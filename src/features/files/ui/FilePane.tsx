@@ -357,6 +357,7 @@ function PlanSurface({
             {session && !remote ? (
               <BuildTargetButton
                 from={session.harness}
+                cwd={session.cwd}
                 model={session.model}
                 settings={session.modelSettings}
                 disabled={buildDisabled}

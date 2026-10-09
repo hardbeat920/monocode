@@ -79,6 +79,16 @@ pub(crate) fn spawn_pty(
 pub(crate) fn spawn_managed(
     command: &mut std::process::Command,
 ) -> io::Result<std::process::Child> {
+    spawn_managed_in_job(command, None)
+}
+
+/// Optional nested job scopes one invocation's descendants. Assign it while
+/// suspended, along with the app job, so even an immediately exiting leader
+/// cannot leave descendants outside the invocation's cancellation boundary.
+pub(crate) fn spawn_managed_in_job(
+    command: &mut std::process::Command,
+    invocation_job: Option<&OwnedHandle>,
+) -> io::Result<std::process::Child> {
     use std::os::windows::process::CommandExt;
     use windows_sys::Win32::System::Threading::{
         CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, CREATE_SUSPENDED,
@@ -88,7 +98,19 @@ pub(crate) fn spawn_managed(
     // while suspended, then let the first thread run.
     command.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED);
     let mut child = command.spawn()?;
-    if let Err(err) = assign_child(child.as_raw_handle()).and_then(|()| resume_child(child.id())) {
+    let assign_invocation = || {
+        if let Some(job) = invocation_job {
+            if unsafe { AssignProcessToJobObject(job.as_raw_handle(), child.as_raw_handle()) } == 0
+            {
+                return Err(io::Error::last_os_error());
+            }
+        }
+        Ok(())
+    };
+    if let Err(err) = assign_child(child.as_raw_handle())
+        .and_then(|()| assign_invocation())
+        .and_then(|()| resume_child(child.id()))
+    {
         let _ = child.kill();
         let _ = child.wait();
         return Err(err);

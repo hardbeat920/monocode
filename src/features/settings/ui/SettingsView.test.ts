@@ -32,6 +32,7 @@ import {
 } from "../../monos/model/mono";
 
 vi.mock("@tauri-apps/api/core", () => ({
+  isTauri: () => false,
   invoke: vi.fn(async () => undefined),
   convertFileSrc: (path: string) => path,
 }));

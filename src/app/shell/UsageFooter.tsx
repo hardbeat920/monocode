@@ -387,7 +387,7 @@ export function UsageFooter({
           </button>
         </>
       ) : session ? (
-        <SessionChip key={session.id ?? session.harness} session={session} />
+        <SessionChip key={session.id ?? session.harness} session={session} cwd={project} />
       ) : null}
       {showTerminals || showTerminalButton ? (
         <div className="ml-auto flex shrink-0 items-center gap-2">
@@ -430,7 +430,7 @@ function TerminalLiveMark() {
   );
 }
 
-function SessionChip({ session }: { session: UsageFooterSession }) {
+function SessionChip({ session, cwd }: { session: UsageFooterSession; cwd?: string }) {
   const trigger = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const [loginState, setLoginState] = useState<ProviderSignInState>("idle");
@@ -438,7 +438,7 @@ function SessionChip({ session }: { session: UsageFooterSession }) {
   const authRequired = Boolean(
     session.authRequired && loginState !== "complete",
   );
-  const canLogin = authRequired && supportsHarnessLogin(session.harness);
+  const canLogin = authRequired && supportsHarnessLogin(session.harness, cwd);
 
   useEffect(() => {
     if (!session.authRequired && loginState === "complete") {
@@ -457,7 +457,7 @@ function SessionChip({ session }: { session: UsageFooterSession }) {
     setLoginState("running");
     setLoginError(null);
     try {
-      await loginHarness(session.harness);
+      await loginHarness(session.harness, undefined, cwd);
       setOpen(false);
       setLoginState("complete");
     } catch (error) {

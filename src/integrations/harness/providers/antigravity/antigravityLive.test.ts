@@ -176,6 +176,12 @@ describe.each(providers)("$id offline ACP transport", (provider) => {
     expect(events).toContainEqual({ type: "message.completed" });
   });
 
+  it("keeps the remote workspace cwd in ACP catalog discovery", async () => {
+    await provider.refresh("remote://host/project");
+    expect(mock.sent.find((message) => message.method === "session/new")?.params?.cwd)
+      .toBe("remote://host/project");
+  });
+
   it("denies edits in plan intent even with full access selected", async () => {
     const turn = provider.send({ ...input, runtimeMode: "full-access", intent: "plan" });
     await waitPrompt();

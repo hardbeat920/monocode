@@ -1,6 +1,7 @@
 use tauri::Manager;
 
 mod account_identity;
+mod antigravity_native;
 mod artifacts;
 mod automations;
 mod azure_devops;
@@ -244,6 +245,7 @@ pub fn run() {
                 .build(),
         )
         .manage(harness::HarnessHost::new())
+        .manage(antigravity_native::NativeHost::default())
         .manage(pty::PtyHost::new())
         .manage(remote::RemoteConnections::default())
         .manage(window_transfer::WindowTransferState::new())
@@ -457,6 +459,16 @@ pub fn run() {
             harness::harness_resolve_hermes,
             harness::harness_resolve_devin,
             harness::harness_resolve_antigravity,
+            antigravity_native::antigravity_native_status,
+            antigravity_native::antigravity_native_login,
+            antigravity_native::antigravity_native_cancel_login,
+            antigravity_native::antigravity_native_logout,
+            antigravity_native::antigravity_native_catalog,
+            antigravity_native::antigravity_native_send,
+            antigravity_native::antigravity_native_approve,
+            antigravity_native::antigravity_native_cancel,
+            antigravity_native::antigravity_native_bind,
+            antigravity_native::antigravity_native_stop,
             harness::harness_free_port,
             harness::harness_spawn,
             codex_mono_store::codex_mono_store_prepare,
@@ -633,6 +645,9 @@ pub fn run() {
             ..
         } => {
             window::forget_quit_window(handle, &label);
+            if let Some(host) = handle.try_state::<antigravity_native::NativeHost>() {
+                host.cancel_window(&label);
+            }
             let other_window = window::workspace_windows(handle)
                 .iter()
                 .any(|window| window.label() != label);
@@ -665,6 +680,9 @@ pub fn run() {
 }
 
 fn reap_harness_children(handle: &tauri::AppHandle) {
+    if let Some(host) = handle.try_state::<antigravity_native::NativeHost>() {
+        host.cancel_all();
+    }
     if let Some(host) = handle.try_state::<harness::HarnessHost>() {
         host.kill_all();
     }

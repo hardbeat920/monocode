@@ -1,4 +1,5 @@
 import { homeDir } from "../../../../platform/tauri/fs";
+import { usesNativeAntigravity, refreshNativeAntigravityCatalog } from "./antigravityNative";
 import { setHarnessModels } from "../../../../features/sessions/model/models";
 import { AcpClient } from "../../core/acp";
 import {
@@ -17,9 +18,10 @@ const PROBE_ID = "monocode-antigravity-probe";
 const REQUEST_TIMEOUT_MS = 12_000;
 let inflight: Promise<void> | null = null;
 
-export function refreshAntigravityCatalog(): Promise<void> {
+export function refreshAntigravityCatalog(cwd?: string): Promise<void> {
+  if (usesNativeAntigravity(cwd)) return refreshNativeAntigravityCatalog();
   if (inflight) return inflight;
-  inflight = discoverAntigravityModels()
+  inflight = discoverAntigravityModels(cwd)
     .then((models) => {
       if (models.length > 0) setHarnessModels("antigravity", models);
     })

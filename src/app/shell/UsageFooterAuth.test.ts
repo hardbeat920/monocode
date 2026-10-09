@@ -162,7 +162,7 @@ describe("UsageFooter provider authentication", () => {
     expect(dialog?.querySelector(".size-9")).not.toBeNull();
 
     act(() => button("Sign in to Grok Build").click());
-    expect(auth.loginHarness).toHaveBeenCalledWith("grok");
+    expect(auth.loginHarness).toHaveBeenCalledWith("grok", undefined, undefined);
     expect(dialog?.textContent).toContain("Waiting for browser…");
 
     await act(async () => finishLogin?.());

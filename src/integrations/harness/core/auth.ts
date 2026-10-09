@@ -4,6 +4,7 @@ import { supportsAccountProfiles } from "../../../features/providers/model/provi
 import { HARNESS_TITLE, type HarnessId } from "../../../features/sessions/model/session";
 import * as child from "./child";
 import { harnessLoginArgs } from "./authSupport";
+import { usesNativeAntigravity, loginNativeAntigravity, refreshNativeAntigravityCatalog } from "../providers/antigravity/antigravityNative";
 
 export {
   harnessLoginArgs,
@@ -53,12 +54,14 @@ const inflight = new Map<string, Promise<void>>();
 export function loginHarness(
   harness: HarnessId,
   accountId?: string,
+  cwd?: string,
 ): Promise<void> {
-  const key = `${harness}:${accountId ?? "default"}`;
+  const mode = harness === "antigravity" && usesNativeAntigravity(cwd);
+  const key = `${harness}:${accountId ?? "default"}:${mode}`;
   const current = inflight.get(key);
   if (current) return current;
 
-  const run = runHarnessLogin(harness, accountId).finally(() => {
+  const run = runHarnessLogin(harness, accountId, cwd).finally(() => {
     if (inflight.get(key) === run) inflight.delete(key);
   });
   inflight.set(key, run);
@@ -68,7 +71,13 @@ export function loginHarness(
 async function runHarnessLogin(
   harness: HarnessId,
   accountId?: string,
+  workspaceCwd?: string,
 ): Promise<void> {
+  if (harness === "antigravity" && usesNativeAntigravity(workspaceCwd)) {
+    await loginNativeAntigravity();
+    await refreshNativeAntigravityCatalog();
+    return;
+  }
   const args = harnessLoginArgs(harness);
   const resolve = LOGIN_RESOLVERS[harness];
   if (!args || !resolve) {

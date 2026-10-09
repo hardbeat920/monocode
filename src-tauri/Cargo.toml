@@ -20,13 +20,16 @@ tauri = { version = "2", features = ["protocol-asset", "macos-private-api"] }
 tauri-plugin-opener = "2"
 open = "5.4.1"
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }
 toml = "0.9.12"
 sha2 = "0.10"
 zstd = "0.13"
 unicode-normalization = "0.1"
 uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "gzip"] }
+futures-util = "0.3"
+tokio = { version = "1", features = ["net", "io-util", "sync", "time", "macros"] }
 tauri-plugin-dialog = "2"
 rusqlite = { version = "0.40.2", features = ["bundled", "hooks"], default-features = false }
 ureq = { version = "2.12.1", default-features = false, features = ["tls", "gzip"] }
@@ -44,7 +47,7 @@ junction = { version = "2.1", default-features = false }
 keyring = { version = "3.6", default-features = false, features = ["windows-native"] }
 tauri = { version = "2", features = ["tray-icon"] }
 portable-pty = { version = "0.9", path = "../vendor/portable-pty" }
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_System_LibraryLoader", "Win32_System_Diagnostics_ToolHelp"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_System_LibraryLoader", "Win32_System_Diagnostics_ToolHelp"] }
 tauri-winrt-notification = "0.8"
 # WinRT toast settings (Windows.UI.Notifications) to read the per-app block.
 windows = { version = "0.62", features = ["UI_Notifications"] }

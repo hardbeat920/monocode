@@ -89,7 +89,7 @@ export type HarnessAdapter = {
   /** Seed provider task state from a restored session's persisted panels. */
   restoreTaskLists?(threadId: string, lists: TaskListMeta[]): void;
   /** Refresh the model catalog overlay when supported. */
-  refreshCatalog?(): Promise<void>;
+  refreshCatalog?(cwd?: string): Promise<void>;
   /** Optional LLM tab title for the first turn. */
   generateTitle?(input: TitleInput): Promise<GeneratedSessionTitle | null>;
   /** Optional LLM commit message from staged changes. */
@@ -396,7 +396,7 @@ export function bindHarnessSession(
 /** `force` re-reads a catalog that already loaded, e.g. after a CLI update. */
 export async function refreshHarnessCatalogs(
   ids: Iterable<HarnessId>,
-  options?: { force?: boolean },
+  options?: { force?: boolean; cwd?: string },
 ): Promise<void> {
   const wanted = new Set(ids);
   if (wanted.size === 0) return;
@@ -408,7 +408,7 @@ export async function refreshHarnessCatalogs(
         // `force` marks an explicit user action (opening the model dropdown);
         // routine refreshes keep skipping adapters with a live catalog.
         if (!options?.force && hasLiveCatalog(adapter.id)) return;
-        await adapter.refreshCatalog().catch((error: unknown) => {
+        await adapter.refreshCatalog(options?.cwd).catch((error: unknown) => {
           console.debug(`[monocode] ${adapter.id} catalog`, error);
         });
       }),

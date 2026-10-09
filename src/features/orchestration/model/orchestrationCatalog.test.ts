@@ -29,9 +29,10 @@ describe("automatic orchestration catalog", () => {
         { id: "codex:live", harness: "codex", name: "Live Codex" },
       ]);
     });
-    const settings = await discoverOrchestrationSettings();
+    const settings = await discoverOrchestrationSettings("/repo");
     expect(probeHarnessAvailability).toHaveBeenCalledOnce();
-    expect(refreshHarnessCatalogs).toHaveBeenCalledWith(["claude", "codex"]);
+    expect(probeHarnessAvailability).toHaveBeenCalledWith({ cwd: "/repo" });
+    expect(refreshHarnessCatalogs).toHaveBeenCalledWith(["claude", "codex"], { cwd: "/repo" });
     expect(settings.choices).toContainEqual({
       harness: "codex",
       model: "codex:live",

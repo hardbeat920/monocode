@@ -1,4 +1,5 @@
 import type { Block, HarnessId } from "../../../features/sessions/model/session";
+import { usesNativeAntigravity } from "../providers/antigravity/antigravityNative";
 
 /**
  * Account-level login commands that can run without an interactive provider
@@ -16,7 +17,8 @@ const LOGIN_ARGS: Partial<Record<HarnessId, readonly string[]>> = {
   devin: ["auth", "login"],
 };
 
-export function supportsHarnessLogin(harness: HarnessId): boolean {
+export function supportsHarnessLogin(harness: HarnessId, cwd?: string): boolean {
+  if (harness === "antigravity") return usesNativeAntigravity(cwd);
   return LOGIN_ARGS[harness] != null;
 }
 

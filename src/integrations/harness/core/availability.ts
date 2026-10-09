@@ -14,6 +14,7 @@ import {
   resolvePiBinary,
 } from "./child";
 import { isLiveHarness } from "./registry";
+import { usesNativeAntigravity, nativeAntigravityAccount } from "../providers/antigravity/antigravityNative";
 import { IS_WIN } from "../../../platform/tauri/platform";
 import {
   emitHarnessAvailability,
@@ -62,6 +63,7 @@ const CLI: Record<HarnessId, { name: string; install?: string }> = {
 };
 
 let inflight: Promise<void> | null = null;
+let probeCwd: string | undefined;
 
 /**
  * A probe stats ~100 paths across the resolvers. The model picker and the
@@ -71,20 +73,27 @@ let inflight: Promise<void> | null = null;
  */
 const PROBE_TTL_MS = 30_000;
 
-export function harnessUnavailableHint(id: HarnessId): string {
+export function harnessUnavailableHint(id: HarnessId, cwd?: string): string {
+  if (id === "antigravity" && usesNativeAntigravity(cwd)) return "Antigravity native backend is unavailable. Restart MonoCode and retry.";
   const { name, install } = CLI[id];
   const how = install ? ` (\`${install}\`)` : "";
   return `${name} not found${how}. Install it, or restart MonoCode if it is already installed.`;
 }
 
 export function probeHarnessAvailability(
-  options?: { force?: boolean },
+  options?: { force?: boolean; cwd?: string },
 ): Promise<void> {
-  if (inflight) return inflight;
+  const cwd = options?.cwd;
+  if (inflight) {
+    return probeCwd === cwd
+      ? inflight
+      : inflight.then(() => probeHarnessAvailability(options));
+  }
   const lastProbe = harnessAvailabilityProbedAt();
-  if (!options?.force && lastProbe > 0 && Date.now() - lastProbe < PROBE_TTL_MS) {
+  if (!options?.force && probeCwd === cwd && lastProbe > 0 && Date.now() - lastProbe < PROBE_TTL_MS) {
     return Promise.resolve();
   }
+  probeCwd = cwd;
   inflight = Promise.all(
     HARNESSES.map(async (id) => {
       if (!isLiveHarness(id)) return [id, false] as const;
@@ -162,6 +171,7 @@ export function probeHarnessAvailability(
       }
       if (id === "antigravity") {
         try {
+          if (usesNativeAntigravity(cwd)) return [id, (await nativeAntigravityAccount()).backendAvailable] as const;
           await resolveAntigravityBinary();
           return [id, true] as const;
         } catch {

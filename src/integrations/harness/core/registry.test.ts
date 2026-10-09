@@ -276,9 +276,10 @@ describe("harness registry", () => {
     registerHarness(stub("pi", { refreshCatalog: pi }));
     registerHarness(stub("claude", { refreshCatalog: claude }));
 
-    await refreshHarnessCatalogs(["claude"]);
+    await refreshHarnessCatalogs(["claude"], { cwd: "/repo" });
 
     expect(claude).toHaveBeenCalledOnce();
+    expect(claude).toHaveBeenCalledWith("/repo");
     expect(pi).not.toHaveBeenCalled();
   });
 

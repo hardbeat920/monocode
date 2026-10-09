@@ -308,7 +308,7 @@ function AgentTranscriptComponent({
   managed = false,
 }: Props) {
   const blocks = useMemo(() => {
-    if (!harness || !supportsHarnessLogin(harness)) return sourceBlocks;
+    if (!harness || !supportsHarnessLogin(harness, cwd)) return sourceBlocks;
     const visibleBlocks = sourceBlocks.filter(
       (block) =>
         !(
@@ -320,7 +320,7 @@ function AgentTranscriptComponent({
     return visibleBlocks.length === sourceBlocks.length
       ? sourceBlocks
       : visibleBlocks;
-  }, [harness, sourceBlocks]);
+  }, [harness, cwd, sourceBlocks]);
   const editableUserBlockId = useMemo(
     () => lastUserTurnBlock(blocks)?.id,
     [blocks],
@@ -1463,6 +1463,7 @@ function AgentTranscriptComponent({
                   sessionCount={spawnedSessions.length}
                   harness={turnHarness}
                   fromHarness={turnHarness}
+                  cwd={cwd}
                   fromModel={turnModel?.id}
                   onSecondOpinion={
                     onSecondOpinion
@@ -1649,6 +1650,7 @@ function TurnDuration({
   sessionsExpanded,
   sessionCount,
   fromHarness,
+  cwd,
   fromModel,
   onSecondOpinion,
   onHandoff,
@@ -1669,6 +1671,7 @@ function TurnDuration({
   sessionsExpanded?: boolean;
   sessionCount?: number;
   fromHarness?: HarnessId;
+  cwd?: string;
   /** The turn's own model, so a same-harness second opinion can hide it. */
   fromModel?: string;
   onSecondOpinion?: (target: ModelTarget) => void;
@@ -1725,11 +1728,12 @@ function TurnDuration({
           </button>
         ) : null}
         {fromHarness && onHandoff ? (
-          <HandoffButton from={fromHarness} onPick={onHandoff} />
+          <HandoffButton from={fromHarness} cwd={cwd} onPick={onHandoff} />
         ) : null}
         {fromHarness && onSecondOpinion ? (
           <SecondOpinionButton
             from={fromHarness}
+            cwd={cwd}
             fromModel={fromModel}
             onPick={onSecondOpinion}
             includeCurrent
@@ -2144,6 +2148,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
     return (
       <div className={embedded ? "py-1" : "px-4 py-1"}>
         <PlanPreview
+          cwd={cwd}
           text={block.text}
           streaming={block.streaming}
           busy={planBusy}

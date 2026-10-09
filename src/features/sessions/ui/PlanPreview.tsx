@@ -5,6 +5,7 @@ import { BuildTargetButton } from "./SecondOpinionButton";
 
 type Props = {
   text: string;
+  cwd?: string;
   streaming?: boolean;
   busy?: boolean;
   plan?: PlanBlockMeta;
@@ -17,6 +18,7 @@ type Props = {
 
 export function PlanPreview({
   text,
+  cwd,
   streaming,
   busy,
   plan,
@@ -110,6 +112,7 @@ export function PlanPreview({
                   {harness ? (
                     <BuildTargetButton
                       from={harness}
+                      cwd={cwd}
                       model={model}
                       settings={modelSettings}
                       disabled={buildDisabled}

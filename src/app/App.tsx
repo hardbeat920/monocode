@@ -1282,7 +1282,7 @@ function Workspace({
     (seenProviderSignInRequestsRef.current = new Set(
       sessions.flatMap((session) => {
         if (
-          !supportsHarnessLogin(session.harness) ||
+          !supportsHarnessLogin(session.harness, session.cwd) ||
           !latestTurnNeedsHarnessLogin(session.blocks)
         ) {
           return [];
@@ -1754,13 +1754,13 @@ function Workspace({
   }, [monosSnap]);
 
   useEffect(() => {
-    void probeHarnessAvailability();
+    void probeHarnessAvailability({ cwd: projectCwd });
     // Only the harnesses already in this window. Probing every installed CLI
     // at boot left unused agents (especially Pi) running in the background.
     const harnesses = [
       ...new Set(sessionsRef.current.map((session) => session.harness)),
     ];
-    void refreshHarnessCatalogs(harnesses).then(() => {
+    void refreshHarnessCatalogs(harnesses, { cwd: projectCwd }).then(() => {
       setSessions((prev) =>
         prev.map((session) => {
           if (!isLiveHarness(session.harness)) return session;
@@ -1948,8 +1948,8 @@ function Workspace({
   const activeHarness = active?.harness;
   useEffect(() => {
     if (!activeHarness || !isLiveHarness(activeHarness)) return;
-    void refreshHarnessCatalogs([activeHarness]);
-  }, [activeHarness]);
+    void refreshHarnessCatalogs([activeHarness], { cwd: active?.cwd });
+  }, [activeHarness, active?.cwd]);
 
   const usageProviders = useMemo(() => {
     if (
@@ -1985,7 +1985,7 @@ function Workspace({
   const activeProviderSignInRequest = useMemo(() => {
     if (
       !active ||
-      !supportsHarnessLogin(active.harness) ||
+      !supportsHarnessLogin(active.harness, active.cwd) ||
       !latestTurnNeedsHarnessLogin(active.blocks)
     ) {
       return null;
@@ -7546,7 +7546,7 @@ function Workspace({
         launchTitleGeneration(workCwd);
         if (turnGen.current.get(sessionId) !== gen) return;
         if (proposalDraft && proposalId) {
-          const settings = await discoverOrchestrationSettings();
+          const settings = await discoverOrchestrationSettings(workCwd);
           if (turnGen.current.get(sessionId) !== gen) return;
           proposalDraft = { ...proposalDraft, settings };
           const discovering = proposalDraft;
@@ -13129,6 +13129,7 @@ function Workspace({
             <ProviderSignInDialog
               key={providerSignInRequest.key}
               harness={providerSignInRequest.harness}
+              cwd={active?.cwd}
               onClose={() => setProviderSignInRequest(null)}
             />
           ) : null}

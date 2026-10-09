@@ -8,10 +8,10 @@ import { refreshHarnessCatalogs } from "../../../integrations/harness/core/regis
 import { validateOrchestrationSettings } from "./orchestrationPlan";
 
 /** Discover worker choices only when the user sends an orchestration request. */
-export async function discoverOrchestrationSettings() {
-  await probeHarnessAvailability();
+export async function discoverOrchestrationSettings(cwd?: string) {
+  await probeHarnessAvailability({ cwd });
   const installed = HARNESSES.filter(isHarnessAvailable);
-  await refreshHarnessCatalogs(installed);
+  await refreshHarnessCatalogs(installed, { cwd });
   return validateOrchestrationSettings({
     maxWorkers: 2,
     choices: installed

@@ -24,7 +24,7 @@ export type ModelSource = {
   available(harness: HarnessId): boolean;
   probed(): boolean;
   /** Refresh availability and catalogs, when the source supports it. */
-  refresh(harnesses: HarnessId[]): void;
+  refresh(harnesses: HarnessId[], cwd?: string): void;
 };
 
 export const LOCAL_MODEL_SOURCE: ModelSource = {
@@ -33,9 +33,9 @@ export const LOCAL_MODEL_SOURCE: ModelSource = {
   find: findModel,
   available: isHarnessAvailable,
   probed: hasProbedHarnessAvailability,
-  refresh: (harnesses) => {
-    void probeHarnessAvailability();
-    void refreshHarnessCatalogs(harnesses);
+  refresh: (harnesses, cwd) => {
+    void probeHarnessAvailability({ cwd });
+    void refreshHarnessCatalogs(harnesses, { cwd });
   },
 };
 

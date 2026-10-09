@@ -47,6 +47,7 @@ import { Popover } from "../../../shared/ui/Popover";
 
 type Props = {
   from: HarnessId;
+  cwd?: string;
   fromModel?: string;
   fromSettings?: Record<string, string>;
   onPick: (target: ModelTarget) => void;
@@ -78,11 +79,13 @@ const SELF = "[data-provider-target]";
 
 export function HandoffButton({
   from,
+  cwd,
   onPick,
-}: Pick<Props, "from" | "onPick">) {
+}: Pick<Props, "from" | "cwd" | "onPick">) {
   return (
     <SecondOpinionButton
       from={from}
+      cwd={cwd}
       onPick={onPick}
       icon={Replace}
       title="Handoff"
@@ -95,12 +98,14 @@ export function HandoffButton({
 
 export function BuildTargetButton({
   from,
+  cwd,
   model,
   settings,
   disabled,
   onPick,
 }: {
   from: HarnessId;
+  cwd?: string;
   model?: string;
   settings?: Record<string, string>;
   disabled?: boolean;
@@ -109,6 +114,7 @@ export function BuildTargetButton({
   return (
     <SecondOpinionButton
       from={from}
+      cwd={cwd}
       fromModel={model}
       fromSettings={settings}
       onPick={onPick}
@@ -126,6 +132,7 @@ export function BuildTargetButton({
 
 export function SecondOpinionButton({
   from,
+  cwd,
   fromModel,
   fromSettings,
   onPick,
@@ -208,13 +215,13 @@ export function SecondOpinionButton({
 
   useEffect(() => {
     if (!open) return;
-    void probeHarnessAvailability();
-  }, [open]);
+    void probeHarnessAvailability({ cwd });
+  }, [open, cwd]);
 
   useEffect(() => {
     if (!open || !activeHarness) return;
-    void refreshHarnessCatalogs([activeHarness]);
-  }, [open, activeHarness]);
+    void refreshHarnessCatalogs([activeHarness], { cwd });
+  }, [open, activeHarness, cwd]);
 
   useEffect(() => {
     setActive(0);

@@ -1,4 +1,5 @@
 import { nativeModelId } from "../../../../features/sessions/model/models";
+import * as native from "./antigravityNative";
 import { AcpSubagents } from "../../core/acpSubagents";
 import type { RuntimeMode } from "../../../../features/sessions/model/session";
 import { AcpClient, type AcpHandlers } from "../../core/acp";
@@ -132,6 +133,7 @@ let childSeq = 0;
 
 /** Live Antigravity adapter. Spawns `agy_acp_server.par`, not `agy acp`. */
 export async function sendAntigravityTurn(input: SendTurnInput): Promise<void> {
+  if (native.usesNativeAntigravity(input.cwd)) return native.sendNativeAntigravityTurn(input);
   const epoch = cancelEpoch.get(input.sessionId) ?? 0;
   const cancelled = () => (cancelEpoch.get(input.sessionId) ?? 0) !== epoch;
   try {
@@ -213,10 +215,15 @@ export function respondAntigravityApproval(
   requestId: number,
   decision: ApprovalDecision,
 ) {
+  if (native.hasNativeAntigravitySession(sessionId)) {
+    native.approveNativeAntigravity(sessionId, requestId, decision);
+    return;
+  }
   liveByThread.get(sessionId)?.approvals.get(requestId)?.(decision);
 }
 
 export async function cancelAntigravityTurn(sessionId: string): Promise<void> {
+  if (native.hasNativeAntigravitySession(sessionId)) return native.cancelNativeAntigravity(sessionId);
   cancelEpoch.set(sessionId, (cancelEpoch.get(sessionId) ?? 0) + 1);
   // Also retire queued/in-flight lifecycle work: a cancel before the child
   // exists must not leave a process spawning in the background.
@@ -256,6 +263,7 @@ async function teardownLive(live: Live): Promise<void> {
 }
 
 export async function stopAntigravitySession(sessionId: string): Promise<void> {
+  if (native.hasNativeAntigravitySession(sessionId)) return native.stopNativeAntigravity(sessionId);
   // Stopping the session invalidates work already queued for it, not just the
   // registered live — a send waiting its turn must not resurrect it.
   cancelEpoch.set(sessionId, (cancelEpoch.get(sessionId) ?? 0) + 1);
@@ -281,6 +289,7 @@ function abortPendingSetup(sessionId: string): void {
 }
 
 export async function forgetAntigravitySession(sessionId: string): Promise<void> {
+  if (native.hasNativeAntigravitySession(sessionId)) return native.stopNativeAntigravity(sessionId, true);
   resumeByThread.delete(sessionId);
   await stopAntigravitySession(sessionId);
 }
@@ -290,6 +299,10 @@ export function bindAntigravitySession(
   acpSessionId: string,
   cwd: string,
 ): void {
+  if (native.usesNativeAntigravity(cwd)) {
+    native.bindNativeAntigravity(threadId, acpSessionId, cwd);
+    return;
+  }
   const sessionId = acpSessionId.trim();
   if (!threadId || !sessionId || !cwd.trim()) return;
   resumeByThread.set(threadId, { acpSessionId: sessionId, cwd });

@@ -445,7 +445,7 @@ export function ModelPicker({
 
   useEffect(() => {
     if (!open) return;
-    source.refresh([current.harness]);
+    source.refresh([current.harness], project);
     setTab(
       coerceModelPickerTab(current.harness, (id) =>
         pickerHarnesses.includes(id),
@@ -457,7 +457,7 @@ export function ModelPicker({
     setSubmenu(hideSettings ? { kind: "models" } : null);
     setQuery("");
     setFavorites(loadFavoriteModels());
-  }, [open, current.harness, hideSettings]);
+  }, [open, current.harness, hideSettings, project]);
 
   useEffect(() => {
     if (visibleTab === tab) return;
@@ -468,8 +468,8 @@ export function ModelPicker({
     if (!open || submenu?.kind !== "models" || visibleTab === "favorites") {
       return;
     }
-    source.refresh([visibleTab]);
-  }, [open, submenu?.kind, visibleTab]);
+    source.refresh([visibleTab], project);
+  }, [open, submenu?.kind, visibleTab, project]);
 
   useEffect(() => {
     if (!open) return;
@@ -742,6 +742,7 @@ export function ModelPicker({
 
       {open && hideSettings ? (
         <ModelFlyout
+          project={project}
           anchor={button}
           side={side}
           autoFocusSearch
@@ -940,6 +941,7 @@ export function ModelPicker({
 
           {showSubmenu && submenu.kind === "models" ? (
             <ModelFlyout
+              project={project}
               anchor={activeRow}
               autoFocusSearch
               harnesses={pickerHarnesses}
@@ -988,7 +990,7 @@ export function ModelPicker({
                 aria-checked={selected}
                 disabled={disabled}
                 title={
-                  disabled ? harnessUnavailableHint(item.harness) : undefined
+                  disabled ? harnessUnavailableHint(item.harness, project) : undefined
                 }
                 onMouseDown={(event) => event.preventDefault()}
                 onMouseEnter={() => setRecentActive(index)}
@@ -1385,6 +1387,7 @@ function SelectPill({
 }
 
 function ModelFlyout({
+  project,
   anchor,
   side = "right",
   autoFocusSearch = false,
@@ -1403,6 +1406,7 @@ function ModelFlyout({
   onPick,
   onToggleFavorite,
 }: {
+  project?: string;
   anchor: HTMLButtonElement | { current: HTMLButtonElement | null };
   side?: "right" | "top" | "bottom";
   autoFocusSearch?: boolean;
@@ -1572,7 +1576,7 @@ function ModelFlyout({
               {tab === "favorites" && !query.trim()
                 ? "No favorite models"
                 : tab !== "favorites" && !source.available(tab)
-                  ? harnessUnavailableHint(tab)
+                  ? harnessUnavailableHint(tab, project)
                   : tab === "codex" && !query.trim()
                     ? "Loading Codex models…"
                     : "No matching models"}
@@ -1619,7 +1623,7 @@ function ModelFlyout({
                         disabled={disabled}
                         title={
                           disabled
-                            ? harnessUnavailableHint(item.harness)
+                            ? harnessUnavailableHint(item.harness, project)
                             : undefined
                         }
                         onMouseDown={(event) => event.preventDefault()}
