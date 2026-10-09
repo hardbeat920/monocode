@@ -2023,6 +2023,9 @@ header[data-tauri-drag-region] button {
 .agent-markdown [data-streamdown="table-cell"] {
   padding: 8px 10px;
   font-size: 12px;
+  /* Keep columns readable; narrow panes use the table's existing scroller. */
+  min-width: 10rem;
+  vertical-align: top;
 }
 
 .agent-markdown [data-streamdown="horizontal-rule"] {

@@ -4066,7 +4066,8 @@ function ActivityThinkingRow({
             bare ? pulse : ""
           }`}
         >
-          {text}
+          {/* Open, the body starts with the paragraph the summary came from. */}
+          {open ? "Thinking" : text}
         </span>
       </button>
       {open ? (
