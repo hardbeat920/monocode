@@ -9,6 +9,13 @@ import {
 } from "../../sessions/ui/SessionPane";
 import type { Block, Session } from "../../sessions/model/session";
 import type { AgentModel } from "../../sessions/model/models";
+import {
+  createMono,
+  findMono,
+  finishMonoPlanBuild,
+  saveMonoPlanMode,
+  saveMonoSessionId,
+} from "../../monos/model/mono";
 import { rememberRemoteProject } from "../model/remoteProjects";
 import { buildRemotePlan } from "../model/remoteSessionActions";
 import { preloadRemoteSession } from "./RemoteSession";
@@ -123,6 +130,8 @@ let commands: HostCommand[];
 let projectKey: string;
 let syncDelay: Promise<void> | undefined;
 let dispatchDelay: Promise<void> | undefined;
+let dispatchFailure: string | undefined;
+let dispatchWithoutReceipt = false;
 let branchFailure: string | undefined;
 let branchActionFailure: string | undefined;
 let currentBranch: string;
@@ -138,6 +147,8 @@ beforeEach(() => {
   host = undefined;
   syncDelay = undefined;
   dispatchDelay = undefined;
+  dispatchFailure = undefined;
+  dispatchWithoutReceipt = false;
   branchFailure = undefined;
   branchActionFailure = undefined;
   currentBranch = "main";
@@ -269,6 +280,8 @@ beforeEach(() => {
       return { offset: (params as { size: number }).size };
     if (method === "commands.dispatch") {
       if (dispatchDelay) await dispatchDelay;
+      if (dispatchFailure) throw new Error(dispatchFailure);
+      if (dispatchWithoutReceipt) return undefined;
       return dispatch(params);
     }
     if (method === "sessions.delete") {
@@ -685,11 +698,32 @@ it("reports acceptance from the registered remote Plan Build handler", async () 
   await act(async () => rememberRemoteSession("shell", "host-session"));
   await settle();
 
-  let accepted: boolean | undefined;
-  await act(async () => {
-    accepted = buildRemotePlan("shell", "approved-plan");
+  let finishDispatch!: () => void;
+  dispatchDelay = new Promise<void>((resolve) => {
+    finishDispatch = resolve;
   });
-  expect(accepted).toBe(true);
+  const mono = createMono();
+  saveMonoSessionId(mono.id, "shell");
+  saveMonoPlanMode(mono.id, true);
+  const revision = findMono(mono.id)!.planModeRevision ?? 0;
+  let accepted: boolean | Promise<boolean> | undefined;
+  await act(async () => {
+    accepted = finishMonoPlanBuild(
+      mono.id,
+      revision,
+      buildRemotePlan("shell", "approved-plan"),
+    );
+  });
+  expect(accepted).toBeInstanceOf(Promise);
+  expect(findMono(mono.id)?.planMode).toBe(true);
+  expect(commands).toEqual([]);
+  let outcome!: boolean;
+  await act(async () => {
+    finishDispatch();
+    outcome = await accepted;
+  });
+  expect(outcome).toBe(true);
+  expect(findMono(mono.id)?.planMode).toBe(false);
   await settle();
   expect(commands.at(-1)).toMatchObject({
     type: "send",
@@ -697,6 +731,109 @@ it("reports acceptance from the registered remote Plan Build handler", async () 
     intent: "build",
     planBlockId: "approved-plan",
   });
+});
+
+it.each([
+  ["missing receipt", false, true],
+  ["dispatch rejection", true, false],
+] as const)(
+  "keeps Plan mode when remote Build has a %s",
+  async (_outcome, rejectDispatch, noReceipt) => {
+    await render();
+    dispatch({
+      type: "create",
+      commandId: "existing-session",
+      projectId: "project",
+      harness: "codex",
+      model: gpt.id,
+      runtimeMode: "supervised",
+    });
+    host = {
+      ...host!,
+      session: {
+        ...host!.session,
+        blocks: [
+          { id: "approved-plan", role: "plan", text: "# Approved plan" },
+        ],
+      },
+    };
+    await act(async () => rememberRemoteSession("shell", "host-session"));
+    await settle();
+    const mono = createMono();
+    saveMonoSessionId(mono.id, "shell");
+    saveMonoPlanMode(mono.id, true);
+    const revision = findMono(mono.id)!.planModeRevision ?? 0;
+    let finishDispatch!: () => void;
+    dispatchDelay = new Promise<void>((resolve) => {
+      finishDispatch = resolve;
+    });
+    dispatchFailure = rejectDispatch ? "connection lost" : undefined;
+    dispatchWithoutReceipt = noReceipt;
+
+    let accepted!: boolean | Promise<boolean>;
+    await act(async () => {
+      accepted = finishMonoPlanBuild(
+        mono.id,
+        revision,
+        buildRemotePlan("shell", "approved-plan"),
+      );
+    });
+    expect(accepted).toBeInstanceOf(Promise);
+    expect(findMono(mono.id)?.planMode).toBe(true);
+    let outcome!: boolean;
+    await act(async () => {
+      finishDispatch();
+      outcome = await accepted;
+    });
+    expect(outcome).toBe(false);
+    expect(findMono(mono.id)?.planMode).toBe(true);
+  },
+);
+
+it("preserves a newer Plan mode choice after remote Build receipt", async () => {
+  await render();
+  dispatch({
+    type: "create",
+    commandId: "existing-session",
+    projectId: "project",
+    harness: "codex",
+    model: gpt.id,
+    runtimeMode: "supervised",
+  });
+  host = {
+    ...host!,
+    session: {
+      ...host!.session,
+      blocks: [{ id: "approved-plan", role: "plan", text: "# Approved plan" }],
+    },
+  };
+  await act(async () => rememberRemoteSession("shell", "host-session"));
+  await settle();
+  const mono = createMono();
+  saveMonoSessionId(mono.id, "shell");
+  saveMonoPlanMode(mono.id, true);
+  const revision = findMono(mono.id)!.planModeRevision ?? 0;
+  let finishDispatch!: () => void;
+  dispatchDelay = new Promise<void>((resolve) => {
+    finishDispatch = resolve;
+  });
+  let accepted!: boolean | Promise<boolean>;
+  await act(async () => {
+    accepted = finishMonoPlanBuild(
+      mono.id,
+      revision,
+      buildRemotePlan("shell", "approved-plan"),
+    );
+  });
+  saveMonoPlanMode(mono.id, false);
+  saveMonoPlanMode(mono.id, true);
+  let outcome!: boolean;
+  await act(async () => {
+    finishDispatch();
+    outcome = await accepted;
+  });
+  expect(outcome).toBe(true);
+  expect(findMono(mono.id)?.planMode).toBe(true);
 });
 
 async function saveDraft(text: string) {

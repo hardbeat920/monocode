@@ -8,6 +8,7 @@ import {
   bundledLanguagesInfo,
   createHighlighter,
   type BundledLanguage,
+  type GrammarState,
 } from "shiki";
 import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
 
@@ -23,7 +24,10 @@ import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
  * Mounted blocks hold their tokens in component state, so eviction only means
  * a remounted block briefly shows plain text while it is highlighted again.
  */
-const DEFAULT_THEMES: [ThemeInput, ThemeInput] = ["github-light", "github-dark"];
+const DEFAULT_THEMES: [ThemeInput, ThemeInput] = [
+  "github-light",
+  "github-dark",
+];
 const MAX_ENTRIES = 100;
 const MAX_CACHED_CHARS = 500_000;
 
@@ -66,6 +70,17 @@ export function createBoundedCodePlugin(
   const results = new Map<string, HighlightResult>();
   const pending = new Map<string, Set<HighlightCallback>>();
   let cachedChars = 0;
+  // Only the most recently highlighted fence needs a streaming checkpoint.
+  // Keep complete lines and their grammar state; the unfinished line must be
+  // tokenized again because its syntax can change as characters arrive.
+  let checkpoint:
+    | {
+        config: string;
+        source: string;
+        tokens: HighlightResult["tokens"];
+        state: GrammarState | undefined;
+      }
+    | undefined;
 
   const highlighterFor = (pair: [ThemeInput, ThemeInput]) => {
     const key = `${themeName(pair[0])}\u0000${themeName(pair[1])}`;
@@ -118,16 +133,74 @@ export function createBoundedCodePlugin(
       pending.set(key, new Set(callback ? [callback] : []));
       void highlighterFor(pair)
         .then(async (highlighter) => {
-          if (supported.has(lang) && !highlighter.getLoadedLanguages().includes(lang)) {
+          if (
+            supported.has(lang) &&
+            !highlighter.getLoadedLanguages().includes(lang)
+          ) {
             await highlighter.loadLanguage(lang as BundledLanguage);
           }
           const usable = highlighter.getLoadedLanguages().includes(lang)
             ? lang
             : "text";
-          const result = highlighter.codeToTokens(code, {
+          const config = `${usable}\u0000${names[0]}\u0000${names[1]}`;
+          const previous =
+            checkpoint?.config === config && code.startsWith(checkpoint.source)
+              ? checkpoint
+              : undefined;
+          const offset = previous?.source.length ?? 0;
+          const boundary = code.lastIndexOf("\n") + 1;
+          const settings = {
             lang: usable as BundledLanguage,
             themes: { light: names[0], dark: names[1] },
+          };
+          let prefix = previous?.tokens ?? [];
+          let state = previous?.state;
+          if (boundary > offset) {
+            const lineEnd =
+              code[boundary - 2] === "\r" ? boundary - 2 : boundary - 1;
+            const complete = highlighter.codeToTokens(
+              code.slice(offset, lineEnd),
+              {
+                ...settings,
+                grammarState: state,
+              },
+            );
+            prefix = [
+              ...prefix,
+              ...complete.tokens.map((line) =>
+                line.map((token) => ({
+                  ...token,
+                  offset: token.offset + offset,
+                })),
+              ),
+            ];
+            state = complete.grammarState;
+          }
+          const tail = highlighter.codeToTokens(code.slice(boundary), {
+            ...settings,
+            grammarState: state,
           });
+          const result = {
+            ...tail,
+            tokens: [
+              ...prefix,
+              ...tail.tokens.map((line) =>
+                line.map((token) => ({
+                  ...token,
+                  offset: token.offset + boundary,
+                })),
+              ),
+            ],
+          };
+          checkpoint =
+            boundary > 0 && boundary <= maxChars
+              ? {
+                  config,
+                  source: code.slice(0, boundary),
+                  tokens: prefix,
+                  state,
+                }
+              : undefined;
           remember(key, result);
           const callbacks = pending.get(key);
           pending.delete(key);

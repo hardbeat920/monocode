@@ -233,9 +233,13 @@ import {
 } from "../../providers/model/providerAccountIdentity";
 import { ProviderAccountSubtitle } from "../../providers/ui/ProviderAccountSubtitle";
 import {
+  saveComposerAutocorrect,
   saveMaskEmails,
+  saveRailMonosPinned,
   saveShowRemainingUsage,
+  useComposerAutocorrect,
   useMaskEmails,
+  useRailMonosPinned,
   useShowRemainingUsage,
 } from "../model/displayPrefs";
 import {
@@ -971,6 +975,7 @@ function ChatPage() {
   const [diffViewer, setDiffViewer] = useState<DiffViewer>(loadDiffViewer);
   const [formatOnSave, setFormatOnSave] = useState(loadFormatOnSave);
   const [composerRunner, setComposerRunner] = useState(loadComposerRunner);
+  const composerAutocorrect = useComposerAutocorrect();
   const [gridArcadeEnabled, setGridArcadeEnabled] = useState(
     loadGridArcadeEnabled,
   );
@@ -1091,6 +1096,17 @@ function ChatPage() {
               { value: "beside", label: "Beside" },
             ]}
             onChange={onModelControls}
+          />
+        </Row>
+        <Row
+          id="composer-autocorrect"
+          label="Autocorrect"
+          description="Spell check and autocorrect prompts in session and mono composers. Turn this off to keep the text exactly as typed."
+        >
+          <Toggle
+            label="Autocorrect"
+            on={composerAutocorrect}
+            onChange={saveComposerAutocorrect}
           />
         </Row>
       </Group>
@@ -3992,6 +4008,7 @@ function MonosPage() {
     loadMonoMenuBarIcon,
     () => true,
   );
+  const railPinned = useRailMonosPinned();
   const snapshot = useSyncExternalStore(subscribeMonos, monosSnapshot);
   const monos = useMemo(() => listMonos(), [snapshot]);
 
@@ -4004,6 +4021,18 @@ function MonosPage() {
           description="Agents of your own on the project rail. Each works on the projects you give it, remembers what matters and picks up habits it runs on its own. Turn this off to hide them."
         >
           <Toggle label="Show monos" on={enabled} onChange={saveMonosEnabled} />
+        </Row>
+        <Row
+          id="rail-monos-pinned"
+          label="Pin monos to the icon rail"
+          description="When the project rail is collapsed to icons, show each Mono at the top of the rail, above a divider, instead of inside the project picker."
+        >
+          <Toggle
+            label="Pin monos to the icon rail"
+            on={railPinned}
+            onChange={saveRailMonosPinned}
+            disabled={!enabled}
+          />
         </Row>
         {IS_MAC && (
           <Row

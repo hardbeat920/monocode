@@ -926,6 +926,7 @@ function ConnectedRemoteSession({
     options?: ComposerTurnOptions,
     asDraft = false,
     planBlockId?: string,
+    onReceipt?: (accepted: boolean) => void,
   ): boolean => {
     if (
       !online ||
@@ -948,6 +949,7 @@ function ConnectedRemoteSession({
       options?.draftBlockId,
       planBlockId,
     );
+    if (!hostSession && onReceipt) return false;
     preparingRef.current = true;
     setStarting(turn);
     if (!hostSession) {
@@ -967,10 +969,12 @@ function ConnectedRemoteSession({
     const version = bindingVersion.current;
     void dispatchTurn(hostSession.id, turn)
       .then((receipt) => {
+        onReceipt?.(receipt !== undefined);
         if (alive.current && version === bindingVersion.current)
           if (!receipt) setStarting({ ...turn, failed: true });
       })
       .catch((reason) => {
+        onReceipt?.(false);
         if (alive.current && version === bindingVersion.current) {
           setError(String(reason));
           setStarting({ ...turn, failed: true });
@@ -1186,7 +1190,10 @@ function ConnectedRemoteSession({
     setSelectedCwd(parsed.hostPath);
   };
 
-  const buildPlan = (blockId: string, target?: PlanBuildTarget): boolean => {
+  const buildPlan = (
+    blockId: string,
+    target?: PlanBuildTarget,
+  ): boolean | Promise<boolean> => {
     const block = hostSession?.blocks.find(
       (entry) => entry.id === blockId && entry.role === "plan",
     );
@@ -1202,13 +1209,19 @@ function ConnectedRemoteSession({
       );
       return false;
     }
-    return submit(
-      `Build the approved plan:\n\n${block.text}`,
-      [],
-      { intent: "build" },
-      false,
-      blockId,
-    );
+    return new Promise((resolve) => {
+      if (
+        !submit(
+          `Build the approved plan:\n\n${block.text}`,
+          [],
+          { intent: "build" },
+          false,
+          blockId,
+          resolve,
+        )
+      )
+        resolve(false);
+    });
   };
 
   const stopTurn = () => {

@@ -6,7 +6,7 @@ import type {
 } from "../../sessions/model/session";
 import type { UserQuestionReply } from "../../sessions/model/userQuestion";
 import { displayAttachments } from "../../sessions/model/attachments";
-import { listMonos, monoLook } from "./mono";
+import { listMonos, monoLook, monoState, type MonoStatus } from "./mono";
 import { pixelLayers } from "../../projects/model/pixelMascots";
 
 export const FLOATING_MONO_CHANGED = "mono_chat_changed";
@@ -19,6 +19,7 @@ export type FloatingMonoEntry = {
   color: string;
   sessionId: string | null;
   planMode?: boolean;
+  status: MonoStatus;
 };
 export type FloatingMonoView = {
   monos: FloatingMonoEntry[];
@@ -47,14 +48,21 @@ export type FloatingMonoRequest = {
   action: FloatingMonoAction;
 };
 
-export function floatingMonoRoster(enabled: boolean): FloatingMonoEntry[] {
+export function floatingMonoRoster(
+  enabled: boolean,
+  sessions: readonly Session[] = [],
+): FloatingMonoEntry[] {
   return enabled
-    ? listMonos().map((mono) => ({
-        id: mono.id,
-        ...monoLook(mono),
-        sessionId: mono.sessionId ?? null,
-        planMode: mono.planMode === true,
-      }))
+    ? listMonos().map((mono) => {
+        const session = sessions.find((s) => s.id === mono.sessionId);
+        return {
+          id: mono.id,
+          ...monoLook(mono),
+          sessionId: mono.sessionId ?? null,
+          planMode: mono.planMode === true,
+          status: session ? monoState(session).status : "idle",
+        };
+      })
     : [];
 }
 

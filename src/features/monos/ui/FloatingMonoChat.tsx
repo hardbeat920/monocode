@@ -33,6 +33,7 @@ import {
   type FloatingMonoView,
 } from "../model/floatingMono";
 import { MonoComposer } from "./MonoComposer";
+import { MonoStatusDot } from "./MonoRailMascot";
 import { MonoStatus } from "./MonoStatus";
 import { MONO_PAGE_TURNS } from "../../sessions/data/sessionStore";
 
@@ -354,6 +355,11 @@ function MonoRail({
                 className="pointer-events-none size-7"
               />
             </button>
+            <MonoStatusDot
+              status={mono.status}
+              color={mono.color}
+              className="pointer-events-none top-0.5 right-2.5 size-2"
+            />
           </div>
         );
       })}

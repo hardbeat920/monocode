@@ -118,7 +118,10 @@ export function useFloatingMono(
       }
     };
     const roster = () => {
-      const monos = floatingMonoRoster(current.current.enabled);
+      const monos = floatingMonoRoster(
+        current.current.enabled,
+        current.current.sessions,
+      );
       const hosted = monos.flatMap((mono) => {
         const session = current.current.sessions.find(
           (s) => s.id === mono.sessionId,
@@ -177,10 +180,12 @@ export function useFloatingMono(
     };
   }, []);
 
-  const roster = floatingMonoRoster(enabled);
-  const hostedKey = sessions
-    .filter((s) => roster.some((m) => m.sessionId === s.id))
-    .map((s) => `${s.id}:${!!s.busy}`)
+  const roster = floatingMonoRoster(enabled, sessions);
+  const hostedKey = roster
+    .map((m) => {
+      const session = sessions.find((s) => s.id === m.sessionId);
+      return `${m.sessionId}:${!!session?.busy}:${m.status}`;
+    })
     .join("|");
   useEffect(() => {
     refresh.current();

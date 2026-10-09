@@ -38,6 +38,9 @@ vi.mock("../../features/monos/model/mono", () => ({
   listMonos: () =>
     ["first", "second"].map((id) => ({ id, sessionId: `chat-${id}` })),
   monoLook: () => ({ name: "Mono", mascot: "crab", color: "#aaf" }),
+  monoState: (session: Session) => ({
+    status: session.busy ? "working" : "idle",
+  }),
 }));
 
 let container: HTMLDivElement;
@@ -382,6 +385,27 @@ it("recovers a timed-out preparation before retrying and ignores its late sync",
     error: null,
   });
   expect(host.buildPlan).toHaveBeenCalledTimes(2);
+});
+
+it("resyncs the roster with each Mono's status for the rail", async () => {
+  await act(async () => root.render(createElement(Harness, { sessions })));
+  native.invoke.mockClear();
+  sessions = sessions.map((session, index) =>
+    index ? session : { ...session, busy: false },
+  );
+  await act(async () => root.render(createElement(Harness, { sessions })));
+  const sync = native.invoke.mock.calls.find(
+    ([command]) => command === "mono_chat_sync",
+  )?.[1];
+  expect(
+    sync.monos.map((mono: { id: string; status: string }) => [
+      mono.id,
+      mono.status,
+    ]),
+  ).toEqual([
+    ["first", "idle"],
+    ["second", "working"],
+  ]);
 });
 
 it("shows or hides the menu bar icon to match the setting", async () => {

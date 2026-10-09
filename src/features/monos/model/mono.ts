@@ -336,20 +336,27 @@ export function saveMonoPlanMode(monoId: string, planMode: boolean): void {
 }
 
 export function finishMonoPlanBuild(
-  monoId: string,
+  monoId: string | undefined,
   planModeRevision: number,
-  accepted: boolean,
-): void {
-  if (!accepted) return;
-  updateMono(monoId, (mono) =>
-    mono.planMode === true && (mono.planModeRevision ?? 0) === planModeRevision
-      ? {
-          ...mono,
-          planMode: false,
-          planModeRevision: planModeRevision + 1,
-        }
-      : mono,
-  );
+  accepted: boolean | Promise<boolean> | undefined,
+): boolean | Promise<boolean> {
+  const finish = (didAccept: boolean) => {
+    if (didAccept && monoId)
+      updateMono(monoId, (mono) =>
+        mono.planMode === true &&
+        (mono.planModeRevision ?? 0) === planModeRevision
+          ? {
+              ...mono,
+              planMode: false,
+              planModeRevision: planModeRevision + 1,
+            }
+          : mono,
+      );
+    return didAccept;
+  };
+  if (accepted === undefined) return false;
+  if (typeof accepted === "boolean") return finish(accepted);
+  return accepted.then(finish, () => finish(false));
 }
 
 export function saveMonoMascot(monoId: string, mascot: string): void {

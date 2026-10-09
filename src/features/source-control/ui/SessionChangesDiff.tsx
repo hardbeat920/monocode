@@ -27,7 +27,7 @@ type LoadedDiff = {
 
 const DIFF_LOAD_CONCURRENCY = 4;
 
-/** Read-only review of the exact before/after snapshots owned by one session. */
+/** Read-only review of the session's recorded before/after snapshots. */
 export function SessionChangesDiff({
   cwd,
   sessionId,
@@ -141,8 +141,8 @@ export function SessionChangesDiff({
                   !loaded.binary
                 ? "No textual diff"
                 : undefined,
-        additions: unified?.additions ?? file.additions,
-        deletions: unified?.deletions ?? file.deletions,
+        additions: file.additions,
+        deletions: file.deletions,
         blocks: unified?.blocks ?? [],
       };
     });

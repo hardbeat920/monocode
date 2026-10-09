@@ -71,6 +71,39 @@ it("leaves Plan mode on when Build is rejected and exits after acceptance", () =
   expect(findMono(id)?.planMode).toBe(false);
 });
 
+it("waits for async Build acceptance and preserves newer Plan choices", async () => {
+  const { id } = createMono();
+  saveMonoPlanMode(id, true);
+  const revision = findMono(id)!.planModeRevision ?? 0;
+  let accept!: (accepted: boolean) => void;
+  const result = finishMonoPlanBuild(
+    id,
+    revision,
+    new Promise<boolean>((resolve) => (accept = resolve)),
+  );
+  expect(findMono(id)?.planMode).toBe(true);
+
+  saveMonoPlanMode(id, false);
+  saveMonoPlanMode(id, true);
+  accept(true);
+
+  await expect(result).resolves.toBe(true);
+  expect(findMono(id)?.planMode).toBe(true);
+});
+
+it("keeps Plan mode when async Build acceptance rejects", async () => {
+  const { id } = createMono();
+  saveMonoPlanMode(id, true);
+  const result = finishMonoPlanBuild(
+    id,
+    findMono(id)!.planModeRevision ?? 0,
+    Promise.reject(new Error("dispatch failed")),
+  );
+
+  await expect(result).resolves.toBe(false);
+  expect(findMono(id)?.planMode).toBe(true);
+});
+
 it("keeps a newer Plan mode choice after deferred Build preparation", async () => {
   const { id } = createMono();
   saveMonoPlanMode(id, true);

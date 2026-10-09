@@ -22,7 +22,8 @@ vi.mock("../model/fileWatch", () => ({
   watchFile: () => () => {},
 }));
 
-vi.mock("../../../platform/tauri/platform", () => ({
+vi.mock("../../../platform/tauri/platform", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   IS_MAC: true,
   IS_WIN: false,
 }));

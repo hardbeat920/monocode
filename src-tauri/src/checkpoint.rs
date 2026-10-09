@@ -17,6 +17,8 @@ use crate::fs::{
 
 const MAX_SNAPSHOT_FILES: usize = 500;
 
+mod turn;
+
 #[derive(Clone)]
 pub struct CheckpointStore {
     root: PathBuf,
@@ -87,6 +89,9 @@ impl CheckpointStore {
     }
 
     fn prepare(&self, session_id: &str, cwd: &str, paths: &[String]) -> Result<(), String> {
+        if self.has_turn_review(session_id, cwd)? {
+            return Ok(());
+        }
         if paths.is_empty() {
             return Ok(());
         }
@@ -139,6 +144,9 @@ impl CheckpointStore {
     }
 
     fn capture(&self, session_id: &str, cwd: &str, paths: &[String]) -> Result<(), String> {
+        if self.has_turn_review(session_id, cwd)? {
+            return Ok(());
+        }
         if paths.is_empty() {
             return Ok(());
         }
@@ -186,6 +194,9 @@ impl CheckpointStore {
     }
 
     fn status(&self, session_id: &str, cwd: &str) -> Result<CheckpointStatus, String> {
+        if let Some(status) = self.turn_status(session_id, cwd)? {
+            return Ok(status);
+        }
         let Some(manifest) = self.load_matching(session_id, cwd)? else {
             return Ok(CheckpointStatus { files: Vec::new() });
         };
@@ -281,6 +292,7 @@ impl CheckpointStore {
     }
 
     fn forget(&self, session_id: &str) -> Result<(), String> {
+        self.forget_turns(session_id)?;
         let dir = self.session_dir(session_id);
         if dir.exists() {
             std::fs::remove_dir_all(dir).map_err(|e| e.to_string())?;
@@ -294,6 +306,9 @@ impl CheckpointStore {
         cwd: &str,
         relative: &str,
     ) -> Result<CheckpointFileDiff, String> {
+        if let Some(diff) = self.turn_file_diff(session_id, cwd, relative)? {
+            return Ok(diff);
+        }
         let Some(manifest) = self.load_matching(session_id, cwd)? else {
             return Err("Session changes are no longer available".into());
         };
@@ -383,6 +398,9 @@ impl CheckpointStore {
         cwd: &str,
         relative: Option<&str>,
     ) -> Result<CheckpointStatus, String> {
+        if let Some(status) = self.undo_turn(session_id, cwd, relative)? {
+            return Ok(status);
+        }
         let Some(mut manifest) = self.load_matching(session_id, cwd)? else {
             return Ok(CheckpointStatus { files: Vec::new() });
         };
@@ -423,6 +441,9 @@ impl CheckpointStore {
         cwd: &str,
         relative: Option<&str>,
     ) -> Result<CheckpointStatus, String> {
+        if let Some(status) = self.keep_turn(session_id, cwd, relative)? {
+            return Ok(status);
+        }
         let Some(mut manifest) = self.load_matching(session_id, cwd)? else {
             return Ok(CheckpointStatus { files: Vec::new() });
         };
@@ -569,6 +590,40 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     app.manage(CheckpointStore::new(dir));
     Ok(())
+}
+
+#[tauri::command]
+pub async fn session_checkpoint_begin_turn(
+    store: State<'_, CheckpointStore>,
+    session_id: String,
+    cwd: String,
+    turn_id: String,
+) -> Result<(), String> {
+    validate_id(&session_id, "session")?;
+    validate_id(&turn_id, "turn")?;
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        store.exclusive(|store| store.begin_turn(&session_id, &cwd, &turn_id))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn session_checkpoint_finish_turn(
+    store: State<'_, CheckpointStore>,
+    session_id: String,
+    cwd: String,
+    turn_id: String,
+) -> Result<(), String> {
+    validate_id(&session_id, "session")?;
+    validate_id(&turn_id, "turn")?;
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        store.exclusive(|store| store.finish_turn(&session_id, &cwd, &turn_id))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
