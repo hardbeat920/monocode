@@ -193,6 +193,12 @@ export const MODELS: AgentModel[] = [
     nativeId: "",
   },
   {
+    id: "muse:default",
+    harness: "muse",
+    name: "Configured model",
+    nativeId: "",
+  },
+  {
     id: "antigravity:gemini-3.8-flash-high",
     harness: "antigravity",
     name: "Gemini 3.8 Flash (High)",
@@ -210,6 +216,7 @@ export const DEFAULT_MODEL_ID: Record<HarnessId, string> = {
   omp: "omp:default",
   fx: "fx:zai/glm-5.2-fast",
   hermes: "hermes:default",
+  muse: "muse:default",
   antigravity: "antigravity:gemini-3.8-flash-high",
 };
 
@@ -239,6 +246,7 @@ const HARNESS_ORDER: HarnessId[] = [
   "omp",
   "fx",
   "hermes",
+  "muse",
   "antigravity",
 ];
 
@@ -372,6 +380,7 @@ export function resolveModel(harness: HarnessId, id?: string): AgentModel {
     const comparableSlug = comparableNativeId(harness, slug);
     const hits = available.filter((model) => {
       const native = model.nativeId ?? nativeIdFrom(model.id);
+      if (harness === "muse" && !native) return false;
       const comparableNative = comparableNativeId(harness, native);
       return (
         comparableNative.startsWith(comparableSlug) ||
@@ -406,9 +415,13 @@ export function resolveModel(harness: HarnessId, id?: string): AgentModel {
     const bundled = bundledById.get(id);
     if (bundled && bundled.harness === harness) return bundled;
 
-    // A saved concrete Claude version may be absent from both catalogs.
+    // A saved concrete model may be absent from both catalogs.
     // Keep the requested id so a new session does not silently switch models.
     const requested = id.trim();
+    if (harness === "muse" && /^muse:muse-spark-[a-z0-9.-]+$/.test(requested)) {
+      const nativeId = nativeIdForUnknownKey(requested);
+      return { id: requested, harness, name: nativeId, nativeId };
+    }
     if (harness === "claude" && /^claude:[a-z][a-z0-9-]*-\d/.test(requested)) {
       const nativeId = nativeIdForUnknownKey(requested);
       return { id: requested, harness, name: nativeId, nativeId };
@@ -968,6 +981,9 @@ function pickDefaultId(harness: HarnessId, models: AgentModel[]): string {
   }
   if (harness === "codex") {
     return models[0]?.id ?? "";
+  }
+  if (harness === "muse") {
+    return models[0]?.id ?? DEFAULT_MODEL_ID.muse;
   }
   if (harness === "grok") {
     return (

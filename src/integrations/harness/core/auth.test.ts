@@ -10,6 +10,7 @@ const child = vi.hoisted(() => ({
   resolveCursorBinary: vi.fn(async () => ({ path: "/bin/agent" })),
   resolveGrokBinary: vi.fn(async () => ({ path: "/bin/grok" })),
   resolveFxBinary: vi.fn(async () => ({ path: "/bin/fx" })),
+  resolveMuseBinary: vi.fn(async () => ({ path: "/bin/muse" })),
 }));
 
 vi.mock("./child", () => child);
@@ -124,5 +125,23 @@ describe("harness login", () => {
       "does not offer a single browser sign-in flow",
     );
     expect(child.spawnChild).not.toHaveBeenCalled();
+  });
+
+  it("uses the Muse CLI's account sign-in", async () => {
+    expect(supportsHarnessLogin("muse")).toBe(true);
+    const login = loginHarness("muse");
+    await vi.waitFor(() => expect(child.watchChild).toHaveBeenCalledOnce());
+    expect(child.spawnChild).toHaveBeenCalledWith(
+      "monocode-provider-login-test-window-muse",
+      "/bin/muse",
+      ["login"],
+      "/home/alice",
+      undefined,
+      "muse",
+    );
+    const onExit = child.watchChild.mock.calls[0]?.[2] as
+      ((code: number | null) => void) | undefined;
+    onExit?.(0);
+    await expect(login).resolves.toBeUndefined();
   });
 });

@@ -440,6 +440,7 @@ pub fn run() {
             harness::harness_resolve_fx,
             harness::harness_resolve_grok,
             harness::harness_resolve_hermes,
+            harness::harness_resolve_muse,
             harness::harness_resolve_antigravity,
             harness::harness_free_port,
             harness::harness_spawn,
@@ -587,15 +588,14 @@ pub fn run() {
 
     app.run(|handle, event| match event {
         #[cfg(target_os = "macos")]
-        tauri::RunEvent::Reopen { .. } => {
-            // A visible floating panel must not make a hidden workspace
-            // unreachable from the Dock.
+        // A visible floating panel must not make a hidden workspace
+        // unreachable from the Dock.
+        tauri::RunEvent::Reopen { .. }
             if !window::workspace_windows(handle)
                 .iter()
-                .any(|window| window.is_visible().unwrap_or(false))
-            {
-                let _ = window::show_hidden_or_open_new(handle);
-            }
+                .any(|window| window.is_visible().unwrap_or(false)) =>
+        {
+            let _ = window::show_hidden_or_open_new(handle);
         }
         tauri::RunEvent::Ready => {
             #[cfg(target_os = "macos")]

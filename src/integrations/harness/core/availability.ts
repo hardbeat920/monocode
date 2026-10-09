@@ -1,5 +1,6 @@
 import type { HarnessId } from "../../../features/sessions/model/session";
 import { HARNESSES } from "../../../features/sessions/model/session";
+import { IS_WIN } from "../../../platform/tauri/platform";
 import {
   resolveAntigravityBinary,
   resolveClaudeBinary,
@@ -8,6 +9,7 @@ import {
   resolveFxBinary,
   resolveGrokBinary,
   resolveHermesBinary,
+  resolveMuseBinary,
   resolveOmpBinary,
   resolveOpenCodeBinary,
   resolvePiBinary,
@@ -51,6 +53,12 @@ const CLI: Record<HarnessId, { name: string; install?: string }> = {
       "Install from hermes-agent.nousresearch.com, then run hermes model",
   },
   antigravity: { name: "Antigravity ACP server (agy_acp_server.par)" },
+  muse: {
+    name: "Muse Code CLI",
+    install: IS_WIN
+      ? "irm https://dev.meta.ai/install.ps1 | iex"
+      : "curl -fsSL https://dev.meta.ai/install.sh | sh",
+  },
 };
 
 let inflight: Promise<void> | null = null;
@@ -155,6 +163,14 @@ export function probeHarnessAvailability(
       if (id === "antigravity") {
         try {
           await resolveAntigravityBinary();
+          return [id, true] as const;
+        } catch {
+          return [id, false] as const;
+        }
+      }
+      if (id === "muse") {
+        try {
+          await resolveMuseBinary();
           return [id, true] as const;
         } catch {
           return [id, false] as const;

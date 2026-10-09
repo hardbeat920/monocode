@@ -1,4 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+it.each(["muse-spark-1.3", "muse-spark-1.3-contributor"])(
+  "preserves a saved Muse model %s before catalog discovery",
+  (nativeId) => {
+    resetHarnessModelOverlays();
+    expect(resolveModel("muse", `muse:${nativeId}`)).toMatchObject({
+      id: `muse:${nativeId}`,
+      harness: "muse",
+      nativeId,
+    });
+    expect(newSession("muse", "/tmp/project", `muse:${nativeId}`).model).toBe(
+      `muse:${nativeId}`,
+    );
+  },
+);
 import { newSession, type HarnessId } from "./session";
 import {
   MODELS,

@@ -17,6 +17,7 @@ let availability: HarnessAvailability = {
   omp: false,
   fx: false,
   hermes: false,
+  muse: false,
   antigravity: false,
 };
 let version = 0;

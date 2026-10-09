@@ -8,6 +8,7 @@ import * as omp from "../src/integrations/harness/providers/omp/omp";
 import * as fx from "../src/integrations/harness/providers/fx/fx";
 import * as hermes from "../src/integrations/harness/providers/hermes/hermes";
 import * as antigravity from "../src/integrations/harness/providers/antigravity/antigravity";
+import * as muse from "../src/integrations/harness/providers/muse/muse";
 import type {
   SendTurnInput,
   CompactContextInput,
@@ -145,6 +146,14 @@ export const hostProviders: Record<RemoteProvider, HostProvider> = {
     stop: antigravity.forgetAntigravitySession,
     bind: antigravity.bindAntigravitySession,
     approve: antigravity.respondAntigravityApproval,
+    answer: unsupportedQuestion,
+  },
+  muse: {
+    send: muse.sendMuseTurn,
+    cancel: muse.cancelMuseTurn,
+    stop: muse.forgetMuseSession,
+    bind: muse.bindMuseSession,
+    approve: muse.respondMuseApproval,
     answer: unsupportedQuestion,
   },
 };

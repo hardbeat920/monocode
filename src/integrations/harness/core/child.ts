@@ -409,6 +409,7 @@ async function resolveHarnessBinary(
     omp: "harness_resolve_omp",
     fx: "harness_resolve_fx",
     hermes: "harness_resolve_hermes",
+    muse: "harness_resolve_muse",
     antigravity: "harness_resolve_antigravity",
   };
   return invoke(command[provider]);
@@ -475,6 +476,12 @@ export function resolveAntigravityBinary(
     path: string;
     args: string[];
   }>;
+}
+
+export function resolveMuseBinary(
+  binaryPath?: string | null,
+): Promise<{ path: string }> {
+  return resolveHarnessBinary("muse", binaryPath);
 }
 
 export function freeHarnessPort(): Promise<number> {

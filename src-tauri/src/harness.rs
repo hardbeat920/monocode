@@ -794,6 +794,18 @@ pub fn harness_resolve_hermes() -> Result<CursorBinary, String> {
         })
 }
 
+/// Resolve Meta's account-authenticated Muse Code CLI.
+#[tauri::command(async)]
+pub fn harness_resolve_muse() -> Result<CursorBinary, String> {
+    resolve_muse()
+        .map(|path| CursorBinary {
+            path: path.to_string_lossy().into_owned(),
+        })
+        .ok_or_else(|| {
+            "Muse Code CLI not found. Install it from https://dev.meta.ai/docs/muse-code and run `muse login`, then retry.".into()
+        })
+}
+
 /// Antigravity's ACP server is separate from the interactive agy CLI.
 #[tauri::command(async)]
 pub fn harness_resolve_antigravity() -> Result<AntigravityBinary, String> {
@@ -1726,11 +1738,13 @@ fn is_harness_argv_token(part: &str) -> bool {
             | "omp"
             | "fx"
             | "hermes"
+            | "muse"
+            | "muse-bin"
             | "agy_acp_server.par"
             | "pi"
             | "worker-server"
             | "app-server"
-    )
+    ) || name.starts_with("muse-bin-")
 }
 
 #[cfg(any(all(unix, not(target_os = "linux")), test))]
@@ -1965,6 +1979,7 @@ fn resolve_harness_binary_default(provider: &str) -> Option<PathBuf> {
         "omp" => resolve_omp(),
         "fx" => resolve_fx(),
         "hermes" => resolve_hermes(),
+        "muse" => resolve_muse(),
         "antigravity" => resolve_antigravity(),
         _ => None,
     }
@@ -2010,6 +2025,7 @@ fn resolve_harness_binary_override(provider: &str, binary_path: &str) -> Result<
         "omp" => &["omp"],
         "fx" => &["fx"],
         "hermes" => &["hermes"],
+        "muse" => &["muse"],
         "antigravity" => &["agy_acp_server.par"],
         _ => {
             return Err(format!(
@@ -2083,6 +2099,7 @@ fn validate_harness_binary_version(provider: &str, path: &Path) -> Result<(), St
         "claude" => lower.contains("claude"),
         "codex" => lower.contains("codex"),
         "hermes" => lower.contains("hermes"),
+        "muse" => lower.contains("muse"),
         _ => true,
     };
     if has_version && provider_marker {
@@ -2373,6 +2390,10 @@ fn resolve_hermes() -> Option<PathBuf> {
     }
 
     first_binary(candidates)
+}
+
+fn resolve_muse() -> Option<PathBuf> {
+    resolve_gui_binary("muse")
 }
 
 fn resolve_antigravity() -> Option<PathBuf> {
@@ -3415,6 +3436,40 @@ mod tests {
         assert!(resolve_mcp_binary("claude", paths.get("codex").map(String::as_str)).is_err());
         assert!(resolve_mcp_binary("pi", paths.get("claude").map(String::as_str)).is_err());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn configured_muse_binary_is_checked_before_spawn() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!("monocode-muse-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let binary = root.join("muse");
+        std::fs::write(&binary, "#!/bin/sh\nprintf 'Muse Code 1.4.3\\n'\n").unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = binary.to_string_lossy();
+        assert_eq!(
+            resolve_harness_binary_override("muse", &path).unwrap(),
+            binary
+        );
+        assert!(is_resolved_harness_binary(&path, Some("muse"), Some(&path)));
+        assert!(resolve_harness_binary_override("codex", &path).is_err());
+
+        std::fs::write(&binary, "#!/bin/sh\nprintf 'Other CLI 1.4.3\\n'\n").unwrap();
+        assert!(resolve_harness_binary_override("muse", &path).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recognizes_muse_launcher_and_versioned_native_processes() {
+        assert!(looks_like_harness_argv(
+            "/home/user/.local/bin/muse exec --json"
+        ));
+        assert!(looks_like_harness_argv(
+            "/home/user/.local/bin/muse-bin-1.4.3-R5018.1 exec --json"
+        ));
+        assert!(!looks_like_harness_argv("/usr/bin/some-muse-tool"));
     }
 
     #[cfg(unix)]
