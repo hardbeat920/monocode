@@ -23,9 +23,10 @@ export function stopCursorGitText(): Promise<void> {
 export async function generateCursorCommitMessage(
   cwd: string,
   signal?: AbortSignal,
+  paths?: readonly string[],
 ): Promise<string> {
   signal?.throwIfAborted();
-  const context = await gitStagedContext(cwd);
+  const context = await gitStagedContext(cwd, paths);
   signal?.throwIfAborted();
   const output = await runCursorTextPrompt({
     cwd,
