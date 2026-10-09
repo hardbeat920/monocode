@@ -18,7 +18,16 @@ vi.mock("../../../shared/ui/Popover", () => ({
 }));
 
 import { AccessPicker } from "./AccessPicker";
-import { resetHarnessModelOverlays, setHarnessModels } from "../model/models";
+import {
+  LOCAL_MODEL_SOURCE,
+  ModelSourceContext,
+  type ModelSource,
+} from "./modelSource";
+import {
+  resetHarnessModelOverlays,
+  setHarnessModels,
+  type AgentModel,
+} from "../model/models";
 import type { HarnessId, RuntimeMode } from "../model/session";
 
 let container: HTMLDivElement;
@@ -48,6 +57,35 @@ function render(
   act(() =>
     root.render(
       createElement(AccessPicker, { harness, model, value, onChange }),
+    ),
+  );
+}
+
+/** Render as a remote session does, with the host's catalog as the source. */
+function renderRemote(
+  hostModels: AgentModel[],
+  harness: HarnessId,
+  model: string,
+  value: RuntimeMode,
+) {
+  const source: ModelSource = {
+    ...LOCAL_MODEL_SOURCE,
+    id: "remote:test",
+    modelsFor: (h) => hostModels.filter((m) => m.harness === h),
+    find: (id) => hostModels.find((m) => m.id === id),
+  };
+  act(() =>
+    root.render(
+      createElement(
+        ModelSourceContext.Provider,
+        { value: source },
+        createElement(AccessPicker, {
+          harness,
+          model,
+          value,
+          onChange: () => undefined,
+        }),
+      ),
     ),
   );
 }
@@ -155,5 +193,21 @@ describe("AccessPicker", () => {
     expect(options()).toHaveLength(3);
     press("Enter");
     expect(onChange).toHaveBeenCalledExactlyOnceWith("full-access");
+  });
+
+  it("offers Auto in a remote session when only the host supports it", () => {
+    setHarnessModels("claude", claude(false));
+    renderRemote(claude(true), "claude", "claude:m", "auto");
+    expect(trigger().getAttribute("aria-label")).toBe("Auto");
+    open();
+    expect(options()).toContain("Auto");
+  });
+
+  it("hides Auto in a remote session when only this computer supports it", () => {
+    setHarnessModels("claude", claude(true));
+    renderRemote(claude(false), "claude", "claude:m", "auto");
+    expect(trigger().getAttribute("aria-label")).toBe("Auto-accept edits");
+    open();
+    expect(options()).not.toContain("Auto");
   });
 });

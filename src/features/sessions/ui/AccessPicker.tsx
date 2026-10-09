@@ -24,6 +24,7 @@ import {
   runtimeModesFor,
   subscribeModels,
 } from "../model/models";
+import { useModelSource } from "./modelSource";
 import { Popover } from "../../../shared/ui/Popover";
 
 type Props = {
@@ -58,10 +59,12 @@ export function AccessPicker({
 }: Props) {
   // Re-render when a late catalog discovery changes which modes a model offers.
   useSyncExternalStore(subscribeModels, getModelSnapshot, getModelSnapshot);
-  const modes = runtimeModesFor(harness, model);
+  // A remote session's capabilities come from its host's catalog, not ours.
+  const source = useModelSource();
+  const modes = runtimeModesFor(harness, model, source);
   // The stored mode is the user's choice and is left alone; a model that can't
   // do it just shows (and runs with) the closest preceding supported mode.
-  const value = coerceRuntimeMode(harness, model, requested);
+  const value = coerceRuntimeMode(harness, model, requested, source);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(() => Math.max(0, modes.indexOf(value)));
   const root = useRef<HTMLDivElement>(null);

@@ -368,6 +368,16 @@ const HARNESS_RUNTIME_MODES: Record<HarnessId, RuntimeMode[]> = {
 };
 
 /**
+ * Where a capability check reads models: this computer's catalog by default,
+ * or, for a remote session, the host's (a `ModelSource` fits this shape).
+ */
+export type ModelCatalog = {
+  find(id: string): AgentModel | undefined;
+};
+
+const LOCAL_CATALOG: ModelCatalog = { find: (id) => lookupModel(id) };
+
+/**
  * Access modes offered for a model. Auto also needs the model: Claude only
  * reports `supportsAutoMode` when it is true, so an unconfirmed model (no live
  * catalog yet, or an older CLI) is treated as unsupported rather than risking a
@@ -377,8 +387,9 @@ const HARNESS_RUNTIME_MODES: Record<HarnessId, RuntimeMode[]> = {
 export function runtimeModesFor(
   harness: HarnessId,
   modelId: string,
+  catalog: ModelCatalog = LOCAL_CATALOG,
 ): RuntimeMode[] {
-  const supported = lookupModel(modelId)?.supportsAuto;
+  const supported = catalog.find(modelId)?.supportsAuto;
   const autoOk =
     harness === "claude" ? supported === true : supported !== false;
   return (HARNESS_RUNTIME_MODES[harness] ?? EDIT_MODES).filter(
@@ -394,8 +405,9 @@ export function coerceRuntimeMode(
   harness: HarnessId,
   modelId: string,
   mode: RuntimeMode,
+  catalog: ModelCatalog = LOCAL_CATALOG,
 ): RuntimeMode {
-  const offered = runtimeModesFor(harness, modelId);
+  const offered = runtimeModesFor(harness, modelId, catalog);
   for (let i = RUNTIME_MODES.indexOf(mode); i >= 0; i--) {
     if (offered.includes(RUNTIME_MODES[i])) return RUNTIME_MODES[i];
   }
