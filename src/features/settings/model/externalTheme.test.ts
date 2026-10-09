@@ -9,12 +9,35 @@ import {
   loadThemeSaturation,
   saveThemeDarkLightness,
 } from "./appearance";
-import { applyExternalThemeSource, parseExternalTheme } from "./externalTheme";
+import {
+  applyExternalThemeSource,
+  EXTERNAL_THEME_CHANGED_EVENT,
+  initExternalTheme,
+  parseExternalTheme,
+} from "./externalTheme";
 
+const tauri = vi.hoisted(() => ({
+  invoke: vi.fn((): Promise<unknown> => Promise.resolve()),
+  listeners: new Map<string, (event: { payload: unknown }) => void>(),
+}));
 vi.mock("@tauri-apps/api/core", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tauri-apps/api/core")>()),
-  invoke: vi.fn(() => Promise.resolve()),
+  invoke: tauri.invoke,
 }));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(
+    (name: string, handler: (event: { payload: unknown }) => void) => {
+      tauri.listeners.set(name, handler);
+      return Promise.resolve(() => {});
+    },
+  ),
+}));
+
+const LATTE = JSON.stringify({
+  appearance: "light",
+  background: "#eff1f5",
+  accent: "#1e66f5",
+});
 
 const OSAKA_JADE = JSON.stringify({
   appearance: "dark",
@@ -126,9 +149,40 @@ describe("applyExternalThemeSource", () => {
     expect(loadThemeDarkLightness()).toBe(9);
   });
 
+  it("repaints a window that loaded settings before another window applied the file", () => {
+    applyExternalThemeSource(OSAKA_JADE, { onlyIfNew: true });
+    // This window painted the defaults before the other one saved the file.
+    document.documentElement.style.setProperty("--theme-hue", "240");
+    document.documentElement.classList.add("theme-light");
+
+    applyExternalThemeSource(OSAKA_JADE, { onlyIfNew: true });
+
+    const root = document.documentElement;
+    expect(root.style.getPropertyValue("--theme-hue")).toBe("158");
+    expect(root.classList.contains("theme-light")).toBe(false);
+  });
+
   it("ignores a missing or unreadable file", () => {
     applyExternalThemeSource(null, { onlyIfNew: false });
     applyExternalThemeSource("not json", { onlyIfNew: false });
     expect(localStorage.length).toBe(0);
+  });
+});
+
+describe("initExternalTheme", () => {
+  it("keeps a change heard while the launch read was in flight", async () => {
+    let finishRead: (raw: string) => void = () => {};
+    tauri.invoke.mockImplementationOnce(
+      () => new Promise((resolve) => (finishRead = resolve)),
+    );
+
+    const started = initExternalTheme();
+    await vi.waitFor(() => expect(tauri.invoke).toHaveBeenCalled());
+    tauri.listeners.get(EXTERNAL_THEME_CHANGED_EVENT)?.({ payload: LATTE });
+    finishRead(OSAKA_JADE);
+    await started;
+
+    expect(loadThemePreference()).toBe("light");
+    expect(loadAccentColor()).toBe("#1e66f5");
   });
 });

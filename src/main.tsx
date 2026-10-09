@@ -28,7 +28,7 @@ performance.mark("monocode:bootstrap");
 const appLoaded = import("./app/App");
 
 initAppearance();
-initExternalTheme();
+void initExternalTheme();
 initSounds();
 // Prime the real home directory before the first render so every `~/` file
 // reference resolves consistently. The IPC call is local and failures remain

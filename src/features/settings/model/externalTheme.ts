@@ -7,6 +7,11 @@ import {
   applyThemePreference,
   applyThemeTint,
   type ColorScheme,
+  loadAccentColor,
+  loadThemeDarkLightness,
+  loadThemeHue,
+  loadThemePreference,
+  loadThemeSaturation,
   saveAccentColor,
   saveThemeDarkLightness,
   saveThemeHue,
@@ -100,26 +105,52 @@ function writeApplied(raw: string) {
   }
 }
 
+/** Repaints this window from the saved settings, which another window may
+ * have updated from the file after this one ran `initAppearance`. */
+function reapplySavedAppearance() {
+  applyThemeTint(loadThemeHue(), loadThemeSaturation());
+  applyThemeDarkLightness(loadThemeDarkLightness());
+  applyAccentColor(loadAccentColor());
+  applyThemePreference(loadThemePreference());
+}
+
 /** Applies `raw` unless it is the file this install last applied. */
 export function applyExternalThemeSource(
   raw: string | null,
   { onlyIfNew }: { onlyIfNew: boolean },
 ) {
   if (raw == null) return;
-  if (onlyIfNew && readApplied() === raw) return;
+  if (onlyIfNew && readApplied() === raw) {
+    reapplySavedAppearance();
+    return;
+  }
   const theme = parseExternalTheme(raw);
   if (!theme) return;
   applyExternalTheme(theme);
   writeApplied(raw);
 }
 
-export function initExternalTheme() {
-  void invoke<string | null>("read_external_theme")
-    .then((raw) => applyExternalThemeSource(raw, { onlyIfNew: true }))
-    .catch(() => {});
+export async function initExternalTheme() {
+  let changes = 0;
   // Every window hears the change, so each applies it even when another
-  // window already recorded it as applied.
-  void listen<string | null>(EXTERNAL_THEME_CHANGED_EVENT, (event) => {
-    applyExternalThemeSource(event.payload, { onlyIfNew: false });
-  }).catch(() => {});
+  // window already recorded it as applied. Listening before the first read
+  // means a change during launch is either read or heard, never lost.
+  try {
+    await listen<string | null>(EXTERNAL_THEME_CHANGED_EVENT, (event) => {
+      changes += 1;
+      applyExternalThemeSource(event.payload, { onlyIfNew: false });
+    });
+  } catch {
+    // no Tauri host (browser preview)
+  }
+  const changesBeforeRead = changes;
+  try {
+    const raw = await invoke<string | null>("read_external_theme");
+    // A change heard while the read was in flight is newer than its result.
+    if (changes === changesBeforeRead) {
+      applyExternalThemeSource(raw, { onlyIfNew: true });
+    }
+  } catch {
+    // no Tauri host (browser preview)
+  }
 }
