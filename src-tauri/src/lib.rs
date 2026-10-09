@@ -13,6 +13,7 @@ mod cursor_store;
 mod devin_config;
 mod devin_usage;
 mod external_editor;
+mod external_theme;
 mod fs;
 mod gitlab;
 mod harness;
@@ -252,6 +253,7 @@ pub fn run() {
             session_store::init(app.handle())?;
             control::init(app.handle())?;
             reminders::init(app.handle());
+            external_theme::init(app.handle());
             checkpoint::init(app.handle())?;
             menu::install(app.handle())?;
             #[cfg(target_os = "windows")]
@@ -595,6 +597,7 @@ pub fn run() {
             window_transfer::stage_window_transfer,
             window_transfer::take_window_transfer,
             chat_background::save_chat_background,
+            external_theme::read_external_theme,
             chat_background::remove_chat_background,
             chat_background::save_project_chat_background,
             chat_background::remove_project_chat_background,

@@ -6,6 +6,7 @@ import {
   activateWindowAppearance,
   initAppearance,
 } from "./features/settings/model/appearance";
+import { initExternalTheme } from "./features/settings/model/externalTheme";
 import { initSounds } from "./features/settings/model/sounds";
 import {
   abortQuit,
@@ -27,6 +28,7 @@ performance.mark("monocode:bootstrap");
 const appLoaded = import("./app/App");
 
 initAppearance();
+initExternalTheme();
 initSounds();
 // Prime the real home directory before the first render so every `~/` file
 // reference resolves consistently. The IPC call is local and failures remain
