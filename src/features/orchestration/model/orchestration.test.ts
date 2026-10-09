@@ -385,6 +385,69 @@ describe("local orchestration", () => {
     expect(unavailable.store.enable).not.toHaveBeenCalled();
     expect(unavailable.host.submit).not.toHaveBeenCalled();
   });
+  it("rechecks project choices before approving an assignment", async () => {
+    const f = setup();
+    f.lead.busy = false;
+    const choices = vi.fn((_project: string) => []);
+    f.host.choices = choices;
+
+    await expect(
+      f.manager.startApproved("lead", "card", proposal()),
+    ).rejects.toThrow("An assigned model is no longer available");
+    expect(choices).toHaveBeenCalledWith("/repo");
+    expect(f.store.enable).not.toHaveBeenCalled();
+    expect(f.host.createWorker).not.toHaveBeenCalled();
+  });
+  it("rechecks project choices before starting a queued worker", async () => {
+    const f = setup();
+    f.lead.busy = false;
+    let visible = true;
+    const choices = vi.fn((project: string) =>
+      visible && project === "/repo"
+        ? [
+            {
+              harness: "codex" as const,
+              models: [{ id: "codex:test", name: "Test" }],
+            },
+          ]
+        : [],
+    );
+    f.host.choices = choices;
+
+    await f.manager.startApproved("lead", "card", proposal());
+    await vi.waitFor(() => expect(f.host.createWorker).toHaveBeenCalledOnce());
+    const first = f.tasks().find((task) => task.title === "Types")!;
+    await vi.waitFor(() =>
+      expect(f.completions.has(first.sessionId)).toBe(true),
+    );
+    visible = false;
+    expect(
+      ((await f.call("list")) as { harnesses: unknown[] }).harnesses,
+    ).toEqual([]);
+    await expect(f.delegate(["src/another"])).rejects.toThrow(
+      "Worker harness is unavailable",
+    );
+    f.completions.get(first.sessionId)!({
+      status: "completed",
+      text: "Types ready",
+    });
+    await vi.waitFor(() =>
+      expect(f.tasks().find((task) => task.id === first.id)?.status).toBe(
+        "completed",
+      ),
+    );
+    await f.call("review", { taskId: first.id });
+    await vi.waitFor(() =>
+      expect(f.tasks().find((task) => task.title === "UI")?.status).toBe(
+        "failed",
+      ),
+    );
+    expect(f.host.createWorker).toHaveBeenCalledOnce();
+    expect(f.tasks().find((task) => task.title === "UI")?.error).toContain(
+      "no longer available",
+    );
+    expect(choices).toHaveBeenCalledWith("/repo");
+  });
   it("treats directory scopes as overlapping only at path boundaries", () => {
     expect(scopesOverlap(["/repo/src"], ["/repo/src/file.ts"])).toBe(true);
     expect(scopesOverlap(["/repo/src"], ["/repo/src2/file.ts"])).toBe(false);

@@ -45,7 +45,6 @@ import {
   type ControlOutcome,
 } from "../features/orchestration/model/orchestration";
 import { modelsFor } from "../features/sessions/model/models";
-import { isHarnessAvailable } from "../integrations/harness/core/availability";
 import {
   completeOrchestrationProposal,
   completeOrRepairOrchestrationProposal,
@@ -56,7 +55,10 @@ import {
   withOrchestrationProposal,
   type OrchestrationProposal,
 } from "../features/orchestration/model/orchestrationPlan";
-import { discoverOrchestrationSettings } from "../features/orchestration/model/orchestrationCatalog";
+import {
+  discoverOrchestrationSettings,
+  isWorkerHarnessEligible,
+} from "../features/orchestration/model/orchestrationCatalog";
 import {
   attachOrchestrationWorkers,
   consolidateOrchestrationTabs,
@@ -10138,8 +10140,10 @@ function Workspace({
     orchestrator.bind({
       session: (id) => sessionsRef.current.find((session) => session.id === id),
       sessions: () => sessionsRef.current,
-      choices: () =>
-        HARNESSES.filter(isHarnessAvailable).map((harness) => ({
+      choices: (project) =>
+        HARNESSES.filter((harness) =>
+          isWorkerHarnessEligible(project, harness),
+        ).map((harness) => ({
           harness,
           models: modelsFor(harness).map(({ id, name }) => ({ id, name })),
         })),

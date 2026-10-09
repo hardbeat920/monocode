@@ -1,4 +1,4 @@
-import { HARNESSES } from "../../sessions/model/session";
+import { HARNESSES, type HarnessId } from "../../sessions/model/session";
 import { isProviderHidden } from "../../sessions/model/projectProviders";
 import {
   isPickerProviderVisible,
@@ -11,14 +11,22 @@ import {
 import { refreshHarnessCatalogs } from "../../../integrations/harness/core/registry";
 import { validateOrchestrationSettings } from "./orchestrationPlan";
 
+export function isWorkerHarnessEligible(
+  project: string | undefined,
+  harness: HarnessId,
+): boolean {
+  return (
+    isHarnessAvailable(harness) &&
+    isPickerProviderVisible(harness) &&
+    !isProviderHidden(project, harness)
+  );
+}
+
 /** Discover worker choices only when the user sends an orchestration request. */
 export async function discoverOrchestrationSettings(project?: string) {
   await probeHarnessAvailability();
   // Worker sessions obey the same global and project visibility as the picker.
-  const isEligible = (id: (typeof HARNESSES)[number]) =>
-    isHarnessAvailable(id) &&
-    isPickerProviderVisible(id) &&
-    !isProviderHidden(project, id);
+  const isEligible = (id: HarnessId) => isWorkerHarnessEligible(project, id);
   const installed = HARNESSES.filter(isEligible);
   await refreshHarnessCatalogs(installed);
   return validateOrchestrationSettings({
