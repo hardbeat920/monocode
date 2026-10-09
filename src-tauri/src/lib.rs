@@ -19,6 +19,7 @@ mod harness;
 mod harness_updates;
 mod inbox_media;
 mod jira;
+mod jsonc;
 mod linear;
 mod link_preview;
 #[cfg(target_os = "macos")]

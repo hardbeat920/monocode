@@ -51,7 +51,14 @@ export function devinAskEditsConfig(user: string | null): string {
   let config: unknown = {};
   if (user?.trim()) {
     try {
-      config = JSON.parse(user);
+      // Devin accepts JSON comments. Match quoted strings first so URLs,
+      // escaped quotes and comment markers inside settings stay untouched.
+      config = JSON.parse(
+        user.replace(
+          /"(?:\\[\s\S]|[^"\\])*"|\/\/[^\r\n]*|\/\*[\s\S]*?\*\//g,
+          (token) => (token.startsWith('"') ? token : " "),
+        ),
+      );
     } catch (error) {
       throw new Error(`Devin's config.json is not valid JSON (${errorDetail(error)}). ${help}`);
     }

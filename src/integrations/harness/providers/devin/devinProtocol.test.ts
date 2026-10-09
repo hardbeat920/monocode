@@ -91,9 +91,45 @@ describe("devin auth helpers", () => {
       JSON.parse(devinAskEditsConfig(JSON.stringify(merged))).permissions.ask,
     ).toEqual(["exec", DEVIN_ASK_EDITS_RULE]);
     // Fails closed rather than starting Supervised without the rule.
-    expect(() => devinAskEditsConfig("{ // comment\n}")).toThrow(/not valid JSON/);
+    expect(() => devinAskEditsConfig("{} /* unterminated")).toThrow(/not valid JSON/);
     expect(() => devinAskEditsConfig("[]")).toThrow(/not a JSON object/);
     expect(() => devinAskEditsConfig('{"permissions":{"ask":"x"}}')).toThrow(/not a list/);
+  });
+
+  it("preserves settings and permission rules in Devin's commented config", () => {
+    const user = String.raw`{
+      // User-wide model and proxy settings.
+      "agent": { "model": "swe-2-high" },
+      "proxy": { "url": "https://example.invalid/a//b/*literal*/" },
+      "label": "雪 \" // still a string /* not a comment */",
+      "permissions": {
+        "allow": ["Exec(git status)"], /* Keep existing grants. */
+        "deny": ["Write(.env*)"],
+        "ask": ["exec"]
+      }
+    } // A trailing comment is also valid.`;
+    const merged = JSON.parse(devinAskEditsConfig(user));
+    expect(merged.agent).toEqual({ model: "swe-2-high" });
+    expect(merged.proxy.url).toBe("https://example.invalid/a//b/*literal*/");
+    expect(merged.label).toBe('雪 " // still a string /* not a comment */');
+    expect(merged.permissions).toEqual({
+      allow: ["Exec(git status)"],
+      deny: ["Write(.env*)"],
+      ask: ["exec", DEVIN_ASK_EDITS_RULE],
+    });
+    expect(
+      JSON.parse(devinAskEditsConfig("{ // comment\r\n}")).permissions.ask,
+    ).toEqual([DEVIN_ASK_EDITS_RULE]);
+  });
+
+  it.each([
+    '{} /* unterminated',
+    '{"a": 1/* a comment cannot join number tokens */2}',
+    '{"permissions": {"ask": /* still the wrong type */ "Write(**)"}}',
+    '{"permissions": [/* still the wrong type */]}',
+    '{"a": "unterminated // comment',
+  ])("still refuses malformed or unsafe commented configs: %s", (user) => {
+    expect(() => devinAskEditsConfig(user)).toThrow();
   });
 
   it("only treats a vanished conversation as safe to replace", () => {

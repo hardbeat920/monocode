@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 
-use crate::dirs_home;
+use crate::{dirs_home, jsonc::strip_jsonc_comments};
 
 pub(crate) const ASK_EDITS_RULE: &str = "Write(**)";
 
@@ -60,8 +60,13 @@ fn read_user_config() -> Result<Option<String>, String> {
 pub(crate) fn ask_before_edits(user: Option<&str>) -> Result<String, String> {
     const HELP: &str = "Supervised mode needs it to make Devin ask before edits.";
     let mut config = match user.map(str::trim).filter(|text| !text.is_empty()) {
-        Some(text) => serde_json::from_str::<Value>(text)
-            .map_err(|e| format!("Devin's config.json is not valid JSON ({e}). {HELP}"))?,
+        Some(text) => {
+            let cleaned = strip_jsonc_comments(text).ok_or_else(|| {
+                format!("Devin's config.json has an unterminated comment. {HELP}")
+            })?;
+            serde_json::from_str::<Value>(&cleaned)
+                .map_err(|e| format!("Devin's config.json is not valid JSON ({e}). {HELP}"))?
+        }
         None => json!({}),
     };
     let ask = config
@@ -162,10 +167,56 @@ mod tests {
 
     #[test]
     fn refuses_configs_it_cannot_extend() {
-        assert!(ask_before_edits(Some("{ // comment\n}")).is_err());
+        assert!(ask_before_edits(Some("{} /* unterminated")).is_err());
         assert!(ask_before_edits(Some("[]")).is_err());
         assert!(ask_before_edits(Some(r#"{"permissions":[]}"#)).is_err());
         assert!(ask_before_edits(Some(r#"{"permissions":{"ask":"Write(**)"}}"#)).is_err());
+    }
+
+    #[test]
+    fn preserves_settings_and_permissions_in_commented_configs() {
+        let user = r#"{
+            // User-wide model and proxy settings.
+            "agent": { "model": "swe-2-high" },
+            "proxy": { "url": "https://example.invalid/a//b/*literal*/" },
+            "label": "雪 \" // still a string /* not a comment */",
+            "permissions": {
+                "allow": ["Exec(git status)"], /* Keep existing grants. */
+                "deny": ["Write(.env*)"],
+                "ask": ["exec"]
+            }
+        } // A trailing comment is also valid."#;
+        let merged = ask_before_edits(Some(user)).unwrap();
+        let value: Value = serde_json::from_str(&merged).unwrap();
+        assert_eq!(value["agent"]["model"], "swe-2-high");
+        assert_eq!(
+            value["proxy"]["url"],
+            "https://example.invalid/a//b/*literal*/"
+        );
+        assert_eq!(
+            value["label"],
+            "雪 \" // still a string /* not a comment */"
+        );
+        assert_eq!(value["permissions"]["allow"], json!(["Exec(git status)"]));
+        assert_eq!(value["permissions"]["deny"], json!(["Write(.env*)"]));
+        assert_eq!(ask_rules(&merged), vec!["exec", ASK_EDITS_RULE]);
+        assert_eq!(
+            ask_rules(&ask_before_edits(Some("{ // comment\r\n}")).unwrap()),
+            vec![ASK_EDITS_RULE]
+        );
+    }
+
+    #[test]
+    fn malformed_commented_configs_still_fail_closed() {
+        for user in [
+            "{} /* unterminated",
+            r#"{"a": 1/* a comment cannot join number tokens */2}"#,
+            r#"{"permissions": {"ask": /* still the wrong type */ "Write(**)"}}"#,
+            r#"{"permissions": [/* still the wrong type */]}"#,
+            r#"{"a": "unterminated // comment"#,
+        ] {
+            assert!(ask_before_edits(Some(user)).is_err(), "Accepted {user}");
+        }
     }
 
     #[test]

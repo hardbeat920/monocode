@@ -1,13 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   mkdtempSync,
+  mkdirSync,
   readFileSync,
   writeFileSync,
   rmSync,
   realpathSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { HostChildBackend } from "./child-backend";
 import { HostStore } from "./store";
 import { HostEngine } from "./engine";
@@ -19,6 +20,12 @@ import {
   acquireHarnessBridge,
   configureChildBackend,
 } from "../src/integrations/harness/core/child";
+
+const fixtureHome = vi.hoisted(() => ({ path: "" }));
+vi.mock("node:os", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:os")>();
+  return { ...original, homedir: () => fixtureHome.path };
+});
 
 // Real subprocesses exercise framing, startup, stdout delivery and teardown
 // through the existing production adapters without contacting a paid model.
@@ -91,6 +98,23 @@ describe("existing providers over headless process I/O", () => {
     directory = realpathSync(
       mkdtempSync(join(tmpdir(), "monocode-provider-test-")),
     );
+    fixtureHome.path = directory;
+    const configHome = join(directory, ".config");
+    vi.stubEnv("XDG_CONFIG_HOME", configHome);
+    vi.stubEnv("APPDATA", configHome);
+    mkdirSync(join(configHome, "devin"), { recursive: true });
+    writeFileSync(
+      join(configHome, "devin", "config.json"),
+      `{
+        // Preserve the user's settings when adding supervised permissions.
+        "agent": { "model": "swe-2-high" },
+        "permissions": {
+          "allow": ["Exec(git status)"],
+          "deny": ["Write(.env*)"],
+          "ask": ["exec"]
+        }
+      }`,
+    );
     const binary = join(directory, "provider.cjs");
     writeFileSync(binary, fixture, { mode: 0o700 });
     writeFileSync(
@@ -120,6 +144,8 @@ describe("existing providers over headless process I/O", () => {
     release?.();
     store?.close();
     if (directory) rmSync(directory, { recursive: true, force: true });
+    vi.unstubAllEnvs();
+    fixtureHome.path = "";
   });
 
   it("discovers host models in parallel without probe process collisions", async () => {
@@ -236,7 +262,8 @@ describe("existing providers over headless process I/O", () => {
       expect(state.providerSessionId).toBe("fixture_acp");
       if (harness === "devin") {
         // The host reuses the key `devin auth login` left on its own disk.
-        expect(readFileSync(join(directory, "calls.log"), "utf8")).toContain(
+        const log = readFileSync(join(directory, "calls.log"), "utf8");
+        expect(log).toContain(
           JSON.stringify({
             authenticate: {
               methodId: "devin-browser",
@@ -244,6 +271,24 @@ describe("existing providers over headless process I/O", () => {
             },
           }),
         );
+        const args: string[] = log
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line))
+          .find((call) => call.claudeArgs?.includes("--config"))?.claudeArgs;
+        expect(args).toContain("acp");
+        const configPath = args[args.indexOf("--config") + 1];
+        expect(dirname(configPath)).toBe(
+          join(directory, ".monocode-host", "devin"),
+        );
+        expect(JSON.parse(readFileSync(configPath, "utf8"))).toEqual({
+          agent: { model: "swe-2-high" },
+          permissions: {
+            allow: ["Exec(git status)"],
+            deny: ["Write(.env*)"],
+            ask: ["exec", "Write(**)"],
+          },
+        });
       }
     },
   );
