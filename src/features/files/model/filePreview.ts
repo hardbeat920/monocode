@@ -11,6 +11,9 @@ const IMAGE_EXTENSIONS = new Set([
   ".ico",
 ]);
 
+// "%PDF-"
+const PDF_MAGIC = [0x25, 0x50, 0x44, 0x46, 0x2d];
+
 /**
  * Whether a path belongs to the image viewer, decided before anything is read.
  *
@@ -18,9 +21,24 @@ const IMAGE_EXTENSIONS = new Set([
  * which offers its own rendered preview alongside the source.
  */
 export function isImagePath(path: string): boolean {
-  const name = basename(path).toLowerCase();
-  const extension = name.includes(".") ? name.slice(name.lastIndexOf(".")) : "";
-  return IMAGE_EXTENSIONS.has(extension);
+  return IMAGE_EXTENSIONS.has(extensionOf(path));
+}
+
+/** Whether a path belongs to the PDF viewer, decided before anything is read. */
+export function isPdfPath(path: string): boolean {
+  return extensionOf(path) === ".pdf";
+}
+
+/**
+ * Whether bytes hold a PDF. The spec lets the `%PDF-` header sit anywhere in
+ * the first 1024 bytes, and pdf.js accepts files that use that allowance.
+ */
+export function isPdfBytes(bytes: Uint8Array): boolean {
+  const head = bytes.subarray(0, 1024);
+  for (let index = 0; index + PDF_MAGIC.length <= head.length; index += 1) {
+    if (startsWith(head.subarray(index), PDF_MAGIC)) return true;
+  }
+  return false;
 }
 
 /**
@@ -64,6 +82,11 @@ export function formatFileSize(bytes: number): string {
     unit += 1;
   }
   return `${size < 10 ? size.toFixed(1) : Math.round(size)} ${units[unit]}`;
+}
+
+function extensionOf(path: string): string {
+  const name = basename(path).toLowerCase();
+  return name.includes(".") ? name.slice(name.lastIndexOf(".")) : "";
 }
 
 function startsWith(bytes: Uint8Array, magic: number[]): boolean {
