@@ -209,6 +209,14 @@ export type DevinModelVariant = {
   name: string;
   effort?: string;
   fast: boolean;
+  /** `fusion-*` ids pair a lead model and effort with a sidekick model. */
+  fusion?: {
+    lead: string;
+    leadName: string;
+    leadEffort?: string;
+    sidekick: string;
+    sidekickName: string;
+  };
 };
 
 /**
@@ -256,6 +264,31 @@ export function devinModelChoices(
   return flattenChoices(option?.options);
 }
 
+export type DevinThoughtLevel = {
+  /** Config option id, usually `thought_level`. */
+  id: string;
+  choices: Array<{ value: string; label: string }>;
+  current?: string;
+};
+
+/**
+ * Newer Devin CLIs moved effort off the model list into a session-wide
+ * `thought_level` select ("No Thinking" / "High" / "Max").
+ */
+export function devinThoughtLevel(raw: unknown): DevinThoughtLevel | null {
+  const options = Array.isArray(raw) ? raw : asRecord(raw)?.configOptions;
+  const option = (Array.isArray(options) ? options : [])
+    .map(asRecord)
+    .find(
+      (item) =>
+        item?.category === "thought_level" || item?.id === "thought_level",
+    );
+  const choices = flattenChoices(option?.options);
+  if (!option || choices.length === 0) return null;
+  const current = stringField(option, "currentValue");
+  return { id: String(option.id), choices, ...(current ? { current } : {}) };
+}
+
 /** Names are more regular than ids: `swe-1-7-lightning` is "Lightning Max". */
 function parseDevinVariant(name: string): { base: string; effort?: string; fast: boolean } {
   let rest = name.trim();
@@ -283,6 +316,37 @@ function familyKey(base: string): string {
   return base.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
+/** Effort survives as an id suffix on CLIs that dropped it from the names. */
+const EFFORT_ID_SUFFIX = /-(none|minimal|low|medium|high|xhigh|max)$/i;
+
+/** `fusion-<lead>-<effort>-sidekick-<sidekick>` → lead/sidekick parts. */
+function devinFusionParts(
+  value: string,
+  label: string,
+): DevinModelVariant["fusion"] {
+  if (!value.startsWith("fusion-")) return undefined;
+  const rest = value.slice("fusion-".length);
+  const at = rest.indexOf("-sidekick-");
+  if (at <= 0) return undefined;
+  const leadPart = rest.slice(0, at);
+  const sidekick = rest.slice(at + "-sidekick-".length);
+  if (!leadPart || !sidekick) return undefined;
+  const leadEffort = EFFORT_ID_SUFFIX.exec(leadPart)?.[1]?.toLowerCase();
+  const lead = leadEffort
+    ? leadPart.slice(0, leadPart.length - leadEffort.length - 1)
+    : leadPart;
+  // "Fusion (Claude Fable 5.1 Medium + SWE-2 Medium)" names both halves.
+  let leadName = lead;
+  let sidekickName = sidekick;
+  const inner = /^fusion\s*\((.*)\)\s*$/i.exec(label.trim())?.[1];
+  const plus = inner?.indexOf(" + ") ?? -1;
+  if (inner && plus > 0) {
+    leadName = parseDevinVariant(inner.slice(0, plus).trim()).base;
+    sidekickName = inner.slice(plus + 3).trim();
+  }
+  return { lead, leadName, leadEffort, sidekick, sidekickName };
+}
+
 export function devinModelFamilies(
   choices: Array<{ value: string; label: string }>,
 ): DevinModelFamily[] {
@@ -291,10 +355,29 @@ export function devinModelFamilies(
   for (const { value, label } of choices) {
     if (seen.has(value)) continue;
     seen.add(value);
-    const parsed = parseDevinVariant(label);
-    const key = familyKey(parsed.base) || value;
-    const family = families.get(key) ?? { key, name: parsed.base, variants: [] };
-    family.variants.push({ value, name: label, effort: parsed.effort, fast: parsed.fast });
+    const fusion = devinFusionParts(value, label);
+    const parsed = fusion ? { base: "Fusion", fast: false } : parseDevinVariant(label);
+    const effort = fusion
+      ? undefined
+      : (parsed.effort ?? EFFORT_ID_SUFFIX.exec(value)?.[1]?.toLowerCase());
+    // Show the id's effort in the name the way Devin's own picker does.
+    const name =
+      fusion || parsed.effort || !effort || effort === "none"
+        ? label
+        : `${label} ${EFFORT_LABELS[effort] ?? effort}`;
+    const key = fusion ? "fusion" : familyKey(parsed.base) || value;
+    const family = families.get(key) ?? {
+      key,
+      name: fusion ? "Fusion" : parsed.base,
+      variants: [],
+    };
+    family.variants.push({
+      value,
+      name,
+      effort,
+      fast: parsed.fast,
+      ...(fusion ? { fusion } : {}),
+    });
     families.set(key, family);
   }
   return [...families.values()].flatMap((family) =>
@@ -311,6 +394,8 @@ export function devinModelFamilies(
 
 /** Every variant must differ by effort/speed, and effort must be all-or-none. */
 function isCleanFamily(family: DevinModelFamily): boolean {
+  // Fusion variants differ by lead and sidekick, not effort or speed.
+  if (family.variants.some((variant) => variant.fusion)) return true;
   if (family.variants.length < 2) return true;
   const withEffort = family.variants.filter((variant) => variant.effort).length;
   if (withEffort !== 0 && withEffort !== family.variants.length) return false;
@@ -323,10 +408,33 @@ function defaultVariant(family: DevinModelFamily): DevinModelVariant {
   return family.variants.find((variant) => !variant.fast) ?? family.variants[0];
 }
 
-function familyModel(family: DevinModelFamily): AgentModel {
+/** The session-wide effort select newer CLIs expose as `thought_level`. */
+function thoughtLevelSetting(thought: DevinThoughtLevel): ModelSetting {
+  return {
+    id: "effort",
+    label: "Effort",
+    kind: "select",
+    value: thought.current ?? thought.choices[0].value,
+    options: thought.choices,
+  };
+}
+
+function familyModel(
+  family: DevinModelFamily,
+  thought?: DevinThoughtLevel | null,
+): AgentModel {
+  if (family.variants.length > 1 && family.variants[0]?.fusion) {
+    return fusionModel(family);
+  }
   if (family.variants.length === 1) {
     const [only] = family.variants;
-    return { id: `devin:${only.value}`, harness: "devin", name: only.name, nativeId: only.value };
+    return {
+      id: `devin:${only.value}`,
+      harness: "devin",
+      name: only.name,
+      nativeId: only.value,
+      ...(thought ? { settings: [thoughtLevelSetting(thought)] } : {}),
+    };
   }
   const fallback = defaultVariant(family);
   const efforts = EFFORT_ORDER.filter((effort) =>
@@ -341,6 +449,8 @@ function familyModel(family: DevinModelFamily): AgentModel {
       value: fallback.effort ?? efforts[0],
       options: efforts.map((value) => ({ value, label: EFFORT_LABELS[value] ?? value })),
     });
+  } else if (thought) {
+    settings.push(thoughtLevelSetting(thought));
   }
   if (family.variants.some((variant) => variant.fast)) {
     settings.push({
@@ -363,6 +473,59 @@ function familyModel(family: DevinModelFamily): AgentModel {
   };
 }
 
+/** Devin's own picker shows one Fusion row with lead/effort/sidekick selects. */
+function fusionModel(family: DevinModelFamily): AgentModel {
+  const variants = family.variants.filter((variant) => variant.fusion);
+  const first = variants[0].fusion!;
+  const leads = new Map<string, string>();
+  const sidekicks = new Map<string, string>();
+  for (const variant of variants) {
+    const fusion = variant.fusion!;
+    if (!leads.has(fusion.lead)) leads.set(fusion.lead, fusion.leadName);
+    if (!sidekicks.has(fusion.sidekick)) {
+      sidekicks.set(fusion.sidekick, fusion.sidekickName);
+    }
+  }
+  const efforts = EFFORT_ORDER.filter((effort) =>
+    variants.some((variant) => variant.fusion!.leadEffort === effort),
+  );
+  const settings: ModelSetting[] = [
+    {
+      id: "lead",
+      label: "Lead",
+      kind: "select",
+      value: first.lead,
+      options: [...leads].map(([value, label]) => ({ value, label })),
+    },
+  ];
+  if (efforts.length > 1) {
+    settings.push({
+      id: "effort",
+      label: "Effort",
+      kind: "select",
+      value: first.leadEffort ?? efforts[0],
+      options: efforts.map((value) => ({
+        value,
+        label: EFFORT_LABELS[value] ?? value,
+      })),
+    });
+  }
+  settings.push({
+    id: "sidekick",
+    label: "Sidekick",
+    kind: "select",
+    value: first.sidekick,
+    options: [...sidekicks].map(([value, label]) => ({ value, label })),
+  });
+  return {
+    id: "devin:fusion",
+    harness: "devin",
+    name: "Fusion",
+    nativeId: "fusion",
+    settings,
+  };
+}
+
 /**
  * The exact Devin model value for a family and the picker's settings.
  * Ids that are not a family (single models, older saved ids) pass through.
@@ -373,7 +536,11 @@ export function devinModelValue(
   settings: Record<string, string> = {},
 ): string {
   const family = families.find((item) => item.key === nativeId);
-  if (!family || family.variants.length < 2) return nativeId;
+  if (!family) return nativeId;
+  if (family.variants.some((variant) => variant.fusion)) {
+    return fusionModelValue(family, settings);
+  }
+  if (family.variants.length < 2) return nativeId;
   const fallback = defaultVariant(family);
   const effort = settings.effort ?? fallback.effort;
   const fast = settings.fast != null ? settings.fast === "true" : fallback.fast;
@@ -381,6 +548,29 @@ export function devinModelValue(
     family.variants.find((variant) => variant.effort === effort && variant.fast === fast) ??
     family.variants.find((variant) => variant.effort === effort && !variant.fast) ??
     fallback
+  ).value;
+}
+
+/** Pick the fusion id for the lead/effort/sidekick settings, falling back sanely. */
+function fusionModelValue(
+  family: DevinModelFamily,
+  settings: Record<string, string>,
+): string {
+  const variants = family.variants;
+  const first = variants.find((variant) => variant.fusion)!;
+  const lead = settings.lead ?? first.fusion!.lead;
+  const forLead = variants.filter((variant) => variant.fusion!.lead === lead);
+  const pool = forLead.length > 0 ? forLead : variants;
+  const effort = settings.effort;
+  const matching = effort
+    ? pool.filter((variant) => variant.fusion!.leadEffort === effort)
+    : [];
+  // A lead may offer only one effort; fall back to what it actually has.
+  const withEffort = matching.length > 0 ? matching : pool;
+  const sidekick = settings.sidekick ?? first.fusion!.sidekick;
+  return (
+    withEffort.find((variant) => variant.fusion!.sidekick === sidekick) ??
+    withEffort[0]
   ).value;
 }
 
@@ -394,13 +584,14 @@ export function modelsFromDevinSession(raw: unknown): AgentModel[] {
   const current =
     typeof option?.currentValue === "string" ? option.currentValue : "";
   const families = devinModelFamilies(devinModelChoices(raw));
+  const thought = devinThoughtLevel(raw);
   // setHarnessModels defaults to the first entry, so lead with the model the
   // account is already configured to use.
   const index = families.findIndex((family) =>
     family.variants.some((variant) => variant.value === current),
   );
   if (index > 0) families.unshift(...families.splice(index, 1));
-  return families.map(familyModel);
+  return families.map((family) => familyModel(family, thought));
 }
 
 function flattenChoices(raw: unknown): Array<{ value: string; label: string }> {

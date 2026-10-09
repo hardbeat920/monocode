@@ -89,6 +89,25 @@ const CONFIG = [
     options: [
       { value: "glm-5-2", name: "GLM-5.2 High" },
       { value: "swe-2-medium", name: "SWE-2 Medium" },
+      {
+        value: "fusion-claude-fable-5-1-medium-sidekick-swe-2-medium",
+        name: "Fusion (Claude Fable 5.1 Medium + SWE-2 Medium)",
+      },
+      {
+        value: "fusion-claude-fable-5-1-medium-sidekick-swe-2-high",
+        name: "Fusion (Claude Fable 5.1 Medium + SWE-2 High)",
+      },
+    ],
+  },
+  {
+    id: "thought_level",
+    category: "thought_level",
+    type: "select",
+    currentValue: "high",
+    options: [
+      { value: "none", name: "No Thinking" },
+      { value: "high", name: "High" },
+      { value: "max", name: "Max" },
     ],
   },
 ];
@@ -226,6 +245,68 @@ describe("Devin live ACP sequence", () => {
     expect(events).toContainEqual(
       expect.objectContaining({ type: "status", text: expect.stringContaining("swe-1-7-lightning") }),
     );
+  });
+
+  it("applies the picked effort through the thought_level option", async () => {
+    const turn = sendDevinTurn({
+      sessionId: "devin-thread",
+      cwd: "/repo",
+      model: "devin:glm-5-2",
+      modelSettings: { effort: "max" },
+      runtimeMode: "auto",
+      text: "hello",
+      onEvent: () => {},
+    });
+    await startSession();
+    await answer("session/set_config_option", { configOptions: CONFIG });
+    expect(request("session/set_config_option")!.params).toEqual({
+      sessionId: "devin-1",
+      configId: "thought_level",
+      value: "max",
+    });
+    await answer("session/set_mode", {});
+    await answer("session/prompt", { stopReason: "end_turn" });
+    await turn;
+  });
+
+  it("ignores a saved effort the CLI no longer offers", async () => {
+    const turn = sendDevinTurn({
+      sessionId: "devin-thread",
+      cwd: "/repo",
+      model: "devin:glm-5-2",
+      modelSettings: { effort: "low" },
+      runtimeMode: "auto",
+      text: "hello",
+      onEvent: () => {},
+    });
+    await startSession();
+    await answer("session/set_mode", {});
+    await answer("session/prompt", { stopReason: "end_turn" });
+    await turn;
+    // "low" is not a thought_level choice; nothing is sent.
+    expect(request("session/set_config_option")).toBeUndefined();
+  });
+
+  it("resolves the fusion picker's lead and sidekick into one model id", async () => {
+    const turn = sendDevinTurn({
+      sessionId: "devin-thread",
+      cwd: "/repo",
+      model: "devin:fusion",
+      modelSettings: { lead: "claude-fable-5-1", sidekick: "swe-2-high" },
+      runtimeMode: "auto",
+      text: "hello",
+      onEvent: () => {},
+    });
+    await startSession();
+    await answer("session/set_config_option", { configOptions: CONFIG });
+    expect(request("session/set_config_option")!.params).toEqual({
+      sessionId: "devin-1",
+      configId: "model",
+      value: "fusion-claude-fable-5-1-medium-sidekick-swe-2-high",
+    });
+    await answer("session/set_mode", {});
+    await answer("session/prompt", { stopReason: "end_turn" });
+    await turn;
   });
 
   it("answers string-id permission requests with the user's decision", async () => {

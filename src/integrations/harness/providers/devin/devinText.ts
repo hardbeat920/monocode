@@ -10,6 +10,7 @@ import {
   devinModelChoices,
   devinModelFamilies,
   devinModelValue,
+  devinThoughtLevel,
 } from "./devinProtocol";
 
 const TEXT_CHILD_PREFIX = "monocode-devin-text-";
@@ -128,6 +129,23 @@ async function promptOnce(input: TextPromptInput): Promise<string> {
           .request(
             "session/set_config_option",
             { sessionId, configId: "model", value: model },
+            REQUEST_TIMEOUT_MS,
+          )
+          .catch(() => undefined);
+      }
+      // Newer CLIs take effort as the session-wide `thought_level` select.
+      const thought = devinThoughtLevel(created);
+      const effort = input.modelSettings?.effort;
+      if (
+        thought &&
+        effort &&
+        effort !== thought.current &&
+        thought.choices.some((choice) => choice.value === effort)
+      ) {
+        await rpc
+          .request(
+            "session/set_config_option",
+            { sessionId, configId: thought.id, value: effort },
             REQUEST_TIMEOUT_MS,
           )
           .catch(() => undefined);

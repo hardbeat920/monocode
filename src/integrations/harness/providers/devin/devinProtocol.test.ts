@@ -267,6 +267,134 @@ describe("devin catalog", () => {
     ]);
     expect(families.map((family) => family.key)).toEqual(["foo", "foo-max"]);
   });
+
+  // Devin 3000.11: effort is a `thought_level` select and names carry no
+  // suffix; fusion pairs a lead and sidekick in a single model id.
+  const NEW_CATALOG = {
+    configOptions: [
+      {
+        id: "model",
+        category: "model",
+        type: "select",
+        currentValue: "glm-5-2",
+        options: [
+          { value: "adaptive", name: "Adaptive" },
+          { value: "swe-2-high", name: "SWE-2" },
+          { value: "swe-1-7-lightning-medium", name: "SWE-1.7 Lightning" },
+          { value: "swe-1-6", name: "SWE-1.6" },
+          { value: "swe-1-6-fast", name: "SWE-1.6 Fast" },
+          { value: "glm-5-2", name: "GLM-5.2 High" },
+          {
+            value: "fusion-claude-fable-5-1-medium-sidekick-swe-2-medium",
+            name: "Fusion (Claude Fable 5.1 Medium + SWE-2 Medium)",
+          },
+          {
+            value: "fusion-gpt-6-sol-high-sidekick-swe-2-medium",
+            name: "Fusion (GPT-6 Sol High Thinking + SWE-2 Medium)",
+          },
+          {
+            value: "fusion-claude-fable-5-1-medium-sidekick-glm-5-2",
+            name: "Fusion (Claude Fable 5.1 Medium + GLM-5.2 High)",
+          },
+          {
+            value: "fusion-claude-fable-5-1-medium-sidekick-swe-2-high",
+            name: "Fusion (Claude Fable 5.1 Medium + SWE-2 High)",
+          },
+        ],
+      },
+      {
+        id: "thought_level",
+        category: "thought_level",
+        type: "select",
+        currentValue: "high",
+        options: [
+          { value: "none", name: "No Thinking" },
+          { value: "high", name: "High" },
+          { value: "max", name: "Max" },
+        ],
+      },
+    ],
+  };
+
+  it("surfaces thought_level as the effort select on every model", () => {
+    const models = modelsFromDevinSession(NEW_CATALOG);
+    const swe2 = models.find((model) => model.nativeId === "swe-2-high")!;
+    expect(swe2.name).toBe("SWE-2 High");
+    expect(swe2.settings).toEqual([
+      {
+        id: "effort",
+        label: "Effort",
+        kind: "select",
+        value: "high",
+        options: [
+          { value: "none", label: "No Thinking" },
+          { value: "high", label: "High" },
+          { value: "max", label: "Max" },
+        ],
+      },
+    ]);
+    const adaptive = models.find((model) => model.nativeId === "adaptive")!;
+    expect(adaptive.settings?.[0]?.id).toBe("effort");
+    // A fast variant still pairs into a toggle.
+    const swe16 = models.find((model) => model.nativeId === "swe-1-6")!;
+    expect(swe16.settings?.map((setting) => setting.id)).toEqual([
+      "effort",
+      "fast",
+    ]);
+  });
+
+  it("collapses fusion ids into one model with lead, effort, and sidekick", () => {
+    const models = modelsFromDevinSession(NEW_CATALOG);
+    const fusions = models.filter((model) => model.name.startsWith("Fusion"));
+    expect(fusions).toHaveLength(1);
+    const [fusion] = fusions;
+    expect(fusion.nativeId).toBe("fusion");
+    expect(fusion.name).toBe("Fusion");
+    expect(fusion.settings?.map((setting) => setting.id)).toEqual([
+      "lead",
+      "effort",
+      "sidekick",
+    ]);
+    const [lead, , sidekick] = fusion.settings!;
+    expect(lead.options).toEqual([
+      { value: "claude-fable-5-1", label: "Claude Fable 5.1" },
+      { value: "gpt-6-sol", label: "GPT-6 Sol" },
+    ]);
+    expect(sidekick.options).toEqual([
+      { value: "swe-2-medium", label: "SWE-2 Medium" },
+      { value: "glm-5-2", label: "GLM-5.2 High" },
+      { value: "swe-2-high", label: "SWE-2 High" },
+    ]);
+  });
+
+  it("maps fusion settings back to the exact catalog id", () => {
+    const families = devinModelFamilies(
+      NEW_CATALOG.configOptions[0].options.map((option) => ({
+        value: option.value,
+        label: option.name,
+      })),
+    );
+    expect(devinModelValue(families, "fusion")).toBe(
+      "fusion-claude-fable-5-1-medium-sidekick-swe-2-medium",
+    );
+    expect(devinModelValue(families, "fusion", { lead: "gpt-6-sol" })).toBe(
+      "fusion-gpt-6-sol-high-sidekick-swe-2-medium",
+    );
+    // GPT-6 Sol has no medium variant: keep its real effort.
+    expect(
+      devinModelValue(families, "fusion", { lead: "gpt-6-sol", effort: "medium" }),
+    ).toBe("fusion-gpt-6-sol-high-sidekick-swe-2-medium");
+    expect(devinModelValue(families, "fusion", { sidekick: "glm-5-2" })).toBe(
+      "fusion-claude-fable-5-1-medium-sidekick-glm-5-2",
+    );
+    expect(
+      devinModelValue(families, "fusion", { sidekick: "swe-2-high" }),
+    ).toBe("fusion-claude-fable-5-1-medium-sidekick-swe-2-high");
+    // A lead Devin does not pair falls back to the first fusion entry.
+    expect(devinModelValue(families, "fusion", { lead: "kimi-k3" })).toBe(
+      "fusion-claude-fable-5-1-medium-sidekick-swe-2-medium",
+    );
+  });
 });
 
 describe("devin updates", () => {

@@ -501,13 +501,19 @@ async function applyModelSelection(
   live: Live,
   input: HarnessSessionInput,
 ): Promise<void> {
+  const nativeId = nativeModelId(input.model).trim();
   const modelId = devinModelValue(
     live.modelFamilies,
-    nativeModelId(input.model).trim(),
+    nativeId,
     input.modelSettings,
   );
-  const offered = live.modelFamilies.some((family) =>
-    family.variants.some((variant) => variant.value === modelId),
+  const family = live.modelFamilies.find(
+    (item) =>
+      item.key === nativeId ||
+      item.variants.some((variant) => variant.value === modelId),
+  );
+  const offered = live.modelFamilies.some((item) =>
+    item.variants.some((variant) => variant.value === modelId),
   );
   if (modelId && modelId !== "default") {
     // Devin rejects ids it no longer lists (CLI updates rename models), which
@@ -523,11 +529,26 @@ async function applyModelSelection(
     }
   }
   for (const [settingId, value] of Object.entries(input.modelSettings ?? {})) {
-    // Effort and speed already picked the model variant above.
-    if (settingId === "effort" || settingId === "fast") continue;
+    // Speed only picks a model variant; Devin has no fast config option.
+    if (settingId === "fast") continue;
+    if (settingId === "effort") {
+      // Already spent on the variant pick (old catalogs) or, for Fusion, the
+      // lead effort riding inside the model id. Newer CLIs take the rest as
+      // the session-wide `thought_level` select.
+      const spent =
+        !!family &&
+        (family.variants.some((variant) => variant.fusion) ||
+          (family.variants.length > 1 &&
+            family.variants.some((variant) => variant.effort)));
+      if (spent) continue;
+    }
     const configId = resolveSettingConfigId(live.configOptions, settingId);
-    if (configId && configId !== "model" && configId !== "mode")
-      await setConfigOption(live, configId, value);
+    if (!configId || configId === "model" || configId === "mode") continue;
+    // A saved value Devin no longer offers (e.g. an old effort level) would
+    // fail every turn with Invalid params; keep the session's value instead.
+    const option = live.configOptions.find((entry) => entry.id === configId);
+    if (option?.choices && !option.choices.includes(value)) continue;
+    await setConfigOption(live, configId, value);
   }
 }
 
