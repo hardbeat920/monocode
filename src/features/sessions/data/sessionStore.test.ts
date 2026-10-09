@@ -688,6 +688,51 @@ describe("sanitizeSessionForPersist", () => {
     expect(persisted.blocks[1]?.interjection).toBeUndefined();
   });
 
+  it("keeps the advisor model and a settled consult status", () => {
+    const session = newSession("claude", "/tmp/project");
+    session.blocks = [
+      {
+        id: "i1",
+        role: "system",
+        text: "",
+        interjection: {
+          customType: "advisor",
+          model: " claude-opus-5-5 ",
+          status: "failed",
+        },
+      },
+      {
+        id: "i2",
+        role: "system",
+        text: "",
+        interjection: { customType: "advisor", status: "running" },
+      },
+      {
+        id: "i3",
+        role: "system",
+        text: "",
+        interjection: {
+          customType: "advisor",
+          model: 42,
+          status: "unknown",
+        } as unknown as Block["interjection"],
+      },
+    ];
+
+    const persisted = sanitizeSessionForPersist(session);
+    expect(persisted.blocks[0]?.interjection).toEqual({
+      customType: "advisor",
+      model: "claude-opus-5-5",
+      status: "failed",
+    });
+    expect(persisted.blocks[1]?.interjection).toEqual({
+      customType: "advisor",
+    });
+    expect(persisted.blocks[2]?.interjection).toEqual({
+      customType: "advisor",
+    });
+  });
+
   it("drops malformed interjection metadata without dropping its system row", () => {
     const session = newSession("pi", "/tmp/project");
     session.blocks = [

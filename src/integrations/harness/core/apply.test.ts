@@ -403,6 +403,24 @@ describe("streamed markdown", () => {
     expect(session.blocks.at(-1)!.id).not.toBe(id);
   });
 
+  it("updates an interjection in place when a later one carries its id", () => {
+    let session = newSession("claude", "/tmp");
+    session = applyHarnessEvent(session, {
+      type: "interjection", id: "advisor-1", text: "Sent.", customType: "advisor", status: "running",
+    });
+    session = applyHarnessEvent(session, { type: "message.delta", text: "Answer." });
+    session = applyHarnessEvent(session, {
+      type: "interjection", id: "advisor-1", text: "Advice.", customType: "advisor",
+      status: "completed", model: "claude-fable-5-1",
+    });
+    expect(session.blocks.map(block => [block.id, block.text])).toEqual([
+      ["advisor-1", "Advice."], [session.blocks[1].id, "Answer."],
+    ]);
+    expect(session.blocks[0].interjection).toEqual({
+      customType: "advisor", status: "completed", model: "claude-fable-5-1",
+    });
+  });
+
   it("keeps stacked interjections as hard boundaries", () => {
     let session = newSession("omp", "/tmp");
     session = applyHarnessEvent(session, {

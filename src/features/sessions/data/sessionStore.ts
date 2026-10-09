@@ -1249,11 +1249,17 @@ function sanitizeInterjection(
     typeof record.customType === "string" ? record.customType.trim() : "";
   if (!customType) return undefined;
   const severity = record.severity;
+  const model = typeof record.model === "string" ? record.model.trim() : "";
+  const status = record.status;
   return {
     customType,
     ...(severity === "nit" || severity === "concern" || severity === "blocker"
       ? { severity }
       : {}),
+    ...(model ? { model } : {}),
+    // A restarted app cannot still be waiting on a consult, so a running
+    // note loads without a status instead of saying "Consulting" forever.
+    ...(status === "completed" || status === "failed" ? { status } : {}),
   };
 }
 

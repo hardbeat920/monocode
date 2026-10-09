@@ -114,4 +114,20 @@ describe("AgentTranscript interjection preview", () => {
     expect(button.getAttribute("aria-expanded")).toBe("true");
     expect(container.querySelector("pre")?.textContent).toBe(note);
   });
+  it("names the advisor model and marks a running or failed consult", () => {
+    const show = (status: "running" | "failed") => {
+      const blocks: Block[] = [{
+        id: "advisor-srvtoolu_1",
+        role: "system",
+        text: "Claude Code sent the full conversation to the advisor.",
+        interjection: { customType: "advisor", model: "claude-fable-5-1", status },
+      }];
+      act(() => root.render(createElement(AgentTranscript, { blocks, busy: true })));
+      return container.querySelector('[aria-label="Interjection: Advisor · Fable 5.1"]');
+    };
+    expect(show("running")?.textContent).toContain("Consulting");
+    const failed = show("failed");
+    expect(failed?.textContent).toContain("Failed");
+    expect(failed?.querySelector(".text-red-400")?.textContent).toBe("Failed");
+  });
 });

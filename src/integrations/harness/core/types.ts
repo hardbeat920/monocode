@@ -30,7 +30,11 @@ export type HarnessEvent =
    * running and will wake it again. Empty once it is back at work.
    */
   | { type: "background.updated"; tasks: string[] }
-  | ({ type: "interjection"; text: string } & InterjectionMeta)
+  /**
+   * With an `id`, a later interjection carrying the same id updates the block
+   * in place, so a running note can fill in once its result arrives.
+   */
+  | ({ type: "interjection"; text: string; id?: string } & InterjectionMeta)
   | { type: "message.delta"; text: string }
   | { type: "message.completed" }
   | {

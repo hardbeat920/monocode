@@ -752,6 +752,22 @@ export function subagentModelName(block: Block): string | undefined {
 }
 
 /**
+ * A short name for the model behind a note, e.g. `claude-fable-5-1` reads as
+ * "Fable 5.1". Unknown ids stay as they are.
+ */
+export function noteModelName(id: string): string {
+  const known = allModels().find(
+    (model) => model.id === id || model.nativeId === id,
+  );
+  if (known) return known.name.replace(/^Claude /, "");
+  const match = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?$/.exec(id);
+  if (!match) return id;
+  const [, family, major, minor] = match;
+  const name = family.charAt(0).toUpperCase() + family.slice(1);
+  return `${name} ${major}${minor ? `.${minor}` : ""}`;
+}
+
+/**
  * What a delegated run handed back: its report, or the reason it died. The
  * provider puts both in the tool result, so a finished run always has the one
  * thing worth reading at the end of its trail.

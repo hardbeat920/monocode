@@ -122,6 +122,7 @@ import {
   isProseBlock,
   needsApproval,
   nestedScrollAbsorbsWheel,
+  noteModelName,
   proseSummary,
   resolveToolCallDisplay,
   subagentBrief,
@@ -4741,22 +4742,27 @@ function interjectionChrome(meta: InterjectionMeta): {
   severityText?: string;
   severityClass: string;
 } {
-  const label =
+  const name =
     meta.customType === "advisor"
       ? "Advisor"
       : meta.customType === "custom"
         ? "Notice"
         : meta.customType;
+  const label = meta.model ? `${name} · ${noteModelName(meta.model)}` : name;
   const severityText =
-    meta.severity === "blocker"
-      ? "Blocker"
-      : meta.severity === "concern"
-        ? "Concern"
-        : meta.severity === "nit"
-          ? "Nit"
-          : undefined;
+    meta.status === "failed"
+      ? "Failed"
+      : meta.status === "running"
+        ? "Consulting"
+        : meta.severity === "blocker"
+          ? "Blocker"
+          : meta.severity === "concern"
+            ? "Concern"
+            : meta.severity === "nit"
+              ? "Nit"
+              : undefined;
   const severityClass =
-    meta.severity === "blocker"
+    meta.status === "failed" || meta.severity === "blocker"
       ? "text-red-400"
       : meta.severity === "concern"
         ? "text-amber-400"

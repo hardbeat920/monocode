@@ -3,6 +3,7 @@ import type {
   AgentStep,
   Attachment,
   Block,
+  InterjectionMeta,
   Session,
   TaskListItem,
   ToolPreview,
@@ -211,18 +212,30 @@ export function applyHarnessEvent(
         ...session,
         usageLimit: event.resetsAt != null ? { resetsAt: event.resetsAt } : {},
       };
-    case "interjection":
+    case "interjection": {
       // A visible boundary the user must not miss, so unlike status it never
       // deduplicates and never reads as turn lifecycle.
+      const interjection: InterjectionMeta = {
+        customType: event.customType,
+        ...(event.severity ? { severity: event.severity } : {}),
+        ...(event.model ? { model: event.model } : {}),
+        ...(event.status ? { status: event.status } : {}),
+      };
+      const index = event.id
+        ? session.blocks.findIndex((block) => block.id === event.id)
+        : -1;
+      if (index >= 0) {
+        const blocks = session.blocks.slice();
+        blocks[index] = { ...blocks[index], text: event.text, interjection };
+        return { ...session, blocks };
+      }
       return appendBlock(session, {
-        id: crypto.randomUUID(),
+        id: event.id ?? crypto.randomUUID(),
         role: "system",
         text: event.text,
-        interjection: {
-          customType: event.customType,
-          ...(event.severity ? { severity: event.severity } : {}),
-        },
+        interjection,
       });
+    }
     default:
       return session;
   }

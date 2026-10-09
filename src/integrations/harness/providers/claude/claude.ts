@@ -16,6 +16,9 @@ import {
   writeChild,
 } from "../../core/child";
 import {
+  advisorInterjection,
+  advisorResultsFromAssistant,
+  advisorUsageFromStreamEvent,
   askUserQuestionAllowInput,
   asRecord,
   assistantMessageId,
@@ -33,6 +36,7 @@ import {
   extractAskUserQuestionTitle,
   extractExitPlanModePlan,
   inputJsonDeltaFromEvent,
+  isAdvisorToolName,
   isAgentTaskType,
   isClaudeUltracodeEffort,
   isSubagentMessage,
@@ -67,6 +71,7 @@ import {
   tryParseJsonRecord,
   turnStatusFromResult,
   usageLimitFromRateLimitEvent,
+  type AdvisorCall,
   type ClaudeAgentTaskNotification,
   type ClaudeCliSettings,
   type ClaudeControlRequest,
@@ -141,6 +146,8 @@ type Live = {
   nextControlId: number;
   toolsByIndex: Map<number, InFlightTool>;
   toolsById: Map<string, InFlightTool>;
+  /** Advisor consults this turn, by server tool id, in call order. */
+  advisorCalls: Map<string, AdvisorCall>;
   agentTasks: Map<string, LiveAgentTask>;
   /**
    * Every task Claude still runs for this session, by id: subagents, shells it
@@ -489,6 +496,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     nextControlId: 1,
     toolsByIndex: new Map(),
     toolsById: new Map(),
+    advisorCalls: new Map(),
     agentTasks: new Map(),
     backgroundTasks: new Map(),
     backgroundRows: new Map(),
@@ -587,6 +595,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   live.pendingAssistantBoundary = false;
   live.toolsByIndex.clear();
   live.toolsById.clear();
+  live.advisorCalls.clear();
   live.agentTasks.clear();
   live.backgroundTasks.clear();
   live.backgroundRows.clear();
@@ -762,6 +771,10 @@ function handleStreamEvent(live: Live, rec: Record<string, unknown>): void {
       noteSubagentTool(live, rec, started.id, started.name, started.input);
       return;
     }
+    if (isAdvisorToolName(started.name)) {
+      startAdvisorCall(live, started.id);
+      return;
+    }
     const tool: InFlightTool = {
       id: started.id,
       name: started.name,
@@ -811,6 +824,8 @@ function handleStreamEvent(live: Live, rec: Record<string, unknown>): void {
     emitTaskListIfNeeded(live, tool.name, parsed);
     return;
   }
+
+  if (!subagent) noteAdvisorUsage(live, advisorUsageFromStreamEvent(rec));
 }
 
 function handleAssistant(live: Live, rec: Record<string, unknown>): void {
@@ -834,6 +849,10 @@ function handleAssistant(live: Live, rec: Record<string, unknown>): void {
   }
 
   for (const use of assistantToolUses(rec)) {
+    if (isAdvisorToolName(use.name)) {
+      startAdvisorCall(live, use.id);
+      continue;
+    }
     const streamed = live.toolsById.get(use.id);
     if (streamed) {
       // content_block_start often has an empty input. The input JSON delta may
@@ -887,11 +906,64 @@ function handleAssistant(live: Live, rec: Record<string, unknown>): void {
     emitTaskListIfNeeded(live, tool.name, tool.input);
   }
 
+  for (const result of advisorResultsFromAssistant(rec)) {
+    const call = live.advisorCalls.get(result.toolUseId) ?? {
+      id: result.toolUseId,
+      status: "running",
+    };
+    call.outcome = result.outcome;
+    call.status = result.outcome.kind === "error" ? "failed" : "completed";
+    live.advisorCalls.set(call.id, call);
+    live.onEvent(advisorInterjection(call));
+  }
+
   // Each assistant record is one Claude message. Wait until the next message
   // begins to close its UI block, so a backgrounded turn stays visibly live.
   live.pendingAssistantBoundary = !!(snapshot || live.emittedAssistant);
   live.emittedAssistant = "";
   live.emittedReasoning = "";
+}
+
+/**
+ * An advisor consult reads as an Advisor note, not a tool row. The stream and
+ * the assistant snapshot both announce the call, so only the first one counts.
+ */
+function startAdvisorCall(live: Live, id: string): void {
+  if (live.advisorCalls.has(id)) return;
+  const call: AdvisorCall = { id, status: "running" };
+  live.advisorCalls.set(id, call);
+  live.onEvent(advisorInterjection(call));
+}
+
+/**
+ * Names the model behind each consult. Claude Code only reports it once the
+ * message ends, one `advisor_message` iteration per run in call order. A call
+ * that errored never ran, so it gets no iteration.
+ */
+function noteAdvisorUsage(
+  live: Live,
+  usage: ReturnType<typeof advisorUsageFromStreamEvent>,
+): void {
+  if (usage.length === 0) return;
+  const waiting = [...live.advisorCalls.values()].filter(
+    (call) => !call.usage && call.outcome?.kind !== "error",
+  );
+  for (const [index, call] of waiting.entries()) {
+    const run = usage[index];
+    if (!run) break;
+    call.usage = run;
+    live.onEvent(advisorInterjection(call));
+  }
+}
+
+/** A consult still running when the turn ends will never get its result. */
+function settleAdvisorCalls(live: Live): void {
+  for (const call of live.advisorCalls.values()) {
+    if (call.status !== "running") continue;
+    call.status = "failed";
+    call.outcome = { kind: "error", errorCode: "no_result" };
+    live.onEvent(advisorInterjection(call));
+  }
 }
 
 function closePendingAssistantMessage(live: Live): void {
@@ -977,6 +1049,7 @@ function handleResult(live: Live, rec: Record<string, unknown>): void {
   }
   const metrics = turnMetricsFromResult(rec);
   if (metrics) live.onEvent({ type: "turn.metrics", ...metrics });
+  settleAdvisorCalls(live);
 
   const result = turnStatusFromResult(rec);
   if (result.status === "failed" && result.error && !live.cancelled) {
