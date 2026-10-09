@@ -12,6 +12,7 @@ import {
 import {
   autoPermissionOption,
   asRecord,
+  AntigravitySubagents,
   eventsFromAcpUpdate,
   extractModelConfigId,
   antigravityModeId,
@@ -24,6 +25,7 @@ import {
   sessionIdFromResult,
   type SessionConfigOption,
 } from "./antigravityProtocol";
+import { antigravitySubagentNames } from "./antigravityStore";
 import type {
   ApprovalDecision,
   HarnessEvent,
@@ -43,6 +45,10 @@ type Live = {
    *  deliver stdout to or take writes from a different generation. */
   childKey: string;
   subagents: AcpSubagents;
+  spawns: AntigravitySubagents;
+  namingSubagents: boolean;
+  /** A store read waiting out the gap since the last one. */
+  namingTimer?: ReturnType<typeof setTimeout>;
   acp: AcpClient;
   acpSessionId: string;
   cwd: string;
@@ -552,6 +558,8 @@ async function startLive(input: SendTurnInput, life: number): Promise<Live> {
       threadId: input.sessionId,
       childKey,
       subagents: new AcpSubagents(),
+      spawns: new AntigravitySubagents(),
+      namingSubagents: false,
       acp,
       acpSessionId,
       cwd: input.cwd,
@@ -686,6 +694,7 @@ async function setConfigOption(
 }
 
 async function prompt(live: Live, input: SendTurnInput): Promise<void> {
+  let ended = false;
   try {
     const blocks = antigravityPromptBlocks(input.text, input.attachments);
     if (blocks.length === 0) return;
@@ -710,6 +719,7 @@ async function prompt(live: Live, input: SendTurnInput): Promise<void> {
       });
       return;
     }
+    ended = true;
     live.onEvent({ type: "message.completed" });
     live.onEvent({ type: "reasoning.completed" });
   } catch (error) {
@@ -721,6 +731,11 @@ async function prompt(live: Live, input: SendTurnInput): Promise<void> {
     });
     throw failure;
   } finally {
+    // Failures settle open rows themselves; a cancelled turn emits nothing.
+    const settled = live.spawns.settle();
+    if (ended) for (const event of settled) live.onEvent(event);
+    clearTimeout(live.namingTimer);
+    live.namingTimer = undefined;
     live.promptInFlight = false;
     if (live.watchdog) {
       clearTimeout(live.watchdog);
@@ -743,9 +758,49 @@ function handleNotification(live: Live, method: string, params: unknown) {
     live.modelConfigId = extractModelConfigId(live.configOptions);
   }
   if (live.muteUpdates) return;
-  for (const event of live.subagents.route(params, eventsFromAcpUpdate(params))) {
+  const child = live.spawns.child(params, live.acpSessionId);
+  // Register the row first so the router attaches its steps instead of buffering.
+  if (child?.opened)
+    for (const event of live.subagents.route({}, [child.opened]))
+      live.onEvent(event);
+  if (child?.unnamed) nameSubagents(live);
+  for (const event of live.spawns.label(
+    live.subagents.route(params, eventsFromAcpUpdate(params), child?.parent),
+  )) {
     live.onEvent(event);
   }
+}
+
+/** Roles live only in Antigravity's store, which names a child only once all
+ *  its siblings are dispatched; read it, spaced out, until every open child is
+ *  named or out of reads. */
+function nameSubagents(live: Live): void {
+  if (live.namingSubagents || live.namingTimer) return;
+  if (live.cancelled || live.muteUpdates) return;
+  const wait = live.spawns.nextLookup(Date.now());
+  if (wait === undefined) return;
+  if (wait > 0) {
+    live.namingTimer = setTimeout(() => {
+      live.namingTimer = undefined;
+      nameSubagents(live);
+    }, wait);
+    return;
+  }
+  live.spawns.lookedUp(Date.now());
+  live.namingSubagents = true;
+  void antigravitySubagentNames(live.acpSessionId)
+    .then((found) => {
+      if (live.cancelled || live.muteUpdates) return;
+      for (const event of live.spawns.learn(found)) live.onEvent(event);
+    })
+    .catch((error: unknown) => {
+      console.debug("[monocode] antigravity subagent names", error);
+    })
+    .finally(() => {
+      live.namingSubagents = false;
+      // Trailing retry: a name may land after the child's last update.
+      nameSubagents(live);
+    });
 }
 
 async function handleRequest(

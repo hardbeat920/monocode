@@ -141,6 +141,10 @@ export function permissionRequestFromAcp(
   };
 }
 
+// The delegation call's whole title; an execute call's title is its command
+// line, which may merely mention the tool.
+const DELEGATION_TITLE = /^Running (?:start|invoke)_subagent$/i;
+
 export function eventsFromAcpUpdate(params: unknown): HarnessEvent[] {
   const rec = asRecord(params);
   const update = asRecord(rec?.update) ?? rec;
@@ -230,6 +234,10 @@ export function eventsFromAcpUpdate(params: unknown): HarnessEvent[] {
         detail: toolDetail(update, tool),
         preview,
         ...acpAgentInfo(update, tool, toolKind, title),
+        // Antigravity names its delegation tool only in the title.
+        ...(DELEGATION_TITLE.test(String(update.title ?? tool.title ?? ""))
+          ? { title: "Launch subagents" }
+          : {}),
       },
     ];
   }
@@ -240,6 +248,137 @@ export function eventsFromAcpUpdate(params: unknown): HarnessEvent[] {
   }
 
   return usageFromUpdate(update);
+}
+
+// Tool ids are `<conversation id>:<step>`, and a subagent's calls carry its
+// own conversation id. Some calls use bare `call_<n>` ids and stay unattributed.
+// Lowercase only, matching the uuids the store lookup accepts.
+const CONVERSATION_ID = /^([0-9a-f-]{36}):\d+$/;
+
+/** Store reads each unnamed child may cost, and the least gap between reads:
+ *  a child the store never names (a subagent's own subagent, recorded in its
+ *  parent's store) must not cost a read per streamed update. */
+const NAME_LOOKUPS = 5;
+const NAME_LOOKUP_GAP_MS = 1_000;
+
+/** A child's role, read from Antigravity's own conversation store. */
+export type AntigravitySubagentName = {
+  conversationId: string;
+  role: string;
+  typeName?: string | null;
+};
+
+/**
+ * Antigravity streams subagent activity into the parent session with no
+ * parent link. Give each foreign conversation its own subagent row, kept
+ * running until the parent's turn ends: nothing reports a child finishing.
+ * Its role is only in Antigravity's store, so a row may be named late.
+ */
+export class AntigravitySubagents {
+  private rows = new Map<string, string>();
+  private names = new Map<string, AntigravitySubagentName>();
+  /** Each row's latest step, which carries a late name onto a row with steps. */
+  private steps = new Map<string, Extract<HarnessEvent, { type: "agent.step" }>>();
+  /** Store reads spent on each open child still unnamed. */
+  private lookups = new Map<string, number>();
+  private lastLookup = -Infinity;
+
+  /** The child row an update belongs to, and the event opening it the first time. */
+  child(
+    params: unknown,
+    sessionId: string,
+  ): { parent: string; opened?: HarnessEvent; unnamed?: string } | undefined {
+    const update = asRecord(asRecord(params)?.update);
+    const conversation = CONVERSATION_ID.exec(
+      String(update?.toolCallId ?? ""),
+    )?.[1];
+    if (!conversation || conversation === sessionId) return undefined;
+    const name = this.names.get(conversation);
+    const unnamed = name ? {} : { unnamed: conversation };
+    const known = this.rows.get(conversation);
+    if (known) return { parent: known, ...unnamed };
+    const parent = `subagent:${conversation}`;
+    this.rows.set(conversation, parent);
+    return {
+      parent,
+      opened: {
+        type: "tool.updated",
+        callId: parent,
+        kind: "agent",
+        // The row drops a leading "Subagent", so a numbered fallback reads as a bare number.
+        title: name?.role ?? "Subagent",
+        status: "in_progress",
+      },
+      ...unnamed,
+    };
+  }
+
+  /** Take roles read from Antigravity's store, renaming rows already open. */
+  learn(found: AntigravitySubagentName[]): HarnessEvent[] {
+    const events: HarnessEvent[] = [];
+    for (const name of found) {
+      if (this.names.has(name.conversationId)) continue;
+      this.names.set(name.conversationId, name);
+      const callId = this.rows.get(name.conversationId);
+      if (!callId) continue;
+      events.push({ type: "tool.updated", callId, title: name.role });
+      // A run with steps ignores a new title and keeps its steps' name.
+      const step = this.steps.get(callId);
+      if (step) events.push(...this.label([step]));
+    }
+    return events;
+  }
+
+  /** A run keeps the name its steps carry, so steps carry the role too. */
+  label(events: HarnessEvent[]): HarnessEvent[] {
+    return events.map((event) => {
+      if (event.type !== "agent.step" || !event.callId.startsWith("subagent:"))
+        return event;
+      this.steps.set(event.callId, event);
+      const name = this.names.get(event.callId.slice("subagent:".length));
+      return name
+        ? {
+            ...event,
+            agentName: name.role,
+            ...(name.typeName ? { agentType: name.typeName } : {}),
+          }
+        : event;
+    });
+  }
+
+  /** Ms until the store is worth reading, or undefined while every open child
+   *  is named or out of reads. */
+  nextLookup(now: number): number | undefined {
+    const wanted = [...this.rows.keys()].some(
+      (conversation) =>
+        !this.names.has(conversation) &&
+        (this.lookups.get(conversation) ?? 0) < NAME_LOOKUPS,
+    );
+    if (!wanted) return undefined;
+    return Math.max(0, this.lastLookup + NAME_LOOKUP_GAP_MS - now);
+  }
+
+  /** Record a store read, spending one of each unnamed child's reads. */
+  lookedUp(now: number): void {
+    this.lastLookup = now;
+    for (const conversation of this.rows.keys()) {
+      if (this.names.has(conversation)) continue;
+      this.lookups.set(conversation, (this.lookups.get(conversation) ?? 0) + 1);
+    }
+  }
+
+  /** Forget the turn's children; the events complete their rows on a clean end. */
+  settle(): HarnessEvent[] {
+    const events = [...this.rows.values()].map<HarnessEvent>((callId) => ({
+      type: "tool.updated",
+      callId,
+      status: "completed",
+    }));
+    this.rows.clear();
+    this.steps.clear();
+    this.lookups.clear();
+    return events;
+  }
 }
 
 /** Discover models and reasoning controls from standard ACP session config. */

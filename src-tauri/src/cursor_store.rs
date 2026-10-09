@@ -2,11 +2,12 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::Connection;
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::dirs_home;
+use crate::sqlite_readonly;
 
 /// Skip huge blobs (reasoning dumps). Everything else is scanned newest-first
 /// until every requested id is found — Cursor writes many non-JSON rows that
@@ -103,7 +104,7 @@ fn lookup_subagent_runs(
             if !path.is_file() {
                 continue;
             }
-            let Ok(connection) = open_cursor_store(&path) else {
+            let Ok(connection) = sqlite_readonly::open(&path) else {
                 continue;
             };
             let Ok(metadata) = read_cursor_metadata(&connection) else {
@@ -408,34 +409,11 @@ fn forget_store_path(session_id: &str) {
 }
 
 fn read_tool_calls(path: &Path, tool_call_ids: &[String]) -> Result<Vec<CursorToolCall>, String> {
-    let connection = open_cursor_store(path)?;
+    let connection = sqlite_readonly::open(path)?;
     connection
         .busy_timeout(std::time::Duration::from_millis(100))
         .map_err(|e| e.to_string())?;
     lookup_tool_calls(&connection, tool_call_ids).map_err(|e| e.to_string())
-}
-
-fn open_cursor_store(path: &Path) -> Result<Connection, String> {
-    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
-    let mut wal = path.as_os_str().to_os_string();
-    wal.push("-wal");
-    if Path::new(&wal).exists() {
-        // Live WAL files must stay visible. Never use immutable for a live store.
-        return Connection::open_with_flags(path, flags).map_err(|e| e.to_string());
-    }
-    // A checkpointed WAL-mode database otherwise tries to create a new -shm
-    // file even on a read-only connection. No sidecars are needed to read it.
-    let name = path
-        .to_str()
-        .ok_or("Invalid Cursor store path")?
-        .replace('%', "%25")
-        .replace('?', "%3F")
-        .replace('#', "%23");
-    Connection::open_with_flags(
-        format!("file:{name}?immutable=1"),
-        flags | OpenFlags::SQLITE_OPEN_URI,
-    )
-    .map_err(|e| e.to_string())
 }
 
 fn lookup_tool_calls(
@@ -615,7 +593,7 @@ mod tests {
             serde_json::json!({"role":"assistant","content":[{"type":"text","text":"Live WAL message"}]}),
         );
         assert!(path.with_file_name("store.db-wal").exists());
-        let live = open_cursor_store(&path).unwrap();
+        let live = sqlite_readonly::open(&path).unwrap();
         assert_eq!(
             read_subagent_steps(&live, "child").unwrap().1[0].text,
             "Live WAL message"
@@ -624,7 +602,7 @@ mod tests {
         drop((live, writer));
         assert!(!path.with_file_name("store.db-wal").exists());
         let bytes = std::fs::read(&path).unwrap();
-        let closed = open_cursor_store(&path).unwrap();
+        let closed = sqlite_readonly::open(&path).unwrap();
         assert_eq!(read_subagent_steps(&closed, "child").unwrap().1.len(), 1);
         assert!(closed.execute("DELETE FROM blobs", []).is_err());
         drop(closed);
