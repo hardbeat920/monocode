@@ -33,6 +33,9 @@ import {
   notifyGitChanged,
 } from "../../../platform/tauri/fs";
 import { invalidateWatchedFiles } from "../../files/model/fileWatch";
+import { acquireRepoLock, repoLock } from "../model/repoLock";
+
+const lockKind = (cwd: string) => repoLock(cwd)?.kind ?? null;
 
 let container: HTMLDivElement;
 let root: Root;
@@ -258,7 +261,7 @@ function buttonNamed(label: string) {
   )!;
 }
 
-it("reports busy for the whole checkout so a host can lock its Git actions", async () => {
+it("holds the repository lock for the whole checkout", async () => {
   let finish!: () => void;
   vi.mocked(gitCheckout).mockImplementationOnce(
     () =>
@@ -266,15 +269,31 @@ it("reports busy for the whole checkout so a host can lock its Git actions", asy
         finish = () => resolve("");
       }),
   );
-  const onBusyChange = vi.fn();
-  const option = await openPickerWithFeature("/repo-busy", { onBusyChange });
-  expect(onBusyChange).not.toHaveBeenCalled();
+  const option = await openPickerWithFeature("/repo-busy");
+  expect(lockKind("/repo-busy")).toBeNull();
 
   await act(async () => option.click());
-  expect(onBusyChange.mock.calls).toEqual([[true]]);
+  expect(lockKind("/repo-busy")).toBe("checkout");
 
   await act(async () => finish());
-  expect(onBusyChange.mock.calls).toEqual([[true], [false]]);
+  expect(lockKind("/repo-busy")).toBeNull();
+});
+
+it("stays disabled while another holder has the repository locked", async () => {
+  const release = acquireRepoLock("/repo-held", "commit")!;
+  act(() =>
+    root.render(
+      createElement(BranchPicker, { cwd: "/repo-held", branch: "main" }),
+    ),
+  );
+  await act(async () => {});
+  const trigger = container.querySelector("button")!;
+  expect(trigger.disabled).toBe(true);
+  await act(async () => trigger.click());
+  expect(document.querySelector("[data-branch-picker]")).toBeNull();
+
+  act(() => release());
+  expect(trigger.disabled).toBe(false);
 });
 
 it("reloads open editors after switching branches", async () => {
@@ -302,11 +321,8 @@ it("reloads open editors after stashing and switching, even if the switch then f
     .mockRejectedValueOnce(new Error("checkout failed"))
     .mockResolvedValueOnce("");
   vi.mocked(gitStash).mockResolvedValue("");
-  const onBusyChange = vi.fn();
   try {
-    const option = await openPickerWithFeature("/repo-stash", {
-      onBusyChange,
-    });
+    const option = await openPickerWithFeature("/repo-stash");
     await act(async () => option.click());
     vi.mocked(invalidateWatchedFiles).mockClear();
 
@@ -314,7 +330,7 @@ it("reloads open editors after stashing and switching, even if the switch then f
     await act(async () => buttonNamed("Stash & switch").click());
     expect(gitStash).toHaveBeenCalledTimes(1);
     expect(invalidateWatchedFiles).toHaveBeenCalledWith();
-    expect(onBusyChange.mock.calls.at(-1)).toEqual([false]);
+    expect(lockKind("/repo-stash")).toBeNull();
 
     vi.mocked(invalidateWatchedFiles).mockClear();
     await act(async () => buttonNamed("Stash & switch").click());
@@ -323,7 +339,7 @@ it("reloads open editors after stashing and switching, even if the switch then f
     expect(
       document.querySelector('[aria-label="Switch to feature/picker"]'),
     ).toBeNull();
-    expect(onBusyChange.mock.calls.at(-1)).toEqual([false]);
+    expect(lockKind("/repo-stash")).toBeNull();
   } finally {
     vi.mocked(isCheckoutBlockedByChanges).mockReturnValue(false);
   }
@@ -359,16 +375,14 @@ it.each(DISMISSALS)(
           finish = () => resolve("");
         }),
     );
-    const onBusyChange = vi.fn();
-    const option = await openPickerWithFeature(`/repo-dismiss-${how}`, {
-      onBusyChange,
-    });
+    const cwd = `/repo-dismiss-${how}`;
+    const option = await openPickerWithFeature(cwd);
     const trigger = container.querySelector("button")!;
     await act(async () => option.click());
-    expect(onBusyChange.mock.calls).toEqual([[true]]);
+    expect(lockKind(cwd)).toBe("checkout");
 
     await dismissPicker(how, trigger);
-    expect(onBusyChange.mock.calls).toEqual([[true]]);
+    expect(lockKind(cwd)).toBe("checkout");
 
     // Reopening can't start a second checkout while the first runs.
     expect(trigger.disabled).toBe(true);
@@ -377,7 +391,7 @@ it.each(DISMISSALS)(
     expect(gitCheckout).toHaveBeenCalledTimes(1);
 
     await act(async () => finish());
-    expect(onBusyChange.mock.calls).toEqual([[true], [false]]);
+    expect(lockKind(cwd)).toBeNull();
     expect(trigger.disabled).toBe(false);
   },
 );
@@ -390,14 +404,11 @@ it("keeps the lock for a checkout that outlives the picker", async () => {
         finish = () => resolve("");
       }),
   );
-  const onBusyChange = vi.fn();
-  const option = await openPickerWithFeature("/repo-unmount", {
-    onBusyChange,
-  });
+  const option = await openPickerWithFeature("/repo-unmount");
   await act(async () => option.click());
   act(() => root.render(null));
-  expect(onBusyChange.mock.calls).toEqual([[true]]);
+  expect(lockKind("/repo-unmount")).toBe("checkout");
 
   await act(async () => finish());
-  expect(onBusyChange.mock.calls).toEqual([[true], [false]]);
+  expect(lockKind("/repo-unmount")).toBeNull();
 });

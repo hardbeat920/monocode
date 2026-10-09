@@ -15,6 +15,7 @@ import {
 } from "../../../platform/tauri/fs";
 import { projectName } from "../../../shared/lib/paths";
 import { BranchPicker } from "../../source-control/ui/BranchPicker";
+import { useRepoLock } from "../../source-control/hooks/useRepoLock";
 import {
   sessionCheckpointStatus,
   subscribeReviewChanged,
@@ -81,14 +82,6 @@ export function MonoChangesPanel({
     );
   }, []);
   const index = project ? indexes.get(project.root) ?? null : null;
-  // One lock for the header's branch picker and the Commit tab's actions, so
-  // a checkout never overlaps a commit, push or discard in the same panel.
-  const [busy, setBusy] = useState<string | null>(null);
-  const onCheckoutBusy = useCallback((working: boolean) => {
-    setBusy((current) =>
-      working ? "checkout" : current === "checkout" ? null : current,
-    );
-  }, []);
 
   useEffect(() => {
     setTab(request.tab);
@@ -131,8 +124,6 @@ export function MonoChangesPanel({
               index={index}
               projects={projects.map((entry) => entry.root)}
               onSelect={setSelectedRoot}
-              branchEnabled={busy === null || busy === "checkout"}
-              onCheckoutBusy={onCheckoutBusy}
             />
           ) : undefined
         }
@@ -192,8 +183,6 @@ export function MonoChangesPanel({
               root={entry.root}
               files={entry.files}
               onIndex={updateIndex}
-              busy={busy}
-              setBusy={setBusy}
               textHarness={textHarness}
               onOpenFile={(path) => {
                 setFocusPath(path);
@@ -221,12 +210,26 @@ export function MonoChangesPanel({
 function ProjectCommit({
   onIndex,
   ...props
-}: Omit<ComponentProps<typeof MonoProjectCommit>, "index" | "reloadIndex"> & {
+}: Omit<
+  ComponentProps<typeof MonoProjectCommit>,
+  "index" | "reloadIndex" | "busy" | "acquire"
+> & {
   onIndex: (root: string, index: GitDiffIndex | null) => void;
 }) {
   const { index, reload } = useProjectIndex(props.root);
   useEffect(() => onIndex(props.root, index), [props.root, index, onIndex]);
-  return <MonoProjectCommit {...props} index={index} reloadIndex={reload} />;
+  // The repository's shared lock, so the header's branch picker, other
+  // panels and later mounts all see a commit, push or discard in flight.
+  const { busy, acquire } = useRepoLock(props.root);
+  return (
+    <MonoProjectCommit
+      {...props}
+      index={index}
+      reloadIndex={reload}
+      busy={busy}
+      acquire={acquire}
+    />
+  );
 }
 
 function TabButton({
@@ -264,15 +267,11 @@ function ProjectHeading({
   index,
   projects,
   onSelect,
-  branchEnabled,
-  onCheckoutBusy,
 }: {
   root: string;
   index: GitDiffIndex | null;
   projects: string[];
   onSelect: (root: string) => void;
-  branchEnabled: boolean;
-  onCheckoutBusy: (busy: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -355,10 +354,9 @@ function ProjectHeading({
       {index?.branch ? (
         <span className="flex min-w-0 items-center gap-1 text-[11px] font-normal text-content/50">
           <BranchPicker
+            key={root}
             cwd={root}
             branch={index.branch}
-            enabled={branchEnabled}
-            onBusyChange={onCheckoutBusy}
             popoverSide="bottom"
             compact
           />

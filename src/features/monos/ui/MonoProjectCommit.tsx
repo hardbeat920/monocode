@@ -36,6 +36,7 @@ import {
   type CheckpointFile,
 } from "../../sessions/model/checkpoint";
 import type { HarnessId } from "../../sessions/model/session";
+import type { AcquireRepoLock } from "../../source-control/hooks/useRepoLock";
 import {
   loadChangesView,
   saveChangesView,
@@ -110,7 +111,7 @@ export function MonoProjectCommit({
   index,
   reloadIndex,
   busy,
-  setBusy,
+  acquire,
   textHarness,
   onOpenFile,
 }: {
@@ -121,9 +122,9 @@ export function MonoProjectCommit({
   files: MonoProjectFile[];
   index: GitDiffIndex | null;
   reloadIndex: () => void;
-  /** Owned by the panel so its branch picker shares the same Git lock. */
+  /** The repository's shared Git lock, held across panels and remounts. */
   busy: string | null;
-  setBusy: (busy: string | null) => void;
+  acquire: AcquireRepoLock;
   textHarness?: HarnessId;
   onOpenFile: (path: string) => void;
 }) {
@@ -140,6 +141,10 @@ export function MonoProjectCommit({
   const menuRef = useRef<HTMLDivElement>(null);
   const messageRef = useRef<HTMLTextAreaElement>(null);
   const generateAbortRef = useRef<AbortController | null>(null);
+  const generateReleaseRef = useRef<(() => void) | null>(null);
+  // Only the mount that started generation can cancel it; another panel on
+  // the same repository just sees the repository busy.
+  const [generating, setGenerating] = useState(false);
 
   useEffect(() => {
     if (!status) return;
@@ -166,7 +171,13 @@ export function MonoProjectCommit({
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
   }, [message]);
 
-  useEffect(() => () => generateAbortRef.current?.abort(), []);
+  useEffect(
+    () => () => {
+      generateAbortRef.current?.abort();
+      generateReleaseRef.current?.();
+    },
+    [],
+  );
 
   const own = new Set(files.map((entry) => entry.relative));
   const changed = index?.files ?? [];
@@ -230,7 +241,8 @@ export function MonoProjectCommit({
       },
     );
     if (!ok) return;
-    setBusy(file.relative);
+    const release = acquire(file.relative);
+    if (!release) return;
     try {
       await gitDiscardFile(root, file.relative);
       invalidateWatchedFiles([file.path]);
@@ -239,7 +251,7 @@ export function MonoProjectCommit({
       fail(error);
     } finally {
       settle();
-      setBusy(null);
+      release();
     }
   };
 
@@ -313,9 +325,12 @@ export function MonoProjectCommit({
 
   const generate = async () => {
     if (busy || selected.length === 0 || generateAbortRef.current) return;
+    const release = acquire("generate");
+    if (!release) return;
     const controller = new AbortController();
     generateAbortRef.current = controller;
-    setBusy("generate");
+    generateReleaseRef.current = release;
+    setGenerating(true);
     try {
       const generated = await generateCommitMessage(
         root,
@@ -329,15 +344,19 @@ export function MonoProjectCommit({
     } finally {
       if (generateAbortRef.current === controller) {
         generateAbortRef.current = null;
-        setBusy(null);
+        generateReleaseRef.current = null;
+        setGenerating(false);
       }
+      release();
     }
   };
 
   const cancelGenerate = () => {
     generateAbortRef.current?.abort();
     generateAbortRef.current = null;
-    setBusy(null);
+    generateReleaseRef.current?.();
+    generateReleaseRef.current = null;
+    setGenerating(false);
   };
 
   const commit = async (push: boolean, createPr = false) => {
@@ -349,7 +368,8 @@ export function MonoProjectCommit({
     ) {
       return;
     }
-    setBusy(createPr ? "pr" : "commit");
+    const release = acquire(createPr ? "pr" : "commit");
+    if (!release) return;
     const committed = files.filter((entry) => selected.includes(entry.relative));
     try {
       await gitCommit(root, message, false, selected);
@@ -377,14 +397,15 @@ export function MonoProjectCommit({
       fail(error);
     } finally {
       settle();
-      setBusy(null);
+      release();
     }
   };
 
   const sync = async () => {
     if (!index || !(canSync || canPublish)) return;
     const pushesCommits = index.ahead > 0;
-    setBusy("sync");
+    const release = acquire("sync");
+    if (!release) return;
     try {
       await gitSync(root);
       if (pushesCommits) recordPrActivity();
@@ -392,13 +413,14 @@ export function MonoProjectCommit({
       fail(error);
     } finally {
       settle();
-      setBusy(null);
+      release();
     }
   };
 
   const createPr = async () => {
     if (!canCreatePr || !(await confirmDefault("pr"))) return;
-    setBusy("pr");
+    const release = acquire("pr");
+    if (!release) return;
     try {
       if ((index?.ahead ?? 0) > 0) await gitPush(root);
       await openCreatedPr();
@@ -406,7 +428,7 @@ export function MonoProjectCommit({
       fail(error);
     } finally {
       settle();
-      setBusy(null);
+      release();
     }
   };
 
@@ -425,7 +447,7 @@ export function MonoProjectCommit({
             rows={1}
             value={message}
             placeholder={`Message (${MOD}↩ to commit)`}
-            disabled={!!busy && busy !== "generate"}
+            disabled={!!busy && !generating}
             onChange={(event) => setMessage(event.target.value)}
             onKeyDown={(event) => {
               if (
@@ -442,24 +464,24 @@ export function MonoProjectCommit({
           <button
             type="button"
             aria-label={
-              busy === "generate"
+              generating
                 ? "Cancel commit message generation"
                 : "Generate commit message"
             }
             title={
-              busy === "generate"
+              generating
                 ? "Cancel commit message generation"
                 : "Generate commit message"
             }
             disabled={
-              busy === "generate" ? false : !!busy || selected.length === 0
+              generating ? false : !!busy || selected.length === 0
             }
             onClick={() =>
-              busy === "generate" ? cancelGenerate() : void generate()
+              generating ? cancelGenerate() : void generate()
             }
             className="group absolute top-1 right-1 grid size-5 place-items-center rounded-md bg-content/10 text-content hover:bg-content/20 disabled:opacity-40"
           >
-            {busy === "generate" ? (
+            {generating ? (
               <>
                 <Loader
                   className="size-3.5 animate-spin group-hover:hidden"

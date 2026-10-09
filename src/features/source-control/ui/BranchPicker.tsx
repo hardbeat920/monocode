@@ -19,6 +19,7 @@ import {
 import { invalidateWatchedFiles } from "../../files/model/fileWatch";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { useProjectBranchesState } from "../hooks/useProjectBranches";
+import { useRepoLock } from "../hooks/useRepoLock";
 import { CreateBranchDialog } from "./CreateBranchDialog";
 import { GitPickerTrigger } from "./GitPickerTrigger";
 import { Popover } from "../../../shared/ui/Popover";
@@ -34,13 +35,13 @@ type Props = {
   onChange?: () => void;
   onClose?: () => void;
   onOpenChange?: (open: boolean) => void;
-  /** Reports while a checkout, or the stash or commit before one, runs. */
-  onBusyChange?: (busy: boolean) => void;
   popoverSide?: "top" | "bottom";
   compact?: boolean;
 };
 
 const MENU_WIDTH = 280;
+
+const REPO_BUSY = "Another Git operation is running in this repository.";
 
 type CreateRow = { kind: "create"; name: string };
 type BranchRow = { kind: "branch"; branch: GitBranchInfo };
@@ -63,7 +64,6 @@ export function BranchPicker({
   onChange,
   onClose,
   onOpenChange,
-  onBusyChange,
   popoverSide = "top",
   compact = false,
 }: Props) {
@@ -84,24 +84,31 @@ export function BranchPicker({
   onCloseRef.current = onClose;
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
-  const onBusyChangeRef = useRef(onBusyChange);
-  onBusyChangeRef.current = onBusyChange;
 
-  // Held from the first Git call until the last one settles. Closing the
-  // popover or disabling the picker resets the UI, never this lock.
+  // The repository's shared Git lock, held from the first Git call until the
+  // last one settles. Closing the popover or disabling the picker resets the
+  // UI, never this lock. Any other holder (a commit, another picker, an
+  // earlier mount of this one) disables the picker until it settles.
+  const [owner] = useState(() => ({}));
+  const { lock, acquire } = useRepoLock(cwd);
+  const lockedElsewhere = lock !== null && lock.owner !== owner;
+  const usable = enabled && !lockedElsewhere;
   const mutatingRef = useRef(false);
   const [mutating, setMutating] = useState(false);
+  /** False, without running `work`, when the repository is already busy. */
   const mutate = async (work: () => Promise<void>) => {
+    const release = acquire("checkout", owner);
+    if (!release) return false;
     mutatingRef.current = true;
     setMutating(true);
-    onBusyChangeRef.current?.(true);
     try {
       await work();
     } finally {
       mutatingRef.current = false;
       setMutating(false);
-      onBusyChangeRef.current?.(false);
+      release();
     }
+    return true;
   };
 
   const surfaceOpen = open || creating || blocked !== null;
@@ -147,7 +154,7 @@ export function BranchPicker({
   }, [open]);
 
   useEffect(() => {
-    if (enabled) return;
+    if (usable) return;
     setOpen(false);
     setCreating(false);
     setQuery("");
@@ -156,7 +163,7 @@ export function BranchPicker({
     setBlocked(null);
     setBlockedError(null);
     setBlockedBusy(null);
-  }, [enabled]);
+  }, [usable]);
 
   const createName = query.trim();
   const createTaken = (projectBranches?.branches ?? []).some(
@@ -219,7 +226,7 @@ export function BranchPicker({
     if (busy || blocked || mutatingRef.current) return;
     setBusy(true);
     setError(null);
-    await mutate(async () => {
+    const ran = await mutate(async () => {
       try {
         await applySwitch(pending);
         finishSwitch();
@@ -241,6 +248,10 @@ export function BranchPicker({
         if (source === "picker") search.current?.focus();
       }
     });
+    if (!ran) {
+      setError(REPO_BUSY);
+      setBusy(false);
+    }
   };
 
   const resolveBlocked = async (
@@ -251,7 +262,7 @@ export function BranchPicker({
     const pending = blocked;
     setBlockedBusy(kind);
     setBlockedError(null);
-    await mutate(async () => {
+    const ran = await mutate(async () => {
       let prepared = false;
       try {
         await work();
@@ -265,6 +276,10 @@ export function BranchPicker({
         setBlockedBusy(null);
       }
     });
+    if (!ran) {
+      setBlockedError(REPO_BUSY);
+      setBlockedBusy(null);
+    }
   };
 
   const pick = (row: Row) => {
@@ -329,7 +344,7 @@ export function BranchPicker({
     : missingGit
       ? "No git repository"
       : label;
-  const interactive = enabled && !awaitingBranch && !missingGit;
+  const interactive = usable && !awaitingBranch && !missingGit;
 
   return (
     <div ref={root} className="relative flex min-w-0 shrink">
