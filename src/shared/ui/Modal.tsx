@@ -141,7 +141,7 @@ export function Modal(props: Props) {
   return createPortal(
     <div className="fixed inset-0" style={{ zIndex: LAYER.dialog }}>
       <div
-        className="modal-backdrop absolute inset-0 z-0 bg-black/40"
+        className="modal-backdrop absolute inset-0 z-0 bg-black/12 dark:bg-black/40"
         onMouseDown={props.onClose}
       />
       <ModalPanel {...props} />

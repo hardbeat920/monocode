@@ -4280,17 +4280,43 @@ fn git_cmd() -> Command {
 
 fn git_cmd_for_args_with_path(args: &[&str], gui_path: impl FnOnce() -> String) -> Command {
     let mut cmd = git_cmd();
-    if matches!(
-        args.first().copied(),
-        Some("commit" | "push" | "pull" | "fetch" | "clone")
-    ) {
+    let action_index = args.iter().position(|arg| !arg.starts_with('-'));
+    let action = action_index.map(|index| args[index]);
+    // Of the worktree subcommands only `add` checks files out. `list`, `lock`,
+    // `remove`, and the rest keep the inherited PATH.
+    let worktree_add = action == Some("worktree")
+        && action_index.and_then(|index| args.get(index + 1)).copied() == Some("add");
+    if worktree_add
+        || matches!(
+            action,
+            Some(
+                "commit"
+                    | "push"
+                    | "pull"
+                    | "fetch"
+                    | "clone"
+                    | "add"
+                    | "checkout"
+                    | "switch"
+                    | "restore"
+                    | "reset"
+                    | "stash"
+                    | "merge"
+                    | "rebase"
+                    | "cherry-pick"
+                    | "revert"
+            )
+        )
+    {
         // Signers, hooks, credential helpers, and git-lfs may need the login-shell PATH.
+        // Anything that writes the work tree runs LFS filters and the post-checkout hook,
+        // which fail when a Finder-launched app cannot find `git-lfs`.
         cmd.env("PATH", gui_path());
     }
     cmd
 }
 
-fn git_cmd_for_args(args: &[&str]) -> Command {
+pub(crate) fn git_cmd_for_args(args: &[&str]) -> Command {
     git_cmd_for_args_with_path(args, crate::harness::gui_search_path)
 }
 
@@ -8694,8 +8720,16 @@ mod tests {
 
     #[test]
     fn read_only_git_never_resolves_login_shell_path() {
-        for action in ["status", "diff", "rev-parse", "ls-files", "cat-file"] {
-            let cmd = git_cmd_for_args_with_path(&[action], || {
+        for args in [
+            &["status"][..],
+            &["diff"],
+            &["rev-parse"],
+            &["ls-files"],
+            &["cat-file"],
+            &["worktree", "list", "--porcelain", "-z"],
+            &["worktree", "lock", "../wt"],
+        ] {
+            let cmd = git_cmd_for_args_with_path(args, || {
                 panic!("read-only git must not resolve the login-shell PATH")
             });
             assert!(!cmd
@@ -8706,8 +8740,27 @@ mod tests {
 
     #[test]
     fn git_actions_that_need_helpers_use_login_shell_path() {
-        for action in ["commit", "push", "pull", "fetch", "clone"] {
-            let cmd = git_cmd_for_args_with_path(&[action], || "gui-git-path".into());
+        for args in [
+            &["commit"][..],
+            &["push"],
+            &["pull"],
+            &["fetch"],
+            &["clone"],
+            &["checkout", "-b", "feature"],
+            &["switch", "main"],
+            &["worktree", "add", "../wt"],
+            &[
+                "worktree",
+                "add",
+                "--no-track",
+                "-b",
+                "feature",
+                "--",
+                "../wt",
+            ],
+            &["--literal-pathspecs", "add", "--", "a.txt"],
+        ] {
+            let cmd = git_cmd_for_args_with_path(args, || "gui-git-path".into());
             assert!(cmd.get_envs().any(|(key, value)| {
                 key == std::ffi::OsStr::new("PATH")
                     && value == Some(std::ffi::OsStr::new("gui-git-path"))
