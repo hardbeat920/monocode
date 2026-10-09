@@ -31,6 +31,7 @@ describe("runtimeModesFor", () => {
   it("offers only what each provider honors", () => {
     const edits = ["supervised", "auto-accept-edits", "full-access"];
     expect(runtimeModesFor("grok", "grok:grok-4.6")).toContain("auto");
+    expect(runtimeModesFor("devin", "devin:x")).toContain("auto");
     for (const harness of [
       "cursor",
       "opencode",

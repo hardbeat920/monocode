@@ -365,6 +365,7 @@ const HARNESS_RUNTIME_MODES: Record<HarnessId, RuntimeMode[]> = {
   claude: ALL_MODES,
   codex: ALL_MODES,
   cursor: EDIT_MODES,
+  devin: ALL_MODES,
   grok: ALL_MODES,
   opencode: EDIT_MODES,
   antigravity: EDIT_MODES,
