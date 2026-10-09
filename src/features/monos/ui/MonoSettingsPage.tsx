@@ -12,21 +12,19 @@ import {
   updateMono,
   type MonoLook,
 } from "../model/mono";
-import { ConfirmReset } from "./ConfirmReset";
 import { ColorPicker, MascotPicker, PageHeader } from "./monoPanelParts";
 
-export type SettingsPage = "habits" | "soul" | "memory";
+export type SettingsPage = "habits" | "soul" | "memory" | "settings";
 
 /**
- * Who the Mono is: its face and name up top, then what it does, who it is
- * and what it remembers, each a page of its own.
+ * Who the Mono is: its face and name up top, then what it does, who it is,
+ * what it remembers and its settings, each a page of its own.
  */
 export function MonoSettingsPage({
   monoId,
   agent,
   onOpen,
   onBack,
-  onReset,
   counts,
   children,
 }: {
@@ -36,7 +34,6 @@ export function MonoSettingsPage({
   counts?: { habits?: number; memory?: number };
   onOpen: (page: SettingsPage) => void;
   onBack?: () => void;
-  onReset?: () => Promise<void>;
   /** Model and project controls, alongside the profile on the front panel. */
   children?: ReactNode;
 }) {
@@ -92,34 +89,13 @@ export function MonoSettingsPage({
             onClick={() => onOpen("memory")}
           />
         </nav>
-        {onReset ? (
-          <div className="mt-auto p-2">
-            <ConfirmReset
-              label="Reset conversation"
-              title={`Reset ${agent.name}'s conversation?`}
-              body="All messages in this Mono's conversation will be deleted and any active reply will be stopped. This can't be undone."
-              kept="Its soul, memory and habits will be kept."
-              failure="Could not reset the conversation."
-              onConfirm={onReset}
-            >
-              {(open, ref) => (
-                <button
-                  ref={ref}
-                  type="button"
-                  onClick={open}
-                  className="flex w-full flex-col rounded-lg px-3 py-2 text-left hover:bg-content/5"
-                >
-                  <span className="text-[13px] leading-5 text-red-400">
-                    Reset conversation
-                  </span>
-                  <span className="text-[12px] leading-5 text-content/40">
-                    Clear all messages and start fresh
-                  </span>
-                </button>
-              )}
-            </ConfirmReset>
-          </div>
-        ) : null}
+        <div className="mt-auto p-2">
+          <NavRow
+            label="Settings"
+            description="Its sessions, and resetting its chat."
+            onClick={() => onOpen("settings")}
+          />
+        </div>
       </div>
     </div>
   );

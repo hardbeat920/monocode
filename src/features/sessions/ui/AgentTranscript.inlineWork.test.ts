@@ -771,3 +771,33 @@ it.each(["Follow up", "👍"])(
     expect(container.textContent).not.toContain("Steer");
   },
 );
+
+it("does not repeat a thought's first paragraph above it once opened", () => {
+  act(() =>
+    root.render(
+      createElement(MonoActivityTrail, {
+        blocks: [
+          tool("before"),
+          {
+            id: "thought",
+            role: "reasoning",
+            text: "Check the config first.\n\nThen run the tests.",
+          },
+          tool("after"),
+        ],
+      }),
+    ),
+  );
+  const row = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Show thinking: Check the config first."]',
+  )!;
+
+  act(() => row.click());
+
+  expect(row.getAttribute("aria-label")).toBe("Hide thinking");
+  expect(row.textContent).toBe("Thinking");
+  expect(container.textContent?.split("Check the config first.")).toHaveLength(
+    2,
+  );
+  expect(container.textContent).toContain("Then run the tests.");
+});
