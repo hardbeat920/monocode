@@ -1,7 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
-import { HARNESSES, type HarnessId, type Session } from "../../sessions/model/session";
+import {
+  HARNESSES,
+  type HarnessId,
+  type Session,
+} from "../../sessions/model/session";
 import { pathKey } from "../../../shared/lib/paths";
-import type { ApprovalDecision, HarnessEvent } from "../../../integrations/harness/core/types";
+import type {
+  ApprovalDecision,
+  HarnessEvent,
+} from "../../../integrations/harness/core/types";
 import { pendingApprovalForSession } from "../../notifications/model/approvalToast";
 import type { UserQuestionReply } from "../../sessions/model/userQuestion";
 import {
@@ -49,7 +56,9 @@ export type WorkerPreparation = {
 export type OrchestrationHost = {
   session(id: string): Session | undefined;
   sessions(): Session[];
-  choices(): { harness: HarnessId; models: { id: string; name: string }[] }[];
+  choices(
+    project: string,
+  ): { harness: HarnessId; models: { id: string; name: string }[] }[];
   createWorker(
     run: OrchestrationRun,
     task: OrchestrationTask,
@@ -601,7 +610,7 @@ export class Orchestrator {
       )
     )
       throw new Error("Return to the proposal's checkout before starting");
-    const available = this.host!.choices();
+    const available = this.host!.choices(proposal.cwd);
     const allowedModels = settings.choices.filter((choice) =>
       available.some(
         (entry) =>
@@ -693,7 +702,9 @@ export class Orchestrator {
     );
     if (!Number.isInteger(maxWorkers) || maxWorkers < 1 || maxWorkers > 4)
       throw new Error("Choose 1 to 4 workers");
-    const available = this.host!.choices().map((choice) => choice.harness);
+    const available = this.host!.choices(lead.cwd).map(
+      (choice) => choice.harness,
+    );
     if (
       !allowedHarnesses.length ||
       allowedHarnesses.some((id) => !available.includes(id))
@@ -990,7 +1001,7 @@ export class Orchestrator {
       case "list":
         return {
           run: this.view(run),
-          harnesses: this.host!.choices()
+          harnesses: this.host!.choices(run.cwd)
             .filter((choice) => run.allowedHarnesses.includes(choice.harness))
             .map((choice) => ({
               ...choice,
@@ -1029,7 +1040,7 @@ export class Orchestrator {
           throw new Error(
             `Harness "${harness}" is not allowed in this run. Allowed: ${listed(run.allowedHarnesses)}.`,
           );
-        const choice = this.host!.choices().find(
+        const choice = this.host!.choices(run.cwd).find(
           (entry) => entry.harness === harness,
         );
         if (!choice) throw new Error("Worker harness is unavailable");
@@ -1518,19 +1529,20 @@ export class Orchestrator {
             dispatches: [...(run.dispatches ?? []), dispatch],
           });
           this.writeChecks.set(dispatchId, new Set());
-          try {
+          const requireAssignedModel = () => {
             if (
-              !this.host
-                .choices()
-                .some(
-                  (choice) =>
-                    choice.harness === task.harness &&
-                    choice.models.some((model) => model.id === task.model),
-                )
+              !this.host!.choices(run.cwd).some(
+                (choice) =>
+                  choice.harness === task.harness &&
+                  choice.models.some((model) => model.id === task.model),
+              )
             )
               throw new Error(
                 "The assigned harness/model is no longer available. Review this task before retrying.",
               );
+          };
+          try {
+            requireAssignedModel();
             const activeRun = this.run(run.leadId)!;
             const activeTask = activeRun.tasks.find(
               (entry) => entry.id === task.id,
@@ -1584,6 +1596,8 @@ export class Orchestrator {
               task.files,
               prepared.scratchDir,
             );
+            // Preparation may finish after the provider is hidden.
+            requireAssignedModel();
             this.host.submit(task.sessionId, prompt, (outcome) => {
               void this.settle(run.leadId, task.id, outcome, dispatchId).catch(
                 console.error,

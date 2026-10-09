@@ -2101,19 +2101,20 @@ function SidebarComponent({
         {tab === "changes" ? (
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             <SourceControl
-                cwd={gitRoot}
-                enabled={panelOpen}
-                textHarness={textHarness}
-                selectedPath={selectedDiffPath}
-                selectedKind={selectedDiffKind}
-                selectedSha={selectedCommitSha}
-                onOpenFile={
-                  onOpenDiff ??
-                  ((path) => onOpenFile(path, undefined, { exact: true }))
-                }
-                onOpenAllChanges={onOpenAllChanges ?? (() => {})}
-                onOpenCommit={onOpenCommit ?? (() => {})}
-              />
+              cwd={gitRoot}
+              project={cwd}
+              enabled={panelOpen}
+              textHarness={textHarness}
+              selectedPath={selectedDiffPath}
+              selectedKind={selectedDiffKind}
+              selectedSha={selectedCommitSha}
+              onOpenFile={
+                onOpenDiff ??
+                ((path) => onOpenFile(path, undefined, { exact: true }))
+              }
+              onOpenAllChanges={onOpenAllChanges ?? (() => {})}
+              onOpenCommit={onOpenCommit ?? (() => {})}
+            />
           </div>
         ) : null}
         {showSidebarFooter ? (

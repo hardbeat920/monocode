@@ -2,14 +2,19 @@ import { NativePopupHost } from "../../../shared/ui/NativePopupHost";
 import { Loader, WandSparkles, X } from "../../../shared/ui/icons";
 import { useContext, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { generateCommitMessage } from "../../../integrations/harness";
+import {
+  generateCommitMessage,
+  NO_TEXT_HARNESS_MESSAGE,
+} from "../../../integrations/harness";
 import { LAYER } from "../../../shared/lib/layers";
 import { MOD } from "../../../platform/tauri/platform";
+import { useTextHarness } from "../hooks/useTextHarness";
 
 type Busy = "stash" | "commit" | null;
 
 type Props = {
   cwd: string;
+  project?: string;
   branch: string;
   creating?: boolean;
   busy: Busy;
@@ -21,6 +26,7 @@ type Props = {
 
 export function SwitchBranchDialog({
   cwd,
+  project = cwd,
   branch,
   creating = false,
   busy,
@@ -32,6 +38,7 @@ export function SwitchBranchDialog({
   const host = useContext(NativePopupHost);
   const [message, setMessage] = useState("");
   const [generating, setGenerating] = useState(false);
+  const selectedTextHarness = useTextHarness(undefined, project);
   const generateAbortRef = useRef<AbortController | null>(null);
   const messageRef = useRef<HTMLTextAreaElement>(null);
   const trimmed = message.trim();
@@ -80,6 +87,7 @@ export function SwitchBranchDialog({
         cwd,
         undefined,
         controller.signal,
+        project,
       );
       if (!controller.signal.aborted) setMessage(generated);
     } catch (err) {
@@ -158,14 +166,18 @@ export function SwitchBranchDialog({
             title={
               generating
                 ? "Cancel commit message generation"
-                : "Generate commit message"
+                : selectedTextHarness === null
+                  ? NO_TEXT_HARNESS_MESSAGE
+                  : "Generate commit message"
             }
             aria-label={
               generating
                 ? "Cancel commit message generation"
                 : "Generate commit message"
             }
-            disabled={Boolean(busy)}
+            disabled={
+              Boolean(busy) || (!generating && selectedTextHarness === null)
+            }
             onClick={() => (generating ? cancelGenerate() : void generate())}
             className="group absolute top-1 right-1 grid size-5 place-items-center rounded-md bg-content/10 text-content hover:bg-content/20 hover:text-content disabled:opacity-40"
           >

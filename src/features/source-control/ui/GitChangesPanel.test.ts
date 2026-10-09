@@ -36,6 +36,8 @@ vi.mock("../../../platform/tauri/fs", () => ({
 vi.mock("../../../integrations/harness", () => ({
   generateCommitMessage: vi.fn(async () => ""),
   generatePrContent: vi.fn(async () => null),
+  NO_TEXT_HARNESS_MESSAGE: "No text provider is available.",
+  pickTextHarness: vi.fn(),
 }));
 
 vi.mock("../../files/model/fileWatch", () => ({
@@ -61,6 +63,8 @@ import {
 import {
   generateCommitMessage,
   generatePrContent,
+  NO_TEXT_HARNESS_MESSAGE,
+  pickTextHarness,
 } from "../../../integrations/harness";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { GitChangedFile, GitDiffIndex } from "../../../platform/tauri/fs";
@@ -103,6 +107,7 @@ beforeEach(() => {
   vi.mocked(gitUnstageFile).mockReset().mockResolvedValue(undefined);
   vi.mocked(notifyGitChanged).mockClear();
   vi.mocked(generateCommitMessage).mockReset();
+  vi.mocked(pickTextHarness).mockReset().mockReturnValue("cursor");
   invalidateWatchedFiles.mockReset();
   container = document.createElement("div");
   document.body.append(container);
@@ -110,6 +115,21 @@ beforeEach(() => {
 });
 
 describe("GitChangesPanel commit message generation", () => {
+  it("disables generation when no installed provider is eligible", async () => {
+    vi.mocked(pickTextHarness).mockReturnValue(null);
+    vi.mocked(gitDiffIndex).mockResolvedValue(
+      index({ files: [changedFile("src/app.ts")] }),
+    );
+    await renderPanel();
+
+    const generate = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Generate commit message"]',
+    )!;
+    expect(generate.disabled).toBe(true);
+    expect(generate.title).toBe(NO_TEXT_HARNESS_MESSAGE);
+    expect(generateCommitMessage).not.toHaveBeenCalled();
+  });
+
   it("cancels promptly and ignores a late result after a retry", async () => {
     vi.mocked(gitDiffIndex).mockResolvedValue(
       index({
@@ -174,6 +194,63 @@ describe("GitChangesPanel commit message generation", () => {
     await act(async () => resolveFirst("Old message"));
     expect(container.querySelector("textarea")?.value).toBe("New message");
   });
+});
+
+it("disables local PR generation when no text provider is eligible", async () => {
+  vi.mocked(pickTextHarness).mockReturnValue(null);
+  vi.mocked(gitDiffIndex).mockResolvedValue(
+    index({
+      remote: "origin",
+      upstream: "origin/feature/pull",
+      ahead: 1,
+      aheadOfDefault: 1,
+    }),
+  );
+  await renderPanel();
+
+  const createPr = [
+    ...container.querySelectorAll<HTMLButtonElement>("button"),
+  ].find((button) => button.textContent?.trim() === "Create PR")!;
+  expect(createPr.disabled).toBe(true);
+  expect(createPr.title).toBe(NO_TEXT_HARNESS_MESSAGE);
+  expect(generatePrContent).not.toHaveBeenCalled();
+});
+
+it("disables commit-push-create-PR when no local text provider is eligible", async () => {
+  vi.mocked(pickTextHarness).mockReturnValue(null);
+  vi.mocked(gitDiffIndex).mockResolvedValue(
+    index({
+      files: [changedFile("change.ts", { staged: true, unstaged: false })],
+      remote: "origin",
+      upstream: "origin/feature/pull",
+    }),
+  );
+  await renderPanel();
+  const textarea = container.querySelector("textarea")!;
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      "value",
+    )?.set;
+    setter?.call(textarea, "Ship it");
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => {
+    container
+      .querySelector<HTMLButtonElement>('[aria-label="Commit options"]')!
+      .click();
+  });
+  const items = [
+    ...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+  ];
+  const push = items.find(
+    (item) => item.textContent?.trim() === "Commit & Push",
+  )!;
+  const pushPr = items.find(
+    (item) => item.textContent?.trim() === "Commit, Push & Create PR",
+  )!;
+  expect(push.disabled).toBe(false);
+  expect(pushPr.disabled).toBe(true);
 });
 
 afterEach(() => {

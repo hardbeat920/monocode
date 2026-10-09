@@ -1956,6 +1956,7 @@ export function Composer({
                   {(workspaceMode ?? "current") === "current" ? (
                     <BranchPicker
                       cwd={executionCwd}
+                      project={cwd}
                       branch={branch}
                       enabled={enabled && !busy}
                       onChange={onBranchChange}
@@ -1983,6 +1984,7 @@ export function Composer({
                   ) : null}
                   <BranchPicker
                     cwd={executionCwd}
+                    project={cwd}
                     branch={branch}
                     enabled={enabled && !busy}
                     onChange={onBranchChange}

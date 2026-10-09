@@ -3749,9 +3749,9 @@ function ProviderRow({
     models.length > 0 ? resolveModel(harness, selectedModel) : null;
 
   useEffect(() => {
-    if (!available || hasLiveCatalog(harness)) return;
+    if (!available || !inPicker || hasLiveCatalog(harness)) return;
     void refreshHarnessCatalogs([harness]);
-  }, [available, harness]);
+  }, [available, harness, inPicker]);
 
   return (
     <Row

@@ -45,7 +45,6 @@ import {
   type ControlOutcome,
 } from "../features/orchestration/model/orchestration";
 import { modelsFor } from "../features/sessions/model/models";
-import { isHarnessAvailable } from "../integrations/harness/core/availability";
 import {
   completeOrchestrationProposal,
   completeOrRepairOrchestrationProposal,
@@ -56,7 +55,10 @@ import {
   withOrchestrationProposal,
   type OrchestrationProposal,
 } from "../features/orchestration/model/orchestrationPlan";
-import { discoverOrchestrationSettings } from "../features/orchestration/model/orchestrationCatalog";
+import {
+  discoverOrchestrationSettings,
+  isWorkerHarnessEligible,
+} from "../features/orchestration/model/orchestrationCatalog";
 import {
   attachOrchestrationWorkers,
   consolidateOrchestrationTabs,
@@ -7525,34 +7527,40 @@ function Workspace({
 
           const branchMessage =
             harnessText || attachments.map((file) => file.name).join(", ");
-          void generateHarnessBranchName(
-            pickTextHarness(current.harness),
-            workCwd,
-            branchMessage,
-          )
-            .then(async (fragment) => {
-              const branch = fragment ? namedWorktreeBranch(fragment) : null;
-              if (!branch) return;
-              const renamed = await renameWorktreeBranch(
-                current.cwd,
-                tree.path,
-                branch,
-              );
-              setSessions((prev) =>
-                prev.map((session) =>
-                  session.id === sessionId &&
-                  pathKey(sessionWorkCwd(session)) === pathKey(tree.path)
-                    ? { ...session, branch: renamed.branch ?? undefined }
-                    : session,
-                ),
-              );
-            })
-            .catch(() => undefined);
+          const branchTextHarness = pickTextHarness(
+            current.harness,
+            current.cwd,
+          );
+          if (branchTextHarness) {
+            void generateHarnessBranchName(
+              branchTextHarness,
+              workCwd,
+              branchMessage,
+            )
+              .then(async (fragment) => {
+                const branch = fragment ? namedWorktreeBranch(fragment) : null;
+                if (!branch) return;
+                const renamed = await renameWorktreeBranch(
+                  current.cwd,
+                  tree.path,
+                  branch,
+                );
+                setSessions((prev) =>
+                  prev.map((session) =>
+                    session.id === sessionId &&
+                    pathKey(sessionWorkCwd(session)) === pathKey(tree.path)
+                      ? { ...session, branch: renamed.branch ?? undefined }
+                      : session,
+                  ),
+                );
+              })
+              .catch(() => undefined);
+          }
         }
         launchTitleGeneration(workCwd);
         if (turnGen.current.get(sessionId) !== gen) return;
         if (proposalDraft && proposalId) {
-          const settings = await discoverOrchestrationSettings();
+          const settings = await discoverOrchestrationSettings(current.cwd);
           if (turnGen.current.get(sessionId) !== gen) return;
           proposalDraft = { ...proposalDraft, settings };
           const discovering = proposalDraft;
@@ -10132,8 +10140,10 @@ function Workspace({
     orchestrator.bind({
       session: (id) => sessionsRef.current.find((session) => session.id === id),
       sessions: () => sessionsRef.current,
-      choices: () =>
-        HARNESSES.filter(isHarnessAvailable).map((harness) => ({
+      choices: (project) =>
+        HARNESSES.filter((harness) =>
+          isWorkerHarnessEligible(project, harness),
+        ).map((harness) => ({
           harness,
           models: modelsFor(harness).map(({ id, name }) => ({ id, name })),
         })),
@@ -12562,7 +12572,11 @@ function Workspace({
               selectedCommitSha={
                 activeTab ? selectedCommitSha(activeTab) : undefined
               }
-              textHarness={pickTextHarness(active?.harness)}
+              textHarness={
+                active && pathKey(active.cwd) === pathKey(sidebarCwd)
+                  ? active.harness
+                  : undefined
+              }
               recents={recents}
               busyProjectPaths={promptableSessions.flatMap((session) =>
                 session.busy && session.cwd ? [session.cwd] : [],

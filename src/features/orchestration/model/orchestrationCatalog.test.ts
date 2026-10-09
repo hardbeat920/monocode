@@ -12,9 +12,15 @@ import {
   probeHarnessAvailability,
 } from "../../../integrations/harness/core/availability";
 import { refreshHarnessCatalogs } from "../../../integrations/harness/core/registry";
-import { resetHarnessModelOverlays, setHarnessModels } from "../../sessions/model/models";
+import {
+  resetHarnessModelOverlays,
+  savePickerProviderVisible,
+  setHarnessModels,
+} from "../../sessions/model/models";
+import { setProjectProviderHidden } from "../../sessions/model/projectProviders";
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   resetHarnessModelOverlays();
   vi.clearAllMocks();
   vi.mocked(isHarnessAvailable).mockImplementation(
@@ -59,6 +65,116 @@ describe("automatic orchestration catalog", () => {
       settings.choices.filter((choice) => choice.harness === "codex"),
     ).toHaveLength(80);
   });
+  it("leaves providers hidden from the picker out of discovery", async () => {
+    const data = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => data.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        data.set(key, value);
+      },
+      removeItem: (key: string) => {
+        data.delete(key);
+      },
+      clear: () => data.clear(),
+    });
+    vi.mocked(isHarnessAvailable).mockImplementation(
+      (id) => id === "codex" || id === "cursor",
+    );
+    savePickerProviderVisible("cursor", false);
+    setHarnessModels("codex", [
+      { id: "codex:live", harness: "codex", name: "Live Codex" },
+    ]);
+    const settings = await discoverOrchestrationSettings();
+    expect(refreshHarnessCatalogs).toHaveBeenCalledWith(["codex"]);
+    expect(settings.choices.some((choice) => choice.harness === "cursor")).toBe(
+      false,
+    );
+  });
+  it("excludes providers hidden in this project but keeps them in others", async () => {
+    const data = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => data.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        data.set(key, value);
+      },
+    });
+    vi.mocked(isHarnessAvailable).mockImplementation(
+      (id) => id === "codex" || id === "cursor",
+    );
+    setHarnessModels("codex", [
+      { id: "codex:live", harness: "codex", name: "Live Codex" },
+    ]);
+    setHarnessModels("cursor", [
+      { id: "cursor:live", harness: "cursor", name: "Live Cursor" },
+    ]);
+    setProjectProviderHidden("/repo", "cursor", true);
+
+    const hidden = await discoverOrchestrationSettings("/repo");
+    expect(refreshHarnessCatalogs).toHaveBeenCalledWith(["codex"]);
+    expect(hidden.choices.some((choice) => choice.harness === "cursor")).toBe(
+      false,
+    );
+
+    vi.mocked(refreshHarnessCatalogs).mockClear();
+    const visible = await discoverOrchestrationSettings("/other");
+    expect(refreshHarnessCatalogs).toHaveBeenCalledWith(["codex", "cursor"]);
+    expect(visible.choices.some((choice) => choice.harness === "cursor")).toBe(
+      true,
+    );
+  });
+  it.each(["global", "project"] as const)(
+    "excludes a provider hidden %s while its catalog refresh is pending",
+    async (scope) => {
+      const data = new Map<string, string>();
+      vi.stubGlobal("localStorage", {
+        getItem: (key: string) => data.get(key) ?? null,
+        setItem: (key: string, value: string) => {
+          data.set(key, value);
+        },
+        removeItem: (key: string) => {
+          data.delete(key);
+        },
+        clear: () => data.clear(),
+      });
+      vi.mocked(isHarnessAvailable).mockImplementation(
+        (id) => id === "codex" || id === "cursor",
+      );
+      setHarnessModels("codex", [
+        { id: "codex:live", harness: "codex", name: "Live Codex" },
+      ]);
+      setHarnessModels("cursor", [
+        { id: "cursor:live", harness: "cursor", name: "Live Cursor" },
+      ]);
+      let finishRefresh!: () => void;
+      vi.mocked(refreshHarnessCatalogs).mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finishRefresh = resolve;
+          }),
+      );
+
+      const discovery = discoverOrchestrationSettings("/repo");
+      await vi.waitFor(() =>
+        expect(refreshHarnessCatalogs).toHaveBeenCalledWith([
+          "codex",
+          "cursor",
+        ]),
+      );
+      if (scope === "global") savePickerProviderVisible("cursor", false);
+      else setProjectProviderHidden("/repo", "cursor", true);
+      finishRefresh();
+
+      const settings = await discovery;
+      expect(settings.choices).toContainEqual({
+        harness: "codex",
+        model: "codex:live",
+        name: "Live Codex",
+      });
+      expect(
+        settings.choices.some((choice) => choice.harness === "cursor"),
+      ).toBe(false);
+    },
+  );
   it("fails planning clearly when no harness is available", async () => {
     vi.mocked(isHarnessAvailable).mockReturnValue(false);
     await expect(discoverOrchestrationSettings()).rejects.toThrow(

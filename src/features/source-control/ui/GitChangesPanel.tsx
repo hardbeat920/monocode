@@ -73,12 +73,14 @@ import {
 import {
   generateCommitMessage,
   generatePrContent,
+  NO_TEXT_HARNESS_MESSAGE,
 } from "../../../integrations/harness";
 import { invalidateWatchedFiles } from "../../files/model/fileWatch";
 import { MOD } from "../../../platform/tauri/platform";
 import { applyProjectDiffStats } from "../hooks/useProjectDiffStats";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { isRemoteProjectPath } from "../../projects/model/recents";
+import { useTextHarness } from "../hooks/useTextHarness";
 
 const GIT_POLL_MS = 2000;
 
@@ -103,6 +105,7 @@ type AmendTarget = { branch: string | null; head: string | null };
 
 type Props = {
   cwd: string;
+  project?: string;
   enabled: boolean;
   textHarness?: HarnessId;
   selectedPath?: string;
@@ -115,6 +118,7 @@ type Props = {
 
 export function GitChangesPanel({
   cwd,
+  project = cwd,
   enabled,
   textHarness,
   selectedPath,
@@ -272,6 +276,7 @@ export function GitChangesPanel({
       </header>
       <ChangedFiles
         cwd={cwd}
+        project={project}
         textHarness={textHarness}
         index={index}
         files={files}
@@ -329,6 +334,7 @@ export function GitChangesPanel({
 
 function ChangedFiles({
   cwd,
+  project,
   textHarness,
   index,
   files,
@@ -343,6 +349,7 @@ function ChangedFiles({
   onMutated,
 }: {
   cwd: string;
+  project: string;
   textHarness?: HarnessId;
   index: GitDiffIndex | null;
   files: GitChangedFile[];
@@ -357,6 +364,7 @@ function ChangedFiles({
   onMutated: (paths?: string[]) => void;
 }) {
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
+  const selectedTextHarness = useTextHarness(textHarness, project);
   const menuRef = useRef<HTMLDivElement>(null);
   const messageRef = useRef<HTMLTextAreaElement>(null);
   const generateAbortRef = useRef<AbortController | null>(null);
@@ -380,10 +388,15 @@ function ChangedFiles({
     !!index?.branch &&
     !!index.defaultBranch &&
     index.branch === index.defaultBranch;
-  const canGenerate = files.length > 0 && !busy && !isRemoteProjectPath(cwd);
+  const canGenerate =
+    files.length > 0 &&
+    !busy &&
+    !isRemoteProjectPath(cwd) &&
+    selectedTextHarness !== null;
   const canCommit =
     (staged.length > 0 || amend) && message.trim().length > 0 && !busy;
   const canCreatePr =
+    (isRemoteProjectPath(cwd) || selectedTextHarness !== null) &&
     hasRemote &&
     !!index?.branch &&
     !!index.defaultBranch &&
@@ -401,7 +414,11 @@ function ChangedFiles({
     ((index?.ahead ?? 0) > 0 || (index?.behind ?? 0) > 0);
   const canCommitPush =
     canCommit && hasRemote && !diverged && (!amend || !index?.headPushed);
-  const canCommitPushPr = canCommitPush && !hasOpenPr && !onDefault;
+  const canCommitPushPr =
+    canCommitPush &&
+    !hasOpenPr &&
+    !onDefault &&
+    (isRemoteProjectPath(cwd) || selectedTextHarness !== null);
   const canEditMessage = !busy;
 
   useEffect(() => {
@@ -564,6 +581,7 @@ function ChangedFiles({
         cwd,
         textHarness,
         controller.signal,
+        project,
       );
       if (!controller.signal.aborted) setMessage(generated);
     } catch (error) {
@@ -660,7 +678,7 @@ function ChangedFiles({
   const openCreatedPr = async () => {
     const content = isRemoteProjectPath(cwd)
       ? await remotePrContent(cwd)
-      : await generatePrContent(cwd, textHarness);
+      : await generatePrContent(cwd, textHarness, project);
     if (!content) throw new Error("Could not prepare pull request content");
     const url = await gitPrCreate(
       cwd,
@@ -725,7 +743,9 @@ function ChangedFiles({
             title={
               busy === "generate"
                 ? "Cancel commit message generation"
-                : "Generate commit message"
+                : selectedTextHarness === null
+                  ? NO_TEXT_HARNESS_MESSAGE
+                  : "Generate commit message"
             }
             aria-label={
               busy === "generate"
@@ -837,6 +857,9 @@ function ChangedFiles({
             canSync={canSync}
             canPublish={canPublish}
             canCreatePr={canCreatePr}
+            textUnavailable={
+              !isRemoteProjectPath(cwd) && selectedTextHarness === null
+            }
             canViewPr={canViewPr}
             onSync={() => void sync()}
             onCreatePr={() => void createPr()}
@@ -1018,6 +1041,7 @@ export function GitSyncActions({
   canSync,
   canPublish,
   canCreatePr,
+  textUnavailable = false,
   canViewPr,
   onSync,
   onCreatePr,
@@ -1032,6 +1056,7 @@ export function GitSyncActions({
   canSync: boolean;
   canPublish: boolean;
   canCreatePr: boolean;
+  textUnavailable?: boolean;
   canViewPr: boolean;
   onSync: () => void;
   onCreatePr: () => void;
@@ -1115,7 +1140,7 @@ export function GitSyncActions({
       {showCreatePr ? (
         <button
           type="button"
-          title={createTitle}
+          title={textUnavailable ? NO_TEXT_HARNESS_MESSAGE : createTitle}
           disabled={!canCreatePr || !!busy}
           onClick={onCreatePr}
           className={secondary}
