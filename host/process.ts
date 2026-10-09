@@ -5,9 +5,13 @@ import { homedir } from "node:os";
 import { delimiter, dirname, extname, join, basename } from "node:path";
 import type { RemoteProvider } from "../src/features/connections/model/protocol";
 
-const npmEntries: Record<string, string> = {
-  codex: "node_modules/@openai/codex/bin/codex.js",
-  claude: "node_modules/@anthropic-ai/claude-code/cli.js",
+const npmEntries: Record<string, string[]> = {
+  codex: ["node_modules/@openai/codex/bin/codex.js"],
+  claude: ["node_modules/@anthropic-ai/claude-code/cli.js"],
+  copilot: [
+    "node_modules/@github/copilot/npm-loader.js",
+    "node_modules/@github/copilot/index.js",
+  ],
 };
 
 const binaryNames: Record<RemoteProvider, string[]> = {
@@ -211,12 +215,14 @@ export async function providerLaunch(
 ): Promise<{ command: string; args: string[] }> {
   if (platform === "win32" && /\.(cmd|bat)$/i.test(command)) {
     const provider = basename(command, extname(command)).toLowerCase();
-    const relative = npmEntries[provider];
-    if (!relative) throw new Error("Unsupported Windows provider launcher");
-    const entry = join(dirname(command), relative);
-    if (!(await stat(entry)).isFile())
-      throw new Error("Missing npm provider entry point");
-    return { command: process.execPath, args: [entry, ...args] };
+    const entries = npmEntries[provider];
+    if (!entries) throw new Error("Unsupported Windows provider launcher");
+    for (const relative of entries) {
+      const entry = join(dirname(command), relative);
+      if ((await stat(entry).catch(() => undefined))?.isFile())
+        return { command: process.execPath, args: [entry, ...args] };
+    }
+    throw new Error("Missing npm provider entry point");
   }
   if (/\.(cjs|mjs|js)$/i.test(command))
     return { command: process.execPath, args: [command, ...args] };
