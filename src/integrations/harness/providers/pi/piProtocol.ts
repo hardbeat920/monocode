@@ -396,10 +396,7 @@ export function contextFromUsage(
   rec: Record<string, unknown>,
   window?: number,
 ): { used?: number; window?: number } | null {
-  const usage =
-    asRecord(rec.usage) ??
-    assistantMessageUsage(rec) ??
-    asRecord(asRecord(asRecord(rec.assistantMessageEvent)?.partial)?.usage);
+  const usage = frameUsage(rec);
   if (!usage) return null;
   const used =
     numberField(usage, "totalTokens") ||
@@ -414,10 +411,7 @@ export function contextFromUsage(
 export function turnMetricsFromUsage(
   rec: Record<string, unknown>,
 ): TurnMetrics | null {
-  const usage =
-    asRecord(rec.usage) ??
-    assistantMessageUsage(rec) ??
-    asRecord(asRecord(asRecord(rec.assistantMessageEvent)?.partial)?.usage);
+  const usage = frameUsage(rec);
   if (!usage) return null;
   const inputTokens = numberField(usage, "input") ?? 0;
   const outputTokens = numberField(usage, "output") ?? 0;
@@ -435,6 +429,51 @@ export function turnMetricsFromUsage(
       ? { cacheHitPercent: (cacheReadTokens / cacheableInput) * 100 }
       : {}),
   };
+}
+
+/** What the current Pi turn has spent, summed response by response. */
+export type PiTurnUsage = {
+  done: Record<string, number>;
+  open: Record<string, number>;
+};
+
+const PI_USAGE_KEYS = ["input", "output", "cacheRead", "cacheWrite"] as const;
+
+/**
+ * Pi reports usage per assistant response: streaming frames restate that
+ * response's running count, `message_end` settles it, and `turn_end` repeats
+ * it. A turn with tool calls makes several responses, so add each settled one
+ * to the turn instead of letting the latest replace it.
+ */
+export function addPiTurnUsage(
+  spent: PiTurnUsage,
+  rec: Record<string, unknown>,
+): TurnMetrics | null {
+  if (stringField(rec, "type") === "turn_end") return null;
+  const usage = frameUsage(rec);
+  if (!usage) return null;
+  const response: Record<string, number> = {};
+  for (const key of PI_USAGE_KEYS) {
+    if (key in usage) response[key] = numberField(usage, key) ?? 0;
+  }
+  if (stringField(rec, "type") === "message_end") {
+    spent.done = sumUsage(spent.done, response);
+    spent.open = {};
+  } else {
+    spent.open = response;
+  }
+  return turnMetricsFromUsage({ usage: sumUsage(spent.done, spent.open) });
+}
+
+function sumUsage(
+  a: Record<string, number>,
+  b: Record<string, number>,
+): Record<string, number> {
+  const sum = { ...a };
+  for (const [key, value] of Object.entries(b)) {
+    sum[key] = (sum[key] ?? 0) + value;
+  }
+  return sum;
 }
 
 export function contextFromSessionStats(data: unknown): {
@@ -817,6 +856,16 @@ function thinkingLabel(level: PiThinkingLevel): string {
   if (level === "xhigh") return "Extra High";
   if (level === "off") return "Off";
   return level.slice(0, 1).toUpperCase() + level.slice(1);
+}
+
+function frameUsage(
+  rec: Record<string, unknown>,
+): Record<string, unknown> | null {
+  return (
+    asRecord(rec.usage) ??
+    assistantMessageUsage(rec) ??
+    asRecord(asRecord(asRecord(rec.assistantMessageEvent)?.partial)?.usage)
+  );
 }
 
 function assistantMessageUsage(

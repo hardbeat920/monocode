@@ -204,6 +204,28 @@ describe("codex live turn sequence", () => {
     await turn;
   });
 
+  it("reports the whole turn's tokens, not just its last request", async () => {
+    const { events, turn } = await startTurn("codex-live");
+    const usage = (last: Record<string, number>, totalTokens: number) =>
+      notify("thread/tokenUsage/updated", {
+        threadId: "thr_1",
+        turnId: "turn_1",
+        tokenUsage: { last, total: { totalTokens }, modelContextWindow: null },
+      });
+    usage({ totalTokens: 1_100, inputTokens: 1_000, outputTokens: 100 }, 1_100);
+    usage({ totalTokens: 2_200, inputTokens: 2_000, outputTokens: 200 }, 3_300);
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+
+    expect(
+      events.filter((event) => event.type === "turn.metrics").at(-1),
+    ).toEqual({
+      type: "turn.metrics",
+      inputTokens: 3_000,
+      outputTokens: 300,
+    });
+  });
+
   it("keeps ephemeral helper threads out of saved Codex history", async () => {
     const first = await startTurn("codex-live", { ephemeral: true });
     expect(
