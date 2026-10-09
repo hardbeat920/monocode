@@ -642,6 +642,7 @@ export function CodeMirrorEditor({
   const outlineItemsRef = useRef<OutlineItem[]>([]);
   const outlineOpenRef = useRef(outlineView.open);
   const outlineTimerRef = useRef(0);
+  const outlineParseRetriesRef = useRef(0);
   const pathRef = useRef(path);
   const outlineViewRef = useRef(outlineView);
   const gitOptions = {
@@ -663,6 +664,12 @@ export function CodeMirrorEditor({
   pathRef.current = path;
   outlineViewRef.current = outlineView;
 
+  // Viewport-first parsing can leave the tree partial when the budget in
+  // `outlineFromState` is exceeded. A partial tree still yields items, so
+  // retry a bounded number of times — the parser caches progress, and each
+  // retry runs with a fresh budget until the full document is covered.
+  const OUTLINE_PARSE_FOLLOW_UPS = 4;
+
   const refreshOutline = useCallback((view: EditorView) => {
     const items = outlineFromState(view.state, pathRef.current);
     outlineItemsRef.current = items;
@@ -670,12 +677,26 @@ export function CodeMirrorEditor({
       sameOutline(current, items) ? current : items,
     );
     setOutlineActive(activeOutlineId(items, view.state.selection.main.head));
+    const parsed = syntaxTree(view.state).length;
+    if (
+      parsed < view.state.doc.length &&
+      outlineParseRetriesRef.current < OUTLINE_PARSE_FOLLOW_UPS
+    ) {
+      outlineParseRetriesRef.current += 1;
+      window.clearTimeout(outlineTimerRef.current);
+      outlineTimerRef.current = window.setTimeout(() => {
+        if (outlineOpenRef.current) refreshOutline(view);
+      }, 300);
+    } else {
+      outlineParseRetriesRef.current = 0;
+    }
   }, []);
 
   const scheduleOutline = useCallback(
     (view: EditorView) => {
       if (!outlineOpenRef.current) return;
       window.clearTimeout(outlineTimerRef.current);
+      outlineParseRetriesRef.current = 0;
       outlineTimerRef.current = window.setTimeout(
         () => refreshOutline(view),
         150,
