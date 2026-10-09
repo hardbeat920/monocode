@@ -471,6 +471,7 @@ import { deliverQueuedFollowUp } from "../features/sessions/model/queuedFollowUp
 import {
   USAGE_LIMIT_RESUME_GRACE_MS,
   resumeUsageLimitedSession,
+  switchUsageLimitAccount,
   usageLimitResumeDue,
 } from "../features/sessions/model/usageLimit";
 import {
@@ -9016,20 +9017,30 @@ function Workspace({
       );
       if (
         !session ||
-        !isMonoSession(sessionId) ||
         !supportsProviderAccounts(session.harness) ||
         !providerAccountExists(session.harness, accountId)
       )
         return;
-      setSessions((prev) =>
-        prev.map((entry) =>
-          entry.id === sessionId
-            ? switchMonoUsageLimitAccount(entry, accountId)
-            : entry,
-        ),
+      if (isMonoSession(sessionId)) {
+        setSessions((prev) =>
+          prev.map((entry) =>
+            entry.id === sessionId
+              ? switchMonoUsageLimitAccount(entry, accountId)
+              : entry,
+          ),
+        );
+        return;
+      }
+      const switched = switchUsageLimitAccount(session, accountId);
+      if (switched === session) return;
+      // The submit reads the ref, so it must already see the new account.
+      sessionsRef.current = sessionsRef.current.map((entry) =>
+        entry.id === sessionId ? switched : entry,
       );
+      setSessions(sessionsRef.current);
+      onSubmit(sessionId, CONTINUE_PROMPT);
     },
-    [],
+    [onSubmit],
   );
 
   const [usageLimitTick, setUsageLimitTick] = useState(0);
