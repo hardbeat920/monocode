@@ -41,6 +41,14 @@ export function MonoStatus({ state, color, className = "" }: Props) {
           <span className="min-w-0 truncate">{activity}</span>
         </>
       ) : null}
+      {state.goal ? (
+        <span
+          className="min-w-0 truncate"
+          title={`Goal ${state.goal.status}: ${state.goal.objective}`}
+        >
+          {activity ? "· " : ""}Goal {state.goal.status}: {state.goal.objective}
+        </span>
+      ) : null}
     </span>
   );
 }

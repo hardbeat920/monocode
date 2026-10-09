@@ -23,7 +23,8 @@ export type ProjectReturnDecision =
 export function isBlankSession(session: Session | undefined): boolean {
   // Remote transcripts may not have loaded yet, and a shell can hold an
   // unfinished create or composer text. Local blocks cannot prove it is blank.
-  if (!session || session.busy || isRemoteProjectPath(session.cwd)) return false;
+  if (!session || session.busy || isRemoteProjectPath(session.cwd))
+    return false;
   return !session.blocks.some((block) => block.role === "user");
 }
 
@@ -62,7 +63,9 @@ function paneProjects(
   return result;
 }
 
-function tabFocusedPaneById(tabs: readonly WorkspaceTab[]): Map<string, string> {
+function tabFocusedPaneById(
+  tabs: readonly WorkspaceTab[],
+): Map<string, string> {
   return new Map(tabs.map((tab) => [tab.id, tab.focusedId]));
 }
 
@@ -150,17 +153,17 @@ export function planProjectReturn({
   const byPane = paneProjects(tabs, sessions);
   const active = tabs.find((tab) => tab.id === activeTabId);
 
-  if (active?.focusedId && paneBelongsToProject(active.focusedId, target, byPane)) {
+  if (
+    active?.focusedId &&
+    paneBelongsToProject(active.focusedId, target, byPane)
+  ) {
     return { action: "keep" };
   }
 
   const remembered = memory.get(target);
   if (remembered) {
     const rememberedTab = tabs.find((tab) => tabContainsPane(tab, remembered));
-    if (
-      rememberedTab &&
-      paneBelongsToProject(remembered, target, byPane)
-    ) {
+    if (rememberedTab && paneBelongsToProject(remembered, target, byPane)) {
       return {
         action: "activate",
         tabId: rememberedTab.id,

@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useId, useLayoutEffect, useRef, useState } from "react";
 import { isImeComposition } from "../../../shared/lib/keyboard";
 import { ArrowUp, Plus } from "../../../shared/ui/icons";
 import { AttachmentChip } from "../../sessions/ui/AttachmentChip";
@@ -63,6 +63,7 @@ export function MonoComposer({
   onFocus,
 }: Props) {
   const [text, setText] = useState(() => getComposerDraft(sessionId) ?? "");
+  const goalHelpId = useId();
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const textRef = useRef(text);
   const attachmentsRef = useRef(attachments);
@@ -311,7 +312,8 @@ export function MonoComposer({
             ref={field}
             rows={1}
             aria-label={`Message ${name}`}
-            placeholder={`Message ${name}`}
+            aria-describedby={goalHelpId}
+            placeholder={`Message ${name} · /goal <objective>`}
             disabled={!enabled || submitting}
             value={text}
             onFocus={onFocus}
@@ -346,6 +348,10 @@ export function MonoComposer({
           </button>
         </div>
       </div>
+      <p id={goalHelpId} className="px-1 pt-1 text-[10px] text-content/40">
+        /goal &lt;objective&gt; starts a goal; /goal status, pause, resume or
+        cancel manages it.
+      </p>
     </form>
   );
 }

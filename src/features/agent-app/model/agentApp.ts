@@ -40,7 +40,10 @@ import type { Worktree, Worktrees } from "../../source-control/model/worktrees";
 import { pathKey, projectName } from "../../../shared/lib/paths";
 import type { SplitDir } from "../../workspace/model/layout";
 import { consumeOperatorCommand } from "../../sessions/model/operatorCommand";
-import { sessionConversationPage, type SessionReadOptions } from "./sessionConversation";
+import {
+  sessionConversationPage,
+  type SessionReadOptions,
+} from "./sessionConversation";
 import {
   CARD_FIELDS,
   parseCard,
@@ -74,6 +77,7 @@ import {
   supersedeMemoryEntry,
   topicName,
 } from "../../monos/model/monoMemory";
+import type { MonoGoal } from "../../monos/model/mono";
 
 export type AppSessionListing = {
   id: string;
@@ -99,7 +103,10 @@ export type AgentAppHost = {
   ): Promise<void>;
   sessions(cwd: string): Promise<AppSessionListing[]>;
   session(id: string): Promise<Session | null>;
-  readConversation?(session: Session, options: SessionReadOptions): Promise<ReturnType<typeof sessionConversationPage>>;
+  readConversation?(
+    session: Session,
+    options: SessionReadOptions,
+  ): Promise<ReturnType<typeof sessionConversationPage>>;
   send(
     id: string,
     prompt: string,
@@ -126,20 +133,32 @@ export type AgentAppHost = {
   artifacts?(): Promise<Artifact[]>;
   artifact?(id: string): Promise<Artifact | null>;
   saveArtifact?(artifact: ArtifactUpsert): Promise<Artifact>;
-  postArtifact?(sourceSessionId: string, card: ArtifactCard): void | Promise<void>;
+  postArtifact?(
+    sourceSessionId: string,
+    card: ArtifactCard,
+  ): void | Promise<void>;
   /** Whether the session is a Mono's own conversation, which owns memory. */
   isMono(sessionId: string): boolean;
   /**
    * The Mono a session works for: its own conversation or one of its habit
    * runs. Its projects are the ones it may name with "project".
    */
-  monoOf?(sessionId: string): {
-    id: string;
-    projects: readonly string[];
-    showStartedSessionsInSidebar?: boolean;
-    /** Files the sessions it starts into a folder named after it. */
-    folder?: { name: string; color: string };
-  } | undefined;
+  monoOf?(sessionId: string):
+    | {
+        id: string;
+        projects: readonly string[];
+        showStartedSessionsInSidebar?: boolean;
+        goal?: MonoGoal;
+        /** Files the sessions it starts into a folder named after it. */
+        folder?: { name: string; color: string };
+      }
+    | undefined;
+  updateGoal?(
+    monoId: string,
+    goalId: string,
+    status: "done" | "blocked",
+    reason?: string,
+  ): MonoGoal | undefined;
   /** A hidden run of one of a Mono's habits: it may remember, not schedule. */
   isHabitRun?(sessionId: string): boolean;
   /** Puts a card in the Mono's chat, or holds it for a habit run's report. */
@@ -218,6 +237,8 @@ const FIELDS = new Map<string, readonly string[]>([
   ["habits.update", ["id", "name", "instructions", "schedule", "enabled"]],
   ["habits.run", ["id"]],
   ["habits.remove", ["id"]],
+  ["mono.goal.read", []],
+  ["mono.goal.update", ["goalId", "status", "reason"]],
   ["chat.card", [...CARD_FIELDS]],
 ]);
 
@@ -317,11 +338,10 @@ function requireProject(
     const byPath = mono.projects.find(
       (path) => pathKey(path) === pathKey(named),
     );
-    const byName = mono.projects.filter(
-      (path) => projectName(path) === named,
-    );
+    const byName = mono.projects.filter((path) => projectName(path) === named);
     const match = byPath ?? (byName.length === 1 ? byName[0] : undefined);
-    if (!match) throw new Error(`Not one of your projects. Yours: ${choices()}`);
+    if (!match)
+      throw new Error(`Not one of your projects. Yours: ${choices()}`);
     return match;
   }
   const own = mono.projects.find(
@@ -554,8 +574,7 @@ async function editAgentFile<T>(
         await host.writeAgentFile(monoId, path, next.text, current.hash);
       return next.result;
     } catch (error) {
-      if (!(error instanceof MonoFileConflict) || attempt >= 2)
-        throw error;
+      if (!(error instanceof MonoFileConflict) || attempt >= 2) throw error;
     }
   }
 }
@@ -642,7 +661,10 @@ async function handleMemory(
       const hits = searchMemory(texts, query, { since });
       return hits.length
         ? { hits }
-        : { hits, note: "Nothing in memory matches. It may never have been saved." };
+        : {
+            hits,
+            note: "Nothing in memory matches. It may never have been saved.",
+          };
     }
     case "memory.read": {
       if (path !== "MEMORY.md") {
@@ -661,7 +683,11 @@ async function handleMemory(
       };
     }
     case "memory.add": {
-      const entry = memoryEntry(requiredString(input.fact, "fact"), date, until);
+      const entry = memoryEntry(
+        requiredString(input.fact, "fact"),
+        date,
+        until,
+      );
       const added = await editAgentFile(host, monoId, path, (text) => {
         const next = addMemoryEntry(text, entry);
         return { text: next.text, result: next.added };
@@ -672,7 +698,11 @@ async function handleMemory(
     }
     case "memory.replace": {
       const find = requiredString(input.find, "find", 2000);
-      const entry = memoryEntry(requiredString(input.fact, "fact"), date, until);
+      const entry = memoryEntry(
+        requiredString(input.fact, "fact"),
+        date,
+        until,
+      );
       await editAgentFile(host, monoId, path, (text) => ({
         text: supersedeMemoryEntry(text, find, entry, date),
         result: undefined,
@@ -735,7 +765,11 @@ async function handleHabits(
       return { habits: (await habits.load(monoId)).map(habitView) };
     case "habits.add": {
       const name = requiredString(input.name, "name", 80);
-      const instructions = requiredString(input.instructions, "instructions", 4_000);
+      const instructions = requiredString(
+        input.instructions,
+        "instructions",
+        4_000,
+      );
       const schedule = habitSchedule(input.schedule);
       const habit = await habits.update(monoId, (list) => {
         if (list.length >= HABITS_MAX)
@@ -983,20 +1017,41 @@ export async function handleAgentApp(
           })),
         })),
       };
+    case "mono.goal.read": {
+      if (!host.isMono(source.id))
+        throw new Error("Only a Mono can read its goal");
+      return host.monoOf?.(source.id)?.goal ?? null;
+    }
+    case "mono.goal.update": {
+      if (!host.isMono(source.id))
+        throw new Error("Only a Mono can update its goal");
+      const goalId = requiredString(input.goalId, "goalId", 128);
+      const status = input.status;
+      if (status !== "done" && status !== "blocked")
+        throw new Error('status must be "done" or "blocked"');
+      const reason = optionalString(input.reason, "reason", 2_000);
+      const goal = host.updateGoal?.(source.id, goalId, status, reason);
+      if (!goal) throw new Error("That goal is no longer active");
+      return goal;
+    }
     case "sessions.list": {
       const cwd = requireProject(source, input, host);
       return { cwd, sessions: await host.sessions(cwd) };
     }
     case "sessions.read": {
       const id = requiredString(input.sessionId, "sessionId", 256);
-      const target = id === source.id && host.isMono?.(id)
-        ? source : await projectSession(source, id, input, host);
+      const target =
+        id === source.id && host.isMono?.(id)
+          ? source
+          : await projectSession(source, id, input, host);
       const options = {
         before: optionalString(input.before, "before", 256),
         limit: input.limit as number | undefined,
         maxChars: input.maxChars as number | undefined,
       };
-      return host.readConversation ? host.readConversation(target, options) : sessionConversationPage(target, options);
+      return host.readConversation
+        ? host.readConversation(target, options)
+        : sessionConversationPage(target, options);
     }
     case "sessions.send": {
       const id = requiredString(input.sessionId, "sessionId", 256);
@@ -1103,7 +1158,8 @@ export async function handleAgentApp(
           { direction: placement as SplitDir, besideSessionId },
           ...(notifyMonoId ? [notifyMonoId] : []),
         );
-      else if (notifyMonoId) await host.start(launch, id, undefined, notifyMonoId);
+      else if (notifyMonoId)
+        await host.start(launch, id, undefined, notifyMonoId);
       else await host.start(launch, id);
       const folder = host.monoOf?.(source.id)?.folder;
       if (folder && !launch.sidebarHidden)

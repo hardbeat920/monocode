@@ -87,6 +87,39 @@ it("consumes quotes once and adds them to the current draft", () => {
   expect(consumed).toHaveBeenCalledWith(1);
 });
 
+it("associates each composer with its own goal help text", () => {
+  act(() =>
+    root.render(
+      createElement(
+        "div",
+        null,
+        createElement(MonoComposer, {
+          sessionId: "chat",
+          name: "Captain",
+          onSubmit: () => true,
+        }),
+        createElement(MonoComposer, {
+          sessionId: "other-chat",
+          name: "Navigator",
+          onSubmit: () => true,
+        }),
+      ),
+    ),
+  );
+
+  const fields = Array.from(
+    container.querySelectorAll<HTMLTextAreaElement>(
+      "textarea[aria-describedby]",
+    ),
+  );
+  const helpIds = fields.map((input) => input.getAttribute("aria-describedby"));
+  expect(new Set(helpIds).size).toBe(2);
+  for (const id of helpIds) {
+    expect(id).not.toBeNull();
+    expect(document.getElementById(id!)?.textContent).toContain("/goal");
+  }
+});
+
 it("sends consecutive messages without duplicating rapid Enter presses", () => {
   const onSubmit = vi.fn(() => true);
   render({ onSubmit });

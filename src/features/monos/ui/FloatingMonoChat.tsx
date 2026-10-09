@@ -14,7 +14,7 @@ import { AgentTranscript } from "../../sessions/ui/AgentTranscript";
 import { QuestionForm } from "../../sessions/ui/QuestionForm";
 import { revokeAttachment } from "../../sessions/model/attachments";
 import { useMonoTranscript } from "../hooks/useMonoTranscript";
-import { monoState } from "../model/mono";
+import { findMono, monoState } from "../model/mono";
 import {
   monoMessageDeliveries,
   monoPendingTranscriptBlocks,
@@ -143,7 +143,7 @@ export function FloatingMonoChat({ onShown }: { onShown: () => void }) {
     [view.monoId],
   );
   const state = view.session
-    ? monoState(view.session)
+    ? monoState(view.session, findMono(view.monoId ?? "")?.goal)
     : { status: "idle" as const };
   const failure = error ?? view.error;
   const loading = !mono || !view.session;
@@ -334,7 +334,9 @@ function MonoRail({
               aria-current={selected ? "true" : undefined}
               onClick={() => onSwitch(mono.id)}
               className={`grid size-8 place-items-center rounded-lg transition-opacity ${
-                selected ? "" : "opacity-40 hover:opacity-100 focus-visible:opacity-100"
+                selected
+                  ? ""
+                  : "opacity-40 hover:opacity-100 focus-visible:opacity-100"
               }`}
             >
               <PixelMascot
