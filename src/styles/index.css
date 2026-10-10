@@ -3272,9 +3272,13 @@ html.theme-light .mono-pill {
   }
 }
 
-/* Keep the original glass tint in dark mode. Light popovers use an opaque
-   surface so underlying content cannot show through. */
+/* Keep popovers readable on platforms without a native glass surface. */
 .popover-backdrop {
+  background: color-mix(in srgb, var(--color-background-base) 80%, transparent);
+}
+
+/* macOS supplies the translucent window material itself. */
+html.is-mac:not(.theme-light) .popover-backdrop {
   background: color-mix(in srgb, var(--color-content) 2%, transparent);
 }
 
