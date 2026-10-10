@@ -132,8 +132,12 @@ export async function fetchDevinRateLimits(): Promise<ProviderRateLimits> {
 export type CodexRateLimitResetOutcome =
   "reset" | "nothingToReset" | "noCredit" | "alreadyRedeemed";
 
+/** Must not read as a sign-in failure: the CLI renews the token on its own. */
+export const CLAUDE_STALE_TOKEN_MESSAGE =
+  "Claude usage updates the next time Claude runs";
+
 type ClaudeUsageFetch = {
-  status: "ok" | "error" | "unavailable" | string;
+  status: "ok" | "error" | "unavailable" | "stale" | string;
   httpStatus?: number | null;
   body?: string | null;
   error?: string | null;
@@ -148,11 +152,19 @@ export async function fetchClaudeRateLimits(
     });
     if (result.status === "ok" && result.body) {
       const parsed = parseClaudeOAuthUsage(result.body);
-      if (parsed.session || parsed.weekly) return parsed;
-      return {
-        ...parsed,
-        status: parsed.status === "ok" ? "ok" : parsed.status,
-      };
+      if (parsed.session || parsed.weekly || parsed.status !== "ok") {
+        return parsed;
+      }
+      // A 200 with no usable windows is malformed: report an error so the
+      // footer retries instead of showing an empty "ok" chip.
+      return errorRateLimits("claude", "Claude usage response was unexpected");
+    }
+    if (result.status === "stale") {
+      // The stored token lapsed; Claude refreshes it the next time it runs.
+      return errorRateLimits(
+        "claude",
+        result.error?.trim() || CLAUDE_STALE_TOKEN_MESSAGE,
+      );
     }
     if (result.status === "unavailable") {
       return unavailableRateLimits(
@@ -191,15 +203,14 @@ export async function fetchCodexRateLimits(
       {},
       accountId,
     );
+    if (!asRecord(result)) {
+      return errorRateLimits("codex", "Codex usage response was unexpected");
+    }
     const parsed = parseCodexRateLimits(result);
     if (parsed.session || parsed.weekly || parsed.monthly || parsed.resetCredits) {
       return parsed;
     }
-    const rec = asRecord(result);
-    if (rec && !parsed.session && !parsed.weekly) {
-      return unavailableRateLimits("codex", "No Codex usage data");
-    }
-    return parsed;
+    return unavailableRateLimits("codex", "No Codex usage data");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (

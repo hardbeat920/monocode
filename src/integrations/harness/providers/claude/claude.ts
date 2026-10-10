@@ -72,6 +72,7 @@ import {
   type ClaudeControlRequest,
 } from "./claudeProtocol";
 import { isAgentToolName } from "../../core/preview";
+import { refreshRateLimitsIfStale } from "../../../../features/providers/model/rateLimitsCache";
 import { joinStreamText, snapshotRemainder } from "../../core/streamText";
 import {
   questionPromptTitle,
@@ -990,6 +991,9 @@ function handleResult(live: Live, rec: Record<string, unknown>): void {
   if (usageLimit && turnErrored && !live.cancelled) {
     live.onEvent({ type: "usage.limited", ...usageLimit });
   }
+  // The turn just used (and if needed renewed) the account's token, so an
+  // old or failed footer reading can be refreshed now.
+  refreshRateLimitsIfStale("claude", live.providerAccountId ?? "default");
   live.turnResultSeen = true;
   maybeFinishTurn(live);
   showBackgroundRows(live);

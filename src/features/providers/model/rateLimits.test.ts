@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   clampUsedPercent,
+  errorRateLimits,
+  mergeCodexRateLimitsUpdate,
   exhaustedWindowResetAt,
   formatRateLimitWindowChipLabel,
   formatResetCountdown,
@@ -390,4 +392,62 @@ describe("rateLimitWindowTooltip", () => {
       ).toBe(`${remaining} remaining · wk window`);
     },
   );
+});
+
+describe("errorRateLimits", () => {
+  it("keeps the last successful read time when it keeps old windows", () => {
+    const previous = {
+      ...idleRateLimits("claude"),
+      session: { usedPercent: 30, windowMinutes: 300, resetsAt: null },
+      updatedAt: 1_000,
+      status: "ok" as const,
+    };
+    const limits = errorRateLimits("claude", "offline", previous);
+    expect(limits.session).toEqual(previous.session);
+    expect(limits.updatedAt).toBe(1_000);
+    expect(limits.status).toBe("error");
+    expect(limits.error).toBe("offline");
+  });
+});
+
+describe("parseCodexRateLimits window length", () => {
+  it("keeps an unrecognised window's own length instead of calling it 5h", () => {
+    const limits = parseCodexRateLimits({
+      rateLimits: { primary: { usedPercent: 12, windowDurationMins: 1_440 } },
+    });
+    expect(limits.session?.windowMinutes).toBe(1_440);
+  });
+});
+
+describe("mergeCodexRateLimitsUpdate", () => {
+  const previous = {
+    ...idleRateLimits("codex"),
+    session: { usedPercent: 10, windowMinutes: 300, resetsAt: 1_000 },
+    weekly: { usedPercent: 20, windowMinutes: 10_080, resetsAt: 9_000 },
+    resetCredits: { availableCount: 1, credits: null },
+    updatedAt: 5,
+    status: "ok" as const,
+  };
+
+  it("replaces the windows a live update carries and keeps the rest", () => {
+    const merged = mergeCodexRateLimitsUpdate(
+      previous,
+      { primary: { usedPercent: 64, windowDurationMins: 300, resetsAt: 2_000 } },
+      7_000,
+    );
+    expect(merged.session).toEqual({
+      usedPercent: 64,
+      windowMinutes: 300,
+      resetsAt: 2_000_000,
+    });
+    expect(merged.weekly).toEqual(previous.weekly);
+    expect(merged.resetCredits).toEqual(previous.resetCredits);
+    expect(merged.updatedAt).toBe(7_000);
+    expect(merged.status).toBe("ok");
+    expect(merged.error).toBeNull();
+  });
+
+  it("returns null when the update carries no usable window", () => {
+    expect(mergeCodexRateLimitsUpdate(previous, { primary: null }, 7_000)).toBeNull();
+  });
 });

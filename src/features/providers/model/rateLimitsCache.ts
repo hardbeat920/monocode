@@ -3,6 +3,8 @@ import {
   errorRateLimits,
   fetchingRateLimits,
   idleRateLimits,
+  mergeCodexRateLimitsUpdate,
+  RATE_LIMIT_MIN_REFETCH_MS,
   type ProviderRateLimits,
   type RateLimitProvider,
 } from "./rateLimits";
@@ -16,6 +18,7 @@ import {
 const snapshots = new Map<string, ProviderRateLimits>();
 const pending = new Map<string, Promise<ProviderRateLimits>>();
 const queuedRefreshes = new Map<string, Promise<ProviderRateLimits>>();
+const lastAttemptAt = new Map<string, number>();
 const listeners = new Set<() => void>();
 let allSnapshots: Record<string, ProviderRateLimits> = {};
 
@@ -94,9 +97,10 @@ export function loadRateLimits(
   if (cached && !force) return Promise.resolve(cached);
 
   publish(key, fetchingRateLimits(provider, cached));
+  lastAttemptAt.set(key, Date.now());
   const run = (async () => {
     try {
-      const result =
+      const fetched =
         provider === "claude"
           ? await fetchClaudeRateLimits(accountId)
           : provider === "codex"
@@ -104,6 +108,15 @@ export function loadRateLimits(
             : provider === "devin"
               ? await fetchDevinRateLimits()
               : await fetchOpencodeGoRateLimits();
+      // A failed refresh keeps the last good windows beside its error.
+      const result =
+        fetched.status === "error"
+          ? errorRateLimits(
+              provider,
+              fetched.error ?? "Usage unavailable",
+              getCachedRateLimits(provider, accountId),
+            )
+          : fetched;
       publish(key, result);
       return result;
     } catch (error) {
@@ -122,6 +135,39 @@ export function loadRateLimits(
   return run;
 }
 
+/** How soon a reading that did not succeed may be retried after a turn. */
+const FAILED_READ_RETRY_MS = 60_000;
+
+/**
+ * Refetch after an agent turn when the footer's reading is old. Accounts the
+ * footer never loaded are left alone, and refetches are spaced out so busy
+ * sessions do not hammer the usage endpoint.
+ */
+export function refreshRateLimitsIfStale(
+  provider: RateLimitProvider,
+  accountId = "default",
+): void {
+  const key = keyFor(provider, accountId);
+  const cached = snapshots.get(key);
+  if (!cached || cached.status === "idle" || pending.has(key)) return;
+  const interval =
+    cached.status === "ok" ? RATE_LIMIT_MIN_REFETCH_MS : FAILED_READ_RETRY_MS;
+  if (Date.now() - (lastAttemptAt.get(key) ?? 0) < interval) return;
+  void loadRateLimits(provider, accountId, true);
+}
+
+/** Publish a running Codex session's live rate-limit windows. */
+export function applyLiveCodexRateLimits(
+  accountId: string,
+  update: Record<string, unknown>,
+): void {
+  const merged = mergeCodexRateLimitsUpdate(
+    getCachedRateLimits("codex", accountId),
+    update,
+  );
+  if (merged) publish(keyFor("codex", accountId), merged);
+}
+
 /** Also used when an account is removed and by tests that need a clean cache. */
 export function clearCachedRateLimits(
   provider?: RateLimitProvider,
@@ -130,10 +176,12 @@ export function clearCachedRateLimits(
   if (provider && accountId) {
     const key = keyFor(provider, accountId);
     snapshots.delete(key);
+    lastAttemptAt.delete(key);
     const { [key]: _removed, ...rest } = allSnapshots;
     allSnapshots = rest;
   } else {
     snapshots.clear();
+    lastAttemptAt.clear();
     allSnapshots = {};
   }
   for (const listener of listeners) listener();
