@@ -10,6 +10,7 @@ import { recoverCursorSubagents } from "../../../integrations/harness/providers/
 import { persistableAttachment } from "../model/attachments";
 import type { ContextUsage } from "../model/contextUsage";
 import {
+  isLocalProject,
   isRemoteProjectPath,
   normalizeProjectPath,
 } from "../../projects/model/recents";
@@ -130,13 +131,28 @@ type SessionUpsertPayload = {
 /** Only real chats belong in project history — blank tabs stay ephemeral. */
 export function shouldPersistSession(session: Session): boolean {
   return (
-    !session.ephemeral &&
-    !session.inboxAsk &&
-    !isRemoteProjectPath(session.cwd) &&
-    session.cwd !== "~" &&
+    inStorableLocation(session) &&
     (session.blocks.some((block) => block.role === "user") ||
       (isMonoSession(session.id) &&
         (session.blocks.length > 0 || !!session.monoTranscript)))
+  );
+}
+
+/**
+ * A conversation in a local project folder, which the store can hold with or
+ * without a message. Reminders save blank conversations this way. `/` and the
+ * home folder are not projects, so a blank conversation there is not saved.
+ */
+export function isStorableSession(session: Session): boolean {
+  return inStorableLocation(session) && isLocalProject(session.cwd);
+}
+
+function inStorableLocation(session: Session): boolean {
+  return (
+    !session.ephemeral &&
+    !session.inboxAsk &&
+    !isRemoteProjectPath(session.cwd) &&
+    session.cwd !== "~"
   );
 }
 
@@ -377,8 +393,12 @@ function enqueueSessionWrite<T>(
 
 export async function upsertSession(
   session: Session,
+  options: { allowEmpty?: boolean } = {},
 ): Promise<SessionSummary | null> {
-  if (!shouldPersistSession(session) || deletedSessionIds.has(session.id)) {
+  const storable =
+    shouldPersistSession(session) ||
+    (!!options.allowEmpty && isStorableSession(session));
+  if (!storable || deletedSessionIds.has(session.id)) {
     return null;
   }
   const mono = !!session.monoTranscript || isMonoSession(session.id);
