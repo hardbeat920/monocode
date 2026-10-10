@@ -4,6 +4,7 @@ import {
   contextTooltip,
   type ContextUsage,
 } from "../model/contextUsage";
+import { sessionUsageTooltip, type SessionUsage } from "../model/sessionUsage";
 import { Popover } from "../../../shared/ui/Popover";
 
 const SIZE = 14;
@@ -27,10 +28,12 @@ function ringClass(ratio: number): string {
  */
 export function ContextMeter({
   usage,
+  sessionUsage,
   onCompact,
   compactDisabled = false,
 }: {
   usage?: ContextUsage;
+  sessionUsage?: SessionUsage;
   onCompact?: () => void;
   compactDisabled?: boolean;
 }) {
@@ -41,6 +44,11 @@ export function ContextMeter({
   if (!usage || ratio === null) return null;
 
   const { headline, detail } = contextTooltip(usage);
+  const session = sessionUsage ? sessionUsageTooltip(sessionUsage) : null;
+  const label = [
+    `${headline}, ${detail}`,
+    ...(session ? [session.headline, ...session.details] : []),
+  ].join(". ");
   const actionsOpen = open && onCompact != null;
 
   return (
@@ -54,7 +62,7 @@ export function ContextMeter({
         <button
           type="button"
           title="Context usage"
-          aria-label={`${headline}, ${detail}. Open context actions`}
+          aria-label={`${label}. Open context actions`}
           aria-expanded={actionsOpen}
           onClick={() => setOpen((value) => !value)}
           className="-m-1 grid rounded-sm p-1 outline-none focus-visible:ring-1 focus-visible:ring-accent"
@@ -62,7 +70,7 @@ export function ContextMeter({
           <MeterRing ratio={ratio} />
         </button>
       ) : (
-        <MeterRing ratio={ratio} label={`${headline}, ${detail}`} />
+        <MeterRing ratio={ratio} label={label} />
       )}
       {hovered || actionsOpen ? (
         <Popover
@@ -74,6 +82,21 @@ export function ContextMeter({
         >
           <div className="text-[12px] leading-4 text-content">{headline}</div>
           <div className="text-[11px] leading-4 text-content/50">{detail}</div>
+          {session ? (
+            <div className="mt-1.5 border-t border-stroke pt-1.5">
+              <div className="text-[12px] leading-4 text-content">
+                {session.headline}
+              </div>
+              {session.details.map((line) => (
+                <div
+                  key={line}
+                  className="text-[11px] leading-4 text-content/50"
+                >
+                  {line}
+                </div>
+              ))}
+            </div>
+          ) : null}
           {actionsOpen ? (
             <button
               type="button"
