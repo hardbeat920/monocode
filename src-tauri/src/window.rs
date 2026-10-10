@@ -322,22 +322,29 @@ fn reachable_placement(
     let width = window.width.min(primary.width);
     let height = window.height.min(primary.height);
     Some(ScreenRect {
-        x: primary.x + (primary.width - width) as i32 / 2,
-        y: primary.y + (primary.height - height) as i32 / 2,
+        x: primary
+            .x
+            .saturating_add(((primary.width - width) / 2) as i32),
+        y: primary
+            .y
+            .saturating_add(((primary.height - height) / 2) as i32),
         width,
         height,
     })
 }
 
 /// Enough of the top strip of the window on one display to grab and drag it.
+/// Works in i64 so coordinates reported by the OS cannot overflow the sums.
 fn title_bar_visible(window: ScreenRect, area: ScreenRect) -> bool {
-    const STRIP_HEIGHT: i32 = 32;
-    const MIN_WIDTH: i32 = 100;
-    const MIN_HEIGHT: i32 = 24;
-    let left = window.x.max(area.x);
-    let right = (window.x + window.width as i32).min(area.x + area.width as i32);
-    let top = window.y.max(area.y);
-    let bottom = (window.y + STRIP_HEIGHT).min(area.y + area.height as i32);
+    const STRIP_HEIGHT: i64 = 32;
+    const MIN_WIDTH: i64 = 100;
+    const MIN_HEIGHT: i64 = 24;
+    let (window_x, window_y) = (i64::from(window.x), i64::from(window.y));
+    let (area_x, area_y) = (i64::from(area.x), i64::from(area.y));
+    let left = window_x.max(area_x);
+    let right = (window_x + i64::from(window.width)).min(area_x + i64::from(area.width));
+    let top = window_y.max(area_y);
+    let bottom = (window_y + STRIP_HEIGHT).min(area_y + i64::from(area.height));
     right - left >= MIN_WIDTH && bottom - top >= MIN_HEIGHT
 }
 
@@ -802,6 +809,15 @@ mod tests {
     #[test]
     fn a_window_showing_only_a_corner_is_moved_back() {
         let window = rect(1880, 1000, 1280, 800);
+        assert_eq!(
+            reachable_placement(window, &[PRIMARY], PRIMARY),
+            Some(rect(320, 120, 1280, 800))
+        );
+    }
+
+    #[test]
+    fn a_window_at_extreme_coordinates_is_moved_back_without_overflowing() {
+        let window = rect(i32::MAX - 100, i32::MAX - 100, 1280, 800);
         assert_eq!(
             reachable_placement(window, &[PRIMARY], PRIMARY),
             Some(rect(320, 120, 1280, 800))
