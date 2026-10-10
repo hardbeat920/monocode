@@ -6,6 +6,7 @@ import {
   loadProjectGroupAssignments,
   loadProjectGroups,
   nextProjectGroupName,
+  reorderProjectGroups,
   saveProjectGroupAssignments,
   saveProjectGroups,
   setProjectGroupAssignment,
@@ -14,6 +15,18 @@ import {
 beforeEach(() => localStorage.clear());
 
 describe("project groups", () => {
+  it("reorders groups and keeps ones missing from the new order", () => {
+    saveProjectGroups(
+      ["a", "b", "c"].map((id) => ({ id, name: id, collapsed: false })),
+    );
+    reorderProjectGroups(["c", "a"]);
+    expect(loadProjectGroups().map((group) => group.id)).toEqual([
+      "c",
+      "a",
+      "b",
+    ]);
+  });
+
   it("persists ordered appearance and collapsed state", () => {
     expect(
       saveProjectGroups([
