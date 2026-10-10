@@ -384,9 +384,13 @@ export async function installPendingUpdate(
       error,
     };
     emitProgress(onProgress, failed);
-    await message(`Couldn't install the update.\n\n${error}`, {
-      title: "MonoCode",
-    });
+    try {
+      await message(`Couldn't install the update.\n\n${error}`, {
+        title: "MonoCode",
+      });
+    } catch {
+      // The snapshot already carries the error.
+    }
     return failed;
   }
 

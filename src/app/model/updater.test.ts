@@ -101,6 +101,18 @@ describe("installPendingUpdate", () => {
     expect(mocks.relaunch).not.toHaveBeenCalled();
   });
 
+  it("still returns the failure snapshot when the dialog rejects", async () => {
+    mocks.downloadAndInstall.mockRejectedValue(new Error("install failed"));
+    mocks.message.mockRejectedValue(new Error("dialog gone"));
+    const updater = await updaterWithPendingUpdate();
+
+    const result = await updater.installPendingUpdate();
+
+    expect(result.phase).toBe("error");
+    expect(mocks.remember).not.toHaveBeenCalled();
+    expect(mocks.relaunch).not.toHaveBeenCalled();
+  });
+
   it("does not record when no update is pending", async () => {
     const updater = await import("./updater");
 
