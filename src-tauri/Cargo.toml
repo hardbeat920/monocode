@@ -43,6 +43,7 @@ libc = "0.2"
 junction = { version = "2.1", default-features = false }
 keyring = { version = "3.6", default-features = false, features = ["windows-native"] }
 tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-single-instance = "2"
 portable-pty = { version = "0.9", path = "../vendor/portable-pty" }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_System_LibraryLoader", "Win32_System_Diagnostics_ToolHelp"] }
 tauri-winrt-notification = "0.8"

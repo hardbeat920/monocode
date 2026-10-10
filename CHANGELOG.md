@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-10
+
+### Added
+
+- **Video previews** open common video containers, including MP4, MOV, WebM, and MKV, in the file pane with playback controls, dimensions, duration, file size, and format. Playback depends on the platform's supported codecs; unreadable or unsupported local videos offer retry and external playback.
+- Settings → Providers → Advanced → **Keep idle agents ready** controls how many finished conversations keep their agent CLI running for quick follow-ups. Choose None, 1, 2, 3, or 5; the default is 3. Excess agents stop in order of longest idle time, preserving resume state and favoring the conversation on screen. Running turns are excluded, lowering the limit takes effect immediately, and idle agents otherwise stop after three minutes instead of five.
+- Monos can answer with an **emoji reaction** attached to the user message. Reaction-only replies hide their redundant reply bubble, thinking, and tool activity while retaining errors. New reactions animate with reduced-motion support, and notifications describe the reaction.
+- Mono rail badges show **unread reply counts**, including habit posts, instead of a single dot. Counts clear when the Mono is opened, display up to `99+`, and are included in accessible labels.
+
+### Changed
+
+- A Mono's latest turn that edited files has a compact **changes button** showing added and removed line counts and opening the diff. Ordinary sessions retain the full review card; older transcript pages, drafts, and pending inbox questions do not show an unrelated review.
+- Floating macOS Mono chats use a more compact **440-point width and up to 560-point height**, including the Mono rail, while fitting smaller screen work areas.
+- Native browser scrollbars are hidden throughout the app while preserving horizontal and vertical scrolling. Custom editor and terminal scrollbar controls remain available.
+- Streamed agent output batches stdout lines and server events about once per 16-millisecond window, and foreground chat updates are limited to about 30 per second. Unchanged sidebar, live-agent, and Mono rail data reuse their existing values, and output in other tabs avoids rerendering the visible pane tree.
+- Terminal title polling reads foreground commands directly from `/proc` on Linux and skips process lookups while the shell owns the foreground. The animated terminal background caches static outlines, pauses while hidden, draws only the visible board during transitions, and pulses its cursor only on hover. The resident Quick Composer is prepared only when its shortcut is enabled.
+- The README and contributing guide have shorter quick starts with focused guides for provider setup, platform installation, source builds, and agent access.
+- Regression coverage now includes video playback and hidden-tab pauses in Chromium and WebKit, returning to streamed transcripts, reaction rendering, unread counts, idle-agent limits, shared-turn edit attribution, checkpoint recovery, review caching, and theme synchronization. Checkpoint filename fixtures account for Windows removing trailing spaces, browser tests use more stable playback and animation checks, and CI uploads traces when browser tests fail.
+
+### Fixed
+
+- Theme changes synchronize across open windows, including the color scheme, accent, tint, and dark-theme lightness, without requiring a reload. In #909 by @ognjeeen; fixes #894.
+- **New Window** opens a working window on Windows instead of a blank gray frame caused by creating WebView2 on the main thread. In #908 by @ognjeeen; fixes #907.
+- Launching MonoCode again on Windows restores the running instance and its hidden windows instead of starting another process with a duplicate tray icon. In #905 by @ognjeeen; fixes #860.
+- **Reveal in file manager** runs off the main thread, preventing Linux from becoming unresponsive while `xdg-open` waits for the file manager to close. In #902 by @spuder; fixes #901.
+- Manual wheel, pointer, keyboard, and touch scrolling consistently pause transcript following. Scrolling within nested content stays independent, and layout changes or browser-clamped offsets do not incorrectly stop following.
+- Session reviews retain the original checkpoint boundary across interrupted turns and continuations. Older interrupted checkpoints can recover transcript-confirmed changes for review without enabling unsafe undo. Reviews shared by overlapping sessions display only files supported by that session's successful structured edit tools.
+- Committed changes disappear from the current review and stay dismissed if those files are edited again. Review cards and Mono changes buttons share cached status, refresh after workspace changes, and ignore stale responses from an earlier turn.
+- Returning to a hidden transcript tab does not replay the fade animation for words already shown.
+- Video previews pause when their workspace tab or window is hidden, prevent hidden playback from restarting, and release their source when closed. Restoring a source after React replays effects also restarts loading, preventing a blank preview.
+- Subagent mascots render at the same visual scale as neighboring line icons while keeping a fixed icon slot and stable row alignment.
+
 ## [0.11.0] - 2026-10-09
 
 ### Added
@@ -1402,7 +1434,9 @@ First public release. macOS (Apple Silicon) only.
 - Updater endpoint and minisign public key are injected at release time rather than committed, so forks do not inherit the maintainer's update channel.
 - macOS release builds sign with `APPLE_SIGNING_IDENTITY` via a config overlay; the committed default remains ad-hoc `-` for community builds.
 
-[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/hardbeat920/monocode/compare/v0.11.0...v0.12.0
+[0.11.0]: https://github.com/hardbeat920/monocode/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/hardbeat920/monocode/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/hardbeat920/monocode/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/hardbeat920/monocode/compare/v0.7.1...v0.8.0

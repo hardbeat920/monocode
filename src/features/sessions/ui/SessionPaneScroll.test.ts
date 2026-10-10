@@ -16,7 +16,10 @@ vi.mock("./Composer", () => ({ Composer: () => null }));
 vi.mock("../../monos/ui/MonoComposer", () => ({
   MonoComposer: probes.composer,
 }));
-vi.mock("./SessionReview", () => ({ SessionReview: probes.review }));
+vi.mock("./SessionReview", () => ({
+  SessionReview: probes.review,
+  SessionChangesButton: probes.review,
+}));
 vi.mock("../data/sessionStore", async (original) => ({
   ...(await original<typeof import("../data/sessionStore")>()),
   getMonoTranscriptPage: vi.fn(),

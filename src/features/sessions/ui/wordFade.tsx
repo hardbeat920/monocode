@@ -139,6 +139,20 @@ export function useWordFading(active: boolean): boolean {
   return active || lingering;
 }
 
+/**
+ * Marks every word on screen under `root` as already faded in. Showing a
+ * `display: none` subtree restarts its CSS animations, so a reply still
+ * fading when its tab was hidden would otherwise fade in whole again. Words
+ * let out after this are new spans and fade as usual.
+ */
+export function settleWordFades(root: ParentNode) {
+  for (const word of root.querySelectorAll(
+    ".word-fading [data-word-fade]:not([data-word-settled])",
+  )) {
+    word.setAttribute("data-word-settled", "");
+  }
+}
+
 /*
  * Text here is either not prose (code, math, drawings) or read whole by the
  * component that renders it (links).

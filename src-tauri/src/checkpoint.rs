@@ -144,7 +144,7 @@ impl CheckpointStore {
     }
 
     fn capture(&self, session_id: &str, cwd: &str, paths: &[String]) -> Result<(), String> {
-        if self.has_turn_review(session_id, cwd)? {
+        if self.capture_turn_paths(session_id, cwd, paths)? {
             return Ok(());
         }
         if paths.is_empty() {
@@ -598,12 +598,18 @@ pub async fn session_checkpoint_begin_turn(
     session_id: String,
     cwd: String,
     turn_id: String,
+    edited_paths: Option<Vec<String>>,
 ) -> Result<(), String> {
     validate_id(&session_id, "session")?;
     validate_id(&turn_id, "turn")?;
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        store.exclusive(|store| store.begin_turn(&session_id, &cwd, &turn_id))
+        store.exclusive(|store| {
+            if let Some(paths) = &edited_paths {
+                store.capture_turn_paths(&session_id, &cwd, paths)?;
+            }
+            store.begin_turn(&session_id, &cwd, &turn_id)
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -684,11 +690,17 @@ pub async fn session_checkpoint_status(
     store: State<'_, CheckpointStore>,
     session_id: String,
     cwd: String,
+    edited_paths: Option<Vec<String>>,
 ) -> Result<CheckpointStatus, String> {
     validate_id(&session_id, "session")?;
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        store.exclusive(|store| store.status(&session_id, &cwd))
+        store.exclusive(|store| {
+            if let Some(paths) = &edited_paths {
+                store.recover_orphaned_turn(&session_id, &cwd, paths)?;
+            }
+            store.status(&session_id, &cwd)
+        })
     })
     .await
     .map_err(|e| e.to_string())?
