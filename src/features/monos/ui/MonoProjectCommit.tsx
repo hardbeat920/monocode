@@ -36,6 +36,7 @@ import {
   type CheckpointFile,
 } from "../../sessions/model/checkpoint";
 import type { HarnessId } from "../../sessions/model/session";
+import type { AcquireRepoLock } from "../../source-control/hooks/useRepoLock";
 import {
   loadChangesView,
   saveChangesView,
@@ -109,6 +110,8 @@ export function MonoProjectCommit({
   files,
   index,
   reloadIndex,
+  busy,
+  acquire,
   textHarness,
   onOpenFile,
 }: {
@@ -119,12 +122,14 @@ export function MonoProjectCommit({
   files: MonoProjectFile[];
   index: GitDiffIndex | null;
   reloadIndex: () => void;
+  /** The repository's shared Git lock, held across panels and remounts. */
+  busy: string | null;
+  acquire: AcquireRepoLock;
   textHarness?: HarnessId;
   onOpenFile: (path: string) => void;
 }) {
   const { pr, reload: reloadPr } = usePrStatus(root, index?.branch);
   const [message, setMessage] = useState("");
-  const [busy, setBusy] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   // Session files are in by default and other changes out; keep exceptions.
@@ -136,6 +141,10 @@ export function MonoProjectCommit({
   const menuRef = useRef<HTMLDivElement>(null);
   const messageRef = useRef<HTMLTextAreaElement>(null);
   const generateAbortRef = useRef<AbortController | null>(null);
+  const generateReleaseRef = useRef<(() => void) | null>(null);
+  // Only the mount that started generation can cancel it; another panel on
+  // the same repository just sees the repository busy.
+  const [generating, setGenerating] = useState(false);
 
   useEffect(() => {
     if (!status) return;
@@ -162,7 +171,13 @@ export function MonoProjectCommit({
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
   }, [message]);
 
-  useEffect(() => () => generateAbortRef.current?.abort(), []);
+  useEffect(
+    () => () => {
+      generateAbortRef.current?.abort();
+      generateReleaseRef.current?.();
+    },
+    [],
+  );
 
   const own = new Set(files.map((entry) => entry.relative));
   const changed = index?.files ?? [];
@@ -213,21 +228,24 @@ export function MonoProjectCommit({
 
   const discard = async (file: GitChangedFile) => {
     if (busy) return;
-    const name = basename(file.relative);
-    const untracked = file.status === "untracked";
-    const ok = await ask(
-      untracked
-        ? `Delete untracked file ${name}?`
-        : `Discard changes in ${name}? This cannot be undone.`,
-      {
-        title: "MonoCode",
-        kind: "warning",
-        okLabel: untracked ? "Delete" : "Discard",
-      },
-    );
-    if (!ok) return;
-    setBusy(file.relative);
+    // Hold the lock across the confirmation so no checkout or commit can
+    // change what is being discarded while it's up.
+    const release = acquire(file.relative);
+    if (!release) return;
     try {
+      const name = basename(file.relative);
+      const untracked = file.status === "untracked";
+      const ok = await ask(
+        untracked
+          ? `Delete untracked file ${name}?`
+          : `Discard changes in ${name}? This cannot be undone.`,
+        {
+          title: "MonoCode",
+          kind: "warning",
+          okLabel: untracked ? "Delete" : "Discard",
+        },
+      );
+      if (!ok) return;
       await gitDiscardFile(root, file.relative);
       invalidateWatchedFiles([file.path]);
       notifyReviewChanged(sessionId);
@@ -235,7 +253,7 @@ export function MonoProjectCommit({
       fail(error);
     } finally {
       settle();
-      setBusy(null);
+      release();
     }
   };
 
@@ -309,9 +327,12 @@ export function MonoProjectCommit({
 
   const generate = async () => {
     if (busy || selected.length === 0 || generateAbortRef.current) return;
+    const release = acquire("generate");
+    if (!release) return;
     const controller = new AbortController();
     generateAbortRef.current = controller;
-    setBusy("generate");
+    generateReleaseRef.current = release;
+    setGenerating(true);
     try {
       const generated = await generateCommitMessage(
         root,
@@ -325,29 +346,36 @@ export function MonoProjectCommit({
     } finally {
       if (generateAbortRef.current === controller) {
         generateAbortRef.current = null;
-        setBusy(null);
+        generateReleaseRef.current = null;
+        setGenerating(false);
       }
+      release();
     }
   };
 
   const cancelGenerate = () => {
     generateAbortRef.current?.abort();
     generateAbortRef.current = null;
-    setBusy(null);
+    generateReleaseRef.current?.();
+    generateReleaseRef.current = null;
+    setGenerating(false);
   };
 
   const commit = async (push: boolean, createPr = false) => {
     if (!canCommit) return;
     setMenuOpen(false);
-    if (
-      (push || createPr) &&
-      !(await confirmDefault(createPr ? "pr" : "push"))
-    ) {
-      return;
-    }
-    setBusy(createPr ? "pr" : "commit");
+    // Hold the lock across the confirmation so the branch it names is still
+    // the one committed to.
+    const release = acquire(createPr ? "pr" : "commit");
+    if (!release) return;
     const committed = files.filter((entry) => selected.includes(entry.relative));
     try {
+      if (
+        (push || createPr) &&
+        !(await confirmDefault(createPr ? "pr" : "push"))
+      ) {
+        return;
+      }
       await gitCommit(root, message, false, selected);
       // Committed work is accepted work: clear it from the session's review.
       for (const entry of committed) {
@@ -373,14 +401,15 @@ export function MonoProjectCommit({
       fail(error);
     } finally {
       settle();
-      setBusy(null);
+      release();
     }
   };
 
   const sync = async () => {
     if (!index || !(canSync || canPublish)) return;
     const pushesCommits = index.ahead > 0;
-    setBusy("sync");
+    const release = acquire("sync");
+    if (!release) return;
     try {
       await gitSync(root);
       if (pushesCommits) recordPrActivity();
@@ -388,21 +417,23 @@ export function MonoProjectCommit({
       fail(error);
     } finally {
       settle();
-      setBusy(null);
+      release();
     }
   };
 
   const createPr = async () => {
-    if (!canCreatePr || !(await confirmDefault("pr"))) return;
-    setBusy("pr");
+    if (!canCreatePr) return;
+    const release = acquire("pr");
+    if (!release) return;
     try {
+      if (!(await confirmDefault("pr"))) return;
       if ((index?.ahead ?? 0) > 0) await gitPush(root);
       await openCreatedPr();
     } catch (error) {
       fail(error);
     } finally {
       settle();
-      setBusy(null);
+      release();
     }
   };
 
@@ -421,7 +452,7 @@ export function MonoProjectCommit({
             rows={1}
             value={message}
             placeholder={`Message (${MOD}↩ to commit)`}
-            disabled={!!busy && busy !== "generate"}
+            disabled={!!busy && !generating}
             onChange={(event) => setMessage(event.target.value)}
             onKeyDown={(event) => {
               if (
@@ -438,24 +469,24 @@ export function MonoProjectCommit({
           <button
             type="button"
             aria-label={
-              busy === "generate"
+              generating
                 ? "Cancel commit message generation"
                 : "Generate commit message"
             }
             title={
-              busy === "generate"
+              generating
                 ? "Cancel commit message generation"
                 : "Generate commit message"
             }
             disabled={
-              busy === "generate" ? false : !!busy || selected.length === 0
+              generating ? false : !!busy || selected.length === 0
             }
             onClick={() =>
-              busy === "generate" ? cancelGenerate() : void generate()
+              generating ? cancelGenerate() : void generate()
             }
             className="group absolute top-1 right-1 grid size-5 place-items-center rounded-md bg-content/10 text-content hover:bg-content/20 disabled:opacity-40"
           >
-            {busy === "generate" ? (
+            {generating ? (
               <>
                 <Loader
                   className="size-3.5 animate-spin group-hover:hidden"

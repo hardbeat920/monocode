@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { lazySurface } from "../../../shared/ui/lazySurface";
-import { ChevronDown, Folder, GitBranch } from "../../../shared/ui/icons";
+import { ChevronDown, Folder } from "../../../shared/ui/icons";
 import {
   gitLocateFiles,
   subscribeGitChanged,
   type GitDiffIndex,
 } from "../../../platform/tauri/fs";
 import { projectName } from "../../../shared/lib/paths";
+import { BranchPicker } from "../../source-control/ui/BranchPicker";
+import { useRepoLock } from "../../source-control/hooks/useRepoLock";
 import {
   sessionCheckpointStatus,
   subscribeReviewChanged,
@@ -195,12 +197,23 @@ export function MonoChangesPanel({
 function ProjectCommit({
   onIndex,
   ...props
-}: Omit<ComponentProps<typeof MonoProjectCommit>, "index" | "reloadIndex"> & {
+}: Omit<ComponentProps<typeof MonoProjectCommit>, "index" | "reloadIndex" | "busy" | "acquire"> & {
   onIndex: (root: string, index: GitDiffIndex | null) => void;
 }) {
   const { index, reload } = useProjectIndex(props.root);
   useEffect(() => onIndex(props.root, index), [props.root, index, onIndex]);
-  return <MonoProjectCommit {...props} index={index} reloadIndex={reload} />;
+  // The repository's shared lock, so the header's branch picker, other
+  // panels and later mounts all see a commit, push or discard in flight.
+  const { busy, acquire } = useRepoLock(props.root);
+  return (
+    <MonoProjectCommit
+      {...props}
+      index={index}
+      reloadIndex={reload}
+      busy={busy}
+      acquire={acquire}
+    />
+  );
 }
 
 function TabButton({
@@ -324,8 +337,13 @@ function ProjectHeading({
       </div>
       {index?.branch ? (
         <span className="flex min-w-0 items-center gap-1 text-[11px] font-normal text-content/50">
-          <GitBranch className="size-3 shrink-0" strokeWidth={1.75} />
-          <span className="min-w-0 truncate">{index.branch}</span>
+          <BranchPicker
+            key={root}
+            cwd={root}
+            branch={index.branch}
+            popoverSide="bottom"
+            compact
+          />
           {index.ahead > 0 ? (
             <span className="shrink-0 tabular-nums text-content/40">
               ↑{index.ahead}

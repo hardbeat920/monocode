@@ -8,7 +8,6 @@ import {
   ExternalLink,
   FileDiff,
   FolderTree,
-  GitBranch,
   GitPullRequest,
   ListBullet,
   Loader,
@@ -30,6 +29,8 @@ import {
   type ReactNode,
 } from "react";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
+import { BranchPicker } from "./BranchPicker";
+import { useRepoLock, type AcquireRepoLock } from "../hooks/useRepoLock";
 import {
   GitHistoryGraph,
   GraphResizeSash,
@@ -129,9 +130,9 @@ export function GitChangesPanel({
   const paneRef = useRef<HTMLDivElement>(null);
   const branchMenuRef = useRef<HTMLDivElement>(null);
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
-  // Shared across the header and the changed-files list so no two Git
-  // mutations ever run against the same checkout at once.
-  const [busy, setBusy] = useState<string | null>(null);
+  // Shared across the header, the changed-files list and every other panel
+  // on this checkout, so no two Git mutations ever run against it at once.
+  const { busy, acquire } = useRepoLock(cwd);
   const [status, setStatus] = useState<string | null>(null);
   const [graphHeight, setGraphHeight] = useState(loadGraphPanelHeight);
   const [graphExpanded, setGraphExpanded] = useState(graphOpen);
@@ -158,7 +159,8 @@ export function GitChangesPanel({
   const pull = async () => {
     if (!canPull) return;
     setStatus(null);
-    setBusy("pull");
+    const release = acquire("pull");
+    if (!release) return;
     try {
       await gitPull(cwd);
       reload();
@@ -168,7 +170,7 @@ export function GitChangesPanel({
     } catch (error) {
       window.alert(error instanceof Error ? error.message : String(error));
     } finally {
-      setBusy(null);
+      release();
       setBranchMenuOpen(false);
     }
   };
@@ -207,8 +209,13 @@ export function GitChangesPanel({
             className="relative ml-auto flex min-w-0 items-center gap-1"
           >
             <span className="flex min-w-0 items-center gap-1 text-[11px] text-content/50">
-              <GitBranch className="size-3 shrink-0" strokeWidth={1.75} />
-              <span className="min-w-0 truncate">{index.branch}</span>
+              <BranchPicker
+                cwd={cwd}
+                branch={index.branch}
+                enabled={enabled}
+                popoverSide="bottom"
+                compact
+              />
               {index.ahead > 0 ? (
                 <span className="shrink-0 tabular-nums text-content/40">
                   ↑{index.ahead}
@@ -280,7 +287,7 @@ export function GitChangesPanel({
         enabled={enabled}
         fill
         busy={busy}
-        setBusy={setBusy}
+        acquire={acquire}
         onOpenFile={onOpenFile}
         onOpenAllChanges={onOpenAllChanges}
         onMutated={(paths) => {
@@ -337,7 +344,7 @@ function ChangedFiles({
   enabled,
   fill,
   busy,
-  setBusy,
+  acquire,
   onOpenFile,
   onOpenAllChanges,
   onMutated,
@@ -351,7 +358,7 @@ function ChangedFiles({
   enabled: boolean;
   fill: boolean;
   busy: string | null;
-  setBusy: (value: string | null) => void;
+  acquire: AcquireRepoLock;
   onOpenFile: (path: string, kind: GitFileDiffKind, pin?: boolean) => void;
   onOpenAllChanges: (kind: GitFileDiffKind) => void;
   onMutated: (paths?: string[]) => void;
@@ -360,6 +367,12 @@ function ChangedFiles({
   const menuRef = useRef<HTMLDivElement>(null);
   const messageRef = useRef<HTMLTextAreaElement>(null);
   const generateAbortRef = useRef<AbortController | null>(null);
+  const cwdRef = useRef(cwd);
+  cwdRef.current = cwd;
+  const generateReleaseRef = useRef<(() => void) | null>(null);
+  // Only the mount that started generation can cancel it; another panel on
+  // the same repository just sees the repository busy.
+  const [generating, setGenerating] = useState(false);
   const [message, setMessage] = useState("");
   const [amendTarget, setAmendTarget] = useState<AmendTarget | null>(null);
   const amend = amendTarget !== null;
@@ -430,10 +443,12 @@ function ChangedFiles({
       if (generateAbortRef.current) {
         generateAbortRef.current.abort();
         generateAbortRef.current = null;
-        setBusy(null);
+        generateReleaseRef.current?.();
+        generateReleaseRef.current = null;
+        setGenerating(false);
       }
     },
-    [cwd, setBusy],
+    [cwd],
   );
 
   useEffect(() => {
@@ -480,19 +495,22 @@ function ChangedFiles({
     action: "stage" | "unstage" | "discard",
   ) => {
     if (busy) return;
-    if (action === "discard") {
-      const name = basename(file.relative);
-      const untracked = file.status === "untracked";
-      const ok = await confirmNative(
-        untracked
-          ? `Delete untracked file ${name}?`
-          : `Discard changes in ${name}? This cannot be undone.`,
-        untracked ? "Delete" : "Discard",
-      );
-      if (!ok) return;
-    }
-    setBusy(file.relative);
+    // Hold the lock across the confirmation so no checkout or commit can
+    // change what is being discarded while it's up.
+    const release = acquire(file.relative);
+    if (!release) return;
     try {
+      if (action === "discard") {
+        const name = basename(file.relative);
+        const untracked = file.status === "untracked";
+        const ok = await confirmNative(
+          untracked
+            ? `Delete untracked file ${name}?`
+            : `Discard changes in ${name}? This cannot be undone.`,
+          untracked ? "Delete" : "Discard",
+        );
+        if (!ok) return;
+      }
       if (action === "stage") await gitStageFile(cwd, file.relative);
       else if (action === "unstage") await gitUnstageFile(cwd, file.relative);
       else await gitDiscardFile(cwd, file.relative);
@@ -500,29 +518,30 @@ function ChangedFiles({
     } catch (error) {
       fail(error);
     } finally {
-      setBusy(null);
+      release();
     }
   };
 
   const runAll = async (action: "stage" | "unstage" | "discard") => {
     if (busy) return;
-    if (action === "discard") {
-      const n = unstaged.length;
-      if (n === 0) return;
-      const only = unstaged[0];
-      const untrackedOnly = n === 1 && only?.status === "untracked";
-      const ok = await confirmNative(
-        untrackedOnly
-          ? `Delete untracked file ${basename(only.relative)}?`
-          : n === 1 && only
-            ? `Discard changes in ${basename(only.relative)}? This cannot be undone.`
-            : `Discard all unstaged changes in ${n} files? This cannot be undone.`,
-        untrackedOnly ? "Delete" : "Discard",
-      );
-      if (!ok) return;
-    }
-    setBusy(action);
+    if (action === "discard" && unstaged.length === 0) return;
+    const release = acquire(action);
+    if (!release) return;
     try {
+      if (action === "discard") {
+        const n = unstaged.length;
+        const only = unstaged[0];
+        const untrackedOnly = n === 1 && only?.status === "untracked";
+        const ok = await confirmNative(
+          untrackedOnly
+            ? `Delete untracked file ${basename(only.relative)}?`
+            : n === 1 && only
+              ? `Discard changes in ${basename(only.relative)}? This cannot be undone.`
+              : `Discard all unstaged changes in ${n} files? This cannot be undone.`,
+          untrackedOnly ? "Delete" : "Discard",
+        );
+        if (!ok) return;
+      }
       if (action === "stage") await gitStageAll(cwd);
       else if (action === "unstage") await gitUnstageAll(cwd);
       else await gitDiscardAll(cwd);
@@ -532,13 +551,14 @@ function ChangedFiles({
     } catch (error) {
       fail(error);
     } finally {
-      setBusy(null);
+      release();
     }
   };
 
   const runFolder = async (relative: string, action: "stage" | "unstage") => {
     if (busy) return;
-    setBusy(`${action}:${relative}`);
+    const release = acquire(`${action}:${relative}`);
+    if (!release) return;
     try {
       if (action === "stage") await gitStageFile(cwd, relative);
       else await gitUnstageFile(cwd, relative);
@@ -550,15 +570,18 @@ function ChangedFiles({
     } catch (error) {
       fail(error);
     } finally {
-      setBusy(null);
+      release();
     }
   };
 
   const generate = async () => {
     if (!canGenerate || generateAbortRef.current) return;
+    const release = acquire("generate");
+    if (!release) return;
     const controller = new AbortController();
     generateAbortRef.current = controller;
-    setBusy("generate");
+    generateReleaseRef.current = release;
+    setGenerating(true);
     try {
       const generated = await generateCommitMessage(
         cwd,
@@ -571,15 +594,19 @@ function ChangedFiles({
     } finally {
       if (generateAbortRef.current === controller) {
         generateAbortRef.current = null;
-        setBusy(null);
+        generateReleaseRef.current = null;
+        setGenerating(false);
       }
+      release();
     }
   };
 
   const cancelGenerate = () => {
     generateAbortRef.current?.abort();
     generateAbortRef.current = null;
-    setBusy(null);
+    generateReleaseRef.current?.();
+    generateReleaseRef.current = null;
+    setGenerating(false);
   };
 
   const toggleAmend = async () => {
@@ -610,23 +637,30 @@ function ChangedFiles({
 
   const commit = async (push: boolean, createPr = false) => {
     if (!canCommit) return;
-    if (
-      (push || createPr) &&
-      !(await confirmDefault(createPr ? "pr" : "push"))
-    ) {
-      return;
-    }
-    if (!(await confirmAmend())) return;
-    setBusy(createPr ? "pr" : "commit");
-    setMenuOpen(false);
+    // Hold the lock across the confirmations so the branch and HEAD they
+    // describe are still the ones committed to or amended.
+    const release = acquire(createPr ? "pr" : "commit");
+    if (!release) return;
     try {
+      if (
+        (push || createPr) &&
+        !(await confirmDefault(createPr ? "pr" : "push"))
+      ) {
+        return;
+      }
+      if (!(await confirmAmend())) return;
+      setMenuOpen(false);
       await gitCommit(cwd, message, amend);
       if (push || createPr) {
         await gitPush(cwd);
         recordPrActivity();
       }
-      setMessage("");
-      setAmendTarget(null);
+      // The panel may have moved to another repository meanwhile; keep the
+      // draft written there.
+      if (cwdRef.current === cwd) {
+        setMessage("");
+        setAmendTarget(null);
+      }
       onMutated();
       if (createPr) {
         await openCreatedPr();
@@ -636,14 +670,15 @@ function ChangedFiles({
       fail(error);
       onMutated();
     } finally {
-      setBusy(null);
+      release();
     }
   };
 
   const sync = async () => {
     if (!index || !(canSync || canPublish)) return;
     const pushesCommits = index.ahead > 0;
-    setBusy("sync");
+    const release = acquire("sync");
+    if (!release) return;
     try {
       await gitSync(cwd);
       if (pushesCommits) recordPrActivity();
@@ -653,7 +688,7 @@ function ChangedFiles({
       fail(error);
       onMutated();
     } finally {
-      setBusy(null);
+      release();
     }
   };
 
@@ -676,9 +711,10 @@ function ChangedFiles({
 
   const createPr = async () => {
     if (!canCreatePr) return;
-    if (!(await confirmDefault("pr"))) return;
-    setBusy("pr");
+    const release = acquire("pr");
+    if (!release) return;
     try {
+      if (!(await confirmDefault("pr"))) return;
       if ((index?.ahead ?? 0) > 0) await gitPush(cwd);
       await openCreatedPr();
       onMutated();
@@ -687,7 +723,7 @@ function ChangedFiles({
       fail(error);
       onMutated();
     } finally {
-      setBusy(null);
+      release();
     }
   };
 
@@ -723,22 +759,22 @@ function ChangedFiles({
           <button
             type="button"
             title={
-              busy === "generate"
+              generating
                 ? "Cancel commit message generation"
                 : "Generate commit message"
             }
             aria-label={
-              busy === "generate"
+              generating
                 ? "Cancel commit message generation"
                 : "Generate commit message"
             }
-            disabled={busy !== "generate" && !canGenerate}
+            disabled={!generating && !canGenerate}
             onClick={() =>
-              busy === "generate" ? cancelGenerate() : void generate()
+              generating ? cancelGenerate() : void generate()
             }
             className="group absolute top-1 right-1 grid size-5 place-items-center rounded-md bg-content/10 text-content hover:bg-content/20 hover:text-content disabled:opacity-40"
           >
-            {busy === "generate" ? (
+            {generating ? (
               <>
                 <Loader
                   className="size-3.5 animate-spin group-hover:hidden group-focus-visible:hidden"

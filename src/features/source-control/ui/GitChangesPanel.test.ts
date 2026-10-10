@@ -3,6 +3,8 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn(async () => true) }));
+
 vi.mock("@tauri-apps/plugin-opener", () => ({
   openUrl: vi.fn(async () => {}),
 }));
@@ -30,6 +32,18 @@ vi.mock("../../../platform/tauri/fs", () => ({
   gitRangeContext: vi.fn(),
   notifyGitChanged: vi.fn(),
   subscribeGitChanged: () => () => {},
+  gitBranches: vi.fn(async () => ({
+    current: "feature/pull",
+    detached: false,
+    branches: [
+      { name: "feature/pull", current: true, remote: null },
+      { name: "main", current: false, remote: null },
+    ],
+  })),
+  gitCheckout: vi.fn(async () => ""),
+  gitCreateBranch: vi.fn(async () => ""),
+  gitStash: vi.fn(async () => ""),
+  isCheckoutBlockedByChanges: () => false,
   basename: (path: string) => path.split("/").pop() ?? path,
 }));
 
@@ -48,12 +62,16 @@ vi.mock("../../inbox/model/inboxSelfActivity", () => ({
 }));
 
 import { GitChangesPanel } from "./GitChangesPanel";
+import { SourceControl } from "./SourceControl";
 import {
+  gitCheckout,
+  gitCommit,
   gitDiffIndex,
   gitPrCreate,
   gitPull,
   gitPush,
   gitRangeContext,
+  gitDiscardFile,
   gitStageFile,
   gitUnstageFile,
   notifyGitChanged,
@@ -63,6 +81,8 @@ import {
   generatePrContent,
 } from "../../../integrations/harness";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { ask } from "@tauri-apps/plugin-dialog";
+import { acquireRepoLock, repoLock } from "../model/repoLock";
 import type { GitChangedFile, GitDiffIndex } from "../../../platform/tauri/fs";
 
 function index(overrides: Partial<GitDiffIndex> = {}): GitDiffIndex {
@@ -173,6 +193,57 @@ describe("GitChangesPanel commit message generation", () => {
 
     await act(async () => resolveFirst("Old message"));
     expect(container.querySelector("textarea")?.value).toBe("New message");
+  });
+
+  it("drops the Cancel state when the repository changes mid-generation", async () => {
+    vi.mocked(gitDiffIndex).mockResolvedValue(
+      index({
+        files: [
+          {
+            path: "/repo/change.ts",
+            relative: "change.ts",
+            status: "modified",
+            additions: 1,
+            deletions: 0,
+            staged: true,
+            unstaged: false,
+          },
+        ],
+      }),
+    );
+    let resolveFirst!: (message: string) => void;
+    vi.mocked(generateCommitMessage).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveFirst = resolve;
+        }),
+    );
+    await renderPanel();
+
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Generate commit message"]',
+        )!
+        .click();
+    });
+    const signal = vi.mocked(generateCommitMessage).mock.calls[0]?.[2];
+
+    await renderPanel("/other-repo");
+    expect(signal?.aborted).toBe(true);
+    expect(
+      container.querySelector(
+        '[aria-label="Cancel commit message generation"]',
+      ),
+    ).toBeNull();
+
+    await act(async () => resolveFirst("Old message"));
+    expect(
+      container.querySelector(
+        '[aria-label="Cancel commit message generation"]',
+      ),
+    ).toBeNull();
+    expect(container.querySelector("textarea")?.value).toBe("");
   });
 });
 
@@ -498,5 +569,395 @@ describe("GitChangesPanel remote pull request", () => {
       "feature/pull",
     );
     expect(openUrl).toHaveBeenCalledWith("https://example.test/pull/42");
+  });
+});
+
+describe("GitChangesPanel branch picker", () => {
+  function branchTrigger() {
+    return container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Branch feature/pull"]',
+    )!;
+  }
+
+  it("locks the panel's Git actions while a checkout runs", async () => {
+    vi.mocked(gitDiffIndex).mockResolvedValue(
+      index({
+        remote: "origin",
+        upstream: "origin/feature/pull",
+        files: [changedFile("src/app.ts")],
+      }),
+    );
+    let finish!: () => void;
+    vi.mocked(gitCheckout).mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          finish = () => resolve("");
+        }),
+    );
+    await renderPanel("/repo-checkout-lock");
+    const stage = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Stage Changes"]',
+    )!;
+    const actions = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Branch actions"]',
+    )!;
+    expect(stage.disabled).toBe(false);
+    expect(actions.disabled).toBe(false);
+
+    await act(async () => branchTrigger().click());
+    const main = [
+      ...document.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+    ].find((option) => option.textContent?.includes("main"))!;
+    invalidateWatchedFiles.mockClear();
+    await act(async () => main.click());
+
+    expect(gitCheckout).toHaveBeenCalledWith(
+      "/repo-checkout-lock",
+      "main",
+      null,
+    );
+    expect(stage.disabled).toBe(true);
+    expect(actions.disabled).toBe(true);
+    // The picker itself stays usable so its own dialogs aren't torn down.
+    expect(branchTrigger().disabled).toBe(false);
+    await act(async () => stage.click());
+    expect(gitStageFile).not.toHaveBeenCalled();
+
+    await act(async () => finish());
+    expect(stage.disabled).toBe(false);
+    expect(actions.disabled).toBe(false);
+    expect(invalidateWatchedFiles).toHaveBeenCalledWith();
+  });
+
+  it("disables the branch picker while a panel Git action runs", async () => {
+    vi.mocked(gitDiffIndex).mockResolvedValue(
+      index({ remote: "origin", upstream: "origin/feature/pull" }),
+    );
+    let finish!: () => void;
+    vi.mocked(gitPull).mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    await renderPanel("/repo-pull-lock");
+    expect(branchTrigger().disabled).toBe(false);
+
+    const pull = await openBranchMenu();
+    await act(async () => pull.click());
+    expect(branchTrigger().disabled).toBe(true);
+    await act(async () => branchTrigger().click());
+    expect(document.querySelector("[data-branch-picker]")).toBeNull();
+
+    await act(async () => finish());
+    expect(branchTrigger().disabled).toBe(false);
+  });
+});
+
+type Dismissal = "Escape" | "outside click" | "trigger click";
+
+async function dismissPicker(how: Dismissal, trigger: HTMLButtonElement) {
+  await act(async () => {
+    if (how === "Escape") {
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+    } else if (how === "outside click") {
+      document.body.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    } else {
+      trigger.click();
+    }
+  });
+  expect(document.querySelector("[data-branch-picker]")).toBeNull();
+}
+
+const DISMISSALS: Dismissal[] = ["Escape", "outside click", "trigger click"];
+
+describe("GitChangesPanel dismissed checkout", () => {
+  it.each(DISMISSALS)(
+    "keeps panel actions locked after %s until the checkout settles",
+    async (how) => {
+      vi.mocked(gitDiffIndex).mockResolvedValue(
+        index({
+          remote: "origin",
+          upstream: "origin/feature/pull",
+          files: [changedFile("src/app.ts")],
+        }),
+      );
+      vi.mocked(gitCheckout).mockClear();
+      let finish!: () => void;
+      vi.mocked(gitCheckout).mockImplementationOnce(
+        () =>
+          new Promise<string>((resolve) => {
+            finish = () => resolve("");
+          }),
+      );
+      await renderPanel(`/repo-dismiss-${how}`);
+      const trigger = container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Branch feature/pull"]',
+      )!;
+      const stage = container.querySelector<HTMLButtonElement>(
+        '[aria-label="Stage Changes"]',
+      )!;
+      const actions = container.querySelector<HTMLButtonElement>(
+        '[aria-label="Branch actions"]',
+      )!;
+
+      await act(async () => trigger.click());
+      const main = [
+        ...document.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+      ].find((option) => option.textContent?.includes("main"))!;
+      await act(async () => main.click());
+      await dismissPicker(how, trigger);
+
+      expect(stage.disabled).toBe(true);
+      expect(actions.disabled).toBe(true);
+      await act(async () => stage.click());
+      expect(gitStageFile).not.toHaveBeenCalled();
+      await act(async () => trigger.click());
+      expect(document.querySelector("[data-branch-picker]")).toBeNull();
+      expect(gitCheckout).toHaveBeenCalledTimes(1);
+
+      await act(async () => finish());
+      expect(stage.disabled).toBe(false);
+      expect(actions.disabled).toBe(false);
+    },
+  );
+});
+
+describe("GitChangesPanel checkout across remounts", () => {
+  function controls() {
+    return {
+      trigger: container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Branch feature/pull"]',
+      )!,
+      stage: container.querySelector<HTMLButtonElement>(
+        '[aria-label="Stage Changes"]',
+      )!,
+      actions: container.querySelector<HTMLButtonElement>(
+        '[aria-label="Branch actions"]',
+      )!,
+    };
+  }
+
+  async function renderSourceControl(cwd: string) {
+    act(() =>
+      root.render(
+        createElement(SourceControl, {
+          cwd,
+          enabled: true,
+          onOpenFile: vi.fn(),
+          onOpenAllChanges: vi.fn(),
+          onOpenCommit: vi.fn(),
+        }),
+      ),
+    );
+    await act(async () => {});
+  }
+
+  async function startDeferredCheckout() {
+    let finish!: () => void;
+    vi.mocked(gitCheckout).mockClear();
+    vi.mocked(gitCheckout).mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          finish = () => resolve("");
+        }),
+    );
+    await act(async () => controls().trigger.click());
+    const main = [
+      ...document.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+    ].find((option) => option.textContent?.includes("main"))!;
+    await act(async () => main.click());
+    expect(gitCheckout).toHaveBeenCalledTimes(1);
+    return () => act(async () => finish());
+  }
+
+  async function expectLocked() {
+    const { trigger, stage, actions } = controls();
+    expect(trigger.disabled).toBe(true);
+    expect(stage.disabled).toBe(true);
+    expect(actions.disabled).toBe(true);
+    await act(async () => trigger.click());
+    expect(document.querySelector("[data-branch-picker]")).toBeNull();
+    await act(async () => controls().stage.click());
+    expect(gitCheckout).toHaveBeenCalledTimes(1);
+    expect(gitStageFile).not.toHaveBeenCalled();
+  }
+
+  beforeEach(() => {
+    vi.mocked(gitDiffIndex).mockResolvedValue(
+      index({
+        remote: "origin",
+        upstream: "origin/feature/pull",
+        files: [changedFile("src/app.ts")],
+      }),
+    );
+  });
+
+  it("keeps the repository locked after leaving and reopening Changes", async () => {
+    await renderPanel("/repo-leave");
+    const finish = await startDeferredCheckout();
+
+    act(() => root.render(createElement("div")));
+    await renderPanel("/repo-leave");
+    await expectLocked();
+
+    await finish();
+    expect(controls().trigger.disabled).toBe(false);
+    expect(controls().stage.disabled).toBe(false);
+    expect(controls().actions.disabled).toBe(false);
+  });
+
+  it("keeps A locked across A → B → A while B stays usable", async () => {
+    await renderSourceControl("/repo-a");
+    const finish = await startDeferredCheckout();
+
+    await renderSourceControl("/repo-b");
+    expect(controls().trigger.disabled).toBe(false);
+    expect(controls().stage.disabled).toBe(false);
+    expect(controls().actions.disabled).toBe(false);
+
+    await renderSourceControl("/repo-a");
+    await expectLocked();
+
+    await finish();
+    expect(controls().trigger.disabled).toBe(false);
+    expect(controls().stage.disabled).toBe(false);
+  });
+});
+
+describe("GitChangesPanel lock acquisition", () => {
+  it("holds the repository lock while a discard confirmation is up", async () => {
+    vi.mocked(gitDiffIndex).mockResolvedValue(
+      index({ files: [changedFile("src/app.ts")] }),
+    );
+    let confirm!: (ok: boolean) => void;
+    vi.mocked(ask).mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          confirm = resolve;
+        }),
+    );
+    vi.mocked(gitDiscardFile).mockClear();
+    await renderPanel("/repo-confirm");
+    const discard = container.querySelector<HTMLButtonElement>(
+      '[title="Discard Changes"]',
+    )!;
+    await act(async () => discard.click());
+    expect(ask).toHaveBeenCalled();
+
+    // No checkout or commit can slip in while the user is deciding.
+    expect(repoLock("/repo-confirm")?.kind).toBe("src/app.ts");
+    expect(acquireRepoLock("/repo-confirm", "checkout")).toBeNull();
+
+    await act(async () => confirm(true));
+    expect(gitDiscardFile).toHaveBeenCalledWith("/repo-confirm", "src/app.ts");
+    expect(repoLock("/repo-confirm")).toBeNull();
+  });
+
+  it("releases the lock when a discard is declined", async () => {
+    vi.mocked(gitDiffIndex).mockResolvedValue(
+      index({ files: [changedFile("src/app.ts")] }),
+    );
+    vi.mocked(ask).mockResolvedValueOnce(false);
+    vi.mocked(gitDiscardFile).mockClear();
+    await renderPanel("/repo-decline");
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[title="Discard Changes"]')!
+        .click(),
+    );
+
+    expect(gitDiscardFile).not.toHaveBeenCalled();
+    expect(repoLock("/repo-decline")).toBeNull();
+  });
+
+  it("keeps the next repository's draft when an earlier commit finishes", async () => {
+    vi.mocked(gitDiffIndex).mockResolvedValue(
+      index({ files: [changedFile("src/app.ts", { staged: true })] }),
+    );
+    let finish!: () => void;
+    vi.mocked(gitCommit).mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    await renderPanel("/repo-commit-a");
+    const textarea = () => container.querySelector("textarea")!;
+    const type = (value: string) =>
+      act(() => {
+        const setter = Object.getOwnPropertyDescriptor(
+          HTMLTextAreaElement.prototype,
+          "value",
+        )!.set!;
+        setter.call(textarea(), value);
+        textarea().dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    type("Commit A");
+    await act(async () =>
+      [...container.querySelectorAll("button")]
+        .find((button) => button.textContent === "Commit")!
+        .click(),
+    );
+    expect(gitCommit).toHaveBeenCalledWith("/repo-commit-a", "Commit A", false);
+
+    await renderPanel("/repo-commit-b");
+    type("Draft for B");
+    await act(async () => finish());
+
+    expect(textarea().value).toBe("Draft for B");
+  });
+});
+
+describe("GitChangesPanel generation in two panels", () => {
+  it("lets only the generating panel cancel, releasing the lock", async () => {
+    vi.mocked(gitDiffIndex).mockResolvedValue(
+      index({ files: [changedFile("src/app.ts")] }),
+    );
+    vi.mocked(generateCommitMessage).mockImplementationOnce(
+      () => new Promise<string>(() => {}),
+    );
+    const other = document.createElement("div");
+    document.body.append(other);
+    const otherRoot = createRoot(other);
+    const props = {
+      cwd: "/repo-generate",
+      enabled: true,
+      onOpenFile: vi.fn(),
+      onOpenAllChanges: vi.fn(),
+      onOpenCommit: vi.fn(),
+    };
+    try {
+      act(() => root.render(createElement(GitChangesPanel, props)));
+      act(() => otherRoot.render(createElement(GitChangesPanel, props)));
+      await act(async () => {});
+      const button = (host: HTMLElement, label: string) =>
+        host.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`);
+
+      await act(async () =>
+        button(container, "Generate commit message")!.click(),
+      );
+      expect(repoLock("/repo-generate")?.kind).toBe("generate");
+      expect(button(container, "Cancel commit message generation")).not.toBeNull();
+
+      // The other panel sees the repository busy but can't cancel or start.
+      expect(button(other, "Cancel commit message generation")).toBeNull();
+      const otherGenerate = button(other, "Generate commit message")!;
+      expect(otherGenerate.disabled).toBe(true);
+      await act(async () => otherGenerate.click());
+      expect(generateCommitMessage).toHaveBeenCalledTimes(1);
+
+      await act(async () =>
+        button(container, "Cancel commit message generation")!.click(),
+      );
+      expect(repoLock("/repo-generate")).toBeNull();
+      expect(button(other, "Generate commit message")!.disabled).toBe(false);
+      expect(button(container, "Generate commit message")!.disabled).toBe(false);
+    } finally {
+      act(() => otherRoot.unmount());
+      other.remove();
+    }
   });
 });
