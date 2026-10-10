@@ -57,6 +57,38 @@ function mix(base: Rgb, top: Rgb, amount: number): string {
   ]);
 }
 
+function luminance(rgb: Rgb): number {
+  const [r, g, b] = rgb.map((value) => {
+    const channel = value / 255;
+    return channel <= 0.03928
+      ? channel / 12.92
+      : ((channel + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function contrast(a: Rgb, b: Rgb): number {
+  const [light, dark] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (light + 0.05) / (dark + 0.05);
+}
+
+/**
+ * Pie labels share one color across every slice, so each slice is lightened
+ * just enough to keep that label at 4.5:1, whatever the accent is.
+ */
+function legibleFill(fill: Rgb, label: Rgb): string {
+  for (let step = 0; step <= 20; step++) {
+    const amount = step / 20;
+    const lighter: Rgb = [
+      fill[0] + (255 - fill[0]) * amount,
+      fill[1] + (255 - fill[1]) * amount,
+      fill[2] + (255 - fill[2]) * amount,
+    ];
+    if (contrast(lighter, label) >= 4.5) return hex(lighter);
+  }
+  return "#ffffff";
+}
+
 /**
  * Mermaid derives shades with its own color math, so it needs concrete
  * colors rather than CSS variables. Every fill is the theme's ink laid
@@ -71,8 +103,13 @@ export function mermaidThemeConfig(palette: MermaidPalette): MermaidConfig {
   const muted = mix(bg, fg, 0.6);
   const text = hex(fg);
   const series = [hex(accent), ...SERIES];
+  // The darker of ink and background: the theme's own text in light mode.
+  const pieLabel = dark ? bg : fg;
   const pie = Object.fromEntries(
-    series.map((color, index) => [`pie${index + 1}`, color]),
+    series.map((color, index) => [
+      `pie${index + 1}`,
+      legibleFill(parseColor(color) ?? accent, pieLabel),
+    ]),
   );
   return {
     theme: "base",
@@ -120,7 +157,7 @@ export function mermaidThemeConfig(palette: MermaidPalette): MermaidConfig {
       pieStrokeColor: hex(bg),
       pieOuterStrokeColor: hex(bg),
       pieTitleTextColor: text,
-      pieSectionTextColor: dark ? hex(bg) : "#ffffff",
+      pieSectionTextColor: hex(pieLabel),
       pieLegendTextColor: text,
       xyChart: {
         backgroundColor: hex(bg),

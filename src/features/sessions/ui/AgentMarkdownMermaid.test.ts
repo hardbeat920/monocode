@@ -20,10 +20,13 @@ async function settle() {
   });
 }
 
-function lastPie1(): unknown {
+// Pie slices may be lightened for label contrast; the xy palette keeps the
+// accent exactly as set.
+function lastAccent(): unknown {
   const config = engine.initialize.mock.calls.at(-1)?.[0] as
-    { themeVariables?: { pie1?: string } } | undefined;
-  return config?.themeVariables?.pie1;
+    | { themeVariables?: { xyChart?: { plotColorPalette?: string } } }
+    | undefined;
+  return config?.themeVariables?.xyChart?.plotColorPalette?.split(",")[0];
 }
 
 beforeEach(() => {
@@ -58,7 +61,7 @@ describe("AgentMarkdown Mermaid diagrams", () => {
     );
     await settle();
     expect(engine.render).toHaveBeenCalledTimes(1);
-    expect(lastPie1()).toBe("#ff0000");
+    expect(lastAccent()).toBe("#ff0000");
 
     document.documentElement.style.setProperty("--sidebar-opacity", "0.5");
     await settle();
@@ -70,6 +73,6 @@ describe("AgentMarkdown Mermaid diagrams", () => {
     );
     await settle();
     expect(engine.render).toHaveBeenCalledTimes(2);
-    expect(lastPie1()).toBe("#00ff00");
+    expect(lastAccent()).toBe("#00ff00");
   });
 });

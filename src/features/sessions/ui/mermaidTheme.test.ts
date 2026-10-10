@@ -90,3 +90,58 @@ describe("mermaid appearance", () => {
     unsubscribe();
   });
 });
+
+describe("pie section labels", () => {
+  function channels(color: string): number[] {
+    return [1, 3, 5].map((index) =>
+      parseInt(color.slice(index, index + 2), 16),
+    );
+  }
+  function contrast(a: string, b: string): number {
+    const luminance = (color: string) => {
+      const [r, g, b] = channels(color).map((value) => {
+        const channel = value / 255;
+        return channel <= 0.03928
+          ? channel / 12.92
+          : ((channel + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    const [light, dark] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+    return (light + 0.05) / (dark + 0.05);
+  }
+
+  const themes = {
+    light: { background: [247, 247, 247], content: [46, 46, 46], dark: false },
+    dark: { background: [24, 24, 27], content: [235, 235, 235], dark: true },
+  } as const;
+  const accents = {
+    blue: [74, 158, 248],
+    navy: [30, 58, 138],
+    yellow: [232, 197, 71],
+    white: [255, 255, 255],
+  } as const;
+
+  for (const [scheme, theme] of Object.entries(themes)) {
+    for (const [name, accent] of Object.entries(accents)) {
+      it(`keeps every slice at 4.5:1 in ${scheme} mode with a ${name} accent`, () => {
+        const vars = mermaidThemeConfig({
+          ...theme,
+          accent,
+          fontFamily: "sans-serif",
+          fontSize: "14px",
+        }).themeVariables as Record<string, string>;
+        const fills = Object.keys(vars)
+          .filter((key) => /^pie\d+$/.test(key))
+          .map((key) => vars[key]);
+
+        expect(fills).toHaveLength(8);
+        for (const fill of fills) {
+          expect(
+            contrast(fill, vars.pieSectionTextColor),
+          ).toBeGreaterThanOrEqual(4.5);
+        }
+      });
+    }
+  }
+});
