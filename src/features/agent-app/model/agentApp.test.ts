@@ -11,6 +11,7 @@ import {
 } from "../../sessions/model/sessionFolders";
 import type { Note } from "../../notes";
 import type { Artifact } from "../../artifacts/artifacts";
+import { projectBoardRepository } from "../../project-board/model/projectBoard";
 import type { Worktree } from "../../source-control/model/worktrees";
 import { handleAgentApp, notePreview, canAccessAgentAppProject, type AgentAppHost } from "./agentApp";
 
@@ -1474,5 +1475,100 @@ describe("agent app commands", () => {
         host,
       ),
     ).rejects.toThrow("body is required");
+  });
+
+  it("limits project board actions to a Mono's authorized project roster", async () => {
+    const { source, host } = fixture();
+    const list = vi.spyOn(projectBoardRepository, "list").mockResolvedValue([]);
+    host.isMono = () => true;
+    host.monoOf = () => ({ id: source.id, projects: [source.cwd, "/tmp/second"] });
+
+    try {
+      await expect(
+        handleAgentApp(
+          source,
+          "board-foreign",
+          "board.list",
+          { project: "/tmp/not-owned" },
+          host,
+        ),
+      ).rejects.toThrow("Not one of your projects");
+      expect(list).not.toHaveBeenCalled();
+
+      const result = await handleAgentApp(
+        source,
+        "board-owned",
+        "board.list",
+        { project: "/tmp/second" },
+        host,
+      );
+
+      expect(result).toMatchObject({ projectCwd: "/tmp/second", total: 0 });
+      expect(list).toHaveBeenCalledWith("/tmp/second");
+    } finally {
+      list.mockRestore();
+    }
+  });
+
+  it("starts a board card through monitored sessions.start and links the returned thread", async () => {
+    const { source, host } = fixture();
+    const card = {
+      id: "card-1",
+      projectCwd: source.cwd,
+      title: "Review parser behavior",
+      description: "Check malformed input handling.",
+      status: "ready" as const,
+      priority: "high" as const,
+      linkedSessionIds: [],
+      media: [],
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const list = vi
+      .spyOn(projectBoardRepository, "list")
+      .mockResolvedValue([card]);
+    const upsert = vi
+      .spyOn(projectBoardRepository, "upsertCard")
+      .mockImplementation(async (input) => ({ ...card, ...input, updatedAt: 2 }));
+    host.isMono = () => true;
+    host.monoOf = () => ({ id: source.id, projects: [source.cwd] });
+
+    try {
+      const result = (await handleAgentApp(
+        source,
+        "board-start",
+        "board.start",
+        { cardIds: [card.id], placement: "right", project: source.cwd },
+        host,
+      )) as {
+        startedCount: number;
+        failedCount: number;
+        cards: Array<{ sessionId?: string; success: boolean }>;
+      };
+
+      expect(result.startedCount).toBe(1);
+      expect(result.failedCount).toBe(0);
+      expect(result.cards[0]).toMatchObject({ success: true });
+      expect(result.cards[0].sessionId).toMatch(/^app-lead-/);
+      expect(host.start).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cwd: source.cwd,
+          prompt: expect.stringContaining("Review parser behavior"),
+        }),
+        expect.any(String),
+        { direction: "right", besideSessionId: source.id },
+        source.id,
+      );
+      expect(upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: card.id,
+          status: "in-progress",
+          linkedSessionIds: [result.cards[0].sessionId],
+        }),
+      );
+    } finally {
+      list.mockRestore();
+      upsert.mockRestore();
+    }
   });
 });

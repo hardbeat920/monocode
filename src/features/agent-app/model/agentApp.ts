@@ -62,6 +62,11 @@ import {
   type AgentFilePath,
   type MonoFiles,
 } from "../../monos/model/monoFiles";
+import { projectBoardRepository } from "../../project-board/model/projectBoard";
+import {
+  dispatchProjectBoardAction,
+  type ProjectBoardToolHost,
+} from "./projectBoardTools";
 import {
   addMemoryEntry,
   archiveMemoryEntries,
@@ -219,6 +224,10 @@ const FIELDS = new Map<string, readonly string[]>([
   ["habits.run", ["id"]],
   ["habits.remove", ["id"]],
   ["chat.card", [...CARD_FIELDS]],
+  ["board.list", ["status", "project"]],
+  ["board.create", ["id", "title", "description", "status", "priority", "project"]],
+  ["board.update", ["id", "cardId", "title", "description", "status", "priority", "project"]],
+  ["board.start", ["cardIds", "ids", "placement", "project"]],
 ]);
 
 function fields(action: string, input: Record<string, unknown>) {
@@ -964,6 +973,41 @@ export async function handleAgentApp(
         ? "It shows in the chat where you are in your reply."
         : "It goes out with your report, after its text; if you stay quiet, it is dropped.",
     };
+  }
+  if (action.startsWith("board.")) {
+    if (!host.isMono(source.id))
+      throw new Error("Only a Mono can use project board actions");
+
+    const projectCwd = requireProject(source, input, host);
+    const boardInput = { ...input };
+    delete boardInput.project;
+    const boardHost: ProjectBoardToolHost = {
+      repository: projectBoardRepository,
+      startSession: async ({ projectCwd, requestId, prompt, placement }) => {
+        const started = (await handleAgentApp(
+          source,
+          requestId,
+          "sessions.start",
+          {
+            prompt,
+            project: projectCwd,
+            placement,
+            notifyOnComplete: true,
+          },
+          host,
+        )) as { id?: unknown };
+        return {
+          sessionId: requiredString(started?.id, "started session ID", 256),
+        };
+      },
+    };
+
+    return dispatchProjectBoardAction(
+      { projectCwd, requestId },
+      action,
+      boardInput,
+      boardHost,
+    );
   }
   switch (action) {
     case "models.list":
