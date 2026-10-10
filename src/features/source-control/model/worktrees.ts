@@ -186,8 +186,16 @@ export function detachSessionWorktree<T extends { cwd: string; worktreeCwd?: str
   };
 }
 
-/** Existing working copies stay bound; removed ones can be replaced in place. */
-export function sessionInWorktree(session: Session, tree: Worktree): Session {
+/**
+ * Existing working copies stay bound; removed ones can be replaced in place.
+ * `move` carries a conversation to another working copy in place, e.g. when
+ * the agent switched checkouts on its own.
+ */
+export function sessionInWorktree(
+  session: Session,
+  tree: Worktree,
+  { move = false }: { move?: boolean } = {},
+): Session {
   if (
     !session.worktreeRemoved &&
     pathKey(sessionWorkCwd(session)) === pathKey(tree.path)
@@ -200,6 +208,13 @@ export function sessionInWorktree(session: Session, tree: Worktree): Session {
           session.harness,
           session.harness,
           `The previous working copy was deleted. Continue this conversation in ${tree.path}. Recheck the files before making changes.\n\n${buildDeterministicHandoff(session)}`,
+        )
+      : move && !isBlankSession(session)
+      ? appendReadyHandoff(
+          session,
+          session.harness,
+          session.harness,
+          `This conversation moved from ${sessionWorkCwd(session)} to ${tree.path}${tree.branch ? ` (branch ${tree.branch})` : ""}. Continue working there. Recheck the files before making changes.\n\n${buildDeterministicHandoff(session)}`,
         )
       : isBlankSession(session)
         ? session
@@ -223,6 +238,78 @@ export function sessionInWorktree(session: Session, tree: Worktree): Session {
     context: undefined,
     pendingSwitch: undefined,
   };
+}
+
+/** Fields a working-copy switch owns; everything else follows the live session. */
+const WORKTREE_SWITCH_FIELDS = [
+  "worktreeRemoved",
+  "worktreeCwd",
+  "branch",
+  "providerSessionId",
+  "context",
+  "pendingSwitch",
+] as const;
+
+/**
+ * Re-apply a switch computed from `base` onto `live`, which may have changed
+ * while the switch was saving (a draft, a rename, a pin). Blocks the switch
+ * added (its handoff) go before blocks added meanwhile.
+ */
+export function rebaseWorktreeSwitch(
+  switched: Session,
+  base: Session,
+  live: Session,
+): Session {
+  if (live === base) return switched;
+  const baseIds = new Set(base.blocks.map((block) => block.id));
+  const added = switched.blocks.filter((block) => !baseIds.has(block.id));
+  const rebased: Session = {
+    ...live,
+    blocks: [
+      ...live.blocks.filter((block) => baseIds.has(block.id)),
+      ...added,
+      ...live.blocks.filter((block) => !baseIds.has(block.id)),
+    ],
+  };
+  for (const field of WORKTREE_SWITCH_FIELDS) {
+    (rebased as Record<string, unknown>)[field] = switched[field];
+  }
+  return rebased;
+}
+
+/**
+ * Switch a session's working copy in place. The destination is saved before
+ * the old provider binding and checkpoint are released, so a failed save
+ * leaves the session where it was with its recovery state intact.
+ */
+export async function switchSessionWorktree(
+  base: Session,
+  tree: Worktree,
+  {
+    move = false,
+    persist,
+    release,
+    live,
+  }: {
+    move?: boolean;
+    /** Resolves falsy when the session was not saved. */
+    persist: (session: Session) => Promise<unknown>;
+    /** Drop provider and checkpoint state tied to the old working copy. */
+    release: () => Promise<void>;
+    /** The session as it is now, after the save. */
+    live: () => Session | undefined;
+  },
+): Promise<Session> {
+  const switched = sessionInWorktree(base, tree, { move });
+  if (!(await persist(switched))) {
+    throw new Error(
+      "The session could not be saved. It stays in its current working copy.",
+    );
+  }
+  // The switch is saved; releasing what the old copy held is best effort.
+  await release().catch(() => undefined);
+  const current = live();
+  return current ? rebaseWorktreeSwitch(switched, base, current) : switched;
 }
 
 export type RemoveWorktree = (

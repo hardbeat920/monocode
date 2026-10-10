@@ -1647,6 +1647,30 @@ mod tests {
     }
 
     #[test]
+    fn moved_session_claim_blocks_undo_until_kept() {
+        let repo = tmp("moved-claim");
+        if !init_git_commit(&repo.0, &[("a.txt", "head\n")]) {
+            return;
+        }
+        let cwd = repo.0.to_string_lossy().into_owned();
+        let (_root, store) = store();
+        // s1 edits a.txt here, then moves to another worktree.
+        store.ensure("s1", &cwd).unwrap();
+        store.prepare("s1", &cwd, &["a.txt".into()]).unwrap();
+        std::fs::write(repo.0.join("a.txt"), "s1\n").unwrap();
+        store.capture("s1", &cwd, &["a.txt".into()]).unwrap();
+        // s2 edits the same file in the worktree s1 left.
+        store.ensure("s2", &cwd).unwrap();
+        store.prepare("s2", &cwd, &["a.txt".into()]).unwrap();
+        std::fs::write(repo.0.join("a.txt"), "s2\n").unwrap();
+        store.capture("s2", &cwd, &["a.txt".into()]).unwrap();
+        assert!(!store.status("s2", &cwd).unwrap().files[0].undoable);
+
+        store.keep("s1", &cwd, None).unwrap();
+        assert!(store.status("s2", &cwd).unwrap().files[0].undoable);
+    }
+
+    #[test]
     fn keep_clears_review_and_leaves_files() {
         let repo = tmp("keep");
         if !init_git_commit(&repo.0, &[("a.txt", "head\n")]) {

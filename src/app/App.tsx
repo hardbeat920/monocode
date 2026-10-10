@@ -128,6 +128,7 @@ import {
   removeWorktree,
   renameWorktreeBranch,
   sessionInWorktree,
+  switchSessionWorktree,
   temporaryWorktreeBranchName,
   worktreeSessionIds,
   type Worktree,
@@ -5861,6 +5862,7 @@ function Workspace({
       tree: Worktree,
       fromComposer = false,
       isCurrent: () => boolean = () => true,
+      move = false,
     ) => {
       if (!isCurrent()) return;
       const current = sessionsRef.current.find((s) => s.id === sessionId);
@@ -5924,7 +5926,7 @@ function Workspace({
             "The session changed. Try selecting the working copy again.",
           );
         }
-        const selected = sessionInWorktree(source, target);
+        const selected = sessionInWorktree(source, target, { move });
         if (selected.id !== sessionId) {
           // Leave the original conversation, checkpoints, and live provider
           // context attached to the files they describe.
@@ -5943,14 +5945,10 @@ function Workspace({
         }
         await flushSessionCheckpoint(sessionId);
         if (!isCurrent()) return;
-        for (const harness of sessionChildHarnesses(source)) {
-          await forgetHarnessSession(harness, sessionId);
-          if (!isCurrent()) return;
-        }
         const latest = sessionsRef.current.find((s) => s.id === sessionId);
         if (
           !latest ||
-          (!latest.worktreeRemoved && !isBlankSession(latest)) ||
+          (!latest.worktreeRemoved && !isBlankSession(latest) && !move) ||
           latest.cwd !== current.cwd ||
           sessionWorkCwd(latest) !== sessionWorkCwd(current)
         ) {
@@ -5958,15 +5956,26 @@ function Workspace({
             "The session changed. Try selecting the working copy again.",
           );
         }
-        const next = sessionInWorktree(latest, target);
+        pendingPersist.current.delete(sessionId);
+        const next = await switchSessionWorktree(latest, target, {
+          move,
+          persist: async (session) =>
+            !shouldPersistSession(session) || !!(await upsertSession(session)),
+          release: async () => {
+            for (const harness of sessionChildHarnesses(latest))
+              await forgetHarnessSession(harness, sessionId);
+            if (latest.worktreeRemoved)
+              await keepSessionChanges(sessionId, target.path);
+            // Drop the old copy's claim so it can't block other sessions' Undo.
+            else if (move)
+              await keepSessionChanges(sessionId, sessionWorkCwd(latest));
+          },
+          live: () => sessionsRef.current.find((s) => s.id === sessionId),
+        });
+        // Saved: from here the session must follow its stored working copy.
         if (fromComposer)
           workspacePins.current.set(sessionId, currentWorkspace(latest.cwd));
         else workspacePins.current.delete(sessionId);
-        if (latest.worktreeRemoved)
-          await keepSessionChanges(sessionId, target.path);
-        pendingPersist.current.delete(sessionId);
-        if (shouldPersistSession(next)) await upsertSession(next);
-        if (!isCurrent()) return;
         invalidateLoadedSession(sessionId);
         sessionsRef.current = sessionsRef.current.map((s) =>
           s.id === sessionId ? next : s,
@@ -5986,6 +5995,21 @@ function Workspace({
     (sessionId: string, tree: Worktree) =>
       onWorktreeChange(sessionId, tree, true),
     [onWorktreeChange],
+  );
+
+  const onMoveSessionToWorktree = useCallback(
+    async (sessionId: string, tree: Worktree) => {
+      try {
+        await onSelectHistorySession(sessionId);
+        if (!sessionsRef.current.some((s) => s.id === sessionId)) return;
+        await onWorktreeChange(sessionId, tree, false, () => true, true);
+      } catch (error) {
+        void message(error instanceof Error ? error.message : String(error), {
+          title: "Move session",
+        });
+      }
+    },
+    [onSelectHistorySession, onWorktreeChange],
   );
 
   const onSelectWorkspace = useCallback(
@@ -12608,6 +12632,7 @@ function Workspace({
               onPinSession={onPinHistorySession}
               onPinSessions={onPinHistorySessions}
               onSetSessionLinkedWorkItem={onSetHistorySessionLinkedWorkItem}
+              onMoveSessionToWorktree={onMoveSessionToWorktree}
               reminders={sessionReminders.reminders}
               onSetReminders={sessionReminders.schedule}
               onCancelReminders={sessionReminders.cancel}
