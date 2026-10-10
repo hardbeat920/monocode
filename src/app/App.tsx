@@ -7904,18 +7904,28 @@ function Workspace({
           const visualRepliesDue =
             !current.providerSessionId ||
             visualRepliesOwed.current.has(sessionId);
-          if (rawCommand) {
-            if (visualRepliesDue) visualRepliesOwed.current.add(sessionId);
-          } else if (visualRepliesDue && loadVisualReplies()) {
-            appContext.push(VISUAL_REPLIES_CONTEXT);
-            visualRepliesOwed.current.delete(sessionId);
+          const visualRepliesHinted =
+            !rawCommand && visualRepliesDue && loadVisualReplies();
+          // Owed until a send delivers it, since that send may bind the
+          // provider session and still fail.
+          if ((rawCommand && visualRepliesDue) || visualRepliesHinted) {
+            visualRepliesOwed.current.add(sessionId);
           }
+          if (visualRepliesHinted) appContext.push(VISUAL_REPLIES_CONTEXT);
           // A Mono reads who it is ahead of the message, so it never takes it
           // for something the user pasted. A command must stay first.
           if (mono && !rawCommand) sendText = monoTurn(sendText, appContext);
           else if (appContext.length)
             sendText += `\n\n${appContext.join("\n\n")}`;
           await sendTurn(sendText);
+          // A stopped turn can resolve without the provider running it.
+          if (
+            visualRepliesHinted &&
+            !providerFailureSeen &&
+            turnGen.current.get(sessionId) === gen
+          ) {
+            visualRepliesOwed.current.delete(sessionId);
+          }
           if (agentFiles) {
             recordAgentContext(
               sessionId,
