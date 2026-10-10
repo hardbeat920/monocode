@@ -58,6 +58,31 @@ function readAll(): Record<string, RemoteProject> {
   }
 }
 
+/** The remote path git operations should run in for the active session: the
+ * checkout the tab itself points at — the attached host session's work path
+ * or a worktree picked before the first message (`tabCwd`, a host path) —
+ * then the session's own work path when it differs from the project root (a
+ * linked worktree), not the terminal tab's cwd, which follows the shell a
+ * session was launched from rather than the repo its changes live in. The
+ * sidebar's Changes panel resolves the same order, so a diff opens in the
+ * checkout whose files the panel lists. */
+export function remoteSessionGitCwd(
+  project: Pick<RemoteProject, "environmentId" | "cwd">,
+  gitCwd: string | undefined,
+  projectRoot: string,
+  tabCwd?: string,
+): string {
+  if (tabCwd)
+    return isRemoteProjectPath(tabCwd)
+      ? tabCwd
+      : remotePath(project.environmentId, tabCwd);
+  if (gitCwd && isRemoteProjectPath(gitCwd)) return gitCwd;
+  return remotePath(
+    project.environmentId,
+    gitCwd && gitCwd !== projectRoot ? gitCwd : project.cwd,
+  );
+}
+
 export function remoteProjectFor(path: string): RemoteProject | undefined {
   if (!isRemoteProjectPath(path)) return undefined;
   const key = slashed(path).replace(/\/+$/, "");
