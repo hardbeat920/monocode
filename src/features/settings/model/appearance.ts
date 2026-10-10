@@ -304,13 +304,31 @@ export function applyThemeTint(hue: number, saturation: number) {
   return { hue: nextHue, saturation: nextSaturation };
 }
 
-export function initAppearance() {
-  document.documentElement.classList.toggle("is-mac", IS_MAC);
+const THEME_KEYS = new Set([
+  ACCENT_COLOR_KEY,
+  THEME_HUE_KEY,
+  THEME_SATURATION_KEY,
+  THEME_DARK_LIGHTNESS_KEY,
+  SCHEME_KEY,
+]);
+
+function applyStoredTheme() {
   applyAccentColor(loadAccentColor());
   applyThemeTint(loadThemeHue(), loadThemeSaturation());
   applyThemeDarkLightness(loadThemeDarkLightness());
   applyThemePreference(loadThemePreference());
+}
+
+export function initAppearance() {
+  document.documentElement.classList.toggle("is-mac", IS_MAC);
+  applyStoredTheme();
   watchSystemColorScheme();
+  // Settings applies a theme change only to its own window. Other windows
+  // hear about it through the storage event, which never fires in the
+  // window that wrote the value.
+  window.addEventListener("storage", (event) => {
+    if (event.key === null || THEME_KEYS.has(event.key)) applyStoredTheme();
+  });
   applySidebarOpacity(loadSidebarOpacity());
   applySidebarBlur(loadSidebarBlur());
   applyBodyGlass(loadBodyGlass());

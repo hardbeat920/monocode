@@ -1,5 +1,10 @@
 // @vitest-environment happy-dom
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@tauri-apps/api/core", () => ({
+  convertFileSrc: (path: string) => path,
+  invoke: vi.fn().mockResolvedValue(undefined),
+}));
 import {
   ACCENT_COLOR_DEFAULT,
   CHAT_BACKGROUND_OPACITY_DEFAULT,
@@ -35,6 +40,8 @@ import {
   applyDiffPalette,
   loadDiffPalette,
   saveDiffPalette,
+  initAppearance,
+  isLightScheme,
 } from "./appearance";
 
 const KEY = "monocode.transcriptLayout";
@@ -269,6 +276,40 @@ describe("chat background setting", () => {
     expect(loadNewThreadBackgroundEffect()).toBe(
       NEW_THREAD_BACKGROUND_EFFECT_DEFAULT,
     );
+  });
+});
+
+describe("theme changes from another window", () => {
+  beforeEach(mockLocalStorage);
+  afterEach(() => {
+    localStorage.clear();
+    document.documentElement.className = "";
+    document.documentElement.removeAttribute("style");
+  });
+
+  function changeInOtherWindow(key: string, value: string) {
+    localStorage.setItem(key, value);
+    window.dispatchEvent(new StorageEvent("storage", { key, newValue: value }));
+  }
+
+  it("applies a scheme change saved by another window", () => {
+    saveThemePreference("light");
+    initAppearance();
+    expect(isLightScheme()).toBe(true);
+
+    changeInOtherWindow(SCHEME_KEY, "dark");
+
+    expect(isLightScheme()).toBe(false);
+  });
+
+  it("applies an accent change saved by another window", () => {
+    initAppearance();
+
+    changeInOtherWindow(ACCENT_COLOR_KEY, "#ff0000");
+
+    expect(
+      document.documentElement.style.getPropertyValue("--user-accent-color"),
+    ).toBe("#ff0000");
   });
 });
 
