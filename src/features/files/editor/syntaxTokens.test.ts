@@ -10,6 +10,7 @@ import {
 const KEYWORD_DARK = "#ff8ffd";
 const STRING_DARK = "#b4fa72";
 const COMMENT_DARK = "#fefdc2";
+const PROPERTY_DARK = "#d0d1fe";
 
 describe("highlightSource", () => {
   it("colors TypeScript keywords, strings, and comments", () => {
@@ -27,6 +28,34 @@ describe("highlightSource", () => {
     const language = await languageForPath("settings.jsonc");
     const lines = highlightSource('{\n  // note\n  "a": 1\n}', language, "dark");
     expect(token(lines[1], "// note")?.color).toBe(COMMENT_DARK);
+  });
+
+  it("colors script blocks in Vue and Svelte components", async () => {
+    for (const path of ["App.vue", "Counter.svelte"]) {
+      const language = await languageForPath(path);
+      const lines = highlightSource(
+        '<script>\nconst name = "agent";\n</script>',
+        language,
+        "dark",
+      );
+      expect(token(lines[1], "const")?.color).toBe(KEYWORD_DARK);
+      expect(token(lines[1], '"agent"')?.color).toBe(STRING_DARK);
+    }
+  });
+
+  it.each(["theme.scss", "theme.less"])(
+    "colors comments in %s stylesheets",
+    async (path) => {
+      const language = await languageForPath(path);
+      const lines = highlightSource("// note\na { color: red; }", language, "dark");
+      expect(token(lines[0], "// note")?.color).toBe(COMMENT_DARK);
+    },
+  );
+
+  it("colors declarations in indented Sass stylesheets", async () => {
+    const language = await languageForPath("theme.sass");
+    const lines = highlightSource(".card\n  color: red", language, "dark");
+    expect(token(lines[1], "color")?.color).toBe(PROPERTY_DARK);
   });
 
   it("leaves unknown languages unstyled", () => {
