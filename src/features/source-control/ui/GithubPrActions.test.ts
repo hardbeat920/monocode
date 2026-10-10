@@ -6,10 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../../inbox/model/githubTasks", async (original) => ({
   ...(await original<typeof import("../../inbox/model/githubTasks")>()),
   githubPrAction: vi.fn(),
+  githubPrBranch: vi.fn(),
 }));
 
 import {
   githubPrAction,
+  githubPrBranch,
   type GithubWorkItem,
   type InboxItem,
 } from "../../inbox/model/githubTasks";
@@ -46,6 +48,13 @@ beforeEach(() => {
     },
   );
   vi.mocked(githubPrAction).mockReset();
+  vi.mocked(githubPrBranch).mockReset().mockResolvedValue({
+    name: "feature/inbox",
+    repo: "acme/web",
+    exists: true,
+    canDelete: true,
+    reason: "",
+  });
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -128,6 +137,21 @@ describe("GitHub pull request actions", () => {
       projectPath: "/tmp/web",
       provider: "github",
     });
+    await act(async () =>
+      root.render(
+        createElement(GithubPrActions, {
+          item: { ...item, ...merged },
+          baseRef: "main",
+          headRef: "feature/inbox",
+          onChange,
+        }),
+      ),
+    );
+    const deleteButton = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent?.trim() === "Delete branch",
+    );
+    expect(deleteButton?.disabled).toBe(false);
+    expect(container.textContent).not.toContain("Merge pull request");
   });
 
   it("keeps a failed close action open with GitHub's error", async () => {

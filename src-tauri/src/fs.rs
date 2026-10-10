@@ -3063,6 +3063,184 @@ fn git_github_pr_action_for(
     git_github_work_item_for(root, repo, "pr", number)
 }
 
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubPrBranch {
+    pub name: String,
+    pub repo: String,
+    pub exists: bool,
+    pub can_delete: bool,
+    pub reason: String,
+}
+
+/// Read the source branch from GitHub, including branches in a fork.
+#[tauri::command]
+pub async fn git_github_pr_branch(
+    cwd: String,
+    repo: String,
+    number: i64,
+) -> Result<GitHubPrBranch, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        github_pr_branch_with(&repo, number, false, |args| {
+            gh_checked(&expand_home(&cwd), args)
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Delete only the merged PR's remote source branch; keep local worktrees.
+#[tauri::command]
+pub async fn git_github_pr_delete_branch(
+    cwd: String,
+    repo: String,
+    number: i64,
+) -> Result<GitHubPrBranch, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        github_pr_branch_with(&repo, number, true, |args| {
+            gh_checked(&expand_home(&cwd), args)
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+const GITHUB_PR_BRANCH_QUERY: &str = r#"
+query PullRequestBranch($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      state
+      headRefName
+      headRefOid
+      headRef { target { oid } }
+      headRepository {
+        id
+        nameWithOwner
+        viewerPermission
+        defaultBranchRef { name }
+      }
+    }
+  }
+}
+"#;
+
+// beforeOid makes the deletion atomic with respect to pushes after our check.
+// https://docs.github.com/en/graphql/reference/git#updaterefs
+const GITHUB_PR_DELETE_BRANCH_MUTATION: &str = r#"
+mutation DeletePullRequestBranch($repositoryId: ID!, $ref: GitRefname!, $oid: GitObjectID!) {
+  updateRefs(input: {
+    repositoryId: $repositoryId,
+    refUpdates: [{name: $ref, beforeOid: $oid, afterOid: "0000000000000000000000000000000000000000"}]
+  }) { clientMutationId }
+}
+"#;
+
+fn github_pr_branch_with(
+    repo: &str,
+    number: i64,
+    delete: bool,
+    mut run: impl FnMut(&[&str]) -> Result<String, String>,
+) -> Result<GitHubPrBranch, String> {
+    if number <= 0 {
+        return Err("GitHub pull request number must be positive".into());
+    }
+    let (owner, name) = split_github_repo(repo)?;
+    let json = run(&[
+        "api",
+        "graphql",
+        "-f",
+        &format!("query={GITHUB_PR_BRANCH_QUERY}"),
+        "-f",
+        &format!("owner={owner}"),
+        "-f",
+        &format!("name={name}"),
+        "-F",
+        &format!("number={number}"),
+    ])?;
+    let response = github_pr_branch_response(&json)?;
+    let pr = &response["data"]["repository"]["pullRequest"];
+    let name = pr["headRefName"]
+        .as_str()
+        .filter(|name| !name.is_empty())
+        .ok_or("GitHub did not return the pull request's source branch")?;
+    let head_repo = &pr["headRepository"];
+    let repo = head_repo["nameWithOwner"].as_str().unwrap_or_default();
+    let exists = !pr["headRef"].is_null();
+    let oid = pr["headRefOid"].as_str().unwrap_or_default();
+    let reason = if pr["state"].as_str() != Some("MERGED") {
+        "Only merged pull request branches can be deleted."
+    } else if repo.is_empty() || head_repo["id"].as_str().is_none() {
+        "The source repository is unavailable."
+    } else if !exists {
+        ""
+    } else if head_repo["defaultBranchRef"]["name"].as_str().is_none() {
+        "GitHub did not return the source repository's default branch."
+    } else if head_repo["defaultBranchRef"]["name"].as_str() == Some(name) {
+        "The repository's default branch cannot be deleted."
+    } else if !matches!(
+        head_repo["viewerPermission"].as_str(),
+        Some("ADMIN" | "MAINTAIN" | "WRITE")
+    ) {
+        "You need write access to the source repository to delete this branch."
+    } else if oid.is_empty() || pr["headRef"]["target"]["oid"].as_str() != Some(oid) {
+        "This branch has new commits since the pull request was merged."
+    } else {
+        ""
+    };
+    let mut branch = GitHubPrBranch {
+        name: name.into(),
+        repo: repo.into(),
+        exists,
+        can_delete: exists && reason.is_empty(),
+        reason: reason.into(),
+    };
+    if !delete {
+        return Ok(branch);
+    }
+    if !reason.is_empty() {
+        return Err(reason.into());
+    }
+    // Automatic GitHub cleanup or another client may have already deleted it.
+    if !exists {
+        return Ok(branch);
+    }
+    let json = run(&[
+        "api",
+        "graphql",
+        "-f",
+        &format!("query={GITHUB_PR_DELETE_BRANCH_MUTATION}"),
+        "-f",
+        &format!("repositoryId={}", head_repo["id"].as_str().unwrap()),
+        "-f",
+        &format!("ref=refs/heads/{name}"),
+        "-f",
+        &format!("oid={oid}"),
+    ])?;
+    let response = github_pr_branch_response(&json)?;
+    if !response["data"]["updateRefs"].is_object() {
+        return Err("GitHub did not confirm the branch deletion".into());
+    }
+    branch.exists = false;
+    branch.can_delete = false;
+    Ok(branch)
+}
+
+fn github_pr_branch_response(json: &str) -> Result<serde_json::Value, String> {
+    let response: serde_json::Value =
+        serde_json::from_str(json).map_err(|error| error.to_string())?;
+    if let Some(errors) = response["errors"]
+        .as_array()
+        .filter(|errors| !errors.is_empty())
+    {
+        return Err(errors
+            .iter()
+            .map(|error| error["message"].as_str().unwrap_or("GitHub request failed"))
+            .collect::<Vec<_>>()
+            .join("\n"));
+    }
+    Ok(response)
+}
+
 fn git_github_work_item_details_for(
     root: &Path,
     repo: &str,
@@ -8416,6 +8594,137 @@ mod tests {
         assert!(github_pr_action_args("acme/web", 42, "delete").is_err());
         assert!(github_pr_action_args("acme/web", 0, "merge").is_err());
         assert!(github_pr_action_args("invalid", 42, "merge").is_err());
+    }
+
+    fn github_pr_branch_fixture() -> serde_json::Value {
+        serde_json::json!({"data": {"repository": {"pullRequest": {
+            "state": "MERGED",
+            "headRefName": "feature/inbox",
+            "headRefOid": "abc123",
+            "headRef": {"target": {"oid": "abc123"}},
+            "headRepository": {
+                "id": "FORK_REPO_ID", "nameWithOwner": "contributor/web",
+                "viewerPermission": "WRITE", "defaultBranchRef": {"name": "main"}
+            }
+        }}}})
+    }
+
+    #[test]
+    fn github_pr_branch_deletes_the_fork_with_an_atomic_commit_check() {
+        let fixture = github_pr_branch_fixture();
+        let mut calls = Vec::new();
+        let result = github_pr_branch_with("acme/web", 42, true, |args| {
+            calls.push(args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>());
+            if calls.len() == 1 {
+                Ok(fixture.to_string())
+            } else {
+                Ok(r#"{"data":{"updateRefs":{"clientMutationId":null}}}"#.into())
+            }
+        })
+        .unwrap();
+        assert_eq!(calls.len(), 2);
+        assert!(calls[0].contains(&"owner=acme".into()));
+        assert!(calls[0].contains(&"name=web".into()));
+        assert!(calls[1].contains(&"repositoryId=FORK_REPO_ID".into()));
+        assert!(calls[1].contains(&"ref=refs/heads/feature/inbox".into()));
+        assert!(calls[1].contains(&"oid=abc123".into()));
+        assert!(calls[1][3].contains("beforeOid: $oid"));
+        assert!(calls[1][3].contains("afterOid: \"0000000000000000000000000000000000000000\""));
+        assert_eq!(result.repo, "contributor/web");
+        assert!(!result.exists);
+        assert!(!result.can_delete);
+    }
+
+    #[test]
+    fn github_pr_branch_rejects_unmerged_default_inaccessible_and_reused_branches() {
+        for (path, value, expected) in [
+            (vec!["state"], serde_json::json!("OPEN"), "Only merged"),
+            (vec!["state"], serde_json::json!("CLOSED"), "Only merged"),
+            (
+                vec!["headRepository", "defaultBranchRef", "name"],
+                serde_json::json!("feature/inbox"),
+                "default branch",
+            ),
+            (
+                vec!["headRepository", "viewerPermission"],
+                serde_json::json!("READ"),
+                "write access",
+            ),
+            (
+                vec!["headRef", "target", "oid"],
+                serde_json::json!("new_commit"),
+                "new commits",
+            ),
+            (
+                vec!["headRepository"],
+                serde_json::Value::Null,
+                "unavailable",
+            ),
+        ] {
+            let mut fixture = github_pr_branch_fixture();
+            let mut field = &mut fixture["data"]["repository"]["pullRequest"];
+            for segment in path {
+                field = &mut field[segment];
+            }
+            *field = value;
+            let status =
+                github_pr_branch_with("acme/web", 42, false, |_| Ok(fixture.to_string())).unwrap();
+            assert!(!status.can_delete);
+            assert!(status.reason.contains(expected));
+            let mut calls = 0;
+            let error = github_pr_branch_with("acme/web", 42, true, |_| {
+                calls += 1;
+                Ok(fixture.to_string())
+            })
+            .unwrap_err();
+            assert!(error.contains(expected));
+            assert_eq!(calls, 1, "Unsafe branches must not reach the mutation");
+        }
+    }
+
+    #[test]
+    fn github_pr_branch_treats_an_already_deleted_branch_as_success() {
+        let mut fixture = github_pr_branch_fixture();
+        fixture["data"]["repository"]["pullRequest"]["headRef"] = serde_json::Value::Null;
+        let mut calls = 0;
+        let status = github_pr_branch_with("acme/web", 42, true, |_| {
+            calls += 1;
+            Ok(fixture.to_string())
+        })
+        .unwrap();
+        assert_eq!(calls, 1);
+        assert!(!status.exists);
+        assert!(!status.can_delete);
+        assert!(status.reason.is_empty());
+    }
+
+    #[test]
+    fn github_pr_branch_propagates_mutation_failures_without_reporting_success() {
+        let fixture = github_pr_branch_fixture();
+        let mut calls = 0;
+        let error = github_pr_branch_with("acme/web", 42, true, |_| {
+            calls += 1;
+            if calls == 1 {
+                Ok(fixture.to_string())
+            } else {
+                Ok(r#"{"data":{"updateRefs":null},"errors":[{"message":"Branch changed or is protected"}]}"#.into())
+            }
+        }).unwrap_err();
+        assert_eq!(error, "Branch changed or is protected");
+    }
+
+    #[test]
+    fn github_pr_branch_validates_input_before_contacting_github() {
+        for (repo, number) in [("acme/web", 0), ("invalid", 42)] {
+            assert!(github_pr_branch_with(repo, number, true, |_| {
+                panic!("Invalid input must not make a GitHub request")
+            })
+            .is_err());
+        }
+        assert!(github_pr_branch_with("acme/web", 42, false, |_| {
+            Ok(r#"{"data":{"repository":null}}"#.into())
+        })
+        .is_err());
     }
 
     #[test]

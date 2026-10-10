@@ -44,6 +44,13 @@ import { recordInboxSelfActivity } from "./inboxSelfActivity";
 export type GithubTaskKind = "issue" | "pr";
 export type GithubPrAction =
   "merge" | "squash" | "rebase" | "draft" | "ready" | "close" | "reopen";
+export type GithubPrBranch = {
+  name: string;
+  repo: string;
+  exists: boolean;
+  canDelete: boolean;
+  reason: string;
+};
 export type InboxKind = GithubTaskKind | "linear" | "jira";
 
 export type GithubLabel = {
@@ -548,6 +555,27 @@ export async function githubWorkItemComment(
   threadInflight.delete(key);
   recordInboxSelfActivity({ provider: "github", kind, number, repo });
   return url;
+}
+
+/** Read the current source branch, including GitHub's automatic cleanup. */
+export async function githubPrBranch(
+  cwd: string,
+  repo: string,
+  number: number,
+): Promise<GithubPrBranch> {
+  return invoke<GithubPrBranch>("git_github_pr_branch", { cwd, repo, number });
+}
+
+export async function githubPrDeleteBranch(
+  cwd: string,
+  repo: string,
+  number: number,
+): Promise<GithubPrBranch> {
+  return invoke<GithubPrBranch>("git_github_pr_delete_branch", {
+    cwd,
+    repo,
+    number,
+  });
 }
 
 /** Run a state-changing pull request action and return GitHub's fresh PR state. */

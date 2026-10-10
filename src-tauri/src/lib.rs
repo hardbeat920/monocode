@@ -371,6 +371,8 @@ pub fn run() {
             fs::git_github_work_item_thread,
             fs::git_github_work_item_comment,
             fs::git_github_pr_action,
+            fs::git_github_pr_branch,
+            fs::git_github_pr_delete_branch,
             fs::git_github_pr_diff,
             fs::git_github_pr_checks,
             fs::git_github_check_details,
