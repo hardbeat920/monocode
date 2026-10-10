@@ -70,6 +70,7 @@ import {
 import { MonoHeader } from "../../monos/ui/MonoHeader";
 import { MonoComposer } from "../../monos/ui/MonoComposer";
 import { MonoUsageLimitNotice } from "../../monos/ui/MonoUsageLimitNotice";
+import { UsageLimitAccountPicker } from "./UsageLimitAccountPicker";
 import { QuestionForm } from "./QuestionForm";
 import {
   monoMessageDeliveries,
@@ -762,6 +763,19 @@ const LocalSessionPane = memo(function LocalSessionPane({
         onUsageLimitResumeAtReset(session.id, enabled)
       }
       onUsageLimitDismiss={() => onUsageLimitDismiss(session.id)}
+      usageLimitAccountPicker={
+        session.usageLimit && onUsageLimitAccountChange ? (
+          <UsageLimitAccountPicker
+            harness={session.harness}
+            providerAccountId={session.providerAccountId}
+            label="Switch account"
+            className="flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 hover:bg-content/10 hover:text-content"
+            onSelect={(accountId) =>
+              onUsageLimitAccountChange(session.id, accountId)
+            }
+          />
+        ) : undefined
+      }
       onOpenFile={onOpenFile}
       busy={!!session.busy}
       editLastTurnSupported={editLastTurnSupported}

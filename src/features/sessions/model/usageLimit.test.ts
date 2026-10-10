@@ -6,7 +6,9 @@ import {
   usageLimitResumeDue,
   usageLimitFromError,
   resumeUsageLimitedSession,
+  switchUsageLimitAccount,
 } from "./usageLimit";
+import { pendingComposerSwitch, shouldAskOutgoingAgent } from "./handoff";
 
 function limited(patch: Partial<Session> = {}): Session {
   return {
@@ -93,5 +95,36 @@ describe("formatUsageLimitReset", () => {
     expect(formatUsageLimitReset(today, now)).toMatch(/ · in 1h 16m$/);
     const tomorrow = new Date(2026, 8, 26, 3, 16).getTime();
     expect(formatUsageLimitReset(tomorrow, now)).toMatch(/26.* · in 4h 42m$/);
+  });
+});
+
+describe("switchUsageLimitAccount", () => {
+  it("hands the conversation to a fresh thread on the new account", () => {
+    const original = limited({
+      providerSessionId: "old-thread",
+      providerAccountId: "default",
+      blocks: [{ id: "request", role: "user", text: "Fix the tests" }],
+    });
+    const switched = switchUsageLimitAccount(original, "account-work");
+    expect(switched.providerAccountId).toBe("account-work");
+    expect(switched.providerSessionId).toBeUndefined();
+    expect(switched.blocks).toBe(original.blocks);
+    expect(switched.queuedMessages).toBe(original.queuedMessages);
+    expect(pendingComposerSwitch(switched)).toMatchObject({
+      from: "codex",
+      fromProviderSessionId: "old-thread",
+      fromProviderAccountId: "default",
+      skipOutgoingRecap: true,
+    });
+    expect(shouldAskOutgoingAgent(switched)).toBe(false);
+  });
+
+  it("ignores the current account, busy sessions, and unlimited sessions", () => {
+    const original = limited({ providerAccountId: undefined });
+    expect(switchUsageLimitAccount(original, "default")).toBe(original);
+    const busy = limited({ busy: true });
+    expect(switchUsageLimitAccount(busy, "account-work")).toBe(busy);
+    const free = limited({ usageLimit: undefined });
+    expect(switchUsageLimitAccount(free, "account-work")).toBe(free);
   });
 });
