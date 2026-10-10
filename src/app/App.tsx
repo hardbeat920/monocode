@@ -1354,6 +1354,9 @@ function Workspace({
   const queueDispatchingRef = useRef(new Set<string>());
   const [queueDispatchVersion, setQueueDispatchVersion] = useState(0);
   const usageResumingRef = useRef(new Set<string>());
+  // Sessions whose provider session a native command started, so it has not
+  // yet heard that replies can draw.
+  const visualRepliesOwed = useRef(new Set<string>());
   const usageResetLookups = useRef(new WeakSet<UsageLimit>());
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
@@ -7896,13 +7899,16 @@ function Workspace({
               `<monocode_app>\n${handAgent ? "App access is always enabled in this thread." : "The user's Operator command enables app access in this thread, including later turns without the command."} You can start session tabs or split session panes right or down, list and create project worktrees, choose a new session's checkout, read, continue, stop, archive or delete other project sessions, save unsent drafts, organize session folders, and read or write saved notes through its local CLI. Run \`${cli} --help\` when you need the exact commands and JSON fields. When reading another session, start with its latest two or three user/assistant exchanges. Request older exchanges with nextBefore or a larger excerpt only if needed. The CLI uses a session credential already in your environment; never print it. New sessions inherit this session's permission mode unless runtimeMode is set explicitly. For a new session with a draft, call sessions.start with its prompt and draft:true; do not submit a seed prompt. The returned ID can be used as besideSessionId to split its pane again or moved into a folder immediately. A normal sessions.start submits its prompt but returns after acceptance, so do not wait for that agent to finish before organizing it.\n</monocode_app>`,
             );
           }
-          // A fresh provider session hears once that replies can draw.
-          if (
-            !rawCommand &&
-            !current.providerSessionId &&
-            loadVisualReplies()
-          ) {
+          // A fresh provider session hears once that replies can draw, on its
+          // first regular prompt even when a native command started it.
+          const visualRepliesDue =
+            !current.providerSessionId ||
+            visualRepliesOwed.current.has(sessionId);
+          if (rawCommand) {
+            if (visualRepliesDue) visualRepliesOwed.current.add(sessionId);
+          } else if (visualRepliesDue && loadVisualReplies()) {
             appContext.push(VISUAL_REPLIES_CONTEXT);
+            visualRepliesOwed.current.delete(sessionId);
           }
           // A Mono reads who it is ahead of the message, so it never takes it
           // for something the user pasted. A command must stay first.
