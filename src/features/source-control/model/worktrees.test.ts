@@ -6,6 +6,7 @@ import {
   detachSessionWorktree,
   assertWorktreeFilesClosed,
   worktreeDeletedExternally,
+  worktreeOnlyUsedBy,
   worktreeSessionIds,
   type Worktree,
 } from "./worktrees";
@@ -171,6 +172,35 @@ describe("working-copy context", () => {
       "opened-as-project",
       "saved",
     ]);
+  });
+});
+
+describe("worktree left unused by a removed session", () => {
+  const own = { ...newSession("codex", "/repo"), worktreeCwd: tree.path };
+
+  it("offers a branch worktree only its own session uses", () => {
+    expect(worktreeOnlyUsedBy(tree, own.id, [own])).toBe(true);
+    expect(
+      worktreeOnlyUsedBy({ ...tree, sessionIds: [own.id] }, own.id, []),
+    ).toBe(true);
+  });
+
+  it("keeps worktrees that other sessions, including archived ones, use", () => {
+    const other = { ...newSession("codex", "/repo"), worktreeCwd: tree.path };
+    expect(worktreeOnlyUsedBy(tree, own.id, [own, other])).toBe(false);
+    expect(
+      worktreeOnlyUsedBy({ ...tree, sessionIds: ["archived"] }, own.id, [own]),
+    ).toBe(false);
+  });
+
+  it("never offers missing, main, locked, or detached worktrees", () => {
+    for (const candidate of [
+      undefined,
+      { ...tree, isMain: true },
+      { ...tree, locked: true },
+      { ...tree, branch: null },
+    ])
+      expect(worktreeOnlyUsedBy(candidate, own.id, [own])).toBe(false);
   });
 });
 
