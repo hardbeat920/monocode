@@ -243,6 +243,7 @@ pub fn show_hidden_or_open_new(app: &AppHandle) -> Result<(), String> {
     }
     for window in &windows {
         let _ = window.unminimize();
+        bring_on_screen(window);
         let _ = window.show();
     }
     windows
@@ -250,6 +251,94 @@ pub fn show_hidden_or_open_new(app: &AppHandle) -> Result<(), String> {
         .ok_or_else(|| "missing window".to_string())?
         .set_focus()
         .map_err(|err| err.to_string())
+}
+
+/// A hidden or minimized window keeps the coordinates of a display that may
+/// since have been unplugged, and showing it there leaves nothing to click.
+/// Runs after `unminimize`, since a minimized window reports a parked position.
+fn bring_on_screen(window: &WebviewWindow) {
+    if window.is_maximized().unwrap_or(false) || window.is_fullscreen().unwrap_or(false) {
+        return;
+    }
+    let (Ok(position), Ok(size)) = (window.outer_position(), window.outer_size()) else {
+        return;
+    };
+    let monitors = window.available_monitors().unwrap_or_default();
+    let Some(primary) = window
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| monitors.first().cloned())
+    else {
+        return;
+    };
+    let work_area = |monitor: &tauri::Monitor| {
+        let area = monitor.work_area();
+        ScreenRect {
+            x: area.position.x,
+            y: area.position.y,
+            width: area.size.width,
+            height: area.size.height,
+        }
+    };
+    let current = ScreenRect {
+        x: position.x,
+        y: position.y,
+        width: size.width,
+        height: size.height,
+    };
+    let areas: Vec<ScreenRect> = monitors.iter().map(work_area).collect();
+    let Some(target) = reachable_placement(current, &areas, work_area(&primary)) else {
+        return;
+    };
+    if (target.width, target.height) != (size.width, size.height) {
+        let _ = window.set_size(tauri::PhysicalSize::new(target.width, target.height));
+    }
+    let _ = window.set_position(tauri::PhysicalPosition::new(target.x, target.y));
+}
+
+/// A window or display work area in physical pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ScreenRect {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+}
+
+/// Where to put a window whose title bar no display can show, or `None` when
+/// the user can already reach it.
+fn reachable_placement(
+    window: ScreenRect,
+    work_areas: &[ScreenRect],
+    primary: ScreenRect,
+) -> Option<ScreenRect> {
+    if work_areas
+        .iter()
+        .any(|area| title_bar_visible(window, *area))
+    {
+        return None;
+    }
+    let width = window.width.min(primary.width);
+    let height = window.height.min(primary.height);
+    Some(ScreenRect {
+        x: primary.x + (primary.width - width) as i32 / 2,
+        y: primary.y + (primary.height - height) as i32 / 2,
+        width,
+        height,
+    })
+}
+
+/// Enough of the top strip of the window on one display to grab and drag it.
+fn title_bar_visible(window: ScreenRect, area: ScreenRect) -> bool {
+    const STRIP_HEIGHT: i32 = 32;
+    const MIN_WIDTH: i32 = 100;
+    const MIN_HEIGHT: i32 = 24;
+    let left = window.x.max(area.x);
+    let right = (window.x + window.width as i32).min(area.x + area.width as i32);
+    let top = window.y.max(area.y);
+    let bottom = (window.y + STRIP_HEIGHT).min(area.y + area.height as i32);
+    right - left >= MIN_WIDTH && bottom - top >= MIN_HEIGHT
 }
 
 /// window-state can restore a window as hidden after a quit-while-hidden.
@@ -659,6 +748,64 @@ mod tests {
         configure_session_window(&mut config, true);
         assert!(config.visible);
         assert!(config.focus);
+    }
+
+    fn rect(x: i32, y: i32, width: u32, height: u32) -> ScreenRect {
+        ScreenRect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    const PRIMARY: ScreenRect = ScreenRect {
+        x: 0,
+        y: 0,
+        width: 1920,
+        height: 1040,
+    };
+
+    #[test]
+    fn a_window_left_on_a_disconnected_display_is_centered_on_the_primary_one() {
+        let window = rect(-20000, -20000, 1280, 800);
+        assert_eq!(
+            reachable_placement(window, &[PRIMARY], PRIMARY),
+            Some(rect(320, 120, 1280, 800))
+        );
+    }
+
+    #[test]
+    fn a_window_larger_than_the_primary_display_shrinks_to_its_work_area() {
+        let window = rect(-20000, -20000, 2560, 1400);
+        assert_eq!(
+            reachable_placement(window, &[PRIMARY], PRIMARY),
+            Some(PRIMARY)
+        );
+    }
+
+    #[test]
+    fn a_window_on_any_connected_display_stays_where_it_is() {
+        let secondary = rect(1920, -200, 2560, 1400);
+        let displays = [PRIMARY, secondary];
+        // Windows puts a snapped or maximized frame 8 px past the work area.
+        assert_eq!(
+            reachable_placement(rect(-8, -8, 1936, 1056), &displays, PRIMARY),
+            None
+        );
+        assert_eq!(
+            reachable_placement(rect(2400, 100, 1280, 800), &displays, PRIMARY),
+            None
+        );
+    }
+
+    #[test]
+    fn a_window_showing_only_a_corner_is_moved_back() {
+        let window = rect(1880, 1000, 1280, 800);
+        assert_eq!(
+            reachable_placement(window, &[PRIMARY], PRIMARY),
+            Some(rect(320, 120, 1280, 800))
+        );
     }
 
     fn polling(labels: &[&str]) -> Option<QuitRun> {
