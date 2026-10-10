@@ -63,8 +63,9 @@ export function UsageFooter({
   terminalOpen = false,
   onToggleTerminal,
   onNewTerminal,
-  onShowTerminal,
+  onToggleProjectTerminal,
   projectTerminalActive = false,
+  projectTerminalOpen = false,
   onSelectAccount,
   onManageAccounts,
 }: {
@@ -75,8 +76,9 @@ export function UsageFooter({
   terminalOpen?: boolean;
   onToggleTerminal?: (fileId: string) => void;
   onNewTerminal?: () => void;
-  onShowTerminal?: () => void;
+  onToggleProjectTerminal?: () => void;
   projectTerminalActive?: boolean;
+  projectTerminalOpen?: boolean;
   onSelectAccount?: (
     provider: ProviderAccountProvider,
     accountId: string,
@@ -303,13 +305,15 @@ export function UsageFooter({
   const showOpencodeChip = wantOpencode && opencode.status !== "unavailable";
   const showUsage = wantClaude || wantCodex || showOpencodeChip || wantDevin;
   const showTerminals = terminals.length > 0;
-  const showTerminalButton = Boolean(onNewTerminal || onShowTerminal);
+  const showTerminalButton = Boolean(
+    onNewTerminal || onToggleProjectTerminal,
+  );
   const terminalLabel = projectTerminalActive
     ? "Terminal"
     : `New Terminal (${MOD}\`)`;
   const onTerminalClick = projectTerminalActive
-    ? (onShowTerminal ?? onNewTerminal)
-    : (onNewTerminal ?? onShowTerminal);
+    ? (onToggleProjectTerminal ?? onNewTerminal)
+    : (onNewTerminal ?? onToggleProjectTerminal);
   const ariaLabel = showUsage || session?.harness === "pi"
     ? "Provider usage"
     : showTerminals || showTerminalButton
@@ -401,12 +405,12 @@ export function UsageFooter({
             <button
               type="button"
               className={`inline-flex h-5 shrink-0 items-center gap-1.5 whitespace-nowrap rounded px-1.5 hover:bg-content/10 ${
-                projectTerminalActive
+                projectTerminalOpen
                   ? "text-accent"
                   : "text-content/40 hover:text-content"
               }`}
               aria-label={terminalLabel}
-              aria-pressed={projectTerminalActive}
+              aria-pressed={projectTerminalOpen}
               title={terminalLabel}
               onClick={onTerminalClick}
             >

@@ -2979,29 +2979,6 @@ function Workspace({
     onOpenTerminal(terminalCwd);
   }, [terminalCwd, onOpenTerminal]);
 
-  const onShowProjectTerminal = useCallback(() => {
-    leaveCoveringMono();
-    const dock = findProjectTerminal(projectTerminalsRef.current, projectCwd);
-    if (dock && dock.pane.files.length > 0) {
-      if (!dock.open) {
-        setProjectTerminals((prev) =>
-          mapProjectTerminal(prev, projectCwd, (entry) =>
-            withDockOpen(entry, true),
-          ),
-        );
-      }
-      focusProjectTerminal();
-      return;
-    }
-    onOpenTerminal(terminalCwd);
-  }, [
-    terminalCwd,
-    focusProjectTerminal,
-    leaveCoveringMono,
-    onOpenTerminal,
-    projectCwd,
-  ]);
-
   const onNewTerminalInSession = useCallback(
     (sessionId: string) => {
       const session = sessionsRef.current.find(
@@ -13114,15 +13091,18 @@ function Workspace({
                       ? onNewTerminal
                       : undefined
                   }
-                  onShowTerminal={
+                  onToggleProjectTerminal={
                     !monoCovers && isLocalProject(projectCwd)
-                      ? onShowProjectTerminal
+                      ? onToggleProjectTerminal
                       : undefined
                   }
                   projectTerminalActive={
                     !monoCovers &&
                     !!currentProjectDock &&
                     currentProjectDock.pane.files.length > 0
+                  }
+                  projectTerminalOpen={
+                    !monoCovers && !!currentProjectDock?.open
                   }
                 />
               )}
