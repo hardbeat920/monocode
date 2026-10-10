@@ -403,12 +403,26 @@ export type RuntimeMode =
   "supervised" | "auto-accept-edits" | "auto" | "full-access";
 
 /** One GitHub issue or pull request associated with a coding session. */
-export type LinkedWorkItem = {
+export type GithubLinkedWorkItem = {
   kind: "issue" | "pr";
   repo: string;
   number: number;
   url: string;
 };
+
+/** One Linear issue associated with a coding session. `repo` holds the team key. */
+export type LinearLinkedWorkItem = {
+  kind: "linear";
+  /** Linear issue identifier such as `ENG-42`. */
+  identifier: string;
+  /** Linear issue UUID when the link came from an API result. */
+  id?: string;
+  repo: string;
+  number: number;
+  url: string;
+};
+
+export type LinkedWorkItem = GithubLinkedWorkItem | LinearLinkedWorkItem;
 
 export const RUNTIME_MODES: RuntimeMode[] = [
   "supervised",

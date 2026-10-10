@@ -46,6 +46,7 @@ import type {
 } from "../model/session";
 
 import { HARNESSES, RUNTIME_MODES } from "../model/session";
+import { normalizeLinkedWorkItem } from "../model/sessionWorkItem";
 
 import { restoreOrchestrationProposal } from "../../orchestration/model/orchestrationPlan";
 
@@ -303,28 +304,7 @@ function sanitizeQueuedMessages(value: unknown): QueuedMessage[] {
 export function sanitizeLinkedWorkItem(
   value: unknown,
 ): LinkedWorkItem | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const item = value as Partial<LinkedWorkItem>;
-  const kind = item.kind;
-  const repo = typeof item.repo === "string" ? item.repo.trim() : "";
-  const number = item.number;
-  if (
-    (kind !== "issue" && kind !== "pr") ||
-    !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo) ||
-    typeof number !== "number" ||
-    !Number.isSafeInteger(number) ||
-    number <= 0
-  ) {
-    return undefined;
-  }
-  return {
-    kind,
-    repo,
-    number,
-    url: `https://github.com/${repo}/${kind === "pr" ? "pull" : "issues"}/${number}`,
-  };
+  return normalizeLinkedWorkItem(value);
 }
 
 export function sanitizeSessionForPersist(

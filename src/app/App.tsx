@@ -4490,7 +4490,8 @@ function Workspace({
       const session = sessionsRef.current.find(
         (entry) => entry.id === sessionId,
       );
-      if (!session?.linkedWorkItem) return;
+      const linked = session?.linkedWorkItem;
+      if (!linked || linked.kind === "linear") return;
       if (
         session.linkedWorkItemUpdateCard?.updatedAt === update.updatedAt &&
         session.linkedWorkItemUpdateCard.status !== "error"
@@ -4516,9 +4517,9 @@ function Workspace({
 
       void githubWorkItemThread(
         session.cwd,
-        session.linkedWorkItem.repo,
-        session.linkedWorkItem.kind,
-        session.linkedWorkItem.number,
+        linked.repo,
+        linked.kind,
+        linked.number,
         { force: true },
       ).then(
         (thread) => {
@@ -5541,8 +5542,13 @@ function Workspace({
       invalidateLoadedSession(sessionId);
       loadedSessionCache.current.delete(sessionId);
 
+      // The update card describes the previous link; a pending activity fetch
+      // for it must not write a card for the new one.
+      linkedWorkItemActivityFetches.current.delete(sessionId);
       const nextSessions = sessionsRef.current.map((session) =>
-        session.id === sessionId ? { ...session, linkedWorkItem } : session,
+        session.id === sessionId
+          ? { ...session, linkedWorkItem, linkedWorkItemUpdateCard: undefined }
+          : session,
       );
       sessionsRef.current = nextSessions;
       setSessions(nextSessions);

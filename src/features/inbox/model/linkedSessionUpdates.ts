@@ -1,10 +1,13 @@
-import type { LinkedWorkItem } from "../../sessions/model/session";
+import type {
+  GithubLinkedWorkItem,
+  LinkedWorkItem,
+} from "../../sessions/model/session";
 import type { GithubWorkItem } from "./githubTasks";
 import type { SessionSummary } from "../../sessions/data/sessionStore";
 
 export type LinkedWorkItemTarget = {
   key: string;
-  item: LinkedWorkItem;
+  item: GithubLinkedWorkItem;
 };
 
 export type LinkedSessionUpdate = {
@@ -21,14 +24,16 @@ export function linkedWorkItemUpdateKey(
   return `${item.repo.trim().toLowerCase()}:${item.kind}:${item.number}`;
 }
 
+/** GitHub items to poll for updates. Linear links are opened on demand only. */
 export function linkedWorkItemTargets(
   sessions: readonly SessionSummary[],
 ): LinkedWorkItemTarget[] {
-  const targets = new Map<string, LinkedWorkItem>();
+  const targets = new Map<string, GithubLinkedWorkItem>();
   for (const session of sessions) {
-    if (!session.linkedWorkItem || session.archived) continue;
-    const key = linkedWorkItemUpdateKey(session.linkedWorkItem);
-    if (!targets.has(key)) targets.set(key, session.linkedWorkItem);
+    const linked = session.linkedWorkItem;
+    if (!linked || linked.kind === "linear" || session.archived) continue;
+    const key = linkedWorkItemUpdateKey(linked);
+    if (!targets.has(key)) targets.set(key, linked);
   }
   return [...targets].map(([key, item]) => ({ key, item }));
 }
@@ -42,7 +47,7 @@ export function linkedSessionUpdates(
   const updates = new Map<string, LinkedSessionUpdate>();
   for (const session of sessions) {
     const linked = session.linkedWorkItem;
-    if (!linked || session.archived) continue;
+    if (!linked || linked.kind === "linear" || session.archived) continue;
     const item = workItems.get(linkedWorkItemUpdateKey(linked));
     if (!item) continue;
     const remoteUpdatedAt = Date.parse(item.updatedAt);

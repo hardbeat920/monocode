@@ -1279,6 +1279,31 @@ describe("sidebar linked work item updates", () => {
     expect(props.onSelectSession).not.toHaveBeenCalled();
   });
 
+  it("shows a Linear identifier instead of a GitHub number", () => {
+    props.busySessionIds = new Set();
+    props.onOpenInboxItem = vi.fn();
+    const linkedWorkItem = {
+      kind: "linear" as const,
+      identifier: "SW-29",
+      repo: "SW",
+      number: 29,
+      url: "https://linear.app/acme/issue/SW-29",
+    };
+    props.sessions = [{ ...props.sessions[0], linkedWorkItem }];
+    act(() => render());
+
+    const issue = card().querySelector<HTMLButtonElement>(
+      '[aria-label="Open SW-29"]',
+    )!;
+    expect(issue.textContent).toContain("SW-29");
+    expect(issue.title).toContain("-click for Linear");
+    act(() => issue.click());
+    expect(props.onOpenInboxItem).toHaveBeenCalledExactlyOnceWith(
+      linkedWorkItem,
+      "session-1",
+    );
+  });
+
   it("uses the footer for the linked issue or PR instead of a second harness icon", () => {
     props.busySessionIds = new Set();
     props.onArchiveSession = vi.fn();
@@ -1352,11 +1377,11 @@ describe("sidebar session GitHub links", () => {
     );
     const link = Array.from(
       document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
-    ).find((item) => item.textContent === "Link GitHub issue or PR…")!;
+    ).find((item) => item.textContent === "Link issue or PR…")!;
     expect(link).toBeDefined();
     act(() => link.click());
     return document.querySelector<HTMLInputElement>(
-      'input[aria-label="GitHub issue or pull request URL"]',
+      'input[aria-label="GitHub or Linear issue URL"]',
     )!;
   }
 
@@ -1394,8 +1419,27 @@ describe("sidebar session GitHub links", () => {
 
     expect(props.onSetSessionLinkedWorkItem).not.toHaveBeenCalled();
     expect(document.querySelector('[role="alert"]')?.textContent).toContain(
-      "valid GitHub issue or pull request URL",
+      "GitHub issue or pull request URL, or a Linear issue URL",
     );
+  });
+
+  it("links a Linear issue from its URL", () => {
+    props.onSetSessionLinkedWorkItem = vi.fn();
+    act(() => render());
+    const input = openLinkDialog();
+    typeTitle(input, "https://linear.app/acme/issue/SW-29/fix-the-thing");
+    const submit = Array.from(document.querySelectorAll("button")).find(
+      (button) => button.textContent === "Link",
+    )!;
+    act(() => submit.click());
+
+    expect(props.onSetSessionLinkedWorkItem).toHaveBeenCalledWith("session-1", {
+      kind: "linear",
+      identifier: "SW-29",
+      repo: "SW",
+      number: 29,
+      url: "https://linear.app/acme/issue/SW-29",
+    });
   });
 
   it("edits or removes an existing link", () => {
@@ -1417,12 +1461,12 @@ describe("sidebar session GitHub links", () => {
     );
     const edit = Array.from(
       document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
-    ).find((item) => item.textContent === "Edit GitHub issue or PR link…")!;
+    ).find((item) => item.textContent === "Edit linked issue or PR…")!;
     act(() => edit.click());
 
     expect(
       document.querySelector<HTMLInputElement>(
-        'input[aria-label="GitHub issue or pull request URL"]',
+        'input[aria-label="GitHub or Linear issue URL"]',
       )?.value,
     ).toBe("https://github.com/acme/widgets/pull/42");
     const remove = Array.from(document.querySelectorAll("button")).find(
