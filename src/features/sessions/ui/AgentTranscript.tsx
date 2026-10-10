@@ -2307,6 +2307,9 @@ const TranscriptBlock = memo(function TranscriptBlock({
 
   if (!block.text && block.streaming) return null;
 
+  const monoChatProse =
+    bubbleTail && layout === "chat" && isProseBlock(block);
+
   return (
     <div
       data-selectable-agent-response={block.streaming ? undefined : block.id}
@@ -2314,13 +2317,26 @@ const TranscriptBlock = memo(function TranscriptBlock({
       data-chat-message-role="assistant"
       className={`min-w-0 pb-1 text-content ${embedded ? "" : "px-4"} ${underLine ? "pt-1" : "pt-3"}`}
     >
-      <AgentMarkdown
-        text={block.text}
-        streaming={block.streaming}
-        revealOnMount={revealOnMount}
-        cwd={cwd}
-        onOpenFile={onOpenFile}
-      />
+      {monoChatProse ? (
+        <div className="agent-chat-bubble agent-chat-bubble-tail-left box-border w-fit min-w-0 max-w-[min(100%,36rem)] rounded-xl border border-content/10 bg-content/5 px-3 py-2 [--agent-bubble-radius:0.75rem]">
+          <AgentMarkdown
+            className="agent-chat-bubble-md break-words [overflow-wrap:anywhere] [&_pre]:[overflow-wrap:normal] [&_table]:[overflow-wrap:normal] [&_[data-streamdown=table-wrapper]]:[overflow-wrap:normal]"
+            text={block.text}
+            streaming={block.streaming}
+            revealOnMount={revealOnMount}
+            cwd={cwd}
+            onOpenFile={onOpenFile}
+          />
+        </div>
+      ) : (
+        <AgentMarkdown
+          text={block.text}
+          streaming={block.streaming}
+          revealOnMount={revealOnMount}
+          cwd={cwd}
+          onOpenFile={onOpenFile}
+        />
+      )}
     </div>
   );
 });

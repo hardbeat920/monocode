@@ -62,6 +62,7 @@ import {
   type AgentFilePath,
   type MonoFiles,
 } from "../../monos/model/monoFiles";
+import { wrapDelegatedWorkerPrompt } from "../../monos/model/monoSessionCompletion";
 import {
   addMemoryEntry,
   archiveMemoryEntries,
@@ -1002,6 +1003,9 @@ export async function handleAgentApp(
       const id = requiredString(input.sessionId, "sessionId", 256);
       const prompt = agentPrompt(input.prompt);
       const notifyMonoId = completionRecipient(source, input, host);
+      const workerPrompt = notifyMonoId
+        ? wrapDelegatedWorkerPrompt(prompt)
+        : prompt;
       if (id === source.id)
         throw new Error(
           "Use the current conversation to continue this session",
@@ -1011,7 +1015,7 @@ export async function handleAgentApp(
       await projectSession(source, id, input, host);
       const result = await host.send(
         id,
-        prompt,
+        workerPrompt,
         `app-${source.id}-${requestId}`,
         ...(notifyMonoId ? [notifyMonoId] : []),
       );
@@ -1070,6 +1074,7 @@ export async function handleAgentApp(
         );
       const launch = startLaunch(source, input, host);
       const notifyMonoId = completionRecipient(source, input, host, true);
+      if (notifyMonoId) launch.prompt = wrapDelegatedWorkerPrompt(launch.prompt);
       if (input.worktreeCwd !== undefined) {
         const chosen = (await host.worktrees(launch.cwd)).worktrees.find(
           (tree) =>

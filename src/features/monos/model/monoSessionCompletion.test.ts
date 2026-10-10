@@ -18,6 +18,8 @@ import {
   monoSessionCompletionMessage,
   monoSessionCompletionResult,
   MonoSessionCompletionBatches,
+  parseWorkerHandback,
+  wrapDelegatedWorkerPrompt,
 } from "./monoSessionCompletion";
 
 const options = {
@@ -58,6 +60,111 @@ function groupedMessage() {
 }
 
 describe("Mono session completion notifications", () => {
+  it("removes only the appended handoff envelope and preserves marker-like user text", () => {
+    const marker = "monocode_delegated_worker_handoff_v1";
+    const originalPrompt =
+      `Keep this literal marker: <${marker}>user supplied</${marker}>`;
+    const finalText = [
+      "Handoff status: partial",
+      "## Summary",
+      "Implemented the parser.",
+      "## Changes or artifacts",
+      "monoSessionCompletion.ts",
+      "## Checks actually run",
+      "Focused tests passed.",
+      "## Open items or required input",
+      "None.",
+    ].join("\n");
+    const result = monoSessionCompletionResult({
+      ...options,
+      prompt: wrapDelegatedWorkerPrompt(originalPrompt),
+      outcome: { status: "failed", text: finalText },
+    });
+
+    expect(result.originalPrompt).toBe(originalPrompt);
+    expect(
+      monoSessionCompletionResult({ ...options, prompt: originalPrompt })
+        .originalPrompt,
+    ).toBe(originalPrompt);
+    expect(result.result).toBe(finalText);
+    expect(result.status).toBe("failed");
+    expect(result.disposition).toBe("partial");
+    expect(result.dispositionSource).toBe("valid_final_status_line");
+    expect(result.handback).toEqual({
+      disposition: "partial",
+      summary: "Implemented the parser.",
+      changesOrArtifacts: "monoSessionCompletion.ts",
+      checksActuallyRun: "Focused tests passed.",
+      unresolvedOrNeeded: "None.",
+    });
+  });
+
+  it.each([
+    ["Handoff status: completed", "completed"],
+    ["Handoff status: partial", "partial"],
+    ["Handoff status: blocked", "blocked"],
+    ["Handoff status: needs user input", "needs_user_input"],
+  ] as const)("parses the exact first-line disposition %s", (text, disposition) => {
+    const parsed = parseWorkerHandback(
+      `${text}\n## Summary\nWork report`,
+      "cancelled",
+    );
+    expect(parsed.disposition).toBe(disposition);
+    expect(parsed.source).toBe("valid_final_status_line");
+    expect(parsed.runtimeStatus).toBe("cancelled");
+    expect(parsed.finalAssistantText).toContain(text);
+  });
+
+  it.each([
+    "",
+    "Work completed\nHandoff status: completed",
+    "Handoff status: COMPLETE",
+    "Handoff status: completed with caveats",
+    "**Handoff status: completed**",
+  ])("keeps a missing or malformed first-line disposition unreported: %s", (text) => {
+    const parsed = parseWorkerHandback(text, "failed");
+    expect(parsed.disposition).toBe("unreported");
+    expect(parsed.source).toBe("missing_or_malformed");
+    expect(parsed.runtimeStatus).toBe("failed");
+  });
+
+  it("bounds structured handback fields alongside the final response", () => {
+    const finalText = [
+      "Handoff status: completed",
+      "## Summary",
+      "s".repeat(15_000),
+      "## Changes or artifacts",
+      "c".repeat(15_000),
+      "## Checks actually run",
+      "t".repeat(15_000),
+      "## Open items or required input",
+      "None.",
+    ].join("\n");
+    const message = monoSessionCompletionMessage({
+      ...options,
+      outcome: { status: "completed", text: finalText },
+    });
+    const payload = JSON.parse(
+      message.text.slice(message.text.indexOf("\n\n") + 2),
+    );
+    const handback = payload.handback as {
+      summary: string;
+      changesOrArtifacts: string;
+      checksActuallyRun: string;
+      unresolvedOrNeeded: string;
+    };
+
+    expect(payload.truncated).toBe(true);
+    expect(payload.result).toHaveLength(12_000);
+    expect(
+      handback.summary.length +
+        handback.changesOrArtifacts.length +
+        handback.checksActuallyRun.length +
+        handback.unresolvedOrNeeded.length,
+    ).toBeLessThanOrEqual(12_000);
+    expect(message.text.length).toBeLessThan(30_000);
+  });
+
   it("accepts immediately, then queues completion behind chat without steering a busy Mono", async () => {
     let mono: Session = {
       ...newSession("codex", "/code/project"),

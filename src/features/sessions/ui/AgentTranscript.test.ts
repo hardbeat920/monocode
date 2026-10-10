@@ -14,6 +14,14 @@ function tool(id: string, approval?: Block["approval"]): Block {
   };
 }
 
+const transcriptLayout = vi.hoisted(() => ({
+  value: "chat" as "chat" | "full",
+}));
+
+vi.mock("../hooks/useTranscriptLayout", () => ({
+  useTranscriptLayout: () => transcriptLayout.value,
+}));
+
 function render(
   blocks: Block[],
   busy = false,
@@ -23,6 +31,112 @@ function render(
     createElement(AgentTranscript, { blocks, busy, latestTurnAccessory }),
   );
 }
+
+function renderMono(blocks: Block[], layout: "chat" | "full" = "chat") {
+  transcriptLayout.value = layout;
+  try {
+    return renderToStaticMarkup(
+      createElement(AgentTranscript, {
+        blocks,
+        agentName: "Mono",
+        agentMascot: { mascot: "ghost", color: "#a78bfa" },
+      }),
+    );
+  } finally {
+    transcriptLayout.value = "chat";
+  }
+}
+
+describe("Mono assistant response bubbles", () => {
+  it("surfaces Mono assistant prose as a fluid incoming chat bubble", () => {
+    const markup = renderMono([
+      {
+        id: "reply",
+        role: "assistant",
+        text: "A **soft** reply with `inline code`\n\n```ts\nconst answer = 42;\n```",
+      },
+    ]);
+
+    expect(markup).toContain('data-chat-message-role="assistant"');
+    expect(markup).toContain(
+      "agent-chat-bubble agent-chat-bubble-tail-left",
+    );
+    expect(markup).toContain("max-w-[min(100%,36rem)]");
+    expect(markup).toContain("agent-chat-bubble-md");
+    expect(markup).toContain('data-streamdown="strong"');
+    expect(markup).toContain('data-streamdown="code-block"');
+    expect(markup).toContain("const answer = 42;");
+  });
+
+  it("wraps unbroken prose tokens inside the bubble while preserving code and table wrapping", () => {
+    const unbrokenToken = "a".repeat(1813);
+    const tableAndCode = [
+      unbrokenToken,
+      "",
+      "| Name | Status |",
+      "| :--- | :--- |",
+      "| Mono | active |",
+      "",
+      "```ts",
+      "const unbrokenTokenCode = 'unbroken';",
+      "```",
+    ].join("\n");
+
+    const markup = renderMono([
+      {
+        id: "reply",
+        role: "assistant",
+        text: tableAndCode,
+      },
+    ]);
+
+    expect(markup).toContain('data-chat-message-role="assistant"');
+    expect(markup).toContain("agent-chat-bubble agent-chat-bubble-tail-left");
+    expect(markup).toContain("agent-chat-bubble-md");
+    expect(markup).toContain("break-words");
+    expect(markup).toContain("[overflow-wrap:anywhere]");
+    expect(markup).toMatch(/\[&(?:amp;)?_pre\]:\[overflow-wrap:normal\]/);
+    expect(markup).toMatch(/\[&(?:amp;)?_table\]:\[overflow-wrap:normal\]/);
+    expect(markup).toContain(unbrokenToken);
+    expect(markup).toContain('data-streamdown="table-wrapper"');
+    expect(markup).toContain('data-streamdown="code-block"');
+  });
+
+  it("leaves ordinary session assistant prose unboxed", () => {
+    const markup = render([
+      { id: "reply", role: "assistant", text: "An ordinary answer." },
+    ]);
+
+    expect(markup).toContain("An ordinary answer.");
+    expect(markup).not.toContain("agent-chat-bubble-tail-left");
+    expect(markup).not.toContain("agent-chat-bubble-md");
+  });
+
+  it("leaves Mono prose unboxed in document layout", () => {
+    const markup = renderMono(
+      [{ id: "reply", role: "assistant", text: "A document answer." }],
+      "full",
+    );
+
+    expect(markup).toContain("A document answer.");
+    expect(markup).not.toContain("agent-chat-bubble-tail-left");
+  });
+
+  it("keeps tool rows outside the Mono prose bubble", () => {
+    const markup = renderMono([
+      { id: "reply", role: "assistant", text: "The result is ready." },
+      {
+        id: "tool",
+        role: "tool",
+        text: "Inspect the changed files",
+        tool: { kind: "shell", status: "completed" },
+      },
+    ]);
+
+    expect(markup.match(/agent-chat-bubble-tail-left/g)).toHaveLength(1);
+    expect(markup).toContain("Inspect the changed files");
+  });
+});
 
 describe("AgentTranscript collapsed work", () => {
   it("keeps the completed time beside actions when a turn has no BTW control", () => {
