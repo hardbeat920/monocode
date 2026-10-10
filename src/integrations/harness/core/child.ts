@@ -339,6 +339,7 @@ export async function spawnChild(
   account?: { provider: "claude" | "codex"; id: string },
   binaryProvider?: ConfigurableBinaryProvider,
   codexStore?: "mono",
+  env?: Record<string, string>,
   /** `devin acp` only: start with an approval rule for every edit. */
   devinAskEdits?: boolean,
 ): Promise<void> {
@@ -356,6 +357,7 @@ export async function spawnChild(
     account,
     binaryProvider,
     binaryPath,
+    env,
     ...(codexStore ? { codexStore } : {}),
     ...(devinAskEdits ? { devinAskEdits } : {}),
   });

@@ -412,6 +412,8 @@ describe("settings pages", () => {
         return { path: payload?.binaryPath ?? "/auto/opencode" };
       }
       if (command === "harness_exec") {
+        if (payload?.binaryPath === "/v2/opencode") return "opencode 2.0.20";
+        if (payload?.binaryPath === "/unsupported/opencode") return "opencode 3.0.0";
         if (payload?.binaryPath === "/bad/codex") {
           throw new Error("Codex failed to start");
         }
@@ -530,6 +532,21 @@ describe("settings pages", () => {
     await act(async () => details.click());
     expect(document.body.textContent).toContain("/auto/codex");
     expect(document.body.textContent).toContain("Auto-detected");
+    await act(async () => details.click());
+    await save("OpenCode", "/v2/opencode");
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    expect(
+      JSON.parse(localStorage.getItem("monocode.providerBinaryPaths.v1") ?? "{}")
+        .opencode,
+    ).toBe("/v2/opencode");
+    await save("OpenCode", "/unsupported/opencode");
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+      "not supported",
+    );
+    expect(
+      JSON.parse(localStorage.getItem("monocode.providerBinaryPaths.v1") ?? "{}")
+        .opencode,
+    ).toBe("/v2/opencode");
   });
 
   it("offers manual auto-detect retry when a CLI is missing", async () => {

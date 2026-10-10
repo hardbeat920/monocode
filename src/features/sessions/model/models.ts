@@ -253,6 +253,10 @@ const HARNESS_ORDER: HarnessId[] = [
 const EMPTY_MODELS: AgentModel[] = [];
 
 let overlays: Partial<Record<HarnessId, AgentModel[]>> = {};
+const projectOverlays = new Map<
+  string,
+  Partial<Record<HarnessId, AgentModel[]>>
+>();
 let overlayDefaults: Partial<Record<HarnessId, string>> = {};
 let catalogVersion = 0;
 const listeners = new Set<() => void>();
@@ -276,6 +280,22 @@ export function getModelSnapshot(): number {
   return catalogVersion;
 }
 
+export function projectHarnessModels(
+  harness: HarnessId,
+  cwd: string,
+): AgentModel[] | undefined {
+  return projectOverlays.get(cwd)?.[harness];
+}
+
+export function setProjectHarnessModels(
+  harness: HarnessId,
+  cwd: string,
+  models: AgentModel[],
+): void {
+  projectOverlays.set(cwd, { ...projectOverlays.get(cwd), [harness]: models });
+  emit();
+}
+
 export function setHarnessModels(harness: HarnessId, models: AgentModel[]) {
   if (models.length === 0) return;
   overlays = { ...overlays, [harness]: models };
@@ -294,6 +314,7 @@ export function hasLiveCatalog(harness: HarnessId): boolean {
 /** Test seam. */
 export function resetHarnessModelOverlays() {
   overlays = {};
+  projectOverlays.clear();
   overlayDefaults = {};
   emit();
 }
@@ -356,10 +377,17 @@ function lookupModel(id: string): AgentModel | undefined {
   return findModel(id) ?? bundledById.get(id);
 }
 
-export function resolveModel(harness: HarnessId, id?: string): AgentModel {
-  const available = modelsFor(harness);
+export function resolveModel(
+  harness: HarnessId,
+  id?: string,
+  cwd?: string,
+): AgentModel {
+  const scoped = cwd ? projectHarnessModels(harness, cwd) : undefined;
+  const available = scoped ?? modelsFor(harness);
   if (id) {
-    const exact = findModel(id);
+    const exact = scoped
+      ? available.find((model) => model.id === id)
+      : findModel(id);
     if (exact && exact.harness === harness) return exact;
     const slug = nativeIdFrom(id);
     const byNative = available.find(
@@ -447,12 +475,33 @@ export function resolveModel(harness: HarnessId, id?: string): AgentModel {
     };
   }
   const fallbackId = defaultModelId(harness);
-  return (fallbackId ? findModel(fallbackId) : undefined) ?? available[0];
+  return (
+    (fallbackId
+      ? available.find((model) => model.id === fallbackId)
+      : undefined) ?? available[0]
+  );
 }
 
 /** Catalog-reported context window for a model id, when known. */
-export function modelContextWindow(id: string): number | undefined {
-  const window = findModel(id)?.contextWindow;
+export function modelContextWindow(
+  id: string,
+  cwd?: string,
+): number | undefined {
+  const global = findModel(id);
+  const harness =
+    global?.harness ??
+    HARNESS_ORDER.find((candidate) => id.startsWith(`${candidate}:`));
+  const scoped =
+    cwd && harness ? projectHarnessModels(harness, cwd) : undefined;
+  const model = scoped
+    ? (scoped.find((candidate) => candidate.id === id) ??
+      scoped.find(
+        (candidate) =>
+          (candidate.nativeId ?? nativeIdFrom(candidate.id)) ===
+          nativeIdFrom(id),
+      ))
+    : global;
+  const window = model?.contextWindow;
   return window && window > 0 ? window : undefined;
 }
 

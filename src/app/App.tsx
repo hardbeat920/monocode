@@ -302,6 +302,8 @@ import {
   type UserQuestionReply,
 } from "../integrations/harness";
 import { supportsHarnessLogin } from "../integrations/harness/core/authSupport";
+import { refreshProjectOpenCodeCatalog } from "../integrations/harness/providers/opencode/opencodeCatalog";
+import { refreshStartupCatalogs } from "./model/startupCatalogs";
 import {
   appendPreparingHandoff,
   buildDeterministicHandoff,
@@ -333,6 +335,7 @@ import {
 } from "../features/sessions/model/btw";
 
 import { isEditTool } from "../integrations/harness/core/preview";
+import { MessageParts } from "../integrations/harness/core/streamText";
 import { sessionEditPaths } from "../features/sessions/model/checkpointEdits";
 import {
   createEditedResendAttempt,
@@ -1770,14 +1773,15 @@ function Workspace({
     void probeHarnessAvailability();
     // Only the harnesses already in this window. Probing every installed CLI
     // at boot left unused agents (especially Pi) running in the background.
-    const harnesses = [
-      ...new Set(sessionsRef.current.map((session) => session.harness)),
-    ];
-    void refreshHarnessCatalogs(harnesses).then(() => {
+    void refreshStartupCatalogs(sessionsRef.current).then(() => {
       setSessions((prev) =>
         prev.map((session) => {
           if (!isLiveHarness(session.harness)) return session;
-          const resolved = resolveModel(session.harness, session.model);
+          const resolved = resolveModel(
+            session.harness,
+            session.model,
+            session.worktreeCwd ?? session.cwd,
+          );
           const modelSettings = mergeModelSettings(
             resolved,
             session.modelSettings,
@@ -1952,17 +1956,18 @@ function Workspace({
   }
   const busySessionIds = busySessionIdsRef.current;
 
-  /** Probe the active session's harness for its live model catalog whenever
-   * the active harness changes. Catalogs load lazily (probing spawns a CLI
-   * process) and the boot refresh runs before restored sessions land, so a
-   * fresh session would otherwise show only the built-in fallback model
-   * until the picker happened to be opened. Idempotent: refreshHarnessCatalogs
-   * dedupes via hasLiveCatalog and its inflight map. */
+  /** Refresh the active session's inventory before its model picker opens.
+   * OpenCode configuration belongs to the session's working directory. */
   const activeHarness = active?.harness;
+  const activeCatalogCwd = active?.worktreeCwd ?? active?.cwd;
   useEffect(() => {
     if (!activeHarness || !isLiveHarness(activeHarness)) return;
-    void refreshHarnessCatalogs([activeHarness]);
-  }, [activeHarness]);
+    if (activeHarness === "opencode" && activeCatalogCwd) {
+      void refreshProjectOpenCodeCatalog(activeCatalogCwd);
+    } else {
+      void refreshHarnessCatalogs([activeHarness]);
+    }
+  }, [activeHarness, activeCatalogCwd]);
 
   const usageProviders = useMemo(() => {
     if (
@@ -6533,7 +6538,11 @@ function Workspace({
       const current = sessionsRef.current.find((s) => s.id === sessionId);
       if (!current) return;
       if (isPreparingHandoff(current)) return;
-      const resolved = resolveModel(harness, model);
+      const resolved = resolveModel(
+        harness,
+        model,
+        current.worktreeCwd ?? current.cwd,
+      );
       saveRecentModelChoice(resolved.harness, resolved.id);
       if (current.modelSettings) {
         saveLastModelSettings(current.modelSettings, "fill");
@@ -7514,6 +7523,7 @@ function Workspace({
         error: "Turn did not complete",
       };
       let controlText = "";
+      const messageParts = new MessageParts();
       let proposalText = "";
       let nativeProposalText = "";
       let completedProposal: OrchestrationProposal | undefined;
@@ -7641,6 +7651,12 @@ function Workspace({
               proposalText = (proposalText + event.text).slice(-200_000);
               return null;
             }
+            if (event.type === "message.part" && !event.reasoning) {
+              proposalText = messageParts
+                .update(event.partId, event.text)
+                .slice(-200_000);
+              return null;
+            }
             if (event.type === "message.completed") {
               proposalText += "\n";
               return null;
@@ -7668,6 +7684,14 @@ function Workspace({
           orchestrator.observe(sessionId, event);
           if (options?.onSettled && event.type === "message.delta")
             controlText = (controlText + event.text).slice(-20_000);
+          if (
+            options?.onSettled &&
+            event.type === "message.part" &&
+            !event.reasoning
+          )
+            controlText = messageParts
+              .update(event.partId, event.text)
+              .slice(-20_000);
           if (options?.onSettled && event.type === "message.completed")
             controlText += "\n";
           if (event.type === "session.error")
@@ -7948,6 +7972,7 @@ function Workspace({
               nativeProposalText || proposalText,
               async (repairPrompt) => {
                 proposalText = "";
+                messageParts.clear();
                 nativeProposalText = "";
                 await sendTurn(repairPrompt, []);
                 if (providerFailureSeen)
@@ -9195,7 +9220,7 @@ function Workspace({
         worktreeCwd: source.worktreeCwd,
         branch: source.branch,
         modelSettings: mergeModelSettings(
-          resolveModel(harness, model),
+          resolveModel(harness, model, source.worktreeCwd ?? source.cwd),
           modelSettings,
         ),
         title: formatSessionTitle(harness, SECOND_OPINION_TITLE),
@@ -9552,7 +9577,11 @@ function Workspace({
         modelSettings ??
         existing?.modelSettings ??
         preferredModelSettings(
-          resolveModel(requestHarness!, selectedModel || source.model),
+          resolveModel(
+            requestHarness!,
+            selectedModel || source.model,
+            source.worktreeCwd ?? source.cwd,
+          ),
           source.modelSettings,
         );
       if (existing?.status === "running") return false;
@@ -9814,7 +9843,7 @@ function Workspace({
         worktreeCwd: source.worktreeCwd,
         branch: source.branch,
         modelSettings: mergeModelSettings(
-          resolveModel(harness, model),
+          resolveModel(harness, model, source.worktreeCwd ?? source.cwd),
           modelSettings,
         ),
         title: formatSessionTitle(

@@ -1,6 +1,8 @@
 import { homeDir } from "../../../../platform/tauri/fs";
 import {
   setHarnessModels,
+  projectHarnessModels,
+  setProjectHarnessModels,
   type AgentModel,
   type ModelSetting,
   type ModelSettingChoice,
@@ -66,6 +68,28 @@ export function refreshOpenCodeCatalog(): Promise<void> {
       inflight = null;
     });
   return inflight;
+}
+
+const projectInflight = new Map<string, Promise<void>>();
+
+export function projectOpenCodeModels(cwd: string): AgentModel[] | undefined {
+  return projectHarnessModels("opencode", cwd);
+}
+
+/** Project lists stay separate from the home catalog and other projects. */
+export function refreshProjectOpenCodeCatalog(cwd: string): Promise<void> {
+  const running = projectInflight.get(cwd);
+  if (running) return running;
+  const refresh = discoverOpenCodeModels(cwd)
+    .then((models) => {
+      setProjectHarnessModels("opencode", cwd, models);
+    })
+    .catch((error: unknown) =>
+      console.debug("[monocode] opencode project catalog", error),
+    )
+    .finally(() => projectInflight.delete(cwd));
+  projectInflight.set(cwd, refresh);
+  return refresh;
 }
 
 export async function discoverOpenCodeModels(

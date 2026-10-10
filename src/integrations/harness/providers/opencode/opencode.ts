@@ -28,6 +28,10 @@ import {
   asRecord,
   assertSupportedOpenCodeVersion,
   buildOpenCodePermissionRules,
+  managedOpenCodeConfig,
+  verifyManagedOpenCodePolicy,
+  OPENCODE_PLAN_READ_ONLY_PERMISSIONS,
+  nextOpenCodeMessageId,
   contextUsedFromMessageInfo,
   turnMetricsFromMessageInfo,
   detailFromToolPart,
@@ -38,13 +42,13 @@ import {
   KNOWN_HIDDEN_AGENTS,
   parseOpenCodeModelSlug,
   parseOpenCodeVersion,
+  parseOpenCodeToolOutputGlob,
   parseServerUrlFromOutput,
   permissionTitle,
   previewFromToolPart,
   sameDirectory,
   sessionErrorMessage,
   stringField,
-  textDeltaEvent,
   toOpenCodePromptParts,
   toOpenCodePermissionReply,
   toolKindFromName,
@@ -91,7 +95,28 @@ type PendingQuestion = {
   resolve: (reply: UserQuestionReply) => void;
 };
 
+type ActivePrompt = {
+  messageIDs: Set<string>;
+  assistantIDs: Set<string>;
+  accepted: boolean;
+  observed: boolean;
+  idleSeen: boolean;
+  checking: Promise<void> | null;
+  pendingError?: {
+    message: string;
+    name?: string;
+    progressAt: number;
+    graceMs: number;
+  };
+  errorTimer?: ReturnType<typeof setTimeout>;
+};
+
 type Live = {
+  threadId: string;
+  activeAgent: string | undefined;
+  prompt: ActivePrompt | null;
+  compacting: boolean;
+  compactionError?: string;
   client: OpenCodeClient;
   openCodeSessionId: string;
   cwd: string;
@@ -117,7 +142,6 @@ type Live = {
   turns: Promise<void>;
   turnDone: (() => void) | null;
   turnFailed: ((error: Error) => void) | null;
-  turnEndPending: boolean;
   activeTurn: boolean;
   inbox: OpenCodeV2InboxTracker;
   /**
@@ -144,6 +168,15 @@ const COMPACTION_TIMEOUT_MS = 30 * 60_000;
 const liveByThread = new Map<string, Live>();
 const resumeByThread = new Map<string, Resume>();
 const cancelledThreads = new Set<string>();
+const openingThreads = new Map<string, number>();
+const lifecycleByThread = new Map<string, Promise<void>>();
+/**
+ * v2 inbox trackers by OpenCode session id. Cancel drops the Live, but the
+ * shared service keeps running, so a stopped run's late terminal event can
+ * reach the next Live. Reusing the tracker keeps that event attributed to
+ * the stopped run.
+ */
+const v2InboxBySession = new Map<string, OpenCodeV2InboxTracker>();
 
 let resolveOpenCodeBinaryImpl: () => Promise<{ path: string }> =
   resolveOpenCodeBinary;
@@ -163,7 +196,10 @@ export async function sendOpenCodeTurn(input: SendTurnInput): Promise<void> {
     cancelledThreads.delete(input.sessionId);
     throw error;
   }
-  if (cancelledThreads.delete(input.sessionId)) return;
+  if (cancelledThreads.delete(input.sessionId)) {
+    await stopOwnedLive(input.sessionId, live);
+    return;
+  }
 
   live.onEvent = input.onEvent;
   live.runtimeMode = input.runtimeMode;
@@ -171,8 +207,7 @@ export async function sendOpenCodeTurn(input: SendTurnInput): Promise<void> {
   live.turns = live.turns
     .catch(() => undefined)
     .then(async () => {
-      live.cancelled = false;
-      live.muteUpdates = false;
+      if (!canRunQueuedOperation(live)) return;
       try {
         await runTurn(live, input);
       } catch (error) {
@@ -193,7 +228,10 @@ export async function compactOpenCodeContext(
     cancelledThreads.delete(input.sessionId);
     throw error;
   }
-  if (cancelledThreads.delete(input.sessionId)) return;
+  if (cancelledThreads.delete(input.sessionId)) {
+    await stopOwnedLive(input.sessionId, live);
+    return;
+  }
 
   const model = parseOpenCodeModelSlug(nativeModelId(input.model));
   if (!model) {
@@ -205,8 +243,7 @@ export async function compactOpenCodeContext(
   live.turns = live.turns
     .catch(() => undefined)
     .then(async () => {
-      live.cancelled = false;
-      live.muteUpdates = false;
+      if (!canRunQueuedOperation(live)) return;
       try {
         await runCompaction(live, model);
       } catch (error) {
@@ -227,17 +264,31 @@ export async function rewindOpenCodeLastTurn(
     cancelledThreads.delete(input.sessionId);
     throw error;
   }
-  if (cancelledThreads.delete(input.sessionId)) return { submitted: false };
+  if (cancelledThreads.delete(input.sessionId)) {
+    await stopOwnedLive(input.sessionId, live);
+    return { submitted: false };
+  }
 
   live.onEvent = input.onEvent;
-  await live.turns;
+  await live.turns.catch(() => undefined);
+  if (!canRunQueuedOperation(live)) return { submitted: false };
   if (live.activeTurn) {
     throw new Error("Stop the current turn before editing the last message");
   }
 
   const messageID = await latestOpenCodeUserMessageId(live);
+  if (!canRunQueuedOperation(live)) return { submitted: false };
   await live.client.revertSession(live.openCodeSessionId, messageID);
   return { submitted: false };
+}
+
+function canRunQueuedOperation(live: Live): boolean {
+  if (live.cancelled) return false;
+  if (liveByThread.get(live.threadId) !== live || live.muteUpdates)
+    throw new Error(
+      "OpenCode session ended before this operation could start. Retry the request.",
+    );
+  return true;
 }
 
 async function latestOpenCodeUserMessageId(live: Live): Promise<string> {
@@ -245,6 +296,18 @@ async function latestOpenCodeUserMessageId(live: Live): Promise<string> {
   const candidates = messages.flatMap((message) => {
     const info = asRecord(message.info);
     if (stringField(info, "role") !== "user") return [];
+    const parts = message.parts ?? [];
+    if (
+      parts.length > 0 &&
+      !parts.some((part) => {
+        const record = asRecord(part);
+        return (
+          record?.synthetic !== true &&
+          ["text", "file"].includes(stringField(record, "type") ?? "")
+        );
+      })
+    )
+      return [];
     const id = stringField(info, "id");
     if (!id) return [];
     const created = asRecord(info?.time)?.created;
@@ -288,14 +351,26 @@ export async function steerOpenCodeTurn(input: SteerTurnInput): Promise<void> {
   const parts = toOpenCodePromptParts(input.text, input.attachments);
   if (parts.length === 0) return;
 
-  await live.client.promptAsync({
-    sessionID: live.openCodeSessionId,
-    model: parsed,
-    agent: input.modelSettings?.agent,
-    variant: input.modelSettings?.variant,
-    parts,
-    delivery: "steer",
-  });
+  // v2 assigns its own message ids, so only v1 prompts are correlated here.
+  const messageID =
+    live.client.generation === "v2" ? undefined : nextOpenCodeMessageId();
+  const prompt = live.prompt;
+  if (messageID) prompt?.messageIDs.add(messageID);
+  if (prompt?.pendingError) prompt.pendingError.progressAt = Date.now();
+  try {
+    await live.client.promptAsync({
+      sessionID: live.openCodeSessionId,
+      model: parsed,
+      agent: live.activeAgent,
+      messageID,
+      variant: input.modelSettings?.variant,
+      parts,
+      delivery: "steer",
+    });
+  } catch (error) {
+    if (messageID) prompt?.messageIDs.delete(messageID);
+    throw error;
+  }
 }
 
 export function respondOpenCodeApproval(
@@ -321,27 +396,64 @@ export function respondOpenCodeQuestion(
 }
 
 export async function cancelOpenCodeTurn(sessionId: string): Promise<void> {
+  if (openingThreads.has(sessionId)) cancelledThreads.add(sessionId);
+  await withLifecycle(sessionId, () => cancelLive(sessionId));
+}
+
+async function cancelLive(sessionId: string): Promise<void> {
   const live = liveByThread.get(sessionId);
   if (!live) {
+    if (resumeByThread.has(sessionId) && !openingThreads.has(sessionId)) return;
     cancelledThreads.add(sessionId);
     return;
   }
   live.cancelled = true;
   live.muteUpdates = true;
-  for (const [, pending] of live.approvals) pending.resolve("deny");
+  liveByThread.delete(sessionId);
+  for (const pending of live.approvals.values()) pending.resolve("deny");
   live.approvals.clear();
-  for (const [, pending] of live.questions)
+  for (const pending of live.questions.values())
     pending.resolve({ kind: "skipped" });
   live.questions.clear();
-  await live.client.abortSession(live.openCodeSessionId);
-  finishActiveTurn(live, [
-    { type: "message.completed" },
-    { type: "reasoning.completed" },
-  ]);
+  let failure: unknown;
+  try {
+    await live.client.abortSession(live.openCodeSessionId);
+  } catch (error) {
+    failure = error;
+    live.onEvent({
+      type: "session.error",
+      message: `Could not confirm OpenCode cancellation: ${error instanceof Error ? error.message : String(error)}`,
+    });
+  } finally {
+    try {
+      await live.client.closeEvents(sessionId);
+    } finally {
+      unwatchChild(sessionId);
+      try {
+        await killChild(sessionId);
+      } finally {
+        finishActiveTurn(live, [
+          { type: "message.completed" },
+          { type: "reasoning.completed" },
+        ]);
+      }
+    }
+  }
+  if (failure) throw failure;
 }
 
 export async function stopOpenCodeSession(sessionId: string): Promise<void> {
   cancelledThreads.delete(sessionId);
+  await withLifecycle(sessionId, () => stopLive(sessionId));
+}
+
+async function stopOwnedLive(sessionId: string, live: Live): Promise<void> {
+  await withLifecycle(sessionId, async () => {
+    if (liveByThread.get(sessionId) === live) await stopLive(sessionId);
+  });
+}
+
+async function stopLive(sessionId: string): Promise<void> {
   const live = liveByThread.get(sessionId);
   liveByThread.delete(sessionId);
   if (live) {
@@ -355,8 +467,10 @@ export async function stopOpenCodeSession(sessionId: string): Promise<void> {
     live.turnDone?.();
     live.turnDone = null;
     live.turnFailed = null;
-    await live.client.abortSession(live.openCodeSessionId);
-    await live.client.closeEvents(sessionId);
+    await live.client
+      .abortSession(live.openCodeSessionId)
+      .catch(() => undefined);
+    await live.client.closeEvents(sessionId).catch(() => undefined);
   } else {
     // A stream or server that ended on its own already dropped `live`, but
     // its SSE handlers still hold it until the stream is closed.
@@ -367,6 +481,8 @@ export async function stopOpenCodeSession(sessionId: string): Promise<void> {
 }
 
 export async function forgetOpenCodeSession(sessionId: string): Promise<void> {
+  const resume = resumeByThread.get(sessionId);
+  if (resume) v2InboxBySession.delete(resume.sessionId);
   resumeByThread.delete(sessionId);
   await stopOpenCodeSession(sessionId);
 }
@@ -382,20 +498,36 @@ export function bindOpenCodeSession(
 }
 
 async function ensureLive(input: HarnessSessionInput): Promise<Live> {
+  openingThreads.set(
+    input.sessionId,
+    (openingThreads.get(input.sessionId) ?? 0) + 1,
+  );
+  try {
+    return await withLifecycle(input.sessionId, () => startLive(input));
+  } finally {
+    const count = (openingThreads.get(input.sessionId) ?? 1) - 1;
+    if (count > 0) openingThreads.set(input.sessionId, count);
+    else openingThreads.delete(input.sessionId);
+  }
+}
+
+async function startLive(input: HarnessSessionInput): Promise<Live> {
   const existing = liveByThread.get(input.sessionId);
-  if (existing && existing.cwd === input.cwd) {
+  const planning = input.intent === "plan";
+  if (
+    existing &&
+    !existing.muteUpdates &&
+    !existing.cancelled &&
+    existing.cwd === input.cwd &&
+    existing.runtimeMode === input.runtimeMode &&
+    existing.planning === planning
+  ) {
     existing.onEvent = input.onEvent;
-    if (existing.runtimeMode !== input.runtimeMode) {
-      await existing.client.updateSession(existing.openCodeSessionId, {
-        permission: buildOpenCodePermissionRules(input.runtimeMode),
-      });
-    }
-    existing.runtimeMode = input.runtimeMode;
     return existing;
   }
   if (existing) {
-    resumeByThread.delete(input.sessionId);
-    await stopOpenCodeSession(input.sessionId);
+    if (existing.cwd !== input.cwd) resumeByThread.delete(input.sessionId);
+    await stopLive(input.sessionId);
   }
 
   const resume = resumeByThread.get(input.sessionId);
@@ -406,6 +538,40 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
 
   const { path } = await resolveOpenCodeBinaryImpl();
   const generation = await assertOpenCodeVersion(path, input.cwd);
+  const restricted = planning || input.runtimeMode !== "full-access";
+  let toolOutputGlob: string | undefined;
+  let policy: Record<string, unknown> | undefined;
+  if (generation === "v1") {
+    const agents = await execChild(
+      path,
+      ["agent", "list"],
+      input.cwd,
+      "opencode",
+    );
+    toolOutputGlob = restricted
+      ? parseOpenCodeToolOutputGlob(
+          await execChild(path, ["debug", "paths"], input.cwd, "opencode"),
+        )
+      : undefined;
+    policy = managedOpenCodeConfig(
+      agents,
+      input.runtimeMode,
+      planning,
+      toolOutputGlob,
+    );
+  } else if (restricted) {
+    // The v2 service is shared, so MonoCode cannot start it with a managed
+    // config. Its sessions still get the tool-output read rule when the CLI
+    // reports a data directory; without one the rules only deny more.
+    toolOutputGlob = await execChild(
+      path,
+      ["debug", "paths"],
+      input.cwd,
+      "opencode",
+    )
+      .then(parseOpenCodeToolOutputGlob)
+      .catch(() => undefined);
+  }
 
   const liveRef: { current: Live | null } = { current: null };
   const service =
@@ -424,8 +590,9 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       },
       (code) => {
         serverExited = code;
-        liveByThread.delete(input.sessionId);
         const live = liveRef.current;
+        if (live && liveByThread.get(input.sessionId) === live)
+          liveByThread.delete(input.sessionId);
         if (!live?.muteUpdates) {
           (live?.onEvent ?? input.onEvent)({ type: "session.ended", code });
         }
@@ -450,6 +617,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       input.cwd,
       undefined,
       "opencode",
+      undefined,
+      { OPENCODE_CONFIG_CONTENT: JSON.stringify(policy) },
     );
   }
 
@@ -468,10 +637,23 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       generation,
       service?.password,
     );
+    if (generation === "v1" && restricted) {
+      const agents = await client.getAgents();
+      const config = await client.getConfig();
+      verifyManagedOpenCodePolicy(
+        agents,
+        config,
+        input.runtimeMode,
+        planning,
+        toolOutputGlob,
+      );
+    }
     const openCodeSession = await resolveSession(client, {
       resume: canResume ? resume : undefined,
       runtimeMode: input.runtimeMode,
+      planning,
       cwd: input.cwd,
+      toolOutputGlob,
     });
     if (canResume) {
       await repairUnsupportedFileTurn(client, openCodeSession.id).catch(
@@ -481,6 +663,10 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     }
 
     const live: Live = {
+      threadId: input.sessionId,
+      activeAgent: undefined,
+      prompt: null,
+      compacting: false,
       client,
       openCodeSessionId: openCodeSession.id,
       cwd: input.cwd,
@@ -504,9 +690,11 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       turns: Promise.resolve(),
       turnDone: null,
       turnFailed: null,
-      turnEndPending: false,
       activeTurn: false,
-      inbox: new OpenCodeV2InboxTracker(),
+      inbox:
+        generation === "v2"
+          ? v2InboxTracker(openCodeSession.id)
+          : new OpenCodeV2InboxTracker(),
       awaitedInbox: null,
     };
     liveRef.current = live;
@@ -539,7 +727,6 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
         // prompt_async has no response body to await; the SSE stream is its
         // only completion channel. Reusing a Live after this point accepts the
         // next prompt but can never observe it, which looks like a dead thread.
-        liveByThread.delete(input.sessionId);
         const failed = live.turnFailed;
         live.turnDone = null;
         live.turnFailed = null;
@@ -549,8 +736,12 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
         for (const pending of live.questions.values())
           pending.resolve({ kind: "skipped" });
         live.questions.clear();
-        unwatchChild(input.sessionId);
-        void killChild(input.sessionId)
+        void withLifecycle(input.sessionId, async () => {
+          if (liveByThread.get(input.sessionId) !== live) return;
+          liveByThread.delete(input.sessionId);
+          unwatchChild(input.sessionId);
+          await killChild(input.sessionId);
+        })
           .catch(() => undefined)
           .then(() => {
             if (failed) {
@@ -569,7 +760,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     live.onEvent({ type: "session.started" });
     return live;
   } catch (error) {
-    await stopOpenCodeSession(input.sessionId);
+    await stopLive(input.sessionId);
     throw error;
   }
 }
@@ -579,23 +770,25 @@ async function resolveSession(
   input: {
     resume?: Resume;
     runtimeMode: RuntimeMode;
+    planning: boolean;
     cwd: string;
+    toolOutputGlob?: string;
   },
 ) {
-  const permission = buildOpenCodePermissionRules(input.runtimeMode);
+  const permission = buildOpenCodePermissionRules(
+    input.runtimeMode,
+    input.planning,
+    input.toolOutputGlob,
+  );
   if (input.resume) {
     try {
       const adopted = await client.getSession(input.resume.sessionId);
       if (!adopted.directory || sameDirectory(adopted.directory, input.cwd)) {
-        await client
-          .updateSession(adopted.id, { permission })
-          .catch(() => undefined);
+        await client.updateSession(adopted.id, { permission });
         return adopted;
       }
       const forked = await client.forkSession(adopted.id, input.cwd);
-      await client
-        .updateSession(forked.id, { permission })
-        .catch(() => undefined);
+      await client.updateSession(forked.id, { permission });
       return forked;
     } catch (error) {
       if (
@@ -632,25 +825,40 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
     live.turnDone = resolve;
     live.turnFailed = reject;
   });
+  // v1 turns settle from the durable messages that answer this message id.
+  // v2 assigns its own ids and settles through the awaited inbox item.
+  const messageID =
+    live.client.generation === "v2" ? undefined : nextOpenCodeMessageId();
+  live.prompt = messageID
+    ? {
+        messageIDs: new Set([messageID]),
+        assistantIDs: new Set(),
+        accepted: false,
+        observed: false,
+        idleSeen: false,
+        checking: null,
+      }
+    : null;
   live.activeTurn = true;
+  live.activeAgent = openCodeAgentForTurn(input);
   live.turnMetricsByMessageId.clear();
-  const v2 = live.client.generation === "v2";
-  live.awaitedInbox = v2 ? { kind: "turn" } : null;
-  settlePendingTurn(live);
+  live.awaitedInbox = live.client.generation === "v2" ? { kind: "turn" } : null;
 
   try {
     const inboxID = await live.client.promptAsync({
       sessionID: live.openCodeSessionId,
+      messageID,
       model: parsed,
-      agent: openCodeAgentForTurn(input),
+      agent: live.activeAgent,
       variant: input.modelSettings?.variant,
       parts,
     });
     input.onAccepted?.();
-    if (v2) {
-      admitAwaitedInbox(live, inboxID);
-    }
-    settlePendingTurn(live);
+    if (live.client.generation === "v2") admitAwaitedInbox(live, inboxID);
+    if (live.prompt) live.prompt.accepted = true;
+    if (live.prompt?.pendingError)
+      scheduleBufferedErrorCheck(live, live.prompt, 0);
+    if (live.prompt?.idleSeen) await reconcileIdlePrompt(live);
     await turnPromise;
   } catch (error) {
     if (live.cancelled) return;
@@ -660,6 +868,9 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
     });
     throw error;
   } finally {
+    if (live.prompt?.errorTimer) clearTimeout(live.prompt.errorTimer);
+    live.activeTurn = false;
+    live.prompt = null;
     live.awaitedInbox = null;
     live.turnDone = null;
     live.turnFailed = null;
@@ -670,13 +881,42 @@ async function runCompaction(
   live: Live,
   model: { providerID: string; modelID: string },
 ): Promise<void> {
-  if (live.client.generation !== "v2") {
+  if (live.client.generation === "v2") {
+    await runV2Compaction(live, model);
+    return;
+  }
+  const before = new Set(
+    (await live.client.getMessages(live.openCodeSessionId)).map((message) =>
+      stringField(asRecord(message.info), "id"),
+    ),
+  );
+  if (!canRunQueuedOperation(live)) return;
+  live.compacting = true;
+  live.compactionError = undefined;
+  try {
     // Unlike prompt_async, summarize responds only after the compaction pass.
     // Keep this outside the normal turn latch: its eventual session.status=idle
     // must not become a pending completion for the next user turn.
     await live.client.summarizeSession(live.openCodeSessionId, model);
-    return;
+    const messages = await live.client.getMessages(live.openCodeSessionId);
+    const failed = messages.find((message) => {
+      const info = asRecord(message.info);
+      return !before.has(stringField(info, "id")) && info?.error;
+    });
+    if (failed || live.compactionError)
+      throw new Error(
+        failed ? sessionErrorMessage(failed.info?.error) : live.compactionError,
+      );
+  } finally {
+    live.compacting = false;
+    live.compactionError = undefined;
   }
+}
+
+async function runV2Compaction(
+  live: Live,
+  model: { providerID: string; modelID: string },
+): Promise<void> {
   // v2 only queues the compaction. Hold the turn chain until it actually
   // ends so the next prompt is not sent into a context being rewritten.
   const finished = new Promise<void>((resolve, reject) => {
@@ -686,6 +926,7 @@ async function runCompaction(
   // Rejections can land before the admission request returns.
   finished.catch(() => undefined);
   live.awaitedInbox = { kind: "compaction" };
+  live.compacting = true;
   const timer = setTimeout(
     () => live.turnFailed?.(new Error("OpenCode compaction timed out")),
     COMPACTION_TIMEOUT_MS,
@@ -699,6 +940,7 @@ async function runCompaction(
     await finished;
   } finally {
     clearTimeout(timer);
+    live.compacting = false;
     live.awaitedInbox = null;
     live.turnDone = null;
     live.turnFailed = null;
@@ -737,8 +979,7 @@ function gateAwaitedInbox(
     (type === "session.status" &&
       stringField(asRecord(properties.status), "type") === "idle");
   const compactionEnd =
-    type === "session.compaction.ended" ||
-    type === "session.compaction.failed";
+    type === "session.compaction.ended" || type === "session.compaction.failed";
   if (!terminal && !compactionEnd) return false;
   if (!awaited.id) {
     if (awaited.uncorrelated) {
@@ -772,7 +1013,8 @@ function inboxFallbackOutcome(
       : undefined;
   }
   const execution = stringField(properties, "execution");
-  if (execution === "failed") return { kind: "failed", error: properties.error };
+  if (execution === "failed")
+    return { kind: "failed", error: properties.error };
   return { kind: execution === "interrupted" ? "interrupted" : "succeeded" };
 }
 
@@ -781,8 +1023,7 @@ function finishAwaitedInbox(
   fallback?: OpenCodeV2InboxOutcome,
 ): void {
   const awaited = live.awaitedInbox;
-  const outcome =
-    (awaited?.id && live.inbox.outcome(awaited.id)) || fallback;
+  const outcome = (awaited?.id && live.inbox.outcome(awaited.id)) || fallback;
   if (!awaited || !outcome) return;
   live.awaitedInbox = null;
   if (awaited.kind === "compaction") {
@@ -863,6 +1104,29 @@ async function handleEvent(
       const hidden = agent != null && KNOWN_HIDDEN_AGENTS.has(agent);
       if (id && (role === "user" || role === "assistant")) {
         live.messageRoleById.set(id, hidden ? "hidden" : role);
+        if (role === "user" && live.prompt?.messageIDs.has(id)) {
+          live.prompt.observed = true;
+        }
+        if (
+          role === "assistant" &&
+          live.prompt?.messageIDs.has(stringField(info, "parentID") ?? "")
+        )
+          live.prompt.assistantIDs.add(id);
+        if (
+          live.prompt?.pendingError &&
+          (live.prompt.messageIDs.has(id) || live.prompt.assistantIDs.has(id))
+        )
+          live.prompt.pendingError.progressAt = Date.now();
+        for (const part of live.partById.values()) {
+          if (
+            part.messageID === id &&
+            roleForPart(live, part) === "assistant"
+          ) {
+            emitAssistantText(live, part);
+            if (part.type === "tool" && roleForPart(live, part) === "assistant")
+              emitTool(live, part);
+          }
+        }
       }
       // A compaction assistant's usage describes the summarization call, not
       // the rebuilt context. Keep the previous meter value until a real turn
@@ -880,7 +1144,12 @@ async function handleEvent(
       const delta = streamTextDelta(properties.delta);
       if (!partID || !delta) break;
       const existing = live.partById.get(partID);
-      if (!existing || roleForPart(live, existing) !== "assistant") break;
+      if (
+        !existing ||
+        typeof existing.time?.end === "number" ||
+        roleForPart(live, existing) !== "assistant"
+      )
+        break;
       const previous =
         live.emittedTextByPartId.get(partID) ?? existing.text ?? "";
       const { nextText, deltaToEmit } = appendOpenCodeAssistantTextDelta(
@@ -891,18 +1160,26 @@ async function handleEvent(
       if (existing.type === "text" || existing.type === "reasoning") {
         live.partById.set(partID, { ...existing, text: nextText });
       }
-      const mapped = textDeltaEvent(existing, deltaToEmit);
-      if (mapped) live.onEvent(mapped);
+      if (deltaToEmit)
+        emitAssistantSnapshot(live, { ...existing, text: nextText });
       break;
     }
     case "message.part.updated": {
       const part = parsePart(properties.part);
       if (!part) break;
       live.partById.set(part.id, part);
+      if (
+        live.prompt?.pendingError &&
+        part.messageID &&
+        (live.prompt.messageIDs.has(part.messageID) ||
+          live.prompt.assistantIDs.has(part.messageID))
+      )
+        live.prompt.pendingError.progressAt = Date.now();
       if (roleForPart(live, part) === "assistant") {
         emitAssistantText(live, part);
       }
-      if (part.type === "tool") emitTool(live, part);
+      if (part.type === "tool" && roleForPart(live, part) === "assistant")
+        emitTool(live, part);
       break;
     }
     case "permission.asked": {
@@ -959,7 +1236,14 @@ async function handleEvent(
         }) || permissionTitle(permission, patterns);
       if (live.planning) {
         const decision =
-          kind === "read" || kind === "search" ? "allow" : "deny";
+          OPENCODE_PLAN_READ_ONLY_PERMISSIONS.includes(permission) ||
+          (permission === "task" &&
+            payloadSessionId === live.openCodeSessionId &&
+            Array.isArray(properties.patterns) &&
+            properties.patterns.length > 0 &&
+            properties.patterns.every((pattern) => pattern === "explore"))
+            ? "allow"
+            : "deny";
         await live.client.replyPermission(
           id,
           toOpenCodePermissionReply(decision),
@@ -1014,10 +1298,8 @@ async function handleEvent(
         break;
       }
       if (statusType === "idle" && live.activeTurn) {
-        finishActiveTurn(live, [
-          { type: "message.completed" },
-          { type: "reasoning.completed" },
-        ]);
+        if (live.prompt) live.prompt.idleSeen = true;
+        await reconcileIdlePrompt(live);
       }
       break;
     }
@@ -1033,12 +1315,47 @@ async function handleEvent(
     }
     case "session.error": {
       const message = sessionErrorMessage(properties.error);
-      live.onEvent({ type: "session.error", message });
-      // A stale v2 failure with nothing waiting must not be saved as the next
-      // turn's completion. v1 relies on that saved completion.
-      if (live.client.generation !== "v2" || live.turnDone) {
-        finishActiveTurn(live);
+      const errorName = stringField(asRecord(properties.error), "name");
+      if (live.compacting) {
+        live.compactionError = message;
+        // A v2 compaction is still waiting on its latch, not on a response,
+        // so fail it here instead of letting it settle as a success.
+        if (live.client.generation === "v2") {
+          const failed = live.turnFailed;
+          live.awaitedInbox = null;
+          live.turnDone = null;
+          live.turnFailed = null;
+          failed?.(new Error(message));
+        }
+        break;
       }
+      if (live.client.generation === "v2") {
+        live.onEvent({ type: "session.error", message });
+        // A stale v2 failure with nothing waiting must not end the next turn.
+        if (live.turnDone) finishActiveTurn(live);
+        break;
+      }
+      if (!live.activeTurn || !live.prompt) break;
+      const setupFailure =
+        /^(Agent|Model) not found:/.test(message) ||
+        ["ProviderModelNotFoundError", "ModelNotFoundError"].includes(
+          errorName ?? "",
+        );
+      live.prompt.pendingError = {
+        message,
+        name: errorName,
+        progressAt: live.prompt.pendingError?.progressAt ?? Date.now(),
+        graceMs: setupFailure
+          ? 50
+          : (live.prompt.pendingError?.graceMs ?? SERVER_TIMEOUT_MS),
+      };
+      if (errorName === "ContextOverflowError") {
+        live.onEvent({
+          type: "status",
+          text: "OpenCode is compacting context after the provider rejected its size.",
+        });
+      } else live.onEvent({ type: "status", text: message });
+      scheduleBufferedErrorCheck(live, live.prompt, 0);
       break;
     }
     default:
@@ -1120,7 +1437,7 @@ function emitContext(live: Live, info: Record<string, unknown> | null): void {
   const modelID = stringField(info, "modelID");
   const window =
     providerID && modelID
-      ? modelContextWindow(`opencode:${providerID}/${modelID}`)
+      ? modelContextWindow(`opencode:${providerID}/${modelID}`, live.cwd)
       : undefined;
   live.onEvent({ type: "context", used, ...(window ? { window } : {}) });
 }
@@ -1132,10 +1449,15 @@ function emitAssistantText(live: Live, part: OpenCodePart): void {
   const { latestText, deltaToEmit } = mergeOpenCodeAssistantText(
     previous,
     text,
+    typeof part.time?.end === "number",
   );
   live.emittedTextByPartId.set(part.id, latestText);
-  const mapped = textDeltaEvent(part, deltaToEmit);
-  if (mapped) live.onEvent(mapped);
+  if (
+    deltaToEmit ||
+    previous !== latestText ||
+    typeof part.time?.end === "number"
+  )
+    emitAssistantSnapshot(live, { ...part, text: latestText });
 }
 
 function emitTool(live: Live, part: OpenCodePart): void {
@@ -1297,6 +1619,7 @@ function handleSubagentEvent(
     const delta = streamTextDelta(properties.delta);
     if (
       existing &&
+      typeof existing.time?.end !== "number" &&
       delta &&
       (existing.type === "text" || existing.type === "reasoning")
     ) {
@@ -1453,23 +1776,245 @@ function showNextQuestion(live: Live): void {
 }
 
 function finishActiveTurn(live: Live, extraEvents: HarnessEvent[] = []): void {
-  live.turnEndPending = false;
+  if (live.prompt?.errorTimer) clearTimeout(live.prompt.errorTimer);
   live.activeTurn = false;
   for (const event of extraEvents) live.onEvent(event);
   const done = live.turnDone;
-  const failed = live.turnFailed;
   live.turnDone = null;
   live.turnFailed = null;
   if (done) {
     done();
     return;
   }
-  if (!failed) live.turnEndPending = true;
 }
 
-function settlePendingTurn(live: Live): void {
-  if (!live.turnEndPending || !live.turnDone) return;
-  finishActiveTurn(live);
+function emitAssistantSnapshot(live: Live, part: OpenCodePart): void {
+  if (part.type !== "text" && part.type !== "reasoning") return;
+  live.onEvent({
+    type: "message.part",
+    partId: part.id,
+    text: part.text ?? "",
+    reasoning: part.type === "reasoning",
+    streaming: typeof part.time?.end !== "number",
+  });
+}
+
+async function reconcileIdlePrompt(live: Live): Promise<void> {
+  const prompt = live.prompt;
+  if (
+    !prompt ||
+    !live.activeTurn ||
+    !prompt.accepted ||
+    (!prompt.observed && !prompt.pendingError) ||
+    live.cancelled ||
+    live.muteUpdates
+  )
+    return;
+  if (prompt.checking) return prompt.checking;
+  prompt.idleSeen = false;
+  prompt.checking = (async () => {
+    if ((await live.client.sessionStatus(live.openCodeSessionId)) !== "idle")
+      return;
+    const messages = await live.client.getMessages(live.openCodeSessionId);
+    if (live.prompt !== prompt || live.muteUpdates || live.cancelled) return;
+    const relatedIDs = relatedPromptMessageIDs(messages, prompt.messageIDs);
+    const relevant = messages.filter((message) => {
+      const info = asRecord(message.info);
+      return (
+        stringField(info, "role") === "assistant" &&
+        relatedIDs.has(stringField(info, "parentID") ?? "")
+      );
+    });
+    const latest = relevant[relevant.length - 1];
+    const info = asRecord(latest?.info);
+    if (!info) {
+      await reconcileBufferedError(live, prompt, false);
+      return;
+    }
+    const error = info.error;
+    const finish = stringField(info, "finish");
+    if (
+      !error &&
+      (!finish ||
+        finish === "tool-calls" ||
+        stringField(info, "agent") === "compaction")
+    ) {
+      await reconcileBufferedError(
+        live,
+        prompt,
+        !finish && !asRecord(info.time)?.completed,
+      );
+      return;
+    }
+    if (error)
+      live.onEvent({
+        type: "session.error",
+        message: sessionErrorMessage(error),
+      });
+    finishActiveTurn(live, [
+      { type: "message.completed" },
+      { type: "reasoning.completed" },
+    ]);
+  })().finally(async () => {
+    prompt.checking = null;
+    if (prompt.idleSeen && live.prompt === prompt)
+      await reconcileIdlePrompt(live);
+  });
+  return prompt.checking;
+}
+
+function scheduleBufferedErrorCheck(
+  live: Live,
+  prompt: ActivePrompt,
+  delay: number,
+): void {
+  if (
+    !prompt.accepted ||
+    live.prompt !== prompt ||
+    !live.activeTurn ||
+    live.muteUpdates ||
+    live.cancelled
+  )
+    return;
+  if (prompt.errorTimer) clearTimeout(prompt.errorTimer);
+  prompt.errorTimer = setTimeout(
+    () => {
+      prompt.errorTimer = undefined;
+      void reconcileIdlePrompt(live).catch((error: unknown) => {
+        if (
+          live.prompt !== prompt ||
+          !live.activeTurn ||
+          live.muteUpdates ||
+          live.cancelled
+        )
+          return;
+        live.onEvent({
+          type: "session.error",
+          message: `Could not verify OpenCode error: ${error instanceof Error ? error.message : String(error)}`,
+        });
+        finishActiveTurn(live);
+      });
+    },
+    Math.max(0, delay),
+  );
+}
+
+async function reconcileBufferedError(
+  live: Live,
+  prompt: ActivePrompt,
+  assistantRunning: boolean,
+): Promise<void> {
+  const pending = prompt.pendingError;
+  if (!pending || assistantRunning) return;
+  const remaining = pending.graceMs - (Date.now() - pending.progressAt);
+  if (remaining > 0) {
+    scheduleBufferedErrorCheck(live, prompt, remaining);
+    return;
+  }
+  const progressAt = pending.progressAt;
+  const ownedIDs = new Set(prompt.messageIDs);
+  if (
+    (await live.client.sessionStatus(live.openCodeSessionId)) !== "idle" ||
+    live.prompt !== prompt ||
+    !live.activeTurn ||
+    live.muteUpdates ||
+    live.cancelled ||
+    prompt.pendingError !== pending ||
+    pending.progressAt !== progressAt ||
+    prompt.messageIDs.size !== ownedIDs.size ||
+    [...ownedIDs].some((id) => !prompt.messageIDs.has(id))
+  )
+    return;
+  live.onEvent({ type: "session.error", message: pending.message });
+  finishActiveTurn(live, [
+    { type: "message.completed" },
+    { type: "reasoning.completed" },
+  ]);
+}
+
+function relatedPromptMessageIDs(
+  messages: OpenCodeMessage[],
+  ownedIDs: Set<string>,
+): Set<string> {
+  const related = new Set<string>();
+  const owned = messages.filter((message) =>
+    ownedIDs.has(stringField(asRecord(message.info), "id") ?? ""),
+  );
+  if (owned.length !== ownedIDs.size) return related;
+  const latestOwned = owned[owned.length - 1];
+  const boundary = messages.indexOf(latestOwned);
+  if (boundary < 0) return related;
+  related.add(stringField(asRecord(latestOwned.info), "id")!);
+  const created = asRecord(asRecord(messages[boundary].info)?.time)?.created;
+  if (typeof created !== "number") return related;
+  const ownedParts = replayContent(latestOwned.parts ?? []);
+  let compacted = false;
+  for (const message of messages.slice(boundary + 1)) {
+    const info = asRecord(message.info);
+    const id = stringField(info, "id");
+    if (!id) continue;
+    if (stringField(info, "role") === "assistant") {
+      if (
+        related.has(stringField(info, "parentID") ?? "") &&
+        stringField(info, "agent") === "compaction" &&
+        !info?.error &&
+        stringField(info, "finish") === "stop"
+      )
+        compacted = true;
+      continue;
+    }
+    if (stringField(info, "role") !== "user" || ownedIDs.has(id)) continue;
+    const messageCreated = asRecord(info?.time)?.created;
+    if (typeof messageCreated !== "number" || messageCreated < created)
+      continue;
+    const parts = (message.parts ?? [])
+      .map(asRecord)
+      .filter((part) => part !== null);
+    const automaticCompaction =
+      parts.length > 0 &&
+      parts.every((part) => part.type === "compaction" && part.auto === true);
+    const continuation =
+      compacted &&
+      parts.length > 0 &&
+      parts.every(
+        (part) =>
+          part.type === "text" &&
+          part.synthetic === true &&
+          asRecord(part.metadata)?.compaction_continue === true,
+      );
+    const replay =
+      compacted &&
+      parts.length > 0 &&
+      ownedParts === replayContent(message.parts ?? []);
+    if (automaticCompaction || continuation || replay) related.add(id);
+  }
+  return related;
+}
+
+function replayContent(parts: unknown[]): string {
+  return JSON.stringify(
+    parts.flatMap((value) => {
+      const part = asRecord(value);
+      if (!part || part.type === "compaction") return [];
+      if (part.type === "text")
+        return [
+          { type: "text", text: part.text, synthetic: part.synthetic === true },
+        ];
+      if (part.type === "file") {
+        const mime = stringField(part, "mime") ?? "";
+        if (mime.startsWith("image/") || mime === "application/pdf")
+          return [
+            {
+              type: "text",
+              text: `[Attached ${mime}: ${stringField(part, "filename") ?? "file"}]`,
+              synthetic: false,
+            },
+          ];
+        return [{ type: "file", mime, filename: part.filename, url: part.url }];
+      }
+      return [{ type: part.type }];
+    }),
+  );
 }
 
 function parsePart(value: unknown): OpenCodePart | null {
@@ -1496,6 +2041,10 @@ function roleForPart(
   if (part.messageID) {
     const known = live.messageRoleById.get(part.messageID);
     if (known) return known;
+    // v1 also streams user parts, so wait for the message role. The v2
+    // translator builds parts only from assistant step events, so a part
+    // whose step start was missed still belongs to an assistant.
+    if (live.client.generation !== "v2") return undefined;
   }
   return part.type === "tool" ||
     part.type === "text" ||
@@ -1615,8 +2164,40 @@ function waitForServerUrl(
 }
 
 /** Exported for tests. */
+function v2InboxTracker(openCodeSessionId: string): OpenCodeV2InboxTracker {
+  let tracker = v2InboxBySession.get(openCodeSessionId);
+  if (!tracker) {
+    tracker = new OpenCodeV2InboxTracker();
+    v2InboxBySession.set(openCodeSessionId, tracker);
+  }
+  return tracker;
+}
+
 export function __openCodeTestReset(): void {
+  v2InboxBySession.clear();
   liveByThread.clear();
   resumeByThread.clear();
   cancelledThreads.clear();
+  openingThreads.clear();
+  lifecycleByThread.clear();
+}
+
+async function withLifecycle<T>(
+  sessionId: string,
+  action: () => Promise<T>,
+): Promise<T> {
+  const previous = lifecycleByThread.get(sessionId) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  lifecycleByThread.set(sessionId, current);
+  await previous;
+  try {
+    return await action();
+  } finally {
+    release();
+    if (lifecycleByThread.get(sessionId) === current)
+      lifecycleByThread.delete(sessionId);
+  }
 }

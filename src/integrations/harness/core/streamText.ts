@@ -54,3 +54,14 @@ export function streamTextDelta(value: unknown): string {
 
 /** @deprecated Use joinStreamText. Kept so existing imports keep working. */
 export const mergeStream = joinStreamText;
+/** Collect authoritative provider parts in their first observed order. */
+export class MessageParts {
+  private parts = new Map<string, string>();
+  update(partId: string, text: string): string {
+    this.parts.set(partId, text);
+    return [...this.parts.values()].join("");
+  }
+  clear(): void {
+    this.parts.clear();
+  }
+}
