@@ -39,8 +39,10 @@ const extension = {
   contextWindow: 200_000,
 };
 
-// Keep the real PiRpc multiplexer: the fixture answers the same JSONL requests
-// as a child process, including the request id and command fields.
+/**
+ * Answer through the watched child output so tests exercise the real PiRpc
+ * multiplexer, including request ID and command matching, rather than mocking it.
+ */
 function reply(probeId: string, line: string, models: unknown[]) {
   const request = JSON.parse(line);
   const onLine = mocks.watchChild.mock.calls.find(([id]) => id === probeId)![1];
@@ -55,6 +57,10 @@ function reply(probeId: string, line: string, models: unknown[]) {
   );
 }
 
+/**
+ * Check probe teardown and RPC/poll timer cleanup before afterEach clears timers
+ * and could otherwise hide a leak from a successful or failed discovery.
+ */
 function expectStopped() {
   const probeId = mocks.watchChild.mock.calls[0][0];
   expect(mocks.unwatchChild).toHaveBeenCalledExactlyOnceWith(probeId);

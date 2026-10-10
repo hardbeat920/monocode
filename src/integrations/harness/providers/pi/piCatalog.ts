@@ -40,6 +40,14 @@ function refreshCatalog(flavor: PiFlavor): Promise<void> {
   return run;
 }
 
+/**
+ * Probe models in the supplied directory, or the user's home directory.
+ * Pi merges startup snapshots until the five-second minimum and one-second
+ * quiet period are met; this heuristic can miss providers registering later.
+ * omp returns its first snapshot. The 45-second deadline starts after spawn
+ * and returns collected models if any; other failures reject. Every outcome
+ * closes RPC requests, cancels polling, and tears down the child probe.
+ */
 async function discoverModels(flavor: PiFlavor, workingDirectory?: string) {
   const { path } = await flavor.resolveBinary();
   const cwd = workingDirectory ?? (await homeDir());
