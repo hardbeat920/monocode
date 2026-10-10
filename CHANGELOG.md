@@ -7,9 +7,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-10
+
+### Added
+
+- **Video previews** open common video containers, including MP4, MOV, WebM, and MKV, in the file pane with playback controls, dimensions, duration, file size, and format. Playback depends on the platform's supported codecs; unreadable or unsupported local videos offer retry and external playback.
+- Settings → Providers → Advanced → **Keep idle agents ready** controls how many finished conversations keep their agent CLI running for quick follow-ups. Choose None, 1, 2, 3, or 5; the default is 3. Excess agents stop in order of longest idle time, preserving resume state and favoring the conversation on screen. Running turns are excluded, lowering the limit takes effect immediately, and idle agents otherwise stop after three minutes instead of five.
+- Monos can answer with an **emoji reaction** attached to the user message. Reaction-only replies hide their redundant reply bubble, thinking, and tool activity while retaining errors. New reactions animate with reduced-motion support, and notifications describe the reaction.
+- Mono rail badges show **unread reply counts**, including habit posts, instead of a single dot. Counts clear when the Mono is opened, display up to `99+`, and are included in accessible labels.
+
+### Changed
+
+- A Mono's latest turn that edited files has a compact **changes button** showing added and removed line counts and opening the diff. Ordinary sessions retain the full review card; older transcript pages, drafts, and pending inbox questions do not show an unrelated review.
+- Floating macOS Mono chats use a more compact **440-point width and up to 560-point height**, including the Mono rail, while fitting smaller screen work areas.
+- Native browser scrollbars are hidden throughout the app while preserving horizontal and vertical scrolling. Custom editor and terminal scrollbar controls remain available.
+- Streamed agent output batches stdout lines and server events about once per 16-millisecond window, and foreground chat updates are limited to about 30 per second. Unchanged sidebar, live-agent, and Mono rail data reuse their existing values, and output in other tabs avoids rerendering the visible pane tree.
+- Terminal title polling reads foreground commands directly from `/proc` on Linux and skips process lookups while the shell owns the foreground. The animated terminal background caches static outlines, pauses while hidden, draws only the visible board during transitions, and pulses its cursor only on hover. The resident Quick Composer is prepared only when its shortcut is enabled.
+- The README and contributing guide have shorter quick starts with focused guides for provider setup, platform installation, source builds, and agent access.
+- Regression coverage now includes video playback and hidden-tab pauses in Chromium and WebKit, returning to streamed transcripts, reaction rendering, unread counts, idle-agent limits, shared-turn edit attribution, checkpoint recovery, review caching, and theme synchronization. Checkpoint filename fixtures account for Windows removing trailing spaces, browser tests use more stable playback and animation checks, and CI uploads traces when browser tests fail.
+
 ### Fixed
 
-- Markdown table columns keep a readable minimum width and top-aligned content; narrow panes scroll horizontally instead of squeezing file names into stacked text.
+- Theme changes synchronize across open windows, including the color scheme, accent, tint, and dark-theme lightness, without requiring a reload. In #909 by @ognjeeen; fixes #894.
+- **New Window** opens a working window on Windows instead of a blank gray frame caused by creating WebView2 on the main thread. In #908 by @ognjeeen; fixes #907.
+- Launching MonoCode again on Windows restores the running instance and its hidden windows instead of starting another process with a duplicate tray icon. In #905 by @ognjeeen; fixes #860.
+- **Reveal in file manager** runs off the main thread, preventing Linux from becoming unresponsive while `xdg-open` waits for the file manager to close. In #902 by @spuder; fixes #901.
+- Manual wheel, pointer, keyboard, and touch scrolling consistently pause transcript following. Scrolling within nested content stays independent, and layout changes or browser-clamped offsets do not incorrectly stop following.
+- Session reviews retain the original checkpoint boundary across interrupted turns and continuations. Older interrupted checkpoints can recover transcript-confirmed changes for review without enabling unsafe undo. Reviews shared by overlapping sessions display only files supported by that session's successful structured edit tools.
+- Committed changes disappear from the current review and stay dismissed if those files are edited again. Review cards and Mono changes buttons share cached status, refresh after workspace changes, and ignore stale responses from an earlier turn.
+- Returning to a hidden transcript tab does not replay the fade animation for words already shown.
+- Video previews pause when their workspace tab or window is hidden, prevent hidden playback from restarting, and release their source when closed. Restoring a source after React replays effects also restarts loading, preventing a blank preview.
+- Subagent mascots render at the same visual scale as neighboring line icons while keeping a fixed icon slot and stable row alignment.
+
+## [0.11.0] - 2026-10-09
+
+### Added
+
+- **Devin CLI** is available as a provider for local and remote sessions on macOS, Windows, and Linux through ACP. It uses the CLI's existing sign-in on the machine running the session and supports model selection, per-model effort and fast controls, planning, resuming, cancellation, compaction, slash commands, and Devin skills. In #748 by @noursh26.
+- Devin **subagents** appear in the existing agent cards and activity hierarchy, including nested work and child replies. Devin can generate session titles and answer `/btw` side questions; temporary side-question sessions are cleaned up after completion, failure, or cancellation. In #748.
+- Devin account details show the signed-in identity, plan, daily and weekly usage limits and reset times, and extra usage balance. Usage requests keep credentials in the backend and use HTTPS. In #748.
+- Mono chats have a **Changes** panel beside the conversation for reviewing edited files with the existing diff viewer. The **Commit** tab supports selecting files, editing or generating a commit message, committing, pushing, and creating a pull request.
+- Mono reviews group files by their own **Git repository or worktree**, including nested repositories. Each checkout has its own file selection and commit draft, so work across multiple repositories can be reviewed and committed separately. Files outside Git remain available for review.
+- **Turn checkpoints** capture changes before and after a turn in Git workspaces, including edits made through shell commands. Settled turns show their actual diff with keep and undo controls, while preserving changes that were present before the turn.
+- A Mono's **Details → Settings** page controls whether its launched sessions appear in the sidebar and whether they are grouped in a color-coded folder named after the Mono. Resetting the conversation keeps its soul, memory, and habits.
+- Settings → Monos → **Pin monos to the icon rail** places Mono icons above the project picker when the rail is collapsed. The floating Mono rail also shows whether each Mono is working, idle, or waiting for input.
+- Image previews and the image lightbox support **cursor-centered zoom**, modifier-wheel gestures, zoom keyboard shortcuts, and native macOS trackpad pinch gestures. The lightbox also supports dragging to pan and double-clicking to zoom or reset.
+- Settings → Chat → **Autocorrect** controls native spelling and correction behavior in both regular session and Mono composers. The preference persists across restarts and is enabled by default.
+
+### Changed
+
+- Mono commits include only the selected files' current working-copy contents and preserve unrelated staged work, including partial staging. Other existing repository changes are excluded by default, even when already staged. Generated commit context uses a temporary Git index without changing the real staging area or including unselected changes.
+- Mono artifact and changes panels use a wider reader layout. Switching repositories preserves each checkout's selection and draft, and a completed commit clears only its selected files from the Mono review.
+- Large streamed Markdown code blocks reuse highlighted lines and rendered content, reducing rendering work and stalls as output grows. Regression coverage checks correctness and layout in Chromium and WebKit. In #863 by @nwoolls.
+- Regression coverage now includes Devin transport, permissions, model catalogs, usage and subagents; Mono checkpoints and multi-repository commits; literal Git paths and staging preservation; sidebar preferences; image zoom; source-navigation cancellation; and composer autocorrect on the supported platforms. File-navigation fixtures keep mocked file contents stable across watcher IPC calls on slower runners.
+
+### Fixed
+
+- Opening a new session from a full-screen file preview keeps the visible project selected instead of falling back to another project's session. The plus button and new-session shortcut preserve the project's provider defaults and selected worktree. In #896 by @404khai.
+- macOS Finder file-reference URLs resolve to the file's current path, fixing Explorer paste and composer attachments for copied files and images, including files renamed after copying. Both URL parsers reject non-local hosts before resolving a reference. In #635 by @404khai.
+- Mono undo refuses to overwrite later edits, restore across a changed Git `HEAD`, or interfere with an overlapping active session. Checkpoint failures show an error instead of a stale review, and live changes are presented after the turn settles. Windows overlap checks normalize separators and canonical path prefixes while keeping sibling checkouts independent.
+- Selected-file Git actions validate paths against the chosen checkout, reject directory and symlink escapes, and treat filenames literally, including wildcard, colon, and option-like names. Native and remote-host commands use the same selection rules, and repository-discovery failures remain visible.
+- Commit messages remain editable before files are selected or staged.
+- Devin approval responses preserve the selected permission mode instead of escalating a one-time approval to unrestricted access. **Devin's supervised mode accepts file edits automatically and requests command approval**, following the CLI's native behavior; planning denies writes. Cancellation and timeout cleanup reject leftover permission requests, and supervised configuration preserves existing comments and settings. In #748.
+- Devin effort choices follow each model's supported thought levels, and saved model-family selections and unsupported effort values resolve to valid current choices. Background catalog refreshes do not open a sign-in browser, and usage refreshes handle expired credentials and temporary network failures. In #748.
+- Codex discovery prefers the executable resolved by the user's login shell, fixing stale versions and update banners caused by an older fixed-path installation taking precedence. In #878 by @zcy22606.
+- Opening a thought row no longer repeats its first paragraph in both the row header and expanded body. Collapsed rows retain their preview. In #882 by @zcy22606.
+- Tab and project-card reorder drags cancel when a mouse release was missed and the next pointer movement reports no held buttons, preventing a stuck drag. In #879 by @zcy22606.
+- Markdown table columns keep a readable minimum width and top-aligned content; narrow panes scroll horizontally instead of squeezing file names into stacked text. In #876 by @S-loan.
+- Image zoom subscriptions handle setup failures and clean up reliably when previews close or lose their zoom scope.
+- Windows checks handle native temporary-directory paths consistently. Temporary Git-context directories retain private permissions on Unix without introducing a Windows compiler warning.
 
 ## [0.10.0] - 2026-10-08
 
@@ -1368,7 +1434,9 @@ First public release. macOS (Apple Silicon) only.
 - Updater endpoint and minisign public key are injected at release time rather than committed, so forks do not inherit the maintainer's update channel.
 - macOS release builds sign with `APPLE_SIGNING_IDENTITY` via a config overlay; the committed default remains ad-hoc `-` for community builds.
 
-[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/hardbeat920/monocode/compare/v0.11.0...v0.12.0
+[0.11.0]: https://github.com/hardbeat920/monocode/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/hardbeat920/monocode/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/hardbeat920/monocode/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/hardbeat920/monocode/compare/v0.7.1...v0.8.0

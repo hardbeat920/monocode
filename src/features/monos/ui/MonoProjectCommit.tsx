@@ -17,7 +17,6 @@ import {
   gitDiscardFile,
   gitPrCreate,
   gitPush,
-  gitStageFile,
   gitSync,
   notifyGitChanged,
   subscribeGitChanged,
@@ -57,24 +56,27 @@ export function useProjectIndex(root: string | undefined): {
   index: GitDiffIndex | null;
   reload: () => void;
 } {
-  const [index, setIndex] = useState<GitDiffIndex | null>(null);
+  const [loaded, setLoaded] = useState<{ root: string; index: GitDiffIndex } | null>(null);
   const [nonce, setNonce] = useState(0);
   const reload = useCallback(() => setNonce((value) => value + 1), []);
 
   useEffect(() => {
     if (!root) {
-      setIndex(null);
+      setLoaded(null);
       return;
     }
     let cancelled = false;
-    const load = () =>
+    let generation = 0;
+    const load = () => {
+      const current = ++generation;
       void gitDiffIndex(root)
         .then((next) => {
-          if (!cancelled) setIndex(next);
+          if (!cancelled && current === generation) setLoaded({ root, index: next });
         })
         .catch(() => {
-          if (!cancelled) setIndex(null);
+          if (!cancelled && current === generation) setLoaded(null);
         });
+    };
     load();
     const unsubscribe = subscribeGitChanged(load);
     window.addEventListener("focus", load);
@@ -85,7 +87,7 @@ export function useProjectIndex(root: string | undefined): {
     };
   }, [root, nonce]);
 
-  return { index, reload };
+  return { index: loaded && loaded.root === root ? loaded.index : null, reload };
 }
 
 function confirmNative(message: string): Promise<boolean> {
@@ -311,14 +313,11 @@ export function MonoProjectCommit({
     generateAbortRef.current = controller;
     setBusy("generate");
     try {
-      // The message is written from the staged diff, so stage the selection
-      // first; the commit itself still takes only these paths.
-      for (const path of selected) await gitStageFile(root, path);
-      notifyGitChanged();
       const generated = await generateCommitMessage(
         root,
         textHarness,
         controller.signal,
+        selected,
       );
       if (!controller.signal.aborted) setMessage(generated);
     } catch (error) {
@@ -347,7 +346,7 @@ export function MonoProjectCommit({
       return;
     }
     setBusy(createPr ? "pr" : "commit");
-    const committed = files.filter((entry) => isSelected(entry.relative));
+    const committed = files.filter((entry) => selected.includes(entry.relative));
     try {
       await gitCommit(root, message, false, selected);
       // Committed work is accepted work: clear it from the session's review.

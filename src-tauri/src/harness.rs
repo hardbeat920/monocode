@@ -6,9 +6,7 @@ use std::process::{ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
-use std::time::Duration;
-#[cfg(not(windows))]
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -39,6 +37,14 @@ struct HarnessLine {
     line: String,
 }
 
+/// Stdout lines in arrival order; one event carries every line from a window.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct HarnessLines {
+    session_id: String,
+    lines: Vec<String>,
+}
+
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct HarnessExit {
@@ -49,9 +55,59 @@ struct HarnessExit {
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-struct HarnessSse {
+struct HarnessSseBatch {
     session_id: String,
-    data: String,
+    events: Vec<String>,
+}
+
+/// Each `emit` is a JS eval in every window, and a streaming agent prints a
+/// line per token. Coalesce to about one hop per frame, like `pty-data`.
+const OUTPUT_COALESCE: Duration = Duration::from_millis(16);
+/// A huge tool result shouldn't hold back the lines queued behind it.
+const OUTPUT_BATCH_BYTES: usize = 1 << 20;
+/// How long an exit waits for its last output. A grandchild that inherited
+/// stdout can hold the pipe open after the agent itself has gone.
+const OUTPUT_DRAIN_WAIT: Duration = Duration::from_millis(500);
+
+/// Hands `emit` batches of the items sent on the returned channel. After an
+/// idle stretch the first item goes out at once; a burst then waits out the
+/// rest of the window. The receiver fires once everything sent has gone out.
+fn spawn_output_batcher<F>(mut emit: F) -> (mpsc::Sender<String>, mpsc::Receiver<()>)
+where
+    F: FnMut(Vec<String>) + Send + 'static,
+{
+    let (tx, rx) = mpsc::channel::<String>();
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut last_emit: Option<Instant> = None;
+        while let Ok(first) = rx.recv() {
+            let mut bytes = first.len();
+            let mut batch = vec![first];
+            if let Some(deadline) = last_emit.map(|at| at + OUTPUT_COALESCE) {
+                while bytes < OUTPUT_BATCH_BYTES {
+                    let Some(wait) = deadline.checked_duration_since(Instant::now()) else {
+                        break;
+                    };
+                    match rx.recv_timeout(wait) {
+                        Ok(item) => {
+                            bytes += item.len();
+                            batch.push(item);
+                        }
+                        Err(_) => break,
+                    }
+                }
+            }
+            while bytes < OUTPUT_BATCH_BYTES {
+                let Ok(item) = rx.try_recv() else { break };
+                bytes += item.len();
+                batch.push(item);
+            }
+            emit(batch);
+            last_emit = Some(Instant::now());
+        }
+        let _ = done_tx.send(());
+    });
+    (tx, done_rx)
 }
 
 #[derive(Serialize, Clone)]
@@ -968,6 +1024,15 @@ pub fn harness_spawn(
 
     let stdout_app = app.clone();
     let stdout_id = session_id.clone();
+    let (stdout_tx, stdout_drained) = spawn_output_batcher(move |lines| {
+        let _ = stdout_app.emit(
+            STDOUT_EVENT,
+            HarnessLines {
+                session_id: stdout_id.clone(),
+                lines,
+            },
+        );
+    });
     let wait_store = codex_store.clone();
     let stdout_store = codex_store;
     thread::spawn(move || {
@@ -981,13 +1046,9 @@ pub fn harness_spawn(
                     store.sync_auth();
                 }
             }
-            let _ = stdout_app.emit(
-                STDOUT_EVENT,
-                HarnessLine {
-                    session_id: stdout_id.clone(),
-                    line,
-                },
-            );
+            if stdout_tx.send(line).is_err() {
+                break;
+            }
         }
     });
 
@@ -1011,6 +1072,8 @@ pub fn harness_spawn(
     let wait_pid = pid;
     thread::spawn(move || {
         let code = child.wait().ok().and_then(|status| status.code());
+        // Deliver the final batched lines before the exit that follows them.
+        let _ = stdout_drained.recv_timeout(OUTPUT_DRAIN_WAIT);
         if let Some(store) = wait_store {
             store.sync_auth();
         }
@@ -1418,18 +1481,21 @@ fn open_sse_stream(
                     stream_live.cancel();
                     return;
                 }
-                let events = CurrentSseEvents {
+                let events = Arc::new(CurrentSseEvents {
                     streams,
                     events,
                     session_id: stream_id,
                     live: stream_live,
-                };
-                read_sse(
-                    BufReader::new(body),
-                    &events,
-                    &events.session_id,
-                    &events.live.stop,
-                );
+                });
+                let batch_events = events.clone();
+                let (tx, drained) = spawn_output_batcher(move |batch| {
+                    batch_events.sse_batch(&batch_events.session_id, batch);
+                });
+                read_sse(BufReader::new(body), &events.live.stop, |data| {
+                    let _ = tx.send(data);
+                });
+                drop(tx);
+                let _ = drained.recv();
                 events.sse_end(&events.session_id, None);
             }
             Err(error) => {
@@ -1458,6 +1524,11 @@ fn open_sse_stream(
 
 trait OpenCodeEvents: Send + Sync {
     fn sse(&self, session_id: &str, data: String);
+    fn sse_batch(&self, session_id: &str, batch: Vec<String>) {
+        for data in batch {
+            self.sse(session_id, data);
+        }
+    }
     fn sse_end(&self, session_id: &str, error: Option<String>);
 }
 
@@ -1465,11 +1536,14 @@ struct TauriOpenCodeEvents(AppHandle);
 
 impl OpenCodeEvents for TauriOpenCodeEvents {
     fn sse(&self, session_id: &str, data: String) {
+        self.sse_batch(session_id, vec![data]);
+    }
+    fn sse_batch(&self, session_id: &str, events: Vec<String>) {
         let _ = self.0.emit(
             SSE_EVENT,
-            HarnessSse {
+            HarnessSseBatch {
                 session_id: session_id.to_owned(),
-                data,
+                events,
             },
         );
     }
@@ -1493,6 +1567,9 @@ struct CurrentSseEvents {
 
 impl OpenCodeEvents for CurrentSseEvents {
     fn sse(&self, session_id: &str, data: String) {
+        self.sse_batch(session_id, vec![data]);
+    }
+    fn sse_batch(&self, session_id: &str, batch: Vec<String>) {
         let streams = self
             .streams
             .lock()
@@ -1502,7 +1579,7 @@ impl OpenCodeEvents for CurrentSseEvents {
             .is_some_and(|live| Arc::ptr_eq(live, &self.live))
             && !self.live.stop.load(Ordering::SeqCst)
         {
-            self.events.sse(session_id, data);
+            self.events.sse_batch(session_id, batch);
         }
     }
     fn sse_end(&self, session_id: &str, error: Option<String>) {
@@ -1765,12 +1842,7 @@ fn read_http_response(response: ureq::Response) -> Result<HarnessHttpResponse, S
     Ok(HarnessHttpResponse { status, body })
 }
 
-fn read_sse<R: BufRead>(
-    reader: R,
-    events: &dyn OpenCodeEvents,
-    session_id: &str,
-    stop: &AtomicBool,
-) {
+fn read_sse<R: BufRead>(reader: R, stop: &AtomicBool, mut send: impl FnMut(String)) {
     let mut data = String::new();
     for line in reader.lines() {
         if stop.load(Ordering::SeqCst) {
@@ -1784,8 +1856,7 @@ fn read_sse<R: BufRead>(
             if data.is_empty() {
                 continue;
             }
-            let payload = std::mem::take(&mut data);
-            events.sse(session_id, payload);
+            send(std::mem::take(&mut data));
             continue;
         }
         if let Some(rest) = line.strip_prefix("data:") {
@@ -4378,6 +4449,74 @@ mod tests {
         let id = passwd_identity().expect("passwd");
         assert!(!id.user.is_empty());
         assert!(PathBuf::from(&id.home).is_dir());
+    }
+}
+
+#[cfg(test)]
+mod output_batcher_tests {
+    use super::*;
+
+    type Batches = Arc<Mutex<Vec<Vec<String>>>>;
+
+    fn collect() -> (mpsc::Sender<String>, mpsc::Receiver<()>, Batches) {
+        let batches = Arc::new(Mutex::new(Vec::new()));
+        let sink = batches.clone();
+        let (tx, drained) = spawn_output_batcher(move |batch| sink.lock().unwrap().push(batch));
+        (tx, drained, batches)
+    }
+
+    #[test]
+    fn an_idle_stream_sends_its_first_line_at_once() {
+        let (tx, _drained, batches) = collect();
+        tx.send("first".into()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while batches.lock().unwrap().is_empty() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(*batches.lock().unwrap(), vec![vec!["first".to_string()]]);
+    }
+
+    #[test]
+    fn a_burst_shares_one_event_and_drains_before_done() {
+        let (tx, drained, batches) = collect();
+        tx.send("lead".into()).unwrap();
+        while batches.lock().unwrap().is_empty() {
+            thread::sleep(Duration::from_millis(1));
+        }
+        for i in 0..100 {
+            tx.send(format!("line {i}")).unwrap();
+        }
+        drop(tx);
+        drained.recv_timeout(Duration::from_secs(5)).unwrap();
+        let batches = batches.lock().unwrap();
+        assert!(batches.len() <= 3, "{} batches", batches.len());
+        let lines: Vec<String> = batches.iter().flatten().cloned().collect();
+        let expected: Vec<String> = std::iter::once("lead".to_string())
+            .chain((0..100).map(|i| format!("line {i}")))
+            .collect();
+        assert_eq!(lines, expected);
+    }
+
+    #[test]
+    fn a_large_line_closes_its_batch() {
+        let (tx, drained, batches) = collect();
+        tx.send("x".repeat(OUTPUT_BATCH_BYTES)).unwrap();
+        tx.send("after".into()).unwrap();
+        drop(tx);
+        drained.recv_timeout(Duration::from_secs(5)).unwrap();
+        let batches = batches.lock().unwrap();
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[1], vec!["after".to_string()]);
+    }
+
+    #[test]
+    fn sse_events_split_on_blank_lines() {
+        let stream = ": ping\ndata: one\n\ndata: two\ndata: lines\n\n";
+        let mut events = Vec::new();
+        read_sse(stream.as_bytes(), &AtomicBool::new(false), |data| {
+            events.push(data)
+        });
+        assert_eq!(events, vec!["one".to_string(), "two\nlines".to_string()]);
     }
 }
 

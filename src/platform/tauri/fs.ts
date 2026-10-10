@@ -329,7 +329,9 @@ export function gitCommit(
   amend = false,
   paths?: string[],
 ): Promise<void> {
-  return invoke<void>("git_commit", { cwd, message, amend, paths });
+  return invoke<void>("git_commit", {
+    cwd, message, amend, ...(paths === undefined ? {} : { paths }),
+  });
 }
 
 export function gitHeadMessage(cwd: string): Promise<string> {
@@ -342,8 +344,10 @@ export type GitStagedContext = {
   patch: string;
 };
 
-export function gitStagedContext(cwd: string): Promise<GitStagedContext> {
-  return invoke<GitStagedContext>("git_staged_context", { cwd });
+export function gitStagedContext(cwd: string, paths?: readonly string[]): Promise<GitStagedContext> {
+  return invoke<GitStagedContext>("git_staged_context", {
+    cwd, ...(paths === undefined ? {} : { paths }),
+  });
 }
 
 export function gitPush(cwd: string): Promise<void> {
@@ -574,7 +578,7 @@ export function readTextFile(path: string): Promise<string> {
   return invoke<string>("read_text_file", { path });
 }
 
-/** Raw bytes for the image viewer. Arrives as an ArrayBuffer, not base64. */
+/** Raw bytes for media previews. Arrives as an ArrayBuffer, not base64. */
 export async function readBinaryFile(path: string): Promise<Uint8Array> {
   const buffer = await invoke<ArrayBuffer | string>("read_binary_file", {
     path,

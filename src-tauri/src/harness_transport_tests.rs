@@ -122,6 +122,80 @@ fn obsolete_sse_cannot_deliver_data_or_end_to_replacement() {
 }
 
 #[test]
+fn queued_sse_batch_is_discarded_after_stream_replacement() {
+    let (tx, rx) = mpsc::channel();
+    let host = HarnessHost::new();
+    let old = Arc::new(LiveSse {
+        stop: Arc::new(AtomicBool::new(false)),
+        socket: Mutex::new(None),
+    });
+    host.insert_sse("same".into(), old.clone());
+    let events = CurrentSseEvents {
+        streams: host.sse.clone(),
+        events: Arc::new(Events(tx)),
+        session_id: "same".into(),
+        live: old,
+    };
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (batch_tx, drained) = spawn_output_batcher(move |batch| {
+        started_tx.send(()).unwrap();
+        release_rx.recv().unwrap();
+        events.sse_batch(&events.session_id, batch);
+        events.sse_end(&events.session_id, None);
+    });
+    batch_tx.send("queued".into()).unwrap();
+    drop(batch_tx);
+    started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    host.insert_sse(
+        "same".into(),
+        Arc::new(LiveSse {
+            stop: Arc::new(AtomicBool::new(false)),
+            socket: Mutex::new(None),
+        }),
+    );
+    release_tx.send(()).unwrap();
+    drained.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert!(rx.try_recv().is_err());
+    assert!(host.sse.lock().unwrap().contains_key("same"));
+}
+
+#[test]
+fn sse_drains_all_batched_events_before_end() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        request(&mut socket);
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n")
+            .unwrap();
+        for index in 0..100 {
+            write!(socket, "data: {index}\n\n").unwrap();
+        }
+    });
+    let (tx, rx) = mpsc::channel();
+    let host = HarnessHost::new();
+    open_sse_stream(
+        &host,
+        Arc::new(Events(tx)),
+        "stream".into(),
+        format!("http://{address}/event"),
+        None,
+    )
+    .unwrap();
+    for index in 0..100 {
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            index.to_string()
+        );
+    }
+    assert_eq!(rx.recv_timeout(Duration::from_secs(2)).unwrap(), "end");
+    assert!(!host.sse.lock().unwrap().contains_key("stream"));
+    server.join().unwrap();
+}
+
+#[test]
 fn replacing_registered_sse_cancels_its_blocked_socket() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let mut peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();

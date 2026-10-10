@@ -218,8 +218,10 @@ fn set_trackpad_zoom_enabled(
     trackpad_zoom::set_enabled(&window, enabled);
 }
 
+// Async so the window is built off the main thread. Building it from a sync
+// command deadlocks WebView2 on Windows and leaves the new window blank.
 #[tauri::command]
-fn open_new_window(app: tauri::AppHandle) -> Result<(), String> {
+async fn open_new_window(app: tauri::AppHandle) -> Result<(), String> {
     window::open_new_window(&app)
 }
 
@@ -233,7 +235,15 @@ pub fn run() {
     macos::register_spellcheck_default();
     #[cfg(windows)]
     windows::initialize().expect("Failed to initialize Windows process safety");
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // Closing to the tray leaves the process running without a taskbar entry,
+    // so a second launch must reopen it instead of starting another instance.
+    // Registered first so the duplicate exits before any setup runs.
+    #[cfg(target_os = "windows")]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+        let _ = window::show_hidden_or_open_new(app);
+    }));
+    let app = builder
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
@@ -341,6 +351,7 @@ pub fn run() {
             fs::git_stage_all,
             fs::git_unstage_all,
             fs::git_commit,
+            fs::git_locate_files,
             fs::git_head_message,
             fs::git_staged_context,
             fs::git_push,

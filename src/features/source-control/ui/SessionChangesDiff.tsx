@@ -34,7 +34,7 @@ export function SessionChangesDiff({
   focusPath,
   paths,
 }: Props) {
-  const scope = paths?.join("\n");
+  const scope = paths == null ? undefined : JSON.stringify(paths);
   // Only the load order uses the focus; moving it must not restart the load.
   const focusRef = useRef(focusPath);
   focusRef.current = focusPath;
@@ -58,7 +58,7 @@ export function SessionChangesDiff({
       void sessionCheckpointStatus(sessionId, cwd)
         .then(async (status) => {
           if (disposed || current !== generation) return;
-          const allowed = scope == null ? null : new Set(scope.split("\n"));
+          const allowed = scope == null ? null : new Set<string>(JSON.parse(scope));
           const scoped = allowed
             ? status.files.filter((file) => allowed.has(file.path))
             : status.files;

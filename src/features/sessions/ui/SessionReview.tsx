@@ -1,19 +1,23 @@
 import { ChevronDown, ChevronRight, FileDiff } from "../../../shared/ui/icons";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import {
   keepSessionChanges,
-  sessionCheckpointStatus,
-  subscribeReviewChanged,
   undoSessionChanges,
   type CheckpointFile,
 } from "../model/checkpoint";
+import {
+  EMPTY_SESSION_REVIEW,
+  sessionReviewCache,
+} from "../model/sessionReviewCache";
 import { invalidateProjectFiles } from "../../files/model/fileIndex";
 import { invalidateWatchedFiles } from "../../files/model/fileWatch";
-import {
-  basename,
-  notifyGitChanged,
-  subscribeGitChanged,
-} from "../../../platform/tauri/fs";
+import { basename, notifyGitChanged } from "../../../platform/tauri/fs";
 import { formatInteger } from "../../../shared/lib/numbers";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
 
@@ -23,6 +27,7 @@ type Props = {
   enabled?: boolean;
   busy?: boolean;
   undoLocked?: boolean;
+  editedPaths?: readonly string[];
   onOpenDiff: (
     path?: string,
     session?: { sessionId: string; cwd: string },
@@ -36,78 +41,23 @@ export function SessionReview({
   enabled = true,
   busy = false,
   undoLocked = false,
+  editedPaths,
   onOpenDiff,
   onCommit,
 }: Props) {
-  const [files, setFiles] = useState<CheckpointFile[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const { files, setFiles, error, load, filesRef } = useSessionReviewFiles(
+    sessionId,
+    cwd,
+    enabled,
+    busy,
+    editedPaths,
+  );
   const [expanded, setExpanded] = useState(false);
   const [acting, setActing] = useState<"keep" | "undo" | null>(null);
-  const filesRef = useRef(files);
-  const loadGeneration = useRef(0);
-  filesRef.current = files;
-
-  const load = useCallback(() => {
-    const generation = ++loadGeneration.current;
-    if (!cwd || cwd === "~") {
-      setFiles([]);
-      setError(null);
-      return;
-    }
-    void sessionCheckpointStatus(sessionId, cwd)
-      .then((status) => {
-        if (generation !== loadGeneration.current) return;
-        setFiles(status.files);
-        setError(null);
-      })
-      .catch((caught: unknown) => {
-        if (generation !== loadGeneration.current) return;
-        setFiles([]);
-        setError(caught instanceof Error ? caught.message : String(caught));
-      });
-  }, [sessionId, cwd]);
-
-  useEffect(() => {
-    if (!enabled || busy) return;
-    setFiles([]);
-    setError(null);
-    load();
-    let timer: number | null = null;
-    const schedule = () => {
-      if (timer != null) window.clearTimeout(timer);
-      timer = window.setTimeout(() => {
-        timer = null;
-        load();
-      }, 200);
-    };
-    const unsubReview = subscribeReviewChanged((id) => {
-      if (!id || id === sessionId) schedule();
-    });
-    const unsubGit = subscribeGitChanged(schedule);
-    const onResume = schedule;
-    window.addEventListener("focus", onResume);
-    document.addEventListener("visibilitychange", onResume);
-    return () => {
-      loadGeneration.current++;
-      if (timer != null) window.clearTimeout(timer);
-      window.removeEventListener("focus", onResume);
-      document.removeEventListener("visibilitychange", onResume);
-      unsubReview();
-      unsubGit();
-    };
-  }, [enabled, load, sessionId, busy]);
 
   useEffect(() => {
     if (files.length <= 3) setExpanded(false);
   }, [files.length]);
-
-  useEffect(() => {
-    if (busy) {
-      loadGeneration.current++;
-      setFiles([]);
-      setError(null);
-    }
-  }, [busy]);
 
   // The card represents the result of a turn. Keep it out of the live turn,
   // then refresh and reveal it once the turn has settled.
@@ -133,13 +83,7 @@ export function SessionReview({
   const canUndoAll = !undoLocked && files.every((file) => file.undoable);
   const visibleFiles = expanded ? files : files.slice(0, 3);
   const hiddenFileCount = files.length - visibleFiles.length;
-  const totals = files.reduce(
-    (sum, file) => ({
-      additions: sum.additions + file.additions,
-      deletions: sum.deletions + file.deletions,
-    }),
-    { additions: 0, deletions: 0 },
-  );
+  const totals = sumChanges(files);
 
   const run = (action: "keep" | "undo") => {
     if (disabled) return;
@@ -151,8 +95,8 @@ export function SessionReview({
     const previous = filesRef.current.map((file) => file.path);
     void op
       .then((status) => {
-        setFiles(status.files);
         notifyGitChanged();
+        setFiles(status.files);
         invalidateWatchedFiles(previous);
         invalidateProjectFiles(cwd);
       })
@@ -267,6 +211,104 @@ export function SessionReview({
         ) : null}
       </div>
     </div>
+  );
+}
+
+/** Cached changes shared by the transcript card and compact review button. */
+function useSessionReviewFiles(
+  sessionId: string,
+  cwd: string,
+  enabled: boolean,
+  busy: boolean,
+  editedPaths?: readonly string[],
+) {
+  const editScope =
+    editedPaths === undefined ? undefined : JSON.stringify(editedPaths);
+  const valid = !!sessionId && !!cwd && cwd !== "~";
+  const subscribe = useCallback(
+    (listener: () => void) =>
+      valid && enabled && !busy
+        ? sessionReviewCache.subscribe(sessionId, cwd, editScope, listener)
+        : () => {},
+    [valid, enabled, busy, sessionId, cwd, editScope],
+  );
+  const getSnapshot = useCallback(
+    () =>
+      valid && !busy
+        ? sessionReviewCache.getSnapshot(sessionId, cwd)
+        : EMPTY_SESSION_REVIEW,
+    [valid, busy, sessionId, cwd],
+  );
+  const { files, error } = useSyncExternalStore(
+    subscribe,
+    getSnapshot,
+    getSnapshot,
+  );
+  const filesRef = useRef(files);
+  filesRef.current = files;
+  useEffect(() => {
+    if (valid && busy) sessionReviewCache.startTurn(sessionId, cwd);
+  }, [valid, busy, sessionId, cwd]);
+  const load = useCallback(() => {
+    if (valid) void sessionReviewCache.refresh(sessionId, cwd);
+  }, [valid, sessionId, cwd]);
+  const setFiles = useCallback(
+    (next: CheckpointFile[]) =>
+      sessionReviewCache.setFiles(sessionId, cwd, next),
+    [sessionId, cwd],
+  );
+
+  return { files, setFiles, error, load, filesRef };
+}
+
+/** A Mono's compact review: the recorded line counts, opening the diff. */
+export function SessionChangesButton({
+  sessionId,
+  cwd,
+  enabled = true,
+  busy = false,
+  editedPaths,
+  onOpenDiff,
+}: Pick<
+  Props,
+  "sessionId" | "cwd" | "enabled" | "busy" | "editedPaths" | "onOpenDiff"
+>) {
+  const { files } = useSessionReviewFiles(
+    sessionId,
+    cwd,
+    enabled,
+    busy,
+    editedPaths,
+  );
+  if (busy || files.length === 0) return null;
+  const totals = sumChanges(files);
+  const label = `Changed ${files.length} ${files.length === 1 ? "file" : "files"}`;
+  return (
+    <button
+      type="button"
+      title={`${label}. Review changes`}
+      aria-label={`${label}, ${totals.additions} additions, ${totals.deletions} deletions. Review changes`}
+      onClick={() => onOpenDiff(undefined, { sessionId, cwd })}
+      className="flex items-center gap-1 rounded-md p-1 font-sans text-[11px] font-semibold leading-none tabular-nums outline-none hover:bg-content/8 focus-visible:ring-1 focus-visible:ring-accent"
+      data-session-changes
+    >
+      <span className="text-diff-add-fg">
+        +{formatInteger(totals.additions)}
+      </span>
+      <span className="text-diff-del-fg">
+        -{formatInteger(totals.deletions)}
+      </span>
+    </button>
+  );
+}
+
+function sumChanges(files: CheckpointFile[]) {
+  return files.reduce(
+    (sum, file) => ({
+      additions: sum.additions + file.additions,
+      deletions: sum.deletions + file.deletions,
+    }),
+    { additions: 0, deletions: 0 },
   );
 }
 

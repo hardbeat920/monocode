@@ -167,7 +167,10 @@ import {
   assertSupportedOpenCodeVersion,
   parseOpenCodeVersion,
 } from "../../../integrations/harness/providers/opencode/opencodeProtocol";
-import { refreshHarnessCatalogs } from "../../../integrations/harness/core/registry";
+import {
+  enforceHarnessIdleLimit,
+  refreshHarnessCatalogs,
+} from "../../../integrations/harness/core/registry";
 import { loginHarness } from "../../../integrations/harness/core/auth";
 import {
   defaultModelId,
@@ -314,6 +317,7 @@ import {
   filterKeybindings,
   currentKeybindings,
   loadClaudeHooks,
+  loadIdleAgentLimit,
   loadCloseToTray,
   loadCollapsedProjectRailMode,
   loadComposerRunner,
@@ -334,6 +338,9 @@ import {
   loadQuickComposerShortcut,
   loadTabAnimationsEnabled,
   saveClaudeHooks,
+  saveIdleAgentLimit,
+  IDLE_AGENT_LIMITS,
+  type IdleAgentLimit,
   saveCloseToTray,
   saveCollapsedProjectRailMode,
   saveComposerRunner,
@@ -3169,6 +3176,8 @@ function ProvidersPage({
   const [choice, setChoice] = useState(loadLastModelChoice);
   const [defaultModels, setDefaultModels] = useState(loadDefaultModels);
   const [claudeHooks, setClaudeHooks] = useState(loadClaudeHooks);
+  const [idleAgentLimit, setIdleAgentLimit] =
+    useState<IdleAgentLimit>(loadIdleAgentLimit);
   const [scope, setScope] = useState<string>(GLOBAL_PROVIDER_SCOPE);
   const [hiddenGlobally, setHiddenGlobally] = useState(
     loadHiddenPickerProviders,
@@ -3226,6 +3235,14 @@ function ProvidersPage({
   const onClaudeHooks = (next: boolean) => {
     saveClaudeHooks(next);
     setClaudeHooks(next);
+  };
+
+  const onIdleAgentLimit = (next: string) => {
+    const limit = Number(next) as IdleAgentLimit;
+    saveIdleAgentLimit(limit);
+    setIdleAgentLimit(limit);
+    // A lower limit takes effect now, not at the next finished turn.
+    enforceHarnessIdleLimit();
   };
 
   const onModelChange = (harness: HarnessId, model: string) => {
@@ -3329,6 +3346,21 @@ function ProvidersPage({
       </Group>
 
       <Group title="Advanced">
+        <Row
+          id="idle-agents"
+          label="Keep idle agents ready"
+          description="A finished conversation keeps its agent CLI running for a few minutes, so a follow-up starts instantly. Each one can hold a few hundred MB of memory. Past this many, the one idle longest stops early; it resumes on your next message after a short restart. Choose None on a machine short on memory."
+        >
+          <Segmented
+            label="Keep idle agents ready"
+            value={String(idleAgentLimit)}
+            options={IDLE_AGENT_LIMITS.map((limit) => ({
+              value: String(limit),
+              label: limit === 0 ? "None" : String(limit),
+            }))}
+            onChange={onIdleAgentLimit}
+          />
+        </Row>
         <Row
           id="claude-hooks"
           label="Claude Code hooks"

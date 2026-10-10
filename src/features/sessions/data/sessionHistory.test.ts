@@ -6,6 +6,7 @@ import {
   mergeHistorySummary,
   mergeProjectHistorySummary,
   replaceProjectHistory,
+  sameSessionSummaries,
 } from "./sessionHistory";
 import { newSession } from "../model/session";
 import type { SessionSummary } from "./sessionStore";
@@ -146,7 +147,11 @@ describe("historyWithLiveSessions", () => {
       blocks: [{ id: "u", role: "user" as const, text: "Fix PR #42" }],
       busy: true,
     };
-    const rows = historyWithLiveSessions([summary("live", cwd)], [session], cwd);
+    const rows = historyWithLiveSessions(
+      [summary("live", cwd)],
+      [session],
+      cwd,
+    );
     expect(rows[0]).toMatchObject({
       title: "cursor · Fix tab title refresh",
       linkedWorkItem,
@@ -469,5 +474,33 @@ describe("pinned sessions", () => {
     ];
     const rows = historyWithLiveSessions(history, [], "/tmp/project-a");
     expect(rows.map((row) => row.id)).toEqual(["pin", "new"]);
+  });
+});
+
+describe("sameSessionSummaries", () => {
+  it("treats a live row's restamped clock as unchanged", () => {
+    const before = [summary("a", "/p", 1_000), summary("b", "/p", 500)];
+    const after = [{ ...before[0], updatedAt: 21_000 }, before[1]];
+    expect(sameSessionSummaries(before, after)).toBe(true);
+  });
+
+  it("lets the clock move once the relative time could show it", () => {
+    const before = [summary("a", "/p", 1_000)];
+    const after = [{ ...before[0], updatedAt: 31_000 }];
+    expect(sameSessionSummaries(before, after)).toBe(false);
+  });
+
+  it("notices a changed field, nested value, or order", () => {
+    const a = summary("a", "/p");
+    const b = summary("b", "/p");
+    expect(sameSessionSummaries([a], [{ ...a, title: "Renamed" }])).toBe(false);
+    expect(
+      sameSessionSummaries(
+        [{ ...a, linkedWorkItem: { url: "u1" } as never }],
+        [{ ...a, linkedWorkItem: { url: "u2" } as never }],
+      ),
+    ).toBe(false);
+    expect(sameSessionSummaries([a, b], [b, a])).toBe(false);
+    expect(sameSessionSummaries([a], [a, b])).toBe(false);
   });
 });

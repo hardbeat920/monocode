@@ -760,6 +760,46 @@ describe("AgentTranscript collapsed work", () => {
     );
   });
 
+  it("keeps a Mono's changes action on the turn that edited files", () => {
+    const blocks: Block[] = [
+      {
+        id: "edit-user",
+        role: "user",
+        text: "Write the report",
+        startedAt: 1_000,
+        durationMs: 500,
+      },
+      {
+        id: "edit",
+        role: "tool",
+        text: "Write report.md",
+        tool: { kind: "edit", status: "completed" },
+      },
+      { id: "edit-answer", role: "assistant", text: "Report written." },
+      {
+        id: "later-user",
+        role: "user",
+        text: "Rerun the checks",
+        startedAt: 2_000,
+        durationMs: 500,
+      },
+      { id: "later-answer", role: "assistant", text: "Checks rerunning." },
+    ];
+    const markup = renderToStaticMarkup(
+      createElement(AgentTranscript, {
+        blocks,
+        editTurnAction: createElement("button", {}, "+7 -0"),
+      }),
+    );
+    const action = markup.indexOf("+7 -0");
+    expect(markup.match(/\+7 -0/g)).toHaveLength(1);
+    expect(action).toBeGreaterThan(markup.indexOf("Report written."));
+    expect(action).toBeLessThan(markup.indexOf("Rerun the checks"));
+    expect(markup.lastIndexOf("data-turn-actions", action)).toBeGreaterThan(
+      markup.indexOf("Report written."),
+    );
+  });
+
   it("renders an advisor interjection between answered work phases", () => {
     // Live: the interjection lands on its own labeled row. Once the turn
     // settles it folds into the work trail — covered below.
