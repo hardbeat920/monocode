@@ -7,6 +7,7 @@ import type { AgentModel, ModelSetting } from "../../../../features/sessions/mod
 import { isTaskListToolName } from "../../../../features/sessions/model/taskList";
 import type { PiFlavor } from "./piFlavor";
 import { extractToolPreview, titleFromToolInput } from "../../core/preview";
+import { upstreamProviderName } from "../../core/providerNames";
 import { streamTextDelta } from "../../core/streamText";
 
 /** Images Pi RPC accepts on `prompt` / `steer`. */
@@ -739,6 +740,7 @@ export function isHiddenCopilotModel(provider: string, modelId: string) {
   );
 }
 
+/** Build the Pi/omp picker catalog with provider labels, sorted by model name. */
 export function modelsFromRpcData(
   flavor: PiFlavor,
   data: unknown,
@@ -772,6 +774,7 @@ export function modelsFromRpcData(
       harness: flavor.id,
       name,
       nativeId,
+      provider: { id: provider, name: upstreamProviderName(provider) },
       ...(settings.length > 0 ? { settings } : {}),
       ...(contextWindow && contextWindow > 0 ? { contextWindow } : {}),
     });

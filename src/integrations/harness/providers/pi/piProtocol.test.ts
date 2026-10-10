@@ -397,6 +397,10 @@ describe("tools and models", () => {
     ]);
     expect(models[0]?.settings?.[0]?.id).toBe("thinking");
     expect(models[0]?.contextWindow).toBe(200000);
+    expect(models.map((model) => model.provider)).toEqual([
+      { id: "anthropic", name: "Anthropic" },
+      { id: "openai", name: "OpenAI" },
+    ]);
     expect(models[1]?.settings).toBeUndefined();
   });
 
