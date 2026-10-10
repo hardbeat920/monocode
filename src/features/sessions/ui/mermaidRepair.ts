@@ -4,11 +4,16 @@
  * the semicolons after a statement's `:` keeps the text and lets it render.
  * Entities Mermaid recognizes (`#\w+;`, such as `#59;`, `#quot;` or
  * `#frac12;`) are left whole, so repairing twice changes nothing.
+ * YAML frontmatter is kept as written; only the diagram after it is repaired.
  * Returns the source unchanged when there is nothing to repair.
  */
 export function repairMermaid(source: string): string {
-  if (!/^\s*sequenceDiagram\b/.test(source)) return source;
-  return source
+  const frontmatter = /^\s*---\r?\n[\s\S]*?\r?\n---[^\S\r\n]*(?:\r?\n|$)/.exec(
+    source,
+  )?.[0];
+  const body = frontmatter ? source.slice(frontmatter.length) : source;
+  if (!/^\s*sequenceDiagram\b/.test(body)) return source;
+  const repaired = body
     .split("\n")
     .map((line) => {
       const colon = line.indexOf(":");
@@ -23,4 +28,5 @@ export function repairMermaid(source: string): string {
       );
     })
     .join("\n");
+  return (frontmatter ?? "") + repaired;
 }

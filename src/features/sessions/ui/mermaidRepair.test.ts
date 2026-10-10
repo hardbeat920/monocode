@@ -100,3 +100,46 @@ describe("repairMermaid alphanumeric entities", () => {
     );
   });
 });
+
+describe("repairMermaid frontmatter", () => {
+  const source = [
+    "---",
+    "title: Load; check",
+    "---",
+    "sequenceDiagram",
+    "    App->>DB: Load registration; check expiry",
+  ].join("\n");
+
+  it("repairs the diagram after frontmatter and leaves the frontmatter as written", () => {
+    expect(repairMermaid(source)).toBe(
+      [
+        "---",
+        "title: Load; check",
+        "---",
+        "sequenceDiagram",
+        "    App->>DB: Load registration#59; check expiry",
+      ].join("\n"),
+    );
+    expect(repairMermaid(repairMermaid(source))).toBe(repairMermaid(source));
+  });
+
+  it("parses in Mermaid only after the repair", async () => {
+    const { default: mermaid } = await import("mermaid");
+    expect(await mermaid.parse(source, { suppressErrors: true })).toBe(false);
+
+    const diagram = await mermaid.mermaidAPI.getDiagramFromText(
+      repairMermaid(source),
+    );
+    const db = diagram.db as unknown as {
+      getMessages(): Array<{ message: string }>;
+    };
+    expect(db.getMessages().map((entry) => decodeLabel(entry.message))).toEqual(
+      ["Load registration; check expiry"],
+    );
+  });
+
+  it("leaves frontmatter-prefixed non-sequence diagrams alone", () => {
+    const flowchart = "---\ntitle: a; b\n---\nflowchart LR\n  A --> B";
+    expect(repairMermaid(flowchart)).toBe(flowchart);
+  });
+});
