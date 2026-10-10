@@ -1,11 +1,12 @@
 // @vitest-environment happy-dom
-import { act, createElement } from "react";
+import { act, createElement, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BinaryFileView } from "./BinaryFileView";
 
 const actions = vi.hoisted(() => ({
   copyFileToClipboard: vi.fn(async () => {}),
+  openPathWithDefaultApp: vi.fn(async () => {}),
   readBinaryFile: vi.fn(
     async () =>
       new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
@@ -15,6 +16,7 @@ const actions = vi.hoisted(() => ({
 vi.mock("../../../platform/tauri/fs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../platform/tauri/fs")>()),
   copyFileToClipboard: actions.copyFileToClipboard,
+  openPathWithDefaultApp: actions.openPathWithDefaultApp,
   readBinaryFile: actions.readBinaryFile,
 }));
 
@@ -48,14 +50,18 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-async function renderViewer() {
+async function renderViewer(
+  path = "/repo/art/original image.png",
+  visible = true,
+  strict = false,
+) {
   await act(async () => {
-    root.render(
-      createElement(BinaryFileView, {
-        path: "/repo/art/original image.png",
-        cwd: "/repo",
-      }),
-    );
+    const viewer = createElement(BinaryFileView, {
+      path,
+      cwd: "/repo",
+      visible,
+    });
+    root.render(strict ? createElement(StrictMode, null, viewer) : viewer);
     await Promise.resolve();
   });
 }
@@ -101,5 +107,118 @@ describe("BinaryFileView image copy", () => {
       "/repo/art/original image.png",
     );
     expect(container.querySelector('[aria-label="Copied"]')).not.toBeNull();
+  });
+});
+
+describe("BinaryFileView video playback", () => {
+  it("renders a controlled player and shows its metadata", async () => {
+    await renderViewer("/repo/clip.mp4");
+    const video = container.querySelector("video")!;
+    expect(video.src).toBe("blob:image-preview");
+    expect(video.controls).toBe(true);
+    expect(video.autoplay).toBe(false);
+    expect(video.preload).toBe("metadata");
+    expect(video.hasAttribute("playsinline")).toBe(true);
+    expect(container.querySelector("img")).toBeNull();
+    const blob = vi.mocked(URL.createObjectURL).mock.calls[0][0] as Blob;
+    expect(blob.type).toBe("video/mp4");
+
+    Object.defineProperties(video, {
+      videoWidth: { value: 1920 },
+      videoHeight: { value: 1080 },
+      duration: { value: 70.8 },
+    });
+    act(() => video.dispatchEvent(new Event("loadedmetadata")));
+
+    expect(container.textContent).toContain("1920 × 1080");
+    expect(container.textContent).toContain("1:10");
+    expect(container.textContent).toContain("8 B");
+  });
+
+  it("pauses a hidden tab without resuming when it becomes visible", async () => {
+    await renderViewer("/repo/clip.mp4");
+    const video = container.querySelector("video")!;
+    const pause = vi.spyOn(video, "pause");
+    const play = vi.spyOn(video, "play");
+
+    await renderViewer("/repo/clip.mp4", false);
+    expect(pause).toHaveBeenCalledOnce();
+    await renderViewer("/repo/clip.mp4", true);
+    expect(play).not.toHaveBeenCalled();
+
+    vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+    expect(pause).toHaveBeenCalledTimes(2);
+  });
+
+  it("offers an external player and retries after a decoding error", async () => {
+    await renderViewer("/repo/clip.mov");
+    act(() =>
+      container.querySelector("video")!.dispatchEvent(new Event("error")),
+    );
+    expect(container.querySelector("video")).toBeNull();
+    expect(container.textContent).toContain("Couldn’t play clip.mov");
+    expect(container.textContent).toContain("format or codec is unsupported");
+
+    const buttons = [...container.querySelectorAll("button")];
+    await act(async () =>
+      buttons
+        .find((button) => button.textContent === "Open externally")!
+        .click(),
+    );
+    expect(actions.openPathWithDefaultApp).toHaveBeenCalledWith(
+      "/repo/clip.mov",
+    );
+    vi.mocked(URL.createObjectURL).mockReturnValueOnce("blob:video-retry");
+    await act(async () =>
+      buttons.find((button) => button.textContent === "Retry")!.click(),
+    );
+    expect(container.querySelector("video")).not.toBeNull();
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:image-preview");
+  });
+
+  it("does not offer a local external player for remote videos", async () => {
+    await renderViewer("remote://env/repo/clip.mp4");
+    act(() =>
+      container.querySelector("video")!.dispatchEvent(new Event("error")),
+    );
+    expect(container.textContent).not.toContain("Open externally");
+  });
+
+  it("releases the player and blob when closed", async () => {
+    await renderViewer("/repo/clip.mp4");
+    const video = container.querySelector("video")!;
+    const pause = vi.spyOn(video, "pause");
+    const load = vi.spyOn(video, "load");
+    act(() => root.render(null));
+    expect(pause).toHaveBeenCalledOnce();
+    expect(video.hasAttribute("src")).toBe(false);
+    expect(load).toHaveBeenCalledOnce();
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:image-preview");
+  });
+
+  it("restarts loading the restored source after StrictMode replays its effects", async () => {
+    const loadedSources: Array<string | null> = [];
+    vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(function (
+      this: HTMLMediaElement,
+    ) {
+      loadedSources.push(this.getAttribute("src"));
+    });
+    await renderViewer("/repo/clip.mp4", true, true);
+    expect(container.querySelector("video")?.src).toBe("blob:image-preview");
+    expect(loadedSources).toEqual([null, "blob:image-preview"]);
+  });
+
+  it("shows file read errors and allows retry", async () => {
+    actions.readBinaryFile.mockRejectedValueOnce(
+      new Error("File is too large to preview (maximum 25 MB)."),
+    );
+    await renderViewer("/repo/clip.mp4");
+    expect(container.textContent).toContain("maximum 25 MB");
+    const retry = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Retry",
+    )!;
+    await act(async () => retry.click());
+    expect(container.querySelector("video")).not.toBeNull();
   });
 });

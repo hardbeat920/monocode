@@ -18,7 +18,7 @@ import {
   type EditorPane,
   type FilePaneTab,
 } from "../../workspace/model/layout";
-import { isImagePath } from "../model/filePreview";
+import { isImagePath, isVideoPath } from "../model/filePreview";
 import type { TerminalMetaPatch } from "../../terminal/model/terminalTab";
 import type { EditorNavigationTarget } from "../../search/model/search";
 import { editorPathsEqual } from "../../search/model/search";
@@ -59,6 +59,8 @@ const WorkingTreeDiff = lazySurface(async () => {
 type Props = {
   pane: EditorPane;
   focused: boolean;
+  /** The containing workspace tab can stay mounted while hidden. */
+  visible?: boolean;
   /** The title bar already names a standalone file, so avoid repeating it. */
   showTabs?: boolean;
   dirtyFileIds: Set<string>;
@@ -87,6 +89,7 @@ type Props = {
 function FilePaneComponent({
   pane,
   focused,
+  visible = true,
   showTabs = true,
   dirtyFileIds,
   fileErrorCounts,
@@ -209,8 +212,12 @@ function FilePaneComponent({
                     onTerminalMetaChange?.(file.id, patch)
                   }
                 />
-              ) : isImagePath(file.path) ? (
-                <BinaryFileView path={file.path} cwd={file.cwd} />
+              ) : isImagePath(file.path) || isVideoPath(file.path) ? (
+                <BinaryFileView
+                  path={file.path}
+                  cwd={file.cwd}
+                  visible={visible && file.id === pane.activeFileId}
+                />
               ) : (
                 <FileEditor
                   path={file.path}
@@ -245,6 +252,7 @@ export const FilePane = memo(FilePaneComponent, (previous, next) => {
   if (
     previous.pane !== next.pane ||
     previous.focused !== next.focused ||
+    previous.visible !== next.visible ||
     previous.showTabs !== next.showTabs ||
     previous.dirtyFileIds !== next.dirtyFileIds ||
     previous.fileErrorCounts !== next.fileErrorCounts ||

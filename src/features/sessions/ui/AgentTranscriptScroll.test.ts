@@ -292,6 +292,7 @@ describe("transcript scrolling", () => {
 
   it("pauses following for a scrollbar move inside the bottom margin", () => {
     const { scroller, geometry, observer } = mountScroller();
+    act(() => scroller.dispatchEvent(new PointerEvent("pointerdown")));
     geometry.top = 596;
     act(() => scroller.dispatchEvent(new Event("scroll")));
     geometry.height = 1100;
@@ -303,6 +304,7 @@ describe("transcript scrolling", () => {
     "respects an upward move before its scroll event arrives during a %s",
     (change) => {
       const { scroller, geometry, observer, blocks } = mountScroller();
+      act(() => scroller.dispatchEvent(new PointerEvent("pointerdown")));
       // The browser moves first; a streaming commit or resize can run before
       // its asynchronous scroll event is dispatched.
       geometry.top = 560;

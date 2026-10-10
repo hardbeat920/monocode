@@ -76,9 +76,10 @@ describe("harness event queue", () => {
       paint();
       vi.advanceTimersByTime(16);
     }
+    // 60Hz frames, but the shell only re-renders on every other one.
     expect(
       apply.mock.calls.filter(([batch]) => batch.has("front")),
-    ).toHaveLength(20);
+    ).toHaveLength(10);
     expect(
       apply.mock.calls.filter(([batch]) => batch.has("back1")),
     ).toHaveLength(2);
@@ -87,6 +88,7 @@ describe("harness event queue", () => {
       else expect([...batch.keys()]).toEqual(["back1", "back2"]);
     }
     vi.advanceTimersByTime(100);
+    paint();
     for (const id of ["front", "back1", "back2"]) {
       const events = apply.mock.calls.flatMap(([batch]) => batch.get(id) ?? []);
       expect(events).toHaveLength(20);
@@ -100,6 +102,22 @@ describe("harness event queue", () => {
       );
     }
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("caps a visible stream near 30Hz on a high refresh display", () => {
+    const { queue, apply, paint } = controlledQueue(new Set(["front"]));
+    for (let i = 0; i < 120; i++) {
+      queue.enqueue("front", { type: "message.delta", text: ` a${i}` });
+      paint();
+      vi.advanceTimersByTime(1000 / 120);
+    }
+    expect(apply.mock.calls.length).toBeGreaterThanOrEqual(29);
+    expect(apply.mock.calls.length).toBeLessThanOrEqual(31);
+    paint();
+    const events = apply.mock.calls.flatMap(
+      ([batch]) => batch.get("front") ?? [],
+    );
+    expect(events).toHaveLength(120);
   });
 
   it("catches up a selected chat without flushing other chats or postponing their timer", () => {
