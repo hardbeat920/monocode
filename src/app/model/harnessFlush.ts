@@ -2,6 +2,13 @@ import type { HarnessEvent } from "../../integrations/harness/core/types";
 
 export type ScheduledFlush = { kind: "raf" | "timeout"; id: number };
 
+/**
+ * Each flush re-renders the app shell, so a visible stream lands at ~30Hz
+ * rather than every frame; paced text animates between flushes on its own.
+ * Just under two 60Hz frames, so frame jitter can't halve the rate.
+ */
+export const FOREGROUND_FLUSH_MS = 30;
+
 export function cancelScheduledFlush(handle: ScheduledFlush | null) {
   if (!handle) return;
   if (handle.kind === "raf") cancelAnimationFrame(handle.id);
@@ -24,9 +31,11 @@ export class HarnessEventQueue {
   private queued = new Map<string, HarnessEvent[]>();
   private foregroundFlush: ScheduledFlush | null = null;
   private backgroundFlush: ScheduledFlush | null = null;
+  private lastForegroundFlush = -Infinity;
 
   constructor(
-    private readonly isForeground: (sessionId: string) => boolean,
+    /** Whether the conversation is on screen; idle parking reads it too. */
+    readonly isForeground: (sessionId: string) => boolean,
     private readonly apply: (
       batches: ReadonlyMap<string, HarnessEvent[]>,
     ) => void,
@@ -100,6 +109,12 @@ export class HarnessEventQueue {
       if (this.foregroundFlush) return;
       this.foregroundFlush = scheduleHarnessFlush(() => {
         this.foregroundFlush = null;
+        const now = performance.now();
+        if (now - this.lastForegroundFlush < FOREGROUND_FLUSH_MS) {
+          this.schedule(true);
+          return;
+        }
+        this.lastForegroundFlush = now;
         this.flushForeground();
       }, true);
     } else if (!this.backgroundFlush) {

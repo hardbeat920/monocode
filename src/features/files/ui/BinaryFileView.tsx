@@ -17,12 +17,18 @@ import {
 import { ExplorerMenu } from "./ExplorerMenu";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { copyText } from "../../../platform/tauri/clipboard";
-import { formatFileSize, sniffImageMime } from "../model/filePreview";
+import {
+  formatFileSize,
+  sniffImageMime,
+  videoMimeForPath,
+} from "../model/filePreview";
 import { watchFile } from "../model/fileWatch";
 import {
   basename,
   copyFileToClipboard,
+  openPathWithDefaultApp,
   readBinaryFile,
+  REMOTE_PATH_PREFIX,
   revealPath,
 } from "../../../platform/tauri/fs";
 import { displayPath } from "../../../shared/lib/paths";
@@ -43,7 +49,7 @@ type ZoomAnchor = {
   clientY: number;
 };
 
-type Props = { path: string; cwd: string };
+type Props = { path: string; cwd: string; visible?: boolean };
 
 type LoadState =
   | { status: "loading" }
@@ -52,10 +58,9 @@ type LoadState =
   | { status: "error"; message: string };
 
 /**
- * Read-only surface for files the editor can't open. Images render; bytes that
- * turn out not to be an image get a card pointing at the file on disk.
+ * Read-only image and video previews, with a card for unreadable media.
  */
-export function BinaryFileView({ path, cwd }: Props) {
+export function BinaryFileView({ path, cwd, visible = true }: Props) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -67,9 +72,9 @@ export function BinaryFileView({ path, cwd }: Props) {
     readBinaryFile(path).then(
       (bytes) => {
         if (cancelled) return;
-        // The blob's MIME comes from the bytes, never the extension, so a file
-        // named `.png` that holds markup can't become a same-origin document.
-        const mime = sniffImageMime(bytes);
+        // Images are sniffed; videos receive only an explicit video MIME and
+        // are validated by the media decoder. Neither can become a document.
+        const mime = videoMimeForPath(path) ?? sniffImageMime(bytes);
         if (!mime) {
           setState({ status: "unsupported", size: bytes.byteLength });
           return;
@@ -128,6 +133,7 @@ export function BinaryFileView({ path, cwd }: Props) {
         detail={state.message}
         icon={<AlertCircle className="mx-auto mb-3 size-5 text-red-400" />}
         onRetry={reload}
+        offerOpen={videoMimeForPath(path) !== null}
       />
     );
   }
@@ -148,6 +154,20 @@ export function BinaryFileView({ path, cwd }: Props) {
     );
   }
 
+  if (state.mime.startsWith("video/")) {
+    return (
+      <VideoView
+        key={state.url}
+        path={path}
+        cwd={cwd}
+        url={state.url}
+        size={state.size}
+        visible={visible}
+        onRetry={reload}
+      />
+    );
+  }
+
   return (
     <ImageView
       path={path}
@@ -155,6 +175,113 @@ export function BinaryFileView({ path, cwd }: Props) {
       size={state.size}
       mime={state.mime}
     />
+  );
+}
+
+function VideoView({
+  path,
+  cwd,
+  url,
+  size,
+  visible,
+  onRetry,
+}: {
+  path: string;
+  cwd: string;
+  url: string;
+  size: number;
+  visible: boolean;
+  onRetry: () => void;
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [metadata, setMetadata] = useState<{
+    width: number;
+    height: number;
+    duration: number;
+  } | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    const pauseWhenHidden = () => {
+      if (!visible || document.hidden) video?.pause();
+    };
+    pauseWhenHidden();
+    document.addEventListener("visibilitychange", pauseWhenHidden);
+    return () =>
+      document.removeEventListener("visibilitychange", pauseWhenHidden);
+  }, [visible, failed]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    // Restore the source and restart loading if React replays effects after cleanup.
+    if (video && !video.hasAttribute("src")) {
+      video.src = url;
+      video.load();
+    }
+    return () => {
+      if (!video) return;
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+    };
+  }, [url, failed]);
+
+  if (failed) {
+    return (
+      <FileCard
+        path={path}
+        cwd={cwd}
+        title={`Couldn’t play ${basename(path)}`}
+        detail="This video’s format or codec is unsupported, or the file is damaged."
+        icon={<AlertCircle className="mx-auto mb-3 size-5 text-red-400" />}
+        onRetry={onRetry}
+        offerOpen
+      />
+    );
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex min-h-0 flex-1 items-center justify-center bg-black/80 p-4">
+        <video
+          ref={videoRef}
+          src={url}
+          controls
+          playsInline
+          preload="metadata"
+          aria-label={`Video preview: ${basename(path)}`}
+          className="h-full w-full object-contain"
+          onLoadedMetadata={(event) => {
+            const video = event.currentTarget;
+            setMetadata({
+              width: video.videoWidth,
+              height: video.videoHeight,
+              duration: video.duration,
+            });
+          }}
+          onPlay={(event) => {
+            if (!visible || document.hidden) event.currentTarget.pause();
+          }}
+          onError={(event) => {
+            if (event.currentTarget.hasAttribute("src")) setFailed(true);
+          }}
+        />
+      </div>
+      <footer className="flex h-8 shrink-0 items-center gap-3 border-t border-stroke px-3 text-[11px] text-content/50">
+        <span className="tabular-nums">
+          {metadata ? `${metadata.width} × ${metadata.height}` : "—"}
+        </span>
+        {metadata && Number.isFinite(metadata.duration) ? (
+          <span className="tabular-nums">
+            {Math.floor(metadata.duration / 60)}:
+            {String(Math.floor(metadata.duration % 60)).padStart(2, "0")}
+          </span>
+        ) : null}
+        <span className="tabular-nums">{formatFileSize(size)}</span>
+        <span className="uppercase">{basename(path).split(".").pop()}</span>
+      </footer>
+    </div>
   );
 }
 
@@ -463,6 +590,7 @@ function FileCard({
   detail,
   icon,
   onRetry,
+  offerOpen = false,
 }: {
   path: string;
   cwd: string;
@@ -470,6 +598,7 @@ function FileCard({
   detail: string;
   icon: React.ReactNode;
   onRetry?: () => void;
+  offerOpen?: boolean;
 }) {
   return (
     <div className="grid h-full place-items-center p-6">
@@ -485,6 +614,13 @@ function FileCard({
             <CardButton onClick={onRetry}>
               <RotateCcw className="size-3" strokeWidth={1.75} />
               Retry
+            </CardButton>
+          ) : null}
+          {offerOpen && !path.startsWith(REMOTE_PATH_PREFIX) ? (
+            <CardButton
+              onClick={() => void openPathWithDefaultApp(path).catch(() => {})}
+            >
+              Open externally
             </CardButton>
           ) : null}
           <CardButton onClick={() => void revealPath(path).catch(() => {})}>

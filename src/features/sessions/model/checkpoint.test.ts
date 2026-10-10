@@ -75,3 +75,21 @@ it("does not capture a workspace when no local turn was started", async () => {
   await checkpoint.finishSessionTurn("s", "/repo");
   expect(invoke).not.toHaveBeenCalled();
 });
+
+it("passes persisted edit evidence when resuming and reviewing a restored session", async () => {
+  await checkpoint.beginSessionTurn("s", "/repo", ["README.md"]);
+  expect(invoke).toHaveBeenCalledWith(
+    "session_checkpoint_begin_turn",
+    expect.objectContaining({
+      sessionId: "s",
+      cwd: "/repo",
+      editedPaths: ["README.md"],
+    }),
+  );
+  await checkpoint.sessionCheckpointStatus("s", "/repo", ["README.md"]);
+  expect(invoke).toHaveBeenLastCalledWith("session_checkpoint_status", {
+    sessionId: "s",
+    cwd: "/repo",
+    editedPaths: ["README.md"],
+  });
+});
