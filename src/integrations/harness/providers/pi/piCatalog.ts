@@ -31,6 +31,12 @@ function refreshCatalog(flavor: PiFlavor): Promise<void> {
   return run;
 }
 
+/**
+ * Probes with the user's extensions loaded. An extension may register a
+ * provider (`pi.registerProvider`), so stripping extensions can hide the entire
+ * catalog; when that provider also supplies the default model the CLI exits
+ * before answering `get_available_models`, and the probe yields nothing.
+ */
 async function discoverModels(flavor: PiFlavor, workingDirectory?: string) {
   const { path } = await flavor.resolveBinary();
   const cwd = workingDirectory ?? (await homeDir());
@@ -56,7 +62,6 @@ async function discoverModels(flavor: PiFlavor, workingDirectory?: string) {
       path,
       buildPiSpawnArgs(flavor, {
         noSession: true,
-        noExtensions: flavor.id !== "pi",
       }),
       cwd,
       undefined,

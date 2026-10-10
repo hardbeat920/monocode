@@ -144,7 +144,7 @@ export function buildPiSpawnArgs(
     resume?: string;
     /** Catalog probes and isolated jobs: do not write a session file. */
     noSession?: boolean;
-    /** Catalog probes and throwaway text jobs — never for live chat. */
+    /** Throwaway text jobs — never for live chat or catalog probes. */
     noExtensions?: boolean;
     /** Titles and other one-shot prompts: no tools, skills, or project context. */
     isolated?: boolean;
