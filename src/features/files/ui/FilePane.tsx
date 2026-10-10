@@ -222,6 +222,7 @@ function FilePaneComponent({
                 <FileEditor
                   path={file.path}
                   cwd={file.cwd}
+                  autosave={file.autosave}
                   showDiff={!!file.review}
                   active={focused && file.id === pane.activeFileId}
                   navigation={

@@ -55,6 +55,7 @@ import {
   type MentionToken,
 } from "../../files/model/fileMentions";
 import type { ProjectFile } from "../../../platform/tauri/fs";
+import type { OpenFileFn } from "../../search/model/search";
 import {
   composeInboxMessage,
   type InboxComposerCard,
@@ -199,6 +200,8 @@ import {
 import type { LastTurnRecall } from "../model/editLastTurn";
 import { useComposerAutocorrect } from "../../settings/model/displayPrefs";
 
+const LARGE_PASTE_CHARACTER_THRESHOLD = 2_000;
+
 type Props = {
   enabled?: boolean;
   focused: boolean;
@@ -229,6 +232,8 @@ type Props = {
   compactSupported?: boolean;
   quoteRequest?: QuoteRequest;
   initialDraft?: string;
+  initialAttachments?: Attachment[];
+  initialBorrowedAttachmentIds?: ReadonlySet<string>;
   draftResetToken?: number;
   inboxCard?: InboxComposerCard;
   noteCard?: NoteComposerCard;
@@ -287,8 +292,12 @@ type Props = {
   onUsageLimitResume?: () => void;
   onUsageLimitResumeAtReset?: (enabled: boolean) => void;
   onUsageLimitDismiss?: () => void;
-  onOpenFile?: (path: string) => void;
+  onOpenFile?: OpenFileFn;
   onDraftChange?: (text: string) => void;
+  onAttachmentsChange?: (
+    attachments: Attachment[],
+    borrowedIds: ReadonlySet<string>,
+  ) => void;
   onRecallLastTurnReady?: (recall: () => void) => void;
   onEditingLastTurnChange?: (editing: boolean) => void;
   children?: ReactNode;
@@ -354,6 +363,8 @@ export function Composer({
   compactSupported = false,
   quoteRequest,
   initialDraft,
+  initialAttachments = [],
+  initialBorrowedAttachmentIds = new Set(),
   draftResetToken,
   inboxCard,
   noteCard,
@@ -404,6 +415,7 @@ export function Composer({
   onUsageLimitDismiss,
   onOpenFile,
   onDraftChange,
+  onAttachmentsChange,
   onRecallLastTurnReady,
   onEditingLastTurnChange,
   children,
@@ -412,8 +424,10 @@ export function Composer({
   const boxRef = useRef<HTMLDivElement>(null);
   const plusRef = useRef<HTMLDivElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
-  const attachmentsRef = useRef<Attachment[]>([]);
-  const borrowedAttachmentIdsRef = useRef(new Set<string>());
+  const attachmentsRef = useRef<Attachment[]>(initialAttachments);
+  const borrowedAttachmentIdsRef = useRef(
+    new Set(initialBorrowedAttachmentIds),
+  );
   const attachmentLifecycleRef = useRef(0);
   const consumedQuoteId = useRef<number | null>(null);
   const draftRevisionRef = useRef(0);
@@ -459,11 +473,13 @@ export function Composer({
   const [hasValue, setHasValue] = useState(
     () =>
       (initialDraft ?? "").trim().length > 0 ||
+      initialAttachments.length > 0 ||
       !!inboxCard ||
       !!noteCard ||
       !!handoffCard,
   );
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [attachments, setAttachments] =
+    useState<Attachment[]>(initialAttachments);
   const [pasteError, setPasteError] = useState<string | null>(null);
   const [plusOpen, setPlusOpen] = useState(false);
   const [planSelected, setPlanSelected] = useState(false);
@@ -520,6 +536,13 @@ export function Composer({
   mentionRef.current = mention;
 
   attachmentsRef.current = attachments;
+
+  useEffect(() => {
+    onAttachmentsChange?.(
+      attachments,
+      new Set(borrowedAttachmentIdsRef.current),
+    );
+  }, [attachments, onAttachmentsChange]);
 
   const mentionOpen =
     !remote && mention !== null && (looksLikeProject(cwd) || notesEnabled);
@@ -787,6 +810,7 @@ export function Composer({
       queueMicrotask(() => {
         if (attachmentLifecycleRef.current !== lifecycle) return;
         pasteGenerationRef.current += 1;
+        if (onAttachmentsChange) return;
         for (const file of attachmentsRef.current) {
           if (!borrowedAttachmentIdsRef.current.delete(file.id)) {
             revokeAttachment(file);
@@ -796,7 +820,7 @@ export function Composer({
         borrowedAttachmentIdsRef.current.clear();
       });
     };
-  }, []);
+  }, [onAttachmentsChange]);
 
   useEffect(() => {
     if (harnessSupportsAttachments(harness)) return;
@@ -1647,13 +1671,17 @@ export function Composer({
       );
       return;
     }
-    const files = filesFromClipboard(e.clipboardData);
+    let files = filesFromClipboard(e.clipboardData);
+    const text =
+      files.length === 0 ? e.clipboardData.getData("text/plain") : "";
+    if (attachmentsSupported && text.length > LARGE_PASTE_CHARACTER_THRESHOLD) {
+      files = [new File([text], "pasted-text.txt", { type: "text/plain" })];
+    }
     if (files.length === 0) {
       // A webview reports a paste as text only, so a screenshot or a file
       // copied in a file manager arrives with nothing to attach; both live on
       // the native clipboard.
       if (!attachmentsSupported) return;
-      const text = e.clipboardData.getData("text/plain");
       // Prose and whitespace alike are the webview's to insert.
       if (text && !isFileReferenceText(text)) return;
       // A file URI becomes a chip, so it is kept out of the draft; with no text
@@ -1692,13 +1720,15 @@ export function Composer({
     e.preventDefault();
     if (!attachmentsSupported) return;
     const generation = pasteGenerationRef.current;
+    const captured = text ? captureDraft(e.currentTarget) : null;
     rememberAttachmentRead(
       attachmentsFromFiles(files).then((pasted) => {
         if (pasteGenerationRef.current !== generation) {
           pasted.forEach(revokeAttachment);
           return;
         }
-        addAttachments(pasted);
+        if (pasted.length) addAttachments(pasted);
+        else if (captured) insertRestoredText(captured, text);
       }),
     );
   };
@@ -2010,6 +2040,18 @@ export function Composer({
                 <AttachmentChip
                   key={file.id}
                   attachment={file}
+                  onOpen={
+                    !remote &&
+                    file.mimeType === "text/plain" &&
+                    file.path &&
+                    onOpenFile
+                      ? () =>
+                          onOpenFile(file.path!, undefined, {
+                            exact: true,
+                            autosave: true,
+                          })
+                      : undefined
+                  }
                   onRemove={() => removeAttachment(file.id)}
                 />
               ))}

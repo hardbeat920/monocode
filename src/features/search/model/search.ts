@@ -42,6 +42,8 @@ export type FileOpenOptions = {
   exact?: boolean;
   /** Open as a permanent tab instead of the pane's preview tab. */
   pin?: boolean;
+  /** Save changes immediately without changing the global editor preference. */
+  autosave?: boolean;
 };
 
 export type OpenFileFn = (
