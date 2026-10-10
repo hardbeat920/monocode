@@ -15,6 +15,7 @@ import {
   applyHarnessEvent,
   appendSteerUser,
   promoteLastAssistantToPlan,
+  promoteProposedPlan,
   stopStreaming,
 } from "./apply";
 
@@ -1135,6 +1136,83 @@ describe("task list updates", () => {
       "user",
       "assistant",
     ]);
+  });
+
+  it("lifts a tagged Codex plan out of a revision sent outside Plan mode", () => {
+    let session = appendUser(
+      newSession("codex", "/tmp"),
+      "Revise the plan to include verification",
+    );
+    session = applyHarnessEvent(session, {
+      type: "message.delta",
+      text: "I'll fold verification into the plan.",
+    });
+    session = applyHarnessEvent(session, { type: "message.completed" });
+    session = applyHarnessEvent(session, {
+      type: "message.delta",
+      text: "Updated.\n\n<proposed_plan>\n# Plan\n\n1. Change it.\n2. Verify it.\n</proposed_plan>\n",
+    });
+    session = applyHarnessEvent(session, { type: "message.completed" });
+    session = applyHarnessEvent(session, {
+      type: "message.delta",
+      text: "Switch to Build when ready.",
+    });
+    session = applyHarnessEvent(session, { type: "message.completed" });
+
+    session = promoteProposedPlan(stopStreaming(session), "turn:2");
+
+    expect(session.blocks.map((block) => [block.role, block.text])).toEqual([
+      ["user", "Revise the plan to include verification"],
+      ["assistant", "I'll fold verification into the plan."],
+      ["assistant", "Updated."],
+      ["plan", "# Plan\n\n1. Change it.\n2. Verify it."],
+      ["assistant", "Switch to Build when ready."],
+    ]);
+    expect(session.blocks[3]?.plan).toEqual({
+      key: "turn:2",
+      status: "ready",
+      originalText: "# Plan\n\n1. Change it.\n2. Verify it.",
+      edited: false,
+    });
+    expect(new Set(session.blocks.map((block) => block.id)).size).toBe(5);
+  });
+
+  it("keeps the tagged plan when the Plan-mode fallback runs after it", () => {
+    let session = appendUser(newSession("codex", "/tmp"), "plan it");
+    session = applyHarnessEvent(session, {
+      type: "message.delta",
+      text: "<proposed_plan>\n# Plan\n\n1. Do it.\n</proposed_plan>",
+    });
+    session = applyHarnessEvent(session, { type: "message.completed" });
+    session = applyHarnessEvent(session, {
+      type: "message.delta",
+      text: "Let me know if you want changes.",
+    });
+    session = applyHarnessEvent(session, { type: "message.completed" });
+
+    session = promoteLastAssistantToPlan(
+      promoteProposedPlan(stopStreaming(session), "turn:1"),
+      "turn:1",
+    );
+
+    expect(session.blocks.map((block) => [block.role, block.text])).toEqual([
+      ["user", "plan it"],
+      ["plan", "# Plan\n\n1. Do it."],
+      ["assistant", "Let me know if you want changes."],
+    ]);
+  });
+
+  it("leaves replies without a complete proposed_plan block alone", () => {
+    let session = appendUser(newSession("codex", "/tmp"), "plan it");
+    session = applyHarnessEvent(session, {
+      type: "message.delta",
+      text: "Mention `<proposed_plan>` inline.\n\n<proposed_plan>\n# Cut off",
+    });
+    session = stopStreaming(
+      applyHarnessEvent(session, { type: "message.completed" }),
+    );
+
+    expect(promoteProposedPlan(session, "turn:1")).toBe(session);
   });
 });
 

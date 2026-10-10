@@ -663,6 +663,61 @@ export function promoteLastAssistantToPlan(
   return { ...session, blocks };
 }
 
+const PROPOSED_PLAN =
+  /^[ \t]*<proposed_plan>[ \t]*\r?\n([\s\S]*?)^[ \t]*<\/proposed_plan>[ \t]*$/m;
+
+/**
+ * Codex wraps a finished plan in `<proposed_plan>` tags and only lifts it into
+ * a plan item while the turn runs in its Plan mode. A follow-up sent outside
+ * Plan mode ("revise the plan…") still answers with the tagged block, so lift
+ * it here once the turn has ended. Text around the block stays assistant text.
+ */
+export function promoteProposedPlan(session: Session, key?: string): Session {
+  const lastUser = lastMatchingBlock(
+    session.blocks,
+    (block) => block.role === "user",
+  );
+  if (
+    session.blocks.some(
+      (block, index) => index > lastUser && block.role === "plan",
+    )
+  ) {
+    return session;
+  }
+
+  for (let index = session.blocks.length - 1; index > lastUser; index -= 1) {
+    const block = session.blocks[index];
+    if (block.role !== "assistant") continue;
+    const match = PROPOSED_PLAN.exec(block.text);
+    const text = match?.[1].trim();
+    if (!match || !text) continue;
+    const before = block.text.slice(0, match.index).trim();
+    const after = block.text.slice(match.index + match[0].length).trim();
+    const blocks = session.blocks.slice();
+    blocks.splice(
+      index,
+      1,
+      ...(before ? [{ ...block, text: before }] : []),
+      {
+        ...block,
+        id: before ? crypto.randomUUID() : block.id,
+        role: "plan",
+        text,
+        streaming: false,
+        plan: {
+          ...(key ? { key } : {}),
+          status: "ready",
+          originalText: text,
+          edited: false,
+        },
+      },
+      ...(after ? [{ ...block, id: crypto.randomUUID(), text: after }] : []),
+    );
+    return { ...session, blocks };
+  }
+  return session;
+}
+
 function stopBlockProgress(block: Block): Block {
   let stopped = block.streaming ? { ...block, streaming: false } : block;
   if (stopped.orchestration?.status === "planning") {
