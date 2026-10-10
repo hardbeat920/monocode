@@ -367,11 +367,24 @@ fn fetch_claude_usage_sync(config_dir: Option<PathBuf>) -> Result<ClaudeUsageFet
     // usage footer must remain read-only: independently refreshing here can
     // race a live CLI (or another MonoCode window) and leave one process with
     // a spent refresh token, which forces the user through sign-in again.
+    //
+    // A lapsed stored token is therefore not a sign-in failure: the CLI
+    // renews it silently the next time it runs, so report a stale reading
+    // instead of prompting the user to sign in again.
     if token_expired(creds.expires_at_ms, now_ms()) {
-        return Ok(usage_error(401));
+        return Ok(stale_token_result());
     }
 
     Ok(fetch_usage_with_token(&creds.access_token))
+}
+
+fn stale_token_result() -> ClaudeUsageFetch {
+    usage_result(
+        "stale",
+        None,
+        None,
+        Some("Claude usage updates the next time Claude runs".into()),
+    )
 }
 
 fn fetch_usage_with_token(token: &str) -> ClaudeUsageFetch {
@@ -807,6 +820,15 @@ mod tests {
         );
         assert_eq!(read_opencode_go_api_key(), None);
         std::env::remove_var("OPENCODE_AUTH_CONTENT");
+    }
+
+    #[test]
+    fn lapsed_token_reports_stale_not_signed_out() {
+        let fetch = stale_token_result();
+        assert_eq!(fetch.status, "stale");
+        assert_eq!(fetch.http_status, None);
+        let message = fetch.error.unwrap().to_lowercase();
+        assert!(!message.contains("expired") && !message.contains("sign-in"));
     }
 
     #[test]

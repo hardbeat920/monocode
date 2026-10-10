@@ -5,6 +5,7 @@ import {
   exhaustedWindowResetAt,
   parseCodexRateLimits,
 } from "../../../../features/providers/model/rateLimits";
+import { applyLiveCodexRateLimits } from "../../../../features/providers/model/rateLimitsCache";
 import type { RuntimeMode } from "../../../../features/sessions/model/session";
 import {
   questionPromptTitle,
@@ -1125,14 +1126,21 @@ async function materializeGeneratedImage(
   }
 }
 
+const CODEX_ACCOUNT_LIMIT_ID = "codex";
+
 /** Rate-limit updates are sparse: a missing window keeps its last reading. */
 function noteRateLimits(live: Live, update: Record<string, unknown>): void {
   const id = stringField(update, "limitId") ?? "";
   const current = live.rateLimits.get(id) ?? {};
-  live.rateLimits.set(id, {
+  const windows = {
     primary: update.primary ?? current.primary,
     secondary: update.secondary ?? current.secondary,
-  });
+  };
+  live.rateLimits.set(id, windows);
+  // Only the account-wide Codex limit is what the usage footer shows.
+  if (id === "" || id === CODEX_ACCOUNT_LIMIT_ID) {
+    applyLiveCodexRateLimits(live.providerAccountId ?? "default", windows);
+  }
 }
 
 function usageLimitResetAt(live: Live): number | null {
