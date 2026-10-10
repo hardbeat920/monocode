@@ -10,6 +10,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ComponentProps,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
@@ -51,6 +52,13 @@ import { rehypeHardBreaks } from "./hardBreaks";
 import { rehypeWordFade, usePacedText, useWordFading } from "./wordFade";
 import { isFenceBlock, parseStreamingMarkdown } from "./streamingMarkdown";
 import { HighlightedCodeBlock } from "./HighlightedCodeBlock";
+import { repairMermaid } from "./mermaidRepair";
+import {
+  mermaidAppearanceKey,
+  mermaidThemeConfig,
+  readMermaidPalette,
+  subscribeMermaidAppearance,
+} from "./mermaidTheme";
 
 const MERMAID_BASE_CONFIG = {
   startOnLoad: false,
@@ -59,10 +67,7 @@ const MERMAID_BASE_CONFIG = {
 } as const;
 
 const mermaid = createLazyMermaidPlugin({
-  config: {
-    ...MERMAID_BASE_CONFIG,
-    theme: "dark",
-  },
+  config: MERMAID_BASE_CONFIG,
 });
 
 const MARKDOWN_PLUGINS = { code: boundedCode, mermaid };
@@ -745,6 +750,12 @@ function MermaidBlock({
   const [svg, setSvg] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const colorScheme = useColorScheme();
+  // Hue, saturation, lightness and accent change without a scheme change.
+  const appearance = useSyncExternalStore(
+    subscribeMermaidAppearance,
+    mermaidAppearanceKey,
+    () => "",
+  );
 
   useEffect(() => {
     if (incomplete) {
@@ -756,12 +767,17 @@ function MermaidBlock({
     setSvg(null);
     setFailed(false);
     const id = `mermaid-${Math.abs(hashCode(code)).toString(36)}-${Date.now().toString(36)}`;
-    void mermaid
-      .getMermaid({
-        ...MERMAID_BASE_CONFIG,
-        theme: colorScheme === "light" ? "default" : "dark",
-      })
+    const engine = mermaid.getMermaid({
+      ...MERMAID_BASE_CONFIG,
+      ...mermaidThemeConfig(readMermaidPalette(colorScheme)),
+    });
+    const repaired = repairMermaid(code);
+    void engine
       .render(id, code)
+      .catch((error: unknown) => {
+        if (repaired === code) throw error;
+        return engine.render(`${id}-repaired`, repaired);
+      })
       .then((result) => {
         if (cancelled) return;
         setSvg(result.svg);
@@ -772,7 +788,7 @@ function MermaidBlock({
     return () => {
       cancelled = true;
     };
-  }, [code, incomplete, colorScheme]);
+  }, [code, incomplete, colorScheme, appearance]);
 
   if (incomplete || failed) {
     return (
@@ -799,7 +815,7 @@ function MermaidBlock({
 
   return (
     <div
-      className="mermaid-block overflow-x-auto rounded-[10px] border border-content/10 bg-content/6 p-3"
+      className="mermaid-block overflow-x-auto py-1"
       data-streamdown="mermaid-block"
       dir="ltr"
       dangerouslySetInnerHTML={{ __html: svg }}

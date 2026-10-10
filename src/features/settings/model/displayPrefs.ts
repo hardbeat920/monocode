@@ -5,11 +5,13 @@ const SHOW_REMAINING_USAGE_KEY = "monocode.showRemainingUsage";
 const MASK_EMAILS_KEY = "monocode.maskEmails";
 const COMPOSER_AUTOCORRECT_KEY = "monocode.composerAutocorrect";
 const RAIL_MONOS_PINNED_KEY = "monocode.railMonosPinned";
+const VISUAL_REPLIES_KEY = "monocode.visualReplies";
 
 export const SHOW_REMAINING_USAGE_DEFAULT = false;
 export const MASK_EMAILS_DEFAULT = true;
 export const COMPOSER_AUTOCORRECT_DEFAULT = true;
 export const RAIL_MONOS_PINNED_DEFAULT = false;
+export const VISUAL_REPLIES_DEFAULT = true;
 
 /** Fired on `window` whenever the usage meter direction flips (detail: boolean). */
 export const SHOW_REMAINING_USAGE_CHANGE_EVENT =
@@ -21,6 +23,8 @@ export const COMPOSER_AUTOCORRECT_CHANGE_EVENT =
   "monocode:composerautocorrectchange";
 /** Fired on `window` whenever Monos are pinned to or unpinned from the icon rail (detail: boolean). */
 export const RAIL_MONOS_PINNED_CHANGE_EVENT = "monocode:railmonospinnedchange";
+/** Fired on `window` whenever visual replies flip (detail: boolean). */
+export const VISUAL_REPLIES_CHANGE_EVENT = "monocode:visualreplieschange";
 
 function flagStore(key: string, fallback: boolean, event: string) {
   // Holds a saved value only while storage failed to keep it, so the switch
@@ -72,6 +76,11 @@ const railMonosPinned = flagStore(
   RAIL_MONOS_PINNED_DEFAULT,
   RAIL_MONOS_PINNED_CHANGE_EVENT,
 );
+const visualReplies = flagStore(
+  VISUAL_REPLIES_KEY,
+  VISUAL_REPLIES_DEFAULT,
+  VISUAL_REPLIES_CHANGE_EVENT,
+);
 
 /** Usage meters fill with what is left instead of what is used. */
 export const loadShowRemainingUsage = showRemainingUsage.load;
@@ -96,3 +105,9 @@ export const loadRailMonosPinned = railMonosPinned.load;
 export const saveRailMonosPinned = railMonosPinned.save;
 export const subscribeRailMonosPinned = railMonosPinned.subscribe;
 export const useRailMonosPinned = railMonosPinned.useFlag;
+
+/** Agents are told they can answer with diagrams and charts, not just text. */
+export const loadVisualReplies = visualReplies.load;
+export const saveVisualReplies = visualReplies.save;
+export const subscribeVisualReplies = visualReplies.subscribe;
+export const useVisualReplies = visualReplies.useFlag;

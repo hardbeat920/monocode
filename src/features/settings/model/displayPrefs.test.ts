@@ -4,12 +4,15 @@ import {
   loadComposerAutocorrect,
   loadMaskEmails,
   loadShowRemainingUsage,
+  loadVisualReplies,
   saveComposerAutocorrect,
   saveMaskEmails,
   saveShowRemainingUsage,
+  saveVisualReplies,
   subscribeComposerAutocorrect,
   subscribeMaskEmails,
   subscribeShowRemainingUsage,
+  subscribeVisualReplies,
 } from "./displayPrefs";
 
 const prefs = [
@@ -36,6 +39,14 @@ const prefs = [
     load: loadComposerAutocorrect,
     save: saveComposerAutocorrect,
     subscribe: subscribeComposerAutocorrect,
+  },
+  {
+    name: "visual replies",
+    key: "monocode.visualReplies",
+    defaultValue: true,
+    load: loadVisualReplies,
+    save: saveVisualReplies,
+    subscribe: subscribeVisualReplies,
   },
 ];
 
