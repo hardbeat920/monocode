@@ -45,6 +45,11 @@ export function MonoSkillsPage({
     setView({ kind: "list" });
   };
   const remove = async (skill: MonoSkill) => {
+    if (
+      skill.owned &&
+      !window.confirm(`Delete “${skill.name}”? This cannot be undone.`)
+    )
+      return;
     setWorking(true);
     setError(undefined);
     try {

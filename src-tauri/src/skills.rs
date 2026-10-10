@@ -375,6 +375,108 @@ fn path_is_within(path: &Path, root: &Path) -> bool {
     path == root || path.starts_with(root)
 }
 
+/// Relative folders `list_skills_from` scans under a project or home.
+const SKILL_ROOT_SUFFIXES: &[&str] = &[
+    "/.agents/skills",
+    "/.claude/skills",
+    "/.cursor/skills",
+    "/.codex/skills",
+    "/.opencode/skills",
+    "/.pi/skills",
+    "/.omp/skills",
+    "/.fx/skills",
+    "/.grok/skills",
+    "/.hermes/skills",
+    "/.devin/skills",
+    "/.pi/agent/skills",
+    "/.omp/agent/skills",
+    "/.gemini/antigravity/skills",
+    "/.config/devin/skills",
+];
+
+/// True when `path` is a `SKILL.md` discovered from a known project, user, or
+/// installed Claude-plugin skill folder — not merely any absolute SKILL.md.
+pub(crate) fn is_discovered_skill_path(path: &str) -> bool {
+    let Some(root) = skill_md_discovery_root(Path::new(path)) else {
+        return false;
+    };
+    if !is_skill_discovery_root(&root) {
+        return false;
+    }
+    let assigned = normalize_path_for_compare(path);
+    scan_root(&root, "", "")
+        .iter()
+        .any(|skill| normalize_path_for_compare(&skill.path) == assigned)
+}
+
+fn skill_md_discovery_root(path: &Path) -> Option<PathBuf> {
+    let name = path.file_name()?.to_str()?;
+    if name != "SKILL.md" && name != "skill.md" {
+        return None;
+    }
+    path.parent()?.parent().map(Path::to_path_buf)
+}
+
+fn is_skill_discovery_root(root: &Path) -> bool {
+    let normalized = normalize_path_for_compare(&crate::fs::path_to_js(root));
+    if SKILL_ROOT_SUFFIXES
+        .iter()
+        .any(|suffix| normalized.ends_with(suffix))
+    {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        let devin = std::env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .or_else(|| dirs_home().map(|home| PathBuf::from(home).join("AppData/Roaming")))
+            .unwrap_or_default()
+            .join("devin/skills");
+        if normalize_path_for_compare(&crate::fs::path_to_js(&devin)) == normalized {
+            return true;
+        }
+    }
+    claude_plugin_skill_install_roots()
+        .iter()
+        .any(|plugin_root| {
+            normalize_path_for_compare(&crate::fs::path_to_js(plugin_root)) == normalized
+        })
+}
+
+/// Plugin skill folders from the Claude registry, ignoring enablement so an
+/// already-assigned plugin skill remains readable.
+fn claude_plugin_skill_install_roots() -> Vec<PathBuf> {
+    let Some(home) = dirs_home().map(PathBuf::from) else {
+        return Vec::new();
+    };
+    let Ok(raw) = std::fs::read_to_string(home.join(".claude/plugins/installed_plugins.json"))
+    else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return Vec::new();
+    };
+    let Some(plugins) = value.get("plugins").and_then(|value| value.as_object()) else {
+        return Vec::new();
+    };
+    let mut roots = Vec::new();
+    for installed in plugins.values() {
+        let entries: Vec<&serde_json::Value> = match installed.as_array() {
+            Some(entries) => entries.iter().collect(),
+            None if installed.is_object() => vec![installed],
+            None => continue,
+        };
+        for entry in entries {
+            let Some(install_path) = entry.get("installPath").and_then(|value| value.as_str())
+            else {
+                continue;
+            };
+            roots.push(resolve_home_path(install_path, &home).join("skills"));
+        }
+    }
+    roots
+}
+
 pub(crate) fn scan_root(root: &Path, scope: &str, source: &str) -> Vec<DiscoveredSkill> {
     let Ok(reader) = std::fs::read_dir(root) else {
         return Vec::new();
@@ -1184,5 +1286,25 @@ mod tests {
             slash_skill.is_some(),
             "distinct backslash path on Unix must not be disabled by colliding slash path"
         );
+    }
+
+    #[test]
+    fn discovered_skill_paths_require_a_known_skill_root() {
+        let project = tmp("proj-assign");
+        write_skill(
+            &project.0.join(".agents/skills"),
+            "review",
+            "---\nname: review\ndescription: Review PRs\n---\n",
+        );
+        let allowed = crate::fs::path_to_js(&project.0.join(".agents/skills/review/SKILL.md"));
+        let outside = crate::fs::path_to_js(&project.0.join("notes/SKILL.md"));
+        std::fs::create_dir_all(project.0.join("notes")).unwrap();
+        std::fs::write(
+            project.0.join("notes/SKILL.md"),
+            "---\nname: notes\ndescription: Not a catalog skill\n---\n",
+        )
+        .unwrap();
+        assert!(is_discovered_skill_path(&allowed));
+        assert!(!is_discovered_skill_path(&outside));
     }
 }

@@ -577,13 +577,18 @@ mod tests {
     #[test]
     fn assigned_skills_keep_sources_and_follow_source_changes() {
         let root = temp_root();
-        let external = root.join("external");
-        std::fs::create_dir_all(&external).unwrap();
-        let path = external.join("SKILL.md");
+        let folder = root.join("app/.agents/skills/shared");
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("SKILL.md");
         let body = "---\nname: shared\ndescription: Shared workflow\n---\n\nFollow reference.md.\n";
         std::fs::write(&path, body).unwrap();
-        std::fs::write(external.join("reference.md"), "Supporting content").unwrap();
-        let config = serde_json::json!([{ "name": "shared", "description": "Shared workflow", "path": path }]).to_string();
+        std::fs::write(folder.join("reference.md"), "Supporting content").unwrap();
+        let config = serde_json::json!([{
+            "name": "shared",
+            "description": "Shared workflow",
+            "path": crate::fs::path_to_js(&path)
+        }])
+        .to_string();
         save(&root, "a", None, "skills.json", &config, None).unwrap();
         let first = load(&root, "a", None).unwrap();
         assert!(!first.skills[0].owned);
@@ -596,10 +601,37 @@ mod tests {
         save(&root, "a", None, "skills.json", "[]", None).unwrap();
         assert!(load(&root, "a", None).unwrap().skills.is_empty());
         assert!(path.is_file());
-        assert!(external.join("reference.md").is_file());
+        assert!(folder.join("reference.md").is_file());
         save(&root, "a", None, "skills.json", &config, None).unwrap();
         std::fs::remove_file(&path).unwrap();
         assert!(!load(&root, "a", None).unwrap().skills[0].available);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn assigned_skills_must_match_a_discovery_root() {
+        let root = temp_root();
+        let secret = root.join("secret/SKILL.md");
+        std::fs::create_dir_all(secret.parent().unwrap()).unwrap();
+        std::fs::write(
+            &secret,
+            "---\nname: secret\ndescription: Should not be read\n---\nSECRET\n",
+        )
+        .unwrap();
+        let config = serde_json::json!([{
+            "name": "secret",
+            "description": "Should not be read",
+            "path": crate::fs::path_to_js(&secret)
+        }])
+        .to_string();
+        assert!(save(&root, "a", None, "skills.json", &config, None).is_err());
+        let dir = agent_dir(&root, "a", None).unwrap();
+        std::fs::write(dir.join("skills.json"), &config).unwrap();
+        let listed = load(&root, "a", None).unwrap();
+        assert_eq!(listed.skills.len(), 1);
+        assert!(!listed.skills[0].available);
+        assert_eq!(listed.skills[0].description, "Should not be read");
+        assert_eq!(listed.skills[0].hash, "");
         std::fs::remove_dir_all(root).unwrap();
     }
 }

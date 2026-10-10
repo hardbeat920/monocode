@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
 use crate::mono::{agent_dir, content_hash, monos_root, CONFLICT, FILES_LOCK};
-use crate::skills::{is_valid_skill_name, parse_frontmatter, scan_root};
+use crate::skills::{is_discovered_skill_path, is_valid_skill_name, parse_frontmatter, scan_root};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -52,6 +52,7 @@ fn assignments(text: &str) -> Result<Vec<Assignment>, String> {
                 path.file_name().and_then(|n| n.to_str()),
                 Some("SKILL.md" | "skill.md")
             )
+            || !is_discovered_skill_path(&item.path)
             || item.description.len() > 4096
         {
             return Err("Invalid skill assignment".into());
@@ -151,7 +152,11 @@ pub(crate) fn list(dir: &Path) -> Result<Vec<MonoSkill>, String> {
         if !names.insert(item.name.clone()) {
             continue;
         }
-        let text = skill_text(Path::new(&item.path)).ok();
+        let text = if is_discovered_skill_path(&item.path) {
+            skill_text(Path::new(&item.path)).ok()
+        } else {
+            None
+        };
         let description = text
             .as_ref()
             .map(|text| parse_frontmatter(text, &item.name).1)
@@ -175,6 +180,9 @@ fn read_skill(dir: &Path, name: &str) -> Result<MonoSkillFile, String> {
         .into_iter()
         .find(|skill| skill.name == name)
         .ok_or("No skill with that name is assigned to this Mono")?;
+    if !skill.owned && !is_discovered_skill_path(&skill.path) {
+        return Err("This assigned skill is not in a known skill folder".into());
+    }
     let text = skill_text(Path::new(&skill.path))?;
     Ok(MonoSkillFile {
         hash: content_hash(&text),
@@ -248,6 +256,52 @@ mod tests {
         assert!(path.exists());
         remove_skill(&dir, "review-pr", &content_hash(text)).unwrap();
         assert!(list(&dir).unwrap().is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn refuses_to_read_assigned_paths_outside_discovery_roots() {
+        let dir = std::env::temp_dir().join(format!("mono-skills-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let secret = dir.join("outside/SKILL.md");
+        std::fs::create_dir_all(secret.parent().unwrap()).unwrap();
+        std::fs::write(
+            &secret,
+            "---\nname: secret\ndescription: Should not be read\n---\nSECRET\n",
+        )
+        .unwrap();
+        let allowed = dir.join("app/.agents/skills/shared");
+        std::fs::create_dir_all(&allowed).unwrap();
+        let allowed_path = allowed.join("SKILL.md");
+        std::fs::write(
+            &allowed_path,
+            "---\nname: shared\ndescription: Shared workflow\n---\nFollow this.\n",
+        )
+        .unwrap();
+        let config = serde_json::json!([
+            {
+                "name": "secret",
+                "description": "Should not be read",
+                "path": crate::fs::path_to_js(&secret)
+            },
+            {
+                "name": "shared",
+                "description": "Shared workflow",
+                "path": crate::fs::path_to_js(&allowed_path)
+            }
+        ])
+        .to_string();
+        assert!(assignments(&config).is_err());
+        std::fs::write(dir.join("skills.json"), config).unwrap();
+        let listed = list(&dir).unwrap();
+        let secret_skill = listed.iter().find(|skill| skill.name == "secret").unwrap();
+        assert!(!secret_skill.available);
+        assert_eq!(secret_skill.hash, "");
+        assert!(read_skill(&dir, "secret").is_err());
+        assert_eq!(
+            read_skill(&dir, "shared").unwrap().path,
+            crate::fs::path_to_js(&allowed_path)
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 

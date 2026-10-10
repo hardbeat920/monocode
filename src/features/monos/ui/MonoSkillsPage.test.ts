@@ -137,6 +137,7 @@ it("assigns skills discovered in the Mono's personal and project catalogs", asyn
 });
 
 it("previews an assigned skill without exposing an editor, and can unassign it", async () => {
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
   await render([shared]);
   await click("review-prReview PRsAssigned · shared");
   expect(container.textContent).toContain("Original Markdown");
@@ -152,7 +153,24 @@ it("previews an assigned skill without exposing an editor, and can unassign it",
   root = createRoot(container);
   await render([shared]);
   await click("Unassign skill review-pr");
+  expect(confirm).not.toHaveBeenCalled();
   expect(mocks.remove).toHaveBeenCalledWith("mono-a", shared);
+  confirm.mockRestore();
+});
+
+it("asks before deleting an owned skill and leaves it when cancelled", async () => {
+  const owned = { ...shared, owned: true };
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  await render([owned]);
+  await click("Delete skill review-pr");
+  expect(confirm).toHaveBeenCalledWith(
+    "Delete “review-pr”? This cannot be undone.",
+  );
+  expect(mocks.remove).not.toHaveBeenCalled();
+  confirm.mockReturnValue(true);
+  await click("Delete skill review-pr");
+  expect(mocks.remove).toHaveBeenCalledWith("mono-a", owned);
+  confirm.mockRestore();
 });
 
 it("preserves an owned skill's draft if its save conflicts", async () => {
