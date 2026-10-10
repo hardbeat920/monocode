@@ -7,6 +7,7 @@ import {
   watchChild,
 } from "../../core/child";
 import { PiRpc } from "./piClient";
+import { isolatedExtensionArgs } from "./piExtensionIsolation";
 import { OMP_FLAVOR, PI_FLAVOR, type PiFlavor } from "./piFlavor";
 import { buildPiSpawnArgs, modelsFromRpcData } from "./piProtocol";
 
@@ -54,9 +55,12 @@ async function discoverModels(flavor: PiFlavor, workingDirectory?: string) {
     await spawnChild(
       probeId,
       path,
-      // Extensions stay loaded: plugin-registered providers contribute models
-      // to the catalog, and the probe must see exactly what a live session sees.
-      buildPiSpawnArgs(flavor, { noSession: true }),
+      // The probe must see the models a live session sees, including the ones a
+      // user's extension registers, without running a workspace's extensions.
+      buildPiSpawnArgs(flavor, {
+        noSession: true,
+        ...(await isolatedExtensionArgs(flavor)),
+      }),
       cwd,
       undefined,
       flavor.id,

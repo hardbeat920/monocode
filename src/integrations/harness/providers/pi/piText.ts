@@ -6,6 +6,7 @@ import {
   watchChild,
 } from "../../core/child";
 import { PiRpc } from "./piClient";
+import { isolatedExtensionArgs } from "./piExtensionIsolation";
 import { OMP_FLAVOR, PI_FLAVOR, type PiFlavor } from "./piFlavor";
 import {
   agentEndWillRetry,
@@ -281,11 +282,12 @@ async function startLive(
     await spawnChild(
       childId,
       path,
-      // `isolated` strips tools, skills, and project context but never
-      // extensions: `model` is a catalog id that a plugin provider may own.
+      // `isolated` strips tools, skills, and project context; extensions stay
+      // reachable because `model` is a catalog id a plugin provider may own.
       buildPiSpawnArgs(flavor, {
         isolated: true,
         model,
+        ...(await isolatedExtensionArgs(flavor)),
       }),
       cwd,
       undefined,

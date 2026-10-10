@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- omp's model catalog includes models registered by extensions, matching what a live session loads. The catalog probe no longer disables extension discovery, so a model from a plugin provider is selectable instead of resolving to an empty catalog. Throwaway text jobs (session titles, summaries) keep extensions loaded too, since the model they are handed can belong to a plugin provider; `omp --no-extensions --model <plugin model>` exits with "Model not found". In #855 by @blackplume233.
+- omp's model catalog includes models registered by extensions, matching what a live session loads. A probe or throwaway text job still runs with extension discovery off, so a workspace's own extensions never execute, but the user's extension directory is passed with `-e` so a plugin-registered provider still contributes models — without it the probe came back empty and `omp --no-extensions --model <plugin model>` exited with "Model not found". In #855 by @blackplume233.
 
 ## [0.10.0] - 2026-10-08
 

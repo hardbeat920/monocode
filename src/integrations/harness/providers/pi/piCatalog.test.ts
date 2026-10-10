@@ -17,6 +17,7 @@ vi.mock("../../../../features/sessions/model/models", () => ({
   setHarnessModels: vi.fn(),
 }));
 vi.mock("../../core/child", () => ({
+  execChild: vi.fn(async () => "/home/test/.omp/agent"),
   killChild: mocks.killChild,
   resolveOmpBinary: mocks.resolveBinary,
   resolvePiBinary: mocks.resolveBinary,
@@ -42,7 +43,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("loads Pi extensions when discovering package-provided models", async () => {
+it("keeps extension discovery on for the Pi catalog probe", async () => {
   await discoverPiModels("/workspace");
   expect(mocks.spawnChild).toHaveBeenCalledWith(
     expect.any(String),
@@ -58,16 +59,39 @@ it("loads Pi extensions when discovering package-provided models", async () => {
   );
 });
 
-it("loads extensions in omp catalog probes so plugin models appear", async () => {
-  await discoverOmpModels("/workspace");
+it("loads the user's extensions in an omp probe while a workspace's stay out", async () => {
+  mocks.request.mockResolvedValueOnce({
+    data: {
+      models: [
+        {
+          id: "plugin-model",
+          name: "Plugin Model",
+          provider: "plugin-provider",
+        },
+      ],
+    },
+  });
+
+  const models = await discoverOmpModels("/workspace");
+
   expect(mocks.spawnChild).toHaveBeenCalledWith(
     expect.any(String),
     "/fake/pi",
-    ["--mode", "rpc", "--no-session"],
+    [
+      "--mode",
+      "rpc",
+      "--no-session",
+      "--no-extensions",
+      "-e",
+      "/home/test/.omp/agent/extensions",
+    ],
     "/workspace",
     undefined,
     "omp",
   );
+  expect(models.map((model) => model.nativeId)).toEqual([
+    "plugin-provider/plugin-model",
+  ]);
 });
 
 it("clears the outer discovery timeout after a successful probe", async () => {

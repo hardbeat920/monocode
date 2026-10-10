@@ -22,6 +22,14 @@ export type PiFlavor = {
   probeChildId: string;
   /** Child id for the shared one-shot text generator. */
   textChildId: string;
+  /**
+   * Whether the CLI gates project-local extension code behind its own trust
+   * prompt. Pi reads project `.pi` resources through a saved trust.json, so a
+   * probe or throwaway job may leave extension discovery on. omp has no project
+   * gate, so those children turn discovery off and name the user's own
+   * extension directory explicitly — see [isolatedExtensionArgs](./piExtensionIsolation.ts).
+   */
+  gatesProjectExtensions: boolean;
 };
 
 export const PI_FLAVOR: PiFlavor = {
@@ -33,6 +41,7 @@ export const PI_FLAVOR: PiFlavor = {
   planTools: ["read", "grep", "find", "ls"],
   probeChildId: "monocode-pi-probe",
   textChildId: "monocode-pi-text",
+  gatesProjectExtensions: true,
 };
 
 /**
@@ -49,4 +58,5 @@ export const OMP_FLAVOR: PiFlavor = {
   planTools: ["read", "grep", "glob", "lsp"],
   probeChildId: "monocode-omp-probe",
   textChildId: "monocode-omp-text",
+  gatesProjectExtensions: false,
 };

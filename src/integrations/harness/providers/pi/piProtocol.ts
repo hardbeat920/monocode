@@ -133,12 +133,18 @@ export function parsePiVersion(output: string): string | null {
 }
 
 /**
- * Spawn args for every Pi/omp process MonoCode starts. `--no-extensions` is
- * never passed: extension factories own part of the model registry, so a
- * child without them cannot resolve a plugin-provided model id and reports an
- * empty catalog instead. Live sessions also keep the user's global Pi
- * packages (todos, subagents, custom tools) working. Project-local `.pi`
- * resources follow Pi's saved trust.json; RPC never prompts.
+ * Spawn args for every Pi/omp process MonoCode starts. Extension discovery
+ * normally stays on: extension factories own part of the model registry
+ * (`pi.registerProvider`), so a child without them cannot resolve a
+ * plugin-provided model id and reports an empty catalog instead. Live sessions
+ * also keep the user's global packages (todos, subagents, custom tools)
+ * working, and project-local `.pi` resources follow Pi's saved trust.json; RPC
+ * never prompts.
+ *
+ * A flavor with no such gate (omp) passes `noExtensions` for probes and
+ * throwaway jobs so a workspace's own extensions cannot run; `extensionPaths`
+ * re-adds the trusted roots the child still needs — see
+ * [isolatedExtensionArgs](./piExtensionIsolation.ts).
  */
 export function buildPiSpawnArgs(
   flavor: PiFlavor,
@@ -147,6 +153,10 @@ export function buildPiSpawnArgs(
     resume?: string;
     /** Catalog probes and isolated jobs: do not write a session file. */
     noSession?: boolean;
+    /** Probes and throwaway jobs: never run a workspace's own extensions. */
+    noExtensions?: boolean;
+    /** Absolute extension roots to load explicitly with `-e` while disabled. */
+    extensionPaths?: readonly string[];
     /** Titles and other one-shot prompts: no tools, skills, or project context. */
     isolated?: boolean;
     plan?: boolean;
@@ -154,6 +164,12 @@ export function buildPiSpawnArgs(
 ): string[] {
   const args = ["--mode", "rpc"];
   if (input.isolated || input.noSession) args.push("--no-session");
+  if (input.noExtensions) {
+    args.push("--no-extensions");
+    for (const extensionPath of input.extensionPaths ?? []) {
+      args.push("-e", extensionPath);
+    }
+  }
   if (input.isolated) {
     args.push(...flavor.isolateFlags);
   } else if (input.plan) {

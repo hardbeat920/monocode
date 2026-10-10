@@ -53,6 +53,26 @@ describe("buildPiSpawnArgs", () => {
     ]);
   });
 
+  it("names the trusted extension roots when discovery is off", () => {
+    expect(buildPiSpawnArgs(OMP_FLAVOR, { noExtensions: true })).toEqual([
+      "--mode",
+      "rpc",
+      "--no-extensions",
+    ]);
+    expect(
+      buildPiSpawnArgs(OMP_FLAVOR, {
+        noExtensions: true,
+        extensionPaths: ["/home/test/.omp/agent/extensions"],
+      }),
+    ).toEqual([
+      "--mode",
+      "rpc",
+      "--no-extensions",
+      "-e",
+      "/home/test/.omp/agent/extensions",
+    ]);
+  });
+
   it("isolates throwaway text jobs from tools and project context", () => {
     expect(buildPiSpawnArgs(PI_FLAVOR, { isolated: true })).toEqual([
       "--mode",
