@@ -1191,9 +1191,11 @@ struct GitPrCreateInput {
     head: String,
 }
 
-/// Create a GitHub pull request with `gh` and return its URL.
+/// Create a pull request and return its URL. Azure Repos checkouts use the
+/// Azure DevOps API; everything else falls back to the GitHub CLI.
 #[tauri::command]
 pub async fn git_pr_create(
+    app: AppHandle,
     cwd: String,
     title: String,
     body: String,
@@ -1202,6 +1204,7 @@ pub async fn git_pr_create(
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         git_pr_create_for(
+            &app,
             &expand_home(&cwd),
             &GitPrCreateInput {
                 title,
@@ -2832,6 +2835,43 @@ fn git_push_for(root: &Path) -> Result<(), String> {
     git_checked(root, &["push", "-u", &remote, "HEAD"])
 }
 
+/// Remote `git push` would use: the upstream's remote when the branch tracks
+/// one, otherwise `branch.<name>.pushRemote`, then `remote.pushDefault`,
+/// otherwise the default remote. Mirrors `git_push_for` so pull-request
+/// creation targets the same repository the branch pushes to.
+pub(crate) fn git_push_remote_name(root: &Path) -> Option<String> {
+    if let Some(upstream) = git_stdout(root, &["rev-parse", "--abbrev-ref", "@{upstream}"]) {
+        let upstream = upstream.trim();
+        if let Some((remote, _)) = upstream.split_once('/') {
+            if !remote.is_empty() {
+                return Some(remote.to_string());
+            }
+        }
+        return None;
+    }
+    if let Some(branch) = git_head_branch(root) {
+        let key = format!("branch.{branch}.pushRemote");
+        if let Some(remote) = git_config_value(root, &key) {
+            if git_remote_names(root).iter().any(|name| name == &remote) {
+                return Some(remote);
+            }
+        }
+    }
+    if let Some(remote) = git_config_value(root, "remote.pushDefault") {
+        if git_remote_names(root).iter().any(|name| name == &remote) {
+            return Some(remote);
+        }
+    }
+    git_remote_name(root)
+}
+
+/// Single trimmed `git config` value, or `None` when unset/empty.
+fn git_config_value(root: &Path, key: &str) -> Option<String> {
+    git_stdout(root, &["config", "--get", key])
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
 fn git_sync_changes_for(root: &Path) -> Result<(), String> {
     if git_stdout(root, &["rev-parse", "--abbrev-ref", "@{upstream}"]).is_some() {
         git_checked(root, &["pull", "--no-edit", "--ff"]).map_err(with_signing_hint)?;
@@ -4273,7 +4313,21 @@ fn parse_gh_pr_list(json: &str) -> Option<GitPr> {
     best
 }
 
-fn git_pr_create_for(root: &Path, input: &GitPrCreateInput) -> Result<String, String> {
+fn git_pr_create_for(
+    app: &AppHandle,
+    root: &Path,
+    input: &GitPrCreateInput,
+) -> Result<String, String> {
+    if let Some(url) = crate::azure_devops::try_create_pull_request(
+        app,
+        root,
+        &input.title,
+        &input.body,
+        &input.base,
+        &input.head,
+    )? {
+        return Ok(url);
+    }
     let title = input.title.trim();
     if title.is_empty() {
         return Err("Pull request title cannot be empty".into());
@@ -7019,6 +7073,83 @@ mod tests {
             info.repo.as_deref(),
             dir.0.file_name().and_then(|name| name.to_str())
         );
+    }
+
+    #[test]
+    fn git_push_remote_name_follows_the_push_destination() {
+        let dir = tmp("git-push-remote");
+        if !init_git(&dir.0, "feature", Some("https://github.com/acme/web.git")) {
+            return;
+        }
+        // No upstream: the default remote.
+        assert_eq!(git_push_remote_name(&dir.0).as_deref(), Some("origin"));
+        // An extra Azure remote must not change the push destination.
+        if !git(
+            &dir.0,
+            &[
+                "remote",
+                "add",
+                "azure",
+                "https://dev.azure.com/acme/shop/_git/web",
+            ],
+        ) {
+            return;
+        }
+        assert_eq!(git_push_remote_name(&dir.0).as_deref(), Some("origin"));
+        // Once the branch tracks the Azure remote, pushes go there.
+        if std::fs::write(dir.0.join("file.txt"), "initial\n").is_err()
+            || !git(&dir.0, &["add", "."])
+            || !git(&dir.0, &["commit", "-m", "initial"])
+        {
+            return;
+        }
+        let Some(sha) = git_run(&dir.0, &["rev-parse", "HEAD"]).map(|sha| sha.trim().to_string())
+        else {
+            return;
+        };
+        if !git(&dir.0, &["update-ref", "refs/remotes/azure/feature", &sha])
+            || !git(&dir.0, &["branch", "--set-upstream-to", "azure/feature"])
+        {
+            return;
+        }
+        assert_eq!(git_push_remote_name(&dir.0).as_deref(), Some("azure"));
+    }
+
+    #[test]
+    fn git_push_remote_name_honors_push_remote_config() {
+        let dir = tmp("git-push-remote-config");
+        if !init_git(&dir.0, "feature", Some("https://github.com/acme/web.git")) {
+            return;
+        }
+        if !git(
+            &dir.0,
+            &[
+                "remote",
+                "add",
+                "azure",
+                "https://dev.azure.com/acme/shop/_git/web",
+            ],
+        ) {
+            return;
+        }
+        // `branch.<name>.pushRemote` wins over the default remote.
+        if !git(&dir.0, &["config", "branch.feature.pushRemote", "azure"]) {
+            return;
+        }
+        assert_eq!(git_push_remote_name(&dir.0).as_deref(), Some("azure"));
+        // An unknown remote in pushRemote is ignored.
+        if !git(&dir.0, &["config", "branch.feature.pushRemote", "missing"]) {
+            return;
+        }
+        assert_eq!(git_push_remote_name(&dir.0).as_deref(), Some("origin"));
+        if !git(&dir.0, &["config", "--unset", "branch.feature.pushRemote"]) {
+            return;
+        }
+        // `remote.pushDefault` wins over the default remote.
+        if !git(&dir.0, &["config", "remote.pushDefault", "azure"]) {
+            return;
+        }
+        assert_eq!(git_push_remote_name(&dir.0).as_deref(), Some("azure"));
     }
 
     fn git(dir: &Path, args: &[&str]) -> bool {
