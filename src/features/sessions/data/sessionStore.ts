@@ -908,6 +908,7 @@ function sanitizeBlock(
   }
   if (block.role === "user" && typeof block.sentAt === "number")
     next.sentAt = block.sentAt;
+  if (block.role === "assistant" && block.yielded === true) next.yielded = true;
   const turnModel = sanitizeTurnModel(block.turnModel);
   if (block.role === "user" && turnModel) next.turnModel = turnModel;
   if (block.role === "user" && block.draft) next.draft = true;

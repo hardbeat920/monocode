@@ -1308,6 +1308,35 @@ describe("the settled work trail", () => {
     ]);
   });
 
+  it("keeps an answer yielded after a follow-up above what the task wakes it to do", () => {
+    // The user wrote in while the turn waited on a task from before: the
+    // task's row sits above their message, so nothing marks the reply but
+    // the yield itself.
+    const items = groupTurnItems(
+      [
+        { id: "u", role: "user", text: "what next?", sentAt: 1 },
+        { id: "intro", role: "assistant", text: "Checking the PRs." },
+        shell("t1"),
+        {
+          id: "answer",
+          role: "assistant",
+          text: "Here is the order.",
+          yielded: true,
+        },
+        shell("cat"),
+        { id: "late", role: "assistant", text: "The task passed." },
+      ],
+      { settled: true },
+    );
+    const fold = foldableWork(items)!;
+    expect(foldedBlocks(items, fold).map((block) => block.id)).toEqual([
+      "intro",
+      "t1",
+    ]);
+    const after = items.slice(fold.end + 1);
+    expect(after[0]).toMatchObject({ type: "block", block: { id: "answer" } });
+  });
+
   it("keeps a yielded answer visible when status precedes the background tool", () => {
     const items = groupTurnItems(
       [
@@ -1332,6 +1361,21 @@ describe("the settled work trail", () => {
       "block",
     ]);
   });
+
+  it.each([false, true])(
+    "keeps yielded prose before a subagent (settled: %s)",
+    (settled) => {
+      const items = groupTurnItems([
+        shell("before"),
+        { ...note("answer", "Here is the answer."), yielded: true },
+        { ...agent("ag"), tool: { kind: "agent", status: "failed" } },
+        shell("after"),
+        note("done", "The task finished."),
+      ], { settled });
+      expect(foldedBlocks(items, foldableWork(items)!).map((block) => block.id))
+        .toEqual(["before"]);
+    },
+  );
 
   it("lets the settled fold reach across an interjection that stops it live", () => {
     const turn = [
