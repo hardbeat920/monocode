@@ -927,6 +927,17 @@ describe("settings search", () => {
     expect(onSelectSection).not.toHaveBeenCalled();
   });
 
+  it("lists Escape stopping a session without a recorder", async () => {
+    await render("keybindings");
+    const row = [...container.querySelectorAll("span")].find(
+      (span) => span.textContent === "Session: Stop",
+    )?.parentElement;
+    expect(row?.textContent).toContain("Esc");
+    expect(
+      container.querySelector('[aria-label="Change Session: Stop shortcut"]'),
+    ).toBeNull();
+  });
+
   it("records a custom keybinding from the key cell", async () => {
     await render("keybindings");
     const input = container.querySelector<HTMLInputElement>(

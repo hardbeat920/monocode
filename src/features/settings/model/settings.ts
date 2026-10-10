@@ -1085,6 +1085,7 @@ export type KeybindingRow = {
   command: string;
   keys: string;
   when: string;
+  fixed?: true;
 };
 
 /**
@@ -1147,6 +1148,12 @@ export const KEYBINDINGS: KeybindingRow[] = [
     when: "sessionFocus && !overlay",
   },
   {
+    command: "Session: Stop",
+    keys: "Esc",
+    when: "sessionBusy && !terminalFocus",
+    fixed: true,
+  },
+  {
     command: "Session: Previous",
     keys: `${MOD}${SHIFT}↑`,
     when: "!overlay && (!textFocus || emptyComposer)",
@@ -1204,7 +1211,9 @@ export type KeybindingOverride = {
 
 export type KeybindingOverrides = Record<string, KeybindingOverride>;
 
-const VALID_COMMANDS = new Set(KEYBINDINGS.map((row) => row.command));
+const VALID_COMMANDS = new Set(
+  KEYBINDINGS.filter((row) => !row.fixed).map((row) => row.command),
+);
 
 const KEY_CODES: Record<string, string> = {
   " ": "Space",
