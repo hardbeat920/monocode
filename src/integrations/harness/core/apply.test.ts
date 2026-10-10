@@ -1177,6 +1177,31 @@ describe("task list updates", () => {
     expect(new Set(session.blocks.map((block) => block.id)).size).toBe(5);
   });
 
+  it("keeps the tagged plan when the Plan-mode fallback runs after it", () => {
+    let session = appendUser(newSession("codex", "/tmp"), "plan it");
+    session = applyHarnessEvent(session, {
+      type: "message.delta",
+      text: "<proposed_plan>\n# Plan\n\n1. Do it.\n</proposed_plan>",
+    });
+    session = applyHarnessEvent(session, { type: "message.completed" });
+    session = applyHarnessEvent(session, {
+      type: "message.delta",
+      text: "Let me know if you want changes.",
+    });
+    session = applyHarnessEvent(session, { type: "message.completed" });
+
+    session = promoteLastAssistantToPlan(
+      promoteProposedPlan(stopStreaming(session), "turn:1"),
+      "turn:1",
+    );
+
+    expect(session.blocks.map((block) => [block.role, block.text])).toEqual([
+      ["user", "plan it"],
+      ["plan", "# Plan\n\n1. Do it."],
+      ["assistant", "Let me know if you want changes."],
+    ]);
+  });
+
   it("leaves replies without a complete proposed_plan block alone", () => {
     let session = appendUser(newSession("codex", "/tmp"), "plan it");
     session = applyHarnessEvent(session, {
