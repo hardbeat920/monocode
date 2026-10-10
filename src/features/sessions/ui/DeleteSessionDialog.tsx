@@ -8,23 +8,28 @@ export type SessionDeleteChoice = {
 };
 
 export function DeleteSessionDialog({
+  mode = "delete",
   title,
   unusedWorktree,
   onClose,
 }: {
+  mode?: "archive" | "delete";
   title: string;
   unusedWorktree: string;
   onClose: (choice: SessionDeleteChoice) => void;
 }) {
   const [deleteWorktree, setDeleteWorktree] = useState(false);
+  const archive = mode === "archive";
   return (
     <Modal
-      title="Delete session?"
+      title={archive ? "Archive session?" : "Delete session?"}
       size="sm"
       onClose={() => onClose({ confirmed: false, deleteWorktree: false })}
     >
       <div className="flex flex-col gap-4 p-4 text-[12px]">
-        <p>“{title}” will be permanently deleted.</p>
+        <p>
+          “{title}” will be {archive ? "archived" : "permanently deleted"}.
+        </p>
         <label className="flex items-start gap-2">
           <input
             type="checkbox"
@@ -54,9 +59,13 @@ export function DeleteSessionDialog({
           <button
             type="button"
             onClick={() => onClose({ confirmed: true, deleteWorktree })}
-            className="rounded-md bg-red-500/20 px-3 py-1.5 font-medium text-red-400 hover:bg-red-500/30 active:scale-[0.97]"
+            className={
+              archive
+                ? "rounded-md bg-accent px-3 py-1.5 font-medium text-white hover:brightness-110 active:scale-[0.97]"
+                : "rounded-md bg-red-500/20 px-3 py-1.5 font-medium text-red-400 hover:bg-red-500/30 active:scale-[0.97]"
+            }
           >
-            Delete session
+            {archive ? "Archive session" : "Delete session"}
           </button>
         </div>
       </div>
