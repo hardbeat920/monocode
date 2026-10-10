@@ -232,6 +232,8 @@ type Props = {
   compactSupported?: boolean;
   quoteRequest?: QuoteRequest;
   initialDraft?: string;
+  initialAttachments?: Attachment[];
+  initialBorrowedAttachmentIds?: ReadonlySet<string>;
   draftResetToken?: number;
   inboxCard?: InboxComposerCard;
   noteCard?: NoteComposerCard;
@@ -292,6 +294,10 @@ type Props = {
   onUsageLimitDismiss?: () => void;
   onOpenFile?: OpenFileFn;
   onDraftChange?: (text: string) => void;
+  onAttachmentsChange?: (
+    attachments: Attachment[],
+    borrowedIds: ReadonlySet<string>,
+  ) => void;
   onRecallLastTurnReady?: (recall: () => void) => void;
   onEditingLastTurnChange?: (editing: boolean) => void;
   children?: ReactNode;
@@ -357,6 +363,8 @@ export function Composer({
   compactSupported = false,
   quoteRequest,
   initialDraft,
+  initialAttachments = [],
+  initialBorrowedAttachmentIds = new Set(),
   draftResetToken,
   inboxCard,
   noteCard,
@@ -407,6 +415,7 @@ export function Composer({
   onUsageLimitDismiss,
   onOpenFile,
   onDraftChange,
+  onAttachmentsChange,
   onRecallLastTurnReady,
   onEditingLastTurnChange,
   children,
@@ -415,8 +424,10 @@ export function Composer({
   const boxRef = useRef<HTMLDivElement>(null);
   const plusRef = useRef<HTMLDivElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
-  const attachmentsRef = useRef<Attachment[]>([]);
-  const borrowedAttachmentIdsRef = useRef(new Set<string>());
+  const attachmentsRef = useRef<Attachment[]>(initialAttachments);
+  const borrowedAttachmentIdsRef = useRef(
+    new Set(initialBorrowedAttachmentIds),
+  );
   const attachmentLifecycleRef = useRef(0);
   const consumedQuoteId = useRef<number | null>(null);
   const draftRevisionRef = useRef(0);
@@ -462,11 +473,13 @@ export function Composer({
   const [hasValue, setHasValue] = useState(
     () =>
       (initialDraft ?? "").trim().length > 0 ||
+      initialAttachments.length > 0 ||
       !!inboxCard ||
       !!noteCard ||
       !!handoffCard,
   );
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [attachments, setAttachments] =
+    useState<Attachment[]>(initialAttachments);
   const [pasteError, setPasteError] = useState<string | null>(null);
   const [plusOpen, setPlusOpen] = useState(false);
   const [planSelected, setPlanSelected] = useState(false);
@@ -523,6 +536,13 @@ export function Composer({
   mentionRef.current = mention;
 
   attachmentsRef.current = attachments;
+
+  useEffect(() => {
+    onAttachmentsChange?.(
+      attachments,
+      new Set(borrowedAttachmentIdsRef.current),
+    );
+  }, [attachments, onAttachmentsChange]);
 
   const mentionOpen =
     !remote && mention !== null && (looksLikeProject(cwd) || notesEnabled);
@@ -790,6 +810,7 @@ export function Composer({
       queueMicrotask(() => {
         if (attachmentLifecycleRef.current !== lifecycle) return;
         pasteGenerationRef.current += 1;
+        if (onAttachmentsChange) return;
         for (const file of attachmentsRef.current) {
           if (!borrowedAttachmentIdsRef.current.delete(file.id)) {
             revokeAttachment(file);
@@ -799,7 +820,7 @@ export function Composer({
         borrowedAttachmentIdsRef.current.clear();
       });
     };
-  }, []);
+  }, [onAttachmentsChange]);
 
   useEffect(() => {
     if (harnessSupportsAttachments(harness)) return;
@@ -2027,7 +2048,6 @@ export function Composer({
                       ? () =>
                           onOpenFile(file.path!, undefined, {
                             exact: true,
-                            workspace: true,
                             autosave: true,
                           })
                       : undefined

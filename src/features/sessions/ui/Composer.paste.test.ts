@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Composer } from "./Composer";
 import { copyMessage } from "../../../platform/tauri/clipboard";
+import type { Attachment } from "../model/session";
 
 const { invoke } = vi.hoisted(() => ({
   invoke: vi.fn(async () => []),
@@ -268,7 +269,6 @@ describe("large plain-text pastes", () => {
     );
     expect(openFile).toHaveBeenCalledWith("/tmp/pasted-text.txt", undefined, {
       exact: true,
-      workspace: true,
       autosave: true,
     });
 
@@ -301,6 +301,31 @@ describe("large plain-text pastes", () => {
         path: "/tmp/pasted-text.txt",
       }),
     ]);
+  });
+
+  it("keeps the attachment when the composer remounts", async () => {
+    let saved: Attachment[] = [];
+    const rememberAttachments = (attachments: Attachment[]) => {
+      saved = attachments;
+    };
+    const textarea = draw({ onAttachmentsChange: rememberAttachments });
+
+    paste(textarea, "x".repeat(2_001));
+    await settleUntil(() => saved.length === 1);
+
+    await act(async () => {
+      root.render(createElement("div"));
+      await Promise.resolve();
+    });
+    draw({
+      initialAttachments: saved,
+      onAttachmentsChange: rememberAttachments,
+    });
+    await act(async () => Promise.resolve());
+
+    expect(
+      container.querySelector('[aria-label="Remove pasted-text.txt"]'),
+    ).not.toBeNull();
   });
 
   it("leaves large text inline when attachments are unsupported", () => {

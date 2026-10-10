@@ -99,6 +99,7 @@ import { AstraWelcome } from "./AstraWelcome";
 import { OpusWelcome } from "./OpusWelcome";
 import { projectKey } from "../../../shared/lib/paths";
 import { canEditLastTurn, lastTurnRecall } from "../model/editLastTurn";
+import { revokeAttachment } from "../model/attachments";
 import {
   loadProjectChatBackgroundSettings,
   projectChatBackgroundImageRevision,
@@ -622,6 +623,31 @@ const LocalSessionPane = memo(function LocalSessionPane({
     (!draftBlock && (!isEmpty || inSplit || !!session.inboxAsk || !!agent));
   const composerDockMotion = useComposerDockMotion(dockComposer);
   const draftRef = useRef<string | undefined>(getComposerDraft(session.id));
+  const attachmentDraftRef = useRef<Attachment[]>([]);
+  const borrowedAttachmentIdsRef = useRef<ReadonlySet<string>>(new Set());
+  const attachmentDraftLifecycleRef = useRef(0);
+  const rememberAttachments = useCallback(
+    (attachments: Attachment[], borrowedIds: ReadonlySet<string>) => {
+      attachmentDraftRef.current = attachments;
+      borrowedAttachmentIdsRef.current = borrowedIds;
+    },
+    [],
+  );
+  useEffect(() => {
+    const lifecycle = ++attachmentDraftLifecycleRef.current;
+    return () => {
+      queueMicrotask(() => {
+        if (attachmentDraftLifecycleRef.current !== lifecycle) return;
+        attachmentDraftRef.current.forEach((attachment) => {
+          if (!borrowedAttachmentIdsRef.current.has(attachment.id)) {
+            revokeAttachment(attachment);
+          }
+        });
+        attachmentDraftRef.current = [];
+        borrowedAttachmentIdsRef.current = new Set();
+      });
+    };
+  }, []);
   const composer = (
     <Composer
       key={session.id}
@@ -657,10 +683,13 @@ const LocalSessionPane = memo(function LocalSessionPane({
           ? undefined
           : session.composerSeed)
       }
+      initialAttachments={attachmentDraftRef.current}
+      initialBorrowedAttachmentIds={borrowedAttachmentIdsRef.current}
       onDraftChange={(text) => {
         draftRef.current = text;
         setComposerDraft(session.id, text);
       }}
+      onAttachmentsChange={rememberAttachments}
       inboxCard={session.inboxCard}
       noteCard={session.noteCard}
       handoffCard={session.handoffCard}

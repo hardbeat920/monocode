@@ -42,8 +42,6 @@ export type FileOpenOptions = {
   exact?: boolean;
   /** Open as a permanent tab instead of the pane's preview tab. */
   pin?: boolean;
-  /** Open separately so temporary UI state in the current workspace stays mounted. */
-  workspace?: boolean;
   /** Save changes immediately without changing the global editor preference. */
   autosave?: boolean;
 };

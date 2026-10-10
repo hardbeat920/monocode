@@ -6353,7 +6353,7 @@ function Workspace({
           ...(options?.autosave ? { autosave: true } : {}),
         };
         const pin = !!options?.pin;
-        if (options?.workspace || loadFileTabMode() === "workspace") {
+        if (loadFileTabMode() === "workspace") {
           // Built once: the updater may run twice in StrictMode.
           const created = newEditorWorkspaceTab(
             pin ? file : { ...file, preview: true },
