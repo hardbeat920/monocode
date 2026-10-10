@@ -159,5 +159,5 @@ export function CommitDiff({ cwd, sha }: Props) {
     );
   }
 
-  return <UnifiedDiffView files={models} totals={totals} />;
+  return <UnifiedDiffView files={models} workspace={cwd} totals={totals} />;
 }

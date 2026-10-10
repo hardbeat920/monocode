@@ -120,7 +120,17 @@ import { QuestionForm } from "./QuestionForm";
 import { MessageQueue } from "./MessageQueue";
 import { SkillPicker } from "../../skills/ui/SkillPicker";
 import { pathKey, projectKey } from "../../../shared/lib/paths";
-import { consumeQuoteRequest, type QuoteRequest } from "../model/quoteDraft";
+import {
+  appendComposerInsert,
+  consumeQuoteRequest,
+  type QuoteRequest,
+} from "../model/quoteDraft";
+import {
+  clearReviewComments,
+  formatReviewComments,
+  reviewCommentsSnapshot,
+  subscribeReviewComments,
+} from "../../review-comments/model/reviewComments";
 import { useTabGroupLogos } from "../../projects/hooks/useTabGroupLogos";
 import { useProjectBranchesState } from "../../source-control/hooks/useProjectBranches";
 import {
@@ -409,6 +419,14 @@ export function Composer({
   children,
 }: Props) {
   const ref = useRef<HTMLTextAreaElement>(null);
+  const allReviewComments = useSyncExternalStore(
+    subscribeReviewComments,
+    reviewCommentsSnapshot,
+    reviewCommentsSnapshot,
+  );
+  const reviewComments = allReviewComments.filter(
+    (comment) => comment.workspace === executionCwd,
+  );
   const boxRef = useRef<HTMLDivElement>(null);
   const plusRef = useRef<HTMLDivElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
@@ -1268,14 +1286,50 @@ export function Composer({
     onRecallLastTurnReady(recallLastTurn);
   }, [editLastTurnSupported, onRecallLastTurnReady, recallLastTurn]);
 
-  const submit = (value: string) => {
+  const submit = (
+    value: string,
+    onAccepted?: () => void,
+    onRejected?: () => void,
+    skipDraftSave = false,
+  ) => {
     if (disabled || worktreeRemoved || submitLockRef.current) return;
     submitLockRef.current = true;
-    void completeSubmit(value).finally(() => {
+    void completeSubmit(value, onAccepted, onRejected, skipDraftSave).finally(() => {
       submitLockRef.current = false;
     });
   };
-  const completeSubmit = async (submittedValue: string) => {
+  const submitReview = () => {
+    if (disabled || worktreeRemoved || submitLockRef.current) return;
+    const review = formatReviewComments(reviewComments);
+    if (!review) return;
+    const submittedCommentIds = new Set(
+      reviewComments.map((comment) => comment.id),
+    );
+    const originalDraft = ref.current?.value ?? "";
+    const value = appendComposerInsert(originalDraft, review);
+    if (ref.current) {
+      ref.current.value = value;
+      resizeComposer(ref.current);
+    }
+    setDraft(value);
+    onDraftChange?.(value);
+    syncHasValue(value, attachmentsRef.current);
+    submit(value, () => clearReviewComments(submittedCommentIds), () => {
+      if (ref.current) {
+        ref.current.value = originalDraft;
+        resizeComposer(ref.current);
+      }
+      setDraft(originalDraft);
+      onDraftChange?.(originalDraft);
+      syncHasValue(originalDraft, attachmentsRef.current);
+    }, true);
+  };
+  const completeSubmit = async (
+    submittedValue: string,
+    onAccepted?: () => void,
+    onRejected?: () => void,
+    skipDraftSave = false,
+  ) => {
     let pending = pasteFlightRef.current;
     const generation = pasteGenerationRef.current;
     while (pending) {
@@ -1302,7 +1356,7 @@ export function Composer({
     const draftCommand = canSaveDraft
       ? consumeDraftCommand(value)
       : { text: value, matched: false };
-    if ((draftSelected || draftCommand.matched) && onSaveDraft) {
+    if (!skipDraftSave && (draftSelected || draftCommand.matched) && onSaveDraft) {
       const files = attachmentsRef.current;
       const text = draftCommand.text;
       if (!text.trim() && files.length === 0) return;
@@ -1436,8 +1490,10 @@ export function Composer({
     // intact so resolving the blocker never destroys their work.
     if (accepted === false) {
       restoreDraft(text, files);
+      onRejected?.();
       return;
     }
+    onAccepted?.();
     pasteGenerationRef.current += 1;
     if (ref.current) {
       ref.current.value = "";
@@ -2393,6 +2449,16 @@ export function Composer({
               </button>
             ) : null}
             <div className="flex shrink-0 items-center gap-1">
+              {reviewComments.length > 0 ? (
+                <button
+                  type="button"
+                  disabled={disabled || worktreeRemoved}
+                  onClick={submitReview}
+                  className="inline-flex h-7 items-center gap-1 rounded-md border border-content/15 px-2 text-[11px] font-medium text-content hover:bg-content/10 disabled:opacity-40"
+                >
+                  Submit review ({reviewComments.length})
+                </button>
+              ) : null}
               <ComposerAction
                 busy={busy}
                 disabled={disabled}
