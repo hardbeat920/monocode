@@ -52,7 +52,6 @@ fn assignments(text: &str) -> Result<Vec<Assignment>, String> {
                 path.file_name().and_then(|n| n.to_str()),
                 Some("SKILL.md" | "skill.md")
             )
-            || !is_discovered_skill_path(&item.path)
             || item.description.len() > 4096
         {
             return Err("Invalid skill assignment".into());
@@ -62,7 +61,14 @@ fn assignments(text: &str) -> Result<Vec<Assignment>, String> {
 }
 
 pub(crate) fn validate_assignments(text: &str) -> Result<(), String> {
-    assignments(text).map(|_| ())
+    let items = assignments(text)?;
+    if items
+        .iter()
+        .any(|item| !is_discovered_skill_path(&item.path))
+    {
+        return Err("Invalid skill assignment".into());
+    }
+    Ok(())
 }
 
 pub(crate) fn owned_path(dir: &Path, name: &str) -> Result<PathBuf, String> {
@@ -291,7 +297,7 @@ mod tests {
             }
         ])
         .to_string();
-        assert!(assignments(&config).is_err());
+        assert!(validate_assignments(&config).is_err());
         std::fs::write(dir.join("skills.json"), config).unwrap();
         let listed = list(&dir).unwrap();
         let secret_skill = listed.iter().find(|skill| skill.name == "secret").unwrap();
