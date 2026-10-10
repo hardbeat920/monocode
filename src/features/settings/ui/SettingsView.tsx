@@ -1764,7 +1764,7 @@ function LinearSettings() {
   );
 }
 
-function UpdateRow({
+export function UpdateRow({
   onOpenWhatsNew,
 }: {
   onOpenWhatsNew: (version: string) => void;
@@ -1801,8 +1801,7 @@ function UpdateRow({
     };
   }, []);
 
-  // An install can finish via the sidebar or the app menu while Settings is
-  // open. Sync the staged restart so the row doesn't keep offering Download.
+  // Syncs a restart staged elsewhere while open.
   useEffect(() => {
     let cancelled = false;
     const unsubscribe = subscribePendingRestart(() => {
@@ -1843,9 +1842,7 @@ function UpdateRow({
     if (busy) return;
     try {
       if (needsRestart) {
-        // On relaunch success onProgress is never called; applying the
-        // snapshot keeps the row from sticking on "Restart now" if relaunch
-        // ever no-ops.
+        // The helper stays in restart-required if relaunch no-ops.
         setSnapshot(await restartToApplyUpdate(setSnapshot));
         return;
       }

@@ -38,15 +38,12 @@ export function SidebarUpdateFooter({
     phase: "idle",
     currentVersion: "…",
   });
-  // "Later" for an installed update: hide the sidebar row for this version
-  // until a newer one arrives. The install stays staged — Settings still
-  // offers "Restart now" and a manual check re-offers the restart dialog.
+  // Dismiss hides this version only; the install stays staged and a newer
+  // version un-dismisses.
   const [dismissedRestart, setDismissedRestart] = useState<string | null>(null);
 
-  // The automatic probe runs on mount whether or not it ends up rendering
-  // anything, so a newly published version still surfaces on its own. The
-  // snapshot lives here rather than in SidebarUpdate so the footer can drop its
-  // padding entirely when neither child has anything to show.
+  // Runs the automatic probe on mount; the footer owns the snapshot so it can
+  // drop its padding when there is nothing to show.
   useEffect(() => {
     let cancelled = false;
 
@@ -87,9 +84,7 @@ export function SidebarUpdateFooter({
     };
   }, []);
 
-  // An install can finish via Settings or the app menu while the footer is
-  // mounted. Without this the row keeps reading "Update to X" until clicked
-  // (the click self-heals via installPendingUpdate's pending-restart branch).
+  // Syncs a restart staged elsewhere while mounted.
   useEffect(() => {
     let cancelled = false;
     const unsubscribe = subscribePendingRestart(() => {
@@ -136,9 +131,7 @@ export function SidebarUpdateFooter({
 
   if (!card && !showUpdate) return null;
 
-  // The gap down to the Settings block belongs to that block's own padding, so
-  // the footer can disappear without leaving the sidebar's bottom row flush
-  // against the scrolling list above it.
+  // Bottom spacing belongs to the Settings block, so hiding leaves no gap.
   return (
     <div className="flex flex-col gap-1.5 p-2 pb-0">
       {card}
@@ -177,9 +170,7 @@ export function SidebarUpdate({
     installing.current = true;
     try {
       if (needsRestart) {
-        // On relaunch success onProgress is never called (the process is
-        // expected to exit); applying the snapshot keeps the button from
-        // sticking on "Restart to update" if relaunch ever no-ops.
+        // The helper stays in restart-required if relaunch no-ops.
         onSnapshot(await restartToApplyUpdate(onSnapshot));
         return;
       }

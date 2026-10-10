@@ -80,11 +80,7 @@ export function getPendingRestartVersion(): string | null {
 type PendingRestartListener = () => void;
 const pendingRestartListeners = new Set<PendingRestartListener>();
 
-/**
- * Subscribe to deferred-restart changes. Fires when an install finishes
- * elsewhere (Settings, app menu) while another surface is mounted, so the
- * sidebar and Settings rows can sync without polling.
- */
+/** Fires when the staged restart changes, so mounted rows can sync. */
 export function subscribePendingRestart(
   listener: PendingRestartListener,
 ): () => void {
@@ -136,7 +132,15 @@ export async function restartToApplyUpdate(
   }
   try {
     await relaunch();
-    return { phase: "current", currentVersion: pending };
+    // relaunch should exit the process; if it returns, the restart is still
+    // staged, so stay in restart-required and keep module state in sync.
+    const staged: UpdaterSnapshot = {
+      phase: "restart-required",
+      currentVersion,
+      availableVersion: pending,
+    };
+    emitProgress(onProgress, staged);
+    return staged;
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     const restartRequired: UpdaterSnapshot = {
@@ -327,6 +331,11 @@ export async function installPendingUpdate(
         availableVersion: pendingRestartVersion,
       };
       emitProgress(onProgress, restartRequired);
+      // Stale "available" snapshot: re-offer so one click restarts.
+      const restartNow = await askToRestartNow(pendingRestartVersion);
+      if (restartNow) {
+        return restartToApplyUpdate(onProgress);
+      }
       return restartRequired;
     }
     const idle: UpdaterSnapshot = { phase: "idle", currentVersion };

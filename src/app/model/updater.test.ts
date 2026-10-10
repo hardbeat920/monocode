@@ -182,7 +182,12 @@ describe("restart-required flow", () => {
       expect.objectContaining({ title: "Update ready" }),
     );
     expect(mocks.relaunch).toHaveBeenCalledOnce();
-    expect(result.phase).toBe("current");
+    // relaunch should exit; if it returns, the restart stays staged so a
+    // no-op relaunch never desyncs the snapshot from module state.
+    expect(result).toMatchObject({
+      phase: "restart-required",
+      availableVersion: "0.1.23",
+    });
   });
 
   it("holds the app open when the manual restart offer is declined", async () => {
@@ -245,6 +250,47 @@ describe("restartToApplyUpdate", () => {
     await expect(updater.runUpdateFlow(false, throwing)).resolves.toMatchObject(
       { phase: "restart-required" },
     );
+  });
+
+  it("re-offers the restart when a staged install is triggered again", async () => {
+    mocks.downloadAndInstall.mockResolvedValue(undefined);
+    mocks.ask.mockResolvedValue(false);
+    const updater = await updaterWithPendingUpdate();
+    const staged = await updater.installPendingUpdate();
+    expect(staged.phase).toBe("restart-required");
+    vi.clearAllMocks();
+    mocks.getVersion.mockResolvedValue("0.1.22");
+    mocks.ask.mockResolvedValue(true);
+    mocks.relaunch.mockResolvedValue(undefined);
+    mocks.message.mockResolvedValue(undefined);
+
+    // pendingUpdate is gone but the restart is staged: one call restarts.
+    const result = await updater.installPendingUpdate();
+
+    expect(mocks.ask).toHaveBeenCalledWith(
+      expect.stringContaining("Restart now"),
+      expect.objectContaining({ title: "Update ready" }),
+    );
+    expect(mocks.relaunch).toHaveBeenCalledOnce();
+    expect(result.phase).toBe("restart-required");
+  });
+
+  it("holds the staged restart when the re-offer is declined", async () => {
+    mocks.downloadAndInstall.mockResolvedValue(undefined);
+    mocks.ask.mockResolvedValue(false);
+    const updater = await updaterWithPendingUpdate();
+    await updater.installPendingUpdate();
+    vi.clearAllMocks();
+    mocks.getVersion.mockResolvedValue("0.1.22");
+    mocks.ask.mockResolvedValue(false);
+
+    const result = await updater.installPendingUpdate();
+
+    expect(result).toMatchObject({
+      phase: "restart-required",
+      availableVersion: "0.1.23",
+    });
+    expect(mocks.relaunch).not.toHaveBeenCalled();
   });
 
   it("notifies pending-restart subscribers when an install stages", async () => {
