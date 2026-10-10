@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  addPiTurnUsage,
   agentEndWillRetry,
   assistantDeltaFromEvent,
   buildPiPrompt,
@@ -541,6 +542,35 @@ describe("tools and models", () => {
       cacheWriteTokens: 50,
       cacheHitPercent: (300 / 450) * 100,
     });
+  });
+});
+
+describe("addPiTurnUsage", () => {
+  it("adds up every response in the turn, once each", () => {
+    const spent = { done: {}, open: {} };
+    const first = { input: 100, output: 20, cacheRead: 300, cacheWrite: 50 };
+    const second = { input: 200, output: 40, cacheRead: 0, cacheWrite: 0 };
+    const frames = [
+      { type: "message_start", message: { role: "assistant" } },
+      { type: "message_update", usage: { ...first, output: 5 } },
+      { type: "message_end", message: { role: "assistant", usage: first } },
+      { type: "turn_end", message: { role: "assistant", usage: first } },
+      { type: "message_update", usage: { ...second, output: 10 } },
+      { type: "message_end", message: { role: "assistant", usage: second } },
+      { type: "turn_end", message: { role: "assistant", usage: second } },
+    ];
+    const metrics = frames.map((frame) => addPiTurnUsage(spent, frame));
+    expect(metrics[1]).toMatchObject({ inputTokens: 100, outputTokens: 5 });
+    expect(metrics[3]).toBeNull();
+    expect(metrics[4]).toMatchObject({ inputTokens: 300, outputTokens: 30 });
+    expect(metrics[5]).toEqual({
+      inputTokens: 300,
+      outputTokens: 60,
+      cacheReadTokens: 300,
+      cacheWriteTokens: 50,
+      cacheHitPercent: (300 / 650) * 100,
+    });
+    expect(metrics[6]).toBeNull();
   });
 });
 

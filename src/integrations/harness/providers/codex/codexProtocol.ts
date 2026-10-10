@@ -535,12 +535,59 @@ function mapTokenUsage(rec: Record<string, unknown>): MappedCodexNotification {
   if (!last) return { events: [] };
   const used = numberField(last, "totalTokens");
   const window = numberField(usage, "modelContextWindow");
-  const inputTokens = numberField(last, "inputTokens");
-  const cacheReadTokens = numberField(last, "cachedInputTokens");
-  const cacheWriteTokens = numberField(last, "cacheWriteInputTokens");
-  const outputTokens = numberField(last, "outputTokens");
+  if (!used && !window) return { events: [] };
+  return {
+    events: [
+      {
+        type: "context",
+        ...(used > 0 ? { used } : {}),
+        ...(window > 0 ? { window } : {}),
+      },
+    ],
+  };
+}
+
+/** What the current Codex turn has spent, summed request by request. */
+export type CodexTurnUsage = {
+  /** `total.totalTokens` of the last reading, to spot a repeated one. */
+  threadTotal?: number;
+  turn: Record<string, number>;
+};
+
+const CODEX_USAGE_KEYS = [
+  "inputTokens",
+  "cachedInputTokens",
+  "cacheWriteInputTokens",
+  "outputTokens",
+] as const;
+
+/**
+ * `last` in `thread/tokenUsage/updated` covers a single model request, and a
+ * turn with tool calls makes several. Codex also re-sends an unchanged reading
+ * with no new request behind it (after compaction, on a usage limit), so `last`
+ * is only added when the thread's `total` has moved.
+ */
+export function addCodexTurnUsage(
+  spent: CodexTurnUsage,
+  params: unknown,
+): TurnMetrics | null {
+  const usage = asRecord(asRecord(params)?.tokenUsage);
+  const last = asRecord(usage?.last);
+  if (!last) return null;
+  const threadTotal = numberField(asRecord(usage?.total), "totalTokens");
+  if (threadTotal > 0 && threadTotal === spent.threadTotal) return null;
+  spent.threadTotal = threadTotal;
+  for (const key of CODEX_USAGE_KEYS) {
+    if (key in last) {
+      spent.turn[key] = (spent.turn[key] ?? 0) + numberField(last, key);
+    }
+  }
+  const inputTokens = numberField(spent.turn, "inputTokens");
+  const cacheReadTokens = numberField(spent.turn, "cachedInputTokens");
+  const cacheWriteTokens = numberField(spent.turn, "cacheWriteInputTokens");
+  const outputTokens = numberField(spent.turn, "outputTokens");
   const cacheReported =
-    "cachedInputTokens" in last || "cacheWriteInputTokens" in last;
+    "cachedInputTokens" in spent.turn || "cacheWriteInputTokens" in spent.turn;
   const metrics: TurnMetrics = {
     ...(inputTokens ? { inputTokens } : {}),
     ...(outputTokens ? { outputTokens } : {}),
@@ -553,22 +600,7 @@ function mapTokenUsage(rec: Record<string, unknown>): MappedCodexNotification {
         }
       : {}),
   };
-  const hasMetrics = Object.keys(metrics).length > 0;
-  if (!used && !window && !hasMetrics) return { events: [] };
-  return {
-    events: [
-      ...(used || window
-        ? [
-            {
-              type: "context" as const,
-              ...(used > 0 ? { used } : {}),
-              ...(window > 0 ? { window } : {}),
-            },
-          ]
-        : []),
-      ...(hasMetrics ? [{ type: "turn.metrics" as const, ...metrics }] : []),
-    ],
-  };
+  return Object.keys(metrics).length > 0 ? metrics : null;
 }
 
 function mapTurnTerminal(
