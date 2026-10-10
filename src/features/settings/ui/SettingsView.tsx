@@ -393,10 +393,12 @@ import {
   type NotificationPermission,
 } from "../../notifications/model/notifications";
 import {
+  getPendingRestartVersion,
   installPendingUpdate,
   packageManagedInstall,
   packageManagerHint,
   readAppVersion,
+  restartToApplyUpdate,
   runUpdateFlow,
   type UpdaterSnapshot,
 } from "../../../app/model/updater";
@@ -1776,6 +1778,16 @@ function UpdateRow({
     void Promise.all([readAppVersion(), packageManagedInstall()]).then(
       ([currentVersion, packageManaged]) => {
         if (cancelled) return;
+        const deferred = getPendingRestartVersion();
+        if (deferred) {
+          setSnapshot({
+            phase: "restart-required",
+            currentVersion,
+            availableVersion: deferred,
+            packageManaged: packageManaged ?? undefined,
+          });
+          return;
+        }
         setSnapshot((current) => ({
           ...current,
           currentVersion,
@@ -1791,30 +1803,42 @@ function UpdateRow({
   const busy =
     snapshot.phase === "checking" || snapshot.phase === "downloading";
   const hasUpdate = snapshot.phase === "available";
+  const needsRestart = snapshot.phase === "restart-required";
 
   const onClick = async () => {
     if (busy) return;
-    if (hasUpdate) {
-      await installPendingUpdate(setSnapshot);
-      return;
+    try {
+      if (needsRestart) {
+        await restartToApplyUpdate(setSnapshot);
+        return;
+      }
+      if (hasUpdate) {
+        await installPendingUpdate(setSnapshot);
+        return;
+      }
+      await runUpdateFlow(true, setSnapshot);
+    } catch {
+      // Updater helpers surface errors via dialogs/snapshots; swallow so the
+      // fire-and-forget `void onClick()` never yields unhandled rejections.
     }
-    await runUpdateFlow(true, setSnapshot);
   };
 
   const status =
     snapshot.phase === "available"
       ? `Version ${snapshot.availableVersion} is available.`
-      : snapshot.phase === "downloading"
-        ? `Downloading${snapshot.progress != null ? ` ${snapshot.progress}%` : "…"}`
-        : snapshot.phase === "checking"
-          ? "Checking for updates…"
-          : snapshot.phase === "current"
-            ? "You're on the latest version."
-            : snapshot.phase === "error"
-              ? (snapshot.error ?? "Update check failed.")
-              : snapshot.packageManaged
-                ? packageManagerHint(snapshot.packageManaged)
-                : "MonoCode updates itself from the release feed.";
+      : snapshot.phase === "restart-required"
+        ? `Version ${snapshot.availableVersion} is installed. Restart to apply it.`
+        : snapshot.phase === "downloading"
+          ? `Downloading${snapshot.progress != null ? ` ${snapshot.progress}%` : "…"}`
+          : snapshot.phase === "checking"
+            ? "Checking for updates…"
+            : snapshot.phase === "current"
+              ? "You're on the latest version."
+              : snapshot.phase === "error"
+                ? (snapshot.error ?? "Update check failed.")
+                : snapshot.packageManaged
+                  ? packageManagerHint(snapshot.packageManaged)
+                  : "MonoCode updates itself from the release feed.";
 
   return (
     <Row
@@ -1839,12 +1863,16 @@ function UpdateRow({
         <SecondaryButton onClick={() => void onClick()} disabled={busy}>
           {busy ? (
             <Loader className="size-3.5 animate-spin" aria-hidden />
-          ) : hasUpdate ? (
+          ) : hasUpdate || needsRestart ? (
             <ArrowDownCircle className="size-3.5 text-accent" aria-hidden />
           ) : (
             <RefreshCw className="size-3.5" strokeWidth={1.75} aria-hidden />
           )}
-          {hasUpdate ? "Download" : "Check for updates"}
+          {hasUpdate
+            ? "Download"
+            : needsRestart
+              ? "Restart now"
+              : "Check for updates"}
         </SecondaryButton>
       </div>
     </Row>

@@ -1,20 +1,27 @@
-import { ArrowDownCircle, Loader } from "../../shared/ui/icons";
+import { ArrowDownCircle, Loader, X } from "../../shared/ui/icons";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  getPendingRestartVersion,
   installPendingUpdate,
   probeForUpdate,
   readAppVersion,
+  restartToApplyUpdate,
   type UpdaterSnapshot,
 } from "../model/updater";
 import type { InstalledUpdate } from "../model/updateNotice";
 import { UpdateRailCard } from "./UpdateRailCard";
 
 // The sidebar row only earns its space when there is something to act on: an
-// update waiting to be installed, or one already downloading. Every other phase
-// — including a probe that failed — stays silent, because manual "Check for
-// updates" already lives in Settings and the app menu.
+// update waiting to be installed, one already downloading, or one installed
+// and waiting for a restart. Every other phase — including a probe that
+// failed — stays silent, because manual "Check for updates" already lives in
+// Settings and the app menu.
 export function isSidebarUpdateActionable(snapshot: UpdaterSnapshot): boolean {
-  return snapshot.phase === "available" || snapshot.phase === "downloading";
+  return (
+    snapshot.phase === "available" ||
+    snapshot.phase === "downloading" ||
+    snapshot.phase === "restart-required"
+  );
 }
 
 export function SidebarUpdateFooter({
@@ -30,6 +37,10 @@ export function SidebarUpdateFooter({
     phase: "idle",
     currentVersion: "…",
   });
+  // "Later" for an installed update: hide the sidebar row for this version
+  // until a newer one arrives. The install stays staged — Settings still
+  // offers "Restart now" and a manual check re-offers the restart dialog.
+  const [dismissedRestart, setDismissedRestart] = useState<string | null>(null);
 
   // The automatic probe runs on mount whether or not it ends up rendering
   // anything, so a newly published version still surfaces on its own. The
@@ -41,6 +52,15 @@ export function SidebarUpdateFooter({
     (async () => {
       const currentVersion = await readAppVersion();
       if (cancelled) return;
+      const deferred = getPendingRestartVersion();
+      if (deferred) {
+        setSnapshot({
+          phase: "restart-required",
+          currentVersion,
+          availableVersion: deferred,
+        });
+        return;
+      }
       setSnapshot({ phase: "checking", currentVersion });
 
       try {
@@ -75,8 +95,13 @@ export function SidebarUpdateFooter({
       />
     ) : null;
   const actionable = isSidebarUpdateActionable(snapshot);
+  const restartDismissed =
+    snapshot.phase === "restart-required" &&
+    dismissedRestart != null &&
+    snapshot.availableVersion === dismissedRestart;
+  const showUpdate = actionable && !restartDismissed;
 
-  if (!card && !actionable) return null;
+  if (!card && !showUpdate) return null;
 
   // The gap down to the Settings block belongs to that block's own padding, so
   // the footer can disappear without leaving the sidebar's bottom row flush
@@ -84,8 +109,16 @@ export function SidebarUpdateFooter({
   return (
     <div className="flex flex-col gap-1.5 p-2 pb-0">
       {card}
-      {actionable ? (
-        <SidebarUpdate snapshot={snapshot} onSnapshot={setSnapshot} />
+      {showUpdate ? (
+        <SidebarUpdate
+          snapshot={snapshot}
+          onSnapshot={setSnapshot}
+          onDismiss={
+            snapshot.phase === "restart-required" && snapshot.availableVersion
+              ? () => setDismissedRestart(snapshot.availableVersion ?? null)
+              : undefined
+          }
+        />
       ) : null}
     </div>
   );
@@ -94,11 +127,14 @@ export function SidebarUpdateFooter({
 export function SidebarUpdate({
   snapshot,
   onSnapshot,
+  onDismiss,
 }: {
   snapshot: UpdaterSnapshot;
   onSnapshot: (next: UpdaterSnapshot) => void;
+  onDismiss?: () => void;
 }) {
   const busy = snapshot.phase === "downloading";
+  const needsRestart = snapshot.phase === "restart-required";
   // `busy` only flips after installPendingUpdate awaits readAppVersion, so a
   // second click can still land. The ref closes that window immediately.
   const installing = useRef(false);
@@ -107,42 +143,65 @@ export function SidebarUpdate({
     if (busy || installing.current) return;
     installing.current = true;
     try {
+      if (needsRestart) {
+        await restartToApplyUpdate(onSnapshot);
+        return;
+      }
       await installPendingUpdate(onSnapshot);
+    } catch {
+      // Helpers are non-throwing (errors surface via dialogs/snapshots);
+      // swallow so React handlers never produce unhandled rejections.
     } finally {
       installing.current = false;
     }
-  }, [busy, onSnapshot]);
+  }, [busy, needsRestart, onSnapshot]);
 
   const label = busy
     ? `Downloading${snapshot.progress != null ? ` ${snapshot.progress}%` : "…"}`
-    : `Update to ${snapshot.availableVersion}`;
+    : needsRestart
+      ? `Restart to update to ${snapshot.availableVersion}`
+      : `Update to ${snapshot.availableVersion}`;
 
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={busy}
-      className={`flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors ${
-        busy
-          ? "bg-content/5 text-content/75 hover:bg-content/10 hover:text-content"
-          : "bg-accent/15 text-content hover:bg-accent/20"
-      } disabled:cursor-default disabled:opacity-70`}
-    >
-      <span className="grid size-[18px] shrink-0 place-items-center">
-        {busy ? (
-          <Loader className="size-4 animate-spin opacity-70" aria-hidden />
-        ) : (
-          <ArrowDownCircle className="size-4 text-accent" aria-hidden />
-        )}
-      </span>
-      <span className="min-w-0 flex-1 flex items-center">
-        <span className="block truncate text-[12px] font-medium leading-tight">
-          {label}
+    <div className="relative">
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={busy}
+        className={`flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors ${
+          needsRestart ? "pr-8" : ""
+        } ${
+          busy
+            ? "bg-content/5 text-content/75 hover:bg-content/10 hover:text-content"
+            : "bg-accent/15 text-content hover:bg-accent/20"
+        } disabled:cursor-default disabled:opacity-70`}
+      >
+        <span className="grid size-[18px] shrink-0 place-items-center">
+          {busy ? (
+            <Loader className="size-4 animate-spin opacity-70" aria-hidden />
+          ) : (
+            <ArrowDownCircle className="size-4 text-accent" aria-hidden />
+          )}
         </span>
-        <span className="ml-auto block text-[11px] text-content/40">
-          v{snapshot.currentVersion}
+        <span className="min-w-0 flex-1 flex items-center">
+          <span className="block truncate text-[12px] font-medium leading-tight">
+            {label}
+          </span>
+          <span className="ml-auto block text-[11px] text-content/40">
+            v{snapshot.currentVersion}
+          </span>
         </span>
-      </span>
-    </button>
+      </button>
+      {needsRestart && onDismiss ? (
+        <button
+          type="button"
+          aria-label="Dismiss restart notification"
+          onClick={onDismiss}
+          className="absolute right-1 top-1/2 grid size-6 -translate-y-1/2 place-items-center rounded-md text-content/45 hover:bg-content/8 hover:text-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        >
+          <X className="size-3.5" strokeWidth={1.75} />
+        </button>
+      ) : null}
+    </div>
   );
 }

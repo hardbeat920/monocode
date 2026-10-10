@@ -11,6 +11,7 @@ export type UpdaterPhase =
   | "current"
   | "available"
   | "downloading"
+  | "restart-required"
   | "error";
 
 export type UpdaterSnapshot = {
@@ -24,6 +25,8 @@ export type UpdaterSnapshot = {
 };
 
 let pendingUpdate: Update | null = null;
+/** Version that finished installing but hasn't been restarted into yet. */
+let pendingRestartVersion: string | null = null;
 
 const RELEASES_URL = "https://github.com/hardbeat920/monocode/releases/latest";
 
@@ -64,6 +67,75 @@ function isUpdaterNotConfiguredError(error: unknown): boolean {
   return /updater does not have any endpoints set/i.test(text);
 }
 
+export function getPendingRestartVersion(): string | null {
+  return pendingRestartVersion;
+}
+
+/** Relaunch into an already-installed update (user chose "Later" before).
+ * Never rejects: a failed relaunch stays in `restart-required` and surfaces
+ * a dialog, so React onClick handlers can't produce unhandled rejections. */
+export async function restartToApplyUpdate(
+  onProgress?: (snapshot: UpdaterSnapshot) => void,
+): Promise<UpdaterSnapshot> {
+  let currentVersion: string;
+  try {
+    currentVersion = await readAppVersion();
+  } catch {
+    currentVersion = "0.0.0";
+  }
+  const pending = pendingRestartVersion;
+  if (!pending) {
+    const idle: UpdaterSnapshot = { phase: "idle", currentVersion };
+    try {
+      onProgress?.(idle);
+    } catch {
+      // UI callbacks must never break the non-throwing contract.
+    }
+    return idle;
+  }
+  try {
+    await relaunch();
+    return { phase: "current", currentVersion: pending };
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    const restartRequired: UpdaterSnapshot = {
+      phase: "restart-required",
+      currentVersion,
+      availableVersion: pending,
+      error,
+    };
+    try {
+      onProgress?.(restartRequired);
+    } catch {
+      // ignore
+    }
+    try {
+      await message(`Couldn't restart to apply the update.\n\n${error}`, {
+        title: "MonoCode",
+      });
+    } catch {
+      // Dialog failures stay silent; the snapshot already carries the error.
+    }
+    return restartRequired;
+  }
+}
+
+async function askToRestartNow(version: string): Promise<boolean> {
+  try {
+    return await ask(
+      `MonoCode ${version} is installed and ready.\n\nRestart now to apply the update? You can also choose Later and restart whenever you're ready.`,
+      {
+        title: "Update ready",
+        kind: "info",
+        okLabel: "Restart now",
+        cancelLabel: "Later",
+      },
+    );
+  } catch {
+    return false;
+  }
+}
+
 export async function readAppVersion(): Promise<string> {
   try {
     return await getVersion();
@@ -73,6 +145,7 @@ export async function readAppVersion(): Promise<string> {
 }
 
 export async function probeForUpdate(): Promise<Update | null> {
+  if (pendingRestartVersion) return null;
   if (await packageManagedInstall()) {
     pendingUpdate = null;
     return null;
@@ -108,6 +181,25 @@ export async function runUpdateFlow(
     return idle;
   }
 
+  // An update already finished installing but the user chose Later. Don't
+  // re-download: surface the pending restart instead, and let a manual check
+  // re-offer the restart confirmation.
+  if (pendingRestartVersion) {
+    const restartRequired: UpdaterSnapshot = {
+      phase: "restart-required",
+      currentVersion,
+      availableVersion: pendingRestartVersion,
+    };
+    onProgress?.(restartRequired);
+    if (manual) {
+      const restartNow = await askToRestartNow(pendingRestartVersion);
+      if (restartNow) {
+        return restartToApplyUpdate(onProgress);
+      }
+    }
+    return restartRequired;
+  }
+
   try {
     const update = await check();
     if (!update) {
@@ -135,7 +227,12 @@ export async function runUpdateFlow(
     const detail = notes ? `\n\n${notes}` : "";
     const yes = await ask(
       `MonoCode ${update.version} is available (you have ${currentVersion}).${detail}\n\nInstall now?`,
-      { title: "Update available", kind: "info" },
+      {
+        title: "Update available",
+        kind: "info",
+        okLabel: "Install now",
+        cancelLabel: "Later",
+      },
     );
     if (!yes) return available;
 
@@ -186,6 +283,15 @@ export async function installPendingUpdate(
   const currentVersion = await readAppVersion();
   const update = pendingUpdate;
   if (!update) {
+    if (pendingRestartVersion) {
+      const restartRequired: UpdaterSnapshot = {
+        phase: "restart-required",
+        currentVersion,
+        availableVersion: pendingRestartVersion,
+      };
+      onProgress?.(restartRequired);
+      return restartRequired;
+    }
     const idle: UpdaterSnapshot = { phase: "idle", currentVersion };
     onProgress?.(idle);
     return idle;
@@ -223,14 +329,6 @@ export async function installPendingUpdate(
         progress,
       });
     });
-
-    rememberInstalledUpdate(update.version);
-    pendingUpdate = null;
-    await relaunch();
-    return {
-      phase: "current",
-      currentVersion: update.version,
-    };
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     const failed: UpdaterSnapshot = {
@@ -243,4 +341,21 @@ export async function installPendingUpdate(
     await message(`Couldn't install the update.\n\n${error}`, { title: "MonoCode" });
     return failed;
   }
+
+  rememberInstalledUpdate(update.version);
+  pendingUpdate = null;
+  pendingRestartVersion = update.version;
+
+  const restartNow = await askToRestartNow(update.version);
+  if (!restartNow) {
+    const restartRequired: UpdaterSnapshot = {
+      phase: "restart-required",
+      currentVersion,
+      availableVersion: update.version,
+    };
+    onProgress?.(restartRequired);
+    return restartRequired;
+  }
+
+  return restartToApplyUpdate(onProgress);
 }
