@@ -48,6 +48,7 @@ import type {
 import { HARNESSES, RUNTIME_MODES } from "../model/session";
 
 import { restoreOrchestrationProposal } from "../../orchestration/model/orchestrationPlan";
+import { forgetBrowserSessions } from "../../browser/model/browserStore";
 
 import type { OrchestrationSummary } from "../../orchestration/model/orchestrationSummary";
 
@@ -757,6 +758,9 @@ export async function deleteSession(
       invoke<void>("session_delete", { sessionId, imagePaths }),
     );
     monoSavedBlocks.delete(sessionId);
+    // Its browser tabs go with it. Only deletion does this: a session that
+    // leaves memory while idle is still saved and keeps its tabs.
+    forgetBrowserSessions([sessionId]);
     const tombstone = setTimeout(
       () => deletedSessionIds.delete(sessionId),
       60_000,

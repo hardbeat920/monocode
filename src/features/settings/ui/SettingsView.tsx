@@ -237,12 +237,16 @@ import {
 } from "../../providers/model/providerAccountIdentity";
 import { ProviderAccountSubtitle } from "../../providers/ui/ProviderAccountSubtitle";
 import {
+  saveAgentBrowser,
   saveComposerAutocorrect,
   saveMaskEmails,
+  saveOpenLinksInApp,
   saveRailMonosPinned,
   saveShowRemainingUsage,
+  useAgentBrowser,
   useComposerAutocorrect,
   useMaskEmails,
+  useOpenLinksInApp,
   useRailMonosPinned,
   useShowRemainingUsage,
 } from "../model/displayPrefs";
@@ -902,6 +906,8 @@ function GeneralPage({
             onChange={onFileTabMode}
           />
         </Row>
+        <OpenLinksSetting />
+        <AgentBrowserSetting />
         <Row
           id="tab-animations"
           label="Tab animations"
@@ -3373,6 +3379,44 @@ function ProvidersPage({
         </Row>
       </Group>
     </>
+  );
+}
+
+function OpenLinksSetting() {
+  const inApp = useOpenLinksInApp();
+  return (
+    <Row
+      id="open-links"
+      label="Open links in"
+      description={`Where links clicked in chats and terminals open. Hold ${IS_MAC ? "⌘" : "Ctrl"} while clicking to use the other one.`}
+    >
+      <Segmented
+        label="Open links in"
+        value={inApp ? "app" : "system"}
+        options={[
+          { value: "app", label: "Built-in browser" },
+          { value: "system", label: "Default browser" },
+        ]}
+        onChange={(value) => saveOpenLinksInApp(value === "app")}
+      />
+    </Row>
+  );
+}
+
+function AgentBrowserSetting() {
+  const enabled = useAgentBrowser();
+  return (
+    <Row
+      id="agent-browser"
+      label="Agent browser"
+      description="Let chats open, read, click through, and run scripts in their own built-in browser tabs. Agents share your browser sign-ins. Applies to Claude, Codex, Cursor, Grok, Antigravity, fx, and Hermes the next time a chat's agent starts."
+    >
+      <Toggle
+        label="Agent browser"
+        on={enabled}
+        onChange={saveAgentBrowser}
+      />
+    </Row>
   );
 }
 

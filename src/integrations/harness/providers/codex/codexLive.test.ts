@@ -1,5 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const browserMcpFor = vi.hoisted(() =>
+  vi.fn(
+    async (): Promise<{
+      command: string;
+      args: string[];
+      env: Record<string, string>;
+    } | null> => null,
+  ),
+);
+vi.mock(
+  "../../../../features/browser/model/browserMcp",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../../../../features/browser/model/browserMcp")
+    >()),
+    browserMcpFor,
+  }),
+);
+
 const sent: string[] = [];
 let onLine: ((line: string) => void) | undefined;
 const writeChild = vi.fn(async (_id: string, line: string) => {
@@ -118,6 +137,7 @@ async function startTurn(
     beforeThreadReply?: () => Promise<void>;
     onAccepted?: () => void;
     controlsAgents?: boolean;
+    text?: string;
     ephemeral?: boolean;
     codexStore?: "mono";
   } = {},
@@ -142,7 +162,7 @@ async function startTurn(
     ephemeral: options.ephemeral,
     codexStore: options.codexStore,
     intent: options.intent,
-    text: "summarize the changelog",
+    text: options.text ?? "summarize the changelog",
     attachments: [],
     onAccepted: options.onAccepted,
     onEvent: (event) => events.push(event),
@@ -177,6 +197,7 @@ async function startTurn(
 
 describe("codex live turn sequence", () => {
   beforeEach(() => {
+    browserMcpFor.mockResolvedValue(null);
     sent.length = 0;
     onLine = undefined;
     writeChild.mockClear();
@@ -193,6 +214,30 @@ describe("codex live turn sequence", () => {
     await stopCodexSession("codex-live");
     __codexTestReset();
   });
+
+  it.each([false, true])(
+    "routes embedded browser requests on resumed=%s threads",
+    async (resume) => {
+      browserMcpFor.mockResolvedValue({
+        command: "/fake/monocode",
+        args: ["browser-mcp"],
+        env: {},
+      });
+      const text =
+        "open google.com in your embedded browser, search for MonoCode, and click I\'m feeling lucky.";
+      const { turn } = await startTurn("codex-live", { resume, text });
+      const params = parse().find((m) => m.method === "turn/start")!.params as {
+        input: { text: string }[];
+      };
+      expect(params.input[0].text).toContain("monocode_browser MCP server");
+      expect(params.input[0].text).toContain(
+        "separate from Computer Use's iab",
+      );
+      expect(params.input[0].text).toContain(text);
+      notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+      await turn;
+    },
+  );
 
   it("reports when the provider accepts a turn", async () => {
     const onAccepted = vi.fn();

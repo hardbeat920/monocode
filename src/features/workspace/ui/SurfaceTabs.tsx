@@ -1,5 +1,6 @@
 import {
   GitCompare,
+  Globe,
   GripVertical,
   Terminal,
   X,
@@ -14,6 +15,7 @@ import {
 } from "../../../platform/tauri/fs";
 import {
   isAgentTab,
+  isBrowserTab,
   isChangesTab,
   isCommitTab,
   isFilesystemTab,
@@ -28,6 +30,7 @@ import { displayPath } from "../../../shared/lib/paths";
 import { IS_MAC, IS_WIN } from "../../../platform/tauri/platform";
 import { releaseNotesTitle } from "../../../app/model/releaseNotes";
 import { terminalTabLabel } from "../../terminal/model/terminalTab";
+import { browserUrlLabel } from "../../browser/model/browserUrl";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { useAnimatedReorder } from "../../../shared/hooks/useAnimatedReorder";
 import { useTabCloseMotion } from "../hooks/useTabCloseMotion";
@@ -141,6 +144,16 @@ export function surfaceTabPresentation(
       label: "Session Changes",
       iconName: "CHANGES",
       tooltip: "Changes captured for this session only",
+    };
+  }
+
+  if (isBrowserTab(file)) {
+    const name = file.browser.title?.trim() || browserUrlLabel(file.browser.url);
+    return {
+      name,
+      label: name,
+      iconName: "BROWSER",
+      tooltip: file.browser.url,
     };
   }
 
@@ -302,6 +315,7 @@ export function SurfaceTabs({
           const commit = isCommitTab(file);
           const review = isReviewTab(file) && !changes;
           const terminal = isTerminalTab(file);
+          const browser = isBrowserTab(file) ? file.browser : null;
           const agent = isAgentTab(file) ? file.agent : null;
           const { label, iconName, tooltip } = surfaceTabPresentation(file);
           const tab = (
@@ -371,6 +385,11 @@ export function SurfaceTabs({
               >
                 {terminal ? (
                   <Terminal className="size-3.5 shrink-0" strokeWidth={1.75} />
+                ) : browser ? (
+                  <Globe
+                    className={`size-3.5 shrink-0 ${browser.loading ? "animate-pulse" : ""}`}
+                    strokeWidth={1.75}
+                  />
                 ) : agent ? (
                   <HarnessIcon
                     harness={agent.harness}

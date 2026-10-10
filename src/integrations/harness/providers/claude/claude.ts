@@ -1,4 +1,8 @@
 import { TurnNotReadyError } from "../../core/types";
+import {
+  browserMcpFor,
+  claudeBrowserMcpConfig,
+} from "../../../../features/browser/model/browserMcp";
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import { sameProviderAccountId } from "../../../../features/providers/model/providerAccounts";
 import type {
@@ -538,10 +542,14 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     },
   );
 
+  const browserMcp = await browserMcpFor(input.sessionId);
   await spawnChild(
     input.sessionId,
     path,
-    buildClaudeSpawnArgs(launch),
+    buildClaudeSpawnArgs({
+      ...launch,
+      mcpConfig: browserMcp ? claudeBrowserMcpConfig(browserMcp) : undefined,
+    }),
     input.cwd,
     { provider: "claude", id: input.providerAccountId ?? "default" },
     "claude",

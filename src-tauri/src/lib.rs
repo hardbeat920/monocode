@@ -4,6 +4,8 @@ mod account_identity;
 mod artifacts;
 mod automations;
 mod azure_devops;
+mod browser;
+pub mod browser_mcp;
 mod chat_background;
 mod checkpoint;
 mod codex_mono_store;
@@ -184,7 +186,7 @@ pub(crate) fn passwd_identity() -> Option<PasswdIdentity> {
 
 #[tauri::command]
 fn set_traffic_lights_visible(
-    #[allow(unused_variables)] window: tauri::WebviewWindow,
+    #[allow(unused_variables)] window: tauri::Window,
     #[allow(unused_variables)] visible: bool,
 ) {
     #[cfg(target_os = "macos")]
@@ -193,7 +195,7 @@ fn set_traffic_lights_visible(
 
 #[tauri::command]
 fn set_window_background_blur(
-    #[allow(unused_variables)] window: tauri::WebviewWindow,
+    #[allow(unused_variables)] window: tauri::Window,
     #[allow(unused_variables)] radius: u8,
 ) {
     #[cfg(target_os = "macos")]
@@ -202,7 +204,7 @@ fn set_window_background_blur(
 
 #[tauri::command]
 fn set_dock_badge(
-    #[allow(unused_variables)] window: tauri::WebviewWindow,
+    #[allow(unused_variables)] window: tauri::Window,
     #[allow(unused_variables)] count: u32,
 ) {
     #[cfg(target_os = "macos")]
@@ -246,7 +248,15 @@ pub fn run() {
     let app = builder
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_opener::init())
+        // The plugin's link script would run in built-in browser pages too,
+        // swallowing plain clicks on target=_blank links: it cancels them and
+        // calls an opener command remote pages may not use. The app's own
+        // links open explicitly, so the script is not needed.
+        .plugin(
+            tauri_plugin_opener::Builder::new()
+                .open_js_links_on_click(false)
+                .build(),
+        )
         .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_window_state::Builder::default()
@@ -271,13 +281,13 @@ pub fn run() {
                 quick_composer::init(app.handle())?;
                 mono_chat::init(app.handle())?;
                 macos::install_dock_menu(app.handle());
-                if let Some(window) = app.get_webview_window("main") {
+                if let Some(window) = app.get_window("main") {
                     macos::install(&window);
                 }
             }
             #[cfg(not(target_os = "macos"))]
             {
-                if let Some(window) = app.get_webview_window("main") {
+                if let Some(window) = app.get_window("main") {
                     let _ = window.set_decorations(false);
                     let _ = window.set_shadow(true);
                 }
@@ -288,6 +298,17 @@ pub fn run() {
             menu::dispatch(app, event.id().as_ref());
         })
         .invoke_handler(tauri::generate_handler![
+            browser::browser_open,
+            browser::browser_url,
+            browser::browser_set_bounds,
+            browser::browser_set_visible,
+            browser::browser_focus,
+            browser::browser_navigate,
+            browser::browser_history,
+            browser::browser_close,
+            browser::browser_retain,
+            browser::browser_eval,
+            browser::browser_screenshot,
             remote::remote_machines,
             remote::remote_connect,
             remote::remote_disconnect,
@@ -298,6 +319,7 @@ pub fn run() {
             remote::remote_ssh_answer,
             remote::remote_ssh_cancel,
             control::control_enable,
+            control::control_browser_mcp,
             control::control_disable,
             control::control_reply,
             control::control_save,

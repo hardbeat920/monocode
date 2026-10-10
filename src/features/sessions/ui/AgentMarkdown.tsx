@@ -1,5 +1,5 @@
+import { openLink } from "../../browser/model/openLink";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   createContext,
   isValidElement,
@@ -261,7 +261,7 @@ function MarkdownLink({
         }
         event.preventDefault();
         if (href && /^https?:\/\//i.test(href)) {
-          void openUrl(href).catch((error) => {
+          void openLink(href, event).catch((error) => {
             console.error("Failed to open web link:", error);
           });
         }

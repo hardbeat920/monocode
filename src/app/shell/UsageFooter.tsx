@@ -1,4 +1,5 @@
 import { RefreshCw, Terminal } from "../../shared/ui/icons";
+import { BrowserStatusButton } from "../../features/browser/ui/BrowserStatusButton";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { HarnessIcon } from "../../features/sessions/ui/HarnessIcon";
 import { Popover, type PopoverDismissReason } from "../../shared/ui/Popover";
@@ -62,9 +63,9 @@ export function UsageFooter({
   terminals = [],
   terminalOpen = false,
   onToggleTerminal,
-  onNewTerminal,
-  onShowTerminal,
-  projectTerminalActive = false,
+  projectTerminalOpen = false,
+  onToggleProjectTerminal,
+  showBrowser = false,
   onSelectAccount,
   onManageAccounts,
 }: {
@@ -74,9 +75,11 @@ export function UsageFooter({
   terminals?: RunningTerminal[];
   terminalOpen?: boolean;
   onToggleTerminal?: (fileId: string) => void;
-  onNewTerminal?: () => void;
-  onShowTerminal?: () => void;
-  projectTerminalActive?: boolean;
+  /** The project's terminal dock is on screen. */
+  projectTerminalOpen?: boolean;
+  /** Show or hide the terminal dock, creating a terminal the first time. */
+  onToggleProjectTerminal?: () => void;
+  showBrowser?: boolean;
   onSelectAccount?: (
     provider: ProviderAccountProvider,
     accountId: string,
@@ -303,13 +306,8 @@ export function UsageFooter({
   const showOpencodeChip = wantOpencode && opencode.status !== "unavailable";
   const showUsage = wantClaude || wantCodex || showOpencodeChip || wantDevin;
   const showTerminals = terminals.length > 0;
-  const showTerminalButton = Boolean(onNewTerminal || onShowTerminal);
-  const terminalLabel = projectTerminalActive
-    ? "Terminal"
-    : `New Terminal (${MOD}\`)`;
-  const onTerminalClick = projectTerminalActive
-    ? (onShowTerminal ?? onNewTerminal)
-    : (onNewTerminal ?? onShowTerminal);
+  const showTerminalButton = Boolean(onToggleProjectTerminal);
+  const terminalLabel = `${projectTerminalOpen ? "Hide" : "Show"} Terminal (${MOD}J)`;
   const ariaLabel = showUsage || session?.harness === "pi"
     ? "Provider usage"
     : showTerminals || showTerminalButton
@@ -389,8 +387,9 @@ export function UsageFooter({
       ) : session ? (
         <SessionChip key={session.id ?? session.harness} session={session} />
       ) : null}
-      {showTerminals || showTerminalButton ? (
+      {showTerminals || showTerminalButton || showBrowser ? (
         <div className="ml-auto flex shrink-0 items-center gap-2">
+          {showBrowser ? <BrowserStatusButton /> : null}
           {showTerminals ? (
             <RunningTerminalChip
               terminals={terminals}
@@ -401,14 +400,14 @@ export function UsageFooter({
             <button
               type="button"
               className={`inline-flex h-5 shrink-0 items-center gap-1.5 whitespace-nowrap rounded px-1.5 hover:bg-content/10 ${
-                projectTerminalActive
+                projectTerminalOpen
                   ? "text-accent"
                   : "text-content/40 hover:text-content"
               }`}
               aria-label={terminalLabel}
-              aria-pressed={projectTerminalActive}
+              aria-pressed={projectTerminalOpen}
               title={terminalLabel}
-              onClick={onTerminalClick}
+              onClick={onToggleProjectTerminal}
             >
               <Terminal className="size-3.5" strokeWidth={1.75} aria-hidden />
               <span>Terminal</span>
