@@ -59,6 +59,7 @@ const CLI: Record<HarnessId, { name: string; install?: string }> = {
     install: IS_WIN
       ? "irm https://static.devin.ai/cli/setup.ps1 | iex"
       : "curl -fsSL https://cli.devin.ai/install.sh | bash",
+  },
   opencrabs: {
     name: "OpenCrabs CLI",
     install: "cargo install --git https://github.com/adolfousier/opencrabs",
@@ -175,6 +176,11 @@ export function probeHarnessAvailability(
       if (id === "devin") {
         try {
           await resolveDevinBinary();
+          return [id, true] as const;
+        } catch {
+          return [id, false] as const;
+        }
+      }
       if (id === "opencrabs") {
         try {
           await resolveOpenCrabsBinary();

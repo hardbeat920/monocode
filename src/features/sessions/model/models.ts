@@ -203,6 +203,8 @@ export const MODELS: AgentModel[] = [
     harness: "devin",
     name: "Adaptive",
     nativeId: "adaptive",
+  },
+  {
     id: "opencrabs:default",
     harness: "opencrabs",
     name: "Configured model",
