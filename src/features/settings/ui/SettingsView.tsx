@@ -238,10 +238,12 @@ import {
   saveMaskEmails,
   saveRailMonosPinned,
   saveShowRemainingUsage,
+  saveVisualReplies,
   useComposerAutocorrect,
   useMaskEmails,
   useRailMonosPinned,
   useShowRemainingUsage,
+  useVisualReplies,
 } from "../model/displayPrefs";
 import {
   accountStatus,
@@ -977,6 +979,7 @@ function ChatPage() {
   const [formatOnSave, setFormatOnSave] = useState(loadFormatOnSave);
   const [composerRunner, setComposerRunner] = useState(loadComposerRunner);
   const composerAutocorrect = useComposerAutocorrect();
+  const visualReplies = useVisualReplies();
   const [gridArcadeEnabled, setGridArcadeEnabled] = useState(
     loadGridArcadeEnabled,
   );
@@ -1061,6 +1064,17 @@ function ChatPage() {
             label="Anchor prompts to top"
             on={transcriptAnchor}
             onChange={onTranscriptAnchor}
+          />
+        </Row>
+        <Row
+          id="visual-replies"
+          label="Visual replies"
+          description="Let agents know they can answer with a diagram or chart when that explains it better than text. Diagrams follow the app's theme either way."
+        >
+          <Toggle
+            label="Visual replies"
+            on={visualReplies}
+            onChange={saveVisualReplies}
           />
         </Row>
       </Group>
