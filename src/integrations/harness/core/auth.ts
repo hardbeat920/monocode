@@ -38,6 +38,7 @@ const LOGIN_RESOLVERS: Partial<
   claude: () => child.resolveClaudeBinary(),
   codex: () => child.resolveCodexBinary(),
   cursor: () => child.resolveCursorBinary(),
+  copilot: () => child.resolveCopilotBinary(),
   grok: () => child.resolveGrokBinary(),
   fx: () => child.resolveFxBinary(),
   devin: () => child.resolveDevinBinary(),

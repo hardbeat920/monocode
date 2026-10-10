@@ -837,6 +837,18 @@ pub fn harness_resolve_grok() -> Result<CursorBinary, String> {
         })
 }
 
+/// Resolve GitHub Copilot CLI (`copilot`).
+#[tauri::command(async)]
+pub fn harness_resolve_copilot() -> Result<CursorBinary, String> {
+    resolve_copilot()
+        .map(|path| CursorBinary {
+            path: path.to_string_lossy().into_owned(),
+        })
+        .ok_or_else(|| {
+            "GitHub Copilot CLI not found. Install it with `npm install -g @github/copilot` and run `copilot login`, then retry.".into()
+        })
+}
+
 /// Resolve Nous Research Hermes Agent (`hermes`).
 #[tauri::command(async)]
 pub fn harness_resolve_hermes() -> Result<CursorBinary, String> {
@@ -1823,6 +1835,7 @@ fn is_harness_argv_token(part: &str) -> bool {
             | "omp"
             | "fx"
             | "hermes"
+            | "copilot"
             | "devin"
             | "agy_acp_server.par"
             | "pi"
@@ -2063,6 +2076,7 @@ fn resolve_harness_binary_default(provider: &str) -> Option<PathBuf> {
         "omp" => resolve_omp(),
         "fx" => resolve_fx(),
         "hermes" => resolve_hermes(),
+        "copilot" => resolve_copilot(),
         "antigravity" => resolve_antigravity(),
         "devin" => resolve_devin(),
         _ => None,
@@ -2109,6 +2123,7 @@ fn resolve_harness_binary_override(provider: &str, binary_path: &str) -> Result<
         "omp" => &["omp"],
         "fx" => &["fx"],
         "hermes" => &["hermes"],
+        "copilot" => &["copilot"],
         "antigravity" => &["agy_acp_server.par"],
         "devin" => &["devin"],
         _ => {
@@ -2148,6 +2163,8 @@ fn resolve_harness_binary_override(provider: &str, binary_path: &str) -> Result<
 
 fn is_supported_harness_version(version: &str) -> bool {
     version.split_whitespace().any(|token| {
+        // Human-readable CLI output can end the version sentence with a period.
+        let token = token.strip_suffix('.').unwrap_or(token);
         let token = token
             .strip_prefix('v')
             .or_else(|| token.strip_prefix('V'))
@@ -2183,6 +2200,7 @@ fn validate_harness_binary_version(provider: &str, path: &Path) -> Result<(), St
         "claude" => lower.contains("claude"),
         "codex" => lower.contains("codex"),
         "hermes" => lower.contains("hermes"),
+        "copilot" => lower.contains("copilot"),
         "devin" => lower.contains("devin"),
         _ => true,
     };
@@ -2445,6 +2463,29 @@ fn resolve_grok() -> Option<PathBuf> {
     }
 
     first_binary_matching(candidates, is_grok_agent)
+}
+
+fn resolve_copilot() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(from_shell) = which_via_login_shell("copilot") {
+        candidates.push(from_shell);
+    }
+    if let Some(home) = dirs_home().map(PathBuf::from) {
+        for dir in [".local/bin", ".npm-global/bin", ".bun/bin", "n/bin"] {
+            candidates.push(home.join(dir).join("copilot"));
+        }
+    }
+    for dir in [
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/usr/bin",
+        "/snap/bin",
+    ] {
+        candidates.push(PathBuf::from(dir).join("copilot"));
+    }
+    first_binary_matching(candidates, |path| {
+        validate_harness_binary_version("copilot", path).is_ok()
+    })
 }
 
 fn resolve_hermes() -> Option<PathBuf> {
@@ -3547,6 +3588,46 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn copilot_resolution_skips_an_unrelated_binary() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir =
+            std::env::temp_dir().join(format!("monocode-copilot-identity-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let decoy = dir.join("decoy");
+        let copilot = dir.join("copilot");
+        for (path, version) in [
+            (&decoy, "unrelated-cli 1.0.94"),
+            (
+                &copilot,
+                "GitHub Copilot CLI 1.0.94.\nRun 'copilot update' to check for updates.",
+            ),
+        ] {
+            std::fs::write(path, format!("#!/bin/sh\necho '{version}'\n")).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert_eq!(
+            first_binary_matching(vec![decoy, copilot.clone()], |path| {
+                validate_harness_binary_version("copilot", path).is_ok()
+            }),
+            Some(copilot)
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn harness_versions_accept_sentence_punctuation_without_accepting_invalid_versions() {
+        assert!(is_supported_harness_version(
+            "GitHub Copilot CLI 1.0.94.\nRun 'copilot update' to check for updates."
+        ));
+        assert!(is_supported_harness_version("codex-cli 0.156.1"));
+        for version in ["1.0", "1.0.94.1", "1.0.94..", "1.0.94-invalid!", "latest"] {
+            assert!(!is_supported_harness_version(version), "{version}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn configured_binary_paths_fail_closed_and_stay_exact() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -3558,6 +3639,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let codex = dir.join("codex");
         let opencode = dir.join("opencode");
+        let copilot = dir.join("copilot");
         let cursor_agent = dir.join("cursor-agent");
         let decoy = dir.join("codex.sh");
         let antigravity = dir.join("agy_acp_server");
@@ -3565,6 +3647,7 @@ mod tests {
         for path in [
             &codex,
             &opencode,
+            &copilot,
             &cursor_agent,
             &decoy,
             &antigravity,
@@ -3575,6 +3658,8 @@ mod tests {
                     b"#!/bin/sh\n"
                 } else if path == &codex {
                     b"#!/bin/sh\necho 'codex-cli 0.156.1'\n"
+                } else if path == &copilot {
+                    b"#!/bin/sh\necho 'GitHub Copilot CLI 1.0.94.'\n"
                 } else if path == &cursor_agent {
                     b"#!/bin/sh\necho '2026.09.23-86fc751'\n"
                 } else {
@@ -3623,6 +3708,11 @@ mod tests {
             resolve_harness_binary_override("opencode", &opencode.to_string_lossy()),
             Ok(opencode.clone())
         );
+        assert_eq!(
+            resolve_harness_binary_override("copilot", &copilot.to_string_lossy()),
+            Ok(copilot.clone())
+        );
+        assert!(resolve_harness_binary_override("copilot", &codex.to_string_lossy()).is_err());
         assert_eq!(
             resolve_harness_binary_override("cursor", &cursor_agent.to_string_lossy()),
             Ok(cursor_agent.clone())
@@ -4206,6 +4296,9 @@ mod reap_logic_tests {
         ));
         assert!(looks_like_harness_argv("/Users/n/.local/bin/claude --help"));
         assert!(looks_like_harness_argv("/Users/n/.local/bin/hermes acp"));
+        assert!(looks_like_harness_argv(
+            "/opt/homebrew/bin/copilot --acp --stdio"
+        ));
         assert!(looks_like_harness_argv("/Users/n/.local/bin/devin acp"));
         assert!(!looks_like_harness_argv("tmux new -s work"));
         assert!(!looks_like_harness_argv("npm start"));
