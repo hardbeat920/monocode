@@ -64,6 +64,13 @@ import { resolveModel } from "../../features/sessions/model/models";
 import type { OpenFileFn } from "../../features/search/model/search";
 import { sessionDisplayTitle } from "../../features/sessions/model/session";
 import { ParticleText } from "../../shared/ui/ParticleText";
+import { flushSync } from "react-dom";
+import {
+  captureSessionListLayout,
+  liftSessionGhost,
+  playSessionListLayout,
+  type SessionDragGhost,
+} from "./sessionDragMotion";
 import { nextUnseenFinishedSessions } from "../../features/sessions/model/sessionDone";
 import { orchestrationTaskLabel } from "../../features/orchestration/model/orchestrationSummary";
 import {
@@ -3407,6 +3414,7 @@ const SessionCard = memo(function SessionCard({
     let lastX = startX;
     let lastY = startY;
     let lastList: SessionListDropTarget | null = null;
+    let ghost: SessionDragGhost | null = null;
     handle.setPointerCapture(pointerId);
     const restoreSelection = suppressTextSelection();
 
@@ -3419,9 +3427,11 @@ const SessionCard = memo(function SessionCard({
     const onMove = (ev: PointerEvent) => {
       lastX = ev.clientX;
       lastY = ev.clientY;
+      ghost?.move(ev.clientX, ev.clientY);
       if (!active) {
         if (Math.hypot(ev.clientX - startX, ev.clientY - startY) < 5) return;
         active = true;
+        ghost = liftSessionGhost(handle, startX, startY);
         setDragging(true);
         if (onPlaceOnPane) {
           setExternalPaneDrop({
@@ -3476,18 +3486,33 @@ const SessionCard = memo(function SessionCard({
       }
       if (!active) return;
       skipClickUntil.current = performance.now() + 400;
-      if (!commit) return;
+      if (!commit) {
+        ghost?.cancel();
+        return;
+      }
       const listOver = onListDrop
         ? sessionListDropFromPoint(lastX, lastY, session.id)
         : null;
       if (listOver) {
-        onListDrop?.(session.id, listOver);
+        const list = handle.closest<HTMLElement>("[data-session-list]");
+        const before = captureSessionListLayout(list);
+        // Commit now so the new layout can be measured and animated into.
+        flushSync(() => onListDrop?.(session.id, listOver));
+        playSessionListLayout(list, before, session.id);
+        ghost?.land(
+          list?.querySelector<HTMLElement>(
+            `[data-session-card="${CSS.escape(session.id)}"]`,
+          ) ?? null,
+        );
         return;
       }
       const over = paneDropFromPoint(lastX, lastY);
       if (over && over.id !== session.id) {
+        ghost?.land(null);
         onPlaceOnPane?.(session.id, over.id, over.edge);
+        return;
       }
+      ghost?.cancel();
     }
 
     window.addEventListener("pointermove", onMove);
