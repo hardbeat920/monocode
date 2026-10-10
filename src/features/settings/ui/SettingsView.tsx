@@ -50,6 +50,7 @@ import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { useColorScheme } from "../../../shared/hooks/useColorScheme";
 import {
   applyChatBackground,
+  applyChatBackgroundBlur,
   applyChatBackgroundEmptyOpacity,
   applyChatBackgroundSessionOpacity,
   applyChatBackgroundScope,
@@ -58,11 +59,15 @@ import {
   applyBodyGlass,
   applySidebarBlur,
   applySidebarOpacity,
+  applyMainOpacity,
   applyThemeDarkLightness,
   applyThemePreference,
   applyThemeTint,
   BODY_GLASS_DEFAULT,
   ACCENT_COLOR_DEFAULT,
+  CHAT_BACKGROUND_BLUR_DEFAULT,
+  CHAT_BACKGROUND_BLUR_MAX,
+  CHAT_BACKGROUND_BLUR_MIN,
   CHAT_BACKGROUND_EMPTY_OPACITY_DEFAULT,
   CHAT_BACKGROUND_OPACITY_MAX,
   CHAT_BACKGROUND_OPACITY_MIN,
@@ -72,6 +77,7 @@ import {
   chatBackgroundSrc,
   loadBodyGlass,
   loadAccentColor,
+  loadChatBackgroundBlur,
   loadChatBackgroundEmptyOpacity,
   loadChatBackgroundPath,
   loadChatBackgroundSessionOpacity,
@@ -82,12 +88,14 @@ import {
   loadThemePreference,
   loadSidebarBlur,
   loadSidebarOpacity,
+  loadMainOpacity,
   loadThemeHue,
   loadThemeSaturation,
   loadTranscriptLayout,
   loadTranscriptAnchor,
   saveBodyGlass,
   saveAccentColor,
+  saveChatBackgroundBlur,
   saveChatBackgroundEmptyOpacity,
   saveChatBackgroundPath,
   saveChatBackgroundSessionOpacity,
@@ -98,6 +106,7 @@ import {
   saveThemePreference,
   saveSidebarBlur,
   saveSidebarOpacity,
+  saveMainOpacity,
   saveThemeHue,
   saveThemeSaturation,
   isLightScheme,
@@ -112,6 +121,9 @@ import {
   SIDEBAR_BLUR_MAX,
   SIDEBAR_BLUR_MIN,
   SIDEBAR_OPACITY_DEFAULT,
+  MAIN_OPACITY_DEFAULT,
+  MAIN_OPACITY_MAX,
+  MAIN_OPACITY_MIN,
   SIDEBAR_OPACITY_MAX,
   SIDEBAR_OPACITY_MIN,
   THEME_DARK_LIGHTNESS_DEFAULT,
@@ -1863,6 +1875,7 @@ function useAppearanceSettings(
     useState<ThemePreference>(loadThemePreference);
   const [accentColor, setAccentColor] = useState(loadAccentColor);
   const [opacity, setOpacity] = useState(loadSidebarOpacity);
+  const [mainOpacity, setMainOpacity] = useState(loadMainOpacity);
   const [blur, setBlur] = useState(loadSidebarBlur);
   const [themeHue, setThemeHue] = useState(loadThemeHue);
   const [themeSaturation, setThemeSaturation] = useState(loadThemeSaturation);
@@ -1881,6 +1894,9 @@ function useAppearanceSettings(
   );
   const [chatBackgroundSessionOpacity, setChatBackgroundSessionOpacity] =
     useState(loadChatBackgroundSessionOpacity);
+  const [chatBackgroundBlur, setChatBackgroundBlur] = useState(
+    loadChatBackgroundBlur,
+  );
   const [chatBackgroundScope, setChatBackgroundScope] =
     useState<ChatBackgroundScope>(loadChatBackgroundScope);
   const [diffPalette, setDiffPalette] = useState<DiffPalette>(loadDiffPalette);
@@ -1914,6 +1930,12 @@ function useAppearanceSettings(
     const next = applySidebarOpacity(percent / 100);
     saveSidebarOpacity(next);
     setOpacity(next);
+  }, []);
+
+  const onMainOpacity = useCallback((percent: number) => {
+    const next = applyMainOpacity(percent / 100);
+    saveMainOpacity(next);
+    setMainOpacity(next);
   }, []);
 
   const onBlur = useCallback((radius: number) => {
@@ -1995,6 +2017,12 @@ function useAppearanceSettings(
     setChatBackgroundSessionOpacity(next);
   }, []);
 
+  const onChatBackgroundBlur = useCallback((radius: number) => {
+    const next = applyChatBackgroundBlur(radius);
+    saveChatBackgroundBlur(next);
+    setChatBackgroundBlur(next);
+  }, []);
+
   const onChatBackgroundScope = useCallback((next: ChatBackgroundScope) => {
     applyChatBackgroundScope(next);
     saveChatBackgroundScope(next);
@@ -2034,6 +2062,7 @@ function useAppearanceSettings(
     onThemePreference(THEME_PREFERENCE_DEFAULT);
     onAccentColor(ACCENT_COLOR_DEFAULT);
     onOpacity(Math.round(SIDEBAR_OPACITY_DEFAULT * 100));
+    onMainOpacity(Math.round(MAIN_OPACITY_DEFAULT * 100));
     onBlur(SIDEBAR_BLUR_DEFAULT);
     onTint(THEME_HUE_DEFAULT, THEME_SATURATION_DEFAULT);
     onDarkLightness(THEME_DARK_LIGHTNESS_DEFAULT);
@@ -2046,6 +2075,7 @@ function useAppearanceSettings(
       Math.round(CHAT_BACKGROUND_SESSION_OPACITY_DEFAULT * 100),
     );
     onChatBackgroundScope(CHAT_BACKGROUND_SCOPE_DEFAULT);
+    onChatBackgroundBlur(CHAT_BACKGROUND_BLUR_DEFAULT);
     onDiffPalette(DIFF_PALETTE_DEFAULT);
     onNewThreadBackgroundEffect(NEW_THREAD_BACKGROUND_EFFECT_DEFAULT);
     if (chatBackgroundPath) void onClearChatBackground();
@@ -2058,6 +2088,7 @@ function useAppearanceSettings(
     onChatBackgroundEmptyOpacity,
     onChatBackgroundSessionOpacity,
     onChatBackgroundScope,
+    onChatBackgroundBlur,
     onDiffPalette,
     onNewThreadBackgroundEffect,
     onClearChatBackground,
@@ -2065,6 +2096,7 @@ function useAppearanceSettings(
     onShowExcludedFiles,
     onThemePreference,
     onOpacity,
+    onMainOpacity,
     onTint,
     onDarkLightness,
     onUiScale,
@@ -2075,6 +2107,7 @@ function useAppearanceSettings(
     themePreference,
     accentColor,
     opacity,
+    mainOpacity,
     blur,
     themeHue,
     themeSaturation,
@@ -2085,6 +2118,7 @@ function useAppearanceSettings(
     chatBackgroundEmptyOpacity,
     chatBackgroundSessionOpacity,
     chatBackgroundScope,
+    chatBackgroundBlur,
     diffPalette,
     newThreadBackgroundEffect,
     chatBackgroundBusy,
@@ -2094,6 +2128,7 @@ function useAppearanceSettings(
     onThemePreference,
     onAccentColor,
     onOpacity,
+    onMainOpacity,
     onBlur,
     onTint,
     onDarkLightness,
@@ -2104,6 +2139,7 @@ function useAppearanceSettings(
     onChatBackgroundEmptyOpacity,
     onChatBackgroundSessionOpacity,
     onChatBackgroundScope,
+    onChatBackgroundBlur,
     onDiffPalette,
     onNewThreadBackgroundEffect,
     onUiScale,
@@ -2114,6 +2150,7 @@ function useAppearanceSettings(
 
 function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
   const percent = Math.round(appearance.opacity * 100);
+  const mainPercent = Math.round(appearance.mainOpacity * 100);
   const glassDisabled = useColorScheme() === "light";
 
   return (
@@ -2232,7 +2269,7 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
         <Row
           id="sidebar-opacity"
           label="Sidebar opacity"
-          description="Applies to the project rail and the other glass panes."
+          description="Applies to the project rail and the session sidebar."
         >
           <Slider
             label="Sidebar opacity"
@@ -2269,6 +2306,21 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
             on={appearance.bodyGlass}
             onChange={appearance.onBodyGlass}
             disabled={glassDisabled}
+          />
+        </Row>
+        <Row
+          id="main-pane-opacity"
+          label="Main pane opacity"
+          description="Applies to the main pane when main pane glass is on."
+        >
+          <Slider
+            label="Main pane opacity"
+            value={mainPercent}
+            display={`${mainPercent}%`}
+            min={Math.round(MAIN_OPACITY_MIN * 100)}
+            max={Math.round(MAIN_OPACITY_MAX * 100)}
+            onChange={appearance.onMainOpacity}
+            disabled={glassDisabled || !appearance.bodyGlass}
           />
         </Row>
       </Group>
@@ -2473,6 +2525,21 @@ function ChatBackgroundCard({
           </Row>
         </>
       ) : null}
+      {/* Project background images use this blur too, so it stays available
+          without a global image. */}
+      <Row
+        label="Background blur"
+        description="Blurs the image behind chat panes, including project images. Haze keeps its own blur."
+      >
+        <Slider
+          label="Chat background blur"
+          value={appearance.chatBackgroundBlur}
+          display={`${appearance.chatBackgroundBlur}px`}
+          min={CHAT_BACKGROUND_BLUR_MIN}
+          max={CHAT_BACKGROUND_BLUR_MAX}
+          onChange={appearance.onChatBackgroundBlur}
+        />
+      </Row>
     </Group>
   );
 }
