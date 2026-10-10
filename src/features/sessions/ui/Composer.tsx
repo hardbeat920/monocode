@@ -1699,13 +1699,15 @@ export function Composer({
     e.preventDefault();
     if (!attachmentsSupported) return;
     const generation = pasteGenerationRef.current;
+    const captured = text ? captureDraft(e.currentTarget) : null;
     rememberAttachmentRead(
       attachmentsFromFiles(files).then((pasted) => {
         if (pasteGenerationRef.current !== generation) {
           pasted.forEach(revokeAttachment);
           return;
         }
-        addAttachments(pasted);
+        if (pasted.length) addAttachments(pasted);
+        else if (captured) insertRestoredText(captured, text);
       }),
     );
   };

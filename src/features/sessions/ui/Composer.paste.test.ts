@@ -319,6 +319,21 @@ describe("large plain-text pastes", () => {
     );
   });
 
+  it("restores large text when the attachment cannot be written", async () => {
+    invoke.mockRejectedValueOnce(new Error("write failed"));
+    const text = "x".repeat(2_001);
+    const textarea = draw({ initialDraft: "Before after" });
+    textarea.setSelectionRange(7, 12);
+
+    const event = paste(textarea, text);
+    await settleUntil(() => textarea.value === `Before ${text}`);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(
+      container.querySelector('[aria-label="Remove pasted-text.txt"]'),
+    ).toBeNull();
+  });
+
   it("does not offer local editing for a remote attachment", async () => {
     const textarea = draw({
       remoteSession: true,
