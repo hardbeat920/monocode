@@ -129,6 +129,7 @@ import {
   renameWorktreeBranch,
   sessionInWorktree,
   temporaryWorktreeBranchName,
+  worktreeOnlyUsedBy,
   worktreeSessionIds,
   type Worktree,
 } from "../features/source-control/model/worktrees";
@@ -1067,6 +1068,7 @@ function Workspace({
     () => windowTransfer?.sessions ?? resumed?.sessions ?? [seed.session],
   );
   const [sessionDeleteDialog, setSessionDeleteDialog] = useState<{
+    mode: "archive" | "delete";
     title: string;
     unusedWorktree: string;
     resolve: (choice: SessionDeleteChoice) => void;
@@ -5200,7 +5202,7 @@ function Workspace({
         : "this session";
       removingSessionIds.current.add(sessionId);
       let deleteWorktreePath: string | undefined;
-      if (mode === "delete" && !skipDeleteConfirm) {
+      if (!skipDeleteConfirm) {
         deleteConfirmationPending.current = true;
         let unusedWorktree: string | undefined;
         if (seed?.worktreeCwd) {
@@ -5209,15 +5211,7 @@ function Workspace({
             const tree = worktrees.find(
               (entry) => pathKey(entry.path) === pathKey(seed.worktreeCwd!),
             );
-            if (
-              tree &&
-              !tree.isMain &&
-              !tree.locked &&
-              tree.branch &&
-              worktreeSessionIds(tree, sessionsRef.current).every(
-                (id) => id === sessionId,
-              )
-            )
+            if (worktreeOnlyUsedBy(tree, sessionId, sessionsRef.current))
               unusedWorktree = tree.path;
           } catch {
             // A failed lookup must never offer filesystem cleanup.
@@ -5227,7 +5221,12 @@ function Workspace({
           deleteConfirmationPending.current = false;
         } else {
           const choice = await new Promise<SessionDeleteChoice>((resolve) => {
-            setSessionDeleteDialog({ title: label, unusedWorktree, resolve });
+            setSessionDeleteDialog({
+              mode,
+              title: label,
+              unusedWorktree,
+              resolve,
+            });
           });
           deleteConfirmationPending.current = false;
           if (!choice.confirmed) {
@@ -5376,10 +5375,37 @@ function Workspace({
         const removed = await remover.remove(sessionId);
         if (removed && deleteWorktreePath && seed) {
           try {
-            await onRemoveWorktree(seed.cwd, deleteWorktreePath, false);
+            const archive = mode === "archive";
+            if (archive) {
+              // Archive releases agent processes in the background, and the
+              // worktree cannot be removed while they still run inside it.
+              if (open)
+                await Promise.all(
+                  sessionChildHarnesses(open).map((harness) =>
+                    forgetHarnessSession(harness, sessionId),
+                  ),
+                );
+              // The archived record still uses the worktree. Detach it only
+              // if no other session started using the worktree meanwhile;
+              // checked last so nothing is awaited between here and removal.
+              const { worktrees } = await listWorktrees(seed.cwd);
+              const tree = worktrees.find(
+                (entry) => pathKey(entry.path) === pathKey(deleteWorktreePath!),
+              );
+              if (!worktreeOnlyUsedBy(tree, sessionId, sessionsRef.current))
+                throw new Error("Another session is using this worktree.");
+              // onRemoveWorktree locks the archived session itself.
+              removingSessionIds.current.delete(sessionId);
+            }
+            await onRemoveWorktree(
+              seed.cwd,
+              deleteWorktreePath,
+              false,
+              archive,
+            );
           } catch (error) {
             void message(
-              `The session was deleted. Its worktree was kept.\n\n${String(error)}\n\nYou can manage it in Settings → Worktrees.`,
+              `The session was ${mode === "archive" ? "archived" : "deleted"}. Its worktree was kept.\n\n${String(error)}\n\nYou can manage it in Settings → Worktrees.`,
               { title: "MonoCode", kind: "warning" },
             );
           }
@@ -13146,6 +13172,7 @@ function Workspace({
 
           {sessionDeleteDialog && (
             <DeleteSessionDialog
+              mode={sessionDeleteDialog.mode}
               title={sessionDeleteDialog.title}
               unusedWorktree={sessionDeleteDialog.unusedWorktree}
               onClose={(choice) => {

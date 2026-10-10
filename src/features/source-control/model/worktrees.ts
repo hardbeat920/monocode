@@ -163,6 +163,21 @@ export function worktreeSessionIds(
   return [...ids];
 }
 
+/** Whether removing `sessionId` leaves this branch worktree with no sessions. */
+export function worktreeOnlyUsedBy(
+  tree: Worktree | undefined,
+  sessionId: string,
+  sessions: Parameters<typeof worktreeSessionIds>[1],
+): tree is Worktree {
+  return (
+    !!tree &&
+    !tree.isMain &&
+    !tree.locked &&
+    !!tree.branch &&
+    worktreeSessionIds(tree, sessions).every((id) => id === sessionId)
+  );
+}
+
 export const NO_BRANCH_LABEL = "No branch selected";
 
 /** Keep the transcript and project identity while requiring a new working copy. */
