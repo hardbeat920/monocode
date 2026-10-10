@@ -617,15 +617,14 @@ pub fn run() {
 
     app.run(|handle, event| match event {
         #[cfg(target_os = "macos")]
-        tauri::RunEvent::Reopen { .. } => {
-            // A visible floating panel must not make a hidden workspace
-            // unreachable from the Dock.
+        // A visible floating panel must not make a hidden workspace
+        // unreachable from the Dock.
+        tauri::RunEvent::Reopen { .. }
             if !window::workspace_windows(handle)
                 .iter()
-                .any(|window| window.is_visible().unwrap_or(false))
-            {
-                let _ = window::show_hidden_or_open_new(handle);
-            }
+                .any(|window| window.is_visible().unwrap_or(false)) =>
+        {
+            let _ = window::show_hidden_or_open_new(handle);
         }
         tauri::RunEvent::Ready => {
             #[cfg(target_os = "macos")]
