@@ -12,12 +12,24 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@tauri-apps/api/app", () => ({
   getVersion: mocks.getVersion,
   getBundleType: mocks.getBundleType,
-  BundleType: { Nsis: "nsis", Msi: "msi", Deb: "deb", Rpm: "rpm", AppImage: "appimage", App: "app" },
+  BundleType: {
+    Nsis: "nsis",
+    Msi: "msi",
+    Deb: "deb",
+    Rpm: "rpm",
+    AppImage: "appimage",
+    App: "app",
+  },
 }));
 vi.mock("@tauri-apps/plugin-updater", () => ({ check: mocks.check }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: mocks.ask, message: mocks.message }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  ask: mocks.ask,
+  message: mocks.message,
+}));
 vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: mocks.relaunch }));
-vi.mock("../../features/settings/model/sounds", () => ({ announceUpdateAvailable: vi.fn() }));
+vi.mock("../../features/settings/model/sounds", () => ({
+  announceUpdateAvailable: vi.fn(),
+}));
 
 describe("updater", () => {
   beforeEach(() => {
@@ -33,7 +45,9 @@ describe("updater", () => {
 
   it("keeps automatic checks quiet when updater endpoints are missing", async () => {
     mocks.getVersion.mockResolvedValue("0.1.23");
-    mocks.check.mockRejectedValue(new Error("Updater does not have any endpoints set"));
+    mocks.check.mockRejectedValue(
+      new Error("Updater does not have any endpoints set"),
+    );
     const { runUpdateFlow } = await import("./updater");
 
     await expect(runUpdateFlow(false)).resolves.toEqual({
@@ -45,7 +59,9 @@ describe("updater", () => {
 
   it("points manual checks without updater endpoints to GitHub releases", async () => {
     mocks.getVersion.mockResolvedValue("0.1.23");
-    mocks.check.mockRejectedValue(new Error("Updater does not have any endpoints set"));
+    mocks.check.mockRejectedValue(
+      new Error("Updater does not have any endpoints set"),
+    );
     const { runUpdateFlow } = await import("./updater");
 
     await expect(runUpdateFlow(true)).resolves.toEqual({
@@ -53,7 +69,9 @@ describe("updater", () => {
       currentVersion: "0.1.23",
     });
     expect(mocks.message).toHaveBeenCalledWith(
-      expect.stringContaining("https://github.com/hardbeat920/monocode/releases/latest"),
+      expect.stringContaining(
+        "https://github.com/hardbeat920/monocode/releases/latest",
+      ),
       { title: "MonoCode" },
     );
   });
@@ -70,33 +88,48 @@ describe("updater", () => {
     expect(mocks.message).toHaveBeenCalledOnce();
   });
 
-  it.each(["deb", "rpm"] as const)("names one %s installer and the releases URL", async (kind) => {
-    const { packageManagerHint } = await import("./updater");
-    const hint = packageManagerHint(kind);
-    expect(hint).toContain("https://github.com/hardbeat920/monocode/releases/latest");
-    expect(hint).not.toMatch(/[*<>]/);
-    expect(hint).toContain("Replace the file name");
-    expect(hint).toContain(kind === "deb" ? "sudo apt install ./MonoCode_X.Y.Z_amd64.deb" : "sudo dnf install ./MonoCode-X.Y.Z-1.x86_64.rpm");
-  });
+  it.each(["deb", "rpm"] as const)(
+    "names one %s installer and the releases URL",
+    async (kind) => {
+      const { packageManagerHint } = await import("./updater");
+      const hint = packageManagerHint(kind);
+      expect(hint).toContain(
+        "https://github.com/hardbeat920/monocode/releases/latest",
+      );
+      expect(hint).not.toMatch(/[*<>]/);
+      expect(hint).toContain("Replace the file name");
+      expect(hint).toContain(
+        kind === "deb"
+          ? "sudo apt install ./MonoCode_X.Y.Z_amd64.deb"
+          : "sudo dnf install ./MonoCode-X.Y.Z-1.x86_64.rpm",
+      );
+    },
+  );
 
   it.each([
     ["deb", "sudo apt install"],
     ["rpm", "sudo dnf install"],
-  ])("sends %s installs to their package manager without checking the feed", async (kind, hint) => {
-    mocks.getVersion.mockResolvedValue("0.9.0");
-    mocks.getBundleType.mockResolvedValue(kind);
-    const { runUpdateFlow } = await import("./updater");
+  ])(
+    "sends %s installs to their package manager without checking the feed",
+    async (kind, hint) => {
+      mocks.getVersion.mockResolvedValue("0.9.0");
+      mocks.getBundleType.mockResolvedValue(kind);
+      const { runUpdateFlow } = await import("./updater");
 
-    await expect(runUpdateFlow(true)).resolves.toEqual({
-      phase: "idle",
-      currentVersion: "0.9.0",
-      packageManaged: kind,
-    });
-    expect(mocks.check).not.toHaveBeenCalled();
-    expect(mocks.message).toHaveBeenCalledWith(expect.stringContaining(hint), {
-      title: "MonoCode",
-    });
-  });
+      await expect(runUpdateFlow(true)).resolves.toEqual({
+        phase: "idle",
+        currentVersion: "0.9.0",
+        packageManaged: kind,
+      });
+      expect(mocks.check).not.toHaveBeenCalled();
+      expect(mocks.message).toHaveBeenCalledWith(
+        expect.stringContaining(hint),
+        {
+          title: "MonoCode",
+        },
+      );
+    },
+  );
 
   it("keeps the automatic probe silent on package-managed installs", async () => {
     mocks.getBundleType.mockResolvedValue("deb");

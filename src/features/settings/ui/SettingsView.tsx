@@ -400,6 +400,7 @@ import {
   readAppVersion,
   restartToApplyUpdate,
   runUpdateFlow,
+  subscribePendingRestart,
   type UpdaterSnapshot,
 } from "../../../app/model/updater";
 
@@ -1800,6 +1801,39 @@ function UpdateRow({
     };
   }, []);
 
+  // An install can finish via the sidebar or the app menu while Settings is
+  // open. Sync the staged restart so the row doesn't keep offering Download.
+  useEffect(() => {
+    let cancelled = false;
+    const unsubscribe = subscribePendingRestart(() => {
+      void Promise.all([readAppVersion(), packageManagedInstall()]).then(
+        ([currentVersion, packageManaged]) => {
+          if (cancelled) return;
+          const deferred = getPendingRestartVersion();
+          if (!deferred) return;
+          setSnapshot((prev) => {
+            if (
+              prev.phase === "restart-required" &&
+              prev.availableVersion === deferred
+            ) {
+              return prev;
+            }
+            return {
+              phase: "restart-required",
+              currentVersion,
+              availableVersion: deferred,
+              packageManaged: packageManaged ?? prev.packageManaged,
+            };
+          });
+        },
+      );
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, []);
+
   const busy =
     snapshot.phase === "checking" || snapshot.phase === "downloading";
   const hasUpdate = snapshot.phase === "available";
@@ -1809,14 +1843,17 @@ function UpdateRow({
     if (busy) return;
     try {
       if (needsRestart) {
-        await restartToApplyUpdate(setSnapshot);
+        // On relaunch success onProgress is never called; applying the
+        // snapshot keeps the row from sticking on "Restart now" if relaunch
+        // ever no-ops.
+        setSnapshot(await restartToApplyUpdate(setSnapshot));
         return;
       }
       if (hasUpdate) {
-        await installPendingUpdate(setSnapshot);
+        setSnapshot(await installPendingUpdate(setSnapshot));
         return;
       }
-      await runUpdateFlow(true, setSnapshot);
+      setSnapshot(await runUpdateFlow(true, setSnapshot));
     } catch {
       // Updater helpers surface errors via dialogs/snapshots; swallow so the
       // fire-and-forget `void onClick()` never yields unhandled rejections.

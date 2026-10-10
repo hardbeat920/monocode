@@ -1,7 +1,11 @@
 import { BundleType, getBundleType, getVersion } from "@tauri-apps/api/app";
 import { ask, message } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updater";
+import {
+  check,
+  type DownloadEvent,
+  type Update,
+} from "@tauri-apps/plugin-updater";
 import { announceUpdateAvailable } from "../../features/settings/model/sounds";
 import { rememberInstalledUpdate } from "./updateNotice";
 
@@ -59,7 +63,9 @@ export function packageManagerHint(kind: PackageManagedInstall): string {
 function isTargetMissingError(error: unknown): boolean {
   const text = error instanceof Error ? error.message : String(error);
   // tauri-plugin-updater Error::TargetsNotFound / Error::TargetNotFound.
-  return /none of the fallback platforms|the platform `[^`]*` was not found/i.test(text);
+  return /none of the fallback platforms|the platform `[^`]*` was not found/i.test(
+    text,
+  );
 }
 
 function isUpdaterNotConfiguredError(error: unknown): boolean {
@@ -71,26 +77,61 @@ export function getPendingRestartVersion(): string | null {
   return pendingRestartVersion;
 }
 
+type PendingRestartListener = () => void;
+const pendingRestartListeners = new Set<PendingRestartListener>();
+
+/**
+ * Subscribe to deferred-restart changes. Fires when an install finishes
+ * elsewhere (Settings, app menu) while another surface is mounted, so the
+ * sidebar and Settings rows can sync without polling.
+ */
+export function subscribePendingRestart(
+  listener: PendingRestartListener,
+): () => void {
+  pendingRestartListeners.add(listener);
+  return () => {
+    pendingRestartListeners.delete(listener);
+  };
+}
+
+function setPendingRestartVersion(version: string | null): void {
+  pendingRestartVersion = version;
+  for (const listener of [...pendingRestartListeners]) {
+    try {
+      listener();
+    } catch {
+      // Listener failures stay silent; snapshot reads stay authoritative.
+    }
+  }
+}
+
+/**
+ * UI callbacks must never break the non-throwing contract: every helper
+ * below reports through snapshots/dialogs, so a throwing onProgress would
+ * otherwise turn into an unhandled rejection in React onClick handlers.
+ */
+function emitProgress(
+  onProgress: ((snapshot: UpdaterSnapshot) => void) | undefined,
+  snapshot: UpdaterSnapshot,
+): void {
+  try {
+    onProgress?.(snapshot);
+  } catch {
+    // Ignore UI callback failures; the returned snapshot stays authoritative.
+  }
+}
+
 /** Relaunch into an already-installed update (user chose "Later" before).
  * Never rejects: a failed relaunch stays in `restart-required` and surfaces
  * a dialog, so React onClick handlers can't produce unhandled rejections. */
 export async function restartToApplyUpdate(
   onProgress?: (snapshot: UpdaterSnapshot) => void,
 ): Promise<UpdaterSnapshot> {
-  let currentVersion: string;
-  try {
-    currentVersion = await readAppVersion();
-  } catch {
-    currentVersion = "0.0.0";
-  }
+  const currentVersion = await readAppVersion();
   const pending = pendingRestartVersion;
   if (!pending) {
     const idle: UpdaterSnapshot = { phase: "idle", currentVersion };
-    try {
-      onProgress?.(idle);
-    } catch {
-      // UI callbacks must never break the non-throwing contract.
-    }
+    emitProgress(onProgress, idle);
     return idle;
   }
   try {
@@ -104,11 +145,7 @@ export async function restartToApplyUpdate(
       availableVersion: pending,
       error,
     };
-    try {
-      onProgress?.(restartRequired);
-    } catch {
-      // ignore
-    }
+    emitProgress(onProgress, restartRequired);
     try {
       await message(`Couldn't restart to apply the update.\n\n${error}`, {
         title: "MonoCode",
@@ -162,7 +199,7 @@ export async function runUpdateFlow(
 ): Promise<UpdaterSnapshot> {
   const currentVersion = await readAppVersion();
   const base: UpdaterSnapshot = { phase: "checking", currentVersion };
-  onProgress?.(base);
+  emitProgress(onProgress, base);
 
   const managed = await packageManagedInstall();
   if (managed) {
@@ -172,7 +209,7 @@ export async function runUpdateFlow(
       currentVersion,
       packageManaged: managed,
     };
-    onProgress?.(idle);
+    emitProgress(onProgress, idle);
     if (manual) {
       await message(packageManagerHint(managed), {
         title: "MonoCode",
@@ -190,7 +227,7 @@ export async function runUpdateFlow(
       currentVersion,
       availableVersion: pendingRestartVersion,
     };
-    onProgress?.(restartRequired);
+    emitProgress(onProgress, restartRequired);
     if (manual) {
       const restartNow = await askToRestartNow(pendingRestartVersion);
       if (restartNow) {
@@ -205,7 +242,7 @@ export async function runUpdateFlow(
     if (!update) {
       pendingUpdate = null;
       const current: UpdaterSnapshot = { phase: "current", currentVersion };
-      onProgress?.(current);
+      emitProgress(onProgress, current);
       if (manual) {
         await message("You're on the latest version.", { title: "MonoCode" });
       }
@@ -219,7 +256,7 @@ export async function runUpdateFlow(
       currentVersion,
       availableVersion: update.version,
     };
-    onProgress?.(available);
+    emitProgress(onProgress, available);
 
     if (!manual) return available;
 
@@ -241,7 +278,7 @@ export async function runUpdateFlow(
     if (isUpdaterNotConfiguredError(err)) {
       pendingUpdate = null;
       const idle: UpdaterSnapshot = { phase: "idle", currentVersion };
-      onProgress?.(idle);
+      emitProgress(onProgress, idle);
       if (manual) {
         await message(
           `Automatic updates aren't configured for this build.\n\nDownload releases at ${RELEASES_URL}`,
@@ -255,7 +292,7 @@ export async function runUpdateFlow(
       // The feed has no build for this platform/installer yet.
       pendingUpdate = null;
       const idle: UpdaterSnapshot = { phase: "idle", currentVersion };
-      onProgress?.(idle);
+      emitProgress(onProgress, idle);
       if (manual) {
         await message(
           `Automatic updates aren't available for this install yet.\n\nDownload releases at ${RELEASES_URL}`,
@@ -267,7 +304,7 @@ export async function runUpdateFlow(
 
     const error = err instanceof Error ? err.message : String(err);
     const failed: UpdaterSnapshot = { phase: "error", currentVersion, error };
-    onProgress?.(failed);
+    emitProgress(onProgress, failed);
     if (manual) {
       await message(`Couldn't check for updates.\n\n${error}`, {
         title: "MonoCode",
@@ -289,11 +326,11 @@ export async function installPendingUpdate(
         currentVersion,
         availableVersion: pendingRestartVersion,
       };
-      onProgress?.(restartRequired);
+      emitProgress(onProgress, restartRequired);
       return restartRequired;
     }
     const idle: UpdaterSnapshot = { phase: "idle", currentVersion };
-    onProgress?.(idle);
+    emitProgress(onProgress, idle);
     return idle;
   }
 
@@ -306,7 +343,7 @@ export async function installPendingUpdate(
     availableVersion: update.version,
     progress: 0,
   };
-  onProgress?.(downloading);
+  emitProgress(onProgress, downloading);
 
   try {
     await update.downloadAndInstall((event: DownloadEvent) => {
@@ -322,7 +359,7 @@ export async function installPendingUpdate(
           ? Math.min(100, Math.round((downloaded / contentLength) * 100))
           : undefined;
 
-      onProgress?.({
+      emitProgress(onProgress, {
         phase: "downloading",
         currentVersion,
         availableVersion: update.version,
@@ -337,14 +374,16 @@ export async function installPendingUpdate(
       availableVersion: update.version,
       error,
     };
-    onProgress?.(failed);
-    await message(`Couldn't install the update.\n\n${error}`, { title: "MonoCode" });
+    emitProgress(onProgress, failed);
+    await message(`Couldn't install the update.\n\n${error}`, {
+      title: "MonoCode",
+    });
     return failed;
   }
 
   rememberInstalledUpdate(update.version);
   pendingUpdate = null;
-  pendingRestartVersion = update.version;
+  setPendingRestartVersion(update.version);
 
   const restartNow = await askToRestartNow(update.version);
   if (!restartNow) {
@@ -353,7 +392,7 @@ export async function installPendingUpdate(
       currentVersion,
       availableVersion: update.version,
     };
-    onProgress?.(restartRequired);
+    emitProgress(onProgress, restartRequired);
     return restartRequired;
   }
 

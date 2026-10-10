@@ -17,7 +17,14 @@ const updaterMocks = vi.hoisted(() => ({
 vi.mock("@tauri-apps/api/app", () => ({
   getVersion: vi.fn(),
   getBundleType: vi.fn().mockResolvedValue("appimage"),
-  BundleType: { Nsis: "nsis", Msi: "msi", Deb: "deb", Rpm: "rpm", AppImage: "appimage", App: "app" },
+  BundleType: {
+    Nsis: "nsis",
+    Msi: "msi",
+    Deb: "deb",
+    Rpm: "rpm",
+    AppImage: "appimage",
+    App: "app",
+  },
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   ask: vi.fn(),
@@ -41,7 +48,9 @@ function installButtonClick() {
   // optional dismiss button for restart-required), so walk the element tree.
   function findInstallClick(node: unknown): (() => void) | undefined {
     if (!node || typeof node !== "object") return undefined;
-    const el = node as ReactElement<{ onClick?: () => void; children?: unknown } & Record<string, unknown>>;
+    const el = node as ReactElement<
+      { onClick?: () => void; children?: unknown } & Record<string, unknown>
+    >;
     if (
       el.type === "button" &&
       typeof el.props?.onClick === "function" &&
@@ -90,7 +99,11 @@ describe("isSidebarUpdateActionable", () => {
     const actionable = phases.filter((phase) =>
       isSidebarUpdateActionable({ phase, currentVersion: "0.1.37" }),
     );
-    expect(actionable).toEqual(["available", "downloading", "restart-required"]);
+    expect(actionable).toEqual([
+      "available",
+      "downloading",
+      "restart-required",
+    ]);
   });
 });
 

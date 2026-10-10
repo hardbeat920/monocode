@@ -6,6 +6,7 @@ import {
   probeForUpdate,
   readAppVersion,
   restartToApplyUpdate,
+  subscribePendingRestart,
   type UpdaterSnapshot,
 } from "../model/updater";
 import type { InstalledUpdate } from "../model/updateNotice";
@@ -86,6 +87,38 @@ export function SidebarUpdateFooter({
     };
   }, []);
 
+  // An install can finish via Settings or the app menu while the footer is
+  // mounted. Without this the row keeps reading "Update to X" until clicked
+  // (the click self-heals via installPendingUpdate's pending-restart branch).
+  useEffect(() => {
+    let cancelled = false;
+    const unsubscribe = subscribePendingRestart(() => {
+      void (async () => {
+        const currentVersion = await readAppVersion();
+        if (cancelled) return;
+        const deferred = getPendingRestartVersion();
+        if (!deferred) return;
+        setSnapshot((prev) => {
+          if (
+            prev.phase === "restart-required" &&
+            prev.availableVersion === deferred
+          ) {
+            return prev;
+          }
+          return {
+            phase: "restart-required",
+            currentVersion,
+            availableVersion: deferred,
+          };
+        });
+      })();
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, []);
+
   const card =
     update && onOpenWhatsNew && onDismissUpdate ? (
       <UpdateRailCard
@@ -144,10 +177,13 @@ export function SidebarUpdate({
     installing.current = true;
     try {
       if (needsRestart) {
-        await restartToApplyUpdate(onSnapshot);
+        // On relaunch success onProgress is never called (the process is
+        // expected to exit); applying the snapshot keeps the button from
+        // sticking on "Restart to update" if relaunch ever no-ops.
+        onSnapshot(await restartToApplyUpdate(onSnapshot));
         return;
       }
-      await installPendingUpdate(onSnapshot);
+      onSnapshot(await installPendingUpdate(onSnapshot));
     } catch {
       // Helpers are non-throwing (errors surface via dialogs/snapshots);
       // swallow so React handlers never produce unhandled rejections.

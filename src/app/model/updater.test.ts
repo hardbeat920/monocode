@@ -14,7 +14,14 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@tauri-apps/api/app", () => ({
   getVersion: mocks.getVersion,
   getBundleType: vi.fn().mockResolvedValue("appimage"),
-  BundleType: { Nsis: "nsis", Msi: "msi", Deb: "deb", Rpm: "rpm", AppImage: "appimage", App: "app" },
+  BundleType: {
+    Nsis: "nsis",
+    Msi: "msi",
+    Deb: "deb",
+    Rpm: "rpm",
+    AppImage: "appimage",
+    App: "app",
+  },
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   ask: mocks.ask,
@@ -22,7 +29,9 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 }));
 vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: mocks.relaunch }));
 vi.mock("@tauri-apps/plugin-updater", () => ({ check: mocks.check }));
-vi.mock("../../features/settings/model/sounds", () => ({ announceUpdateAvailable: mocks.announce }));
+vi.mock("../../features/settings/model/sounds", () => ({
+  announceUpdateAvailable: mocks.announce,
+}));
 vi.mock("./updateNotice", () => ({ rememberInstalledUpdate: mocks.remember }));
 
 beforeEach(() => {
@@ -216,5 +225,39 @@ describe("restartToApplyUpdate", () => {
       expect.stringContaining("Couldn't restart"),
       { title: "MonoCode" },
     );
+  });
+
+  it("tolerates a throwing onProgress without rejecting", async () => {
+    mocks.downloadAndInstall.mockResolvedValue(undefined);
+    mocks.ask.mockResolvedValue(false);
+    const updater = await updaterWithPendingUpdate();
+    const throwing = () => {
+      throw new Error("ui boom");
+    };
+
+    await expect(updater.installPendingUpdate(throwing)).resolves.toMatchObject(
+      { phase: "restart-required" },
+    );
+    mocks.relaunch.mockRejectedValue(new Error("nope"));
+    await expect(updater.restartToApplyUpdate(throwing)).resolves.toMatchObject(
+      { phase: "restart-required" },
+    );
+    await expect(updater.runUpdateFlow(false, throwing)).resolves.toMatchObject(
+      { phase: "restart-required" },
+    );
+  });
+
+  it("notifies pending-restart subscribers when an install stages", async () => {
+    mocks.downloadAndInstall.mockResolvedValue(undefined);
+    mocks.ask.mockResolvedValue(false);
+    const updater = await updaterWithPendingUpdate();
+    const listener = vi.fn();
+    const unsubscribe = updater.subscribePendingRestart(listener);
+
+    await updater.installPendingUpdate();
+
+    expect(listener).toHaveBeenCalledOnce();
+    expect(updater.getPendingRestartVersion()).toBe("0.1.23");
+    unsubscribe();
   });
 });
