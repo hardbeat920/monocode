@@ -55,6 +55,19 @@ describe("languageForPath", () => {
     await expect(languageForPath(path)).resolves.not.toBeNull();
   });
 
+  it.each([".env", ".env.local", "/repo/.env.example"])(
+    "highlights dotenv file %s as KEY=value properties",
+    async (path) => {
+      const env = await languageForPath(path);
+      expect(env).not.toBeNull();
+      expect(languageName(env!)).toBe("properties");
+    },
+  );
+
+  it("does not treat .envrc as a dotenv file", async () => {
+    await expect(languageForPath(".envrc")).resolves.toBeNull();
+  });
+
   it("leaves unknown file types as plain text", async () => {
     await expect(languageForPath("notes.unknown")).resolves.toBeNull();
   });
