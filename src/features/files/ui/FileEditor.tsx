@@ -12,6 +12,7 @@ import {
   countColumn,
   EditorSelection,
   Prec,
+  StateEffect,
   StateField,
   Transaction,
   type EditorState,
@@ -55,9 +56,14 @@ import {
   writeTextFile,
   type GitFileDiffKind,
 } from "../../../platform/tauri/fs";
+import {
+  editorPathsEqual,
+  type EditorNavigation,
+  searchProject,
+  type ProjectSearchMatch,
+} from "../../search/model/search";
 import { syncWatchedMtime, watchFile } from "../model/fileWatch";
 import { displayPath } from "../../../shared/lib/paths";
-import type { EditorNavigation } from "../../search/model/search";
 import { MarkdownDocumentPreview } from "../../sessions/ui/MarkdownDocumentPreview";
 import {
   DiffCommentComposer,
@@ -95,6 +101,7 @@ import { editorLint } from "../editor/editorLint";
 import { editorSearch } from "../editor/editorSearch";
 import { editorScrollbar } from "../editor/editorScrollbar";
 import { FilePreviewSearch } from "./FilePreviewSearch";
+import { definitionFor, symbolAt } from "../editor/editorSymbolNavigation";
 
 type EditorNavigationRequest = EditorNavigation & { token: number };
 
@@ -484,6 +491,7 @@ export function FileEditor({
               <CodeMirrorEditor
                 key={`${path}:${reloadKey}`}
                 path={path}
+                cwd={cwd}
                 commentPath={relativePath}
                 value={loadState.content}
                 showDiff={showDiff}
@@ -500,6 +508,7 @@ export function FileEditor({
                     : undefined
                 }
                 onDocChange={setDraft}
+                onOpenFile={onOpenFile}
               />
             </div>
           }
@@ -508,6 +517,7 @@ export function FileEditor({
         <CodeMirrorEditor
           key={`${path}:${reloadKey}`}
           path={path}
+          cwd={cwd}
           commentPath={relativePath}
           value={loadState.content}
           showDiff={showDiff}
@@ -521,6 +531,7 @@ export function FileEditor({
           onStageGit={
             showDiff && gitDiff?.kind === "unstaged" ? stageGit : undefined
           }
+          onOpenFile={onOpenFile}
         />
       )}
       <footer className="flex h-6 shrink-0 items-center border-t border-stroke px-2.5 font-mono text-[10.5px] text-content/40">
@@ -546,6 +557,7 @@ export function FileEditor({
 
 export function CodeMirrorEditor({
   path,
+  cwd,
   commentPath,
   value,
   showDiff,
@@ -558,9 +570,11 @@ export function CodeMirrorEditor({
   canAutosave,
   onStageGit,
   onDocChange,
+  onOpenFile,
   formatOnSave = true,
 }: {
   path: string;
+  cwd: string;
   commentPath: string;
   value: string;
   showDiff: boolean;
@@ -573,6 +587,7 @@ export function CodeMirrorEditor({
   canAutosave: () => boolean;
   onStageGit?: (contents: string) => Promise<void>;
   onDocChange?: (content: string) => void;
+  onOpenFile?: (path: string, navigation?: EditorNavigation) => void;
   formatOnSave?: boolean;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -588,6 +603,7 @@ export function CodeMirrorEditor({
   const canStage = onStageGit !== undefined;
   const onDocChangeRef = useRef(onDocChange);
   const valueRef = useRef(value);
+  const symbolSearchTokenRef = useRef(0);
   const navigationTokenRef = useRef<number | undefined>(undefined);
   const pendingNavigationRef = useRef<EditorNavigationRequest | null>(null);
   const gitOriginalRef = useRef(gitOriginal);
@@ -604,6 +620,11 @@ export function CodeMirrorEditor({
     useState<DiffCommentComposerTarget | null>(null);
   const [selectionTarget, setSelectionTarget] =
     useState<EditorSelectionTarget | null>(null);
+  const [references, setReferences] = useState<{
+    symbol: string;
+    matches: ProjectSearchMatch[];
+    error: string | null;
+  } | null>(null);
   const gitOptions = {
     onStage: canStage
       ? (contents: string) => onStageGitRef.current?.(contents)
@@ -619,6 +640,64 @@ export function CodeMirrorEditor({
   onDocChangeRef.current = onDocChange;
   valueRef.current = value;
   gitOriginalRef.current = gitOriginal;
+
+  const findSymbol = useCallback(
+    async (view: EditorView, mode: "auto" | "definition" | "references") => {
+      const symbol = symbolAt(
+        view.state.doc.toString(),
+        view.state.selection.main.head,
+      );
+      if (!symbol) return false;
+      const token = ++symbolSearchTokenRef.current;
+      try {
+        const result = await searchProject({
+          cwd,
+          query: symbol.name,
+          wholeWord: true,
+          searchId: crypto.randomUUID(),
+        });
+        if (token !== symbolSearchTokenRef.current) return true;
+        const definition = definitionFor(symbol.name, result.matches);
+        const line = view.state.doc.lineAt(symbol.from);
+        const clickedDefinition =
+          definition &&
+          editorPathsEqual(path, definition.path) &&
+          definition.line === line.number &&
+          definition.column === symbol.from - line.from + 1;
+        if (mode === "definition" || (mode === "auto" && !clickedDefinition)) {
+          if (definition) onOpenFile?.(definition.path, definition);
+          else
+            setReferences({
+              symbol: symbol.name,
+              matches: [],
+              error: "No definition found",
+            });
+        } else {
+          setReferences({
+            symbol: symbol.name,
+            matches: definition
+              ? result.matches.filter(
+                  (match) =>
+                    match.path !== definition.path ||
+                    match.line !== definition.line ||
+                    match.column !== definition.column,
+                )
+              : result.matches,
+            error: null,
+          });
+        }
+      } catch (error) {
+        if (token !== symbolSearchTokenRef.current) return true;
+        setReferences({
+          symbol: symbol.name,
+          matches: [],
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return true;
+    },
+    [cwd, onOpenFile, path],
+  );
 
   const syncChunkNav = useCallback((view: EditorView, fromScroll = true) => {
     const positions = diffNavigablePositions(view);
@@ -698,6 +777,59 @@ export function CodeMirrorEditor({
     let saveGeneration = 0;
     let autosaveTimer = 0;
     let view: EditorView;
+    let hoverKey = "";
+    let hoverGeneration = 0;
+
+    const clearSymbolHover = () => {
+      hoverKey = "";
+      hoverGeneration += 1;
+      view.dom.style.cursor = "";
+      view.dispatch({ effects: symbolHover.of(null) });
+    };
+
+    const updateSymbolHover = (event: MouseEvent) => {
+      if (!event.metaKey && !event.ctrlKey) {
+        clearSymbolHover();
+        return;
+      }
+      const position = view.posAtCoords({ x: event.clientX, y: event.clientY });
+      if (position === null) {
+        clearSymbolHover();
+        return;
+      }
+      const symbol = symbolAt(view.state.doc.toString(), position);
+      if (!symbol) {
+        clearSymbolHover();
+        return;
+      }
+      const key = `${symbol.from}:${symbol.to}:${symbol.name}`;
+      if (key === hoverKey) return;
+      hoverKey = key;
+      const generation = ++hoverGeneration;
+      view.dom.style.cursor = "progress";
+      view.dispatch({ effects: symbolHover.of(null) });
+      void searchProject({
+        cwd,
+        query: symbol.name,
+        wholeWord: true,
+        searchId: crypto.randomUUID(),
+      })
+        .then((result) => {
+          if (disposed || generation !== hoverGeneration || key !== hoverKey)
+            return;
+          const definition = definitionFor(symbol.name, result.matches);
+          const navigable = !!definition || result.matches.length > 1;
+          view.dom.style.cursor = navigable ? "pointer" : "";
+          if (navigable) {
+            view.dispatch({
+              effects: symbolHover.of({ from: symbol.from, to: symbol.to }),
+            });
+          }
+        })
+        .catch(() => {
+          if (generation === hoverGeneration) view.dom.style.cursor = "";
+        });
+    };
 
     const markDirty = () => {
       const saved = savedDocumentRef.current;
@@ -761,11 +893,7 @@ export function CodeMirrorEditor({
       if (!loadAutosave()) return;
       autosaveTimer = window.setTimeout(() => {
         autosaveTimer = 0;
-        if (
-          dirtyRef.current &&
-          loadAutosave() &&
-          canAutosaveRef.current()
-        ) {
+        if (dirtyRef.current && loadAutosave() && canAutosaveRef.current()) {
           save(true);
         }
       }, FILE_EDITOR_AUTOSAVE_DELAY_MS);
@@ -794,10 +922,25 @@ export function CodeMirrorEditor({
         editorLint(path, (count) => onErrorCountChangeRef.current(count)),
         editorScrollbar,
         editorSearch,
+        symbolHoverField,
         Prec.high(
           keymap.of([
             ...foldKeymap,
             { key: "Mod-s", run: () => save(), preventDefault: true },
+            {
+              key: "F12",
+              run: (view) => {
+                void findSymbol(view, "definition");
+                return true;
+              },
+            },
+            {
+              key: "Shift-F12",
+              run: (view) => {
+                void findSymbol(view, "references");
+                return true;
+              },
+            },
             {
               key: "Tab",
               run: (view) => {
@@ -839,6 +982,24 @@ export function CodeMirrorEditor({
           scheduleAutosave();
         }),
         EditorView.domEventHandlers({
+          mousedown: (event, view) => {
+            if (!event.metaKey && !event.ctrlKey) return false;
+            const position = view.posAtCoords({
+              x: event.clientX,
+              y: event.clientY,
+            });
+            if (position === null) return false;
+            view.dispatch({ selection: { anchor: position } });
+            event.preventDefault();
+            void findSymbol(view, event.shiftKey ? "references" : "auto");
+            return true;
+          },
+          mousemove: (event) => {
+            updateSymbolHover(event);
+          },
+          mouseleave: () => {
+            clearSymbolHover();
+          },
           blur: () => {
             pendingNavigationRef.current = null;
           },
@@ -1009,6 +1170,52 @@ export function CodeMirrorEditor({
           />
         ) : null}
         <div ref={hostRef} className="min-h-0 flex-1" />
+        {references ? (
+          <div
+            className="flex max-h-48 shrink-0 flex-col border-t border-stroke bg-background-base"
+            role="region"
+            aria-label={`References for ${references.symbol}`}
+          >
+            <div className="flex h-9 shrink-0 items-center border-b border-stroke px-1.5">
+              <div className="flex h-7.5 min-w-0 flex-1 items-center gap-1.5 rounded-md bg-selection px-2 text-[12px] text-content">
+                <span className="truncate font-medium">
+                  {references.error ?? `References: ${references.symbol}`}
+                </span>
+                {!references.error ? (
+                  <span className="shrink-0 text-[11px] text-content/50">
+                    {references.matches.length}
+                  </span>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                onClick={() => setReferences(null)}
+                aria-label="Close references"
+                title="Close references"
+                className="ml-1 grid size-7 shrink-0 place-items-center rounded-md text-content/50 hover:bg-content/5 hover:text-content"
+              >
+                ×
+              </button>
+            </div>
+            <div className="min-h-0 overflow-auto px-1.5 py-1">
+              {references.matches.map((match) => (
+                <button
+                  key={`${match.path}:${match.line}:${match.column}`}
+                  type="button"
+                  onClick={() => onOpenFile?.(match.path, match)}
+                  className="flex w-full min-w-0 items-baseline gap-2 rounded-md px-2 py-1 text-left hover:bg-content/5"
+                >
+                  <span className="shrink-0 font-mono text-[10.5px] text-content/45">
+                    {match.relative}:{match.line}
+                  </span>
+                  <span className="min-w-0 truncate font-mono text-[11px] text-content/70">
+                    {match.preview.trim()}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </div>
       {commentTarget ? (
         <DiffCommentComposer
@@ -1155,6 +1362,26 @@ function revealNavigation(view: EditorView, target: EditorNavigation) {
 
 const diskReload = Annotation.define<boolean>();
 const sourceNavigation = Annotation.define<boolean>();
+const symbolHover = StateEffect.define<{ from: number; to: number } | null>();
+const symbolHoverField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update: (decorations, transaction) => {
+    for (const effect of transaction.effects) {
+      if (effect.is(symbolHover)) {
+        return effect.value
+          ? Decoration.set([
+              Decoration.mark({ class: "cm-symbol-navigation-target" }).range(
+                effect.value.from,
+                effect.value.to,
+              ),
+            ])
+          : Decoration.none;
+      }
+    }
+    return decorations.map(transaction.changes);
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
 
 function indentOrInsertTab(view: EditorView): boolean {
   const { state, dispatch } = view;
