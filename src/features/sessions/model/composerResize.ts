@@ -2,7 +2,7 @@
 export const COMPOSER_MAX_HEIGHT = 160;
 
 type Resizable = {
-  style: { height: string };
+  style: { height: string; overflowY?: string };
   scrollHeight: number;
   parentElement?: {
     style: { minHeight: string };
@@ -22,6 +22,9 @@ export function resizeComposer(el: Resizable, maxHeight = COMPOSER_MAX_HEIGHT) {
   try {
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`;
+    // WebKit rounds scrollHeight up at non-100% zoom, so a field that fits
+    // reports a 1px overflow; only scroll once it really passes the max.
+    el.style.overflowY = el.scrollHeight > maxHeight ? "auto" : "hidden";
   } finally {
     if (wrapper) wrapper.style.minHeight = minHeight;
   }

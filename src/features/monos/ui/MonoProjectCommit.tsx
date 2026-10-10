@@ -47,6 +47,7 @@ import {
   GitSyncActions,
   usePrStatus,
 } from "../../source-control/ui/GitChangesPanel";
+import { useAutoGrow } from "../../../shared/hooks/useAutoGrow";
 
 /** One session file, with its path inside the repository that holds it. */
 export type MonoProjectFile = { file: CheckpointFile; relative: string };
@@ -152,15 +153,7 @@ export function MonoProjectCommit({
     return () => window.removeEventListener("pointerdown", onPointer);
   }, [menuOpen]);
 
-  useEffect(() => {
-    const el = messageRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    // The tab mounts hidden, where nothing has a height; leave it at its
-    // natural size until it can be measured.
-    if (el.scrollHeight === 0) return;
-    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
-  }, [message]);
+  useAutoGrow(messageRef, message);
 
   useEffect(() => () => generateAbortRef.current?.abort(), []);
 
@@ -433,7 +426,7 @@ export function MonoProjectCommit({
                 void commit(false);
               }
             }}
-            className="max-h-40 w-full resize-none overflow-y-auto rounded-md bg-content/10 py-1 pr-8 pl-2 text-[13px] leading-5 text-content outline-none placeholder:text-content/35 disabled:opacity-40"
+            className="max-h-40 w-full resize-none overflow-hidden rounded-md bg-content/10 py-1 pr-8 pl-2 text-[13px] leading-5 text-content outline-none placeholder:text-content/35 disabled:opacity-40"
           />
           <button
             type="button"

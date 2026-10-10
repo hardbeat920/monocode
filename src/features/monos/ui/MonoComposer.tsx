@@ -105,7 +105,6 @@ export function MonoComposer({
       // Holds the input's height while measuring, as sessions do, so the
       // transcript above never grows for a moment and loses its bottom pin.
       resizeComposer(el, MAX_HEIGHT);
-      el.style.overflowY = el.scrollHeight > MAX_HEIGHT ? "auto" : "hidden";
     };
     fit();
     // An empty field stays one line at any width, so once measured, resizing

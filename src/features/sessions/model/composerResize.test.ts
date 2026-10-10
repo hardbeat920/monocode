@@ -18,6 +18,15 @@ describe("resizeComposer", () => {
     expect(el.style.height).toBe(`${COMPOSER_MAX_HEIGHT}px`);
   });
 
+  it("scrolls only once the draft passes the max height", () => {
+    const fits = field(88);
+    resizeComposer(fits);
+    expect(fits.style).toMatchObject({ overflowY: "hidden" });
+    const overflows = field(400);
+    resizeComposer(overflows);
+    expect(overflows.style).toMatchObject({ overflowY: "auto" });
+  });
+
   it("supports a taller field without changing the composer default", () => {
     const el = field(400);
     resizeComposer(el, Number.POSITIVE_INFINITY);

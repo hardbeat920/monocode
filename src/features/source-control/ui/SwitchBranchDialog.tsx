@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { generateCommitMessage } from "../../../integrations/harness";
 import { LAYER } from "../../../shared/lib/layers";
 import { MOD } from "../../../platform/tauri/platform";
+import { useAutoGrow } from "../../../shared/hooks/useAutoGrow";
 
 type Busy = "stash" | "commit" | null;
 
@@ -52,12 +53,7 @@ export function SwitchBranchDialog({
     [cwd],
   );
 
-  useEffect(() => {
-    const el = messageRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
-  }, [message]);
+  useAutoGrow(messageRef, message);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -140,7 +136,7 @@ export function SwitchBranchDialog({
             placeholder={`Message (${MOD}↩ to commit)`}
             disabled={Boolean(busy) || generating}
             aria-label="Commit message"
-            className="max-h-40 w-full resize-none overflow-y-auto rounded-md bg-content/10 py-1 pr-8 pl-2 text-[13px] leading-5 text-content outline-none placeholder:text-content/35 disabled:opacity-40"
+            className="max-h-40 w-full resize-none overflow-hidden rounded-md bg-content/10 py-1 pr-8 pl-2 text-[13px] leading-5 text-content outline-none placeholder:text-content/35 disabled:opacity-40"
             onChange={(event) => setMessage(event.target.value)}
             onKeyDown={(event) => {
               if (

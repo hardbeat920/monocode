@@ -1380,6 +1380,13 @@ html.is-mac.has-native-glass.has-native-glass-tint.glass-body:not(.theme-light)
   background: color-mix(in srgb, var(--color-background-base) 0%, transparent);
 }
 
+/* Textareas wrap, so they never need to scroll sideways. WebKit at a
+   non-100% UI scale also overstates an empty textarea's scrollWidth by the
+   zoom factor, which would show a horizontal scrollbar under the placeholder. */
+textarea {
+  overflow-x: hidden;
+}
+
 textarea,
 input,
 .agent-transcript,
