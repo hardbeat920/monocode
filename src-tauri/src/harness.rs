@@ -2467,6 +2467,9 @@ fn resolve_grok() -> Option<PathBuf> {
 
 fn resolve_copilot() -> Option<PathBuf> {
     let mut candidates = Vec::new();
+    if let Some(from_shell) = which_via_login_shell("copilot") {
+        candidates.push(from_shell);
+    }
     if let Some(home) = dirs_home().map(PathBuf::from) {
         for dir in [".local/bin", ".npm-global/bin", ".bun/bin", "n/bin"] {
             candidates.push(home.join(dir).join("copilot"));
@@ -2479,9 +2482,6 @@ fn resolve_copilot() -> Option<PathBuf> {
         "/snap/bin",
     ] {
         candidates.push(PathBuf::from(dir).join("copilot"));
-    }
-    if let Some(from_shell) = which_via_login_shell("copilot") {
-        candidates.push(from_shell);
     }
     first_binary_matching(candidates, |path| {
         validate_harness_binary_version("copilot", path).is_ok()
