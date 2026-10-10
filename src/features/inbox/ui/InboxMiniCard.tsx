@@ -25,7 +25,9 @@ export function InboxMiniCard({ card, onDismiss }: Props) {
           ? "GitLab"
           : card.provider === "azuredevops"
             ? "ADO"
-            : "GitHub";
+            : card.provider === "bitbucket"
+              ? "Bitbucket"
+              : "GitHub";
 
   return (
     <div className="px-3 pt-2">

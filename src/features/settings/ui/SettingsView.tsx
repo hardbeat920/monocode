@@ -278,6 +278,11 @@ import {
   saveAzureDevOpsConfig,
 } from "../../inbox/model/azureDevOps";
 import {
+  bitbucketConnected,
+  disconnectBitbucket,
+  saveBitbucketConfig,
+} from "../../inbox/model/bitbucket";
+import {
   disconnectLinear,
   LINEAR_CHANGE_EVENT,
   linearConnected,
@@ -1257,6 +1262,22 @@ function InboxPage({
       </Group>
 
       <Group
+        id="bitbucket"
+        title={
+          <span className="flex items-center gap-2">
+            <InboxProviderMark
+              provider="bitbucket"
+              className="size-4 shrink-0"
+            />
+            Bitbucket
+          </span>
+        }
+        description="Pull requests from Bitbucket Cloud repositories."
+      >
+        <BitbucketSettings />
+      </Group>
+
+      <Group
         id="jira"
         title={
           <span className="flex items-center gap-2">
@@ -1584,6 +1605,141 @@ function AzureDevOpsSettings() {
             <SecondaryButton
               onClick={() => void onSave()}
               disabled={busy || !token.trim()}
+            >
+              {busy ? "Saving" : "Connect"}
+            </SecondaryButton>
+          </div>
+        )}
+      </Row>
+      {error ? (
+        <p className="border-b border-content/5 px-4 pb-3 text-[12px] text-red-400/90 last:border-b-0">
+          {error}
+        </p>
+      ) : null}
+    </>
+  );
+}
+
+function BitbucketSettings() {
+  const [email, setEmail] = useState("");
+  const [token, setToken] = useState("");
+  const [connected, setConnected] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // Set once Connect or Disconnect starts so a slower initial status read
+  // cannot overwrite the result of that action.
+  const actedRef = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void bitbucketConnected()
+      .then((status) => {
+        if (cancelled || actedRef.current) return;
+        setConnected(status.connected);
+        if (status.email) setEmail(status.email);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled && !actedRef.current)
+          setError(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const onSave = async () => {
+    if (!email.trim() || !token.trim() || busy) return;
+    actedRef.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      const status = await saveBitbucketConfig(email, token);
+      setEmail(status.email);
+      setToken("");
+      setConnected(status.connected);
+      clearInboxCache();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+      // A failed save leaves any stored config untouched, so restore its state.
+      try {
+        const stored = await bitbucketConnected();
+        setConnected(stored.connected);
+        if (stored.email) setEmail(stored.email);
+      } catch {
+        // Keep the last known state; the save error is already shown.
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onDisconnect = async () => {
+    if (busy) return;
+    actedRef.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      const status = await disconnectBitbucket(email);
+      setConnected(false);
+      setEmail(status.email || email);
+      clearInboxCache();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <Row
+        label="Connection"
+        description="Connect Bitbucket Cloud with your Atlassian account email and an API token with the scopes read:user:bitbucket, read:repository:bitbucket, read:pullrequest:bitbucket and write:pullrequest:bitbucket. Optional: include read:pipeline:bitbucket to see build steps. Scopes are fixed when a token is created, so choose them up front. The token is stored locally and Disconnect deletes it."
+      >
+        {connected ? (
+          <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
+            <span className="max-w-56 truncate text-[12px] text-content/50">
+              {email}
+            </span>
+            <SecondaryButton
+              onClick={() => void onDisconnect()}
+              disabled={busy}
+            >
+              Disconnect
+            </SecondaryButton>
+          </div>
+        ) : (
+          <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
+            <label className="flex h-7 w-52 max-w-full shrink-0 items-center rounded-md border border-content/10 px-2 focus-within:border-content/20">
+              <input
+                type="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                placeholder="you@example.com"
+                aria-label="Atlassian account email"
+                autoComplete="email"
+                spellCheck={false}
+                className="min-w-0 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content/35"
+              />
+            </label>
+            <label className="flex h-7 w-52 max-w-full shrink-0 items-center rounded-md border border-content/10 px-2 focus-within:border-content/20">
+              <input
+                type="password"
+                value={token}
+                onChange={(event) => setToken(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") void onSave();
+                }}
+                placeholder="API token…"
+                aria-label="Bitbucket API token"
+                autoComplete="off"
+                spellCheck={false}
+                className="min-w-0 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content/35"
+              />
+            </label>
+            <SecondaryButton
+              onClick={() => void onSave()}
+              disabled={busy || !email.trim() || !token.trim()}
             >
               {busy ? "Saving" : "Connect"}
             </SecondaryButton>

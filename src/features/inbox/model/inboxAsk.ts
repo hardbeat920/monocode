@@ -5,7 +5,8 @@ export type InboxAskContext = {
   key: string;
   title: string;
   url: string;
-  provider: "github" | "linear" | "jira" | "gitlab" | "azuredevops";
+  provider:
+    "github" | "linear" | "jira" | "gitlab" | "azuredevops" | "bitbucket";
   description?: string;
 };
 
