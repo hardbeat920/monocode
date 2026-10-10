@@ -1,6 +1,7 @@
 use tauri::Manager;
 
 mod account_identity;
+mod antigravity_usage;
 mod artifacts;
 mod automations;
 mod azure_devops;
@@ -486,6 +487,7 @@ pub fn run() {
             account_identity::provider_account_identity,
             pi_usage::fetch_pi_usage,
             rate_limits::fetch_claude_usage,
+            antigravity_usage::fetch_antigravity_usage,
             rate_limits::fetch_opencode_go_usage,
             devin_usage::fetch_devin_usage,
             pty::pty_spawn,
