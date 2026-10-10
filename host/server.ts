@@ -19,6 +19,12 @@ import { parseGithubWorkItemUrl } from "../src/features/sessions/model/sessionWo
 import { SyncTransfers } from "./sync-transfer";
 import { browseHostDirectories } from "./browse";
 import {
+  GitHostCheckouts,
+  gitHostProvider,
+  gitHostStatuses,
+  planHostCheckout,
+} from "./git-hosts";
+import {
   createHostBranch,
   hostBranches,
   switchHostBranch,
@@ -141,6 +147,7 @@ export function createHostServer(
     { binaries: string; probed: number; catalog: Promise<HostModelCatalog> }
   >();
   const transfers = new SyncTransfers();
+  const checkouts = new GitHostCheckouts((cwd) => engine.openProject(cwd));
   const workspace = new WorkspaceCommands(
     engine.store,
     (projectId, action) => engine.withIdleProject(projectId, action),
@@ -292,6 +299,7 @@ export function createHostServer(
                 "attachments.read",
                 "sessions.draft",
                 "sessions.plan",
+                "gitHosts.checkout",
               ],
             };
             break;
@@ -303,6 +311,28 @@ export function createHostServer(
             break;
           case "projects.open":
             result = await engine.openProject(String(params.cwd ?? ""));
+            break;
+          case "gitHosts.status":
+            result = await gitHostStatuses();
+            break;
+          case "gitHosts.repos":
+            result = await gitHostProvider(params.provider).repos();
+            break;
+          case "gitHosts.search":
+            result = await gitHostProvider(params.provider).search(String(params.query ?? ""));
+            break;
+          case "gitHosts.checkoutPlan":
+            result = await planHostCheckout(
+              gitHostProvider(params.provider),
+              params.slug,
+              params.parent,
+            );
+            break;
+          case "gitHosts.checkoutStart":
+            result = checkouts.start(params);
+            break;
+          case "gitHosts.checkoutStatus":
+            result = checkouts.status(params.jobId);
             break;
           case "models.list":
             result = await models(params.projectId);

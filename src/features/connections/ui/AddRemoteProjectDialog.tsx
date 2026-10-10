@@ -248,7 +248,7 @@ export function AddRemoteProjectDialog({
   );
 }
 
-function FolderRow({ name, onOpen }: { name: string; onOpen: () => void }) {
+export function FolderRow({ name, onOpen }: { name: string; onOpen: () => void }) {
   return (
     <button
       type="button"

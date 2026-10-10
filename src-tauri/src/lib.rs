@@ -14,6 +14,7 @@ mod devin_config;
 mod devin_usage;
 mod external_editor;
 mod fs;
+mod git_hosts;
 mod gitlab;
 mod harness;
 mod harness_updates;
@@ -361,6 +362,12 @@ pub fn run() {
             fs::git_pr_status,
             fs::git_pr_create,
             fs::git_github_status,
+            git_hosts::git_host_statuses,
+            git_hosts::git_host_repos,
+            git_hosts::git_host_search_repos,
+            git_hosts::git_host_checkout_plan,
+            git_hosts::git_host_checkout,
+            git_hosts::git_host_default_parent,
             fs::github_monocode_star_status,
             fs::github_star_monocode,
             fs::git_github_repo,

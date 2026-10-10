@@ -1272,7 +1272,7 @@ pub async fn git_github_status() -> Result<GitHubStatus, String> {
         .map_err(|error| error.to_string())
 }
 
-fn git_github_status_for() -> GitHubStatus {
+pub(crate) fn git_github_status_for() -> GitHubStatus {
     let Some(program) = crate::harness::resolve_gui_binary("gh") else {
         return GitHubStatus {
             connected: false,
@@ -4332,7 +4332,7 @@ struct GitHubRateLimitBackoff {
 // Shared by all webviews, including background Inbox and PR checks requests.
 static GITHUB_RATE_LIMIT_BACKOFF: Mutex<Option<GitHubRateLimitBackoff>> = Mutex::new(None);
 
-fn gh_run(root: &Path, args: &[&str], allow_empty: bool) -> Result<String, String> {
+pub(crate) fn gh_run(root: &Path, args: &[&str], allow_empty: bool) -> Result<String, String> {
     gh_with_backoff(
         &GITHUB_RATE_LIMIT_BACKOFF,
         args,

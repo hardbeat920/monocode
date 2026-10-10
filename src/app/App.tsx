@@ -676,6 +676,12 @@ import {
 } from "../features/connections/model/remoteProjects";
 import type { HostSession } from "../features/connections/model/protocol";
 import { AddRemoteProjectDialog } from "../features/connections/ui/AddRemoteProjectDialog";
+import { CloneRepoDialog } from "../features/git-hosts/ui/CloneRepoDialog";
+import { CloneRepoNotice } from "../features/git-hosts/ui/CloneRepoNotice";
+import {
+  OPEN_CLONE_REPO_EVENT,
+  type CloneRepoRequest,
+} from "../features/git-hosts/model/gitHosts";
 import type { ConnectableInboxSource } from "../features/inbox/model/inboxFilters";
 import type { InboxSessionPortal } from "../features/inbox/ui/InboxDiscussionPanel";
 import { inboxAskKey, inboxAskPrompt } from "../features/inbox/model/inboxAsk";
@@ -11596,6 +11602,15 @@ function Workspace({
     window.addEventListener(OPEN_REMOTE_PROJECT_EVENT, open);
     return () => window.removeEventListener(OPEN_REMOTE_PROJECT_EVENT, open);
   }, []);
+  const [cloneRepoRequest, setCloneRepoRequest] =
+    useState<CloneRepoRequest | null>(null);
+  const [cloneRepoNotice, setCloneRepoNotice] = useState<string>();
+  useEffect(() => {
+    const open = (event: Event) =>
+      setCloneRepoRequest((event as CustomEvent<CloneRepoRequest>).detail);
+    window.addEventListener(OPEN_CLONE_REPO_EVENT, open);
+    return () => window.removeEventListener(OPEN_CLONE_REPO_EVENT, open);
+  }, []);
 
   useEffect(() => {
     const onOpenMcp = () => openSettings("mcp");
@@ -13193,6 +13208,25 @@ function Workspace({
                 setRemoteProjectDialogOpen(false);
                 onSelectProject(key);
               }}
+            />
+          ) : null}
+          {cloneRepoRequest ? (
+            <CloneRepoDialog
+              key={`${cloneRepoRequest.provider}:${cloneRepoRequest.target}`}
+              provider={cloneRepoRequest.provider}
+              target={cloneRepoRequest.target}
+              onCancel={() => setCloneRepoRequest(null)}
+              onOpen={(key, reused) => {
+                setCloneRepoRequest(null);
+                onSelectProject(key);
+                if (reused) setCloneRepoNotice("Opened the existing checkout — nothing was cloned.");
+              }}
+            />
+          ) : null}
+          {cloneRepoNotice ? (
+            <CloneRepoNotice
+              message={cloneRepoNotice}
+              onDismiss={() => setCloneRepoNotice(undefined)}
             />
           ) : null}
           {providerSignInRequest ? (
