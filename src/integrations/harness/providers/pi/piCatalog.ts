@@ -91,7 +91,6 @@ async function discoverModels(flavor: PiFlavor, workingDirectory?: string) {
     );
     if (exitError) throw exitError;
     const started = Date.now();
-    const deadline = started + DISCOVERY_TIMEOUT_MS;
     const timedOut = new Promise<never>((_, reject) => {
       timeout = setTimeout(() => reject(timeoutError), DISCOVERY_TIMEOUT_MS);
     });
@@ -104,7 +103,9 @@ async function discoverModels(flavor: PiFlavor, workingDirectory?: string) {
       while (!stopped) {
         const response = await rpc.request(
           { type: "get_available_models" },
-          Math.max(1, deadline - Date.now()),
+          // The outer timer owns the discovery deadline. A shorter RPC timer
+          // could win the race and discard models collected by earlier polls.
+          DISCOVERY_TIMEOUT_MS,
         );
         if (stopped) break;
         const snapshot = modelsFromRpcData(flavor, response.data);

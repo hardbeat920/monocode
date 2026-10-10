@@ -258,6 +258,30 @@ it("returns collected models at the deadline if a later request stalls", async (
   expect(vi.getTimerCount()).toBe(0);
 });
 
+it("keeps collected models when the clock advances during timer setup", async () => {
+  let clock: ReturnType<typeof vi.spyOn> | undefined;
+  mocks.writeChild.mockImplementation(async (id, line) => {
+    if (mocks.writeChild.mock.calls.length === 1) {
+      // Model a millisecond passing between recording startup and installing
+      // the deadline timer. A per-RPC remaining-time timer would expire first.
+      clock = vi
+        .spyOn(Date, "now")
+        .mockImplementation(() => vi.getMockedSystemTime()!.getTime() + 1);
+      reply(id, line, [builtin]);
+    }
+  });
+  try {
+    const result = discoverPiModels("/workspace");
+    await vi.advanceTimersByTimeAsync(45_000);
+    expect((await result).map((model) => model.nativeId)).toEqual([
+      "meta/shared-id",
+    ]);
+    expectStopped();
+  } finally {
+    clock?.mockRestore();
+  }
+});
+
 it("bounds discovery even when the catalog changes on every response", async () => {
   mocks.writeChild.mockImplementation(async (id, line) => {
     reply(id, line, [{ ...extension, contextWindow: 200_000 + Date.now() }]);
