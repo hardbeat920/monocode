@@ -5348,14 +5348,6 @@ function Workspace({
           try {
             const archive = mode === "archive";
             if (archive) {
-              // The archived record still uses the worktree. Detach it only
-              // if no other session started using the worktree meanwhile.
-              const { worktrees } = await listWorktrees(seed.cwd);
-              const tree = worktrees.find(
-                (entry) => pathKey(entry.path) === pathKey(deleteWorktreePath!),
-              );
-              if (!worktreeOnlyUsedBy(tree, sessionId, sessionsRef.current))
-                throw new Error("Another session is using this worktree.");
               // Archive releases agent processes in the background, and the
               // worktree cannot be removed while they still run inside it.
               if (open)
@@ -5364,6 +5356,15 @@ function Workspace({
                     forgetHarnessSession(harness, sessionId),
                   ),
                 );
+              // The archived record still uses the worktree. Detach it only
+              // if no other session started using the worktree meanwhile;
+              // checked last so nothing is awaited between here and removal.
+              const { worktrees } = await listWorktrees(seed.cwd);
+              const tree = worktrees.find(
+                (entry) => pathKey(entry.path) === pathKey(deleteWorktreePath!),
+              );
+              if (!worktreeOnlyUsedBy(tree, sessionId, sessionsRef.current))
+                throw new Error("Another session is using this worktree.");
               // onRemoveWorktree locks the archived session itself.
               removingSessionIds.current.delete(sessionId);
             }
