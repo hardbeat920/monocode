@@ -35,8 +35,9 @@ type Options = {
     tree: Worktree,
     isCurrent: () => boolean,
   ) => Promise<void>;
-  activateTab: (id: string) => void;
+  activateTab: (id: string, sessionId?: string) => void;
   createTab: (project: string, focus?: WorktreeFocus) => string;
+  openCowSession?: (project: string, focus: WorktreeFocus, isCurrent: () => boolean) => Promise<string>;
 };
 
 const workspaceKey = (project: string, path: string) =>
@@ -141,11 +142,15 @@ export function useWorkspaceNavigation(options: Options) {
               : (scoped.find((entry) => entry.id === memory.current.get(key)) ??
                 scoped[scoped.length - 1]);
           let tabId: string;
-          if (target) {
+          if (next.focus?.cowId) {
+            if (!view.openCowSession) throw new Error("Copy-on-write session navigation is unavailable");
+            tabId = await view.openCowSession(next.project, next.focus, isCurrent);
+          } else if (target) {
             tabId = target.id;
           } else if (
             session &&
             isBlankSession(session) &&
+            !session.cowId &&
             sameProjectPath(session.cwd, next.project)
           ) {
             moving.current.add(session.id);
@@ -184,7 +189,7 @@ export function useWorkspaceNavigation(options: Options) {
           }
           memory.current.set(key, tabId);
           setWorktreeFocus(next.project, next.focus);
-          view.activateTab(tabId);
+          view.activateTab(tabId, next.focus?.cowId ? next.focus.sessionId : undefined);
         } catch (caught) {
           if (isCurrent()) {
             // A project rail landing may still be in its default workspace.

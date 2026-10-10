@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { workspaceTabCwd } from "../../workspace/model/workspaceTabGroups";
+import { describe, expect, it, vi } from "vitest";
 import { leafIds, newFileTab, newTab, type WorkspaceTab } from "../../workspace/model/layout";
 import type { Session } from "./session";
 import { applyAddToChatRequest } from "./addChatToWorkspace";
+import * as settings from "../../settings/model/settings";
 
 function session(id: string, cwd: string, overrides: Partial<Session> = {}): Session {
   return {
@@ -142,6 +144,34 @@ describe("applyAddToChatRequest: zero-tab fallback", () => {
 });
 
 describe("applyAddToChatRequest: file-only tab", () => {
+  it.each(["cow", "worktree"] as const)(
+    "keeps the selected worktree when new sessions default to %s",
+    (mode) => {
+      const preference = vi.spyOn(settings, "loadDefaultIsolationMode").mockReturnValue(mode);
+      try {
+        const tab = fileOnlyTab("feature", "/repo-worktrees/feature");
+        tab.focusedId = "pane";
+        tab.layout = { type: "leaf", id: "pane" };
+        tab.editorPanes[0].files[0].projectCwd = "/repo";
+        const result = applyAddToChatRequest({
+          sessions: [],
+          tabs: [tab],
+          activeTabId: tab.id,
+          projectCwd: "/repo",
+          text: "Review this feature code",
+        });
+        const chat = newChat(result!);
+        expect(chat.cwd).toBe("/repo");
+        expect(chat.worktreeCwd).toBe("/repo-worktrees/feature");
+        expect(chat.workspaceMode).toBeUndefined();
+        expect(chat.worktreeBase).toBeUndefined();
+        expect(chat.composerSeed).toContain("Review this feature code");
+      } finally {
+        preference.mockRestore();
+      }
+    },
+  );
+
   it("splits the new chat beside the file pane", () => {
     const tab = fileOnlyTab("tab1", "/current/project");
     const result = applyAddToChatRequest({
@@ -174,4 +204,37 @@ describe("applyAddToChatRequest: file-only tab", () => {
 
     expect(result).toBeNull();
   });
+});
+
+describe("add-to-chat from an existing copy-on-write workspace", () => {
+  it.each([false, true])(
+    "constructs a fresh copy session without mutating the source (no tabs: %s)",
+    (empty) => {
+      const source = {
+        ...session("copy-source", "/repo"),
+        cowId: "source",
+        worktreeCwd: "/repo-cow/source",
+      };
+      const tab = fileOnlyTab("copy-file", source.worktreeCwd);
+      const before = JSON.stringify({ source, tab });
+      const result = applyAddToChatRequest({
+        sessions: [source],
+        tabs: empty ? [] : [tab],
+        activeTabId: tab.id,
+        projectCwd: source.worktreeCwd,
+        text: "Review selected code",
+      })!;
+      const added = newChat(result);
+      expect(added).toMatchObject({
+        cwd: "/repo",
+        workspaceMode: "cow",
+        cowSourceCwd: source.worktreeCwd,
+      });
+      expect(added.worktreeCwd).toBeUndefined();
+      expect(added.cowId).toBeUndefined();
+      expect(result.tabs[0].focusedId).toBe(added.id);
+      expect(workspaceTabCwd(result.tabs[0], result.sessions)).toBe("/repo");
+      expect(JSON.stringify({ source, tab })).toBe(before);
+    },
+  );
 });

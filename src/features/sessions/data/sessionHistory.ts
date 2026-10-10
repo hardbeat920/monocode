@@ -117,6 +117,7 @@ export function summaryFromSession(
     draft: !!sessionDraftBlock(session),
     providerSessionId: session.providerSessionId,
     worktreeCwd: session.worktreeCwd,
+    cowId: session.cowId,
     worktreeRemoved: session.worktreeRemoved,
     ...(session.linkedWorkItem
       ? { linkedWorkItem: session.linkedWorkItem }

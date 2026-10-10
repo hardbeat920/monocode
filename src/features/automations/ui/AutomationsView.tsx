@@ -1,3 +1,4 @@
+import { cowCapability } from "../../source-control/model/cow";
 import {
   useCallback,
   useEffect,
@@ -85,20 +86,35 @@ import {
   azureDevOpsConnected,
 } from "../../inbox/model/azureDevOps";
 import { gitBranches } from "../../../platform/tauri/fs";
-import { formatRelativeTime, githubStatus } from "../../inbox/model/githubTasks";
+import {
+  formatRelativeTime,
+  githubStatus,
+} from "../../inbox/model/githubTasks";
 import { GITLAB_CHANGE_EVENT, gitlabConnected } from "../../inbox/model/gitlab";
 import { LAYER } from "../../../shared/lib/layers";
 import { LINEAR_CHANGE_EVENT, linearConnected } from "../../inbox/model/linear";
 import { JIRA_CHANGE_EVENT, jiraConnected } from "../../inbox/model/jira";
-import { defaultSessionChoice, firstEnabledHarness, modelsFor, preferredModelId, resolveModel } from "../../sessions/model/models";
+import {
+  defaultSessionChoice,
+  firstEnabledHarness,
+  modelsFor,
+  preferredModelId,
+  resolveModel,
+} from "../../sessions/model/models";
 import { projectKey, projectName } from "../../../shared/lib/paths";
 import { IS_MAC } from "../../../platform/tauri/platform";
-import { looksLikeProject, type RecentProject } from "../../projects/model/recents";
+import {
+  looksLikeProject,
+  type RecentProject,
+} from "../../projects/model/recents";
 import {
   loadSessionFolders,
   subscribeSessionFolders,
 } from "../../sessions/model/sessionFolders";
-import { loadModelControls, subscribeModelControls } from "../../settings/model/settings";
+import {
+  loadModelControls,
+  subscribeModelControls,
+} from "../../settings/model/settings";
 import {
   loadTabGroupColors,
   loadTabGroupCustomColors,
@@ -298,6 +314,14 @@ function AutomationsContent({
     if (saving) return;
     setSaving(true);
     try {
+      if (nextDraft.workspaceMode === "cow") {
+        const capability = await cowCapability(nextDraft.cwd);
+        if (!capability.supported)
+          throw new Error(
+            capability.reason ||
+              "Copy-on-write is unavailable. Choose another isolation mode.",
+          );
+      }
       const saved = await saveAutomation(nextDraft);
       setPickerOpen(false);
       setDraft(null);
@@ -1370,20 +1394,22 @@ function AutomationEditor({
               <div className="mt-3 divide-y divide-content/7 rounded-md border border-content/10">
                 <SettingsRow
                   label="Working copy"
-                  hint="This repo, or a fresh worktree"
+                  hint="This repo, a fresh worktree, or copy-on-write"
                 >
                   <SettingsSelect
                     label="Working copy"
                     value={
-                      draft.workspaceMode === "worktree"
-                        ? "worktree"
-                        : "current"
+                      draft.workspaceMode === "cow"
+                        ? "cow"
+                        : draft.workspaceMode === "worktree"
+                          ? "worktree"
+                          : "current"
                     }
                     options={WORKSPACE_OPTIONS}
                     onChange={(value) =>
                       onChange({
                         ...draft,
-                        workspaceMode: value as "current" | "worktree",
+                        workspaceMode: value as "current" | "worktree" | "cow",
                         worktreeCwd: "",
                         reuseSession: value === "current" && draft.reuseSession,
                       })
@@ -1397,7 +1423,10 @@ function AutomationEditor({
                   <SettingsSelect
                     label="Conversation"
                     value={draft.reuseSession ? "reuse" : "fresh"}
-                    disabled={draft.workspaceMode === "worktree"}
+                    disabled={
+                      draft.workspaceMode === "worktree" ||
+                      draft.workspaceMode === "cow"
+                    }
                     options={CONVERSATION_OPTIONS}
                     onChange={(value) =>
                       update("reuseSession", value === "reuse")
@@ -1631,6 +1660,7 @@ function ToggleSwitch({
 const WORKSPACE_OPTIONS = [
   { value: "current", label: "Current" },
   { value: "worktree", label: "Fresh worktree" },
+  { value: "cow", label: "New copy-on-write" },
 ] as const;
 
 const CONVERSATION_OPTIONS = [

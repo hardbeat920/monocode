@@ -1,3 +1,4 @@
+import { cowCapability } from "../../source-control/model/cow";
 import { NativePopupHost } from "../../../shared/ui/NativePopupHost";
 import {
   useCallback,
@@ -15,6 +16,7 @@ import { prettyCwd } from "../../../shared/lib/paths";
 import type { WorkspaceMode } from "../../sessions/model/session";
 import {
   Check,
+  Copy,
   ChevronRight,
   Folder,
   FolderTree,
@@ -106,7 +108,7 @@ export function WorkspacePicker({
         mode={mode}
         enabled={enabled && !!resolvedBase}
         onChange={(next) =>
-          onModeChange(next, next === "worktree" ? effectiveBase : undefined)
+          onModeChange(next, next !== "current" ? effectiveBase : undefined)
         }
         onSelectWorktree={onSelectWorktree}
         onOpenSettings={onOpenSettings}
@@ -114,7 +116,7 @@ export function WorkspacePicker({
         onOpenChange={reportMode}
         popoverSide={popoverSide}
       />
-      {mode === "worktree" ? (
+      {mode !== "current" ? (
         <WorktreeBasePicker
           initialOpen={initialPicker === "base"}
           branches={branches?.branches ?? []}
@@ -132,9 +134,19 @@ export function WorkspacePicker({
 }
 
 /** A started conversation owns its working copy; only its branch stays mutable. */
-export function WorkspaceIdentity({ worktree }: { worktree: boolean }) {
-  const Icon = worktree ? FolderTree : Folder;
-  const label = worktree ? "Worktree" : "Current checkout";
+export function WorkspaceIdentity({
+  worktree,
+  cow = false,
+}: {
+  worktree: boolean;
+  cow?: boolean;
+}) {
+  const Icon = cow ? Copy : worktree ? FolderTree : Folder;
+  const label = cow
+    ? "Copy-on-write"
+    : worktree
+      ? "Worktree"
+      : "Current checkout";
   return (
     <div
       title={`Workspace: ${label}`}
@@ -176,6 +188,27 @@ function WorkspaceModePicker({
     onOpenChange?.(open);
   }, [open, onOpenChange]);
   useEffect(() => () => onOpenChange?.(false), [onOpenChange]);
+  const [cowSupport, setCowSupport] = useState<{
+    supported: boolean;
+    reason?: string;
+  }>({ supported: false, reason: "Checking filesystem support…" });
+  useEffect(() => {
+    let disposed = false;
+    setCowSupport({ supported: false, reason: "Checking filesystem support…" });
+    if (enabled && cwd)
+      void cowCapability(cwd).then(
+        (capability) => {
+          if (!disposed) setCowSupport(capability);
+        },
+        (error) => {
+          if (!disposed)
+            setCowSupport({ supported: false, reason: String(error) });
+        },
+      );
+    return () => {
+      disposed = true;
+    };
+  }, [cwd, enabled]);
   const [worktreeMenu, setWorktreeMenu] = useState(false);
   const [busyPath, setBusyPath] = useState<string>();
   const [pickError, setPickError] = useState<string>();
@@ -253,7 +286,12 @@ function WorkspaceModePicker({
       setPickError(undefined);
     }, HOVER_CLOSE_MS);
   };
-  const label = mode === "worktree" ? "New worktree" : "Current checkout";
+  const label =
+    mode === "cow"
+      ? "New copy-on-write"
+      : mode === "worktree"
+        ? "New worktree"
+        : "Current checkout";
   const shortcut = keybindingShortcutLabel(
     "Composer: Toggle Workspace",
     WORKSPACE_MODE_SHORTCUT,
@@ -262,7 +300,8 @@ function WorkspaceModePicker({
     "Composer: Toggle Workspace",
     "Meta+Shift+G Control+Shift+G",
   );
-  const Icon = mode === "worktree" ? FolderTree : Folder;
+  const Icon =
+    mode === "cow" ? Copy : mode === "worktree" ? FolderTree : Folder;
 
   return (
     <div ref={anchor} className="relative flex min-w-0 shrink-0">
@@ -298,12 +337,12 @@ function WorkspaceModePicker({
           onDismiss={dismiss}
           ignore={WORKSPACE_SURFACES}
           role="dialog"
-          aria-label="Workspace"
+          aria-label="Isolation"
           data-workspace-picker
           className="overflow-hidden p-1.5"
         >
           <div className="flex items-center justify-between gap-3 px-2 py-1 text-[11px] font-medium text-content/45">
-            <span>Workspace</span>
+            <span>Isolation</span>
             {shortcut ? (
               <kbd className="font-sans text-[10px] font-normal text-content/35">
                 {shortcut}
@@ -314,12 +353,19 @@ function WorkspaceModePicker({
             [
               ["current", "Current checkout", Folder],
               ["worktree", "New worktree", FolderTree],
+              ["cow", "New copy-on-write", Copy],
             ] as const
           ).map(([value, text, RowIcon]) => (
             <button
               key={value}
               type="button"
               aria-pressed={mode === value}
+              disabled={value === "cow" && !cowSupport.supported}
+              title={
+                value === "cow" && !cowSupport.supported
+                  ? cowSupport.reason
+                  : undefined
+              }
               onMouseDown={(event) => event.preventDefault()}
               onMouseEnter={closeWorktreeMenu}
               onClick={() => {
@@ -335,6 +381,11 @@ function WorkspaceModePicker({
               {mode === value ? <Check className="size-3.5" /> : null}
             </button>
           ))}
+          {!cowSupport.supported && cowSupport.reason ? (
+            <p className="px-2 py-1 text-[11px] text-content/45">
+              {cowSupport.reason}
+            </p>
+          ) : null}
           {onSelectWorktree ? (
             <button
               ref={worktreeAnchor}
@@ -369,8 +420,8 @@ function WorkspaceModePicker({
             <div className="h-9 border-t border-stroke">
               <button
                 type="button"
-                title="Open worktree settings"
-                aria-label="Open worktree settings"
+                title="Open isolation settings"
+                aria-label="Open isolation settings"
                 onMouseDown={(event) => event.preventDefault()}
                 onMouseEnter={closeWorktreeMenu}
                 onClick={() => {
@@ -383,7 +434,7 @@ function WorkspaceModePicker({
                   className="size-4 shrink-0 text-content/45"
                   strokeWidth={1.75}
                 />
-                <span className="flex-1">Worktree settings</span>
+                <span className="flex-1">Isolation settings</span>
               </button>
             </div>
           ) : null}
@@ -532,7 +583,7 @@ export function WorktreeBasePicker({
       <GitPickerTrigger
         disabled={!enabled}
         title={`Create from ${selected}`}
-        aria-label={`Create worktree from ${selected}`}
+        aria-label={`Select base branch ${selected}`}
         aria-haspopup="dialog"
         aria-expanded={open}
         onMouseDown={(event) => event.preventDefault()}

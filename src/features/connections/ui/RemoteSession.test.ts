@@ -11,6 +11,8 @@ import type { Block, Session } from "../../sessions/model/session";
 import type { AgentModel } from "../../sessions/model/models";
 import { rememberRemoteProject } from "../model/remoteProjects";
 import { preloadRemoteSession } from "./RemoteSession";
+import { remoteSessionActions } from "../model/remoteSessionActions";
+import { remotePath } from "../model/remoteProjects";
 import { rememberRemoteSession, remoteSessionFor } from "../model/connections";
 import "../model/remoteCommands";
 import type {
@@ -122,9 +124,20 @@ let currentBranch: string;
 let createdBranch: string | undefined;
 let createdWorktree: string | undefined;
 let deletedSessions: string[];
+let cowSupported: boolean;
+let createdCowCount: number;
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const storage = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => storage.set(key, value),
+    removeItem: (key: string) => storage.delete(key),
+    clear: () => storage.clear(),
+    key: (index: number) => [...storage.keys()][index] ?? null,
+    get length() { return storage.size; },
+  });
   localStorage.clear();
   localStorage.setItem("monocode.modelControls", "beside");
   commands = [];
@@ -137,6 +150,8 @@ beforeEach(() => {
   createdBranch = undefined;
   createdWorktree = undefined;
   deletedSessions = [];
+  cowSupported = true;
+  createdCowCount = 0;
   catalog = { models: { codex: [gpt] }, errors: {} };
   providers = ["codex"];
   projectKey = rememberRemoteProject("env", {
@@ -163,7 +178,7 @@ beforeEach(() => {
         environmentId: "env",
         name: "home",
         providers,
-        capabilities: ["attachments.upload", "sessions.plan", "sessions.draft"],
+        capabilities: ["attachments.upload", "sessions.plan", "sessions.draft", "workspace.cow.v1"],
       };
     if (method === "models.list") {
       if (catalog instanceof Error) throw catalog.message;
@@ -213,6 +228,12 @@ beforeEach(() => {
             : []),
         ],
       };
+    if (operation === "cow_list") return [{ id: "prepared-copy", sessionId: "release-operation", path: "/home/me/repo-cow/prepared", sourceCwd: "/home/me/repo", projectCwd: "/home/me/repo", head: "abc" }];
+    if (operation === "cow_capability") return { supported: cowSupported, reason: cowSupported ? undefined : "Unsupported filesystem" };
+    if (operation === "cow_create") {
+      createdCowCount++;
+      return { id: "cow-copy", path: "/home/me/repo-cow/session", sourceCwd: "/home/me/repo", head: "abc" };
+    }
     if (method === "git.worktreeCreate") {
       createdBranch = params.branch;
       createdWorktree = `/home/me/repo-worktrees/wt-${params.branch.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
@@ -260,8 +281,8 @@ afterEach(() => {
   act(() => root.unmount());
   container.remove();
   document.body.innerHTML = "";
-  vi.unstubAllGlobals();
   localStorage.clear();
+  vi.unstubAllGlobals();
 });
 
 /** A minimal host engine: persists commands the way the real one does. */
@@ -276,6 +297,7 @@ function dispatch(command: HostCommand) {
       session: {
         id: "host-session",
         cwd: command.worktreeCwd ?? "/home/me/repo",
+        cowId: command.cowId,
         harness: command.harness,
         model: command.model,
         modelSettings: command.modelSettings ?? {},
@@ -811,10 +833,10 @@ it("creates a host worktree through the composer and selects it", async () => {
   await render();
   await act(async () => byLabel("Workspace Current checkout")!.click());
   expect(
-    document.body.querySelector('[aria-label="Workspace"]'),
+    document.body.querySelector('[aria-label="Isolation"]'),
   ).not.toBeNull();
   expect(document.body.textContent).toContain("Existing worktree…");
-  expect(document.body.textContent).not.toContain("Worktree settings");
+  expect(document.body.textContent).not.toContain("Isolation settings");
   expect(
     document.body.querySelector('[aria-label="Existing worktrees"]'),
   ).toBeNull();
@@ -826,14 +848,14 @@ it("creates a host worktree through the composer and selects it", async () => {
   ].find((button) => button.textContent?.trim() === "New worktree");
   await act(async () => create!.click());
   expect(byLabel("Workspace New worktree")).not.toBeNull();
-  expect(byLabel("Create worktree from main")).not.toBeNull();
+  expect(byLabel("Select base branch main")).not.toBeNull();
   expect(byLabel("Branch main")).toBeNull();
-  await act(async () => byLabel("Create worktree from main")!.click());
+  await act(async () => byLabel("Select base branch main")!.click());
   const devBase = [
     ...document.body.querySelectorAll<HTMLButtonElement>('[role="option"]'),
   ].find((button) => button.textContent?.trim() === "dev");
   await act(async () => devBase!.click());
-  expect(byLabel("Create worktree from dev")).not.toBeNull();
+  expect(byLabel("Select base branch dev")).not.toBeNull();
   expect(invoke).not.toHaveBeenCalledWith(
     "remote_request",
     expect.objectContaining({ method: "git.worktreeCreate" }),
@@ -1073,4 +1095,209 @@ it("ignores a late create response after its tab has switched conversations", as
   expect(remoteSessionFor("shell")).toBe("different-session");
   expect(commands.map((command) => command.type)).toEqual(["create"]);
   expect(container.textContent).not.toContain("Pending first message");
+});
+
+it("starts copy-on-write remotely with the shell ownership ID and clone cwd", async () => {
+  localStorage.setItem("monocode.defaultIsolationMode", "cow");
+  await render({ ...shell(), worktreeBase: "feature/base" });
+  expect(byLabel("Workspace New copy-on-write")).not.toBeNull();
+  await send("Work in the copy");
+  const request = vi.mocked(invoke).mock.calls.find(([, input]) => {
+    const params = (input as { params?: { command?: string } })?.params;
+    return params?.command === "cow_create";
+  })?.[1] as { params: { args: Record<string, unknown> } };
+  expect(request.params.args).toMatchObject({ cwd: "/home/me/repo", projectCwd: "/home/me/repo", sessionId: "shell", base: "feature/base" });
+  expect(commands[0]).toMatchObject({ type: "create", cowId: "cow-copy", worktreeCwd: "/home/me/repo-cow/session" });
+  expect(createdCowCount).toBe(1);
+  expect(container.querySelector('[aria-label="Workspace Copy-on-write"]')).not.toBeNull();
+});
+it("blocks unsupported remote CoW without creating a local or worktree session", async () => {
+  cowSupported = false;
+  await render({ ...shell(), workspaceMode: "cow" });
+  await send("Work in the copy");
+  expect(commands).toEqual([]);
+  expect(createdCowCount).toBe(0);
+  expect(document.body.textContent).toContain("Unsupported filesystem");
+});
+
+it.each([false, true])("reuses a prepared CoW copy after a lost create response (remount: %s)", async (remount) => {
+  localStorage.setItem("monocode.defaultIsolationMode", "cow");
+  const original = vi.mocked(invoke).getMockImplementation()!;
+  let accepted: ReturnType<typeof dispatch> | undefined;
+  vi.mocked(invoke).mockImplementation(async (command, input) => {
+    const request = input as { method?: string; params?: HostCommand } | undefined;
+    if (request?.method === "commands.dispatch" && request.params?.type === "create") {
+      if (accepted) return accepted;
+      accepted = dispatch(request.params);
+      throw new Error("Response lost after acceptance");
+    }
+    return original(command, input);
+  });
+  await render();
+  await send("Keep this copy");
+  expect(createdCowCount).toBe(1);
+  if (remount) {
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    await render();
+  }
+  const retry = [...container.querySelectorAll("button")].find((button) => button.textContent === "Retry")!;
+  await act(async () => retry.click());
+  await settle();
+  expect(createdCowCount).toBe(1);
+  expect(commands.map((command) => command.type)).toEqual(["create", "send"]);
+  expect(commands[0]).toMatchObject({ cowId: "cow-copy", worktreeCwd: "/home/me/repo-cow/session" });
+});
+
+it("uses an existing owned copy and settles with the final remote assistant response", async () => {
+  const onSettled = vi.fn();
+  await render({ ...shell(), id: "release-operation", cowId: "prepared-copy", worktreeCwd: remotePath("env", "/home/me/repo-cow/prepared") });
+  const actions = remoteSessionActions("release-operation")!;
+  await act(async () => { expect(actions.submit("Resolve conflicts", [], { onSettled })).toBe(true); });
+  await settle();
+  expect(createdCowCount).toBe(0);
+  expect(commands[0]).toMatchObject({ type: "create", cowId: "prepared-copy", worktreeCwd: "/home/me/repo-cow/prepared" });
+  expect(onSettled).toHaveBeenCalledExactlyOnceWith({ status: "completed", text: "Done" });
+});
+it("rejects an existing remote copy with another session owner", async () => {
+  const onSettled = vi.fn();
+  await render({ ...shell(), cowId: "prepared-copy", worktreeCwd: remotePath("env", "/home/me/repo-cow/prepared") });
+  await act(async () => { remoteSessionActions("shell")!.submit("Resolve conflicts", [], { onSettled }); });
+  await settle();
+  expect(commands).toEqual([]);
+  expect(onSettled).toHaveBeenCalledWith(expect.objectContaining({ status: "failed", error: expect.stringContaining("ownership") }));
+});
+
+it("settles an interrupted remote turn as failure", async () => {
+  const original = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation(async (command, input) => {
+    const result = await original(command, input);
+    const request = input as { method?: string; params?: HostCommand } | undefined;
+    if (request?.method === "commands.dispatch" && request.params?.type === "send") {
+      host = { ...host!, revision: host!.revision + 1, status: "interrupted" };
+    }
+    return result;
+  });
+  await render({ ...shell(), id: "release-operation", cowId: "prepared-copy", worktreeCwd: remotePath("env", "/home/me/repo-cow/prepared") });
+  const onSettled = vi.fn();
+  await act(async () => { remoteSessionActions("release-operation")!.submit("Resolve", [], { onSettled }); });
+  await settle();
+  expect(onSettled).toHaveBeenCalledExactlyOnceWith({ status: "failed", text: "Done", error: "Remote provider turn was interrupted" });
+});
+
+it.each(["create", "worktree"])(
+  "settles the first turn when the host rejects %s creation",
+  async (failure) => {
+    const original = vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation(async (command, input) => {
+      const request = input as
+        { method?: string; params?: HostCommand } | undefined;
+      if (
+        (failure === "create" &&
+          request?.method === "commands.dispatch" &&
+          request.params?.type === "create") ||
+        (failure === "worktree" && request?.method === "git.worktreeCreate")
+      )
+        throw new Error("Host rejected request: creation unavailable");
+      return original(command, input);
+    });
+    const onSettled = vi.fn();
+    await render({
+      ...shell(),
+      workspaceMode: failure === "worktree" ? "worktree" : "current",
+    });
+    await act(async () => {
+      expect(
+        remoteSessionActions("shell")!.submit("Resolve conflicts", [], {
+          onSettled,
+        }),
+      ).toBe(true);
+    });
+    await settle();
+    expect(onSettled).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        status: "failed",
+        error: expect.stringContaining("creation unavailable"),
+      }),
+    );
+  },
+);
+
+it("keeps an ambiguous create response unsettled until retry delivers the turn", async () => {
+  const original = vi.mocked(invoke).getMockImplementation()!;
+  let accepted: ReturnType<typeof dispatch> | undefined;
+  vi.mocked(invoke).mockImplementation(async (command, input) => {
+    const request = input as
+      { method?: string; params?: HostCommand } | undefined;
+    if (
+      request?.method === "commands.dispatch" &&
+      request.params?.type === "create"
+    ) {
+      if (accepted) return accepted;
+      accepted = dispatch(request.params);
+      throw new Error("Response lost after acceptance");
+    }
+    return original(command, input);
+  });
+  const onSettled = vi.fn();
+  await render();
+  await act(async () => {
+    expect(
+      remoteSessionActions("shell")!.submit("Resolve conflicts", [], {
+        onSettled,
+      }),
+    ).toBe(true);
+  });
+  await settle();
+  expect(onSettled).not.toHaveBeenCalled();
+  const retry = [...container.querySelectorAll("button")].find(
+    (button) => button.textContent === "Retry",
+  )!;
+  await act(async () => retry.click());
+  await settle();
+  expect(onSettled).toHaveBeenCalledExactlyOnceWith({
+    status: "completed",
+    text: "Done",
+  });
+});
+
+it("settles the tracked first turn when an ambiguous create retry is rejected", async () => {
+  const original = vi.mocked(invoke).getMockImplementation()!;
+  let attempts = 0;
+  vi.mocked(invoke).mockImplementation(async (command, input) => {
+    const request = input as
+      { method?: string; params?: HostCommand } | undefined;
+    if (
+      request?.method === "commands.dispatch" &&
+      request.params?.type === "create"
+    )
+      throw new Error(
+        ++attempts === 1
+          ? "Response lost"
+          : "Host rejected request: creation unavailable",
+      );
+    return original(command, input);
+  });
+  const onSettled = vi.fn();
+  await render();
+  await act(async () => {
+    expect(
+      remoteSessionActions("shell")!.submit("Resolve conflicts", [], {
+        onSettled,
+      }),
+    ).toBe(true);
+  });
+  await settle();
+  expect(onSettled).not.toHaveBeenCalled();
+  const retry = [...container.querySelectorAll("button")].find(
+    (button) => button.textContent === "Retry",
+  )!;
+  await act(async () => retry.click());
+  await settle();
+  expect(onSettled).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      status: "failed",
+      error: expect.stringContaining("creation unavailable"),
+    }),
+  );
 });

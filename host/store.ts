@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
+import { lstatSync } from "node:fs";
 import { randomUUID, createHash, randomBytes } from "node:crypto";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, isAbsolute } from "node:path";
 import type {
   CommandReceipt,
   HostProject,
@@ -18,6 +19,7 @@ export class HostStore {
   readonly db: DatabaseSync;
   readonly environmentId: string;
   readonly attachmentDir: string;
+  readonly isolationDir: string;
   // This process is the only session writer, so recently used snapshots are
   // served from memory instead of re-parsing whole transcripts. Callers must
   // treat returned values as immutable.
@@ -25,6 +27,7 @@ export class HostStore {
 
   constructor(path: string) {
     this.attachmentDir = join(dirname(path), "attachments");
+    this.isolationDir = join(dirname(path), "isolation");
     this.db = new DatabaseSync(path);
     this.db
       .exec(`PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;
@@ -33,7 +36,8 @@ export class HostStore {
       CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), snapshot TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS receipts (id TEXT PRIMARY KEY, signature TEXT NOT NULL, receipt TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS events (session_id TEXT NOT NULL REFERENCES sessions(id), revision INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(session_id, revision));
-      CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, name TEXT NOT NULL, hash TEXT NOT NULL UNIQUE);`);
+      CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, name TEXT NOT NULL, hash TEXT NOT NULL UNIQUE);
+      CREATE TABLE IF NOT EXISTS workspace_removals (path TEXT PRIMARY KEY, identity TEXT NOT NULL, sessions_json TEXT NOT NULL);`);
     const columns = this.db.prepare("PRAGMA table_info(sessions)").all();
     if (!columns.some((column) => column.name === "summary"))
       this.db.exec("ALTER TABLE sessions ADD COLUMN summary TEXT");
@@ -45,6 +49,13 @@ export class HostStore {
         .prepare("SELECT value FROM metadata WHERE key='environmentId'")
         .get()!.value,
     );
+    for (const row of this.db.prepare("SELECT path FROM workspace_removals").all()) {
+      try {
+        this.finishCowRemoval(String(row.path), true);
+      } catch (error) {
+        console.error("Workspace removal recovery will retry on restart:", error);
+      }
+    }
   }
 
   transaction<T>(fn: () => T): T {
@@ -224,6 +235,77 @@ export class HostStore {
     });
   }
 
+  cowWorkspaceSessions(cowId: string, path: string): HostSession[] {
+    return this.sessions().filter((value) => {
+      const cwd = value.session.worktreeCwd || value.session.cwd;
+      const rel = relative(path, cwd);
+      return !value.session.worktreeRemoved &&
+        (value.session.cowId === cowId || rel === "" || (!rel.startsWith("..") && !isAbsolute(rel)));
+    });
+  }
+
+  prepareCowRemoval(cowId: string, path: string, projectCwd: string, keepSessions: boolean, expectedRootIdentity: readonly [string, string]): HostSession[] {
+    return this.transaction(() => {
+      const sessions = this.cowWorkspaceSessions(cowId, path);
+      if (sessions.some((value) => value.status === "running"))
+        throw new Error("Stop the sessions using this workspace first");
+      if (!keepSessions && sessions.length)
+        throw new Error("Sessions still use this workspace. Move or delete those sessions first (including archived sessions).");
+      const identity = workspaceIdentity(path);
+      if (!identity || identity.device !== expectedRootIdentity[0] || identity.inode !== expectedRootIdentity[1])
+        throw new Error("Copy-on-write checkout was replaced");
+      this.db.prepare("INSERT INTO workspace_removals VALUES (?, ?, ?)").run(
+        path,
+        JSON.stringify(identity),
+        JSON.stringify(sessions),
+      );
+      for (const value of sessions) {
+        this.save({
+          ...value,
+          revision: value.revision + 1,
+          session: {
+            ...value.session,
+            cwd: projectCwd,
+            worktreeCwd: value.session.worktreeCwd || value.session.cwd,
+            worktreeRemoved: true,
+            cowId: undefined,
+            cowSourceCwd: undefined,
+            workspaceMode: undefined,
+            worktreeBase: undefined,
+            branch: undefined,
+            providerSessionId: undefined,
+            context: undefined,
+            pendingSwitch: undefined,
+            pendingQuestion: undefined,
+            busy: false,
+            queueStatus: "paused",
+          },
+        }, { type: "workspace.removed", path });
+      }
+      return sessions;
+    });
+  }
+
+  /** Finish deletion or restore only the original surviving checkout after failure/restart. */
+  finishCowRemoval(path: string, failed = false): boolean {
+    const row = this.db.prepare("SELECT identity, sessions_json FROM workspace_removals WHERE path=?").get(path);
+    if (!row) return false;
+    const identity = failed ? workspaceIdentity(path) : null;
+    const survives = !!identity && JSON.stringify(identity) === String(row.identity);
+    this.transaction(() => {
+      if (survives) {
+        for (const previous of JSON.parse(String(row.sessions_json)) as HostSession[]) {
+          const current = this.find(previous.session.id);
+          // A session may have been deleted or reattached while recovery was pending.
+          if (!current?.session.worktreeRemoved || current.revision !== previous.revision + 1) continue;
+          this.save({ ...previous, revision: current.revision + 1 }, { type: "workspace.removalFailed" });
+        }
+      }
+      this.db.prepare("DELETE FROM workspace_removals WHERE path=?").run(path);
+    });
+    return !survives;
+  }
+
   deleteSession(id: string): void {
     this.transaction(() => {
       const current = this.session(id);
@@ -325,6 +407,7 @@ export function summary(value: HostSession): HostSessionSummary {
     updatedAt: value.updatedAt,
     id: value.session.id,
     cwd: value.session.cwd,
+    cowId: value.session.cowId,
     title: value.session.title,
     harness: value.session.harness as RemoteProvider,
     model: value.session.model,
@@ -360,4 +443,17 @@ export function blockRevisions(
         : next.revision;
   }
   return revisions;
+}
+
+/** Keep replaced roots and Git directories detached; errors other than absence retain the journal. */
+function workspaceIdentity(path: string): { device: string; inode: string; gitDevice: string; gitInode: string } | null {
+  try {
+    const root = lstatSync(path, { bigint: true });
+    const git = lstatSync(join(path, ".git"), { bigint: true });
+    if (!root.isDirectory() || !git.isDirectory()) return null;
+    return { device: String(root.dev), inode: String(root.ino), gitDevice: String(git.dev), gitInode: String(git.ino) };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
 }

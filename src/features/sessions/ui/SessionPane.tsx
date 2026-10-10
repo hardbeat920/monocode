@@ -697,6 +697,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
           ? !remoteSessionStarted
           : (isEmpty || !!session.workspaceMode) && !session.worktreeCwd)
       }
+      cowId={session.cowId}
       workspaceMode={session.workspaceMode}
       worktreeBase={session.worktreeBase}
       onWorkspaceModeChange={(mode, base) =>

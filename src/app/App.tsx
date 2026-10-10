@@ -1,3 +1,11 @@
+import {
+  createCowWorkspace,
+  listCowWorkspaces,
+  applyCowWorkspace,
+  removeCowWorkspace,
+  checkCowRemoval,
+} from "../features/source-control/model/cow";
+import { loadDefaultIsolationMode } from "../features/settings/model/settings";
 import { sessionConversationPage } from "../features/agent-app/model/sessionConversation";
 import { readMonoConversation } from "../features/monos/model/monoConversation";
 import {
@@ -113,6 +121,7 @@ import {
   type WorktreeFocus,
   useWorktreeFocus,
   worktreeFocus,
+  setWorktreeFocus,
 } from "../features/source-control/model/worktreeFocus";
 import {
   assertWorktreeFilesClosed,
@@ -1069,6 +1078,7 @@ function Workspace({
   const [sessionDeleteDialog, setSessionDeleteDialog] = useState<{
     title: string;
     unusedWorktree: string;
+    cow?: boolean;
     resolve: (choice: SessionDeleteChoice) => void;
   }>();
   const switchingWorktrees = useRef(new Map<string, string>());
@@ -1446,9 +1456,9 @@ function Workspace({
     tabWorkspace,
     moveSession: (id, tree, isCurrent) =>
       onWorktreeChange(id, tree, false, isCurrent),
-    activateTab: (id) => {
+    activateTab: (id, sessionId) => {
       if (tabsRef.current.some((tab) => tab.id === id)) {
-        activateTab(id, undefined, "workspace");
+        activateTab(id, sessionId, "workspace");
       } else {
         // A newly created tab has not rendered into tabsRef yet.
         closeMonoView();
@@ -1457,6 +1467,17 @@ function Workspace({
       }
     },
     createTab: (project, focus) => createWorkspaceTab(project, focus),
+    openCowSession: async (project, focus, isCurrent) => {
+      if (!focus.sessionId || !focus.cowId) throw new Error("Copy-on-write workspace has no owning session");
+      const owner = await ensureOpenSession(focus.sessionId);
+      if (!owner || owner.worktreeRemoved || owner.cowId !== focus.cowId || !sameProjectPath(owner.cwd, project) || !sameProjectPath(sessionWorkCwd(owner), focus.path)) throw new Error("The owning copy-on-write session is unavailable");
+      if (!isCurrent()) return "";
+      const existing = tabsRef.current.find((tab) => leafIds(tab.layout).includes(owner.id));
+      if (existing) return existing.id;
+      const tab = newTab(owner.id);
+      appendTab(tab, project);
+      return tab.id;
+    },
   });
   // Every ordinary tab activation supersedes an unfinished workspace request,
   // including opening a session in the same tab or selecting a project.
@@ -2640,6 +2661,7 @@ function Workspace({
           active.modelSettings,
         ),
         providerAccountId: accountId,
+        ...(active.cowId ? { workspaceMode: "cow" as const, cowSourceCwd: sessionWorkCwd(active), worktreeBase: undefined } : {}),
       };
       const tab = newTab(session.id);
       setSessions((current) => [...current, session]);
@@ -2666,9 +2688,11 @@ function Workspace({
     (cwd: string, focus?: WorktreeFocus) => {
       const session = {
         ...newDefaultSession(cwd, sessionDefaults?.runtimeMode),
-        ...(focus && !sameProjectPath(focus.path, cwd)
-          ? { worktreeCwd: focus.path, branch: focus.branch ?? undefined }
-          : {}),
+        ...(focus?.cowId
+          ? { workspaceMode: "cow" as const, cowSourceCwd: focus.path, worktreeBase: undefined }
+          : focus && !sameProjectPath(focus.path, cwd)
+            ? { worktreeCwd: focus.path, branch: focus.branch ?? undefined, workspaceMode: undefined, worktreeBase: undefined }
+            : {}),
       };
       const tab = newTab(session.id);
       setSessions((prev) => [...prev, session]);
@@ -2876,6 +2900,11 @@ function Workspace({
         sessionDefaults?.cwd ?? projectCwd,
         sessionDefaults?.runtimeMode,
       );
+      if (sessionDefaults?.cowId) {
+        session.workspaceMode = "cow";
+        session.cowSourceCwd = sessionWorkCwd(sessionDefaults);
+        session.worktreeBase = undefined;
+      }
       setSessions((prev) => [...prev, session]);
       setTabs((prev) =>
         prev.map((t) => {
@@ -2889,7 +2918,7 @@ function Workspace({
       );
       setComposerFocused(true);
     },
-    [activeTab, projectCwd, sessionDefaults?.cwd, sessionDefaults?.runtimeMode],
+    [activeTab, projectCwd, sessionDefaults],
   );
 
   const focusProjectTerminal = useCallback(() => {
@@ -3587,9 +3616,13 @@ function Workspace({
             oldSession.runtimeMode,
             oldSession.modelSettings,
           ),
-          ...(workspace && !sameProjectPath(workspace, oldSession.cwd)
+          ...((oldSession.cowId && sameProjectPath(workspace || "", sessionWorkCwd(oldSession))) || (focus?.cowId && sameProjectPath(focus.path, workspace || ""))
+            ? { workspaceMode: "cow" as const, cowSourceCwd: workspace || undefined, worktreeBase: undefined }
+            : workspace && !sameProjectPath(workspace, oldSession.cwd)
             ? {
                 worktreeCwd: workspace,
+                workspaceMode: undefined,
+                worktreeBase: undefined,
                 branch:
                   (focus && sameProjectPath(focus.path, workspace)
                     ? focus.branch
@@ -4395,6 +4428,13 @@ function Workspace({
         void refreshHistory(sidebarCwd);
         return null;
       }
+      if (restored.cowId) {
+        const copies = await listCowWorkspaces(restored.cwd).catch(() => undefined);
+        if (copies && !copies.some((copy) =>
+          copy.id === restored.cowId && copy.sessionId === restored.id &&
+          sameProjectPath(copy.path, sessionWorkCwd(restored))))
+          restored.worktreeRemoved = true;
+      }
       loadedSessionCache.current.delete(sessionId);
       const appeared = sessionsRef.current.find(
         (session) => session.id === sessionId,
@@ -5040,7 +5080,11 @@ function Workspace({
   const onCheckWorktreeRemoval = useCallback(
     async (cwd: string, path: string, force: boolean) => {
       checkOpenWorktreeFiles(path);
-      await checkWorktreeRemoval(cwd, path, force);
+      const copy = (await listCowWorkspaces(cwd)).find(
+        (workspace) => pathKey(workspace.path) === pathKey(path),
+      );
+      if (copy) await checkCowRemoval(cwd, copy.id, force);
+      else await checkWorktreeRemoval(cwd, path, force);
       // Re-read UI state after the native check, before deleting sessions.
       checkOpenWorktreeFiles(path);
     },
@@ -5066,10 +5110,14 @@ function Workspace({
           );
         }
         await onCheckWorktreeRemoval(cwd, path, force);
-        const listed = await listWorktrees(cwd);
-        const tree = listed.worktrees.find(
-          (entry) => pathKey(entry.path) === pathKey(path),
+        const copy = (await listCowWorkspaces(cwd)).find(
+          (workspace) => pathKey(workspace.path) === pathKey(path),
         );
+        const tree = copy
+          ? { path: copy.path, sessionIds: copy.sessionIds ?? [] }
+          : (await listWorktrees(cwd)).worktrees.find(
+              (entry) => pathKey(entry.path) === pathKey(path),
+            );
         if (!tree) throw new Error("This worktree is no longer available.");
         const ids = worktreeSessionIds(tree, sessionsRef.current);
         if (!keepSessions && ids.length) {
@@ -5119,7 +5167,9 @@ function Workspace({
         }
         await flushSessionWrites();
         checkOpenWorktreeFiles(path);
-        const removed = await removeWorktree(cwd, path, force, keepSessions);
+        const removed = copy
+          ? await removeCowWorkspace(cwd, copy.id, force, keepSessions)
+          : await removeWorktree(cwd, path, force, keepSessions);
         const affected = new Set([...ids, ...removed.sessionIds]);
         if (isEqualOrInside(projectCwdRef.current, path)) {
           setProjectCwd(removed.projectCwd);
@@ -5203,7 +5253,23 @@ function Workspace({
       if (mode === "delete" && !skipDeleteConfirm) {
         deleteConfirmationPending.current = true;
         let unusedWorktree: string | undefined;
-        if (seed?.worktreeCwd) {
+        if (seed?.cowId && seed.worktreeCwd) {
+          try {
+            const copies = await listCowWorkspaces(seed.cwd);
+            const copy = copies.find((entry) =>
+              entry.id === seed.cowId && sameProjectPath(entry.path, seed.worktreeCwd!),
+            );
+            if (
+              copy && copy.sessionId === sessionId &&
+              worktreeSessionIds(
+                { path: copy.path, sessionIds: copy.sessionIds ?? [] },
+                sessionsRef.current,
+              ).every((id) => id === sessionId)
+            ) unusedWorktree = copy.path;
+          } catch {
+            // A failed lookup must never offer filesystem cleanup.
+          }
+        } else if (seed?.worktreeCwd) {
           try {
             const { worktrees } = await listWorktrees(seed.cwd);
             const tree = worktrees.find(
@@ -5227,7 +5293,12 @@ function Workspace({
           deleteConfirmationPending.current = false;
         } else {
           const choice = await new Promise<SessionDeleteChoice>((resolve) => {
-            setSessionDeleteDialog({ title: label, unusedWorktree, resolve });
+            setSessionDeleteDialog({
+              title: label,
+              unusedWorktree,
+              cow: !!seed?.cowId,
+              resolve,
+            });
           });
           deleteConfirmationPending.current = false;
           if (!choice.confirmed) {
@@ -5379,7 +5450,7 @@ function Workspace({
             await onRemoveWorktree(seed.cwd, deleteWorktreePath, false);
           } catch (error) {
             void message(
-              `The session was deleted. Its worktree was kept.\n\n${String(error)}\n\nYou can manage it in Settings → Worktrees.`,
+              `The session was deleted. Its isolated workspace was kept.\n\n${String(error)}\n\nYou can manage it in Settings → Work Isolation.`,
               { title: "MonoCode", kind: "warning" },
             );
           }
@@ -5703,6 +5774,7 @@ function Workspace({
       const normalized = normalizeProjectPath(cwd);
       const current = sessionsRef.current.find((s) => s.id === sessionId);
       const previous = current?.cwd;
+      if (current?.cowId && sameProjectPath(current.cwd, normalized)) return;
       // Threads stay bound to their project. Switching from the composer opens a
       // new tab instead of retargeting the conversation.
       if (
@@ -5710,7 +5782,7 @@ function Workspace({
         previous &&
         looksLikeProject(previous) &&
         !sameProjectPath(previous, normalized) &&
-        !isBlankSession(current)
+        (!isBlankSession(current) || !!current.cowId)
       ) {
         setProjectCwd(normalized);
         setRecents(rememberProject(normalized));
@@ -5756,6 +5828,8 @@ function Workspace({
             cwd: normalized,
             branch: undefined,
             worktreeCwd: undefined,
+            cowId: undefined,
+            cowSourceCwd: undefined,
             worktreeRemoved: undefined,
             workspaceMode: undefined,
             worktreeBase: undefined,
@@ -5818,17 +5892,17 @@ function Workspace({
           ) {
             return session;
           }
-          return mode === "worktree"
-            ? base || session.worktreeBase
-              ? {
-                  ...session,
-                  workspaceMode: "worktree",
-                  worktreeBase: base || session.worktreeBase,
-                }
-              : session
+          return mode === "worktree" || mode === "cow"
+            ? {
+                ...session,
+                workspaceMode: mode,
+                cowSourceCwd: mode === "cow" ? session.cowSourceCwd : undefined,
+                worktreeBase: base || session.worktreeBase || "HEAD",
+              }
             : {
                 ...session,
                 workspaceMode: undefined,
+                cowSourceCwd: undefined,
                 worktreeBase: undefined,
               };
         }),
@@ -5846,7 +5920,7 @@ function Workspace({
             (!!session.workspaceMode &&
               !session.worktreeCwd &&
               !session.busy)) &&
-          session.workspaceMode === "worktree"
+          (session.workspaceMode === "worktree" || session.workspaceMode === "cow")
             ? { ...session, worktreeBase: base }
             : session,
         ),
@@ -5876,6 +5950,9 @@ function Workspace({
       }
       if (
         !current.worktreeRemoved &&
+        !current.cowId &&
+        current.workspaceMode !== "cow" &&
+        current.workspaceMode !== "worktree" &&
         pathKey(sessionWorkCwd(current)) === pathKey(tree.path)
       )
         return;
@@ -6839,6 +6916,8 @@ function Workspace({
       const initialWorkCwd = sessionWorkCwd(current);
       const createDraftWorktree =
         !current.worktreeCwd && current.workspaceMode === "worktree";
+      const createDraftCow =
+        !current.worktreeCwd && !current.cowId && current.workspaceMode === "cow";
       const accountProvider = supportsProviderAccounts(current.harness)
         ? current.harness
         : undefined;
@@ -7308,7 +7387,7 @@ function Workspace({
               ...selected,
               providerAccountId,
               usageLimit: undefined,
-              worktreePreparing: createDraftWorktree
+              worktreePreparing: createDraftWorktree || createDraftCow
                 ? true
                 : selected.worktreePreparing,
               inboxCard:
@@ -7519,6 +7598,27 @@ function Workspace({
       let completedProposal: OrchestrationProposal | undefined;
       void (async () => {
         let workCwd = initialWorkCwd;
+        if (current.cowId) {
+          const copies = await listCowWorkspaces(current.cwd);
+          if (!copies.some((copy) => copy.id === current.cowId && copy.sessionId === sessionId && sameProjectPath(copy.path, workCwd))) {
+            setSessions((prev) => prev.map((session) => session.id === sessionId ? { ...session, worktreeRemoved: true } : session));
+            throw new Error("This copy-on-write workspace is unavailable. Its session cannot continue in the source checkout.");
+          }
+        }
+        if (createDraftCow) {
+          const copy = await createCowWorkspace(current.cowSourceCwd || current.cwd, sessionId, current.cwd, current.worktreeBase);
+          workCwd = copy.path;
+          workspacePins.current.set(sessionId, copy.path);
+          for (const tab of tabsRef.current) {
+            if (tab.focusedId === sessionId || (leafIds(tab.layout).length === 1 && leafIds(tab.layout)[0] === sessionId)) workspacePins.current.set(tab.id, copy.path);
+          }
+          if (activeSessionIdRef.current === sessionId) setWorktreeFocus(current.cwd, { path: copy.path, branch: copy.branch ?? null, cowId: copy.id, sessionId });
+          if (proposalDraft) proposalDraft = { ...proposalDraft, checkoutCwd: copy.path };
+          const prepared = { ...current, worktreeCwd: copy.path, cowId: copy.id, branch: copy.branch ?? undefined, workspaceMode: undefined, cowSourceCwd: undefined, worktreePreparing: undefined };
+          setSessions((prev) => prev.map((session) => session.id === sessionId ? { ...session, ...prepared, blocks: session.blocks, busy: session.busy } : session));
+          await upsertSession({ ...prepared, blocks: sessionsRef.current.find((session) => session.id === sessionId)?.blocks ?? prepared.blocks });
+          notifyReviewChanged(sessionId);
+        }
         if (createDraftWorktree) {
           const tree = await createWorktree(
             current.cwd,
@@ -8300,7 +8400,7 @@ function Workspace({
                   !entry.worktreeRemoved &&
                   !automationSessionReservations.current.has(entry.id) &&
                   (automation.workspaceMode === "current"
-                    ? entry.workspaceMode !== "worktree" &&
+                    ? !entry.workspaceMode &&
                       !entry.worktreeCwd &&
                       pathKey(entry.cwd) === pathKey(automation.cwd)
                     : automation.workspaceMode === "existing"
@@ -8324,12 +8424,12 @@ function Workspace({
               : formatSessionTitle(automation.harness, automation.name),
             automationId: automation.id,
             ...(linkedWorkItem ? { linkedWorkItem } : {}),
-            ...(automation.workspaceMode === "worktree"
-              ? { workspaceMode: "worktree" as const, worktreeBase: "HEAD" }
+            ...(automation.workspaceMode === "worktree" || automation.workspaceMode === "cow"
+              ? { workspaceMode: automation.workspaceMode, worktreeBase: "HEAD" }
               : automation.workspaceMode === "existing" &&
                   automation.worktreeCwd
-                ? { worktreeCwd: automation.worktreeCwd }
-                : {}),
+                ? { worktreeCwd: automation.worktreeCwd, workspaceMode: undefined, worktreeBase: undefined }
+                : { workspaceMode: undefined, worktreeBase: undefined }),
           };
           const nextSessions = [...sessionsRef.current, session];
           sessionsRef.current = nextSessions;
@@ -9192,7 +9292,19 @@ function Workspace({
       });
       const session = {
         ...newSession(harness, source.cwd, model, source.runtimeMode),
-        worktreeCwd: source.worktreeCwd,
+        ...(source.cowId
+          ? {
+              workspaceMode: "cow" as const,
+              cowSourceCwd: sessionWorkCwd(source),
+              worktreeBase: undefined,
+            }
+          : source.worktreeCwd
+            ? {
+                worktreeCwd: source.worktreeCwd,
+                workspaceMode: undefined,
+                worktreeBase: undefined,
+              }
+            : { workspaceMode: undefined, worktreeBase: undefined }),
         branch: source.branch,
         modelSettings: mergeModelSettings(
           resolveModel(harness, model),
@@ -9811,7 +9923,19 @@ function Workspace({
       const display = sessionDisplayTitle(source.title, source.harness);
       const session = {
         ...newSession(harness, source.cwd, model, source.runtimeMode),
-        worktreeCwd: source.worktreeCwd,
+        ...(source.cowId
+          ? {
+              workspaceMode: "cow" as const,
+              cowSourceCwd: sessionWorkCwd(source),
+              worktreeBase: undefined,
+            }
+          : source.worktreeCwd
+            ? {
+                worktreeCwd: source.worktreeCwd,
+                workspaceMode: undefined,
+                worktreeBase: undefined,
+              }
+            : { workspaceMode: undefined, worktreeBase: undefined }),
         branch: source.branch,
         modelSettings: mergeModelSettings(
           resolveModel(harness, model),
@@ -10176,7 +10300,13 @@ function Workspace({
         const workspace =
           task.workspacePolicy === "shared"
             ? workspaceIdentity(projectCwd, leadCheckoutCwd)
-            : task.workspace
+            : task.workspace?.kind === "cow"
+              ? await listCowWorkspaces(projectCwd).then((copies) => {
+                  const copy = copies.find((entry) => entry.id === task.workspace!.cowId);
+                  if (!copy) throw new Error("This worker's retained copy-on-write workspace is missing.");
+                  return workspaceIdentity(projectCwd, copy.path, copy.branch ?? undefined, copy.id);
+                })
+              : task.workspace
               ? await listWorktrees(leadCheckoutCwd).then((listed) => {
                   const tree = listed.worktrees.find(
                     (entry) =>
@@ -10193,7 +10323,9 @@ function Workspace({
                     tree.branch ?? task.workspace!.branch,
                   );
                 })
-              : await createOrchestrationWorktree(
+              : loadDefaultIsolationMode() === "cow"
+                ? await createCowWorkspace(leadCheckoutCwd, task.sessionId, projectCwd).then((copy) => workspaceIdentity(projectCwd, copy.path, copy.branch ?? undefined, copy.id))
+                : await createOrchestrationWorktree(
                   leadCheckoutCwd,
                   orchestrationWorktreeBranchName(task.id),
                 ).then((tree) =>
@@ -10231,6 +10363,8 @@ function Workspace({
               ? undefined
               : checkoutCwd,
             branch: workspace.branch,
+            cowId: workspace.cowId,
+            workspaceMode: undefined,
             worktreeRemoved: false,
             runtimeMode: lead.runtimeMode,
             orchestrationLeadId: run.leadId,
@@ -10255,7 +10389,13 @@ function Workspace({
           ...newSession(task.harness, projectCwd, task.model, lead.runtimeMode),
           ...(sameProjectPath(projectCwd, checkoutCwd)
             ? {}
-            : { worktreeCwd: checkoutCwd, branch: workspace.branch }),
+            : {
+                worktreeCwd: checkoutCwd,
+                branch: workspace.branch,
+                cowId: workspace.cowId,
+                workspaceMode: undefined,
+                worktreeBase: undefined,
+              }),
           ...(task.modelSettings
             ? {
                 modelSettings: mergeModelSettings(
@@ -10276,6 +10416,8 @@ function Workspace({
               branch: sameProjectPath(projectCwd, checkoutCwd)
                 ? undefined
                 : workspace.branch,
+              cowId: workspace.cowId,
+              workspaceMode: undefined,
               worktreeRemoved: false,
               runtimeMode: lead.runtimeMode,
             }
@@ -10284,7 +10426,7 @@ function Workspace({
               id: task.sessionId,
               title: task.title,
             };
-        const worker = { ...base, orchestrationLeadId: run.leadId };
+        const worker = { ...base, workspaceMode: undefined, worktreeBase: undefined, orchestrationLeadId: run.leadId };
         if (worker.providerSessionId)
           bindHarnessSession(
             worker.harness,
@@ -10317,6 +10459,9 @@ function Workspace({
         await invoke("harness_kill", { sessionId: task.sessionId });
         await invoke("control_turn_finished", { sessionId: task.sessionId });
         await flushSessionCheckpoint(task.sessionId);
+        if (task.workspace?.kind === "cow" && task.workspace.cowId) {
+          return applyCowWorkspace(orchestrationProjectCwd(run), task.workspace.cowId, orchestrationCheckoutCwd(run));
+        }
         const listed = await listWorktrees(orchestrationCheckoutCwd(run));
         const workerTree = listed.worktrees.find((tree) =>
           sameProjectPath(tree.path, fromCwd),
@@ -10340,11 +10485,18 @@ function Workspace({
       },
       cleanupWorker: async (run, task, onlyIfUnchanged) => {
         const workspace = task.workspace;
-        if (!workspace || workspace.kind !== "worktree") return true;
+        if (!workspace) return true;
+        const cow = workspace.kind === "cow" && !!workspace.cowId;
+        if (!cow && workspace.kind !== "worktree") return true;
         const path = workspace.checkoutCwd;
         await flushSessionCheckpoint(task.sessionId);
-        const listed = await listWorktrees(orchestrationCheckoutCwd(run));
-        const exists = listed.worktrees.some(
+        const listed = cow
+          ? { worktrees: [] as Worktree[] }
+          : await listWorktrees(orchestrationCheckoutCwd(run));
+        const copy = cow
+          ? (await listCowWorkspaces(orchestrationProjectCwd(run))).find((entry) => entry.id === workspace.cowId && sameProjectPath(entry.path, path))
+          : undefined;
+        const exists = !!copy || listed.worktrees.some(
           (tree) => pathKey(tree.path) === pathKey(path),
         );
         if (!exists && onlyIfUnchanged) return false;
@@ -10355,7 +10507,7 @@ function Workspace({
           sameProjectPath(tree.path, orchestrationCheckoutCwd(run)),
         );
         if (
-          exists &&
+          !cow && exists &&
           (!workerTree || !leadTree || workerTree.head !== leadTree.head)
         ) {
           if (onlyIfUnchanged) return false;
@@ -10364,16 +10516,28 @@ function Workspace({
           );
         }
         if (onlyIfUnchanged) {
+          // The checkpoint distinguishes inherited dirty files from worker edits.
           const safe = await sessionCheckpointCleanupSafe(task.sessionId, path);
           if (!safe) return false;
+          if (cow) {
+            try {
+              await checkCowRemoval(orchestrationProjectCwd(run), workspace.cowId!, true);
+            } catch {
+              return false;
+            }
+          }
         } else if (exists) {
           // Re-verify immediately before destructive cleanup. The operation is
           // idempotent, so this also finishes a partially applied integration.
-          await applySessionCheckpoint(
-            task.sessionId,
-            path,
-            orchestrationCheckoutCwd(run),
-          );
+          if (cow) {
+            await applyCowWorkspace(orchestrationProjectCwd(run), workspace.cowId!, orchestrationCheckoutCwd(run));
+          } else {
+            await applySessionCheckpoint(
+              task.sessionId,
+              path,
+              orchestrationCheckoutCwd(run),
+            );
+          }
         }
 
         if (exists) {
@@ -10394,10 +10558,21 @@ function Workspace({
           });
           await flushSessionWrites();
           checkOpenWorktreeFiles(path);
-          const removed = await removeOrchestrationWorktree(
-            orchestrationCheckoutCwd(run),
-            path,
-          );
+          if (
+            onlyIfUnchanged &&
+            !(await sessionCheckpointCleanupSafe(task.sessionId, path))
+          )
+            return false;
+          const removed = cow
+            ? await removeCowWorkspace(orchestrationProjectCwd(run), workspace.cowId!, true, true).catch((error) => {
+                if (onlyIfUnchanged) return undefined;
+                throw error;
+              })
+            : await removeOrchestrationWorktree(
+                orchestrationCheckoutCwd(run),
+                path,
+              );
+          if (!removed) return false;
           const affected = new Set([task.sessionId, ...removed.sessionIds]);
           sessionsRef.current = sessionsRef.current.map((session) =>
             affected.has(session.id)
@@ -10434,7 +10609,7 @@ function Workspace({
             if (shouldPersistSession(next)) await upsertSession(next);
           }
         }
-        if (workspace.branch)
+        if (!cow && workspace.branch)
           await removeOrchestrationBranch(
             orchestrationCheckoutCwd(run),
             workspace.branch,
@@ -13148,6 +13323,7 @@ function Workspace({
             <DeleteSessionDialog
               title={sessionDeleteDialog.title}
               unusedWorktree={sessionDeleteDialog.unusedWorktree}
+              cow={sessionDeleteDialog.cow}
               onClose={(choice) => {
                 sessionDeleteDialog.resolve(choice);
                 setSessionDeleteDialog(undefined);

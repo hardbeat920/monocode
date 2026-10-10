@@ -9224,6 +9224,115 @@ mod tests {
     }
 
     #[test]
+    fn git_flows_use_native_cow_checkout_without_changing_source() {
+        let dir = tmp("git-cow-flows");
+        let source = dir.0.join("project");
+        std::fs::create_dir(&source).unwrap();
+        assert!(init_git_commit(
+            &source,
+            &[
+                ("demo.txt", "base\n"),
+                ("inherited.txt", "original\n"),
+                (".gitignore", "secret.env\n")
+            ],
+        ));
+        let store = dir.0.join("isolation");
+        let capability = monocode_isolation::dispatch(
+            &store,
+            serde_json::json!({"command":"cow_capability","args":{"cwd":source}}),
+        )
+        .unwrap();
+        if capability["supported"] != true {
+            assert_ne!(
+                std::env::var("MONOCODE_REQUIRE_COW").as_deref(),
+                Ok("1"),
+                "{capability}"
+            );
+            return;
+        }
+        let remote = dir.0.join("remote.git");
+        std::fs::create_dir(&remote).unwrap();
+        git_checked(&remote, &["init", "--bare", "--initial-branch=main"]).unwrap();
+        git_checked(
+            &source,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        )
+        .unwrap();
+        git_push_for(&source).unwrap();
+        git_checked(&source, &["remote", "set-head", "origin", "main"]).unwrap();
+        let source_head = git_stdout(&source, &["rev-parse", "HEAD"]).unwrap();
+        std::fs::write(source.join("inherited.txt"), "inherited dirty edit\n").unwrap();
+        std::fs::write(source.join("secret.env"), "secret\n").unwrap();
+        let workspace = monocode_isolation::dispatch(
+            &store,
+            serde_json::json!({"command":"cow_create","args":{"cwd":source,"sessionId":"desktop-git-flow"}}),
+        ).unwrap();
+        let copy = Path::new(workspace["path"].as_str().unwrap());
+        let index = git_diff_index_for(copy);
+        assert!(index.branch.as_deref().unwrap().starts_with("mc/"));
+        assert_eq!(index.remote.as_deref(), Some("origin"));
+        assert_eq!(index.default_branch.as_deref(), Some("main"));
+        assert!(index.upstream.is_none());
+        assert_eq!(index.files.len(), 1);
+        assert_eq!(index.files[0].relative, "inherited.txt");
+        std::fs::write(copy.join("demo.txt"), "base\nfeature\nlater\n").unwrap();
+        git_stage_file_for(copy, "demo.txt").unwrap();
+        assert!(git_diff_index_for(copy)
+            .files
+            .iter()
+            .any(|f| f.relative == "demo.txt" && f.staged));
+        git_unstage_file_for(copy, "demo.txt").unwrap();
+        git_stage_contents_for(copy, "demo.txt", b"base\nfeature\n").unwrap();
+        assert_eq!(
+            git_file_diff_for(copy, "demo.txt", true).unwrap().current,
+            "base\nfeature\n"
+        );
+        assert_eq!(
+            git_file_diff_for(copy, "demo.txt", false).unwrap().original,
+            "base\nfeature\n"
+        );
+        git_discard_file_for(copy, "demo.txt").unwrap();
+        git_discard_file_for(copy, "inherited.txt").unwrap();
+        git_commit_for(copy, "Feature").unwrap();
+        git_commit_amend_for(copy, "Amended feature").unwrap();
+        assert!(git_diff_index_for(copy).files.is_empty());
+        assert_eq!(
+            git_head_message_for(copy).unwrap().trim(),
+            "Amended feature"
+        );
+        assert!(git_history_for(copy, Some(20))
+            .unwrap()
+            .commits
+            .iter()
+            .any(|c| c.subject == "Amended feature"));
+        let range = git_range_context_for(copy).unwrap();
+        assert_eq!(range.base, "main");
+        assert!(range.head.starts_with("mc/"));
+        assert!(range.diff_patch.contains("+feature"));
+        assert!(!range.diff_patch.contains("inherited dirty edit"));
+        assert!(!range.diff_patch.contains("secret.env"));
+        git_push_for(copy).unwrap();
+        assert!(git_diff_index_for(copy).upstream.is_some());
+        git_checked(copy, &["pull", "--ff-only"]).unwrap();
+        git_sync_changes_for(copy).unwrap();
+        git_checkout_for(copy, "main", None).unwrap();
+        git_checkout_for(copy, &range.head, None).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(source.join("demo.txt")).unwrap(),
+            "base\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(source.join("inherited.txt")).unwrap(),
+            "inherited dirty edit\n"
+        );
+        assert_eq!(
+            git_stdout(&source, &["rev-parse", "HEAD"]).unwrap(),
+            source_head
+        );
+        assert_eq!(git_head_branch(&source).as_deref(), Some("main"));
+    }
+
+    #[test]
     fn git_branches_empty_outside_a_repo() {
         let dir = tmp("git-branches-none");
         std::fs::write(dir.0.join("notes.txt"), "hello\n").unwrap();

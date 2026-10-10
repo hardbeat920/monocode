@@ -1,3 +1,4 @@
+import { cowCapability } from "../../source-control/model/cow";
 // @vitest-environment happy-dom
 import { act, createElement, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -7,6 +8,10 @@ import { QuickGitPopupPicker } from "./QuickGitPopup";
 import { NativePopupHost } from "../../../shared/ui/NativePopupHost";
 import type { QuickGitRequest } from "../model/quickGitPopup";
 import type { QuickWorkspace } from "../model/quickWorkspace";
+
+vi.mock("../../source-control/model/cow", () => ({
+  cowCapability: vi.fn(async () => ({ supported: true })),
+}));
 
 const git = vi.hoisted(() => ({ available: true, settled: true }));
 vi.mock("../../source-control/hooks/useProjectBranches", () => ({
@@ -106,9 +111,9 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-it("selects a new worktree and base branch without checking out or creating anything yet", async () => {
-  await act(async () => button("New worktree").click());
-  expect(selection).toMatchObject({ mode: "worktree", base: "main" });
+it.each(["worktree", "cow"] as const)("selects %s and its base without checking out or creating anything yet", async (mode) => {
+  await act(async () => button(mode === "cow" ? "New copy-on-write" : "New worktree").click());
+  expect(selection).toMatchObject({ mode, base: "main" });
   await render("base", selection);
   await act(async () => button("origin/develop").click());
   expect(selection.base).toBe("origin/develop");
@@ -195,4 +200,21 @@ it("keeps branch creation inside the popup and finishes only after creating the 
   await act(async () => button("Create branch").click());
   expect(gitCreateBranch).toHaveBeenCalledWith("/repo", "feature/popup");
   expect(onFinish).toHaveBeenCalledTimes(1);
+});
+
+it("selects copy-on-write with a base selector without checking out the source", async () => {
+  await act(async () => button("New copy-on-write").click());
+  expect(selection).toMatchObject({ mode: "cow" });
+  expect(selection.base).toBe("main");
+  expect(gitCheckout).not.toHaveBeenCalled();
+  expect(gitCreateBranch).not.toHaveBeenCalled();
+});
+it("disables copy-on-write on unsupported filesystems with the reason", async () => {
+  vi.mocked(cowCapability).mockResolvedValueOnce({
+    supported: false,
+    reason: "Unsupported filesystem",
+  });
+  await render("workspace");
+  expect(button("New copy-on-write").disabled).toBe(true);
+  expect(button("New copy-on-write").title).toBe("Unsupported filesystem");
 });

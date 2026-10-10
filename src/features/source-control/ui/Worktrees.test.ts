@@ -4,6 +4,11 @@ import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
+vi.mock("../model/cow", () => ({
+  listCowWorkspaces: vi.fn(),
+  cowCapability: vi.fn().mockResolvedValue({ supported: true }),
+}));
+
 vi.mock("../model/worktrees", async (original) => ({
   ...(await original<typeof import("../model/worktrees")>()),
   listWorktrees: vi.fn(),
@@ -59,6 +64,7 @@ import { FolderTree, GitBranch } from "../../../shared/ui/icons";
 import { DeleteWorktreeDialog } from "./DeleteWorktreeDialog";
 import { DeleteSessionDialog } from "../../sessions/ui/DeleteSessionDialog";
 import { WorktreesPage } from "./WorktreesPage";
+import { listCowWorkspaces } from "../model/cow";
 
 let container: HTMLDivElement;
 let root: Root;
@@ -75,6 +81,7 @@ const tree: Worktree = {
   sessionIds: [],
 };
 beforeEach(() => {
+  vi.mocked(listCowWorkspaces).mockResolvedValue([]);
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   container = document.createElement("div");
   document.body.append(container);
@@ -181,9 +188,9 @@ it("selects a draft workspace without opening the creation dialog", async () => 
       .click(),
   );
   const settings = document.querySelector<HTMLButtonElement>(
-    '[aria-label="Open worktree settings"]',
+    '[aria-label="Open isolation settings"]',
   )!;
-  expect(settings.textContent).toContain("Worktree settings");
+  expect(settings.textContent).toContain("Isolation settings");
   expect(settings.parentElement?.className).toContain("border-t");
   expect(settings.parentElement?.className).toContain("h-9");
   expect(settings.className).toContain("h-full");
@@ -192,9 +199,9 @@ it("selects a draft workspace without opening the creation dialog", async () => 
   await act(async () => settings.click());
   expect(onOpenSettings).toHaveBeenCalledOnce();
   expect(
-    document.querySelector('[aria-label="Open worktree settings"]'),
+    document.querySelector('[aria-label="Open isolation settings"]'),
   ).toBeNull();
-  expect(document.querySelector('[aria-label="Workspace"]')).toBeNull();
+  expect(document.querySelector('[aria-label="Isolation"]')).toBeNull();
 });
 
 it("selects an existing worktree from the draft workspace menu", async () => {
@@ -279,7 +286,7 @@ it("keeps the selected worktree base visible beside the workspace mode", async (
   );
 
   const base = container.querySelector<HTMLButtonElement>(
-    '[aria-label="Create worktree from main"]',
+    '[aria-label="Select base branch main"]',
   )!;
   expect(base.textContent).toContain("From main");
   await act(async () => base.click());
@@ -308,13 +315,13 @@ it("keeps the settings rows mounted through focus refreshes and failures", async
   });
   expect(listWorktrees).toHaveBeenCalledTimes(before + 1);
   expect(container.querySelector('[aria-label="Reveal feature"]')).toBe(reveal);
-  expect(container.textContent).not.toContain("Loading worktrees");
+  expect(container.textContent).not.toContain("Loading workspaces");
   expect(button("Create worktree").disabled).toBe(false);
   await act(async () => request.reject(new Error("Git unavailable")));
   expect(container.querySelector('[aria-label="Reveal feature"]')).toBe(reveal);
   expect(
     container
-      .querySelector('[aria-label="Refresh worktrees"]')
+      .querySelector('[aria-label="Refresh workspaces"]')
       ?.getAttribute("title"),
   ).toContain("Git unavailable");
   vi.mocked(listWorktrees).mockResolvedValue(result("updated"));
@@ -616,12 +623,12 @@ it("uses the shared project picker without leaking late worktree responses", asy
   const create = button("Create worktree");
   expect(create.className).toContain("h-7.5");
   const refresh = container.querySelector<HTMLButtonElement>(
-    '[aria-label="Refresh worktrees"]',
+    '[aria-label="Refresh workspaces"]',
   )!;
   expect(refresh.textContent).toBe("Refresh");
   expect(refresh.className).toContain("bg-content/8");
   expect(refresh.parentElement?.textContent).toContain(
-    "Deleting one keeps its sessions by default",
+    "Deleting an isolated workspace keeps its sessions by default",
   );
   await act(async () => picker.click());
   expect(
@@ -1169,4 +1176,69 @@ it("shows no selected branch after removal even when the old path has a branch a
   expect(onSelect).toHaveBeenCalledWith(
     expect.objectContaining({ path: "/repo" }),
   );
+});
+
+it("uses the same Git status and keep-session deletion flow for copy-on-write", async () => {
+  vi.mocked(listCowWorkspaces).mockResolvedValue([
+    {
+      id: "copy",
+      path: "/repo-cow/copy",
+      sourceCwd: "/repo",
+      projectCwd: "/repo",
+      sessionId: "owned-session",
+      sessionIds: ["owned-session"],
+      branch: "mc/copy",
+      head: "abc",
+      dirty: true,
+      unpushed: 2,
+    },
+  ]);
+  const onRemove = vi.fn().mockResolvedValue(undefined);
+  const onCheckRemove = vi.fn().mockResolvedValue(undefined);
+  await act(async () =>
+    root.render(
+      createElement(WorktreesPage, {
+        cwd: "/repo",
+        onRemove,
+        onCheckRemove,
+      }),
+    ),
+  );
+  expect(container.textContent).toContain("Current branch: mc/copy");
+  expect(container.textContent).toContain("Uncommitted changes");
+  expect(container.textContent).toContain("2 unpublished commits");
+  const deletion = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Delete mc/copy"]',
+  )!;
+  expect(deletion.disabled).toBe(false);
+  await act(async () => deletion.click());
+  expect(document.body.textContent).toContain(
+    "branch and its commits are kept",
+  );
+  expect(document.body.textContent).toContain(
+    "Select a branch or worktree to continue",
+  );
+  await act(async () => button("Delete copy-on-write workspace").click());
+  expect(onCheckRemove).toHaveBeenCalledWith("/repo", "/repo-cow/copy", true);
+  expect(onRemove).toHaveBeenCalledWith("/repo", "/repo-cow/copy", true, true);
+});
+
+it("clears a recovered CoW listing failure on refresh", async () => {
+  vi.mocked(listCowWorkspaces)
+    .mockRejectedValueOnce(new Error("CoW listing unavailable"))
+    .mockResolvedValue([]);
+  await act(async () =>
+    root.render(
+      createElement(WorktreesPage, { cwd: "/repo", onRemove: vi.fn() }),
+    ),
+  );
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+    "CoW listing unavailable",
+  );
+  await act(async () =>
+    container
+      .querySelector<HTMLButtonElement>('[aria-label="Refresh workspaces"]')!
+      .click(),
+  );
+  expect(container.querySelector('[role="alert"]')).toBeNull();
 });

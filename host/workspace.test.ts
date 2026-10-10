@@ -10,6 +10,9 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { HostStore } from "./store";
+import { WorkspaceCommands } from "./workspace-commands";
+import { hostCow, type HostCow } from "./cow";
 import {
   createHostPath,
   hostFileDiff,
@@ -339,3 +342,66 @@ it("stages selected host diff content without replacing the working file", async
     hostGitAction(root, "stageContents", "../escape", undefined, "x"),
   ).rejects.toThrow("outside");
 });
+
+it.each(["worktree", "copy-on-write"])(
+  "publishes a fresh %s branch through host sync and sets its upstream",
+  async (isolation) => {
+    const folder = realpathSync.native(
+      mkdtempSync(join(tmpdir(), "monocode-host-publish-")),
+    );
+    roots.push(folder);
+    const source = join(folder, "source");
+    const remote = join(folder, "remote.git");
+    mkdirSync(source);
+    const git = (cwd: string, ...args: string[]) =>
+      execFileSync("git", args, { cwd, encoding: "utf8", stdio: "pipe" }).trim();
+    git(source, "init", "-q", "-b", "main");
+    git(source, "config", "user.name", "Test");
+    git(source, "config", "user.email", "test@example.com");
+    writeFileSync(join(source, "file.txt"), "base\n");
+    git(source, "add", ".");
+    git(source, "commit", "-qm", "base");
+    git(source, "init", "-q", "--bare", remote);
+    git(source, "remote", "add", "origin", remote);
+    git(source, "push", "-u", "origin", "main");
+    const store = new HostStore(join(folder, "host.db"));
+    store.addProject(source, "Project");
+    const commands = new WorkspaceCommands(store, async (_id, action) => action());
+    try {
+      let cwd: string;
+      if (isolation === "copy-on-write") {
+        const capability = await hostCow<{ supported: boolean }>(
+          store,
+          "cow_capability",
+          { cwd: source },
+        );
+        if (!capability.supported) {
+          expect(process.env.MONOCODE_REQUIRE_COW).not.toBe("1");
+          return;
+        }
+        cwd = ((await commands.run("cow_create", {
+          cwd: source,
+          sessionId: "publish-sync",
+        })) as HostCow).path;
+      } else {
+        cwd = join(folder, "worktree");
+        git(source, "worktree", "add", "-b", "publish-sync", cwd);
+      }
+      const branch = git(cwd, "branch", "--show-current");
+      writeFileSync(join(cwd, "file.txt"), "published\n");
+      await commands.run("git_stage_all", { cwd });
+      await commands.run("git_commit", { cwd, message: "publish" });
+      expect(() => git(cwd, "rev-parse", "@{upstream}")).toThrow();
+      await commands.run("git_sync", { cwd });
+      expect(git(cwd, "rev-parse", "--abbrev-ref", "@{upstream}")).toBe(
+        `origin/${branch}`,
+      );
+      expect(git(remote, "rev-parse", `refs/heads/${branch}`)).toBe(
+        git(cwd, "rev-parse", "HEAD"),
+      );
+      await commands.run("git_sync", { cwd });
+    } finally {
+      store.close();
+    }
+  },
+);

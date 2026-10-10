@@ -10,10 +10,12 @@ export type SessionDeleteChoice = {
 export function DeleteSessionDialog({
   title,
   unusedWorktree,
+  cow = false,
   onClose,
 }: {
   title: string;
   unusedWorktree: string;
+  cow?: boolean;
   onClose: (choice: SessionDeleteChoice) => void;
 }) {
   const [deleteWorktree, setDeleteWorktree] = useState(false);
@@ -33,13 +35,16 @@ export function DeleteSessionDialog({
             className="mt-0.5 accent-accent"
           />
           <span>
-            Also delete the unused worktree
+            {cow
+              ? "Also delete the unused copy-on-write workspace"
+              : "Also delete the unused worktree"}
             <span className="mt-1 block break-all text-[11px] text-content/45">
               {prettyCwd(unusedWorktree)}
             </span>
             <span className="mt-1 block text-[11px] text-content/45">
-              The branch is kept. If files have uncommitted changes, the
-              worktree stays.
+              {cow
+                ? "The branch is kept. If files have uncommitted changes, the workspace stays."
+                : "The branch is kept. If files have uncommitted changes, the worktree stays."}
             </span>
           </span>
         </label>

@@ -170,7 +170,7 @@ Actions:
                   effort, modelSettings, permission mode and workspace choice
                   use composer values. Set worktreeCwd to a path from
                   worktrees.list to choose a specific existing checkout, or
-                  workspaceMode:"worktree" and optional worktreeBase to make
+                  workspaceMode:"cow" for copy-on-write isolation, or workspaceMode:"worktree"; optional worktreeBase selects the source base for either isolated mode to make
                   a new worktree with an automatic branch name. Omit
                   runtimeMode to inherit this
                   session's permission mode; set it to override. Run

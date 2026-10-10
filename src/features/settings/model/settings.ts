@@ -1,3 +1,4 @@
+import type { WorkspaceMode } from "../../sessions/model/session";
 import {
   ALT,
   IS_MAC,
@@ -144,8 +145,8 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   {
     id: "worktrees",
     group: "workspace",
-    label: "Worktrees",
-    description: "Manage additional worktrees for each project.",
+    label: "Work Isolation",
+    description: "Choose session isolation and manage isolated workspaces.",
     keywords: "git branch worktree working copy project create delete",
   },
 ];
@@ -184,6 +185,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     section: "mcp",
     label: "MCP servers",
     keywords: "claude tools connections oauth authenticate login add remove",
+  },
+  {
+    id: "default-isolation-mode",
+    section: "worktrees",
+    label: "Start new session on",
+    keywords: "local worktree copy-on-write cow isolation default",
   },
   {
     id: "monos-enabled",
@@ -1485,4 +1492,40 @@ export function filterKeybindings(
       row.keys.toLowerCase().includes(needle) ||
       row.when.toLowerCase().includes(needle),
   );
+}
+
+const DEFAULT_ISOLATION_MODE_KEY = "monocode.defaultIsolationMode";
+const DEFAULT_ISOLATION_MODE_EVENT = "monocode:default-isolation-mode-change";
+
+export function loadDefaultIsolationMode(): WorkspaceMode {
+  try {
+    const value = localStorage.getItem(DEFAULT_ISOLATION_MODE_KEY);
+    return value === "worktree" || value === "cow" ? value : "current";
+  } catch {
+    return "current";
+  }
+}
+
+export function saveDefaultIsolationMode(mode: WorkspaceMode) {
+  try {
+    localStorage.setItem(DEFAULT_ISOLATION_MODE_KEY, mode);
+  } catch {
+    // private mode / quota
+  }
+  if (typeof window !== "undefined")
+    window.dispatchEvent(new Event(DEFAULT_ISOLATION_MODE_EVENT));
+}
+
+export function subscribeDefaultIsolationMode(onStoreChange: () => void) {
+  if (typeof window === "undefined") return () => {};
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === DEFAULT_ISOLATION_MODE_KEY || event.key === null)
+      onStoreChange();
+  };
+  window.addEventListener(DEFAULT_ISOLATION_MODE_EVENT, onStoreChange);
+  window.addEventListener("storage", onStorage);
+  return () => {
+    window.removeEventListener(DEFAULT_ISOLATION_MODE_EVENT, onStoreChange);
+    window.removeEventListener("storage", onStorage);
+  };
 }

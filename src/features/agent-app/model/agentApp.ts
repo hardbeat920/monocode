@@ -1,3 +1,4 @@
+import { loadDefaultIsolationMode } from "../../settings/model/settings";
 import { isHarnessAvailable } from "../../../integrations/harness/core/availability";
 import { looksLikeProject } from "../../projects/model/recents";
 import {
@@ -453,18 +454,20 @@ function startLaunch(
     throw new Error(`runtimeMode must be one of: ${RUNTIME_MODES.join(", ")}`);
   const reveal = input.reveal ?? false;
   if (typeof reveal !== "boolean") throw new Error("reveal must be a boolean");
-  const workspaceMode = input.workspaceMode ?? "current";
-  if (workspaceMode !== "current" && workspaceMode !== "worktree")
-    throw new Error("workspaceMode must be current or worktree");
+  const workspaceMode = input.workspaceMode ?? (input.worktreeCwd !== undefined ? "current" : source.cowId ? "cow" : loadDefaultIsolationMode());
+  if (workspaceMode !== "current" && workspaceMode !== "worktree" && workspaceMode !== "cow")
+    throw new Error("workspaceMode must be current, worktree or cow");
   const worktreeBase = optionalString(input.worktreeBase, "worktreeBase");
-  if (worktreeBase && workspaceMode !== "worktree")
-    throw new Error("worktreeBase requires workspaceMode worktree");
+  if (worktreeBase && workspaceMode !== "worktree" && workspaceMode !== "cow")
+    throw new Error("worktreeBase requires workspaceMode worktree or cow");
   const worktreeCwd = optionalString(input.worktreeCwd, "worktreeCwd");
   if (worktreeCwd && workspaceMode !== "current")
     throw new Error("worktreeCwd requires workspaceMode current");
   const currentWorktree =
     worktreeCwd ||
-    (pathKey(cwd) === pathKey(source.cwd) ? source.worktreeCwd : undefined);
+    (!source.cowId && pathKey(cwd) === pathKey(source.cwd)
+      ? source.worktreeCwd
+      : undefined);
   return {
     cwd,
     prompt,

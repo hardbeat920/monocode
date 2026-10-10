@@ -992,3 +992,15 @@ it("saves the exact CI context alongside the compact user message", () => {
     ciContext: context,
   });
 });
+
+it("persists CoW ownership and pending creation across crashes", () => {
+  const session = newSession("codex", "/repo");
+  session.cowId = "owned-copy";
+  session.worktreeCwd = "/repo-copies/owned-copy";
+  expect(sanitizeSessionForPersist(session)).toMatchObject({ cowId: "owned-copy", worktreeCwd: "/repo-copies/owned-copy" });
+  session.cowId = undefined;
+  session.worktreeCwd = undefined;
+  session.workspaceMode = "cow";
+  session.cowSourceCwd = "/repo-copies/parent";
+  expect(sanitizeSessionForPersist(session)).toMatchObject({ workspaceMode: "cow", cowSourceCwd: "/repo-copies/parent" });
+});

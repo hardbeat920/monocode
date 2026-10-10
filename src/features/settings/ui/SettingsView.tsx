@@ -318,6 +318,9 @@ import {
   filterKeybindings,
   currentKeybindings,
   loadClaudeHooks,
+  loadDefaultIsolationMode,
+  saveDefaultIsolationMode,
+  subscribeDefaultIsolationMode,
   loadIdleAgentLimit,
   loadCloseToTray,
   loadCollapsedProjectRailMode,
@@ -600,7 +603,7 @@ export function SettingsView({
                 <ProvidersPage cwd={cwd} recents={recents} />
               ) : null}
               {section === "worktrees" ? (
-                <WorktreesPage
+                <WorkIsolationPage
                   cwd={cwd}
                   recents={recents}
                   liveSessions={liveSessions}
@@ -4263,6 +4266,31 @@ function Row({
       <div className="settings-row-control flex min-w-0 max-w-[60%] shrink-0 flex-wrap items-center justify-end gap-2">
         {children}
       </div>
+    </div>
+  );
+}
+
+function WorkIsolationPage(props: React.ComponentProps<typeof WorktreesPage>) {
+  const mode = useSyncExternalStore(
+    subscribeDefaultIsolationMode,
+    loadDefaultIsolationMode,
+    loadDefaultIsolationMode,
+  );
+  return (
+    <div className="flex flex-col gap-4">
+      <Row id="default-isolation-mode" label="Start new session on">
+        <Segmented
+          label="Start new session on"
+          value={mode}
+          options={[
+            { value: "current", label: "Local" },
+            { value: "worktree", label: "New worktree" },
+            { value: "cow", label: "New copy-on-write" },
+          ]}
+          onChange={saveDefaultIsolationMode}
+        />
+      </Row>
+      <WorktreesPage {...props} />
     </div>
   );
 }

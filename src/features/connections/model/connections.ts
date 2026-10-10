@@ -27,6 +27,27 @@ export const refreshRemoteMachines = () =>
 const TAB_KEY = "monocode.remote-tabs.v2";
 const WORKTREE_KEY = "monocode.remote-pending-worktrees.v1";
 
+const COW_KEY = "monocode.remote-pending-cow.v1";
+export type RemotePendingCow = { cowId: string; path: string };
+export function remotePendingCow(shellId: string): RemotePendingCow | undefined {
+  try {
+    const value = JSON.parse(localStorage.getItem(COW_KEY) ?? "{}")[shellId];
+    return value && typeof value.cowId === "string" && typeof value.path === "string" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+export function rememberRemotePendingCow(shellId: string, workspace?: RemotePendingCow) {
+  try {
+    const all = JSON.parse(localStorage.getItem(COW_KEY) ?? "{}");
+    if (workspace) all[shellId] = workspace;
+    else delete all[shellId];
+    localStorage.setItem(COW_KEY, JSON.stringify(all));
+  } catch {
+    /* backend creation is idempotent for this session ID */
+  }
+}
+
 export function remotePendingWorktree(shellId: string): string | undefined {
   try {
     const value = JSON.parse(localStorage.getItem(WORKTREE_KEY) ?? "{}")[

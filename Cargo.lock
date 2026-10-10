@@ -2501,6 +2501,7 @@ dependencies = [
  "junction",
  "keyring",
  "libc",
+ "monocode-isolation",
  "notify-rust",
  "objc2",
  "objc2-app-kit",
@@ -2534,6 +2535,17 @@ dependencies = [
  "windows 0.62.2",
  "windows-sys 0.61.2",
  "zstd",
+]
+
+[[package]]
+name = "monocode-isolation"
+version = "0.12.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "uuid",
 ]
 
 [[package]]

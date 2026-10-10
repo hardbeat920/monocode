@@ -9,6 +9,7 @@ mod checkpoint;
 mod codex_mono_store;
 mod control;
 pub mod control_cli;
+mod cow;
 mod cursor_store;
 mod devin_config;
 mod devin_usage;
@@ -412,6 +413,14 @@ pub fn run() {
             fs::git_checkout,
             fs::git_create_branch,
             fs::git_stash,
+            cow::cow_capability,
+            cow::cow_create,
+            cow::cow_list,
+            cow::cow_status,
+            cow::cow_file_diff,
+            cow::cow_remove,
+            cow::cow_check_remove,
+            cow::cow_apply,
             worktrees::git_worktrees,
             worktrees::git_worktree_create,
             worktrees::git_orchestration_worktree_create,

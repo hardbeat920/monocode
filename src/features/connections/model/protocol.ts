@@ -75,6 +75,7 @@ export type HostSessionSummary = Omit<
   needsInput?: boolean;
   branch?: string;
   worktreeCwd?: string;
+  cowId?: string;
   repo?: string;
   draft?: boolean;
 };
@@ -147,6 +148,7 @@ export type HostCommand =
       commandId: string;
       projectId: string;
       worktreeCwd?: string;
+      cowId?: string;
       autoWorktreeBranch?: string;
       harness: RemoteProvider;
       model: string;

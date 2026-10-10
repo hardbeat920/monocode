@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="805" viewBox="0 0 1120 805" role="img" aria-labelledby="title desc">
+<title id="title">Same Changes and Git flow for every isolation type</title><desc id="desc">Local checkouts, Git worktrees and APFS copies use the existing GitChangesPanel and Git commands. A copy provides its independent current working directory. First publish sets upstream; subsequent sync pulls and pushes. GitHub authentication requirements are unchanged.</desc>
+<defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#475569"/></marker></defs>
+<style>text{font-family:Arial,Helvetica,sans-serif;fill:#172033} .heading{font-size:30px;font-weight:700} .subtitle{font-size:18px;fill:#475569} .box-title{font-size:21px;font-weight:700} .body{font-size:18px} .label{font-size:17px;fill:#475569} .arrow{fill:none;stroke:#475569;stroke-width:2;marker-end:url(#arrow)}</style>
+<rect width="100%" height="100%" fill="#ffffff"/>
+
+<text x="45" y="53" class="heading">Same Changes and Git flow for every isolation type</text>
+<text x="45" y="85" class="subtitle">The selected isolation changes workspace creation and ownership. Git controls stay shared.</text>
+<rect x="45" y="120" width="300" height="95" rx="12" fill="#eef4ff" stroke="#94a3b8"/>
+<text x="65" y="154" class="box-title">Local checkout</text>
+<text x="65" y="184" class="body">Existing repository</text>
+<rect x="405" y="120" width="300" height="95" rx="12" fill="#eef4ff" stroke="#94a3b8"/>
+<text x="425" y="154" class="box-title">Git worktree</text>
+<text x="425" y="184" class="body">Worktree checkout</text>
+<rect x="765" y="120" width="310" height="95" rx="12" fill="#eef4ff" stroke="#94a3b8"/>
+<text x="785" y="154" class="box-title">APFS copy</text>
+<text x="785" y="184" class="body">Independent repository</text>
+<path d="M195 215 L195 270 L555 270 L555 320" class="arrow"/>
+<path d="M555 215 L555 320" class="arrow"/>
+<path d="M920 215 L920 270 L555 270" class="arrow"/>
+<rect x="220" y="320" width="670" height="140" rx="12" fill="#eef4ff" stroke="#94a3b8"/>
+<text x="240" y="354" class="box-title">Existing Changes panel + Git commands</text>
+<text x="240" y="384" class="body">HEAD / index / working-file diffs; stage, unstage and commit</text>
+<text x="240" y="410" class="body">Branch, history, publish, sync and pull request controls</text>
+<rect x="45" y="550" width="300" height="115" rx="12" fill="#eef4ff" stroke="#94a3b8"/>
+<text x="65" y="584" class="box-title">First publish</text>
+<text x="65" y="614" class="body">Push the session branch</text>
+<text x="65" y="640" class="body">Set its upstream</text>
+<rect x="405" y="550" width="300" height="115" rx="12" fill="#eef4ff" stroke="#94a3b8"/>
+<text x="425" y="584" class="box-title">Later sync</text>
+<text x="425" y="614" class="body">Pull, then push</text>
+<text x="425" y="640" class="body">Use the configured upstream</text>
+<rect x="765" y="550" width="310" height="115" rx="12" fill="#eef4ff" stroke="#94a3b8"/>
+<text x="785" y="584" class="box-title">Create pull request</text>
+<text x="785" y="614" class="body">Existing PR creation flow</text>
+<text x="785" y="640" class="body">GitHub account required</text>
+<path d="M390 460 L390 505 L195 505 L195 550" class="arrow"/>
+<path d="M555 460 L555 550" class="arrow"/>
+<path d="M720 460 L720 505 L920 505 L920 550" class="arrow"/>
+<rect x="45" y="710" width="1030" height="65" rx="12" fill="#f6f7fa" stroke="#94a3b8"/>
+<text x="65" y="744" class="box-title">Normal Git uses effective source SSH / credential helpers; keys stay in existing stores</text>
+<text x="45" y="690" class="subtitle">Clone, baseline and cleanup internals disable hooks / filters and never contact remotes.</text>
+</svg>

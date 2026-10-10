@@ -53,6 +53,10 @@ export type WorkspaceSessionStub = {
   providerAccountId?: string;
   branch?: string;
   worktreeCwd?: string;
+  cowId?: string;
+  workspaceMode?: Session["workspaceMode"];
+  worktreeBase?: string;
+  cowSourceCwd?: string;
   worktreeRemoved?: boolean;
 };
 
@@ -367,6 +371,10 @@ function sessionStub(session: Session): WorkspaceSessionStub | null {
       : {}),
     ...(session.branch ? { branch: session.branch } : {}),
     ...(session.worktreeCwd ? { worktreeCwd: session.worktreeCwd } : {}),
+    ...(session.cowId ? { cowId: session.cowId } : {}),
+    workspaceMode: session.workspaceMode,
+    worktreeBase: session.worktreeBase,
+    cowSourceCwd: session.cowSourceCwd,
     ...(session.worktreeRemoved ? { worktreeRemoved: true } : {}),
   };
 }
@@ -382,6 +390,9 @@ function sessionFromStub(stub: WorkspaceSessionStub): Session {
   return {
     ...session,
     id: stub.id,
+    workspaceMode: stub.workspaceMode,
+    worktreeBase: stub.worktreeBase,
+    cowSourceCwd: stub.cowSourceCwd,
     // A snapshot is a saved choice, not a new conversation. Catalog discovery
     // and the current picker preferences must not replace its model.
     model: stub.model || session.model,
@@ -396,6 +407,7 @@ function sessionFromStub(stub: WorkspaceSessionStub): Session {
       : {}),
     ...(stub.branch ? { branch: stub.branch } : {}),
     ...(stub.worktreeCwd ? { worktreeCwd: stub.worktreeCwd } : {}),
+    ...(stub.cowId ? { cowId: stub.cowId } : {}),
     ...(stub.worktreeRemoved ? { worktreeRemoved: true } : {}),
   };
 }
@@ -441,6 +453,10 @@ function sanitizeStub(raw: unknown): WorkspaceSessionStub | null {
     ...(typeof value.branch === "string" && value.branch.trim()
       ? { branch: value.branch.trim() }
       : {}),
+    ...(value.workspaceMode === "cow" || value.workspaceMode === "worktree" || value.workspaceMode === "current" ? { workspaceMode: value.workspaceMode } : {}),
+    ...(typeof value.worktreeBase === "string" ? { worktreeBase: value.worktreeBase } : {}),
+    ...(typeof value.cowSourceCwd === "string" ? { cowSourceCwd: value.cowSourceCwd } : {}),
+    ...(typeof value.cowId === "string" && value.cowId.trim() ? { cowId: value.cowId.trim() } : {}),
     ...(typeof value.worktreeCwd === "string" && value.worktreeCwd.trim()
       ? { worktreeCwd: value.worktreeCwd.trim() }
       : {}),

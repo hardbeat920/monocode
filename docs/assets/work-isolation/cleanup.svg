@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="1200" viewBox="0 0 1120 1200" role="img" aria-labelledby="title desc">
+<title id="title">Copy-on-write lifecycle: retain first, remove safely</title><desc id="desc">Archiving retains the checkout. Deletion uses the shared worktree confirmation and session retention policy, checks identity and active processes, journals session detachment, retains branches, tags, detached HEAD and all stash entries in the originating repository, then removes the owned checkout. Earlier failures recover only the original surviving directory. Later metadata errors retry without restoring sessions to a missing checkout.</desc>
+<defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#475569"/></marker></defs>
+<style>text{font-family:Arial,Helvetica,sans-serif;fill:#172033} .heading{font-size:30px;font-weight:700} .subtitle{font-size:18px;fill:#475569} .box-title{font-size:21px;font-weight:700} .body{font-size:18px} .label{font-size:17px;fill:#475569} .arrow{fill:none;stroke:#475569;stroke-width:2;marker-end:url(#arrow)}</style>
+<rect width="100%" height="100%" fill="#ffffff"/>
+
+<text x="45" y="53" class="heading">Copy-on-write lifecycle: retain first, remove safely</text>
+<text x="45" y="85" class="subtitle">Archive keeps the workspace. Deletion follows the existing session and worktree lifecycle.</text>
+<rect x="45" y="120" width="300" height="110" rx="12" fill="#e9f7ef" stroke="#94a3b8"/>
+<text x="65" y="154" class="box-title">Archive session</text>
+<text x="65" y="184" class="body">Retain the working copy</text>
+<text x="65" y="210" class="body">Keep files and history</text>
+<rect x="405" y="120" width="670" height="110" rx="12" fill="#eef4ff" stroke="#94a3b8"/>
+<text x="425" y="154" class="box-title">Delete owned copy</text>
+<text x="425" y="184" class="body">Shared confirmation and session-retention controls</text>
+<text x="425" y="210" class="body">Uncommitted changes require explicit force</text>
+<path d="M740 230 L740 280" class="arrow"/>
+<rect x="405" y="280" width="670" height="110" rx="12" fill="#eef4ff" stroke="#94a3b8"/>
+<text x="425" y="314" class="box-title">Preflight checks</text>
+<text x="425" y="344" class="body">Verify ownership and original directory identity</text>
+<text x="425" y="370" class="body">Refuse while terminals or agent processes use the checkout</text>
+<path d="M740 390 L740 440" class="arrow"/>
+<rect x="405" y="440" width="670" height="110" rx="12" fill="#eef4ff" stroke="#94a3b8"/>
+<text x="425" y="474" class="box-title">Journal session detachment</text>
+<text x="425" y="504" class="body">Desktop / host persist the existing removal journal</text>
+<text x="425" y="530" class="body">Keep transcripts when the selected retention policy requests it</text>
+<path d="M740 550 L740 600" class="arrow"/>
+<rect x="405" y="600" width="670" height="135" rx="12" fill="#eef4ff" stroke="#94a3b8"/>
+<text x="425" y="634" class="box-title">Retain Git history in the originating project</text>
+<text x="425" y="664" class="body">Branches, tags, detached HEAD and every stash entry</text>
+<text x="425" y="690" class="body">Name collisions retained under mc/kept-&lt;cowId&gt;/…</text>
+<text x="425" y="716" class="body">Any history-retention failure blocks deletion, including force</text>
+<path d="M740 735 L740 785" class="arrow"/>
+<rect x="405" y="785" width="670" height="110" rx="12" fill="#fff4dd" stroke="#94a3b8"/>
+<text x="425" y="819" class="box-title">Remove the owned checkout</text>
+<text x="425" y="849" class="body">Persist removal record; rename to an owned removal path</text>
+<text x="425" y="875" class="body">Once removed, do not restore sessions to the missing checkout</text>
+<path d="M740 895 L740 945" class="arrow"/>
+<rect x="405" y="945" width="670" height="110" rx="12" fill="#eef4ff" stroke="#94a3b8"/>
+<text x="425" y="979" class="box-title">Finish metadata cleanup</text>
+<text x="425" y="1009" class="body">Remove leftovers, baseline and ownership record</text>
+<text x="425" y="1035" class="body">Retry on later native requests if cleanup is interrupted</text>
+<rect x="45" y="490" width="300" height="200" rx="12" fill="#fff4dd" stroke="#94a3b8"/>
+<text x="65" y="524" class="box-title">Failure before removal</text>
+<text x="65" y="554" class="body">Keep the original checkout</text>
+<text x="65" y="580" class="body">Recover journaled sessions only</text>
+<text x="65" y="606" class="body">if the same directory and .git</text>
+<text x="65" y="632" class="body">still survive</text>
+<path d="M405 495 L345 495" class="arrow" stroke-dasharray="6 5"/>
+<path d="M405 665 L345 665" class="arrow" stroke-dasharray="6 5"/>
+<rect x="45" y="920" width="300" height="160" rx="12" fill="#fff4dd" stroke="#94a3b8"/>
+<text x="65" y="954" class="box-title">Failure after removal</text>
+<text x="65" y="984" class="body">Checkout remains removed</text>
+<text x="65" y="1010" class="body">Retry leftover cleanup</text>
+<text x="65" y="1036" class="body">Never attach sessions to a</text>
+<text x="65" y="1062" class="body">deleted or replaced directory</text>
+<path d="M405 1000 L345 1000" class="arrow" stroke-dasharray="6 5"/>
+<text x="45" y="1120" class="subtitle">History retention preserves committed and stashed work. Forced deletion can discard unstaged / staged edits.</text>
+<text x="45" y="1150" class="subtitle">An unused clean copy may also be removed when deleting its session, through the same guarded path.</text>
+</svg>

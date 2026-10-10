@@ -22,7 +22,8 @@ export type OrchestrationWorkspace = {
   projectCwd: string;
   /** Concrete checkout in which this run may read and write. */
   checkoutCwd: string;
-  kind: "main" | "worktree";
+  kind: "main" | "worktree" | "cow";
+  cowId?: string;
   branch?: string;
 };
 
@@ -119,12 +120,14 @@ export function workspaceIdentity(
   projectCwd: string,
   checkoutCwd: string,
   branch?: string,
+  cowId?: string,
 ): OrchestrationWorkspace {
   return {
     id: `checkout:${pathKey(checkoutCwd)}`,
     projectCwd,
     checkoutCwd,
-    kind: pathKey(projectCwd) === pathKey(checkoutCwd) ? "main" : "worktree",
+    kind: cowId ? "cow" : pathKey(projectCwd) === pathKey(checkoutCwd) ? "main" : "worktree",
+    ...(cowId ? { cowId } : {}),
     ...(branch ? { branch } : {}),
   };
 }

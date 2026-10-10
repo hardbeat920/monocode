@@ -144,7 +144,7 @@ export function assertWorktreeFilesClosed(
 }
 
 export function worktreeSessionIds(
-  tree: Worktree,
+  tree: Pick<Worktree, "path" | "sessionIds">,
   sessions: readonly Pick<
     Session,
     "id" | "cwd" | "worktreeCwd" | "worktreeRemoved"
@@ -176,6 +176,10 @@ export function detachSessionWorktree<T extends { cwd: string; worktreeCwd?: str
     cwd: isEqualOrInside(session.cwd, path) ? projectCwd : session.cwd,
     worktreeCwd: session.worktreeCwd || session.cwd,
     worktreeRemoved: true,
+    cowId: undefined,
+    cowSourceCwd: undefined,
+    workspaceMode: undefined,
+    worktreeBase: undefined,
     branch: undefined,
     providerSessionId: undefined,
     context: undefined,
@@ -190,6 +194,9 @@ export function detachSessionWorktree<T extends { cwd: string; worktreeCwd?: str
 export function sessionInWorktree(session: Session, tree: Worktree): Session {
   if (
     !session.worktreeRemoved &&
+    !session.cowId &&
+    session.workspaceMode !== "cow" &&
+    session.workspaceMode !== "worktree" &&
     pathKey(sessionWorkCwd(session)) === pathKey(tree.path)
   )
     return session;
@@ -201,7 +208,7 @@ export function sessionInWorktree(session: Session, tree: Worktree): Session {
           session.harness,
           `The previous working copy was deleted. Continue this conversation in ${tree.path}. Recheck the files before making changes.\n\n${buildDeterministicHandoff(session)}`,
         )
-      : isBlankSession(session)
+      : isBlankSession(session) && (!session.cowId || session.worktreeRemoved)
         ? session
         : {
             ...newSession(
@@ -215,6 +222,10 @@ export function sessionInWorktree(session: Session, tree: Worktree): Session {
           };
   return {
     ...target,
+    workspaceMode: undefined,
+    worktreeBase: undefined,
+    cowId: undefined,
+    cowSourceCwd: undefined,
     worktreeRemoved: undefined,
     worktreeCwd:
       pathKey(tree.path) === pathKey(session.cwd) ? undefined : tree.path,
