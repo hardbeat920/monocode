@@ -268,6 +268,8 @@ describe("large plain-text pastes", () => {
     );
     expect(openFile).toHaveBeenCalledWith("/tmp/pasted-text.txt", undefined, {
       exact: true,
+      workspace: true,
+      autosave: true,
     });
 
     act(() =>

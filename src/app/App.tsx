@@ -6348,15 +6348,12 @@ function Workspace({
           (entry) => entry.id === activeTabIdRef.current,
         );
         if (!tab) return;
-        const file = newFileTab(
-          resolved,
-          fileCwd,
-          false,
-          undefined,
-          fileProjectCwd,
-        );
+        const file = {
+          ...newFileTab(resolved, fileCwd, false, undefined, fileProjectCwd),
+          ...(options?.autosave ? { autosave: true } : {}),
+        };
         const pin = !!options?.pin;
-        if (loadFileTabMode() === "workspace") {
+        if (options?.workspace || loadFileTabMode() === "workspace") {
           // Built once: the updater may run twice in StrictMode.
           const created = newEditorWorkspaceTab(
             pin ? file : { ...file, preview: true },

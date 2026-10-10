@@ -57,7 +57,7 @@ describe("file editor line endings", () => {
     vi.unstubAllGlobals();
   });
 
-  async function renderEditor(path: string) {
+  async function renderEditor(path: string, autosave = false) {
     // Keep the same FileEditor instance so its save queue survives the switch.
     await act(async () =>
       root.render(
@@ -65,6 +65,7 @@ describe("file editor line endings", () => {
           path,
           cwd: "/repo",
           active: true,
+          autosave,
           onDirtyChange: () => {},
         }),
       ),
@@ -139,6 +140,18 @@ describe("file editor line endings", () => {
     });
 
     expect(written.content).toBeNull();
+  });
+
+  it("autosaves attachment editors when global autosave is disabled", async () => {
+    disk.content = "alpha\n";
+    saveAutosave(false);
+    const view = await renderEditor("/tmp/pasted-text.txt", true);
+
+    await act(async () => {
+      view.dispatch({ changes: { from: 0, insert: "changed " } });
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.waitFor(() => expect(written.content).toBe("changed alpha\n"));
+    });
   });
 
   it("does not autosave over an external file change", async () => {

@@ -2024,7 +2024,12 @@ export function Composer({
                     file.mimeType === "text/plain" &&
                     file.path &&
                     onOpenFile
-                      ? () => onOpenFile(file.path!, undefined, { exact: true })
+                      ? () =>
+                          onOpenFile(file.path!, undefined, {
+                            exact: true,
+                            workspace: true,
+                            autosave: true,
+                          })
                       : undefined
                   }
                   onRemove={() => removeAttachment(file.id)}

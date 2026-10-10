@@ -107,6 +107,7 @@ type Props = {
   path: string;
   cwd: string;
   active: boolean;
+  autosave?: boolean;
   showDiff?: boolean;
   navigation?: EditorNavigationRequest | null;
   onDirtyChange: (path: string, dirty: boolean) => void;
@@ -127,6 +128,7 @@ export function FileEditor({
   path,
   cwd,
   active,
+  autosave = false,
   showDiff = false,
   navigation,
   onDirtyChange,
@@ -493,6 +495,7 @@ export function FileEditor({
                 onDirtyChange={dirtyChange}
                 onErrorCountChange={errorCountChange}
                 onSave={save}
+                autosave={autosave}
                 canAutosave={() => !pendingDiskRef.current}
                 onStageGit={
                   showDiff && gitDiff?.kind === "unstaged"
@@ -517,6 +520,7 @@ export function FileEditor({
           onDirtyChange={dirtyChange}
           onErrorCountChange={errorCountChange}
           onSave={save}
+          autosave={autosave}
           canAutosave={() => !pendingDiskRef.current}
           onStageGit={
             showDiff && gitDiff?.kind === "unstaged" ? stageGit : undefined
@@ -555,6 +559,7 @@ export function CodeMirrorEditor({
   onDirtyChange,
   onErrorCountChange,
   onSave,
+  autosave = false,
   canAutosave,
   onStageGit,
   onDocChange,
@@ -570,6 +575,7 @@ export function CodeMirrorEditor({
   onDirtyChange: (dirty: boolean) => void;
   onErrorCountChange: (count: number) => void;
   onSave: (content: string) => Promise<void>;
+  autosave?: boolean;
   canAutosave: () => boolean;
   onStageGit?: (contents: string) => Promise<void>;
   onDocChange?: (content: string) => void;
@@ -705,7 +711,8 @@ export function CodeMirrorEditor({
     };
 
     const save = (automatic = false) => {
-      const retryPendingAutosave = autosaveTimer !== 0 && loadAutosave();
+      const retryPendingAutosave =
+        autosaveTimer !== 0 && (autosave || loadAutosave());
       window.clearTimeout(autosaveTimer);
       const generation = ++saveGeneration;
       void (async () => {
@@ -758,17 +765,20 @@ export function CodeMirrorEditor({
 
     function scheduleAutosave() {
       window.clearTimeout(autosaveTimer);
-      if (!loadAutosave()) return;
-      autosaveTimer = window.setTimeout(() => {
-        autosaveTimer = 0;
-        if (
-          dirtyRef.current &&
-          loadAutosave() &&
-          canAutosaveRef.current()
-        ) {
-          save(true);
-        }
-      }, FILE_EDITOR_AUTOSAVE_DELAY_MS);
+      if (!autosave && !loadAutosave()) return;
+      autosaveTimer = window.setTimeout(
+        () => {
+          autosaveTimer = 0;
+          if (
+            dirtyRef.current &&
+            (autosave || loadAutosave()) &&
+            canAutosaveRef.current()
+          ) {
+            save(true);
+          }
+        },
+        autosave ? 0 : FILE_EDITOR_AUTOSAVE_DELAY_MS,
+      );
     }
 
     view = new EditorView({
@@ -888,7 +898,7 @@ export function CodeMirrorEditor({
       setSelectionTarget(null);
       view.destroy();
     };
-  }, [formatOnSave, lockOverscroll, path, showDiff, syncChunkNav]);
+  }, [autosave, formatOnSave, lockOverscroll, path, showDiff, syncChunkNav]);
 
   useEffect(() => {
     const view = viewRef.current;
