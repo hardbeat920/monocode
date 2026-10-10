@@ -21,6 +21,7 @@ tauri-plugin-opener = "2"
 open = "5.4.1"
 serde.workspace = true
 serde_json.workspace = true
+monocode-skills = { path = "../crates/skills" }
 toml = "0.9.12"
 sha2 = "0.10"
 zstd = "0.13"

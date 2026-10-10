@@ -7,7 +7,7 @@ import {
   type DiscoveredSkill,
 } from "../../../platform/tauri/fs";
 import { invalidateProjectFiles } from "../../files/model/fileIndex";
-import { joinPath } from "../../../shared/lib/paths";
+import { joinPath, parentPath } from "../../../shared/lib/paths";
 import { isLocalProject, normalizeProjectPath } from "../../projects/model/recents";
 import { isMarkdownBlockquotePosition } from "../../sessions/model/quoteDraft";
 import type { HarnessId } from "../../sessions/model/session";
@@ -422,7 +422,10 @@ export function injectSkillPrompt(
     seen.add(skill.name);
     const body = bodies[skill.name]?.trim();
     if (!body) continue;
-    blocks.push(`## /${skill.name}\n\n${body}`);
+    const location = skill.kind === "file"
+      ? `Skill file: ${skill.path}\nResource directory: ${parentPath(skill.path)}\nResolve this skill's relative script and reference paths against its resource directory. Keep the project's working directory unchanged.\n\n`
+      : "";
+    blocks.push(`## /${skill.name}\n\n${location}${body}`);
   }
   if (blocks.length === 0) return text;
   return [
