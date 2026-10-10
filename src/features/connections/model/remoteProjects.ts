@@ -12,6 +12,8 @@ export type RemoteProject = {
   projectId: string;
   /** The folder's path on the host. */
   cwd: string;
+  /** The checkout's remote URL, when the host reports one. */
+  remoteUrl?: string;
 };
 
 const KEY = "monocode.remote-projects.v2";
@@ -76,6 +78,7 @@ export function rememberRemoteProject(
     environmentId,
     projectId: project.id,
     cwd: project.cwd,
+    ...(project.remoteUrl ? { remoteUrl: project.remoteUrl } : {}),
   };
   try {
     localStorage.setItem(

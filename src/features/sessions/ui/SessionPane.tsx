@@ -115,6 +115,7 @@ import {
 } from "../../settings/model/appearance";
 import type { SessionFolderTarget } from "../model/sessionFolders";
 import { markLinkedSessionUpdateSeen } from "../../inbox/model/linkedSessionSeen";
+import { requestProjectLocation } from "../../projects/model/projectMachines";
 import { RemoteSession } from "../../connections/ui/RemoteSession";
 import { isRemoteProjectPath } from "../../projects/model/recents";
 import type { HostSession } from "../../connections/model/protocol";
@@ -146,6 +147,9 @@ export type SessionPaneProps = {
   onFocus: (sessionId: string) => void;
   onClose: (sessionId: string) => void;
   onCwdChange: (sessionId: string, cwd: string) => void;
+  /** Moves a session that has not started to another machine's folder. A
+   * remote session keeps this even though it ignores `onCwdChange`. */
+  onMachineChange?: (sessionId: string, cwd: string) => void;
   onBranchChange: (sessionId: string) => void;
   onWorktreeChange?: (sessionId: string, tree: Worktree) => Promise<void>;
   onRemoteSnapshot?: (shellId: string, snapshot?: HostSession) => void;
@@ -305,6 +309,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
   onFocus,
   onClose,
   onCwdChange,
+  onMachineChange,
   onBranchChange,
   onWorktreeChange,
   onWorkspaceModeChange,
@@ -683,6 +688,18 @@ const LocalSessionPane = memo(function LocalSessionPane({
       onQuestionInteraction={(id) => onQuestionInteraction?.(session.id, id)}
       onFocus={() => onFocus(session.id)}
       onCwdChange={(cwd) => onCwdChange(session.id, cwd)}
+      onMachineChange={
+        onMachineChange
+          ? (cwd) => onMachineChange(session.id, cwd)
+          : undefined
+      }
+      onAddMachineLocation={(where) =>
+        requestProjectLocation({
+          project: session.cwd,
+          where,
+          sessionId: session.id,
+        })
+      }
       onBranchChange={() => onBranchChange(session.id)}
       onWorktreeChange={
         onWorktreeChange

@@ -35,7 +35,7 @@ import { IS_MAC, MOD } from "../../platform/tauri/platform";
 import { formatInteger } from "../../shared/lib/numbers";
 import { pathKey, projectKey, projectName } from "../../shared/lib/paths";
 import {
-  collectRailProjects,
+  collectRailHomes,
   loadPinnedProjects,
   loadProjectRailOrder,
   projectRailSections,
@@ -47,6 +47,13 @@ import {
   toggleProjectPin,
   type RecentProject,
 } from "../../features/projects/model/recents";
+import {
+  projectHome,
+  useProjectLocations,
+  useProjectMachinesRevision,
+  locationFolder,
+  locationLabel,
+} from "../../features/projects/model/projectMachines";
 import {
   loadTabGroupColors,
   loadTabGroupCustomColors,
@@ -216,9 +223,11 @@ export function ProjectRail({
     setInboxMenu(null);
   }, [visible]);
   const notificationPreferences = useProjectNotificationPreferences();
+  const machinesRevision = useProjectMachinesRevision();
+  const homeCwd = useMemo(() => projectHome(cwd), [cwd, machinesRevision]);
   const allProjects = useMemo(
-    () => collectRailProjects(recents, cwd),
-    [cwd, recents],
+    () => collectRailHomes(recents, cwd),
+    [cwd, recents, machinesRevision],
   );
   const notificationProjects = useNotificationProjects([...allProjects.keys()]);
   const menuTrigger = useRef<HTMLElement | null>(null);
@@ -232,7 +241,7 @@ export function ProjectRail({
   }
   const sections = useMemo(
     () => projectRailSections(recents, cwd, railOrder, pinnedPaths),
-    [cwd, pinnedPaths, railOrder, recents],
+    [cwd, pinnedPaths, railOrder, recents, machinesRevision],
   );
   const groupedProjectSections = useMemo(() => {
     const byGroup = new Map<string, RecentProject[]>(
@@ -258,9 +267,12 @@ export function ProjectRail({
   }, [projectGroupAssignments, projectGroups, sections.projects]);
   const busy = useMemo(() => {
     const set = new Set<string>();
-    for (const path of busyPaths ?? []) set.add(path);
+    for (const path of busyPaths ?? []) {
+      set.add(path);
+      set.add(projectHome(path));
+    }
     return set;
-  }, [busyPaths]);
+  }, [busyPaths, machinesRevision]);
 
   useEffect(() => {
     setRailOrder((prev) => {
@@ -433,7 +445,7 @@ export function ProjectRail({
                 label="Pinned"
                 items={sections.pinned}
                 muteStatuses={muteStatuses}
-                cwd={cwd}
+                cwd={homeCwd}
                 busy={busy}
                 statsEnabled={visible}
                 sortable={pinnedSortable}
@@ -464,7 +476,7 @@ export function ProjectRail({
                       group={group}
                       items={items}
                       muteStatuses={muteStatuses}
-                      cwd={cwd}
+                      cwd={homeCwd}
                       busy={busy}
                       statsEnabled={visible}
                       searchActive={otherViewActive}
@@ -503,7 +515,7 @@ export function ProjectRail({
                   : undefined
               }
               onAdd={onOpenProject}
-              cwd={cwd}
+              cwd={homeCwd}
               busy={busy}
               statsEnabled={visible}
               sortable={projectSortable}
@@ -893,7 +905,9 @@ function ProjectCard({
   const deletions = stats?.deletions ?? 0;
   const hasChanges = files > 0 || additions > 0 || deletions > 0;
   const remote = remoteProjectFor(item.path);
-  const { machines } = useRemoteMachines(!!remote);
+  const locations = useProjectLocations(item.path);
+  const multi = locations.length > 1;
+  const { machines } = useRemoteMachines(!!remote || multi);
   const machine = remote
     ? machines.find((entry) => entry.environmentId === remote.environmentId)
     : undefined;
@@ -908,19 +922,26 @@ function ProjectCard({
           ? "Connected"
           : "Reconnecting";
   const cardTitle = projectCardTitle(
-    remote
+    multi
+      ? locations
+          .map((path) => `${locationLabel(path, machines)}: ${locationFolder(path)}`)
+          .join("\n")
+      : remote
       ? `${remote.cwd} on ${machine?.name ?? "another machine"} (${connection})`
       : item.path,
     name,
     stats,
     busy,
   );
+  const machineText = multi
+    ? `${locations.length} machines`
+    : machine?.name;
   const cardAriaLabel = projectCardAriaLabel(
-    machine ? `${name} on ${machine.name}` : name,
+    machineText ? `${name} on ${machineText}` : name,
     stats,
     busy,
   );
-  const labelClassName = machine
+  const labelClassName = machineText
     ? "min-w-0 max-w-[75%] shrink-0 truncate text-sm font-medium leading-tight"
     : nameClassName;
 
@@ -990,9 +1011,9 @@ function ProjectCard({
         ) : (
           <span className={labelClassName}>{name}</span>
         )}
-        {machine ? (
+        {machineText ? (
           <span className="min-w-0 flex-1 truncate text-[11px] leading-tight text-content/45">
-            {machine.name}
+            {machineText}
           </span>
         ) : null}
         {hasChanges ? (
@@ -1000,7 +1021,7 @@ function ProjectCard({
             <ProjectDiffStat additions={additions} deletions={deletions} />
           </span>
         ) : null}
-        {remote ? (
+        {remote && !multi ? (
           <span
             role="img"
             aria-label={connection}

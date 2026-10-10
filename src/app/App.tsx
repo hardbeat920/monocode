@@ -676,6 +676,17 @@ import {
 } from "../features/connections/model/remoteProjects";
 import type { HostSession } from "../features/connections/model/protocol";
 import { AddRemoteProjectDialog } from "../features/connections/ui/AddRemoteProjectDialog";
+import { useProjectMachineSync } from "../features/projects/hooks/useProjectMachineSync";
+import {
+  ADD_PROJECT_LOCATION_EVENT,
+  forgetMachineLocation,
+  linkProjectLocation,
+  projectHome,
+  projectLocations,
+  sessionCanMove,
+  useProjectMachinesRevision,
+  type AddProjectLocationRequest,
+} from "../features/projects/model/projectMachines";
 import type { ConnectableInboxSource } from "../features/inbox/model/inboxFilters";
 import type { InboxSessionPortal } from "../features/inbox/ui/InboxDiscussionPanel";
 import { inboxAskKey, inboxAskPrompt } from "../features/inbox/model/inboxAsk";
@@ -1057,6 +1068,7 @@ function Workspace({
       ? rememberProject(resumed.projectCwd)
       : loadRecents(),
   );
+  useProjectMachineSync(recents);
   const [seed] = useState(() => {
     const cwd = lastProjectPath() ?? "~";
     const session = newDefaultSession(cwd);
@@ -1875,6 +1887,18 @@ function Workspace({
     activeFile?.projectCwd ?? activeFile?.cwd ?? active?.cwd ?? projectCwd;
   const sidebarCwdRef = useRef(sidebarCwd);
   sidebarCwdRef.current = sidebarCwd;
+  // The sidebar lists every machine's sessions for the project. This
+  // computer's come from its own folder, wherever the open session runs.
+  const projectMachinesRevision = useProjectMachinesRevision();
+  const historyCwd = useMemo(
+    () =>
+      projectLocations(sidebarCwd).find(
+        (location) => !isRemoteProjectPath(location),
+      ) ?? sidebarCwd,
+    [sidebarCwd, projectMachinesRevision],
+  );
+  const historyCwdRef = useRef(historyCwd);
+  historyCwdRef.current = historyCwd;
   const [sidebarTabSelection, setSidebarTabSelection] = useState<{
     project: string;
     tab: SidebarTabId;
@@ -1895,7 +1919,7 @@ function Workspace({
     });
   }, []);
   const sidebarCwdKey =
-    sidebarCwd && sidebarCwd !== "~" ? normalizeProjectPath(sidebarCwd) : null;
+    historyCwd && historyCwd !== "~" ? normalizeProjectPath(historyCwd) : null;
   const historyFailed =
     sidebarCwdKey != null && historyErrorCwd === sidebarCwdKey;
   // True from the very first frame that shows a project we have never listed,
@@ -2276,13 +2300,13 @@ function Workspace({
     setHistoryErrorCwd((prev) => (prev === key ? null : prev));
     try {
       const rows = await listSessionsByProject(cwd);
-      if (cwd !== sidebarCwdRef.current) return;
+      if (cwd !== historyCwdRef.current) return;
       setHistory((current) => replaceProjectHistory(current, cwd, rows));
       setLoadedProjects((prev) =>
         prev.has(key) ? prev : new Set(prev).add(key),
       );
     } catch {
-      if (cwd !== sidebarCwdRef.current) return;
+      if (cwd !== historyCwdRef.current) return;
       // A failed revalidate keeps the cached cards rather than replacing a
       // good list with an error.
       if (!loadedProjectsRef.current.has(key)) setHistoryErrorCwd(key);
@@ -2290,8 +2314,8 @@ function Workspace({
   }, []);
 
   useEffect(() => {
-    void refreshHistory(sidebarCwd);
-  }, [sidebarCwd, refreshHistory]);
+    void refreshHistory(historyCwd);
+  }, [historyCwd, refreshHistory]);
 
   useEffect(() => {
     if (!inboxViewOpen) return;
@@ -2328,7 +2352,7 @@ function Workspace({
       .then((summary) => {
         if (!summary) return;
         lastPersisted.current.set(session.id, fingerprint);
-        if (summary.cwd === sidebarCwdRef.current) {
+        if (summary.cwd === historyCwdRef.current) {
           setHistory((current) => mergeProjectHistorySummary(current, summary));
         }
       })
@@ -2403,7 +2427,7 @@ function Workspace({
           const summary = await upsertSession(session).catch(() => null);
           if (!summary) return;
           lastPersisted.current.set(session.id, fingerprint);
-          if (summary.cwd === sidebarCwdRef.current) {
+          if (summary.cwd === historyCwdRef.current) {
             setHistory((current) =>
               mergeProjectHistorySummary(current, summary),
             );
@@ -5737,7 +5761,8 @@ function Workspace({
       if (
         previous &&
         !sameProjectPath(previous, normalized) &&
-        previous !== "~"
+        previous !== "~" &&
+        !isRemoteProjectPath(previous)
       ) {
         void keepSessionChanges(sessionId, previous).catch(() => undefined);
       }
@@ -5783,6 +5808,18 @@ function Workspace({
       notifyReviewChanged(sessionId);
     },
     [appendTab, projectOfTab],
+  );
+
+  // The picker is disabled once a remote tab is bound to a host session, but
+  // a binding can land while its menu is open. Moving then would leave the tab
+  // polling the old host's session id on the new machine.
+  const onMachineChange = useCallback(
+    (sessionId: string, cwd: string) => {
+      const session = sessionsRef.current.find((s) => s.id === sessionId);
+      if (sessionCanMove(session, remoteSessionFor(sessionId)))
+        onCwdChange(sessionId, cwd);
+    },
+    [onCwdChange],
   );
 
   const onBranchChange = useCallback(
@@ -6133,6 +6170,9 @@ function Workspace({
         ? forgetProject(normalized)
         : archiveProject(normalized);
       if (options.purgeData) {
+        // An archived project keeps its machines for when it comes back.
+        for (const location of projectLocations(normalized).reverse())
+          forgetMachineLocation(location);
         forgetProjectLocation(normalized);
         setSidebarTabSelection((current) =>
           sameProjectPath(current.project, normalized)
@@ -11220,13 +11260,13 @@ function Workspace({
         history,
         // A habit's hidden run is never one of the project's chats.
         promptableSessions,
-        sidebarCwd,
+        historyCwd,
         {
           ...(projectBranches?.current
             ? { branch: projectBranches.current }
             : {}),
-          ...(sidebarCwd && sidebarCwd !== "~"
-            ? { repo: projectName(sidebarCwd) }
+          ...(historyCwd && historyCwd !== "~"
+            ? { repo: projectName(historyCwd) }
             : {}),
         },
         orchestrationRuns,
@@ -11235,7 +11275,7 @@ function Workspace({
       history,
       projectBranches,
       promptableSessions,
-      sidebarCwd,
+      historyCwd,
       orchestrationRuns,
     ],
   );
@@ -11590,11 +11630,52 @@ function Workspace({
     return () =>
       window.removeEventListener(OPEN_CONNECTIONS_EVENT, openConnections);
   }, [openSettings]);
-  const [remoteProjectDialogOpen, setRemoteProjectDialogOpen] = useState(false);
+  const [remoteProjectDialog, setRemoteProjectDialog] = useState<{
+    /** Home of the project the folder joins; absent for a new project. */
+    linkTo?: string;
+    sessionId?: string;
+  } | null>(null);
+  const addProjectLocation = useCallback(
+    (home: string, path: string, sessionId?: string) => {
+      if (!linkProjectLocation(home, path)) {
+        window.alert(
+          `${projectName(home)} already has a folder on that machine. Unlink it from the project's Machines menu first.`,
+        );
+        return;
+      }
+      const session = sessionId
+        ? sessionsRef.current.find((entry) => entry.id === sessionId)
+        : undefined;
+      if (session && sessionCanMove(session, remoteSessionFor(session.id)))
+        onCwdChange(session.id, path);
+    },
+    [onCwdChange],
+  );
+  const addProjectLocationRef = useRef(addProjectLocation);
+  addProjectLocationRef.current = addProjectLocation;
   useEffect(() => {
-    const open = () => setRemoteProjectDialogOpen(true);
+    const open = () => setRemoteProjectDialog({});
+    const add = (event: Event) => {
+      const request = (event as CustomEvent<AddProjectLocationRequest>).detail;
+      if (!request) return;
+      const home = projectHome(request.project);
+      if (request.where === "remote") {
+        setRemoteProjectDialog({ linkTo: home, sessionId: request.sessionId });
+        return;
+      }
+      void pickFolders(`Choose ${projectName(home)} on this computer`).then(
+        ([path]) => {
+          if (path)
+            addProjectLocationRef.current(home, path, request.sessionId);
+        },
+      );
+    };
     window.addEventListener(OPEN_REMOTE_PROJECT_EVENT, open);
-    return () => window.removeEventListener(OPEN_REMOTE_PROJECT_EVENT, open);
+    window.addEventListener(ADD_PROJECT_LOCATION_EVENT, add);
+    return () => {
+      window.removeEventListener(OPEN_REMOTE_PROJECT_EVENT, open);
+      window.removeEventListener(ADD_PROJECT_LOCATION_EVENT, add);
+    };
   }, []);
 
   useEffect(() => {
@@ -12309,6 +12390,7 @@ function Workspace({
     onFocus: onFocusPane,
     onClose: onClosePane,
     onCwdChange,
+    onMachineChange,
     onBranchChange,
     onWorktreeChange: onComposerWorktreeChange,
     onRemoteSnapshot,
@@ -13186,12 +13268,23 @@ function Workspace({
               onClose={() => setWhatsNewVersion(null)}
             />
           ) : null}
-          {remoteProjectDialogOpen ? (
+          {remoteProjectDialog ? (
             <AddRemoteProjectDialog
-              onCancel={() => setRemoteProjectDialogOpen(false)}
+              linkTo={
+                remoteProjectDialog.linkTo
+                  ? {
+                      name: projectName(remoteProjectDialog.linkTo),
+                      locations: projectLocations(remoteProjectDialog.linkTo),
+                    }
+                  : undefined
+              }
+              onCancel={() => setRemoteProjectDialog(null)}
               onOpen={(key) => {
-                setRemoteProjectDialogOpen(false);
-                onSelectProject(key);
+                const request = remoteProjectDialog;
+                setRemoteProjectDialog(null);
+                if (request.linkTo)
+                  addProjectLocation(request.linkTo, key, request.sessionId);
+                else onSelectProject(key);
               }}
             />
           ) : null}
