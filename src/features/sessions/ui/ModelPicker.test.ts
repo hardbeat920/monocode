@@ -128,6 +128,92 @@ function inputText(input: HTMLInputElement, value: string) {
 }
 
 describe("model picker", () => {
+  it.each([
+    ["codex", "serviceTier", "select", "priority", "default"],
+    ["codex", "serviceTier", "select", "fast", "default"],
+    ["claude", "fast", "toggle", "true", "false"],
+    ["omp", "fast", "toggle", "true", "false"],
+  ] as const)(
+    "shows an inline fast indicator for %s %s (%s=%s)",
+    (harness, id, kind, enabled, disabled) => {
+      const model = `${harness}:fast-indicator`;
+      const plainModel = `${harness}:plain`;
+      const catalog = (value: string) =>
+        act(() =>
+          setHarnessModels(harness, [
+            {
+              id: model,
+              harness,
+              name: "Test model",
+              nativeId: "test",
+              settings: [
+                {
+                  id: "reasoningEffort",
+                  label: "Reasoning",
+                  kind: "select",
+                  value: "medium",
+                  options: [{ value: "medium", label: "Medium" }],
+                },
+                {
+                  id,
+                  kind,
+                  label: "Fast",
+                  value,
+                  options: [
+                    { value: enabled, label: "On" },
+                    { value: disabled, label: "Off" },
+                  ],
+                },
+              ],
+            },
+            { id: plainModel, harness, name: "Plain model", nativeId: "plain" },
+          ]),
+        );
+      const render = (
+        values: Record<string, string>,
+        selected = model,
+        hideSettings = false,
+      ) =>
+        act(() =>
+          root.render(
+            createElement(ModelPicker, {
+              harness,
+              model: selected,
+              values,
+              hideSettings,
+              onChange: vi.fn(),
+              onSettingsChange: vi.fn(),
+            }),
+          ),
+        );
+      const trigger = () =>
+        container.querySelector<HTMLButtonElement>("button[aria-haspopup]")!;
+      const lightning = () => trigger().querySelector("svg.text-accent");
+      catalog(disabled);
+      render({ [id]: enabled });
+      expect(lightning()).not.toBeNull();
+      expect(lightning()?.previousElementSibling?.textContent).toBe("Medium");
+      expect(lightning()?.nextElementSibling).toBe(trigger().lastElementChild);
+      expect(lightning()?.getAttribute("fill")).toBe("none");
+      expect(trigger().textContent).toBe("Test modelMedium");
+      expect(container.querySelectorAll("button")).toHaveLength(1);
+      expect(trigger().getAttribute("aria-label")).toContain("fast mode");
+      expect(trigger().title).toContain("Fast mode");
+      render({ [id]: disabled });
+      expect(lightning()).toBeNull();
+      expect(trigger().getAttribute("aria-label")).not.toContain("fast mode");
+      catalog(enabled);
+      render({});
+      expect(lightning()).not.toBeNull();
+      render({ [id]: disabled });
+      expect(lightning()).toBeNull();
+      render({ [id]: enabled }, plainModel);
+      expect(lightning()).toBeNull();
+      render({ [id]: enabled }, model, true);
+      expect(lightning()).not.toBeNull();
+    },
+  );
+
   it("shows the model name and effort in the combined picker", () => {
     const onChange = vi.fn();
     const onSettingsChange = vi.fn();
