@@ -26,6 +26,11 @@ function Bomb() {
   throw new Error("kaboom");
 }
 
+/** Throws a falsy value, which is legal but not an `Error`. */
+function NullBomb() {
+  throw null;
+}
+
 function renderBoundary(child: ReactNode) {
   return act(async () =>
     root.render(createElement(ErrorBoundary, null, child)),
@@ -47,6 +52,16 @@ it("shows a recoverable frame instead of unmounting the tree", async () => {
   expect(alert).not.toBeNull();
   expect(alert!.textContent).toContain("Something went wrong");
   expect(alert!.textContent).toContain("kaboom");
+});
+
+it("falls back for a thrown falsy value instead of retrying the child", async () => {
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  // `throw null` is legal. Storing only the value would read as "no error"
+  // and re-render the child forever.
+  await renderBoundary(createElement(NullBomb, null));
+  const alert = container.querySelector("[role=alert]");
+  expect(alert).not.toBeNull();
+  expect(alert!.textContent).toContain("Something went wrong");
 });
 
 it("reloads only when the user asks, never on its own", async () => {

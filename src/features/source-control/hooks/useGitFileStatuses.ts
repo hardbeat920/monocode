@@ -64,12 +64,19 @@ function entryFor(cwd: string): Entry {
   entries.delete(cwd);
   entries.set(cwd, entry);
   while (entries.size > MAX_CACHED_PROJECTS) {
-    const oldest = entries.keys().next().value;
-    if (oldest === undefined) break;
-    const evicted = entries.get(oldest);
-    if (evicted?.listeners.size) break;
-    stop(evicted!);
-    entries.delete(oldest);
+    // Evict the oldest entry nothing is listening to. Stopping at the first
+    // subscribed entry would preserve every later one too, so the cache could
+    // still grow without a bound once more than the limit are subscribed.
+    let evictable: string | undefined;
+    for (const key of entries.keys()) {
+      if (!entries.get(key)?.listeners.size) {
+        evictable = key;
+        break;
+      }
+    }
+    if (evictable === undefined) break;
+    stop(entries.get(evictable)!);
+    entries.delete(evictable);
   }
   return entry;
 }

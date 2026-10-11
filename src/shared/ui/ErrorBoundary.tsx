@@ -12,12 +12,16 @@ import { Component, type ErrorInfo, type ReactNode } from "react";
  */
 export class ErrorBoundary extends Component<
   { children: ReactNode },
-  { error: Error | null }
+  { failed: boolean; error: unknown }
 > {
-  state = { error: null as Error | null };
+  state = { failed: false, error: null as unknown };
 
-  static getDerivedStateFromError(error: Error) {
-    return { error };
+  static getDerivedStateFromError(error: unknown) {
+    // `failed` is tracked separately from `error` because a throw is not
+    // guaranteed to be an `Error` — `throw null` is legal, and storing only
+    // the value would make `render` treat that as no failure and retry the
+    // child forever instead of showing the fallback.
+    return { failed: true, error };
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
@@ -27,13 +31,13 @@ export class ErrorBoundary extends Component<
   }
 
   private reset = () => {
-    this.setState({ error: null });
+    this.setState({ failed: false, error: null });
     window.location.reload();
   };
 
   render() {
-    const { error } = this.state;
-    if (!error) return this.props.children;
+    const { failed, error } = this.state;
+    if (!failed) return this.props.children;
     return (
       <div
         role="alert"
@@ -73,7 +77,7 @@ export class ErrorBoundary extends Component<
               marginTop: "12px",
             }}
           >
-            {error.message}
+            {describeError(error)}
           </pre>
         </details>
         <button
@@ -94,5 +98,16 @@ export class ErrorBoundary extends Component<
         </button>
       </div>
     );
+  }
+}
+
+/** Anything can be thrown, so render whatever it was without assuming a shape. */
+function describeError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  try {
+    return JSON.stringify(error) ?? String(error);
+  } catch {
+    return String(error);
   }
 }

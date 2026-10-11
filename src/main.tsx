@@ -114,8 +114,8 @@ void Promise.all([
     const installedUpdate = windowTransfer ? null : consumeInstalledUpdate();
     ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
       <React.StrictMode>
-        <ErrorBoundary>
-          <BootGate>
+        <BootGate>
+          <ErrorBoundary>
             <App
               windowTransfer={windowTransfer}
               resumed={resumed}
@@ -123,8 +123,8 @@ void Promise.all([
               history={history}
               historyCwd={historyCwd}
             />
-          </BootGate>
-        </ErrorBoundary>
+          </ErrorBoundary>
+        </BootGate>
       </React.StrictMode>,
     );
   },

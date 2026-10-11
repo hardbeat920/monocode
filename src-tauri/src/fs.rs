@@ -929,10 +929,11 @@ fn git_change_token_for(root: &Path) -> Result<String, String> {
 }
 
 /// A small FNV-1a digest. The UI only compares tokens, so any stable hash of
-/// the status text works and this avoids a dependency.
-fn digest(text: &str) -> u64 {
+/// the status output works and this avoids a dependency. Takes bytes because
+/// `git status -z` output is a byte string, not necessarily valid UTF-8.
+fn digest(bytes: &[u8]) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in text.as_bytes() {
+    for byte in bytes {
         hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }

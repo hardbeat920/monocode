@@ -1731,10 +1731,16 @@ function useDiffIndex(
     };
 
     void reloadNow();
+    // The interval only asks whether anything moved, so it must keep the
+    // token. Going through `reloadNow` here cleared it every tick and
+    // rebuilt the full index every 2s, which defeats the whole point.
+    const onPoll = () => {
+      if (!document.hidden) void poll();
+    };
     const onResume = () => {
       if (!document.hidden) void reloadNow();
     };
-    const timer = window.setInterval(onResume, GIT_POLL_MS);
+    const timer = window.setInterval(onPoll, GIT_POLL_MS);
     window.addEventListener("focus", onResume);
     document.addEventListener("visibilitychange", onResume);
     const unsubGit = subscribeGitChanged(onResume);
