@@ -21,8 +21,19 @@ import { initializeProviderBinaryPaths } from "./features/providers/model/provid
 // Lets file commands reach a connected machine for `remote://` paths.
 import "./features/connections/model/remoteCommands";
 import "./styles/index.css";
+import { ErrorBoundary } from "./shared/ui/ErrorBoundary";
 
 performance.mark("monocode:bootstrap");
+
+// The boundary only catches what React can route to it. Async work, effects,
+// and event handlers throw outside that path, so they get their own handlers;
+// without them those failures stay invisible even with the boundary in place.
+window.addEventListener("error", (event) => {
+  console.error("Uncaught error:", event.error ?? event.message);
+});
+window.addEventListener("unhandledrejection", (event) => {
+  console.error("Unhandled rejection:", event.reason);
+});
 // Let local boot IPC overlap loading/evaluating the workspace UI.
 const appLoaded = import("./app/App");
 
@@ -103,15 +114,17 @@ void Promise.all([
     const installedUpdate = windowTransfer ? null : consumeInstalledUpdate();
     ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
       <React.StrictMode>
-        <BootGate>
-          <App
-            windowTransfer={windowTransfer}
-            resumed={resumed}
-            installedUpdate={installedUpdate}
-            history={history}
-            historyCwd={historyCwd}
-          />
-        </BootGate>
+        <ErrorBoundary>
+          <BootGate>
+            <App
+              windowTransfer={windowTransfer}
+              resumed={resumed}
+              installedUpdate={installedUpdate}
+              history={history}
+              historyCwd={historyCwd}
+            />
+          </BootGate>
+        </ErrorBoundary>
       </React.StrictMode>,
     );
   },

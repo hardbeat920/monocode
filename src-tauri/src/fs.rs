@@ -889,6 +889,56 @@ pub async fn git_diff_files(cwd: String) -> Result<GitDiffIndex, String> {
         .map_err(|e| e.to_string())
 }
 
+/// A cheap fingerprint of the working tree, for change detection.
+///
+/// The UI polls for changes every couple of seconds. Rebuilding the full diff
+/// index for that costs eight or more `git` forks, most of which answer the
+/// same question: has anything moved? This runs a single `git status` and
+/// returns a digest of it, so a quiet repository costs one process instead of
+/// ten, and the expensive index is only rebuilt when the digest changes.
+#[tauri::command]
+pub async fn git_change_token(cwd: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || git_change_token_for(&expand_home(&cwd)))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+fn git_change_token_for(root: &Path) -> Result<String, String> {
+    // Not via `git_stdout`: that helper treats empty output as failure, and a
+    // clean tree is empty. Skipping it keeps the idle case cheap instead of
+    // erroring into a full index rebuild every poll.
+    let status = git_cmd()
+        .arg("-C")
+        .arg(root)
+        .args([
+            "status",
+            "--porcelain=v1",
+            // Untracked files are listed individually so adding a file changes
+            // the digest; `-uno` would lump them into one entry and hide them.
+            "--untracked-files=all",
+            "-z",
+        ])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !status.status.success() {
+        return Err("Not a git repository".to_string());
+    }
+    // A new branch or commit also has to invalidate the cached index.
+    let head = git_stdout(root, &["rev-parse", "HEAD"]).unwrap_or_default();
+    Ok(format!("{head}\u{0}{}", digest(&status.stdout)))
+}
+
+/// A small FNV-1a digest. The UI only compares tokens, so any stable hash of
+/// the status text works and this avoids a dependency.
+fn digest(text: &str) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in text.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GitFileDiff {

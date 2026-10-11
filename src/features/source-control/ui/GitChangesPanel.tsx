@@ -40,6 +40,7 @@ import {
 } from "./GitHistoryGraph";
 import {
   basename,
+  gitChangeToken,
   gitCommit,
   gitDiffIndex,
   gitDiscardAll,
@@ -98,6 +99,24 @@ let changesView: ChangesView = loadChangesView();
 const collapsedDirs = new Set<string>();
 const indexByCwd = new Map<string, GitDiffIndex>();
 const prByCwd = new Map<string, GitPr | null>();
+
+/**
+ * How many projects keep a cached diff index. Entries are added on every poll
+ * and dropped only on error, so hopping between worktrees used to grow this
+ * map for the life of the process — one full file list per project.
+ */
+const MAX_CACHED_PROJECTS = 8;
+
+/** Least-recently-set entries fall out first. */
+function cachePut<V>(cache: Map<string, V>, key: string, value: V) {
+  cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > MAX_CACHED_PROJECTS) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    cache.delete(oldest);
+  }
+}
 
 type AmendTarget = { branch: string | null; head: string | null };
 
@@ -964,12 +983,12 @@ export function usePrStatus(
       void gitPrStatus(cwd)
         .then((next) => {
           if (cancelled) return;
-          prByCwd.set(cwd, next);
+          cachePut(prByCwd, cwd, next);
           setPr(next);
         })
         .catch(() => {
           if (cancelled) return;
-          prByCwd.set(cwd, null);
+          cachePut(prByCwd, cwd, null);
           setPr(null);
         });
     };
@@ -1636,20 +1655,18 @@ function useDiffIndex(
     let cancelled = false;
     let inFlight = false;
     let pending = false;
+    /** Last cheap fingerprint, so a quiet tree skips the expensive rebuild. */
+    let token: string | null = null;
 
-    const load = async () => {
-      if (inFlight) {
-        pending = true;
-        return;
-      }
-      if (document.hidden && nonce === 0) return;
+    /** Rebuild the full index. `force` ignores the fingerprint. */
+    const loadIndex = async () => {
       inFlight = true;
       try {
         const next = await gitDiffIndex(cwd);
         if (cancelled) return;
         const prev = indexRef.current;
         if (sameIndex(prev, next)) return;
-        indexByCwd.set(cwd, next);
+        cachePut(indexByCwd, cwd, next);
         indexRef.current = next;
         setIndex(next);
         applyProjectDiffStats(cwd, {
@@ -1671,14 +1688,51 @@ function useDiffIndex(
         inFlight = false;
         if (pending && !cancelled) {
           pending = false;
-          void load();
+          void poll();
         }
       }
     };
 
-    void load();
+    /**
+     * Poll: probe with one cheap `git status` and only rebuild the index when
+     * the working tree actually moved. Rebuilding costs ten forks, so paying
+     * that every 2s on an idle repo was the bulk of the app's background CPU.
+     */
+    const poll = async () => {
+      if (inFlight) {
+        pending = true;
+        return;
+      }
+      if (document.hidden) return;
+      inFlight = true;
+      try {
+        const next = await gitChangeToken(cwd);
+        if (cancelled) return;
+        if (next === token) return;
+        token = next;
+        await loadIndex();
+      } catch {
+        // A failed probe says nothing about the tree; fall back to a full
+        // rebuild so a broken `git status` cannot freeze the panel.
+        await loadIndex();
+      } finally {
+        inFlight = false;
+        if (pending && !cancelled) {
+          pending = false;
+          void poll();
+        }
+      }
+    };
+
+    // An explicit reload must always rebuild, whatever the fingerprint says.
+    const reloadNow = async () => {
+      token = null;
+      await poll();
+    };
+
+    void reloadNow();
     const onResume = () => {
-      if (!document.hidden) void load();
+      if (!document.hidden) void reloadNow();
     };
     const timer = window.setInterval(onResume, GIT_POLL_MS);
     window.addEventListener("focus", onResume);

@@ -34,9 +34,22 @@ type Entry = {
 
 const entries = new Map<string, Entry>();
 
+/**
+ * How many projects keep a status map. Each entry holds a full file/dir status
+ * map and is created on demand, so hopping between worktrees accumulates one
+ * per project for the life of the process.
+ */
+const MAX_CACHED_PROJECTS = 8;
+
 function entryFor(cwd: string): Entry {
   const existing = entries.get(cwd);
-  if (existing) return existing;
+  // Re-insert on every access, not just creation, or the eviction order below
+  // is insertion order rather than least-recently-used.
+  if (existing) {
+    entries.delete(cwd);
+    entries.set(cwd, existing);
+    return existing;
+  }
   const entry: Entry = {
     cwd,
     data: EMPTY,
@@ -47,7 +60,17 @@ function entryFor(cwd: string): Entry {
     unsubscribeDirs: null,
     onResume: null,
   };
+  // Re-insert to keep least-recently-used order, then drop the oldest.
+  entries.delete(cwd);
   entries.set(cwd, entry);
+  while (entries.size > MAX_CACHED_PROJECTS) {
+    const oldest = entries.keys().next().value;
+    if (oldest === undefined) break;
+    const evicted = entries.get(oldest);
+    if (evicted?.listeners.size) break;
+    stop(evicted!);
+    entries.delete(oldest);
+  }
   return entry;
 }
 
