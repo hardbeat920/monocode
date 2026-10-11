@@ -141,6 +141,15 @@ it("says how to keep memory and update the soul only at the user's request", () 
   expect(full).toContain(
     "Submitted sessions notify you on completion by default",
   );
+  expect(full).toContain("doing work for you as the coordinating Mono");
+  expect(full).toContain("Handoff status: completed, Handoff status: partial");
+  expect(full).toContain("task disposition");
+  expect(full).toContain("Treat a missing or malformed status as unreported");
+  expect(full).toContain("separate from task disposition");
+  expect(full).toContain("Unreported is not verified completion");
+  expect(full).toContain(
+    "send the user one consolidated update",
+  );
   expect(full).toContain('set "notifyOnComplete":false on sessions.start');
   expect(full).toContain("waits for every session in that group to stop");
   expect(full).toContain("give one consolidated report");
