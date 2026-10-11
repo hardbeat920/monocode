@@ -105,6 +105,7 @@ import {
 } from "../features/monos/model/monoActivity";
 import { MenuBar } from "./shell/MenuBar";
 import { FilePicker } from "../features/files/ui/FilePicker";
+import { ProjectBoardDialog } from "../features/project-board/ui";
 import {
   DeleteSessionDialog,
   type SessionDeleteChoice,
@@ -1217,6 +1218,7 @@ function Workspace({
     [],
   );
   const [projectRailOpen, setProjectRailOpen] = useState(loadProjectRailOpen);
+  const [projectBoardCwd, setProjectBoardCwd] = useState<string | null>(null);
   const [sessionSidebarOpen, setSessionSidebarOpen] = useState(
     loadSessionSidebarOpen,
   );
@@ -11449,6 +11451,16 @@ function Workspace({
     });
   }, []);
 
+  const onOpenProjectBoard = useCallback((projectCwd: string) => {
+    setFilePickerOpen(false);
+    setSettingsOpen(false);
+    setSearchViewOpen(false);
+    setInboxViewOpen(false);
+    setNotesViewOpen(false);
+    setAutomationsViewOpen(false);
+    setProjectBoardCwd(projectCwd);
+  }, []);
+
   const onOpenLinkedWorkItem = useCallback(
     (item: LinkedWorkItem, sessionId: string) => {
       const request = linkedWorkItemPanelRequest.current + 1;
@@ -11691,6 +11703,10 @@ function Workspace({
   );
 
   const onRailBack = useCallback(() => {
+    if (projectBoardCwd) {
+      setProjectBoardCwd(null);
+      return;
+    }
     if (settingsOpen) {
       onCloseSettings();
       return;
@@ -11721,6 +11737,7 @@ function Workspace({
     onCloseSettings,
     onVisitBack,
     closeMonoView,
+    projectBoardCwd,
     searchViewOpen,
     settingsOpen,
     inboxViewOpen,
@@ -12592,6 +12609,7 @@ function Workspace({
   const onDismissUpdate = useCallback(() => setUpdateNotice(null), []);
 
   const chromeSurfaceOpen =
+    !!projectBoardCwd ||
     searchViewOpen ||
     settingsOpen ||
     inboxViewOpen ||
@@ -12628,7 +12646,7 @@ function Workspace({
       projectRailOpen={projectRailOpen}
       sessionSidebarOpen={sessionSidebarOpen}
       compactRail={compactTitleNavigation}
-      canGoBack={!!monoViewId || tabVisitNav.canBack}
+      canGoBack={!!projectBoardCwd || !!monoViewId || tabVisitNav.canBack}
       canGoForward={tabVisitNav.canForward}
       onGoBack={onRailBack}
       onGoForward={onRailForward}
@@ -12712,6 +12730,7 @@ function Workspace({
               onFileMoved={onFileMoved}
               onFileDeleted={onFileDeleted}
               canGoBack={
+                !!projectBoardCwd ||
                 !!monoViewId ||
                 tabVisitNav.canBack ||
                 searchViewOpen ||
@@ -12742,6 +12761,7 @@ function Workspace({
               onSelectAgent={onSelectLiveAgent}
               onSelectProject={onSelectProject}
               onOpenProject={pickProject}
+              onOpenProjectBoard={onOpenProjectBoard}
               onRemoveProject={onRemoveProject}
               monos={sidebarMonos}
               monoViewActive={monoCovers}
@@ -13297,6 +13317,16 @@ function Workspace({
               key={providerSignInRequest.key}
               harness={providerSignInRequest.harness}
               onClose={() => setProviderSignInRequest(null)}
+            />
+          ) : null}
+          {projectBoardCwd ? (
+            <ProjectBoardDialog
+              projectCwd={projectBoardCwd}
+              onClose={() => setProjectBoardCwd(null)}
+              onOpenSession={(sessionId) => {
+                setProjectBoardCwd(null);
+                void onSelectHistorySession(sessionId);
+              }}
             />
           ) : null}
         </div>

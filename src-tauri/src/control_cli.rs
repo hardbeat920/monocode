@@ -82,7 +82,7 @@ const ACTIONS: [&str; 12] = [
     "list", "delegate", "get", "steer", "message", "retry", "cancel", "wait", "review", "finish",
     "respond", "answer",
 ];
-const APP_ACTIONS: [&str; 32] = [
+const APP_ACTIONS: [&str; 36] = [
     "models.list",
     "sessions.list",
     "sessions.read",
@@ -115,14 +115,18 @@ const APP_ACTIONS: [&str; 32] = [
     "habits.run",
     "habits.remove",
     "chat.card",
+    "board.list",
+    "board.create",
+    "board.update",
+    "board.start",
 ];
 const APP_USAGE: &str = r#"MonoCode app access — use in a thread enabled by /operator.
 
 Usage: {exe} app ACTION [--json JSON | --input FILE|-] [--request-id ID]
 
 A Mono works on several projects: add "project":"<path or name>" to the
-sessions.*, worktrees.* and folders.* actions to choose which one. It may be
-left out when the Mono has a single project.
+sessions.*, worktrees.*, folders.* and board.* actions to choose which one. It
+may be left out when the Mono has a single project.
 
 Actions:
   models.list    {}  Available providers, models, settings and permission modes.
@@ -259,6 +263,19 @@ Actions:
                    "schedule":{"kind":"daily","time":"09:00"}}
                   choices accepts 1–4 options. A habit card is a suggestion;
                   the user must start it before it is scheduled.
+  board.list     {"project":"...","status":"ready"}
+                  List cards in one of your projects; status is optional.
+  board.create   {"project":"...","title":"...","description":"...",
+                  "status":"backlog","priority":"medium"}
+                  Create a project card. Status: backlog, ready, in-progress,
+                  blocked or done. Priority: low, medium or high.
+  board.update   {"project":"...","id":"...","status":"in-progress"}
+                  Update only supplied card fields. Session links are created
+                  by board.start; never provide linkedSessionIds.
+  board.start    {"project":"...","cardIds":["..."],"placement":"right"}
+                  Start only the selected 1–10 cards as monitored sessions.
+                  Returns a result and session ID for each card. A session
+                  that started but could not be linked is reported explicitly.
 
 The output is one JSON line: {"ok":true,"result":...} or {"ok":false,"error":"..."}.
 Use --input - to pass JSON on stdin. Never print MonoCode credentials.

@@ -36,6 +36,7 @@ mod notes;
 mod notifications;
 mod pasteboard;
 mod pi_usage;
+mod project_board;
 mod project_logo;
 mod pty;
 #[cfg(target_os = "macos")]
@@ -508,6 +509,14 @@ pub fn run() {
             session_store::session_delete,
             session_store::session_set_archived,
             session_store::session_set_pinned,
+            project_board::project_board_list,
+            project_board::project_board_upsert_card,
+            project_board::project_board_patch_card,
+            project_board::project_board_link_session,
+            project_board::project_board_delete_card,
+            project_board::project_board_add_media,
+            project_board::project_board_get_media,
+            project_board::project_board_delete_media,
             session_store::session_set_linked_work_item,
             session_store::session_set_in_flight,
             session_store::session_list_in_flight,
