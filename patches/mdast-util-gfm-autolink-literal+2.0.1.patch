@@ -1,0 +1,13 @@
+diff --git a/node_modules/mdast-util-gfm-autolink-literal/lib/index.js b/node_modules/mdast-util-gfm-autolink-literal/lib/index.js
+index c5ca771..7fcfaf8 100644
+--- a/node_modules/mdast-util-gfm-autolink-literal/lib/index.js
++++ b/node_modules/mdast-util-gfm-autolink-literal/lib/index.js
+@@ -132,7 +132,7 @@ function transformGfmAutolinkLiterals(tree) {
+     tree,
+     [
+       [/(https?:\/\/|www(?=\.))([-.\w]+)([^ \t\r\n]*)/gi, findUrl],
+-      [/(?<=^|\s|\p{P}|\p{S})([-.\w+]+)@([-\w]+(?:\.[-\w]+)+)/gu, findEmail]
++      [/([-.\w+]+)@([-\w]+(?:\.[-\w]+)+)/gu, findEmail]
+     ],
+     {ignore: ['link', 'linkReference']}
+   )
