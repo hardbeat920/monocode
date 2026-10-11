@@ -2320,7 +2320,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
       {monoChatProse ? (
         <div className="agent-chat-bubble agent-chat-bubble-tail-left box-border w-fit min-w-0 max-w-[min(100%,36rem)] rounded-xl border border-content/10 bg-content/5 px-3 py-2 [--agent-bubble-radius:0.75rem]">
           <AgentMarkdown
-            className="agent-chat-bubble-md break-words [overflow-wrap:anywhere] [&_pre]:[overflow-wrap:normal] [&_table]:[overflow-wrap:normal] [&_[data-streamdown=table-wrapper]]:[overflow-wrap:normal]"
+            className="agent-chat-bubble-md [overflow-wrap:anywhere] [&_pre]:[overflow-wrap:normal] [&_table]:[overflow-wrap:normal] [&_[data-streamdown=table-wrapper]]:[overflow-wrap:normal]"
             text={block.text}
             streaming={block.streaming}
             revealOnMount={revealOnMount}

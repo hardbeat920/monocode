@@ -93,7 +93,7 @@ describe("Mono assistant response bubbles", () => {
     expect(markup).toContain('data-chat-message-role="assistant"');
     expect(markup).toContain("agent-chat-bubble agent-chat-bubble-tail-left");
     expect(markup).toContain("agent-chat-bubble-md");
-    expect(markup).toContain("break-words");
+    expect(markup).not.toContain("break-words");
     expect(markup).toContain("[overflow-wrap:anywhere]");
     expect(markup).toMatch(/\[&(?:amp;)?_pre\]:\[overflow-wrap:normal\]/);
     expect(markup).toMatch(/\[&(?:amp;)?_table\]:\[overflow-wrap:normal\]/);
