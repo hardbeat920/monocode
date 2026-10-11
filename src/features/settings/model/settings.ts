@@ -370,6 +370,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "queue steer interrupt send while running",
   },
   {
+    id: "resume-at-reset",
+    section: "chat",
+    label: "Resume at reset",
+    keywords: "usage limit rate limit continue automatically wait",
+  },
+  {
     id: "model-controls",
     section: "chat",
     label: "Model controls",
@@ -995,6 +1001,19 @@ export function subscribeDiffViewer(onStoreChange: () => void) {
   window.addEventListener(DIFF_VIEWER_CHANGE_EVENT, onStoreChange);
   return () =>
     window.removeEventListener(DIFF_VIEWER_CHANGE_EVENT, onStoreChange);
+}
+
+const RESUME_AT_RESET_KEY = "monocode.resumeAtReset";
+
+export const RESUME_AT_RESET_DEFAULT = true;
+
+/** Whether a usage limit notice starts armed to continue at the reset. */
+export function loadResumeAtReset(): boolean {
+  return readFlag(RESUME_AT_RESET_KEY) ?? RESUME_AT_RESET_DEFAULT;
+}
+
+export function saveResumeAtReset(value: boolean) {
+  writeFlag(RESUME_AT_RESET_KEY, value);
 }
 
 const FORMAT_ON_SAVE_KEY = "monocode.formatOnSave";
