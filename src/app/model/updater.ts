@@ -3,6 +3,8 @@ import { ask, message } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updater";
 import { announceUpdateAvailable } from "../../features/settings/model/sounds";
+import { quitWhileBusyMessage } from "../../features/sessions/model/inFlight";
+import { liveInFlightCount } from "./appLifecycle";
 import { rememberInstalledUpdate } from "./updateNotice";
 
 export type UpdaterPhase =
@@ -226,6 +228,27 @@ export async function installPendingUpdate(
 
     rememberInstalledUpdate(update.version);
     pendingUpdate = null;
+
+    // The bits are already on disk; only the restart is optional. Ask before
+    // taking it if chats are running, the same way a plain quit would — a
+    // relaunch that starts unconditionally can't be walked back by a later
+    // "No", since the new process is already on its way up by the time the
+    // busy-quit dialog's answer comes back.
+    const busy = liveInFlightCount();
+    if (busy > 0) {
+      const proceed = await ask(quitWhileBusyMessage(busy), {
+        title: "MonoCode",
+        kind: "warning",
+        okLabel: "Quit",
+      });
+      if (!proceed) {
+        return {
+          phase: "current",
+          currentVersion: update.version,
+        };
+      }
+    }
+
     await relaunch();
     return {
       phase: "current",
