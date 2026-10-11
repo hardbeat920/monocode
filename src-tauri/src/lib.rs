@@ -467,6 +467,7 @@ pub fn run() {
             harness::harness_resolve_hermes,
             harness::harness_resolve_devin,
             harness::harness_resolve_antigravity,
+            harness::harness_resolve_opencrabs,
             harness::harness_free_port,
             harness::harness_spawn,
             codex_mono_store::codex_mono_store_prepare,

@@ -204,6 +204,12 @@ export const MODELS: AgentModel[] = [
     name: "Adaptive",
     nativeId: "adaptive",
   },
+  {
+    id: "opencrabs:default",
+    harness: "opencrabs",
+    name: "Configured model",
+    nativeId: "",
+  },
 ];
 
 export const DEFAULT_MODEL_ID: Record<HarnessId, string> = {
@@ -218,6 +224,7 @@ export const DEFAULT_MODEL_ID: Record<HarnessId, string> = {
   hermes: "hermes:default",
   antigravity: "antigravity:gemini-3.8-flash-high",
   devin: "devin:adaptive",
+  opencrabs: "opencrabs:default",
 };
 
 const FAVORITES_KEY = "monocode.favoriteModels";
@@ -248,6 +255,7 @@ const HARNESS_ORDER: HarnessId[] = [
   "hermes",
   "antigravity",
   "devin",
+  "opencrabs",
 ];
 
 const EMPTY_MODELS: AgentModel[] = [];

@@ -1,0 +1,138 @@
+name: Cross release (fork)
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*-opencrabs.*"
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux packages
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux system dependencies
+        run: bash scripts/install-linux-deps-debian.sh
+
+      - run: npm ci
+
+      - name: Build Linux packages
+        run: |
+          set -euo pipefail
+          printf '%s\n' '{"bundle":{"createUpdaterArtifacts":false}}' > "$RUNNER_TEMP/tauri.fork.conf.json"
+          npm run build:linux -- --config "$RUNNER_TEMP/tauri.fork.conf.json"
+
+      - name: Stage Linux packages
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          mkdir -p release-artifacts
+          cp target/release/bundle/deb/*.deb release-artifacts/
+          cp target/release/bundle/appimage/*.AppImage release-artifacts/
+
+      - name: Upload Linux packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: release-artifacts/
+          if-no-files-found: error
+
+  linux-rpm:
+    name: Linux rpm package
+    runs-on: ubuntu-latest
+    # Same recipe as upstream: build inside EL 10 so the rpm's glibc
+    # requirement matches the oldest advertised target; an Ubuntu-linked
+    # rpm would install on EL 10 and then fail to load.
+    container: almalinux:10
+    steps:
+      - name: Install git
+        run: dnf install -y git
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Enterprise Linux system dependencies
+        run: bash scripts/install-linux-deps-fedora.sh
+
+      - run: npm ci
+
+      - name: Build rpm package
+        run: npm run build:fedora
+
+      - name: Verify and stage the rpm
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          bundle=(target/release/bundle/rpm/*.rpm)
+          if (( ${#bundle[@]} != 1 )); then
+            echo "Expected exactly one .rpm" >&2
+            exit 1
+          fi
+          requires="$(rpm -qp --requires "${bundle[0]}")"
+          for dep in webkit2gtk4.1 gtk3 libappindicator-gtk3 librsvg2 openssl-libs; do
+            if ! grep -qx "$dep" <<<"$requires"; then
+              echo "rpm is missing Requires: $dep" >&2
+              exit 1
+            fi
+          done
+          mkdir -p release-artifacts
+          cp "${bundle[0]}" release-artifacts/
+
+      - name: Upload rpm package
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-rpm-package
+          path: release-artifacts/
+          if-no-files-found: error
+
+  windows:
+    name: Windows packages
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - run: npm ci
+
+      - name: Build Windows installer
+        shell: pwsh
+        run: |
+          '{"bundle":{"createUpdaterArtifacts":false}}' | Set-Content -Encoding utf8 "$env:RUNNER_TEMP\tauri.fork.conf.json"
+          npx tauri build --bundles nsis --config "$env:RUNNER_TEMP\tauri.fork.conf.json"
+
+      - name: Stage Windows packages
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "release-artifacts" | Out-Null
+          Copy-Item "target/release/bundle/nsis/*.exe" "release-artifacts/"
+
+      - name: Upload Windows packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-packages
+          path: release-artifacts/
+          if-no-files-found: error
