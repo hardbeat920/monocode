@@ -54,7 +54,16 @@ import {
   type MentionIndex,
   type MentionToken,
 } from "../../files/model/fileMentions";
-import type { ProjectFile } from "../../../platform/tauri/fs";
+import {
+  pathMentionDir,
+  pathMentionQuery,
+  rankPathEntries,
+} from "../../files/model/pathMentions";
+import {
+  listDir,
+  type FsEntry,
+  type ProjectFile,
+} from "../../../platform/tauri/fs";
 import {
   composeInboxMessage,
   type InboxComposerCard,
@@ -507,6 +516,15 @@ export function Composer({
   const [notes, setNotes] = useState<Note[]>(() => peekNotes() ?? []);
   const [mention, setMention] = useState<MentionToken | null>(null);
   const [mentionActive, setMentionActive] = useState(0);
+  /** One listed directory for an `@../`-style mention. */
+  const [pathListing, setPathListing] = useState<{
+    dir: string;
+    entries: FsEntry[];
+  } | null>(null);
+  /** Out-of-project files picked via `@../`, so the composer highlights them. */
+  const [pickedPaths, setPickedPaths] = useState<Map<string, ProjectFile>>(
+    () => new Map(),
+  );
   const [resendEdited, setResendEdited] = useState(false);
   const [runnerEnabled, setRunnerEnabled] = useState(loadComposerRunner);
   const autocorrect = useComposerAutocorrect();
@@ -603,8 +621,19 @@ export function Composer({
   );
   const mentionIndexRef = useRef<MentionIndex>(mentionIndex);
   mentionIndexRef.current = mentionIndex;
+  const highlightLabels = useMemo(() => {
+    if (pickedPaths.size === 0) return mentionIndex.labels;
+    return new Map([...mentionIndex.labels, ...pickedPaths]);
+  }, [mentionIndex.labels, pickedPaths]);
+  const pathQuery = mentionOpen ? pathMentionQuery(mention?.query ?? "") : null;
+  const pathDir = pathQuery ? pathMentionDir(pathQuery.dir, localCwd) : null;
+  const pathEntries =
+    pathDir && pathListing?.dir === pathDir ? pathListing.entries : null;
   const rankedFiles = useMemo(() => {
     if (!mentionOpen) return [];
+    if (pathQuery) {
+      return pathEntries ? rankPathEntries(pathQuery, pathEntries) : [];
+    }
     const fileHits = looksLikeProject(executionCwd)
       ? rankMentionFiles(
           files,
@@ -617,7 +646,16 @@ export function Composer({
       : [];
     const seen = new Set(noteHits.map((file) => file.path));
     return [...noteHits, ...fileHits.filter((file) => !seen.has(file.path))];
-  }, [executionCwd, files, mention?.query, mentionOpen, notes, notesEnabled]);
+    // `pathQuery` derives from `mention.query`, already a dependency.
+  }, [
+    executionCwd,
+    files,
+    mention?.query,
+    mentionOpen,
+    notes,
+    notesEnabled,
+    pathEntries,
+  ]);
 
   const syncHasValue = useCallback(
     (text: string, files: Attachment[]) => {
@@ -861,6 +899,20 @@ export function Composer({
       unsub();
     };
   }, [localCwd, mentionOpen]);
+
+  useEffect(() => {
+    if (!pathDir) return;
+    let cancelled = false;
+    const apply = (entries: FsEntry[]) => {
+      if (!cancelled) setPathListing({ dir: pathDir, entries });
+    };
+    void listDir(pathDir)
+      .then(apply)
+      .catch(() => apply([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [pathDir]);
 
   useEffect(() => {
     if (!mentionOpen || !notesEnabled) return;
@@ -1109,9 +1161,31 @@ export function Composer({
         setMention(null);
         return;
       }
-      const label = isNoteMentionPath(file.path)
-        ? file.relative
-        : mentionLabel(file, mentionIndexRef.current);
+      if (pathMentionQuery(token.query)) {
+        // Folders too: `@../dir/` stays a highlighted mention once left as is.
+        setPickedPaths((prev) =>
+          prev.get(file.relative)?.path === file.path
+            ? prev
+            : new Map(prev).set(file.relative, file),
+        );
+        if (file.isDir) {
+          // Keep browsing: `@../dir/` lists `dir` without closing the picker.
+          const value = `${el.value.slice(0, token.start)}@${file.relative}/`;
+          const next = value + el.value.slice(token.end);
+          el.value = next;
+          resizeComposer(el);
+          el.setSelectionRange(value.length, value.length);
+          setDraft(next);
+          syncHasValue(next, attachmentsRef.current);
+          setMention(mentionTokenAt(next, value.length));
+          el.focus();
+          return;
+        }
+      }
+      const label =
+        isNoteMentionPath(file.path) || pathMentionQuery(token.query)
+          ? file.relative
+          : mentionLabel(file, mentionIndexRef.current);
       const next = replaceMentionToken(el.value, token, label);
       el.value = next;
       resizeComposer(el);
@@ -1895,10 +1969,12 @@ export function Composer({
               query={mention?.query ?? ""}
               active={mentionActive}
               loading={
-                looksLikeProject(executionCwd) &&
-                peekProjectFiles(executionCwd) == null
+                pathQuery
+                  ? pathDir != null && pathEntries == null
+                  : looksLikeProject(executionCwd) &&
+                    peekProjectFiles(executionCwd) == null
               }
-              includeNotes={notesEnabled}
+              includeNotes={notesEnabled && !pathQuery}
               onActive={setMentionActive}
               onPick={pickMention}
             />
@@ -2050,7 +2126,7 @@ export function Composer({
                 text={draft}
                 mode={leadingMode}
                 names={skillNames}
-                mentions={mentionIndex.labels}
+                mentions={highlightLabels}
                 mcpTags={selectedMcp}
               />
             </div>
