@@ -8,12 +8,16 @@ import {
   subscribeProjectBoard,
   project_board_list,
   project_board_upsert_card,
+  project_board_patch_card,
+  project_board_link_session,
   project_board_delete_card,
   project_board_add_media,
   project_board_get_media,
   project_board_delete_media,
   projectBoardList,
   projectBoardUpsertCard,
+  projectBoardPatchCard,
+  projectBoardLinkSession,
   projectBoardDeleteCard,
   projectBoardAddMedia,
   projectBoardGetMedia,
@@ -22,6 +26,7 @@ import {
   createProjectBoardRepository,
   type ProjectBoardCard,
   type ProjectBoardCardInput,
+  type ProjectBoardCardPatch,
   type BoardMediaRef,
   type BoardMedia,
 } from "./projectBoard";
@@ -103,6 +108,68 @@ describe("Project Board Model & Contract", () => {
       expect(eventDetail).toEqual({ projectCwd: "/workspace/project-a" });
 
       window.removeEventListener(PROJECT_BOARD_CHANGED_EVENT, listener);
+    });
+
+
+    it("project_board_patch_card invokes native command and dispatches change event with project path", async () => {
+      let eventDetail: unknown = null;
+      const listener = (e: Event) => {
+        eventDetail = (e as CustomEvent).detail;
+      };
+      window.addEventListener(PROJECT_BOARD_CHANGED_EVENT, listener);
+
+      const patchedCard = { ...mockCard, title: "Patched Title" };
+      vi.mocked(invoke).mockResolvedValueOnce(patchedCard);
+      const patch: ProjectBoardCardPatch = {
+        title: "Patched Title",
+      };
+
+      const result = await project_board_patch_card("/workspace/project-a", "card-1", patch);
+      expect(invoke).toHaveBeenCalledWith("project_board_patch_card", {
+        projectCwd: "/workspace/project-a",
+        cardId: "card-1",
+        patch,
+      });
+      expect(result).toEqual(patchedCard);
+      expect(eventDetail).toEqual({ projectCwd: "/workspace/project-a" });
+
+      window.removeEventListener(PROJECT_BOARD_CHANGED_EVENT, listener);
+    });
+
+    it("project_board_link_session invokes native command and dispatches change event when card updated", async () => {
+      let eventDetail: unknown = null;
+      const listener = (e: Event) => {
+        eventDetail = (e as CustomEvent).detail;
+      };
+      window.addEventListener(PROJECT_BOARD_CHANGED_EVENT, listener);
+
+      const linkedCard = { ...mockCard, status: "in-progress" as const, linkedSessionIds: ["sess-1", "sess-2"] };
+      vi.mocked(invoke).mockResolvedValueOnce(linkedCard);
+
+      const result = await project_board_link_session("/workspace/project-a", "card-1", "sess-2");
+      expect(invoke).toHaveBeenCalledWith("project_board_link_session", {
+        projectCwd: "/workspace/project-a",
+        cardId: "card-1",
+        sessionId: "sess-2",
+      });
+      expect(result).toEqual(linkedCard);
+      expect(eventDetail).toEqual({ projectCwd: "/workspace/project-a" });
+
+      window.removeEventListener(PROJECT_BOARD_CHANGED_EVENT, listener);
+    });
+
+    it("project_board_link_session returns null and does not dispatch change event when card deleted", async () => {
+      const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+      vi.mocked(invoke).mockResolvedValueOnce(null);
+
+      const result = await project_board_link_session("/workspace/project-a", "card-deleted", "sess-2");
+      expect(invoke).toHaveBeenCalledWith("project_board_link_session", {
+        projectCwd: "/workspace/project-a",
+        cardId: "card-deleted",
+        sessionId: "sess-2",
+      });
+      expect(result).toBeNull();
+      expect(dispatchSpy).not.toHaveBeenCalled();
     });
 
     it("project_board_delete_card invokes native command and dispatches change event", async () => {
@@ -245,6 +312,8 @@ describe("Project Board Model & Contract", () => {
     it("projectBoardRepository provides all contract methods", () => {
       expect(typeof projectBoardRepository.list).toBe("function");
       expect(typeof projectBoardRepository.upsertCard).toBe("function");
+      expect(typeof projectBoardRepository.patchCard).toBe("function");
+      expect(typeof projectBoardRepository.linkSession).toBe("function");
       expect(typeof projectBoardRepository.deleteCard).toBe("function");
       expect(typeof projectBoardRepository.addMedia).toBe("function");
       expect(typeof projectBoardRepository.getMedia).toBe("function");

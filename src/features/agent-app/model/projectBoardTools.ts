@@ -42,7 +42,7 @@ export type ProjectBoardCardInput = Pick<
 >;
 
 export type ProjectBoardCardPatch = Partial<
-  Pick<ProjectBoardCard, "title" | "description" | "status" | "priority" | "linkedSessionIds">
+  Pick<ProjectBoardCard, "title" | "description" | "status" | "priority">
 >;
 
 export interface BoardMedia extends BoardMediaRef {
@@ -53,6 +53,8 @@ export interface BoardMedia extends BoardMediaRef {
 export interface ProjectBoardRepository {
   list(projectCwd: string): Promise<ProjectBoardCard[]>;
   upsertCard(input: ProjectBoardCardInput): Promise<ProjectBoardCard>;
+  patchCard(projectCwd: string, cardId: string, patch: ProjectBoardCardPatch): Promise<ProjectBoardCard>;
+  linkSession(projectCwd: string, cardId: string, sessionId: string): Promise<ProjectBoardCard | null>;
   deleteCard(projectCwd: string, cardId: string): Promise<void>;
   addMedia(input: {
     projectCwd: string;
@@ -512,14 +514,6 @@ export async function dispatchProjectBoardAction(
       }
       const cardId = sanitizeId(rawId);
 
-      const existingCards = await host.repository.list(context.projectCwd);
-      const existing = existingCards.find((c) => c.id === cardId);
-      if (!existing) {
-        throw new Error(
-          "Card \"" + cardId + "\" not found in authorized project",
-        );
-      }
-
       const hasUpdateField =
         input.title !== undefined ||
         input.description !== undefined ||
@@ -530,7 +524,8 @@ export async function dispatchProjectBoardAction(
         throw new Error("Supply at least one field to update");
       }
 
-      let title = existing.title;
+      const patch: ProjectBoardCardPatch = {};
+
       if (input.title !== undefined) {
         if (typeof input.title !== "string" || !input.title.trim()) {
           throw new Error("title must be a non-empty string");
@@ -541,10 +536,9 @@ export async function dispatchProjectBoardAction(
             "title exceeds maximum length of " + BOARD_VALIDATION.titleMax + " characters",
           );
         }
-        title = trimmedTitle;
+        patch.title = trimmedTitle;
       }
 
-      let description = existing.description;
       if (input.description !== undefined) {
         if (typeof input.description !== "string") {
           throw new Error("description must be a string");
@@ -554,10 +548,9 @@ export async function dispatchProjectBoardAction(
             "description exceeds maximum length of " + BOARD_VALIDATION.descriptionMax + " characters",
           );
         }
-        description = input.description;
+        patch.description = input.description;
       }
 
-      let status = existing.status;
       if (input.status !== undefined) {
         if (
           typeof input.status !== "string" ||
@@ -567,10 +560,9 @@ export async function dispatchProjectBoardAction(
             "Invalid status: " + String(input.status) + ". Must be one of: " + VALID_STATUSES.join(", "),
           );
         }
-        status = input.status as BoardStatus;
+        patch.status = input.status as BoardStatus;
       }
 
-      let priority = existing.priority;
       if (input.priority !== undefined) {
         if (
           typeof input.priority !== "string" ||
@@ -580,20 +572,14 @@ export async function dispatchProjectBoardAction(
             "Invalid priority: " + String(input.priority) + ". Must be one of: " + VALID_PRIORITIES.join(", "),
           );
         }
-        priority = input.priority as BoardPriority;
+        patch.priority = input.priority as BoardPriority;
       }
 
-      const patchInput: ProjectBoardCardInput = {
-        id: existing.id,
-        projectCwd: context.projectCwd,
-        title,
-        description,
-        status,
-        priority,
-        linkedSessionIds: existing.linkedSessionIds,
-      };
-
-      const card = await host.repository.upsertCard(patchInput);
+      const card = await host.repository.patchCard(
+        context.projectCwd,
+        cardId,
+        patch,
+      );
       return {
         ...card,
         card,
@@ -688,10 +674,13 @@ export async function dispatchProjectBoardAction(
         }
 
         try {
-          const latestCards = await host.repository.list(context.projectCwd);
-          const latestCard = latestCards.find((c) => c.id === cardId);
+          const linkedCard = await host.repository.linkSession(
+            context.projectCwd,
+            cardId,
+            sessionId,
+          );
 
-          if (!latestCard) {
+          if (!linkedCard) {
             cardResults.push({
               cardId,
               success: false,
@@ -704,28 +693,6 @@ export async function dispatchProjectBoardAction(
             });
             continue;
           }
-
-          const nextLinked = latestCard.linkedSessionIds.includes(sessionId)
-            ? latestCard.linkedSessionIds
-            : [...latestCard.linkedSessionIds, sessionId];
-
-          if (nextLinked.length > BOARD_VALIDATION.linkedSessionsMax) {
-            throw new Error(
-              "Card exceeds maximum of " + BOARD_VALIDATION.linkedSessionsMax + " linked sessions",
-            );
-          }
-
-          const updatedCard: ProjectBoardCardInput = {
-            id: latestCard.id,
-            projectCwd: context.projectCwd,
-            title: latestCard.title,
-            description: latestCard.description,
-            status: "in-progress",
-            priority: latestCard.priority,
-            linkedSessionIds: nextLinked,
-          };
-
-          await host.repository.upsertCard(updatedCard);
 
           cardResults.push({
             cardId,

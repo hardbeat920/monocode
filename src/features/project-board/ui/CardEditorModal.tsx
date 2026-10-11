@@ -23,6 +23,7 @@ import {
   type BoardStatus,
   type ProjectBoardCard,
   type ProjectBoardCardInput,
+  type ProjectBoardCardPatch,
   type ProjectBoardRepository,
 } from "./types";
 import { MediaPreviewModal } from "./MediaPreviewModal";
@@ -63,6 +64,19 @@ export function CardEditorModal({
 }: Props) {
   const cardId = useRef<string>(initialCard?.id ?? generateId()).current;
   const isEditing = Boolean(initialCard);
+  const createdRef = useRef(false);
+
+  // Snapshot opening values for existing cards to submit only changed fields
+  const openingSnapshotRef = useRef(
+    initialCard
+      ? {
+          title: initialCard.title,
+          description: initialCard.description,
+          status: initialCard.status,
+          priority: initialCard.priority,
+        }
+      : null,
+  );
 
   const [title, setTitle] = useState(initialCard?.title ?? "");
   const [description, setDescription] = useState(initialCard?.description ?? "");
@@ -180,34 +194,80 @@ export function CardEditorModal({
 
     setIsSubmitting(true);
     try {
-      const input: ProjectBoardCardInput = {
-        id: cardId,
-        projectCwd,
-        title: cleanTitle,
-        description,
-        status,
-        priority,
-        linkedSessionIds: existingSessions,
-      };
+      let savedCard: ProjectBoardCard;
 
-      const savedCard = await repository.upsertCard(input);
+      if (isEditing || createdRef.current) {
+        const snapshot = openingSnapshotRef.current;
+        if (!snapshot) {
+          throw new Error("Card opening snapshot is unavailable.");
+        }
 
-      // Upload newly attached media
-      for (const media of mediaList) {
+        const patch: ProjectBoardCardPatch = {};
+        if (cleanTitle !== snapshot.title) {
+          patch.title = cleanTitle;
+        }
+        if (description !== snapshot.description) {
+          patch.description = description;
+        }
+        if (status !== snapshot.status) {
+          patch.status = status;
+        }
+        if (priority !== snapshot.priority) {
+          patch.priority = priority;
+        }
+
+        savedCard = await repository.patchCard(projectCwd, cardId, patch);
+      } else {
+        const input: ProjectBoardCardInput = {
+          id: cardId,
+          projectCwd,
+          title: cleanTitle,
+          description,
+          status,
+          priority,
+          linkedSessionIds: existingSessions,
+        };
+        savedCard = await repository.upsertCard(input);
+        createdRef.current = true;
+        openingSnapshotRef.current = {
+          title: cleanTitle,
+          description,
+          status,
+          priority,
+        };
+      }
+
+      // Keep an evolving list so later upload updates preserve earlier persisted references.
+      let mediaToUpload = [...mediaList];
+      for (let i = 0; i < mediaToUpload.length; i++) {
+        const media = mediaToUpload[i];
         if (!media.isExisting && media.dataBase64) {
-          await repository.addMedia({
+          const uploadedRef = await repository.addMedia({
             projectCwd,
             cardId,
             name: media.name,
             mimeType: media.mimeType,
             dataBase64: media.dataBase64,
           });
+          const persistedMedia: PendingMedia = {
+            ...media,
+            ...uploadedRef,
+            dataBase64: "",
+            isExisting: true,
+          };
+          const updatedMediaList = [...mediaToUpload];
+          updatedMediaList[i] = persistedMedia;
+          mediaToUpload = updatedMediaList;
+          setMediaList(updatedMediaList);
         }
       }
 
       // Commit staged media removals only after card save succeeds
-      for (const mediaId of stagedRemovals) {
+      let remainingRemovals = [...stagedRemovals];
+      for (const mediaId of [...remainingRemovals]) {
         await repository.deleteMedia(projectCwd, cardId, mediaId);
+        remainingRemovals = remainingRemovals.filter((id) => id !== mediaId);
+        setStagedRemovals(remainingRemovals);
       }
 
       // Re-fetch card to get updated media list

@@ -1,5 +1,5 @@
 use base64::prelude::*;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -117,6 +117,36 @@ pub struct ProjectBoardCardInput {
     pub priority: BoardPriority,
     #[serde(default)]
     pub linked_session_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectBoardCardPatch {
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub status: Option<BoardStatus>,
+    pub priority: Option<BoardPriority>,
+}
+
+pub fn validate_card_patch(patch: &ProjectBoardCardPatch) -> Result<(), String> {
+    if let Some(title) = &patch.title {
+        if title.trim().is_empty() {
+            return Err("Card title cannot be empty".into());
+        }
+        if title.chars().count() > TITLE_MAX {
+            return Err(format!(
+                "Card title exceeds maximum length of {TITLE_MAX} characters"
+            ));
+        }
+    }
+    if let Some(desc) = &patch.description {
+        if desc.chars().count() > DESCRIPTION_MAX {
+            return Err(format!(
+                "Card description exceeds maximum length of {DESCRIPTION_MAX} characters"
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -394,57 +424,46 @@ pub fn upsert_card(
 ) -> Result<ProjectBoardCard, String> {
     validate_card_input(input)?;
 
-    let existing_created_at: Option<i64> = conn
+    let existing: bool = conn
         .query_row(
-            "SELECT created_at FROM project_board_cards WHERE project_cwd = ?1 AND id = ?2",
+            "SELECT 1 FROM project_board_cards WHERE project_cwd = ?1 AND id = ?2",
             params![input.project_cwd, input.id],
-            |row| row.get(0),
+            |_| Ok(true),
         )
         .optional()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+        .unwrap_or(false);
+
+    if existing {
+        return Err(format!(
+            "Card with ID '{}' already exists in project",
+            input.id
+        ));
+    }
 
     let now = now_millis();
-    let created_at = existing_created_at.unwrap_or(now);
+    let created_at = now;
     let updated_at = now;
     let linked_sessions_json =
         serde_json::to_string(&input.linked_session_ids).map_err(|e| e.to_string())?;
 
-    if existing_created_at.is_some() {
-        conn.execute(
-            "UPDATE project_board_cards
-             SET title = ?1, description = ?2, status = ?3, priority = ?4, linked_sessions_json = ?5, updated_at = ?6
-             WHERE project_cwd = ?7 AND id = ?8",
-            params![
-                input.title,
-                input.description,
-                input.status.as_str(),
-                input.priority.as_str(),
-                linked_sessions_json,
-                updated_at,
-                input.project_cwd,
-                input.id,
-            ],
-        )
-        .map_err(|e| e.to_string())?;
-    } else {
-        conn.execute(
-            "INSERT INTO project_board_cards
-             (id, project_cwd, title, description, status, priority, linked_sessions_json, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                input.id,
-                input.project_cwd,
-                input.title,
-                input.description,
-                input.status.as_str(),
-                input.priority.as_str(),
-                linked_sessions_json,
-                created_at,
-                updated_at,
-            ],
-        )
-        .map_err(|e| e.to_string())?;
-    }
+    conn.execute(
+        "INSERT INTO project_board_cards
+         (id, project_cwd, title, description, status, priority, linked_sessions_json, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            input.id,
+            input.project_cwd,
+            input.title,
+            input.description,
+            input.status.as_str(),
+            input.priority.as_str(),
+            linked_sessions_json,
+            created_at,
+            updated_at,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
 
     let media = list_card_media_refs(conn, &input.project_cwd, &input.id)?;
 
@@ -460,6 +479,178 @@ pub fn upsert_card(
         created_at,
         updated_at,
     })
+}
+
+pub fn patch_card(
+    conn: &Connection,
+    project_cwd: &str,
+    card_id: &str,
+    patch: &ProjectBoardCardPatch,
+) -> Result<ProjectBoardCard, String> {
+    validate_project_cwd(project_cwd)?;
+    validate_id(card_id, "card")?;
+    validate_card_patch(patch)?;
+
+    let now = now_millis();
+
+    let rows_affected = conn
+        .execute(
+            "UPDATE project_board_cards
+             SET title = COALESCE(?1, title),
+                 description = COALESCE(?2, description),
+                 status = COALESCE(?3, status),
+                 priority = COALESCE(?4, priority),
+                 updated_at = ?5
+             WHERE project_cwd = ?6 AND id = ?7",
+            params![
+                patch.title.as_deref(),
+                patch.description.as_deref(),
+                patch.status.map(|s| s.as_str()),
+                patch.priority.map(|p| p.as_str()),
+                now,
+                project_cwd,
+                card_id,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+
+    if rows_affected == 0 {
+        return Err(format!("Card '{card_id}' not found in authorized project"));
+    }
+
+    let row = conn
+        .query_row(
+            "SELECT title, description, status, priority, linked_sessions_json, created_at, updated_at
+             FROM project_board_cards
+             WHERE project_cwd = ?1 AND id = ?2",
+            params![project_cwd, card_id],
+            |r| {
+                let title: String = r.get(0)?;
+                let description: String = r.get(1)?;
+                let status_raw: String = r.get(2)?;
+                let priority_raw: String = r.get(3)?;
+                let linked_raw: String = r.get(4)?;
+                let created_at: i64 = r.get(5)?;
+                let updated_at: i64 = r.get(6)?;
+                Ok((
+                    title,
+                    description,
+                    status_raw,
+                    priority_raw,
+                    linked_raw,
+                    created_at,
+                    updated_at,
+                ))
+            },
+        )
+        .map_err(|e| e.to_string())?;
+
+    let (title, description, status_raw, priority_raw, linked_raw, created_at, updated_at) = row;
+    let status = BoardStatus::parse(&status_raw)?;
+    let priority = BoardPriority::parse(&priority_raw)?;
+    let linked_session_ids: Vec<String> = serde_json::from_str(&linked_raw).unwrap_or_default();
+    let media = list_card_media_refs(conn, project_cwd, card_id)?;
+
+    Ok(ProjectBoardCard {
+        id: card_id.to_string(),
+        project_cwd: project_cwd.to_string(),
+        title,
+        description,
+        status,
+        priority,
+        linked_session_ids,
+        media,
+        created_at,
+        updated_at,
+    })
+}
+
+pub fn link_session(
+    conn: &mut Connection,
+    project_cwd: &str,
+    card_id: &str,
+    session_id: &str,
+) -> Result<Option<ProjectBoardCard>, String> {
+    validate_project_cwd(project_cwd)?;
+    validate_id(card_id, "card")?;
+    validate_id(session_id, "session")?;
+
+    // Acquire SQLite's write reservation before reading the session list. This
+    // serializes the read-modify-write sequence across separate connections.
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|e| e.to_string())?;
+
+    let row = tx
+        .query_row(
+            "SELECT title, description, priority, linked_sessions_json, created_at
+             FROM project_board_cards
+             WHERE project_cwd = ?1 AND id = ?2",
+            params![project_cwd, card_id],
+            |r| {
+                let title: String = r.get(0)?;
+                let description: String = r.get(1)?;
+                let priority_raw: String = r.get(2)?;
+                let linked_raw: String = r.get(3)?;
+                let created_at: i64 = r.get(4)?;
+                Ok((title, description, priority_raw, linked_raw, created_at))
+            },
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+
+    let (title, description, priority_raw, linked_raw, created_at) = match row {
+        Some(r) => r,
+        // Dropping the transaction rolls back; a deleted card is never recreated.
+        None => return Ok(None),
+    };
+
+    let priority = BoardPriority::parse(&priority_raw)?;
+    let mut linked: Vec<String> = serde_json::from_str(&linked_raw).unwrap_or_default();
+    if !linked.contains(&session_id.to_string()) {
+        if linked.len() >= LINKED_SESSIONS_MAX {
+            return Err(format!(
+                "Card exceeds maximum of {LINKED_SESSIONS_MAX} linked sessions"
+            ));
+        }
+        linked.push(session_id.to_string());
+    }
+
+    let now = now_millis();
+    let linked_sessions_json = serde_json::to_string(&linked).map_err(|e| e.to_string())?;
+    let in_progress = BoardStatus::InProgress;
+
+    tx.execute(
+        "UPDATE project_board_cards
+         SET status = ?1, linked_sessions_json = ?2, updated_at = ?3
+         WHERE project_cwd = ?4 AND id = ?5",
+        params![
+            in_progress.as_str(),
+            linked_sessions_json,
+            now,
+            project_cwd,
+            card_id,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+
+    let media = list_card_media_refs(&tx, project_cwd, card_id)?;
+
+    let card = ProjectBoardCard {
+        id: card_id.to_string(),
+        project_cwd: project_cwd.to_string(),
+        title,
+        description,
+        status: in_progress,
+        priority,
+        linked_session_ids: linked,
+        media,
+        created_at,
+        updated_at: now,
+    };
+    tx.commit().map_err(|e| e.to_string())?;
+
+    Ok(Some(card))
 }
 
 pub fn delete_card(conn: &mut Connection, project_cwd: &str, card_id: &str) -> Result<(), String> {
@@ -679,6 +870,45 @@ pub fn project_board_upsert_card(
     let conn = store.lock_conn()?;
     ensure_tables(&conn).map_err(|e| e.to_string())?;
     upsert_card(&conn, &resolved)
+}
+
+#[tauri::command(async)]
+#[allow(clippy::too_many_arguments)]
+pub fn project_board_patch_card(
+    store: State<'_, SessionStore>,
+    project_cwd: String,
+    card_id: String,
+    patch: Option<ProjectBoardCardPatch>,
+    title: Option<String>,
+    description: Option<String>,
+    status: Option<BoardStatus>,
+    priority: Option<BoardPriority>,
+) -> Result<ProjectBoardCard, String> {
+    let resolved_patch = if let Some(p) = patch {
+        p
+    } else {
+        ProjectBoardCardPatch {
+            title,
+            description,
+            status,
+            priority,
+        }
+    };
+    let conn = store.lock_conn()?;
+    ensure_tables(&conn).map_err(|e| e.to_string())?;
+    patch_card(&conn, &project_cwd, &card_id, &resolved_patch)
+}
+
+#[tauri::command(async)]
+pub fn project_board_link_session(
+    store: State<'_, SessionStore>,
+    project_cwd: String,
+    card_id: String,
+    session_id: String,
+) -> Result<Option<ProjectBoardCard>, String> {
+    let mut conn = store.lock_conn()?;
+    ensure_tables(&conn).map_err(|e| e.to_string())?;
+    link_session(&mut conn, &project_cwd, &card_id, &session_id)
 }
 
 #[tauri::command(async)]
@@ -1025,7 +1255,7 @@ mod tests {
     }
 
     #[test]
-    fn test_upsert_preserves_created_at_and_updates_updated_at() {
+    fn test_upsert_card_is_creation_only_and_rejects_duplicate() {
         let store = SessionStore::open_in_memory().unwrap();
         let conn = store.lock_conn().unwrap();
         ensure_tables(&conn).unwrap();
@@ -1041,19 +1271,220 @@ mod tests {
         };
 
         let first = upsert_card(&conn, &card).unwrap();
+        assert_eq!(first.title, "Original");
+
+        // Second upsert with same ID must fail
+        let duplicate = upsert_card(&conn, &card);
+        assert!(duplicate.is_err(), "Duplicate upsert must fail");
+        let err = duplicate.unwrap_err();
+        assert!(
+            err.contains("already exists"),
+            "Expected duplicate error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_patch_card_atomic_updates_and_preserves_omitted_fields() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.lock_conn().unwrap();
+        ensure_tables(&conn).unwrap();
+
+        let card = ProjectBoardCardInput {
+            id: "card-patch-test".into(),
+            project_cwd: "/project/test".into(),
+            title: "Initial Title".into(),
+            description: "Initial Description".into(),
+            status: BoardStatus::Backlog,
+            priority: BoardPriority::Low,
+            linked_session_ids: vec!["session-alpha".into()],
+        };
+        let created = upsert_card(&conn, &card).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(5));
 
-        let updated_input = ProjectBoardCardInput {
-            title: "Updated Title".into(),
-            status: BoardStatus::InProgress,
-            ..card.clone()
-        };
-        let second = upsert_card(&conn, &updated_input).unwrap();
+        // Patch only title and status, leaving description and priority untouched
+        let patched = patch_card(
+            &conn,
+            "/project/test",
+            "card-patch-test",
+            &ProjectBoardCardPatch {
+                title: Some("Patched Title".into()),
+                status: Some(BoardStatus::InProgress),
+                description: None,
+                priority: None,
+            },
+        )
+        .unwrap();
 
-        assert_eq!(second.created_at, first.created_at);
-        assert!(second.updated_at >= first.updated_at);
-        assert_eq!(second.title, "Updated Title");
-        assert_eq!(second.status, BoardStatus::InProgress);
+        assert_eq!(patched.title, "Patched Title");
+        assert_eq!(patched.status, BoardStatus::InProgress);
+        assert_eq!(patched.description, "Initial Description");
+        assert_eq!(patched.priority, BoardPriority::Low);
+        assert_eq!(patched.linked_session_ids, vec!["session-alpha"]);
+        assert_eq!(patched.created_at, created.created_at);
+        assert!(patched.updated_at >= created.updated_at);
+
+        // Patching nonexistent or deleted card fails
+        let missing = patch_card(
+            &conn,
+            "/project/test",
+            "card-nonexistent",
+            &ProjectBoardCardPatch {
+                title: Some("Fails".into()),
+                ..Default::default()
+            },
+        );
+        assert!(missing.is_err());
+    }
+
+    #[test]
+    fn test_link_session_preserves_user_fields_retains_multiple_and_no_duplicates() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let mut conn = store.lock_conn().unwrap();
+        ensure_tables(&conn).unwrap();
+
+        let card = ProjectBoardCardInput {
+            id: "card-link-test".into(),
+            project_cwd: "/project/test".into(),
+            title: "Task Title".into(),
+            description: "Detailed description".into(),
+            status: BoardStatus::Backlog,
+            priority: BoardPriority::High,
+            linked_session_ids: vec!["sess-1".into()],
+        };
+        let created = upsert_card(&conn, &card).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+
+        // First link adds sess-2, sets in-progress, preserves fields
+        let linked1 = link_session(&mut conn, "/project/test", "card-link-test", "sess-2")
+            .unwrap()
+            .expect("Card must exist");
+
+        assert_eq!(linked1.status, BoardStatus::InProgress);
+        assert_eq!(linked1.linked_session_ids, vec!["sess-1", "sess-2"]);
+        assert_eq!(linked1.title, "Task Title");
+        assert_eq!(linked1.description, "Detailed description");
+        assert_eq!(linked1.priority, BoardPriority::High);
+        assert_eq!(linked1.created_at, created.created_at);
+        assert!(linked1.updated_at >= created.updated_at);
+
+        // Duplicate link with sess-2 does not duplicate session ID
+        let linked_dup = link_session(&mut conn, "/project/test", "card-link-test", "sess-2")
+            .unwrap()
+            .expect("Card must exist");
+        assert_eq!(linked_dup.linked_session_ids, vec!["sess-1", "sess-2"]);
+
+        // Sequential link with sess-3 retains all sessions
+        let linked2 = link_session(&mut conn, "/project/test", "card-link-test", "sess-3")
+            .unwrap()
+            .expect("Card must exist");
+        assert_eq!(
+            linked2.linked_session_ids,
+            vec!["sess-1", "sess-2", "sess-3"]
+        );
+        assert_eq!(linked2.title, "Task Title");
+        assert_eq!(linked2.priority, BoardPriority::High);
+
+        // Linking a card after deletion returns None and does not recreate it.
+        delete_card(&mut conn, "/project/test", "card-link-test").unwrap();
+        let not_found =
+            link_session(&mut conn, "/project/test", "card-link-test", "sess-4").unwrap();
+        assert!(not_found.is_none());
+
+        let all = list_cards(&conn, "/project/test").unwrap();
+        assert!(all.iter().all(|c| c.id != "card-link-test"));
+    }
+
+    #[test]
+    fn test_link_session_serializes_read_modify_write_across_connections() {
+        use std::sync::{Arc, Barrier};
+
+        let db_path = std::env::temp_dir().join(format!(
+            "monocode-project-board-link-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let setup_conn = Connection::open(&db_path).unwrap();
+        setup_conn
+            .execute_batch("PRAGMA busy_timeout = 5000;")
+            .unwrap();
+        ensure_tables(&setup_conn).unwrap();
+        upsert_card(
+            &setup_conn,
+            &ProjectBoardCardInput {
+                id: "card-concurrent-link".into(),
+                project_cwd: "/project/test".into(),
+                title: "Concurrent links".into(),
+                description: "Keep both sessions".into(),
+                status: BoardStatus::Ready,
+                priority: BoardPriority::High,
+                linked_session_ids: vec![],
+            },
+        )
+        .unwrap();
+        drop(setup_conn);
+
+        let mut first_conn = Connection::open(&db_path).unwrap();
+        let mut second_conn = Connection::open(&db_path).unwrap();
+        first_conn
+            .execute_batch("PRAGMA busy_timeout = 5000;")
+            .unwrap();
+        second_conn
+            .execute_batch("PRAGMA busy_timeout = 5000;")
+            .unwrap();
+
+        let barrier = Arc::new(Barrier::new(3));
+        let first_barrier = Arc::clone(&barrier);
+        let first = std::thread::spawn(move || {
+            first_barrier.wait();
+            link_session(
+                &mut first_conn,
+                "/project/test",
+                "card-concurrent-link",
+                "session-concurrent-a",
+            )
+            .unwrap()
+            .expect("card exists")
+        });
+        let second_barrier = Arc::clone(&barrier);
+        let second = std::thread::spawn(move || {
+            second_barrier.wait();
+            link_session(
+                &mut second_conn,
+                "/project/test",
+                "card-concurrent-link",
+                "session-concurrent-b",
+            )
+            .unwrap()
+            .expect("card exists")
+        });
+
+        barrier.wait();
+        let first_result = first.join().unwrap();
+        let second_result = second.join().unwrap();
+        assert!(first_result
+            .linked_session_ids
+            .contains(&"session-concurrent-a".to_string()));
+        assert!(second_result
+            .linked_session_ids
+            .contains(&"session-concurrent-b".to_string()));
+
+        let verify_conn = Connection::open(&db_path).unwrap();
+        let saved = list_cards(&verify_conn, "/project/test").unwrap();
+        let saved = saved
+            .iter()
+            .find(|card| card.id == "card-concurrent-link")
+            .unwrap();
+        assert_eq!(saved.status, BoardStatus::InProgress);
+        let mut saved_session_ids = saved.linked_session_ids.clone();
+        saved_session_ids.sort();
+        assert_eq!(
+            saved_session_ids,
+            vec![
+                "session-concurrent-a".to_string(),
+                "session-concurrent-b".to_string()
+            ]
+        );
+        drop(verify_conn);
+        std::fs::remove_file(db_path).unwrap();
     }
 
     #[test]

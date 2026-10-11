@@ -9,6 +9,7 @@ import {
   type BoardMediaRef,
   type ProjectBoardCard,
   type ProjectBoardCardInput,
+  type ProjectBoardCardPatch,
   type ProjectBoardRepository,
 } from "./types";
 import { ProjectBoardDialog } from "./ProjectBoardDialog";
@@ -37,14 +38,18 @@ const sampleCard: ProjectBoardCard = {
 };
 
 function createMockRepository(initialCards: ProjectBoardCard[] = []): {
-  repository: ProjectBoardRepository;
+  repository: ProjectBoardRepository & {
+    patchCard: ReturnType<typeof vi.fn>;
+  };
   cards: ProjectBoardCard[];
   listCalls: number;
 } {
   const cards = [...initialCards];
   let listCalls = 0;
 
-  const repository: ProjectBoardRepository = {
+  const repository: ProjectBoardRepository & {
+    patchCard: ReturnType<typeof vi.fn>;
+  } = {
     list: vi.fn(async (cwd: string) => {
       listCalls++;
       return cards.filter((c) => c.projectCwd === cwd);
@@ -62,6 +67,35 @@ function createMockRepository(initialCards: ProjectBoardCard[] = []): {
       } else {
         cards.push(updated);
       }
+      return updated;
+    }),
+    patchCard: vi.fn(async (cwd: string, cardId: string, patch: ProjectBoardCardPatch) => {
+      const idx = cards.findIndex((c) => c.id === cardId && c.projectCwd === cwd);
+      if (idx < 0) throw new Error("Card not found");
+      const current = cards[idx];
+      const updated: ProjectBoardCard = {
+        ...current,
+        ...(patch.title !== undefined ? { title: patch.title } : {}),
+        ...(patch.description !== undefined ? { description: patch.description } : {}),
+        ...(patch.status !== undefined ? { status: patch.status } : {}),
+        ...(patch.priority !== undefined ? { priority: patch.priority } : {}),
+        updatedAt: Date.now(),
+      };
+      cards[idx] = updated;
+      return updated;
+    }),
+    linkSession: vi.fn(async (cwd: string, cardId: string, sessionId: string) => {
+      const idx = cards.findIndex((c) => c.id === cardId && c.projectCwd === cwd);
+      if (idx < 0) return null;
+      const current = cards[idx];
+      const existing = current.linkedSessionIds ?? [];
+      const updated = {
+        ...current,
+        linkedSessionIds: existing.includes(sessionId) ? existing : [...existing, sessionId],
+        status: "in-progress" as const,
+        updatedAt: Date.now(),
+      };
+      cards[idx] = updated;
       return updated;
     }),
     deleteCard: vi.fn(async (cwd: string, cardId: string) => {
@@ -323,14 +357,13 @@ describe("ProjectBoardDialog", () => {
       form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     });
 
-    // Verify existing linked sessions were preserved exactly
-    expect(repository.upsertCard).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: "card-1",
-        title: "Refactored authentication",
-        linkedSessionIds: ["sess-abc-123", "sess-def-456"],
-      }),
+    // Verify partial patch was called with only changed fields and upsertCard was not called
+    expect(repository.patchCard).toHaveBeenCalledWith(
+      sampleProjectCwd,
+      "card-1",
+      { title: "Refactored authentication" },
     );
+    expect(repository.upsertCard).not.toHaveBeenCalled();
   });
 
   it("moves a card to a different status lane", async () => {
@@ -359,12 +392,12 @@ describe("ProjectBoardDialog", () => {
       moveSelect.dispatchEvent(new Event("change", { bubbles: true }));
     });
 
-    expect(repository.upsertCard).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: "card-1",
-        status: "in-progress",
-      }),
+    expect(repository.patchCard).toHaveBeenCalledWith(
+      sampleProjectCwd,
+      "card-1",
+      { status: "in-progress" },
     );
+    expect(repository.upsertCard).not.toHaveBeenCalled();
 
     const inProgressLane = container.querySelector(
       '[data-lane-status="in-progress"]',
@@ -900,8 +933,8 @@ describe("ProjectBoardDialog", () => {
       removeBtn.click();
     });
 
-    // Test failed save boundary: upsertCard throws
-    repository.upsertCard = vi.fn(async () => {
+    // Test failed save boundary: patchCard throws
+    repository.patchCard = vi.fn(async () => {
       throw new Error("Failed to persist card update");
     });
 
@@ -915,9 +948,9 @@ describe("ProjectBoardDialog", () => {
     expect(repository.deleteMedia).not.toHaveBeenCalled();
     expect(cards[0].media).toHaveLength(1);
 
-    // Now restore successful upsertCard and submit again
+    // Now restore successful patchCard and submit again
     const mockRepo = createMockRepository([sampleCard]).repository;
-    repository.upsertCard = mockRepo.upsertCard;
+    repository.patchCard = mockRepo.patchCard;
 
     await act(async () => {
       form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
@@ -1041,5 +1074,338 @@ describe("ProjectBoardDialog", () => {
     expect(
       container.querySelector('button[aria-label="View attachment diagram.png"]'),
     ).toBeNull();
+  });
+
+  it("submits only changed fields via patchCard and preserves concurrent untouched updates", async () => {
+    const cardWithDetails: ProjectBoardCard = {
+      ...sampleCard,
+      title: "Initial title",
+      description: "Initial description",
+      priority: "medium",
+      status: "backlog",
+      linkedSessionIds: ["sess-init-1"],
+    };
+    const { repository, cards } = createMockRepository([cardWithDetails]);
+
+    await act(async () => {
+      root.render(
+        createElement(ProjectBoardDialog, {
+          projectCwd: sampleProjectCwd,
+          onClose: vi.fn(),
+          onOpenSession: vi.fn(),
+          repository,
+        }),
+      );
+    });
+
+    // Open edit modal
+    const editBtn = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Edit card Initial title"]',
+    )!;
+    await act(async () => {
+      editBtn.click();
+    });
+
+    // Simulate concurrent update on untouched fields (e.g. background agent or another window)
+    cards[0].description = "Concurrently updated description";
+    cards[0].priority = "high";
+    cards[0].linkedSessionIds = ["sess-init-1", "sess-concurrent-2"];
+
+    // In editor, only change the title
+    const titleInput = container.querySelector<HTMLInputElement>("#card-title-input")!;
+    await act(async () => {
+      setInputValue(titleInput, "Locally patched title");
+    });
+
+    // Submit the form
+    const form = container.querySelector("form")!;
+    await act(async () => {
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+
+    // Verify patchCard was called with ONLY title; untouched fields were not submitted
+    expect(repository.patchCard).toHaveBeenCalledWith(
+      sampleProjectCwd,
+      "card-1",
+      { title: "Locally patched title" },
+    );
+    expect(repository.upsertCard).not.toHaveBeenCalled();
+
+    // Verify concurrent updates to untouched fields are preserved in DB and displayed on the board
+    expect(cards[0].title).toBe("Locally patched title");
+    expect(cards[0].description).toBe("Concurrently updated description");
+    expect(cards[0].priority).toBe("high");
+    expect(cards[0].linkedSessionIds).toEqual(["sess-init-1", "sess-concurrent-2"]);
+
+    expect(container.textContent).toContain("Locally patched title");
+    expect(container.textContent).toContain("Concurrently updated description");
+  });
+
+  it("does not fall back to upsertCard when the required patchCard method is absent", async () => {
+    const { repository } = createMockRepository([sampleCard]);
+    const repositoryWithoutPatch = {
+      ...repository,
+      patchCard: undefined,
+    } as unknown as ProjectBoardRepository;
+
+    await act(async () => {
+      root.render(
+        createElement(ProjectBoardDialog, {
+          projectCwd: sampleProjectCwd,
+          onClose: vi.fn(),
+          onOpenSession: vi.fn(),
+          repository: repositoryWithoutPatch,
+        }),
+      );
+    });
+
+    const editButton = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Edit card Setup authentication"]',
+    )!;
+    await act(async () => {
+      editButton.click();
+    });
+
+    const titleInput = container.querySelector<HTMLInputElement>("#card-title-input")!;
+    await act(async () => {
+      setInputValue(titleInput, "Updated title");
+    });
+
+    const form = container.querySelector("form")!;
+    await act(async () => {
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+
+    expect(container.querySelector('[aria-label="Edit card"]')?.textContent).toContain(
+      "patchCard",
+    );
+    expect(repository.upsertCard).not.toHaveBeenCalled();
+  });
+
+  it("retries safely after partial media upload failure without re-uploading succeeded media", async () => {
+    const cardWithoutMedia: ProjectBoardCard = {
+      ...sampleCard,
+      media: [],
+    };
+    const { repository, cards } = createMockRepository([cardWithoutMedia]);
+
+    let uploadAttempts = 0;
+    const addMediaSpy = vi.fn(async ({ name, mimeType, dataBase64 }) => {
+      uploadAttempts++;
+      if (uploadAttempts === 2) {
+        throw new Error("Network drop on second attachment");
+      }
+      const ref: BoardMediaRef = {
+        id: "media-persisted-" + uploadAttempts,
+        name,
+        mimeType,
+        byteLength: 1024,
+      };
+      cards[0].media = [...(cards[0].media ?? []), ref];
+      return ref;
+    });
+    repository.addMedia = addMediaSpy;
+
+    await act(async () => {
+      root.render(
+        createElement(ProjectBoardDialog, {
+          projectCwd: sampleProjectCwd,
+          onClose: vi.fn(),
+          onOpenSession: vi.fn(),
+          repository,
+        }),
+      );
+    });
+
+    const editBtn = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Edit card Setup authentication"]',
+    )!;
+    await act(async () => {
+      editBtn.click();
+    });
+
+    const editModal = container.querySelector('[aria-label="Edit card"]')!;
+
+    // Paste image 1
+    const file1 = new File(["dummy1"], "photo-1.png", { type: "image/png" });
+    const paste1 = new Event("paste", { bubbles: true }) as any;
+    paste1.clipboardData = {
+      items: [{ type: "image/png", getAsFile: () => file1 }],
+    };
+    await act(async () => {
+      editModal.dispatchEvent(paste1);
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    // Paste image 2
+    const file2 = new File(["dummy2"], "photo-2.png", { type: "image/png" });
+    const paste2 = new Event("paste", { bubbles: true }) as any;
+    paste2.clipboardData = {
+      items: [{ type: "image/png", getAsFile: () => file2 }],
+    };
+    await act(async () => {
+      editModal.dispatchEvent(paste2);
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    // First submit attempt: image 1 succeeds, image 2 throws
+    const form = editModal.querySelector("form")!;
+    await act(async () => {
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+
+    // Verify error is displayed and modal remains open
+    expect(editModal.textContent).toContain("Network drop on second attachment");
+    expect(container.querySelector('[aria-label="Edit card"]')).not.toBeNull();
+    expect(addMediaSpy).toHaveBeenCalledTimes(2);
+
+    // Verify image 1 was called on first attempt
+    expect(addMediaSpy.mock.calls[0][0].name).toBe("photo-1.png");
+    expect(addMediaSpy.mock.calls[1][0].name).toBe("photo-2.png");
+
+    // Clear addMediaSpy call history for the retry check
+    addMediaSpy.mockClear();
+
+    // Now retry submission
+    await act(async () => {
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+
+    // CRITICAL ACCEPTANCE CHECK:
+    // Only image 2 was re-uploaded; image 1 was marked existing with empty payload so retry did NOT duplicate it!
+    expect(addMediaSpy).toHaveBeenCalledTimes(1);
+    expect(addMediaSpy.mock.calls[0][0].name).toBe("photo-2.png");
+
+    // Modal closed upon successful retry
+    expect(container.querySelector('[aria-label="Edit card"]')).toBeNull();
+
+    // Final card has both media items without duplication
+    expect(cards[0].media).toHaveLength(2);
+    expect(cards[0].media.map((m) => m.name)).toEqual(["photo-1.png", "photo-2.png"]);
+  });
+
+  it("preserves multiple successful uploads and completed deletions when a later staged deletion fails", async () => {
+    const cardWithTwoMedia: ProjectBoardCard = {
+      ...sampleCard,
+      media: [
+        {
+          id: "media-1",
+          name: "diagram.png",
+          mimeType: "image/png",
+          byteLength: 2048,
+        },
+        {
+          id: "media-2",
+          name: "notes.png",
+          mimeType: "image/png",
+          byteLength: 1024,
+        },
+      ],
+    };
+    const { repository, cards } = createMockRepository([cardWithTwoMedia]);
+
+    let uploadId = 0;
+    const addMediaSpy = vi.fn(async ({ name, mimeType }) => {
+      uploadId++;
+      const ref: BoardMediaRef = {
+        id: "uploaded-" + uploadId,
+        name,
+        mimeType,
+        byteLength: 1024,
+      };
+      cards[0].media = [...cards[0].media, ref];
+      return ref;
+    });
+    repository.addMedia = addMediaSpy;
+
+    let failSecondDeletionOnce = true;
+    const deleteMediaSpy = vi.fn(async (_cwd, cardId, mediaId) => {
+      if (mediaId === "media-2" && failSecondDeletionOnce) {
+        failSecondDeletionOnce = false;
+        throw new Error("Second staged deletion failed");
+      }
+      const card = cards.find((item) => item.id === cardId);
+      if (card) {
+        card.media = card.media.filter((media) => media.id !== mediaId);
+      }
+    });
+    repository.deleteMedia = deleteMediaSpy;
+
+    await act(async () => {
+      root.render(
+        createElement(ProjectBoardDialog, {
+          projectCwd: sampleProjectCwd,
+          onClose: vi.fn(),
+          onOpenSession: vi.fn(),
+          repository,
+        }),
+      );
+    });
+
+    const editButton = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Edit card Setup authentication"]',
+    )!;
+    await act(async () => {
+      editButton.click();
+    });
+
+    for (const name of ["diagram.png", "notes.png"]) {
+      const removeButton = container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Remove attachment ' + name + '"]',
+      )!;
+      await act(async () => {
+        removeButton.click();
+      });
+    }
+
+    const editModal = container.querySelector('[aria-label="Edit card"]')!;
+    for (const name of ["first.png", "second.png"]) {
+      const file = new File([name], name, { type: "image/png" });
+      const pasteEvent = new Event("paste", { bubbles: true }) as any;
+      pasteEvent.clipboardData = {
+        items: [{ type: "image/png", getAsFile: () => file }],
+      };
+      await act(async () => {
+        editModal.dispatchEvent(pasteEvent);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    }
+
+    const form = container.querySelector("form")!;
+    await act(async () => {
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+
+    expect(container.querySelector('[aria-label="Edit card"]')?.textContent).toContain(
+      "Second staged deletion failed",
+    );
+    expect(addMediaSpy).toHaveBeenCalledTimes(2);
+    expect(addMediaSpy.mock.calls.map(([input]) => input.name)).toEqual([
+      "first.png",
+      "second.png",
+    ]);
+    expect(deleteMediaSpy.mock.calls.map(([, , mediaId]) => mediaId)).toEqual([
+      "media-1",
+      "media-2",
+    ]);
+    expect(cards[0].media.map((media) => media.id)).toEqual([
+      "media-2",
+      "uploaded-1",
+      "uploaded-2",
+    ]);
+
+    await act(async () => {
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+
+    expect(addMediaSpy).toHaveBeenCalledTimes(2);
+    expect(deleteMediaSpy.mock.calls.map(([, , mediaId]) => mediaId)).toEqual([
+      "media-1",
+      "media-2",
+      "media-2",
+    ]);
+    expect(container.querySelector('[aria-label="Edit card"]')).toBeNull();
+    expect(cards[0].media.map((media) => media.id)).toEqual(["uploaded-1", "uploaded-2"]);
+    expect(cards[0].media.map((media) => media.name)).toEqual(["first.png", "second.png"]);
   });
 });

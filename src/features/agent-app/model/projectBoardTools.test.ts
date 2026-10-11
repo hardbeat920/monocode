@@ -100,6 +100,45 @@ describe("ProjectBoardTools", () => {
         cardsStore.set(input.projectCwd, list);
         return savedCard;
       }),
+      patchCard: vi.fn(async (projectCwd: string, cardId: string, patch: ProjectBoardCardPatch) => {
+        const list = cardsStore.get(projectCwd) ?? [];
+        const index = list.findIndex((c) => c.id === cardId);
+        if (index < 0) {
+          throw new Error('Card "' + cardId + '" not found in authorized project');
+        }
+        const existing = list[index];
+        const patched: ProjectBoardCard = {
+          ...existing,
+          title: patch.title !== undefined ? patch.title : existing.title,
+          description: patch.description !== undefined ? patch.description : existing.description,
+          status: patch.status !== undefined ? patch.status : existing.status,
+          priority: patch.priority !== undefined ? patch.priority : existing.priority,
+          updatedAt: Date.now(),
+        };
+        list[index] = patched;
+        cardsStore.set(projectCwd, list);
+        return patched;
+      }),
+      linkSession: vi.fn(async (projectCwd: string, cardId: string, sessionId: string) => {
+        const list = cardsStore.get(projectCwd) ?? [];
+        const index = list.findIndex((c) => c.id === cardId);
+        if (index < 0) {
+          return null;
+        }
+        const existing = list[index];
+        const nextLinked = existing.linkedSessionIds.includes(sessionId)
+          ? existing.linkedSessionIds
+          : [...existing.linkedSessionIds, sessionId];
+        const updated: ProjectBoardCard = {
+          ...existing,
+          status: "in-progress",
+          linkedSessionIds: nextLinked,
+          updatedAt: Date.now(),
+        };
+        list[index] = updated;
+        cardsStore.set(projectCwd, list);
+        return updated;
+      }),
       deleteCard: vi.fn(async (projectCwd: string, cardId: string) => {
         const list = cardsStore.get(projectCwd) ?? [];
         cardsStore.set(
@@ -469,15 +508,40 @@ expect(PROJECT_BOARD_FIELDS.get("board.update")).toEqual([
         "sess-persisted-1",
         "sess-persisted-2",
       ]);
-      expect(mockRepository.upsertCard).toHaveBeenCalledWith(
-        expect.objectContaining({
-          id: "card-1",
-          linkedSessionIds: ["sess-persisted-1", "sess-persisted-2"],
-        }),
+      expect(mockRepository.patchCard).toHaveBeenCalledWith(
+        projectA,
+        "card-1",
+        { title: "Updated Title Preserving Links" },
       );
+      expect(mockRepository.upsertCard).not.toHaveBeenCalled();
     });
   });
 
+
+
+    it("proves board.update applies only requested patch fields and does not overwrite omitted fields or call upsertCard", async () => {
+      const result = (await dispatchProjectBoardAction(
+        defaultContext,
+        "board.update",
+        {
+          id: "card-1",
+          status: "in-progress",
+          priority: "high",
+        },
+        mockHost,
+      )) as { card: ProjectBoardCard };
+
+      expect(mockRepository.patchCard).toHaveBeenCalledWith(
+        projectA,
+        "card-1",
+        { status: "in-progress", priority: "high" },
+      );
+      expect(mockRepository.upsertCard).not.toHaveBeenCalled();
+      expect(result.card.status).toBe("in-progress");
+      expect(result.card.priority).toBe("high");
+      expect(result.card.title).toBe("Fix bug in parser");
+      expect(result.card.description).toBe("Parser crashes on null byte");
+    });
 
   describe("generateChildRequestId and request ID boundary", () => {
     it("generates deterministic, unique IDs <=128 chars even for 128-char card IDs", () => {
@@ -788,20 +852,22 @@ expect(PROJECT_BOARD_FIELDS.get("board.update")).toEqual([
         }),
       );
 
-      (mockRepository.upsertCard as ReturnType<typeof vi.fn>).mockImplementation(
-        async (input: ProjectBoardCardInput) => {
-          if (input.id === "card-1") {
+      (mockRepository.linkSession as ReturnType<typeof vi.fn>).mockImplementation(
+        async (_projectCwd: string, cardId: string, sessionId: string) => {
+          if (cardId === "card-1") {
             throw new Error("Disk I/O error persisting card update");
           }
-          const list = cardsStore.get(input.projectCwd) ?? [];
-          const index = list.findIndex((c) => c.id === input.id);
-          const savedCard = {
+          const list = cardsStore.get(projectA) ?? [];
+          const index = list.findIndex((c) => c.id === cardId);
+          if (index < 0) return null;
+          const updated = {
             ...list[index],
-            ...input,
+            status: "in-progress" as const,
+            linkedSessionIds: [...list[index].linkedSessionIds, sessionId],
             updatedAt: Date.now(),
           };
-          list[index] = savedCard as any;
-          return savedCard;
+          list[index] = updated;
+          return updated;
         },
       );
 

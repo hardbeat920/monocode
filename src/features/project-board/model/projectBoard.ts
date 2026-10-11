@@ -38,8 +38,17 @@ export type ProjectBoardCardInput = Pick<
 >;
 
 export type ProjectBoardCardPatch = Partial<
-  Pick<ProjectBoardCard, "title" | "description" | "status" | "priority" | "linkedSessionIds">
+  Pick<ProjectBoardCard, "title" | "description" | "status" | "priority">
 >;
+
+export interface AddMediaInput {
+  id?: string;
+  projectCwd: string;
+  cardId: string;
+  name: string;
+  mimeType: BoardMediaRef["mimeType"];
+  dataBase64: string;
+}
 
 export interface BoardMedia extends BoardMediaRef {
   dataBase64: string;
@@ -49,14 +58,10 @@ export interface BoardMedia extends BoardMediaRef {
 export interface ProjectBoardRepository {
   list(projectCwd: string): Promise<ProjectBoardCard[]>;
   upsertCard(input: ProjectBoardCardInput): Promise<ProjectBoardCard>;
+  patchCard(projectCwd: string, cardId: string, patch: ProjectBoardCardPatch): Promise<ProjectBoardCard>;
+  linkSession(projectCwd: string, cardId: string, sessionId: string): Promise<ProjectBoardCard | null>;
   deleteCard(projectCwd: string, cardId: string): Promise<void>;
-  addMedia(input: {
-    projectCwd: string;
-    cardId: string;
-    name: string;
-    mimeType: BoardMediaRef["mimeType"];
-    dataBase64: string;
-  }): Promise<BoardMediaRef>;
+  addMedia(input: AddMediaInput): Promise<BoardMediaRef>;
   getMedia(projectCwd: string, cardId: string, mediaId: string): Promise<BoardMedia | null>;
   deleteMedia(projectCwd: string, cardId: string, mediaId: string): Promise<void>;
 }
@@ -160,6 +165,39 @@ export async function project_board_upsert_card(
   return card;
 }
 
+
+/** Typed wrapper for patching card fields. Dispatches change event on success. */
+export async function project_board_patch_card(
+  projectCwd: string,
+  cardId: string,
+  patch: ProjectBoardCardPatch,
+): Promise<ProjectBoardCard> {
+  const card = await invoke<ProjectBoardCard>("project_board_patch_card", {
+    projectCwd,
+    cardId,
+    patch,
+  });
+  dispatchProjectBoardChanged(projectCwd);
+  return card;
+}
+
+/** Typed wrapper for atomically linking a session to a card. Dispatches change event if card updated. */
+export async function project_board_link_session(
+  projectCwd: string,
+  cardId: string,
+  sessionId: string,
+): Promise<ProjectBoardCard | null> {
+  const card = await invoke<ProjectBoardCard | null>("project_board_link_session", {
+    projectCwd,
+    cardId,
+    sessionId,
+  });
+  if (card) {
+    dispatchProjectBoardChanged(projectCwd);
+  }
+  return card;
+}
+
 /** Typed wrapper for deleting a card. Dispatches change event on success. */
 export async function project_board_delete_card(
   projectCwd: string,
@@ -214,6 +252,8 @@ export async function project_board_delete_media(
 // CamelCase aliases
 export const projectBoardList = project_board_list;
 export const projectBoardUpsertCard = project_board_upsert_card;
+export const projectBoardPatchCard = project_board_patch_card;
+export const projectBoardLinkSession = project_board_link_session;
 export const projectBoardDeleteCard = project_board_delete_card;
 export const projectBoardAddMedia = project_board_add_media;
 export const projectBoardGetMedia = project_board_get_media;
@@ -222,6 +262,8 @@ export const projectBoardDeleteMedia = project_board_delete_media;
 export const projectBoardRepository: ProjectBoardRepository = {
   list: project_board_list,
   upsertCard: project_board_upsert_card,
+  patchCard: project_board_patch_card,
+  linkSession: project_board_link_session,
   deleteCard: project_board_delete_card,
   addMedia: project_board_add_media,
   getMedia: project_board_get_media,

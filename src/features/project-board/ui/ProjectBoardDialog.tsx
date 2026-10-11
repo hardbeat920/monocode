@@ -105,19 +105,11 @@ export function ProjectBoardDialog({
     if (card.status === nextStatus) return;
     setError(null);
     try {
-      await repository.upsertCard({
-        id: card.id,
-        projectCwd: card.projectCwd,
-        title: card.title,
-        description: card.description,
+      const updated = await repository.patchCard(card.projectCwd, card.id, {
         status: nextStatus,
-        priority: card.priority,
-        linkedSessionIds: card.linkedSessionIds,
       });
       setCards((prev) =>
-        prev.map((c) =>
-          c.id === card.id ? { ...c, status: nextStatus, updatedAt: Date.now() } : c,
-        ),
+        prev.map((current) => (current.id === card.id ? updated : current)),
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to move card");
