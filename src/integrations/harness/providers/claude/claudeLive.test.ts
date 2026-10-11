@@ -37,6 +37,7 @@ vi.mock("../../core/child", () => ({
 const {
   bindClaudeSession,
   cancelClaudeTurn,
+  claudeCommandProvider,
   compactClaudeContext,
   respondClaudeApproval,
   respondClaudeQuestion,
@@ -266,7 +267,84 @@ beforeEach(() => {
 
 afterEach(async () => {
   await stopClaudeSession("s1");
+  await stopClaudeSession("cmds1");
   __claudeTestReset();
+});
+
+describe("claude native command discovery", () => {
+  it("reuses a live session's own commands, filtering out TUI-only ones, without spawning a probe", async () => {
+    const events: HarnessEvent[] = [];
+    void sendClaudeTurn({
+      sessionId: "cmds1",
+      cwd: "/repo",
+      model: "claude:claude-sonnet-5",
+      modelSettings: {},
+      runtimeMode: "supervised",
+      text: "hi",
+      attachments: [],
+      onEvent: (event) => events.push(event),
+    }).catch(() => undefined);
+
+    await waitFor(
+      () =>
+        parse().some((m) => {
+          const request = m.request as Record<string, unknown> | undefined;
+          return request?.subtype === "initialize";
+        }),
+      "initialize",
+    );
+    const initRequestId = parse().find((m) => {
+      const request = m.request as Record<string, unknown> | undefined;
+      return request?.subtype === "initialize";
+    })!.request_id as string;
+
+    emit({
+      type: "control_response",
+      response: {
+        subtype: "success",
+        request_id: initRequestId,
+        response: {
+          commands: [
+            {
+              name: "compact",
+              description: "Free up context",
+              argumentHint: "",
+              builtin: true,
+            },
+            {
+              name: "doctor",
+              description: "Health-check the setup",
+              argumentHint: "",
+              builtin: true,
+            },
+          ],
+        },
+      },
+    });
+    emit({
+      type: "system",
+      subtype: "init",
+      session_id: "sess_cmds1",
+      terminal_slash_commands: ["doctor"],
+    });
+    await waitFor(() => parse().some((m) => m.type === "user"), "user prompt");
+
+    const spawnedBefore = spawned.length;
+    const commands = await claudeCommandProvider.discover({
+      cwd: "/repo",
+      sessionId: "cmds1",
+    });
+
+    expect(commands).toEqual([
+      {
+        name: "compact",
+        description: "Free up context",
+        invocation: "claude:compact",
+        source: "claude",
+      },
+    ]);
+    expect(spawned.length).toBe(spawnedBefore);
+  });
 });
 
 describe("claude streamed tool inputs", () => {
