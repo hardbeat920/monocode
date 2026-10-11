@@ -40,6 +40,7 @@ import {
   turnMetricsFromResult,
   isUsageLimitResult,
   usageLimitFromRateLimitEvent,
+  isReplayedTaskNotificationResult,
 } from "./claudeProtocol";
 
 describe("runtimeModeToPermission", () => {
@@ -983,5 +984,20 @@ describe("applyClaudeTaskTool", () => {
     expect(applyClaudeTaskTool(tasks, "TaskUpdate", { taskId: "9", status: "completed" }, "")).toBe(false);
     expect(applyClaudeTaskTool(tasks, "TaskList", {}, "#1 [pending] One")).toBe(false);
     expect(tasks.size).toBe(0);
+  });
+});
+
+describe("isReplayedTaskNotificationResult", () => {
+  it("matches only a zero-turn result woken by a task notification", () => {
+    const origin = { kind: "task-notification" };
+    expect(
+      isReplayedTaskNotificationResult({ type: "result", num_turns: 0, origin }),
+    ).toBe(true);
+    expect(
+      isReplayedTaskNotificationResult({ type: "result", num_turns: 1, origin }),
+    ).toBe(false);
+    expect(
+      isReplayedTaskNotificationResult({ type: "result", num_turns: 0 }),
+    ).toBe(false);
   });
 });
