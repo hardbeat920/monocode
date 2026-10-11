@@ -923,9 +923,47 @@ fn git_change_token_for(root: &Path) -> Result<String, String> {
     if !status.status.success() {
         return Err("Not a git repository".to_string());
     }
+    // The status digest alone is not enough: a tracked edit that changes its
+    // line counts leaves `git status` byte-identical, and an untracked file's
+    // counted lines can change with its content. Hashing the same inputs the
+    // index displays — numstat for tracked files, plus each untracked file's
+    // line count — keeps the probe honest without paying for a full rebuild.
+    let tracked = git_run(
+        root,
+        &["diff", "--no-ext-diff", "--numstat", "HEAD", "--", "."],
+    )
+    .unwrap_or_else(|| {
+        // Same fallback as the index build: no HEAD yet, so staged and
+        // unstaged are reported separately.
+        format!(
+            "{}\u{0}{}",
+            git_run(root, &["diff", "--no-ext-diff", "--numstat", "--", "."]).unwrap_or_default(),
+            git_run(
+                root,
+                &["diff", "--no-ext-diff", "--cached", "--numstat", "--", "."],
+            )
+            .unwrap_or_default()
+        )
+    });
+    let mut displayed = tracked;
+    if let Some(untracked) = git_run(
+        root,
+        &["ls-files", "-o", "--exclude-standard", "-z", "--", "."],
+    ) {
+        for relative in untracked.split('\0').filter(|path| !path.is_empty()) {
+            displayed.push('\0');
+            displayed.push_str(relative);
+            displayed.push('\0');
+            displayed.push_str(&text_line_count(&root.join(relative)).to_string());
+        }
+    }
     // A new branch or commit also has to invalidate the cached index.
     let head = git_stdout(root, &["rev-parse", "HEAD"]).unwrap_or_default();
-    Ok(format!("{head}\u{0}{}", digest(&status.stdout)))
+    Ok(format!(
+        "{head}\u{0}{}\u{0}{}",
+        digest(&status.stdout),
+        digest(displayed.as_bytes())
+    ))
 }
 
 /// A small FNV-1a digest. The UI only compares tokens, so any stable hash of
