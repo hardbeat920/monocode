@@ -167,6 +167,7 @@ import {
   homeDir,
   notifyGitChanged,
   pickFolders,
+  subscribePrCreated,
   type GitFileDiffKind,
   type GitHistoryCommit,
 } from "../platform/tauri/fs";
@@ -687,8 +688,10 @@ import {
 import {
   linkedWorkItemFromAutomationEvent,
   linkedWorkItemFromInboxItem,
+  parseGithubWorkItemUrl,
   resolveLinkedWorkItem,
 } from "../features/sessions/model/sessionWorkItem";
+import { findSessionPullRequest } from "../features/sessions/model/sessionPullRequest";
 import {
   completeLinkedWorkItemUpdateCard,
   failLinkedWorkItemUpdateCard,
@@ -1335,6 +1338,8 @@ function Workspace({
     () => new Map(),
   );
   const [history, setHistory] = useState<SessionSummary[]>(() => bootHistory);
+  const historyRef = useRef(history);
+  historyRef.current = history;
   const [, refreshRemoteTabTitles] = useState(0);
   useEffect(() => {
     const updated = () => refreshRemoteTabTitles((value) => value + 1);
@@ -6736,6 +6741,56 @@ function Workspace({
     [invalidateLoadedSession],
   );
 
+  // Link the PR a session produced: one it created, or one opened on a branch
+  // it pushed, whenever that happened. Runs at turn boundaries and never
+  // replaces an existing link.
+  const linkSessionPullRequest = useCallback((sessionId: string) => {
+    const session = sessionsRef.current.find((s) => s.id === sessionId);
+    if (!session || session.linkedWorkItem) return;
+    const workCwd = sessionWorkCwd(session);
+    // A worktree no other session uses is this session's own branch.
+    const dedicatedWorktree =
+      Boolean(session.worktreeCwd) &&
+      pathKey(workCwd) !== pathKey(session.cwd) &&
+      ![...sessionsRef.current, ...historyRef.current].some(
+        (other) =>
+          other.id !== sessionId &&
+          pathKey(sessionWorkCwd(other)) === pathKey(workCwd),
+      );
+    void findSessionPullRequest(session, workCwd, { dedicatedWorktree })
+      .then((linkedWorkItem) => {
+        if (!linkedWorkItem) return;
+        setSessions((prev) =>
+          prev.map((s) =>
+            s.id === sessionId && !s.linkedWorkItem
+              ? { ...s, linkedWorkItem }
+              : s,
+          ),
+        );
+      })
+      .catch(() => undefined);
+  }, []);
+
+  // A PR opened from the Git panel belongs to the session in front of it.
+  useEffect(
+    () =>
+      subscribePrCreated((cwd, url) => {
+        const linkedWorkItem = parseGithubWorkItemUrl(url);
+        const sessionId = activeSessionIdRef.current;
+        if (linkedWorkItem?.kind !== "pr" || !sessionId) return;
+        setSessions((prev) =>
+          prev.map((s) =>
+            s.id === sessionId &&
+            !s.linkedWorkItem &&
+            pathKey(sessionWorkCwd(s)) === pathKey(cwd)
+              ? { ...s, linkedWorkItem }
+              : s,
+          ),
+        );
+      }),
+    [],
+  );
+
   const submitSession = useCallback(
     (
       sessionId: string,
@@ -7618,6 +7673,8 @@ function Workspace({
             .catch(() => undefined);
         }
         launchTitleGeneration(workCwd);
+        // The PR may have been opened since the last turn, e.g. in a browser.
+        linkSessionPullRequest(sessionId);
         if (turnGen.current.get(sessionId) !== gen) return;
         if (proposalDraft && proposalId) {
           const settings = await discoverOrchestrationSettings();
@@ -8108,6 +8165,7 @@ function Workspace({
             // A habit's hidden run speaks through its Mono's chat instead.
             if (finished && !isHabitRun(sessionId))
               void announceSessionFinished(finished, visible);
+            linkSessionPullRequest(sessionId);
           }, 0);
           notifyReviewChanged(sessionId);
           notifyGitChanged();
@@ -8166,6 +8224,7 @@ function Workspace({
       dismissNoticesForContinuedSession,
       enqueueHarnessEvent,
       flushHarnessEvents,
+      linkSessionPullRequest,
     ],
   );
   submitAfterProjectSyncRef.current = submitSession;

@@ -1183,6 +1183,37 @@ pub async fn git_pr_status(cwd: String) -> Result<Option<GitPr>, String> {
         .map_err(|e| e.to_string())?
 }
 
+/// Latest pull request for a pushed branch (the current one when omitted),
+/// optionally pushed to `remote`.
+#[tauri::command]
+pub async fn git_branch_pr(
+    cwd: String,
+    branch: Option<String>,
+    remote: Option<String>,
+) -> Result<Option<GitPr>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = expand_home(&cwd);
+        let remote = remote.as_deref().map(str::trim).filter(|r| !r.is_empty());
+        let branch = match branch.map(|branch| branch.trim().to_string()) {
+            Some(branch) if !branch.is_empty() => branch,
+            // A checked-out branch that was never published cannot have a PR;
+            // skip the GitHub round trip for it.
+            _ => match git_head_branch(&root) {
+                Some(branch)
+                    if git_stdout(&root, &["rev-parse", "--abbrev-ref", "@{upstream}"])
+                        .is_some() =>
+                {
+                    branch
+                }
+                _ => return Ok(None),
+            },
+        };
+        Ok(git_branch_pr_for(&root, &branch, remote))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[derive(Deserialize)]
 struct GitPrCreateInput {
     title: String,
@@ -2871,30 +2902,54 @@ fn git_range_context_for(root: &Path) -> Result<GitRangeContext, String> {
 }
 
 fn git_pr_status_for(root: &Path) -> Option<GitPr> {
-    let branch = git_branch(root)?;
-    let repo = git_github_repo_for(root).ok()?;
-    let head = github_pr_head_filter(&repo, &branch)?;
+    git_branch_pr_for(root, &git_head_branch(root)?, None)
+}
+
+/// Pull request whose head is `branch` on the repository it is pushed to.
+/// `gh pr list --head` ignores an `owner:` prefix, so the owner is matched
+/// here instead; otherwise a common name like `main` would pick up any fork's PR.
+fn git_branch_pr_for(root: &Path, branch: &str, remote: Option<&str>) -> Option<GitPr> {
+    let owner = git_push_owner(root, branch, remote)?;
     let json = gh_stdout(
         root,
         &[
             "pr",
             "list",
             "--head",
-            &head,
+            branch,
             "--json",
-            "number,title,url,state",
+            "number,title,url,state,headRepositoryOwner",
             "--limit",
             "20",
             "--state",
             "all",
         ],
     )?;
-    parse_gh_pr_list(&json)
+    parse_gh_pr_list(&json, &owner)
 }
 
-fn github_pr_head_filter(repo: &str, branch: &str) -> Option<String> {
-    let (owner, _) = split_github_repo(repo).ok()?;
-    Some(format!("{owner}:{branch}"))
+/// Owner of the GitHub repository `branch` is pushed to: the given remote,
+/// else the branch's push remote, else the repository `gh` resolves to.
+fn git_push_owner(root: &Path, branch: &str, remote: Option<&str>) -> Option<String> {
+    let remote = remote
+        .map(str::to_owned)
+        .or_else(|| git_stdout(root, &["config", &format!("branch.{branch}.pushRemote")]))
+        .or_else(|| git_stdout(root, &["config", "remote.pushDefault"]))
+        .or_else(|| git_stdout(root, &["config", &format!("branch.{branch}.remote")]));
+    if let Some(owner) = remote
+        .and_then(|remote| git_stdout(root, &["remote", "get-url", &remote]))
+        .and_then(|url| github_remote_owner(&url))
+    {
+        return Some(owner);
+    }
+    let repo = git_github_repo_for(root).ok()?;
+    split_github_repo(&repo).ok().map(|(owner, _)| owner)
+}
+
+fn github_remote_owner(url: &str) -> Option<String> {
+    let normalized = normalize_github_remote_url(url);
+    let (owner, _) = normalized.strip_prefix("github.com/")?.split_once('/')?;
+    (!owner.is_empty()).then(|| owner.to_string())
 }
 
 fn git_github_repo_for(root: &Path) -> Result<String, String> {
@@ -4246,17 +4301,29 @@ fn parse_github_work_item(json: &str, kind: &str, repo: &str) -> Result<GitHubWo
         .ok_or_else(|| "GitHub did not return a work item".into())
 }
 
-fn parse_gh_pr_list(json: &str) -> Option<GitPr> {
+fn parse_gh_pr_list(json: &str, owner: &str) -> Option<GitPr> {
     #[derive(Deserialize)]
+    struct Owner {
+        login: String,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
     struct Row {
         number: i64,
         title: String,
         url: String,
         state: String,
+        head_repository_owner: Option<Owner>,
     }
     let rows: Vec<Row> = serde_json::from_str(json).ok()?;
     let mut best: Option<GitPr> = None;
     for row in rows {
+        if !row
+            .head_repository_owner
+            .is_some_and(|head| head.login.eq_ignore_ascii_case(owner))
+        {
+            continue;
+        }
         let pr = GitPr {
             number: row.number,
             title: row.title,
@@ -8213,19 +8280,31 @@ mod tests {
 
     #[test]
     fn parse_gh_pr_list_prefers_open() {
-        let json = r#"[{"number":2,"title":"Old","url":"https://example.com/2","state":"MERGED"},{"number":3,"title":"Now","url":"https://example.com/3","state":"OPEN"}]"#;
-        let pr = parse_gh_pr_list(json).unwrap();
+        let json = r#"[{"number":2,"title":"Old","url":"https://example.com/2","state":"MERGED","headRepositoryOwner":{"login":"acme"}},{"number":3,"title":"Now","url":"https://example.com/3","state":"OPEN","headRepositoryOwner":{"login":"acme"}}]"#;
+        let pr = parse_gh_pr_list(json, "acme").unwrap();
         assert_eq!(pr.number, 3);
         assert_eq!(pr.state, "open");
         assert_eq!(pr.title, "Now");
     }
 
     #[test]
-    fn pr_head_filter_qualifies_branch_with_repo_owner() {
+    fn parse_gh_pr_list_keeps_only_the_pushed_owners_head() {
+        let json = r#"[{"number":4,"title":"Fork","url":"https://example.com/4","state":"OPEN","headRepositoryOwner":{"login":"someone"}},{"number":5,"title":"Mine","url":"https://example.com/5","state":"MERGED","headRepositoryOwner":{"login":"SHLE1"}}]"#;
+        assert_eq!(parse_gh_pr_list(json, "shle1").unwrap().number, 5);
+        assert!(parse_gh_pr_list(json, "acme").is_none());
+    }
+
+    #[test]
+    fn github_remote_owner_reads_https_and_ssh_urls() {
         assert_eq!(
-            github_pr_head_filter("hardbeat920/monocode", "main").as_deref(),
-            Some("hardbeat920:main")
+            github_remote_owner("https://github.com/SHLE1/monocode.git").as_deref(),
+            Some("shle1")
         );
+        assert_eq!(
+            github_remote_owner("git@github.com:acme/web.git").as_deref(),
+            Some("acme")
+        );
+        assert_eq!(github_remote_owner("https://gitlab.com/acme/web.git"), None);
     }
 
     #[test]
