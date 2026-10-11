@@ -284,6 +284,7 @@ import {
   probeHarnessAvailability,
   refreshHarnessCatalogs,
   registerBuiltinHarnesses,
+  selectClaudeCatalogAccount,
   promoteLastAssistantToPlan,
   respondHarnessApproval,
   respondHarnessQuestion,
@@ -430,6 +431,7 @@ import {
   DEFAULT_PROVIDER_ACCOUNT_ID,
   providerAccountExists,
   selectedProviderAccountId,
+  subscribeProviderAccounts,
   supportsProviderAccounts,
   type ProviderAccountProvider,
 } from "../features/providers/model/providerAccounts";
@@ -1984,6 +1986,20 @@ function Workspace({
    * until the picker happened to be opened. Idempotent: refreshHarnessCatalogs
    * dedupes via hasLiveCatalog and its inflight map. */
   const activeHarness = active?.harness;
+  const activeCwd = active?.cwd;
+  const activeAccountId = active?.providerAccountId;
+  // Claude's model list depends on the account (a gateway profile exposes
+  // different models). Declared before the refresh below so the first probe
+  // already targets the right account.
+  useEffect(() => {
+    if (activeHarness !== "claude") return;
+    const sync = () =>
+      selectClaudeCatalogAccount(
+        activeAccountId ?? selectedProviderAccountId("claude", activeCwd),
+      );
+    sync();
+    return subscribeProviderAccounts(sync);
+  }, [activeHarness, activeCwd, activeAccountId]);
   useEffect(() => {
     if (!activeHarness || !isLiveHarness(activeHarness)) return;
     void refreshHarnessCatalogs([activeHarness]);
