@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { HarnessId, RuntimeMode } from "../../sessions/model/session";
+import { runtimeModesFor } from "../../sessions/model/models";
 import { AccessPicker } from "../../sessions/ui/AccessPicker";
 import { ModelPicker, ModelSettingRows } from "../../sessions/ui/ModelPicker";
 import type { MonoLook, MonoState } from "../model/mono";
@@ -221,15 +222,19 @@ export function MonoDetails({
                 <Property label={label}>{control}</Property>
               )}
             />
-            <Property label="Permissions">
-              <AccessPicker
-                value={runtimeMode}
-                onChange={onRuntimeModeChange}
-                busy={busy}
-                side="bottom"
-                variant="plain"
-              />
-            </Property>
+            {runtimeModesFor(harness, model).length > 1 ? (
+              <Property label="Permissions">
+                <AccessPicker
+                  harness={harness}
+                  model={model}
+                  value={runtimeMode}
+                  onChange={onRuntimeModeChange}
+                  busy={busy}
+                  side="bottom"
+                  variant="plain"
+                />
+              </Property>
+            ) : null}
             <Property label="Projects">
               <MonoProjects monoId={monoId} projects={agent.projects} />
             </Property>

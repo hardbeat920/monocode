@@ -128,6 +128,13 @@ describe("grok protocol", () => {
     );
   });
 
+  it("leaves prompts that survive Grok's Auto classifier to the user", () => {
+    const options = ["allow-once", "reject-once"];
+    for (const kind of ["edit", "execute", "fetch", "read", undefined]) {
+      expect(pickAutoOption("auto", kind, options)).toBeNull();
+    }
+  });
+
   it("picks allow/reject option ids from ACP permission options", () => {
     expect(permissionOptionId("allow", ["allow_once", "reject_once"])).toBe(
       "allow_once",

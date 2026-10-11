@@ -1,5 +1,10 @@
 import type { HarnessId } from "./session";
-import { HARNESSES } from "./session";
+import {
+  DEFAULT_RUNTIME_MODE,
+  HARNESSES,
+  RUNTIME_MODES,
+  type RuntimeMode,
+} from "./session";
 import { loadProjectProviderSettings } from "./projectProviders";
 import {
   hasProbedHarnessAvailability,
@@ -33,6 +38,8 @@ export type AgentModel = {
   settings?: ModelSetting[];
   /** Context window, when the harness catalog reports one. */
   contextWindow?: number;
+  /** Whether Auto approval works with this model; unset means unconfirmed. */
+  supportsAuto?: boolean;
 };
 
 export const MODELS: AgentModel[] = [
@@ -338,6 +345,109 @@ export function findModel(id: string): AgentModel | undefined {
     indexById = index;
   }
   return indexById.get(id);
+}
+
+/** Modes each harness honors; the rest are ignored by its adapter. */
+// Spelled out rather than built from `RUNTIME_MODES`, which isn't initialized
+// yet when this module loads inside the import cycle with `session`.
+const ALL_MODES: RuntimeMode[] = [
+  "supervised",
+  "auto-accept-edits",
+  "auto",
+  "full-access",
+];
+const EDIT_MODES: RuntimeMode[] = [
+  "supervised",
+  "auto-accept-edits",
+  "full-access",
+];
+const HARNESS_RUNTIME_MODES: Record<HarnessId, RuntimeMode[]> = {
+  claude: ALL_MODES,
+  codex: ALL_MODES,
+  cursor: EDIT_MODES,
+  devin: ALL_MODES,
+  grok: ALL_MODES,
+  opencode: EDIT_MODES,
+  antigravity: EDIT_MODES,
+  hermes: EDIT_MODES,
+  // These run with no approval levels, so there is nothing to choose.
+  pi: [],
+  omp: [],
+  fx: [],
+};
+
+/**
+ * Where a capability check reads models: this computer's catalog by default,
+ * or, for a remote session, the host's (a `ModelSource` fits this shape).
+ */
+export type ModelCatalog = {
+  find(id: string): AgentModel | undefined;
+  modelsFor(harness: HarnessId): AgentModel[];
+};
+
+// Only live entries carry capabilities, so the bundled list is left out: an
+// exact bundled hit would hide an equivalent discovered entry.
+const LOCAL_CATALOG: ModelCatalog = {
+  find: (id) => findModel(id),
+  modelsFor: (harness) => modelsFor(harness),
+};
+
+/**
+ * The catalog entry whose capabilities apply to a saved model: the exact
+ * picker id first, then the same native model within the provider. Saved ids
+ * can differ from discovered ones (`claude:opus-4.7` and `claude:opus-4-7`
+ * both launch `claude-opus-4-7`), and an exact-only match would lose what the
+ * discovered entry confirms.
+ */
+function capabilityModel(
+  harness: HarnessId,
+  modelId: string,
+  catalog: ModelCatalog,
+): AgentModel | undefined {
+  const exact = catalog.find(modelId);
+  if (exact?.harness === harness) return exact;
+  const native = nativeModelId(modelId);
+  if (!native) return undefined;
+  return catalog
+    .modelsFor(harness)
+    .find((model) => nativeModelId(model) === native);
+}
+
+/**
+ * Access modes offered for a model. Auto also needs the model: Claude only
+ * reports `supportsAutoMode` when it is true, so an unconfirmed model (no live
+ * catalog yet, or an older CLI) is treated as unsupported rather than risking a
+ * turn the CLI rejects. The saved mode is kept and applies once it's confirmed.
+ * Codex doesn't report per-model support, so it follows the harness.
+ */
+export function runtimeModesFor(
+  harness: HarnessId,
+  modelId: string,
+  catalog: ModelCatalog = LOCAL_CATALOG,
+): RuntimeMode[] {
+  const supported = capabilityModel(harness, modelId, catalog)?.supportsAuto;
+  const autoOk =
+    harness === "claude" ? supported === true : supported !== false;
+  return (HARNESS_RUNTIME_MODES[harness] ?? EDIT_MODES).filter(
+    (mode) => mode !== "auto" || autoOk,
+  );
+}
+
+/**
+ * The mode to use for a model. When `mode` isn't offered, step down to the
+ * closest offered mode before it (Auto → Auto-accept edits → Supervised).
+ */
+export function coerceRuntimeMode(
+  harness: HarnessId,
+  modelId: string,
+  mode: RuntimeMode,
+  catalog: ModelCatalog = LOCAL_CATALOG,
+): RuntimeMode {
+  const offered = runtimeModesFor(harness, modelId, catalog);
+  for (let i = RUNTIME_MODES.indexOf(mode); i >= 0; i--) {
+    if (offered.includes(RUNTIME_MODES[i])) return RUNTIME_MODES[i];
+  }
+  return DEFAULT_RUNTIME_MODE;
 }
 
 /** The bundled list never changes, so index it once for `lookupModel`. */

@@ -35,7 +35,10 @@ const {
   __cursorTestReset,
 } = await import("./cursor");
 import type { HarnessEvent } from "../../core/types";
-import { newSession } from "../../../../features/sessions/model/session";
+import {
+  newSession,
+  type RuntimeMode,
+} from "../../../../features/sessions/model/session";
 import { applyHarnessEvent } from "../../core/apply";
 
 function parse() {
@@ -68,14 +71,17 @@ function outboundRequest(method: string) {
   return parse().find((message) => message.method === method);
 }
 
-async function startTurn(sessionId: string) {
+async function startTurn(
+  sessionId: string,
+  runtimeMode: RuntimeMode = "supervised",
+) {
   const events: HarnessEvent[] = [];
   const turn = sendCursorTurn({
     sessionId,
     cwd: "/repo",
     model: "cursor:composer-2.5",
     modelSettings: {},
-    runtimeMode: "supervised",
+    runtimeMode,
     text: "explore the codebase",
     attachments: [],
     onEvent: (event) => events.push(event),
@@ -639,5 +645,34 @@ describe("cursor background subagents", () => {
     reply(promptId, { stopReason: "end_turn" });
     await turn;
     expect(agentEvents(events).at(-1)).toMatchObject({ status: "completed" });
+  });
+});
+
+describe("cursor command permissions", () => {
+  const askToRun = (id: number) =>
+    request(id, "session/request_permission", {
+      sessionId: "cursor_1",
+      toolCall: { toolCallId: "call_bash", title: "npm test", kind: "execute" },
+      options: [
+        { optionId: "allow-once", name: "Allow", kind: "allow_once" },
+        { optionId: "reject-once", name: "Reject", kind: "reject_once" },
+      ],
+    });
+  const answered = (id: number) =>
+    parse().some((message) => message.id === id && "result" in message);
+
+  it("waits for approval to run a command when only edits are auto-accepted", async () => {
+    const { events, promptId, turn } = await startTurn(
+      "cursor-live",
+      "auto-accept-edits",
+    );
+    askToRun(81);
+    await waitFor(
+      () => events.some((event) => event.type === "approval.requested"),
+      "approval.requested",
+    );
+    expect(answered(81)).toBe(false);
+    reply(promptId, { stopReason: "end_turn" });
+    await turn;
   });
 });
