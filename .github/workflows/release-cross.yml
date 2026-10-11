@@ -32,7 +32,10 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s\n' '{"bundle":{"createUpdaterArtifacts":false}}' > "$RUNNER_TEMP/tauri.fork.conf.json"
-          npm run build:linux -- --config "$RUNNER_TEMP/tauri.fork.conf.json"
+          # Call tauri directly: upstream's build:linux script chains the AppImage
+          # repack script, whose $# guard exits on npm-appended --config args.
+          ./node_modules/.bin/tauri build --bundles deb,appimage --config "$RUNNER_TEMP/tauri.fork.conf.json"
+          bash scripts/repack-appimage.sh
 
       - name: Stage Linux packages
         run: |
