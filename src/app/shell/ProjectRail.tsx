@@ -14,11 +14,19 @@ import {
   Settings,
   Zap,
 } from "../../shared/ui/icons";
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { useDragResize } from "../../shared/hooks/useDragResize";
 import { useLockOverscroll } from "../../shared/hooks/useLockOverscroll";
 import { useProjectDiffStats } from "../../features/source-control/hooks/useProjectDiffStats";
 import { useAnimatedReorder } from "../../shared/hooks/useAnimatedReorder";
+import { useSortable } from "../../shared/hooks/useSortable";
 import { useTabGroupLogos } from "../../features/projects/hooks/useTabGroupLogos";
 import {
   loadProjectRailWidth,
@@ -34,6 +42,7 @@ import {
 import { IS_MAC, MOD } from "../../platform/tauri/platform";
 import { formatInteger } from "../../shared/lib/numbers";
 import { pathKey, projectKey, projectName } from "../../shared/lib/paths";
+import { orderByIds } from "../../shared/lib/reorder";
 import {
   collectRailProjects,
   loadPinnedProjects,
@@ -62,6 +71,7 @@ import {
   loadProjectGroups,
   projectGroupColor,
   projectGroupIdForPath,
+  saveProjectGroups,
   updateProjectGroup,
   type ProjectGroup,
 } from "../../features/projects/model/projectGroups";
@@ -329,6 +339,12 @@ export function ProjectRail({
     saveProjectRailOrder(next);
   };
 
+  const onReorderGroups = (ids: string[]) => {
+    const next = orderByIds(projectGroups, ids);
+    setProjectGroups(next);
+    saveProjectGroups(next);
+  };
+
   // Another view in the main area means no project row is the current one.
   const otherViewActive =
     searchActive ||
@@ -338,8 +354,10 @@ export function ProjectRail({
     !!monos?.activeId;
   const pinnedIds = sections.pinned.map((item) => item.path);
   const projectIds = groupedProjectSections.ungrouped.map((item) => item.path);
+  const groupIds = projectGroups.map((group) => group.id);
   const pinnedSortable = useAnimatedReorder(pinnedIds, onReorderPinned, "y");
   const projectSortable = useAnimatedReorder(projectIds, onReorderProjects, "y");
+  const groupSortable = useSortable(groupIds, onReorderGroups, { axis: "y" });
   return (
     <nav
       ref={resize.setPaneRef}
@@ -458,37 +476,62 @@ export function ProjectRail({
                   onAddGroup={(x, y) => projectMenu.createGroup(x, y)}
                 />
                 <div className="flex flex-col gap-px px-2">
-                  {groupedProjectSections.grouped.map(({ group, items }) => (
-                    <ProjectGroupSection
-                      key={group.id}
-                      group={group}
-                      items={items}
-                      muteStatuses={muteStatuses}
-                      cwd={cwd}
-                      busy={busy}
-                      statsEnabled={visible}
-                      searchActive={otherViewActive}
-                      onSelect={onSelectProject}
-                      onTogglePin={toggleProjectPin}
-                      onContextMenu={onProjectContextMenu}
-                      onOpenMenu={projectMenu.open}
-                      onReorder={onReorderProjects}
-                      onToggleCollapsed={() =>
-                        updateProjectGroup(group.id, (current) => ({
-                          ...current,
-                          collapsed: !current.collapsed,
-                        }))
-                      }
-                      onOpenGroupMenu={(x, y) =>
-                        projectMenu.openGroupMenu(group.id, x, y)
-                      }
-                      groupLabels={groupLabels}
-                      groupColors={groupColors}
-                      groupCustomColors={groupCustomColors}
-                      groupLogos={groupLogos}
-                      groupMascots={groupMascots}
-                    />
-                  ))}
+                  {groupedProjectSections.grouped.map(({ group, items }) => {
+                    const groupIndex = groupIds.indexOf(group.id);
+                    const draggingGroup =
+                      groupSortable.draggingId === group.id;
+                    const showGroupDropStart =
+                      groupSortable.draggingId &&
+                      groupSortable.toIndex === groupIndex &&
+                      groupSortable.fromIndex !== null &&
+                      groupSortable.toIndex < groupSortable.fromIndex;
+                    const showGroupDropEnd =
+                      groupSortable.draggingId &&
+                      groupSortable.toIndex === groupIndex &&
+                      groupSortable.fromIndex !== null &&
+                      groupSortable.toIndex > groupSortable.fromIndex;
+                    return (
+                      <ProjectGroupSection
+                        key={group.id}
+                        group={group}
+                        items={items}
+                        muteStatuses={muteStatuses}
+                        cwd={cwd}
+                        busy={busy}
+                        statsEnabled={visible}
+                        searchActive={otherViewActive}
+                        dragging={draggingGroup}
+                        showDropStart={Boolean(showGroupDropStart)}
+                        showDropEnd={Boolean(showGroupDropEnd)}
+                        setGroupRef={(el) =>
+                          groupSortable.setItemRef(group.id, el)
+                        }
+                        onGroupPointerDown={(event) =>
+                          groupSortable.onItemPointerDown(group.id, event)
+                        }
+                        consumeGroupClick={groupSortable.consumeClick}
+                        onSelect={onSelectProject}
+                        onTogglePin={toggleProjectPin}
+                        onContextMenu={onProjectContextMenu}
+                        onOpenMenu={projectMenu.open}
+                        onReorder={onReorderProjects}
+                        onToggleCollapsed={() =>
+                          updateProjectGroup(group.id, (current) => ({
+                            ...current,
+                            collapsed: !current.collapsed,
+                          }))
+                        }
+                        onOpenGroupMenu={(x, y) =>
+                          projectMenu.openGroupMenu(group.id, x, y)
+                        }
+                        groupLabels={groupLabels}
+                        groupColors={groupColors}
+                        groupCustomColors={groupCustomColors}
+                        groupLogos={groupLogos}
+                        groupMascots={groupMascots}
+                      />
+                    );
+                  })}
                 </div>
               </div>
             ) : null}
@@ -697,6 +740,12 @@ function ProjectGroupSection({
   busy,
   statsEnabled,
   searchActive,
+  dragging,
+  showDropStart,
+  showDropEnd,
+  setGroupRef,
+  onGroupPointerDown,
+  consumeGroupClick,
   onSelect,
   onTogglePin,
   onContextMenu,
@@ -717,6 +766,12 @@ function ProjectGroupSection({
   busy: Set<string>;
   statsEnabled: boolean;
   searchActive: boolean;
+  dragging: boolean;
+  showDropStart: boolean;
+  showDropEnd: boolean;
+  setGroupRef: (el: HTMLElement | null) => void;
+  onGroupPointerDown: (event: ReactPointerEvent) => void;
+  consumeGroupClick: () => boolean;
   onSelect: (path: string) => void;
   onTogglePin: (path: string) => void;
   onContextMenu: (path: string, event: MouseEvent<HTMLElement>) => void;
@@ -744,15 +799,29 @@ function ProjectGroupSection({
 
   return (
     <div
-      className={`shrink-0 overflow-hidden rounded-md ${
+      ref={setGroupRef}
+      className={`relative shrink-0 overflow-hidden rounded-md ${
         expanded ? "mb-1.5 bg-content/5" : ""
-      }`}
+      } ${dragging ? "opacity-40" : ""}`}
       data-project-group={group.id}
       role="group"
       aria-label={group.name}
     >
+      {showDropStart ? (
+        <div className="pointer-events-none absolute inset-x-1 top-0 z-20 h-0.5 rounded-full bg-accent" />
+      ) : null}
+      {showDropEnd ? (
+        <div className="pointer-events-none absolute inset-x-1 bottom-0 z-20 h-0.5 rounded-full bg-accent" />
+      ) : null}
       <div
-        className="project-reorder-item group relative flex h-8 items-stretch rounded-md px-2 opacity-65 cursor-default"
+        className="project-reorder-item group relative flex h-8 touch-none items-stretch rounded-md px-2 opacity-65 cursor-default"
+        onPointerDown={(event) => {
+          if (event.button !== 0) return;
+          if ((event.target as HTMLElement | null)?.closest("[data-no-drag]")) {
+            return;
+          }
+          onGroupPointerDown(event);
+        }}
         onContextMenu={(event) => {
           event.preventDefault();
           event.currentTarget.querySelector<HTMLButtonElement>("button")?.focus();
@@ -764,7 +833,10 @@ function ProjectGroupSection({
           aria-expanded={!group.collapsed}
           aria-label={`${group.name}, ${countLabel}`}
           title={`${group.name} · ${countLabel}`}
-          onClick={onToggleCollapsed}
+          onClick={() => {
+            if (consumeGroupClick()) return;
+            onToggleCollapsed();
+          }}
           className="flex min-w-0 flex-1 cursor-default items-center gap-2 text-left transition-[padding] duration-150 motion-reduce:transition-none group-hover:pr-6 group-has-[:focus-visible]:pr-6"
         >
           <div className="grid size-4 shrink-0 place-items-center">

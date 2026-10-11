@@ -146,6 +146,67 @@ it("renders assigned projects in persistent collapsible groups", async () => {
   expect(button("personal")).toBeDefined();
 });
 
+it("reorders groups by dragging the group header", async () => {
+  saveProjectGroups([
+    { id: "clients", name: "Clients", collapsed: true },
+    { id: "personal", name: "Personal", collapsed: true },
+  ]);
+  await renderRail();
+
+  const first = container.querySelector<HTMLElement>(
+    '[data-project-group="clients"]',
+  )!;
+  const second = container.querySelector<HTMLElement>(
+    '[data-project-group="personal"]',
+  )!;
+  const header = first.querySelector(".project-reorder-item") as HTMLElement;
+  const firstRect = { top: 100, bottom: 132, left: 0, right: 200, height: 32, width: 200 };
+  const secondRect = { top: 140, bottom: 172, left: 0, right: 200, height: 32, width: 200 };
+  vi.spyOn(first, "getBoundingClientRect").mockReturnValue(
+    firstRect as DOMRect,
+  );
+  vi.spyOn(second, "getBoundingClientRect").mockReturnValue(
+    secondRect as DOMRect,
+  );
+
+  await act(async () => {
+    header.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        button: 0,
+        clientX: 20,
+        clientY: 116,
+        pointerId: 1,
+      }),
+    );
+    window.dispatchEvent(
+      new PointerEvent("pointermove", {
+        bubbles: true,
+        clientX: 20,
+        clientY: 156,
+        pointerId: 1,
+      }),
+    );
+    window.dispatchEvent(
+      new PointerEvent("pointerup", {
+        bubbles: true,
+        clientX: 20,
+        clientY: 156,
+        pointerId: 1,
+      }),
+    );
+  });
+
+  expect(loadProjectGroups().map((group) => group.id)).toEqual([
+    "personal",
+    "clients",
+  ]);
+  const groups = [
+    ...container.querySelectorAll<HTMLElement>("[data-project-group]"),
+  ].map((el) => el.getAttribute("data-project-group"));
+  expect(groups).toEqual(["personal", "clients"]);
+});
+
 it("creates, styles, assigns, and deletes a group from the rail", async () => {
   await renderRail();
   expect(sectionLabels()).toEqual(["Projects"]);
