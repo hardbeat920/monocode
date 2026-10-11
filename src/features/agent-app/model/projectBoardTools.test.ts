@@ -691,6 +691,80 @@ expect(PROJECT_BOARD_FIELDS.get("board.update")).toEqual([
       );
     });
 
+    it("uses the latest card fields when an earlier start edits a later card", async () => {
+      (mockHost.startSession as ReturnType<typeof vi.fn>).mockImplementationOnce(
+        async ({ requestId }) => {
+          const secondCard = cardsStore
+            .get(projectA)!
+            .find((card) => card.id === "card-2")!;
+          secondCard.title = "Updated while first card started";
+          secondCard.description = "New details for the worker";
+          secondCard.priority = "high";
+          return { sessionId: `session-started-for-${requestId}` };
+        },
+      );
+
+      const result = (await dispatchProjectBoardAction(
+        defaultContext,
+        "board.start",
+        { cardIds: ["card-1", "card-2"] },
+        mockHost,
+      )) as { startedCount: number; failedCount: number };
+
+      expect(result.startedCount).toBe(2);
+      expect(result.failedCount).toBe(0);
+      expect(mockHost.startSession).toHaveBeenCalledTimes(2);
+      expect(mockHost.startSession).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          requestId: "req-100-card-2",
+          prompt: expect.stringContaining(
+            "Task: Updated while first card started",
+          ),
+        }),
+      );
+      const secondPrompt = (mockHost.startSession as ReturnType<typeof vi.fn>)
+        .mock.calls[1][0].prompt;
+      expect(secondPrompt).toContain("Priority: high");
+      expect(secondPrompt).toContain("Description:\nNew details for the worker");
+      expect(secondPrompt).not.toContain("Add dark mode toggle");
+    });
+
+    it("skips a later card deleted while an earlier card is starting", async () => {
+      (mockHost.startSession as ReturnType<typeof vi.fn>).mockImplementationOnce(
+        async ({ requestId }) => {
+          cardsStore.set(
+            projectA,
+            cardsStore.get(projectA)!.filter((card) => card.id !== "card-2"),
+          );
+          return { sessionId: `session-started-for-${requestId}` };
+        },
+      );
+
+      const result = (await dispatchProjectBoardAction(
+        defaultContext,
+        "board.start",
+        { cardIds: ["card-1", "card-2"] },
+        mockHost,
+      )) as {
+        startedCount: number;
+        failedCount: number;
+        cards: Array<{ cardId: string; success: boolean; error?: string }>;
+      };
+
+      expect(result.startedCount).toBe(1);
+      expect(result.failedCount).toBe(1);
+      expect(result.cards[1]).toMatchObject({
+        cardId: "card-2",
+        success: false,
+        error: 'Card "card-2" not found in authorized project',
+      });
+      expect(mockHost.startSession).toHaveBeenCalledTimes(1);
+      expect(mockHost.startSession).toHaveBeenCalledWith(
+        expect.objectContaining({ requestId: "req-100-card-1" }),
+      );
+    });
+
     it("supports ids alias and explicit placement", async () => {
       const result = (await dispatchProjectBoardAction(
         defaultContext,

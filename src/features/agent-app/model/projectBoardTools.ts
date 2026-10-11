@@ -629,11 +629,11 @@ export async function dispatchProjectBoardAction(
         placement = context.placement ?? "tab";
       }
 
-      const existingCards = await host.repository.list(context.projectCwd);
       const cardResults: BoardStartCardResult[] = [];
 
       for (const cardId of cardIds) {
-        const card = existingCards.find((c) => c.id === cardId);
+        const latestCards = await host.repository.list(context.projectCwd);
+        const card = latestCards.find((c) => c.id === cardId);
         if (!card) {
           cardResults.push({
             cardId,
