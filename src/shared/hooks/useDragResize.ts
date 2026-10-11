@@ -46,6 +46,7 @@ export function useDragResize({
   const [dragging, setDragging] = useState(false);
   const paneRef = useRef<HTMLElement | null>(null);
   const widthRef = useRef(width);
+  const appliedInitialRef = useRef(initial);
   const stopDrag = useRef<(() => void) | null>(null);
 
   const apply = (next: number) => {
@@ -58,6 +59,20 @@ export function useDragResize({
     paneRef.current = el;
     if (el) el.style.width = `${widthRef.current}px`;
   }, []);
+
+  // Adopt width changes made elsewhere — another pane, a layout reset, or a
+  // persisted value restored by other code — while never fighting an active drag.
+  useEffect(() => {
+    if (dragging) return;
+    if (initial === appliedInitialRef.current) return;
+    const next = clamp(initial);
+    appliedInitialRef.current = initial;
+    if (next === widthRef.current) return;
+    widthRef.current = next;
+    const pane = paneRef.current;
+    if (pane) pane.style.width = `${next}px`;
+    setWidth(next);
+  }, [initial, dragging, clamp]);
 
   const commit = (next: number) => {
     const value = clamp(next);
