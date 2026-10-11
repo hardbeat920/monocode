@@ -717,8 +717,45 @@ html.has-chat-background.chat-background-effect-ready.chat-background-gradient-b
   }
 }
 
+/* A Mono's turn keeps its actions the way a sent message does: in a fixed
+ * gap under the turn, shown on hover, so revealing them shifts nothing. One
+ * whose panel is open stays visible. */
+@media (hover: hover) and (pointer: fine) {
+  /* Leave breathing room above the buttons. Keep the gap while a
+   * completion report reopens the same turn and its
+   * actions are temporarily absent. Shrinking it makes the chat dip first. */
+  .transcript-turn-mono {
+    position: relative;
+    padding-bottom: 1.5rem;
+  }
+
+  .turn-actions-hover {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    z-index: 1;
+    height: 1.5rem;
+    padding-top: 0;
+    padding-bottom: 0;
+    opacity: 0;
+    transition: opacity 120ms ease;
+  }
+
+  /* The reply's actions answer to the reply: hovering the prompt above it,
+   * whose own actions show then, or its day stamp, leaves them hidden. */
+  .transcript-turn:hover:not(
+      :has([data-prompt-anchor]:hover, [data-day-separator]:hover)
+    )
+    > .turn-actions-hover,
+  .turn-actions-hover:focus-within,
+  .turn-actions-hover:has([aria-expanded="true"]) {
+    opacity: 1;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .user-message-actions {
+  .user-message-actions,
+  .turn-actions-hover {
     transition: none;
   }
 }
@@ -1343,6 +1380,11 @@ html.has-user-accent .user-message-bubble[data-draft="true"] {
    for the final word's fade, using the reply's actual animation state. */
 .transcript-turn:has([data-artifact-results]):has(.word-fading)
   > :is([data-artifact-results], [data-turn-actions]) {
+  display: none;
+}
+/* Session cards wait for the reply above them to finish its reveal; cards
+   above a later reply, such as a report back, stay where they are. */
+.transcript-turn > :has(.word-fading) ~ [data-launched-sessions] {
   display: none;
 }
 
@@ -2806,6 +2848,46 @@ html.theme-light .mono-pill {
 }
 
 /*
+ * Soft edges like the Mono transcript's, but only on a side with more to
+ * scroll to: a window resting at the top has nothing above it to fade into.
+ * The lengths are registered so an edge eases in and out instead of popping.
+ */
+@property --zen-phase-fade-top {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@property --zen-phase-fade-bottom {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+.zen-phase-body[data-open="true"] > .zen-phase-live {
+  --zen-phase-mask: linear-gradient(
+    to bottom,
+    transparent,
+    #000 var(--zen-phase-fade-top),
+    #000 calc(100% - var(--zen-phase-fade-bottom)),
+    transparent
+  );
+  -webkit-mask-image: var(--zen-phase-mask);
+  mask-image: var(--zen-phase-mask);
+  transition:
+    --zen-phase-fade-top 160ms ease-out,
+    --zen-phase-fade-bottom 160ms ease-out;
+}
+
+.zen-phase-live[data-fade-top="true"] {
+  --zen-phase-fade-top: 1.5rem;
+}
+
+.zen-phase-live[data-fade-bottom="true"] {
+  --zen-phase-fade-bottom: 2rem;
+}
+
+/*
  * The rail: a spine down the group with a step branching off it on a curve,
  * drawn on the step itself so it follows however tall that step turns out to
  * be. The curve is a quarter circle, tangent to the spine at the top and to
@@ -3143,7 +3225,7 @@ html.theme-light .mono-pill {
 }
 
 /*
- * A streamed word fading in as the paced reveal lets it out (wordFade.tsx).
+ * A streamed word fading in as it is shown (wordFade.tsx).
  * Opacity only: a word that moved would jostle the line it is set on. The
  * fade plays as a word's span is added, and words already on screen keep
  * theirs while the reply is coming in. The spans come off once the fade
@@ -3158,8 +3240,10 @@ html.theme-light .mono-pill {
   }
 }
 
+/* Unpaced replies set the timing from the stream's cadence (AgentMarkdown). */
 .agent-markdown.word-fading [data-word-fade]:not([data-word-settled]) {
-  animation: word-fade-in 320ms ease-out both;
+  animation: word-fade-in var(--word-fade-ms, 320ms)
+    var(--word-fade-ease, ease-out) both;
 }
 
 @keyframes zen-thinking-pulse {

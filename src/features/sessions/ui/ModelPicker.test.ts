@@ -309,6 +309,57 @@ describe("model picker", () => {
     expect(options).not.toContain("Base model");
   });
 
+  it.each(["pill", "text"] as const)(
+    "uses project-specific OpenCode settings in %s controls",
+    (variant) => {
+      const model = "opencode:fixture/worktree";
+      setProjectHarnessModels("opencode", "/worktree", [
+        {
+          id: model,
+          harness: "opencode",
+          name: "Worktree model",
+          settings: [
+            {
+              id: "variant",
+              label: "Variant",
+              kind: "select",
+              value: "high",
+              options: [
+                { value: "low", label: "Project Low" },
+                { value: "high", label: "Project High" },
+              ],
+            },
+          ],
+        },
+      ]);
+      const onSettingsChange = vi.fn();
+      act(() =>
+        root.render(
+          createElement(ModelControlPills, {
+            project: "/worktree",
+            harness: "opencode",
+            model,
+            values: {},
+            variant,
+            onSettingsChange,
+          }),
+        ),
+      );
+      const trigger = container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Variant: Project High"]',
+      );
+      expect(trigger).not.toBeNull();
+      expect(trigger?.querySelector("svg") != null).toBe(variant === "pill");
+      act(() => trigger?.click());
+      const option = [
+        ...container.querySelectorAll<HTMLButtonElement>("button"),
+      ].find((button) => button.textContent === "Project Low");
+      expect(option).toBeDefined();
+      act(() => option?.click());
+      expect(onSettingsChange).toHaveBeenCalledWith({ variant: "low" });
+    },
+  );
+
   it("groups OpenCode models by provider and searches provider names", () => {
     setHarnessModels("opencode", [
       {

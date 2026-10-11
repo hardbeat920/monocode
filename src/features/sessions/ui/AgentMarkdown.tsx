@@ -11,6 +11,7 @@ import {
   useRef,
   useState,
   type ComponentProps,
+  type CSSProperties,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
@@ -48,7 +49,15 @@ import { isNoteImagePath } from "../../notes";
 import { IS_MAC, IS_WIN } from "../../../platform/tauri/platform";
 import { InboxMedia } from "../../inbox/ui/InboxMedia";
 import { rehypeHardBreaks } from "./hardBreaks";
-import { rehypeWordFade, usePacedText, useWordFading } from "./wordFade";
+import {
+  pacedRevealPreferred,
+  rehypeWordFade,
+  useCadenceFade,
+  usePacedText,
+  useStreamedText,
+  useWordFading,
+  WORD_FADE_MS,
+} from "./wordFade";
 import { isFenceBlock, parseStreamingMarkdown } from "./streamingMarkdown";
 import { HighlightedCodeBlock } from "./HighlightedCodeBlock";
 
@@ -554,8 +563,19 @@ export const AgentMarkdown = memo(function AgentMarkdown({
     [cwd],
   );
   const remoteMedia = !!allowRemoteMedia;
-  const paced = usePacedText(text, !!streaming, revealOnMount);
-  const fading = useWordFading(!!streaming || paced.revealing);
+  // Read once: switching reveal hooks while mounted would break hook order.
+  const [pacedReveal] = useState(pacedRevealPreferred);
+  const useReveal = pacedReveal ? usePacedText : useStreamedText;
+  const paced = useReveal(text, !!streaming, revealOnMount);
+  const cadence = useCadenceFade(paced.text);
+  const fadeMs = pacedReveal ? WORD_FADE_MS : cadence.durationMs;
+  const fading = useWordFading(!!streaming || paced.revealing, fadeMs);
+  const fadeStyle = pacedReveal
+    ? undefined
+    : ({
+        "--word-fade-ms": `${fadeMs}ms`,
+        "--word-fade-ease": cadence.easing,
+      } as CSSProperties);
   // Spans stay while words are fading so a word already on screen keeps its
   // element. Dropping one mid-fade would remount it and fade it again. Once
   // the fade is over they come off, or a finished reply would keep a span per
@@ -617,21 +637,24 @@ export const AgentMarkdown = memo(function AgentMarkdown({
       <FileOpenContext.Provider value={fileOpen}>
         <>
           <MarkdownFadeContext.Provider value={fading}>
-            <Streamdown
-              BlockComponent={DirectionalBlock}
-              className={`agent-markdown min-w-0 font-sans text-sm leading-6 ${fading ? "word-fading" : ""} ${className ?? ""}`}
-              components={MARKDOWN_COMPONENTS}
-              controls={false}
-              dir="auto"
-              isAnimating={!!streaming || paced.revealing}
-              parseIncompleteMarkdown={false}
-              parseMarkdownIntoBlocksFn={parseStreamingMarkdown}
-              plugins={MARKDOWN_PLUGINS}
-              remarkPlugins={remarkPlugins}
-              rehypePlugins={rehypePlugins}
-            >
-              {paced.text}
-            </Streamdown>
+            {/* Streamdown takes no style; a contents box passes the fade timing down. */}
+            <div className="contents" style={fadeStyle}>
+              <Streamdown
+                BlockComponent={DirectionalBlock}
+                className={`agent-markdown min-w-0 font-sans text-sm leading-6 ${fading ? "word-fading" : ""} ${className ?? ""}`}
+                components={MARKDOWN_COMPONENTS}
+                controls={false}
+                dir="auto"
+                isAnimating={!!streaming || paced.revealing}
+                parseIncompleteMarkdown={false}
+                parseMarkdownIntoBlocksFn={parseStreamingMarkdown}
+                plugins={MARKDOWN_PLUGINS}
+                remarkPlugins={remarkPlugins}
+                rehypePlugins={rehypePlugins}
+              >
+                {paced.text}
+              </Streamdown>
+            </div>
           </MarkdownFadeContext.Provider>
           {fileMenu ? (
             <ExplorerMenu
