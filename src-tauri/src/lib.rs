@@ -31,6 +31,7 @@ mod menu;
 mod mono;
 #[cfg(target_os = "macos")]
 mod mono_chat;
+mod mono_skills;
 mod mono_transcript;
 mod notes;
 mod notifications;
@@ -527,6 +528,8 @@ pub fn run() {
             mono::mono_load,
             mono::mono_read,
             mono::mono_save,
+            mono_skills::mono_skill_read,
+            mono_skills::mono_skill_remove,
             checkpoint::session_checkpoint_ensure,
             checkpoint::session_checkpoint_begin_turn,
             checkpoint::session_checkpoint_finish_turn,

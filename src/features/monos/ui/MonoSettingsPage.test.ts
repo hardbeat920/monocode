@@ -60,11 +60,12 @@ it("lists what lives behind each page, and opens it", () => {
   );
   const rows = [...container.querySelectorAll("nav button")].map((row) => row.textContent);
   expect(rows).toEqual([
+    "SkillsAssign reusable skills or create ones for this Mono.",
     "SoulDefines who this bot is and the rules it follows. Always included in its context.",
     "HabitsRecurring tasks this bot runs on its own.",
     "MemoryFacts and preferences this bot remembers.",
   ]);
-  act(() => (container.querySelectorAll("nav button")[2] as HTMLElement).click());
+  act(() => (container.querySelectorAll("nav button")[3] as HTMLElement).click());
   expect(onOpen).toHaveBeenCalledWith("memory");
 });
 
@@ -80,9 +81,9 @@ it("shows how many habits and facts it has once they load", () => {
     ),
   );
   const rows = [...container.querySelectorAll("nav button")].map((row) => row.textContent);
-  expect(rows[0]).toMatch(/context\.$/);
-  expect(rows[1]).toBe("HabitsRecurring tasks this bot runs on its own.3");
-  expect(rows[2]).toBe("MemoryFacts and preferences this bot remembers.12");
+  expect(rows[1]).toMatch(/context\.$/);
+  expect(rows[2]).toBe("HabitsRecurring tasks this bot runs on its own.3");
+  expect(rows[3]).toBe("MemoryFacts and preferences this bot remembers.12");
 });
 
 function renderReset(onReset: () => Promise<void>) {
@@ -110,7 +111,7 @@ it("requires confirmation for reset and cancels without deleting anything", () =
   const dialog = document.querySelector('[role="dialog"]')!;
   expect(dialog.textContent).toContain("Reset Broski's conversation?");
   expect(dialog.textContent).toContain("All messages");
-  expect(dialog.textContent).toContain("soul, memory and habits will be kept");
+  expect(dialog.textContent).toContain("soul, memory, habits and skills will be kept");
   expect(reset).not.toHaveBeenCalled();
   act(() => dialogButton("Cancel").click());
   expect(document.querySelector('[role="dialog"]')).toBeNull();

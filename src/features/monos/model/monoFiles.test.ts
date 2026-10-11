@@ -93,6 +93,47 @@ it("refreshes standing rules in an existing conversation after a context upgrade
   });
 });
 
+it("refreshes only the skills catalog when its contents change", () => {
+  const original = { ...files(), skillsHash: "skills-1" };
+  expect(planAgentContext("chat", undefined, original)).toEqual({
+    soul: true,
+    memory: true,
+    skills: true,
+  });
+  recordAgentContext("chat", "native-1", original);
+  expect(planAgentContext("chat", "native-1", original)).toEqual({
+    soul: false,
+    memory: false,
+    skills: false,
+  });
+  expect(
+    planAgentContext("chat", "native-1", {
+      ...original,
+      skillsHash: "skills-2",
+    }),
+  ).toEqual({ soul: false, memory: false, skills: true });
+  const context = monoContext(
+    { name: "Cat", mascot: "cat", color: "#fff", projects: [] },
+    {
+      ...original,
+      skills: [
+        {
+          name: "review-pr",
+          description: "Review a PR",
+          path: "/skills/review-pr/SKILL.md",
+          hash: "body",
+          owned: false,
+          available: true,
+        },
+      ],
+    },
+    { soul: false, memory: false, skills: true },
+  );
+  expect(context).toContain('"review-pr": "Review a PR"');
+  expect(context).not.toContain("Be brief.");
+  expect(context).not.toContain("<memory>");
+});
+
 it("loads only whole lines within the memory budget", () => {
   const memory = Array.from(
     { length: MEMORY_MAX_LINES + 5 },

@@ -10,6 +10,8 @@
 //!     ├── SOUL.md           who it is; edited by the user or at their request
 //!     ├── MEMORY.md         what it has learned; loads into every turn
 //!     ├── habits.json       what it does on its own, on a schedule
+//!     ├── skills.json       references to skills assigned by the user
+//!     ├── skills/           skills created just for this Mono
 //!     └── memory/           topic notes read on demand, and archive.md
 //! ```
 //!
@@ -43,7 +45,7 @@ static INDEX_LOCK: Mutex<()> = Mutex::new(());
 
 /// All windows share this store. Keep initialization and hash-checked writes
 /// serialized so only one caller can save over a version of a file.
-static FILES_LOCK: Mutex<()> = Mutex::new(());
+pub(crate) static FILES_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct AgentIndex {
@@ -80,6 +82,8 @@ pub struct AgentFiles {
     pub memory_path: String,
     /// Topic notes under memory/, by name without `.md`; not the archive.
     pub topics: Vec<String>,
+    pub skills: Vec<crate::mono_skills::MonoSkill>,
+    pub skills_hash: String,
 }
 
 /// The files the app reads and writes for an agent, relative to its folder:
@@ -88,6 +92,15 @@ pub struct AgentFiles {
 fn resolve_file(dir: &Path, relative: &str) -> Result<PathBuf, String> {
     if relative == SOUL_FILE || relative == MEMORY_FILE || relative == HABITS_FILE {
         return Ok(dir.join(relative));
+    }
+    if relative == "skills.json" {
+        return Ok(dir.join(relative));
+    }
+    if let Some(name) = relative
+        .strip_prefix("skills/")
+        .and_then(|rest| rest.strip_suffix("/SKILL.md"))
+    {
+        return crate::mono_skills::owned_path(dir, name);
     }
     let name = relative
         .strip_prefix("memory/")
@@ -123,7 +136,7 @@ fn topics(dir: &Path) -> Vec<String> {
     names
 }
 
-fn monos_root(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn monos_root(app: &AppHandle) -> Result<PathBuf, String> {
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let root = data.join(MONOS_DIR);
     let legacy = data.join(LEGACY_DIR);
@@ -193,7 +206,11 @@ fn valid_id(id: &str) -> bool {
 
 /// The Mono's folder, created with an empty memory on first use. A Mono that
 /// was a project's own takes over that project's folder the first time.
-fn agent_dir(root: &Path, mono: &str, legacy_project: Option<&str>) -> Result<PathBuf, String> {
+pub(crate) fn agent_dir(
+    root: &Path,
+    mono: &str,
+    legacy_project: Option<&str>,
+) -> Result<PathBuf, String> {
     if !valid_id(mono) {
         return Err("Not a Mono id".into());
     }
@@ -240,6 +257,8 @@ fn load(root: &Path, mono: &str, legacy_project: Option<&str>) -> Result<AgentFi
     let soul = read_optional(&dir.join(SOUL_FILE))?;
     let memory_path = dir.join(MEMORY_FILE);
     let memory = read_optional(&memory_path)?.unwrap_or_default();
+    let skills = crate::mono_skills::list(&dir)?;
+    let skills_hash = content_hash(&serde_json::to_string(&skills).map_err(|e| e.to_string())?);
     Ok(AgentFiles {
         id: mono.to_string(),
         soul_hash: content_hash(soul.as_deref().unwrap_or("")),
@@ -248,6 +267,8 @@ fn load(root: &Path, mono: &str, legacy_project: Option<&str>) -> Result<AgentFi
         memory,
         memory_path: memory_path.to_string_lossy().into_owned(),
         topics: topics(&dir),
+        skills,
+        skills_hash,
         dir: dir.to_string_lossy().into_owned(),
     })
 }
@@ -283,6 +304,13 @@ fn save(
     let _guard = FILES_LOCK.lock().map_err(|e| e.to_string())?;
     let dir = agent_dir(root, mono, legacy_project)?;
     let path = resolve_file(&dir, relative)?;
+    if relative.starts_with("skills/") {
+        crate::mono_skills::validate_owned(&path, text)?;
+        std::fs::create_dir_all(path.parent().ok_or("Invalid skill path")?)
+            .map_err(|e| e.to_string())?;
+    } else if relative == "skills.json" {
+        crate::mono_skills::validate_assignments(text)?;
+    }
     if let Some(expected) = expected_hash {
         let current = read_optional(&path)?.unwrap_or_default();
         if content_hash(&current) != expected {
@@ -509,6 +537,101 @@ mod tests {
         ] {
             assert!(save(&root, "m", None, path, "x", None).is_err(), "{path}");
         }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn skills_are_owned_by_one_mono_and_updated_with_hashes() {
+        let root = temp_root();
+        let path = "skills/review-pr/SKILL.md";
+        let text =
+            "---\nname: review-pr\ndescription: 'Review the team''s PRs'\n---\n\nRun checks.\n";
+        let empty = read(&root, "a", None, path).unwrap();
+        let hash = save(&root, "a", None, path, text, Some(&empty.hash)).unwrap();
+        let first = load(&root, "a", None).unwrap();
+        assert_eq!(first.skills.len(), 1);
+        assert_eq!(first.skills[0].description, "Review the team's PRs");
+        assert!(first.skills[0].owned);
+        assert!(load(&root, "b", None).unwrap().skills.is_empty());
+        let updated = text.replace("Run checks.", "Run checks and inspect the diff.");
+        save(&root, "a", None, path, &updated, Some(&hash)).unwrap();
+        assert_ne!(
+            first.skills_hash,
+            load(&root, "a", None).unwrap().skills_hash
+        );
+        assert_eq!(
+            save(&root, "a", None, path, text, Some(&hash)),
+            Err(CONFLICT.into())
+        );
+        for invalid in [
+            "skills/../SKILL.md",
+            "skills/a/b/SKILL.md",
+            "skills/.hidden/SKILL.md",
+        ] {
+            assert!(save(&root, "a", None, invalid, text, None).is_err());
+        }
+        assert!(save(&root, "a", None, path, "no metadata", None).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn assigned_skills_keep_sources_and_follow_source_changes() {
+        let root = temp_root();
+        let folder = root.join("app/.agents/skills/shared");
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("SKILL.md");
+        let body = "---\nname: shared\ndescription: Shared workflow\n---\n\nFollow reference.md.\n";
+        std::fs::write(&path, body).unwrap();
+        std::fs::write(folder.join("reference.md"), "Supporting content").unwrap();
+        let config = serde_json::json!([{
+            "name": "shared",
+            "description": "Shared workflow",
+            "path": crate::fs::path_to_js(&path)
+        }])
+        .to_string();
+        save(&root, "a", None, "skills.json", &config, None).unwrap();
+        let first = load(&root, "a", None).unwrap();
+        assert!(!first.skills[0].owned);
+        assert!(first.skills[0].available);
+        assert!(load(&root, "b", None).unwrap().skills.is_empty());
+        std::fs::write(&path, body.replace("Shared workflow", "Updated workflow")).unwrap();
+        let next = load(&root, "a", None).unwrap();
+        assert_eq!(next.skills[0].description, "Updated workflow");
+        assert_ne!(first.skills_hash, next.skills_hash);
+        save(&root, "a", None, "skills.json", "[]", None).unwrap();
+        assert!(load(&root, "a", None).unwrap().skills.is_empty());
+        assert!(path.is_file());
+        assert!(folder.join("reference.md").is_file());
+        save(&root, "a", None, "skills.json", &config, None).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert!(!load(&root, "a", None).unwrap().skills[0].available);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn assigned_skills_must_match_a_discovery_root() {
+        let root = temp_root();
+        let secret = root.join("secret/SKILL.md");
+        std::fs::create_dir_all(secret.parent().unwrap()).unwrap();
+        std::fs::write(
+            &secret,
+            "---\nname: secret\ndescription: Should not be read\n---\nSECRET\n",
+        )
+        .unwrap();
+        let config = serde_json::json!([{
+            "name": "secret",
+            "description": "Should not be read",
+            "path": crate::fs::path_to_js(&secret)
+        }])
+        .to_string();
+        assert!(save(&root, "a", None, "skills.json", &config, None).is_err());
+        let dir = agent_dir(&root, "a", None).unwrap();
+        std::fs::write(dir.join("skills.json"), &config).unwrap();
+        let listed = load(&root, "a", None).unwrap();
+        assert_eq!(listed.skills.len(), 1);
+        assert!(!listed.skills[0].available);
+        assert_eq!(listed.skills[0].description, "Should not be read");
+        assert_eq!(listed.skills[0].hash, "");
         std::fs::remove_dir_all(root).unwrap();
     }
 }

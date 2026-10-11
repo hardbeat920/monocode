@@ -151,6 +151,22 @@ export type AgentAppHost = {
       change: (habits: Habit[]) => { habits: Habit[]; result: T },
     ): Promise<T>;
   };
+  skills?: {
+    read(
+      monoId: string,
+      name: string,
+    ): Promise<{ text: string; hash: string; path: string; owned: boolean }>;
+    create(
+      monoId: string,
+      input: { name: string; description: string; instructions: string },
+    ): Promise<void>;
+    update(
+      monoId: string,
+      name: string,
+      text: string,
+      expectedHash: string,
+    ): Promise<void>;
+  };
   agentFiles(monoId: string): Promise<MonoFiles>;
   readAgentFile(
     monoId: string,
@@ -208,6 +224,10 @@ const FIELDS = new Map<string, readonly string[]>([
   ["artifacts.write", ["id", "kind", "title", "body", "summary"]],
   ["soul.read", []],
   ["soul.update", ["text", "expectedHash"]],
+  ["skills.list", []],
+  ["skills.read", ["name"]],
+  ["skills.create", ["name", "description", "instructions"]],
+  ["skills.update", ["name", "text", "expectedHash"]],
   ["memory.read", ["topic"]],
   ["memory.search", ["query", "since"]],
   ["memory.add", ["fact", "topic", "until"]],
@@ -495,6 +515,57 @@ function memoryPath(topic: unknown): AgentFilePath {
   return topic === undefined
     ? "MEMORY.md"
     : `memory/${topicName(requiredString(topic, "topic", 80))}.md`;
+}
+
+async function handleSkills(
+  source: Session,
+  action: string,
+  input: Record<string, unknown>,
+  host: AgentAppHost,
+): Promise<unknown> {
+  const monoId =
+    host.isMono(source.id) || host.isHabitRun?.(source.id)
+      ? host.monoOf?.(source.id)?.id
+      : undefined;
+  if (!monoId)
+    throw new Error("Only a Mono or its habit runs can read its skills");
+  if (action === "skills.list")
+    return { skills: (await host.agentFiles(monoId)).skills ?? [] };
+  if (!host.skills) throw new Error("Skills are unavailable");
+  const name = requiredString(input.name, "name", 128);
+  if (action === "skills.read")
+    return { name, ...(await host.skills.read(monoId, name)) };
+  if (!host.isMono(source.id))
+    throw new Error(
+      "Only a Mono's own conversation can create or update its skills",
+    );
+  if (action === "skills.create") {
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name) || name.length > 64)
+      throw new Error("Skill names must use lowercase letters, numbers and hyphens (up to 64 characters)");
+    await host.skills.create(monoId, {
+      name,
+      description: requiredString(input.description, "description", 1024),
+      instructions: requiredString(input.instructions, "instructions", 240_000),
+    });
+    return { created: true, name };
+  }
+  if (typeof input.text !== "string" || input.text.length > 240_000)
+    throw new Error("text must be a string under 240000 characters");
+  try {
+    await host.skills.update(
+      monoId,
+      name,
+      input.text,
+      requiredString(input.expectedHash, "expectedHash", 128),
+    );
+  } catch (error) {
+    if (error instanceof MonoFileConflict)
+      throw new Error(
+        "The skill changed since you read it. Run skills.read and reapply the user's changes before calling skills.update again.",
+      );
+    throw error;
+  }
+  return { updated: true, name };
 }
 
 async function handleSoul(
@@ -946,6 +1017,8 @@ export async function handleAgentApp(
     return handleArtifacts(source, requestId, action, input, host);
   if (action.startsWith("soul."))
     return handleSoul(source, action, input, host);
+  if (action.startsWith("skills."))
+    return handleSkills(source, action, input, host);
   if (action.startsWith("memory."))
     return handleMemory(source, action, input, host);
   if (action.startsWith("habits."))
