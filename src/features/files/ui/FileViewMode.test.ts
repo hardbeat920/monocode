@@ -158,6 +158,22 @@ describe("previewable file view mode", () => {
     expect(file.selected()).toBe("Source");
   });
 
+  it("keeps the last choice for this run when storage rejects it", async () => {
+    vi.stubGlobal("localStorage", {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error("quota");
+      },
+    });
+    const file = await open("/repo/unsaved.md");
+    await file.choose("Source");
+
+    const next = await open("/repo/unsaved-next.md");
+    expect(next.selected()).toBe("Source");
+    // The in-memory choice lasts for the module; leave it at the default.
+    await next.choose("Preview");
+  });
+
   it("does not change the file default when navigation opens the source", async () => {
     const linked = await open("/repo/linked.md", { line: 1 });
     await vi.waitFor(() => expect(linked.selected()).toBe("Source"));

@@ -12,12 +12,13 @@ export function useMarkdownMode(
     () => remembered.get(key) ?? fallback,
   );
   // A changed fallback applies to the next key, not the item already shown.
-  const fallbackRef = useRef(fallback);
-  fallbackRef.current = fallback;
+  const shownKey = useRef(key);
 
   useEffect(() => {
-    setMode(remembered.get(key) ?? fallbackRef.current);
-  }, [key]);
+    if (shownKey.current === key) return;
+    shownKey.current = key;
+    setMode(remembered.get(key) ?? fallback);
+  }, [key, fallback]);
 
   return [
     mode,
