@@ -72,6 +72,7 @@ import {
   type ClaudeControlRequest,
 } from "./claudeProtocol";
 import { isAgentToolName } from "../../core/preview";
+import { claudePromptText, leadingClaudeCommand } from "./claudeCommands";
 import { joinStreamText, snapshotRemainder } from "../../core/streamText";
 import {
   questionPromptTitle,
@@ -285,10 +286,15 @@ export async function steerClaudeTurn(input: SteerTurnInput): Promise<void> {
   const live = liveByThread.get(input.sessionId);
   if (!live?.activeTurn) throw new TurnNotReadyError("No active turn to steer");
 
+  const effort = input.modelSettings?.effort;
   const message = buildClaudeUserMessage({
-    text: input.text,
+    text: claudePromptText(input.text),
     attachments: input.attachments,
-    effort: input.modelSettings?.effort,
+    effort,
+    command: !!leadingClaudeCommand(input.text, {
+      cwd: live.cwd,
+      accountId: live.providerAccountId,
+    }),
   });
   const content = (message.message as { content: unknown[] }).content;
   if (content.length === 0) return;
@@ -574,10 +580,15 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
 
 async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   const effort = input.modelSettings?.effort;
+  const command = leadingClaudeCommand(input.text, {
+    cwd: live.cwd,
+    accountId: live.providerAccountId,
+  });
   const message = buildClaudeUserMessage({
-    text: input.text,
+    text: claudePromptText(input.text),
     attachments: input.attachments,
     effort,
+    command: !!command,
   });
   const content = (message.message as { content: unknown[] }).content;
   if (content.length === 0) return;
@@ -606,6 +617,12 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
     await writeJson(input.sessionId, message);
     input.onAccepted?.();
     settlePendingTurn(live);
+    if (command && effort === "ultrathink") {
+      live.onEvent({
+        type: "status",
+        text: `Ultrathink skipped: a prompt starting with /${command} goes to Claude Code as a command, which takes no prefix.`,
+      });
+    }
     await turnPromise;
   } catch (error) {
     if (live.cancelled) return;

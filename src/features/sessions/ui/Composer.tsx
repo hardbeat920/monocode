@@ -217,6 +217,8 @@ type Props = {
   cwd?: string;
   executionCwd: string;
   sessionId?: string;
+  /** Provider account the session runs under; scopes its native commands. */
+  providerAccountId?: string;
   branch?: string;
   recents?: RecentProject[];
   hideProjectPicker?: boolean;
@@ -343,6 +345,7 @@ export function Composer({
   cwd = "~",
   executionCwd,
   sessionId,
+  providerAccountId,
   branch,
   recents = [],
   hideProjectPicker = false,
@@ -535,6 +538,7 @@ export function Composer({
     harness,
     executionCwd: localCwd,
     sessionId,
+    accountId: providerAccountId,
     pickerOpen: pickerOpen && !remote,
   });
   const skills = skillCatalog.skills;

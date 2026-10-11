@@ -89,6 +89,18 @@ describe("applyClaudePromptEffortPrefix", () => {
     ).toBe("Ultrathink:\nInvestigate the edge cases");
     expect(applyClaudePromptEffortPrefix("hello", "high")).toBe("hello");
   });
+
+  it("leaves a leading slash command first", () => {
+    expect(
+      buildClaudeUserMessage({
+        text: "/code-review high",
+        effort: "ultrathink",
+        command: true,
+      }),
+    ).toMatchObject({
+      message: { content: [{ type: "text", text: "/code-review high" }] },
+    });
+  });
 });
 
 describe("resolveClaudeApiModelId", () => {

@@ -93,6 +93,7 @@ import {
 } from "../../settings/model/settings";
 import { getComposerDraft, setComposerDraft } from "../model/draftCache";
 import { resolveModel } from "../model/models";
+import { sessionSkillAccountId } from "../model/sessionSkills";
 import { isAstraModel } from "../model/astraWelcome";
 import { isOpus55Model } from "../model/opusWelcome";
 import { AstraWelcome } from "./AstraWelcome";
@@ -645,6 +646,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
       hotkeys={focused && !btw.open}
       shell={!dockComposer}
       harness={session.harness}
+      providerAccountId={sessionSkillAccountId(session)}
       model={session.model}
       modelSettings={session.modelSettings}
       runtimeMode={session.runtimeMode}

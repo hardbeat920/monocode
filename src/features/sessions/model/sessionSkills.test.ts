@@ -11,7 +11,10 @@ vi.mock("../../../integrations/harness/core/registry", () => ({
 }));
 
 import { describe, expect, it, vi } from "vitest";
-import { nativeSkillContextForSession } from "./sessionSkills";
+import {
+  nativeSkillContextForSession,
+  sessionSkillAccountId,
+} from "./sessionSkills";
 
 describe("nativeSkillContextForSession", () => {
   it("scopes OMP warmup to the active conversation worktree", () => {
@@ -38,5 +41,21 @@ describe("nativeSkillContextForSession", () => {
     expect(
       nativeSkillContextForSession({ harness: "claude", cwd: "/repo" }),
     ).toBeNull();
+  });
+});
+
+describe("sessionSkillAccountId", () => {
+  it("uses the session's account, else the default for account providers", () => {
+    expect(
+      sessionSkillAccountId({
+        harness: "claude",
+        cwd: "/repo",
+        providerAccountId: "work",
+      }),
+    ).toBe("work");
+    expect(sessionSkillAccountId({ harness: "claude", cwd: "/repo" })).toBe(
+      "default",
+    );
+    expect(sessionSkillAccountId({ harness: "omp", cwd: "/repo" })).toBeUndefined();
   });
 });
