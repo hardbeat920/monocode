@@ -8,6 +8,7 @@ import { LiveAgentsPreview } from "./LiveAgentsPreview";
 let container: HTMLDivElement;
 let root: Root;
 
+/** Creates a live-card fixture; `patch` overrides its default fields. */
 function agent(
   id: string,
   cwd: string,
@@ -26,6 +27,7 @@ function agent(
   };
 }
 
+/** Renders preview props inside `act` so updates finish before assertions. */
 function render(props: ComponentProps<typeof LiveAgentsPreview>) {
   act(() => root.render(createElement(LiveAgentsPreview, props)));
 }
@@ -121,5 +123,66 @@ describe("LiveAgentsPreview", () => {
     expect(liveRegion.textContent).toBe("2 working agents");
     expect(liveRegion.textContent).not.toMatch(/\d+s/);
     expect(container.querySelector("[role=status]")).toBeNull();
+  });
+
+  it("shows reported turn counts and exposes cache details on hover or focus", () => {
+    const agents = [
+      agent("a", "/repo/a", {
+        turnMetrics: { inputTokens: 0, cacheReadTokens: 1_200 },
+      }),
+      agent("b", "/repo/b"),
+    ];
+    render({
+      agents,
+      groupLabels: {},
+      groupColors: {},
+      groupCustomColors: {},
+      groupMascots: {},
+    });
+
+    const card = container.querySelector<HTMLElement>(
+      '[data-live-agent-card="a"]',
+    )!;
+    expect(card.textContent).toContain("0 input");
+    expect(card.textContent).not.toContain("1.2K cached");
+    expect(card.getAttribute("aria-label")).toContain("0 input");
+    expect(card.getAttribute("aria-label")).not.toContain("output");
+    expect(card.getAttribute("aria-label")).not.toContain("cached");
+    expect(card.title).toContain("0 input");
+    expect(card.title).not.toContain("cached");
+    act(() => card.focus());
+    expect(document.querySelector('[role="tooltip"]')?.textContent).toContain(
+      "1.2K cached",
+    );
+    expect(card.getAttribute("aria-describedby")).not.toBeNull();
+    act(() => card.blur());
+    expect(document.querySelector('[role="tooltip"]')).toBeNull();
+
+    render({
+      agents: [
+        agent("a", "/repo/a", {
+          turnMetrics: { inputTokens: 2_000, outputTokens: 84 },
+        }),
+        agents[1],
+      ],
+      groupLabels: {},
+      groupColors: {},
+      groupCustomColors: {},
+      groupMascots: {},
+    });
+    expect(card.textContent).toContain("2K input · 84 output");
+    expect(card.textContent).not.toContain("cached");
+    expect(card.getAttribute("aria-label")).toContain("2K input · 84 output");
+    expect(card.title).toContain("2K input · 84 output");
+
+    render({
+      agents: [agent("a", "/repo/a"), agents[1]],
+      groupLabels: {},
+      groupColors: {},
+      groupCustomColors: {},
+      groupMascots: {},
+    });
+    expect(card.textContent).not.toContain("input");
+    expect(card.textContent).not.toContain("output");
   });
 });

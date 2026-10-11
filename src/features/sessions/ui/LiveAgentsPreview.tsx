@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { formatLiveElapsed, type LiveAgent } from "../model/liveAgents";
+import { formatTokens } from "../model/contextUsage";
 import { projectKey, projectName } from "../../../shared/lib/paths";
 import {
   loadTabGroupColors,
@@ -15,6 +16,7 @@ import { Check, ChevronDown, ChevronUp, CircleAlert } from "../../../shared/ui/i
 import { HarnessIcon } from "./HarnessIcon";
 import { ProjectMascot } from "../../projects/ui/ProjectMascot";
 import { TerminalSpinner } from "./TerminalSpinner";
+import { Popover } from "../../../shared/ui/Popover";
 
 const LIVE_AGENT_MIN = 2;
 const LIVE_AGENT_CAP = 4;
@@ -30,6 +32,7 @@ type Props = {
   groupMascots?: Record<string, string>;
 };
 
+/** Renders the sidebar panel once at least two live or unseen-finished agents are available. */
 export function LiveAgentsPreview({
   agents,
   activeSessionId,
@@ -129,6 +132,7 @@ export function LiveAgentsPreview({
   );
 }
 
+/** Renders a selectable agent card with cache metrics in a hover/focus tooltip. */
 function LiveAgentCard({
   agent,
   now,
@@ -148,6 +152,10 @@ function LiveAgentCard({
   groupCustomColors: Record<string, string>;
   groupMascots: Record<string, string>;
 }) {
+  const root = useRef<HTMLButtonElement>(null);
+  const cacheTooltipId = useId();
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
   const seed = projectName(agent.cwd);
   const key = projectKey(agent.cwd);
   const project = resolveTabGroupLabel(key, groupLabels, seed);
@@ -165,7 +173,28 @@ function LiveAgentCard({
       ? "Done"
       : agent.activity;
   const live = !agent.needsApproval && !agent.done;
-  const title = [agent.title, project, activity, elapsed]
+  const tokenCounts = [
+    agent.turnMetrics?.inputTokens != null
+      ? `${formatTokens(agent.turnMetrics.inputTokens)} input`
+      : null,
+    agent.turnMetrics?.outputTokens != null
+      ? `${formatTokens(agent.turnMetrics.outputTokens)} output`
+      : null,
+  ].filter(Boolean);
+  const cacheCounts = [
+    agent.turnMetrics?.cacheReadTokens != null
+      ? `${formatTokens(agent.turnMetrics.cacheReadTokens)} cached`
+      : null,
+    agent.turnMetrics?.cacheWriteTokens != null
+      ? `${formatTokens(agent.turnMetrics.cacheWriteTokens)} cache written`
+      : null,
+    agent.turnMetrics?.cacheHitPercent != null
+      ? `Cache hit ${Math.round(agent.turnMetrics.cacheHitPercent)}%`
+      : null,
+  ].filter(Boolean);
+  const metricsLabel = tokenCounts.join(" · ");
+  const showCacheTooltip = cacheCounts.length > 0 && (hovered || focused);
+  const title = [agent.title, project, activity, elapsed, metricsLabel]
     .filter(Boolean)
     .join("\n");
 
@@ -173,12 +202,18 @@ function LiveAgentCard({
     <button
       type="button"
       title={title}
-      aria-label={[agent.title, project, activity, elapsed]
+      aria-label={[agent.title, project, activity, elapsed, metricsLabel]
         .filter(Boolean)
         .join(", ")}
       aria-current={selected ? "true" : undefined}
+      aria-describedby={showCacheTooltip ? cacheTooltipId : undefined}
       data-live-agent-card={agent.id}
+      ref={root}
       onClick={() => onSelect?.(agent.id)}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
       className={`relative flex w-full flex-col rounded-md px-2 py-1.5 text-left ${
         selected ? "bg-selection" : "hover:bg-content/8"
       }`}
@@ -226,6 +261,23 @@ function LiveAgentCard({
           <span className="shrink-0 tabular-nums">{elapsed}</span>
         ) : null}
       </span>
+      {tokenCounts.length ? (
+        <span className="mt-1 min-w-0 truncate pl-4 text-[10px] leading-tight text-content/40">
+          {tokenCounts.join(" · ")}
+        </span>
+      ) : null}
+      {showCacheTooltip ? (
+        <Popover
+          anchor={root}
+          side="top"
+          align="start"
+          id={cacheTooltipId}
+          role="tooltip"
+          className="pointer-events-none w-max max-w-[min(240px,90vw)] px-2.5 py-1.5 text-[11px] leading-4 text-content"
+        >
+          {cacheCounts.join(" · ")}
+        </Popover>
+      ) : null}
     </button>
   );
 }
