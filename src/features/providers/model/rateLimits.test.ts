@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  activeRateLimitPool,
   clampUsedPercent,
   exhaustedWindowResetAt,
   formatRateLimitWindowChipLabel,
@@ -9,6 +10,7 @@ import {
   formatWindowLabel,
   idleRateLimits,
   mapUsageWindow,
+  parseAntigravityUsage,
   parseClaudeOAuthUsage,
   parseCodexRateLimits,
   formatExtraUsageBalance,
@@ -390,4 +392,186 @@ describe("rateLimitWindowTooltip", () => {
       ).toBe(`${remaining} remaining · wk window`);
     },
   );
+});
+
+describe("parseAntigravityUsage", () => {
+  const body = JSON.stringify({
+    models: {
+      "gemini-3.1-pro-high": {
+        displayName: "Gemini 3.1 Pro (High)",
+        quotaInfo: { remainingFraction: 0.92, resetTime: "2026-10-09T12:16:47Z" },
+      },
+      "gemini-3-flash": {
+        displayName: "Gemini 3 Flash",
+        quotaInfo: { remainingFraction: 0.92, resetTime: "2026-10-09T12:16:47Z" },
+      },
+      // Proto JSON drops a zero remainingFraction: this pool is spent.
+      "claude-opus-5-5-high": {
+        displayName: "Claude Opus 5.5 (High)",
+        quotaInfo: { resetTime: "2026-10-10T12:24:28Z" },
+      },
+      "gpt-oss-120b-medium": {
+        displayName: "GPT-OSS 120B (Medium)",
+        quotaInfo: { resetTime: "2026-10-10T12:24:28Z" },
+      },
+      // Internal models carry no display name.
+      chat_20706: { quotaInfo: { remainingFraction: 1 } },
+      "gemini-3.6-flash-tiered": {
+        quotaInfo: { remainingFraction: 0.92, resetTime: "2026-10-09T12:16:47Z" },
+      },
+    },
+  });
+
+  it("groups models that share a quota and labels them by family", () => {
+    const limits = parseAntigravityUsage(body);
+    expect(limits.status).toBe("ok");
+    expect(limits.session).toBeNull();
+    expect(limits.pools).toEqual([
+      {
+        id: "claude-opus-5-5-high",
+        label: "Claude & GPT-OSS",
+        shortLabel: "Claude",
+        modelIds: ["claude-opus-5-5-high", "gpt-oss-120b-medium"],
+        modelNames: ["Claude Opus 5.5 (High)", "GPT-OSS 120B (Medium)"],
+        window: {
+          usedPercent: 100,
+          windowMinutes: 0,
+          resetsAt: Date.parse("2026-10-10T12:24:28Z"),
+        },
+      },
+      {
+        id: "gemini-3-flash",
+        label: "Gemini",
+        shortLabel: "Gemini",
+        modelIds: ["gemini-3-flash", "gemini-3.1-pro-high"],
+        modelNames: ["Gemini 3 Flash", "Gemini 3.1 Pro (High)"],
+        window: {
+          usedPercent: expect.closeTo(8, 5),
+          windowMinutes: 0,
+          resetsAt: Date.parse("2026-10-09T12:16:47Z"),
+        },
+      },
+    ]);
+    expect(exhaustedWindowResetAt(limits)).toBe(
+      Date.parse("2026-10-10T12:24:28Z"),
+    );
+  });
+
+  it("names split pools within one family by model", () => {
+    const limits = parseAntigravityUsage(
+      JSON.stringify({
+        models: {
+          pro: {
+            displayName: "Gemini 3.1 Pro (High)",
+            quotaInfo: { remainingFraction: 0.5 },
+          },
+          flash: {
+            displayName: "Gemini 3 Flash",
+            quotaInfo: { remainingFraction: 1 },
+          },
+        },
+      }),
+    );
+    expect(limits.pools?.map((pool) => [pool.label, pool.shortLabel])).toEqual([
+      ["Gemini 3 Flash", "Gemini 3 Flash"],
+      ["Gemini 3.1 Pro", "Gemini 3.1 Pro"],
+    ]);
+  });
+
+  it("keeps untouched quotas apart by family", () => {
+    const limits = parseAntigravityUsage(
+      JSON.stringify({
+        models: {
+          flash: {
+            displayName: "Gemini 3 Flash",
+            quotaInfo: { remainingFraction: 1 },
+          },
+          opus: {
+            displayName: "Claude Opus 5.5 (High)",
+            quotaInfo: { remainingFraction: 1 },
+          },
+          // No fraction and no reset says nothing about the quota.
+          unknown: { displayName: "Gemini 2.5 Pro", quotaInfo: {} },
+        },
+      }),
+    );
+    expect(limits.pools?.map((pool) => pool.label)).toEqual([
+      "Claude",
+      "Gemini",
+    ]);
+    expect(limits.pools?.every((pool) => pool.window.usedPercent === 0)).toBe(
+      true,
+    );
+  });
+
+  it("keeps models one quota apart when resets differ by seconds", () => {
+    const limits = parseAntigravityUsage(
+      JSON.stringify({
+        models: {
+          a: {
+            displayName: "Gemini 3 Flash",
+            quotaInfo: { remainingFraction: 0.5, resetTime: "2026-10-09T12:16:47Z" },
+          },
+          b: {
+            displayName: "Gemini 3.1 Pro (High)",
+            quotaInfo: { remainingFraction: 0.5, resetTime: "2026-10-09T12:16:48Z" },
+          },
+        },
+      }),
+    );
+    expect(limits.pools).toHaveLength(1);
+  });
+
+  it("gives effort variants in separate quotas distinct labels", () => {
+    const limits = parseAntigravityUsage(
+      JSON.stringify({
+        models: {
+          high: {
+            displayName: "Gemini 3.1 Pro (High)",
+            quotaInfo: { remainingFraction: 0.2, resetTime: "2026-10-09T12:00:00Z" },
+          },
+          low: {
+            displayName: "Gemini 3.1 Pro (Low)",
+            quotaInfo: { remainingFraction: 0.7, resetTime: "2026-10-09T12:00:00Z" },
+          },
+        },
+      }),
+    );
+    expect(limits.pools?.map((pool) => [pool.id, pool.label])).toEqual([
+      ["high", "Gemini 3.1 Pro (High)"],
+      ["low", "Gemini 3.1 Pro (Low)"],
+    ]);
+  });
+
+  it("reports malformed payloads as errors", () => {
+    expect(parseAntigravityUsage("nope").status).toBe("error");
+    expect(parseAntigravityUsage("{}").status).toBe("error");
+  });
+
+  it("finds the pool serving a model by id or display name", () => {
+    const limits = parseAntigravityUsage(body);
+    expect(activeRateLimitPool(limits, { id: "gemini-3-flash" })?.label).toBe(
+      "Gemini",
+    );
+    expect(
+      activeRateLimitPool(limits, {
+        id: "claude-opus",
+        name: "Claude Opus 5.5 (High)",
+      })?.label,
+    ).toBe("Claude & GPT-OSS");
+    // ACP names can drop the effort suffix the quota API keeps.
+    expect(
+      activeRateLimitPool(limits, {
+        id: "gemini-3.1-pro",
+        name: "Gemini 3.1 Pro",
+      })?.label,
+    ).toBe("Gemini");
+    expect(activeRateLimitPool(limits, { id: "unknown" })).toBeNull();
+  });
+
+  it("formats pools without a reset time as bare usage", () => {
+    const window = { usedPercent: 0, windowMinutes: 0, resetsAt: null };
+    expect(formatRateLimitWindowChipLabel(window, 0)).toBe("");
+    expect(rateLimitWindowTooltip(window, 0)).toBe("0% used");
+  });
 });

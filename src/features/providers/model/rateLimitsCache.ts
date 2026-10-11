@@ -7,6 +7,7 @@ import {
   type RateLimitProvider,
 } from "./rateLimits";
 import {
+  fetchAntigravityRateLimits,
   fetchClaudeRateLimits,
   fetchCodexRateLimits,
   fetchDevinRateLimits,
@@ -50,6 +51,7 @@ const idle: Record<RateLimitProvider, ProviderRateLimits> = {
   codex: idleRateLimits("codex"),
   opencode: idleRateLimits("opencode"),
   devin: idleRateLimits("devin"),
+  antigravity: idleRateLimits("antigravity"),
 };
 
 export function useCachedRateLimits(
@@ -103,7 +105,9 @@ export function loadRateLimits(
             ? await fetchCodexRateLimits(accountId)
             : provider === "devin"
               ? await fetchDevinRateLimits()
-              : await fetchOpencodeGoRateLimits();
+              : provider === "antigravity"
+                ? await fetchAntigravityRateLimits()
+                : await fetchOpencodeGoRateLimits();
       publish(key, result);
       return result;
     } catch (error) {

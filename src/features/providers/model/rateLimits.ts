@@ -1,6 +1,7 @@
 import { asRecord } from "../../../integrations/harness/providers/codex/codexProtocol";
 
-export type RateLimitProvider = "claude" | "codex" | "opencode" | "devin";
+export type RateLimitProvider =
+  "claude" | "codex" | "opencode" | "devin" | "antigravity";
 
 export type RateLimitStatus =
   "idle" | "fetching" | "ok" | "error" | "unavailable";
@@ -12,6 +13,20 @@ export type RateLimitWindow = {
   windowMinutes: number;
   /** Unix ms timestamp when the window resets, if known. */
   resetsAt: number | null;
+};
+
+/** A quota shared by a group of models (Antigravity), not a fixed window. */
+export type RateLimitPool = {
+  /** Stable within one snapshot; safe as a React key. */
+  id: string;
+  /** Every model reporting this quota, e.g. "Claude & GPT-OSS". */
+  label: string;
+  /** First family only, for the compact status-bar chip. */
+  shortLabel: string;
+  modelIds: string[];
+  modelNames: string[];
+  /** `windowMinutes` is 0: pools report a reset time, not a duration. */
+  window: RateLimitWindow;
 };
 
 export type RateLimitResetCredit = {
@@ -39,6 +54,8 @@ export type ProviderRateLimits = {
   resetCredits: RateLimitResetCredits | null;
   /** Devin-only extra (overage) usage balance in US dollars; negative once billed. */
   extraUsageBalance?: number | null;
+  /** Antigravity-only per-model-group quotas. */
+  pools?: RateLimitPool[];
   updatedAt: number;
   error: string | null;
   status: RateLimitStatus;
@@ -52,6 +69,16 @@ export const RATE_LIMIT_POLL_MS = 15 * 60_000;
 export const RATE_LIMIT_MIN_REFETCH_MS = 5 * 60_000;
 
 const WINDOW_DURATION_TOLERANCE_MINUTES = 1;
+
+export function hasRateLimitData(limits: ProviderRateLimits): boolean {
+  return Boolean(
+    limits.session ||
+      limits.weekly ||
+      limits.monthly ||
+      limits.resetCredits ||
+      limits.pools?.length,
+  );
+}
 
 export function idleRateLimits(
   provider: RateLimitProvider,
@@ -72,13 +99,7 @@ export function fetchingRateLimits(
   provider: RateLimitProvider,
   previous?: ProviderRateLimits | null,
 ): ProviderRateLimits {
-  if (
-    previous &&
-    (previous.session ||
-      previous.weekly ||
-      previous.monthly ||
-      previous.resetCredits)
-  ) {
+  if (previous && hasRateLimitData(previous)) {
     return { ...previous, status: "fetching" };
   }
   return {
@@ -114,13 +135,7 @@ export function errorRateLimits(
   error: string,
   previous?: ProviderRateLimits | null,
 ): ProviderRateLimits {
-  if (
-    previous &&
-    (previous.session ||
-      previous.weekly ||
-      previous.monthly ||
-      previous.resetCredits)
-  ) {
+  if (previous && hasRateLimitData(previous)) {
     return {
       ...previous,
       error,
@@ -203,6 +218,7 @@ export function formatRateLimitWindowChipLabel(
   if (window.resetsAt != null) {
     return formatResetDuration(window.resetsAt - now);
   }
+  if (window.windowMinutes <= 0) return "";
   return formatWindowLabel(window.windowMinutes);
 }
 
@@ -214,6 +230,7 @@ export function rateLimitWindowTooltip(
   const pct = clampUsedPercent(window.usedPercent);
   const usage = `${formatUsagePercent(showRemaining ? 100 - pct : pct)} ${showRemaining ? "remaining" : "used"}`;
   if (window.resetsAt == null) {
+    if (window.windowMinutes <= 0) return usage;
     return `${usage} · ${formatWindowLabel(window.windowMinutes)} window`;
   }
   return `${usage} · ${formatResetCountdown(window.resetsAt - now)}`;
@@ -224,7 +241,12 @@ export function exhaustedWindowResetAt(
   limits: ProviderRateLimits,
 ): number | null {
   let latest: number | null = null;
-  for (const window of [limits.session, limits.weekly, limits.monthly]) {
+  for (const window of [
+    limits.session,
+    limits.weekly,
+    limits.monthly,
+    ...(limits.pools ?? []).map((pool) => pool.window),
+  ]) {
     if (!window || window.usedPercent < 100 || window.resetsAt == null)
       continue;
     latest = Math.max(latest ?? 0, window.resetsAt);
@@ -299,6 +321,156 @@ export function parseClaudeOAuthUsage(body: string): ProviderRateLimits {
     error: null,
     status: "ok",
   };
+}
+
+/**
+ * Parse Cloud Code's fetchAvailableModels payload:
+ * { models: { [id]: { displayName, quotaInfo: { remainingFraction, resetTime } } } }
+ * Models drawing on the same quota report identical numbers, so they are
+ * grouped by value. Proto JSON omits a zero `remainingFraction`, so a quota
+ * with a reset time but no fraction is spent. Models without a display name
+ * are internal (tab completion, routing) and are skipped.
+ */
+export function parseAntigravityUsage(body: string): ProviderRateLimits {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return errorRateLimits(
+      "antigravity",
+      "Antigravity usage response was not JSON",
+    );
+  }
+  const models = asRecord(asRecord(parsed)?.models);
+  if (!models) {
+    return errorRateLimits(
+      "antigravity",
+      "Antigravity usage response was unexpected",
+    );
+  }
+  const groups = new Map<
+    string,
+    { ids: string[]; names: string[]; window: RateLimitWindow }
+  >();
+  for (const [id, raw] of Object.entries(models)) {
+    const model = asRecord(raw);
+    const name = model ? stringField(model, "displayName") : null;
+    const quota = asRecord(model?.quotaInfo);
+    if (!name || !quota) continue;
+    const resetsAt = parseResetTimestamp(quota.resetTime);
+    const fraction = numberField(quota, "remainingFraction");
+    if (fraction == null && resetsAt == null) continue;
+    const remaining = fraction ?? 0;
+    // Untouched quotas all read 1 with no reset, so value alone would merge
+    // unrelated ones; keep those apart by family. Partly used quotas group
+    // by value, with the reset rounded to the minute against clock jitter.
+    const key =
+      remaining >= 1 && resetsAt == null
+        ? `full|${modelFamily(name)}`
+        : `${remaining.toFixed(4)}|${resetsAt == null ? "" : Math.round(resetsAt / 60_000)}`;
+    let group = groups.get(key);
+    if (!group) {
+      group = {
+        ids: [],
+        names: [],
+        window: {
+          usedPercent: clampUsedPercent((1 - remaining) * 100),
+          windowMinutes: 0,
+          resetsAt,
+        },
+      };
+      groups.set(key, group);
+    }
+    group.ids.push(id);
+    if (!group.names.includes(name)) group.names.push(name);
+  }
+  const candidates = [...groups.values()].map((group) => {
+    group.ids.sort();
+    group.names.sort();
+    const families = unique(group.names.map(modelFamily));
+    // Coarsest first; a finer label only when a coarser one is shared.
+    return {
+      group,
+      family: families[0] ?? "",
+      labels: [
+        families.join(" & "),
+        unique(group.names.map(baseModelName)).join(", "),
+        group.names.join(", "),
+        group.ids.join(", "),
+      ],
+    };
+  });
+  const pools = candidates.map(({ group, family, labels }, index) => {
+    const level = labels.findIndex((label, depth) =>
+      candidates.every(
+        (other, otherIndex) =>
+          otherIndex === index || other.labels[depth] !== label,
+      ),
+    );
+    const label = labels[level < 0 ? labels.length - 1 : level]!;
+    const familyShared = candidates.some(
+      (other, otherIndex) => otherIndex !== index && other.family === family,
+    );
+    return {
+      id: group.ids[0]!,
+      label,
+      shortLabel: familyShared ? label : family,
+      modelIds: group.ids,
+      modelNames: group.names,
+      window: group.window,
+    };
+  });
+  pools.sort((a, b) => a.label.localeCompare(b.label));
+  return {
+    provider: "antigravity",
+    session: null,
+    weekly: null,
+    monthly: null,
+    resetCredits: null,
+    pools,
+    updatedAt: Date.now(),
+    error: null,
+    status: "ok",
+  };
+}
+
+/** "Claude Opus 5.5 (High)" -> "Claude"; "GPT-OSS 120B (Medium)" -> "GPT-OSS". */
+function modelFamily(name: string): string {
+  return name.split(/\s+/)[0] ?? name;
+}
+
+/** "Gemini 3.1 Pro (High)" -> "Gemini 3.1 Pro". */
+function baseModelName(name: string): string {
+  return name.replace(/\s*\([^)]*\)\s*$/, "");
+}
+
+function unique(values: string[]): string[] {
+  return [...new Set(values)];
+}
+
+/**
+ * The pool serving the session's model. The ACP catalog and the quota API
+ * may disagree on ids and on whether effort is part of the name, so fall
+ * back from an exact id or name to the name without its effort suffix.
+ */
+export function activeRateLimitPool(
+  limits: ProviderRateLimits,
+  model: { id: string; name?: string } | null | undefined,
+): RateLimitPool | null {
+  const pools = limits.pools;
+  if (!model || !pools) return null;
+  const name = model.name;
+  const base = name ? baseModelName(name) : null;
+  return (
+    pools.find((pool) => pool.modelIds.includes(model.id)) ??
+    (name ? pools.find((pool) => pool.modelNames.includes(name)) : null) ??
+    (base
+      ? pools.find((pool) =>
+          pool.modelNames.some((candidate) => baseModelName(candidate) === base),
+        )
+      : null) ??
+    null
+  );
 }
 
 type CodexWindowSnapshot = {

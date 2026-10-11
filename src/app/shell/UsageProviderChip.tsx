@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import {
+  activeRateLimitPool,
   clampUsedPercent,
   DAILY_WINDOW_MINUTES,
   formatExtraUsageBalance,
@@ -57,9 +58,14 @@ import { ProviderAccountSubtitle } from "../../features/providers/ui/ProviderAcc
 import { useShowRemainingUsage } from "../../features/settings/model/displayPrefs";
 
 type UsageWindowEntry = {
-  key: "session" | "weekly" | "monthly";
+  key: string;
+  title: string;
+  /** Names a model-group pool on the chip; fixed windows need none. */
+  chipLabel?: string;
   window: RateLimitWindow;
 };
+
+const CHIP_POOL_LIMIT = 2;
 
 type ResetActionState =
   "idle" | "confirming" | "using" | CodexRateLimitResetOutcome | "error";
@@ -76,9 +82,12 @@ export function UsageProviderChip({
   onConsumeReset,
   onReconnect,
   presentation,
+  activeModel,
 }: {
   limits: ProviderRateLimits;
   now: number;
+  /** Puts the pool serving this model first (Antigravity). */
+  activeModel?: { id: string; name?: string };
   presentation?: { harness: HarnessId; label: string; sourceLabel?: string };
   project?: string;
   accounts?: ProviderAccount[];
@@ -106,22 +115,34 @@ export function UsageProviderChip({
     (limits.status === "fetching" &&
       !limits.session &&
       !limits.weekly &&
-      !limits.monthly);
+      !limits.monthly &&
+      !limits.pools?.length);
   const disconnected = limits.status === "unavailable";
-  const windows = usageWindows(limits);
+  const activePool = activeRateLimitPool(limits, activeModel);
+  const windows = usageWindows(limits, activePool?.window);
+  // Pools can be numerous; the footer shows two and the popover all of them.
+  const chipWindows = [
+    ...windows.filter((entry) => !entry.chipLabel),
+    ...windows.filter((entry) => entry.chipLabel).slice(0, CHIP_POOL_LIMIT),
+  ];
   const loginView = Boolean(
     onReconnect &&
     windows.length === 0 &&
     (needsProviderLogin(limits) || reconnectState !== "idle"),
   );
-  const tightest = windows.reduce<RateLimitWindow | null>((best, entry) => {
-    if (!best || entry.window.usedPercent > best.usedPercent) {
-      return entry.window;
-    }
-    return best;
-  }, null);
+  const tightest =
+    activePool?.window ??
+    windows.reduce<RateLimitWindow | null>((best, entry) => {
+      if (!best || entry.window.usedPercent > best.usedPercent) {
+        return entry.window;
+      }
+      return best;
+    }, null);
   const tooltip = windows
-    .map((entry) => rateLimitWindowTooltip(entry.window, now, showRemaining))
+    .map((entry) => {
+      const text = rateLimitWindowTooltip(entry.window, now, showRemaining);
+      return entry.chipLabel ? `${entry.title}: ${text}` : text;
+    })
     .join(" · ");
   const providerLabel = presentation?.label ?? HARNESS_TITLE[limits.provider];
   const iconHarness = presentation?.harness ?? limits.provider;
@@ -255,7 +276,7 @@ export function UsageProviderChip({
             ) : null}
             {tightest ? <MiniBar usedPct={tightest.usedPercent} /> : null}
             <span className="flex min-w-0 items-center gap-1 tabular-nums">
-              {windows.map((entry, index) => (
+              {chipWindows.map((entry, index) => (
                 <span
                   key={entry.key}
                   className="inline-flex items-center gap-1"
@@ -264,6 +285,11 @@ export function UsageProviderChip({
                     <span className="text-content/25">·</span>
                   ) : null}
                   <span>
+                    {entry.chipLabel ? (
+                      <span className="text-content/40">
+                        {entry.chipLabel}{" "}
+                      </span>
+                    ) : null}
                     {formatUsagePercent(
                       showRemaining
                         ? 100 - clampUsedPercent(entry.window.usedPercent)
@@ -405,7 +431,7 @@ export function UsageProviderChip({
                   {windows.map((entry) => (
                     <UsageWindowCard
                       key={entry.key}
-                      kind={entry.key}
+                      title={entry.title}
                       window={entry.window}
                       now={now}
                     />
@@ -757,24 +783,51 @@ function AddProviderAccount({
   );
 }
 
-function usageWindows(limits: ProviderRateLimits): UsageWindowEntry[] {
+function usageWindows(
+  limits: ProviderRateLimits,
+  activeWindow?: RateLimitWindow,
+): UsageWindowEntry[] {
+  const pools = (limits.pools ?? []).map(
+    (pool): UsageWindowEntry => ({
+      key: `pool:${pool.id}`,
+      title: pool.label,
+      chipLabel: pool.shortLabel,
+      window: pool.window,
+    }),
+  );
+  // Active pool first, then the tightest, so the chip's first entries matter.
+  pools.sort(
+    (a, b) =>
+      Number(b.window === activeWindow) - Number(a.window === activeWindow) ||
+      b.window.usedPercent - a.window.usedPercent,
+  );
   return [
     limits.session
-      ? ({ key: "session", window: limits.session } as const)
+      ? {
+          key: "session",
+          title:
+            limits.session.windowMinutes === DAILY_WINDOW_MINUTES
+              ? "Daily limit"
+              : "5-hour limit",
+          window: limits.session,
+        }
       : null,
-    limits.weekly ? ({ key: "weekly", window: limits.weekly } as const) : null,
+    limits.weekly
+      ? { key: "weekly", title: "Weekly limit", window: limits.weekly }
+      : null,
     limits.monthly
-      ? ({ key: "monthly", window: limits.monthly } as const)
+      ? { key: "monthly", title: "Monthly limit", window: limits.monthly }
       : null,
+    ...pools,
   ].filter((entry): entry is UsageWindowEntry => entry != null);
 }
 
 function UsageWindowCard({
-  kind,
+  title,
   window,
   now,
 }: {
-  kind: UsageWindowEntry["key"];
+  title: string;
   window: RateLimitWindow;
   now: number;
 }) {
@@ -782,16 +835,6 @@ function UsageWindowCard({
   const pct = clampUsedPercent(window.usedPercent);
   const remaining = 100 - pct;
   const shown = showRemaining ? remaining : pct;
-  const title =
-    kind === "session" && window.windowMinutes === DAILY_WINDOW_MINUTES
-      ? "Daily limit"
-      : kind === "session"
-      ? "5-hour limit"
-      : kind === "weekly"
-        ? "Weekly limit"
-        : kind === "monthly"
-          ? "Monthly limit"
-          : `${formatWindowLabel(window.windowMinutes)} limit`;
   return (
     <section className="rounded-lg bg-content/[0.045] px-3 py-2.5 ring-1 ring-inset ring-content/[0.06]">
       <div className="flex items-baseline justify-between gap-3">
@@ -826,9 +869,11 @@ function UsageWindowCard({
               : new Date(window.resetsAt).toLocaleString()
           }
         >
-          {window.resetsAt == null
-            ? `${formatWindowLabel(window.windowMinutes)} window`
-            : formatResetCountdown(window.resetsAt - now)}
+          {window.resetsAt != null
+            ? formatResetCountdown(window.resetsAt - now)
+            : window.windowMinutes > 0
+              ? `${formatWindowLabel(window.windowMinutes)} window`
+              : null}
         </span>
       </div>
     </section>

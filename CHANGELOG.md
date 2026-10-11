@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Antigravity sessions show **usage** in the status bar, like Claude and Codex. Antigravity meters quota per model group rather than in 5-hour or weekly windows, so the chip lists each group (for example Gemini, or Claude & GPT-OSS) with its usage and reset time, the current model's group first. The popover shows every group.
+
 ## [0.12.0] - 2026-10-10
 
 ### Added

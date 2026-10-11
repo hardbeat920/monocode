@@ -28,6 +28,10 @@ import {
   type RunningTerminal,
 } from "../../features/terminal/model/terminalTab";
 import { MOD } from "../../platform/tauri/platform";
+import {
+  findModel,
+  nativeModelId,
+} from "../../features/sessions/model/models";
 import { UsageProviderChip } from "./UsageProviderChip";
 import { PiUsage } from "./PiUsage";
 import {
@@ -87,6 +91,7 @@ export function UsageFooter({
   const wantCodex = providers.includes("codex");
   const wantOpencode = providers.includes("opencode");
   const wantDevin = providers.includes("devin");
+  const wantAntigravity = providers.includes("antigravity");
   const [now, setNow] = useState(() => Date.now());
   const [refreshing, setRefreshing] = useState(false);
   const [, setAccountsVersion] = useState(0);
@@ -110,6 +115,7 @@ export function UsageFooter({
   const cachedCodex = useCachedRateLimits("codex", codexAccountId);
   const opencode = useCachedRateLimits("opencode");
   const devin = useCachedRateLimits("devin");
+  const antigravity = useCachedRateLimits("antigravity");
   const claude = claudeAccountAvailable
     ? cachedClaude
     : unavailableRateLimits(
@@ -138,11 +144,13 @@ export function UsageFooter({
       void loadRateLimits("codex", codexAccountId);
     if (wantOpencode) void loadRateLimits("opencode");
     if (wantDevin) void loadRateLimits("devin");
+    if (wantAntigravity) void loadRateLimits("antigravity");
   }, [
     claudeAccountAvailable,
     claudeAccountId,
     codexAccountAvailable,
     codexAccountId,
+    wantAntigravity,
     wantClaude,
     wantCodex,
     wantOpencode,
@@ -159,6 +167,8 @@ export function UsageFooter({
       jobs.push(loadRateLimits("codex", codexAccountId, true));
     if (wantOpencode) jobs.push(loadRateLimits("opencode", "default", true));
     if (wantDevin) jobs.push(loadRateLimits("devin", "default", true));
+    if (wantAntigravity)
+      jobs.push(loadRateLimits("antigravity", "default", true));
     const run = Promise.allSettled(jobs)
       .then(() => undefined)
       .finally(() => {
@@ -172,6 +182,7 @@ export function UsageFooter({
     claudeAccountId,
     codexAccountAvailable,
     codexAccountId,
+    wantAntigravity,
     wantClaude,
     wantCodex,
     wantOpencode,
@@ -301,7 +312,23 @@ export function UsageFooter({
   );
 
   const showOpencodeChip = wantOpencode && opencode.status !== "unavailable";
-  const showUsage = wantClaude || wantCodex || showOpencodeChip || wantDevin;
+  const showAntigravityChip =
+    wantAntigravity && antigravity.status !== "unavailable";
+  // The session's own model, never the harness default: a restored session
+  // can predate the live catalog.
+  const antigravityModel =
+    showAntigravityChip && session?.harness === "antigravity" && session.model
+      ? {
+          id: nativeModelId(session.model),
+          name: findModel(session.model)?.name,
+        }
+      : undefined;
+  const showUsage =
+    wantClaude ||
+    wantCodex ||
+    showOpencodeChip ||
+    wantDevin ||
+    showAntigravityChip;
   const showTerminals = terminals.length > 0;
   const showTerminalButton = Boolean(onNewTerminal || onShowTerminal);
   const terminalLabel = projectTerminalActive
@@ -369,6 +396,14 @@ export function UsageFooter({
               now={now}
               project={project}
               onReconnect={reconnectDevin}
+            />
+          ) : null}
+          {showAntigravityChip ? (
+            <UsageProviderChip
+              limits={antigravity}
+              now={now}
+              project={project}
+              activeModel={antigravityModel}
             />
           ) : null}
           <button

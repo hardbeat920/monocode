@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { homeDir } from "../../../platform/tauri/fs";
 import {
   errorRateLimits,
+  parseAntigravityUsage,
   parseClaudeOAuthUsage,
   parseCodexRateLimits,
   parseDevinUsage,
@@ -127,6 +128,44 @@ export async function fetchDevinRateLimits(): Promise<ProviderRateLimits> {
   // failure keeps the identity beside the last usage snapshot.
   if (result.httpStatus === 401 || result.httpStatus === 403) devinIdentity = null;
   return errorRateLimits("devin", result.error?.trim() || "Devin usage unavailable");
+}
+
+type AntigravityUsageFetch = {
+  status: "ok" | "error" | "unavailable" | string;
+  httpStatus?: number | null;
+  body?: string | null;
+  error?: string | null;
+};
+
+/**
+ * Fetch Antigravity per-model quota pools. The host refreshes agy's Google
+ * token in memory, so the token never reaches the webview.
+ */
+export async function fetchAntigravityRateLimits(): Promise<ProviderRateLimits> {
+  let result: AntigravityUsageFetch;
+  try {
+    result = await invoke<AntigravityUsageFetch>("fetch_antigravity_usage");
+  } catch (error) {
+    return errorRateLimits(
+      "antigravity",
+      error instanceof Error ? error.message : "Antigravity usage unavailable",
+    );
+  }
+  if (result.status === "ok" && result.body) {
+    const parsed = parseAntigravityUsage(result.body);
+    if (parsed.status !== "ok" || parsed.pools?.length) return parsed;
+    return errorRateLimits("antigravity", "No Antigravity quota data");
+  }
+  if (result.status === "unavailable") {
+    return unavailableRateLimits(
+      "antigravity",
+      result.error?.trim() || "Antigravity not signed in",
+    );
+  }
+  return errorRateLimits(
+    "antigravity",
+    result.error?.trim() || "Antigravity usage unavailable",
+  );
 }
 
 export type CodexRateLimitResetOutcome =

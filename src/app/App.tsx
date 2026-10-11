@@ -1984,7 +1984,8 @@ function Workspace({
       active?.harness === "claude" ||
       active?.harness === "codex" ||
       active?.harness === "opencode" ||
-      active?.harness === "devin"
+      active?.harness === "devin" ||
+      active?.harness === "antigravity"
     ) {
       return [active.harness];
     }
