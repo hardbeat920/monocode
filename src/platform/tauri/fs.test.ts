@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   gitCommit,
+  gitCommitMessage,
   gitHeadMessage,
   isCheckoutBlockedByChanges,
   listSkills,
@@ -144,5 +145,18 @@ describe("gitHeadMessage", () => {
     vi.mocked(invoke).mockResolvedValueOnce("Subject\n\nBody");
     await expect(gitHeadMessage("/repo")).resolves.toBe("Subject\n\nBody");
     expect(invoke).toHaveBeenCalledWith("git_head_message", { cwd: "/repo" });
+  });
+});
+
+describe("gitCommitMessage", () => {
+  it("invokes git_commit_message with cwd and sha", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce("Subject\n\nBody");
+    await expect(gitCommitMessage("/repo", "abc123")).resolves.toBe(
+      "Subject\n\nBody",
+    );
+    expect(invoke).toHaveBeenCalledWith("git_commit_message", {
+      cwd: "/repo",
+      sha: "abc123",
+    });
   });
 });
