@@ -765,6 +765,69 @@ expect(PROJECT_BOARD_FIELDS.get("board.update")).toEqual([
       );
     });
 
+    it("continues starting later cards when one card refresh fails", async () => {
+      cardsStore.get(projectA)!.push(
+        createCard("card-3", projectA, {
+          title: "Third card",
+          description: "Third card details",
+        }),
+      );
+
+      let listCallCount = 0;
+      (mockRepository.list as ReturnType<typeof vi.fn>).mockImplementation(
+        async (projectCwd: string) => {
+          listCallCount += 1;
+          if (listCallCount === 2) {
+            throw new Error("Board refresh unavailable");
+          }
+          return cardsStore.get(projectCwd) ?? [];
+        },
+      );
+
+      const result = (await dispatchProjectBoardAction(
+        defaultContext,
+        "board.start",
+        { cardIds: ["card-1", "card-2", "card-3"] },
+        mockHost,
+      )) as {
+        startedCount: number;
+        failedCount: number;
+        cards: Array<{
+          cardId: string;
+          success: boolean;
+          sessionId?: string;
+          error?: string;
+        }>;
+      };
+
+      expect(result.startedCount).toBe(2);
+      expect(result.failedCount).toBe(1);
+      expect(result.cards[0]).toMatchObject({
+        cardId: "card-1",
+        success: true,
+        sessionId: "session-started-for-req-100-card-1",
+      });
+      expect(result.cards[1]).toMatchObject({
+        cardId: "card-2",
+        success: false,
+        error: "Board refresh unavailable",
+      });
+      expect(result.cards[2]).toMatchObject({
+        cardId: "card-3",
+        success: true,
+        sessionId: "session-started-for-req-100-card-3",
+      });
+      expect(mockHost.startSession).toHaveBeenCalledTimes(2);
+      expect(mockHost.startSession).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ requestId: "req-100-card-1" }),
+      );
+      expect(mockHost.startSession).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ requestId: "req-100-card-3" }),
+      );
+    });
+
     it("supports ids alias and explicit placement", async () => {
       const result = (await dispatchProjectBoardAction(
         defaultContext,

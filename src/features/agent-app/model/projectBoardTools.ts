@@ -632,7 +632,18 @@ export async function dispatchProjectBoardAction(
       const cardResults: BoardStartCardResult[] = [];
 
       for (const cardId of cardIds) {
-        const latestCards = await host.repository.list(context.projectCwd);
+        let latestCards: ProjectBoardCard[];
+        try {
+          latestCards = await host.repository.list(context.projectCwd);
+        } catch (err) {
+          cardResults.push({
+            cardId,
+            success: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          continue;
+        }
+
         const card = latestCards.find((c) => c.id === cardId);
         if (!card) {
           cardResults.push({
