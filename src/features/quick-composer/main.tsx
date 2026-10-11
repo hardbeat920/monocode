@@ -27,9 +27,13 @@ function applyAppearance() {
   applyAccentColor(loadAccentColor());
   applyThemeTint(loadThemeHue(), loadThemeSaturation());
   applyThemeDarkLightness(loadThemeDarkLightness());
-  const scheme = applyThemePreference(loadThemePreference());
+  const preference = loadThemePreference();
+  const scheme = applyThemePreference(preference);
   // The native blur follows the window's appearance, not the page's, so
-  // match it to the app theme rather than the system one.
+  // match it to the app theme rather than the system one. The theme is
+  // app-wide on macOS, so "system" is left cleared: pinning the resolved
+  // scheme would hold every window at the OS appearance of this moment.
+  if (preference === "system") return;
   void getCurrentWindow()
     .setTheme(scheme)
     .catch(() => undefined);
