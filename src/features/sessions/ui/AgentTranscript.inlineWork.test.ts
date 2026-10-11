@@ -907,6 +907,34 @@ it("keeps interrupted Mono messages together above one working indicator", () =>
   expect(container.querySelectorAll(".transcript-turn")).toHaveLength(2);
 });
 
+it("stacks the next message onto one the Mono only reacted to", () => {
+  const props = {
+    agentName: "Captain",
+    agentMascot: { mascot: "cat" as const, color: "#6ba" },
+  };
+  const blocks: Block[] = [
+    { id: "thanks", role: "user", text: "thanks :)", startedAt: 1000 },
+    { id: "reaction", role: "assistant", text: "<reaction>😊</reaction>" },
+    { id: "next", role: "user", text: "one more thing", startedAt: 2000 },
+  ];
+  render(blocks, props);
+  const stacked = container.querySelectorAll<HTMLElement>(
+    '[data-message-stack="true"]',
+  );
+  expect([...stacked].map((row) => row.dataset.promptAnchor)).toEqual([
+    "thanks",
+  ]);
+  expect(container.querySelector('[data-mono-reaction="😊"]')).not.toBeNull();
+  // It opens a turn, but sits as close as a message sent mid-turn.
+  expect(
+    container
+      .querySelector('[data-prompt-anchor="next"]')!
+      .classList.contains("pt-1"),
+  ).toBe(true);
+  render(blocks.slice(0, 2), props);
+  expect(container.querySelector('[data-message-stack="true"]')).toBeNull();
+});
+
 it("shows answers to mid-turn follow-ups immediately and retains them during later work", () => {
   const props = { busy: true, agentName: "MonoInvader" };
   const blocks: Block[] = [

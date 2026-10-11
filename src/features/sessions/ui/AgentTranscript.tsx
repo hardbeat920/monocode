@@ -1269,14 +1269,29 @@ function AgentTranscriptComponent({
             item.type === "block"
               ? item.block.id === searchCurrent
               : item.blocks.some((block) => block.id === searchCurrent);
+          // A reaction hides the reply between two messages, so the next
+          // turn's message stacks onto this one as if nothing came between.
+          const stacksIntoNextTurn =
+            reactedOnly &&
+            stacksAfterReaction(
+              turn,
+              turns[firstVisibleTurn + turnIndex + 1],
+              daySeparators,
+            );
+          const stackedOnPreviousTurn =
+            inlineWork &&
+            !!previousTurn &&
+            previousTurn.every((block) => block.role === "user") &&
+            stacksAfterReaction(previousTurn, turn, daySeparators);
           const isCompactFollowUp = (item: TurnItem, index: number) => {
             const next = items[index + 1];
             return (
               inlineWork &&
               item.type === "block" &&
               item.block.role === "user" &&
-              next?.type === "block" &&
-              next.block.role === "user"
+              (next
+                ? next.type === "block" && next.block.role === "user"
+                : stacksIntoNextTurn)
             );
           };
           const renderItem = (item: TurnItem, itemIndex: number) =>
@@ -1333,6 +1348,11 @@ function AgentTranscriptComponent({
                 layout={transcriptLayout}
                 bubbleTail={!!agentMascot}
                 compactFollowUp={isCompactFollowUp(item, itemIndex)}
+                stackedOnPrevious={
+                  itemIndex === 0
+                    ? stackedOnPreviousTurn
+                    : isCompactFollowUp(items[itemIndex - 1], itemIndex - 1)
+                }
                 delivery={messageDeliveries?.get(item.block.id)}
                 onRetryMessage={onRetryMessage}
                 visible={item.block.role === "user" ? visible : undefined}
@@ -1437,7 +1457,9 @@ function AgentTranscriptComponent({
             <div
               key={turn[0].id}
               data-transcript-turn={turnId}
-              className={`transcript-turn flex min-w-0 flex-col${inlineWork && !reactedOnly ? " transcript-turn-mono" : ""}${
+              // A stacked message sits as close as one in the same turn, so
+              // the gap between turns gives way.
+              className={`transcript-turn flex min-w-0 flex-col${inlineWork && !reactedOnly ? " transcript-turn-mono" : ""}${stacksIntoNextTurn ? " -mb-1" : ""}${
                 isLastTurn ? " transcript-turn-live" : ""
               }${
                 promptAnchor && anchorTurn && isLastTurn && userBlock
@@ -2172,6 +2194,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
   layout,
   bubbleTail = false,
   compactFollowUp = false,
+  stackedOnPrevious = false,
   delivery,
   onRetryMessage,
   visible,
@@ -2199,6 +2222,8 @@ const TranscriptBlock = memo(function TranscriptBlock({
   layout: TranscriptLayout;
   bubbleTail?: boolean;
   compactFollowUp?: boolean;
+  /** True when this message stacks onto the one above it. */
+  stackedOnPrevious?: boolean;
   delivery?: MessageDelivery;
   onRetryMessage?: (blockId: string) => void;
   visible?: boolean;
@@ -2231,6 +2256,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
         layout={layout}
         bubbleTail={bubbleTail}
         compactFollowUp={compactFollowUp}
+        stackedOnPrevious={stackedOnPrevious}
         delivery={delivery}
         onRetryMessage={onRetryMessage}
         visible={visible ?? true}
@@ -2367,11 +2393,9 @@ function MonoReactionBadge({ emoji, live }: { emoji: string; live: boolean }) {
       role="img"
       aria-label={`Reacted ${emoji}`}
       data-mono-reaction={emoji}
-      className={`${live ? "mono-reaction-in " : ""}absolute -top-4 -left-2 z-[1] rounded-full bg-background-base p-0.5 leading-none`}
+      className={`${live ? "mono-reaction-in " : ""}mono-reaction-badge absolute -top-2.5 -left-2.5 z-[1] grid h-[22px] place-items-center rounded-[8px] px-[7px] font-sans text-[11px] leading-none`}
     >
-      <span className="grid h-6 min-w-7 place-items-center rounded-full bg-content/10 px-1.5 font-sans text-[14px]">
-        {emoji}
-      </span>
+      {emoji}
     </span>
   );
 }
@@ -2381,6 +2405,7 @@ function UserMessageBlock({
   layout,
   bubbleTail = false,
   compactFollowUp = false,
+  stackedOnPrevious = false,
   delivery,
   onRetryMessage,
   visible,
@@ -2396,6 +2421,7 @@ function UserMessageBlock({
   layout: TranscriptLayout;
   bubbleTail?: boolean;
   compactFollowUp?: boolean;
+  stackedOnPrevious?: boolean;
   delivery?: MessageDelivery;
   onRetryMessage?: (blockId: string) => void;
   visible: boolean;
@@ -2428,7 +2454,7 @@ function UserMessageBlock({
   const messageAt = block.sentAt ?? block.startedAt;
   const chatSpacing = compactFollowUp
     ? "pt-1 pb-0"
-    : bubbleTail && block.sentAt != null
+    : bubbleTail && (block.sentAt != null || stackedOnPrevious)
       ? "pt-1 pb-5"
       : "pt-1.5 pb-5";
   // A Mono's chat shows sent images above the bubble, like photos in a
@@ -5087,6 +5113,31 @@ function turnUserBlock(blocks: Block[], managed = false): Block | undefined {
     if (block.role === "user" && (managed || !block.internal)) return block;
   }
   return undefined;
+}
+
+/**
+ * Whether a Mono turn that ended in only a reaction stacks into the next
+ * one: the next turn opens with a message of the user's own, in the same
+ * stretch of time.
+ */
+function stacksAfterReaction(
+  turn: Block[],
+  next: Block[] | undefined,
+  daySeparators: boolean,
+): boolean {
+  const start = next?.[0];
+  return (
+    !!start &&
+    turn.some((block) => !!block.monoReaction) &&
+    start.role === "user" &&
+    !start.internal &&
+    !start.monoHabit &&
+    !(
+      daySeparators &&
+      start.startedAt != null &&
+      opensNewStretch(start.startedAt, monoTurnLatestStart(turn))
+    )
+  );
 }
 
 function monoTurnUserBlock(
