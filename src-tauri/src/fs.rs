@@ -1786,16 +1786,35 @@ fn git_diff_stats_for(root: &Path) -> GitDiffStats {
     let mut files: HashMap<String, FileAcc> = HashMap::new();
     if let Some(text) = git_run(
         root,
-        &["diff", "--no-ext-diff", "--numstat", "HEAD", "--", "."],
+        &[
+            "diff",
+            "-z",
+            "--no-ext-diff",
+            "--numstat",
+            "HEAD",
+            "--",
+            ".",
+        ],
     ) {
         add_numstat_map(&text, &mut files);
     } else {
-        if let Some(text) = git_run(root, &["diff", "--no-ext-diff", "--numstat", "--", "."]) {
+        if let Some(text) = git_run(
+            root,
+            &["diff", "-z", "--no-ext-diff", "--numstat", "--", "."],
+        ) {
             add_numstat_map(&text, &mut files);
         }
         if let Some(text) = git_run(
             root,
-            &["diff", "--no-ext-diff", "--cached", "--numstat", "--", "."],
+            &[
+                "diff",
+                "-z",
+                "--no-ext-diff",
+                "--cached",
+                "--numstat",
+                "--",
+                ".",
+            ],
         ) {
             add_numstat_map(&text, &mut files);
         }
@@ -1840,6 +1859,7 @@ fn git_diff_index_with(root: &Path, include_sync: bool) -> GitDiffIndex {
         root,
         &[
             "diff",
+            "-z",
             "--relative",
             "--no-ext-diff",
             "--numstat",
@@ -1853,6 +1873,7 @@ fn git_diff_index_with(root: &Path, include_sync: bool) -> GitDiffIndex {
             root,
             &[
                 "diff",
+                "-z",
                 "--relative",
                 "--no-ext-diff",
                 "--name-status",
@@ -1869,6 +1890,7 @@ fn git_diff_index_with(root: &Path, include_sync: bool) -> GitDiffIndex {
             root,
             &[
                 "diff",
+                "-z",
                 "--relative",
                 "--no-ext-diff",
                 "--numstat",
@@ -1882,6 +1904,7 @@ fn git_diff_index_with(root: &Path, include_sync: bool) -> GitDiffIndex {
             root,
             &[
                 "diff",
+                "-z",
                 "--relative",
                 "--no-ext-diff",
                 "--cached",
@@ -1896,6 +1919,7 @@ fn git_diff_index_with(root: &Path, include_sync: bool) -> GitDiffIndex {
             root,
             &[
                 "diff",
+                "-z",
                 "--relative",
                 "--no-ext-diff",
                 "--name-status",
@@ -1910,6 +1934,7 @@ fn git_diff_index_with(root: &Path, include_sync: bool) -> GitDiffIndex {
             root,
             &[
                 "diff",
+                "-z",
                 "--relative",
                 "--no-ext-diff",
                 "--cached",
@@ -1974,12 +1999,29 @@ fn git_diff_index_with(root: &Path, include_sync: bool) -> GitDiffIndex {
 }
 
 fn add_numstat_map(text: &str, files: &mut HashMap<String, FileAcc>) {
-    for line in text.lines() {
-        let mut parts = line.splitn(3, '\t');
+    // `git diff -z --numstat` ends each record with NUL. A rename is
+    // `add <TAB> del <TAB> <NUL> old <NUL> new <NUL>`; every other record is
+    // `add <TAB> del <TAB> path <NUL>`. The path itself may contain spaces,
+    // quotes, tabs, or non-ASCII bytes, which a newline listing would C-quote.
+    let mut fields = text.split('\0');
+    while let Some(record) = fields.next() {
+        if record.is_empty() {
+            continue;
+        }
+        let mut parts = record.splitn(3, '\t');
         let Some(add) = parts.next() else { continue };
         let Some(del) = parts.next() else { continue };
         let Some(path) = parts.next() else { continue };
-        let relative = normalize_diff_path(path);
+        let path = if path.is_empty() {
+            let _previous = fields.next();
+            match fields.next() {
+                Some(destination) if !destination.is_empty() => destination,
+                _ => continue,
+            }
+        } else {
+            path
+        };
+        let relative = literal_diff_path(path);
         if relative.is_empty() {
             continue;
         }
@@ -1992,9 +2034,14 @@ fn add_numstat_map(text: &str, files: &mut HashMap<String, FileAcc>) {
 }
 
 fn add_name_status(text: &str, statuses: &mut HashMap<String, &'static str>) {
-    for line in text.lines() {
-        let Some((code, rest)) = line.split_once('\t') else {
+    // `--no-renames -z` is `status <NUL> path <NUL>`, repeated.
+    let mut fields = text.split('\0');
+    while let Some(code) = fields.next() {
+        if code.is_empty() {
             continue;
+        }
+        let Some(path) = fields.next() else {
+            break;
         };
         let status = match code.as_bytes().first() {
             Some(b'A') => "added",
@@ -2002,10 +2049,19 @@ fn add_name_status(text: &str, statuses: &mut HashMap<String, &'static str>) {
             Some(b'M' | b'T') => "modified",
             _ => continue,
         };
-        let relative = normalize_diff_path(rest);
+        let relative = literal_diff_path(path);
         if !relative.is_empty() {
             statuses.insert(relative, status);
         }
+    }
+}
+
+fn literal_diff_path(path: &str) -> String {
+    let path = path.trim();
+    if path.is_empty() {
+        String::new()
+    } else {
+        path_to_js(Path::new(path))
     }
 }
 
@@ -2074,6 +2130,7 @@ fn mark_cached_and_unstaged(root: &Path, files: &mut HashMap<String, FileAcc>) {
         root,
         &[
             "diff",
+            "-z",
             "--relative",
             "--cached",
             "--name-only",
@@ -2082,8 +2139,8 @@ fn mark_cached_and_unstaged(root: &Path, files: &mut HashMap<String, FileAcc>) {
             ".",
         ],
     ) {
-        for line in names.lines() {
-            let relative = normalize_diff_path(line);
+        for line in names.split('\0') {
+            let relative = literal_diff_path(line);
             if !relative.is_empty() {
                 files.entry(relative).or_default().staged = true;
             }
@@ -2093,6 +2150,7 @@ fn mark_cached_and_unstaged(root: &Path, files: &mut HashMap<String, FileAcc>) {
         root,
         &[
             "diff",
+            "-z",
             "--relative",
             "--name-only",
             "--no-renames",
@@ -2100,8 +2158,8 @@ fn mark_cached_and_unstaged(root: &Path, files: &mut HashMap<String, FileAcc>) {
             ".",
         ],
     ) {
-        for line in names.lines() {
-            let relative = normalize_diff_path(line);
+        for line in names.split('\0') {
+            let relative = literal_diff_path(line);
             if !relative.is_empty() {
                 files.entry(relative).or_default().unstaged = true;
             }
@@ -2359,6 +2417,7 @@ fn git_commit_files_for(root: &Path, sha: &str) -> Result<Vec<GitChangedFile>, S
         root,
         &[
             "diff-tree",
+            "-z",
             "--no-commit-id",
             "-r",
             "--root",
@@ -2373,6 +2432,7 @@ fn git_commit_files_for(root: &Path, sha: &str) -> Result<Vec<GitChangedFile>, S
         root,
         &[
             "diff-tree",
+            "-z",
             "--no-commit-id",
             "-r",
             "--root",
@@ -7351,6 +7411,41 @@ mod tests {
         assert_eq!(untracked.status, "untracked");
         assert_eq!(untracked.additions, 2);
         assert_eq!(untracked.deletions, 0);
+    }
+
+    #[test]
+    fn git_diff_index_keeps_literal_non_ascii_paths() {
+        let dir = tmp("git-diff-quoted-path");
+        if !init_git_commit(&dir.0, &[("한글.md", "before\n"), ("my file.txt", "one\n")]) {
+            return;
+        }
+        // Default quoting would otherwise hand the Changes view a C-escaped name.
+        assert!(git(&dir.0, &["config", "core.quotePath", "true"]));
+        std::fs::write(dir.0.join("한글.md"), "before\nafter\n").unwrap();
+        std::fs::write(dir.0.join("my file.txt"), "one\ntwo\n").unwrap();
+
+        let index = git_diff_index_for(&dir.0);
+        let hangul = index
+            .files
+            .iter()
+            .find(|file| file.relative == "한글.md")
+            .unwrap();
+        assert_eq!(hangul.status, "modified");
+        assert_eq!(hangul.additions, 1);
+        assert!(hangul.unstaged);
+        assert!(!hangul.relative.contains('\\'));
+
+        let spaced = index
+            .files
+            .iter()
+            .find(|file| file.relative == "my file.txt")
+            .unwrap();
+        assert_eq!(spaced.status, "modified");
+        assert_eq!(spaced.additions, 1);
+
+        let diff = git_file_diff_for(&dir.0, "한글.md", false).unwrap();
+        assert_eq!(diff.relative, "한글.md");
+        assert!(diff.current.contains("after"));
     }
 
     #[test]
