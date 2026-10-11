@@ -9,19 +9,33 @@ import {
   useRemoteMachines,
 } from "../model/connections";
 import { rememberRemoteProject } from "../model/remoteProjects";
+import { locationMachine } from "../../projects/model/projectMachines";
 import type { HostDirectory, HostProject } from "../model/protocol";
 
 /** Adds a project whose folder is on a connected machine. Sessions in it run
  * on that machine; the project otherwise behaves like any other in the rail. */
 export function AddRemoteProjectDialog({
+  linkTo,
   onCancel,
   onOpen,
 }: {
+  /** Adds the folder to this project instead of opening a new one. */
+  linkTo?: { name: string; locations: readonly string[] };
   onCancel: () => void;
   /** Receives the new project's rail key. */
   onOpen: (key: string) => void;
 }) {
-  const { machines, loaded } = useRemoteMachines();
+  const { machines: paired, loaded } = useRemoteMachines();
+  // A project has one folder per machine, so link mode offers the others.
+  const machines = linkTo
+    ? paired.filter(
+        (entry) =>
+          !linkTo.locations.some(
+            (location) => locationMachine(location) === entry.environmentId,
+          ),
+      )
+    : paired;
+  const title = linkTo ? `Add ${linkTo.name} on a machine` : "Open folder on a machine";
   const [machineId, setMachineId] = useState<string>();
   const machine =
     machines.find((entry) => entry.id === machineId) ?? machines[0];
@@ -112,7 +126,7 @@ export function AddRemoteProjectDialog({
       <form
         role="dialog"
         aria-modal="true"
-        aria-label="Open folder on a machine"
+        aria-label={title}
         onMouseDown={(event) => event.stopPropagation()}
         onSubmit={(event) => {
           event.preventDefault();
@@ -122,19 +136,20 @@ export function AddRemoteProjectDialog({
       >
         <div className="flex flex-col gap-1">
           <h2 className="text-[13px] font-medium leading-tight text-content">
-            Open folder on a machine
+            {title}
           </h2>
           <p className="text-[12px] leading-snug text-content/55">
-            Sessions in this project run on that machine, using its checkout and
-            its Codex or Claude Code sign-in. They keep running when you close
-            MonoCode here.
+            {linkTo
+              ? "Choose this repository's checkout on the machine. New sessions in the project can then run there or on any of its other machines."
+              : "Sessions in this project run on that machine, using its checkout and its Codex or Claude Code sign-in. They keep running when you close MonoCode here."}
           </p>
         </div>
         {!loaded ? null : !machine ? (
           <>
             <p className="text-[12px] leading-snug text-content/55">
-              No machines are connected yet. Add one in Settings, then open a
-              folder on it here.
+              {paired.length > 0
+                ? "This project already has a folder on every connected machine. Add another machine in Settings to run it there."
+                : "No machines are connected yet. Add one in Settings, then open a folder on it here."}
             </p>
             <div className="flex justify-end gap-2">
               <button

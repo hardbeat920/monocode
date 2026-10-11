@@ -2,6 +2,7 @@ import { isHexColor } from "../../../shared/lib/colorUtils";
 import { compareSessionSummaries } from "../data/sessionHistory";
 import type { SessionSummary } from "../data/sessionStore";
 import { normalizeProjectPath } from "../../projects/model/recents";
+import { projectHome } from "../../projects/model/projectMachines";
 import { orderByIds } from "../../../shared/lib/reorder";
 import { TAB_GROUP_COLORS } from "../../workspace/model/tabGroups";
 
@@ -570,7 +571,8 @@ export function subscribeSessionFolders(
 
 function storageKey(cwd: string): string | null {
   if (!cwd || cwd === "~") return null;
-  return normalizeProjectPath(cwd);
+  // Folders belong to the project, whichever machine's folder is open.
+  return normalizeProjectPath(projectHome(cwd));
 }
 
 function parseStore(): Record<string, SessionFolder[]> {

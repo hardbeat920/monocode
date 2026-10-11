@@ -186,6 +186,24 @@ describe("remote host API", () => {
     expect((await s.call("sessions.list", { projectId: s.project.id })).value.result).toEqual([]);
   });
 
+  it("reports each project's remote URL so desktops can match it across machines", async () => {
+    const s = await setup();
+    const git = (...args: string[]) =>
+      execFileSync("git", args, { cwd: s.project.cwd });
+    const listed = async () =>
+      (await s.call("projects.list", {})).value.result.find(
+        (project: { id: string }) => project.id === s.project.id,
+      );
+    expect((await listed()).remoteUrl).toBeUndefined();
+    git("init", "-q");
+    git("remote", "add", "upstream", "https://github.com/acme/app.git");
+    expect((await listed()).remoteUrl).toBe("https://github.com/acme/app.git");
+    git("remote", "add", "origin", "git@github.com:me/app.git");
+    expect((await listed()).remoteUrl).toBe("git@github.com:me/app.git");
+    const opened = await s.call("projects.open", { cwd: s.project.cwd });
+    expect(opened.value.result.remoteUrl).toBe("git@github.com:me/app.git");
+  });
+
   it("lists, creates, and selects registered remote worktrees through RPC", async () => {
     const s = await setup();
     const git = (...args: string[]) =>

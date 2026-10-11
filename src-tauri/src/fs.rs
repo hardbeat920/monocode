@@ -1347,6 +1347,27 @@ pub async fn git_github_repo(cwd: String) -> Result<String, String> {
         .map_err(|e| e.to_string())?
 }
 
+/// The URL of the remote that names this repository: `origin`, then
+/// `upstream`, then the first remote by name. `None` outside Git or without
+/// a remote. The desktop groups folders on different machines by this URL.
+#[tauri::command]
+pub async fn git_remote_url(cwd: String) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || git_remote_url_for(&expand_home(&cwd)))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+fn git_remote_url_for(root: &Path) -> Option<String> {
+    let mut names = git_remote_names(root);
+    names.sort();
+    let name = ["origin", "upstream"]
+        .into_iter()
+        .find(|preferred| names.iter().any(|name| name == preferred))
+        .map(str::to_string)
+        .or_else(|| names.into_iter().next())?;
+    git_stdout(root, &["remote", "get-url", &name])
+}
+
 /// The GitHub remote of this working copy and, when it is a fork, its parent.
 #[tauri::command]
 pub async fn git_github_repositories(cwd: String) -> Result<Vec<String>, String> {
@@ -6990,6 +7011,43 @@ mod tests {
             && git(dir, &["config", "user.email", "monocode@test"])
             && git(dir, &["config", "commit.gpgsign", "false"])
             && git(dir, &["config", "core.autocrlf", "false"])
+    }
+
+    #[test]
+    fn git_remote_url_prefers_origin_then_upstream_then_first() {
+        let dir = tmp("git-remote-url");
+        if !init_git(&dir.0, "main", None) {
+            return;
+        }
+        assert_eq!(git_remote_url_for(&dir.0), None);
+        assert!(git(
+            &dir.0,
+            &["remote", "add", "zeta", "https://example.com/z.git"]
+        ));
+        assert!(git(
+            &dir.0,
+            &["remote", "add", "beta", "https://example.com/b.git"]
+        ));
+        assert_eq!(
+            git_remote_url_for(&dir.0).as_deref(),
+            Some("https://example.com/b.git")
+        );
+        assert!(git(
+            &dir.0,
+            &["remote", "add", "upstream", "https://example.com/u.git"]
+        ));
+        assert_eq!(
+            git_remote_url_for(&dir.0).as_deref(),
+            Some("https://example.com/u.git")
+        );
+        assert!(git(
+            &dir.0,
+            &["remote", "add", "origin", "git@example.com:me/o.git"]
+        ));
+        assert_eq!(
+            git_remote_url_for(&dir.0).as_deref(),
+            Some("git@example.com:me/o.git")
+        );
     }
 
     #[test]

@@ -3,6 +3,7 @@ import {
   AppWindow,
   Archive,
   BellOff,
+  Computer,
   FolderOpen,
   FolderTree,
   ImagePlus,
@@ -76,6 +77,14 @@ import { useProjectNotificationPreferences } from "../../features/notifications/
 import { useNotificationProjects } from "../../features/notifications/hooks/useNotificationProjects";
 import { updateNotificationPreferences } from "../../features/notifications/model/notificationPreferences";
 import type { ExplorerMenuItem } from "../../features/files/ui/ExplorerMenu";
+import {
+  locationLabel,
+  projectLocations,
+  requestProjectLocation,
+  unlinkProjectLocation,
+} from "../../features/projects/model/projectMachines";
+import { isRemoteProjectPath } from "../../features/projects/model/recents";
+import { useRemoteMachines } from "../../features/connections/model/connections";
 
 const REVEAL_LABEL = IS_MAC
   ? "Reveal in Finder"
@@ -90,7 +99,8 @@ function projectMenuExtraItems(
   notificationReady: boolean,
   externalEditors: ExternalEditor[] | null,
   projectGroups: ProjectGroup[],
-  currentProjectGroupId?: string,
+  currentProjectGroupId: string | undefined,
+  machines: ExplorerMenuItem[],
 ): TabGroupMenuExtraItem[] {
   const groupSubmenu: ExplorerMenuItem[] = [
     { kind: "item", id: "project-group:new", label: "New group…" },
@@ -154,6 +164,13 @@ function projectMenuExtraItems(
                   disabled: true,
                 },
               ],
+    },
+    {
+      id: "machines",
+      label: "Machines",
+      icon: Computer,
+      sepBefore: true,
+      submenu: machines,
     },
     {
       id: "notifications-mute",
@@ -232,6 +249,7 @@ export function useProjectMenu({
     [],
   );
   const groupLogos = useTabGroupLogos();
+  const { machines } = useRemoteMachines(Boolean(projectMenu));
   const notificationPreferences = useProjectNotificationPreferences();
   const menuPath = projectMenu?.path;
   useNotificationProjects(menuPath ? [menuPath] : []);
@@ -322,10 +340,51 @@ export function useProjectMenu({
 
   const groupLabels = projectMenu ? loadTabGroupLabels() : {};
 
+  const machinesSubmenu = (path: string): ExplorerMenuItem[] => {
+    const [home, ...members] = projectLocations(path);
+    const locations = [home, ...members];
+    return [
+      ...locations.map((location) => ({
+        kind: "item" as const,
+        id: `machines:show:${location}`,
+        label: locationLabel(location, machines),
+        disabled: true,
+      })),
+      { kind: "sep" as const },
+      {
+        kind: "item" as const,
+        id: "machines:add-remote",
+        label: "Add on another machine…",
+      },
+      ...(locations.some((location) => !isRemoteProjectPath(location))
+        ? []
+        : [
+            {
+              kind: "item" as const,
+              id: "machines:add-local",
+              label: "Add folder on this computer…",
+            },
+          ]),
+      ...(members.length > 0 ? [{ kind: "sep" as const }] : []),
+      ...locations.slice(1).map((location) => ({
+        kind: "item" as const,
+        id: `machines:unlink:${location}`,
+        label: `Unlink from ${locationLabel(location, machines)}`,
+      })),
+    ];
+  };
+
   const onPick = (action: string) => {
     if (!projectMenu) return;
     const { path, projectKey: key } = projectMenu;
-    if (action === "project-group:new") {
+    if (action === "machines:add-remote" || action === "machines:add-local") {
+      requestProjectLocation({
+        project: path,
+        where: action === "machines:add-remote" ? "remote" : "local",
+      });
+    } else if (action.startsWith("machines:unlink:")) {
+      unlinkProjectLocation(action.slice("machines:unlink:".length));
+    } else if (action === "project-group:new") {
       createGroup(projectMenu.x, projectMenu.y, path);
     } else if (action === "project-group:none") {
       setProjectGroupAssignment(path, null);
@@ -449,6 +508,7 @@ export function useProjectMenu({
             projectMenu.path,
             loadProjectGroupAssignments(),
           ),
+          machinesSubmenu(projectMenu.path),
         )}
         footer={
           menuError ? (
