@@ -26,6 +26,7 @@ interface Props {
   onDelete: (cardId: string) => void;
   onMove: (card: ProjectBoardCard, nextStatus: BoardStatus) => void;
   onOpenSession: (sessionId: string) => void;
+  onMediaDeleted?: (cardId: string, mediaId: string) => void;
 }
 
 function PriorityBadge({ priority }: { priority: BoardPriority }) {
@@ -72,6 +73,7 @@ export function BoardCard({
   onDelete,
   onMove,
   onOpenSession,
+  onMediaDeleted,
 }: Props) {
   const [selectedPreview, setSelectedPreview] = useState<BoardMediaRef | null>(
     null,
@@ -200,7 +202,7 @@ export function BoardCard({
           onClose={() => setSelectedPreview(null)}
           onDelete={async () => {
             await repository.deleteMedia(projectCwd, card.id, selectedPreview.id);
-            card.media = (card.media ?? []).filter((m) => m.id !== selectedPreview.id);
+            onMediaDeleted?.(card.id, selectedPreview.id);
             setSelectedPreview(null);
           }}
         />

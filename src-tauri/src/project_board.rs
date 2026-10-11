@@ -10,7 +10,7 @@ pub const DESCRIPTION_MAX: usize = 12_000;
 pub const LINKED_SESSIONS_MAX: usize = 50;
 pub const MEDIA_BYTES_MAX: usize = 5 * 1024 * 1024; // 5 MiB = 5,242,880 bytes
 /// Largest standard-base64 payload length that can represent MEDIA_BYTES_MAX bytes.
-pub const MEDIA_BASE64_BYTES_MAX: usize = ((MEDIA_BYTES_MAX + 2) / 3) * 4;
+pub const MEDIA_BASE64_BYTES_MAX: usize = MEDIA_BYTES_MAX.div_ceil(3) * 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -239,7 +239,7 @@ fn validate_encoded_media_size(encoded: &str) -> Result<(), String> {
     // Invalid, non-quantized lengths are left to the strict decoder. For a
     // complete base64 quantum, padding distinguishes the exact decoded size
     // when the encoded length is at the maximum boundary.
-    if encoded_length % 4 == 0 {
+    if encoded_length.is_multiple_of(4) {
         let trailing_padding = encoded
             .as_bytes()
             .iter()
@@ -509,6 +509,20 @@ pub fn add_media(conn: &Connection, input: &AddMediaInput) -> Result<BoardMediaR
         _ => uuid::Uuid::new_v4().to_string(),
     };
 
+    let existing_media: bool = conn
+        .query_row(
+            "SELECT 1 FROM project_board_media WHERE id = ?1",
+            params![media_id],
+            |_| Ok(true),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .unwrap_or(false);
+
+    if existing_media {
+        return Err(format!("Media with ID '{media_id}' already exists"));
+    }
+
     let name = if input.name.trim().is_empty() {
         "attachment".to_string()
     } else {
@@ -521,7 +535,7 @@ pub fn add_media(conn: &Connection, input: &AddMediaInput) -> Result<BoardMediaR
     let now = now_millis();
 
     conn.execute(
-        "INSERT OR REPLACE INTO project_board_media
+        "INSERT INTO project_board_media
          (id, project_cwd, card_id, name, mime_type, byte_length, data_bytes, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
@@ -621,7 +635,9 @@ pub fn project_board_list(
     list_cards(&conn, &project_cwd)
 }
 
+// Tauri command maintains backwards compatibility with both nested input objects and flattened arguments.
 #[tauri::command(async)]
+#[allow(clippy::too_many_arguments)]
 pub fn project_board_upsert_card(
     store: State<'_, SessionStore>,
     input: Option<ProjectBoardCardInput>,
@@ -676,7 +692,9 @@ pub fn project_board_delete_card(
     delete_card(&mut conn, &project_cwd, &card_id)
 }
 
+// Tauri command maintains backwards compatibility with both nested input objects and flattened arguments.
 #[tauri::command(async)]
+#[allow(clippy::too_many_arguments)]
 pub fn project_board_add_media(
     store: State<'_, SessionStore>,
     input: Option<AddMediaInput>,
@@ -1036,5 +1054,125 @@ mod tests {
         assert!(second.updated_at >= first.updated_at);
         assert_eq!(second.title, "Updated Title");
         assert_eq!(second.status, BoardStatus::InProgress);
+    }
+
+    #[test]
+    fn test_media_id_collision_rejects_without_replacement() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.lock_conn().unwrap();
+        ensure_tables(&conn).unwrap();
+
+        let card = ProjectBoardCardInput {
+            id: "card-media-collision".into(),
+            project_cwd: "/project/test".into(),
+            title: "Card With Media".into(),
+            description: "Test description".into(),
+            status: BoardStatus::Backlog,
+            priority: BoardPriority::Medium,
+            linked_session_ids: vec![],
+        };
+        upsert_card(&conn, &card).unwrap();
+
+        let original_bytes = b"original media byte content";
+        let original_b64 = BASE64_STANDARD.encode(original_bytes);
+        let original_media = add_media(
+            &conn,
+            &AddMediaInput {
+                id: Some("media-fixed-id".into()),
+                project_cwd: "/project/test".into(),
+                card_id: "card-media-collision".into(),
+                name: "original_image.png".into(),
+                mime_type: "image/png".into(),
+                data_base64: original_b64,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(original_media.id, "media-fixed-id");
+        assert_eq!(original_media.name, "original_image.png");
+        assert_eq!(original_media.mime_type, "image/png");
+        assert_eq!(original_media.byte_length, original_bytes.len());
+
+        // Attempt to insert another media with the same ID, different content and metadata
+        let colliding_bytes = b"different colliding payload bytes";
+        let colliding_b64 = BASE64_STANDARD.encode(colliding_bytes);
+        let collision_result = add_media(
+            &conn,
+            &AddMediaInput {
+                id: Some("media-fixed-id".into()),
+                project_cwd: "/project/test".into(),
+                card_id: "card-media-collision".into(),
+                name: "replaced_image.jpg".into(),
+                mime_type: "image/jpeg".into(),
+                data_base64: colliding_b64.clone(),
+            },
+        );
+
+        assert!(
+            collision_result.is_err(),
+            "Colliding media ID insert must fail"
+        );
+        let err_msg = collision_result.unwrap_err();
+        assert!(
+            err_msg.contains("already exists"),
+            "Expected collision error, got: {err_msg}"
+        );
+
+        // Verify original media metadata and bytes remain unchanged
+        let fetched = get_media(
+            &conn,
+            "/project/test",
+            "card-media-collision",
+            "media-fixed-id",
+        )
+        .unwrap()
+        .expect("Original media must still exist");
+        assert_eq!(fetched.id, "media-fixed-id");
+        assert_eq!(fetched.name, "original_image.png");
+        assert_eq!(fetched.mime_type, "image/png");
+        assert_eq!(fetched.byte_length, original_bytes.len());
+        let decoded = BASE64_STANDARD.decode(&fetched.data_base64).unwrap();
+        assert_eq!(decoded, original_bytes);
+
+        // Attempt to insert media with the same ID under a different card
+        let card_b = ProjectBoardCardInput {
+            id: "card-second".into(),
+            project_cwd: "/project/test".into(),
+            title: "Card Two".into(),
+            description: "Second card".into(),
+            status: BoardStatus::Ready,
+            priority: BoardPriority::High,
+            linked_session_ids: vec![],
+        };
+        upsert_card(&conn, &card_b).unwrap();
+
+        let cross_card_result = add_media(
+            &conn,
+            &AddMediaInput {
+                id: Some("media-fixed-id".into()),
+                project_cwd: "/project/test".into(),
+                card_id: "card-second".into(),
+                name: "cross_card.png".into(),
+                mime_type: "image/png".into(),
+                data_base64: colliding_b64,
+            },
+        );
+        assert!(
+            cross_card_result.is_err(),
+            "Cross-card media ID collision must fail"
+        );
+
+        // Original media remains intact
+        let fetched_after = get_media(
+            &conn,
+            "/project/test",
+            "card-media-collision",
+            "media-fixed-id",
+        )
+        .unwrap()
+        .expect("Original media must still exist");
+        assert_eq!(fetched_after.name, "original_image.png");
+        let decoded_after = BASE64_STANDARD.decode(&fetched_after.data_base64).unwrap();
+        assert_eq!(decoded_after, original_bytes);
     }
 }

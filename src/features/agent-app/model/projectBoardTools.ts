@@ -284,6 +284,10 @@ export const PROJECT_BOARD_HARDENING = {
   topmostDialogFocusTrap: true,
   boardStartIsOnlySessionLinkWriter: true,
   maxChildRequestIdLength: 128,
+  boardStartRefresh: "reread-latest-card-after-session-start",
+  boardStartMutableFields: ["status", "linkedSessionIds"] as const,
+  deletedDuringStart: "do-not-recreate-card",
+  cardIdValidation: "validate-before-request-id-generation",
 } as const;
 
 function validateFields(action: string, input: Record<string, unknown>): void {
@@ -350,20 +354,20 @@ export function generateChildRequestId(
   contextRequestId: string,
   cardId: string,
 ): string {
+  const validCard = sanitizeId(cardId);
   const safeReq = contextRequestId.trim().replace(/[^A-Za-z0-9_-]/g, "_");
-  const safeCard = cardId.trim().replace(/[^A-Za-z0-9_-]/g, "_");
-  const raw = safeReq + "-" + safeCard;
+  const raw = safeReq + "-" + validCard;
   if (raw.length <= 128) {
     return raw;
   }
-  const hash = hash128(contextRequestId + ":" + cardId);
+  const hash = hash128(contextRequestId + ":" + validCard);
   const maxPrefixLen = 128 - 1 - hash.length;
   const prefix = raw.slice(0, maxPrefixLen).replace(/[-_]+$/, "");
   const result = prefix ? prefix + "-" + hash : hash;
   return result.slice(0, 128);
 }
 
-function sanitizeId(raw: string): string {
+export function sanitizeId(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed || !/^[A-Za-z0-9_-]{1,128}$/.test(trimmed)) {
     throw new Error(
@@ -615,9 +619,10 @@ export async function dispatchProjectBoardAction(
         if (typeof id !== "string" || !id.trim()) {
           throw new Error("Each card ID must be a non-empty string");
         }
+        sanitizeId(id);
       }
 
-      const cardIds = rawCardIds.map((id) => id.trim());
+      const cardIds = rawCardIds.map((id) => sanitizeId(id));
       const uniqueIds = new Set(cardIds);
       if (uniqueIds.size !== cardIds.length) {
         throw new Error("cardIds contains duplicate card IDs");
@@ -683,9 +688,26 @@ export async function dispatchProjectBoardAction(
         }
 
         try {
-          const nextLinked = card.linkedSessionIds.includes(sessionId)
-            ? card.linkedSessionIds
-            : [...card.linkedSessionIds, sessionId];
+          const latestCards = await host.repository.list(context.projectCwd);
+          const latestCard = latestCards.find((c) => c.id === cardId);
+
+          if (!latestCard) {
+            cardResults.push({
+              cardId,
+              success: false,
+              sessionId,
+              status: "started-but-unlinked",
+              error:
+                "started-but-unlinked: session " +
+                sessionId +
+                " started but card was deleted while launch was pending",
+            });
+            continue;
+          }
+
+          const nextLinked = latestCard.linkedSessionIds.includes(sessionId)
+            ? latestCard.linkedSessionIds
+            : [...latestCard.linkedSessionIds, sessionId];
 
           if (nextLinked.length > BOARD_VALIDATION.linkedSessionsMax) {
             throw new Error(
@@ -694,12 +716,12 @@ export async function dispatchProjectBoardAction(
           }
 
           const updatedCard: ProjectBoardCardInput = {
-            id: card.id,
+            id: latestCard.id,
             projectCwd: context.projectCwd,
-            title: card.title,
-            description: card.description,
+            title: latestCard.title,
+            description: latestCard.description,
             status: "in-progress",
-            priority: card.priority,
+            priority: latestCard.priority,
             linkedSessionIds: nextLinked,
           };
 

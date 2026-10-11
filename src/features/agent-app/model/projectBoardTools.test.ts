@@ -13,6 +13,7 @@ import {
   formatTaskBrief,
   generateChildRequestId,
   handleProjectBoardAction,
+  sanitizeId,
   type ProjectBoardCard,
   type ProjectBoardCardInput,
   type ProjectBoardRepository,
@@ -185,6 +186,19 @@ expect(PROJECT_BOARD_FIELDS.get("board.update")).toEqual([
       expect(PROJECT_BOARD_HARDENING.boardStartIsOnlySessionLinkWriter).toBe(true);
       expect(PROJECT_BOARD_HARDENING.freeformSessionLinks).toBe(false);
       expect(PROJECT_BOARD_HARDENING.maxChildRequestIdLength).toBe(128);
+      expect(PROJECT_BOARD_HARDENING.boardStartRefresh).toBe(
+        "reread-latest-card-after-session-start",
+      );
+      expect(PROJECT_BOARD_HARDENING.boardStartMutableFields).toEqual([
+        "status",
+        "linkedSessionIds",
+      ]);
+      expect(PROJECT_BOARD_HARDENING.deletedDuringStart).toBe(
+        "do-not-recreate-card",
+      );
+      expect(PROJECT_BOARD_HARDENING.cardIdValidation).toBe(
+        "validate-before-request-id-generation",
+      );
     });
   });
 
@@ -511,6 +525,32 @@ expect(PROJECT_BOARD_FIELDS.get("board.update")).toEqual([
       expect(lastCall.requestId.length).toBeLessThanOrEqual(128);
       expect(lastCall.requestId).toMatch(/^[A-Za-z0-9_-]{1,128}$/);
     });
+
+    it("validates card IDs before generating child request ID without transforming invalid chars", () => {
+      expect(() => generateChildRequestId("req-100", "invalid card id")).toThrow(
+        /Invalid card ID/,
+      );
+      expect(() => generateChildRequestId("req-100", "card!1")).toThrow(
+        /Invalid card ID/,
+      );
+      expect(() => generateChildRequestId("req-100", "card/1")).toThrow(
+        /Invalid card ID/,
+      );
+      expect(() => generateChildRequestId("req-100", "")).toThrow(
+        /Invalid card ID/,
+      );
+      expect(() => generateChildRequestId("req-100", "c".repeat(129))).toThrow(
+        /Invalid card ID/,
+      );
+    });
+
+    it("sanitizeId accepts valid alphanumeric/dash/underscore IDs and rejects all others", () => {
+      expect(sanitizeId("card-1_test")).toBe("card-1_test");
+      expect(sanitizeId("  card-trimmed  ")).toBe("card-trimmed");
+      expect(() => sanitizeId("card.with.dots")).toThrow(/Invalid card ID/);
+      expect(() => sanitizeId("card with spaces")).toThrow(/Invalid card ID/);
+      expect(() => sanitizeId("card$invalid")).toThrow(/Invalid card ID/);
+    });
   });
 
   describe("formatTaskBrief", () => {
@@ -826,6 +866,153 @@ expect(PROJECT_BOARD_FIELDS.get("board.update")).toEqual([
       const c1 = cardsStore.get(projectA)!.find((c) => c.id === "card-1")!;
       expect(c1.status).toBe("ready"); // not changed to in-progress
       expect(c1.linkedSessionIds).toEqual([]); // no empty session linked
+    });
+
+    it("enforces cardIdValidation: rejects invalid card IDs upfront before startSession or request derivation", async () => {
+      await expect(
+        dispatchProjectBoardAction(
+          defaultContext,
+          "board.start",
+          { cardIds: ["invalid card id"] },
+          mockHost,
+        ),
+      ).rejects.toThrow(/Invalid card ID/);
+
+      await expect(
+        dispatchProjectBoardAction(
+          defaultContext,
+          "board.start",
+          { cardIds: ["card-1", "card!bad"] },
+          mockHost,
+        ),
+      ).rejects.toThrow(/Invalid card ID/);
+
+      expect(mockHost.startSession).not.toHaveBeenCalled();
+    });
+
+    it("enforces boardStartRefresh and boardStartMutableFields: preserves concurrent edits to title, description, priority, and links", async () => {
+      const initialCard = cardsStore.get(projectA)!.find((c) => c.id === "card-1")!;
+      initialCard.linkedSessionIds = ["pre-existing-session"];
+
+      (mockHost.startSession as ReturnType<typeof vi.fn>).mockImplementationOnce(
+        async ({ requestId }) => {
+          const list = cardsStore.get(projectA)!;
+          const idx = list.findIndex((c) => c.id === "card-1");
+          list[idx] = {
+            ...list[idx],
+            title: "Concurrent Title Update",
+            description: "Concurrent Description Update",
+            priority: "low",
+            linkedSessionIds: ["pre-existing-session", "concurrent-user-session"],
+            updatedAt: Date.now() + 50,
+          };
+          return { sessionId: "session-new-" + requestId };
+        },
+      );
+
+      const result = (await dispatchProjectBoardAction(
+        defaultContext,
+        "board.start",
+        { cardIds: ["card-1"] },
+        mockHost,
+      )) as {
+        startedCount: number;
+        failedCount: number;
+        cards: Array<{ cardId: string; success: boolean; sessionId?: string; status?: string }>;
+      };
+
+      expect(result.startedCount).toBe(1);
+      expect(result.failedCount).toBe(0);
+      expect(result.cards[0].success).toBe(true);
+      expect(result.cards[0].status).toBe("in-progress");
+
+      const refreshed = cardsStore.get(projectA)!.find((c) => c.id === "card-1")!;
+      expect(refreshed.title).toBe("Concurrent Title Update");
+      expect(refreshed.description).toBe("Concurrent Description Update");
+      expect(refreshed.priority).toBe("low");
+      expect(refreshed.status).toBe("in-progress");
+      expect(refreshed.linkedSessionIds).toEqual([
+        "pre-existing-session",
+        "concurrent-user-session",
+        "session-new-req-100-card-1",
+      ]);
+    });
+
+    it("enforces deletedDuringStart: does not recreate card if card was deleted while startSession was pending", async () => {
+      (mockHost.startSession as ReturnType<typeof vi.fn>).mockImplementationOnce(
+        async ({ requestId }) => {
+          const list = cardsStore.get(projectA)!;
+          cardsStore.set(
+            projectA,
+            list.filter((c) => c.id !== "card-1"),
+          );
+          return { sessionId: "session-for-deleted-" + requestId };
+        },
+      );
+
+      const result = (await dispatchProjectBoardAction(
+        defaultContext,
+        "board.start",
+        { cardIds: ["card-1"] },
+        mockHost,
+      )) as {
+        startedCount: number;
+        failedCount: number;
+        cards: Array<{
+          cardId: string;
+          success: boolean;
+          sessionId?: string;
+          status?: string;
+          error?: string;
+        }>;
+      };
+
+      expect(result.startedCount).toBe(0);
+      expect(result.failedCount).toBe(1);
+      expect(result.cards.length).toBe(1);
+
+      const cardRes = result.cards[0];
+      expect(cardRes.cardId).toBe("card-1");
+      expect(cardRes.success).toBe(false);
+      expect(cardRes.sessionId).toBe("session-for-deleted-req-100-card-1");
+      expect(cardRes.status).toBe("started-but-unlinked");
+      expect(cardRes.error).toContain("started-but-unlinked");
+      expect(cardRes.error).toContain("deleted while launch was pending");
+
+      const listAfter = cardsStore.get(projectA)!;
+      expect(listAfter.find((c) => c.id === "card-1")).toBeUndefined();
+      expect(mockRepository.upsertCard).not.toHaveBeenCalled();
+    });
+
+    it("handles multiple cards with concurrent edits properly in sequence", async () => {
+      (mockHost.startSession as ReturnType<typeof vi.fn>).mockImplementation(
+        async ({ requestId }) => {
+          if (requestId.includes("card-1")) {
+            const list = cardsStore.get(projectA)!;
+            const idx2 = list.findIndex((c) => c.id === "card-2");
+            list[idx2] = {
+              ...list[idx2],
+              title: "Card 2 updated while card 1 was starting",
+            };
+          }
+          return { sessionId: "sess-" + requestId };
+        },
+      );
+
+      const result = (await dispatchProjectBoardAction(
+        defaultContext,
+        "board.start",
+        { cardIds: ["card-1", "card-2"] },
+        mockHost,
+      )) as { startedCount: number; failedCount: number };
+
+      expect(result.startedCount).toBe(2);
+      expect(result.failedCount).toBe(0);
+
+      const c2 = cardsStore.get(projectA)!.find((c) => c.id === "card-2")!;
+      expect(c2.title).toBe("Card 2 updated while card 1 was starting");
+      expect(c2.status).toBe("in-progress");
+      expect(c2.linkedSessionIds).toContain("sess-req-100-card-2");
     });
   });
 

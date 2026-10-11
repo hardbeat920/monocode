@@ -158,6 +158,19 @@ export function ProjectBoardDialog({
     });
   };
 
+  const handleMediaDeleted = useCallback((cardId: string, mediaId: string) => {
+    setCards((prev) =>
+      prev.map((c) =>
+        c.id === cardId
+          ? {
+              ...c,
+              media: (c.media ?? []).filter((m) => m.id !== mediaId),
+            }
+          : c,
+      ),
+    );
+  }, []);
+
   const handleOpenCreate = (status: BoardStatus = "backlog") => {
     setCreateStatus(status);
     setIsCreating(true);
@@ -361,6 +374,7 @@ export function ProjectBoardDialog({
                             onDelete={handleDeleteCard}
                             onMove={handleMoveCard}
                             onOpenSession={onOpenSession}
+                            onMediaDeleted={handleMediaDeleted}
                           />
                         ))
                       )}

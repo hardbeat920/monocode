@@ -805,4 +805,241 @@ describe("ProjectBoardDialog", () => {
       expect(cardDesc?.className).not.toContain("break-words");
     }
   });
+
+  it("enforces editorCancelAfterRemoval: removing an attachment in editor is staged and cancelling preserves persisted media", async () => {
+    const { repository, cards } = createMockRepository([sampleCard]);
+
+    await act(async () => {
+      root.render(
+        createElement(ProjectBoardDialog, {
+          projectCwd: sampleProjectCwd,
+          onClose: vi.fn(),
+          onOpenSession: vi.fn(),
+          repository,
+        }),
+      );
+    });
+
+    // 1. Open edit card modal
+    const editBtn = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Edit card Setup authentication"]',
+    )!;
+    await act(async () => {
+      editBtn.click();
+    });
+
+    const editModal = container.querySelector('[aria-label="Edit card"]')!;
+    expect(editModal).not.toBeNull();
+
+    // Verify existing attachment is shown
+    const removeBtn = editModal.querySelector<HTMLButtonElement>(
+      'button[aria-label="Remove attachment diagram.png"]',
+    )!;
+    expect(removeBtn).not.toBeNull();
+
+    // 2. Remove the attachment in the editor
+    await act(async () => {
+      removeBtn.click();
+    });
+
+    // Staged removal: attachment disappeared from editor modal
+    expect(editModal.querySelector('button[aria-label="Remove attachment diagram.png"]')).toBeNull();
+
+    // CRITICAL: repository.deleteMedia must NOT have been called yet
+    expect(repository.deleteMedia).not.toHaveBeenCalled();
+    expect(cards[0].media).toHaveLength(1);
+
+    // 3. Cancel the editor by clicking the close button
+    const closeBtn = editModal.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!;
+    await act(async () => {
+      closeBtn.click();
+    });
+
+    // Modal closed
+    expect(container.querySelector('[aria-label="Edit card"]')).toBeNull();
+
+    // deleteMedia was NEVER called
+    expect(repository.deleteMedia).not.toHaveBeenCalled();
+
+    // Card in the board view still has diagram.png view button
+    const viewAttachBtn = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="View attachment diagram.png"]',
+    );
+    expect(viewAttachBtn).not.toBeNull();
+  });
+
+  it("enforces editorSaveAfterRemoval: staged removals are deleted on save, but failed save leaves persisted media intact", async () => {
+    const { repository, cards } = createMockRepository([sampleCard]);
+
+    await act(async () => {
+      root.render(
+        createElement(ProjectBoardDialog, {
+          projectCwd: sampleProjectCwd,
+          onClose: vi.fn(),
+          onOpenSession: vi.fn(),
+          repository,
+        }),
+      );
+    });
+
+    // 1. Open edit modal
+    const editBtn = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Edit card Setup authentication"]',
+    )!;
+    await act(async () => {
+      editBtn.click();
+    });
+
+    const editModal = container.querySelector('[aria-label="Edit card"]')!;
+
+    // 2. Remove the attachment
+    const removeBtn = editModal.querySelector<HTMLButtonElement>(
+      'button[aria-label="Remove attachment diagram.png"]',
+    )!;
+    await act(async () => {
+      removeBtn.click();
+    });
+
+    // Test failed save boundary: upsertCard throws
+    repository.upsertCard = vi.fn(async () => {
+      throw new Error("Failed to persist card update");
+    });
+
+    const form = editModal.querySelector("form")!;
+    await act(async () => {
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+
+    // Verify error is shown and deleteMedia was NOT called
+    expect(editModal.textContent).toContain("Failed to persist card update");
+    expect(repository.deleteMedia).not.toHaveBeenCalled();
+    expect(cards[0].media).toHaveLength(1);
+
+    // Now restore successful upsertCard and submit again
+    const mockRepo = createMockRepository([sampleCard]).repository;
+    repository.upsertCard = mockRepo.upsertCard;
+
+    await act(async () => {
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+
+    // Verify deleteMedia was called upon successful save
+    expect(repository.deleteMedia).toHaveBeenCalledWith(
+      sampleProjectCwd,
+      "card-1",
+      "media-1",
+    );
+
+    // Editor modal closed
+    expect(container.querySelector('[aria-label="Edit card"]')).toBeNull();
+
+    // Board view updated: diagram.png is no longer on the board card
+    expect(
+      container.querySelector('button[aria-label="View attachment diagram.png"]'),
+    ).toBeNull();
+  });
+
+  it("enforces boardMediaDeleteState: preview delete failure leaves card view intact, and success updates owner board state without mutating card.media directly", async () => {
+    // Freeze the initial card object and its media array to prove zero in-place mutation
+    const frozenCard: ProjectBoardCard = Object.freeze({
+      ...sampleCard,
+      media: Object.freeze([
+        Object.freeze({
+          id: "media-1",
+          name: "diagram.png",
+          mimeType: "image/png" as const,
+          byteLength: 2048,
+        }),
+      ]),
+    });
+
+    const { repository } = createMockRepository([frozenCard]);
+
+    await act(async () => {
+      root.render(
+        createElement(ProjectBoardDialog, {
+          projectCwd: sampleProjectCwd,
+          onClose: vi.fn(),
+          onOpenSession: vi.fn(),
+          repository,
+        }),
+      );
+    });
+
+    // Open preview
+    const viewAttachBtn = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="View attachment diagram.png"]',
+    )!;
+    await act(async () => {
+      viewAttachBtn.click();
+    });
+
+    const previewModal = container.querySelector(
+      '[aria-label="Image preview: diagram.png"]',
+    )!;
+    const deleteBtn = previewModal.querySelector<HTMLButtonElement>(
+      'button[aria-label="Delete attachment diagram.png"]',
+    )!;
+
+    // Boundary 1: Deletion failure
+    repository.deleteMedia = vi.fn(async () => {
+      throw new Error("Disk permission denied");
+    });
+
+    await act(async () => {
+      deleteBtn.click();
+    });
+
+    // Preview modal stays open with error
+    expect(previewModal.textContent).toContain("Failed to delete attachment: Disk permission denied");
+
+    // Close preview modal via close button
+    const closePreviewBtn = previewModal.querySelector<HTMLButtonElement>(
+      'button[aria-label="Close preview"]',
+    )!;
+    await act(async () => {
+      closePreviewBtn.click();
+    });
+
+    // Card view in board remains intact with attachment button visible
+    expect(
+      container.querySelector('button[aria-label="View attachment diagram.png"]'),
+    ).not.toBeNull();
+
+    // Boundary 2: Successful deletion updates owner state immutably without mutating frozen card
+    repository.deleteMedia = vi.fn(async (_cwd, cardId, mediaId) => {});
+
+    // Open preview again
+    const viewAttachBtn2 = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="View attachment diagram.png"]',
+    )!;
+    await act(async () => {
+      viewAttachBtn2.click();
+    });
+
+    const previewModal2 = container.querySelector(
+      '[aria-label="Image preview: diagram.png"]',
+    )!;
+    const deleteBtn2 = previewModal2.querySelector<HTMLButtonElement>(
+      'button[aria-label="Delete attachment diagram.png"]',
+    )!;
+
+    // Click delete inside preview - this succeeds
+    await act(async () => {
+      deleteBtn2.click();
+    });
+
+    // Deletion succeeded without throwing a TypeError (frozenCard was not mutated)
+    expect(repository.deleteMedia).toHaveBeenCalledWith(
+      sampleProjectCwd,
+      "card-1",
+      "media-1",
+    );
+
+    // Preview closed and board card view updated immutably: attachment button removed
+    expect(container.querySelector('[aria-label="Image preview: diagram.png"]')).toBeNull();
+    expect(
+      container.querySelector('button[aria-label="View attachment diagram.png"]'),
+    ).toBeNull();
+  });
 });

@@ -80,6 +80,7 @@ export function CardEditorModal({
       isExisting: true,
     })),
   );
+  const [stagedRemovals, setStagedRemovals] = useState<string[]>([]);
 
   const [selectedPreview, setSelectedPreview] = useState<PendingMedia | null>(
     null,
@@ -150,9 +151,11 @@ export function CardEditorModal({
     }
   };
 
-  const handleRemoveMedia = async (media: PendingMedia) => {
+  const handleRemoveMedia = (media: PendingMedia) => {
     if (media.isExisting) {
-      await repository.deleteMedia(projectCwd, cardId, media.id);
+      setStagedRemovals((prev) =>
+        prev.includes(media.id) ? prev : [...prev, media.id],
+      );
     }
     setMediaList((prev) => prev.filter((m) => m.id !== media.id));
   };
@@ -200,6 +203,11 @@ export function CardEditorModal({
             dataBase64: media.dataBase64,
           });
         }
+      }
+
+      // Commit staged media removals only after card save succeeds
+      for (const mediaId of stagedRemovals) {
+        await repository.deleteMedia(projectCwd, cardId, mediaId);
       }
 
       // Re-fetch card to get updated media list
@@ -450,12 +458,8 @@ export function CardEditorModal({
                       <button
                         type="button"
                         aria-label={`Remove attachment ${m.name}`}
-                        onClick={async () => {
-                          try {
-                            await handleRemoveMedia(m);
-                          } catch (err) {
-                            setError(err instanceof Error ? err.message : "Failed to delete attachment");
-                          }
+                        onClick={() => {
+                          handleRemoveMedia(m);
                         }}
                         className="absolute right-1 top-1 grid size-5 place-items-center rounded bg-background-base/80 text-content/50 opacity-0 transition-opacity hover:text-red-400 group-hover:opacity-100 focus-visible:opacity-100"
                       >
@@ -519,8 +523,8 @@ export function CardEditorModal({
           initialBase64={selectedPreview.dataBase64 || undefined}
           repository={repository}
           onClose={() => setSelectedPreview(null)}
-          onDelete={async () => {
-            await handleRemoveMedia(selectedPreview);
+          onDelete={() => {
+            handleRemoveMedia(selectedPreview);
             setSelectedPreview(null);
           }}
         />
