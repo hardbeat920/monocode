@@ -406,8 +406,15 @@ describe("agent app commands", () => {
       submitted: true,
       notifyOnComplete: true,
     });
+    const monitoredPrompt = vi.mocked(host.start).mock.calls.at(-1)![0].prompt;
+    expect(monitoredPrompt).toContain("Review the API");
+    expect(monitoredPrompt).toContain(
+      "<monocode_delegated_worker_handoff_v1>",
+    );
+    expect(monitoredPrompt).toContain("coordinating Mono");
+    expect(monitoredPrompt).toContain("Handoff status: completed");
     expect(host.start).toHaveBeenLastCalledWith(
-      expect.objectContaining({ prompt: "Review the API" }),
+      expect.objectContaining({ prompt: monitoredPrompt }),
       "app-lead-monitored",
       undefined,
       "lead",
@@ -424,6 +431,7 @@ describe("agent app commands", () => {
       expect.anything(),
       "app-lead-ordinary",
     );
+    expect(vi.mocked(host.start).mock.calls.at(-1)![0].prompt).toBe("Review");
   });
 
   it("does not monitor a Mono's unsent draft by default", async () => {
@@ -441,6 +449,9 @@ describe("agent app commands", () => {
     expect(host.start).toHaveBeenCalledWith(
       expect.objectContaining({ draft: true }),
       "app-lead-draft",
+    );
+    expect(vi.mocked(host.start).mock.calls.at(-1)![0].prompt).toBe(
+      "Review the API",
     );
   });
 
@@ -477,13 +488,45 @@ describe("agent app commands", () => {
         host,
       ),
     ).toMatchObject({ submitted: true, notifyOnComplete: true });
+    const sentPrompt = vi.mocked(host.send).mock.calls.at(-1)![1];
+    expect(sentPrompt).toContain("Fix the findings");
+    expect(sentPrompt).toContain(
+      "<monocode_delegated_worker_handoff_v1>",
+    );
+    expect(sentPrompt).toContain("Handoff status: needs user input");
     expect(host.send).toHaveBeenCalledWith(
       "other",
-      "Fix the findings",
+      sentPrompt,
       "app-lead-monitored-send",
       "lead",
     );
   });
+
+  it.each([undefined, false])(
+    "leaves follow-ups unwrapped when completion reporting is opted out or absent: %s",
+    async (notifyOnComplete) => {
+      const { source, host } = fixture();
+      host.isMono = (id) => id === source.id;
+      const result = await handleAgentApp(
+        source,
+        "ordinary-send",
+        "sessions.send",
+        {
+          sessionId: "other",
+          prompt: "Continue the review",
+          ...(notifyOnComplete === undefined ? {} : { notifyOnComplete }),
+        },
+        host,
+      );
+
+      expect(result).not.toHaveProperty("notifyOnComplete");
+      expect(host.send).toHaveBeenCalledWith(
+        "other",
+        "Continue the review",
+        "app-lead-ordinary-send",
+      );
+    },
+  );
 
   it.each([
     { reveal: undefined },
@@ -501,10 +544,19 @@ describe("agent app commands", () => {
       { prompt: "Review the API", ...options },
       host,
     );
+    const launchPrompt = vi.mocked(host.start).mock.calls[0][0].prompt;
+    expect(launchPrompt).toContain("Review the API");
     expect(vi.mocked(host.start).mock.calls[0][0]).toMatchObject({
-      prompt: "Review the API",
+      prompt: launchPrompt,
       reveal: false,
     });
+    if (options.draft) {
+      expect(launchPrompt).toBe("Review the API");
+    } else {
+      expect(launchPrompt).toContain(
+        "<monocode_delegated_worker_handoff_v1>",
+      );
+    }
   });
 
   it("reports completion by default through split placement", async () => {

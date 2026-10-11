@@ -5,6 +5,156 @@ import type {
   Session,
 } from "../../sessions/model/session";
 
+export type RuntimeStatus = MonoSessionCompletion["status"];
+
+export type TaskDisposition =
+  | "completed"
+  | "partial"
+  | "blocked"
+  | "needs_user_input"
+  | "unreported";
+
+export type WorkerHandback = {
+  disposition: TaskDisposition;
+  summary: string;
+  changesOrArtifacts: string;
+  checksActuallyRun: string;
+  unresolvedOrNeeded: string;
+};
+
+export type ParsedHandback = {
+  disposition: TaskDisposition;
+  source: "valid_final_status_line" | "missing_or_malformed";
+  runtimeStatus: RuntimeStatus;
+  finalAssistantText: string;
+};
+
+export const DELEGATED_WORKER_HANDOFF_MARKER =
+  "monocode_delegated_worker_handoff_v1";
+
+const DELEGATED_WORKER_HANDOFF_ENVELOPE = `<${DELEGATED_WORKER_HANDOFF_MARKER}>
+You are doing this work for a coordinating Mono. Your final response returns to that Mono as evidence for its report.
+
+Begin your final response with exactly one of these status lines:
+Handoff status: completed
+Handoff status: partial
+Handoff status: blocked
+Handoff status: needs user input
+
+Then include these sections:
+## Summary
+## Changes or artifacts
+## Checks actually run
+## Open items or required input
+Report only work completed, artifacts produced, and checks actually run. If you cannot continue without a decision or answer, use "needs user input".
+</${DELEGATED_WORKER_HANDOFF_MARKER}>`;
+
+export function wrapDelegatedWorkerPrompt(prompt: string): string {
+  return `${prompt}\n\n${DELEGATED_WORKER_HANDOFF_ENVELOPE}`;
+}
+
+/** Remove only the complete envelope appended by wrapDelegatedWorkerPrompt. */
+export function unwrapDelegatedWorkerPrompt(prompt: string): string {
+  const suffix = `\n\n${DELEGATED_WORKER_HANDOFF_ENVELOPE}`;
+  return prompt.endsWith(suffix)
+    ? prompt.slice(0, -suffix.length)
+    : prompt;
+}
+
+function parseTaskDisposition(text: string): Pick<
+  ParsedHandback,
+  "disposition" | "source"
+> {
+  const firstLine = text.split(/\r?\n/, 1)[0]?.trim();
+  const match = firstLine?.match(
+    /^Handoff status: (completed|partial|blocked|needs user input)$/,
+  );
+  if (!match) {
+    return { disposition: "unreported", source: "missing_or_malformed" };
+  }
+  return {
+    disposition:
+      match[1] === "needs user input"
+        ? "needs_user_input"
+        : (match[1] as Exclude<TaskDisposition, "needs_user_input" | "unreported">),
+    source: "valid_final_status_line",
+  };
+}
+
+function parseHandbackSections(
+  text: string,
+  statusSource: ParsedHandback["source"],
+): Omit<WorkerHandback, "disposition"> {
+  const lines = text.split(/\r?\n/);
+  const body = statusSource === "valid_final_status_line" ? lines.slice(1) : lines;
+  const sections: Record<
+    "summary" | "changesOrArtifacts" | "checksActuallyRun" | "unresolvedOrNeeded",
+    string[]
+  > = {
+    summary: [],
+    changesOrArtifacts: [],
+    checksActuallyRun: [],
+    unresolvedOrNeeded: [],
+  };
+  const headings: Record<string, keyof typeof sections> = {
+    summary: "summary",
+    "changes or artifacts": "changesOrArtifacts",
+    "checks actually run": "checksActuallyRun",
+    "open items or required input": "unresolvedOrNeeded",
+  };
+  let active: keyof typeof sections = "summary";
+  let foundHeading = false;
+
+  for (const line of body) {
+    const heading = line
+      .trim()
+      .replace(/^#{1,6}\s+/, "")
+      .toLowerCase();
+    const next = headings[heading];
+    if (next) {
+      active = next;
+      foundHeading = true;
+    } else {
+      sections[active].push(line);
+    }
+  }
+
+  // Unsectioned prose stays in finalAssistantText; do not guess which field it fills.
+  if (!foundHeading) {
+    return {
+      summary: "",
+      changesOrArtifacts: "",
+      checksActuallyRun: "",
+      unresolvedOrNeeded: "",
+    };
+  }
+
+  return {
+    summary: sections.summary.join("\n").trim(),
+    changesOrArtifacts: sections.changesOrArtifacts.join("\n").trim(),
+    checksActuallyRun: sections.checksActuallyRun.join("\n").trim(),
+    unresolvedOrNeeded: sections.unresolvedOrNeeded.join("\n").trim(),
+  };
+}
+
+export function parseWorkerHandback(
+  text: string,
+  runtimeStatus: RuntimeStatus,
+): ParsedHandback & { handback: WorkerHandback } {
+  const parsed = parseTaskDisposition(text);
+  const sections = parseHandbackSections(text, parsed.source);
+  const handback: WorkerHandback = {
+    disposition: parsed.disposition,
+    ...sections,
+  };
+  return {
+    ...parsed,
+    runtimeStatus,
+    finalAssistantText: text,
+    handback,
+  };
+}
+
 const RESULT_MAX_CHARS = 12_000;
 const BATCH_RESULT_MAX_CHARS = 48_000;
 
@@ -22,12 +172,26 @@ export type MonoSessionCompletionResult = {
   sessionId: string;
   project: string;
   title: string;
-  status: MonoSessionCompletion["status"];
+  status: RuntimeStatus;
+  disposition: TaskDisposition;
+  dispositionSource: ParsedHandback["source"];
+  handback: WorkerHandback;
   originalPrompt: string;
   result: string;
   truncated: boolean;
   error?: string;
 };
+
+type StoredMonoSessionCompletionResult = Omit<
+  MonoSessionCompletionResult,
+  "disposition" | "dispositionSource" | "handback"
+> &
+  Partial<
+    Pick<
+      MonoSessionCompletionResult,
+      "disposition" | "dispositionSource" | "handback"
+    >
+  >;
 
 export function monoSessionCompletionResult(
   options: CompletionOptions,
@@ -52,12 +216,17 @@ export function monoSessionCompletionResult(
     }
   }
   const result = reply || outcome.text;
+  const parsed = parseWorkerHandback(result, outcome.status);
+  const originalPrompt = unwrapDelegatedWorkerPrompt(prompt);
   return {
     sessionId,
     project,
     title,
-    status: outcome.status,
-    originalPrompt: prompt.slice(0, RESULT_MAX_CHARS),
+    status: parsed.runtimeStatus,
+    disposition: parsed.disposition,
+    dispositionSource: parsed.source,
+    handback: parsed.handback,
+    originalPrompt: originalPrompt.slice(0, RESULT_MAX_CHARS),
     result: result.slice(0, RESULT_MAX_CHARS),
     truncated: result.length > RESULT_MAX_CHARS,
     ...(outcome.error ? { error: outcome.error } : {}),
@@ -72,10 +241,59 @@ export function monoSessionCompletionMessage(
   ]);
 }
 
+/** Bound raw evidence and its structured fields within each result's share. */
+function boundedCompletionResult(
+  result: StoredMonoSessionCompletionResult,
+  promptBudget: number,
+  resultBudget: number,
+  handbackBudget: number,
+): MonoSessionCompletionResult {
+  const disposition = result.disposition ?? "unreported";
+  const source = result.dispositionSource ?? "missing_or_malformed";
+  const handback = result.handback ?? {
+    disposition,
+    summary: "",
+    changesOrArtifacts: "",
+    checksActuallyRun: "",
+    unresolvedOrNeeded: "",
+  };
+  const sectionBudget = Math.floor(handbackBudget / 4);
+  const boundedHandback: WorkerHandback = {
+    disposition,
+    summary: handback.summary.slice(0, sectionBudget),
+    changesOrArtifacts: handback.changesOrArtifacts.slice(0, sectionBudget),
+    checksActuallyRun: handback.checksActuallyRun.slice(0, sectionBudget),
+    unresolvedOrNeeded: handback.unresolvedOrNeeded.slice(0, sectionBudget),
+  };
+  const handbackChars =
+    handback.summary.length +
+    handback.changesOrArtifacts.length +
+    handback.checksActuallyRun.length +
+    handback.unresolvedOrNeeded.length;
+
+  return {
+    ...result,
+    disposition,
+    dispositionSource: source,
+    handback: boundedHandback,
+    originalPrompt: result.originalPrompt.slice(0, promptBudget),
+    result: result.result.slice(0, resultBudget),
+    truncated:
+      result.truncated ||
+      result.originalPrompt.length > promptBudget ||
+      result.result.length > resultBudget ||
+      handbackChars > handbackBudget ||
+      handback.summary.length > sectionBudget ||
+      handback.changesOrArtifacts.length > sectionBudget ||
+      handback.checksActuallyRun.length > sectionBudget ||
+      handback.unresolvedOrNeeded.length > sectionBudget,
+  };
+}
+
 /** One app turn containing the group's monitored outcomes. */
 function completionMessage(
   id: string,
-  results: MonoSessionCompletionResult[],
+  results: StoredMonoSessionCompletionResult[],
 ): QueuedMessage {
   const first = results[0];
   const multiple = results.length > 1;
@@ -87,21 +305,19 @@ function completionMessage(
   const title = multiple ? `${results.length} session results` : first.title;
   // Keep every session represented; inspect truncated reports with sessions.read.
   const budget = Math.floor(BATCH_RESULT_MAX_CHARS / results.length);
-  const promptBudget = Math.min(2_000, Math.floor(budget / 4));
-  const resultBudget = Math.min(RESULT_MAX_CHARS, Math.floor((budget * 3) / 4));
+  const promptBudget = Math.min(2_000, Math.floor(budget / 6));
+  const resultBudget = Math.min(RESULT_MAX_CHARS, Math.floor(budget / 3));
+  const handbackBudget = Math.min(RESULT_MAX_CHARS, Math.floor(budget / 3));
+  const bound = (result: StoredMonoSessionCompletionResult) =>
+    boundedCompletionResult(
+      result,
+      promptBudget,
+      resultBudget,
+      handbackBudget,
+    );
   const payload = multiple
-    ? {
-        sessions: results.map((result) => ({
-          ...result,
-          originalPrompt: result.originalPrompt.slice(0, promptBudget),
-          result: result.result.slice(0, resultBudget),
-          truncated:
-            result.truncated ||
-            result.originalPrompt.length > promptBudget ||
-            result.result.length > resultBudget,
-        })),
-      }
-    : first;
+    ? { sessions: results.map(bound) }
+    : bound(first);
   return {
     id,
     attachments: [],
@@ -283,9 +499,23 @@ function withoutSessionReport(
   }
 }
 
+function isWorkerHandback(value: unknown): value is WorkerHandback {
+  if (!value || typeof value !== "object") return false;
+  const handback = value as WorkerHandback;
+  return (
+    ["completed", "partial", "blocked", "needs_user_input", "unreported"].includes(
+      handback.disposition,
+    ) &&
+    typeof handback.summary === "string" &&
+    typeof handback.changesOrArtifacts === "string" &&
+    typeof handback.checksActuallyRun === "string" &&
+    typeof handback.unresolvedOrNeeded === "string"
+  );
+}
+
 function isCompletionResult(
   value: unknown,
-): value is MonoSessionCompletionResult {
+): value is StoredMonoSessionCompletionResult {
   if (!value || typeof value !== "object") return false;
   const result = value as MonoSessionCompletionResult;
   return (
@@ -293,6 +523,15 @@ function isCompletionResult(
     typeof result.project === "string" &&
     typeof result.title === "string" &&
     ["completed", "failed", "cancelled"].includes(result.status) &&
+    (result.disposition === undefined ||
+      ["completed", "partial", "blocked", "needs_user_input", "unreported"].includes(
+        result.disposition,
+      )) &&
+    (result.dispositionSource === undefined ||
+      ["valid_final_status_line", "missing_or_malformed"].includes(
+        result.dispositionSource,
+      )) &&
+    (result.handback === undefined || isWorkerHandback(result.handback)) &&
     typeof result.originalPrompt === "string" &&
     typeof result.result === "string" &&
     typeof result.truncated === "boolean" &&
