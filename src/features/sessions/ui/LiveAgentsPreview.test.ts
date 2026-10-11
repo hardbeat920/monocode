@@ -108,6 +108,59 @@ describe("LiveAgentsPreview", () => {
     expect(onSelect).toHaveBeenCalledExactlyOnceWith("b");
   });
 
+  it("keeps an unfocused working agent after the other turn finishes", () => {
+    render({
+      agents: [agent("background", "/repo/b")],
+      activeSessionId: "open-session",
+      groupLabels: {},
+      groupColors: {},
+      groupCustomColors: {},
+      groupMascots: {},
+    });
+
+    expect(
+      container.querySelector('[data-live-agent-card="background"]'),
+    ).not.toBeNull();
+    expect(
+      container.querySelector('[aria-live="polite"]')!.textContent,
+    ).toBe("1 working agent");
+  });
+
+  it("hides the card when the only live agent is the open session", () => {
+    render({
+      agents: [agent("open-session", "/repo/a")],
+      activeSessionId: "open-session",
+      groupLabels: {},
+      groupColors: {},
+      groupCustomColors: {},
+      groupMascots: {},
+    });
+
+    expect(container.querySelector("[data-live-agents-preview]")).toBeNull();
+  });
+
+  it("keeps an unfocused finished session until it is opened", () => {
+    render({
+      agents: [agent("background", "/repo/b", { done: true, activity: "Done" })],
+      activeSessionId: "open-session",
+      groupLabels: {},
+      groupColors: {},
+      groupCustomColors: {},
+      groupMascots: {},
+    });
+
+    const card = container.querySelector(
+      '[data-live-agent-card="background"]',
+    )!;
+    expect(card.textContent).toContain("Done");
+    expect(
+      container.querySelector('[data-live-agents-preview]')?.getAttribute("aria-label"),
+    ).toBe("Finished agents");
+    expect(container.querySelector('[aria-live="polite"]')?.textContent).toBe(
+      "1 finished agent",
+    );
+  });
+
   it("keeps elapsed timers out of its live region", () => {
     render({
       agents: [agent("a", "/repo/a"), agent("b", "/repo/b")],

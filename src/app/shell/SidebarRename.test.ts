@@ -2064,6 +2064,32 @@ describe("sidebar working agents", () => {
     act(() => render());
     expect(container.querySelector("[data-live-agents-preview]")).toBeNull();
   });
+
+  it("keeps an unfocused working agent after the other turn finishes", () => {
+    props.projectRailOpen = false;
+    props.activeSessionId = "session-1";
+    props.liveAgents = [
+      {
+        id: "agent-b",
+        cwd: "/workspace/beta",
+        title: "Review tests",
+        harness: "claude",
+        activity: "Running tests",
+        startedAt: Date.now() - 5_000,
+        needsApproval: false,
+        done: false,
+      },
+    ];
+    act(() => render());
+
+    const preview = container.querySelector<HTMLElement>(
+      '[data-live-agents-preview="full"]',
+    )!;
+    expect(preview.querySelectorAll("[data-live-agent-card]")).toHaveLength(1);
+    expect(
+      preview.querySelector('[data-live-agent-card="agent-b"]')!.textContent,
+    ).toContain("beta");
+  });
 });
 
 it("labels preserved sessions as having no branch selected", () => {
