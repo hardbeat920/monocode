@@ -201,7 +201,23 @@ test("scrolling up interrupts a completed Mono reply's glide", async ({
       ),
     )
     .toBeGreaterThan(100);
-  const top = await scroller.evaluate((el) => el.scrollTop);
+  // Native wheel scrolling can outlast mouse.wheel and the transform reset.
+  const top = await scroller.evaluate(
+    (el) =>
+      new Promise<number>((resolve) => {
+        let top = el.scrollTop;
+        let stableSince = performance.now();
+        const sample = (now: number) => {
+          if (el.scrollTop !== top) {
+            top = el.scrollTop;
+            stableSince = now;
+          }
+          if (now - stableSince >= 100) resolve(top);
+          else requestAnimationFrame(sample);
+        };
+        requestAnimationFrame(sample);
+      }),
+  );
   await page.evaluate(() =>
     (window as MonoScrollWindow).completeMonoReply("More text. ".repeat(600)),
   );
