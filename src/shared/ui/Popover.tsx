@@ -49,6 +49,8 @@ type Props = Omit<ComponentPropsWithoutRef<"div">, "style"> & {
   layer?: number;
   /** Drops the glass frame and keeps only placement and the content animation. */
   bare?: boolean;
+  /** Corner radius of the glass frame. Defaults to `rounded-xl`. */
+  rounded?: string;
   style?: CSSProperties;
   autoFocus?: boolean;
   /** Wiring this in hands Popover the outside-click and Escape handling. */
@@ -59,8 +61,7 @@ type Props = Omit<ComponentPropsWithoutRef<"div">, "style"> & {
   ref?: Ref<HTMLDivElement>;
 };
 
-const FRAME =
-  "isolate overflow-hidden rounded-xl border border-content/10 shadow-xl";
+const FRAME = "isolate overflow-hidden border border-content/10 shadow-xl";
 
 /** Which corner the open animation grows from, so it reads as anchored. */
 function origin(side: PopoverSide, align: PopoverAlign): string {
@@ -192,6 +193,7 @@ function NativePopover({
     constrainHeight: _constrainHeight,
     layer: _layer,
     bare: _bare,
+    rounded: _rounded,
     ...rest
   } = props;
   return createPortal(
@@ -223,6 +225,7 @@ function WebPopover({
   constrainHeight = true,
   layer = LAYER.popover,
   bare = false,
+  rounded = "rounded-xl",
   className,
   style,
   autoFocus = false,
@@ -342,7 +345,7 @@ function WebPopover({
       ref={frame}
       data-popover-side={position?.side ?? side}
       style={{ ...placed, zIndex: layer }}
-      className={bare ? undefined : FRAME}
+      className={bare ? undefined : `${FRAME} ${rounded}`}
     >
       {bare ? null : <GlassBackdrop />}
       <div

@@ -136,3 +136,67 @@ describe("QuestionForm keyboard navigation", () => {
     expect(options[1].getAttribute("aria-pressed")).toBe("false");
   });
 });
+
+describe("QuestionForm steps", () => {
+  function twoQuestions(): UserQuestionPrompt {
+    return {
+      requestId: 9,
+      questions: [
+        {
+          id: "colour",
+          prompt: "Pick a colour",
+          multiSelect: false,
+          allowCustom: false,
+          options: [
+            { id: "red", label: "Red" },
+            { id: "green", label: "Green" },
+          ],
+        },
+        {
+          id: "size",
+          prompt: "Pick a size",
+          multiSelect: false,
+          allowCustom: false,
+          options: [
+            { id: "small", label: "Small" },
+            { id: "large", label: "Large" },
+          ],
+        },
+      ],
+    };
+  }
+
+  function button(label: string): HTMLButtonElement {
+    const match = Array.from(container.querySelectorAll("button")).find(
+      (item) => item.textContent?.trim() === label,
+    );
+    if (!match) throw new Error(`No button labelled ${label}`);
+    return match;
+  }
+
+  it("returns to the previous question with its answer and submits the change", () => {
+    const onReply = vi.fn();
+    act(() =>
+      root.render(createElement(QuestionForm, { prompt: twoQuestions(), onReply })),
+    );
+    expect(container.textContent).not.toContain("Back");
+
+    act(() => button("Red").click());
+    act(() => button("Continue").click());
+    expect(container.textContent).toContain("Pick a size");
+
+    act(() => button("Back").click());
+    expect(container.textContent).toContain("Pick a colour");
+    expect(button("Red").getAttribute("aria-pressed")).toBe("true");
+
+    act(() => button("Green").click());
+    act(() => button("Continue").click());
+    act(() => button("Large").click());
+    act(() => button("Continue").click());
+
+    expect(onReply).toHaveBeenCalledWith(9, {
+      kind: "answered",
+      answers: { colour: ["green"], size: ["large"] },
+    });
+  });
+});

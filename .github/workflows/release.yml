@@ -24,6 +24,9 @@ jobs:
           node-version: 20
           cache: npm
 
+      - name: Select release channel
+        run: node scripts/release-channel.cjs
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
@@ -79,11 +82,8 @@ jobs:
             process.exit(1);
           }
           const pubkey = process.env.TAURI_UPDATER_PUBKEY || "";
-          const endpoint =
-            process.env.TAURI_UPDATER_ENDPOINT ||
-            (process.env.R2_PUBLIC_BASE_URL
-              ? `${process.env.R2_PUBLIC_BASE_URL.replace(/\/$/, "")}/latest.json`
-              : "");
+          const { updaterEndpoint } = require("./scripts/release-channel.cjs");
+          const endpoint = updaterEndpoint(process.env);
           if (!pubkey || !endpoint) {
             console.error("TAURI_UPDATER_PUBKEY and an updater endpoint are required");
             process.exit(1);
@@ -184,6 +184,8 @@ jobs:
           INTEL_DMGS=("$INTEL_BUNDLE"/dmg/*.dmg)
           WINDOWS_INSTALLERS=("$BUNDLE"/nsis/*.exe)
           WINDOWS_SIGNATURES=("$BUNDLE"/nsis/*.exe.sig)
+          LINUX_APPIMAGES=("$BUNDLE"/linux/*.AppImage)
+          LINUX_APPIMAGE_SIGNATURES=("$BUNDLE"/linux/*.AppImage.sig)
           if (( ${#ARM_TARS[@]} != 1 || ${#ARM_DMGS[@]} != 1 )); then
             echo "Expected exactly one Apple Silicon updater archive and DMG" >&2
             exit 1
@@ -196,6 +198,10 @@ jobs:
             echo "Expected exactly one Windows installer and updater signature" >&2
             exit 1
           fi
+          if (( ${#LINUX_APPIMAGES[@]} != 1 || ${#LINUX_APPIMAGE_SIGNATURES[@]} != 1 )); then
+            echo "Expected exactly one Linux AppImage and updater signature" >&2
+            exit 1
+          fi
           ARM_TAR="${ARM_TARS[0]}"
           ARM_SIG="${ARM_TAR}.sig"
           ARM_DMG="${ARM_DMGS[0]}"
@@ -204,6 +210,8 @@ jobs:
           INTEL_DMG="${INTEL_DMGS[0]}"
           WINDOWS_INSTALLER="${WINDOWS_INSTALLERS[0]}"
           WINDOWS_SIGNATURE="${WINDOWS_SIGNATURES[0]}"
+          LINUX_APPIMAGE="${LINUX_APPIMAGES[0]}"
+          LINUX_APPIMAGE_SIGNATURE="${LINUX_APPIMAGE_SIGNATURES[0]}"
           for artifact in "$ARM_SIG" "$INTEL_SIG"; do
             if [[ ! -f "$artifact" ]]; then
               echo "Missing release artifact: $artifact" >&2
@@ -221,6 +229,8 @@ jobs:
           INTEL_DMG_KEY="${RELEASE_PREFIX}/MonoCode_${VERSION}_x64.dmg"
           WINDOWS_INSTALLER_KEY="${RELEASE_PREFIX}/MonoCode_${VERSION}_x64-setup.exe"
           WINDOWS_SIGNATURE_KEY="${WINDOWS_INSTALLER_KEY}.sig"
+          LINUX_APPIMAGE_KEY="${RELEASE_PREFIX}/MonoCode_${VERSION}_amd64.AppImage"
+          LINUX_APPIMAGE_SIGNATURE_KEY="${LINUX_APPIMAGE_KEY}.sig"
 
           VERSION="$VERSION" \
             ARM_SIG="$ARM_SIG" \
@@ -229,6 +239,8 @@ jobs:
             INTEL_TAR_URL="$BASE/$INTEL_TAR_KEY" \
             WINDOWS_SIGNATURE="$WINDOWS_SIGNATURE" \
             WINDOWS_INSTALLER_URL="$BASE/$WINDOWS_INSTALLER_KEY" \
+            LINUX_APPIMAGE_SIGNATURE="$LINUX_APPIMAGE_SIGNATURE" \
+            LINUX_APPIMAGE_URL="$BASE/$LINUX_APPIMAGE_KEY" \
             node <<'NODE'
           const fs = require("fs");
           fs.writeFileSync(
@@ -257,6 +269,15 @@ jobs:
                       .trim(),
                     url: process.env.WINDOWS_INSTALLER_URL,
                   },
+                  // AppImage only: the installer-specific key keeps .deb and
+                  // .rpm installs (which have no `linux-x86_64` entry) on
+                  // their package manager instead of self-updating.
+                  "linux-x86_64-appimage": {
+                    signature: fs
+                      .readFileSync(process.env.LINUX_APPIMAGE_SIGNATURE, "utf8")
+                      .trim(),
+                    url: process.env.LINUX_APPIMAGE_URL,
+                  },
                 },
               },
               null,
@@ -276,10 +297,14 @@ jobs:
           aws s3 cp "$INTEL_SIG" "s3://${R2_BUCKET_NAME}/${INTEL_SIG_KEY}" --cache-control "$IMMUTABLE_CACHE" --endpoint-url "$ENDPOINT"
           aws s3 cp "$WINDOWS_INSTALLER" "s3://${R2_BUCKET_NAME}/${WINDOWS_INSTALLER_KEY}" --cache-control "$IMMUTABLE_CACHE" --endpoint-url "$ENDPOINT"
           aws s3 cp "$WINDOWS_SIGNATURE" "s3://${R2_BUCKET_NAME}/${WINDOWS_SIGNATURE_KEY}" --cache-control "$IMMUTABLE_CACHE" --endpoint-url "$ENDPOINT"
+          aws s3 cp "$LINUX_APPIMAGE" "s3://${R2_BUCKET_NAME}/${LINUX_APPIMAGE_KEY}" --cache-control "$IMMUTABLE_CACHE" --endpoint-url "$ENDPOINT"
+          aws s3 cp "$LINUX_APPIMAGE_SIGNATURE" "s3://${R2_BUCKET_NAME}/${LINUX_APPIMAGE_SIGNATURE_KEY}" --cache-control "$IMMUTABLE_CACHE" --endpoint-url "$ENDPOINT"
           # Keep stable links for both architectures, but never let the CDN
           # retain an older release under these mutable names.
-          aws s3 cp "$ARM_DMG" "s3://${R2_BUCKET_NAME}/MonoCode.dmg" --cache-control "$NO_CACHE" --endpoint-url "$ENDPOINT"
-          aws s3 cp "$INTEL_DMG" "s3://${R2_BUCKET_NAME}/MonoCode_x64.dmg" --cache-control "$NO_CACHE" --endpoint-url "$ENDPOINT"
+          if [[ "$RELEASE_PRERELEASE" != true ]]; then
+            aws s3 cp "$ARM_DMG" "s3://${R2_BUCKET_NAME}/MonoCode.dmg" --cache-control "$NO_CACHE" --endpoint-url "$ENDPOINT"
+            aws s3 cp "$INTEL_DMG" "s3://${R2_BUCKET_NAME}/MonoCode_x64.dmg" --cache-control "$NO_CACHE" --endpoint-url "$ENDPOINT"
+          fi
 
       - name: GitHub Release
         env:
@@ -298,6 +323,7 @@ jobs:
           INTEL_DMG="$INTEL_BUNDLE/dmg/MonoCode_${VERSION}_x64.dmg"
           DEB="$BUNDLE/linux/MonoCode_${VERSION}_amd64.deb"
           APPIMAGE="$BUNDLE/linux/MonoCode_${VERSION}_amd64.AppImage"
+          APPIMAGE_SIG="${APPIMAGE}.sig"
           shopt -s nullglob
           RPMS=("$BUNDLE"/rpm/*.rpm)
           if (( ${#RPMS[@]} != 1 )); then
@@ -307,7 +333,7 @@ jobs:
           RPM="${RPMS[0]}"
           NSIS="$BUNDLE/nsis/MonoCode_${VERSION}_x64-setup.exe"
           NSIS_SIG="${NSIS}.sig"
-          for artifact in "$ARM_DMG" "$ARM_TAR" "$ARM_SIG" "$INTEL_DMG" "$INTEL_TAR" "$INTEL_SIG" "$DEB" "$APPIMAGE" "$RPM" "$NSIS" "$NSIS_SIG"; do
+          for artifact in "$ARM_DMG" "$ARM_TAR" "$ARM_SIG" "$INTEL_DMG" "$INTEL_TAR" "$INTEL_SIG" "$DEB" "$APPIMAGE" "$APPIMAGE_SIG" "$RPM" "$NSIS" "$NSIS_SIG"; do
             if [[ ! -f "$artifact" ]]; then
               echo "Missing release artifact: $artifact" >&2
               exit 1
@@ -335,23 +361,28 @@ jobs:
           RELEASE_FILES=(
             "$ARM_DMG" "$RELEASE_ASSETS/MonoCode.app.tar.gz" "$RELEASE_ASSETS/MonoCode.app.tar.gz.sig"
             "$INTEL_DMG" "$RELEASE_ASSETS/MonoCode_x64.app.tar.gz" "$RELEASE_ASSETS/MonoCode_x64.app.tar.gz.sig"
-            "$DEB" "$APPIMAGE" "$RPM" "$NSIS" "$NSIS_SIG" "${HOST_FILES[@]}"
+            "$DEB" "$APPIMAGE" "$APPIMAGE_SIG" "$RPM" "$NSIS" "$NSIS_SIG" "${HOST_FILES[@]}"
           )
           if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release create "$GITHUB_REF_NAME" \
               --draft \
+              --prerelease="$RELEASE_PRERELEASE" \
               --title "MonoCode $VERSION" \
               --notes "See CHANGELOG.md for details."
           fi
           verify_release() {
             local expected_draft="$1"
-            gh release view "$GITHUB_REF_NAME" --json isDraft,assets > "$RUNNER_TEMP/release-state.json"
+            gh release view "$GITHUB_REF_NAME" --json isDraft,isPrerelease,assets > "$RUNNER_TEMP/release-state.json"
             node - "$RUNNER_TEMP/release-state.json" "$expected_draft" "${RELEASE_FILES[@]}" <<'NODE'
           const fs = require("node:fs");
           const path = require("node:path");
           const release = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
           if (release.isDraft !== (process.argv[3] === "true")) {
             console.error("GitHub Release publication state is unexpected.");
+            process.exit(1);
+          }
+          if (release.isPrerelease !== (process.env.RELEASE_PRERELEASE === "true")) {
+            console.error("GitHub Release channel is unexpected.");
             process.exit(1);
           }
           const names = new Set(release.assets.map((asset) => asset.name));
@@ -370,7 +401,7 @@ jobs:
             # published release is immutable, so only resume drafts.
             gh release upload "$GITHUB_REF_NAME" "${RELEASE_FILES[@]}" --clobber
             verify_release true
-            gh release edit "$GITHUB_REF_NAME" --draft=false
+            gh release edit "$GITHUB_REF_NAME" --draft=false --prerelease="$RELEASE_PRERELEASE"
           elif [[ "$IS_DRAFT" != false ]]; then
             echo "Unexpected GitHub Release state: $IS_DRAFT" >&2
             exit 1
@@ -387,7 +418,7 @@ jobs:
         run: |
           set -euo pipefail
           ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-          aws s3 cp latest.json "s3://${R2_BUCKET_NAME}/latest.json" \
+          aws s3 cp latest.json "s3://${R2_BUCKET_NAME}/${UPDATER_FEED_KEY}" \
             --content-type "application/json" \
             --cache-control "no-store,max-age=0,must-revalidate" \
             --endpoint-url "$ENDPOINT"
@@ -432,6 +463,9 @@ jobs:
           node-version: 20
           cache: npm
 
+      - name: Select release channel
+        run: node scripts/release-channel.cjs
+
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Install Linux system dependencies
@@ -439,8 +473,58 @@ jobs:
 
       - run: npm ci
 
+      - name: Write updater release config
+        env:
+          TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
+          TAURI_UPDATER_ENDPOINT: ${{ secrets.TAURI_UPDATER_ENDPOINT }}
+          R2_PUBLIC_BASE_URL: ${{ secrets.R2_PUBLIC_BASE_URL }}
+        run: |
+          node <<'NODE'
+          const { writeFileSync } = require("node:fs");
+          const pubkey = process.env.TAURI_UPDATER_PUBKEY || "";
+          const { updaterEndpoint } = require("./scripts/release-channel.cjs");
+          const endpoint = updaterEndpoint(process.env);
+          if (!pubkey || !endpoint) {
+            console.error("TAURI_UPDATER_PUBKEY and an updater endpoint are required");
+            process.exit(1);
+          }
+          writeFileSync(
+            process.env.RUNNER_TEMP + "/tauri.release.conf.json",
+            JSON.stringify(
+              { plugins: { updater: { pubkey, endpoints: [endpoint] } } },
+              null,
+              2,
+            ),
+          );
+          NODE
+
+      # Same as `npm run build:linux`, with the updater config merged in.
+      # npm would append extra args to the repack script, not tauri build.
       - name: Build Linux packages
-        run: npm run build:linux
+        run: |
+          set -euo pipefail
+          npx tauri build --bundles deb,appimage --config "$RUNNER_TEMP/tauri.release.conf.json"
+          bash scripts/repack-appimage.sh
+
+      - name: Assert AppImage uses host libraries
+        run: bash scripts/assert-appimage-host-libs.sh
+
+      # Sign after repack-appimage.sh: a signature Tauri wrote during the
+      # build would cover the pre-repack file and fail updater verification.
+      - name: Sign AppImage for the updater
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          appimage=(target/release/bundle/appimage/*.AppImage)
+          if (( ${#appimage[@]} != 1 )); then
+            echo "Expected exactly one AppImage" >&2
+            exit 1
+          fi
+          npx tauri signer sign "${appimage[0]}"
+          test -s "${appimage[0]}.sig"
 
       - name: Stage Linux packages
         run: |
@@ -452,8 +536,12 @@ jobs:
             echo "Expected exactly one .deb and one AppImage" >&2
             exit 1
           fi
+          if [[ ! -s "${appimage[0]}.sig" ]]; then
+            echo "Missing AppImage updater signature" >&2
+            exit 1
+          fi
           mkdir -p release-artifacts
-          cp "${deb[0]}" "${appimage[0]}" release-artifacts/
+          cp "${deb[0]}" "${appimage[0]}" "${appimage[0]}.sig" release-artifacts/
 
       - name: Upload Linux packages
         uses: actions/upload-artifact@v4
@@ -536,6 +624,9 @@ jobs:
           node-version: 20
           cache: npm
 
+      - name: Select release channel
+        run: node scripts/release-channel.cjs
+
       - uses: dtolnay/rust-toolchain@stable
 
       - run: npm ci
@@ -546,12 +637,9 @@ jobs:
           TAURI_UPDATER_ENDPOINT: ${{ secrets.TAURI_UPDATER_ENDPOINT }}
           R2_PUBLIC_BASE_URL: ${{ secrets.R2_PUBLIC_BASE_URL }}
         run: |
-          $endpoint = $env:TAURI_UPDATER_ENDPOINT
-          if ([string]::IsNullOrWhiteSpace($endpoint)) {
-            if ([string]::IsNullOrWhiteSpace($env:R2_PUBLIC_BASE_URL)) {
-              throw "TAURI_UPDATER_ENDPOINT or R2_PUBLIC_BASE_URL is required"
-            }
-            $endpoint = "$($env:R2_PUBLIC_BASE_URL.TrimEnd('/'))/latest.json"
+          $endpoint = node -p "require('./scripts/release-channel.cjs').updaterEndpoint(process.env)"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not select the updater endpoint"
           }
           if ([string]::IsNullOrWhiteSpace($env:TAURI_UPDATER_PUBKEY)) {
             throw "TAURI_UPDATER_PUBKEY is required"

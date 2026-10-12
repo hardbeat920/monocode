@@ -22,6 +22,7 @@ function note(
   return {
     body: "",
     tags: [],
+    slugPending: false,
     createdAt: 1,
     updatedAt: 1,
     ...partial,

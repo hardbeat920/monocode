@@ -54,7 +54,10 @@ async function discoverModels(flavor: PiFlavor, workingDirectory?: string) {
     await spawnChild(
       probeId,
       path,
-      buildPiSpawnArgs(flavor, { noSession: true, noExtensions: true }),
+      buildPiSpawnArgs(flavor, {
+        noSession: true,
+        noExtensions: flavor.id !== "pi",
+      }),
       cwd,
       undefined,
       flavor.id,

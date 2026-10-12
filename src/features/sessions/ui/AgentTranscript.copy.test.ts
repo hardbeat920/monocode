@@ -146,7 +146,8 @@ it("remeasures prompt corners when a pooled tab is shown at a new width", () => 
   textWidth = 0;
   textHeight = 0;
   show(false);
-  expect(bubble().classList).toContain("rounded-xl");
+  // Keep the last measured shape while hidden; activation remeasures it.
+  expect(bubble().classList).toContain("rounded-full");
 
   // Reattached in a narrower pane, so the same prompt wraps onto two lines.
   textWidth = 260;

@@ -4,6 +4,7 @@ import {
   applyTerminalMeta,
   defaultTerminalTitle,
   listRunningTerminals,
+  newTerminalCwd,
   runningTerminalChipLabel,
   scanOscCwd,
   terminalTabLabel,
@@ -98,5 +99,55 @@ describe("scanOscCwd", () => {
     const { cwd, rest } = scanOscCwd("/repo\x07", partial);
     expect(cwd).toBe("/Users/dev/repo");
     expect(rest).toBe("");
+  });
+});
+
+describe("newTerminalCwd", () => {
+  const worktreeSession = {
+    cwd: "/repo",
+    worktreeCwd: "/repo/.worktrees/feature",
+  };
+
+  it("opens in the session's worktree over a focused main-checkout pane", () => {
+    expect(
+      newTerminalCwd({
+        activeFile: { cwd: "/repo" },
+        session: worktreeSession,
+        fallback: "/repo",
+      }),
+    ).toBe("/repo/.worktrees/feature");
+  });
+
+  it("keeps the focused pane's directory for a session without a worktree", () => {
+    expect(
+      newTerminalCwd({
+        activeFile: { cwd: "/repo/packages/app" },
+        session: { cwd: "/repo" },
+        fallback: "/elsewhere",
+      }),
+    ).toBe("/repo/packages/app");
+  });
+
+  it("does not open in a worktree that was removed", () => {
+    expect(
+      newTerminalCwd({
+        activeFile: { cwd: "/repo/docs" },
+        session: { ...worktreeSession, worktreeRemoved: true },
+        fallback: "/repo",
+      }),
+    ).toBe("/repo/docs");
+    expect(
+      newTerminalCwd({
+        session: { ...worktreeSession, worktreeRemoved: true },
+        fallback: "/elsewhere",
+      }),
+    ).toBe("/repo");
+  });
+
+  it("uses the fallback with no session or focused pane", () => {
+    expect(newTerminalCwd({ fallback: "/repo" })).toBe("/repo");
+    expect(
+      newTerminalCwd({ activeFile: { cwd: "/notes" }, fallback: "/repo" }),
+    ).toBe("/notes");
   });
 });

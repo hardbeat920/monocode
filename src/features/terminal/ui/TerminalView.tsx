@@ -113,9 +113,9 @@ function terminalTheme(light: boolean) {
   };
 }
 
-function monoFont(): string {
+function terminalFont(): string {
   const fromCss = getComputedStyle(document.documentElement)
-    .getPropertyValue("--font-mono")
+    .getPropertyValue("--font-terminal")
     .trim();
   return fromCss || "ui-monospace, SFMono-Regular, Menlo, Monaco, monospace";
 }
@@ -163,7 +163,7 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
     const term = new Terminal({
       cursorBlink: true,
       cursorStyle: "bar",
-      fontFamily: monoFont(),
+      fontFamily: terminalFont(),
       fontSize: 13,
       lineHeight: 1,
       letterSpacing: 0,
