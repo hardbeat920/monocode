@@ -261,18 +261,25 @@ function useSessionReviewFiles(
   return { files, setFiles, error, load, filesRef };
 }
 
-/** A Mono's compact review: the recorded line counts, opening the diff. */
-export function SessionChangesButton({
-  sessionId,
-  cwd,
-  enabled = true,
-  busy = false,
-  editedPaths,
-  onOpenDiff,
-}: Pick<
-  Props,
-  "sessionId" | "cwd" | "enabled" | "busy" | "editedPaths" | "onOpenDiff"
->) {
+export type SessionChangeTotals = {
+  files: number;
+  additions: number;
+  deletions: number;
+};
+
+/**
+ * A session's recorded changes as one summary. A running turn keeps the
+ * last settled summary, so the count does not drop out and back each turn.
+ */
+export function useSessionChangeTotals(
+  sessionId: string,
+  cwd: string,
+  {
+    enabled = true,
+    busy = false,
+    editedPaths,
+  }: Pick<Props, "enabled" | "busy" | "editedPaths"> = {},
+): SessionChangeTotals | null {
   const { files } = useSessionReviewFiles(
     sessionId,
     cwd,
@@ -280,26 +287,25 @@ export function SessionChangesButton({
     busy,
     editedPaths,
   );
-  if (busy || files.length === 0) return null;
-  const totals = sumChanges(files);
-  const label = `Changed ${files.length} ${files.length === 1 ? "file" : "files"}`;
-  return (
-    <button
-      type="button"
-      title={`${label}. Review changes`}
-      aria-label={`${label}, ${totals.additions} additions, ${totals.deletions} deletions. Review changes`}
-      onClick={() => onOpenDiff(undefined, { sessionId, cwd })}
-      className="flex items-center gap-1 rounded-md p-1 font-sans text-[11px] font-semibold leading-none tabular-nums outline-none hover:bg-content/8 focus-visible:ring-1 focus-visible:ring-accent"
-      data-session-changes
-    >
-      <span className="text-diff-add-fg">
-        +{formatInteger(totals.additions)}
-      </span>
-      <span className="text-diff-del-fg">
-        -{formatInteger(totals.deletions)}
-      </span>
-    </button>
-  );
+  const settled = useRef<{
+    key: string;
+    totals: SessionChangeTotals | null;
+  } | null>(null);
+  const key = JSON.stringify([sessionId, cwd]);
+  if (settled.current?.key !== key) settled.current = { key, totals: null };
+  if (!busy) {
+    const previous = settled.current.totals;
+    const totals = sumChanges(files);
+    settled.current.totals =
+      files.length === 0
+        ? null
+        : previous?.files === files.length &&
+            previous.additions === totals.additions &&
+            previous.deletions === totals.deletions
+          ? previous
+          : { files: files.length, ...totals };
+  }
+  return settled.current.totals;
 }
 
 function sumChanges(files: CheckpointFile[]) {

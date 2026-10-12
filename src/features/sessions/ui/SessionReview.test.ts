@@ -3,7 +3,11 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { CheckpointStatus } from "../model/checkpoint";
-import { SessionChangesButton, SessionReview } from "./SessionReview";
+import {
+  SessionReview,
+  useSessionChangeTotals,
+  type SessionChangeTotals,
+} from "./SessionReview";
 import { notifyGitChanged } from "../../../platform/tauri/fs";
 
 const probes = vi.hoisted(() => ({
@@ -323,7 +327,7 @@ it("updates the cache directly after Keep and reuses the cleared result on reope
   expect(probes.status).toHaveBeenCalledTimes(1);
 });
 
-it("keeps the card visible during a refresh and shares its cache with the compact button", async () => {
+it("keeps the card visible during a refresh and shares its cache with the change totals", async () => {
   vi.useFakeTimers();
   probes.status.mockResolvedValue(status("before.ts"));
   await render();
@@ -343,15 +347,28 @@ it("keeps the card visible during a refresh and shares its cache with the compac
   await act(async () => complete(status("after.ts")));
   act(() => root.unmount());
   root = createRoot(container);
-  await act(async () =>
-    root.render(
-      createElement(SessionChangesButton, {
-        sessionId: sessionKey(),
-        cwd: "/repo",
-        onOpenDiff: vi.fn(),
-      }),
-    ),
-  );
-  expect(container.querySelector("[data-session-changes]")).not.toBeNull();
+  let totals: SessionChangeTotals | null = null;
+  function Totals() {
+    totals = useSessionChangeTotals(sessionKey(), "/repo");
+    return null;
+  }
+  await act(async () => root.render(createElement(Totals)));
+  expect(totals).toEqual({ files: 1, additions: 3, deletions: 1 });
   expect(probes.status).toHaveBeenCalledTimes(2);
+});
+
+it("keeps the settled change totals while a turn runs", async () => {
+  probes.status.mockResolvedValue(status("before.ts"));
+  let totals: SessionChangeTotals | null = null;
+  function Totals({ busy }: { busy: boolean }) {
+    totals = useSessionChangeTotals(sessionKey(), "/repo", { busy });
+    return null;
+  }
+  await act(async () => root.render(createElement(Totals, { busy: false })));
+  expect(totals).toEqual({ files: 1, additions: 3, deletions: 1 });
+  await act(async () => root.render(createElement(Totals, { busy: true })));
+  expect(totals).toEqual({ files: 1, additions: 3, deletions: 1 });
+  probes.status.mockResolvedValue({ files: [] });
+  await act(async () => root.render(createElement(Totals, { busy: false })));
+  expect(totals).toBeNull();
 });

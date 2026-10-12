@@ -78,7 +78,7 @@ vi.mock("../../inbox/model/inboxSelfActivity", () => ({
   recordInboxSelfActivity: vi.fn(),
 }));
 
-import { MonoChangesPanel } from "./MonoChangesPanel";
+import { MonoChangesView } from "./MonoChangesView";
 import { BranchPicker } from "../../source-control/ui/BranchPicker";
 import { acquireRepoLock, repoLock } from "../../source-control/model/repoLock";
 import { ask } from "@tauri-apps/plugin-dialog";
@@ -89,6 +89,7 @@ import {
   gitDiffIndex,
   gitDiscardFile,
   gitLocateFiles,
+  gitStageAll,
   type GitDiffIndex,
 } from "../../../platform/tauri/fs";
 import { sessionCheckpointStatus } from "../../sessions/model/checkpoint";
@@ -103,7 +104,7 @@ const INDEX: GitDiffIndex = {
       status: "modified",
       additions: 1,
       deletions: 0,
-      staged: false,
+      staged: true,
       unstaged: true,
     },
   ],
@@ -118,11 +119,22 @@ const INDEX: GitDiffIndex = {
   headPushed: true,
 };
 
+vi.mock("../../source-control/model/worktrees", () => ({
+  listWorktrees: vi.fn(async (cwd: string) => ({
+    defaultRoot: "",
+    worktrees: [{ path: cwd, isMain: true }],
+  })),
+}));
+
 let container: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("ResizeObserver", class {
+    observe() {}
+    disconnect() {}
+  });
   vi.mocked(gitDiffIndex).mockResolvedValue(INDEX);
   vi.mocked(gitCommit).mockReset().mockResolvedValue(undefined);
   vi.mocked(gitCheckout).mockReset().mockResolvedValue("");
@@ -143,12 +155,12 @@ afterEach(async () => {
 async function renderPanel() {
   act(() =>
     root.render(
-      createElement(MonoChangesPanel, {
+      createElement(MonoChangesView, {
         sessionId: "session-1",
         cwd: "/repo",
-        request: { tab: "commit" },
-        color: "#888",
-        onClose: vi.fn(),
+        request: {},
+        agentName: "Mono",
+        attachedProjects: [],
       }),
     ),
   );
@@ -181,7 +193,7 @@ function typeMessage(text: string) {
   });
 }
 
-describe("MonoChangesPanel branch picker", () => {
+describe("MonoChangesView branch picker", () => {
   it("disables the branch picker while a commit runs", async () => {
     let finish!: () => void;
     vi.mocked(gitCommit).mockImplementationOnce(
@@ -252,7 +264,7 @@ async function dismissPicker(how: Dismissal, trigger: HTMLButtonElement) {
 
 const DISMISSALS: Dismissal[] = ["Escape", "outside click", "trigger click"];
 
-describe("MonoChangesPanel dismissed checkout", () => {
+describe("MonoChangesView dismissed checkout", () => {
   it.each(DISMISSALS)(
     "keeps the Commit tab locked after %s until the checkout settles",
     async (how) => {
@@ -287,7 +299,7 @@ describe("MonoChangesPanel dismissed checkout", () => {
   );
 });
 
-describe("MonoChangesPanel reopened during a checkout", () => {
+describe("MonoChangesView reopened during a checkout", () => {
   it("keeps the repository locked until the checkout settles", async () => {
     let finish!: () => void;
     vi.mocked(gitCheckout).mockImplementationOnce(
@@ -321,7 +333,7 @@ describe("MonoChangesPanel reopened during a checkout", () => {
   });
 });
 
-describe("MonoChangesPanel beside the composer's branch picker", () => {
+describe("MonoChangesView beside the composer's branch picker", () => {
   let composer: HTMLDivElement;
   let composerRoot: Root;
 
@@ -401,7 +413,27 @@ describe("MonoChangesPanel beside the composer's branch picker", () => {
   });
 });
 
-describe("MonoChangesPanel lock acquisition", () => {
+describe("MonoChangesView lock acquisition", () => {
+  it("locks branch switching and commits while staging runs", async () => {
+    let finish!: () => void;
+    vi.mocked(gitStageAll).mockImplementationOnce(
+      () => new Promise<void>((resolve) => { finish = resolve; }),
+    );
+    await renderPanel();
+    typeMessage("Fix the app");
+    const stage = container.querySelector<HTMLButtonElement>(
+      '[title="Stage All Changes"]',
+    )!;
+    await act(async () => stage.click());
+    expect(repoLock("/repo")?.kind).toBe("stage");
+    expect(branchTrigger().disabled).toBe(true);
+    expect(commitButton().disabled).toBe(true);
+    await act(async () => finish());
+    expect(repoLock("/repo")).toBeNull();
+    expect(branchTrigger().disabled).toBe(false);
+    expect(commitButton().disabled).toBe(false);
+  });
+
   it("holds the repository lock while a discard confirmation is up", async () => {
     let confirm!: (ok: boolean) => void;
     vi.mocked(ask).mockImplementationOnce(
@@ -416,13 +448,12 @@ describe("MonoChangesPanel lock acquisition", () => {
       ...INDEX,
       files: [
         ...INDEX.files,
-        { ...INDEX.files[0]!, path: "/repo/notes.md", relative: "notes.md" },
+        { ...INDEX.files[0]!, path: "/repo/notes.md", relative: "notes.md", staged: false },
       ],
     });
     await renderPanel();
-    const discard = container.querySelector<HTMLButtonElement>(
-      '[data-mono-commit] [title="Discard Changes"]',
-    )!;
+    const discard = container.querySelector('[title="notes.md"]')!
+      .parentElement!.querySelector<HTMLButtonElement>('[title="Discard Changes"]')!;
     await act(async () => discard.click());
     expect(ask).toHaveBeenCalled();
 
@@ -436,7 +467,7 @@ describe("MonoChangesPanel lock acquisition", () => {
   });
 });
 
-describe("MonoChangesPanel generation in two panels", () => {
+describe("MonoChangesView generation in two panels", () => {
   it("lets only the generating panel cancel, releasing the lock", async () => {
     vi.mocked(generateCommitMessage).mockClear();
     vi.mocked(generateCommitMessage).mockImplementationOnce(
@@ -449,12 +480,12 @@ describe("MonoChangesPanel generation in two panels", () => {
     try {
       act(() =>
         otherRoot.render(
-          createElement(MonoChangesPanel, {
+          createElement(MonoChangesView, {
             sessionId: "session-2",
             cwd: "/repo",
-            request: { tab: "commit" },
-            color: "#888",
-            onClose: vi.fn(),
+            request: {},
+            agentName: "Mono",
+            attachedProjects: [],
           }),
         ),
       );
@@ -489,7 +520,7 @@ describe("MonoChangesPanel generation in two panels", () => {
   });
 });
 
-describe("MonoChangesPanel with several projects", () => {
+describe("MonoChangesView with several projects", () => {
   beforeEach(() => {
     vi.mocked(gitLocateFiles).mockImplementation(async (paths: string[]) =>
       paths.map((path) => {
@@ -525,7 +556,7 @@ describe("MonoChangesPanel with several projects", () => {
 
   function visibleCommit() {
     return container.querySelector<HTMLElement>(
-      '[role="tabpanel"][aria-label="Commit"]:not([hidden])',
+      '[role="tabpanel"]:not([hidden])',
     )!;
   }
 
@@ -548,16 +579,10 @@ describe("MonoChangesPanel with several projects", () => {
   }
 
   async function selectProject(name: string) {
-    const switcher = container.querySelector<HTMLButtonElement>(
-      'button[aria-haspopup="menu"]',
+    const tab = container.querySelector<HTMLButtonElement>(
+      `[data-mono-project="${name}"]`,
     )!;
-    await act(async () => switcher.click());
-    const item = [
-      ...container.querySelectorAll<HTMLButtonElement>(
-        '[role="menuitemradio"]',
-      ),
-    ].find((entry) => entry.title === name)!;
-    await act(async () => item.click());
+    await act(async () => tab.click());
   }
 
   it("keeps other projects usable while one commits", async () => {

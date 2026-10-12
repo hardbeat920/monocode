@@ -253,6 +253,9 @@ pub fn run() {
                 .with_filter(window::is_workspace_window)
                 .build(),
         )
+        .register_uri_scheme_protocol(artifacts::HTML_SCHEME, |ctx, request| {
+            artifacts::serve_html(ctx.app_handle(), &request)
+        })
         .manage(harness::HarnessHost::new())
         .manage(pty::PtyHost::new())
         .manage(remote::RemoteConnections::default())
@@ -435,6 +438,7 @@ pub fn run() {
             fs::inspect_paths,
             fs::read_file_base64,
             fs::read_binary_file,
+            fs::allow_video_stream,
             fs::write_attachment,
             fs::save_generated_image,
             fs::delete_generated_images,
