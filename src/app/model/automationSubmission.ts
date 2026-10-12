@@ -6,30 +6,49 @@ import {
 import { submitWithSettlement } from "./managedSubmission";
 import type { SubmissionAcceptance } from "./submissionAcceptance";
 
-/** Release a head claim when a newer Inbox poll completed before dispatch. */
-export async function releaseStaleInboxHeadClaim(
+const staleInboxHeadClaims = new Map<string, AutomationRun>();
+
+/** Prevent dispatch of a head claim after a newer Inbox poll completes. */
+export async function deferStaleInboxHeadClaim(
   run: AutomationRun,
   isCurrent: () => boolean,
 ): Promise<boolean> {
   if (run.event !== "pull_request_head_changed" || isCurrent()) return false;
   try {
     await updateAutomationRun(run.id, "pending", {
-      error: "A newer Inbox observation arrived before dispatch; waiting for fresh GitHub state.",
+      error:
+        "A newer Inbox observation arrived before dispatch; waiting for fresh GitHub state.",
     });
-    return true;
   } catch {
-    // Keep the durable reservation moving if it cannot be released.
-    return false;
+    staleInboxHeadClaims.set(run.id, run);
+  }
+  return true;
+}
+
+async function retryStaleInboxHeadClaims(): Promise<void> {
+  for (const [runId] of staleInboxHeadClaims) {
+    try {
+      await updateAutomationRun(runId, "pending", {
+        error:
+          "A newer Inbox observation arrived before dispatch; waiting for fresh GitHub state.",
+      });
+      staleInboxHeadClaims.delete(runId);
+    } catch {
+      // Keep retrying on the next Inbox poll; a restart recovers running claims.
+    }
   }
 }
 
-export async function dispatchInboxAutomationRuns<T extends { run: AutomationRun }>(
-  due: Promise<readonly T[]>,
+export async function dispatchInboxAutomationRuns<
+  T extends { run: AutomationRun },
+>(
+  claim: () => Promise<readonly T[]>,
   isCurrent: () => boolean,
   launch: (item: T) => Promise<unknown>,
 ): Promise<void> {
-  for (const item of await due) {
-    if (await releaseStaleInboxHeadClaim(item.run, isCurrent)) continue;
+  await retryStaleInboxHeadClaims();
+  for (const item of await claim()) {
+    if (await deferStaleInboxHeadClaim(item.run, isCurrent)) continue;
     await launch(item).catch(() => undefined);
   }
 }

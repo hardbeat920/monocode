@@ -16,15 +16,16 @@ beforeEach(() => {
   update.mockResolvedValue({});
 });
 
-it("releases a head claim when a newer Inbox poll lands during the delayed claim", async () => {
+it("defers a stale claim on release failure and frees it before a newer head claim", async () => {
   let resolveClaim!: (runs: readonly { run: AutomationRun }[]) => void;
   const claim = new Promise<readonly { run: AutomationRun }[]>((resolve) => {
     resolveClaim = resolve;
   });
   let revision = 1;
   const launch = vi.fn(async () => undefined);
+  update.mockRejectedValueOnce(new Error("database busy"));
   const dispatch = dispatchInboxAutomationRuns(
-    claim,
+    () => claim,
     () => revision === 1,
     launch,
   );
@@ -39,6 +40,27 @@ it("releases a head claim when a newer Inbox poll lands during the delayed claim
     expect.objectContaining({ error: expect.stringContaining("newer Inbox") }),
   );
   expect(launch).not.toHaveBeenCalled();
+
+  const events: string[] = [];
+  const runStates = new Map([["run", "running"]]);
+  update.mockImplementation(async (runId: string, status: string) => {
+    events.push(`release:${runId}`);
+    runStates.set(runId, status);
+    return {};
+  });
+  const newerRun = { ...run, id: "newer" };
+  await dispatchInboxAutomationRuns(
+    async () => {
+      expect(runStates.get("run")).toBe("pending");
+      events.push("claim");
+      return [{ run: newerRun }];
+    },
+    () => revision === 2,
+    async (item) => {
+      events.push(`launch:${item.run.id}`);
+    },
+  );
+  expect(events).toEqual(["release:run", "claim", "launch:newer"]);
 });
 
 it.each(["false", "throw", "early failure"])(

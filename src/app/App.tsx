@@ -27,7 +27,7 @@ import {
 import { submitWithSettlement } from "./model/managedSubmission";
 import {
   dispatchInboxAutomationRuns,
-  releaseStaleInboxHeadClaim,
+  deferStaleInboxHeadClaim,
   submitAutomationRun,
 } from "./model/automationSubmission";
 import { canReuseAutomationSession } from "./model/automationSessionReuse";
@@ -8473,7 +8473,7 @@ function Workspace({
         });
         if (
           isInboxRevisionCurrent &&
-          (await releaseStaleInboxHeadClaim(run, isInboxRevisionCurrent))
+          (await deferStaleInboxHeadClaim(run, isInboxRevisionCurrent))
         )
           return;
         // From here the settlement callback owns reservation cleanup, including
@@ -8716,9 +8716,10 @@ function Workspace({
         .then(() => ensureAutomationRecovery())
         .then(() =>
           dispatchInboxAutomationRuns(
-            revision === inboxActivityRevision.current
-              ? claimInboxAutomationRuns([], Date.now(), [], observed)
-              : Promise.resolve([]),
+            () =>
+              revision === inboxActivityRevision.current
+                ? claimInboxAutomationRuns([], Date.now(), [], observed)
+                : Promise.resolve([]),
             () => revision === inboxActivityRevision.current,
             (item) =>
               launchAutomation(
