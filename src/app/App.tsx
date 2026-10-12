@@ -442,6 +442,7 @@ import {
   HARNESS_LABEL,
   HARNESS_TITLE,
   canReplaceSessionTitle,
+  shouldSeedSessionTitle,
   formatSessionTitle,
   sessionNeedsInput,
   newDefaultSession,
@@ -7273,9 +7274,11 @@ function Workspace({
           }
         : undefined;
       const isFirstTurn = current.blocks.length === 0;
-      const placeholderTitle =
-        canReplaceSessionTitle(current, HARNESS_LABEL[current.harness]) ||
-        !!draftBlock;
+      const placeholderTitle = shouldSeedSessionTitle(
+        current,
+        HARNESS_LABEL[current.harness],
+        !!draftBlock,
+      );
       const titleSeed =
         isFirstTurn &&
         !current.inboxCard &&

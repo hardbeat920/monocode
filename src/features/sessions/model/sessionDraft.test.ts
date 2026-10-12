@@ -5,7 +5,9 @@ import {
   HARNESS_LABEL,
   newSession,
   removeSessionDraft,
+  sessionDraftBlock,
   sessionDisplayTitle,
+  shouldSeedSessionTitle,
   titleFromPrompt,
   withHarnessChoice,
   type HarnessId,
@@ -72,6 +74,42 @@ it("preserves an explicit prompt seed when removing a draft, including subsequen
   expect(updated.title).toBe(session.title);
   expect(canReplaceSessionTitle(updated, session.title)).toBe(false);
   expect(updated.blocks).toEqual([]);
+});
+
+it.each(["codex · Operator title", ""])(
+  "does not replace an explicit %s title when submitting a saved draft",
+  (title) => {
+    const session = newSession("codex", "/repo");
+    session.title = title;
+    session.titleIsExplicit = true;
+    session.blocks = [
+      { id: "draft", role: "user", text: "Updated prompt", draft: true },
+    ];
+
+    expect(
+      shouldSeedSessionTitle(
+        session,
+        HARNESS_LABEL[session.harness],
+        !!sessionDraftBlock(session),
+      ),
+    ).toBe(false);
+  },
+);
+
+it("still seeds a non-explicit draft title from the submitted prompt", () => {
+  const session = newSession("codex", "/repo");
+  session.title = titleFromPrompt("Saved prompt", session.harness);
+  session.blocks = [
+    { id: "draft", role: "user", text: "Updated prompt", draft: true },
+  ];
+
+  expect(
+    shouldSeedSessionTitle(
+      session,
+      HARNESS_LABEL[session.harness],
+      !!sessionDraftBlock(session),
+    ),
+  ).toBe(true);
 });
 
 const modelChoices: [string, HarnessId, boolean][] = [

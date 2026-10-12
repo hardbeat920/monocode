@@ -766,6 +766,18 @@ export function canReplaceSessionTitle(
   );
 }
 
+/** Whether submitting a saved draft may replace its current title with the prompt seed. */
+export function shouldSeedSessionTitle(
+  session: Pick<Session, "title" | "harness" | "titleIsExplicit">,
+  seed: string,
+  hasDraft: boolean,
+): boolean {
+  return (
+    canReplaceSessionTitle(session, seed) ||
+    (hasDraft && !session.titleIsExplicit)
+  );
+}
+
 export function hasPendingApproval(blocks: Block[]): boolean {
   return blocks.some((block) => block.approval && !block.approval.decided);
 }
