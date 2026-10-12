@@ -35,6 +35,7 @@ type Workspace = {
 export async function closeAgentSession(
   source: Session,
   id: string,
+  expectedCwd: string,
   workspace: {
     /** Read current refs so post-save validation does not use a stale render. */
     snapshot(): Workspace;
@@ -55,7 +56,7 @@ export async function closeAgentSession(
       (target &&
         (target.inboxAsk ||
           target.orchestrationLeadId ||
-          !sameProjectPath(target.cwd, source.cwd)))
+          !sameProjectPath(target.cwd, expectedCwd)))
     )
       throw new Error("Session is unavailable in this project");
     if (

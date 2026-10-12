@@ -130,10 +130,78 @@ describe("agent app commands", () => {
     await expect(
       handleAgentApp(source, "close", "sessions.close", { sessionId: "other" }, host),
     ).resolves.toEqual({ sessionId: "other", closed: true });
-    expect(host.close).toHaveBeenCalledExactlyOnceWith("other");
+    expect(host.close).toHaveBeenCalledExactlyOnceWith("other", source.cwd);
     await expect(
       handleAgentApp(source, "close-self", "sessions.close", { sessionId: source.id }, host),
     ).rejects.toThrow("calling session");
+  });
+
+  it("lets a Mono close a session in an assigned project without closing its chat", async () => {
+    const { source, host } = fixture();
+    source.cwd = "/home/user";
+    host.isMono = (id) => id === source.id || id === "mono-chat";
+    host.monoOf = () => ({ id: "mono", projects: ["/code/app", "/code/site"] });
+    vi.mocked(host.sessions).mockResolvedValue([
+      {
+        id: "other",
+        title: "Other",
+        harness: "codex",
+        model: "codex:test",
+        busy: false,
+        hasDraft: true,
+        archived: false,
+      },
+    ]);
+    vi.mocked(host.session).mockResolvedValue({
+      ...newSession("codex", "/code/site"),
+      id: "other",
+    });
+
+    await expect(
+      handleAgentApp(
+        source,
+        "close-site",
+        "sessions.close",
+        { sessionId: "other", project: "site" },
+        host,
+      ),
+    ).resolves.toEqual({ sessionId: "other", closed: true });
+    expect(host.close).toHaveBeenCalledExactlyOnceWith("other", "/code/site");
+    await expect(
+      handleAgentApp(
+        source,
+        "close-outside",
+        "sessions.close",
+        { sessionId: "other", project: "/code/private" },
+        host,
+      ),
+    ).rejects.toThrow("Not one of your projects");
+
+    vi.mocked(host.sessions).mockResolvedValue([
+      {
+        id: "mono-chat",
+        title: "Mono chat",
+        harness: "codex",
+        model: "codex:test",
+        busy: false,
+        hasDraft: false,
+        archived: false,
+      },
+    ]);
+    vi.mocked(host.session).mockResolvedValue({
+      ...newSession("codex", "/code/site"),
+      id: "mono-chat",
+    });
+    await expect(
+      handleAgentApp(
+        source,
+        "close-mono",
+        "sessions.close",
+        { sessionId: "mono-chat", project: "site" },
+        host,
+      ),
+    ).rejects.toThrow("Only regular project sessions");
+    expect(host.close).toHaveBeenCalledOnce();
   });
 
   it.each([undefined, true, false])(

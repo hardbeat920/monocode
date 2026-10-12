@@ -59,7 +59,7 @@ function fixture(tabs?: WorkspaceTab[]) {
     source,
     target,
     workspace,
-    close: () => closeAgentSession(source, target.id, workspace),
+    close: () => closeAgentSession(source, target.id, cwd, workspace),
   };
 }
 
@@ -144,6 +144,37 @@ describe("closeAgentSession lifecycle", () => {
     expect(after.tabs[1].focusedId).toBe("neighbor");
     expect(after.sessions).toEqual(before.sessions);
     expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the active tab when closing a background session", async () => {
+    const f = fixture();
+    const activeTabId = f.workspace.snapshot().tabs[0].id;
+    f.workspace.snapshot().activeTabId = activeTabId;
+    await f.close();
+    expect(f.workspace.snapshot().activeTabId).toBe(activeTabId);
+  });
+
+  it("closes an assigned-project session for a Mono and saves its draft", async () => {
+    const f = fixture();
+    const monoSource = { ...f.source, cwd: "/home/user" };
+    f.target.cwd = "/projects/site";
+    f.target.blocks.push({
+      id: "draft",
+      role: "user",
+      text: "Keep this draft",
+      draft: true,
+    });
+
+    await expect(
+      closeAgentSession(monoSource, f.target.id, "/projects/site", f.workspace),
+    ).resolves.toEqual({ closed: true });
+    expect((vi.mocked(invoke).mock.calls[0][1] as any).session.blocks).toEqual(
+      f.target.blocks,
+    );
+    expect(f.workspace.snapshot().sessions).toContain(f.target);
+    expect(
+      f.workspace.snapshot().tabs.flatMap((tab) => leafIds(tab.layout)),
+    ).not.toContain(f.target.id);
   });
 
   it("keeps file-only and terminal-only remainder panes instead of closing their tab", async () => {
@@ -269,7 +300,7 @@ describe("closeAgentSession lifecycle", () => {
   it("refuses the caller and a still-loading view", async () => {
     const f = fixture();
     await expect(
-      closeAgentSession(f.source, f.source.id, f.workspace),
+      closeAgentSession(f.source, f.source.id, cwd, f.workspace),
     ).rejects.toThrow("calling session");
     f.workspace.snapshot().sessions = [f.source];
     await expect(f.close()).rejects.toThrow("still loading");

@@ -109,7 +109,7 @@ export type AgentAppHost = {
     requestId: string,
   ): Promise<{ alreadySaved: boolean; draft: boolean }>;
   /** Save and close an authorized target's views, rejecting unsafe live state. */
-  close(id: string): Promise<{ closed: boolean }>;
+  close(id: string, cwd: string): Promise<{ closed: boolean }>;
   stop(id: string): Promise<void>;
   remove(id: string, mode: "archive" | "delete"): Promise<void>;
   worktrees(cwd: string): Promise<Worktrees>;
@@ -170,7 +170,7 @@ const FIELDS = new Map<string, readonly string[]>([
   ["sessions.read", ["sessionId", "before", "limit", "maxChars", "project"]],
   ["sessions.send", ["sessionId", "prompt", "project", "notifyOnComplete"]],
   ["sessions.draft", ["sessionId", "prompt", "project"]],
-  ["sessions.close", ["sessionId"]],
+  ["sessions.close", ["sessionId", "project"]],
   ["sessions.stop", ["sessionId", "project"]],
   ["sessions.archive", ["sessionId", "project"]],
   ["sessions.delete", ["sessionId", "project"]],
@@ -1024,7 +1024,7 @@ export async function handleAgentApp(
         host.isHabitRun?.(id)
       )
         throw new Error("Only regular project sessions can be closed here");
-      return { sessionId: id, ...(await host.close(id)) };
+      return { sessionId: id, ...(await host.close(id, target.cwd)) };
     }
     case "sessions.stop":
     case "sessions.archive":

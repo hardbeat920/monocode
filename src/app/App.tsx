@@ -10667,8 +10667,8 @@ function Workspace({
               if (!saved) throw new Error("Session could not accept a draft");
               return { alreadySaved: false, draft: true };
             },
-            close: (id) =>
-              closeAgentSession(source, id, {
+            close: (id, expectedCwd) =>
+              closeAgentSession(source, id, expectedCwd, {
                 snapshot: () => ({
                   sessions: sessionsRef.current,
                   tabs: tabsRef.current,
@@ -10680,13 +10680,15 @@ function Workspace({
                   !!orchestrator.run(targetId),
                 worktreeOf: tabWorktreeOf,
                 apply(next) {
+                  const activeTabId = activeTabIdRef.current;
                   flushSync(() => {
                     sessionsRef.current = next.sessions;
                     tabsRef.current = next.tabs;
                     activeTabIdRef.current = next.activeTabId;
                     setSessions(next.sessions);
                     setTabs(next.tabs);
-                    activateTab(next.activeTabId);
+                    if (next.activeTabId !== activeTabId)
+                      activateTab(next.activeTabId);
                   });
                   void refreshHistory(sidebarCwdRef.current);
                 },

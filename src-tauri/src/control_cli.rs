@@ -142,9 +142,11 @@ Actions:
                   Save an unsent draft in an idle project session. Existing
                   drafts are preserved; send or remove one in MonoCode first.
                   Reuse --request-id on retries.
-  sessions.close {"sessionId":"..."}
+  sessions.close {"sessionId":"...","project":"<Mono project>"}
                   Close an idle project's open tabs or panes after saving its
                   conversation. Unsaved composer text or attachments block it.
+                  Monos select an assigned project by name or path; leave it
+                  out when the Mono has one project.
                   This never stops, archives or deletes the session.
   sessions.start {"prompt":"...","harness":"codex","model":"codex:...",
                   "effort":"high","reveal":false,
