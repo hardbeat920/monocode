@@ -1,3 +1,4 @@
+use crate::jsonc::strip_jsonc_comments;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -238,63 +239,6 @@ fn parse_opencode_config(raw: &str) -> Option<Value> {
         let normalized = strip_jsonc_trailing_commas(&without_comments);
         serde_json::from_str(&normalized).ok()
     })
-}
-
-fn strip_jsonc_comments(raw: &str) -> Option<String> {
-    let mut out = String::with_capacity(raw.len());
-    let mut chars = raw.chars().peekable();
-    let mut in_string = false;
-    let mut escaped = false;
-
-    while let Some(ch) = chars.next() {
-        if in_string {
-            out.push(ch);
-            if escaped {
-                escaped = false;
-            } else if ch == '\\' {
-                escaped = true;
-            } else if ch == '"' {
-                in_string = false;
-            }
-            continue;
-        }
-
-        match (ch, chars.peek().copied()) {
-            ('"', _) => {
-                in_string = true;
-                out.push(ch);
-            }
-            ('/', Some('/')) => {
-                let _ = chars.next();
-                out.push(' ');
-                for next in chars.by_ref() {
-                    if next == '\n' {
-                        out.push('\n');
-                        break;
-                    }
-                }
-            }
-            ('/', Some('*')) => {
-                let _ = chars.next();
-                out.push(' ');
-                let mut closed = false;
-                while let Some(next) = chars.next() {
-                    if next == '\n' {
-                        out.push('\n');
-                    }
-                    if next == '*' && chars.next_if_eq(&'/').is_some() {
-                        closed = true;
-                        break;
-                    }
-                }
-                if !closed {
-                    return None;
-                }
-            }
-            _ => out.push(ch),
-        }
-    }
-    Some(out)
 }
 
 fn strip_jsonc_trailing_commas(raw: &str) -> String {

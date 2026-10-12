@@ -1,6 +1,11 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { projectName } from "../../../shared/lib/paths";
-import { ChevronRight } from "../../../shared/ui/icons";
+import { IconButton } from "../../../app/shell/TitleBar";
+import {
+  ChevronRight,
+  ExternalLink,
+  PanelRightToggle,
+} from "../../../shared/ui/icons";
 import {
   getSession,
   listSessionsByProject,
@@ -17,15 +22,32 @@ import {
 } from "../../sessions/model/session";
 import { HarnessIcon } from "../../sessions/ui/HarnessIcon";
 import type { MonoLook } from "../model/mono";
+import { PageHeader } from "./monoPanelParts";
+import { PanelStack, type StackPage } from "./PanelStack";
 import { MonoSidebar, MonoSidebarHeader } from "./MonoSidebar";
 
-/** Sessions launched by the selected turn, including those no longer open. */
+/** A launched session open over the list, live and fully usable. */
+export type ShownMonoSession = {
+  sessionId: string;
+  title: string;
+  /** The session's pane. */
+  pane: ReactNode;
+};
+
+/**
+ * Sessions launched by the selected turn, including those no longer open.
+ * Opening one slides it in over the list, the way the details panel's pages
+ * do.
+ */
 export function MonoSessionsPanel({
   agent,
   launches,
   sessions,
   history = [],
+  shown,
   onOpenSession,
+  onBack = () => {},
+  onOpenInWorkspace = () => {},
   onClose,
   windowControls,
 }: {
@@ -33,7 +55,10 @@ export function MonoSessionsPanel({
   launches: readonly MonoSpawnedSession[];
   sessions: readonly Session[];
   history?: readonly SessionSummary[];
+  shown?: ShownMonoSession;
   onOpenSession: (sessionId: string) => void | Promise<void>;
+  onBack?: () => void;
+  onOpenInWorkspace?: (sessionId: string) => void | Promise<void>;
   onClose: () => void;
   windowControls?: ReactNode;
 }) {
@@ -110,6 +135,24 @@ export function MonoSessionsPanel({
     }
   };
 
+  const pages: StackPage[] = shown
+    ? [
+        {
+          key: `session:${shown.sessionId}`,
+          node: (
+            <LaunchedSessionPage
+              title={shown.title}
+              onBack={onBack}
+              onOpenInWorkspace={() => onOpenInWorkspace(shown.sessionId)}
+              onClose={onClose}
+            >
+              {shown.pane}
+            </LaunchedSessionPage>
+          ),
+        },
+      ]
+    : [];
+
   return (
     <MonoSidebar
       open
@@ -118,103 +161,156 @@ export function MonoSessionsPanel({
       color={agent.color}
       windowControls={windowControls}
     >
-      <MonoSidebarHeader title="Sessions" onClose={onClose} />
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-none px-3 py-3">
-        <p className="px-1 pb-3 text-[11px] text-content/45">
-          {launches.length} {launches.length === 1 ? "session" : "sessions"}{" "}
-          launched in this turn
-        </p>
-        <div className="flex flex-col gap-2">
-          {launches.map((launch) => {
-            const live = sessions.find(
-              (entry) => entry.id === launch.sessionId,
-            );
-            const saved =
-              history.find((entry) => entry.id === launch.sessionId) ??
-              stored.byId.get(launch.sessionId);
-            const unavailable =
-              !live && !saved && stored.loaded.has(launch.cwd);
-            const session = live ?? saved;
-            const harness = session?.harness ?? launch.harness;
-            const model = resolveModel(
-              harness,
-              session?.model ?? launch.model,
-            ).name;
-            const title = sessionDisplayTitle(
-              session?.title ?? launch.title,
-              harness,
-            );
-            const status = unavailable
-              ? "No longer available"
-              : live &&
-                  (hasPendingApproval(live.blocks) || live.pendingQuestion)
-                ? "Needs input"
-                : live?.busy
-                  ? "Working"
-                  : saved?.archived
-                    ? "Archived"
-                    : (live ? !!sessionDraftBlock(live) : saved?.draft)
-                      ? "Draft"
-                      : session
-                        ? "Ready"
-                        : stored.failed.has(launch.cwd)
-                          ? "Status unavailable"
-                          : "Loading…";
-            return (
-              <button
-                key={launch.sessionId}
-                type="button"
-                data-mono-session={launch.sessionId}
-                disabled={unavailable || !!opening}
-                onClick={() => void open(launch.sessionId)}
-                className="group flex w-full items-center gap-2 rounded-lg border border-stroke bg-content/3 px-3 py-2.5 text-left outline-none hover:border-content/20 hover:bg-content/6 focus-visible:ring-1 focus-visible:ring-accent disabled:cursor-default disabled:opacity-50"
-              >
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-[13px] font-medium text-content">
-                    {title}
-                  </p>
-                  <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[11px] text-content/45">
-                    <HarnessIcon
-                      harness={harness}
-                      className="size-3 shrink-0"
-                    />
-                    <span className="truncate">{model}</span>
-                    <span aria-hidden>·</span>
-                    <span
-                      className="truncate"
-                      title={session?.cwd ?? launch.cwd}
-                    >
-                      {agent.projects.find(
-                        (project) =>
-                          project.path === (session?.cwd ?? launch.cwd),
-                      )?.name ?? projectName(session?.cwd ?? launch.cwd)}
-                    </span>
-                  </div>
-                  <p
-                    className="mt-2 flex items-center gap-1.5 text-[11px] text-content/55"
-                    role="status"
-                  >
-                    <span
-                      aria-hidden
-                      className={`size-1.5 rounded-full ${status === "Working" ? "animate-pulse bg-[var(--mono-color)]" : status === "Needs input" ? "bg-amber-500/70" : "bg-content/30"}`}
-                    />
-                    {opening === launch.sessionId ? "Opening…" : status}
-                  </p>
-                </div>
-                <ChevronRight
-                  aria-hidden
-                  className="size-3.5 shrink-0 text-content/30 group-hover:text-content/60"
-                />
-              </button>
-            );
-          })}
-        </div>
-        {error ? (
-          <p role="alert" className="px-1 pt-3 text-xs text-red-400">
-            {error}
+      <PanelStack pages={pages}>
+        <MonoSidebarHeader title="Sessions" onClose={onClose} />
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-none px-3 py-3">
+          <p className="px-1 pb-3 text-[11px] text-content/45">
+            {launches.length} {launches.length === 1 ? "session" : "sessions"}{" "}
+            launched in this turn
           </p>
-        ) : null}
-      </div>
+          <div className="flex flex-col gap-2">
+            {launches.map((launch) => {
+              const live = sessions.find(
+                (entry) => entry.id === launch.sessionId,
+              );
+              const saved =
+                history.find((entry) => entry.id === launch.sessionId) ??
+                stored.byId.get(launch.sessionId);
+              const unavailable =
+                !live && !saved && stored.loaded.has(launch.cwd);
+              const session = live ?? saved;
+              const harness = session?.harness ?? launch.harness;
+              const model = resolveModel(
+                harness,
+                session?.model ?? launch.model,
+              ).name;
+              const title = sessionDisplayTitle(
+                session?.title ?? launch.title,
+                harness,
+              );
+              const status = unavailable
+                ? "No longer available"
+                : live &&
+                    (hasPendingApproval(live.blocks) || live.pendingQuestion)
+                  ? "Needs input"
+                  : live?.busy
+                    ? "Working"
+                    : saved?.archived
+                      ? "Archived"
+                      : (live ? !!sessionDraftBlock(live) : saved?.draft)
+                        ? "Draft"
+                        : session
+                          ? "Ready"
+                          : stored.failed.has(launch.cwd)
+                            ? "Status unavailable"
+                            : "Loading…";
+              return (
+                <button
+                  key={launch.sessionId}
+                  type="button"
+                  data-mono-session={launch.sessionId}
+                  disabled={unavailable || !!opening}
+                  onClick={() => void open(launch.sessionId)}
+                  className="group flex w-full items-center gap-2 rounded-lg border border-stroke bg-content/3 px-3 py-2.5 text-left outline-none hover:border-content/20 hover:bg-content/6 focus-visible:ring-1 focus-visible:ring-accent disabled:cursor-default disabled:opacity-50"
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-[13px] font-medium text-content">
+                      {title}
+                    </p>
+                    <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[11px] text-content/45">
+                      <HarnessIcon
+                        harness={harness}
+                        className="size-3 shrink-0"
+                      />
+                      <span className="truncate">{model}</span>
+                      <span aria-hidden>·</span>
+                      <span
+                        className="truncate"
+                        title={session?.cwd ?? launch.cwd}
+                      >
+                        {agent.projects.find(
+                          (project) =>
+                            project.path === (session?.cwd ?? launch.cwd),
+                        )?.name ?? projectName(session?.cwd ?? launch.cwd)}
+                      </span>
+                    </div>
+                    <p
+                      className="mt-2 flex items-center gap-1.5 text-[11px] text-content/55"
+                      role="status"
+                    >
+                      <span
+                        aria-hidden
+                        className={`size-1.5 rounded-full ${status === "Working" ? "animate-pulse bg-[var(--mono-color)]" : status === "Needs input" ? "bg-amber-500/70" : "bg-content/30"}`}
+                      />
+                      {opening === launch.sessionId ? "Opening…" : status}
+                    </p>
+                  </div>
+                  <ChevronRight
+                    aria-hidden
+                    className="size-3.5 shrink-0 text-content/30 group-hover:text-content/60"
+                  />
+                </button>
+              );
+            })}
+          </div>
+          {error ? (
+            <p role="alert" className="px-1 pt-3 text-xs text-red-400">
+              {error}
+            </p>
+          ) : null}
+        </div>
+      </PanelStack>
     </MonoSidebar>
+  );
+}
+
+function LaunchedSessionPage({
+  title,
+  onBack,
+  onOpenInWorkspace,
+  onClose,
+  children,
+}: {
+  title: string;
+  onBack: () => void;
+  onOpenInWorkspace: () => void | Promise<void>;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const [error, setError] = useState<string>();
+  return (
+    <>
+      <PageHeader title={title} onBack={onBack}>
+        <IconButton
+          label="Open in workspace"
+          onClick={() => {
+            setError(undefined);
+            void Promise.resolve(onOpenInWorkspace()).catch((cause) =>
+              setError(
+                cause instanceof Error
+                  ? cause.message
+                  : "Could not open this session.",
+              ),
+            );
+          }}
+        >
+          <ExternalLink className="size-3.5" strokeWidth={1.75} />
+        </IconButton>
+        <IconButton label="Hide sessions" active onClick={onClose}>
+          <PanelRightToggle className="size-3.5" strokeWidth={1.75} />
+        </IconButton>
+      </PageHeader>
+      {error ? (
+        <p role="alert" className="px-4 pt-2 text-xs text-red-400">
+          {error}
+        </p>
+      ) : null}
+      <div
+        data-mono-launched-session=""
+        className="flex min-h-0 min-w-0 flex-1 flex-col"
+      >
+        {children}
+      </div>
+    </>
   );
 }
