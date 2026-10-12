@@ -660,12 +660,15 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
           type="button"
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => openPicker("model")}
-          title="Model (⌘.)"
+          title={`Model: ${model.name} (⌘.)`}
+          aria-label={`Model: ${model.name}`}
           aria-expanded={picker === "model"}
           className={`flex min-w-0 max-w-[40%] items-center gap-1.5 rounded-md px-2 py-1 text-[12px] ${picker === "model" ? "bg-selection-emphasis text-content" : "text-content/70 hover:bg-selection-hover hover:text-content"}`}
         >
           <HarnessIcon harness={model.harness} className="size-3.5 shrink-0" />
-          <span className="truncate">{model.name}</span>
+          <span dir="rtl" className="truncate text-right">
+            {model.name}
+          </span>
           <ChevronDown className="size-3 shrink-0 opacity-60" />
         </button>
         {model.harness !== "fx" ? (

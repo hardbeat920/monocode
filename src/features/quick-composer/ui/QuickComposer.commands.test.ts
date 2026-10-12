@@ -35,7 +35,7 @@ vi.mock("../model/quickComposer", async (actual) => ({
   resolveQuickModel: () => ({
     harness: "codex",
     id: "test",
-    name: "Test model",
+    name: "Claude Opus 5.5",
   }),
 }));
 
@@ -130,6 +130,14 @@ it.each(["Enter", "Tab"])(
     expect(prompt.value).toBe("");
   },
 );
+
+it("keeps the full model name available when the button truncates it", () => {
+  const modelButton = container.querySelector<HTMLButtonElement>(
+    'button[aria-label="Model: Claude Opus 5.5"]',
+  )!;
+  expect(modelButton.title).toBe("Model: Claude Opus 5.5 (⌘.)");
+  expect(modelButton.querySelector("span")?.getAttribute("dir")).toBe("rtl");
+});
 
 it("completes a command by mouse while preserving the rest of the prompt and caret", async () => {
   input("  /op list my notes", 5);
