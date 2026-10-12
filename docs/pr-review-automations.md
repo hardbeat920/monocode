@@ -3,6 +3,8 @@
 In **Automations**, add **GitHub → Pull request opened** and **GitHub → Pull
 request head changed** to the same review automation. Choose its project,
 repository filters, conversation reuse, workspace and permission mode as usual.
+“Continue last” only reuses a matching ordinary session; Mono conversations and
+habit runs stay separate.
 Head changes apply to open, non-draft PRs. Draft pushes establish a new baseline
 without launching a review; add **Pull request ready for review** if desired.
 
