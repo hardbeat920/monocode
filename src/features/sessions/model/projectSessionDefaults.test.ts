@@ -3,6 +3,7 @@ import {
   newSession,
   newSessionForProject,
   retargetSessionToProject,
+  withHarnessChoice,
   type Session,
 } from "./session";
 import {
@@ -88,6 +89,24 @@ describe("retargetSessionToProject", () => {
     expect(retargeted.cwd).toBe("/repo/a");
     expect(retargeted.harness).toBe("cursor");
     expect(retargeted.model).toBe("cursor:composer-2.5");
+  });
+
+  it("keeps an explicitly named blank tab when choosing a project", () => {
+    setProjectDefaultProvider("/repo/a", "cursor", "cursor:composer-2.5");
+    const blank = newSession("claude", "~");
+    blank.title = "claude · #646 — Operator session titles";
+    blank.titleIsExplicit = true;
+    const retargeted = retargetSessionToProject(blank, "/repo/a");
+    expect(retargeted).toMatchObject({
+      title: "cursor · #646 — Operator session titles",
+      titleIsExplicit: true,
+    });
+    expect(
+      withHarnessChoice(retargeted, "codex", "codex:gpt-5-codex", {}),
+    ).toMatchObject({
+      title: "codex · #646 — Operator session titles",
+      titleIsExplicit: true,
+    });
   });
 
   it("keeps the session's provider when the project has no defaults", () => {

@@ -82,12 +82,13 @@ const ACTIONS: [&str; 12] = [
     "list", "delegate", "get", "steer", "message", "retry", "cancel", "wait", "review", "finish",
     "respond", "answer",
 ];
-const APP_ACTIONS: [&str; 32] = [
+const APP_ACTIONS: [&str; 33] = [
     "models.list",
     "sessions.list",
     "sessions.read",
     "sessions.send",
     "sessions.draft",
+    "sessions.rename",
     "sessions.start",
     "sessions.stop",
     "sessions.archive",
@@ -141,7 +142,10 @@ Actions:
                   Save an unsent draft in an idle project session. Existing
                   drafts are preserved; send or remove one in MonoCode first.
                   Reuse --request-id on retries.
-  sessions.start {"prompt":"...","harness":"codex","model":"codex:...",
+  sessions.rename {"sessionId":"...","title":"..."}
+                  Rename a project session without submitting a turn. Titles
+                  trim whitespace and must contain 1–512 characters.
+  sessions.start {"prompt":"...","title":"...","harness":"codex","model":"codex:...",
                   "effort":"high","reveal":false,
                   "workspaceMode":"current","worktreeCwd":"<path>","draft":false,
                   "placement":"right",
@@ -151,7 +155,8 @@ Actions:
                   calling session; besideSessionId chooses another visible
                   session in this project, including one just created. Set
                   draft:true to save the prompt unsent; no agent turn runs.
-                  Otherwise the turn is submitted.
+                  Otherwise the turn is submitted. Optional title sets an
+                  explicit display name; omit it for automatic naming.
                   Submitted sessions notify the calling Mono by default when
                   this turn completes, fails or is cancelled. The Mono reviews
                   it and reports back once idle. Set notifyOnComplete:false
@@ -635,6 +640,7 @@ mod tests {
             "sessions.read",
             "sessions.send",
             "sessions.draft",
+            "sessions.rename",
             "sessions.stop",
             "sessions.archive",
             "sessions.delete",

@@ -111,6 +111,7 @@ export type AgentAppHost = {
     prompt: string,
     requestId: string,
   ): Promise<{ alreadySaved: boolean; draft: boolean }>;
+  rename(id: string, title: string, expectedCwd?: string): Promise<void>;
   stop(id: string): Promise<void>;
   remove(id: string, mode: "archive" | "delete"): Promise<void>;
   worktrees(cwd: string): Promise<Worktrees>;
@@ -173,6 +174,7 @@ const FIELDS = new Map<string, readonly string[]>([
   ["sessions.read", ["sessionId", "before", "limit", "maxChars", "project"]],
   ["sessions.send", ["sessionId", "prompt", "project", "notifyOnComplete"]],
   ["sessions.draft", ["sessionId", "prompt", "project"]],
+  ["sessions.rename", ["sessionId", "title", "project"]],
   ["sessions.stop", ["sessionId", "project"]],
   ["sessions.archive", ["sessionId", "project"]],
   ["sessions.delete", ["sessionId", "project"]],
@@ -180,6 +182,7 @@ const FIELDS = new Map<string, readonly string[]>([
     "sessions.start",
     [
       "prompt",
+      "title",
       "draft",
       "harness",
       "model",
@@ -399,6 +402,7 @@ function startLaunch(
 ): QuickLaunch {
   const cwd = requireProject(source, input, host);
   const prompt = agentPrompt(input.prompt);
+  const title = optionalString(input.title, "title");
   const draft = input.draft ?? false;
   if (typeof draft !== "boolean") throw new Error("draft must be a boolean");
   const harness = input.harness ?? source.harness;
@@ -468,6 +472,7 @@ function startLaunch(
   return {
     cwd,
     prompt,
+    ...(title ? { title } : {}),
     ...(host.monoOf?.(source.id)?.showStartedSessionsInSidebar === false
       ? { sidebarHidden: true }
       : {}),
@@ -1036,6 +1041,19 @@ export async function handleAgentApp(
         `app-${source.id}-${requestId}`,
       );
       return { sessionId: id, saved: true, ...result };
+    }
+    case "sessions.rename": {
+      const id = requiredString(input.sessionId, "sessionId", 256);
+      const title = requiredString(input.title, "title", 512);
+      const target = await projectSession(source, id, input, host);
+      if (
+        target.orchestrationLeadId ||
+        host.isMono(id) ||
+        host.isHabitRun?.(id)
+      )
+        throw new Error("Only regular project sessions can be renamed here");
+      await host.rename(id, title, target.cwd);
+      return { sessionId: id, renamed: true };
     }
     case "sessions.stop":
     case "sessions.archive":

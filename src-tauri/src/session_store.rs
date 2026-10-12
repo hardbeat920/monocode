@@ -98,6 +98,8 @@ fn init_with(
 pub struct SessionUpsert {
     #[serde(default)]
     pub sidebar_hidden: bool,
+    #[serde(default)]
+    pub title_is_explicit: bool,
     pub id: String,
     pub cwd: String,
     pub harness: String,
@@ -177,6 +179,8 @@ pub struct SessionSummary {
 pub struct SessionRecord {
     #[serde(default)]
     pub sidebar_hidden: bool,
+    #[serde(default)]
+    pub title_is_explicit: bool,
     pub id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub orchestration_lead_id: Option<String>,
@@ -783,6 +787,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         ("queued_messages_json", "TEXT NOT NULL DEFAULT '[]'"),
         ("queue_status", "TEXT"),
         ("sidebar_hidden", "INTEGER NOT NULL DEFAULT 0"),
+        ("title_is_explicit", "INTEGER NOT NULL DEFAULT 0"),
     ] {
         ensure_session_column(conn, column, decl)?;
     }
@@ -1210,8 +1215,8 @@ pub(crate) fn upsert_session(
            provider_session_id, blocks_json, created_at, updated_at, branch,
            context_used, context_window, worktree_cwd, has_user_message,
            linked_work_item_json, provider_account_id, worktree_removed, is_draft,
-           automation_id, queued_messages_json, queue_status, sidebar_hidden
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)
+           automation_id, title_is_explicit, queued_messages_json, queue_status, sidebar_hidden
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
          ON CONFLICT(id) DO UPDATE SET
            cwd = excluded.cwd,
            harness = excluded.harness,
@@ -1232,6 +1237,7 @@ pub(crate) fn upsert_session(
            worktree_removed = excluded.worktree_removed,
            is_draft = excluded.is_draft,
            automation_id = excluded.automation_id,
+           title_is_explicit = excluded.title_is_explicit,
            queued_messages_json = excluded.queued_messages_json,
            queue_status = excluded.queue_status,
            sidebar_hidden = excluded.sidebar_hidden",
@@ -1257,6 +1263,7 @@ pub(crate) fn upsert_session(
             i64::from(session.worktree_removed),
             i64::from(is_draft),
             automation_id,
+            i64::from(session.title_is_explicit),
             queued_messages_json,
             session.queue_status,
             i64::from(session.sidebar_hidden),
@@ -1930,7 +1937,7 @@ fn get_session_record(
                 provider_session_id, {blocks}, created_at, updated_at,
                 context_used, context_window, branch, worktree_cwd,
                 linked_work_item_json, provider_account_id, worktree_removed,
-                automation_id, queued_messages_json, queue_status, sidebar_hidden
+                automation_id, title_is_explicit, queued_messages_json, queue_status, sidebar_hidden
          FROM sessions
          WHERE id = ?1 AND inbox_ask IS NULL"
         ),
@@ -1953,7 +1960,8 @@ fn get_session_record(
                 )
             })?;
             Ok(SessionRecord {
-                sidebar_hidden: row.get::<_, i64>(21)? != 0,
+                sidebar_hidden: row.get::<_, i64>(22)? != 0,
+                title_is_explicit: row.get::<_, i64>(19)? != 0,
                 id: row.get(0)?,
                 orchestration_lead_id: worker_parent(conn, session_id)?,
                 cwd: row.get(1)?,
@@ -1964,14 +1972,14 @@ fn get_session_record(
                 title: row.get(6)?,
                 provider_session_id: row.get(7)?,
                 blocks,
-                queued_messages: serde_json::from_str(&row.get::<_, String>(19)?).map_err(|e| {
+                queued_messages: serde_json::from_str(&row.get::<_, String>(20)?).map_err(|e| {
                     rusqlite::Error::FromSqlConversionFailure(
-                        19,
+                        20,
                         rusqlite::types::Type::Text,
                         Box::new(e),
                     )
                 })?,
-                queue_status: row.get(20)?,
+                queue_status: row.get(21)?,
                 context_used: row.get(11)?,
                 context_window: row.get(12)?,
                 branch: row.get(13)?,
@@ -2166,6 +2174,7 @@ mod tests {
     fn sample(id: &str, cwd: &str, title: &str) -> SessionUpsert {
         SessionUpsert {
             sidebar_hidden: false,
+            title_is_explicit: false,
             id: id.into(),
             cwd: cwd.into(),
             harness: "cursor".into(),
@@ -2186,6 +2195,21 @@ mod tests {
             linked_work_item: None,
             automation_id: None,
         }
+    }
+
+    #[test]
+    fn explicit_title_survives_session_store_round_trip() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.lock_conn().unwrap();
+        let mut session = sample("named", "/tmp/project", "Release plan");
+        session.title_is_explicit = true;
+        upsert_session(&conn, &session).unwrap();
+        assert!(
+            get_session(&conn, "named")
+                .unwrap()
+                .unwrap()
+                .title_is_explicit
+        );
     }
 
     #[test]

@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { newSession, removeSessionDraft } from "./session";
+import {
+  canReplaceSessionTitle,
+  formatSessionTitle,
+  HARNESS_LABEL,
+  newSession,
+  removeSessionDraft,
+  sessionDraftBlock,
+  sessionDisplayTitle,
+  shouldSeedSessionTitle,
+  titleFromPrompt,
+  withHarnessChoice,
+  type HarnessId,
+} from "./session";
 
 describe("removeSessionDraft", () => {
   it("removes a follow-up draft without changing earlier conversation history", () => {
@@ -50,3 +62,110 @@ describe("removeSessionDraft", () => {
     expect(removeSessionDraft(session, "missing")).toBeUndefined();
   });
 });
+
+it("preserves an explicit prompt seed when removing a draft, including subsequent naming", () => {
+  const session = newSession("codex", "/repo");
+  session.title = titleFromPrompt("Maybe later", session.harness);
+  session.titleIsExplicit = true;
+  session.blocks = [
+    { id: "draft", role: "user", text: "Maybe later", draft: true },
+  ];
+  const updated = removeSessionDraft(session, "draft")!;
+  expect(updated.title).toBe(session.title);
+  expect(canReplaceSessionTitle(updated, session.title)).toBe(false);
+  expect(updated.blocks).toEqual([]);
+});
+
+it.each(["codex · Operator title", ""])(
+  "does not replace an explicit %s title when submitting a saved draft",
+  (title) => {
+    const session = newSession("codex", "/repo");
+    session.title = title;
+    session.titleIsExplicit = true;
+    session.blocks = [
+      { id: "draft", role: "user", text: "Updated prompt", draft: true },
+    ];
+
+    expect(
+      shouldSeedSessionTitle(
+        session,
+        HARNESS_LABEL[session.harness],
+        !!sessionDraftBlock(session),
+      ),
+    ).toBe(false);
+  },
+);
+
+it("still seeds a non-explicit draft title from the submitted prompt", () => {
+  const session = newSession("codex", "/repo");
+  session.title = titleFromPrompt("Saved prompt", session.harness);
+  session.blocks = [
+    { id: "draft", role: "user", text: "Updated prompt", draft: true },
+  ];
+
+  expect(
+    shouldSeedSessionTitle(
+      session,
+      HARNESS_LABEL[session.harness],
+      !!sessionDraftBlock(session),
+    ),
+  ).toBe(true);
+});
+
+const modelChoices: [string, HarnessId, boolean][] = [
+  ["same model and provider", "codex", false],
+  ["different model, same provider", "codex", true],
+  ["different provider", "claude", true],
+];
+
+it.each(modelChoices)(
+  "keeps an explicit title after draft removal and %s selection",
+  (_, harness, changeModel) => {
+    const session = newSession("codex", "/repo");
+    const displayTitle = "#646 — codex · Operator session titles";
+    session.title = formatSessionTitle(session.harness, displayTitle);
+    session.titleIsExplicit = true;
+    session.blocks = [
+      { id: "draft", role: "user", text: "Fix titles", draft: true },
+    ];
+    const empty = removeSessionDraft(session, "draft")!;
+    const model = changeModel ? "another-model" : session.model;
+    const changed = withHarnessChoice(empty, harness, model, {
+      effort: "high",
+    });
+    expect(changed).toMatchObject({
+      harness,
+      model,
+      modelSettings: { effort: "high" },
+      blocks: [],
+      titleIsExplicit: true,
+      title: formatSessionTitle(harness, displayTitle),
+    });
+    expect(sessionDisplayTitle(changed.title, harness)).toBe(displayTitle);
+    expect(canReplaceSessionTitle(changed, changed.title)).toBe(false);
+    expect(
+      withHarnessChoice(changed, session.harness, session.model, {}).title,
+    ).toBe(session.title);
+  },
+);
+
+it.each(modelChoices)(
+  "keeps automatic naming after draft removal and %s selection",
+  (_, harness, changeModel) => {
+    const session = newSession("codex", "/repo");
+    session.title = titleFromPrompt("Fix titles", session.harness);
+    session.blocks = [
+      { id: "draft", role: "user", text: "Fix titles", draft: true },
+    ];
+    const empty = removeSessionDraft(session, "draft")!;
+    const changed = withHarnessChoice(
+      empty,
+      harness,
+      changeModel ? "another-model" : session.model,
+      {},
+    );
+    expect(changed.title).toBe(HARNESS_LABEL[harness]);
+    expect(changed.titleIsExplicit).toBeUndefined();
+    expect(canReplaceSessionTitle(changed, HARNESS_LABEL[harness])).toBe(true);
+  },
+);

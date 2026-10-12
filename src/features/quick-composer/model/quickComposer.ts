@@ -55,6 +55,8 @@ export type QuickLaunch = {
   /** Mono's visibility preference, captured before creating the session. */
   sidebarHidden?: boolean;
   prompt: string;
+  /** Explicit display title, using the same format as a manual rename. */
+  title?: string;
   /** Create an unsent user draft instead of starting an agent turn. */
   draft?: boolean;
   /** Turn mode picked with a leading composer command. */

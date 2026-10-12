@@ -745,3 +745,23 @@ describe("worktree tab cleanup", () => {
     expect(snapshot.sessions.map((stub) => stub.id)).toEqual(["main"]);
   });
 });
+
+it("retains an explicit title on a blank tab across workspace snapshots", () => {
+  const session = newSession("codex", "/repo");
+  session.title = "codex · Maybe later";
+  session.titleIsExplicit = true;
+  const tab = newTab(session.id);
+  const saved = collectWorkspaceSnapshot(
+    [tab],
+    [session],
+    tab.id,
+    session.cwd,
+    new Map(),
+  );
+  const parsed = parseWorkspaceSnapshot(JSON.parse(JSON.stringify(saved)))!;
+  const restored = hydrateWorkspaceSnapshot(parsed, new Map());
+  expect(restored?.sessions[0]).toMatchObject({
+    title: session.title,
+    titleIsExplicit: true,
+  });
+});

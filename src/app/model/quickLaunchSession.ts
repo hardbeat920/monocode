@@ -10,6 +10,7 @@ import {
   resolveModel,
 } from "../../features/sessions/model/models";
 import {
+  formatSessionTitle,
   newSession,
   type Session,
   type Attachment,
@@ -79,6 +80,10 @@ export async function acceptQuickLaunch(
       launch,
     );
   session.id = deliveryId;
+  if (!existing && launch.title) {
+    session.title = formatSessionTitle(session.harness, launch.title);
+    session.titleIsExplicit = true;
+  }
   if (!existing && launch.sidebarHidden) session.sidebarHidden = true;
   if (launch.modelSettings) {
     session.modelSettings = mergeModelSettings(

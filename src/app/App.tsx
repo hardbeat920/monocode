@@ -15,6 +15,7 @@ import {
   MonoSessionCompletionBatches,
 } from "../features/monos/model/monoSessionCompletion";
 import { acceptQuickLaunch } from "./model/quickLaunchSession";
+import { renameSession } from "./model/renameSession";
 import { useWorkspaceNavigation } from "./hooks/useWorkspaceNavigation";
 import { useIdleSessionDetach } from "./hooks/useIdleSessionDetach";
 import { HarnessEventQueue } from "./model/harnessFlush";
@@ -441,11 +442,13 @@ import {
   HARNESS_LABEL,
   HARNESS_TITLE,
   canReplaceSessionTitle,
+  shouldSeedSessionTitle,
   formatSessionTitle,
   sessionNeedsInput,
   newDefaultSession,
   newSession,
   retargetSessionToProject,
+  withHarnessChoice,
   removeSessionDraft,
   sessionDisplayTitle,
   sessionDraftBlock,
@@ -486,7 +489,6 @@ import {
   fetchCodexRateLimits,
 } from "../features/providers/model/rateLimitsFetch";
 import { exhaustedWindowResetAt } from "../features/providers/model/rateLimits";
-import { dropContextWindow } from "../features/sessions/model/contextUsage";
 import {
   discardDraftSessionRecord,
   deleteSession,
@@ -903,33 +905,6 @@ function userTurnCards(
   return {
     ...(secondOpinion ? { secondOpinion } : {}),
     ...(noteCard ? { noteCard: noteCardMeta(noteCard) } : {}),
-  };
-}
-
-function withHarnessChoice(
-  session: Session,
-  harness: HarnessId,
-  model: string,
-  modelSettings: Record<string, string>,
-): Session {
-  return {
-    ...session,
-    harness,
-    model,
-    modelSettings,
-    title:
-      session.blocks.length === 0
-        ? HARNESS_LABEL[harness]
-        : formatSessionTitle(
-            harness,
-            sessionDisplayTitle(session.title, session.harness),
-          ),
-    ...(session.model === model
-      ? {}
-      : { context: dropContextWindow(session.context) }),
-    ...(session.harness === harness
-      ? {}
-      : { providerSessionId: undefined, providerAccountId: undefined }),
   };
 }
 
@@ -5068,42 +5043,32 @@ function Workspace({
   );
 
   const onRenameHistorySession = useCallback(
-    async (sessionId: string, displayTitle: string) => {
-      const trimmed = displayTitle.trim();
-      if (!trimmed) return;
+    async (
+      sessionId: string,
+      displayTitle: string,
+      expectedCwd = sidebarCwd,
+    ) => {
       invalidateLoadedSession(sessionId);
-
-      const open = sessionsRef.current.find(
-        (session) => session.id === sessionId,
+      const updated = await renameSession(
+        sessionId,
+        displayTitle,
+        () => sessionsRef.current,
+        (update) => {
+          pendingPersist.current.delete(sessionId);
+          sessionsRef.current = update(sessionsRef.current);
+          setSessions(update);
+        },
+        expectedCwd,
       );
-      if (open) {
-        const title = formatSessionTitle(open.harness, trimmed);
-        const updated = { ...open, title };
-        setSessions((prev) =>
-          prev.map((session) => (session.id === sessionId ? updated : session)),
-        );
-        loadedSessionCache.current.delete(sessionId);
-        persistSession(updated);
-      } else {
-        const restored = await getSession(sessionId).catch(() => null);
-        if (!restored) {
-          void refreshHistory(sidebarCwd);
-          return;
-        }
-        const updated = {
-          ...restored,
-          title: formatSessionTitle(restored.harness, trimmed),
-        };
-        const saved = await upsertSession(updated).catch(() => null);
-        if (saved) {
-          rememberLoadedSession(loadedSessionCache.current, updated);
-          lastPersisted.current.set(sessionId, persistFingerprint(updated));
-        }
-      }
+      if (!sessionsRef.current.some((session) => session.id === sessionId))
+        rememberLoadedSession(loadedSessionCache.current, updated);
+      lastPersisted.current.set(sessionId, persistFingerprint(updated));
       void refreshHistory(sidebarCwd);
     },
-    [invalidateLoadedSession, persistSession, refreshHistory, sidebarCwd],
+    [invalidateLoadedSession, refreshHistory, sidebarCwd],
   );
+  const renameHistorySessionRef = useRef(onRenameHistorySession);
+  renameHistorySessionRef.current = onRenameHistorySession;
 
   const checkOpenWorktreeFiles = useCallback((path: string) => {
     assertWorktreeFilesClosed(path, [
@@ -6698,8 +6663,7 @@ function Workspace({
         return false;
       }
       const placeholderTitle = canReplaceSessionTitle(
-        current.title,
-        current.harness,
+        current,
         HARNESS_LABEL[current.harness],
       );
       const title = placeholderTitle
@@ -7310,12 +7274,11 @@ function Workspace({
           }
         : undefined;
       const isFirstTurn = current.blocks.length === 0;
-      const placeholderTitle =
-        canReplaceSessionTitle(
-          current.title,
-          current.harness,
-          HARNESS_LABEL[current.harness],
-        ) || !!draftBlock;
+      const placeholderTitle = shouldSeedSessionTitle(
+        current,
+        HARNESS_LABEL[current.harness],
+        !!draftBlock,
+      );
       const titleSeed =
         isFirstTurn &&
         !current.inboxCard &&
@@ -7530,7 +7493,7 @@ function Workspace({
                 if (
                   generated &&
                   (options?.refreshTitle ||
-                    canReplaceSessionTitle(s.title, s.harness, titleSeed))
+                    canReplaceSessionTitle(s, titleSeed))
                 ) {
                   next = {
                     ...next,
@@ -10835,6 +10798,13 @@ function Workspace({
                 ? target
                 : null;
             },
+            rename: async (id, title, expectedCwd) => {
+              await renameHistorySessionRef.current(
+                id,
+                title,
+                expectedCwd ?? source.cwd,
+              );
+            },
             readConversation: async (target, options) =>
               isMonoSession(target.id)
                 ? readMonoConversation(target, options)
@@ -12809,7 +12779,14 @@ function Workspace({
               onPrefetchSession={onPrefetchHistorySession}
               onSessionNavigationOrder={onSessionNavigationOrder}
               onPlaceSessionOnPane={onPlaceSessionOnPane}
-              onRenameSession={onRenameHistorySession}
+              onRenameSession={(sessionId, title) => {
+                void onRenameHistorySession(sessionId, title).catch((error) => {
+                  void message(
+                    `Could not rename this conversation. Please retry.\n\n${String(error)}`,
+                    { title: "MonoCode", kind: "error" },
+                  );
+                });
+              }}
               onArchiveSession={onArchiveHistorySession}
               onArchiveSessions={onArchiveHistorySessions}
               onPinSession={onPinHistorySession}
