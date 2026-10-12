@@ -51,7 +51,10 @@ function scrollable(node: HTMLElement, e: Delta): boolean {
  * gesture. Cancelling here would cancel it for that scroller too, since the
  * browser picks what to scroll only after the event has finished dispatching.
  */
-export function innerScrollerTakes(el: HTMLElement, e: WheelEvent): boolean {
+export function innerScrollerTakes(
+  el: HTMLElement,
+  e: Pick<WheelEvent, "target" | "deltaX" | "deltaY">,
+): boolean {
   let node = e.target instanceof Element ? e.target : null;
   while (node && node !== el) {
     // Geometry first: it is free, and it rules out most of the ancestry

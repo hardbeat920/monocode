@@ -88,6 +88,9 @@ export type Tab = {
   previewFileId?: string;
 };
 
+/** How far below the tab bar a dragged tab must go before it targets a pane. */
+const PANE_DROP_PULL = 32;
+
 type Props = {
   tabs: Tab[];
   activeId: string;
@@ -646,12 +649,24 @@ function TitleBarComponent({
 }: Props) {
   const tabIds = tabs.map((tab) => tab.id);
   const { displayed, setTabNode, finishMotion } = useTabCloseMotion(tabs);
+  const tabStripRef = useRef<HTMLDivElement | null>(null);
+  const paneDropArmed = useRef(false);
   const externalTabDrop = useMemo<ReorderExternalDrop<string> | undefined>(
-    () =>
-      onPlaceOnPane
+    () => {
+      // A sideways drag sags, so only a deliberate pull below the tab bar
+      // targets a pane. Once armed it stays armed until the pointer is back
+      // over the tabs.
+      const pulledBelowTabs = (event: PointerEvent) => {
+        const bottom = tabStripRef.current?.getBoundingClientRect().bottom ?? 0;
+        if (event.clientY <= bottom) paneDropArmed.current = false;
+        else if (event.clientY >= bottom + PANE_DROP_PULL)
+          paneDropArmed.current = true;
+        return paneDropArmed.current;
+      };
+      return onPlaceOnPane
         ? {
             onMove: (tabId, event) => {
-              if (tabId === activeId) {
+              if (tabId === activeId || !pulledBelowTabs(event)) {
                 setExternalPaneDrop(null);
                 return false;
               }
@@ -664,21 +679,24 @@ function TitleBarComponent({
               return over != null;
             },
             onDrop: (tabId, event) => {
-              if (tabId === activeId) return false;
+              if (tabId === activeId || !pulledBelowTabs(event)) return false;
               const over = paneDropFromPoint(event.clientX, event.clientY);
               if (!over) return false;
               onPlaceOnPane(tabId, over.id, over.edge);
               return true;
             },
-            onEnd: () => setExternalPaneDrop(null),
+            onEnd: () => {
+              paneDropArmed.current = false;
+              setExternalPaneDrop(null);
+            },
           }
-        : undefined,
+        : undefined;
+    },
     [activeId, onPlaceOnPane],
   );
   const sortable = useAnimatedReorder(tabIds, onReorder, "x", externalTabDrop);
   const paneToTabDrop = useExternalTitleTabDrop();
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
-  const tabStripRef = useRef<HTMLDivElement | null>(null);
   const setTabStripRef = useCallback(
     (el: HTMLDivElement | null) => {
       tabStripRef.current = el;

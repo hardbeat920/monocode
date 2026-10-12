@@ -153,6 +153,53 @@ describe("workspace tab gestures", () => {
     );
   });
 
+  it("drops a drag whose pointerup was missed once the mouse moves with no button held", () => {
+    const { press, tabs, onReorder } = setup();
+    press();
+    pointer("pointermove", 180);
+    vi.advanceTimersByTime(16);
+    expect(tabs[0].dataset.dragging).toBe("true");
+
+    browser.dispatchEvent(
+      Object.assign(new Event("pointermove"), {
+        clientX: 260,
+        clientY: 260,
+        pointerId: 1,
+        pointerType: "mouse",
+        buttons: 0,
+      }),
+    );
+    vi.runAllTimers();
+
+    expect(tabs[0].dataset.dragging).toBeUndefined();
+    expect(tabs[0].style.transform).toBe("");
+    expect(onReorder).not.toHaveBeenCalled();
+  });
+
+  it("still drops a fast drag whose last moves report no button just before pointerup", () => {
+    const { press, onReorder } = setup();
+    press();
+    pointer("pointermove", 180);
+    // WebKit reads the live button state, so moves queued behind a quick
+    // release arrive with no buttons ahead of the pointerup.
+    browser.dispatchEvent(
+      Object.assign(new Event("pointermove"), {
+        clientX: 250,
+        clientY: 250,
+        pointerId: 1,
+        pointerType: "mouse",
+        buttons: 0,
+      }),
+    );
+    pointer("pointerup", 250);
+    vi.runAllTimers();
+
+    expect(onReorder).toHaveBeenCalledExactlyOnceWith(
+      ["changes", "explorer", "sessions"],
+      "sessions",
+    );
+  });
+
   it("previews and reorders vertical project rows", () => {
     const { press, tabs, onReorder } = setup(false, "y");
     press();
