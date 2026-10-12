@@ -17,23 +17,25 @@ export function MonoSidebar({
   children,
 }: {
   open: boolean;
-  kind: "details" | "activity" | "sessions" | "artifact";
+  kind: "details" | "activity" | "sessions" | "artifact" | "changes";
   label: string;
   color: string;
   windowControls?: ReactNode;
   children: ReactNode;
 }) {
+  // Readers (documents, diffs) need room; the turn sidebars stay narrow.
+  const reader = kind === "artifact" || kind === "changes";
   const resize = useDragResize({
-    min: kind === "artifact" ? 360 : MIN_WIDTH,
+    min: reader ? 360 : MIN_WIDTH,
     max: () =>
-      kind === "artifact"
+      reader
         ? Math.min(840, Math.round(window.innerWidth * 0.58))
         : Math.min(440, Math.round(window.innerWidth * 0.4)),
-    defaultWidth: kind === "artifact" ? 560 : MIN_WIDTH,
-    initial: kind === "artifact" ? rememberedArtifactWidth : rememberedWidth,
+    defaultWidth: reader ? 560 : MIN_WIDTH,
+    initial: reader ? rememberedArtifactWidth : rememberedWidth,
     direction: "left",
     onCommit: (width) => {
-      if (kind === "artifact") rememberedArtifactWidth = width;
+      if (reader) rememberedArtifactWidth = width;
       else rememberedWidth = width;
     },
   });
@@ -47,6 +49,7 @@ export function MonoSidebar({
       data-mono-activity={kind === "activity" ? "" : undefined}
       data-mono-sessions={kind === "sessions" ? "" : undefined}
       data-mono-artifact={kind === "artifact" ? "" : undefined}
+      data-mono-changes={kind === "changes" ? "" : undefined}
       data-open={open}
       style={
         {
@@ -76,10 +79,13 @@ export function MonoSidebar({
 
 export function MonoSidebarHeader({
   title,
+  heading,
   onClose,
   actions,
 }: {
   title: string;
+  /** Richer content in place of the plain title text. */
+  heading?: ReactNode;
   onClose: () => void;
   actions?: ReactNode;
 }) {
@@ -90,7 +96,7 @@ export function MonoSidebarHeader({
       data-tauri-drag-region="deep"
     >
       <h3 className="flex min-w-0 flex-1 items-center pl-4 text-[13px] font-medium text-content">
-        {title}
+        {heading ?? title}
       </h3>
       <div className="flex shrink-0 items-center gap-0.5 px-3">
         {actions}

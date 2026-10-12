@@ -397,7 +397,9 @@ export function ProjectPickerPopover({
             setActive(0);
           }}
           placeholder={
-            monos ? "Search monos and projects..." : "Search projects..."
+            monos?.items.length
+              ? "Search monos and projects..."
+              : "Search projects..."
           }
           className="min-w-0 flex-1 bg-transparent text-[13px] text-content outline-none placeholder:text-content/35"
         />

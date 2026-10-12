@@ -210,9 +210,8 @@ it.each(["current", "older"])(
       expect(previousTurn.querySelector('[aria-label="Copy response"]')).toBe(
         actions,
       );
-      expect(previousTurn.textContent).toContain(
-        "Captain Awesome worked for 20s",
-      );
+      expect(previousTurn.textContent).toContain("Captain Awesome");
+      expect(previousTurn.textContent).not.toContain("worked for");
     };
     const notification = monoSessionCompletionMessage({
       requestId: "review",

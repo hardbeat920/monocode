@@ -1055,20 +1055,56 @@ pub struct GitStagedContext {
     pub patch: String,
 }
 
+#[derive(Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitFileLocation {
+    pub root: String,
+    pub relative: String,
+}
+
+/// Locate each file's own checkout, including files whose parents were deleted.
+#[tauri::command]
+pub async fn git_locate_files(paths: Vec<String>) -> Result<Vec<Option<GitFileLocation>>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        paths
+            .iter()
+            .map(|path| git_locate_file(&expand_home(path)))
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Staged diff (or unstaged vs HEAD if nothing is staged) for commit text generation.
 #[tauri::command]
-pub async fn git_staged_context(cwd: String) -> Result<GitStagedContext, String> {
-    tauri::async_runtime::spawn_blocking(move || git_staged_context_for(&expand_home(&cwd)))
-        .await
-        .map_err(|e| e.to_string())?
+pub async fn git_staged_context(
+    cwd: String,
+    paths: Option<Vec<String>>,
+) -> Result<GitStagedContext, String> {
+    tauri::async_runtime::spawn_blocking(move || match paths {
+        Some(paths) => git_selected_context_for(&expand_home(&cwd), &paths),
+        None => git_staged_context_for(&expand_home(&cwd)),
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Create a commit from the current index, or rewrite HEAD with it when `amend` is set.
 #[tauri::command]
-pub async fn git_commit(cwd: String, message: String, amend: bool) -> Result<(), String> {
+pub async fn git_commit(
+    cwd: String,
+    message: String,
+    amend: bool,
+    paths: Option<Vec<String>>,
+) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let root = expand_home(&cwd);
-        if amend {
+        if let Some(paths) = paths {
+            if amend {
+                return Err("Selected-file commits cannot amend HEAD".into());
+            }
+            git_commit_selected_for(&root, &message, &paths)
+        } else if amend {
             git_commit_amend_for(&root, &message)
         } else {
             git_commit_for(&root, &message)
@@ -2565,6 +2601,192 @@ fn git_staged_context_for(root: &Path) -> Result<GitStagedContext, String> {
         branch: git_branch(root),
         summary,
         patch,
+    })
+}
+
+fn git_locate_file(path: &Path) -> Result<Option<GitFileLocation>, String> {
+    if !path.is_absolute() || path.as_os_str().to_string_lossy().contains('\0') {
+        return Err("Invalid file path".into());
+    }
+    let mut parent = path.parent().ok_or("Invalid file path")?;
+    while !parent.is_dir() {
+        parent = parent.parent().ok_or("File has no existing parent")?;
+    }
+    // Canonicalize parents rather than the file: deleted files still have a
+    // location, and a tracked symlink belongs to the checkout holding the link.
+    let directory = std::fs::canonicalize(parent).map_err(|e| e.to_string())?;
+    let actual = directory.join(path.strip_prefix(parent).map_err(|e| e.to_string())?);
+    let output = git_cmd()
+        .args(["-C"])
+        .arg(&directory)
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        return if error.contains("not a git repository") {
+            Ok(None)
+        } else {
+            Err(error.trim().into())
+        };
+    }
+    let top = String::from_utf8(output.stdout).map_err(|e| e.to_string())?;
+    let top = Path::new(top.trim_end_matches(['\r', '\n']));
+    let repo = std::fs::canonicalize(top).map_err(|e| e.to_string())?;
+    let relative = actual.strip_prefix(&repo).map_err(|e| e.to_string())?;
+    Ok(Some(GitFileLocation {
+        // Git supplies a usable Windows path without canonicalize's verbatim prefix.
+        root: path_to_js(top),
+        relative: path_to_js(relative),
+    }))
+}
+
+/// A selection names literal files in exactly one checkout, never a directory
+/// or a pathspec that can widen the commit to other files or repositories.
+fn git_selected_paths(root: &Path, paths: &[String]) -> Result<Vec<String>, String> {
+    if paths.is_empty() {
+        return Err("Select at least one file".into());
+    }
+    let canonical_root = std::fs::canonicalize(root).map_err(|e| e.to_string())?;
+    let mut selected = Vec::new();
+    for path in paths {
+        let relative = path_to_js(Path::new(path));
+        if relative.contains('\0')
+            || Path::new(&relative).is_absolute()
+            || Path::new(&relative)
+                .components()
+                .any(|part| !matches!(part, std::path::Component::Normal(_)))
+            || relative.split('/').any(|part| {
+                part.is_empty() || matches!(part, "." | "..") || part.eq_ignore_ascii_case(".git")
+            })
+        {
+            return Err("Invalid selected file path".into());
+        }
+        let target = canonical_root.join(&relative);
+        let exists = match std::fs::symlink_metadata(&target) {
+            Ok(entry) if entry.is_dir() => {
+                return Err("Select files rather than directories".into())
+            }
+            Ok(_) => true,
+            Err(error) if error.kind() == ErrorKind::NotFound => false,
+            Err(error) => return Err(error.to_string()),
+        };
+        let location = git_locate_file(&canonical_root.join(&relative))?
+            .ok_or("Selected file is outside Git")?;
+        if std::fs::canonicalize(&location.root).map_err(|e| e.to_string())? != canonical_root {
+            return Err("Selected files must belong to this repository".into());
+        }
+        let tracked = git_output(
+            root,
+            &["--literal-pathspecs", "ls-files", "-z", "--", &relative],
+        )
+        .ok_or("Could not validate selected files")?;
+        if tracked
+            .split(|byte| *byte == 0)
+            .any(|entry| !entry.is_empty() && entry != relative.as_bytes())
+        {
+            return Err("Select files rather than directories".into());
+        }
+        let head_type = git_stdout(root, &["cat-file", "-t", &format!("HEAD:{relative}")]);
+        if head_type.as_deref() == Some("tree") {
+            return Err("Select files rather than directories".into());
+        }
+        if !exists && tracked.is_empty() && head_type.as_deref() != Some("blob") {
+            return Err("Selected file does not exist in this repository".into());
+        }
+        if !selected.contains(&relative) {
+            selected.push(relative);
+        }
+    }
+    Ok(selected)
+}
+
+fn git_commit_selected_for(root: &Path, message: &str, paths: &[String]) -> Result<(), String> {
+    if message.trim().is_empty() {
+        return Err("Commit message cannot be empty".into());
+    }
+    let paths = git_selected_paths(root, paths)?;
+    let existing: Vec<&str> = paths
+        .iter()
+        .filter(|path| std::fs::symlink_metadata(root.join(path)).is_ok())
+        .map(String::as_str)
+        .collect();
+    let mut add = vec!["--literal-pathspecs", "add", "-A", "--"];
+    add.extend(existing);
+    if add.len() > 4 {
+        git_checked(root, &add)?;
+    }
+    // --only takes the chosen working-tree files and preserves every other
+    // staged entry. Add existing files to make new files eligible for --only;
+    // already-staged deletions no longer match `git add` but do match `commit`.
+    let mut args = vec![
+        "--literal-pathspecs",
+        "commit",
+        "--only",
+        "--cleanup=strip",
+        "-m",
+        message.trim(),
+        "--",
+    ];
+    args.extend(paths.iter().map(String::as_str));
+    git_checked(root, &args).map_err(with_signing_hint)
+}
+
+struct GitSelectionIndex(PathBuf);
+
+impl Drop for GitSelectionIndex {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn git_selected_context_for(root: &Path, paths: &[String]) -> Result<GitStagedContext, String> {
+    let paths = git_selected_paths(root, paths)?;
+    let index_dir = std::env::temp_dir().join(format!("monocode-git-selection-{}", Uuid::new_v4()));
+    let directory = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    let directory = {
+        use std::os::unix::fs::DirBuilderExt;
+        let mut directory = directory;
+        directory.mode(0o700);
+        directory
+    };
+    directory.create(&index_dir).map_err(|e| e.to_string())?;
+    let index = GitSelectionIndex(index_dir);
+    let run = |args: &[&str]| -> Result<String, String> {
+        let output = git_cmd()
+            .arg("--literal-pathspecs")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .env("GIT_INDEX_FILE", index.0.join("index"))
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("PATH", crate::harness::gui_search_path())
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().into());
+        }
+        String::from_utf8(output.stdout).map_err(|e| e.to_string())
+    };
+    if git_stdout(root, &["rev-parse", "--verify", "HEAD"]).is_some() {
+        run(&["read-tree", "HEAD"])?;
+    } else {
+        run(&["read-tree", "--empty"])?;
+    }
+    let mut add = vec!["add", "-A", "--"];
+    add.extend(paths.iter().map(String::as_str));
+    run(&add)?;
+    Ok(GitStagedContext {
+        branch: git_branch(root),
+        summary: run(&["diff", "--cached", "--stat", "--no-renames"])?,
+        patch: run(&[
+            "diff",
+            "--cached",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-renames",
+        ])?,
     })
 }
 
@@ -4280,6 +4502,7 @@ fn git_cmd() -> Command {
 
 fn git_cmd_for_args_with_path(args: &[&str], gui_path: impl FnOnce() -> String) -> Command {
     let mut cmd = git_cmd();
+    let args = args.strip_prefix(&["--literal-pathspecs"]).unwrap_or(args);
     if matches!(
         args.first().copied(),
         Some("commit" | "push" | "pull" | "fetch" | "clone")
@@ -5866,8 +6089,16 @@ pub async fn move_path(from: String, dest_parent: String) -> Result<String, Stri
 }
 
 #[tauri::command]
-pub fn reveal_path(path: String) -> Result<(), String> {
-    let path = expand_home(&path);
+pub async fn reveal_path(path: String) -> Result<(), String> {
+    // On Linux `xdg-open` can stay alive until the file manager window closes;
+    // waiting on it from the main thread hangs the UI.
+    tauri::async_runtime::spawn_blocking(move || reveal_path_sync(&path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn reveal_path_sync(path: &str) -> Result<(), String> {
+    let path = expand_home(path);
     if !path.exists() {
         return Err(format!("{}: No such file or directory", path.display()));
     }
@@ -6821,6 +7052,225 @@ mod tests {
             }
         }
         git(dir, &["add", "."]) && git(dir, &["commit", "-m", "init"])
+    }
+
+    #[test]
+    fn selected_commit_preserves_other_staged_files() {
+        let repo = tmp("selected-commit");
+        assert!(init_git_commit(
+            &repo.0,
+            &[("chosen.txt", "old\n"), ("other.txt", "old\n")]
+        ));
+        std::fs::write(repo.0.join("other.txt"), "unrelated staged\n").unwrap();
+        assert!(git(&repo.0, &["add", "other.txt"]));
+        std::fs::write(repo.0.join("chosen.txt"), "partial staging\n").unwrap();
+        assert!(git(&repo.0, &["add", "chosen.txt"]));
+        std::fs::write(repo.0.join("chosen.txt"), "chosen working tree\n").unwrap();
+
+        git_commit_selected_for(&repo.0, "Selected only", &["chosen.txt".into()]).unwrap();
+        assert_eq!(
+            git_stdout(&repo.0, &["show", "HEAD:chosen.txt"]).as_deref(),
+            Some("chosen working tree")
+        );
+        assert_eq!(
+            git_stdout(&repo.0, &["show", "HEAD:other.txt"]).as_deref(),
+            Some("old")
+        );
+        assert_eq!(
+            git_stdout(&repo.0, &["show", ":other.txt"]).as_deref(),
+            Some("unrelated staged")
+        );
+        assert_eq!(
+            git_stdout(&repo.0, &["diff", "--cached", "--name-only"]).as_deref(),
+            Some("other.txt")
+        );
+        // The existing whole-index workflow remains available to other panels.
+        git_commit_for(&repo.0, "Remaining staged work").unwrap();
+        assert_eq!(
+            git_stdout(&repo.0, &["show", "HEAD:other.txt"]).as_deref(),
+            Some("unrelated staged")
+        );
+    }
+
+    #[test]
+    fn selected_context_keeps_index_and_excluded_content_private() {
+        let repo = tmp("selected-context");
+        assert!(init_git_commit(
+            &repo.0,
+            &[
+                ("chosen.txt", "old\n"),
+                ("secret.txt", "old\n"),
+                ("deleted.txt", "gone\n")
+            ]
+        ));
+        std::fs::write(repo.0.join("secret.txt"), "EXCLUDED_SECRET\n").unwrap();
+        std::fs::write(repo.0.join("chosen.txt"), "partial staging\n").unwrap();
+        assert!(git(&repo.0, &["add", "."]));
+        std::fs::write(repo.0.join("chosen.txt"), "selected work\n").unwrap();
+        std::fs::write(repo.0.join("new.txt"), "selected new\n").unwrap();
+        std::fs::remove_file(repo.0.join("deleted.txt")).unwrap();
+        assert!(git(&repo.0, &["add", "deleted.txt"]));
+        let index = std::fs::read(repo.0.join(".git/index")).unwrap();
+        let head = git_stdout(&repo.0, &["rev-parse", "HEAD"]);
+        let paths = vec!["chosen.txt".into(), "new.txt".into(), "deleted.txt".into()];
+
+        let context = git_selected_context_for(&repo.0, &paths).unwrap();
+        assert!(context.patch.contains("+selected work"));
+        assert!(context.patch.contains("+selected new"));
+        assert!(context.patch.contains("-gone"));
+        assert!(!context.patch.contains("EXCLUDED_SECRET"));
+        assert!(!context.summary.contains("secret.txt"));
+        assert_eq!(std::fs::read(repo.0.join(".git/index")).unwrap(), index);
+        assert_eq!(git_stdout(&repo.0, &["rev-parse", "HEAD"]), head);
+
+        git_commit_selected_for(&repo.0, "Add and delete selected files", &paths).unwrap();
+        assert_eq!(
+            git_stdout(&repo.0, &["show", "HEAD:new.txt"]).as_deref(),
+            Some("selected new")
+        );
+        assert!(git_stdout(&repo.0, &["show", "HEAD:deleted.txt"]).is_none());
+        assert_eq!(
+            git_stdout(&repo.0, &["show", ":secret.txt"]).as_deref(),
+            Some("EXCLUDED_SECRET")
+        );
+    }
+
+    #[test]
+    fn selected_files_work_without_a_head() {
+        let repo = tmp("selected-unborn");
+        assert!(init_git(&repo.0, "main", None));
+        std::fs::write(repo.0.join("chosen.txt"), "chosen\n").unwrap();
+        std::fs::write(repo.0.join("other.txt"), "other\n").unwrap();
+        assert!(git(&repo.0, &["add", "other.txt"]));
+        let paths = vec!["chosen.txt".into()];
+        assert!(git_selected_context_for(&repo.0, &paths)
+            .unwrap()
+            .patch
+            .contains("+chosen"));
+        git_commit_selected_for(&repo.0, "First selected commit", &paths).unwrap();
+        assert_eq!(
+            git_stdout(&repo.0, &["ls-tree", "--name-only", "HEAD"]).as_deref(),
+            Some("chosen.txt")
+        );
+        assert_eq!(
+            git_stdout(&repo.0, &["diff", "--cached", "--name-only"]).as_deref(),
+            Some("other.txt")
+        );
+    }
+
+    #[test]
+    fn selected_paths_reject_directories_and_other_repositories_before_staging() {
+        let repo = tmp("selected-invalid");
+        assert!(init_git_commit(&repo.0, &[("chosen.txt", "old\n")]));
+        let nested = repo.0.join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        assert!(init_git_commit(&nested, &[("file.txt", "nested\n")]));
+        std::fs::create_dir(repo.0.join("missing-folder")).unwrap();
+        std::fs::write(repo.0.join("missing-folder/child.txt"), "child\n").unwrap();
+        assert!(git(&repo.0, &["add", "missing-folder/child.txt"]));
+        std::fs::remove_dir_all(repo.0.join("missing-folder")).unwrap();
+        std::fs::write(repo.0.join("chosen.txt"), "unstaged\n").unwrap();
+        let index = std::fs::read(repo.0.join(".git/index")).unwrap();
+        for invalid in [
+            "",
+            "../escape",
+            ".git/config",
+            "./chosen.txt",
+            "nested/file.txt",
+            "missing-folder",
+            "absent.txt",
+        ] {
+            let paths = vec!["chosen.txt".into(), invalid.into()];
+            assert!(
+                git_commit_selected_for(&repo.0, "Invalid", &paths).is_err(),
+                "{invalid}"
+            );
+            assert!(
+                git_selected_context_for(&repo.0, &paths).is_err(),
+                "{invalid}"
+            );
+            assert_eq!(std::fs::read(repo.0.join(".git/index")).unwrap(), index);
+        }
+        assert!(git_commit_selected_for(&repo.0, "Empty", &[]).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn selected_filenames_are_literal() {
+        let repo = tmp("selected-literal");
+        assert!(init_git_commit(&repo.0, &[("other.txt", "old\n")]));
+        std::fs::write(repo.0.join("other.txt"), "excluded\n").unwrap();
+        let paths: Vec<String> = [
+            "*",
+            ":(glob)*",
+            "-flag",
+            "line\nbreak",
+            "back\\slash",
+            "hello é.txt",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        for path in &paths {
+            std::fs::write(repo.0.join(path), "literal file\n").unwrap();
+        }
+        git_commit_selected_for(&repo.0, "Literal filenames", &paths).unwrap();
+        assert_eq!(
+            git_stdout(&repo.0, &["show", "HEAD:other.txt"]).as_deref(),
+            Some("old")
+        );
+        for path in paths {
+            assert_eq!(
+                git_stdout(&repo.0, &["show", &format!("HEAD:{path}")]).as_deref(),
+                Some("literal file")
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn selected_symlinks_do_not_read_or_commit_outside_files() {
+        use std::os::unix::fs::symlink;
+        let repo = tmp("selected-symlinks");
+        let outside = tmp("selected-outside");
+        assert!(init_git_commit(&repo.0, &[("chosen.txt", "old\n")]));
+        std::fs::write(outside.0.join("secret.txt"), "OUTSIDE_SECRET\n").unwrap();
+        symlink(outside.0.join("secret.txt"), repo.0.join("file-link")).unwrap();
+        symlink(&outside.0, repo.0.join("dir-link")).unwrap();
+        let context = git_selected_context_for(&repo.0, &["file-link".into()]).unwrap();
+        assert!(!context.patch.contains("OUTSIDE_SECRET"));
+        assert!(context.patch.contains("new file mode 120000"));
+        assert!(git_selected_context_for(&repo.0, &["dir-link/secret.txt".into()]).is_err());
+        assert!(
+            git_commit_selected_for(&repo.0, "Escape", &["dir-link/secret.txt".into()]).is_err()
+        );
+    }
+
+    #[test]
+    fn locate_files_distinguishes_repos_worktrees_and_deleted_parents() {
+        let home = tmp("locate-files");
+        let a = home.0.join("a");
+        let b = home.0.join("b");
+        std::fs::create_dir(&a).unwrap();
+        std::fs::create_dir(&b).unwrap();
+        assert!(init_git_commit(&a, &[("file.txt", "a\n")]));
+        assert!(init_git_commit(&b, &[("file.txt", "b\n")]));
+        let tree = home.0.join("worktree");
+        assert!(git(
+            &a,
+            &["worktree", "add", "-b", "other", tree.to_str().unwrap()]
+        ));
+        for (root, relative) in [
+            (&a, "deleted/folder/file.txt"),
+            (&b, "file.txt"),
+            (&tree, "file.txt"),
+        ] {
+            let canonical = std::fs::canonicalize(root).unwrap();
+            let location = git_locate_file(&root.join(relative)).unwrap().unwrap();
+            assert_eq!(std::fs::canonicalize(&location.root).unwrap(), canonical);
+            assert_eq!(location.relative, relative);
+        }
+        assert_eq!(git_locate_file(&home.0.join("outside.txt")).unwrap(), None);
     }
 
     #[test]

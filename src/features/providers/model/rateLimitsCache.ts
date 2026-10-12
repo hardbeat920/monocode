@@ -11,6 +11,7 @@ import {
 import {
   fetchClaudeRateLimits,
   fetchCodexRateLimits,
+  fetchDevinRateLimits,
   fetchOpencodeGoRateLimits,
 } from "./rateLimitsFetch";
 
@@ -58,6 +59,7 @@ const idle: Record<RateLimitSource, ProviderRateLimits> = {
   claude: idleRateLimits("claude"),
   codex: idleRateLimits("codex"),
   opencode: idleRateLimits("opencode"),
+  devin: idleRateLimits("devin"),
   "pi:anthropic": idleRateLimits("claude"),
   "pi:openai-codex": idleRateLimits("codex"),
 };
@@ -138,11 +140,13 @@ export function loadRateLimits(
           ? await fetchClaudeRateLimits(accountId)
           : provider === "codex"
             ? await fetchCodexRateLimits(accountId)
-            : provider === "opencode"
-              ? await fetchOpencodeGoRateLimits()
-              : await fetchPiUsage(
-                  provider === "pi:anthropic" ? "anthropic" : "openai-codex",
-                );
+            : provider === "devin"
+              ? await fetchDevinRateLimits()
+              : provider === "opencode"
+                ? await fetchOpencodeGoRateLimits()
+                : await fetchPiUsage(
+                    provider === "pi:anthropic" ? "anthropic" : "openai-codex",
+                  );
       if (result.status === "ok") {
         result = { ...result, fetchedAt: result.updatedAt };
       } else if (cached) {

@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   AlertCircle,
   Check,
@@ -11,21 +17,39 @@ import {
 import { ExplorerMenu } from "./ExplorerMenu";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { copyText } from "../../../platform/tauri/clipboard";
-import { formatFileSize, sniffImageMime } from "../model/filePreview";
+import {
+  formatFileSize,
+  sniffImageMime,
+  videoMimeForPath,
+} from "../model/filePreview";
 import { watchFile } from "../model/fileWatch";
 import {
   basename,
   copyFileToClipboard,
+  openPathWithDefaultApp,
   readBinaryFile,
+  REMOTE_PATH_PREFIX,
   revealPath,
 } from "../../../platform/tauri/fs";
 import { displayPath } from "../../../shared/lib/paths";
 import { IS_MAC } from "../../../platform/tauri/platform";
+import { claimTrackpadMagnify } from "../../../platform/tauri/trackpadZoom";
+import { resolveZoomKeybinding } from "../../settings/model/zoomKeybinding";
 
 const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 16;
+const ZOOM_STEP = 1.5;
 
-type Props = { path: string; cwd: string };
+type Zoom = number | "fit";
+/** An image point that must stay under a client point after a zoom renders. */
+type ZoomAnchor = {
+  imageX: number;
+  imageY: number;
+  clientX: number;
+  clientY: number;
+};
+
+type Props = { path: string; cwd: string; visible?: boolean };
 
 type LoadState =
   | { status: "loading" }
@@ -34,10 +58,9 @@ type LoadState =
   | { status: "error"; message: string };
 
 /**
- * Read-only surface for files the editor can't open. Images render; bytes that
- * turn out not to be an image get a card pointing at the file on disk.
+ * Read-only image and video previews, with a card for unreadable media.
  */
-export function BinaryFileView({ path, cwd }: Props) {
+export function BinaryFileView({ path, cwd, visible = true }: Props) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -49,9 +72,9 @@ export function BinaryFileView({ path, cwd }: Props) {
     readBinaryFile(path).then(
       (bytes) => {
         if (cancelled) return;
-        // The blob's MIME comes from the bytes, never the extension, so a file
-        // named `.png` that holds markup can't become a same-origin document.
-        const mime = sniffImageMime(bytes);
+        // Images are sniffed; videos receive only an explicit video MIME and
+        // are validated by the media decoder. Neither can become a document.
+        const mime = videoMimeForPath(path) ?? sniffImageMime(bytes);
         if (!mime) {
           setState({ status: "unsupported", size: bytes.byteLength });
           return;
@@ -110,6 +133,7 @@ export function BinaryFileView({ path, cwd }: Props) {
         detail={state.message}
         icon={<AlertCircle className="mx-auto mb-3 size-5 text-red-400" />}
         onRetry={reload}
+        offerOpen={videoMimeForPath(path) !== null}
       />
     );
   }
@@ -130,6 +154,20 @@ export function BinaryFileView({ path, cwd }: Props) {
     );
   }
 
+  if (state.mime.startsWith("video/")) {
+    return (
+      <VideoView
+        key={state.url}
+        path={path}
+        cwd={cwd}
+        url={state.url}
+        size={state.size}
+        visible={visible}
+        onRetry={reload}
+      />
+    );
+  }
+
   return (
     <ImageView
       path={path}
@@ -137,6 +175,120 @@ export function BinaryFileView({ path, cwd }: Props) {
       size={state.size}
       mime={state.mime}
     />
+  );
+}
+
+function VideoView({
+  path,
+  cwd,
+  url,
+  size,
+  visible,
+  onRetry,
+}: {
+  path: string;
+  cwd: string;
+  url: string;
+  size: number;
+  visible: boolean;
+  onRetry: () => void;
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [metadata, setMetadata] = useState<{
+    width: number;
+    height: number;
+    duration: number;
+  } | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    const pauseWhenHidden = () => {
+      if (!visible || document.hidden) video?.pause();
+    };
+    pauseWhenHidden();
+    document.addEventListener("visibilitychange", pauseWhenHidden);
+    return () =>
+      document.removeEventListener("visibilitychange", pauseWhenHidden);
+  }, [visible, failed]);
+
+  const releaseSource = useRef(0);
+  useEffect(() => {
+    const video = videoRef.current;
+    // A StrictMode replay runs this again straight after the cleanup. Keep the
+    // load in flight: aborting and restarting it in one task can leave Linux
+    // WebKit's media pipeline stalled without metadata or an error.
+    window.clearTimeout(releaseSource.current);
+    if (video && !video.hasAttribute("src")) {
+      video.src = url;
+      video.load();
+    }
+    return () => {
+      if (!video) return;
+      video.pause();
+      // Free the decoder once the element is really gone.
+      releaseSource.current = window.setTimeout(() => {
+        video.removeAttribute("src");
+        video.load();
+      });
+    };
+  }, [url, failed]);
+
+  if (failed) {
+    return (
+      <FileCard
+        path={path}
+        cwd={cwd}
+        title={`Couldn’t play ${basename(path)}`}
+        detail="This video’s format or codec is unsupported, or the file is damaged."
+        icon={<AlertCircle className="mx-auto mb-3 size-5 text-red-400" />}
+        onRetry={onRetry}
+        offerOpen
+      />
+    );
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex min-h-0 flex-1 items-center justify-center bg-black/80 p-4">
+        <video
+          ref={videoRef}
+          src={url}
+          controls
+          playsInline
+          preload="metadata"
+          aria-label={`Video preview: ${basename(path)}`}
+          className="h-full w-full object-contain"
+          onLoadedMetadata={(event) => {
+            const video = event.currentTarget;
+            setMetadata({
+              width: video.videoWidth,
+              height: video.videoHeight,
+              duration: video.duration,
+            });
+          }}
+          onPlay={(event) => {
+            if (!visible || document.hidden) event.currentTarget.pause();
+          }}
+          onError={(event) => {
+            if (event.currentTarget.hasAttribute("src")) setFailed(true);
+          }}
+        />
+      </div>
+      <footer className="flex h-8 shrink-0 items-center gap-3 border-t border-stroke px-3 text-[11px] text-content/50">
+        <span className="tabular-nums">
+          {metadata ? `${metadata.width} × ${metadata.height}` : "—"}
+        </span>
+        {metadata && Number.isFinite(metadata.duration) ? (
+          <span className="tabular-nums">
+            {Math.floor(metadata.duration / 60)}:
+            {String(Math.floor(metadata.duration % 60)).padStart(2, "0")}
+          </span>
+        ) : null}
+        <span className="tabular-nums">{formatFileSize(size)}</span>
+        <span className="uppercase">{basename(path).split(".").pop()}</span>
+      </footer>
+    </div>
   );
 }
 
@@ -152,10 +304,122 @@ function ImageView({
   mime: string;
 }) {
   const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
-  const [zoom, setZoom] = useState<number | "fit">("fit");
+  const [zoom, setZoomState] = useState<Zoom>("fit");
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [hovered, setHovered] = useState(false);
   const copiedTimer = useRef<number | null>(null);
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const imageRef = useRef<HTMLImageElement>(null);
+  const zoomRef = useRef<Zoom>(zoom);
+  const anchorRef = useRef<ZoomAnchor | null>(null);
+  const pointerRef = useRef<{ x: number; y: number } | null>(null);
+
+  const setZoom = useCallback((next: Zoom) => {
+    anchorRef.current = null;
+    zoomRef.current = next;
+    setZoomState(next);
+  }, []);
+
+  /** The rendered scale, including what "fit" works out to right now. */
+  const currentScale = useCallback(() => {
+    const value = zoomRef.current;
+    if (value !== "fit") return value;
+    const image = imageRef.current;
+    if (!image?.naturalWidth) return 1;
+    return image.getBoundingClientRect().width / image.naturalWidth;
+  }, []);
+
+  // Zooms so the image point under (clientX, clientY) stays there.
+  const zoomAt = useCallback(
+    (next: number, clientX: number, clientY: number) => {
+      const image = imageRef.current;
+      if (!image) return;
+      const scale = currentScale();
+      const rect = image.getBoundingClientRect();
+      setZoom(clampZoom(next));
+      anchorRef.current = {
+        imageX: (clientX - rect.left) / scale,
+        imageY: (clientY - rect.top) / scale,
+        clientX,
+        clientY,
+      };
+    },
+    [currentScale, setZoom],
+  );
+
+  const zoomAtCenter = useCallback(
+    (next: number) => {
+      const scroller = scrollerRef.current;
+      if (!scroller) return;
+      const rect = scroller.getBoundingClientRect();
+      zoomAt(next, rect.left + rect.width / 2, rect.top + rect.height / 2);
+    },
+    [zoomAt],
+  );
+
+  // A pinch carries no position, so it zooms toward the last pointer spot.
+  const zoomAtPointer = useCallback(
+    (next: number) => {
+      const pointer = pointerRef.current;
+      if (pointer) zoomAt(next, pointer.x, pointer.y);
+      else zoomAtCenter(next);
+    },
+    [zoomAt, zoomAtCenter],
+  );
+
+  useLayoutEffect(() => {
+    const anchor = anchorRef.current;
+    const image = imageRef.current;
+    const scroller = scrollerRef.current;
+    anchorRef.current = null;
+    if (!anchor || !image || !scroller || zoom === "fit") return;
+    const rect = image.getBoundingClientRect();
+    scroller.scrollLeft += rect.left + anchor.imageX * zoom - anchor.clientX;
+    scroller.scrollTop += rect.top + anchor.imageY * zoom - anchor.clientY;
+  }, [zoom]);
+
+  // Cmd/Ctrl+scroll zooms; a plain scroll still pans the scroller.
+  useEffect(() => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    const onWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : 1;
+      const factor = Math.exp(-event.deltaY * unit * 0.01);
+      zoomAt(currentScale() * factor, event.clientX, event.clientY);
+    };
+    scroller.addEventListener("wheel", onWheel, { passive: false });
+    return () => scroller.removeEventListener("wheel", onWheel);
+  }, [currentScale, zoomAt]);
+
+  // While the pointer is over the preview, pinches and the zoom keys act on
+  // the image instead of the app.
+  useEffect(() => {
+    if (!hovered) return;
+    const release = claimTrackpadMagnify((delta) =>
+      zoomAtPointer(currentScale() * (1 + delta)),
+    );
+    const onKeyDown = (event: KeyboardEvent) => {
+      const action = resolveZoomKeybinding(event);
+      if (!action) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (action === "zoom-reset") setZoom("fit");
+      else
+        zoomAtCenter(
+          action === "zoom-in"
+            ? currentScale() * ZOOM_STEP
+            : currentScale() / ZOOM_STEP,
+        );
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      release();
+      window.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [hovered, currentScale, setZoom, zoomAtCenter, zoomAtPointer]);
 
   useEffect(
     () => () => {
@@ -181,8 +445,20 @@ function ImageView({
   }, [path]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div
+      className="flex h-full min-h-0 flex-col"
+      data-image-zoom={hovered ? "" : undefined}
+      onPointerEnter={() => setHovered(true)}
+      onPointerLeave={() => {
+        setHovered(false);
+        pointerRef.current = null;
+      }}
+      onPointerMove={(event) => {
+        pointerRef.current = { x: event.clientX, y: event.clientY };
+      }}
+    >
       <div
+        ref={scrollerRef}
         className="grid min-h-0 flex-1 place-items-center overflow-auto overscroll-contain p-4"
         style={{
           // A checkerboard so transparent PNGs read as transparent rather than
@@ -194,6 +470,7 @@ function ImageView({
         }}
       >
         <img
+          ref={imageRef}
           src={url}
           alt=""
           draggable={false}
@@ -203,7 +480,11 @@ function ImageView({
               h: event.currentTarget.naturalHeight,
             })
           }
-          onClick={() => setZoom((value) => (value === "fit" ? 1 : "fit"))}
+          onClick={(event) => {
+            if (zoomRef.current === "fit")
+              zoomAt(1, event.clientX, event.clientY);
+            else setZoom("fit");
+          }}
           onContextMenu={
             IS_MAC
               ? (event) => {
@@ -246,9 +527,7 @@ function ImageView({
         ) : null}
         <ZoomButton
           label="Zoom out"
-          onClick={() =>
-            setZoom((value) => clampZoom((value === "fit" ? 1 : value) / 1.5))
-          }
+          onClick={() => zoomAtCenter(currentScale() / ZOOM_STEP)}
         >
           <Minus className="size-3" strokeWidth={1.75} />
         </ZoomButton>
@@ -262,9 +541,7 @@ function ImageView({
         </button>
         <ZoomButton
           label="Zoom in"
-          onClick={() =>
-            setZoom((value) => clampZoom((value === "fit" ? 1 : value) * 1.5))
-          }
+          onClick={() => zoomAtCenter(currentScale() * ZOOM_STEP)}
         >
           <Plus className="size-3" strokeWidth={1.75} />
         </ZoomButton>
@@ -320,6 +597,7 @@ function FileCard({
   detail,
   icon,
   onRetry,
+  offerOpen = false,
 }: {
   path: string;
   cwd: string;
@@ -327,6 +605,7 @@ function FileCard({
   detail: string;
   icon: React.ReactNode;
   onRetry?: () => void;
+  offerOpen?: boolean;
 }) {
   return (
     <div className="grid h-full place-items-center p-6">
@@ -342,6 +621,13 @@ function FileCard({
             <CardButton onClick={onRetry}>
               <RotateCcw className="size-3" strokeWidth={1.75} />
               Retry
+            </CardButton>
+          ) : null}
+          {offerOpen && !path.startsWith(REMOTE_PATH_PREFIX) ? (
+            <CardButton
+              onClick={() => void openPathWithDefaultApp(path).catch(() => {})}
+            >
+              Open externally
             </CardButton>
           ) : null}
           <CardButton onClick={() => void revealPath(path).catch(() => {})}>

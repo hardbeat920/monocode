@@ -2,6 +2,8 @@ import { unwrapShellCommand } from "../../../integrations/harness/core/shellInte
 import { monoCodeToolCall } from "../../sessions/model/monocodeToolCall";
 import {
   HARNESSES,
+  sessionDraftBlock,
+  sessionNeedsInput,
   type Block,
   type MonoSpawnedSession,
   type Session,
@@ -38,7 +40,7 @@ export function sanitizeMonoSpawnedSessions(
   return [...result.values()];
 }
 
-/** Record only accepted launches; retries never duplicate a card. */
+/** Record accepted launches and follow-ups; retries never duplicate a card. */
 export function recordMonoSpawnedSession(
   mono: Session,
   turnId: string,
@@ -63,13 +65,22 @@ export function recordMonoSpawnedSession(
   return { ...mono, blocks };
 }
 
-const blockLaunches = new WeakMap<Block, MonoSpawnedSession[]>();
+type SessionReceipt = {
+  launches: MonoSpawnedSession[];
+  listed: MonoSpawnedSession[];
+  sentSessionId?: string;
+};
+
+const blockReceipts = new WeakMap<Block, SessionReceipt>();
 
 /** Blocks are immutable, so old receipts only need to be parsed once. */
-function launchesInBlock(block: Block): MonoSpawnedSession[] {
-  const cached = blockLaunches.get(block);
+function sessionReceipt(block: Block): SessionReceipt {
+  const cached = blockReceipts.get(block);
   if (cached) return cached;
-  const found = sanitizeMonoSpawnedSessions(block.monoSpawnedSessions);
+  const found: SessionReceipt = {
+    launches: sanitizeMonoSpawnedSessions(block.monoSpawnedSessions),
+    listed: [],
+  };
   if (
     block.tool &&
     ["completed", "success"].includes(block.tool.status ?? "")
@@ -87,10 +98,14 @@ function launchesInBlock(block: Block): MonoSpawnedSession[] {
           },
         })
       : undefined;
-    if (call?.action === "sessions.start") {
+    if (
+      call &&
+      ["sessions.start", "sessions.list", "sessions.send"].includes(call.action)
+    ) {
       try {
         const receipt = JSON.parse(block.tool.detail ?? "");
         if (
+          call.action === "sessions.start" &&
           receipt?.ok === true &&
           typeof receipt.result?.id === "string" &&
           receipt.result.id.startsWith("app-")
@@ -104,28 +119,80 @@ function launchesInBlock(block: Block): MonoSpawnedSession[] {
           ])[0];
           if (
             entry &&
-            !found.some((existing) => existing.sessionId === entry.sessionId)
+            !found.launches.some(
+              (existing) => existing.sessionId === entry.sessionId,
+            )
           )
-            found.push(entry);
+            found.launches.push(entry);
+        } else if (
+          call.action === "sessions.list" &&
+          receipt?.ok === true &&
+          Array.isArray(receipt.result?.sessions)
+        ) {
+          found.listed = sanitizeMonoSpawnedSessions(
+            receipt.result.sessions.map((session: Record<string, unknown>) => ({
+              ...session,
+              sessionId: session?.id,
+              cwd: receipt.result.cwd,
+            })),
+          );
+        } else if (
+          call.action === "sessions.send" &&
+          receipt?.ok === true &&
+          receipt.result?.submitted === true &&
+          typeof receipt.result.sessionId === "string"
+        ) {
+          found.sentSessionId = receipt.result.sessionId;
         }
       } catch {
         // Incomplete or truncated output is not a confirmed launch.
       }
     }
   }
-  blockLaunches.set(block, found);
+  blockReceipts.set(block, found);
   return found;
 }
 
 /** Saved chats predate launch metadata, so recover successful CLI receipts too. */
 export function monoSpawnedSessions(
   blocks: readonly Block[],
+  knownSessions: readonly MonoSpawnedSession[] = [],
 ): MonoSpawnedSession[] {
-  const found = new Map<string, MonoSpawnedSession>();
-  for (const block of blocks) {
-    for (const entry of launchesInBlock(block)) {
-      if (!found.has(entry.sessionId)) found.set(entry.sessionId, entry);
+  const known = new Map(knownSessions.map((entry) => [entry.sessionId, entry]));
+  const receipts = blocks.map(sessionReceipt);
+  // A listing provides the details for an older accepted follow-up, but
+  // listing or reading a session alone never puts a card in the chat.
+  for (const receipt of receipts) {
+    for (const entry of [...receipt.listed, ...receipt.launches]) {
+      known.set(entry.sessionId, entry);
     }
   }
+  const found = new Map<string, MonoSpawnedSession>();
+  for (const receipt of receipts) {
+    for (const entry of receipt.launches) {
+      if (!found.has(entry.sessionId)) found.set(entry.sessionId, entry);
+    }
+    const sent = receipt.sentSessionId && known.get(receipt.sentSessionId);
+    if (sent && !found.has(sent.sessionId)) found.set(sent.sessionId, sent);
+  }
   return [...found.values()];
+}
+
+/** Where a launched session stands, for its card in the Mono's chat. */
+export type LaunchedSessionState =
+  "working" | "input" | "draft" | "failed" | "stopped" | "done";
+
+export type LaunchedSessionView = {
+  state: LaunchedSessionState;
+  title: string;
+};
+
+export function launchedSessionState(session: Session): LaunchedSessionState {
+  if (sessionNeedsInput(session)) return "input";
+  if (session.busy) return "working";
+  if (sessionDraftBlock(session)) return "draft";
+  const notice = session.blocks[session.blocks.length - 1]?.notice;
+  if (notice === "error") return "failed";
+  if (notice === "interrupt") return "stopped";
+  return "done";
 }
