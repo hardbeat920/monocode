@@ -13308,12 +13308,15 @@ function Workspace({
               inboxViewOpen ||
               notesViewOpen ||
               automationsViewOpen ||
-              settingsOpen ||
-              monoCovers ? null : (
+              settingsOpen ? null : (
                 <UsageFooter
-                  providers={usageProviders}
-                  session={usageSession}
-                  project={active?.cwd ?? projectCwd}
+                  providers={monoCovers ? ["claude", "codex"] : usageProviders}
+                  session={monoCovers ? undefined : usageSession}
+                  project={
+                    monoCovers
+                      ? monoViewSession?.cwd
+                      : (active?.cwd ?? projectCwd)
+                  }
                   onSelectAccount={onSelectProviderAccount}
                   onManageAccounts={() =>
                     openSettings("providers", "provider-accounts")

@@ -133,6 +133,18 @@ it("shows this window's Mono with its status beneath the name", async () => {
   );
   expect(container.querySelectorAll("[data-mono-status]")).toHaveLength(1);
   expect(
+    container.querySelector('footer[aria-label="Provider usage"]'),
+  ).not.toBeNull();
+  expect(
+    container.querySelector('[aria-label="Claude usage details"]'),
+  ).not.toBeNull();
+  expect(
+    container.querySelector('[aria-label="Codex usage details"]'),
+  ).not.toBeNull();
+  expect(
+    container.querySelector('[aria-label="Refresh usage"]'),
+  ).not.toBeNull();
+  expect(
     container.querySelector('[aria-label="Message Captain"]'),
   ).not.toBeNull();
 });
