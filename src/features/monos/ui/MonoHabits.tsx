@@ -17,18 +17,24 @@ import {
 import { RunningFor, useHabitRunning } from "./HabitPage";
 import { Empty, Section } from "./monoPanelParts";
 
+/** Each Mono's habits as last loaded, so switching back shows them at once. */
+const loadedHabits = new Map<string, Habit[]>();
+
 /** The Mono's habits, reloaded whenever its folder changes or a run ends. */
 export function useHabits(
   monoId: string,
   status: MonoState["status"],
 ): Habit[] | undefined {
-  const [habits, setHabits] = useState<Habit[]>();
+  const [habits, setHabits] = useState<Habit[] | undefined>(() =>
+    loadedHabits.get(monoId),
+  );
   const working = status === "working";
   useEffect(() => {
     let live = true;
     const refresh = () => {
       void loadHabits(monoId)
         .then((next) => {
+          loadedHabits.set(monoId, next);
           if (live) setHabits(next);
         })
         .catch(() => {});
@@ -203,24 +209,63 @@ export function HabitsList({
   habits,
   actions,
   onOpen,
+  empty = <Empty>No habits yet</Empty>,
 }: {
   habits: Habit[] | undefined;
   actions: HabitActions;
   onOpen: (id: string) => void;
+  /** Shown once loaded with none. */
+  empty?: ReactNode;
 }) {
-  if (!habits) return <Empty>Loading…</Empty>;
-  if (habits.length === 0) return <Empty>No habits yet</Empty>;
+  const now = useTodayTick();
+  // Blank for the moment it loads, rather than a line the list replaces.
+  if (!habits) return null;
+  if (habits.length === 0) return <>{empty}</>;
+  // The day in three parts: what is still to come today, what already ran,
+  // and the rest, soonest first with paused ones last.
+  const today = habitsToday(habits, now);
+  const upcoming = today.filter((item) => item.state !== "done");
+  const done = today.filter((item) => item.state === "done");
+  const shown = new Set(today.map((item) => item.habit.id));
+  const later = habits
+    .filter((habit) => !shown.has(habit.id))
+    .sort(
+      (a, b) =>
+        Number(b.enabled) - Number(a.enabled) || a.nextRunAt - b.nextRunAt,
+    );
+  const group = (title: string, items: Habit[]) =>
+    items.length ? (
+      <section aria-label={title} className="flex flex-col gap-1.5">
+        <h4 className="px-2 text-[11px] font-medium uppercase tracking-wide text-content/40">
+          {title}
+          <span className="ml-1.5 tabular-nums text-content/30">
+            {items.length}
+          </span>
+        </h4>
+        <ul className="flex flex-col gap-px">
+          {items.map((habit) => (
+            <HabitRow
+              key={habit.id}
+              habit={habit}
+              actions={actions}
+              onOpen={() => onOpen(habit.id)}
+            />
+          ))}
+        </ul>
+      </section>
+    ) : null;
   return (
-    <ul className="flex flex-col gap-px">
-      {habits.map((habit) => (
-        <HabitRow
-          key={habit.id}
-          habit={habit}
-          actions={actions}
-          onOpen={() => onOpen(habit.id)}
-        />
-      ))}
-    </ul>
+    <div className="flex flex-col gap-4 pt-1">
+      {group(
+        "Up next today",
+        upcoming.map((item) => item.habit),
+      )}
+      {group(
+        "Done today",
+        done.map((item) => item.habit),
+      )}
+      {group(today.length ? "Later" : "Scheduled", later)}
+    </div>
   );
 }
 

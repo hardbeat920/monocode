@@ -253,6 +253,9 @@ pub fn run() {
                 .with_filter(window::is_workspace_window)
                 .build(),
         )
+        .register_uri_scheme_protocol(artifacts::HTML_SCHEME, |ctx, request| {
+            artifacts::serve_html(ctx.app_handle(), &request)
+        })
         .manage(harness::HarnessHost::new())
         .manage(pty::PtyHost::new())
         .manage(remote::RemoteConnections::default())

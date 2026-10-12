@@ -391,6 +391,16 @@ html.is-mac.has-native-glass.has-native-glass-tint:not(.theme-light)
   mask-image: radial-gradient(circle at 15px 1px, transparent 5px, black 5.5px);
 }
 
+/* The same cut-out, for the Mono overview's 14px tab icons. */
+.overview-tab-icon-with-dot {
+  -webkit-mask-image: radial-gradient(
+    circle at 13px 1px,
+    transparent 4.5px,
+    black 5px
+  );
+  mask-image: radial-gradient(circle at 13px 1px, transparent 4.5px, black 5px);
+}
+
 .body-glass {
   background: var(--color-background-base);
   transition: background-color var(--motion-feedback-duration)

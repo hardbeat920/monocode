@@ -1113,7 +1113,7 @@ function textControlClass(open: boolean, extra = ""): string {
 
 /** Trigger classes for a setting control in each look. */
 function controlClass(variant: Variant, open = false): string {
-  if (variant === "text") return textControlClass(open, "max-w-28");
+  if (variant === "text") return textControlClass(open, "max-w-28 gap-1.5");
   return variant === "plain"
     ? `-mx-1.5 flex h-7 min-w-0 max-w-full items-center gap-2 rounded-md px-1.5 text-[12px] text-content/85 ${
         open ? "bg-content/8" : "hover:bg-content/6"
@@ -1306,7 +1306,7 @@ function SelectPill({
         onClick={() => (open ? dismiss(true) : openPicker())}
         className={controlClass(variant, open)}
       >
-        {variant === "text" ? null : isEffortSetting(setting) ? (
+        {isEffortSetting(setting) ? (
           <Gauge className="size-3.5 shrink-0" strokeWidth={1.75} />
         ) : setting.id === "serviceTier" ? (
           <Zap className="size-3.5 shrink-0" strokeWidth={1.75} />
