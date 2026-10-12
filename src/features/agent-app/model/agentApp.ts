@@ -113,7 +113,10 @@ export type AgentAppHost = {
   ): Promise<{ alreadySaved: boolean; draft: boolean }>;
   stop(id: string): Promise<void>;
   unarchive(id: string, expectedCwd: string): Promise<{ changed: boolean }>;
-  remove(id: string, mode: "archive" | "delete"): Promise<void>;
+  remove(
+    id: string,
+    mode: "archive" | "delete",
+  ): Promise<{ changed: boolean }>;
   worktrees(cwd: string): Promise<Worktrees>;
   createWorktree(
     cwd: string,
@@ -1054,8 +1057,8 @@ export async function handleAgentApp(
         host.isHabitRun?.(id)
       )
         throw new Error("Only regular project sessions can be managed here");
-      await host.remove(id, "archive");
-      return { sessionId: id, archived: true };
+      const result = await host.remove(id, "archive");
+      return { sessionId: id, archived: true, changed: result.changed };
     }
     case "sessions.unarchive": {
       const id = requiredString(input.sessionId, "sessionId", 256);

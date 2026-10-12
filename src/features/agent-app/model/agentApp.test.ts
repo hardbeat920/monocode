@@ -109,7 +109,7 @@ function fixture() {
     send: vi.fn(async () => ({ alreadySubmitted: false })),
     draft: vi.fn(async () => ({ alreadySaved: false, draft: true })),
     stop: vi.fn(async () => {}),
-    remove: vi.fn(async () => {}),
+    remove: vi.fn(async () => ({ changed: true })),
     worktrees: vi.fn(async () => ({
       worktrees: [
         { ...featureWorktree },
@@ -655,8 +655,8 @@ describe("agent app commands", () => {
     expect(host.send).toHaveBeenCalledTimes(1);
   });
 
-  /** Keep archive on the native removal path and restore through storage. */
-  it("archives through native lifecycle and unarchives another project session", async () => {
+  /** Keep native archive results and restore through storage. */
+  it("reports archive changes, including repeats, and unarchives another session", async () => {
     const { source, host } = fixture();
     expect(
       await handleAgentApp(
@@ -666,8 +666,18 @@ describe("agent app commands", () => {
         { sessionId: "other" },
         host,
       ),
-    ).toEqual({ sessionId: "other", archived: true });
+    ).toEqual({ sessionId: "other", archived: true, changed: true });
     expect(host.remove).toHaveBeenCalledExactlyOnceWith("other", "archive");
+    vi.mocked(host.remove).mockResolvedValueOnce({ changed: false });
+    expect(
+      await handleAgentApp(
+        source,
+        "archive-repeat",
+        "sessions.archive",
+        { sessionId: "other" },
+        host,
+      ),
+    ).toEqual({ sessionId: "other", archived: true, changed: false });
     expect(
       await handleAgentApp(
         source,
@@ -713,7 +723,7 @@ describe("agent app commands", () => {
         },
       ),
     ).rejects.toThrow("busy");
-    expect(host.remove).toHaveBeenCalledTimes(2);
+    expect(host.remove).toHaveBeenCalledTimes(3);
   });
 
   /** Require the requested ID to belong to the caller's project. */

@@ -52,6 +52,7 @@ type WorkspaceChange =
       removal: SessionWorkspaceRemoval;
       session?: Session;
       savedSummary?: SessionSummary;
+      archivedChanged?: boolean;
     };
 
 type SessionRemovalMode = "archive" | "delete";
@@ -103,6 +104,10 @@ async function removeSession(
   options: SessionRemovalOptions,
 ): Promise<boolean> {
   const initial = options.workspace.snapshot();
+  const isBusy = () =>
+    options.workspace.snapshot().sessions.find((session) => session.id === sessionId)
+      ?.busy || orchestrator.run(sessionId);
+  if (options.mode === "archive" && isBusy()) return false;
   const canCloseTab = (tab: WorkspaceTab) =>
     !options.preserveOpenFiles ||
     (tab.editorPanes.length === 0 && tab.terminalPanes.length === 0);
@@ -114,6 +119,7 @@ async function removeSession(
     canCloseTab,
   });
   if (!(await options.confirm(plan.closedTabs, options.mode))) return false;
+  if (options.mode === "archive" && isBusy()) return false;
 
   if (options.mode === "delete") {
     const run = orchestrator.forSession(sessionId);
@@ -151,6 +157,7 @@ async function removeSession(
 
   if (stopped) await flushSessionCheckpoint(sessionId);
   let savedSummary: SessionSummary | undefined;
+  let archivedChanged: boolean | undefined;
   if (options.mode === "delete") {
     const imagePaths = stopped?.blocks.flatMap((block) =>
       block.role === "image" && block.image ? [block.image.path] : [],
@@ -168,7 +175,7 @@ async function removeSession(
       if (!saved) throw new Error("The conversation could not be saved.");
       savedSummary = saved;
     }
-    await setSessionArchived(sessionId, true);
+    archivedChanged = await setSessionArchived(sessionId, true);
   }
 
   const current = options.workspace.snapshot();
@@ -215,6 +222,7 @@ async function removeSession(
     removal,
     session: removedSession,
     savedSummary,
+    archivedChanged,
   });
   return true;
 }

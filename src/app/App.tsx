@@ -5259,6 +5259,7 @@ function Workspace({
       mode: "archive" | "delete",
       skipDeleteConfirm = false,
       origin: "ui" | "cli" = "ui",
+      archiveOutcome?: { changed?: boolean },
     ): Promise<boolean> => {
       if (
         removingSessionIds.current.has(sessionId) ||
@@ -5378,6 +5379,8 @@ function Workspace({
               }
 
               const { removal } = change;
+              if (change.mode === "archive" && archiveOutcome)
+                archiveOutcome.changed = change.archivedChanged ?? false;
               lastPersisted.current.delete(sessionId);
               pendingPersist.current.delete(sessionId);
               const closingFiles = filesInWorkspaceTabs(removal.closedTabs);
@@ -10994,17 +10997,20 @@ function Workspace({
                 isHabitRun(id)
               )
                 throw new Error("Session is unavailable in this project");
+              const archiveOutcome: { changed?: boolean } = {};
               const removed = await removeSessionRef.current(
                 id,
                 mode,
                 true,
                 "cli",
+                archiveOutcome,
               );
               if (!removed)
                 throw new Error(
                   `Session could not be ${mode === "archive" ? "archived" : "deleted"}; another session operation is in progress`,
                 );
               dismissCompletion(id);
+              return { changed: archiveOutcome.changed ?? false };
             },
             worktrees: (cwd) => listWorktrees(cwd),
             createWorktree: (cwd, branch, base, existing) =>

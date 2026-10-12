@@ -23,15 +23,25 @@ function deferred() {
 }
 
 function fixture(mode: "archive" | "delete", preserveOpenFiles = false) {
+  const busy = mode === "delete";
   const closing: Session = {
     ...newSession("cursor", "/tmp/project"),
-    busy: true,
+    busy,
     blocks: [
       { id: "user", role: "user", text: "hello" },
-      { id: "answer", role: "assistant", text: "partial", streaming: true },
+      {
+        id: "answer",
+        role: "assistant",
+        text: busy ? "partial" : "finished",
+        ...(busy ? { streaming: true } : {}),
+      },
     ],
-    queuedMessages: [{ id: "queued", text: "next", attachments: [] }],
-    queueStatus: "active",
+    ...(busy
+      ? {
+          queuedMessages: [{ id: "queued", text: "next", attachments: [] }],
+          queueStatus: "active" as const,
+        }
+      : {}),
   };
   const other = newSession("cursor", "/tmp/project");
   let state = {
@@ -43,10 +53,17 @@ function fixture(mode: "archive" | "delete", preserveOpenFiles = false) {
   state.activeTabId = state.tabs[0].id;
   const confirmClose = vi.fn(async () => true);
   const stop = vi.fn(async () => {});
+  let archived = false;
+  let archivedChanged: boolean | undefined;
   const commit = vi.fn((removal: SessionWorkspaceRemoval) => {
     state = { ...state, ...removal };
   });
   mocks.invoke.mockImplementation(async (command, args) => {
+    if (command === "session_set_archived") {
+      const changed = archived !== args.archived;
+      archived = args.archived;
+      return changed;
+    }
     if (command === "session_upsert") {
       return { ...args.session, createdAt: 1, updatedAt: 1 };
     }
@@ -61,6 +78,7 @@ function fixture(mode: "archive" | "delete", preserveOpenFiles = false) {
     confirmClose,
     stop,
     commit,
+    archiveChanged: () => archivedChanged,
     run: () => {
       const remover = createSessionRemover({
         mode,
@@ -71,6 +89,7 @@ function fixture(mode: "archive" | "delete", preserveOpenFiles = false) {
           apply: (change) => {
             if (change.type === "orchestrationReleased") return;
             if (change.type === "removed") {
+              archivedChanged = change.archivedChanged;
               commit(change.removal);
               return;
             }
@@ -187,11 +206,11 @@ describe.each(["archive", "delete"] as const)("%s lifecycle", (mode) => {
     await expect(f.run()).rejects.toThrow("disk unavailable");
     expect(f.stop).toHaveBeenCalledOnce();
     expect(f.commit).not.toHaveBeenCalled();
-    expect(f.read().sessions[0]).toMatchObject({
-      busy: false,
-      queueStatus: "paused",
-    });
-    expect(f.read().sessions[0].blocks[1].streaming).toBeFalsy();
+    expect(f.read().sessions[0].busy).toBe(false);
+    if (mode === "delete") {
+      expect(f.read().sessions[0].queueStatus).toBe("paused");
+      expect(f.read().sessions[0].blocks[1].streaming).toBeFalsy();
+    }
     expect(f.read().tabs).toHaveLength(2);
   });
 
@@ -201,7 +220,7 @@ describe.each(["archive", "delete"] as const)("%s lifecycle", (mode) => {
     expect(await f.run()).toBe(false);
     expect(f.stop).not.toHaveBeenCalled();
     expect(mocks.invoke).not.toHaveBeenCalled();
-    expect(f.read().sessions[0].busy).toBe(true);
+    expect(f.read().sessions[0].busy).toBe(mode === "delete");
   });
 
   it("keeps files that become dirty while storage is pending", async () => {
@@ -243,38 +262,52 @@ describe.each(["archive", "delete"] as const)("%s lifecycle", (mode) => {
   });
 });
 
-it("archives the flushed transcript after cancellation, with streaming stopped", async () => {
+it("archives an idle transcript and reports whether the archive state changed", async () => {
   const f = fixture("archive");
-  f.stop.mockImplementation(async () => {
-    f.write({
-      ...f.read(),
-      sessions: f.read().sessions.map((s) =>
-        s.id === f.closing.id
-          ? {
-              ...s,
-              blocks: [
-                ...s.blocks,
-                {
-                  id: "buffered",
-                  role: "assistant",
-                  text: "last buffered output",
-                  streaming: true,
-                },
-              ],
-            }
-          : s,
-      ),
-    });
-  });
   await f.run();
   const [command, args] = mocks.invoke.mock.calls[0];
   expect(command).toBe("session_upsert");
-  expect(args.session.blocks.at(-1)).toMatchObject({
-    text: "last buffered output",
-  });
+  expect(args.session.blocks.at(-1)).toMatchObject({ text: "finished" });
   expect(args.session.blocks.at(-1).streaming).toBeFalsy();
+  expect(f.stop).toHaveBeenCalledExactlyOnceWith(f.closing.id);
+  expect(f.archiveChanged()).toBe(true);
   expect(mocks.invoke.mock.calls.map(([name]) => name)).toEqual([
     "session_upsert",
     "session_set_archived",
   ]);
+  await f.run();
+  expect(f.archiveChanged()).toBe(false);
+});
+
+it("does not stop a busy session, including one that turns busy during confirmation", async () => {
+  const alreadyBusy = fixture("archive");
+  alreadyBusy.write({
+    ...alreadyBusy.read(),
+    sessions: alreadyBusy.read().sessions.map((session) =>
+      session.id === alreadyBusy.closing.id
+        ? { ...session, busy: true }
+        : session,
+    ),
+  });
+  expect(await alreadyBusy.run()).toBe(false);
+  expect(alreadyBusy.confirmClose).not.toHaveBeenCalled();
+  expect(alreadyBusy.stop).not.toHaveBeenCalled();
+
+  const racesBusy = fixture("archive");
+  racesBusy.confirmClose.mockImplementation(async () => {
+    racesBusy.write({
+      ...racesBusy.read(),
+      sessions: racesBusy.read().sessions.map((session) =>
+        session.id === racesBusy.closing.id
+          ? { ...session, busy: true }
+          : session,
+      ),
+    });
+    return true;
+  });
+  expect(await racesBusy.run()).toBe(false);
+  expect(racesBusy.stop).not.toHaveBeenCalled();
+  expect(mocks.invoke).not.toHaveBeenCalled();
+  expect(racesBusy.read().sessions[0].busy).toBe(true);
+  expect(racesBusy.read().tabs).toHaveLength(2);
 });
