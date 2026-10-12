@@ -440,6 +440,7 @@ import {
   cancelMonoViewRequest,
   finishMonoViewRequest,
   isMonoViewRequestCurrent,
+  resetMonoViewAfterSessionReset,
   type MonoViewRequestState,
 } from "./model/monoViewRequest";
 import { shouldGenerateSessionTitle } from "../features/sessions/model/sessionTitle";
@@ -4766,7 +4767,8 @@ function Workspace({
       const current = sessionsRef.current.find(
         (session) => session.id === sessionId,
       );
-      if (!current || !isMonoSession(sessionId))
+      const monoId = monoForSession(sessionId)?.id;
+      if (!current || !monoId)
         throw new Error("This Mono's conversation is no longer available.");
       if (removingSessionIds.current.has(sessionId))
         throw new Error("This conversation is already being reset.");
@@ -4818,13 +4820,18 @@ function Workspace({
             setStoredLinkedSessions((history) =>
               history.filter((entry) => entry.id !== sessionId),
             );
-            if (monoViewIdRef.current === sessionId) {
-              cancelMonoViewRequest(monoViewRequest.current);
-              monoViewIdRef.current = fresh.id;
-              setMonoViewId(fresh.id);
-              setComposerFocused(true);
-              setComposerFocusToken((token) => token + 1);
-            }
+            resetMonoViewAfterSessionReset(
+              monoViewRequest.current,
+              monoViewIdRef.current,
+              sessionId,
+              monoId,
+              () => {
+                monoViewIdRef.current = fresh.id;
+                setMonoViewId(fresh.id);
+                setComposerFocused(true);
+                setComposerFocusToken((token) => token + 1);
+              },
+            );
           },
         });
       } finally {

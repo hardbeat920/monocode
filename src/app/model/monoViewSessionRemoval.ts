@@ -1,3 +1,4 @@
+/** Whether a removed session still owns the displayed Mono view. */
 export function shouldCloseMonoViewAfterSessionRemoval(
   monoViewId: string | null,
   sessionId: string,
@@ -5,6 +6,7 @@ export function shouldCloseMonoViewAfterSessionRemoval(
   return monoViewId === sessionId;
 }
 
+/** Closes the removed view while preserving pending opens for a different Mono. */
 export function closeMonoViewAfterSessionRemoval(
   monoViewId: string | null,
   sessionId: string,
