@@ -31,6 +31,7 @@ import {
   revokeAttachment,
 } from "../model/attachments";
 import { resizeComposer } from "../model/composerResize";
+import { useRefitOnWidthChange } from "../../../shared/hooks/useAutoGrow";
 import {
   isFileReferenceText,
   messageFilesFromClipboard,
@@ -591,6 +592,7 @@ export function Composer({
     // The indent can rewrap the first line after the input already resized.
     if (ref.current) resizeComposer(ref.current);
   }, [modeIndent]);
+  useRefitOnWidthChange(ref, resizeComposer);
   const mentionFiles = useMemo(
     () => (notesEnabled ? [...files, ...notesAsProjectFiles(notes)] : files),
     [files, notes, notesEnabled],

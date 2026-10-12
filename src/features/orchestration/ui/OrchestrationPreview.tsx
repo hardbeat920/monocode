@@ -15,6 +15,7 @@ import type {
 import { orchestrator } from "../model/orchestration";
 import { resizeComposer } from "../../sessions/model/composerResize";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
+import { useRefitOnWidthChange } from "../../../shared/hooks/useAutoGrow";
 import {
   findModel,
   mergeModelSettings,
@@ -410,7 +411,7 @@ function WorkerHelp() {
   );
 }
 
-function InstructionsField({
+export function InstructionsField({
   label,
   value,
   className,
@@ -429,6 +430,7 @@ function InstructionsField({
   useLayoutEffect(() => {
     if (ref.current) resizeComposer(ref.current);
   }, [value]);
+  useRefitOnWidthChange(ref, resizeComposer);
   return (
     <textarea
       ref={(el) => {

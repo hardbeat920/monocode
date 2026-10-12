@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, type RefObject } from "react";
 
 type Growable = {
   style: { height: string; overflowY: string };
@@ -28,6 +28,20 @@ export function useAutoGrow(
     if (ref.current) fitTextarea(ref.current, maxHeight);
   }, [ref, value, maxHeight]);
 
+  useRefitOnWidthChange(ref, (el) => fitTextarea(el, maxHeight));
+}
+
+/**
+ * Calls `refit` when the field's width changes. A fitted field hides its
+ * scrollbar, so text rewrapped by a narrower pane would otherwise be clipped.
+ */
+export function useRefitOnWidthChange(
+  ref: RefObject<HTMLTextAreaElement | null>,
+  refit: (el: HTMLTextAreaElement) => void,
+) {
+  const latest = useRef(refit);
+  latest.current = refit;
+
   useEffect(() => {
     const el = ref.current;
     if (!el || typeof ResizeObserver === "undefined") return;
@@ -37,9 +51,9 @@ export function useAutoGrow(
     const observer = new ResizeObserver(() => {
       if (el.clientWidth === width) return;
       width = el.clientWidth;
-      fitTextarea(el, maxHeight);
+      latest.current(el);
     });
     observer.observe(el);
     return () => observer.disconnect();
-  }, [ref, maxHeight]);
+  }, [ref]);
 }

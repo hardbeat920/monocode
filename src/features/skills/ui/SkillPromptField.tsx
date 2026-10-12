@@ -9,6 +9,7 @@ import {
   type Ref,
 } from "react";
 import { resizeComposer } from "../../sessions/model/composerResize";
+import { useRefitOnWidthChange } from "../../../shared/hooks/useAutoGrow";
 import type { HarnessId } from "../../sessions/model/session";
 import {
   hasNativeCommands,
@@ -75,6 +76,9 @@ export function SkillPromptField({ value, harness, cwd, onChange }: Props) {
       resizeComposer(fieldRef.current, Number.POSITIVE_INFINITY);
     }
   }, [value]);
+  useRefitOnWidthChange(fieldRef, (field) =>
+    resizeComposer(field, Number.POSITIVE_INFINITY),
+  );
 
   const syncSlashToken = useCallback(
     (field: HTMLTextAreaElement) => {
