@@ -128,11 +128,23 @@ describe("agent app commands", () => {
   it("closes an accessible project session and rejects closing the caller", async () => {
     const { source, host } = fixture();
     await expect(
-      handleAgentApp(source, "close", "sessions.close", { sessionId: "other" }, host),
+      handleAgentApp(
+        source,
+        "close",
+        "sessions.close",
+        { sessionId: "other" },
+        host,
+      ),
     ).resolves.toEqual({ sessionId: "other", closed: true });
     expect(host.close).toHaveBeenCalledExactlyOnceWith("other", source.cwd);
     await expect(
-      handleAgentApp(source, "close-self", "sessions.close", { sessionId: source.id }, host),
+      handleAgentApp(
+        source,
+        "close-self",
+        "sessions.close",
+        { sessionId: source.id },
+        host,
+      ),
     ).rejects.toThrow("calling session");
   });
 

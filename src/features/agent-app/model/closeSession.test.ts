@@ -119,10 +119,7 @@ describe("closeAgentSession lifecycle", () => {
       layout: splitPane(leaf("source"), "source", "right", "target"),
     };
     shared = openEditorTab(shared, newFileTab(`${cwd}/unsaved.txt`, cwd));
-    shared = openTerminalTab(
-      shared,
-      newTerminalFile(cwd, "Terminal"),
-    );
+    shared = openTerminalTab(shared, newTerminalFile(cwd, "Terminal"));
     const other = {
       ...newTab("target"),
       layout: splitPane(leaf("target"), "target", "down", "neighbor"),
