@@ -356,6 +356,10 @@ export function ModelPicker({
   const triggerEffortLabel = triggerEffortSetting
     ? settingValueLabel(triggerEffortSetting, values)
     : undefined;
+  const triggerModelName =
+    current.harness === "claude"
+      ? current.name.replace(/^Claude /, "")
+      : current.name;
   const triggerTitle = [
     HARNESS_TITLE[current.harness],
     current.provider?.name,
@@ -736,7 +740,7 @@ export function ModelPicker({
         <span
           className={`whitespace-nowrap ${variant === "pill" ? "text-[11px]" : ""}`}
         >
-          {triggerLabel ?? current.name}
+          {triggerLabel ?? triggerModelName}
         </span>
         {!triggerLabel && triggerEffortLabel ? (
           <span
