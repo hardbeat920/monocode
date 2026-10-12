@@ -73,8 +73,12 @@ export interface OmpAssistantText {
   concat: string;
 }
 
-export function ompActiveAssistantTexts(providerSessionId: string): Promise<OmpAssistantText[]> {
-  return invoke<OmpAssistantText[]>("omp_active_assistant_texts", { providerSessionId });
+export function ompActiveAssistantTexts(
+  providerSessionId: string,
+): Promise<OmpAssistantText[]> {
+  return invoke<OmpAssistantText[]>("omp_active_assistant_texts", {
+    providerSessionId,
+  });
 }
 
 export function claudeShellCommands(
@@ -271,6 +275,10 @@ export function gitCommitFiles(
   sha: string,
 ): Promise<GitChangedFile[]> {
   return invoke<GitChangedFile[]>("git_commit_files", { cwd, sha });
+}
+
+export function gitCommitMessage(cwd: string, sha: string): Promise<string> {
+  return invoke<string>("git_commit_message", { cwd, sha });
 }
 
 export function gitCommitFileDiff(
@@ -518,7 +526,9 @@ export async function pickFolders(title = "Open projects"): Promise<string[]> {
   return typeof selected === "string" && selected ? [slash(selected)] : [];
 }
 
-export async function pickFiles(title = "Attach files"): Promise<string[] | null> {
+export async function pickFiles(
+  title = "Attach files",
+): Promise<string[] | null> {
   const selected = await open({
     multiple: true,
     directory: false,

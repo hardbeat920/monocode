@@ -19,6 +19,7 @@ import {
   type IconComponent,
 } from "../../../shared/ui/icons";
 import { Popover } from "../../../shared/ui/Popover";
+import { useHoverCard } from "../../../shared/hooks/useHoverCard";
 import {
   formatRelativeTime,
   githubWorkItem,
@@ -109,8 +110,11 @@ function GenericLinkPreview({ link }: { link: UserLink }) {
   );
 }
 
-const HOVER_OPEN_DELAY_MS = 220;
-const HOVER_CLOSE_DELAY_MS = 100;
+// VS Code's `editor.hover.delay` and `editor.hover.hidingDelay`, both 300.
+// The chip's own constants used to be 220/100, which meant the same app had
+// two hover cards that disagreed about when to appear and how long to wait.
+const HOVER_OPEN_DELAY_MS = 300;
+const HOVER_CLOSE_DELAY_MS = 300;
 
 function GithubWorkItemPreview({
   link,
@@ -124,12 +128,14 @@ function GithubWorkItemPreview({
   compact: boolean;
 }) {
   const anchor = useRef<HTMLAnchorElement>(null);
-  const openTimer = useRef<number | null>(null);
-  const closeTimer = useRef<number | null>(null);
   const mounted = useRef(true);
   const requestStarted = useRef(false);
   const tooltipId = useId();
-  const [open, setOpen] = useState(false);
+  const hover = useHoverCard({
+    openDelayMs: HOVER_OPEN_DELAY_MS,
+    closeDelayMs: HOVER_CLOSE_DELAY_MS,
+  });
+  const { open } = hover;
   const [item, setItem] = useState<GithubWorkItem | null>(() =>
     peekGithubWorkItem(workItem.repo, workItem.kind, workItem.number),
   );
@@ -144,8 +150,6 @@ function GithubWorkItemPreview({
     mounted.current = true;
     return () => {
       mounted.current = false;
-      if (openTimer.current != null) window.clearTimeout(openTimer.current);
-      if (closeTimer.current != null) window.clearTimeout(closeTimer.current);
     };
   }, []);
 
@@ -191,44 +195,11 @@ function GithubWorkItemPreview({
     });
   }, [cwd, details, item, workItem]);
 
-  const clearOpenTimer = () => {
-    if (openTimer.current == null) return;
-    window.clearTimeout(openTimer.current);
-    openTimer.current = null;
-  };
-  const clearCloseTimer = () => {
-    if (closeTimer.current == null) return;
-    window.clearTimeout(closeTimer.current);
-    closeTimer.current = null;
-  };
-  const showNow = () => {
-    clearOpenTimer();
-    clearCloseTimer();
-    setOpen(true);
-    load();
-  };
-  const showAfterDelay = () => {
-    clearCloseTimer();
-    if (open || openTimer.current != null) return;
-    openTimer.current = window.setTimeout(() => {
-      openTimer.current = null;
-      setOpen(true);
-      load();
-    }, HOVER_OPEN_DELAY_MS);
-  };
-  const hideAfterDelay = () => {
-    clearOpenTimer();
-    clearCloseTimer();
-    closeTimer.current = window.setTimeout(() => {
-      closeTimer.current = null;
-      setOpen(false);
-    }, HOVER_CLOSE_DELAY_MS);
-  };
-  const hideNow = () => {
-    clearOpenTimer();
-    clearCloseTimer();
-    setOpen(false);
-  };
+  // The card fetches on open rather than the timer callbacks doing it inline,
+  // so the fetch keys off visibility alone. `load` is idempotent.
+  useEffect(() => {
+    if (open) load();
+  }, [open, load]);
 
   const kindLabel = workItem.kind === "pr" ? "Pull request" : "Issue";
   const compactKind = workItem.kind === "pr" ? "PR" : "Issue";
@@ -249,12 +220,12 @@ function GithubWorkItemPreview({
             ? "align-middle text-xs leading-4"
             : "align-[-0.25em] text-[11px] leading-4"
         }`}
-        onMouseEnter={showAfterDelay}
-        onMouseLeave={hideAfterDelay}
-        onFocus={showNow}
-        onBlur={hideNow}
+        onMouseEnter={hover.openAfterDelay}
+        onMouseLeave={hover.closeAfterDelay}
+        onFocus={hover.openNow}
+        onBlur={hover.closeNow}
         onClick={(event) => {
-          hideNow();
+          hover.closeNow();
           openExternalLink(event, link.url);
         }}
       >
@@ -291,13 +262,13 @@ function GithubWorkItemPreview({
           gap={6}
           width={360}
           constrainHeight={false}
-          onDismiss={hideNow}
+          onDismiss={hover.closeNow}
           id={tooltipId}
           role="tooltip"
           data-github-work-item-popover
           className="p-3.5 font-sans text-content"
-          onMouseEnter={clearCloseTimer}
-          onMouseLeave={hideAfterDelay}
+          onMouseEnter={hover.cancelClose}
+          onMouseLeave={hover.closeAfterDelay}
         >
           <GithubWorkItemCard
             parsed={workItem}

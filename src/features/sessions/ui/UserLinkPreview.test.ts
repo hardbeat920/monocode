@@ -35,7 +35,10 @@ vi.mock("../../inbox/model/githubTasks", () => ({
 }));
 
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { githubWorkItem, githubWorkItemDetails } from "../../inbox/model/githubTasks";
+import {
+  githubWorkItem,
+  githubWorkItemDetails,
+} from "../../inbox/model/githubTasks";
 import type { UserLink } from "../model/linkPreview";
 import { UserLinkPreview } from "./UserLinkPreview";
 
@@ -114,17 +117,19 @@ describe("GitHub work item link preview", () => {
     );
   });
 
-  it("opens after a short hover delay", async () => {
+  it("opens after VS Code's 300ms hover delay", async () => {
     vi.useFakeTimers();
     act(() => root.render(createElement(UserLinkPreview, { link })));
     const chip = container.querySelector<HTMLAnchorElement>(
       '[data-github-work-item-chip="pr"]',
     )!;
 
+    // `editor.hover.delay` is 300. This used to be 220, which meant the same
+    // app had two hover cards disagreeing about when to appear.
     act(() =>
       chip.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })),
     );
-    act(() => vi.advanceTimersByTime(219));
+    act(() => vi.advanceTimersByTime(299));
     expect(
       document.querySelector("[data-github-work-item-popover]"),
     ).toBeNull();
@@ -138,6 +143,56 @@ describe("GitHub work item link preview", () => {
     expect(
       document.querySelector("[data-github-work-item-popover]"),
     ).not.toBeNull();
+  });
+
+  it("keeps the card open while the pointer travels onto it", async () => {
+    vi.useFakeTimers();
+    act(() => root.render(createElement(UserLinkPreview, { link })));
+    const chip = container.querySelector<HTMLAnchorElement>(
+      '[data-github-work-item-chip="pr"]',
+    )!;
+
+    act(() =>
+      chip.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })),
+    );
+    await act(async () => {
+      vi.advanceTimersByTime(300);
+      await Promise.resolve();
+    });
+    const popover = document.querySelector<HTMLElement>(
+      "[data-github-work-item-popover]",
+    )!;
+    expect(popover).not.toBeNull();
+
+    // Leaving the chip arms a delayed close, so the pointer can cross the gap.
+    act(() =>
+      chip.dispatchEvent(new MouseEvent("mouseout", { bubbles: true })),
+    );
+    act(() =>
+      popover.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })),
+    );
+    act(() => vi.advanceTimersByTime(500));
+    expect(
+      document.querySelector("[data-github-work-item-popover]"),
+    ).not.toBeNull();
+
+    // Leaving the card for real does close it, after `editor.hover.hidingDelay`
+    // rather than the 100ms this used to use.
+    act(() =>
+      popover.dispatchEvent(new MouseEvent("mouseout", { bubbles: true })),
+    );
+    act(() => vi.advanceTimersByTime(299));
+    expect(
+      document.querySelector("[data-github-work-item-popover]"),
+    ).not.toBeNull();
+
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+      await Promise.resolve();
+    });
+    expect(
+      document.querySelector("[data-github-work-item-popover]"),
+    ).toBeNull();
   });
 
   it("keeps the chip clickable and opens the original URL", () => {
