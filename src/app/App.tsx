@@ -496,7 +496,6 @@ import {
   type SessionSummary,
 } from "../features/sessions/data/sessionStore";
 import { rememberLoadedSession } from "../features/sessions/data/sessionCache";
-import { archiveOperatorSession } from "../features/agent-app/model/operatorSessionArchive";
 import {
   TranscriptPool,
   TranscriptPoolOutlet,
@@ -5041,14 +5040,13 @@ function Workspace({
     ],
   );
 
-  /** Close views through shared safeguards and report archive write changes. */
+  /** Close views through shared session-removal safeguards. */
   const onRemoveHistorySession = useCallback(
     async (
       sessionId: string,
       mode: "archive" | "delete",
       skipDeleteConfirm = false,
       origin: "ui" | "cli" = "ui",
-      archiveOutcome?: { changed?: boolean },
     ): Promise<boolean> => {
       if (
         removingSessionIds.current.has(sessionId) ||
@@ -5168,8 +5166,6 @@ function Workspace({
               }
 
               const { removal } = change;
-              if (change.mode === "archive" && archiveOutcome)
-                archiveOutcome.changed = change.archivedChanged ?? false;
               lastPersisted.current.delete(sessionId);
               pendingPersist.current.delete(sessionId);
               const closingFiles = filesInWorkspaceTabs(removal.closedTabs);
@@ -10579,57 +10575,21 @@ function Workspace({
                 ? target
                 : null;
             },
-            /** Route archive through view safeguards and restore through storage. */
-            archive: async (id, archived, expectedCwd) => {
-              const result = await archiveOperatorSession(id, archived, {
-                callerId: source.id,
-                /** Read the latest open session only inside the requested project. */
-                liveSession: (sessionId) => {
-                  const session = sessionsRef.current.find(
-                    (entry) => entry.id === sessionId,
-                  );
-                  return session && sameProjectPath(session.cwd, expectedCwd)
-                    ? session
-                    : undefined;
-                },
-                /** Include renderer activity and active orchestrator runs. */
-                isBusy: (sessionId) =>
-                  !!sessionsRef.current.find(
-                    (session) =>
-                      session.id === sessionId &&
-                      sameProjectPath(session.cwd, expectedCwd),
-                  )?.busy || !!orchestrator.run(sessionId),
-                /** Restrict history lookup to the already validated project. */
-                persistedSession: async (sessionId) => {
-                  const saved = await listSessionsByProject(expectedCwd);
-                  return saved.find((session) => session.id === sessionId);
-                },
-                /** Use the real view close path; CLI failures stay visible. */
-                archiveView: async (sessionId) => {
-                  const outcome: { changed?: boolean } = {};
-                  const completed = await onRemoveHistorySession(
-                    sessionId,
-                    "archive",
-                    false,
-                    "cli",
-                    outcome,
-                  );
-                  return { completed, changed: outcome.changed ?? false };
-                },
-                /** Persist restore without opening a tab or starting an agent. */
-                setArchived: async (sessionId, value) => {
-                  const changed = await setSessionArchived(sessionId, value);
-                  setHistory((current) =>
-                    current.map((entry) =>
-                      entry.id === sessionId
-                        ? { ...entry, archived: value }
-                        : entry,
-                    ),
-                  );
-                  return changed;
-                },
-              });
-              return { changed: result.changed };
+            /** Restore history visibility without opening or starting the session. */
+            unarchive: async (id, expectedCwd) => {
+              if (
+                !(await listSessionsByProject(expectedCwd)).some(
+                  (session) => session.id === id,
+                )
+              )
+                throw new Error("Session was not found in this project");
+              const changed = await setSessionArchived(id, false);
+              setHistory((current) =>
+                current.map((entry) =>
+                  entry.id === id ? { ...entry, archived: false } : entry,
+                ),
+              );
+              return { changed };
             },
             readConversation: async (target, options) =>
               isMonoSession(target.id)

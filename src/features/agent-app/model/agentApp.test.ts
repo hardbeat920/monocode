@@ -105,8 +105,7 @@ function fixture() {
     session: vi.fn(async (id) =>
       id === "other" ? { ...newSession("codex", source.cwd), id } : null,
     ),
-    /** Model the fixture write as changed only for the archive request. */
-    archive: vi.fn(async (_id, archived) => ({ changed: archived })),
+    unarchive: vi.fn(async () => ({ changed: false })),
     send: vi.fn(async () => ({ alreadySubmitted: false })),
     draft: vi.fn(async () => ({ alreadySaved: false, draft: true })),
     stop: vi.fn(async () => {}),
@@ -618,8 +617,8 @@ describe("agent app commands", () => {
     expect(host.send).toHaveBeenCalledTimes(1);
   });
 
-  /** Report transitions and refuse self or busy targets. */
-  it("archives and restores only another idle session in the project", async () => {
+  /** Keep archive on the native removal path and restore through storage. */
+  it("archives through native lifecycle and unarchives another project session", async () => {
     const { source, host } = fixture();
     expect(
       await handleAgentApp(
@@ -629,8 +628,8 @@ describe("agent app commands", () => {
         { sessionId: "other" },
         host,
       ),
-    ).toEqual({ sessionId: "other", archived: true, changed: true });
-    expect(host.archive).toHaveBeenCalledWith("other", true, source.cwd);
+    ).toEqual({ sessionId: "other", archived: true });
+    expect(host.remove).toHaveBeenCalledExactlyOnceWith("other", "archive");
     expect(
       await handleAgentApp(
         source,
@@ -640,7 +639,7 @@ describe("agent app commands", () => {
         host,
       ),
     ).toEqual({ sessionId: "other", archived: false, changed: false });
-    expect(host.archive).toHaveBeenLastCalledWith("other", false, source.cwd);
+    expect(host.unarchive).toHaveBeenCalledWith("other", source.cwd);
     await expect(
       handleAgentApp(
         source,
@@ -650,6 +649,16 @@ describe("agent app commands", () => {
         host,
       ),
     ).rejects.toThrow("current session");
+    await expect(
+      handleAgentApp(
+        source,
+        "unarchive-self",
+        "sessions.unarchive",
+        { sessionId: source.id },
+        host,
+      ),
+    ).rejects.toThrow("calling session");
+    vi.mocked(host.remove).mockRejectedValueOnce(new Error("busy"));
     await expect(
       handleAgentApp(
         source,
@@ -666,7 +675,7 @@ describe("agent app commands", () => {
         },
       ),
     ).rejects.toThrow("busy");
-    expect(host.archive).toHaveBeenCalledTimes(2);
+    expect(host.remove).toHaveBeenCalledTimes(2);
   });
 
   /** Require the requested ID to belong to the caller's project. */
@@ -695,11 +704,12 @@ describe("agent app commands", () => {
         host,
       ),
     ).rejects.toThrow("not found in this project");
-    expect(host.archive).not.toHaveBeenCalled();
+    expect(host.remove).not.toHaveBeenCalled();
+    expect(host.unarchive).not.toHaveBeenCalled();
   });
 
-  /** Keep archive reads and writes scoped to a Mono's selected project. */
-  it("archives a session only in the selected assigned project", async () => {
+  /** Keep native archive and restore scoped to a Mono's selected project. */
+  it("archives and restores only in the selected assigned project", async () => {
     const { source, host } = fixture();
     source.cwd = "/home/user";
     host.isMono = (id) => id === source.id;
@@ -716,7 +726,15 @@ describe("agent app commands", () => {
       host,
     );
     expect(host.sessions).toHaveBeenCalledWith("/code/site");
-    expect(host.archive).toHaveBeenCalledWith("other", true, "/code/site");
+    expect(host.remove).toHaveBeenCalledExactlyOnceWith("other", "archive");
+    await handleAgentApp(
+      source,
+      "unarchive-site",
+      "sessions.unarchive",
+      { sessionId: "other", project: "site" },
+      host,
+    );
+    expect(host.unarchive).toHaveBeenCalledWith("other", "/code/site");
     await expect(
       handleAgentApp(
         source,
@@ -726,7 +744,8 @@ describe("agent app commands", () => {
         host,
       ),
     ).rejects.toThrow("Not one of your projects");
-    expect(host.archive).toHaveBeenCalledTimes(1);
+    expect(host.remove).toHaveBeenCalledTimes(1);
+    expect(host.unarchive).toHaveBeenCalledTimes(1);
   });
 
   /** Keep archived sessions discoverable with draft state intact. */

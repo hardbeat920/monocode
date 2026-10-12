@@ -7,10 +7,7 @@ import {
   sessionChildHarnesses,
 } from "./handoff";
 import { flushSessionCheckpoint } from "./checkpoint";
-import {
-  isFilesystemTab,
-  type WorkspaceTab,
-} from "../../workspace/model/layout";
+import { isFilesystemTab, type WorkspaceTab } from "../../workspace/model/layout";
 import { orchestrator } from "../../orchestration/model/orchestration";
 import {
   newSession,
@@ -55,7 +52,6 @@ type WorkspaceChange =
       removal: SessionWorkspaceRemoval;
       session?: Session;
       savedSummary?: SessionSummary;
-      archivedChanged?: boolean;
     };
 
 type SessionRemovalMode = "archive" | "delete";
@@ -107,12 +103,6 @@ async function removeSession(
   options: SessionRemovalOptions,
 ): Promise<boolean> {
   const initial = options.workspace.snapshot();
-  if (
-    options.mode === "archive" &&
-    (initial.sessions.find((session) => session.id === sessionId)?.busy ||
-      orchestrator.run(sessionId))
-  )
-    return false;
   const canCloseTab = (tab: WorkspaceTab) =>
     !options.preserveOpenFiles ||
     (tab.editorPanes.length === 0 && tab.terminalPanes.length === 0);
@@ -125,26 +115,18 @@ async function removeSession(
   });
   if (!(await options.confirm(plan.closedTabs, options.mode))) return false;
 
-  const beforeStop = options.workspace.snapshot();
-  if (
-    options.mode === "archive" &&
-    (beforeStop.sessions.find((session) => session.id === sessionId)?.busy ||
-      orchestrator.run(sessionId))
-  )
-    return false;
-
   if (options.mode === "delete") {
     const run = orchestrator.forSession(sessionId);
     if (run && (run.status === "active" || run.status === "paused")) {
       await orchestrator.stopRun(run.leadId);
     }
   }
-  if (options.mode === "delete") await options.stop(sessionId);
+  await options.stop(sessionId);
   const latest = options.workspace
     .snapshot()
     .sessions.find((session) => session.id === sessionId);
   let stopped = latest;
-  if (latest && options.mode === "delete") {
+  if (latest) {
     stopped = latest.busy ? stopStreaming(latest) : latest;
     if (isPreparingHandoff(stopped)) {
       stopped = completeHandoff(stopped, buildDeterministicHandoff(stopped));
@@ -169,12 +151,10 @@ async function removeSession(
 
   if (stopped) await flushSessionCheckpoint(sessionId);
   let savedSummary: SessionSummary | undefined;
-  let archivedChanged: boolean | undefined;
   if (options.mode === "delete") {
-    const imagePaths =
-      stopped?.blocks.flatMap((block) =>
-        block.role === "image" && block.image ? [block.image.path] : [],
-      ) ?? [];
+    const imagePaths = stopped?.blocks.flatMap((block) =>
+      block.role === "image" && block.image ? [block.image.path] : [],
+    ) ?? [];
     await orchestrator.deleteSession(sessionId, () =>
       deleteSession(sessionId, imagePaths),
     );
@@ -188,23 +168,7 @@ async function removeSession(
       if (!saved) throw new Error("The conversation could not be saved.");
       savedSummary = saved;
     }
-    if (
-      options.workspace
-        .snapshot()
-        .sessions.find((session) => session.id === sessionId)?.busy ||
-      orchestrator.run(sessionId)
-    )
-      return false;
-    archivedChanged = await setSessionArchived(sessionId, true);
-    if (
-      options.workspace
-        .snapshot()
-        .sessions.find((session) => session.id === sessionId)?.busy ||
-      orchestrator.run(sessionId)
-    ) {
-      if (archivedChanged) await setSessionArchived(sessionId, false);
-      return false;
-    }
+    await setSessionArchived(sessionId, true);
   }
 
   const current = options.workspace.snapshot();
@@ -251,7 +215,6 @@ async function removeSession(
     removal,
     session: removedSession,
     savedSummary,
-    archivedChanged,
   });
   return true;
 }

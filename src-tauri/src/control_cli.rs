@@ -181,15 +181,13 @@ Actions:
                   The conversation and checkout are kept. Idle sessions are
                   unchanged. Reuse --request-id on retries.
   sessions.archive {"sessionId":"..."}
-                  Close an idle session's views and save it for later restore.
-                  It does not stop the provider. Active and empty unsaved
-                  sessions are rejected. Returns archived and changed.
+                  Stop the session if running, save its conversation and
+                  archive it. Restore it from MonoCode's archive.
                   Open files, terminals and worktrees are kept.
                   Reuse --request-id on retries.
   sessions.unarchive {"sessionId":"..."}
                   Restore an archived session in history without opening it.
                   Returns archived and changed. Reuse --request-id on retries.
-                  Reuse --request-id on retries.
   sessions.delete {"sessionId":"..."}
                   Stop the session if running and permanently delete its
                   saved conversation. Open files, terminals and worktrees

@@ -109,12 +109,7 @@ export type AgentAppHost = {
     requestId: string,
   ): Promise<{ alreadySaved: boolean; draft: boolean }>;
   stop(id: string): Promise<void>;
-  /** Persist archive visibility without starting or stopping the target. */
-  archive(
-    id: string,
-    archived: boolean,
-    expectedCwd: string,
-  ): Promise<{ changed: boolean }>;
+  unarchive(id: string, expectedCwd: string): Promise<{ changed: boolean }>;
   remove(id: string, mode: "archive" | "delete"): Promise<void>;
   worktrees(cwd: string): Promise<Worktrees>;
   createWorktree(
@@ -1017,28 +1012,41 @@ export async function handleAgentApp(
       );
       return { sessionId: id, saved: true, ...result };
     }
-    case "sessions.archive":
-    case "sessions.unarchive": {
+    case "sessions.archive": {
       const id = requiredString(input.sessionId, "sessionId", 256);
-      const archived = action === "sessions.archive";
-      if (archived && id === source.id)
-        throw new Error("The current session cannot be archived by the app CLI");
+      if (id === source.id)
+        throw new Error(
+          "The current session cannot be archived by the app CLI",
+        );
+      if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId))
+        throw new Error("Invalid request ID");
       const target = await projectSession(source, id, input, host);
-      if (
-        archived &&
-        (target.busy ||
-          (await host.sessions(target.cwd)).find((session) => session.id === id)
-            ?.busy)
-      )
-        throw new Error("Session is busy; try again when it finishes");
       if (
         target.orchestrationLeadId ||
         host.isMono(id) ||
         host.isHabitRun?.(id)
       )
         throw new Error("Only regular project sessions can be managed here");
-      const result = await host.archive(id, archived, target.cwd);
-      return { sessionId: id, archived, changed: result.changed };
+      await host.remove(id, "archive");
+      return { sessionId: id, archived: true };
+    }
+    case "sessions.unarchive": {
+      const id = requiredString(input.sessionId, "sessionId", 256);
+      if (id === source.id)
+        throw new Error(
+          "The calling session cannot be unarchived by the app CLI",
+        );
+      if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId))
+        throw new Error("Invalid request ID");
+      const target = await projectSession(source, id, input, host);
+      if (
+        target.orchestrationLeadId ||
+        host.isMono(id) ||
+        host.isHabitRun?.(id)
+      )
+        throw new Error("Only regular project sessions can be managed here");
+      const result = await host.unarchive(id, target.cwd);
+      return { sessionId: id, archived: false, changed: result.changed };
     }
     case "sessions.stop":
     case "sessions.delete": {
