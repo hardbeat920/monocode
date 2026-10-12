@@ -13,6 +13,7 @@ vi.mock("../model/monoFiles", async (original) => ({
 
 const { MonoSettingsPage } = await import("./MonoSettingsPage");
 const { MemoryPage } = await import("./MonoFilePages");
+const { MonoPreferencesPage } = await import("./MonoPreferencesPage");
 
 let root: Root;
 let container: HTMLElement;
@@ -85,10 +86,9 @@ it("shows how many habits and facts it has once they load", () => {
 });
 
 function renderReset(onReset: () => Promise<void>) {
-  act(() => root.render(createElement(MonoSettingsPage, {
+  act(() => root.render(createElement(MonoPreferencesPage, {
     monoId: "mono-1",
     agent,
-    onOpen: vi.fn(),
     onBack: vi.fn(),
     onReset,
   })));

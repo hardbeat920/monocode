@@ -196,3 +196,54 @@ it("shows a draft and then an approval without treating either as completed", as
   ]);
   expect(container.textContent).toContain("Needs input");
 });
+
+it("slides a shown session over the list with back, workspace and hide", async () => {
+  const onBack = vi.fn();
+  const onOpenInWorkspace = vi
+    .fn()
+    .mockRejectedValue(new Error("This session is no longer available."));
+  const props = {
+    agent,
+    launches: [launch],
+    sessions: [],
+    onOpenSession,
+    onBack,
+    onOpenInWorkspace,
+    onClose,
+  };
+  await act(async () => root.render(createElement(MonoSessionsPanel, props)));
+  const panel = container.querySelector("[data-mono-sessions]")!;
+  await act(async () =>
+    root.render(
+      createElement(MonoSessionsPanel, {
+        ...props,
+        shown: {
+          sessionId: launch.sessionId,
+          title: "Review latest PR",
+          pane: createElement("p", { "data-pane": "" }, "Session pane"),
+        },
+      }),
+    ),
+  );
+  expect(
+    panel.querySelector("[data-mono-launched-session] [data-pane]"),
+  ).not.toBeNull();
+  // The list stays beneath, out of reach while the session covers it.
+  const list = panel.querySelector("[data-mono-session]")!;
+  expect(list.closest("[inert]")).not.toBeNull();
+  const button = (label: string) =>
+    panel
+      .querySelector<HTMLButtonElement>(`[data-mono-launched-session]`)!
+      .parentElement!.querySelector<HTMLButtonElement>(
+        `button[aria-label="${label}"]`,
+      )!;
+  act(() => button("Back").click());
+  expect(onBack).toHaveBeenCalledOnce();
+  act(() => button("Hide sessions").click());
+  expect(onClose).toHaveBeenCalledOnce();
+  await act(async () => button("Open in workspace").click());
+  expect(onOpenInWorkspace).toHaveBeenCalledWith(launch.sessionId);
+  expect(panel.querySelector('[role="alert"]')?.textContent).toBe(
+    "This session is no longer available.",
+  );
+});

@@ -8,8 +8,11 @@ import { PaneTree } from "./PaneTree";
 vi.mock("../../files/ui/FilePane", async () => {
   const { createElement } = await import("react");
   return {
-    FilePane: ({ pane }: { pane: EditorPane }) =>
-      createElement("div", { "data-file-pane": pane.id }),
+    FilePane: ({ pane, visible }: { pane: EditorPane; visible: boolean }) =>
+      createElement("div", {
+        "data-file-pane": pane.id,
+        "data-pane-visible": visible,
+      }),
   };
 });
 
@@ -91,6 +94,7 @@ function render(layout: LayoutNode, ids: string[]) {
     onNewTerminal: noop,
   };
   act(() => root.render(createElement(PaneTree, props)));
+  return props;
 }
 
 function enterFrom(id: string) {
@@ -150,4 +154,14 @@ describe("pane enter animation", () => {
     render(split("right", leaf("a"), leaf("c")), ["a", "c"]);
     expect(container.querySelector("[data-pane-enter]")).toBeNull();
   });
+});
+
+it("updates file pane visibility when switching workspace tabs", () => {
+  const props = render(leaf("a"), ["a"]);
+  const pane = container.querySelector('[data-file-pane="a"]')!;
+  expect(pane.getAttribute("data-pane-visible")).toBe("true");
+  act(() => root.render(createElement(PaneTree, { ...props, visible: false })));
+  expect(pane.getAttribute("data-pane-visible")).toBe("false");
+  act(() => root.render(createElement(PaneTree, props)));
+  expect(pane.getAttribute("data-pane-visible")).toBe("true");
 });

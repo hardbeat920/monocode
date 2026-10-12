@@ -1,6 +1,6 @@
 import { asRecord } from "../../../integrations/harness/providers/codex/codexProtocol";
 
-export type RateLimitProvider = "claude" | "codex" | "opencode";
+export type RateLimitProvider = "claude" | "codex" | "opencode" | "devin";
 
 export type RateLimitStatus =
   "idle" | "fetching" | "ok" | "error" | "unavailable";
@@ -37,12 +37,15 @@ export type ProviderRateLimits = {
   monthly: RateLimitWindow | null;
   /** Codex-only banked rate-limit reset rewards, when supplied by app-server. */
   resetCredits: RateLimitResetCredits | null;
+  /** Devin-only extra (overage) usage balance in US dollars; negative once billed. */
+  extraUsageBalance?: number | null;
   updatedAt: number;
   error: string | null;
   status: RateLimitStatus;
 };
 
 export const SESSION_WINDOW_MINUTES = 300;
+export const DAILY_WINDOW_MINUTES = 1_440;
 export const WEEKLY_WINDOW_MINUTES = 10_080;
 export const MONTHLY_WINDOW_MINUTES = 43_200;
 export const RATE_LIMIT_POLL_MS = 15 * 60_000;
@@ -319,6 +322,53 @@ export function parseCodexRateLimits(result: unknown): ProviderRateLimits {
     resetCredits: parseResetCredits(
       rec?.rateLimitResetCredits ?? rec?.rate_limit_reset_credits,
     ),
+    updatedAt: Date.now(),
+    error: null,
+    status: "ok",
+  };
+}
+
+/** What the `fetch_devin_usage` command reads from Devin's user status. */
+export type DevinUsage = {
+  name?: string | null;
+  email?: string | null;
+  plan?: string | null;
+  dailyRemainingPercent?: number | null;
+  dailyResetsAt?: number | null;
+  weeklyRemainingPercent?: number | null;
+  weeklyResetsAt?: number | null;
+  extraUsageBalanceMicros?: number | null;
+};
+
+/** "$-1.67", the way Devin's own plan panel writes the balance. */
+export function formatExtraUsageBalance(dollars: number): string {
+  return `$${dollars.toFixed(2)}`;
+}
+
+/** Devin reports remaining quota; MonoCode meters show the share used. */
+export function parseDevinUsage(usage: DevinUsage): ProviderRateLimits {
+  const window = (
+    remaining: number | null | undefined,
+    resetsAt: number | null | undefined,
+    windowMinutes: number,
+  ): RateLimitWindow | null =>
+    remaining == null || !Number.isFinite(remaining)
+      ? null
+      : {
+          usedPercent: clampUsedPercent(100 - remaining),
+          windowMinutes,
+          resetsAt: parseResetTimestamp(resetsAt),
+        };
+  return {
+    provider: "devin",
+    session: window(usage.dailyRemainingPercent, usage.dailyResetsAt, DAILY_WINDOW_MINUTES),
+    weekly: window(usage.weeklyRemainingPercent, usage.weeklyResetsAt, WEEKLY_WINDOW_MINUTES),
+    monthly: null,
+    resetCredits: null,
+    extraUsageBalance:
+      usage.extraUsageBalanceMicros == null || !Number.isFinite(usage.extraUsageBalanceMicros)
+        ? null
+        : usage.extraUsageBalanceMicros / 1_000_000,
     updatedAt: Date.now(),
     error: null,
     status: "ok",
