@@ -3,6 +3,7 @@ import {
   newSession,
   newSessionForProject,
   retargetSessionToProject,
+  withHarnessChoice,
   type Session,
 } from "./session";
 import {
@@ -95,8 +96,15 @@ describe("retargetSessionToProject", () => {
     const blank = newSession("claude", "~");
     blank.title = "claude · #646 — Operator session titles";
     blank.titleIsExplicit = true;
-    expect(retargetSessionToProject(blank, "/repo/a")).toMatchObject({
+    const retargeted = retargetSessionToProject(blank, "/repo/a");
+    expect(retargeted).toMatchObject({
       title: "cursor · #646 — Operator session titles",
+      titleIsExplicit: true,
+    });
+    expect(
+      withHarnessChoice(retargeted, "codex", "codex:gpt-5-codex", {}),
+    ).toMatchObject({
+      title: "codex · #646 — Operator session titles",
       titleIsExplicit: true,
     });
   });

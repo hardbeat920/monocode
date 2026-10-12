@@ -447,6 +447,7 @@ import {
   newDefaultSession,
   newSession,
   retargetSessionToProject,
+  withHarnessChoice,
   removeSessionDraft,
   sessionDisplayTitle,
   sessionDraftBlock,
@@ -487,7 +488,6 @@ import {
   fetchCodexRateLimits,
 } from "../features/providers/model/rateLimitsFetch";
 import { exhaustedWindowResetAt } from "../features/providers/model/rateLimits";
-import { dropContextWindow } from "../features/sessions/model/contextUsage";
 import {
   discardDraftSessionRecord,
   deleteSession,
@@ -904,33 +904,6 @@ function userTurnCards(
   return {
     ...(secondOpinion ? { secondOpinion } : {}),
     ...(noteCard ? { noteCard: noteCardMeta(noteCard) } : {}),
-  };
-}
-
-function withHarnessChoice(
-  session: Session,
-  harness: HarnessId,
-  model: string,
-  modelSettings: Record<string, string>,
-): Session {
-  return {
-    ...session,
-    harness,
-    model,
-    modelSettings,
-    title:
-      session.blocks.length === 0
-        ? HARNESS_LABEL[harness]
-        : formatSessionTitle(
-            harness,
-            sessionDisplayTitle(session.title, session.harness),
-          ),
-    ...(session.model === model
-      ? {}
-      : { context: dropContextWindow(session.context) }),
-    ...(session.harness === harness
-      ? {}
-      : { providerSessionId: undefined, providerAccountId: undefined }),
   };
 }
 

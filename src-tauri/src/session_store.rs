@@ -2204,7 +2204,12 @@ mod tests {
         let mut session = sample("named", "/tmp/project", "Release plan");
         session.title_is_explicit = true;
         upsert_session(&conn, &session).unwrap();
-        assert!(get_session(&conn, "named").unwrap().unwrap().title_is_explicit);
+        assert!(
+            get_session(&conn, "named")
+                .unwrap()
+                .unwrap()
+                .title_is_explicit
+        );
     }
 
     #[test]
