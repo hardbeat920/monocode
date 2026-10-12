@@ -256,6 +256,59 @@ describe("model picker", () => {
     );
   });
 
+  it("shows a saved Claude version's settings when only its alias is live", () => {
+    setHarnessModels("claude", [
+      {
+        id: "claude:opus",
+        harness: "claude",
+        name: "Opus 5.5",
+        nativeId: "opus",
+        aliasTarget: "claude-opus-5-5",
+        settings: [
+          {
+            id: "effort",
+            label: "Reasoning",
+            kind: "select",
+            value: "high",
+            options: [{ value: "high", label: "High" }],
+          },
+          {
+            id: "fast",
+            label: "Fast",
+            kind: "toggle",
+            value: "false",
+            options: [
+              { value: "true", label: "On" },
+              { value: "false", label: "Off" },
+            ],
+          },
+        ],
+      },
+    ]);
+    act(() =>
+      root.render(
+        createElement(ModelPicker, {
+          harness: "claude",
+          model: "claude:opus-5-5",
+          values: {},
+          onChange: vi.fn(),
+          onSettingsChange: vi.fn(),
+        }),
+      ),
+    );
+
+    act(() =>
+      container
+        .querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')!
+        .click(),
+    );
+    const rows = [
+      ...container.querySelectorAll<HTMLButtonElement>("button"),
+    ].map((button) => button.textContent ?? "");
+    expect(rows.some((row) => row.startsWith("Effort"))).toBe(true);
+    expect(rows.some((row) => row.startsWith("Fast"))).toBe(true);
+  });
+
   it("groups OpenCode models by provider and searches provider names", () => {
     setHarnessModels("opencode", [
       {
