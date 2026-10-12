@@ -135,7 +135,10 @@ import {
   worktreeSessionIds,
   type Worktree,
 } from "../features/source-control/model/worktrees";
-import { UsageFooter } from "./shell/UsageFooter";
+import {
+  UsageFooter,
+  workspaceUsageAccountSelection,
+} from "./shell/UsageFooter";
 import { useProjectBranches } from "../features/source-control/hooks/useProjectBranches";
 import { useInboxActivity } from "../features/inbox/hooks/useInboxUnseen";
 import {
@@ -13317,7 +13320,10 @@ function Workspace({
                       ? monoViewSession?.cwd
                       : (active?.cwd ?? projectCwd)
                   }
-                  onSelectAccount={onSelectProviderAccount}
+                  onSelectAccount={workspaceUsageAccountSelection(
+                    monoCovers,
+                    onSelectProviderAccount,
+                  )}
                   onManageAccounts={() =>
                     openSettings("providers", "provider-accounts")
                   }

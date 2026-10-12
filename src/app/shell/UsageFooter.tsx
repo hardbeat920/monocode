@@ -55,6 +55,16 @@ export type UsageFooterSession = {
   providerAccountId?: string;
 };
 
+export function workspaceUsageAccountSelection(
+  monoCovers: boolean,
+  onSelectAccount: (
+    provider: ProviderAccountProvider,
+    accountId: string,
+  ) => void,
+) {
+  return monoCovers ? undefined : onSelectAccount;
+}
+
 export function UsageFooter({
   providers,
   session,
@@ -310,13 +320,14 @@ export function UsageFooter({
   const onTerminalClick = projectTerminalActive
     ? (onShowTerminal ?? onNewTerminal)
     : (onNewTerminal ?? onShowTerminal);
-  const ariaLabel = showUsage || session?.harness === "pi"
-    ? "Provider usage"
-    : showTerminals || showTerminalButton
-      ? "Terminals"
-      : session
-        ? "Session"
-        : undefined;
+  const ariaLabel =
+    showUsage || session?.harness === "pi"
+      ? "Provider usage"
+      : showTerminals || showTerminalButton
+        ? "Terminals"
+        : session
+          ? "Session"
+          : undefined;
 
   return (
     <footer
@@ -324,7 +335,11 @@ export function UsageFooter({
       className="flex h-7 shrink-0 items-center gap-1.5 overflow-x-auto border-t border-stroke px-3 text-[11px] text-content/55"
     >
       {session?.harness === "pi" ? (
-        <PiUsage key={`${session.id}:${session.model}`} model={session.model} now={now} />
+        <PiUsage
+          key={`${session.id}:${session.model}`}
+          model={session.model}
+          now={now}
+        />
       ) : showUsage ? (
         <>
           {wantClaude ? (

@@ -136,7 +136,7 @@ it("shows this window's Mono with its status beneath the name", async () => {
     container.querySelector('footer[aria-label="Provider usage"]'),
   ).not.toBeNull();
   expect(
-    container.querySelector('[aria-label="Claude usage details"]'),
+    container.querySelector('[aria-label="Claude Code usage details"]'),
   ).not.toBeNull();
   expect(
     container.querySelector('[aria-label="Codex usage details"]'),
