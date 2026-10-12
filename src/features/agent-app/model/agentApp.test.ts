@@ -290,6 +290,102 @@ describe("agent app commands", () => {
     expect(host.btwAsk).not.toHaveBeenCalled();
   });
 
+  it("routes Mono side questions and reads through an assigned project", async () => {
+    const { source, host } = fixture();
+    source.id = "mono";
+    source.cwd = "/tmp/mono-home";
+    host.isMono = () => true;
+    host.monoOf = () => ({
+      id: "mono",
+      projects: ["/tmp/project", "/tmp/other"],
+    });
+    const target = newSession("codex", "/tmp/project", "codex:test");
+    target.id = "other";
+    target.blocks = [
+      {
+        id: "user-1",
+        role: "user",
+        text: "Inspect the implementation",
+        durationMs: 50,
+      },
+      { id: "answer-1", role: "assistant", text: "It is complete." },
+    ];
+    vi.mocked(host.session).mockResolvedValue(target);
+
+    await expect(
+      handleAgentApp(
+        source,
+        "ask-1",
+        "sessions.btw",
+        { sessionId: "other", project: "project", question: "Why?" },
+        host,
+      ),
+    ).resolves.toMatchObject({ status: "running" });
+    expect(host.sessions).toHaveBeenCalledWith("/tmp/project");
+    expect(host.btwAsk).toHaveBeenCalledWith(
+      target,
+      expect.arrayContaining(target.blocks),
+      expect.any(String),
+      expect.any(String),
+      "Why?",
+    );
+
+    target.blocks[0].btwThreads = [
+      {
+        id: "saved-thread",
+        sourceEndBlockId: "answer-1",
+        createdAt: 1,
+        updatedAt: 2,
+        status: "ready",
+        harness: "codex",
+        messages: [
+          { id: "question", role: "user", text: "Why?", createdAt: 1 },
+          { id: "answer", role: "assistant", text: "Because.", createdAt: 2 },
+        ],
+      },
+    ];
+    await expect(
+      handleAgentApp(
+        source,
+        "get-1",
+        "btw.get",
+        {
+          sessionId: "other",
+          project: "/tmp/project",
+          threadId: "saved-thread",
+        },
+        host,
+      ),
+    ).resolves.toMatchObject({
+      status: "completed",
+      messages: [{ text: "Why?" }, { text: "Because." }],
+    });
+    expect(host.sessions).toHaveBeenLastCalledWith("/tmp/project");
+  });
+
+  it("rejects Mono side questions for projects outside its assignment", async () => {
+    const { source, host } = fixture();
+    source.id = "mono";
+    source.cwd = "/tmp/mono-home";
+    host.monoOf = () => ({ id: "mono", projects: ["/tmp/project"] });
+
+    await expect(
+      handleAgentApp(
+        source,
+        "ask-outside",
+        "sessions.btw",
+        {
+          sessionId: "other",
+          project: "/tmp/outside",
+          question: "Why?",
+        },
+        host,
+      ),
+    ).rejects.toThrow("Not one of your projects");
+    expect(host.sessions).not.toHaveBeenCalled();
+    expect(host.btwAsk).not.toHaveBeenCalled();
+  });
+
   it.each([undefined, true, false])(
     "uses the Mono's sidebar preference for both submitted and draft sessions: %s",
     async (showStartedSessionsInSidebar) => {

@@ -123,8 +123,8 @@ const APP_USAGE: &str = r#"MonoCode app access — use in a thread enabled by /o
 Usage: {exe} app ACTION [--json JSON | --input FILE|-] [--request-id ID]
 
 A Mono works on several projects: add "project":"<path or name>" to the
-sessions.*, worktrees.* and folders.* actions to choose which one. It may be
-left out when the Mono has a single project.
+sessions.*, btw.get, worktrees.* and folders.* actions to choose which one. It
+may be left out when the Mono has a single project or is already in that project.
 
 Actions:
   models.list    {}  Available providers, models, settings and permission modes.
