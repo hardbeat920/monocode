@@ -272,6 +272,7 @@ function modelGroups(tab: ModelPickerTab, models: AgentModel[]): ModelGroup[] {
   return [...groups.values()];
 }
 
+/** Model selection and settings control shared by the composer and session toolbar. */
 export function ModelPicker({
   harness,
   model,

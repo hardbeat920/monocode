@@ -259,9 +259,14 @@ describe("model picker", () => {
   });
 
   it.each([
-    ["claude:opus-5", "Opus 5 (1M context)"],
-    ["claude:opus-5-5", "Opus 5.5 (1M context)"],
-  ])("keeps %s and its context qualifier visible", (id, name) => {
+    ["claude:opus-5", "Claude Opus 5 (1M context)", "Opus 5 (1M context)"],
+    [
+      "claude:opus-5-5",
+      "Claude Opus 5.5 (1M context)",
+      "Opus 5.5 (1M context)",
+    ],
+    ["claude:opus-5-5", "Opus 5.5 (1M context)", "Opus 5.5 (1M context)"],
+  ])("keeps %s version and context qualifier visible", (id, name, visible) => {
     setHarnessModels("claude", [{ id, harness: "claude", name }]);
     act(() =>
       root.render(
@@ -278,7 +283,7 @@ describe("model picker", () => {
     const trigger = container.querySelector<HTMLButtonElement>(
       'button[aria-haspopup="menu"]',
     )!;
-    expect(trigger.querySelector("span")?.textContent).toBe(name);
+    expect(trigger.querySelector("span")?.textContent).toBe(visible);
     expect(trigger.getAttribute("aria-label")).toContain(name);
     expect(trigger.title).toContain(name);
   });
