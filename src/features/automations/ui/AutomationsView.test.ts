@@ -99,7 +99,9 @@ it("invalidates the cached list when an automation changes", async () => {
 });
 
 it("offers exactly the inbox events that can fire, each under its own label", () => {
-  for (const [kind, supported] of Object.entries(SUPPORTED_INBOX_TRIGGER_EVENTS)) {
+  for (const [kind, supported] of Object.entries(
+    SUPPORTED_INBOX_TRIGGER_EVENTS,
+  )) {
     const offered = TRIGGER_EVENTS[kind as keyof typeof TRIGGER_EVENTS];
     expect(offered.map((event) => event.value).sort()).toEqual(
       [...supported].sort(),
@@ -124,4 +126,3 @@ it("names the GitHub state-change triggers for what happened", () => {
     pull_request_ready_for_review: "Pull request ready for review",
   });
 });
-
