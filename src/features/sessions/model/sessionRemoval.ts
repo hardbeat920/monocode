@@ -141,7 +141,7 @@ async function removeSession(
     .snapshot()
     .sessions.find((session) => session.id === sessionId);
   let stopped = latest;
-  if (latest) {
+  if (latest && !archiveIdleOnly) {
     stopped = latest.busy ? stopStreaming(latest) : latest;
     if (isPreparingHandoff(stopped)) {
       stopped = completeHandoff(stopped, buildDeterministicHandoff(stopped));

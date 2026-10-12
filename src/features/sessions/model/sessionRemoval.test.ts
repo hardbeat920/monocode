@@ -57,6 +57,7 @@ function fixture(
   state.activeTabId = state.tabs[0].id;
   const confirmClose = vi.fn(async () => true);
   const stop = vi.fn(async () => {});
+  let stopped: Session | undefined;
   let archived = false;
   let archivedChanged: boolean | undefined;
   const commit = vi.fn((removal: SessionWorkspaceRemoval) => {
@@ -81,6 +82,7 @@ function fixture(
     },
     confirmClose,
     stop,
+    stopped: () => stopped,
     commit,
     archiveChanged: () => archivedChanged,
     run: () => {
@@ -98,6 +100,7 @@ function fixture(
               commit(change.removal);
               return;
             }
+            stopped = change.session;
             state = {
               ...state,
               sessions: state.sessions.map((session) =>
@@ -293,6 +296,17 @@ it("archives an idle API target without calling the stop path", async () => {
 
 it("keeps a target active if it becomes busy during a later archive write", async () => {
   const f = fixture("archive", false, true);
+  const queuedMessages = [{ id: "queued", text: "next", attachments: [] }];
+  f.write({
+    ...f.read(),
+    sessions: f
+      .read()
+      .sessions.map((session) =>
+        session.id === f.closing.id
+          ? { ...session, queuedMessages, queueStatus: "active" as const }
+          : session,
+      ),
+  });
   const saving = deferred();
   mocks.invoke.mockImplementation(async (command, args) => {
     if (command === "session_upsert") {
@@ -329,7 +343,32 @@ it("keeps a target active if it becomes busy during a later archive write", asyn
     "session_upsert",
   ]);
   expect(f.read().sessions[0].busy).toBe(true);
+  expect(f.read().sessions[0].queueStatus).toBe("active");
+  expect(f.read().sessions[0].queuedMessages).toEqual(queuedMessages);
   expect(f.read().tabs).toHaveLength(2);
+});
+
+it("keeps queued work active when an API archive write fails", async () => {
+  const f = fixture("archive", false, true);
+  const queuedMessages = [{ id: "queued", text: "next", attachments: [] }];
+  f.write({
+    ...f.read(),
+    sessions: f
+      .read()
+      .sessions.map((session) =>
+        session.id === f.closing.id
+          ? { ...session, queuedMessages, queueStatus: "active" as const }
+          : session,
+      ),
+  });
+  mocks.invoke.mockRejectedValue(new Error("disk unavailable"));
+  await expect(f.run()).rejects.toThrow("disk unavailable");
+  expect(f.stop).not.toHaveBeenCalled();
+  expect(f.read().sessions[0]).toMatchObject({
+    queueStatus: "active",
+    queuedMessages,
+  });
+  expect(f.commit).not.toHaveBeenCalled();
 });
 
 it("undoes an archive flag if the target becomes busy while it is being stored", async () => {
@@ -371,6 +410,44 @@ it("undoes an archive flag if the target becomes busy while it is being stored",
   expect(f.read().sessions[0].busy).toBe(true);
 });
 
+it("surfaces a failed archive rollback after saving the transcript", async () => {
+  const f = fixture("archive", false, true);
+  const archiving = deferred();
+  mocks.invoke.mockImplementation(async (command, args) => {
+    if (command === "session_upsert")
+      return { ...args.session, createdAt: 1, updatedAt: 1 };
+    if (command === "session_set_archived") {
+      if (args.archived) {
+        await archiving.promise;
+        return true;
+      }
+      throw new Error("rollback disk unavailable");
+    }
+  });
+  const pending = f.run();
+  await vi.waitFor(() =>
+    expect(mocks.invoke).toHaveBeenCalledWith("session_set_archived", {
+      sessionId: f.closing.id,
+      archived: true,
+    }),
+  );
+  f.write({
+    ...f.read(),
+    sessions: f
+      .read()
+      .sessions.map((session) =>
+        session.id === f.closing.id ? { ...session, busy: true } : session,
+      ),
+  });
+  archiving.resolve();
+  await expect(pending).rejects.toThrow("rollback disk unavailable");
+  expect(mocks.invoke).toHaveBeenCalledWith("session_upsert", {
+    session: expect.objectContaining({ id: f.closing.id }),
+  });
+  expect(f.commit).not.toHaveBeenCalled();
+  expect(f.read().sessions[0].busy).toBe(true);
+});
+
 it("keeps ordinary UI archive able to stop a busy session", async () => {
   const f = fixture("archive");
   f.write({
@@ -389,12 +466,15 @@ it("keeps ordinary UI archive able to stop a busy session", async () => {
                 streaming: true,
               },
             ],
+            queuedMessages: [{ id: "queued", text: "next", attachments: [] }],
+            queueStatus: "active" as const,
           }
         : session,
     ),
   });
   await expect(f.run()).resolves.toBe(true);
   expect(f.stop).toHaveBeenCalledExactlyOnceWith(f.closing.id);
+  expect(f.stopped()?.queueStatus).toBe("paused");
   expect(f.commit).toHaveBeenCalledOnce();
 });
 

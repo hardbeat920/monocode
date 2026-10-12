@@ -25,6 +25,7 @@ import {
   type AppSessionPlacement,
 } from "../features/agent-app/model/agentApp";
 import { submitWithSettlement } from "./model/managedSubmission";
+import { persistAfterFailedSessionRemoval } from "./model/sessionRemovalPersistence";
 import {
   submitAfterProjectSync,
   type SubmissionAcceptance,
@@ -5278,6 +5279,7 @@ function Workspace({
         : "this session";
       removingSessionIds.current.add(sessionId);
       let deleteWorktreePath: string | undefined;
+      let removalSucceeded = false;
       if (mode === "delete" && !skipDeleteConfirm) {
         deleteConfirmationPending.current = true;
         let unusedWorktree: string | undefined;
@@ -5316,7 +5318,6 @@ function Workspace({
         }
       }
       invalidateLoadedSession(sessionId);
-      pendingPersist.current.delete(sessionId);
       try {
         const remover = createSessionRemover({
           mode,
@@ -5454,8 +5455,8 @@ function Workspace({
           },
           stop: stopSessionForRemoval,
         });
-        const removed = await remover.remove(sessionId);
-        if (removed && deleteWorktreePath && seed) {
+        removalSucceeded = await remover.remove(sessionId);
+        if (removalSucceeded && deleteWorktreePath && seed) {
           try {
             await onRemoveWorktree(seed.cwd, deleteWorktreePath, false);
           } catch (error) {
@@ -5465,7 +5466,7 @@ function Workspace({
             );
           }
         }
-        return removed;
+        return removalSucceeded;
       } catch (error) {
         if (origin === "cli") throw error;
         const detail = error instanceof Error ? error.message : String(error);
@@ -5476,6 +5477,16 @@ function Workspace({
         return false;
       } finally {
         removingSessionIds.current.delete(sessionId);
+        persistAfterFailedSessionRemoval(
+          sessionId,
+          removalSucceeded,
+          sessionsRef.current.find(
+            (session) =>
+              session.id === sessionId && shouldPersistSession(session),
+          ),
+          pendingPersist.current,
+          persistSession,
+        );
       }
     },
     [
@@ -5487,6 +5498,7 @@ function Workspace({
       stopSessionForRemoval,
       tabCloseScope,
       onRemoveWorktree,
+      persistSession,
     ],
   );
 
