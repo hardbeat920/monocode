@@ -31,6 +31,8 @@ export {
   stopCodexSession,
   forgetCodexSession,
   bindCodexSession,
+  hasLiveCodexSession,
+  migrateMonoCodexSession,
 } from "./providers/codex/codex";
 export {
   sendOpenCodeTurn,
@@ -181,6 +183,8 @@ export {
   respondHarnessQuestion,
   keepHarnessQuestionOpen,
   stopHarnessSession,
+  configureHarnessIdlePark,
+  enforceHarnessIdleLimit,
   forgetHarnessSession,
   bindHarnessSession,
   refreshHarnessCatalogs,

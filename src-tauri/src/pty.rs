@@ -204,8 +204,8 @@ pub(crate) struct PtyStatus {
     foreground: Option<String>,
 }
 
-/// Off the main thread: this forks `ps`, and the title poll calls it once a
-/// second for every open terminal.
+/// Off the main thread: outside Linux a running command costs a `ps` fork,
+/// and the title poll calls it once a second for every open terminal.
 #[tauri::command(async)]
 pub fn pty_status(host: State<'_, PtyHost>, id: String) -> Result<PtyStatus, String> {
     let live = host
@@ -705,11 +705,12 @@ fn foreground_label(master_fd: i32, shell_pid: u32) -> Option<String> {
         return None;
     }
     let pid = pgrp;
-    if pid <= 0 {
+    // An idle shell owns the foreground; settle that before any lookup.
+    if pid <= 0 || pid == shell_pid as i32 {
         return None;
     }
     let label = process_label(pid)?;
-    if pid == shell_pid as i32 || is_shell_name(&label) {
+    if is_shell_name(&label) {
         return None;
     }
     Some(label)
@@ -717,6 +718,23 @@ fn foreground_label(master_fd: i32, shell_pid: u32) -> Option<String> {
 
 #[cfg(unix)]
 fn process_label(pid: i32) -> Option<String> {
+    #[cfg(target_os = "linux")]
+    if let Some(label) = proc_cmdline_label(pid) {
+        return Some(label);
+    }
+    ps_label(pid)
+}
+
+/// The same argv `ps -o args=` prints, read without forking a process.
+#[cfg(target_os = "linux")]
+fn proc_cmdline_label(pid: i32) -> Option<String> {
+    let raw = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    let args = String::from_utf8_lossy(&raw).replace('\0', " ");
+    command_label(args.trim())
+}
+
+#[cfg(unix)]
+fn ps_label(pid: i32) -> Option<String> {
     use std::process::Command;
     let output = Command::new("ps")
         .args(["-p", &pid.to_string(), "-o", "args="])
@@ -786,6 +804,12 @@ mod label_tests {
             Some("npm".into())
         );
         assert_eq!(command_label("cargo build"), Some("cargo".into()));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn proc_cmdline_labels_a_live_process() {
+        assert!(proc_cmdline_label(std::process::id() as i32).is_some());
     }
 
     #[test]

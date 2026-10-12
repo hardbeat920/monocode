@@ -5,12 +5,7 @@ import { leafIds, newTab, splitPane } from "../../workspace/model/layout";
 import { planWorkspaceTabClose } from "../../workspace/model/workspaceTabGroups";
 import { createMono, findMono, saveMonoName, saveMonoSessionId } from "./mono";
 import { planAgentContext, recordAgentContext } from "./monoFiles";
-import {
-  loadMonoBaseline,
-  loadMonoRotation,
-  saveMonoBaseline,
-  saveMonoRotation,
-} from "./monoRotation";
+import { loadMonoRotation, saveMonoRotation } from "./monoRotation";
 import {
   detachMonoTabs,
   ensureMonoSession,
@@ -152,8 +147,6 @@ it("deletes the Mono's chat before replacing it with an empty provider session",
   };
   saveMonoRotation(current.id, rotation);
   saveMonoRotation("other-mono", rotation);
-  saveMonoBaseline(current.id, current.harness, 20_000);
-  saveMonoBaseline("other-mono", current.harness, 25_000);
 
   const stopped = { ...current, busy: false };
   const stop = vi.fn(async () => stopped);
@@ -182,13 +175,11 @@ it("deletes the Mono's chat before replacing it with an empty provider session",
   expect(sessionOf(monoId)).toBe(fresh.id);
   expect(findMono(monoId)?.name).toBe("Broski");
   expect(loadMonoRotation(current.id)).toBeUndefined();
-  expect(loadMonoBaseline(current.id, current.harness)).toBeUndefined();
   expect(
     planAgentContext(current.id, current.providerSessionId, files),
   ).toEqual({ soul: true, memory: true });
   expect(sessionOf(otherId)).toBe("other-mono");
   expect(loadMonoRotation("other-mono")).toEqual(rotation);
-  expect(loadMonoBaseline("other-mono", current.harness)).toBe(25_000);
   expect(planAgentContext("other-mono", "other-provider", files)).toEqual({
     soul: false,
     memory: false,
