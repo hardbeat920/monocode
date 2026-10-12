@@ -129,19 +129,30 @@ describe("agent app commands", () => {
     "uses the Mono's sidebar preference for both submitted and draft sessions: %s",
     async (showStartedSessionsInSidebar) => {
       const { source, host } = fixture();
+      source.cwd = "/home/user";
       host.isMono = () => true;
       host.monoOf = () => ({
         id: "mono",
-        projects: [source.cwd],
+        projects: ["/code/app", "/code/site"],
         showStartedSessionsInSidebar,
       });
       for (const draft of [false, true]) {
-        await handleAgentApp(source, `launch-${draft}`, "sessions.start", {
-          prompt: "Review the project",
-          draft,
-          notifyOnComplete: false,
-        }, host);
+        await handleAgentApp(
+          source,
+          `launch-${draft}`,
+          "sessions.start",
+          {
+            prompt: "Review the project",
+            title: "Release plan",
+            draft,
+            project: "site",
+            notifyOnComplete: false,
+          },
+          host,
+        );
         const launch = vi.mocked(host.start).mock.calls.at(-1)![0];
+        expect(launch.title).toBe("Release plan");
+        expect(launch.cwd).toBe("/code/site");
         expect(launch.sidebarHidden).toBe(
           showStartedSessionsInSidebar === false ? true : undefined,
         );
@@ -673,6 +684,99 @@ describe("agent app commands", () => {
       source.cwd,
     );
     expect(host.send).not.toHaveBeenCalled();
+  });
+
+  it("lets a Mono rename a session in a selected assigned project", async () => {
+    const { source, host } = fixture();
+    source.cwd = "/home/user";
+    host.isMono = (id) => id === source.id;
+    host.monoOf = () => ({ id: "mono", projects: ["/code/app", "/code/site"] });
+    vi.mocked(host.sessions).mockResolvedValue([
+      {
+        id: "other",
+        title: "Other",
+        harness: "codex",
+        model: "codex:test",
+        busy: false,
+        hasDraft: false,
+        archived: false,
+      },
+    ]);
+    vi.mocked(host.session).mockResolvedValue({
+      ...newSession("codex", "/code/site"),
+      id: "other",
+    });
+
+    await expect(
+      handleAgentApp(
+        source,
+        "rename-site",
+        "sessions.rename",
+        { sessionId: "other", title: "Release plan", project: "site" },
+        host,
+      ),
+    ).resolves.toEqual({ sessionId: "other", renamed: true });
+    expect(host.sessions).toHaveBeenCalledWith("/code/site");
+    expect(host.rename).toHaveBeenCalledExactlyOnceWith(
+      "other",
+      "Release plan",
+      "/code/site",
+    );
+    await expect(
+      handleAgentApp(
+        source,
+        "rename-outside",
+        "sessions.rename",
+        { sessionId: "other", title: "No access", project: "/code/private" },
+        host,
+      ),
+    ).rejects.toThrow("Not one of your projects");
+    expect(host.rename).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let a Mono rename its chat or a session outside the selected project", async () => {
+    const { source, host } = fixture();
+    source.cwd = "/home/user";
+    host.isMono = (id) => id === source.id || id === "mono-chat";
+    host.monoOf = () => ({ id: "mono", projects: ["/code/site"] });
+    vi.mocked(host.sessions).mockResolvedValue([
+      {
+        id: "mono-chat",
+        title: "Mono chat",
+        harness: "codex",
+        model: "codex:test",
+        busy: false,
+        hasDraft: false,
+        archived: false,
+      },
+    ]);
+    vi.mocked(host.session).mockResolvedValue({
+      ...newSession("codex", "/code/site"),
+      id: "mono-chat",
+    });
+    await expect(
+      handleAgentApp(
+        source,
+        "rename-mono",
+        "sessions.rename",
+        { sessionId: "mono-chat", title: "Wrong target", project: "site" },
+        host,
+      ),
+    ).rejects.toThrow("Only regular project sessions");
+    vi.mocked(host.session).mockResolvedValue({
+      ...newSession("codex", "/code/other"),
+      id: "other",
+    });
+    await expect(
+      handleAgentApp(
+        source,
+        "rename-wrong-project",
+        "sessions.rename",
+        { sessionId: "other", title: "Wrong project", project: "site" },
+        host,
+      ),
+    ).rejects.toThrow("not found in this project");
+    expect(host.rename).not.toHaveBeenCalled();
   });
 
   it("does not let app-supplied prompts enable Operator in another session", async () => {
