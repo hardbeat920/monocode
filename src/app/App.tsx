@@ -431,6 +431,7 @@ import {
   type AddToChatRequest,
 } from "../features/sessions/model/quoteDraft";
 import { createSessionRemover } from "../features/sessions/model/sessionRemoval";
+import { shouldCloseMonoViewAfterSessionRemoval } from "./model/monoViewSessionRemoval";
 import { shouldGenerateSessionTitle } from "../features/sessions/model/sessionTitle";
 import {
   DEFAULT_PROVIDER_ACCOUNT_ID,
@@ -5380,6 +5381,13 @@ function Workspace({
               }
 
               const { removal } = change;
+              if (
+                shouldCloseMonoViewAfterSessionRemoval(
+                  monoViewIdRef.current,
+                  sessionId,
+                )
+              )
+                closeMonoView();
               lastPersisted.current.delete(sessionId);
               pendingPersist.current.delete(sessionId);
               const closingFiles = filesInWorkspaceTabs(removal.closedTabs);
@@ -5477,6 +5485,7 @@ function Workspace({
     },
     [
       activateTab,
+      closeMonoView,
       history,
       invalidateLoadedSession,
       refreshHistory,
@@ -5688,19 +5697,24 @@ function Workspace({
       );
       if (!confirmed) return;
       if (mono.sessionId) {
-        if (monoViewIdRef.current === mono.sessionId) closeMonoView();
-        if (
+        const hasSession =
           sessionsRef.current.some(
             (session) => session.id === mono.sessionId,
-          ) ||
-          history.some((entry) => entry.id === mono.sessionId)
-        ) {
+          ) || history.some((entry) => entry.id === mono.sessionId);
+        if (hasSession) {
           const removed = await onRemoveHistorySession(
             mono.sessionId,
             "delete",
             true,
           );
           if (!removed) return;
+        } else if (
+          shouldCloseMonoViewAfterSessionRemoval(
+            monoViewIdRef.current,
+            mono.sessionId,
+          )
+        ) {
+          closeMonoView();
         }
       }
       removeMono(monoId);
