@@ -182,10 +182,22 @@ it("switches Monos inside the same frame, loading only the conversation", async 
     container.querySelector("[data-floating-mono-loader]")?.textContent,
   ).toBe("Loading conversation…");
   expect(
+    container.querySelector('footer[aria-label="Provider usage"]'),
+  ).toBeNull();
+  expect(
     rail?.querySelector('[aria-current="true"]')?.getAttribute("aria-label"),
   ).toBe("Scout");
   act(() => receive({ payload: snapshot(1) }));
   expect(container.textContent).toContain("Scout's conversation");
+  expect(
+    container.querySelector('footer[aria-label="Provider usage"]'),
+  ).not.toBeNull();
+  expect(
+    container.querySelector('[aria-label="Claude Code usage details"]'),
+  ).not.toBeNull();
+  expect(
+    container.querySelector('[aria-label="Codex usage details"]'),
+  ).not.toBeNull();
 });
 
 it("keeps one loading screen through initial lookup and roster updates until the conversation arrives", async () => {

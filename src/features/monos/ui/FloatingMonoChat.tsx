@@ -283,10 +283,12 @@ export function FloatingMonoChat({ onShown }: { onShown: () => void }) {
             }}
           />
         ) : null}
-        <UsageFooter
-          providers={["claude", "codex"]}
-          project={view.session?.cwd}
-        />
+        {view.session ? (
+          <UsageFooter
+            providers={["claude", "codex"]}
+            project={view.session.cwd}
+          />
+        ) : null}
       </div>
     </div>
   );
@@ -340,7 +342,9 @@ function MonoRail({
               aria-current={selected ? "true" : undefined}
               onClick={() => onSwitch(mono.id)}
               className={`grid size-8 place-items-center rounded-lg transition-opacity ${
-                selected ? "" : "opacity-40 hover:opacity-100 focus-visible:opacity-100"
+                selected
+                  ? ""
+                  : "opacity-40 hover:opacity-100 focus-visible:opacity-100"
               }`}
             >
               <PixelMascot
