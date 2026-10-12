@@ -472,6 +472,7 @@ function PaneTreeComponent({
               {editorPane ? (
                 <FilePane
                   pane={editorPane}
+                  visible={visible}
                   focused={focusedId === editorPane.id}
                   showTabs={inSplit || editorPane.files.length > 1}
                   dirtyFileIds={dirtyFileIds}
@@ -591,10 +592,38 @@ function PaneTreeComponent({
   );
 }
 
-export const PaneTree = memo(
-  PaneTreeComponent,
-  (previous, next) => !previous.visible && !next.visible,
-);
+/** What review undo locking reads from sessions outside this tree. */
+function busyWorkCwds(sessions: readonly Session[]): string {
+  return sessions
+    .filter((session) => session.busy)
+    .map((session) => `${session.id}\0${sessionWorkCwd(session)}`)
+    .join("\n");
+}
+
+/**
+ * Hidden trees never re-render. A visible one skips the `sessions` rebuild
+ * that another tab's stream causes, re-rendering only when its own panes'
+ * sessions or the busy set it reads change.
+ */
+function samePaneTreeProps(previous: Props, next: Props): boolean {
+  if (!previous.visible && !next.visible) return true;
+  const keys = Object.keys(next) as (keyof Props)[];
+  if (keys.length !== Object.keys(previous).length) return false;
+  for (const key of keys) {
+    if (key !== "sessions" && previous[key] !== next[key]) return false;
+  }
+  if (previous.sessions === next.sessions) return true;
+  for (const leaf of layoutLeaves(next.layout)) {
+    // File panes read the whole list.
+    if (next.editorPanes.some((pane) => pane.id === leaf.id)) return false;
+    const before = previous.sessions.find((entry) => entry.id === leaf.id);
+    const after = next.sessions.find((entry) => entry.id === leaf.id);
+    if (before !== after) return false;
+  }
+  return busyWorkCwds(previous.sessions) === busyWorkCwds(next.sessions);
+}
+
+export const PaneTree = memo(PaneTreeComponent, samePaneTreeProps);
 
 type PaneEnterFrom = "left" | "right" | "top" | "bottom" | "fade";
 

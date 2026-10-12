@@ -128,20 +128,21 @@ describe("settings pages", () => {
         `[role="switch"][aria-label="Show sessions started by ${monoLook(findMono(id)!).name} in sidebar"]`,
       )!;
     await render("monos");
-    expect(toggle(mono.id).getAttribute("aria-checked")).toBe("true");
-    expect(toggle(other.id).getAttribute("aria-checked")).toBe("true");
-    await act(async () => toggle(mono.id).click());
+    // Off until turned on: a Mono's sessions stay in its overview.
     expect(toggle(mono.id).getAttribute("aria-checked")).toBe("false");
-    expect(findMono(mono.id)?.showStartedSessionsInSidebar).toBe(false);
-    expect(toggle(other.id).getAttribute("aria-checked")).toBe("true");
+    expect(toggle(other.id).getAttribute("aria-checked")).toBe("false");
+    await act(async () => toggle(mono.id).click());
+    expect(toggle(mono.id).getAttribute("aria-checked")).toBe("true");
+    expect(findMono(mono.id)?.showStartedSessionsInSidebar).toBe(true);
+    expect(toggle(other.id).getAttribute("aria-checked")).toBe("false");
     await render("general");
     await render("monos");
-    expect(toggle(mono.id).getAttribute("aria-checked")).toBe("false");
+    expect(toggle(mono.id).getAttribute("aria-checked")).toBe("true");
     await act(async () => updateMono(mono.id, (entry) => ({
       ...entry,
-      showStartedSessionsInSidebar: true,
+      showStartedSessionsInSidebar: false,
     })));
-    expect(toggle(mono.id).getAttribute("aria-checked")).toBe("true");
+    expect(toggle(mono.id).getAttribute("aria-checked")).toBe("false");
   });
 
   it("blurs account emails by default and hides them when settings reopen", async () => {

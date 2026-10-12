@@ -16,7 +16,9 @@ vi.mock("./Composer", () => ({ Composer: () => null }));
 vi.mock("../../monos/ui/MonoComposer", () => ({
   MonoComposer: probes.composer,
 }));
-vi.mock("./SessionReview", () => ({ SessionReview: probes.review }));
+vi.mock("./SessionReview", () => ({
+  SessionReview: probes.review,
+}));
 vi.mock("../data/sessionStore", async (original) => ({
   ...(await original<typeof import("../data/sessionStore")>()),
   getMonoTranscriptPage: vi.fn(),
@@ -151,18 +153,47 @@ it("routes a Mono footer activity click to its session and selected turn", () =>
   const pane = props();
   pane.session.blocks = [
     { id: "user", role: "user", text: "Inspect", durationMs: 23000 },
-    { id: "call", role: "tool", text: "ls", tool: { kind: "shell", status: "completed" } },
+    {
+      id: "call",
+      role: "tool",
+      text: "ls",
+      tool: { kind: "shell", status: "completed" },
+    },
     { id: "reply", role: "assistant", text: "Done" },
   ];
   const onShowMonoActivity = vi.fn();
-  act(() => root.render(createElement(SessionPane, { ...pane, onShowMonoActivity })));
-  act(() => container.querySelector<HTMLButtonElement>('[data-turn-actions] [aria-label="Show activity"]')!.click());
-  expect(onShowMonoActivity).toHaveBeenCalledWith("chat", "user", pane.session.blocks);
-  act(() => root.render(createElement(SessionPane, { ...pane, onShowMonoActivity, monoActivityTurnId: "user" })));
-  expect(container.querySelector('[data-turn-actions] [aria-label="Hide activity"]')?.getAttribute("aria-expanded")).toBe("true");
+  act(() =>
+    root.render(createElement(SessionPane, { ...pane, onShowMonoActivity })),
+  );
+  act(() =>
+    container
+      .querySelector<HTMLButtonElement>(
+        '[data-turn-actions] [aria-label="Show activity"]',
+      )!
+      .click(),
+  );
+  expect(onShowMonoActivity).toHaveBeenCalledWith(
+    "chat",
+    "user",
+    pane.session.blocks,
+  );
+  act(() =>
+    root.render(
+      createElement(SessionPane, {
+        ...pane,
+        onShowMonoActivity,
+        monoActivityTurnId: "user",
+      }),
+    ),
+  );
+  expect(
+    container
+      .querySelector('[data-turn-actions] [aria-label="Hide activity"]')
+      ?.getAttribute("aria-expanded"),
+  ).toBe("true");
 });
 
-it("routes launched sessions from a Mono footer to its session and turn", () => {
+it("routes a launched session's card to the Mono, its turn and the session", () => {
   const pane = props();
   pane.session.blocks[0] = {
     ...pane.session.blocks[0],
@@ -176,35 +207,44 @@ it("routes launched sessions from a Mono footer to its session and turn", () => 
       },
     ],
   };
-  const onShowMonoSessions = vi.fn();
+  const onOpenMonoSession = vi.fn();
+  const monoLaunchedSessions = new Map([
+    ["app-review", { state: "working" as const, title: "Review" }],
+  ]);
   act(() =>
-    root.render(createElement(SessionPane, { ...pane, onShowMonoSessions })),
+    root.render(
+      createElement(SessionPane, {
+        ...pane,
+        onOpenMonoSession,
+        monoLaunchedSessions,
+      }),
+    ),
   );
-  act(() =>
-    container
-      .querySelector<HTMLButtonElement>(
-        '[data-turn-actions] [aria-label="Show sessions"]',
-      )!
-      .click(),
-  );
-  expect(onShowMonoSessions).toHaveBeenCalledWith(
+  const card = container.querySelector<HTMLButtonElement>(
+    '[data-launched-session="app-review"]',
+  )!;
+  expect(card.dataset.state).toBe("working");
+  act(() => card.click());
+  expect(onOpenMonoSession).toHaveBeenCalledWith(
     "chat",
     "user",
     pane.session.blocks,
+    "app-review",
   );
   act(() =>
     root.render(
       createElement(SessionPane, {
         ...pane,
-        onShowMonoSessions,
-        monoSessionsTurnId: "user",
+        onOpenMonoSession,
+        monoLaunchedSessions,
+        openMonoSessionId: "app-review",
       }),
     ),
   );
   expect(
     container
-      .querySelector('[aria-label="Hide sessions"]')
-      ?.getAttribute("aria-expanded"),
+      .querySelector('[data-launched-session="app-review"]')
+      ?.getAttribute("aria-pressed"),
   ).toBe("true");
 });
 
@@ -220,7 +260,8 @@ it("renders older replies immediately when scrolling up loads a Mono page", asyn
     hasNewer: true,
   });
   act(() => root.render(createElement(SessionPane, pane)));
-  const scroller = container.querySelector<HTMLDivElement>(".agent-transcript")!;
+  const scroller =
+    container.querySelector<HTMLDivElement>(".agent-transcript")!;
   await act(async () => {
     scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
   });
