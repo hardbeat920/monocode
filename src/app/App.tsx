@@ -431,7 +431,10 @@ import {
   type AddToChatRequest,
 } from "../features/sessions/model/quoteDraft";
 import { createSessionRemover } from "../features/sessions/model/sessionRemoval";
-import { shouldCloseMonoViewAfterSessionRemoval } from "./model/monoViewSessionRemoval";
+import {
+  closeMonoViewAfterSessionRemoval,
+  shouldCloseMonoViewAfterSessionRemoval,
+} from "./model/monoViewSessionRemoval";
 import {
   beginMonoViewRequest,
   cancelMonoViewRequest,
@@ -5396,13 +5399,12 @@ function Workspace({
               }
 
               const { removal } = change;
-              if (
-                shouldCloseMonoViewAfterSessionRemoval(
-                  monoViewIdRef.current,
-                  sessionId,
-                )
-              )
-                closeMonoView(monoForSession(sessionId)?.id);
+              closeMonoViewAfterSessionRemoval(
+                monoViewIdRef.current,
+                sessionId,
+                monoForSession,
+                closeMonoView,
+              );
               lastPersisted.current.delete(sessionId);
               pendingPersist.current.delete(sessionId);
               const closingFiles = filesInWorkspaceTabs(removal.closedTabs);

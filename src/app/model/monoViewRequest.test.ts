@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { shouldCloseMonoViewAfterSessionRemoval } from "./monoViewSessionRemoval";
+import { closeMonoViewAfterSessionRemoval } from "./monoViewSessionRemoval";
 import {
   beginMonoViewRequest,
   cancelMonoViewRequest,
@@ -28,10 +28,15 @@ describe("Mono view requests", () => {
       finishMonoViewRequest(requests, request);
     });
 
-    if (shouldCloseMonoViewAfterSessionRemoval(monoViewId, "session-a")) {
-      cancelMonoViewRequest(requests, "mono-a");
-      monoViewId = null;
-    }
+    closeMonoViewAfterSessionRemoval(
+      monoViewId,
+      "session-a",
+      () => ({ id: "mono-a" }),
+      (removedMonoId) => {
+        cancelMonoViewRequest(requests, removedMonoId);
+        monoViewId = null;
+      },
+    );
     expect(monoViewId).toBeNull();
 
     loading.resolve("session-b");
@@ -50,10 +55,15 @@ describe("Mono view requests", () => {
       finishMonoViewRequest(requests, request);
     });
 
-    if (shouldCloseMonoViewAfterSessionRemoval(monoViewId, "session-a")) {
-      cancelMonoViewRequest(requests, "mono-a");
-      monoViewId = null;
-    }
+    closeMonoViewAfterSessionRemoval(
+      monoViewId,
+      "session-a",
+      () => ({ id: "mono-a" }),
+      (removedMonoId) => {
+        cancelMonoViewRequest(requests, removedMonoId);
+        monoViewId = null;
+      },
+    );
     loading.resolve("session-a-reopened");
     await opening;
     expect(monoViewId).toBeNull();
