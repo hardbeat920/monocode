@@ -432,6 +432,13 @@ import {
 } from "../features/sessions/model/quoteDraft";
 import { createSessionRemover } from "../features/sessions/model/sessionRemoval";
 import { shouldCloseMonoViewAfterSessionRemoval } from "./model/monoViewSessionRemoval";
+import {
+  beginMonoViewRequest,
+  cancelMonoViewRequest,
+  finishMonoViewRequest,
+  isMonoViewRequestCurrent,
+  type MonoViewRequestState,
+} from "./model/monoViewRequest";
 import { shouldGenerateSessionTitle } from "../features/sessions/model/sessionTitle";
 import {
   DEFAULT_PROVIDER_ACCOUNT_ID,
@@ -1183,9 +1190,9 @@ function Workspace({
   );
   const monoViewIdRef = useRef(monoViewId);
   monoViewIdRef.current = monoViewId;
-  const monoViewRequest = useRef(0);
-  const closeMonoView = useCallback(() => {
-    monoViewRequest.current += 1;
+  const monoViewRequest = useRef<MonoViewRequestState>({ current: 0 });
+  const closeMonoView = useCallback((removedMonoId?: string) => {
+    cancelMonoViewRequest(monoViewRequest.current, removedMonoId);
     monoViewIdRef.current = null;
     setMonoViewId(null);
     setMonoActivity(null);
@@ -4698,27 +4705,35 @@ function Workspace({
       setMonoActivity(null);
       setMonoSessions(null);
       workspaceNavigation.cancel();
-      const request = ++monoViewRequest.current;
+      const request = beginMonoViewRequest(monoViewRequest.current, monoId);
       setSearchViewOpen(false);
       setInboxViewOpen(false);
       setNotesViewOpen(false);
       setAutomationsViewOpen(false);
       lastMonoIdRef.current = monoId;
-      const session = await ensureMonoSession(monoId, {
-        home: homeDir,
-        load: ensureOpenSession,
-        create: (path) => newDefaultSession(path),
-        add: (created) => {
-          sessionsRef.current = [...sessionsRef.current, created];
-          setSessions(sessionsRef.current);
-        },
-      });
-      if (!session || request !== monoViewRequest.current) return;
-      monoViewIdRef.current = session.id;
-      setMonoViewId(session.id);
-      setProjectTerminalFocused(false);
-      setComposerFocused(true);
-      setComposerFocusToken((token) => token + 1);
+      try {
+        const session = await ensureMonoSession(monoId, {
+          home: homeDir,
+          load: ensureOpenSession,
+          create: (path) => newDefaultSession(path),
+          add: (created) => {
+            sessionsRef.current = [...sessionsRef.current, created];
+            setSessions(sessionsRef.current);
+          },
+        });
+        if (
+          !session ||
+          !isMonoViewRequestCurrent(monoViewRequest.current, request)
+        )
+          return;
+        monoViewIdRef.current = session.id;
+        setMonoViewId(session.id);
+        setProjectTerminalFocused(false);
+        setComposerFocused(true);
+        setComposerFocusToken((token) => token + 1);
+      } finally {
+        finishMonoViewRequest(monoViewRequest.current, request);
+      }
     },
     [ensureOpenSession, workspaceNavigation.cancel],
   );
@@ -4801,7 +4816,7 @@ function Workspace({
               history.filter((entry) => entry.id !== sessionId),
             );
             if (monoViewIdRef.current === sessionId) {
-              monoViewRequest.current += 1;
+              cancelMonoViewRequest(monoViewRequest.current);
               monoViewIdRef.current = fresh.id;
               setMonoViewId(fresh.id);
               setComposerFocused(true);
@@ -5387,7 +5402,7 @@ function Workspace({
                   sessionId,
                 )
               )
-                closeMonoView();
+                closeMonoView(monoForSession(sessionId)?.id);
               lastPersisted.current.delete(sessionId);
               pendingPersist.current.delete(sessionId);
               const closingFiles = filesInWorkspaceTabs(removal.closedTabs);
@@ -5714,7 +5729,7 @@ function Workspace({
             mono.sessionId,
           )
         ) {
-          closeMonoView();
+          closeMonoView(monoId);
         }
       }
       removeMono(monoId);
