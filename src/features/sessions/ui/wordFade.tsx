@@ -2,16 +2,88 @@ import type { Element, ElementContent, Root } from "hast";
 import { useEffect, useReducer, useRef, useState } from "react";
 
 /*
- * Streaming prose, paced. Tokens land in uneven bursts; read straight off the
- * wire, whole clauses pop in at once and then nothing for a beat. Instead the
- * text is let out a word at a time at a steady rate that closes on whatever
- * has arrived, and each word fades in as it is let out (the fade itself is
- * `.word-fading [data-word-fade]` in index.css), so the reply grows with a
- * soft leading edge rather than a ragged one.
+ * Streaming prose. Tokens land in uneven bursts. By default each burst goes
+ * on screen as it arrives, so layout is always the real reply, and its words
+ * fade in over a time that follows the stream cadance
+ * veil): a fast stream gets short fades, a slow one long fades, and either
+ * way consecutive bursts overlap into one rolling edge instead of popping in
+ * clause by clause. The fade itself is `.word-fading [data-word-fade]` in
+ * index.css.
+ *
+ * The older paced reveal, which lets text out a word at a time at a steady
+ * rate, stays available behind `localStorage["monocode.pacedReveal"] = "1"`.
  */
 
-/** How long one word takes to fade in; matches `word-fade-in` in index.css. */
+/** How long one word takes to fade in while paced. */
 export const WORD_FADE_MS = 320;
+
+/** Opt back into the paced word-at-a-time reveal. */
+export const PACED_REVEAL_KEY = "monocode.pacedReveal";
+
+/**
+ * Fade length tracks an average of the gaps between bursts: three gaps long,
+ * within these bounds.
+ */
+const CADENCE_FADE_MIN_MS = 120;
+const CADENCE_FADE_MAX_MS = 400;
+/** The gap average a fresh stream starts from. */
+const CADENCE_SEED_MS = 160;
+/** A stall longer than this counts as this long, so one pause can't drag every fade out. */
+const CADENCE_GAP_CAP_MS = 1000;
+
+const CADENCE_FADE_EASE = "cubic-bezier(0.33, 0.53, 0.67, 1)";
+
+export function pacedRevealPreferred(): boolean {
+  try {
+    return localStorage.getItem(PACED_REVEAL_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** The next gap average once a burst lands `gapMs` after the one before. */
+export function nextCadence(averageMs: number, gapMs: number): number {
+  return averageMs * 0.7 + Math.min(gapMs, CADENCE_GAP_CAP_MS) * 0.3;
+}
+
+/** How long a burst's words fade, given the current gap average. */
+export function cadenceFadeMs(averageMs: number): number {
+  return Math.min(
+    CADENCE_FADE_MAX_MS,
+    Math.max(CADENCE_FADE_MIN_MS, averageMs * 3),
+  );
+}
+
+/**
+ * The fade length and curve for words appearing in `text` now. Each change
+ * that adds to the text is one burst; the gap since the previous one feeds
+ * the average. A render that repeats the same text (strict mode, an unrelated
+ * parent update) leaves it alone.
+ */
+export function useCadenceFade(text: string): {
+  durationMs: number;
+  easing: string;
+} {
+  const state = useRef({
+    text,
+    average: CADENCE_SEED_MS,
+    lastBurst: null as number | null,
+  });
+  const current = state.current;
+  if (text !== current.text) {
+    if (text.length > current.text.length) {
+      const now = performance.now();
+      if (current.lastBurst !== null)
+        current.average = nextCadence(current.average, now - current.lastBurst);
+      current.lastBurst = now;
+    }
+    current.text = text;
+  }
+  return {
+    durationMs: Math.round(cadenceFadeMs(current.average)),
+    easing: CADENCE_FADE_EASE,
+  };
+}
 /**
  * The slowest the reveal goes, in characters a second, so the tail of a
  * finished reply never crawls out.
@@ -49,6 +121,42 @@ export function revealEnd(
 
 function isSpace(code: number): boolean {
   return code === 32 || code === 10 || code === 9 || code === 13;
+}
+
+/**
+ * Show streamed output as it arrives, holding back only a word still being
+ * written until it is whole or the stream pauses on it. `revealing` stays on
+ * for the first render of new output so it fades in, including a reply that
+ * completed before its first paint; callers opening existing output opt out.
+ */
+export function useStreamedText(
+  text: string,
+  streaming: boolean,
+  revealOnMount = streaming,
+): { text: string; revealing: boolean } {
+  const [mountReveal, setMountReveal] = useState(revealOnMount);
+  // Output already there when it opens is shown whole, half-written word too.
+  const [heldText, setHeldText] = useState<string | null>(
+    revealOnMount ? null : text,
+  );
+  const end =
+    heldText === text ? text.length : revealEnd(text, text.length, streaming);
+  const behind = end < text.length;
+
+  useEffect(() => {
+    if (mountReveal) setMountReveal(false);
+  }, [mountReveal]);
+
+  useEffect(() => {
+    if (!behind) return;
+    const timer = window.setTimeout(() => setHeldText(text), REVEAL_HOLD_MS);
+    return () => window.clearTimeout(timer);
+  }, [behind, text]);
+
+  return {
+    text: behind ? text.slice(0, end) : text,
+    revealing: behind || mountReveal,
+  };
 }
 
 /**
@@ -124,19 +232,38 @@ export function usePacedText(
  * — an animation replays whenever its element is hidden and shown again, and
  * a finished reply folded away and reopened must not fade in all over again.
  */
-export function useWordFading(active: boolean): boolean {
+export function useWordFading(active: boolean, fadeMs = WORD_FADE_MS): boolean {
   const [lingering, setLingering] = useState(false);
+  const lastFadeMs = useRef(fadeMs);
+  lastFadeMs.current = fadeMs;
 
   useEffect(() => {
     if (active) {
       setLingering(true);
       return;
     }
-    const timer = window.setTimeout(() => setLingering(false), WORD_FADE_MS);
+    const timer = window.setTimeout(
+      () => setLingering(false),
+      lastFadeMs.current,
+    );
     return () => window.clearTimeout(timer);
   }, [active]);
 
   return active || lingering;
+}
+
+/**
+ * Marks every word on screen under `root` as already faded in. Showing a
+ * `display: none` subtree restarts its CSS animations, so a reply still
+ * fading when its tab was hidden would otherwise fade in whole again. Words
+ * let out after this are new spans and fade as usual.
+ */
+export function settleWordFades(root: ParentNode) {
+  for (const word of root.querySelectorAll(
+    ".word-fading [data-word-fade]:not([data-word-settled])",
+  )) {
+    word.setAttribute("data-word-settled", "");
+  }
 }
 
 /*

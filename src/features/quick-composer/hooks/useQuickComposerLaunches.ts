@@ -33,10 +33,11 @@ export function useQuickComposerLaunches(
 
   useEffect(() => {
     if (!quickComposerSupported()) return;
-    const stopPreparing = prepareQuickComposerWhenIdle();
-    void setQuickComposerShortcut(loadQuickComposerEnabled()).catch(
-      () => undefined,
-    );
+    const enabled = loadQuickComposerEnabled();
+    // Each prepared panel is a resident webview; with the shortcut off it
+    // waits for the menu bar to build it on first open instead.
+    const stopPreparing = enabled ? prepareQuickComposerWhenIdle() : () => {};
+    void setQuickComposerShortcut(enabled).catch(() => undefined);
 
     let disposed = false;
     const receive = launchReceiver({

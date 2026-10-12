@@ -2,12 +2,9 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Block } from "../../sessions/model/session";
 import {
-  IDLE_ROTATE_MS,
-  loadMonoBaseline,
   loadMonoRotation,
   planRotation,
   rotationReason,
-  saveMonoBaseline,
   saveMonoRotation,
 } from "./monoRotation";
 
@@ -34,29 +31,56 @@ function turn(user: string, reply: string, at: number, extra: Block[] = []) {
   ] as Block[];
 }
 
-it("rotates once the chat has grown well past a fresh session, or after a break", () => {
-  const blocks = turn("hi", "hello", T0);
-  const session = (used: number, window?: number) => ({
-    providerSessionId: "native",
-    context: { used, window },
-    blocks,
-  });
-  expect(rotationReason(session(85_000), T0 + HOUR)).toBe("context");
-  expect(rotationReason(session(60_000, 100_000), T0 + HOUR)).toBe("context");
-  expect(rotationReason(session(30_000, 1_000_000), T0 + HOUR)).toBeUndefined();
-  expect(rotationReason(session(45_000), T0 + IDLE_ROTATE_MS + HOUR)).toBe(
-    "idle",
-  );
-  // Close to a fresh session's size, there is nothing to gain by dropping it.
+it.each([128_000, 200_000, 1_000_000])(
+  "rotates at 80% of a %i-token context window",
+  (window) => {
+    const session = (used: number) => ({
+      providerSessionId: "native",
+      context: { used, window },
+      blocks: [],
+    });
+    expect(rotationReason(session(window * 0.8 - 1))).toBeUndefined();
+    expect(rotationReason(session(window * 0.8))).toBe("context");
+    expect(rotationReason(session(window))).toBe("context");
+    expect(
+      rotationReason({
+        ...session(window),
+        providerSessionId: undefined,
+      }),
+    ).toBeUndefined();
+  },
+);
+
+it.each([45_000, 600_000])(
+  "keeps a %i-token conversation in a large window across a long break",
+  (used) => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(T0 + 48 * HOUR);
+      const session = {
+        providerSessionId: "native",
+        context: { used, window: 1_000_000 },
+        blocks: turn("hi", "hello", T0),
+      };
+      expect(rotationReason(session)).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
+
+it.each([
+  undefined,
+  { used: 900_000 },
+  { used: 900_000, window: 0 },
+  { used: 900_000, window: -1 },
+  { used: 900_000, window: Number.NaN },
+  { used: Number.NaN, window: 1_000_000 },
+  { used: Number.POSITIVE_INFINITY, window: 1_000_000 },
+  { used: -1, window: 1_000_000 },
+])("does not rotate without a usable context percentage (%#)", (context) => {
   expect(
-    rotationReason(session(30_000), T0 + IDLE_ROTATE_MS + HOUR),
-  ).toBeUndefined();
-  expect(
-    rotationReason(session(45_000), T0 + IDLE_ROTATE_MS - HOUR),
-  ).toBeUndefined();
-  // Already fresh: the next turn starts a new provider session anyway.
-  expect(
-    rotationReason({ ...session(200_000), providerSessionId: undefined }, T0),
+    rotationReason({ providerSessionId: "native", context, blocks: [] }),
   ).toBeUndefined();
 });
 
@@ -124,7 +148,8 @@ it("remembers a completion report without overwriting the answer to the user's c
 it("carries earlier lines across rotations, briefing only what came since", () => {
   const first = [...turn("one", "1", T0), ...turn("two", "2", T0 + HOUR)];
   const planned = planRotation(first, undefined, "context", T0 + 2 * HOUR);
-  saveMonoRotation("mono-1", planned.rotation);
+  // A saved rotation from before idle rotation was removed still carries over.
+  saveMonoRotation("mono-1", { ...planned.rotation, reason: "idle" });
   const blocks = [
     ...first,
     ...turn("three", "3", T0 + 3 * HOUR),
@@ -133,7 +158,7 @@ it("carries earlier lines across rotations, briefing only what came since", () =
   const text = planRotation(
     blocks,
     loadMonoRotation("mono-1"),
-    "idle",
+    "context",
     T0 + 5 * HOUR,
   ).brief("mono-1");
   expect(text).toMatch(
@@ -148,22 +173,4 @@ it("keeps long messages bounded", () => {
   const text = planRotation(blocks, undefined, "context", T0 + HOUR).brief("m");
   expect(text.length).toBeLessThan(6_000);
   expect(text).toContain("[…]");
-});
-
-it("measures growth from the harness's own fresh-session size", () => {
-  const blocks = turn("hi", "hello", T0);
-  const session = {
-    providerSessionId: "native",
-    context: { used: 90_000 },
-    blocks,
-  };
-  // A harness that starts at 40K has only grown 50K.
-  expect(rotationReason(session, T0 + HOUR, 40_000)).toBeUndefined();
-  expect(rotationReason(session, T0 + HOUR, 25_000)).toBe("context");
-  saveMonoBaseline("mono-1", "claude", 38_412.6);
-  expect(loadMonoBaseline("mono-1", "claude")).toBe(38_413);
-  // Another harness starts from a different size; it measures its own.
-  expect(loadMonoBaseline("mono-1", "codex")).toBeUndefined();
-  saveMonoBaseline("mono-1", "claude", 0);
-  expect(loadMonoBaseline("mono-1", "claude")).toBe(38_413);
 });

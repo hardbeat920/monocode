@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Block } from "../model/session";
 import { AgentTranscript } from "./AgentTranscript";
-import { WORD_FADE_MS } from "./wordFade";
+import { PACED_REVEAL_KEY, WORD_FADE_MS } from "./wordFade";
 
 let container: HTMLDivElement;
 let root: Root;
@@ -27,12 +27,15 @@ beforeEach(() => {
       disconnect() {}
     },
   );
+  // These cover the opt-in paced reveal unless a test says otherwise.
+  localStorage.setItem(PACED_REVEAL_KEY, "1");
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
 });
 
 afterEach(() => {
+  localStorage.removeItem(PACED_REVEAL_KEY);
   act(() => root.unmount());
   container.remove();
   vi.unstubAllGlobals();
@@ -214,6 +217,24 @@ it("shows output received in a hidden tab immediately when switching to it", () 
     ],
     false,
   );
+  expect(answerText()).toBe(reply);
+  expect(container.querySelector(".word-fading")).toBeNull();
+});
+
+it("shows a new reply at once and fades it in without the paced reveal", () => {
+  localStorage.removeItem(PACED_REVEAL_KEY);
+  render([prompt]);
+  render(
+    [
+      prompt,
+      { id: "answer", role: "assistant", text: reply, streaming: false },
+    ],
+    false,
+  );
+  expect(answerText()).toBe(reply);
+  expect(container.querySelector(".word-fading")).not.toBeNull();
+
+  act(() => vi.advanceTimersByTime(400));
   expect(answerText()).toBe(reply);
   expect(container.querySelector(".word-fading")).toBeNull();
 });
