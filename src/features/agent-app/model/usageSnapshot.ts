@@ -34,7 +34,11 @@ type Target = {
  * Cached reads do not probe; explicit refresh starts shared throttled loads and
  * returns immediately, so loading rows may need a subsequent cached read.
  */
-export function usageSnapshot(source: Session, input: Record<string, unknown>) {
+export function usageSnapshot(
+  source: Session,
+  input: Record<string, unknown>,
+  project: string,
+) {
   const { provider, accountId, refresh = false } = input;
   if (provider !== undefined && !HARNESSES.includes(provider as HarnessId))
     throw new Error("Unknown provider; run models.list for provider IDs");
@@ -47,7 +51,7 @@ export function usageSnapshot(source: Session, input: Record<string, unknown>) {
     throw new Error("refresh must be a boolean");
   const targets: Target[] = HARNESSES.flatMap((provider): Target[] => {
     if (supportsProviderAccounts(provider)) {
-      const selected = selectedProviderAccountId(provider, source.cwd);
+      const selected = selectedProviderAccountId(provider, project);
       const sessionId = source.providerAccountId ?? "default";
       const accounts = providerAccounts(provider);
       const rows: Target[] = accounts.map((account) => ({
@@ -117,6 +121,7 @@ export function usageSnapshot(source: Session, input: Record<string, unknown>) {
   const snapshotAt = Date.now();
   return {
     snapshotAt,
+    project,
     accounts: targets.map((target) => {
       const limits = target.source
         ? getCachedRateLimits(target.source, target.cacheAccountId)

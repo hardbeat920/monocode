@@ -121,16 +121,17 @@ const APP_USAGE: &str = r#"MonoCode app access — use in a thread enabled by /o
 
 Usage: {exe} app ACTION [--json JSON | --input FILE|-] [--request-id ID]
 
-A Mono works on several projects: add "project":"<path or name>" to the
+A Mono works on several projects: add "project":"<path or name>" to usage.list,
 sessions.*, worktrees.* and folders.* actions to choose which one. It may be
-left out when the Mono has a single project.
+left out when the Mono has a single project or is already in that project.
 
 Actions:
   models.list    {}  Available providers, models, settings and permission modes.
   usage.list     {"provider":"claude","accountId":"default","refresh":false}
                   All fields optional. Read cached limits for all providers and
-                  accounts, independently of this session's harness. Filters
-                  narrow rows; unsupported providers stay explicit.
+                  accounts, independently of this session's harness. Monos may
+                  select an assigned project; selection metadata reflects it.
+                  Filters narrow rows; unsupported providers stay explicit.
                   refresh:true starts a shared deduplicated refresh with
                   cooldown and backoff. Cached reads never probe; stale data is
                   not renewed quota. No account switch.

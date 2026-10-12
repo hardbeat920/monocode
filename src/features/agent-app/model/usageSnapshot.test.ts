@@ -60,8 +60,12 @@ const claude = () =>
     }),
   );
 const host = {} as AgentAppHost; // usage.list must never call a mutating host method.
-const list = (input: Record<string, unknown> = {}, session = source()) =>
-  handleAgentApp(session, "usage-1", "usage.list", input, host) as Promise<
+const list = (
+  input: Record<string, unknown> = {},
+  session = source(),
+  appHost = host,
+) =>
+  handleAgentApp(session, "usage-1", "usage.list", input, appHost) as Promise<
     ReturnType<typeof usageSnapshot>
   >;
 
@@ -150,6 +154,57 @@ describe("usage.list through the app handler", () => {
       expect(providerAccounts("claude")).toHaveLength(2);
     },
   );
+
+  it("uses the Mono's selected project and lists usage across harnesses", async () => {
+    const session = newSession("cursor", "/tmp/mono", "cursor:mono");
+    const monoHost = {
+      monoOf: () => ({
+        id: "mono-1",
+        projects: ["/tmp/project", "/tmp/other"],
+      }),
+    } as AgentAppHost;
+    saveProviderAccount({ provider: "claude", id: "work", label: "Work" });
+    selectProviderAccount("claude", "/tmp/other", "work");
+
+    const result = await list({ project: "other" }, session, monoHost);
+
+    expect(result.project).toBe("/tmp/other");
+    expect(result.accounts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          provider: "claude",
+          accountId: "work",
+          selectedForProject: true,
+        }),
+        expect.objectContaining({ provider: "codex" }),
+        expect.objectContaining({ provider: "pi" }),
+      ]),
+    );
+    for (const fetch of Object.values(fetches))
+      expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects a Mono usage project outside its assigned projects", async () => {
+    const session = newSession("cursor", "/tmp/mono", "cursor:mono");
+    const monoHost = {
+      monoOf: () => ({
+        id: "mono-1",
+        projects: ["/tmp/project", "/tmp/other"],
+      }),
+    } as AgentAppHost;
+
+    await expect(
+      list({ project: "/tmp/outside" }, session, monoHost),
+    ).rejects.toThrow("Not one of your projects");
+    await expect(list({}, session, monoHost)).rejects.toThrow(
+      'Pass "project" to choose one',
+    );
+    await expect(list({ project: "/tmp/project" })).rejects.toThrow(
+      "project is only for a Mono",
+    );
+    for (const fetch of Object.values(fetches))
+      expect(fetch).not.toHaveBeenCalled();
+  });
 
   it("retains expired usage and reports stale data instead of full allowance", async () => {
     setCachedRateLimits("claude", "default", claude());
