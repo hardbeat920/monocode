@@ -88,6 +88,7 @@ export function ensureSessionCheckpoint(
 export async function beginSessionTurn(
   sessionId: string,
   cwd: string,
+  editedPaths?: readonly string[],
 ): Promise<string | undefined> {
   if (!cwd || cwd === "~") return undefined;
   const id = crypto.randomUUID();
@@ -98,6 +99,7 @@ export async function beginSessionTurn(
       sessionId,
       cwd,
       turnId: id,
+      ...(editedPaths === undefined ? {} : { editedPaths }),
     }),
   ).catch(console.error);
   notifyReviewChanged(sessionId);
@@ -163,11 +165,13 @@ export function captureSessionCheckpoint(
 export function sessionCheckpointStatus(
   sessionId: string,
   cwd: string,
+  editedPaths?: readonly string[],
 ): Promise<CheckpointStatus> {
   return enqueueCheckpoint(sessionId, () =>
     invoke<CheckpointStatus>("session_checkpoint_status", {
       sessionId,
       cwd,
+      ...(editedPaths === undefined ? {} : { editedPaths }),
     }),
   );
 }

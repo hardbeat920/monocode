@@ -12,9 +12,17 @@ import {
   RATE_LIMIT_MIN_REFETCH_MS,
   RATE_LIMIT_POLL_MS,
 } from "../../features/providers/model/rateLimits";
-import { UsageProviderChip } from "./UsageProviderChip";
+import { UsageProviderChip, type UsageChipVariant } from "./UsageProviderChip";
 
-export function PiUsage({ model, now }: { model?: string; now: number }) {
+export function PiUsage({
+  model,
+  now,
+  variant = "footer",
+}: {
+  model?: string;
+  now: number;
+  variant?: UsageChipVariant;
+}) {
   const provider = piUsageProvider(model);
   if (!provider) {
     return (
@@ -31,15 +39,24 @@ export function PiUsage({ model, now }: { model?: string; now: number }) {
       </span>
     );
   }
-  return <PiProviderUsage key={provider} provider={provider} now={now} />;
+  return (
+    <PiProviderUsage
+      key={provider}
+      provider={provider}
+      now={now}
+      variant={variant}
+    />
+  );
 }
 
 function PiProviderUsage({
   provider,
   now,
+  variant,
 }: {
   provider: PiUsageProvider;
   now: number;
+  variant: UsageChipVariant;
 }) {
   const [limits, setLimits] = useState(() =>
     idleRateLimits(piBillingProvider(provider)),
@@ -90,6 +107,7 @@ function PiProviderUsage({
       <UsageProviderChip
         limits={limits}
         now={now}
+        variant={variant}
         presentation={{
           sourceLabel: "Pi's saved OAuth account",
           harness: "pi",

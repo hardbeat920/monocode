@@ -18,6 +18,9 @@ export type ReorderExternalDrop<T extends string> = {
   onEnd?: (id: T) => void;
 };
 
+/** How long a button-less move waits for a late pointerup before cancelling. */
+const LOST_POINTERUP_GRACE = 150;
+
 /** Direct manipulation for a row or column of equal-sized items. */
 export function useAnimatedReorder<T extends string>(
   ids: T[],
@@ -94,6 +97,7 @@ export function useAnimatedReorder<T extends string>(
       let pointerPosition = startPosition;
       let overExternalTarget = false;
       let finishTimer: ReturnType<typeof setTimeout> | undefined;
+      let lostPointerUpTimer: ReturnType<typeof setTimeout> | undefined;
 
       function releasePointer() {
         for (const element of tabs) delete element.dataset.reordering;
@@ -116,6 +120,7 @@ export function useAnimatedReorder<T extends string>(
         window.removeEventListener("blur", onCancel);
         window.removeEventListener("scroll", onScroll, true);
         window.clearTimeout(finishTimer);
+        window.clearTimeout(lostPointerUpTimer);
         window.cancelAnimationFrame(frame);
         for (const element of tabs) {
           element.style.removeProperty("transition");
@@ -182,14 +187,23 @@ export function useAnimatedReorder<T extends string>(
       function onMove(ev: globalThis.PointerEvent) {
         if (ev.pointerId !== pointerId || settling) return;
         // The button is already up but its pointerup never reached us: drop
-        // the drag instead of leaving the item stuck to the cursor.
+        // the drag instead of leaving the item stuck to the cursor. WebKit
+        // reads the live button state, so a quick release also reports no
+        // buttons on the moves queued ahead of its pointerup; give that
+        // pointerup a moment to arrive before giving up.
         if (
           ev.type === "pointermove" &&
           ev.pointerType === "mouse" &&
           ev.buttons === 0
         ) {
-          stop(false);
-          return;
+          if (!lostPointerUpTimer)
+            lostPointerUpTimer = setTimeout(
+              () => stop(false),
+              LOST_POINTERUP_GRACE,
+            );
+        } else if (ev.type === "pointermove") {
+          window.clearTimeout(lostPointerUpTimer);
+          lostPointerUpTimer = undefined;
         }
         pointerPosition = ev[coordinate];
         if (!active) {
@@ -220,6 +234,8 @@ export function useAnimatedReorder<T extends string>(
 
       function stop(commit: boolean, event?: globalThis.PointerEvent) {
         if (settling) return;
+        window.clearTimeout(lostPointerUpTimer);
+        lostPointerUpTimer = undefined;
         if (!active) {
           reset();
           return;

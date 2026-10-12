@@ -82,8 +82,12 @@ function listen<T>(
 }
 
 type LinePayload = { sessionId: string; line: string };
+// The desktop batches a frame's stdout lines and SSE events into one event;
+// the remote host still sends them one at a time.
+type LinesPayload = LinePayload | { sessionId: string; lines: string[] };
 type ExitPayload = { sessionId: string; code: number | null; pid?: number };
-type SsePayload = { sessionId: string; data: string };
+type SsePayload =
+  { sessionId: string; data: string } | { sessionId: string; events: string[] };
 type SseEndPayload = { sessionId: string; error?: string | null };
 
 type LineHandler = (line: string) => void;
@@ -155,15 +159,17 @@ function ensureBridge() {
   bridgeAttempt = attempt;
   const installation = Promise.all([
     register(
-      listen<LinePayload>("harness-stdout", (event) => {
-        const { sessionId, line } = event.payload;
-        const handler = lineHandlers.get(sessionId);
-        if (handler) {
-          handler(line);
-          return;
-        }
-        if (ownedChildren.has(sessionId)) {
-          pushBounded(lineBuffer, sessionId, line);
+      listen<LinesPayload>("harness-stdout", (event) => {
+        const { payload } = event;
+        const { sessionId } = payload;
+        const lines = "lines" in payload ? payload.lines : [payload.line];
+        for (const line of lines) {
+          // A handler may detach mid-batch; later lines follow the old path.
+          const handler = lineHandlers.get(sessionId);
+          if (handler) handler(line);
+          else if (ownedChildren.has(sessionId)) {
+            pushBounded(lineBuffer, sessionId, line);
+          }
         }
       }),
     ),
@@ -193,13 +199,16 @@ function ensureBridge() {
     ),
     register(
       listen<SsePayload>("harness-sse", (event) => {
-        const { sessionId, data } = event.payload;
-        const handler = sseHandlers.get(sessionId);
-        if (handler) {
-          handler(data);
-          return;
+        const { payload } = event;
+        const { sessionId } = payload;
+        const events = "events" in payload ? payload.events : [payload.data];
+        for (const data of events) {
+          const handler = sseHandlers.get(sessionId);
+          if (handler) handler(data);
+          else if (ownedSse.has(sessionId)) {
+            pushBounded(sseBuffer, sessionId, data);
+          }
         }
-        if (ownedSse.has(sessionId)) pushBounded(sseBuffer, sessionId, data);
       }),
     ),
     register(

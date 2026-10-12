@@ -1,5 +1,7 @@
 import React, { useLayoutEffect } from "react";
 import ReactDOM from "react-dom/client";
+// TEMPORARY: remove with src/debugMonoScroll.ts.
+if (import.meta.env.DEV) void import("./debugMonoScroll");
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {

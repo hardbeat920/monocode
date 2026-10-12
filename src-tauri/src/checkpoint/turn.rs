@@ -1,5 +1,6 @@
 //! Git-backed recordings of workspace changes during a turn. These snapshots
-//! record what changed, without inferring which process owns a line.
+//! record what changed. Shared reviews require successful edit evidence for
+//! each displayed file, without inferring which process owns individual lines.
 use super::*;
 use std::io::Write;
 
@@ -17,6 +18,10 @@ struct RecordedTurn {
     error: Option<String>,
     #[serde(default)]
     dismissed: BTreeSet<String>,
+    /// Files reported by this session's successful structured edit tools.
+    /// Older shared snapshots have no attribution evidence and stay out of the card.
+    #[serde(default)]
+    edited: BTreeSet<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -70,16 +75,34 @@ impl CheckpointStore {
                 active: None,
                 latest: None,
             });
+        let pending = review
+            .active
+            .clone()
+            .filter(|turn| turn.before.is_some() && turn.error.is_none());
+        if let Some(pending) = &pending {
+            // A reload can interrupt checkpoint completion after the provider
+            // already wrote files. Continue from that original boundary.
+            self.finish_turn(session_id, cwd, &pending.id)?;
+            review = read_review(&dir)?.ok_or("Missing continued turn review")?;
+        }
         let mut turn = RecordedTurn {
             id: id.into(),
-            before: None,
+            before: pending.as_ref().and_then(|turn| turn.before.clone()),
             after: None,
-            head: run_git(&root, &["rev-parse", "--verify", "HEAD"])
-                .ok()
-                .map(|bytes| String::from_utf8_lossy(&bytes).trim().to_string()),
-            shared: false,
+            head: if let Some(pending) = &pending {
+                pending.head.clone()
+            } else {
+                run_git(&root, &["rev-parse", "--verify", "HEAD"])
+                    .ok()
+                    .map(|bytes| String::from_utf8_lossy(&bytes).trim().to_string())
+            },
+            shared: pending.as_ref().is_some_and(|turn| turn.shared),
             error: None,
             dismissed: BTreeSet::new(),
+            edited: pending
+                .as_ref()
+                .map(|turn| turn.edited.clone())
+                .unwrap_or_default(),
         };
         // Publish the pending state first. A failed baseline must not leave the
         // previous turn's card underneath the new response.
@@ -99,7 +122,13 @@ impl CheckpointStore {
                 }
                 write_review(&other_dir, &other)?;
             }
-            capture_workspace(&root, &turn_ref(session_id, id, "before"))
+            let reference = turn_ref(session_id, id, "before");
+            if let Some(before) = &turn.before {
+                run_git(&root, &["update-ref", &reference, before])?;
+                Ok(before.clone())
+            } else {
+                capture_workspace(&root, &reference)
+            }
         })();
         match capture {
             Ok(oid) => turn.before = Some(oid),
@@ -148,6 +177,126 @@ impl CheckpointStore {
         Ok(self.matching_turn_review(session_id, cwd)?.is_some())
     }
 
+    pub(super) fn capture_turn_paths(
+        &self,
+        session_id: &str,
+        cwd: &str,
+        paths: &[String],
+    ) -> Result<bool, String> {
+        let Some(mut review) = self.matching_turn_review(session_id, cwd)? else {
+            return Ok(false);
+        };
+        let Some(active) = review.active.as_mut() else {
+            // Late tool events must not change the last completed turn.
+            return Ok(true);
+        };
+        let workspace = project_root(cwd)?;
+        let mut dirty = false;
+        for path in paths {
+            if let Ok(relative) = resolve_edit_path(&workspace, Path::new(&review.cwd), path) {
+                dirty |= active.edited.insert(relative);
+            }
+        }
+        if dirty {
+            write_review(&self.session_dir(session_id), &review)?;
+        }
+        Ok(true)
+    }
+
+    /// Repair the interrupted-turn state left by versions that replaced its
+    /// baseline on Continue. Only transcript-confirmed edits can be recovered.
+    pub(super) fn recover_orphaned_turn(
+        &self,
+        session_id: &str,
+        cwd: &str,
+        paths: &[String],
+    ) -> Result<(), String> {
+        if paths.is_empty() {
+            return Ok(());
+        }
+        let Some(mut review) = self.matching_turn_review(session_id, cwd)? else {
+            return Ok(());
+        };
+        if review.active.is_some() {
+            return Ok(());
+        }
+        let turn = completed_turn(&review)?;
+        let root = Path::new(&review.cwd);
+        if !turn.edited.is_empty() || !changes(root, turn)?.is_empty() {
+            return Ok(());
+        }
+        let workspace = project_root(cwd)?;
+        let edited: BTreeSet<_> = paths
+            .iter()
+            .filter_map(|path| resolve_edit_path(&workspace, root, path).ok())
+            .collect();
+        if edited.is_empty() {
+            return Ok(());
+        }
+        let prefix = format!("refs/monocode/checkpoints/{session_id}/");
+        let refs = run_git(
+            root,
+            &[
+                "for-each-ref",
+                "--sort=-committerdate",
+                "--format=%(refname) %(objectname)",
+                &prefix,
+            ],
+        )?;
+        let refs: Vec<_> = String::from_utf8_lossy(&refs)
+            .lines()
+            .filter_map(|line| {
+                line.split_once(' ')
+                    .map(|(name, oid)| (name.to_string(), oid.to_string()))
+            })
+            .collect();
+        let names: HashSet<_> = refs.iter().map(|(name, _)| name.as_str()).collect();
+        let dir = self.session_dir(session_id);
+        for (reference, before) in &refs {
+            let Some(id) = reference
+                .strip_prefix(&prefix)
+                .and_then(|name| name.strip_suffix("/before"))
+            else {
+                continue;
+            };
+            if id == turn.id
+                || names.contains(turn_ref(session_id, id, "after").as_str())
+                || dir.join("turns").join(format!("{id}.json")).exists()
+            {
+                continue;
+            }
+            validate_id(id, "turn")?;
+            let mut recovered = turn.clone();
+            recovered.before = Some(before.clone());
+            recovered.edited = edited.clone();
+            // The orphan lost its original HEAD and overlap metadata. Review
+            // remains available, but recovery must never make Undo available.
+            recovered.head = None;
+            recovered.shared = true;
+            if !changes(root, &recovered)?
+                .iter()
+                .any(|change| edited.contains(&change.relative))
+            {
+                continue;
+            }
+            let mut archived = recovered.clone();
+            archived.id = id.into();
+            for saved in [archived, recovered.clone()] {
+                write_json(
+                    &dir.join("turns").join(format!("{}.json", saved.id)),
+                    &SavedTurn {
+                        cwd: review.cwd.clone(),
+                        repo: review.repo.clone(),
+                        turn: saved,
+                    },
+                )?;
+            }
+            review.latest = Some(recovered);
+            return write_review(&dir, &review);
+        }
+        Ok(())
+    }
+
     fn matching_turn_review(
         &self,
         session_id: &str,
@@ -191,21 +340,31 @@ impl CheckpointStore {
         session_id: &str,
         cwd: &str,
     ) -> Result<Option<CheckpointStatus>, String> {
-        let Some(review) = self.matching_turn_review(session_id, cwd)? else {
+        let Some(mut review) = self.matching_turn_review(session_id, cwd)? else {
             return Ok(None);
         };
         let turn = completed_turn(&review)?;
-        let root = Path::new(&review.cwd);
-        let head = run_git(root, &["rev-parse", "--verify", "HEAD"])
+        let root = PathBuf::from(&review.cwd);
+        let head = run_git(&root, &["rev-parse", "--verify", "HEAD"])
             .ok()
             .map(|bytes| String::from_utf8_lossy(&bytes).trim().to_string());
+        let recorded = changes(&root, turn)?;
+        let resolved = resolved_turn_paths(&root, turn, &recorded, head.as_deref())?;
+        if !resolved.is_empty() {
+            // Dismiss accepted work durably so later edits cannot resurrect
+            // this turn's card. Its saved snapshots remain available to review.
+            review.latest.as_mut().unwrap().dismissed.extend(resolved);
+            write_review(&self.session_dir(session_id), &review)?;
+        }
+        let turn = completed_turn(&review)?;
         let can_restore =
-            !turn.shared && head == turn.head && self.active_turns(root, session_id)?.is_empty();
-        let files = changes(root, turn)?
+            !turn.shared && head == turn.head && self.active_turns(&root, session_id)?.is_empty();
+        let files = recorded
             .into_iter()
             .filter(|change| !turn.dismissed.contains(&change.relative))
+            .filter(|change| !turn.shared || turn.edited.contains(&change.relative))
             .map(|change| {
-                let undoable = can_restore && restorable(root, &change);
+                let undoable = can_restore && restorable(&root, &change);
                 CheckpointFile {
                     path: path_to_js(&root.join(&change.relative)),
                     relative: change.relative,
@@ -422,6 +581,20 @@ fn resolve_turn_path(relative: &str) -> Result<String, String> {
     Ok(relative.into())
 }
 
+fn resolve_edit_path(workspace: &Path, root: &Path, path: &str) -> Result<String, String> {
+    let path = expand_home(path);
+    let relative = if path.is_absolute() {
+        let relative = path
+            .strip_prefix(workspace)
+            .or_else(|_| path.strip_prefix(root))
+            .map_err(|_| "Path is outside the project")?;
+        path_to_js(relative)
+    } else {
+        path_to_js(&path)
+    };
+    resolve_turn_path(&relative)
+}
+
 fn git_command(root: &Path, args: &[&str]) -> Command {
     let mut command = Command::new("git");
     crate::hide_window_console(&mut command);
@@ -591,6 +764,66 @@ fn changes(root: &Path, turn: &RecordedTurn) -> Result<Vec<Change>, String> {
     }
     out.sort_by(|a, b| a.relative.cmp(&b.relative));
     Ok(out)
+}
+
+fn resolved_turn_paths(
+    root: &Path,
+    turn: &RecordedTurn,
+    recorded: &[Change],
+    head: Option<&str>,
+) -> Result<Vec<String>, String> {
+    let Some(head) = head.filter(|head| Some(*head) != turn.head.as_deref()) else {
+        return Ok(Vec::new());
+    };
+    if recorded
+        .iter()
+        .all(|change| turn.dismissed.contains(&change.relative))
+    {
+        return Ok(Vec::new());
+    }
+    let diff = [
+        "diff",
+        "--relative",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-renames",
+        "--name-only",
+        "-z",
+    ];
+    let after = turn.after.as_deref().ok_or("Missing turn result")?;
+    let differs_from_result =
+        git_paths(root, &[diff.as_slice(), &[after, head, "--", "."]].concat())?;
+    let mut pending = git_paths(root, &[diff.as_slice(), &[head, "--", "."]].concat())?;
+    pending.extend(git_paths(
+        root,
+        &[
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            "--",
+            ".",
+        ],
+    )?);
+    // A file is resolved when its recorded result is in HEAD, even if someone
+    // edited it again, or when it is clean after a commit that included more edits.
+    Ok(recorded
+        .iter()
+        .filter(|change| {
+            !turn.dismissed.contains(&change.relative)
+                && (!differs_from_result.contains(&change.relative)
+                    || !pending.contains(&change.relative))
+        })
+        .map(|change| change.relative.clone())
+        .collect())
+}
+
+fn git_paths(root: &Path, args: &[&str]) -> Result<HashSet<String>, String> {
+    run_git(root, args)?
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| String::from_utf8(path.to_vec()).map_err(|e| e.to_string()))
+        .collect()
 }
 
 fn restorable(root: &Path, change: &Change) -> bool {
