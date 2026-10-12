@@ -3,7 +3,11 @@ import { EditorView } from "@codemirror/view";
 import { act, createElement, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { newEditorPane, newFileTab } from "../../workspace/model/layout";
+import {
+  newEditorPane,
+  newFileTab,
+  restorePaneFile,
+} from "../../workspace/model/layout";
 import { invalidateWatchedFiles } from "../model/fileWatch";
 import { FilePane } from "./FilePane";
 
@@ -124,6 +128,88 @@ describe("file pane source navigation", () => {
     ].find((tab) => tab.textContent === "Preview")!;
     await act(async () => preview.click());
     expect(preview.getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("follows two Markdown links and supports consecutive back and forward swipes", async () => {
+    disk.content = "[Next file](second.md)";
+    await render("/repo/first.md", 1);
+    let time = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => time);
+    const rerender = () => root.render(createElement(FilePane, paneProps));
+    paneProps = {
+      ...paneProps,
+      editorNavigation: null,
+      pane: {
+        ...paneProps.pane,
+        files: paneProps.pane.files.map((file) => ({ ...file, preview: true })),
+      },
+      onOpenFile: (path) => {
+        disk.content =
+          path === "/repo/second.md" ? "[Third file](third.md)" : "Third file";
+        const file = { ...newFileTab(path, "/repo"), preview: true };
+        paneProps = {
+          ...paneProps,
+          pane: { ...paneProps.pane, files: [file], activeFileId: file.id },
+        };
+        rerender();
+      },
+      onNavigateFile: (paneId, file) => {
+        expect(paneId).toBe(paneProps.pane.id);
+        paneProps = {
+          ...paneProps,
+          pane: restorePaneFile(paneProps.pane, file, crypto.randomUUID()),
+        };
+        rerender();
+      },
+    };
+    await act(async () => {
+      rerender();
+      [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+        .find((tab) => tab.textContent === "Preview")!
+        .click();
+    });
+    await vi.waitFor(() =>
+      expect(container.querySelector("a"), container.innerHTML).not.toBeNull(),
+    );
+    await act(async () =>
+      container.querySelector<HTMLAnchorElement>("a")!.click(),
+    );
+    expect(paneProps.pane.files[0].path).toBe("/repo/second.md");
+    await vi.waitFor(() => expect(container.querySelector("a")).not.toBeNull());
+    await act(async () =>
+      container.querySelector<HTMLAnchorElement>("a")!.click(),
+    );
+    expect(paneProps.pane.files[0].path).toBe("/repo/third.md");
+    const swipe = async (deltaX: number) => {
+      time += 300;
+      await act(async () =>
+        container.firstChild!.dispatchEvent(
+          new WheelEvent("wheel", { deltaX, bubbles: true, cancelable: true }),
+        ),
+      );
+      // Tail events arrive over the restored file but must not navigate again.
+      await act(async () =>
+        container.firstChild!.dispatchEvent(
+          new WheelEvent("wheel", {
+            deltaX: deltaX / 2,
+            bubbles: true,
+            cancelable: true,
+          }),
+        ),
+      );
+    };
+    await swipe(-100);
+    expect(paneProps.pane.files[0].path).toBe("/repo/second.md");
+    await swipe(-100);
+    expect(paneProps.pane.files[0].path).toBe("/repo/first.md");
+    await swipe(-100);
+    expect(paneProps.pane.files[0].path).toBe("/repo/first.md");
+    await swipe(100);
+    expect(paneProps.pane.files[0].path).toBe("/repo/second.md");
+    await swipe(100);
+    expect(paneProps.pane.files[0].path).toBe("/repo/third.md");
+    await swipe(100);
+    expect(paneProps.pane.files[0].path).toBe("/repo/third.md");
   });
 
   it("clamps a stale source location to the last line instead of waiting forever", async () => {
