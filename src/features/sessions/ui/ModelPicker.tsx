@@ -66,14 +66,20 @@ type Props = {
   hotkeys?: boolean;
   /** Which way the menus open; the composer sits low, so they open up. */
   side?: "top" | "bottom";
-  /** `plain` drops the pill for rows like a details panel's property list. */
-  variant?: "pill" | "plain";
+  /**
+   * `plain` drops the pill for rows like a details panel's property list;
+   * `text` is just the provider and name, for a quiet row beneath a chat
+   * input.
+   */
+  variant?: Variant;
   /** Action label for recovery surfaces that open the same model chooser. */
   triggerLabel?: string;
   onChange: (harness: HarnessId, model: string) => void;
   onSettingsChange: (settings: Record<string, string>) => void;
   onClose?: () => void;
 };
+
+type Variant = "pill" | "plain" | "text";
 
 type MenuEntry = { kind: "setting"; setting: ModelSetting } | { kind: "model" };
 
@@ -691,11 +697,14 @@ export function ModelPicker({
             ? `${triggerLabel} · ${triggerTitle}`
             : `${triggerTitle} · Recent models: right-click or ${MOD}.`
         }
-        aria-label={triggerLabel ?? `${HARNESS_TITLE[current.harness]}${
-          current.provider ? `, ${current.provider.name},` : ""
-        } ${current.name}${
-          triggerEffortLabel ? `, effort ${triggerEffortLabel}` : ""
-        }`}
+        aria-label={
+          triggerLabel ??
+          `${HARNESS_TITLE[current.harness]}${
+            current.provider ? `, ${current.provider.name},` : ""
+          } ${current.name}${
+            triggerEffortLabel ? `, effort ${triggerEffortLabel}` : ""
+          }`
+        }
         aria-keyshortcuts={`${MOD}.`}
         aria-expanded={open || recentMenu != null}
         aria-haspopup={hideSettings ? "dialog" : "menu"}
@@ -707,37 +716,41 @@ export function ModelPicker({
         }}
         onClick={() => togglePicker()}
         className={
-          variant === "plain"
-            ? `-mx-1.5 flex h-7 shrink-0 items-center gap-2 rounded-md px-1.5 text-[12px] text-content/85 ${
-                open ? "bg-content/8" : "hover:bg-content/6"
-              }`
-            : `flex h-6.5 shrink-0 items-center gap-1 rounded-md px-1.5 ${
-                open
-                  ? "bg-selection text-content"
-                  : "bg-selection text-content hover:bg-selection-hover"
-              }`
+          variant === "text"
+            ? textControlClass(open, "shrink-0 gap-1.5")
+            : variant === "plain"
+              ? `-mx-1.5 flex h-7 shrink-0 items-center gap-2 rounded-md px-1.5 text-[12px] text-content/85 ${
+                  open ? "bg-content/8" : "hover:bg-content/6"
+                }`
+              : `flex h-6.5 shrink-0 items-center gap-1 rounded-md px-1.5 ${
+                  open
+                    ? "bg-selection text-content"
+                    : "bg-selection text-content hover:bg-selection-hover"
+                }`
         }
       >
         <HarnessIcon
           harness={current.harness}
-          className={`${variant === "plain" ? "size-3.5" : "size-4"} shrink-0`}
+          className={`${variant === "pill" ? "size-4" : "size-3.5"} shrink-0`}
         />
         <span
-          className={`whitespace-nowrap ${variant === "plain" ? "" : "text-[11px]"}`}
+          className={`whitespace-nowrap ${variant === "pill" ? "text-[11px]" : ""}`}
         >
           {triggerLabel ?? current.name}
         </span>
         {!triggerLabel && triggerEffortLabel ? (
           <span
-            className={`shrink-0 text-content/50 ${variant === "plain" ? "" : "text-[11px]"}`}
+            className={`shrink-0 text-content/50 ${variant === "pill" ? "text-[11px]" : ""}`}
           >
             {triggerEffortLabel}
           </span>
         ) : null}
-        <ChevronDown
-          className={`size-3 shrink-0 text-content/50 ${open ? "rotate-180" : ""}`}
-          strokeWidth={1.75}
-        />
+        {variant === "text" ? null : (
+          <ChevronDown
+            className={`size-3 shrink-0 text-content/50 ${open ? "rotate-180" : ""}`}
+            strokeWidth={1.75}
+          />
+        )}
       </button>
 
       {open && hideSettings ? (
@@ -1033,11 +1046,12 @@ export function ModelControlPills({
   harness,
   model,
   values,
+  variant = "pill",
   onSettingsChange,
   onClose,
 }: Pick<
   Props,
-  "harness" | "model" | "values" | "onSettingsChange" | "onClose"
+  "harness" | "model" | "values" | "variant" | "onSettingsChange" | "onClose"
 >) {
   const catalogVersion = useSyncExternalStore(
     subscribeModels,
@@ -1067,6 +1081,7 @@ export function ModelControlPills({
             key={setting.id}
             setting={setting}
             values={values}
+            variant={variant}
             onSettingsChange={onSettingsChange}
           />
         ) : (
@@ -1074,6 +1089,7 @@ export function ModelControlPills({
             key={setting.id}
             setting={setting}
             values={values}
+            variant={variant}
             onSettingsChange={onSettingsChange}
             onClose={onClose}
             additionalSettings={
@@ -1086,8 +1102,18 @@ export function ModelControlPills({
   );
 }
 
-/** Trigger classes for a setting control in the pill or plain look. */
-function controlClass(variant: "pill" | "plain", open = false): string {
+/** Trigger classes for a text-only control: a label that brightens on hover. */
+function textControlClass(open: boolean, extra = ""): string {
+  return `flex h-6.5 min-w-0 items-center rounded-md px-1.5 text-[12px] transition-colors ${extra} ${
+    open
+      ? "bg-content/8 text-content"
+      : "text-content/55 hover:bg-content/8 hover:text-content"
+  }`;
+}
+
+/** Trigger classes for a setting control in each look. */
+function controlClass(variant: Variant, open = false): string {
+  if (variant === "text") return textControlClass(open, "max-w-28");
   return variant === "plain"
     ? `-mx-1.5 flex h-7 min-w-0 max-w-full items-center gap-2 rounded-md px-1.5 text-[12px] text-content/85 ${
         open ? "bg-content/8" : "hover:bg-content/6"
@@ -1163,7 +1189,7 @@ function TogglePill({
 }: {
   setting: ModelSetting;
   values: Record<string, string>;
-  variant?: "pill" | "plain";
+  variant?: Variant;
   onSettingsChange: (settings: Record<string, string>) => void;
 }) {
   const on = settingValue(setting, values) === "true";
@@ -1205,7 +1231,9 @@ function TogglePill({
       className={controlClass(variant)}
     >
       <span
-        className={`min-w-0 truncate text-[11px] ${on ? "" : "text-content/50"}`}
+        className={`min-w-0 truncate ${variant === "pill" ? "text-[11px]" : ""} ${
+          on ? "" : variant === "text" ? "opacity-50" : "text-content/50"
+        }`}
       >
         {setting.label}
       </span>
@@ -1224,7 +1252,7 @@ function SelectPill({
 }: {
   setting: ModelSetting;
   values: Record<string, string>;
-  variant?: "pill" | "plain";
+  variant?: Variant;
   side?: "top" | "bottom";
   onSettingsChange: (settings: Record<string, string>) => void;
   onClose?: () => void;
@@ -1278,20 +1306,22 @@ function SelectPill({
         onClick={() => (open ? dismiss(true) : openPicker())}
         className={controlClass(variant, open)}
       >
-        {isEffortSetting(setting) ? (
+        {variant === "text" ? null : isEffortSetting(setting) ? (
           <Gauge className="size-3.5 shrink-0" strokeWidth={1.75} />
         ) : setting.id === "serviceTier" ? (
           <Zap className="size-3.5 shrink-0" strokeWidth={1.75} />
         ) : null}
         <span
-          className={`min-w-0 truncate ${variant === "plain" ? "" : "text-[11px]"}`}
+          className={`min-w-0 truncate ${variant === "pill" ? "text-[11px]" : ""}`}
         >
           {valueLabel}
         </span>
-        <ChevronDown
-          className={`size-3 shrink-0 text-content/50 ${open ? "rotate-180" : ""}`}
-          strokeWidth={1.75}
-        />
+        {variant === "text" ? null : (
+          <ChevronDown
+            className={`size-3 shrink-0 text-content/50 ${open ? "rotate-180" : ""}`}
+            strokeWidth={1.75}
+          />
+        )}
       </button>
 
       {open ? (

@@ -6089,8 +6089,16 @@ pub async fn move_path(from: String, dest_parent: String) -> Result<String, Stri
 }
 
 #[tauri::command]
-pub fn reveal_path(path: String) -> Result<(), String> {
-    let path = expand_home(&path);
+pub async fn reveal_path(path: String) -> Result<(), String> {
+    // On Linux `xdg-open` can stay alive until the file manager window closes;
+    // waiting on it from the main thread hangs the UI.
+    tauri::async_runtime::spawn_blocking(move || reveal_path_sync(&path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn reveal_path_sync(path: &str) -> Result<(), String> {
+    let path = expand_home(path);
     if !path.exists() {
         return Err(format!("{}: No such file or directory", path.display()));
     }
