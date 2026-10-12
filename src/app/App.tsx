@@ -5069,6 +5069,7 @@ function Workspace({
 
   const onRenameHistorySession = useCallback(
     async (sessionId: string, displayTitle: string) => {
+      if (removingSessionIds.current.has(sessionId)) return;
       const trimmed = displayTitle.trim();
       if (!trimmed) return;
       invalidateLoadedSession(sessionId);
@@ -5086,7 +5087,7 @@ function Workspace({
         persistSession(updated);
       } else {
         const restored = await getSession(sessionId).catch(() => null);
-        if (!restored) {
+        if (!restored || removingSessionIds.current.has(sessionId)) {
           void refreshHistory(sidebarCwd);
           return;
         }
@@ -5319,6 +5320,7 @@ function Workspace({
       try {
         const remover = createSessionRemover({
           mode,
+          archiveIdleOnly: mode === "archive" && origin === "cli",
           preserveOpenFiles: origin === "cli",
           scope: tabCloseScope,
           replacement: {
@@ -6609,6 +6611,7 @@ function Workspace({
 
   const onModelChange = useCallback(
     (sessionId: string, harness: HarnessId, model: string) => {
+      if (removingSessionIds.current.has(sessionId)) return;
       const current = sessionsRef.current.find((s) => s.id === sessionId);
       if (!current) return;
       if (isPreparingHandoff(current)) return;
@@ -6662,6 +6665,7 @@ function Workspace({
 
   const onModelSettingsChange = useCallback(
     (sessionId: string, modelSettings: Record<string, string>) => {
+      if (removingSessionIds.current.has(sessionId)) return;
       saveLastModelSettings(modelSettings);
       setSessions((prev) =>
         prev.map((s) => (s.id === sessionId ? { ...s, modelSettings } : s)),
@@ -6672,6 +6676,7 @@ function Workspace({
 
   const onRuntimeModeChange = useCallback(
     (sessionId: string, runtimeMode: RuntimeMode) => {
+      if (removingSessionIds.current.has(sessionId)) return;
       setSessions((prev) =>
         prev.map((s) => (s.id === sessionId ? { ...s, runtimeMode } : s)),
       );
@@ -6686,6 +6691,7 @@ function Workspace({
       attachments: Attachment[] = [],
       appRequestId?: string,
     ) => {
+      if (removingSessionIds.current.has(sessionId)) return false;
       const current = sessionsRef.current.find(
         (session) => session.id === sessionId,
       );
@@ -6737,6 +6743,7 @@ function Workspace({
 
   const onRemoveDraft = useCallback(
     (sessionId: string, draftBlockId: string) => {
+      if (removingSessionIds.current.has(sessionId)) return false;
       const current = sessionsRef.current.find(
         (session) => session.id === sessionId,
       );
@@ -6777,6 +6784,14 @@ function Workspace({
       attachments: Attachment[] = [],
       options?: SubmitOptions,
     ): SubmissionAcceptance => {
+      if (removingSessionIds.current.has(sessionId)) {
+        options?.onSettled?.({
+          status: "failed",
+          text: "",
+          error: "Session is unavailable or already running",
+        });
+        return false;
+      }
       const remote = sessionsRef.current.find(
         (session) => session.id === sessionId,
       );
@@ -7514,6 +7529,7 @@ function Workspace({
           providerAccountId,
         })
           .then(async (generated) => {
+            if (removingSessionIds.current.has(sessionId)) return;
             if (
               options?.refreshTitle &&
               !isFirstTurn &&
@@ -7526,6 +7542,7 @@ function Workspace({
               workCwd,
               generated?.workItem ?? null,
             );
+            if (removingSessionIds.current.has(sessionId)) return;
             if (!generated && !linkedWorkItem) return;
             setSessions((prev) =>
               prev.map((s) => {

@@ -22,7 +22,11 @@ function deferred() {
   return { promise, resolve };
 }
 
-function fixture(mode: "archive" | "delete", preserveOpenFiles = false) {
+function fixture(
+  mode: "archive" | "delete",
+  preserveOpenFiles = false,
+  archiveIdleOnly = false,
+) {
   const busy = mode === "delete";
   const closing: Session = {
     ...newSession("cursor", "/tmp/project"),
@@ -82,6 +86,7 @@ function fixture(mode: "archive" | "delete", preserveOpenFiles = false) {
     run: () => {
       const remover = createSessionRemover({
         mode,
+        archiveIdleOnly,
         preserveOpenFiles,
         replacement: { cwd: "/tmp/project", harness: "cursor" },
         workspace: {
@@ -279,29 +284,147 @@ it("archives an idle transcript and reports whether the archive state changed", 
   expect(f.archiveChanged()).toBe(false);
 });
 
-it("does not stop a busy session, including one that turns busy during confirmation", async () => {
-  const alreadyBusy = fixture("archive");
-  alreadyBusy.write({
-    ...alreadyBusy.read(),
-    sessions: alreadyBusy.read().sessions.map((session) =>
-      session.id === alreadyBusy.closing.id
-        ? { ...session, busy: true }
+it("archives an idle API target without calling the stop path", async () => {
+  const f = fixture("archive", false, true);
+  expect(await f.run()).toBe(true);
+  expect(f.stop).not.toHaveBeenCalled();
+  expect(f.archiveChanged()).toBe(true);
+});
+
+it("keeps a target active if it becomes busy during a later archive write", async () => {
+  const f = fixture("archive", false, true);
+  const saving = deferred();
+  mocks.invoke.mockImplementation(async (command, args) => {
+    if (command === "session_upsert") {
+      await saving.promise;
+      return { ...args.session, createdAt: 1, updatedAt: 1 };
+    }
+    return false;
+  });
+  const pending = f.run();
+  await vi.waitFor(() => expect(mocks.invoke).toHaveBeenCalledOnce());
+  f.write({
+    ...f.read(),
+    sessions: f.read().sessions.map((session) =>
+      session.id === f.closing.id
+        ? {
+            ...session,
+            busy: true,
+            blocks: [
+              ...session.blocks,
+              {
+                id: "later-turn",
+                role: "user" as const,
+                text: "new activity",
+              },
+            ],
+          }
         : session,
     ),
+  });
+  saving.resolve();
+  expect(await pending).toBe(false);
+  expect(f.stop).not.toHaveBeenCalled();
+  expect(mocks.invoke.mock.calls.map(([name]) => name)).toEqual([
+    "session_upsert",
+  ]);
+  expect(f.read().sessions[0].busy).toBe(true);
+  expect(f.read().tabs).toHaveLength(2);
+});
+
+it("undoes an archive flag if the target becomes busy while it is being stored", async () => {
+  const f = fixture("archive", false, true);
+  const archiving = deferred();
+  mocks.invoke.mockImplementation(async (command, args) => {
+    if (command === "session_upsert")
+      return { ...args.session, createdAt: 1, updatedAt: 1 };
+    if (command === "session_set_archived") {
+      if (args.archived) await archiving.promise;
+      return true;
+    }
+  });
+  const pending = f.run();
+  await vi.waitFor(() =>
+    expect(mocks.invoke).toHaveBeenCalledWith("session_set_archived", {
+      sessionId: f.closing.id,
+      archived: true,
+    }),
+  );
+  f.write({
+    ...f.read(),
+    sessions: f
+      .read()
+      .sessions.map((session) =>
+        session.id === f.closing.id ? { ...session, busy: true } : session,
+      ),
+  });
+  archiving.resolve();
+  expect(await pending).toBe(false);
+  expect(
+    mocks.invoke.mock.calls.map(([name, args]) => [name, args.archived]),
+  ).toEqual([
+    ["session_upsert", undefined],
+    ["session_set_archived", true],
+    ["session_set_archived", false],
+  ]);
+  expect(f.commit).not.toHaveBeenCalled();
+  expect(f.read().sessions[0].busy).toBe(true);
+});
+
+it("keeps ordinary UI archive able to stop a busy session", async () => {
+  const f = fixture("archive");
+  f.write({
+    ...f.read(),
+    sessions: f.read().sessions.map((session) =>
+      session.id === f.closing.id
+        ? {
+            ...session,
+            busy: true,
+            blocks: [
+              { id: "user", role: "user" as const, text: "hello" },
+              {
+                id: "answer",
+                role: "assistant" as const,
+                text: "partial",
+                streaming: true,
+              },
+            ],
+          }
+        : session,
+    ),
+  });
+  await expect(f.run()).resolves.toBe(true);
+  expect(f.stop).toHaveBeenCalledExactlyOnceWith(f.closing.id);
+  expect(f.commit).toHaveBeenCalledOnce();
+});
+
+it("does not stop an API archive target that is already busy or turns busy during confirmation", async () => {
+  const alreadyBusy = fixture("archive", false, true);
+  alreadyBusy.write({
+    ...alreadyBusy.read(),
+    sessions: alreadyBusy
+      .read()
+      .sessions.map((session) =>
+        session.id === alreadyBusy.closing.id
+          ? { ...session, busy: true }
+          : session,
+      ),
   });
   expect(await alreadyBusy.run()).toBe(false);
   expect(alreadyBusy.confirmClose).not.toHaveBeenCalled();
   expect(alreadyBusy.stop).not.toHaveBeenCalled();
 
-  const racesBusy = fixture("archive");
+  const racesBusy = fixture("archive", false, true);
   racesBusy.confirmClose.mockImplementation(async () => {
     racesBusy.write({
       ...racesBusy.read(),
-      sessions: racesBusy.read().sessions.map((session) =>
-        session.id === racesBusy.closing.id
-          ? { ...session, busy: true }
-          : session,
-      ),
+      sessions: racesBusy
+        .read()
+        .sessions.map((session) =>
+          session.id === racesBusy.closing.id
+            ? { ...session, busy: true }
+            : session,
+        ),
     });
     return true;
   });
