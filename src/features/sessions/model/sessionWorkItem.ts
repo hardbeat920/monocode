@@ -122,9 +122,11 @@ export function linkedWorkItemFromAutomationEvent(run: {
   eventKey?: string;
 }): LinkedWorkItem | null {
   if (run.trigger !== "event" || run.eventKind !== "github") return null;
-  const match = /^github:(pr|issue):([^/:]+\/[^/:]+):([1-9]\d*)$/i.exec(
-    run.eventKey?.trim() ?? "",
-  );
+  // Changes after opening append `:<change>:<timestamp>` to the item's key.
+  const match =
+    /^github:(pr|issue):([^/:]+\/[^/:]+):([1-9]\d*)(?::(?:head_changed:[a-f0-9]+|[a-z_]+:\d+))?$/i.exec(
+      run.eventKey?.trim() ?? "",
+    );
   if (!match) return null;
   const number = Number(match[3]);
   if (!validNumber(number)) return null;

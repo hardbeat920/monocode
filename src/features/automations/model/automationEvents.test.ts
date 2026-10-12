@@ -4,6 +4,7 @@ import {
   automationEventKey,
   claimInboxAutomationRuns,
   inboxAppearedEvent,
+  inboxTransitionEvent,
   matchInboxAutomations,
 } from "./automationEvents";
 import {
@@ -432,4 +433,578 @@ describe("inbox automation events", () => {
     invoke.mockReset();
     window.localStorage.clear();
   });
+});
+
+describe("inbox transition events", () => {
+  const issue = (overrides: Partial<InboxItem> = {}) =>
+    item({
+      kind: "issue",
+      url: "https://github.com/acme/web/issues/12",
+      ...overrides,
+    });
+
+  function stubStorage(): Map<string, string> {
+    const storage = new Map<string, string>();
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      value: {
+        clear: () => storage.clear(),
+        getItem: (key: string) => storage.get(key) ?? null,
+        removeItem: (key: string) => storage.delete(key),
+        setItem: (key: string, value: string) => storage.set(key, value),
+      },
+    });
+    return storage;
+  }
+
+  function claimCalls() {
+    return invoke.mock.calls
+      .filter(([command]) => command === "automations_claim_event")
+      .map(([, args]) => (args as { claim: Record<string, unknown> }).claim);
+  }
+
+  it("maps GitHub state changes to their own trigger events", () => {
+    expect(inboxTransitionEvent(issue(), "reopened")).toEqual({
+      kind: "github",
+      event: "issue_reopened",
+    });
+    expect(inboxTransitionEvent(issue(), "closed")).toEqual({
+      kind: "github",
+      event: "issue_closed",
+    });
+    expect(inboxTransitionEvent(item(), "reopened")).toEqual({
+      kind: "github",
+      event: "pull_request_reopened",
+    });
+    expect(inboxTransitionEvent(item(), "closed")).toEqual({
+      kind: "github",
+      event: "pull_request_closed",
+    });
+    expect(inboxTransitionEvent(item(), "merged")).toEqual({
+      kind: "github",
+      event: "pull_request_merged",
+    });
+    expect(inboxTransitionEvent(item(), "ready_for_review")).toEqual({
+      kind: "github",
+      event: "pull_request_ready_for_review",
+    });
+  });
+
+  it("has no event for changes an item cannot go through, or for other providers", () => {
+    expect(inboxTransitionEvent(issue(), "merged")).toBeNull();
+    expect(inboxTransitionEvent(issue(), "ready_for_review")).toBeNull();
+    expect(
+      inboxTransitionEvent(item({ provider: "gitlab" }), "reopened"),
+    ).toBeNull();
+  });
+
+  it("keeps the opened key and gives every later change its own key", () => {
+    const first = issue({ updatedAt: "2026-09-20T10:00:00Z" });
+    const second = issue({ updatedAt: "2026-09-22T10:00:00Z" });
+    expect(automationEventKey(first)).toBe("github:issue:acme/web:12");
+    expect(automationEventKey(first, "reopened")).toBe(
+      `github:issue:acme/web:12:reopened:${at("2026-09-20T10:00:00Z")}`,
+    );
+    expect(automationEventKey(first, "reopened")).toBe(
+      automationEventKey({ ...first }, "reopened"),
+    );
+    expect(automationEventKey(second, "reopened")).not.toBe(
+      automationEventKey(first, "reopened"),
+    );
+    expect(automationEventKey(first, "closed")).not.toBe(
+      automationEventKey(first, "reopened"),
+    );
+  });
+
+  it("fires a reopened issue into its trigger and tells the agent why", () => {
+    const again = automation({
+      prompt: "Look at this again.",
+      triggers: [createAutomationTrigger("github", "issue_reopened")],
+    });
+    const reopened = issue({ updatedAt: "2026-09-22T10:00:00Z" });
+    const [match] = matchInboxAutomations(
+      [again],
+      [],
+      [{ item: reopened, transition: "reopened" }],
+    );
+    expect(match?.trigger.event).toBe("issue_reopened");
+    expect(match?.eventKey).toBe(automationEventKey(reopened, "reopened"));
+    expect(match?.occurredAt).toBe(at("2026-09-22T10:00:00Z"));
+    expect(match?.prompt).toContain("Look at this again.");
+    expect(match?.prompt).toContain("This GitHub issue was reopened:");
+    expect(match?.prompt).toContain("#12 Fix checkout");
+    expect(match?.prompt).toContain("https://github.com/acme/web/issues/12");
+    expect(match?.prompt).not.toContain("Work on this GitHub issue:");
+  });
+
+  it("keeps opened and changed events apart", () => {
+    const onOpen = automation({
+      id: "on-open",
+      triggers: [createAutomationTrigger("github", "issue_opened")],
+    });
+    const onReopen = automation({
+      id: "on-reopen",
+      triggers: [createAutomationTrigger("github", "issue_reopened")],
+    });
+    const both = [onOpen, onReopen];
+    expect(
+      matchInboxAutomations(both, [issue()]).map((match) => match.automation.id),
+    ).toEqual(["on-open"]);
+    expect(
+      matchInboxAutomations(
+        both,
+        [],
+        [{ item: issue(), transition: "reopened" }],
+      ).map((match) => match.automation.id),
+    ).toEqual(["on-reopen"]);
+    expect(
+      matchInboxAutomations(both, [], [{ item: issue(), transition: "closed" }]),
+    ).toEqual([]);
+  });
+
+  it("separates merged pull requests from closed ones", () => {
+    const onMerge = automation({
+      id: "on-merge",
+      triggers: [createAutomationTrigger("github", "pull_request_merged")],
+    });
+    const onClose = automation({
+      id: "on-close",
+      triggers: [createAutomationTrigger("github", "pull_request_closed")],
+    });
+    const merged = item({ state: "merged" });
+    const [match] = matchInboxAutomations(
+      [onMerge, onClose],
+      [],
+      [{ item: merged, transition: "merged" }],
+    );
+    expect(match?.automation.id).toBe("on-merge");
+    expect(match?.prompt).toContain("This GitHub pull request was merged:");
+    expect(
+      matchInboxAutomations(
+        [onMerge, onClose],
+        [],
+        [{ item: item({ state: "closed" }), transition: "closed" }],
+      ).map((entry) => entry.automation.id),
+    ).toEqual(["on-close"]);
+  });
+
+  it("fires a draft marked ready into its own trigger", () => {
+    const onReady = automation({
+      triggers: [
+        createAutomationTrigger("github", "pull_request_ready_for_review"),
+      ],
+    });
+    const [match] = matchInboxAutomations(
+      [onReady],
+      [],
+      [{ item: item(), transition: "ready_for_review" }],
+    );
+    expect(match?.prompt).toContain(
+      "This GitHub pull request was marked ready for review:",
+    );
+    expect(matchInboxAutomations([onReady], [item()])).toEqual([]);
+  });
+
+  it("lets one automation run for the open and for a later reopen of the same issue", () => {
+    const both = automation({
+      triggers: [
+        createAutomationTrigger("github", "issue_opened"),
+        createAutomationTrigger("github", "issue_reopened"),
+      ],
+    });
+    const [opened] = matchInboxAutomations([both], [issue()]);
+    const [reopened] = matchInboxAutomations(
+      [both],
+      [],
+      [{ item: issue(), transition: "reopened" }],
+    );
+    expect(opened?.eventKey).toBe("github:issue:acme/web:12");
+    expect(opened?.trigger.event).toBe("issue_opened");
+    expect(reopened?.eventKey).toBe(automationEventKey(issue(), "reopened"));
+    expect(reopened?.trigger.event).toBe("issue_reopened");
+  });
+
+  it("scopes changed items to the automation's project and repo filter", () => {
+    const elsewhere = automation({
+      cwd: "/tmp/other",
+      triggers: [createAutomationTrigger("github", "issue_reopened")],
+    });
+    const filtered = automation({
+      id: "filtered",
+      triggers: [
+        createAutomationTrigger("github", "issue_reopened", {
+          repos: ["acme/api"],
+        }),
+      ],
+    });
+    const allowed = automation({
+      id: "allowed",
+      triggers: [
+        createAutomationTrigger("github", "issue_reopened", {
+          repos: ["acme/web"],
+        }),
+      ],
+    });
+    expect(
+      matchInboxAutomations(
+        [elsewhere, filtered, allowed],
+        [],
+        [{ item: issue(), transition: "reopened" }],
+      ).map((match) => match.automation.id),
+    ).toEqual(["allowed"]);
+  });
+
+  it("claims a reopened issue under its own key and retries it after a failed claim", async () => {
+    stubStorage();
+    const again = automation({
+      triggers: [createAutomationTrigger("github", "issue_reopened")],
+    });
+    const reopened = issue({ updatedAt: "2026-09-22T10:00:00Z" });
+    let rejectClaim = true;
+    invoke.mockImplementation(async (command: string) => {
+      if (command === "automations_list") return [again];
+      if (command === "automations_claim_event") {
+        if (rejectClaim) throw new Error("database busy");
+        return {
+          automation: again,
+          run: {
+            id: "run-id",
+            automationId: again.id,
+            trigger: "event",
+            scheduledFor: at("2026-09-22T10:00:00Z"),
+            createdAt: at("2026-09-22T10:00:01Z"),
+            status: "pending",
+          },
+        };
+      }
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    expect(
+      await claimInboxAutomationRuns([], at("2026-09-22T10:00:05Z"), [
+        { item: reopened, transition: "reopened" },
+      ]),
+    ).toEqual([]);
+    rejectClaim = false;
+    const retried = await claimInboxAutomationRuns([]);
+
+    expect(retried).toHaveLength(1);
+    expect(retried[0]?.prompt).toContain("This GitHub issue was reopened:");
+    expect(retried[0]?.linkedWorkItem).toEqual({
+      kind: "issue",
+      repo: "acme/web",
+      number: 12,
+      url: "https://github.com/acme/web/issues/12",
+    });
+    const claims = claimCalls();
+    expect(claims).toHaveLength(2);
+    for (const claim of claims) {
+      expect(claim.eventKey).toBe(automationEventKey(reopened, "reopened"));
+      expect(claim.event).toBe("issue_reopened");
+      expect(claim.scheduledFor).toBe(at("2026-09-22T10:00:00Z"));
+    }
+    expect(await claimInboxAutomationRuns([])).toEqual([]);
+    expect(claimCalls()).toHaveLength(2);
+    invoke.mockReset();
+    window.localStorage.clear();
+  });
+
+  it("still retries opened items saved by an older version", async () => {
+    const storage = stubStorage();
+    storage.set(
+      "monocode.automation-inbox-retries.v1",
+      JSON.stringify([issue()]),
+    );
+    const triage = automation({
+      triggers: [createAutomationTrigger("github", "issue_opened")],
+    });
+    invoke.mockImplementation(async (command: string) => {
+      if (command === "automations_list") return [triage];
+      if (command === "automations_claim_event") {
+        return {
+          automation: triage,
+          run: {
+            id: "run-id",
+            automationId: triage.id,
+            trigger: "event",
+            scheduledFor: at("2026-09-19T15:00:00Z"),
+            createdAt: at("2026-09-19T15:00:01Z"),
+            status: "pending",
+          },
+        };
+      }
+      throw new Error(`Unexpected command: ${command}`);
+    });
+    vi.resetModules();
+    const fresh = await import("./automationEvents");
+
+    expect(await fresh.claimInboxAutomationRuns([])).toHaveLength(1);
+    expect(claimCalls()[0]?.eventKey).toBe("github:issue:acme/web:12");
+    expect(claimCalls()[0]?.event).toBe("issue_opened");
+    expect(storage.has("monocode.automation-inbox-retries.v1")).toBe(false);
+    invoke.mockReset();
+  });
+});
+
+
+describe("PR head review queue", () => {
+  const head = (sha: string, overrides: Partial<InboxItem> = {}) =>
+    item({ headRefOid: sha.repeat(40), ...overrides });
+  const moved = (sha: string, previous = "a") => ({
+    item: head(sha),
+    transition: "head_changed" as const,
+    previousHead: previous.repeat(40),
+  });
+  const review = () =>
+    automation({
+      triggers: [
+        createAutomationTrigger("github", "pull_request_head_changed"),
+      ],
+    });
+
+  async function freshQueue() {
+    localStorage.clear();
+    invoke.mockReset();
+    vi.resetModules();
+    return import("./automationEvents");
+  }
+
+  it("keys by head, keeps opened claims compatible, and includes both heads and PR identity", () => {
+    const b = head("b");
+    expect(automationEventKey(b)).toBe("github:pr:acme/web:12");
+    expect(automationEventKey(b, "head_changed")).toBe(
+      `github:pr:acme/web:12:head_changed:${b.headRefOid}`,
+    );
+    expect(
+      automationEventKey({ ...b, updatedAt: "later" }, "head_changed"),
+    ).toBe(automationEventKey(b, "head_changed"));
+    const matches = matchInboxAutomations(
+      [review()],
+      [],
+      [moved("b"), moved("b")],
+    );
+    expect(matches).toHaveLength(1);
+    expect(matches[0].prompt).toContain(
+      `Previous observed head: ${"a".repeat(40)}`,
+    );
+    expect(matches[0].prompt).toContain(`Current head: ${b.headRefOid}`);
+    expect(matches[0].prompt).toContain("https://github.com/acme/web/pull/12");
+    expect(matches[0].prompt).toContain("acme/web");
+  });
+
+  it("honors enabled/project/repository/actor/draft/state filters and preserves workspace settings", () => {
+    for (const change of [
+      { draft: true },
+      { state: "closed" },
+      { state: "merged" },
+      { kind: "issue" as const },
+      { provider: "gitlab" as const },
+      { projectPath: "/tmp/other" },
+      { headRefOid: undefined },
+    ]) {
+      expect(
+        matchInboxAutomations(
+          [review()],
+          [],
+          [{ ...moved("b"), item: head("b", change) }],
+        ),
+      ).toEqual([]);
+    }
+    for (const change of [
+      { enabled: false },
+      { cwd: "/tmp/other" },
+      {
+        triggers: [
+          createAutomationTrigger("github", "pull_request_head_changed", {
+            repo: "acme/other",
+          }),
+        ],
+      },
+      {
+        triggers: [
+          createAutomationTrigger("github", "pull_request_head_changed", {
+            actor: "me",
+          }),
+        ],
+      },
+    ]) {
+      expect(
+        matchInboxAutomations([{ ...review(), ...change }], [], [moved("b")]),
+      ).toEqual([]);
+    }
+    const config = {
+      ...review(),
+      reuseSession: true,
+      workspaceMode: "existing" as const,
+      worktreeCwd: "/tmp/tree",
+    };
+    expect(
+      matchInboxAutomations([config], [], [moved("b")])[0].automation,
+    ).toBe(config);
+  });
+
+  it("retries failed claims and rejected launches across restart without duplicating accepted heads", async () => {
+    let queue = await freshQueue();
+    const config = review();
+    const persistedRuns = new Map<string, { id: string; status: string }>();
+    let failClaim = true;
+    invoke.mockImplementation(async (command, args) => {
+      if (command === "automations_list") return [config];
+      if (command === "automations_claim_event") {
+        if (failClaim) throw new Error("database busy");
+        const key = args.claim.eventKey;
+        const stored = persistedRuns.get(key);
+        if (stored && stored.status !== "pending") return null;
+        const run = stored ?? {
+          id: `run-${persistedRuns.size}`,
+          status: "pending",
+        };
+        persistedRuns.set(key, run);
+        return { automation: config, run };
+      }
+      throw new Error(command);
+    });
+    expect(await queue.claimInboxAutomationRuns([], 1, [moved("b")])).toEqual(
+      [],
+    );
+    failClaim = false;
+    vi.resetModules();
+    queue = await import("./automationEvents");
+    expect(await queue.claimInboxAutomationRuns([])).toEqual([]); // no fresh GitHub state yet
+    const [first] = await queue.claimInboxAutomationRuns(
+      [],
+      2,
+      [],
+      [head("b")],
+    );
+    const [retry] = await queue.claimInboxAutomationRuns(
+      [],
+      3,
+      [],
+      [head("b")],
+    );
+    expect(retry.run.id).toBe(first.run.id);
+    expect(retry.prompt).toContain(`Previous observed head: ${"a".repeat(40)}`);
+    persistedRuns.values().next().value!.status = "running";
+    vi.resetModules();
+    queue = await import("./automationEvents");
+    expect(
+      await queue.claimInboxAutomationRuns([], 4, [], [head("b")]),
+    ).toEqual([]);
+    expect(persistedRuns.size).toBe(1);
+    expect(
+      localStorage.getItem("monocode.automation-inbox-retries.v1"),
+    ).toBeNull();
+  });
+
+  it("coalesces newer heads during an active review and retains them across refresh failures/restart", async () => {
+    let queue = await freshQueue();
+    let active = true;
+    const seen: string[] = [];
+    invoke.mockImplementation(async (command, args) => {
+      if (command === "automations_list") return [review()];
+      if (command === "automations_claim_event") {
+        if (active) throw new Error("review still active");
+        seen.push(args.claim.eventKey);
+        return {
+          automation: review(),
+          run: { id: "latest", status: "pending" },
+        };
+      }
+      throw new Error(command);
+    });
+    await queue.claimInboxAutomationRuns([], 1, [moved("b")]);
+    queue.queueInboxAutomationEvents([], [moved("c", "b")]);
+    // An older queued callback cannot discard the newer revision.
+    await queue.claimInboxAutomationRuns([], 2, [], [head("b")]);
+    await queue.claimInboxAutomationRuns([]);
+    vi.resetModules();
+    queue = await import("./automationEvents");
+    active = false;
+    const due = await queue.claimInboxAutomationRuns([], 3, [], [head("c")]);
+    expect(due).toHaveLength(1);
+    expect(seen).toEqual([automationEventKey(head("c"), "head_changed")]);
+    expect(due[0].prompt).toContain(
+      `Previous observed head: ${"b".repeat(40)}`,
+    );
+  });
+
+  it("keeps pending head events separate when the same PR belongs to two project paths", async () => {
+    const queue = await freshQueue();
+    const other = { ...head("b"), projectPath: "/tmp/second" };
+    const configs = [
+      review(),
+      { ...review(), id: "second", cwd: other.projectPath },
+    ];
+    invoke.mockImplementation(async (command, args) => {
+      if (command === "automations_list") return configs;
+      if (command === "automations_claim_event")
+        return {
+          automation: configs.find((config) => config.id === args.automationId),
+          run: { id: args.automationId, status: "running" },
+        };
+      throw new Error(command);
+    });
+    const due = await queue.claimInboxAutomationRuns([], 1, [
+      moved("b"),
+      { ...moved("b"), item: other },
+    ]);
+    expect(due.map(({ automation }) => automation.cwd)).toEqual([
+      "/tmp/web",
+      "/tmp/second",
+    ]);
+  });
+
+  it("marks rejected pending launches skipped after closure without interrupting accepted runs", async () => {
+    const queue = await freshQueue();
+    queue.queueInboxAutomationEvents([], [moved("b")]);
+    const key = automationEventKey(head("b"), "head_changed");
+    invoke.mockImplementation(async (command) => {
+      if (command === "automations_list") return [review()];
+      if (command === "automation_runs_list")
+        return [
+          { id: "pending", eventKey: key, status: "pending" },
+          { id: "active", eventKey: key, status: "running" },
+        ];
+      if (command === "automation_run_update") return {};
+      throw new Error(command);
+    });
+    await queue.claimInboxAutomationRuns(
+      [],
+      2,
+      [],
+      [head("c", { state: "closed" })],
+    );
+    expect(
+      invoke.mock.calls.filter(([cmd]) => cmd === "automation_run_update"),
+    ).toEqual([
+      [
+        "automation_run_update",
+        expect.objectContaining({ runId: "pending", status: "skipped" }),
+      ],
+    ]);
+  });
+
+  it.each([{ state: "closed" }, { state: "merged" }, { draft: true }])(
+    "drops queued reviews when fresh state is %o",
+    async (change) => {
+      const queue = await freshQueue();
+      queue.queueInboxAutomationEvents([], [moved("b")]);
+      invoke.mockImplementation(async (command) => {
+        if (command === "automations_list") return [review()];
+        if (command === "automation_runs_list") return [];
+        throw new Error(`Must not claim: ${command}`);
+      });
+      expect(
+        await queue.claimInboxAutomationRuns([], 2, [], [head("b", change)]),
+      ).toEqual([]);
+      expect(invoke.mock.calls.map(([command]) => command)).toEqual([
+        "automations_list",
+        "automation_runs_list",
+      ]);
+      expect(
+        localStorage.getItem("monocode.automation-inbox-retries.v1"),
+      ).toBeNull();
+    },
+  );
 });

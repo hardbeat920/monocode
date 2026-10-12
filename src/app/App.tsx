@@ -26,6 +26,12 @@ import {
 } from "../features/agent-app/model/agentApp";
 import { submitWithSettlement } from "./model/managedSubmission";
 import {
+  dispatchInboxAutomationRuns,
+  deferStaleInboxHeadClaim,
+  submitAutomationRun,
+} from "./model/automationSubmission";
+import { canReuseAutomationSession } from "./model/automationSessionReuse";
+import {
   submitAfterProjectSync,
   type SubmissionAcceptance,
 } from "./model/submissionAcceptance";
@@ -640,7 +646,10 @@ import {
 } from "../features/automations/model/automations";
 import { useQuickComposerLaunches } from "../features/quick-composer/hooks/useQuickComposerLaunches";
 import type { QuickLaunch } from "../features/quick-composer/model/quickComposer";
-import { claimInboxAutomationRuns } from "../features/automations/model/automationEvents";
+import {
+  claimInboxAutomationRuns,
+  queueInboxAutomationEvents,
+} from "../features/automations/model/automationEvents";
 import {
   SECOND_OPINION_TITLE,
   buildSecondOpinionRequest,
@@ -8353,6 +8362,7 @@ function Workspace({
       reveal = false,
       prompt = run.prompt ?? automation.prompt,
       sourceWorkItem?: LinkedWorkItem,
+      isInboxRevisionCurrent?: () => boolean,
     ) => {
       let reservationId: string | undefined;
       let releaseAfterSettle = false;
@@ -8370,6 +8380,7 @@ function Workspace({
             ? sessionsRef.current.find(
                 (entry) =>
                   entry.id === automation.lastSessionId &&
+                  canReuseAutomationSession(entry.id) &&
                   entry.harness === automation.harness &&
                   !entry.busy &&
                   !entry.worktreeRemoved &&
@@ -8460,36 +8471,30 @@ function Workspace({
         await updateAutomationRun(run.id, "running", {
           sessionId: session.id,
         });
+        if (
+          isInboxRevisionCurrent &&
+          (await deferStaleInboxHeadClaim(run, isInboxRevisionCurrent))
+        )
+          return;
         // From here the settlement callback owns reservation cleanup, including
         // a rejected submission that never starts an agent turn.
         releaseAfterSettle = true;
-        await submitWithSettlement({
-          submit: (onSettled) =>
+        await submitAutomationRun(
+          run,
+          session.id,
+          (onSettled) =>
             submitSession(session.id, prompt, [], {
               refreshTitle: eventRun,
               onSettled,
             }),
-          rejectionMessage:
-            "The selected agent session could not start this run.",
-          onSettled: (outcome) => {
-            const status =
-              outcome.status === "completed"
-                ? "succeeded"
-                : outcome.status === "cancelled"
-                  ? "cancelled"
-                  : "failed";
-            void updateAutomationRun(run.id, status, {
-              sessionId: session.id,
-              ...(outcome.error ? { error: outcome.error } : {}),
-            })
-              .catch(() => undefined)
-              .finally(releaseReservation);
-          },
-        });
+          releaseReservation,
+        );
       } catch (reason: unknown) {
-        await updateAutomationRun(run.id, "failed", {
-          error: reason instanceof Error ? reason.message : String(reason),
-        }).catch(() => undefined);
+        await updateAutomationRun(
+          run.id,
+          run.event === "pull_request_head_changed" ? "pending" : "failed",
+          { error: reason instanceof Error ? reason.message : String(reason) },
+        ).catch(() => undefined);
         throw reason;
       } finally {
         if (!releaseAfterSettle) releaseReservation();
@@ -8695,21 +8700,38 @@ function Workspace({
     };
   }, [ensureAutomationRecovery, launchAutomation]);
 
-  const onInboxAppeared = useCallback(
-    (items: Parameters<typeof claimInboxAutomationRuns>[0]) => {
-      void ensureAutomationRecovery()
-        .then(() => claimInboxAutomationRuns(items))
-        .then((due) => {
-          for (const item of due) {
-            void launchAutomation(
-              item.automation,
-              item.run,
-              false,
-              item.prompt,
-              item.linkedWorkItem,
-            ).catch(() => undefined);
-          }
-        })
+  const inboxDispatch = useRef(Promise.resolve());
+  const inboxActivityRevision = useRef(0);
+  const onInboxActivity = useCallback(
+    (
+      items: Parameters<typeof claimInboxAutomationRuns>[0],
+      transitions: Parameters<typeof claimInboxAutomationRuns>[2],
+      observed: Parameters<typeof claimInboxAutomationRuns>[3],
+    ) => {
+      queueInboxAutomationEvents(items, transitions);
+      const revision = ++inboxActivityRevision.current;
+      // One acceptance at a time; agent completion is not awaited. This also
+      // keeps a failed launch retry from racing its original dispatch.
+      inboxDispatch.current = inboxDispatch.current
+        .then(() => ensureAutomationRecovery())
+        .then(() =>
+          dispatchInboxAutomationRuns(
+            () =>
+              revision === inboxActivityRevision.current
+                ? claimInboxAutomationRuns([], Date.now(), [], observed)
+                : Promise.resolve([]),
+            () => revision === inboxActivityRevision.current,
+            (item) =>
+              launchAutomation(
+                item.automation,
+                item.run,
+                false,
+                item.prompt,
+                item.linkedWorkItem,
+                () => revision === inboxActivityRevision.current,
+              ),
+          ),
+        )
         .catch(() => undefined);
     },
     [ensureAutomationRecovery, launchAutomation],
@@ -11344,7 +11366,7 @@ function Workspace({
     linkedSessionUpdateIds,
     linkedSessionUpdates,
   } = useInboxActivity(recents, sidebarCwd, sidebarHistory, {
-    onAppeared: onInboxAppeared,
+    onActivity: onInboxActivity,
   });
   linkedSessionUpdatesRef.current = linkedSessionUpdates;
   const inboxRelatedSessions = useMemo(() => {

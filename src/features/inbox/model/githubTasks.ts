@@ -69,6 +69,8 @@ export type GithubWorkItem = {
   labels: GithubLabel[];
   assignees: GithubAssignee[];
   draft: boolean;
+  /** Present for GitHub PR snapshots, including force-pushed revisions. */
+  headRefOid?: string;
   repo: string;
 };
 

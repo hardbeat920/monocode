@@ -47,6 +47,12 @@ MonoCode is still early. If something breaks, [report a bug](https://github.com/
 - [Agent access with /operator](docs/agent-access.md)
 - [Remote sessions, experimental](docs/remote-access.md)
 
+### PR review automations
+
+Combine **Pull request opened** and **Pull request head changed** to review later
+pushes through the shared Inbox refresh. See [setup, retries and restart
+behavior](docs/pr-review-automations.md).
+
 ## Build from source
 
 You’ll need Node.js 20+ and a stable Rust toolchain. See [build setup](docs/building.md) for platform dependencies and packaging.
