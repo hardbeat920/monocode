@@ -46,9 +46,7 @@ export function liveAgentsFromSessions(
         isLiveAgentSession(session) &&
         (isInFlightSession(session) || unseenFinishedIds.has(session.id)),
     )
-    .map((session) =>
-      toLiveAgent(session, unseenFinishedIds.has(session.id)),
-    )
+    .map((session) => toLiveAgent(session, unseenFinishedIds.has(session.id)))
     .sort(compareLiveAgents);
 }
 

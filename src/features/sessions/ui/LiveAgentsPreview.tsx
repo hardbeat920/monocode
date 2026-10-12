@@ -12,7 +12,12 @@ import {
   resolveTabGroupLabel,
   resolveTabGroupMascot,
 } from "../../workspace/model/tabGroups";
-import { Check, ChevronDown, ChevronUp, CircleAlert } from "../../../shared/ui/icons";
+import {
+  Check,
+  ChevronDown,
+  ChevronUp,
+  CircleAlert,
+} from "../../../shared/ui/icons";
 import { HarnessIcon } from "./HarnessIcon";
 import { ProjectMascot } from "../../projects/ui/ProjectMascot";
 import { TerminalSpinner } from "./TerminalSpinner";
