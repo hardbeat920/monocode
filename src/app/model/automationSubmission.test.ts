@@ -1,7 +1,10 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import type { AutomationRun } from "../../features/automations/model/automations";
 import type { ControlOutcome } from "../../features/orchestration/model/orchestration";
-import { submitAutomationRun } from "./automationSubmission";
+import {
+  dispatchInboxAutomationRuns,
+  submitAutomationRun,
+} from "./automationSubmission";
 
 const update = vi.hoisted(() => vi.fn());
 vi.mock("../../features/automations/model/automations", () => ({
@@ -11,6 +14,31 @@ const run = { id: "run", event: "pull_request_head_changed" } as AutomationRun;
 beforeEach(() => {
   update.mockReset();
   update.mockResolvedValue({});
+});
+
+it("releases a head claim when a newer Inbox poll lands during the delayed claim", async () => {
+  let resolveClaim!: (runs: readonly { run: AutomationRun }[]) => void;
+  const claim = new Promise<readonly { run: AutomationRun }[]>((resolve) => {
+    resolveClaim = resolve;
+  });
+  let revision = 1;
+  const launch = vi.fn(async () => undefined);
+  const dispatch = dispatchInboxAutomationRuns(
+    claim,
+    () => revision === 1,
+    launch,
+  );
+
+  revision = 2; // A later poll confirmed a draft/closure or a newer head.
+  resolveClaim([{ run }]);
+  await dispatch;
+
+  expect(update).toHaveBeenCalledExactlyOnceWith(
+    "run",
+    "pending",
+    expect.objectContaining({ error: expect.stringContaining("newer Inbox") }),
+  );
+  expect(launch).not.toHaveBeenCalled();
 });
 
 it.each(["false", "throw", "early failure"])(

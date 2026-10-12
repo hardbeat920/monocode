@@ -8322,7 +8322,10 @@ mod tests {
         let items = parse_github_work_items(json, "pr", "acme/web").unwrap();
         assert_eq!(items[0].kind, "pr");
         assert_eq!(items[0].head_ref_oid, "abc123");
-        assert_eq!(serde_json::to_value(&items[0]).unwrap()["headRefOid"], "abc123");
+        assert_eq!(
+            serde_json::to_value(&items[0]).unwrap()["headRefOid"],
+            "abc123"
+        );
         assert!(items[0].draft);
         assert!(items[0].labels.is_empty());
         assert_eq!(items[0].repo, "acme/web");

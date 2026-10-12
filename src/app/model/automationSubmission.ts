@@ -6,6 +6,34 @@ import {
 import { submitWithSettlement } from "./managedSubmission";
 import type { SubmissionAcceptance } from "./submissionAcceptance";
 
+/** Release a head claim when a newer Inbox poll completed before dispatch. */
+export async function releaseStaleInboxHeadClaim(
+  run: AutomationRun,
+  isCurrent: () => boolean,
+): Promise<boolean> {
+  if (run.event !== "pull_request_head_changed" || isCurrent()) return false;
+  try {
+    await updateAutomationRun(run.id, "pending", {
+      error: "A newer Inbox observation arrived before dispatch; waiting for fresh GitHub state.",
+    });
+    return true;
+  } catch {
+    // Keep the durable reservation moving if it cannot be released.
+    return false;
+  }
+}
+
+export async function dispatchInboxAutomationRuns<T extends { run: AutomationRun }>(
+  due: Promise<readonly T[]>,
+  isCurrent: () => boolean,
+  launch: (item: T) => Promise<unknown>,
+): Promise<void> {
+  for (const item of await due) {
+    if (await releaseStaleInboxHeadClaim(item.run, isCurrent)) continue;
+    await launch(item).catch(() => undefined);
+  }
+}
+
 /** Preserve the durable head claim on launch rejection, but never retry an
  * accepted agent turn (even if that turn later fails or is cancelled). */
 export async function submitAutomationRun(

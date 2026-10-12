@@ -25,7 +25,11 @@ import {
   type AppSessionPlacement,
 } from "../features/agent-app/model/agentApp";
 import { submitWithSettlement } from "./model/managedSubmission";
-import { submitAutomationRun } from "./model/automationSubmission";
+import {
+  dispatchInboxAutomationRuns,
+  releaseStaleInboxHeadClaim,
+  submitAutomationRun,
+} from "./model/automationSubmission";
 import { canReuseAutomationSession } from "./model/automationSessionReuse";
 import {
   submitAfterProjectSync,
@@ -8358,6 +8362,7 @@ function Workspace({
       reveal = false,
       prompt = run.prompt ?? automation.prompt,
       sourceWorkItem?: LinkedWorkItem,
+      isInboxRevisionCurrent?: () => boolean,
     ) => {
       let reservationId: string | undefined;
       let releaseAfterSettle = false;
@@ -8466,6 +8471,11 @@ function Workspace({
         await updateAutomationRun(run.id, "running", {
           sessionId: session.id,
         });
+        if (
+          isInboxRevisionCurrent &&
+          (await releaseStaleInboxHeadClaim(run, isInboxRevisionCurrent))
+        )
+          return;
         // From here the settlement callback owns reservation cleanup, including
         // a rejected submission that never starts an agent turn.
         releaseAfterSettle = true;
@@ -8705,21 +8715,22 @@ function Workspace({
       inboxDispatch.current = inboxDispatch.current
         .then(() => ensureAutomationRecovery())
         .then(() =>
-          revision === inboxActivityRevision.current
-            ? claimInboxAutomationRuns([], Date.now(), [], observed)
-            : [],
+          dispatchInboxAutomationRuns(
+            revision === inboxActivityRevision.current
+              ? claimInboxAutomationRuns([], Date.now(), [], observed)
+              : Promise.resolve([]),
+            () => revision === inboxActivityRevision.current,
+            (item) =>
+              launchAutomation(
+                item.automation,
+                item.run,
+                false,
+                item.prompt,
+                item.linkedWorkItem,
+                () => revision === inboxActivityRevision.current,
+              ),
+          ),
         )
-        .then(async (due) => {
-          for (const item of due) {
-            await launchAutomation(
-              item.automation,
-              item.run,
-              false,
-              item.prompt,
-              item.linkedWorkItem,
-            ).catch(() => undefined);
-          }
-        })
         .catch(() => undefined);
     },
     [ensureAutomationRecovery, launchAutomation],
