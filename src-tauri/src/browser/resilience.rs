@@ -1806,7 +1806,7 @@ fn an_access_request_nobody_answers_expires_without_touching_the_browser() {
 
 #[test]
 fn off_and_revocation_answer_a_waiting_request_at_once() {
-    // The full 50 s wait: each case must end long before it.
+    // The full 45 s wait: each case must end long before it.
     let world = Arc::new(World::managed(AccessMode::Ask));
     world.host.turn_started("s1", "main", "/repo", None);
     world.host.turn_started("s2", "main", "/repo", None);
@@ -1827,9 +1827,12 @@ fn off_and_revocation_answer_a_waiting_request_at_once() {
     assert_eq!(off.reason, Some(Reason::Off), "{off:?}");
     assert!(took < Duration::from_secs(2), "waited {took:?}");
     assert!(!world.requested("s2"));
-    // A late "Allow" from a prompt still on screen connects nothing.
+    // A late "Allow" from a prompt still on screen connects nothing. (The
+    // request itself already warmed the MonoCode browser up.)
+    let before = world.server.connections();
     world.host.answer_request("s2", "main", true);
-    assert_eq!(world.server.connections(), 0);
+    thread::sleep(Duration::from_millis(300));
+    assert_eq!(world.server.connections(), before);
     assert_eq!(world.host.connection().state, ConnectionState::Off);
     world.assert_idle();
 }
