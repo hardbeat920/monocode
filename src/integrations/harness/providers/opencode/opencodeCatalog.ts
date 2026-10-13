@@ -22,6 +22,7 @@ import {
   stringField,
   titleCaseSlug,
 } from "./opencodeProtocol";
+import { upstreamProviderName } from "../../core/providerNames";
 
 const SLUG_LINE_RE = /^(\S+\/\S+)\s*$/;
 const AGENT_HEADER_RE = /^(.+)\s+\((\S+)\)\s*$/;
@@ -37,14 +38,6 @@ type ParsedProvider = {
   id: string;
   name: string;
   models: Record<string, OpenCodeModelJson>;
-};
-
-const PROVIDER_NAMES: Record<string, string> = {
-  opencode: "OpenCode",
-  "opencode-go": "OpenCode Go",
-  openai: "OpenAI",
-  xai: "xAI",
-  "github-copilot": "GitHub Copilot",
 };
 
 export type OpenCodeAgent = {
@@ -346,8 +339,9 @@ export function flattenOpenCodeModels(
   return models.sort((left, right) => left.name.localeCompare(right.name));
 }
 
+/** Resolve OpenCode provider slugs using the shared upstream display names. */
 export function openCodeProviderName(providerID: string): string {
-  return PROVIDER_NAMES[providerID] ?? titleCaseSlug(providerID);
+  return upstreamProviderName(providerID);
 }
 
 function openCodeModelSettings(

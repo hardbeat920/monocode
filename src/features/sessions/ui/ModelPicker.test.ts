@@ -241,6 +241,36 @@ describe("model picker", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["claude:opus-5", "Claude Opus 5 (1M context)", "Opus 5 (1M context)"],
+    [
+      "claude:opus-5-5",
+      "Claude Opus 5.5 (1M context)",
+      "Opus 5.5 (1M context)",
+    ],
+    ["claude:opus-5-5", "Opus 5.5 (1M context)", "Opus 5.5 (1M context)"],
+  ])("keeps %s version and context qualifier visible", (id, name, visible) => {
+    setHarnessModels("claude", [{ id, harness: "claude", name }]);
+    act(() =>
+      root.render(
+        createElement(ModelPicker, {
+          harness: "claude",
+          model: id,
+          values: {},
+          onChange: vi.fn(),
+          onSettingsChange: vi.fn(),
+        }),
+      ),
+    );
+
+    const trigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-haspopup="menu"]',
+    )!;
+    expect(trigger.querySelector("span")?.textContent).toBe(visible);
+    expect(trigger.getAttribute("aria-label")).toContain(name);
+    expect(trigger.title).toContain(name);
+  });
+
   it("lists Claude Opus 5.5 after Opus 5 in the built-in Claude catalog", () => {
     act(() =>
       root.render(
@@ -257,7 +287,9 @@ describe("model picker", () => {
     const trigger = container.querySelector<HTMLButtonElement>(
       'button[aria-haspopup="menu"]',
     )!;
-    expect(trigger.textContent).toContain("Claude Opus 5.5");
+    expect(trigger.querySelector("span")?.textContent).toBe("Opus 5.5");
+    expect(trigger.getAttribute("aria-label")).toContain("Claude Opus 5.5");
+    expect(trigger.title).toContain("Claude Opus 5.5");
 
     act(() => trigger.click());
     const modelRow = [
@@ -313,7 +345,7 @@ describe("model picker", () => {
     expect(options).not.toContain("Base model");
   });
 
-  it.each(["pill", "text", "rows"] as const)(
+  it.each(["pill", "text", "compact", "rows"] as const)(
     "uses project-specific OpenCode settings in %s controls",
     (variant) => {
       const model = "opencode:fixture/worktree";
@@ -353,7 +385,8 @@ describe("model picker", () => {
                 harness: "opencode",
                 model,
                 values: {},
-                variant,
+                variant: variant === "compact" ? "text" : variant,
+                labelClassName: variant === "compact" ? "hidden" : undefined,
                 onSettingsChange,
               }),
         ),
@@ -363,6 +396,11 @@ describe("model picker", () => {
       );
       expect(trigger).not.toBeNull();
       expect(trigger?.querySelector("svg")).not.toBeNull();
+      if (variant === "compact") {
+        expect(trigger?.querySelector("span.hidden")?.textContent).toBe(
+          "Project High",
+        );
+      }
       act(() => trigger?.click());
       const option = [
         ...container.querySelectorAll<HTMLButtonElement>("button"),
@@ -506,6 +544,73 @@ describe("model picker", () => {
       ),
     ).toEqual(["OpenAI"]);
     expect(container.querySelectorAll('[role="option"]')).toHaveLength(2);
+  });
+
+  it("groups omp models by provider in keyboard order", () => {
+    // omp sorts by model name, so providers arrive interleaved.
+    setHarnessModels("omp", [
+      {
+        id: "omp:anthropic/claude-sonnet-5",
+        harness: "omp",
+        name: "Claude Sonnet 5",
+        nativeId: "anthropic/claude-sonnet-5",
+        provider: { id: "anthropic", name: "Anthropic" },
+      },
+      {
+        id: "omp:github-copilot/claude-sonnet-5",
+        harness: "omp",
+        name: "Claude Sonnet 5",
+        nativeId: "github-copilot/claude-sonnet-5",
+        provider: { id: "github-copilot", name: "GitHub Copilot" },
+      },
+      {
+        id: "omp:anthropic/claude-opus-5",
+        harness: "omp",
+        name: "Claude Opus 5",
+        nativeId: "anthropic/claude-opus-5",
+        provider: { id: "anthropic", name: "Anthropic" },
+      },
+    ]);
+    const onChange = vi.fn();
+
+    act(() =>
+      root.render(
+        createElement(ModelPicker, {
+          harness: "omp",
+          model: "omp:anthropic/claude-sonnet-5",
+          values: {},
+          hideSettings: true,
+          onChange,
+          onSettingsChange: vi.fn(),
+        }),
+      ),
+    );
+
+    act(() =>
+      container
+        .querySelector<HTMLButtonElement>('button[aria-haspopup="dialog"]')!
+        .click(),
+    );
+    expect(
+      [...container.querySelectorAll('[role="group"]')].map((group) =>
+        group.getAttribute("aria-label"),
+      ),
+    ).toEqual(["Anthropic", "GitHub Copilot"]);
+    const options = [
+      ...container.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+    ];
+    expect(options.map((option) => option.getAttribute("aria-label"))).toEqual(
+      [
+        "Claude Sonnet 5, Anthropic",
+        "Claude Opus 5, Anthropic",
+        "Claude Sonnet 5, GitHub Copilot",
+      ],
+    );
+    // The next row down is the next visible row, not the next catalog entry.
+    options[0].focus();
+    keyDown(options[0], "ArrowDown");
+    keyDown(options[0], "Enter");
+    expect(onChange).toHaveBeenCalledWith("omp", "omp:anthropic/claude-opus-5");
   });
 
   it("names the source of same-name favorites from different providers", () => {

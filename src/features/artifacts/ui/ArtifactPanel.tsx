@@ -95,7 +95,7 @@ export function ArtifactReader({
       ) : (
         <MonoSidebarHeader title={label} onClose={onClose} actions={actions} />
       )}
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-none px-7 py-6">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-none px-4 py-3">
         {!loaded ? (
           <p role="status" className="text-[13px] text-content/50">
             Loading document…

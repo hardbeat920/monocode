@@ -2,22 +2,20 @@ import type { CSSProperties } from "react";
 import { PROJECT_MASCOTS } from "../../projects/model/projectMascots";
 import { PixelMascot } from "../../projects/ui/PixelMascot";
 import { TAB_GROUP_COLORS } from "../../workspace/model/tabGroups";
-import { Popover } from "../../../shared/ui/Popover";
+import { playCue } from "../../settings/model/sounds";
 type Look = { mascot: string; color: string };
 
 type Props = {
-  /** The rail's add-a-Mono button, which the intro opens beside. */
-  anchor: HTMLElement | null;
   /** The mascot and color the user's first Mono will have. */
   look: Look;
   /** Creates the first Mono and opens it. */
   onCreate: () => void;
-  /** Passes on the intro for good; the rail still offers a new Mono. */
-  onLater: () => void;
+  /** Turns Monos off, as Settings › Monos › Show monos does. */
+  onHide: () => void;
 };
 
 /** Gap between the mascots lining up at the back. */
-const CROWD_STEP = 36;
+const CROWD_STEP = 17;
 
 /** The rest of the mascots, each in its own color, to line up behind the mono. */
 export function monoIntroCrowd(look: Look) {
@@ -30,29 +28,43 @@ export function monoIntroCrowd(look: Look) {
 }
 
 /**
- * Meets a user who has no Mono yet, beside the rail's add button, inviting
- * them to make their first. It shows once ever and stays until they choose:
- * clicking away or Escape does not put it away.
+ * Stands in for the rail's Monos while the user has none, inviting them to
+ * make their first. The switch hides Monos altogether.
  */
-export function MonoIntroPopover({ anchor, look, onCreate, onLater }: Props) {
+export function MonoIntroCard({ look, onCreate, onHide }: Props) {
   const crowd = monoIntroCrowd(look);
   const middle = (crowd.length - 1) / 2;
 
   return (
-    <Popover
-      anchor={anchor}
-      side="right"
-      align="start"
-      gap={10}
-      rounded="rounded-md"
-      width={360}
-      role="dialog"
+    <section
       aria-label="Meet Monos"
+      data-mono-intro
+      className="mx-2 overflow-hidden rounded-lg bg-content/[0.03]"
     >
+      <div className="flex items-center gap-2 pl-2.5 pr-2 pt-2">
+        <h3 className="min-w-0 flex-1 truncate text-[13px] font-medium text-content">
+          Meet Monos
+        </h3>
+        <button
+          type="button"
+          role="switch"
+          aria-checked
+          aria-label="Show monos"
+          title="Hide monos from the rail. Turn them back on in Settings › Monos."
+          onClick={() => {
+            onHide();
+            playCue("switch");
+          }}
+          className="relative h-4 w-7 shrink-0 rounded-full bg-accent transition-colors"
+        >
+          <span className="absolute left-3.5 top-0.5 size-3 rounded-full bg-white" />
+        </button>
+      </div>
+
       <div
         aria-hidden
         data-mono-intro-stage
-        className="mono-intro relative h-52 overflow-hidden"
+        className="mono-intro relative h-12 overflow-hidden"
       >
         {crowd.map((mascot, i) => {
           const offset = (i - middle) * CROWD_STEP;
@@ -62,12 +74,12 @@ export function MonoIntroPopover({ anchor, look, onCreate, onLater }: Props) {
           return (
             <div
               key={mascot.name}
-              className="mono-intro-march absolute top-6 left-1/2 opacity-60"
+              className="mono-intro-march absolute bottom-4 left-1/2 opacity-45"
               style={
                 {
-                  marginLeft: offset - 12,
-                  "--from": `${offset < 0 ? -240 : 240}px`,
-                  "--delay": `${order * 90}ms`,
+                  marginLeft: offset - 7,
+                  "--from": `${offset < 0 ? -140 : 140}px`,
+                  "--delay": `${order * 70}ms`,
                 } as CSSProperties
               }
             >
@@ -75,55 +87,39 @@ export function MonoIntroPopover({ anchor, look, onCreate, onLater }: Props) {
                 <PixelMascot
                   name={mascot.name}
                   color={mascot.color}
-                  className="size-6"
+                  className="size-3.5"
                 />
               </div>
             </div>
           );
         })}
 
-        <div className="absolute bottom-6 left-1/2 h-4 w-36 -translate-x-1/2 bg-[radial-gradient(closest-side,color-mix(in_srgb,var(--color-content)_12%,transparent),transparent)]" />
+        <div className="absolute bottom-0.5 left-1/2 h-2 w-14 -translate-x-1/2 bg-[radial-gradient(closest-side,color-mix(in_srgb,var(--color-content)_14%,transparent),transparent)]" />
 
-        {/* The user's mono drops into the spotlight once the rest are in. */}
-        <div className="mono-intro-drop absolute bottom-8 left-1/2 -ml-12">
+        {/* The user's mono drops in front once the rest are in. */}
+        <div className="mono-intro-drop absolute bottom-1 left-1/2 -ml-4">
           <PixelMascot
             name={look.mascot}
             color={look.color}
-            className="size-24"
+            className="size-8"
           />
         </div>
       </div>
 
-      <div className="px-5 pb-5 text-center">
-        <h3 className="flex items-center justify-center gap-2 text-xl font-semibold text-content">
-          Meet Monos
-          <span className="rounded-full bg-content/8 px-1.5 py-px text-[10px] font-medium text-content/55">
-            Experimental
-          </span>
-        </h3>
-        <p className="mx-auto mt-1.5 text-[13px] leading-relaxed text-content/55">
-          Agents of your own that live on the rail and work across your
-          projects. They remember what matters and pick up habits they run on
-          their own.
-        </p>
-        <div className="mt-6 flex flex-col gap-1">
-          <button
-            type="button"
-            autoFocus
-            onClick={onCreate}
-            className="w-full rounded-lg bg-content py-2 text-[13px] font-medium text-background-base hover:bg-content/85 active:scale-[0.98]"
-          >
-            Create your mono
-          </button>
-          <button
-            type="button"
-            onClick={onLater}
-            className="w-full rounded-lg py-2 text-[13px] text-content/60 hover:bg-content/8 hover:text-content"
-          >
-            Not now
-          </button>
-        </div>
+      <p className="px-2.5 pt-1.5 text-[11px] leading-snug text-content/55">
+        Agents of your own that work across your projects and run habits on
+        their own.
+      </p>
+
+      <div className="p-2">
+        <button
+          type="button"
+          onClick={onCreate}
+          className="h-7 w-full cursor-default rounded-md bg-content text-[12px] font-medium text-background-base hover:bg-content/85 active:scale-[0.98]"
+        >
+          Create mono
+        </button>
       </div>
-    </Popover>
+    </section>
   );
 }
