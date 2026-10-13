@@ -1449,13 +1449,15 @@ mod tests {
             server.received().last().unwrap().method,
             "Page.bringToFront"
         );
-        // Semantic actions are routed to the stub for now.
+        // Semantic actions reach the semantic layer: a ref before any
+        // snapshot is stale, and nothing is sent for it.
+        let before = server.received().len();
         let click = host.handle_request(
             "s1",
             request("c1", "click", json!({ "tab": tab, "ref": "e1" })),
         );
-        assert_eq!(click.reason, Some(Reason::InvalidRequest));
-        assert!(click.message.contains("semantic layer pending"));
+        assert_eq!(click.reason, Some(Reason::RefStale));
+        assert_eq!(server.received().len(), before);
         // Turn end: blocked as turn_inactive, nothing sent.
         let before = server.received().len();
         host.turn_finished("s1");
