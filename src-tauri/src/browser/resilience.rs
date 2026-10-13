@@ -4,7 +4,8 @@
 //! produce: two sessions at once, the browser dying or going away mid-action,
 //! tabs closing under the agent, OFF and revocation in the middle of an
 //! action, and the agent side (MCP server and CLI) reaching all of it through
-//! the control transport.
+//! the control transport. The MonoCode browser (managed mode) and ask-first
+//! access get the same treatment at the end of the file.
 //!
 //! The fake page is deliberately small: one button and one text box per tab,
 //! enough for the semantic layer to snapshot and click. Knobs on [`Page`]
@@ -26,8 +27,8 @@ use super::agent::{cli, mcp};
 use super::discovery::ACTIVE_PORT_FILE;
 use super::link::LinkStatus;
 use super::protocol::{
-    ActionRequest, ActionResult, BrowserChoice, BrowserSettings, ConnectionState, Outcome, Reason,
-    TabId, TabState,
+    AccessMode, ActionRequest, ActionResult, BrowserChoice, BrowserMode, BrowserSettings,
+    ConnectionState, Outcome, Reason, TabId, TabState,
 };
 use super::testing::{default_response, Event, FakeCdp, Received, Response};
 use super::{audit, BrowserHost};
@@ -44,6 +45,9 @@ struct Page {
     sessions: HashMap<String, String>,
     /// `mousePressed` frames per CDP session: the page's click counter.
     presses: HashMap<String, u32>,
+    /// `Target.getTargets` lists the attached pages plus one page the user
+    /// opened ("U1"); off, it lists nothing (the default fake).
+    list_pages: bool,
 }
 
 fn key(received: &Received) -> String {
@@ -85,6 +89,18 @@ fn respond(page: &Mutex<Page>, received: &Received, counter: &AtomicU64) -> Resp
         *page.presses.entry(session.clone()).or_default() += 1;
     }
     let response = match received.method.as_str() {
+        "Target.getTargets" if page.list_pages => {
+            let mut targets: Vec<&String> = page.sessions.values().collect();
+            targets.sort();
+            targets.dedup();
+            let mut infos: Vec<Value> = targets
+                .into_iter()
+                .map(|t| json!({ "targetId": t, "type": "page", "url": "https://example.com/" }))
+                .collect();
+            infos.push(json!({ "targetId": "U1", "type": "page", "url": "https://mail.example/" }));
+            infos.push(json!({ "targetId": "W1", "type": "service_worker", "url": "" }));
+            Response::Result(json!({ "targetInfos": infos }))
+        }
         "Target.attachToTarget" => {
             let n = counter.fetch_add(1, Ordering::Relaxed);
             let cdp = format!("S{n}");
@@ -202,8 +218,8 @@ impl World {
             browser: BrowserChoice::UserDataDir {
                 path: dir.display().to_string(),
             },
-            mode: super::protocol::BrowserMode::Attach,
-            access: super::protocol::AccessMode::Always,
+            mode: BrowserMode::Attach,
+            access: AccessMode::Always,
             ..BrowserSettings::default()
         };
         tweak(&mut settings);
@@ -217,6 +233,56 @@ impl World {
         };
         world.wait_state(ConnectionState::Connected);
         world
+    }
+
+    /// Managed mode (the default): the profile folder is MonoCode's own and a
+    /// "MonoCode browser" already listens in it, so nothing is launched. The
+    /// switch is ON and nothing is connected yet.
+    fn managed(access: AccessMode) -> World {
+        let (server, page) = fake_browser();
+        let dir = std::env::temp_dir().join(format!("monocode-res-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        write_port_file(&dir, &server);
+        let host = BrowserHost::for_tests(BrowserSettings {
+            mode: BrowserMode::Managed,
+            access,
+            ..BrowserSettings::default()
+        });
+        host.set_profile_dir(dir.clone());
+        host.set_toggle(true);
+        let world = World {
+            server,
+            page,
+            host,
+            dir,
+        };
+        world.wait_state(ConnectionState::Idle);
+        world
+    }
+
+    /// Whether an agent of `session` waits for the user's answer, as the
+    /// frontend sees it.
+    fn requested(&self, session: &str) -> bool {
+        self.host
+            .state()
+            .sessions
+            .iter()
+            .any(|s| s.session_id == session && s.requested)
+    }
+
+    /// Run one action on its own thread (an agent's tool call).
+    fn spawn_act(
+        self: &Arc<Self>,
+        session: &'static str,
+        action: &'static str,
+        input: Value,
+    ) -> thread::JoinHandle<(ActionResult, Duration)> {
+        let world = self.clone();
+        thread::spawn(move || {
+            let started = Instant::now();
+            let result = world.act(session, action, input);
+            (result, started.elapsed())
+        })
     }
 
     fn wait_state(&self, state: ConnectionState) {
@@ -705,9 +771,8 @@ fn a_browser_crash_mid_action_is_unknown_and_reconnection_adopts_nothing() {
         assert!(state.granted("s1"), "grants survive a browser crash");
     }
     world.assert_idle();
-    assert_eq!(
-        world.open_lease_rows(),
-        0,
+    assert!(
+        wait_until(Duration::from_secs(2), || world.open_lease_rows() == 0),
         "lease rows closed with the link"
     );
 
@@ -1502,4 +1567,269 @@ fn the_cli_drives_the_fake_browser_and_maps_outcomes_to_exit_codes() {
     let (out, code) = cli::execute_with(&["tabs.list"], creds);
     assert_eq!(code, 2, "{out}");
     assert!(out.contains("revoked"), "{out}");
+}
+
+// ---------------------------------------------------------------------------
+// The MonoCode browser (managed mode) and ask-first access
+// ---------------------------------------------------------------------------
+
+fn created_in_background(world: &World) -> Vec<bool> {
+    world
+        .sent()
+        .iter()
+        .filter(|r| r.method == "Target.createTarget")
+        .map(|r| r.params["background"] == json!(true))
+        .collect()
+}
+
+#[test]
+fn the_monocode_browser_starts_once_for_two_sessions_and_comes_back_after_a_crash() {
+    let world = Arc::new(World::managed(AccessMode::Always));
+    assert_eq!(
+        world.server.connections(),
+        0,
+        "the switch alone connects nothing"
+    );
+    world.grant("s1");
+    world.grant("s2");
+
+    // Both sessions' first actions arrive while nothing runs: one connection
+    // serves both, inside the same tool calls, and nobody is asked to consent.
+    let opening: Vec<_> = ["s1", "s2"]
+        .into_iter()
+        .map(|s| world.spawn_act(s, "tabs.open", json!({ "url": "https://example.com/" })))
+        .collect();
+    let tabs: Vec<TabId> = opening
+        .into_iter()
+        .map(|handle| {
+            let (opened, _) = handle.join().unwrap();
+            assert_eq!(opened.outcome, Outcome::Done, "{opened:?}");
+            TabId(opened.data.unwrap()["tab"].as_str().unwrap().to_string())
+        })
+        .collect();
+    assert_eq!(world.server.connections(), 1);
+    assert_eq!(world.event_count("consent_pending"), 0);
+    assert!(world.host.connection().browser.unwrap().managed);
+    // Our own browser shows what the agents do: tabs open in the foreground.
+    assert_eq!(created_in_background(&world), vec![false, false]);
+    for (session, tab) in [("s1", &tabs[0]), ("s2", &tabs[1])] {
+        assert_eq!(
+            tabs_of(&world.act(session, "tabs.list", json!({}))),
+            vec![tab.0.clone()]
+        );
+    }
+
+    // The browser crashes in the middle of s1's click.
+    let element = world.save_ref("s1", &tabs[0]);
+    world.hold("Input.dispatchMouseEvent:mouseReleased");
+    let mark = world.mark();
+    let clicking = {
+        let world = world.clone();
+        let tab = tabs[0].clone();
+        thread::spawn(move || world.click("s1", &tab, &element))
+    };
+    world.wait_sent(mark, |r| key(r) == "Input.dispatchMouseEvent:mouseReleased");
+    world.server.close_current();
+    let clicked = clicking.join().unwrap();
+    assert_eq!(clicked.outcome, Outcome::Unknown, "{clicked:?}");
+    assert_eq!(clicked.reason, Some(Reason::LinkDown));
+    // Not "disconnected, approve again": the MonoCode browser just waits for
+    // the next action.
+    world.wait_state(ConnectionState::Idle);
+    world.release_knobs();
+    world.assert_idle();
+    // The rows follow the state event, which comes right after the state.
+    assert!(wait_until(Duration::from_secs(2), || world
+        .open_lease_rows()
+        == 0));
+
+    // The next action of either session reconnects and is served in the same
+    // call; nothing from before the crash is adopted.
+    let listed = world.act("s2", "tabs.list", json!({}));
+    assert_eq!(listed.outcome, Outcome::Done, "{listed:?}");
+    assert!(tabs_of(&listed).is_empty());
+    assert_eq!(world.server.connections(), 2);
+    let old = world.act("s1", "snapshot", json!({ "tab": tabs[0] }));
+    assert_eq!(old.reason, Some(Reason::NoLease), "{old:?}");
+
+    // The browser is closed and starts again on another port (a new process
+    // in the same profile): the next action finds it there.
+    let (restarted, _page) = fake_browser();
+    write_port_file(&world.dir, &restarted);
+    world.server.close_current();
+    world.wait_state(ConnectionState::Idle);
+    let opened = world.act("s1", "tabs.open", json!({}));
+    assert_eq!(opened.outcome, Outcome::Done, "{opened:?}");
+    assert_eq!(restarted.connections(), 1);
+    assert_eq!(world.event_count("consent_pending"), 0);
+    assert_eq!(world.open_lease_rows(), 1);
+    world.host.set_toggle(false);
+}
+
+#[test]
+fn off_stops_the_click_and_closes_the_monocode_browsers_pages() {
+    let world = Arc::new(World::managed(AccessMode::Always));
+    world.grant("s1");
+    world.page.lock().unwrap().list_pages = true;
+    let tab = world.open("s1");
+    let cdp = world.cdp_session(&tab);
+    let target = world.page.lock().unwrap().sessions[&cdp].clone();
+    let element = world.save_ref("s1", &tab);
+    world.hold("Input.dispatchMouseEvent:mouseReleased");
+    let mark = world.mark();
+    let clicking = {
+        let world = world.clone();
+        let tab = tab.clone();
+        thread::spawn(move || world.click("s1", &tab, &element))
+    };
+    world.wait_sent(mark, |r| key(r) == "Input.dispatchMouseEvent:mouseReleased");
+    world.host.set_toggle(false);
+    let revoked = world.revoked_at();
+    let clicked = clicking.join().unwrap();
+    assert_eq!(clicked.outcome, Outcome::Unknown, "{clicked:?}");
+    assert_eq!(clicked.reason, Some(Reason::Revoked));
+    // After OFF nothing reached the page: only the browser-level cleanup.
+    let after = world.written_after(revoked);
+    assert!(
+        after.iter().all(|m| matches!(
+            m.as_str(),
+            "Target.getTargets" | "Target.closeTarget" | "Target.detachFromTarget"
+        )),
+        "{after:?}"
+    );
+    assert_eq!(world.presses(&cdp), 1);
+    // Every page of the MonoCode browser is closed, so it exits on its own;
+    // workers are left alone.
+    let closed: HashSet<String> = world
+        .sent()
+        .iter()
+        .filter(|r| r.method == "Target.closeTarget")
+        .map(|r| r.params["targetId"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(closed, HashSet::from([target, "U1".to_string()]));
+    assert_eq!(world.host.link().status(), LinkStatus::Closed);
+    assert_eq!(world.host.connection().state, ConnectionState::Off);
+    assert!(
+        !world.host.policy().read().settings.enabled,
+        "OFF is remembered"
+    );
+    assert_eq!(world.open_lease_rows(), 0);
+    world.assert_idle();
+
+    // ON again starts nothing until an agent acts.
+    world.release_knobs();
+    world.host.set_toggle(true);
+    world.wait_state(ConnectionState::Idle);
+    thread::sleep(Duration::from_millis(200));
+    assert_eq!(world.server.connections(), 1);
+    world.grant("s1");
+    let opened = world.act("s1", "tabs.open", json!({}));
+    assert_eq!(opened.outcome, Outcome::Done, "{opened:?}");
+    assert_eq!(world.server.connections(), 2);
+}
+
+#[test]
+fn off_on_a_hung_monocode_browser_keeps_to_the_off_budget() {
+    let world = Arc::new(World::managed(AccessMode::Always));
+    world.grant("s1");
+    world.page.lock().unwrap().list_pages = true;
+    let _ = world.open("s1");
+    for method in [
+        "Target.getTargets",
+        "Target.closeTarget",
+        "Target.detachFromTarget",
+        "Browser.getVersion",
+    ] {
+        world.hold(method);
+    }
+    let started = Instant::now();
+    world.host.set_toggle(false);
+    let took = started.elapsed();
+    // The switch is a UI command: a browser that stopped answering must not
+    // hold it for the CDP command timeouts.
+    assert!(took < Duration::from_secs(2), "OFF took {took:?}");
+    assert_eq!(world.host.connection().state, ConnectionState::Off);
+    assert_ne!(world.host.link().status(), LinkStatus::Open);
+    world.assert_idle();
+}
+
+#[test]
+fn an_access_request_nobody_answers_expires_without_touching_the_browser() {
+    let world = Arc::new(World::managed(AccessMode::Ask));
+    world.host.set_ask_wait(Duration::from_millis(800));
+    world.host.turn_started("s1", "main", "/repo", None);
+    world.host.turn_started("s2", "main", "/repo", None);
+
+    // Two tool calls of s1 and one of s2 arrive without access.
+    let first = world.spawn_act("s1", "tabs.list", json!({}));
+    assert!(wait_until(Duration::from_secs(5), || world.requested("s1")));
+    let second = world.spawn_act("s1", "tabs.open", json!({}));
+    let other = world.spawn_act("s2", "tabs.list", json!({}));
+    assert!(wait_until(Duration::from_secs(5), || world.requested("s2")));
+    // One prompt per thread, not per action.
+    assert_eq!(world.event_count("grant_requested"), 2);
+
+    // The user answers s2 only.
+    world.host.answer_request("s2", "main", true);
+    let (allowed, _) = other.join().unwrap();
+    assert_eq!(allowed.outcome, Outcome::Done, "{allowed:?}");
+    assert_eq!(world.server.connections(), 1);
+
+    // Nobody answers s1: both of its calls end with not_granted when the
+    // wait runs out, and the prompt goes away.
+    for handle in [first, second] {
+        let (result, took) = handle.join().unwrap();
+        assert_eq!(result.outcome, Outcome::Blocked, "{result:?}");
+        assert_eq!(result.reason, Some(Reason::NotGranted));
+        assert!(took < Duration::from_secs(3), "waited {took:?}");
+    }
+    assert!(!world.requested("s1"));
+    assert_eq!(world.event_count("grant_request_expired"), 1);
+    assert!(!world.host.policy().read().granted("s1"));
+    // s1 sent nothing to the browser.
+    assert!(!world
+        .sent()
+        .iter()
+        .any(|r| r.method == "Target.createTarget"));
+    world.assert_idle();
+
+    // An unanswered prompt is not a "Not now": the next call asks again,
+    // and the end of the turn withdraws it.
+    let again = world.spawn_act("s1", "tabs.list", json!({}));
+    assert!(wait_until(Duration::from_secs(5), || world.requested("s1")));
+    world.host.turn_finished("s1");
+    let (ended, took) = again.join().unwrap();
+    assert_eq!(ended.reason, Some(Reason::NotGranted), "{ended:?}");
+    assert!(took < Duration::from_millis(700), "waited {took:?}");
+    assert!(!world.requested("s1"));
+}
+
+#[test]
+fn off_and_revocation_answer_a_waiting_request_at_once() {
+    // The full 50 s wait: each case must end long before it.
+    let world = Arc::new(World::managed(AccessMode::Ask));
+    world.host.turn_started("s1", "main", "/repo", None);
+    world.host.turn_started("s2", "main", "/repo", None);
+
+    let waiting = world.spawn_act("s1", "tabs.list", json!({}));
+    assert!(wait_until(Duration::from_secs(5), || world.requested("s1")));
+    world.host.revoke("s1");
+    let (revoked, took) = waiting.join().unwrap();
+    assert_eq!(revoked.reason, Some(Reason::NotGranted), "{revoked:?}");
+    assert!(took < Duration::from_secs(2), "waited {took:?}");
+    assert!(!world.requested("s1"));
+
+    let waiting = world.spawn_act("s2", "tabs.list", json!({}));
+    assert!(wait_until(Duration::from_secs(5), || world.requested("s2")));
+    world.host.set_toggle(false);
+    let (off, took) = waiting.join().unwrap();
+    // The agent learns the browser is off, not that its thread lacks access.
+    assert_eq!(off.reason, Some(Reason::Off), "{off:?}");
+    assert!(took < Duration::from_secs(2), "waited {took:?}");
+    assert!(!world.requested("s2"));
+    // A late "Allow" from a prompt still on screen connects nothing.
+    world.host.answer_request("s2", "main", true);
+    assert_eq!(world.server.connections(), 0);
+    assert_eq!(world.host.connection().state, ConnectionState::Off);
+    world.assert_idle();
 }

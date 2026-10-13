@@ -636,6 +636,17 @@ impl Link {
         self.dispatch(SendCtx::System, command, timeout)
     }
 
+    /// [`Self::send_system`] that gives up after `budget` when that is
+    /// shorter than the method's own timeout (cleanup on OFF).
+    pub fn send_system_within(
+        &self,
+        command: Command,
+        budget: Duration,
+    ) -> Result<Value, CdpError> {
+        let timeout = command.method.timeout().min(budget);
+        self.dispatch(SendCtx::System, command, timeout)
+    }
+
     fn dispatch(
         &self,
         ctx: SendCtx,

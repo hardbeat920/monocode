@@ -142,6 +142,8 @@ pub struct BrowserHost {
     generation: AtomicU64,
     /// How long the browser's consent dialog may stay unanswered, in ms.
     consent_timeout_ms: AtomicU64,
+    /// [`ASK_WAIT`]; shorter in tests.
+    ask_wait_ms: AtomicU64,
     /// Whether an agent request may still start a connection attempt that
     /// shows the browser's consent dialog. One per drop (spec 14.1 row 2,
     /// 14.2): restored when a connection is established or the toggle goes
@@ -216,6 +218,7 @@ impl BrowserHost {
             connecting: AtomicU64::new(0),
             generation: AtomicU64::new(0),
             consent_timeout_ms: AtomicU64::new(CONSENT_TIMEOUT.as_millis() as u64),
+            ask_wait_ms: AtomicU64::new(ASK_WAIT.as_millis() as u64),
             auto_dialog: AtomicBool::new(true),
             profile: Mutex::new(None),
             managed: Mutex::new(None),
@@ -250,6 +253,13 @@ impl BrowserHost {
     pub(crate) fn set_consent_timeout(&self, timeout: Duration) {
         self.consent_timeout_ms
             .store(timeout.as_millis() as u64, Ordering::Release);
+    }
+
+    /// Shorter waits for an answer to an access request, for tests.
+    #[cfg(test)]
+    pub(crate) fn set_ask_wait(&self, wait: Duration) {
+        self.ask_wait_ms
+            .store(wait.as_millis() as u64, Ordering::Release);
     }
 
     pub fn link(&self) -> &Link {
@@ -426,14 +436,18 @@ impl BrowserHost {
 
     /// Close every page of the MonoCode browser while the link is still up,
     /// so the browser exits on its own and does not offer to restore them.
+    /// Runs on OFF from a UI command, so all of it fits in
+    /// [`OFF_DETACH_BUDGET`]; a browser that stops answering is left to
+    /// [`Self::close_managed_browser`].
     fn close_managed_pages(&self) {
         if !self.link.is_open() || !self.connected_to_managed() {
             return;
         }
-        let Ok(reply) = self
-            .link
-            .send_system(Command::browser(Method::TargetGetTargets, json!({})))
-        else {
+        let deadline = Instant::now() + OFF_DETACH_BUDGET;
+        let Ok(reply) = self.link.send_system_within(
+            Command::browser(Method::TargetGetTargets, json!({})),
+            OFF_DETACH_BUDGET,
+        ) else {
             return;
         };
         let pages: Vec<TargetId> = reply["targetInfos"]
@@ -444,7 +458,25 @@ impl BrowserHost {
             .filter_map(|info| info["targetId"].as_str())
             .map(|id| TargetId(id.to_string()))
             .collect();
-        targets::close_targets(&self.link, &pages);
+        for page in pages {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero()
+                || self
+                    .link
+                    .send_system_within(
+                        Command::browser(Method::TargetCloseTarget, json!({ "targetId": page.0 })),
+                        left,
+                    )
+                    .is_err_and(|error| {
+                        matches!(
+                            error.reason(),
+                            Reason::CdpTimeout | Reason::LinkDown | Reason::BrowserDisconnected
+                        )
+                    })
+            {
+                return;
+            }
+        }
     }
 
     /// Stop the MonoCode browser this run started: it closes its pages first
@@ -1242,7 +1274,8 @@ impl BrowserHost {
     }
 
     fn wait_for_answer(&self, session: &str, owner: bool) -> bool {
-        let deadline = Instant::now() + ASK_WAIT;
+        let deadline =
+            Instant::now() + Duration::from_millis(self.ask_wait_ms.load(Ordering::Acquire));
         loop {
             {
                 let policy = self.policy.read();
@@ -1352,8 +1385,10 @@ impl BrowserHost {
                 .admit(session, &request_id, kind, common.tab.as_ref(), timeout);
         if admitted.as_ref().err() == Some(&Reason::NotGranted)
             && self.policy.read().settings.access == AccessMode::Ask
-            && self.ask_user(session)
         {
+            // Admitted again whatever the answer: OFF or a revocation during
+            // the wait is reported as such, not as `not_granted`.
+            self.ask_user(session);
             admitted =
                 self.policy
                     .read()
