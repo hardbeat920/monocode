@@ -90,7 +90,7 @@ use targets::TabEvent;
 pub const OFF_DETACH_BUDGET: Duration = Duration::from_millis(500);
 /// How long an agent action waits for the user to answer an access request.
 /// Below the 60 s tool timeout some MCP clients use.
-pub const ASK_WAIT: Duration = Duration::from_secs(50);
+pub const ASK_WAIT: Duration = Duration::from_secs(45);
 /// How long the MonoCode browser may take to close before it is killed.
 const MANAGED_CLOSE_WAIT: Duration = Duration::from_secs(3);
 
@@ -98,6 +98,29 @@ const MANAGED_CLOSE_WAIT: Duration = Duration::from_secs(3);
 struct ManagedBrowser {
     child: Child,
     show_window: bool,
+    profile: PathBuf,
+    /// Private mode: the profile is deleted once the browser has exited.
+    ephemeral: bool,
+}
+
+impl ManagedBrowser {
+    fn exited(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(Some(_)))
+    }
+
+    /// After exit: a private profile goes. Chrome's helper processes can hold
+    /// files for a moment after the main one exits, hence the retries.
+    fn forget(self) {
+        if !self.ephemeral {
+            return;
+        }
+        for _ in 0..20 {
+            if std::fs::remove_dir_all(&self.profile).is_ok() || !self.profile.exists() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(200));
+        }
+    }
 }
 
 static HOST: OnceLock<Arc<BrowserHost>> = OnceLock::new();
@@ -180,7 +203,9 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
     let enabled = settings.enabled;
     let host = BrowserHost::create(run_id, settings, Db::App(app.clone()), Some(app.clone()));
     if let Ok(dir) = app.path().app_data_dir() {
-        host.set_profile_dir(launch::profile_dir(&dir));
+        let profile = launch::profile_dir(&dir);
+        launch::clear_private(&profile);
+        host.set_profile_dir(profile);
     }
     if enabled {
         host.restore_toggle();
@@ -399,6 +424,7 @@ impl BrowserHost {
     fn set_idle(&self) {
         let detail = match self.mode() {
             BrowserMode::Managed => "The MonoCode browser starts when an agent needs it.",
+            BrowserMode::Private => "The private MonoCode browser starts when an agent needs it and forgets everything when it closes.",
             BrowserMode::Attach => "MonoCode connects to your browser when an agent needs it.",
         };
         self.set_connection(ConnectionState::Idle, Some(detail.into()), None, None);
@@ -490,20 +516,55 @@ impl BrowserHost {
             .take();
         let Some(mut managed) = managed else { return };
         let deadline = Instant::now() + MANAGED_CLOSE_WAIT;
-        while Instant::now() < deadline {
-            if matches!(managed.child.try_wait(), Ok(Some(_))) {
-                return;
-            }
+        while Instant::now() < deadline && !managed.exited() {
             thread::sleep(Duration::from_millis(100));
         }
-        let _ = managed.child.kill();
-        let _ = managed.child.wait();
+        if !managed.exited() {
+            let _ = managed.child.kill();
+            let _ = managed.child.wait();
+        }
+        managed.forget();
+    }
+
+    /// The link to the MonoCode browser dropped: when the window was closed
+    /// or the browser crashed, its process exits shortly after. Forget it then
+    /// (a private profile is deleted); a browser that keeps running stays.
+    fn reap_managed_browser(self: &Arc<Self>) {
+        let host = self.clone();
+        let _ = thread::Builder::new()
+            .name("browser-reap".into())
+            .spawn(move || {
+                for _ in 0..100 {
+                    if host.take_exited_browser() {
+                        return;
+                    }
+                    thread::sleep(Duration::from_millis(100));
+                }
+            });
+    }
+
+    /// True when there is nothing left to wait for.
+    fn take_exited_browser(&self) -> bool {
+        let exited = {
+            let mut slot = self.managed.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(managed) = slot.as_mut() else {
+                return true;
+            };
+            if !managed.exited() {
+                return false;
+            }
+            slot.take()
+        };
+        if let Some(managed) = exited {
+            managed.forget();
+        }
+        true
     }
 
     /// Settings "Open browser": the MonoCode browser with a visible window,
     /// for signing in to sites. A headless one is restarted.
     pub fn open_window(self: &Arc<Self>) -> Result<(), String> {
-        if self.mode() != BrowserMode::Managed {
+        if !self.mode().launches() {
             return Err("Open browser is only for the MonoCode browser.".into());
         }
         if !self.policy.read().toggle_on {
@@ -595,7 +656,7 @@ impl BrowserHost {
 
     /// Discovery (spec 4 steps 1-4) then [`Self::connect_endpoint`].
     fn run_connect(self: &Arc<Self>, automatic: bool, generation: u64) {
-        if self.mode() == BrowserMode::Managed {
+        if self.mode().launches() {
             self.run_connect_managed(generation);
             return;
         }
@@ -678,7 +739,24 @@ impl BrowserHost {
     /// it otherwise, then connect like to any other endpoint. No consent
     /// dialog: the browser was started by us with its own profile.
     fn run_connect_managed(self: &Arc<Self>, generation: u64) {
-        let Some(profile) = self.profile_dir() else {
+        let private = self.mode() == BrowserMode::Private;
+        let profile = if private {
+            // The private browser still running keeps its profile; a new one
+            // gets a fresh folder.
+            let current = self
+                .managed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+                .filter(|managed| managed.ephemeral)
+                .map(|managed| managed.profile.clone());
+            current
+                .filter(|dir| launch::running(dir).is_some())
+                .or_else(|| self.profile_dir().map(|dir| launch::private_dir(&dir)))
+        } else {
+            self.profile_dir()
+        };
+        let Some(profile) = profile else {
             self.attempt_state(
                 generation,
                 ConnectionState::StalePort,
@@ -736,8 +814,21 @@ impl BrowserHost {
                     Some(&exe.path.display().to_string()),
                 );
                 let ready = launch::wait_for_endpoint(&mut child, &profile, launch::START_TIMEOUT);
-                *self.managed.lock().unwrap_or_else(|e| e.into_inner()) =
-                    Some(ManagedBrowser { child, show_window });
+                let previous = self
+                    .managed
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .replace(ManagedBrowser {
+                        child,
+                        show_window,
+                        profile: profile.clone(),
+                        ephemeral: private,
+                    });
+                if let Some(mut previous) = previous {
+                    if previous.exited() {
+                        previous.forget();
+                    }
+                }
                 match ready {
                     Ok(active) => active,
                     Err(message) => {
@@ -938,19 +1029,12 @@ impl BrowserHost {
 
     /// Link thread hook: socket gone (ours or the browser's). Epoch up,
     /// leases cleared; tabs in the browser stay (spec 4 "Disconnected").
-    fn on_link_closed(&self, by: ClosedBy) {
+    fn on_link_closed(self: &Arc<Self>, by: ClosedBy) {
         self.policy.write().connection_lost();
         let toggle_on = self.policy.read().toggle_on;
-        let managed = self.mode() == BrowserMode::Managed;
+        let managed = self.mode().launches();
         if managed {
-            // Closed by the user, or crashed: forget the process.
-            let mut slot = self.managed.lock().unwrap_or_else(|e| e.into_inner());
-            if slot
-                .as_mut()
-                .is_some_and(|m| matches!(m.child.try_wait(), Ok(Some(_))))
-            {
-                *slot = None;
-            }
+            self.reap_managed_browser();
         }
         let (state, detail) = if toggle_on && managed {
             (
@@ -1258,7 +1342,7 @@ impl BrowserHost {
     /// Ask mode: put the request to the user in the session's thread and
     /// wait for "Allow" (true) or "Not now", the end of the turn, OFF or
     /// [`ASK_WAIT`] (false).
-    fn ask_user(&self, session: &str) -> bool {
+    fn ask_user(self: &Arc<Self>, session: &str) -> bool {
         let asked = {
             let mut policy = self.policy.write();
             policy.toggle_on && !policy.requested(session) && policy.request_grant(session)
@@ -1270,6 +1354,11 @@ impl BrowserHost {
         }
         self.event("grant_requested", Actor::System, Some(session), None);
         self.emit_state();
+        // Start the MonoCode browser while the user decides, so an Allow near
+        // the end of the wait does not add a cold start on top of it.
+        if self.mode().launches() {
+            self.connect_automatically();
+        }
         self.wait_for_answer(session, true)
     }
 
@@ -1402,7 +1491,7 @@ impl BrowserHost {
             }
         };
         let mut connection = self.connection();
-        if self.mode() == BrowserMode::Managed && connection.state != ConnectionState::Connected {
+        if self.mode().launches() && connection.state != ConnectionState::Connected {
             // The MonoCode browser starts on demand; the action waits for it.
             self.connect_automatically();
             connection = self.wait_for_connection(launch::START_TIMEOUT + Duration::from_secs(5));
@@ -2579,5 +2668,32 @@ mod tests {
         host.set_toggle(false);
         assert!(launch::running(&dir).is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Private mode against the installed browser: every start gets a fresh
+    /// profile, and OFF deletes it. `cargo test -- --ignored private_mode`.
+    #[test]
+    #[ignore = "starts the Chrome or Edge installed on this machine"]
+    fn private_mode_deletes_its_profile() {
+        let root = std::env::temp_dir().join(format!("monocode-private-{}", uuid::Uuid::new_v4()));
+        let host = BrowserHost::for_tests(BrowserSettings {
+            mode: BrowserMode::Private,
+            access: AccessMode::Always,
+            show_window: false,
+            ..BrowserSettings::default()
+        });
+        host.set_profile_dir(root.join("browser-profile"));
+        host.set_toggle(true);
+        host.turn_started("s1", "main", "/repo", Some(true));
+        let opened = host.handle_request("s1", request("p1", "tabs.open", json!({})));
+        assert_eq!(opened.outcome, Outcome::Done, "{opened:?}");
+        let private = root.join("browser-private");
+        let profiles: Vec<_> = std::fs::read_dir(&private).unwrap().collect();
+        assert_eq!(profiles.len(), 1);
+        assert!(!root.join("browser-profile").exists());
+        host.set_toggle(false);
+        let left = std::fs::read_dir(&private).map(|d| d.count()).unwrap_or(0);
+        assert_eq!(left, 0, "the private profile is deleted");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

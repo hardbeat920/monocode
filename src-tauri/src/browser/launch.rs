@@ -32,6 +32,21 @@ pub fn profile_dir(app_data: &Path) -> PathBuf {
     app_data.join("browser-profile")
 }
 
+/// A fresh profile folder for one start of the private MonoCode browser,
+/// next to the kept profile profile.
+pub fn private_dir(profile: &Path) -> PathBuf {
+    private_root(profile).join(uuid::Uuid::new_v4().simple().to_string())
+}
+
+fn private_root(profile: &Path) -> PathBuf {
+    profile.parent().unwrap_or(profile).join("browser-private")
+}
+
+/// Startup: private profiles a crash left behind.
+pub fn clear_private(profile: &Path) {
+    let _ = std::fs::remove_dir_all(private_root(profile));
+}
+
 /// The discovery candidate for the MonoCode profile, so a browser that is
 /// still running from earlier is found the same way as the user's.
 pub fn candidate(profile: &Path, kind: BrowserKind) -> Candidate {
@@ -207,7 +222,12 @@ mod tests {
         );
         assert!(chrome[2].starts_with(r"C:\Users\o\AppData\Local"));
         let edge = known_paths(BrowserKind::Edge, Platform::Windows, env);
-        assert!(edge[1].ends_with(r"Microsoft\Edge\Application\msedge.exe"));
+        assert!(edge[1].ends_with(
+            PathBuf::from("Microsoft")
+                .join("Edge")
+                .join("Application")
+                .join("msedge.exe")
+        ));
     }
 
     #[test]

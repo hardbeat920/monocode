@@ -273,7 +273,7 @@ pub fn open_tab(
         state.reserve_tab(&ctx.session)?;
         // The MonoCode browser is ours: its window shows what the agent does.
         // In the user's browser the tab stays in the background (spec 7).
-        let managed = state.settings.mode == super::protocol::BrowserMode::Managed;
+        let managed = state.settings.mode.launches();
         (
             state.settings.separate_window && !managed,
             managed,

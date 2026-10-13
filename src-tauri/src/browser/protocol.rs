@@ -1127,12 +1127,22 @@ pub enum BrowserMode {
     /// connects to it directly: no remote-debugging setup, no consent dialog.
     #[default]
     Managed,
+    /// Like `Managed`, with a fresh profile for every start that is deleted
+    /// when the browser closes: no sign-ins, nothing kept.
+    Private,
     /// Attach to the browser the user runs (spec 4): remote debugging on in
     /// `chrome://inspect`, and the browser asks on every connection.
     Attach,
 }
 
 /// How a thread gets browser access.
+impl BrowserMode {
+    /// MonoCode starts the browser itself (managed or private).
+    pub fn launches(self) -> bool {
+        self != BrowserMode::Attach
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AccessMode {
