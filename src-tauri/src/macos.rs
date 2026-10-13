@@ -42,7 +42,7 @@ use objc2_app_kit::{
     NSUserInterfaceItemIdentification, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
     NSVisualEffectState, NSVisualEffectView, NSWindow, NSWindowOrderingMode,
 };
-use objc2_foundation::{NSEdgeInsets, NSSize, NSString};
+use objc2_foundation::{NSDictionary, NSEdgeInsets, NSNumber, NSSize, NSString, NSUserDefaults};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use tauri::{AppHandle, Manager, WebviewWindow, WindowEvent};
 
@@ -77,6 +77,18 @@ type ConnectionFn = unsafe extern "C" fn() -> CgsConnection;
 
 unsafe extern "C" {
     fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+}
+
+/// WebKit reads this preference once, when its first webview starts. Register
+/// a fallback so spelling underlines are enabled without replacing a saved
+/// user preference. HTML spellcheck still controls which fields are checked.
+pub fn register_spellcheck_default() {
+    let key = NSString::from_str("WebContinuousSpellCheckingEnabled");
+    let enabled = NSNumber::numberWithBool(true);
+    let defaults: Retained<NSDictionary<NSString>> =
+        NSDictionary::from_slices(&[&*key], &[enabled.as_ref()]);
+    // SAFETY: The dictionary contains a string key and a property-list boolean.
+    unsafe { NSUserDefaults::standardUserDefaults().registerDefaults(&defaults) };
 }
 
 pub fn install(window: &WebviewWindow) {

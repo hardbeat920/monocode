@@ -277,6 +277,69 @@ it("keeps a completion notification queued beside the Mono's composer", () => {
   expect(field()).not.toBeNull();
 });
 
+it("keeps ready completion notifications out of the composer while they deliver", () => {
+  const pane = props();
+  const notification = {
+    id: "notification",
+    text: "Hidden completion review prompt",
+    attachments: [],
+    monoSessionCompletion: {
+      sessionId: "worker",
+      title: "API fix",
+      status: "completed" as const,
+    },
+  };
+  pane.session = {
+    ...pane.session,
+    busy: false,
+    queueStatus: "active",
+    queuedMessages: [notification],
+  };
+  render(pane);
+  expect(container.querySelector("[data-message-queue]")).toBeNull();
+  expect(container.textContent).not.toContain(
+    "Hidden completion review prompt",
+  );
+  expect(pane.session.queuedMessages).toEqual([notification]);
+  expect(probes.transcript.mock.calls.at(-1)![0].messageDeliveries.size).toBe(
+    0,
+  );
+  expect(field()).not.toBeNull();
+});
+
+it("keeps failed completion notifications visible and lets the user retry them", () => {
+  const pane = props();
+  pane.onResumeQueue = vi.fn();
+  pane.session = {
+    ...pane.session,
+    busy: false,
+    queueStatus: "paused",
+    queuedMessages: [
+      {
+        id: "notification",
+        text: "Hidden completion review prompt",
+        attachments: [],
+        error: "Connection lost",
+        monoSessionCompletion: {
+          sessionId: "worker",
+          title: "API fix",
+          status: "completed",
+        },
+      },
+    ],
+  };
+  render(pane);
+  const queue = container.querySelector("[data-message-queue]")!;
+  expect(queue.textContent).toContain("Session completed: API fix");
+  expect(queue.textContent).toContain("Connection lost");
+  expect(queue.textContent).not.toContain("Hidden completion review prompt");
+  const retry = [...queue.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent?.trim() === "Retry",
+  )!;
+  act(() => retry.click());
+  expect(pane.onResumeQueue).toHaveBeenCalledWith("chat");
+});
+
 it("keeps rapid sends out of the queue and steer interface", () => {
   const pane = props();
   pane.session = {

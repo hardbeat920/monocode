@@ -126,15 +126,16 @@ export function UnifiedDiffView({
     if (!resolvedFocusId) return;
     const node = fileRefs.current.get(resolvedFocusId);
     if (!node) return;
+    // A file asked for opens, even where the others start folded.
+    setOpen((current) =>
+      current.has(resolvedFocusId)
+        ? current
+        : new Set(current).add(resolvedFocusId),
+    );
     const scroller = scrollerRef.current;
     if (!scroller) {
-      // Embedded review surfaces jump in from a file list, so open the file
-      // and let the ancestor that owns scrolling bring it up.
-      setOpen((current) =>
-        current.has(resolvedFocusId)
-          ? current
-          : new Set(current).add(resolvedFocusId),
-      );
+      // Embedded review surfaces jump in from a file list; let the ancestor
+      // that owns scrolling bring it up.
       node.scrollIntoView({ block: "start" });
       return;
     }

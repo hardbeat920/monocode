@@ -29,6 +29,7 @@ const HOST_COMMANDS = new Set([
   "git_stage_all",
   "git_unstage_all",
   "git_commit",
+  "git_locate_files",
   "git_head_message",
   "git_push",
   "git_pull",
@@ -85,7 +86,7 @@ export async function runRemoteCommand(
   const hostArgs = Object.fromEntries(
     Object.entries(args).map(([key, value]) => [
       key,
-      PATH_ARGS.includes(key)
+      PATH_ARGS.includes(key) && !(key === "paths" && (command === "git_commit" || command === "git_staged_context"))
         ? toHost(value)
         : key === "options" && value && typeof value === "object" && !Array.isArray(value)
           ? { ...value, cwd: toHost((value as Record<string, unknown>).cwd) }
@@ -104,11 +105,15 @@ export async function runRemoteCommand(
       args: hostArgs,
     });
   } catch (reason) {
-    if (/Unsupported (host method|remote operation)/i.test(String(reason)))
+    if (/Unsupported (host method|remote operation|workspace command)/i.test(String(reason)))
       throw new Error(OUTDATED);
     throw reason;
   }
   const fromHost = (path: string) => remotePath(env, path);
+  if (command === "git_locate_files" && Array.isArray(result))
+    return result.map((entry: { root: string; relative: string } | null) =>
+      entry ? { ...entry, root: fromHost(entry.root) } : null,
+    );
   if (PATH_RESULTS.has(command) && typeof result === "string")
     return fromHost(result);
   if (ENTRY_RESULTS.has(command) && Array.isArray(result))

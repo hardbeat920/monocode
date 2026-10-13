@@ -41,8 +41,10 @@ export type Mono = {
   color: string;
   /** Project folders it works on, in the order they were added. */
   projects: string[];
-  /** New sessions appear in the project sidebar unless explicitly disabled. */
+  /** New sessions stay out of the project sidebar unless turned on. */
   showStartedSessionsInSidebar?: boolean;
+  /** Files the sessions it starts into a sidebar folder named after it. */
+  useSidebarFolders?: boolean;
   /** Superseded by SOUL.md; only read once, to seed it. */
   instructions?: string;
   /**
@@ -168,6 +170,7 @@ function parseMono(value: unknown): Mono | undefined {
     ...(typeof entry.showStartedSessionsInSidebar === "boolean"
       ? { showStartedSessionsInSidebar: entry.showStartedSessionsInSidebar }
       : {}),
+    ...(entry.useSidebarFolders === true ? { useSidebarFolders: true } : {}),
     ...(instructions ? { instructions } : {}),
     ...(legacyProject ? { legacyProject } : {}),
   };
@@ -272,6 +275,26 @@ export function saveMonoRailCollapsed(collapsed: boolean): void {
     else localStorage.removeItem(RAIL_COLLAPSED_KEY);
   } catch {
     // The section opens expanded next launch; harmless.
+  }
+}
+
+const OPEN_MONO_KEY = "monocode:open-mono";
+
+/** The Mono whose conversation was open, so the next launch reopens it. */
+export function loadOpenMono(): string | undefined {
+  try {
+    return localStorage.getItem(OPEN_MONO_KEY) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function saveOpenMono(monoId: string | undefined): void {
+  try {
+    if (monoId) localStorage.setItem(OPEN_MONO_KEY, monoId);
+    else localStorage.removeItem(OPEN_MONO_KEY);
+  } catch {
+    // The next launch opens the workspace instead; harmless.
   }
 }
 

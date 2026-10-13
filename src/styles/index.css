@@ -229,8 +229,7 @@ body,
     var(--motion-ease-out);
 }
 
-/* Linux/Windows: explicit sans + thin scrollbars. macOS keeps native overlay
-   scrollbars and default text rendering. */
+/* Linux/Windows: explicit sans. macOS keeps default text rendering. */
 html:not(.is-mac),
 html:not(.is-mac) body,
 html:not(.is-mac) #root {
@@ -240,26 +239,16 @@ html:not(.is-mac) #root {
   text-rendering: optimizeLegibility;
 }
 
-html:not(.is-mac) ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+/* Hide native scrollbars app-wide while preserving scrolling on both axes.
+   Custom editor and terminal scrollbars are separate elements. */
+* {
+  scrollbar-width: none;
 }
 
-html:not(.is-mac) ::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-html:not(.is-mac) ::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--color-content) 16%, transparent);
-  border-radius: 9999px;
-}
-
-html:not(.is-mac) ::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in srgb, var(--color-content) 32%, transparent);
-}
-
-html:not(.is-mac) ::-webkit-scrollbar-corner {
-  background: transparent;
+::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 /* Tint-less transparent rather than `transparent`, which browsers interpolate
@@ -400,6 +389,16 @@ html.is-mac.has-native-glass.has-native-glass-tint:not(.theme-light)
     black 5.5px
   );
   mask-image: radial-gradient(circle at 15px 1px, transparent 5px, black 5.5px);
+}
+
+/* The same cut-out, for the Mono overview's 14px tab icons. */
+.overview-tab-icon-with-dot {
+  -webkit-mask-image: radial-gradient(
+    circle at 13px 1px,
+    transparent 4.5px,
+    black 5px
+  );
+  mask-image: radial-gradient(circle at 13px 1px, transparent 4.5px, black 5px);
 }
 
 .body-glass {
@@ -635,9 +634,11 @@ html.has-chat-background.chat-background-effect-ready.chat-background-gradient-b
   }
 }
 
+/* History is paged by turn. Lay out each loaded page at its real height:
+   estimated offscreen heights change the scroll range during a gesture and
+   require scrollTop corrections as the reader moves back through history. */
 .transcript-turn {
-  content-visibility: auto;
-  contain-intrinsic-block-size: auto 240px;
+  content-visibility: visible;
 }
 
 ::highlight(monocode-transcript-search-match) {
@@ -690,13 +691,6 @@ html.has-chat-background.chat-background-effect-ready.chat-background-gradient-b
   mask-image: var(--mono-transcript-mask);
 }
 
-/* Mono history is already paged in groups of ten. Lay out those turns at
-   their real heights so opening and scrolling never correct placeholders. */
-.mono-transcript-fades .transcript-turn {
-  content-visibility: visible;
-  contain-intrinsic-block-size: none;
-}
-
 .agent-transcript
   [data-transcript-search-current="true"]
   .user-message-bubble
@@ -704,15 +698,6 @@ html.has-chat-background.chat-background-effect-ready.chat-background-gradient-b
   display: block;
   overflow: visible;
   -webkit-line-clamp: unset;
-}
-
-/*
- * The live turn is still growing. Size containment would flash the 240px
- * intrinsic fallback when the first step arrives, which bounces Working
- * down and then back up.
- */
-.transcript-turn-live {
-  content-visibility: visible;
 }
 
 /* Touch layouts keep actions in flow. Desktop places them in the existing
@@ -742,8 +727,45 @@ html.has-chat-background.chat-background-effect-ready.chat-background-gradient-b
   }
 }
 
+/* A Mono's turn keeps its actions the way a sent message does: in a fixed
+ * gap under the turn, shown on hover, so revealing them shifts nothing. One
+ * whose panel is open stays visible. */
+@media (hover: hover) and (pointer: fine) {
+  /* Leave breathing room above the buttons. Keep the gap while a
+   * completion report reopens the same turn and its
+   * actions are temporarily absent. Shrinking it makes the chat dip first. */
+  .transcript-turn-mono {
+    position: relative;
+    padding-bottom: 1.5rem;
+  }
+
+  .turn-actions-hover {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    z-index: 1;
+    height: 1.5rem;
+    padding-top: 0;
+    padding-bottom: 0;
+    opacity: 0;
+    transition: opacity 120ms ease;
+  }
+
+  /* The reply's actions answer to the reply: hovering the prompt above it,
+   * whose own actions show then, or its day stamp, leaves them hidden. */
+  .transcript-turn:hover:not(
+      :has([data-prompt-anchor]:hover, [data-day-separator]:hover)
+    )
+    > .turn-actions-hover,
+  .turn-actions-hover:focus-within,
+  .turn-actions-hover:has([aria-expanded="true"]) {
+    opacity: 1;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .user-message-actions {
+  .user-message-actions,
+  .turn-actions-hover {
     transition: none;
   }
 }
@@ -1368,6 +1390,11 @@ html.has-user-accent .user-message-bubble[data-draft="true"] {
    for the final word's fade, using the reply's actual animation state. */
 .transcript-turn:has([data-artifact-results]):has(.word-fading)
   > :is([data-artifact-results], [data-turn-actions]) {
+  display: none;
+}
+/* Session cards wait for the reply above them to finish its reveal; cards
+   above a later reply, such as a report back, stay where they are. */
+.transcript-turn > :has(.word-fading) ~ [data-launched-sessions] {
   display: none;
 }
 
@@ -2022,6 +2049,24 @@ header[data-tauri-drag-region] button {
   font-size: 10px;
 }
 
+.markdown-code-numbered-line::before {
+  content: counter(line);
+  counter-increment: line;
+  display: inline-block;
+  text-align: right;
+  user-select: none;
+}
+
+.markdown-code-token {
+  color: var(--sdm-c, inherit);
+  background-color: var(--sdm-tbg, transparent);
+}
+
+html:not(.theme-light) .markdown-code-token {
+  color: var(--shiki-dark, var(--sdm-c, inherit));
+  background-color: var(--shiki-dark-bg, var(--sdm-tbg, transparent));
+}
+
 .agent-markdown [data-streamdown="table-wrapper"] > div {
   border: 0;
   border-radius: 0;
@@ -2037,6 +2082,9 @@ header[data-tauri-drag-region] button {
 .agent-markdown [data-streamdown="table-cell"] {
   padding: 8px 10px;
   font-size: 12px;
+  /* Keep columns readable; narrow panes use the table's existing scroller. */
+  min-width: 10rem;
+  vertical-align: top;
 }
 
 .agent-markdown [data-streamdown="horizontal-rule"] {
@@ -2428,6 +2476,37 @@ header[data-tauri-drag-region] button {
   animation: agent-chat-fade-in 240ms ease-out both;
 }
 
+/* A Mono's reaction: frosted glass a shade lighter than the bubble it sits
+   on, so the corner it covers reads as one surface, not two tints. */
+.mono-reaction-badge {
+  background: color-mix(
+    in srgb,
+    var(--color-content) 17%,
+    color-mix(in srgb, var(--color-background-base) 72%, transparent)
+  );
+  -webkit-backdrop-filter: blur(14px) saturate(1.6);
+  backdrop-filter: blur(14px) saturate(1.6);
+  box-shadow:
+    inset 0 0.5px 0 color-mix(in srgb, var(--color-content) 22%, transparent),
+    0 0 0 0.5px color-mix(in srgb, var(--color-content) 10%, transparent),
+    0 2px 6px rgb(0 0 0 / 0.28);
+}
+
+/* In light mode the bubble is the darker surface, so the reaction is the
+   page's own base colour lifted off it by the shadow. */
+html.theme-light .mono-reaction-badge {
+  background: var(--color-background-base);
+  box-shadow:
+    0 0 0 1px var(--color-background-base),
+    0 1px 4px rgb(0 0 0 / 0.12);
+}
+
+/* A Mono's reaction lands on the message with a small bounce. */
+.mono-reaction-in {
+  animation: agent-chat-bubble-in 320ms cubic-bezier(0.2, 1.4, 0.4, 1) both;
+  transform-origin: 50% 50%;
+}
+
 @keyframes agent-chat-fade-in {
   from {
     opacity: 0;
@@ -2455,7 +2534,8 @@ header[data-tauri-drag-region] button {
 @media (prefers-reduced-motion: reduce) {
   .agent-chat-bubble-in-left,
   .agent-chat-bubble-in-right,
-  .agent-chat-fade-in {
+  .agent-chat-fade-in,
+  .mono-reaction-in {
     animation: none;
   }
 
@@ -2795,6 +2875,51 @@ html.theme-light .mono-pill {
   overflow: auto;
   overscroll-behavior: contain;
   overflow-anchor: none;
+  scrollbar-width: none;
+}
+
+.zen-phase-body > .zen-phase-live::-webkit-scrollbar {
+  display: none;
+}
+
+/*
+ * Soft edges like the Mono transcript's, but only on a side with more to
+ * scroll to: a window resting at the top has nothing above it to fade into.
+ * The lengths are registered so an edge eases in and out instead of popping.
+ */
+@property --zen-phase-fade-top {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@property --zen-phase-fade-bottom {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+.zen-phase-body[data-open="true"] > .zen-phase-live {
+  --zen-phase-mask: linear-gradient(
+    to bottom,
+    transparent,
+    #000 var(--zen-phase-fade-top),
+    #000 calc(100% - var(--zen-phase-fade-bottom)),
+    transparent
+  );
+  -webkit-mask-image: var(--zen-phase-mask);
+  mask-image: var(--zen-phase-mask);
+  transition:
+    --zen-phase-fade-top 160ms ease-out,
+    --zen-phase-fade-bottom 160ms ease-out;
+}
+
+.zen-phase-live[data-fade-top="true"] {
+  --zen-phase-fade-top: 1.5rem;
+}
+
+.zen-phase-live[data-fade-bottom="true"] {
+  --zen-phase-fade-bottom: 2rem;
 }
 
 /*
@@ -3135,11 +3260,14 @@ html.theme-light .mono-pill {
 }
 
 /*
- * A streamed word fading in as the paced reveal lets it out (wordFade.tsx).
+ * A streamed word fading in as it is shown (wordFade.tsx).
  * Opacity only: a word that moved would jostle the line it is set on. The
  * fade plays as a word's span is added, and words already on screen keep
  * theirs while the reply is coming in. The spans come off once the fade
- * ends, so a finished reply hidden and shown again never replays.
+ * ends, so a finished reply hidden and shown again never replays. One still
+ * fading when its tab hides would replay every word on return, since showing
+ * a `display: none` subtree restarts its animations, so the transcript marks
+ * the words already shown as settled before that first paint.
  */
 @keyframes word-fade-in {
   from {
@@ -3147,8 +3275,10 @@ html.theme-light .mono-pill {
   }
 }
 
-.agent-markdown.word-fading [data-word-fade] {
-  animation: word-fade-in 320ms ease-out both;
+/* Unpaced replies set the timing from the stream's cadence (AgentMarkdown). */
+.agent-markdown.word-fading [data-word-fade]:not([data-word-settled]) {
+  animation: word-fade-in var(--word-fade-ms, 320ms)
+    var(--word-fade-ease, ease-out) both;
 }
 
 @keyframes zen-thinking-pulse {

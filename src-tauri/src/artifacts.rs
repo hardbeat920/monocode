@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::notes::{save_content, Note, NoteUpsert};
 use crate::session_store::{validate_id, SessionStore};
@@ -12,12 +12,14 @@ use crate::session_store::{validate_id, SessionStore};
 #[serde(rename_all = "lowercase")]
 pub enum ArtifactKind {
     Document,
+    Html,
 }
 
 impl ArtifactKind {
     fn as_str(self) -> &'static str {
         match self {
             Self::Document => "document",
+            Self::Html => "html",
         }
     }
 }
@@ -187,6 +189,99 @@ pub fn artifacts_upsert(
         .map(|saved| Artifact::from_saved(saved, kind))
 }
 
+/// Scheme that serves `html` artifacts to the sandboxed frames that show them.
+pub const HTML_SCHEME: &str = "monoartifact";
+
+/// The page may run inline scripts and load public styles, scripts, images and
+/// fonts, but it cannot fetch, frame, submit forms or leave its sandbox, even
+/// if something opens its URL outside a sandboxed frame.
+const HTML_CSP: &str = "sandbox allow-scripts; default-src 'none'; \
+    script-src 'unsafe-inline' https:; style-src 'unsafe-inline' https:; \
+    img-src data: blob: https:; font-src data: https:; media-src data: blob: https:; \
+    worker-src blob:; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'";
+
+/// Runs first in every page: applies the theme the app posts, reports the
+/// content height so the frame can fit it, and hands web links to the app.
+const HTML_BOOTSTRAP: &str = r#"<script>(function(){var s=document.createElement("style"),c=document.currentScript,h;c.parentNode.insertBefore(s,c.nextSibling);var base="html{background:var(--background);color:var(--foreground);font-family:var(--font-sans)}body{margin:0}";s.textContent=base;function post(m){if(parent!==window)parent.postMessage(m,"*");}window.addEventListener("message",function(e){var d=e.data;if(e.source!==parent||!d||d.type!=="monocode:theme"||!d.vars)return;var css=":root{color-scheme:"+(d.scheme==="light"?"light":"dark")+";";for(var k in d.vars)if(/^--[a-z0-9-]+$/.test(k))css+=k+":"+String(d.vars[k]).replace(/[;{}<>]/g,"")+";";s.textContent=css+"}"+base;});document.addEventListener("click",function(e){var a=e.target&&e.target.closest?e.target.closest("a[href]"):null,u;if(!a)return;try{u=new URL(a.getAttribute("href"),document.baseURI);}catch(x){return;}if(!/^https?:$/.test(u.protocol))return;e.preventDefault();if(e.isTrusted)post({type:"monocode:open-link",url:u.href});},true);function size(){var r=document.documentElement,v=Math.ceil(r.scrollHeight>r.clientHeight?r.scrollHeight:r.getBoundingClientRect().height);if(v===h)return;h=v;post({type:"monocode:height",height:v});}if(window.ResizeObserver){var o=new ResizeObserver(size);o.observe(document.documentElement);document.addEventListener("DOMContentLoaded",function(){if(document.body)o.observe(document.body);});}window.addEventListener("load",size);document.addEventListener("DOMContentLoaded",size);post({type:"monocode:ready"});})();</script>"#;
+
+/// Serves `<scheme>://localhost/<id>`. Only `html` artifacts are served, so a
+/// frame can never show a document's Markdown as a page.
+pub fn serve_html<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    request: &tauri::http::Request<Vec<u8>>,
+) -> tauri::http::Response<Vec<u8>> {
+    let not_found = || {
+        tauri::http::Response::builder()
+            .status(404)
+            .body(Vec::new())
+            .unwrap_or_default()
+    };
+    if request.method() != tauri::http::Method::GET {
+        return not_found();
+    }
+    let id = request.uri().path().trim_start_matches('/');
+    if validate_id(id, "artifact").is_err() {
+        return not_found();
+    }
+    let Some(store) = app.try_state::<SessionStore>() else {
+        return not_found();
+    };
+    let artifact = match store.lock_conn() {
+        Ok(conn) => get_artifact(&conn, id).ok().flatten(),
+        Err(_) => None,
+    };
+    let Some(artifact) = artifact.filter(|a| a.kind == ArtifactKind::Html) else {
+        return not_found();
+    };
+    tauri::http::Response::builder()
+        .status(200)
+        .header("Content-Type", "text/html; charset=utf-8")
+        .header("Content-Security-Policy", HTML_CSP)
+        .header("Cache-Control", "no-store")
+        .header("X-Content-Type-Options", "nosniff")
+        .body(with_bootstrap(&artifact.body).into_bytes())
+        .unwrap_or_else(|_| not_found())
+}
+
+/// Inserts the bootstrap at the start of `<head>`, else after `<html>` or the
+/// doctype. Never before the doctype, which would switch to quirks mode.
+fn with_bootstrap(body: &str) -> String {
+    // ASCII lowercasing keeps byte offsets, so they index into `body`.
+    let lower = body.to_ascii_lowercase();
+    let at = tag_end(&lower, "<head")
+        .or_else(|| tag_end(&lower, "<html"))
+        .or_else(|| {
+            let start = lower.len() - lower.trim_start().len();
+            lower[start..]
+                .starts_with("<!doctype")
+                .then(|| lower[start..].find('>').map(|end| start + end + 1))
+                .flatten()
+        })
+        .unwrap_or(0);
+    let mut page = String::with_capacity(body.len() + HTML_BOOTSTRAP.len());
+    page.push_str(&body[..at]);
+    page.push_str(HTML_BOOTSTRAP);
+    page.push_str(&body[at..]);
+    page
+}
+
+/// The byte just past the first opening `name` tag, skipping longer names
+/// such as `<header>` for `<head`.
+fn tag_end(lower: &str, name: &str) -> Option<usize> {
+    let mut from = 0;
+    while let Some(found) = lower[from..].find(name) {
+        let start = from + found;
+        let next = start + name.len();
+        match lower.as_bytes().get(next) {
+            Some(b'>' | b'/') | Some(b' ' | b'\t' | b'\n' | b'\r' | b'\x0c') => {
+                return lower[next..].find('>').map(|end| next + end + 1);
+            }
+            _ => from = next,
+        }
+    }
+    None
+}
+
 fn list_artifacts(conn: &Connection) -> rusqlite::Result<Vec<Artifact>> {
     let mut stmt = conn.prepare(
         "SELECT id, artifact_kind, title, body, source_session_id, source_cwd,
@@ -213,6 +308,7 @@ fn read_artifact(row: &rusqlite::Row<'_>) -> rusqlite::Result<Artifact> {
     let kind: String = row.get(1)?;
     let kind = match kind.as_str() {
         "document" => ArtifactKind::Document,
+        "html" => ArtifactKind::Html,
         _ => {
             return Err(rusqlite::Error::InvalidParameterName(
                 "Unsupported artifact kind".into(),
@@ -235,6 +331,38 @@ fn read_artifact(row: &rusqlite::Row<'_>) -> rusqlite::Result<Artifact> {
 mod tests {
     use super::*;
     use crate::notes::upsert_content;
+
+    #[test]
+    fn html_artifacts_round_trip_their_kind() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.lock_conn().unwrap();
+        let note = NoteUpsert {
+            id: "artifact-html".into(),
+            title: "Chart".into(),
+            body: "<p>hi</p>".into(),
+            tags: Vec::new(),
+            source_session_id: None,
+            source_cwd: None,
+            finalize_slug: false,
+        };
+        upsert_content(&conn, &note, "artifact", Some("html")).unwrap();
+        let artifact = get_artifact(&conn, &note.id).unwrap().unwrap();
+        assert_eq!(artifact.kind, ArtifactKind::Html);
+        assert_eq!(serde_json::to_value(artifact).unwrap()["kind"], "html");
+    }
+
+    #[test]
+    fn bootstrap_goes_first_in_head_and_never_before_the_doctype() {
+        let page = with_bootstrap("<!DOCTYPE html><html><HEAD><title>x</title></HEAD></html>");
+        assert!(page.starts_with("<!DOCTYPE html><html><HEAD><script>"));
+        let page = with_bootstrap("<!doctype html>\n<body><header>x</header></body>");
+        assert!(page.starts_with("<!doctype html><script>"));
+        let page = with_bootstrap("<html lang=\"en\"><body></body></html>");
+        assert!(page.starts_with("<html lang=\"en\"><script>"));
+        let page = with_bootstrap("<div>fragment</div>");
+        assert!(page.starts_with("<script>"));
+        assert!(page.ends_with("</script><div>fragment</div>"));
+    }
 
     #[test]
     fn artifact_contract_preserves_kind_and_excludes_note_fields() {

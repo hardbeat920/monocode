@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MonoComposer } from "./MonoComposer";
 import { clearComposerDraft } from "../../sessions/model/draftCache";
+import { saveComposerAutocorrect } from "../../settings/model/displayPrefs";
 
 const { pick } = vi.hoisted(() => ({ pick: vi.fn() }));
 vi.mock("../../sessions/model/attachments", async (original) => ({
@@ -13,6 +14,18 @@ vi.mock("../../sessions/model/attachments", async (original) => ({
 vi.mock("../../sessions/hooks/useFileDrop", () => ({
   useFileDrop: () => false,
 }));
+// The picker itself is covered on its own; here it just hands over a pick.
+vi.mock("../../../shared/ui/EmojiPicker", async () => {
+  const { createElement } = await import("react");
+  return {
+    EmojiPickerPopover: ({ onPick }: { onPick: (emoji: string) => void }) =>
+      createElement(
+        "button",
+        { type: "button", "data-pick": "", onClick: () => onPick("😀") },
+        "pick",
+      ),
+  };
+});
 
 let container: HTMLDivElement;
 let root: Root;
@@ -173,4 +186,50 @@ it("waits for delivery and keeps a rejected message available to retry", async (
   });
   expect(field().value).toBe("");
   expect(onSubmit).toHaveBeenCalledTimes(2);
+});
+
+it("follows the composer autocorrect setting", () => {
+  render();
+  expect(field().getAttribute("spellcheck")).toBe("true");
+  expect(field().getAttribute("autocorrect")).toBe("on");
+
+  act(() => saveComposerAutocorrect(false));
+  expect(field().getAttribute("spellcheck")).toBe("false");
+  expect(field().getAttribute("autocorrect")).toBe("off");
+
+  act(() => saveComposerAutocorrect(true));
+  expect(field().getAttribute("spellcheck")).toBe("true");
+});
+
+it("inserts a picked emoji where the cursor was, beside attach", async () => {
+  render({ controls: createElement("span", null, "Model") });
+  const field = container.querySelector("textarea")!;
+  act(() => {
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!;
+    setter.call(field, "hi there");
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  field.setSelectionRange(2, 2);
+  const button = container.querySelector<HTMLButtonElement>(
+    'button[aria-label="Add emoji"]',
+  )!;
+  expect(button.previousElementSibling?.getAttribute("aria-label")).toBe(
+    "Attach files",
+  );
+  // The picker loads on first open.
+  await act(async () => button.click());
+  await vi.waitFor(() =>
+    expect(container.querySelector("[data-pick]")).not.toBeNull(),
+  );
+  expect(button.getAttribute("aria-expanded")).toBe("true");
+  act(() => container.querySelector<HTMLButtonElement>("[data-pick]")!.click());
+  expect(field.value).toBe("hi😀 there");
+  expect(container.querySelector("[data-pick]")).toBeNull();
+
+  // The floating chat keeps its inline input, without the extra row.
+  render();
+  expect(container.querySelector('button[aria-label="Add emoji"]')).toBeNull();
 });

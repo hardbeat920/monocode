@@ -16,9 +16,12 @@ import {
   type Session,
 } from "../../sessions/model/session";
 import {
+  addSessionToFolder,
+  createFolderWithSessions,
   loadSessionFolders,
   placeSessionInFolder,
   saveSessionFolders,
+  setFolderCustomColor,
 } from "../../sessions/model/sessionFolders";
 import {
   normalizeNoteTags,
@@ -26,11 +29,12 @@ import {
   type Note,
   type NoteUpsert,
 } from "../../notes";
-import type {
-  Artifact,
-  ArtifactCard,
-  ArtifactKind,
-  ArtifactUpsert,
+import {
+  ARTIFACT_KINDS,
+  type Artifact,
+  type ArtifactCard,
+  type ArtifactKind,
+  type ArtifactUpsert,
 } from "../../artifacts/artifacts";
 import type { QuickLaunch } from "../../quick-composer/model/quickComposer";
 import type { Worktree, Worktrees } from "../../source-control/model/worktrees";
@@ -134,6 +138,8 @@ export type AgentAppHost = {
     id: string;
     projects: readonly string[];
     showStartedSessionsInSidebar?: boolean;
+    /** Files the sessions it starts into a folder named after it. */
+    folder?: { name: string; color: string };
   } | undefined;
   /** A hidden run of one of a Mono's habits: it may remember, not schedule. */
   isHabitRun?(sessionId: string): boolean;
@@ -365,6 +371,28 @@ export function notePreview(body: string): string {
     .slice(0, 400);
 }
 
+/**
+ * Puts a session a Mono started into the sidebar folder named after it,
+ * making that folder in its color the first time.
+ */
+function fileInMonoFolder(
+  cwd: string,
+  sessionId: string,
+  folder: { name: string; color: string },
+): void {
+  const folders = loadSessionFolders(cwd);
+  const own = folders.find((entry) => entry.name === folder.name);
+  if (own) {
+    saveSessionFolders(cwd, addSessionToFolder(folders, own.id, sessionId));
+    return;
+  }
+  const created = createFolderWithSessions(folders, [sessionId], folder.name);
+  saveSessionFolders(
+    cwd,
+    setFolderCustomColor(created.folders, created.id, folder.color),
+  );
+}
+
 function startLaunch(
   source: Session,
   input: Record<string, unknown>,
@@ -441,7 +469,7 @@ function startLaunch(
   return {
     cwd,
     prompt,
-    ...(host.monoOf?.(source.id)?.showStartedSessionsInSidebar === false
+    ...(host.monoOf?.(source.id)?.showStartedSessionsInSidebar !== true
       ? { sidebarHidden: true }
       : {}),
     ...(draft ? { draft: true } : {}),
@@ -794,8 +822,10 @@ async function handleHabits(
 }
 
 function artifactKind(value: unknown): ArtifactKind {
-  if (value === undefined || value === "document") return "document";
-  throw new Error('Unsupported artifact kind; only "document" is supported');
+  if (value === undefined) return "document";
+  if (ARTIFACT_KINDS.includes(value as ArtifactKind))
+    return value as ArtifactKind;
+  throw new Error('Unsupported artifact kind; use "document" or "html"');
 }
 
 async function handleArtifacts(
@@ -1078,6 +1108,9 @@ export async function handleAgentApp(
         );
       else if (notifyMonoId) await host.start(launch, id, undefined, notifyMonoId);
       else await host.start(launch, id);
+      const folder = host.monoOf?.(source.id)?.folder;
+      if (folder && !launch.sidebarHidden)
+        fileInMonoFolder(launch.cwd, id, folder);
       return {
         id,
         cwd: launch.cwd,

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from "react";
-import { notifySession, pendingInputNotifications } from "../model/notifications";
+import { announceSessionInput, pendingInputNotifications } from "../model/notifications";
 import type { Session } from "../../sessions/model/session";
 
 export function useInputNotifications(
@@ -23,7 +23,7 @@ export function useInputNotifications(
       // Coalesce this render's banners per session, but leave other requests
       // eligible for the next update (including resolution of the first one).
       notified.add(key);
-      void notifySession(
+      void announceSessionInput(
         session,
         event,
         session.id === activeSessionId,

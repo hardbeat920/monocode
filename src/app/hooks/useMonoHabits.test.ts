@@ -257,6 +257,69 @@ it("posts nothing when the run has nothing to say", async () => {
   expect(host.remove).toHaveBeenCalled();
 });
 
+it("lets a long-running habit finish and post after thirty minutes", async () => {
+  vi.useFakeTimers();
+  const hold = deferred();
+  const host = setup("PR review complete.");
+  const run = host.run.getMockImplementation()!;
+  host.run.mockImplementationOnce(async (id, prompt) => {
+    await hold.promise;
+    return run(id, prompt);
+  });
+  try {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+    });
+    expect(host.run).toHaveBeenCalledTimes(1);
+    expect(host.remove).not.toHaveBeenCalled();
+    expect(stored[0].lastOutcome).toBeUndefined();
+
+    await act(async () => hold.resolve());
+    expect(host.post).toHaveBeenCalledWith(
+      "mono",
+      expect.objectContaining({ id: "h1" }),
+      "PR review complete.",
+      "Skull",
+      [],
+    );
+    expect(stored[0].lastOutcome).toBe("posted");
+    expect(host.remove).toHaveBeenCalledTimes(1);
+  } finally {
+    await act(async () => hold.resolve());
+    vi.useRealTimers();
+  }
+});
+
+it("stops and records a habit that is still running after one hour", async () => {
+  vi.useFakeTimers();
+  const hold = deferred();
+  const host = setup("PR review complete.");
+  host.run.mockImplementationOnce(async () => {
+    await hold.promise;
+    return { status: "completed", text: "PR review complete." };
+  });
+  try {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60 * 60 * 1000 - 2_000);
+    });
+    expect(host.run).toHaveBeenCalledTimes(1);
+    expect(host.remove).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(host.remove).toHaveBeenCalledTimes(1);
+    expect(host.post).not.toHaveBeenCalled();
+    expect(stored[0]).toMatchObject({
+      lastOutcome: "failed",
+      lastError: "It took too long and was stopped.",
+    });
+  } finally {
+    await act(async () => hold.resolve());
+    vi.useRealTimers();
+  }
+});
+
 it(
   "puts an approval the run still asks for to the user, once",
   { timeout: 15_000 },
