@@ -6,6 +6,7 @@ import { Copy, RefreshCw, RotateCcw, X } from "../../../shared/ui/icons";
 import { SecondaryButton } from "../../../shared/ui/SecondaryButton";
 import {
   BROWSER_CHANNELS,
+  browserLaunches,
   browserTabHost,
   browserTabStatus,
   clearBrowserAudit,
@@ -86,7 +87,8 @@ export function BrowserSettings({
 
   const save = (patch: Partial<Settings>) =>
     run(() => saveBrowserSettings({ ...state.settings, ...patch }));
-  const managed = state.settings.mode === "managed";
+  const managed = browserLaunches(state.settings.mode);
+  const isPrivate = state.settings.mode === "private";
 
   return (
     <>
@@ -121,9 +123,11 @@ export function BrowserSettings({
           id="browser-mode"
           label="Browser"
           description={
-            managed
-              ? "MonoCode starts Chrome or Edge with its own profile. Nothing to set up, and your own browser does not need to run."
-              : "MonoCode connects to the Chrome or Edge you run, signed in as you. It needs remote debugging, and the browser asks you to allow every new connection."
+            isPrivate
+              ? "Like the MonoCode browser, with a fresh profile every time it starts. Nothing is kept when it closes: no sign-ins, cookies or history."
+              : managed
+                ? "MonoCode starts Chrome or Edge with its own profile. Nothing to set up, and your own browser does not need to run."
+                : "MonoCode connects to the Chrome or Edge you run, signed in as you."
           }
         >
           <Select
@@ -131,11 +135,13 @@ export function BrowserSettings({
             value={state.settings.mode}
             options={[
               { value: "managed", label: "MonoCode browser" },
+              { value: "private", label: "Private MonoCode browser" },
               { value: "attach", label: "Your Chrome or Edge" },
             ]}
             onChange={(mode) => save({ mode: mode as BrowserMode })}
           />
         </Row>
+        {managed ? null : <AttachSteps state={state} />}
         <Row
           id="browser-access-mode"
           label="Thread access"
@@ -172,15 +178,17 @@ export function BrowserSettings({
                 onChange={(show_window) => save({ show_window })}
               />
             </Row>
-            <Row
-              id="browser-open"
-              label="Sign in to sites"
-              description="Opens the MonoCode browser so you can sign in to the sites agents need. It keeps your sign-ins for next time."
-            >
-              <SecondaryButton onClick={() => run(openBrowserWindow)}>
-                Open browser
-              </SecondaryButton>
-            </Row>
+            {isPrivate ? null : (
+              <Row
+                id="browser-open"
+                label="Sign in to sites"
+                description="Opens the MonoCode browser so you can sign in to the sites agents need. It keeps your sign-ins for next time."
+              >
+                <SecondaryButton onClick={() => run(openBrowserWindow)}>
+                  Open browser
+                </SecondaryButton>
+              </Row>
+            )}
           </>
         ) : (
           <>
@@ -337,7 +345,7 @@ function ConnectionGroup({
       id="browser-connection"
       title="Connection"
       description={
-        state.settings.mode === "managed"
+        browserLaunches(state.settings.mode)
           ? "MonoCode starts its browser when an agent needs it and connects to it directly."
           : "MonoCode never starts your browser. It finds the one you already run and asks it for permission on every new connection."
       }
@@ -375,6 +383,48 @@ function ConnectionGroup({
 }
 
 /** Guided consent (spec 13.3): the steps for the browser that was chosen. */
+/** Your Chrome or Edge: what the user has to do before agents can use it. */
+function AttachSteps({ state }: { state: BrowserState }) {
+  const pages = inspectPages(state);
+  return (
+    <div
+      id={settingDomId("browser-attach-steps")}
+      data-setting-id="browser-attach-steps"
+      className="border-t border-content/5 px-4 py-3.5 text-[12px] leading-relaxed text-content/65"
+    >
+      <p className="mb-2 text-content/85">
+        Your own browser needs these steps before agents can use it:
+      </p>
+      <ol className="list-decimal space-y-1.5 pl-4">
+        <li>
+          Turn on remote debugging once in{" "}
+          {pages.map((page, index) => (
+            <span key={page.url}>
+              {index > 0 ? " or " : null}
+              <span className="rounded bg-content/8 px-1.5 py-0.5 font-mono text-[11px] text-content">
+                {page.url}
+              </span>
+            </span>
+          ))}
+          .
+        </li>
+        <li>Keep the browser running. MonoCode never starts it.</li>
+        <li>
+          Choose Allow when the browser asks. It asks again on every new
+          connection, for example after a browser or MonoCode restart.
+        </li>
+        <li>
+          While MonoCode is connected, the browser shows a bar saying it is
+          controlled by automated software.
+        </li>
+      </ol>
+      <p className="mt-2 text-content/45">
+        The MonoCode browser needs none of this.
+      </p>
+    </div>
+  );
+}
+
 function ConsentGuide({ state }: { state: BrowserState }) {
   const pages = inspectPages(state);
   const [copied, setCopied] = useState<string | null>(null);

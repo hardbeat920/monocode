@@ -61,7 +61,12 @@ export type BrowserLimits = {
  * `managed`: MonoCode starts Chrome or Edge with its own profile.
  * `attach`: MonoCode connects to the browser the user runs.
  */
-export type BrowserMode = "managed" | "attach";
+export type BrowserMode = "managed" | "private" | "attach";
+
+/** MonoCode starts the browser itself (the MonoCode browser, kept or private). */
+export function browserLaunches(mode: BrowserMode): boolean {
+  return mode !== "attach";
+}
 
 /**
  * `ask`: a thread's first browser action asks the user in that thread.
@@ -488,7 +493,7 @@ export type ConnectionView = {
 };
 
 export function connectionView(state: BrowserState): ConnectionView {
-  if (state.settings.mode !== "managed") return attachView(state);
+  if (!browserLaunches(state.settings.mode)) return attachView(state);
   // The MonoCode browser has no consent step, so it never shows the guide.
   return { ...attachView(state), ...managedView(state), guide: false };
 }
@@ -496,24 +501,27 @@ export function connectionView(state: BrowserState): ConnectionView {
 /** The states where the MonoCode browser reads differently from Your Chrome. */
 function managedView(state: BrowserState): Partial<ConnectionView> {
   const { connection } = state;
+  const isPrivate = state.settings.mode === "private";
+  const name = isPrivate ? "private MonoCode browser" : "MonoCode browser";
   switch (connection.state) {
     case "discovering":
-      return { message: "Starting the MonoCode browser…" };
+      return { message: `Starting the ${name}…` };
     case "idle":
       return {
-        message: "Ready. The MonoCode browser starts when an agent needs it.",
+        message: isPrivate
+          ? `Ready. The ${name} starts when an agent needs it and forgets everything when it closes.`
+          : `Ready. The ${name} starts when an agent needs it.`,
         action: null,
       };
     case "connected":
       return {
         message: connection.browser
-          ? `The MonoCode browser is running on ${browserProductLabel(connection.browser)}.`
-          : "The MonoCode browser is running.",
+          ? `The ${name} is running on ${browserProductLabel(connection.browser)}.`
+          : `The ${name} is running.`,
       };
     case "disconnected":
       return {
-        message:
-          "The MonoCode browser closed. It starts again when an agent needs it.",
+        message: `The ${name} closed. It starts again when an agent needs it.`,
         tone: "neutral",
         action: null,
       };

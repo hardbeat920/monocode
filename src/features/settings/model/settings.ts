@@ -205,7 +205,14 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     id: "browser-mode",
     section: "browser",
     label: "Browser",
-    keywords: "monocode browser your chrome edge managed attach own profile",
+    keywords:
+      "monocode browser your chrome edge managed attach own profile private incognito",
+  },
+  {
+    id: "browser-attach-steps",
+    section: "browser",
+    label: "Steps for your own browser",
+    keywords: "remote debugging chrome://inspect edge://inspect allow setup",
   },
   {
     id: "browser-access-mode",

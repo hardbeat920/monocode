@@ -8,16 +8,17 @@ Open Settings → Browser and switch on **Let agents use my browser**. MonoCode 
 
 ## Pick a browser
 
-**Browser** in Settings → Browser has two choices.
+**Browser** in Settings → Browser has three choices.
 
 - **MonoCode browser** (the default): MonoCode starts the Chrome or Edge you have installed, with its own profile in MonoCode's app data. It needs no setup, and your own Chrome does not have to run. **Which browser to start** picks Chrome or Edge; Automatic starts Chrome, or Edge when Chrome is not installed. Click **Open browser** to bring up its window and sign in to the sites your agents need. The profile keeps those sign-ins for next time. Switch off **Show browser window** to run it without a window.
+- **Private MonoCode browser**: the MonoCode browser with a fresh profile every time it starts. MonoCode deletes the profile when the browser closes, so nothing is kept: no sign-ins, cookies or history. Use it when agents should see sites as a new visitor.
 - **Your Chrome or Edge**: MonoCode connects to the browser you already run, signed in as you. The first time, open `chrome://inspect/#remote-debugging` (Chrome) or `edge://inspect` (Edge) and turn on remote debugging. When MonoCode connects, the browser asks whether to allow the connection; choose Allow. Every new connection asks again. While MonoCode is connected, the browser shows a bar saying it is controlled by automated software. The browser draws that bar and MonoCode cannot hide it.
 
 ## Give a thread access
 
 **Thread access** in Settings → Browser decides how a thread gets the browser.
 
-- **Ask in the thread** (the default): the first time an agent needs the browser, its thread shows "This agent wants to use the browser." above the composer. **Allow for this thread** gives the thread access, and it keeps it. **Not now** tells the agent to go on without the browser; it does not ask again until your next message. The agent waits for your answer for about 50 seconds.
+- **Ask in the thread** (the default): the first time an agent needs the browser, its thread shows "This agent wants to use the browser." above the composer. **Allow for this thread** gives the thread access, and it keeps it. **Not now** tells the agent to go on without the browser; it does not ask again until your next message. The agent waits for your answer for about 45 seconds. With the MonoCode browser, the browser already starts while you decide.
 - **Always on**: every thread can use the browser without asking.
 
 `/browser` at the start of a composer message works in both modes.
