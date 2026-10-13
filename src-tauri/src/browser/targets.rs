@@ -505,6 +505,41 @@ pub fn close_targets(link: &Link, targets: &[TargetId]) {
     }
 }
 
+/// Script run in our isolated world to take the marker off a page the user
+/// takes back (spec 13.1 "Preuzmi tab"); `marker.js` defines the hook.
+const MARKER_RELEASE_FN: &str =
+    "function() { return typeof globalThis.__monocodeMarkerRelease === 'function' ? globalThis.__monocodeMarkerRelease() : false; }";
+
+/// Strip the title prefix and restore the favicon in the current document of
+/// `session` before detaching from it. Best effort: the isolated world of the
+/// main frame is looked up by name, so this reaches the running marker script.
+/// New documents get no marker once the session is detached, because
+/// `Page.addScriptToEvaluateOnNewDocument` registrations die with the session.
+pub fn release_marker(
+    link: &Link,
+    session: &CdpSessionId,
+    main_frame_id: &str,
+) -> Result<(), CdpError> {
+    let world = link.send_system(Command::in_session(
+        session,
+        Method::PageCreateIsolatedWorld,
+        json!({ "frameId": main_frame_id, "worldName": ISOLATED_WORLD, "grantUniveralAccess": false }),
+    ))?;
+    let Some(context) = world["executionContextId"].as_i64() else {
+        return Ok(());
+    };
+    link.send_system(Command::in_session(
+        session,
+        Method::RuntimeCallFunctionOn,
+        json!({
+            "functionDeclaration": MARKER_RELEASE_FN,
+            "executionContextId": context,
+            "returnByValue": true,
+        }),
+    ))?;
+    Ok(())
+}
+
 /// Detach from sessions whose leases were revoked (revoke, grant off,
 /// window closed). Tabs stay open with the marker (spec 7).
 pub fn detach_sessions(link: &Link, sessions: &[CdpSessionId]) {
@@ -1401,6 +1436,8 @@ mod tests {
             Reason::TargetClosed
         );
         assert!(MARKER_JS.contains("addScriptToEvaluateOnNewDocument"));
+        assert!(MARKER_JS.contains("globalThis.__monocodeMarkerRelease = "));
+        assert!(MARKER_RELEASE_FN.contains("__monocodeMarkerRelease"));
         assert!(MARKER_JS.contains(super::super::protocol::MARKER_PREFIX));
     }
 }

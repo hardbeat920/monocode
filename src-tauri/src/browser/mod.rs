@@ -592,6 +592,34 @@ impl BrowserHost {
         Ok(())
     }
 
+    /// Settings "Take the tab back" (spec 13.1): the lease is released, the
+    /// marker comes off, we detach, and the tab stays open for the user. The
+    /// owning session's next action on it gets `no_lease`.
+    pub fn release_tab(&self, tab: &TabId) -> Result<(), String> {
+        let (owner, main_frame) = {
+            let state = self.policy.read();
+            let lease = state.lease(tab).ok_or("Unknown tab")?;
+            (lease.owner.clone(), lease.main_frame_id.clone())
+        };
+        let detach = self
+            .policy
+            .write()
+            .release_lease(tab)
+            .map_err(|reason| reason.message().to_string())?;
+        if let Some(session) = detach {
+            if self.link.is_open() {
+                if let Some(frame) = main_frame.as_deref() {
+                    let _ = targets::release_marker(&self.link, &session, frame);
+                }
+                targets::detach_sessions(&self.link, std::slice::from_ref(&session));
+            }
+        }
+        self.db.with(|conn| audit::lease_closed(conn, tab));
+        self.event("tab_released", Actor::User, Some(&owner), Some(&tab.0));
+        self.emit_state();
+        Ok(())
+    }
+
     /// Settings "Close tab" for any agent tab, whoever owns it.
     pub fn close_tab_by_user(&self, tab: &TabId) -> Result<(), String> {
         let target = {
@@ -1213,6 +1241,13 @@ pub fn browser_transfer(
 }
 
 #[tauri::command]
+pub fn browser_release_tab(tab: String) -> Result<BrowserState, String> {
+    let host = require_host()?;
+    host.release_tab(&TabId(tab))?;
+    Ok(host.state())
+}
+
+#[tauri::command]
 pub fn browser_connect() -> Result<BrowserState, String> {
     let host = require_host()?;
     host.connect();
@@ -1282,7 +1317,7 @@ pub fn browser_set_settings(settings: BrowserSettings) -> Result<BrowserState, S
 
 #[cfg(test)]
 mod tests {
-    use super::protocol::{BrowserChoice, TabInfo};
+    use super::protocol::{BrowserChoice, TabInfo, ISOLATED_WORLD};
     use super::testing::{FakeCdp, Response};
     use super::*;
 
@@ -1504,6 +1539,10 @@ mod tests {
             "{:?}",
             host.connection()
         );
+        // OFF dropped every grant: without a new /browser the session is not granted.
+        let ungranted = host.handle_request("s1", request("r2a", "tabs.open", json!({})));
+        assert_eq!(ungranted.reason, Some(Reason::NotGranted));
+        host.set_grant("s1", "main", true);
         let needs = host.handle_request("s1", request("r2", "tabs.open", json!({})));
         assert_eq!(needs.reason, Some(Reason::BrowserNeedsSetup));
         assert!(needs.message.contains("chrome://inspect"));
@@ -1515,6 +1554,7 @@ mod tests {
         .unwrap();
         host.set_toggle(false);
         host.set_toggle(true);
+        host.set_grant("s1", "main", true);
         assert!(
             wait_state(&host, ConnectionState::StalePort),
             "{:?}",
@@ -1549,6 +1589,39 @@ mod tests {
             host.transfer(&tab_b, "s1", "nobody"),
             Err(Reason::NotGranted)
         );
+
+        // User takes tab_a back: marker release in our world, detach, lease revoked, tab open.
+        let before = server.received().len();
+        host.release_tab(&tab_a).unwrap();
+        let received = server.received();
+        let tail: Vec<&str> = received[before..]
+            .iter()
+            .map(|r| r.method.as_str())
+            .collect();
+        assert_eq!(
+            tail,
+            vec![
+                "Page.createIsolatedWorld",
+                "Runtime.callFunctionOn",
+                "Target.detachFromTarget"
+            ]
+        );
+        assert_eq!(received[before].params["worldName"], json!(ISOLATED_WORLD));
+        assert!(received[before + 1].params["functionDeclaration"]
+            .as_str()
+            .unwrap()
+            .contains("__monocodeMarkerRelease"));
+        assert_eq!(
+            host.policy().read().lease(&tab_a).unwrap().state,
+            TabState::Revoked
+        );
+        assert!(host.policy().read().tabs_for("s2").is_empty());
+        let gone =
+            host.handle_request("s2", request("c2", "tabs.close", json!({ "tab": tab_a.0 })));
+        assert_eq!(gone.reason, Some(Reason::NoLease));
+        // Releasing again is a no-op; unknown tabs are errors.
+        host.release_tab(&tab_a).unwrap();
+        assert!(host.release_tab(&TabId("t_deadbeef".into())).is_err());
 
         // Revoke s1: its remaining tab is detached, not closed.
         let before = server.received().len();

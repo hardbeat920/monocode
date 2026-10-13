@@ -229,6 +229,10 @@ pub fn default_response(received: &Received, counter: &AtomicU64) -> Response {
             let n = counter.fetch_add(1, Ordering::Relaxed);
             Response::Result(json!({ "sessionId": format!("S{n}") }))
         }
+        "Page.createIsolatedWorld" => {
+            let n = counter.fetch_add(1, Ordering::Relaxed);
+            Response::Result(json!({ "executionContextId": n }))
+        }
         "DOM.resolveNode" if received.params["backendNodeId"] == json!(-1) => Response::Error {
             code: -32000,
             message: "No node with given id found".into(),

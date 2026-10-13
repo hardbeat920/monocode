@@ -272,6 +272,13 @@ impl PolicyState {
         if on {
             return Vec::new();
         }
+        // OFF revokes every permission (spec 6, 13.1): after the next ON each
+        // session has to be granted `/browser` again.
+        for auth in self.sessions.values_mut() {
+            auth.granted = false;
+            auth.granted_since_ms = None;
+            auth.epoch = auth.epoch.next();
+        }
         let mut detach = Vec::new();
         for lease in self.leases.values_mut() {
             if lease.is_live() {
@@ -283,6 +290,21 @@ impl PolicyState {
             }
         }
         detach
+    }
+
+    /// Settings "Take the tab back" (spec 13.1): the lease ends, the tab stays
+    /// with the user. Returns the main CDP session to detach, if attached.
+    pub fn release_lease(&mut self, tab: &TabId) -> Result<Option<CdpSessionId>, Reason> {
+        let lease = self.leases.get_mut(tab).ok_or(Reason::NoLease)?;
+        match lease.state {
+            TabState::Closed | TabState::Crashed => return Err(Reason::TargetClosed),
+            TabState::Revoked => return Ok(None),
+            TabState::Attaching | TabState::Open => {}
+        }
+        lease.state = TabState::Revoked;
+        lease.busy = false;
+        self.last_revocation = Some(Instant::now());
+        Ok(lease.cdp_session.clone())
     }
 
     /// The socket closed while ON: epoch up, leases gone (spec 4, 6).
@@ -1012,11 +1034,20 @@ mod tests {
         assert_eq!(state.gate(&ctx, &s1, false), Err(GateError::Off));
         state.set_toggle(true);
         assert_eq!(state.gate(&ctx, &s1, false), Err(GateError::Revoked));
-        // The lease was revoked by OFF, so even a fresh ctx has no lease.
+        // OFF dropped the grant; once re-granted, the lease is still gone.
         state.turn_started("s1", "main", "/repo", None);
-        let fresh = state.admit(
+        let ungranted = state.admit(
             "s1",
             "r2",
+            ActionKind::Click,
+            Some(&TabId("t_00000001".into())),
+            Duration::from_secs(1),
+        );
+        assert_eq!(ungranted.unwrap_err(), Reason::NotGranted);
+        state.set_grant("s1", "main", true);
+        let fresh = state.admit(
+            "s1",
+            "r3",
             ActionKind::Click,
             Some(&TabId("t_00000001".into())),
             Duration::from_secs(1),
@@ -1127,6 +1158,49 @@ mod tests {
         state.insert_lease(lease("t_00000004", "T4", "S4", "s4"));
         assert_eq!(state.window_closed("w2"), vec![CdpSessionId("S4".into())]);
         assert!(state.session("s4").is_none());
+        // OFF revokes every grant (spec 6, 13.1): after ON the session must
+        // ask for /browser again, and its epoch moved so in-flight work dies.
+        state.turn_started("s5", "main", "/repo", Some(true));
+        state.insert_lease(lease("t_00000005", "T5", "S5", "s5"));
+        let e5 = state.session_epoch("s5").unwrap();
+        assert_eq!(state.set_toggle(false), vec![CdpSessionId("S5".into())]);
+        assert!(!state.granted("s5"));
+        assert_eq!(state.session_epoch("s5").unwrap(), e5.next());
+        assert!(
+            state.turn_active("s5"),
+            "the turn itself is not ended by OFF"
+        );
+        state.set_toggle(true);
+        assert!(!state.granted("s5"));
+        assert_eq!(
+            state
+                .admit(
+                    "s5",
+                    "r",
+                    ActionKind::TabsList,
+                    None,
+                    Duration::from_secs(1)
+                )
+                .unwrap_err(),
+            Reason::NotGranted
+        );
+        state.set_grant("s5", "main", true);
+        assert!(state.granted("s5"));
+        // Releasing a tab to the user: lease revoked, session to detach returned.
+        state.insert_lease(lease("t_00000006", "T6", "S6", "s5"));
+        let t6 = TabId("t_00000006".into());
+        assert_eq!(
+            state.release_lease(&t6),
+            Ok(Some(CdpSessionId("S6".into())))
+        );
+        assert_eq!(state.lease(&t6).unwrap().state, TabState::Revoked);
+        assert_eq!(state.release_lease(&t6), Ok(None));
+        assert_eq!(
+            state.release_lease(&TabId("t_00000099".into())),
+            Err(Reason::NoLease)
+        );
+        state.lease_mut(&t6).unwrap().state = TabState::Closed;
+        assert_eq!(state.release_lease(&t6), Err(Reason::TargetClosed));
     }
 
     #[test]

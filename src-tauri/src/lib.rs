@@ -322,6 +322,7 @@ pub fn run() {
             browser::browser_set_session_grant,
             browser::browser_close_tab,
             browser::browser_close_all_tabs,
+            browser::browser_release_tab,
             browser::browser_audit_list,
             browser::browser_events_list,
             browser::browser_audit_clear,

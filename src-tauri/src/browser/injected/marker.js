@@ -40,6 +40,10 @@
   let applications = 0;
   let windowStart = 0;
   let applying = false;
+  let released = false;
+  // Original favicon links, detached while ours is shown and restored when
+  // the user takes the tab back ("Preuzmi tab", spec 13.1).
+  const originalIcons = [];
 
   const budgetOk = () => {
     const now = Date.now();
@@ -52,7 +56,7 @@
   };
 
   const applyTitle = () => {
-    if (applying || !document.head) {
+    if (released || applying || !document.head) {
       return;
     }
     const current = document.title || "";
@@ -71,13 +75,14 @@
   };
 
   const applyIcon = () => {
-    if (!document.head) {
+    if (released || !document.head) {
       return;
     }
     const links = Array.from(document.head.querySelectorAll('link[rel~="icon"]'));
     let ours = links.find((l) => l.dataset.monocodeMarker === "1");
     for (const link of links) {
       if (link !== ours) {
+        originalIcons.push(link);
         link.remove();
       }
     }
@@ -135,9 +140,46 @@
   };
 
   const run = () => {
+    if (released) {
+      return;
+    }
     observe();
     applyTitle();
     applyIcon();
+  };
+
+  // Called by the module through Runtime.callFunctionOn in this same
+  // isolated world when the lease is released: stop observing, strip the
+  // prefix and put the page's own favicon back. Idempotent.
+  globalThis.__monocodeMarkerRelease = () => {
+    if (released) {
+      return true;
+    }
+    released = true;
+    if (observer) {
+      observer.disconnect();
+      observer = null;
+    }
+    const current = document.title || "";
+    if (current === BARE) {
+      document.title = "";
+    } else if (current.startsWith(PREFIX)) {
+      document.title = current.slice(PREFIX.length);
+    }
+    if (document.head) {
+      for (const link of Array.from(
+        document.head.querySelectorAll('link[rel~="icon"][data-monocode-marker="1"]')
+      )) {
+        link.remove();
+      }
+      for (const link of originalIcons) {
+        if (!link.isConnected) {
+          document.head.appendChild(link);
+        }
+      }
+    }
+    originalIcons.length = 0;
+    return true;
   };
 
   if (document.head) {
