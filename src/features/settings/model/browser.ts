@@ -21,7 +21,9 @@ export type BrowserConnectionState =
   | "unsupported_version"
   | "policy_blocked"
   | "connected"
-  | "disconnected";
+  | "disconnected"
+  /** Switch on, nothing running yet: the first agent action starts or connects. */
+  | "idle";
 
 export type BrowserKind = "chrome" | "edge" | "chromium";
 
@@ -32,6 +34,8 @@ export type BrowserInfo = {
   major: number;
   user_data_dir: string;
   tabs_total: number;
+  /** MonoCode launched this browser with its own profile. */
+  managed: boolean;
 };
 
 export type BrowserConnection = {
@@ -53,13 +57,32 @@ export type BrowserLimits = {
   concurrent_actions: number;
 };
 
+/**
+ * `managed`: MonoCode starts Chrome or Edge with its own profile.
+ * `attach`: MonoCode connects to the browser the user runs.
+ */
+export type BrowserMode = "managed" | "attach";
+
+/**
+ * `ask`: a thread's first browser action asks the user in that thread.
+ * `always`: every regular thread has access while the switch is on.
+ */
+export type BrowserAccessMode = "ask" | "always";
+
 export type BrowserSettings = {
+  /** Attach: which browser or profile. Managed: which executable to start. */
   browser: BrowserChoice;
   separate_window: boolean;
   limits: BrowserLimits;
   upload_roots: string[];
   allow_dotfiles: boolean;
   protocol_trace: boolean;
+  mode: BrowserMode;
+  access: BrowserAccessMode;
+  /** The remembered main switch; `toggle_on` mirrors it. */
+  enabled: boolean;
+  /** Managed only; false runs the browser without a window. */
+  show_window: boolean;
 };
 
 export type BrowserTabState =
@@ -85,6 +108,8 @@ export type BrowserSessionAccess = {
   turn_active: boolean;
   granted_since_ms?: number;
   tabs: number;
+  /** An agent in this session waits for the user to allow the browser. */
+  requested: boolean;
 };
 
 export type BrowserState = {
@@ -122,6 +147,10 @@ export const DEFAULT_BROWSER_SETTINGS: BrowserSettings = {
   upload_roots: [],
   allow_dotfiles: false,
   protocol_trace: false,
+  mode: "managed",
+  access: "ask",
+  enabled: false,
+  show_window: true,
 };
 
 /** Channel ids discovery knows, in its own search order (spec 4). */
@@ -135,6 +164,9 @@ export const BROWSER_CHANNELS: { channel: string; label: string }[] = [
   { channel: "msedge-dev", label: "Edge Dev" },
   { channel: "msedge-canary", label: "Edge Canary" },
 ];
+
+/** What the MonoCode browser can start; Automatic tries Chrome, then Edge. */
+export const MANAGED_BROWSER_CHANNELS = BROWSER_CHANNELS.slice(0, 2);
 
 export const BROWSER_AUDIT_LIMIT = 50;
 
@@ -195,6 +227,7 @@ export function resetBrowserStore(state: BrowserState | null = null): void {
   started = state != null;
   disconnecting = false;
   registered.clear();
+  turnedOff.clear();
   notice = null;
   for (const listener of listeners) listener();
   for (const listener of noticeListeners) listener();
@@ -219,10 +252,42 @@ export const disconnectBrowser = () => {
     throw error;
   });
 };
+/**
+ * Threads the user took access away from in this app run. "Always on" does
+ * not grant them again on their next turn; they ask like in "Ask" mode.
+ */
+const turnedOff = new Set<string>();
+
+function markTurnedOff(sessionId: string, off: boolean) {
+  if (off) turnedOff.add(sessionId);
+  else turnedOff.delete(sessionId);
+}
+
+export function browserAccessTurnedOff(sessionId: string): boolean {
+  return turnedOff.has(sessionId);
+}
+
 export const revokeBrowserSession = (sessionId: string) =>
-  command("browser_revoke", { sessionId });
+  command("browser_revoke", { sessionId }).then((state) => {
+    markTurnedOff(sessionId, true);
+    return state;
+  });
 export const setSessionBrowserGrant = (sessionId: string, enabled: boolean) =>
-  command("browser_set_session_grant", { sessionId, enabled });
+  command("browser_set_session_grant", { sessionId, enabled }).then((state) => {
+    markTurnedOff(sessionId, !enabled);
+    return state;
+  });
+/**
+ * The user's answer to a thread's browser request. Allow grants the thread;
+ * Not now declines until the user's next message.
+ */
+export const answerBrowserRequest = (sessionId: string, allow: boolean) =>
+  command("browser_answer_request", { sessionId, allow }).then((state) => {
+    if (allow) markTurnedOff(sessionId, false);
+    return state;
+  });
+/** Managed mode: starts the MonoCode browser with a window, for signing in. */
+export const openBrowserWindow = () => command("browser_open_window");
 export const transferBrowserTab = (
   tab: string,
   fromSession: string,
@@ -292,9 +357,9 @@ const registered = new Set<string>();
 
 /**
  * Registers the browser server once per app run for a provider that takes
- * MCP, when one of its threads gets `/browser`. Registration is idempotent;
- * this only saves rewriting the provider's config on every turn. A failure
- * leaves the provider unmarked, so the next grant or turn tries again.
+ * MCP, when one of its threads can use the browser. Registration is
+ * idempotent; this only saves rewriting the provider's config on every turn.
+ * A failure leaves the provider unmarked, so the next turn tries again.
  */
 export async function ensureBrowserMcp(
   provider: string,
@@ -312,7 +377,7 @@ export async function ensureBrowserMcp(
     registered.add(provider);
 }
 
-/** The `<monocode_browser>` block a turn carries while the thread has access. */
+/** The `<monocode_browser>` block a turn carries while it has the browser tools. */
 export function browserAgentInstructions(provider: string): Promise<string> {
   return invoke<string>("browser_agent_instructions", { provider });
 }
@@ -329,7 +394,10 @@ export function sessionBrowserAccess(
   return state.sessions.find((entry) => entry.session_id === sessionId);
 }
 
-/** Whether `/browser` is on for the session; false while the toggle is off. */
+/**
+ * Whether the session has access (`/browser`, Allow or Always on); false
+ * while the toggle is off.
+ */
 export function sessionBrowserGranted(
   state: BrowserState | null,
   sessionId: string | undefined,
@@ -387,7 +455,10 @@ export function browserChannelLabel(channel: string): string {
   );
 }
 
-/** Where the user turns remote debugging on for the chosen or found browser. */
+/**
+ * Where the user turns remote debugging on for the chosen or found browser.
+ * Attach mode only; the MonoCode browser needs no setup.
+ */
 export function inspectPages(
   state: Pick<BrowserState, "connection" | "settings">,
 ): { label: string; url: string }[] {
@@ -412,11 +483,46 @@ export type ConnectionView = {
   message: string;
   tone: "neutral" | "pending" | "good" | "warning" | "error";
   action: ConnectionAction;
-  /** Show the guided consent steps (spec 13.3). */
+  /** Show the guided consent steps (spec 13.3). Attach mode only. */
   guide: boolean;
 };
 
 export function connectionView(state: BrowserState): ConnectionView {
+  if (state.settings.mode !== "managed") return attachView(state);
+  // The MonoCode browser has no consent step, so it never shows the guide.
+  return { ...attachView(state), ...managedView(state), guide: false };
+}
+
+/** The states where the MonoCode browser reads differently from Your Chrome. */
+function managedView(state: BrowserState): Partial<ConnectionView> {
+  const { connection } = state;
+  switch (connection.state) {
+    case "discovering":
+      return { message: "Starting the MonoCode browser…" };
+    case "idle":
+      return {
+        message: "Ready. The MonoCode browser starts when an agent needs it.",
+        action: null,
+      };
+    case "connected":
+      return {
+        message: connection.browser
+          ? `The MonoCode browser is running on ${browserProductLabel(connection.browser)}.`
+          : "The MonoCode browser is running.",
+      };
+    case "disconnected":
+      return {
+        message:
+          "The MonoCode browser closed. It starts again when an agent needs it.",
+        tone: "neutral",
+        action: null,
+      };
+    default:
+      return {};
+  }
+}
+
+function attachView(state: BrowserState): ConnectionView {
   const { connection } = state;
   switch (connection.state) {
     case "off":
@@ -503,6 +609,13 @@ export function connectionView(state: BrowserState): ConnectionView {
         action: "connect",
         guide: false,
       };
+    case "idle":
+      return {
+        message: "Ready. MonoCode connects when an agent needs the browser.",
+        tone: "neutral",
+        action: "connect",
+        guide: false,
+      };
   }
 }
 
@@ -566,7 +679,7 @@ export function useBrowserNotice(): BrowserNotice | null {
 
 /**
  * The one toast of spec 13.4: the link to the browser dropped while it was
- * on and some session had `/browser`. Turning it off yourself is not a drop.
+ * on and some session had access. Turning it off yourself is not a drop.
  */
 export function connectionDropNotice(
   previous: BrowserState | null,
@@ -584,6 +697,6 @@ export function connectionDropNotice(
 
 export const BROWSER_OFF_NOTICE: Omit<BrowserNotice, "id"> = {
   message:
-    "Browser access is off. Turn it on in Settings → Browser, then use /browser again.",
+    "Browser access is off for all agents. Turn it on in Settings → Browser, then try again.",
   settings: true,
 };

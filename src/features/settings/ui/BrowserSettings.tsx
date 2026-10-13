@@ -18,6 +18,8 @@ import {
   inspectPages,
   listBrowserAudit,
   listBrowserMcpStatus,
+  MANAGED_BROWSER_CHANNELS,
+  openBrowserWindow,
   registerBrowserMcp,
   releaseBrowserTab,
   revokeBrowserSession,
@@ -25,10 +27,12 @@ import {
   setBrowserToggle,
   transferBrowserTab,
   useBrowserState,
+  type BrowserAccessMode,
   type BrowserAuditEntry,
   type BrowserChoice,
   type BrowserLimits,
   type BrowserMcpRegistration,
+  type BrowserMode,
   type BrowserOutcome,
   type BrowserSettings as Settings,
   type BrowserState,
@@ -82,6 +86,7 @@ export function BrowserSettings({
 
   const save = (patch: Partial<Settings>) =>
     run(() => saveBrowserSettings({ ...state.settings, ...patch }));
+  const managed = state.settings.mode === "managed";
 
   return (
     <>
@@ -95,12 +100,16 @@ export function BrowserSettings({
       ) : null}
       <Group
         title="Browser access"
-        description="Agents open their own tabs in your Chrome or Edge, next to yours and signed in as you. They never see or touch your own tabs."
+        description={
+          managed
+            ? "Agents open their own tabs in the MonoCode browser, a Chrome or Edge window with its own profile. Your own browser and its tabs stay out of their reach."
+            : "Agents open their own tabs in your Chrome or Edge, next to yours and signed in as you. They never see or touch your own tabs."
+        }
       >
         <Row
           id="browser-toggle"
           label="Let agents use my browser"
-          description="Off after every restart. Turning it off stops every browser action, takes /browser away from every thread and leaves the agents' tabs open. A thread also needs /browser before it can use the browser."
+          description="MonoCode remembers this switch, and nothing starts until an agent needs the browser. Turning it off stops every browser action, takes access away from every thread and leaves the agents' tabs open."
         >
           <Toggle
             label="Let agents use my browser"
@@ -108,21 +117,90 @@ export function BrowserSettings({
             onChange={(on) => run(() => setBrowserToggle(on))}
           />
         </Row>
-        <BrowserChoiceRow
-          choice={state.settings.browser}
-          onChange={(browser) => save({ browser })}
-        />
         <Row
-          id="browser-separate-window"
-          label="Agent tabs in a separate window"
-          description="Off: agent tabs open in the background of your current window, with ◆ MonoCode in front of their title. On: every agent tab opens in a window of its own."
+          id="browser-mode"
+          label="Browser"
+          description={
+            managed
+              ? "MonoCode starts Chrome or Edge with its own profile. Nothing to set up, and your own browser does not need to run."
+              : "MonoCode connects to the Chrome or Edge you run, signed in as you. It needs remote debugging, and the browser asks you to allow every new connection."
+          }
         >
-          <Toggle
-            label="Agent tabs in a separate window"
-            on={state.settings.separate_window}
-            onChange={(separate_window) => save({ separate_window })}
+          <Select
+            label="Browser"
+            value={state.settings.mode}
+            options={[
+              { value: "managed", label: "MonoCode browser" },
+              { value: "attach", label: "Your Chrome or Edge" },
+            ]}
+            onChange={(mode) => save({ mode: mode as BrowserMode })}
           />
         </Row>
+        <Row
+          id="browser-access-mode"
+          label="Thread access"
+          description={
+            state.settings.access === "always"
+              ? "Every thread can use the browser without asking. Orchestration runs never can. /browser still turns access off or on for one thread."
+              : "The first time an agent needs the browser, its thread asks you. Allow it once and the thread keeps access. /browser turns it on or off ahead of time."
+          }
+        >
+          <Select
+            label="Thread access"
+            value={state.settings.access}
+            options={[
+              { value: "ask", label: "Ask in the thread" },
+              { value: "always", label: "Always on" },
+            ]}
+            onChange={(access) => save({ access: access as BrowserAccessMode })}
+          />
+        </Row>
+        {managed ? (
+          <>
+            <ManagedChoiceRow
+              choice={state.settings.browser}
+              onChange={(browser) => save({ browser })}
+            />
+            <Row
+              id="browser-show-window"
+              label="Show browser window"
+              description="Off: the MonoCode browser runs without a window. Agents work the same way, and Open browser still shows one."
+            >
+              <Toggle
+                label="Show browser window"
+                on={state.settings.show_window}
+                onChange={(show_window) => save({ show_window })}
+              />
+            </Row>
+            <Row
+              id="browser-open"
+              label="Sign in to sites"
+              description="Opens the MonoCode browser so you can sign in to the sites agents need. It keeps your sign-ins for next time."
+            >
+              <SecondaryButton onClick={() => run(openBrowserWindow)}>
+                Open browser
+              </SecondaryButton>
+            </Row>
+          </>
+        ) : (
+          <>
+            <BrowserChoiceRow
+              choice={state.settings.browser}
+              onChange={(browser) => save({ browser })}
+            />
+            <Row
+              id="browser-separate-window"
+              label="Agent tabs in a separate window"
+              description="Off: agent tabs open in the background of your current window, with ◆ MonoCode in front of their title. On: every agent tab opens in a window of its own."
+            >
+              <Toggle
+                label="Agent tabs in a separate window"
+                on={state.settings.separate_window}
+                onChange={(separate_window) => save({ separate_window })}
+              />
+            </Row>
+          </>
+        )}
       </Group>
       <ConnectionGroup state={state} run={run} />
       <SessionsGroup state={state} sessionName={sessionName} run={run} />
@@ -157,7 +235,7 @@ function BrowserChoiceRow({
   return (
     <Row
       id="browser-choice"
-      label="Browser"
+      label="Which browser to connect to"
       description={
         choice.kind === "user_data_dir"
           ? `Profile folder: ${choice.path}`
@@ -165,7 +243,7 @@ function BrowserChoiceRow({
       }
     >
       <Select
-        label="Browser"
+        label="Which browser to connect to"
         value={choiceValue(choice)}
         options={[
           { value: "auto", label: "Automatic" },
@@ -180,6 +258,47 @@ function BrowserChoiceRow({
           else if (value === CUSTOM_PROFILE) void pickProfile();
           else onChange({ kind: "channel", channel: value });
         }}
+      />
+    </Row>
+  );
+}
+
+/** Managed mode: which installed browser MonoCode starts. */
+function ManagedChoiceRow({
+  choice,
+  onChange,
+}: {
+  choice: BrowserChoice;
+  onChange: (choice: BrowserChoice) => void;
+}) {
+  const value =
+    choice.kind === "channel" &&
+    MANAGED_BROWSER_CHANNELS.some((entry) => entry.channel === choice.channel)
+      ? choice.channel
+      : "auto";
+  return (
+    <Row
+      id="browser-choice"
+      label="Which browser to start"
+      description="Automatic starts Chrome, or Edge when Chrome is not installed."
+    >
+      <Select
+        label="Which browser to start"
+        value={value}
+        options={[
+          { value: "auto", label: "Automatic" },
+          ...MANAGED_BROWSER_CHANNELS.map((entry) => ({
+            value: entry.channel,
+            label: entry.label,
+          })),
+        ]}
+        onChange={(next) =>
+          onChange(
+            next === "auto"
+              ? { kind: "auto" }
+              : { kind: "channel", channel: next },
+          )
+        }
       />
     </Row>
   );
@@ -217,7 +336,11 @@ function ConnectionGroup({
     <Group
       id="browser-connection"
       title="Connection"
-      description="MonoCode never starts your browser. It finds the one you already run and asks it for permission on every new connection."
+      description={
+        state.settings.mode === "managed"
+          ? "MonoCode starts its browser when an agent needs it and connects to it directly."
+          : "MonoCode never starts your browser. It finds the one you already run and asks it for permission on every new connection."
+      }
     >
       <Row
         label={
@@ -324,7 +447,7 @@ function SessionsGroup({
     <Group
       id="browser-sessions"
       title="Threads and tabs"
-      description="Threads you gave /browser and the tabs their agents opened. Revoking keeps the tabs open; taking a tab back leaves it to you."
+      description="Threads with browser access and the tabs their agents opened. Revoking keeps the tabs open; taking a tab back leaves it to you."
       action={
         liveTabs.length ? (
           <SecondaryButton
@@ -345,8 +468,9 @@ function SessionsGroup({
     >
       {rows.length === 0 && orphans.length === 0 ? (
         <p className="px-4 py-3.5 text-[12px] text-content/45">
-          No thread has browser access. Type /browser in a thread to give it
-          access.
+          {state.settings.access === "always"
+            ? "No thread has used the browser yet."
+            : "No thread has browser access. A thread asks you when its agent needs the browser, or type /browser in it."}
         </p>
       ) : null}
       {[...rows.map((row) => row.session_id), ...orphans].map((sessionId) => {
@@ -632,7 +756,13 @@ function AdvancedGroup({
       action={
         <SecondaryButton
           onClick={() =>
-            run(() => saveBrowserSettings({ ...DEFAULT_BROWSER_SETTINGS }))
+            // The main switch is not a default to restore; it stays as is.
+            run(() =>
+              saveBrowserSettings({
+                ...DEFAULT_BROWSER_SETTINGS,
+                enabled: settings.enabled,
+              }),
+            )
           }
         >
           <RotateCcw className="size-3.5" strokeWidth={1.75} />
@@ -762,7 +892,7 @@ function registrationLabel(entry: BrowserMcpRegistration): string {
 
 /**
  * Where the browser tools are registered (spec 13.1 "status MCP
- * registracije"). MonoCode adds them on the first /browser of a provider;
+ * registracije"). MonoCode adds them on a provider's first browser turn;
  * this row shows the result and repairs an entry a moved app left behind.
  */
 function McpRegistrationRow({ cwd }: { cwd: string }) {
@@ -799,8 +929,8 @@ function McpRegistrationRow({ cwd }: { cwd: string }) {
       </div>
       <p className="mt-1 text-[12px] leading-relaxed text-content/45">
         MonoCode adds its browser tools to a provider the first time one of its
-        threads gets /browser. Agents already running see them after a restart.
-        Other providers get the same actions through a command line.
+        threads can use the browser. Agents already running see them after a
+        restart. Other providers get the same actions through a command line.
       </p>
       {error ? <p className="mt-2 text-[12px] text-red-400">{error}</p> : null}
       {entries ? (

@@ -766,10 +766,23 @@ describe("settings pages", () => {
     "renders every indexed setting on the $section page",
     async ({ section }) => {
       await render(section);
+      const rendered = new Set(renderedSettingIds());
+      // Some browser rows belong to one browser mode only.
+      if (section === "browser") {
+        const state = browserState();
+        await act(async () =>
+          resetBrowserStore({
+            ...state,
+            settings: { ...state.settings, mode: "attach" },
+          }),
+        );
+        await render(section);
+        for (const id of renderedSettingIds()) rendered.add(id);
+      }
       const expected = SETTINGS_INDEX.filter(
         (entry) => entry.section === section,
       ).map((entry) => entry.id);
-      expect(renderedSettingIds().sort()).toEqual(expected.sort());
+      expect([...rendered].sort()).toEqual(expected.sort());
     },
   );
 

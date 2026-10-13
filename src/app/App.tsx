@@ -561,16 +561,22 @@ import {
 import {
   browserGrantChange,
   browserGrantStatus,
+  browserTurnAccess,
   consumeBrowserCommand,
+  withBrowserAskNote,
+  type BrowserTurnAccess,
 } from "../features/sessions/model/browserCommand";
 import {
+  answerBrowserRequest,
   BROWSER_OFF_NOTICE,
+  browserAccessTurnedOff,
   browserAgentInstructions,
   browserStateSnapshot,
   ensureBrowserMcp,
   sessionBrowserGranted,
   setSessionBrowserGrant,
   showBrowserNotice,
+  subscribeBrowserState,
 } from "../features/settings/model/browser";
 import {
   createMono,
@@ -1599,6 +1605,32 @@ function Workspace({
     canForward: false,
   });
   const turnGen = useRef(new Map<string, number>());
+  // Whether each session's latest turn may use the browser. A browser
+  // request from any other session (orchestration workers, app requests or a
+  // turn this run never sent) is declined at once instead of asking the user.
+  const browserEligibleTurns = useRef(new Map<string, boolean>());
+  const decliningBrowserRequests = useRef(new Set<string>());
+  useEffect(
+    () =>
+      subscribeBrowserState(() => {
+        for (const access of browserStateSnapshot()?.sessions ?? []) {
+          const id = access.session_id;
+          if (
+            !access.requested ||
+            browserEligibleTurns.current.get(id) ||
+            decliningBrowserRequests.current.has(id)
+          )
+            continue;
+          decliningBrowserRequests.current.add(id);
+          void answerBrowserRequest(id, false)
+            .catch((error: unknown) =>
+              console.warn("Declining a browser request failed:", error),
+            )
+            .finally(() => decliningBrowserRequests.current.delete(id));
+        }
+      }),
+    [],
+  );
   const editedResends = useRef(createEditedResendCoordinator()).current;
   const lastPersisted = useRef(new Map<string, string>());
   const lastBoundProvider = useRef(new Map<string, string>());
@@ -6971,19 +7003,21 @@ function Workspace({
       // The one grant change this submission makes; the turn waits for it,
       // so control_authorize_turn never has to grant again (one grant_on).
       let browserGrant: Promise<unknown> | undefined;
+      const browserStatus = (message: string) => {
+        enqueueHarnessEvent(sessionId, { type: "status", text: message });
+        flushHarnessEvents();
+      };
+      // A turn may use the browser only where /browser itself is allowed.
+      const browserEligible = !(
+        options?.managed ||
+        options?.appRequestId ||
+        intent === "orchestrate" ||
+        current.orchestrationLeadId ||
+        orchestrator.run(sessionId)
+      );
       if (browserCommand.matched) {
-        const status = (message: string) => {
-          enqueueHarnessEvent(sessionId, { type: "status", text: message });
-          flushHarnessEvents();
-        };
-        if (
-          options?.managed ||
-          options?.appRequestId ||
-          intent === "orchestrate" ||
-          current.orchestrationLeadId ||
-          orchestrator.run(sessionId)
-        ) {
-          status(
+        if (!browserEligible) {
+          browserStatus(
             "Use /browser from a regular session turn, outside an orchestration run.",
           );
           return false;
@@ -6991,7 +7025,7 @@ function Workspace({
         const browserState = browserStateSnapshot();
         if (!browserState?.toggle_on) {
           showBrowserNotice(BROWSER_OFF_NOTICE);
-          status(BROWSER_OFF_NOTICE.message);
+          browserStatus(BROWSER_OFF_NOTICE.message);
           return false;
         }
         const bare =
@@ -7004,7 +7038,9 @@ function Workspace({
         if (enable !== null)
           browserGrant = setSessionBrowserGrant(sessionId, enable).catch(
             (error: unknown) =>
-              status(error instanceof Error ? error.message : String(error)),
+              browserStatus(
+                error instanceof Error ? error.message : String(error),
+              ),
           );
         if (enable)
           void ensureBrowserMcp(current.harness, sessionWorkCwd(current)).catch(
@@ -7012,14 +7048,33 @@ function Workspace({
               console.warn("Browser MCP registration failed:", error),
           );
         if (bare) {
-          status(browserGrantStatus(enable === true));
+          browserStatus(browserGrantStatus(enable === true));
           return true;
         }
       }
       const submittedText = browserCommand.text;
-      const browserAccess =
-        browserCommand.matched ||
-        sessionBrowserGranted(browserStateSnapshot(), sessionId);
+      // Without /browser the access mode decides: "Always on" grants the
+      // thread first, "Ask" carries the tools and the first browser action
+      // asks the user in the thread.
+      const browserSnapshot = browserStateSnapshot();
+      const browserTurn: BrowserTurnAccess = browserCommand.matched
+        ? "granted"
+        : browserTurnAccess({
+            toggleOn: !!browserSnapshot?.toggle_on,
+            access: browserSnapshot?.settings.access ?? "ask",
+            granted: sessionBrowserGranted(browserSnapshot, sessionId),
+            eligible: browserEligible,
+            turnedOff: browserAccessTurnedOff(sessionId),
+          });
+      if (browserTurn === "grant")
+        browserGrant = setSessionBrowserGrant(sessionId, true).catch(
+          (error: unknown) =>
+            browserStatus(
+              error instanceof Error ? error.message : String(error),
+            ),
+        );
+      browserEligibleTurns.current.set(sessionId, browserEligible);
+      const browserAccess = browserTurn !== null;
       const operatorCommand = consumeOperatorCommand(submittedText);
       if (
         operatorCommand.matched &&
@@ -7993,7 +8048,8 @@ function Workspace({
               intent: intent === "orchestrate" ? "plan" : intent,
               // A /operator user turn enables app access for this thread;
               // orchestration leads retain their separate control access.
-              // /browser tools reach the app over the same loopback.
+              // The browser tools reach the app over the same loopback, also
+              // in an "Ask" turn that has no grant yet.
               controlsAgents:
                 browserAccess ||
                 operatorAccess ||
@@ -8084,8 +8140,10 @@ function Workspace({
           ) {
             appContext.push(monoContext(agentLook, agentFiles, agentPlan));
           }
-          // While the thread has /browser, every turn says how to reach it:
-          // a pointer to the MCP tools, or the CLI for providers without MCP.
+          // While the thread can use the browser, every turn says how to
+          // reach it: a pointer to the MCP tools, or the CLI for providers
+          // without MCP. An "Ask" turn also says that the first action waits
+          // for the user's answer.
           if (browserAccess && !rawCommand) {
             await ensureBrowserMcp(current.harness, workCwd).catch(
               (error: unknown) =>
@@ -8094,7 +8152,12 @@ function Workspace({
             const browserContext = await browserAgentInstructions(
               current.harness,
             ).catch(() => "");
-            if (browserContext) appContext.push(browserContext);
+            if (browserContext)
+              appContext.push(
+                browserTurn === "ask"
+                  ? withBrowserAskNote(browserContext)
+                  : browserContext,
+              );
           }
           if (operatorCommand.matched || handAgent) {
             const cli = `${shellPath(await invoke<string>("app_cli_path"))} app`;

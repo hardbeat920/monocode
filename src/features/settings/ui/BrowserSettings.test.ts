@@ -4,8 +4,15 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { BrowserSettings } from "./BrowserSettings";
-import { BrowserIndicator } from "../../sessions/ui/BrowserIndicator";
-import { resetBrowserStore, type BrowserState } from "../model/browser";
+import {
+  BrowserIndicator,
+  BrowserRequestPrompt,
+} from "../../sessions/ui/BrowserIndicator";
+import {
+  DEFAULT_BROWSER_SETTINGS,
+  resetBrowserStore,
+  type BrowserState,
+} from "../model/browser";
 import { browserState, browserTab } from "../model/browser.fixtures";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -22,7 +29,10 @@ const granted = {
   turn_active: false,
   granted_since_ms: 1_700_000_000_000,
   tabs: 1,
+  requested: false,
 };
+
+const attach = { ...DEFAULT_BROWSER_SETTINGS, mode: "attach" as const };
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -166,6 +176,7 @@ it("lists threads with their tabs and acts on them", async () => {
 it("guides the user to turn on remote debugging", async () => {
   state = browserState({
     connection: { state: "needs_toggle", since_ms: 0 },
+    settings: attach,
   });
   resetBrowserStore(state);
   await renderSettings();
@@ -280,5 +291,75 @@ it("shows where the browser tools are registered and adds them", async () => {
   expect(invoke).toHaveBeenCalledWith("browser_mcp_register", {
     provider: "cursor",
     cwd: "/repo",
+  });
+});
+
+it("offers the MonoCode browser rows in managed mode only", async () => {
+  await renderSettings();
+  expect(container.textContent).toContain("Which browser to start");
+  expect(container.textContent).not.toContain(
+    "Agent tabs in a separate window",
+  );
+  await act(async () => button("Open browser").click());
+  expect(invoke).toHaveBeenCalledWith("browser_open_window", undefined);
+  await act(async () =>
+    container
+      .querySelector<HTMLButtonElement>(
+        '[role="switch"][aria-label="Show browser window"]',
+      )!
+      .click(),
+  );
+  expect(invoke).toHaveBeenCalledWith("browser_set_settings", {
+    settings: { ...state.settings, show_window: false },
+  });
+
+  await act(async () => resetBrowserStore({ ...state, settings: attach }));
+  expect(container.textContent).toContain("Agent tabs in a separate window");
+  expect(container.textContent).toContain("Which browser to connect to");
+  expect(() => button("Open browser")).toThrow();
+});
+
+it("saves the thread access mode", async () => {
+  await renderSettings();
+  await act(async () =>
+    container
+      .querySelector<HTMLButtonElement>(
+        '[aria-label="Thread access: Ask in the thread"]',
+      )!
+      .click(),
+  );
+  const always = Array.from(
+    document.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+  ).find((node) => node.textContent === "Always on")!;
+  await act(async () => always.click());
+  expect(invoke).toHaveBeenCalledWith("browser_set_settings", {
+    settings: { ...state.settings, access: "always" },
+  });
+});
+
+it("asks in the thread when its agent wants the browser", async () => {
+  await act(async () =>
+    root.render(createElement(BrowserRequestPrompt, { sessionId: "s1" })),
+  );
+  expect(container.querySelector("[data-browser-request]")).toBeNull();
+
+  // The mock answers with this state, so the prompt stays for both buttons.
+  state = {
+    ...state,
+    sessions: [{ ...granted, granted: false, requested: true }],
+  };
+  await act(async () => resetBrowserStore(state));
+  expect(container.textContent).toContain(
+    "This agent wants to use the browser.",
+  );
+  await act(async () => button("Allow for this thread").click());
+  expect(invoke).toHaveBeenCalledWith("browser_answer_request", {
+    sessionId: "s1",
+    allow: true,
+  });
+  await act(async () => button("Not now").click());
+  expect(invoke).toHaveBeenCalledWith("browser_answer_request", {
+    sessionId: "s1",
+    allow: false,
   });
 });

@@ -115,9 +115,9 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     group: "agents",
     label: "Browser",
     description:
-      "Let agents open and use their own tabs in your Chrome or Edge, and see what they did there.",
+      "Let agents open and use their own tabs in the MonoCode browser or your Chrome or Edge, and see what they did there.",
     keywords:
-      "chrome edge web page tabs automation remote debugging cdp /browser",
+      "chrome edge web page tabs automation remote debugging cdp /browser monocode browser sign in",
   },
   {
     id: "skills",
@@ -202,10 +202,34 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "browser access chrome edge on off enable agents web",
   },
   {
-    id: "browser-choice",
+    id: "browser-mode",
     section: "browser",
     label: "Browser",
+    keywords: "monocode browser your chrome edge managed attach own profile",
+  },
+  {
+    id: "browser-access-mode",
+    section: "browser",
+    label: "Thread access",
+    keywords: "browser ask allow always on permission thread /browser",
+  },
+  {
+    id: "browser-choice",
+    section: "browser",
+    label: "Which browser",
     keywords: "chrome edge chromium beta dev canary profile user data folder",
+  },
+  {
+    id: "browser-show-window",
+    section: "browser",
+    label: "Show browser window",
+    keywords: "monocode browser window headless hidden",
+  },
+  {
+    id: "browser-open",
+    section: "browser",
+    label: "Sign in to sites",
+    keywords: "open monocode browser sign in login accounts",
   },
   {
     id: "browser-separate-window",

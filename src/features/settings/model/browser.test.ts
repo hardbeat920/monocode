@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  answerBrowserRequest,
+  browserAccessTurnedOff,
   browserNoticeSnapshot,
   browserProductLabel,
   browserStateSnapshot,
@@ -9,15 +11,20 @@ import {
   browserTabStatus,
   connectionDropNotice,
   connectionView,
+  DEFAULT_BROWSER_SETTINGS,
   disconnectBrowser,
   ensureBrowserMcp,
   inspectPages,
+  openBrowserWindow,
   resetBrowserStore,
+  revokeBrowserSession,
   sessionBrowserGranted,
   sessionBrowserIndicator,
   setBrowserToggle,
+  setSessionBrowserGrant,
   subscribeBrowserState,
   type BrowserConnectionState,
+  type BrowserMode,
   type BrowserState,
 } from "./browser";
 import { browserState, browserTab } from "./browser.fixtures";
@@ -36,31 +43,41 @@ const granted = (sessionId = "s1") => ({
   granted: true,
   turn_active: false,
   tabs: 0,
+  requested: false,
 });
+
+const inMode = (mode: BrowserMode, patch: Partial<BrowserState> = {}) =>
+  browserState({ settings: { ...DEFAULT_BROWSER_SETTINGS, mode }, ...patch });
 
 beforeEach(() => resetBrowserStore());
 afterEach(() => vi.mocked(invoke).mockReset());
 
 describe("browser state views", () => {
+  const states: BrowserConnectionState[] = [
+    "off",
+    "discovering",
+    "needs_toggle",
+    "stale_port",
+    "awaiting_consent",
+    "consent_denied",
+    "consent_timeout",
+    "unsupported_version",
+    "policy_blocked",
+    "connected",
+    "disconnected",
+    "idle",
+  ];
+  const views = (mode: BrowserMode) =>
+    states.map((state) => ({
+      state,
+      view: connectionView(
+        inMode(mode, { connection: { state, since_ms: 0 } }),
+      ),
+    }));
+
   it("gives every connection state a message, and a button only where one helps", () => {
-    const states: BrowserConnectionState[] = [
-      "off",
-      "discovering",
-      "needs_toggle",
-      "stale_port",
-      "awaiting_consent",
-      "consent_denied",
-      "consent_timeout",
-      "unsupported_version",
-      "policy_blocked",
-      "connected",
-      "disconnected",
-    ];
     const actions = Object.fromEntries(
-      states.map((state) => {
-        const view = connectionView(
-          browserState({ connection: { state, since_ms: 0 } }),
-        );
+      views("attach").map(({ state, view }) => {
         expect(view.message, state).not.toBe("");
         return [state, view.action];
       }),
@@ -77,11 +94,39 @@ describe("browser state views", () => {
       policy_blocked: null,
       connected: "disconnect",
       disconnected: "connect",
+      idle: "connect",
     });
+    expect(
+      connectionView(
+        inMode("attach", { connection: { state: "idle", since_ms: 0 } }),
+      ).message,
+    ).toBe("Ready. MonoCode connects when an agent needs the browser.");
+  });
+
+  it("starts the MonoCode browser on demand and never shows the consent guide", () => {
+    for (const { state, view } of views("managed")) {
+      expect(view.message, state).not.toBe("");
+      expect(view.guide, state).toBe(false);
+    }
+    const idle = connectionView(
+      inMode("managed", { connection: { state: "idle", since_ms: 0 } }),
+    );
+    expect(idle).toMatchObject({
+      message: "Ready. The MonoCode browser starts when an agent needs it.",
+      action: null,
+    });
+    const ended = connectionView(
+      inMode("managed", { connection: { state: "disconnected", since_ms: 0 } }),
+    );
+    expect(ended.action).toBeNull();
+    expect(ended.message).not.toMatch(/permission/i);
+    expect(connectionView(inMode("managed")).message).toBe(
+      "The MonoCode browser is running on Google Chrome 144.0.7559.60.",
+    );
   });
 
   it("names the connected browser and version", () => {
-    const view = connectionView(browserState());
+    const view = connectionView(inMode("attach"));
     expect(view.message).toBe("Connected to Google Chrome 144.0.7559.60.");
     expect(
       browserProductLabel({
@@ -91,12 +136,13 @@ describe("browser state views", () => {
         major: 145,
         user_data_dir: "",
         tabs_total: 0,
+        managed: false,
       }),
     ).toBe("Microsoft Edge 145.0.1");
   });
 
   it("points the consent guide at the chosen browser", () => {
-    const base = browserState({
+    const base = inMode("attach", {
       connection: { state: "needs_toggle", since_ms: 0 },
     });
     expect(inspectPages(base).map((page) => page.url)).toEqual([
@@ -227,6 +273,32 @@ describe("browser store", () => {
     );
     await setBrowserToggle(true);
     expect(browserNoticeSnapshot()?.settings).toBe(true);
+  });
+
+  it("answers a thread's request and opens the MonoCode browser", async () => {
+    vi.mocked(invoke).mockResolvedValue(browserState());
+    await answerBrowserRequest("s1", false);
+    expect(invoke).toHaveBeenCalledWith("browser_answer_request", {
+      sessionId: "s1",
+      allow: false,
+    });
+    await openBrowserWindow();
+    expect(invoke).toHaveBeenCalledWith("browser_open_window", undefined);
+  });
+
+  it("remembers which threads the user turned off in this run", async () => {
+    vi.mocked(invoke).mockResolvedValue(browserState());
+    expect(browserAccessTurnedOff("s1")).toBe(false);
+    await setSessionBrowserGrant("s1", false);
+    expect(browserAccessTurnedOff("s1")).toBe(true);
+    await answerBrowserRequest("s1", false);
+    expect(browserAccessTurnedOff("s1")).toBe(true);
+    await answerBrowserRequest("s1", true);
+    expect(browserAccessTurnedOff("s1")).toBe(false);
+    await revokeBrowserSession("s1");
+    expect(browserAccessTurnedOff("s1")).toBe(true);
+    await setSessionBrowserGrant("s1", true);
+    expect(browserAccessTurnedOff("s1")).toBe(false);
   });
 
   it("does not toast after the user disconnects", async () => {

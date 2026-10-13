@@ -17,6 +17,7 @@ export function browserState(patch: Partial<BrowserState> = {}): BrowserState {
         major: 144,
         user_data_dir: "/home/me/.config/google-chrome",
         tabs_total: 0,
+        managed: false,
       },
       since_ms: 1_700_000_000_000,
     },

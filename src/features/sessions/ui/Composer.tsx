@@ -154,7 +154,7 @@ import {
   ORCHESTRATOR_COMMAND,
 } from "../model/orchestratorCommand";
 import { BROWSER_COMMAND } from "../model/browserCommand";
-import { BrowserIndicator } from "./BrowserIndicator";
+import { BrowserIndicator, BrowserRequestPrompt } from "./BrowserIndicator";
 import { consumeDraftCommand, DRAFT_COMMAND } from "../model/draftCommand";
 import {
   leadingModeCommand,
@@ -1732,6 +1732,9 @@ export function Composer({
         />
       ) : null}
       {children}
+      {!remote && sessionId ? (
+        <BrowserRequestPrompt sessionId={sessionId} />
+      ) : null}
       {usageLimit ? (
         <UsageLimitNotice
           limit={usageLimit}
