@@ -27,6 +27,7 @@ export type SettingsSectionId =
   | "mcp"
   | "skills"
   | "monos"
+  | "mods"
   | "inbox"
   | "worktrees"
   | "archive";
@@ -124,6 +125,15 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description:
       "The resident agent beside your tabs, and which projects have one.",
     keywords: "mono resident agent mascot claim project title bar",
+  },
+  {
+    id: "mods",
+    group: "agents",
+    label: "Mods",
+    description:
+      "Extensions that add views, status chips and toasts to MonoCode, and what each one may access.",
+    keywords:
+      "monomods mod plugin extension permissions unpacked reload sidebar tab pane",
   },
   {
     id: "inbox",

@@ -87,6 +87,14 @@ import {
 import { useStableValue } from "../shared/hooks/useStableValue";
 import { Sidebar } from "./shell/Sidebar";
 import { ApprovalToasts } from "../features/sessions/ui/ApprovalToasts";
+import { ModToasts } from "../features/mods/ui/ModToasts";
+import { ModEventTap } from "../features/mods/runtime/events";
+import {
+  emitModEvents,
+  refreshMods,
+  startModHost,
+} from "../features/mods/runtime/host";
+import { openModTab } from "./model/modWorkspace";
 import { HarnessUpdateNotice } from "../features/providers/ui/HarnessUpdateNotice";
 import { WhatsNewDialog } from "./shell/WhatsNewDialog";
 import { ProviderSignInDialog } from "../features/sessions/ui/ProviderSignInDialog";
@@ -145,6 +153,7 @@ import { useInboxActivity } from "../features/inbox/hooks/useInboxUnseen";
 import {
   loadProjectRailOpen,
   loadSessionSidebarOpen,
+  modSidebarTabId,
   saveProjectRailOpen,
   saveSessionSidebarOpen,
   type SidebarTabId,
@@ -1585,6 +1594,7 @@ function Workspace({
   const openingSessionIds = useRef(new Set<string>());
   const activeSessionPrefetch = useRef<Promise<Session | null> | null>(null);
   const [transcriptPool] = useState(() => new TranscriptPool());
+  const [modEventTap] = useState(() => new ModEventTap());
   // Visible output advances per frame; hidden streams keep their own cadence.
   const [harnessEvents] = useState(
     () =>
@@ -1625,6 +1635,7 @@ function Workspace({
             },
           );
           if (next !== previous) syncDockBadge(next);
+          emitModEvents(modEventTap.derive(batches, next));
         },
       ),
   );
@@ -2153,6 +2164,7 @@ function Workspace({
   );
   const [reminderNoticesHeight, setReminderNoticesHeight] = useState(0);
   const [harnessUpdateHeight, setHarnessUpdateHeight] = useState(0);
+  const [modToastsHeight, setModToastsHeight] = useState(0);
 
   useEffect(() => {
     syncDockBadge(sessions);
@@ -6527,6 +6539,64 @@ function Workspace({
     },
     [activateTab, insertBesideActive, closeMonoView],
   );
+
+  // Mods reach the window through refs, so the host starts once.
+  const modOpenRef = useRef({ onOpenFile, setSidebarTab });
+  modOpenRef.current = { onOpenFile, setSidebarTab };
+  useEffect(() => {
+    startModHost({
+      project: () =>
+        sidebarCwdRef.current && sidebarCwdRef.current !== "~"
+          ? sidebarCwdRef.current
+          : null,
+      sessions: () => sessionsRef.current,
+      activeSessionId: () => activeSessionIdRef.current ?? null,
+      openView: (view) => {
+        if (view.site === "SidebarTab") {
+          modOpenRef.current.setSidebarTab(modSidebarTabId(view.name, view.id));
+          return;
+        }
+        const result = openModTab(
+          tabsRef.current,
+          activeTabIdRef.current,
+          {
+            name: view.name,
+            viewId: view.id,
+            title: view.title,
+            icon: view.icon,
+          },
+          sidebarCwdRef.current,
+        );
+        if (!result.tabId) return;
+        tabsRef.current = result.tabs;
+        setTabs(result.tabs);
+        setActiveTabId(result.tabId);
+      },
+      openFile: (path, line) =>
+        modOpenRef.current.onOpenFile(path, line ? { line } : undefined),
+    });
+  }, [setActiveTabId]);
+  useEffect(() => {
+    void refreshMods();
+  }, [sidebarCwd]);
+  useEffect(() => {
+    emitModEvents([
+      {
+        type: "event",
+        name: "workspace.change",
+        event: {
+          projectCwd: sidebarCwd && sidebarCwd !== "~" ? sidebarCwd : null,
+          sessionId: active?.id ?? null,
+        },
+      },
+    ]);
+  }, [sidebarCwd, active?.id]);
+  // Turns flip `busy` outside the harness flush, so watch every change.
+  const modTurnSessionsRef = useRef(sessions);
+  useEffect(() => {
+    emitModEvents(modEventTap.turns(modTurnSessionsRef.current, sessions));
+    modTurnSessionsRef.current = sessions;
+  }, [sessions, modEventTap]);
 
   const onOpenPlan = useCallback(
     (sessionId: string, blockId: string) => {
@@ -13388,12 +13458,21 @@ function Workspace({
             }
             onHeightChange={setHarnessUpdateHeight}
           />
+          <ModToasts
+            topOffset={
+              12 +
+              (reminderNoticesHeight ? reminderNoticesHeight + 8 : 0) +
+              (harnessUpdateHeight ? harnessUpdateHeight + 8 : 0)
+            }
+            onHeightChange={setModToastsHeight}
+          />
           <ApprovalToasts
             notices={hiddenApprovalToasts}
             topOffset={
               12 +
               (reminderNoticesHeight ? reminderNoticesHeight + 8 : 0) +
-              (harnessUpdateHeight ? harnessUpdateHeight + 8 : 0)
+              (harnessUpdateHeight ? harnessUpdateHeight + 8 : 0) +
+              (modToastsHeight ? modToastsHeight + 8 : 0)
             }
             onFocusSession={onOpenApprovalSession}
             onApproval={onApproval}
@@ -13557,6 +13636,7 @@ function toTitleTab(
     seenKeys.add(key);
     files.push(
       file.plan?.title?.trim() ||
+        file.mod?.title ||
         (file.releaseNotes
           ? releaseNotesTitle(file.releaseNotes.version)
           : file.terminal

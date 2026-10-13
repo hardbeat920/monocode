@@ -70,13 +70,7 @@ import {
 } from "../../../shared/lib/drag";
 import { ExplorerMenu, type ExplorerMenuItem } from "./ExplorerMenu";
 import { FileTypeIcon } from "./FileTypeIcon";
-
-const GIT_STATUS_COLOR: Record<string, string> = {
-  modified: "text-amber-400",
-  added: "text-diff-add-fg",
-  untracked: "text-diff-add-fg",
-  deleted: "text-diff-del-fg",
-};
+import { GIT_STATUS_COLOR, TreeRow } from "../../../shared/ui/TreeRow";
 
 type Props = {
   cwd: string;
@@ -1284,9 +1278,13 @@ function TreeNode({ entry, depth }: { entry: FsEntry; depth: number }) {
           onCancel={onRenameCancel}
         />
       ) : (
-        <button
-          type="button"
-          role="treeitem"
+        <TreeRow
+          depth={depth}
+          selected={selected}
+          open={entry.isDir ? open : undefined}
+          icon={
+            <FileTypeIcon name={entry.name} isDir={entry.isDir} isOpen={open} />
+          }
           title={entry.path}
           aria-expanded={entry.isDir ? open : undefined}
           onClick={onClick}
@@ -1299,27 +1297,10 @@ function TreeNode({ entry, depth }: { entry: FsEntry; depth: number }) {
             if (!entry.isDir) onFilePointerDown(entry.path, event);
           }}
           onContextMenu={(e) => onItemContextMenu(entry, e)}
-          style={{ paddingLeft: 8 + depth * 12 }}
-          className={`flex h-7.5 w-full cursor-default items-center gap-1 pr-2 text-left text-[14px] outline-none focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-accent/40 leading-none data-[explorer-dragging]:opacity-50 ${
-            selected
-              ? "bg-selection text-content"
-              : "text-content hover:bg-content/5"
-          } ${cutPath === entry.path ? "opacity-50" : ""} ${
-            dragOverPath === entry.path ? "bg-selection" : ""
-          }`}
+          className={`data-[explorer-dragging]:opacity-50 ${
+            cutPath === entry.path ? "opacity-50" : ""
+          } ${dragOverPath === entry.path ? "bg-selection" : ""}`}
         >
-          <span className="grid size-4 shrink-0 place-items-center text-content/50">
-            {entry.isDir ? (
-              open ? (
-                <ChevronDown className="size-3.5" strokeWidth={1.75} />
-              ) : (
-                <ChevronRight className="size-3.5" strokeWidth={1.75} />
-              )
-            ) : null}
-          </span>
-          <span className="shrink-0">
-            <FileTypeIcon name={entry.name} isDir={entry.isDir} isOpen={open} />
-          </span>
           <span
             className={`min-w-0 truncate leading-label ${
               entry.ignored ? "italic text-content/50" : (gitColor ?? "")
@@ -1327,7 +1308,7 @@ function TreeNode({ entry, depth }: { entry: FsEntry; depth: number }) {
           >
             {entry.name}
           </span>
-        </button>
+        </TreeRow>
       )}
       {entry.isDir && open ? (
         <TreeChildren

@@ -10,6 +10,7 @@ import {
   isAgentTab,
   isChangesTab,
   isCommitTab,
+  isModTab,
   isPlanTab,
   isReleaseNotesTab,
   isReviewTab,
@@ -33,6 +34,7 @@ import { AgentTabView } from "../../sessions/ui/AgentTabView";
 import { MarkdownPreview } from "../../sessions/ui/AgentMarkdown";
 import { BinaryFileView } from "./BinaryFileView";
 import { ReleaseNotesSurface } from "../../../app/ui/ReleaseNotesSurface";
+import { ModSurface } from "../../mods/ui/ModSurface";
 import { isRemoteProjectPath } from "../../projects/model/recents";
 
 const CommitDiff = lazySurface(async () => {
@@ -203,6 +205,16 @@ function FilePaneComponent({
                 />
               ) : isReleaseNotesTab(file) ? (
                 <ReleaseNotesSurface source={file.releaseNotes} />
+              ) : isModTab(file) ? (
+                <ModSurface
+                  name={file.mod.name}
+                  site="Pane"
+                  requestId={file.mod.viewId}
+                  title={file.mod.title}
+                  cwd={file.cwd}
+                  focused={focused && file.id === pane.activeFileId}
+                  className="flex h-full min-h-0 flex-col overflow-auto p-3"
+                />
               ) : isTerminalTab(file) ? (
                 <TerminalView
                   id={file.id}

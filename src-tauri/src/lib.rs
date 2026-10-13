@@ -28,6 +28,7 @@ mod macos;
 mod macos_background;
 mod mcp;
 mod menu;
+mod mods;
 mod mono;
 #[cfg(target_os = "macos")]
 mod mono_chat;
@@ -255,6 +256,9 @@ pub fn run() {
         )
         .register_uri_scheme_protocol(artifacts::HTML_SCHEME, |ctx, request| {
             artifacts::serve_html(ctx.app_handle(), &request)
+        })
+        .register_uri_scheme_protocol(mods::SCHEME, |ctx, request| {
+            mods::serve(ctx.app_handle(), &request)
         })
         .manage(harness::HarnessHost::new())
         .manage(pty::PtyHost::new())
@@ -525,6 +529,15 @@ pub fn run() {
             artifacts::artifacts_get,
             artifacts::artifacts_upsert,
             artifacts::artifacts_delete,
+            mods::mods_list,
+            mods::mods_set_enabled,
+            mods::mods_add_unpacked,
+            mods::mods_read_source,
+            mods::mod_exec,
+            mods::mod_fs,
+            mods::mod_http,
+            mods::mod_store,
+            mods::mod_env,
             notes::notes_delete,
             notes::notes_save_image,
             notes::notes_image_path,

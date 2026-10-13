@@ -84,6 +84,7 @@ import PinIcon from "@hugeicons/core-free-icons/PinIcon";
 import PinOffIcon from "@hugeicons/core-free-icons/PinOffIcon";
 import PlayIcon from "@hugeicons/core-free-icons/PlayIcon";
 import PreferenceHorizontalIcon from "@hugeicons/core-free-icons/PreferenceHorizontalIcon";
+import PuzzleIcon from "@hugeicons/core-free-icons/PuzzleIcon";
 import Refresh01Icon from "@hugeicons/core-free-icons/Refresh01Icon";
 import RegexIcon from "@hugeicons/core-free-icons/RegexIcon";
 import ReplaceIcon from "@hugeicons/core-free-icons/ReplaceIcon";
@@ -254,6 +255,7 @@ export const PinOff = wrap(PinOffIcon, "PinOff");
 export const Play = wrap(PlayIcon, "Play");
 export const Pipette = wrap(ColorPickerIcon, "Pipette");
 export const Plus = wrap(Add01Icon, "Plus");
+export const Puzzle = wrap(PuzzleIcon, "Puzzle");
 export const RefreshCw = wrap(Refresh01Icon, "RefreshCw");
 export const Regex = wrap(RegexIcon, "Regex");
 export const Replace = wrap(ReplaceIcon, "Replace");
@@ -282,3 +284,69 @@ export const WholeWord = wrap(WholeWordIcon, "WholeWord");
 export const Wrench = wrap(Wrench01Icon, "Wrench");
 export const X = wrap(Cancel01Icon, "X");
 export const Zap = wrap(FlashIcon, "Zap");
+
+/** Icons a mod can name (`IconName` in the MonoMods API); kebab-case, stable. */
+const ICONS_BY_NAME: Record<string, IconComponent> = {
+  alert: AlertCircle,
+  archive: Archive,
+  "arrow-up": ArrowUp,
+  bot: Bot,
+  branch: GitBranch,
+  chart: ChartBreakoutSquare,
+  check: Check,
+  "check-circle": CheckCircle,
+  "chevron-down": ChevronDown,
+  "chevron-right": ChevronRight,
+  circle: CircleDashed,
+  "circle-dot": CircleDot,
+  clock: Clock,
+  copy: Copy,
+  dashboard: DashboardSquare,
+  diff: FileDiff,
+  "external-link": ExternalLink,
+  eye: Eye,
+  file: File,
+  "file-plus": FilePlus,
+  filter: ListFilter,
+  folder: Folder,
+  "folder-open": FolderOpen,
+  "folder-tree": FolderTree,
+  gauge: Gauge,
+  "git-compare": GitCompare,
+  globe: Globe,
+  help: CircleHelp,
+  inbox: Inbox,
+  list: ListBullet,
+  loader: Loader,
+  lock: Lock,
+  merge: GitMerge,
+  message: MessageSquare,
+  more: MoreHorizontal,
+  pause: Pause,
+  pencil: Pencil,
+  pin: Pin,
+  play: Play,
+  plus: Plus,
+  "pull-request": GitPullRequest,
+  "pull-request-closed": GitPullRequestClosed,
+  "pull-request-draft": GitPullRequestDraft,
+  puzzle: Puzzle,
+  refresh: RefreshCw,
+  search: Search,
+  settings: Settings,
+  shield: Shield,
+  sparkles: Sparkles,
+  star: Star,
+  terminal: Terminal,
+  trash: Trash2,
+  undo: Undo2,
+  wrench: Wrench,
+  x: X,
+  zap: Zap,
+};
+
+export function iconByName(name: string | undefined): IconComponent | undefined {
+  return name && Object.prototype.hasOwnProperty.call(ICONS_BY_NAME, name)
+    ? ICONS_BY_NAME[name]
+    : undefined;
+}

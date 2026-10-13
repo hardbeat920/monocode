@@ -36,6 +36,7 @@ import {
 import { InboxProviderMark } from "../../inbox/ui/InboxProviderMark";
 import { ModelControlPills, ModelPicker } from "../../sessions/ui/ModelPicker";
 import { Popover } from "../../../shared/ui/Popover";
+import { Badge } from "../../../shared/ui/Badge";
 import { ProjectLogoIcon } from "../../projects/ui/ProjectLogoIcon";
 import { ProjectMascot } from "../../projects/ui/ProjectMascot";
 import { SearchableProjectPicker } from "../../projects/ui/SearchableProjectPicker";
@@ -734,14 +735,12 @@ function RunRow({
 function RunStatusPill({ status }: { status: AutomationRun["status"] }) {
   const running = status === "running";
   return (
-    <span
-      className={`inline-flex h-5 max-w-full items-center gap-1 rounded-full px-2 text-[11px] font-medium ${runStatusTone(status)}`}
-    >
+    <Badge className={runStatusTone(status)}>
       {running ? (
         <LoaderCircle className="size-2.5 shrink-0 animate-spin" />
       ) : null}
       {runStatusLabel(status)}
-    </span>
+    </Badge>
   );
 }
 

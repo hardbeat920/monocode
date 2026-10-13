@@ -40,6 +40,7 @@ import {
   type UsageChipVariant,
 } from "./UsageProviderChip";
 import { PiUsage } from "./PiUsage";
+import { ModStatusChips } from "../../features/mods/ui/ModStatusChips";
 import {
   ProviderSignInPanel,
   type ProviderSignInState,
@@ -133,6 +134,7 @@ export function UsageFooter({
           ) : null
         }
       />
+      <ModStatusChips />
       {showTerminals || showTerminalButton ? (
         <div className="ml-auto flex shrink-0 items-center gap-2">
           {showTerminals ? (

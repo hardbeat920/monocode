@@ -138,6 +138,22 @@
   --color-skill: #e8c547;
   --color-mention: #38bdf8;
   --color-markdown-heading: #f9a8c9;
+  /* MonoMods tones (mods/ui/ModElement.tsx): status hues, categorical hues,
+     and the read/write/git activity roles built on them. */
+  --tone-warning: #fbbf24;
+  --tone-info: #38bdf8;
+  --tone-purple: #a78bfa;
+  --tone-orange: #fb923c;
+  --tone-green: #4ade80;
+  --tone-teal: #2dd4bf;
+  --tone-pink: #f472b6;
+  --tone-cyan: #22d3ee;
+  --tone-yellow: #facc15;
+  --tone-blue: #60a5fa;
+  --tone-red: #f87171;
+  --tone-read: var(--tone-purple);
+  --tone-write: var(--tone-orange);
+  --tone-git: var(--tone-green);
 }
 
 html {
@@ -151,6 +167,17 @@ html.theme-light {
   --color-skill: #a07c10;
   --color-mention: #0284c7;
   --color-markdown-heading: #be185d;
+  --tone-warning: #b45309;
+  --tone-info: #0369a1;
+  --tone-purple: #7c3aed;
+  --tone-orange: #c2410c;
+  --tone-green: #15803d;
+  --tone-teal: #0f766e;
+  --tone-pink: #be185d;
+  --tone-cyan: #0e7490;
+  --tone-yellow: #a16207;
+  --tone-blue: #1d4ed8;
+  --tone-red: #b91c1c;
   --selection-subtle-strength: 5%;
   --selection-strength: 6%;
   --selection-strong-strength: 7%;
