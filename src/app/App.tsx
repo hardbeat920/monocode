@@ -564,7 +564,9 @@ import {
 } from "../features/sessions/model/browserCommand";
 import {
   BROWSER_OFF_NOTICE,
+  browserAgentInstructions,
   browserStateSnapshot,
+  ensureBrowserMcp,
   sessionBrowserGranted,
   setSessionBrowserGrant,
   showBrowserNotice,
@@ -6996,6 +6998,11 @@ function Workspace({
         void setSessionBrowserGrant(sessionId, enable).catch((error: unknown) =>
           status(error instanceof Error ? error.message : String(error)),
         );
+        if (enable)
+          void ensureBrowserMcp(current.harness, sessionWorkCwd(current)).catch(
+            (error: unknown) =>
+              console.warn("Browser MCP registration failed:", error),
+          );
         if (bare) {
           status(browserGrantStatus(enable));
           return true;
@@ -8069,6 +8076,18 @@ function Workspace({
             (agentPlan.soul || agentPlan.memory)
           ) {
             appContext.push(monoContext(agentLook, agentFiles, agentPlan));
+          }
+          // While the thread has /browser, every turn says how to reach it:
+          // a pointer to the MCP tools, or the CLI for providers without MCP.
+          if (browserAccess && !rawCommand) {
+            await ensureBrowserMcp(current.harness, workCwd).catch(
+              (error: unknown) =>
+                console.warn("Browser MCP registration failed:", error),
+            );
+            const browserContext = await browserAgentInstructions(
+              current.harness,
+            ).catch(() => "");
+            if (browserContext) appContext.push(browserContext);
           }
           if (operatorCommand.matched || handAgent) {
             const cli = `${shellPath(await invoke<string>("app_cli_path"))} app`;

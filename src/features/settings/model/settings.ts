@@ -245,6 +245,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "dotfiles hidden upload browser",
   },
   {
+    id: "browser-mcp",
+    section: "browser",
+    label: "Browser tools in providers",
+    keywords: "mcp register claude codex cursor opencode tools browser",
+  },
+  {
     id: "browser-limits",
     section: "browser",
     label: "Browser limits",

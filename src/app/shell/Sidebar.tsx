@@ -209,6 +209,7 @@ import {
   remoteProjectFor,
 } from "../../features/connections/model/remoteProjects";
 import {
+  ensureBrowserMcp,
   sessionBrowserGranted,
   setSessionBrowserGrant,
   useBrowserState,
@@ -1393,12 +1394,20 @@ function SidebarComponent({
     }
     if (id === "browser-access") {
       // Same switch as /browser in that thread (spec 13.2).
-      void setSessionBrowserGrant(
-        sessionId,
-        !sessionBrowserGranted(browserState, sessionId),
-      ).catch((error) => {
-        console.error("Failed to change browser access:", error);
-      });
+      const enable = !sessionBrowserGranted(browserState, sessionId);
+      const session = menuSessions[0];
+      void setSessionBrowserGrant(sessionId, enable)
+        .then(() =>
+          enable && session
+            ? ensureBrowserMcp(
+                session.harness,
+                session.worktreeCwd ?? session.cwd,
+              )
+            : undefined,
+        )
+        .catch((error) => {
+          console.error("Failed to change browser access:", error);
+        });
       return;
     }
     if (id === "folder-new") {

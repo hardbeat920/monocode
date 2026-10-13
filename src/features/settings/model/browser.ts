@@ -194,6 +194,7 @@ export function resetBrowserStore(state: BrowserState | null = null): void {
   current = state;
   started = state != null;
   disconnecting = false;
+  registered.clear();
   notice = null;
   for (const listener of listeners) listener();
   for (const listener of noticeListeners) listener();
@@ -248,6 +249,67 @@ export function listBrowserAudit(
 
 export function clearBrowserAudit(): Promise<void> {
   return invoke<void>("browser_audit_clear");
+}
+
+// ---------------------------------------------------------------------------
+// Agent side: MCP registration and the per-turn instructions (spec 12.2, 12.5)
+// ---------------------------------------------------------------------------
+
+/** Providers whose MCP configuration MonoCode writes the browser server into. */
+export const BROWSER_MCP_PROVIDERS = [
+  "claude",
+  "codex",
+  "cursor",
+  "opencode",
+] as const;
+
+export type BrowserMcpRegistration = {
+  provider: string;
+  supported: boolean;
+  registered: boolean;
+  /** The entry starts this app; false means a moved or updated app left it. */
+  current: boolean;
+  configPath?: string;
+};
+
+export function listBrowserMcpStatus(): Promise<BrowserMcpRegistration[]> {
+  return invoke<BrowserMcpRegistration[]>("browser_mcp_status");
+}
+
+export function registerBrowserMcp(
+  provider: string,
+  cwd: string,
+): Promise<BrowserMcpRegistration> {
+  return invoke<BrowserMcpRegistration>("browser_mcp_register", {
+    provider,
+    cwd,
+  });
+}
+
+const registered = new Set<string>();
+
+/**
+ * Registers the browser server once per app run for a provider that takes
+ * MCP, when one of its threads gets `/browser`. Registration is idempotent;
+ * this only saves rewriting the provider's config on every turn. A failure
+ * leaves the provider unmarked, so the next grant or turn tries again.
+ */
+export async function ensureBrowserMcp(
+  provider: string,
+  cwd: string,
+): Promise<void> {
+  if (
+    registered.has(provider) ||
+    !(BROWSER_MCP_PROVIDERS as readonly string[]).includes(provider)
+  )
+    return;
+  const result = await registerBrowserMcp(provider, cwd);
+  if (result.registered && result.current) registered.add(provider);
+}
+
+/** The `<monocode_browser>` block a turn carries while the thread has access. */
+export function browserAgentInstructions(provider: string): Promise<string> {
+  return invoke<string>("browser_agent_instructions", { provider });
 }
 
 // ---------------------------------------------------------------------------

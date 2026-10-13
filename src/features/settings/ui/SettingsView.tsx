@@ -611,7 +611,7 @@ export function SettingsView({
                 <McpSettings cwd={cwd} recents={recents} />
               ) : null}
               {section === "browser" ? (
-                <BrowserSettings sessionName={browserSessionName} />
+                <BrowserSettings sessionName={browserSessionName} cwd={cwd} />
               ) : null}
               {section === "providers" ? (
                 <ProvidersPage cwd={cwd} recents={recents} />

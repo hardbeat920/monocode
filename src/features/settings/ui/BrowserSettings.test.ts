@@ -65,6 +65,34 @@ beforeEach(() => {
         },
       ];
     if (command === "browser_audit_clear") return undefined;
+    if (command === "browser_mcp_status")
+      return [
+        {
+          provider: "claude",
+          supported: true,
+          registered: true,
+          current: true,
+        },
+        {
+          provider: "codex",
+          supported: true,
+          registered: true,
+          current: false,
+        },
+        {
+          provider: "cursor",
+          supported: true,
+          registered: false,
+          current: false,
+        },
+      ];
+    if (command === "browser_mcp_register")
+      return {
+        provider: "cursor",
+        supported: true,
+        registered: true,
+        current: true,
+      };
     return state;
   });
 });
@@ -81,6 +109,7 @@ async function renderSettings() {
     root.render(
       createElement(BrowserSettings, {
         sessionName: (id: string) => (id === "s1" ? "Fix login" : id),
+        cwd: "/repo",
       }),
     ),
   );
@@ -228,4 +257,17 @@ it("shows the thread indicator only while the thread has access", async () => {
   expect(
     container.querySelector('[aria-label="A tab is waiting on a dialog"]'),
   ).not.toBeNull();
+});
+
+it("shows where the browser tools are registered and adds them", async () => {
+  await renderSettings();
+  const row = container.querySelector('[data-setting-id="browser-mcp"]')!;
+  expect(row.textContent).toContain("Claude CodeAdded");
+  expect(row.textContent).toContain("Points to an old copy of MonoCode");
+  expect(button("Repair")).toBeTruthy();
+  await act(async () => button("Add").click());
+  expect(invoke).toHaveBeenCalledWith("browser_mcp_register", {
+    provider: "cursor",
+    cwd: "/repo",
+  });
 });

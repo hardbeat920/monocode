@@ -17,6 +17,8 @@ import {
   disconnectBrowser,
   inspectPages,
   listBrowserAudit,
+  listBrowserMcpStatus,
+  registerBrowserMcp,
   releaseBrowserTab,
   revokeBrowserSession,
   saveBrowserSettings,
@@ -26,13 +28,15 @@ import {
   type BrowserAuditEntry,
   type BrowserChoice,
   type BrowserLimits,
+  type BrowserMcpRegistration,
   type BrowserOutcome,
   type BrowserSettings as Settings,
   type BrowserState,
   type BrowserTab,
   type ConnectionView,
 } from "../model/browser";
-import { Group, Row, Select, Toggle } from "./SettingsControls";
+import { MCP_PROVIDER_LABELS } from "../model/mcp";
+import { Group, Row, Select, settingDomId, Toggle } from "./SettingsControls";
 
 /** Resolves a session id to the name the sidebar shows. */
 export type BrowserSessionName = (sessionId: string) => string;
@@ -54,8 +58,11 @@ function clockTime(ms: number): string {
 /** Settings → Browser (spec 13.1): one page for the toggle, link and audit. */
 export function BrowserSettings({
   sessionName,
+  cwd,
 }: {
   sessionName: BrowserSessionName;
+  /** Project the provider CLIs are asked about when registering. */
+  cwd: string;
 }) {
   const state = useBrowserState();
   const [error, setError] = useState<string | null>(null);
@@ -120,7 +127,12 @@ export function BrowserSettings({
       <ConnectionGroup state={state} run={run} />
       <SessionsGroup state={state} sessionName={sessionName} run={run} />
       <AuditGroup state={state} sessionName={sessionName} />
-      <AdvancedGroup settings={state.settings} save={save} run={run} />
+      <AdvancedGroup
+        settings={state.settings}
+        cwd={cwd}
+        save={save}
+        run={run}
+      />
     </>
   );
 }
@@ -598,10 +610,12 @@ const LIMIT_FIELDS: {
 
 function AdvancedGroup({
   settings,
+  cwd,
   save,
   run,
 }: {
   settings: Settings;
+  cwd: string;
   save: (patch: Partial<Settings>) => void;
   run: (action: () => Promise<unknown>) => void;
 }) {
@@ -674,6 +688,7 @@ function AdvancedGroup({
           onChange={(allow_dotfiles) => save({ allow_dotfiles })}
         />
       </Row>
+      <McpRegistrationRow cwd={cwd} />
       <Row
         id="browser-limits"
         label="Limits"
@@ -736,5 +751,93 @@ function LimitInput({
         className="w-14 rounded-md border border-content/10 bg-content/5 px-1.5 py-1 text-right text-content tabular-nums outline-none focus-visible:border-accent"
       />
     </label>
+  );
+}
+
+function registrationLabel(entry: BrowserMcpRegistration): string {
+  if (!entry.registered) return "Not added";
+  return entry.current ? "Added" : "Points to an old copy of MonoCode";
+}
+
+/**
+ * Where the browser tools are registered (spec 13.1 "status MCP
+ * registracije"). MonoCode adds them on the first /browser of a provider;
+ * this row shows the result and repairs an entry a moved app left behind.
+ */
+function McpRegistrationRow({ cwd }: { cwd: string }) {
+  const [entries, setEntries] = useState<BrowserMcpRegistration[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    listBrowserMcpStatus()
+      .then((next) => {
+        setEntries(next);
+        setError(null);
+      })
+      .catch((err: unknown) => setError(errorText(err)));
+  }, []);
+  useEffect(load, [load]);
+
+  const register = (provider: string) => {
+    setBusy(provider);
+    registerBrowserMcp(provider, cwd)
+      .then(load)
+      .catch((err: unknown) => setError(errorText(err)))
+      .finally(() => setBusy(null));
+  };
+
+  return (
+    <div
+      id={settingDomId("browser-mcp")}
+      data-setting-id="browser-mcp"
+      className="border-b border-content/5 px-4 py-3.5"
+    >
+      <div className="text-[13px] font-medium text-content">
+        Browser tools in providers
+      </div>
+      <p className="mt-1 text-[12px] leading-relaxed text-content/45">
+        MonoCode adds its browser tools to a provider the first time one of its
+        threads gets /browser. Agents already running see them after a restart.
+        Other providers get the same actions through a command line.
+      </p>
+      {error ? <p className="mt-2 text-[12px] text-red-400">{error}</p> : null}
+      {entries ? (
+        <ul className="mt-2 space-y-1">
+          {entries
+            .filter((entry) => entry.supported)
+            .map((entry) => (
+              <li
+                key={entry.provider}
+                className="flex items-center gap-2 text-[12px]"
+              >
+                <span className="w-28 shrink-0 text-content">
+                  {MCP_PROVIDER_LABELS[
+                    entry.provider as keyof typeof MCP_PROVIDER_LABELS
+                  ] ?? entry.provider}
+                </span>
+                <span
+                  className="min-w-0 flex-1 truncate text-content/45"
+                  title={entry.configPath}
+                >
+                  {registrationLabel(entry)}
+                </span>
+                {entry.registered && entry.current ? null : (
+                  <SecondaryButton
+                    disabled={busy != null}
+                    onClick={() => register(entry.provider)}
+                  >
+                    {busy === entry.provider
+                      ? "Adding…"
+                      : entry.registered
+                        ? "Repair"
+                        : "Add"}
+                  </SecondaryButton>
+                )}
+              </li>
+            ))}
+        </ul>
+      ) : null}
+    </div>
   );
 }

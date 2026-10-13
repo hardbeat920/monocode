@@ -10,6 +10,7 @@ import {
   connectionDropNotice,
   connectionView,
   disconnectBrowser,
+  ensureBrowserMcp,
   inspectPages,
   resetBrowserStore,
   sessionBrowserGranted,
@@ -238,5 +239,37 @@ describe("browser store", () => {
     );
     await disconnectBrowser();
     expect(browserNoticeSnapshot()).toBeNull();
+  });
+});
+
+describe("browser MCP registration", () => {
+  it("registers each MCP provider once per run and skips the others", async () => {
+    vi.mocked(invoke).mockResolvedValue({
+      provider: "codex",
+      supported: true,
+      registered: true,
+      current: true,
+    });
+    await ensureBrowserMcp("codex", "/repo");
+    await ensureBrowserMcp("codex", "/repo");
+    await ensureBrowserMcp("pi", "/repo");
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith("browser_mcp_register", {
+      provider: "codex",
+      cwd: "/repo",
+    });
+  });
+
+  it("tries again after a failed registration", async () => {
+    vi.mocked(invoke).mockRejectedValueOnce(new Error("locked"));
+    await expect(ensureBrowserMcp("claude", "/repo")).rejects.toThrow("locked");
+    vi.mocked(invoke).mockResolvedValueOnce({
+      provider: "claude",
+      supported: true,
+      registered: true,
+      current: true,
+    });
+    await ensureBrowserMcp("claude", "/repo");
+    expect(invoke).toHaveBeenCalledTimes(2);
   });
 });
