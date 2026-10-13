@@ -234,6 +234,20 @@ fn serve(mut stream: TcpStream, app: &AppHandle, inner: &Arc<Mutex<Inner>>) {
         {
             return Err("Invalid input or request ID".into());
         }
+        if request.namespace == crate::browser::protocol::NAMESPACE {
+            // Browser actions never go through the window: the BrowserHost
+            // answers synchronously, and policy refusals are ordinary
+            // `blocked` results. Only an unknown token is a transport error.
+            let result = crate::browser::handle_token_request(
+                &request.token,
+                crate::browser::protocol::ActionRequest {
+                    request_id: request.request_id,
+                    action: request.action,
+                    input: request.input,
+                },
+            )?;
+            return Ok(json!({"ok": true, "result": result}));
+        }
         let id = uuid::Uuid::new_v4().to_string();
         let (tx, rx) = mpsc::channel();
         let grant = {
@@ -409,6 +423,7 @@ pub fn control_authorize_turn(
     session_id: String,
     cwd: String,
     app_access: bool,
+    browser_access: Option<bool>,
 ) -> Result<(), String> {
     let workdir = crate::fs::expand_home(&cwd);
     let cwd = std::fs::canonicalize(&workdir)
@@ -431,6 +446,9 @@ pub fn control_authorize_turn(
     }
     let eligible = inner.prepare_app_grant(&session_id, window.label(), &cwd);
     let app_allowed = app_access && eligible;
+    // Browser access: token prepared before the provider spawns, grant set
+    // when the frontend passes the flag (spec 6, 13.2).
+    crate::browser::turn_started(&session_id, window.label(), &cwd, browser_access);
     inner.active.insert(
         session_id,
         ActiveTurn {
@@ -447,6 +465,7 @@ pub fn control_turn_finished(host: State<'_, ControlHost>, session_id: String) {
     if let Ok(mut inner) = host.inner.lock() {
         inner.active.remove(&session_id);
     }
+    crate::browser::turn_finished(&session_id);
 }
 
 pub fn window_closed(app: &AppHandle, label: &str) {
@@ -461,16 +480,25 @@ pub fn window_closed(app: &AppHandle, label: &str) {
     if let Ok(mut inner) = host.inner.lock() {
         inner.close_window(label);
     };
+    crate::browser::window_closed(label);
 }
 
 pub fn configure_child(app: &AppHandle, session_id: &str, cmd: &mut Command) {
     cmd.env_remove("MONOCODE_CONTROL_ENDPOINT")
         .env_remove("MONOCODE_CONTROL_TOKEN")
         .env_remove("MONOCODE_APP_ENDPOINT")
-        .env_remove("MONOCODE_APP_TOKEN");
+        .env_remove("MONOCODE_APP_TOKEN")
+        .env_remove(crate::browser::protocol::ENV_ENDPOINT)
+        .env_remove(crate::browser::protocol::ENV_TOKEN);
     let Some(host) = app.try_state::<ControlHost>() else {
         return;
     };
+    // Every session gets a browser token at spawn; whether it may use it is
+    // decided per request by the BrowserHost (spec 13.2).
+    if let Some(token) = crate::browser::child_token(session_id) {
+        cmd.env(crate::browser::protocol::ENV_ENDPOINT, &host.endpoint)
+            .env(crate::browser::protocol::ENV_TOKEN, token);
+    }
     if let Ok(inner) = host.inner.lock() {
         if let Some(grant) = inner.grants.get(session_id) {
             cmd.env("MONOCODE_CONTROL_ENDPOINT", &host.endpoint)

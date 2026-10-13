@@ -4,6 +4,7 @@ mod account_identity;
 mod artifacts;
 mod automations;
 mod azure_devops;
+mod browser;
 mod chat_background;
 mod checkpoint;
 mod codex_mono_store;
@@ -264,6 +265,7 @@ pub fn run() {
             harness::reap_orphaned_harness_processes();
             session_store::init(app.handle())?;
             control::init(app.handle())?;
+            browser::init(app.handle())?;
             reminders::init(app.handle());
             checkpoint::init(app.handle())?;
             menu::install(app.handle())?;
@@ -310,6 +312,20 @@ pub fn run() {
             control::control_attach_worker,
             control::control_authorize_turn,
             control::control_turn_finished,
+            browser::browser_toggle,
+            browser::browser_status,
+            browser::browser_tabs,
+            browser::browser_revoke,
+            browser::browser_transfer,
+            browser::browser_connect,
+            browser::browser_disconnect,
+            browser::browser_set_session_grant,
+            browser::browser_close_tab,
+            browser::browser_close_all_tabs,
+            browser::browser_audit_list,
+            browser::browser_events_list,
+            browser::browser_audit_clear,
+            browser::browser_set_settings,
             control::app_cli_path,
             default_cwd,
             home_dir,
