@@ -85,6 +85,13 @@ beforeEach(() => {
           registered: false,
           current: false,
         },
+        {
+          provider: "opencode",
+          supported: false,
+          registered: false,
+          current: false,
+          unsupportedReason: "OpenCode 2 is not supported yet.",
+        },
       ];
     if (command === "browser_mcp_register")
       return {
@@ -265,6 +272,10 @@ it("shows where the browser tools are registered and adds them", async () => {
   expect(row.textContent).toContain("Claude CodeAdded");
   expect(row.textContent).toContain("Points to an old copy of MonoCode");
   expect(button("Repair")).toBeTruthy();
+  expect(row.textContent).toContain("OpenCodeNot supported");
+  expect(row.textContent).toContain("OpenCode 2 is not supported yet.");
+  // Only Codex (repair) and Cursor (add) offer a button.
+  expect(row.querySelectorAll("button")).toHaveLength(2);
   await act(async () => button("Add").click());
   expect(invoke).toHaveBeenCalledWith("browser_mcp_register", {
     provider: "cursor",

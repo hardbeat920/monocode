@@ -755,6 +755,7 @@ function LimitInput({
 }
 
 function registrationLabel(entry: BrowserMcpRegistration): string {
+  if (entry.unsupportedReason) return "Not supported";
   if (!entry.registered) return "Not added";
   return entry.current ? "Added" : "Points to an old copy of MonoCode";
 }
@@ -805,11 +806,11 @@ function McpRegistrationRow({ cwd }: { cwd: string }) {
       {entries ? (
         <ul className="mt-2 space-y-1">
           {entries
-            .filter((entry) => entry.supported)
+            .filter((entry) => entry.supported || entry.unsupportedReason)
             .map((entry) => (
               <li
                 key={entry.provider}
-                className="flex items-center gap-2 text-[12px]"
+                className="flex flex-wrap items-center gap-x-2 text-[12px]"
               >
                 <span className="w-28 shrink-0 text-content">
                   {MCP_PROVIDER_LABELS[
@@ -822,7 +823,8 @@ function McpRegistrationRow({ cwd }: { cwd: string }) {
                 >
                   {registrationLabel(entry)}
                 </span>
-                {entry.registered && entry.current ? null : (
+                {entry.unsupportedReason ||
+                (entry.registered && entry.current) ? null : (
                   <SecondaryButton
                     disabled={busy != null}
                     onClick={() => register(entry.provider)}
@@ -834,6 +836,11 @@ function McpRegistrationRow({ cwd }: { cwd: string }) {
                         : "Add"}
                   </SecondaryButton>
                 )}
+                {entry.unsupportedReason ? (
+                  <p className="basis-full pt-0.5 pl-30 leading-relaxed text-content/45">
+                    {entry.unsupportedReason}
+                  </p>
+                ) : null}
               </li>
             ))}
         </ul>

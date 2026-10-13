@@ -260,6 +260,19 @@ describe("browser MCP registration", () => {
     });
   });
 
+  it("does not ask an unsupported provider again in the same run", async () => {
+    vi.mocked(invoke).mockResolvedValue({
+      provider: "opencode",
+      supported: false,
+      registered: false,
+      current: false,
+      unsupportedReason: "OpenCode 2",
+    });
+    await ensureBrowserMcp("opencode", "/repo");
+    await ensureBrowserMcp("opencode", "/repo");
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
   it("tries again after a failed registration", async () => {
     vi.mocked(invoke).mockRejectedValueOnce(new Error("locked"));
     await expect(ensureBrowserMcp("claude", "/repo")).rejects.toThrow("locked");

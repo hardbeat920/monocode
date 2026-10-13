@@ -270,6 +270,8 @@ export type BrowserMcpRegistration = {
   /** The entry starts this app; false means a moved or updated app left it. */
   current: boolean;
   configPath?: string;
+  /** Why a provider that takes MCP still cannot use the tools (OpenCode 2). */
+  unsupportedReason?: string;
 };
 
 export function listBrowserMcpStatus(): Promise<BrowserMcpRegistration[]> {
@@ -304,7 +306,10 @@ export async function ensureBrowserMcp(
   )
     return;
   const result = await registerBrowserMcp(provider, cwd);
-  if (result.registered && result.current) registered.add(provider);
+  // An unsupported provider (OpenCode 2) stays so for this run; asking again
+  // on every turn would only rerun its version check.
+  if (!result.supported || (result.registered && result.current))
+    registered.add(provider);
 }
 
 /** The `<monocode_browser>` block a turn carries while the thread has access. */
