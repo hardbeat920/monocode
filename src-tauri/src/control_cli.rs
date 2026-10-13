@@ -82,7 +82,7 @@ const ACTIONS: [&str; 12] = [
     "list", "delegate", "get", "steer", "message", "retry", "cancel", "wait", "review", "finish",
     "respond", "answer",
 ];
-const APP_ACTIONS: [&str; 32] = [
+const APP_ACTIONS: [&str; 36] = [
     "models.list",
     "sessions.list",
     "sessions.read",
@@ -104,6 +104,10 @@ const APP_ACTIONS: [&str; 32] = [
     "artifacts.write",
     "soul.read",
     "soul.update",
+    "skills.list",
+    "skills.read",
+    "skills.create",
+    "skills.update",
     "memory.read",
     "memory.search",
     "memory.add",
@@ -224,6 +228,17 @@ Actions:
                   Preserve the other instructions. If the file changed since
                   soul.read, read it again and reapply the requested changes.
                   Habit runs and other sessions cannot change a Mono's soul.
+  skills.list    {}  Mono or habit only. Its owned and assigned skill catalog.
+  skills.read    {"name":"review-pr"}  Full SKILL.md, hash and source path.
+                  Read before using a skill. Supporting files are relative to
+                  the source folder. Assigned skills keep their original files.
+  skills.create  {"name":"review-pr","description":"What it does and when",
+                  "instructions":"<Markdown>"}  Create for this Mono only,
+                  at the user's request. Does not replace an existing skill.
+  skills.update  {"name":"review-pr","text":"<complete SKILL.md>",
+                  "expectedHash":"<hash from skills.read>"}  Edit an owned
+                  skill at the user's request. Reread on conflict. Habit runs
+                  can read skills but cannot create or edit them.
   memory.read    {"topic":"releases"}  Mono only. Without topic:
                   MEMORY.md, how much of it loads, and the topic names.
   memory.search  {"query":"release tags","since":"7d"}
@@ -700,6 +715,29 @@ mod tests {
         assert!(help.contains("chat.card"));
         for kind in ["pr", "session", "choices", "habit"] {
             assert!(help.contains(&format!(r#""type":"{kind}""#)));
+        }
+    }
+
+    #[test]
+    fn app_mode_exposes_mono_skill_actions() {
+        for (action, input) in [
+            ("skills.list", r#"{}"#),
+            ("skills.read", r#"{"name":"review-pr"}"#),
+            (
+                "skills.create",
+                r#"{"name":"review-pr","description":"Review PRs","instructions":"Check tests"}"#,
+            ),
+            (
+                "skills.update",
+                r#"{"name":"review-pr","text":"Markdown","expectedHash":"hash"}"#,
+            ),
+        ] {
+            assert!(
+                matches!(parse_args_for(&args(&[action, "--json", input]), true),
+                Ok(Parsed::Call(parsed_action, _, _)) if parsed_action == action)
+            );
+            assert!(parse_args_for(&args(&[action]), false).is_err());
+            assert!(app_help().contains(action));
         }
     }
 

@@ -10,7 +10,12 @@ import { isImeComposition } from "../../../shared/lib/keyboard";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { Modal } from "../../../shared/ui/Modal";
 import { Popover } from "../../../shared/ui/Popover";
-import { Settings, Sparkles, StickyNote } from "../../../shared/ui/icons";
+import {
+  FileScript,
+  Settings,
+  Sparkles,
+  StickyNote,
+} from "../../../shared/ui/icons";
 import type { HarnessId, RuntimeMode } from "../../sessions/model/session";
 import { AccessPicker } from "../../sessions/ui/AccessPicker";
 import { ModelPicker, ModelSettingRows } from "../../sessions/ui/ModelPicker";
@@ -28,9 +33,10 @@ import {
 import { ConfirmReset } from "./ConfirmReset";
 import { MemoryPage, SoulPage, useMonoFiles } from "./MonoFilePages";
 import { MonoProjects } from "./MonoProjects";
+import { MonoSkillsPage } from "./MonoSkillsPage";
 import { ColorPicker, MascotPicker, SwitchRow } from "./monoPanelParts";
 
-export type MonoSettingsSection = "general" | "soul" | "memory";
+export type MonoSettingsSection = "general" | "soul" | "memory" | "skills";
 
 const SECTIONS: {
   id: MonoSettingsSection;
@@ -40,6 +46,7 @@ const SECTIONS: {
   { id: "general", label: "General", icon: Settings },
   { id: "soul", label: "Soul", icon: Sparkles },
   { id: "memory", label: "Memory", icon: StickyNote },
+  { id: "skills", label: "Skills", icon: FileScript },
 ];
 
 type Props = {
@@ -64,7 +71,7 @@ type Props = {
 
 /**
  * Who the Mono is and how it works, in a dialog of its own: its name, face,
- * model and projects under General, then its soul and memory.
+ * model and projects under General, then its soul, memory and skills.
  */
 export function MonoSettingsDialog({
   monoId,
@@ -121,8 +128,15 @@ export function MonoSettingsDialog({
             <GeneralSection monoId={monoId} agent={agent} {...general} />
           ) : section === "soul" ? (
             <SoulPage monoId={monoId} agent={agent} files={files} />
-          ) : (
+          ) : section === "memory" ? (
             <MemoryPage monoId={monoId} files={files} />
+          ) : (
+            <MonoSkillsPage
+              monoId={monoId}
+              cwd={general.cwd}
+              projects={agent.projects.map((project) => project.path)}
+              files={files}
+            />
           )}
         </div>
       </div>
@@ -249,7 +263,7 @@ function GeneralSection({
             label="Reset conversation"
             title={`Reset ${agent.name}'s conversation?`}
             body="All messages in this Mono's conversation will be deleted and any active reply will be stopped. This can't be undone."
-            kept="Its soul, memory and habits will be kept."
+            kept="Its soul, memory, habits and skills will be kept."
             failure="Could not reset the conversation."
             onConfirm={onReset}
           >
@@ -257,7 +271,7 @@ function GeneralSection({
               <SettingGroup>
                 <SettingRow
                   label="Reset conversation"
-                  description="Clear all messages and start fresh. Its soul, memory and habits stay."
+                  description="Clear all messages and start fresh. Its soul, memory, habits and skills stay."
                 >
                   <button
                     ref={ref}
