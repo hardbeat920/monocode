@@ -176,6 +176,10 @@ pub struct PolicyState {
     pub active_actions: u32,
     sessions: HashMap<String, SessionAuth>,
     leases: HashMap<TabId, Lease>,
+    /// `tabs.open` calls between the limit check and their lease insert, per
+    /// session; they count against the limits so concurrent opens cannot
+    /// overshoot them.
+    opening: HashMap<String, u32>,
     dedup: HashMap<String, VecDeque<DedupEntry>>,
     /// When the last revocation took effect; the race tests compare write
     /// timestamps against it.
@@ -195,6 +199,7 @@ impl PolicyState {
             active_actions: 0,
             sessions: HashMap::new(),
             leases: HashMap::new(),
+            opening: HashMap::new(),
             dedup: HashMap::new(),
             last_revocation: None,
         }
@@ -593,10 +598,30 @@ impl PolicyState {
             .values()
             .filter(|l| l.owner == session && l.is_live())
             .count() as u32
+            + self.opening.get(session).copied().unwrap_or(0)
     }
 
     pub fn live_tabs_total(&self) -> u32 {
         self.leases.values().filter(|l| l.is_live()).count() as u32
+            + self.opening.values().sum::<u32>()
+    }
+
+    /// Check the limits and hold a slot for a tab about to be created. The
+    /// caller releases it with [`Self::unreserve_tab`] in the same write-lock
+    /// section that inserts the lease, or when the open fails.
+    pub fn reserve_tab(&mut self, session: &str) -> Result<(), Reason> {
+        self.can_open_tab(session)?;
+        *self.opening.entry(session.to_string()).or_default() += 1;
+        Ok(())
+    }
+
+    pub fn unreserve_tab(&mut self, session: &str) {
+        if let Some(count) = self.opening.get_mut(session) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                self.opening.remove(session);
+            }
+        }
     }
 
     /// Limit check before `Target.createTarget` (decision D5).
@@ -1402,6 +1427,7 @@ mod tests {
                 active_actions: self.active_actions,
                 sessions: self.sessions.clone(),
                 leases: self.leases.clone(),
+                opening: self.opening.clone(),
                 dedup: HashMap::new(),
                 last_revocation: self.last_revocation,
             }

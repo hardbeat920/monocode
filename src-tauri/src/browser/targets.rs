@@ -228,6 +228,30 @@ pub struct Opened {
     pub navigation: Result<(), (Reason, String)>,
 }
 
+/// A tab slot held by [`open_tab`] from the limit check until its lease
+/// exists; released on every early return.
+struct Reservation<'a> {
+    policy: &'a Policy,
+    session: &'a str,
+    held: bool,
+}
+
+impl Reservation<'_> {
+    fn release(&mut self, state: &mut PolicyState) {
+        if std::mem::take(&mut self.held) {
+            state.unreserve_tab(self.session);
+        }
+    }
+}
+
+impl Drop for Reservation<'_> {
+    fn drop(&mut self) {
+        if self.held {
+            self.policy.write().unreserve_tab(self.session);
+        }
+    }
+}
+
 /// `tabs.open` (spec 7 "Otvaranje"): create a background tab in the user's
 /// window, attach, set the session up, then navigate.
 pub fn open_tab(
@@ -238,13 +262,18 @@ pub fn open_tab(
 ) -> Result<Opened, TabError> {
     let policy = link.policy();
     let (separate_window, target_url) = {
-        let state = policy.read();
+        let mut state = policy.write();
         let target_url = match url.map(str::trim) {
             Some(url) if !url.is_empty() => check_url(url)?,
             _ => "about:blank".to_string(),
         };
-        state.can_open_tab(&ctx.session)?;
+        state.reserve_tab(&ctx.session)?;
         (state.settings.separate_window, target_url)
+    };
+    let mut reservation = Reservation {
+        policy,
+        session: &ctx.session,
+        held: true,
     };
     let created = link.send(
         ctx,
@@ -262,6 +291,7 @@ pub fn open_tab(
     let tab = {
         let mut state = policy.write();
         let lease = new_lease(&state, &target, None, &ctx.session, None, "about:blank", "");
+        reservation.release(&mut state);
         state.insert_lease(lease)
     };
     let attached = match link.send(

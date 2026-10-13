@@ -140,6 +140,15 @@ pub fn execute(exec: Exec<'_>) -> ActionResult {
 }
 
 /// Identity of the browser host owning `link` (its policy's address).
+/// Forget a tab's refs: after a transfer the new owner must take its own
+/// snapshot, and refs the old owner saw are `ref_stale` (spec 7).
+pub fn forget_refs(link: &Link, tab: &TabId) {
+    refs::clear(&refs::RefKey {
+        host: host_id(link),
+        tab: tab.clone(),
+    });
+}
+
 fn host_id(link: &Link) -> usize {
     std::sync::Arc::as_ptr(link.policy()) as usize
 }

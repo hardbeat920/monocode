@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use base64::Engine;
 use serde_json::{json, Map, Value};
 
-use super::client::{self, Credentials};
+use super::client::{self, Credentials, MissingCredentials};
 use crate::browser::protocol::{ActionKind, ActionResult, Outcome};
 
 const USAGE: &str = r#"MonoCode browser — use your own tabs in the user's Chrome or Edge.
@@ -123,22 +123,29 @@ struct Call {
 }
 
 pub fn run(args: Vec<String>) -> i32 {
-    let call = match parse(&args, &mut std::io::stdin()) {
-        Ok(Parsed::Help) => {
-            println!("{}", help());
-            return 0;
-        }
+    let (text, code) = execute(&args, &mut std::io::stdin(), Credentials::from_env);
+    println!("{text}");
+    code
+}
+
+/// Parse, call and render one invocation: the text to print and the exit code.
+fn execute(
+    args: &[String],
+    stdin: &mut dyn Read,
+    credentials: impl FnOnce() -> Result<Credentials, MissingCredentials>,
+) -> (String, i32) {
+    let call = match parse(args, stdin) {
+        Ok(Parsed::Help) => return (help(), 0),
         Ok(Parsed::Call(call)) => call,
-        Err(error) => {
-            println!("{}", json!({"ok": false, "error": error}));
-            return 1;
-        }
+        Err(error) => return (json!({"ok": false, "error": error}).to_string(), 1),
     };
-    let credentials = match Credentials::from_env() {
+    let credentials = match credentials() {
         Ok(credentials) => credentials,
         Err(missing) => {
-            println!("{}", json!({"ok": false, "error": missing.message()}));
-            return 1;
+            return (
+                json!({"ok": false, "error": missing.message()}).to_string(),
+                1,
+            )
         }
     };
     let result = client::call(
@@ -147,9 +154,14 @@ pub fn run(args: Vec<String>) -> i32 {
         &call.input,
         &call.request_id,
     );
-    let (text, code) = render(&call, result);
-    println!("{text}");
-    code
+    render(&call, result)
+}
+
+/// [`execute`] with explicit credentials, for the module's end-to-end tests.
+#[cfg(test)]
+pub(crate) fn execute_with(args: &[&str], credentials: Credentials) -> (String, i32) {
+    let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+    execute(&args, &mut std::io::empty(), move || Ok(credentials))
 }
 
 fn exit_code(outcome: Outcome) -> i32 {

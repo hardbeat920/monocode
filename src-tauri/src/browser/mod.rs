@@ -54,12 +54,14 @@ pub mod discovery;
 pub mod link;
 pub mod policy;
 pub mod protocol;
+#[cfg(test)]
+mod resilience;
 pub mod semantic;
 pub mod targets;
 #[cfg(test)]
 pub(crate) mod testing;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -118,7 +120,19 @@ pub struct BrowserHost {
     policy: Arc<Policy>,
     link: Link,
     connection: Mutex<ConnectionInfo>,
-    connecting: AtomicBool,
+    /// `generation + 1` of the connection attempt running now, 0 when none.
+    connecting: AtomicU64,
+    /// Bumped by every toggle change. An attempt from an older generation
+    /// (OFF, or OFF→ON, happened while it ran) neither reports its state nor
+    /// keeps a socket it opened.
+    generation: AtomicU64,
+    /// How long the browser's consent dialog may stay unanswered, in ms.
+    consent_timeout_ms: AtomicU64,
+    /// Whether an agent request may still start a connection attempt that
+    /// shows the browser's consent dialog. One per drop (spec 14.1 row 2,
+    /// 14.2): restored when a connection is established or the toggle goes
+    /// ON, spent by the first automatic attempt that reaches the browser.
+    auto_dialog: AtomicBool,
     db: Db,
     app: Option<AppHandle>,
     run_id: u64,
@@ -166,7 +180,10 @@ impl BrowserHost {
                 since_ms: now_ms(),
                 last_error: None,
             }),
-            connecting: AtomicBool::new(false),
+            connecting: AtomicU64::new(0),
+            generation: AtomicU64::new(0),
+            consent_timeout_ms: AtomicU64::new(CONSENT_TIMEOUT.as_millis() as u64),
+            auto_dialog: AtomicBool::new(true),
             db,
             app,
             run_id,
@@ -190,6 +207,13 @@ impl BrowserHost {
 
     pub fn policy(&self) -> &Arc<Policy> {
         &self.policy
+    }
+
+    /// Shorter consent waits for tests (the browser's own dialog has no limit).
+    #[cfg(test)]
+    pub(crate) fn set_consent_timeout(&self, timeout: Duration) {
+        self.consent_timeout_ms
+            .store(timeout.as_millis() as u64, Ordering::Release);
     }
 
     pub fn link(&self) -> &Link {
@@ -222,6 +246,7 @@ impl BrowserHost {
     }
 
     fn emit_state(&self) {
+        self.sync_lease_rows();
         if let Some(app) = &self.app {
             let _ = app.emit(STATE_EVENT, self.state());
         }
@@ -249,6 +274,21 @@ impl BrowserHost {
         self.emit_state();
     }
 
+    /// Close the `browser_leases` rows of this run whose tab is no longer
+    /// leased (revoked, released, closed, or dropped with the connection), so
+    /// the table only lists tabs some session actually holds.
+    fn sync_lease_rows(&self) {
+        let live: std::collections::HashSet<String> = self
+            .policy
+            .read()
+            .leases()
+            .filter(|l| l.is_live())
+            .map(|l| l.tab.0.clone())
+            .collect();
+        self.db
+            .with(|conn| audit::close_leases_except(conn, self.run_id, &live));
+    }
+
     fn event(&self, kind: &str, actor: Actor, session: Option<&str>, detail: Option<&str>) {
         self.db
             .with(|conn| audit::event(conn, kind, actor, session, detail));
@@ -259,8 +299,15 @@ impl BrowserHost {
     /// Main switch. ON starts discovery (asynchronously); OFF bumps the global
     /// epoch, revokes every lease, detaches and closes the link. Tabs stay.
     pub fn set_toggle(self: &Arc<Self>, on: bool) {
-        let detach = self.policy.write().set_toggle(on);
+        let detach = {
+            let mut policy = self.policy.write();
+            if policy.toggle_on != on {
+                self.generation.fetch_add(1, Ordering::AcqRel);
+            }
+            policy.set_toggle(on)
+        };
         if on {
+            self.auto_dialog.store(true, Ordering::Release);
             self.event("toggle_on", Actor::User, None, None);
             self.connect();
         } else {
@@ -282,35 +329,82 @@ impl BrowserHost {
     /// already connected or connecting. Every connection means a new consent
     /// dialog in the browser; there is no automatic retry loop (spec 4).
     pub fn connect(self: &Arc<Self>) {
+        self.start_connect(false);
+    }
+
+    /// A connection attempt started by an agent request (spec 4: the next
+    /// request after a drop starts a new discovery). It may show the consent
+    /// dialog at most once per drop; after that only the user's Connect does.
+    fn connect_automatically(self: &Arc<Self>) {
+        self.start_connect(true);
+    }
+
+    fn start_connect(self: &Arc<Self>, automatic: bool) {
         if !self.policy.read().toggle_on || self.link.is_open() {
             return;
         }
-        if self.connecting.swap(true, Ordering::AcqRel) {
+        let generation = self.generation.load(Ordering::Acquire);
+        let mine = generation + 1;
+        let running = self.connecting.load(Ordering::Acquire);
+        // One attempt per generation; a stale one (from before a toggle
+        // change) does not hold up the new one.
+        if running == mine
+            || self
+                .connecting
+                .compare_exchange(running, mine, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+        {
             return;
         }
         let host = self.clone();
         let spawned = thread::Builder::new()
             .name("browser-connect".into())
             .spawn(move || {
-                host.run_connect();
-                host.connecting.store(false, Ordering::Release);
+                host.run_connect(automatic, generation);
+                let _ =
+                    host.connecting
+                        .compare_exchange(mine, 0, Ordering::AcqRel, Ordering::Acquire);
             });
         if spawned.is_err() {
-            self.connecting.store(false, Ordering::Release);
+            let _ = self
+                .connecting
+                .compare_exchange(mine, 0, Ordering::AcqRel, Ordering::Acquire);
+        }
+    }
+
+    fn current(&self, generation: u64) -> bool {
+        self.generation.load(Ordering::Acquire) == generation
+    }
+
+    /// [`Self::set_connection`] for a connection attempt: dropped when the
+    /// toggle changed since the attempt started.
+    fn attempt_state(
+        &self,
+        generation: u64,
+        state: ConnectionState,
+        detail: Option<String>,
+        browser: Option<BrowserInfo>,
+        last_error: Option<String>,
+    ) {
+        if self.current(generation) {
+            self.set_connection(state, detail, browser, last_error);
         }
     }
 
     /// Discovery (spec 4 steps 1-4) then [`Self::connect_endpoint`].
-    fn run_connect(self: &Arc<Self>) {
+    fn run_connect(self: &Arc<Self>, automatic: bool, generation: u64) {
+        let before = self.connection();
         let choice = self.policy.read().settings.browser.clone();
-        self.set_connection(
+        self.attempt_state(
+            generation,
             ConnectionState::Discovering,
             Some("Looking for Chrome or Edge…".into()),
             None,
             None,
         );
         match discovery::locate(&choice) {
-            Located::NoBrowser => self.set_connection(
+            Located::NoBrowser => self.attempt_state(
+                generation,
                 ConnectionState::NeedsToggle,
                 Some(format!(
                     "No Chrome or Edge profile was found. Install Chrome or Edge, or choose the profile folder in Settings. {}",
@@ -322,7 +416,8 @@ impl BrowserHost {
             Located::NeedsToggle { candidates } => {
                 let kind = candidates.first().map(|c| c.kind);
                 match kind.and_then(discovery::policy_blocks_debugging) {
-                    Some(policy) => self.set_connection(
+                    Some(policy) => self.attempt_state(
+                        generation,
                         ConnectionState::PolicyBlocked,
                         Some(format!(
                             "An administrator policy blocks remote debugging ({policy}). Ask your administrator; MonoCode never works around policies."
@@ -330,7 +425,8 @@ impl BrowserHost {
                         None,
                         None,
                     ),
-                    None => self.set_connection(
+                    None => self.attempt_state(
+                        generation,
                         ConnectionState::NeedsToggle,
                         Some(discovery::setup_instruction(kind)),
                         None,
@@ -338,7 +434,8 @@ impl BrowserHost {
                     ),
                 }
             }
-            Located::StalePort { candidate, port } => self.set_connection(
+            Located::StalePort { candidate, port } => self.attempt_state(
+                generation,
                 ConnectionState::StalePort,
                 Some(format!(
                     "{} left a DevToolsActivePort file (port {port}) but nothing answers there: the browser is closed or the file is stale. Start the browser and retry.",
@@ -347,16 +444,35 @@ impl BrowserHost {
                 None,
                 None,
             ),
+            Located::Found { .. }
+                if automatic && !self.auto_dialog.swap(false, Ordering::AcqRel) =>
+            {
+                // Discovery is harmless; another consent dialog is not.
+                self.event(
+                    "auto_connect_skipped",
+                    Actor::System,
+                    None,
+                    Some("consent dialog already shown once since the last drop"),
+                );
+                self.attempt_state(
+                    generation,
+                    before.state,
+                    Some("The browser already asked for permission once since the connection ended; ask the user to click Connect in MonoCode Settings.".into()),
+                    None,
+                    None,
+                );
+            }
             Located::Found {
                 candidate, ws_url, ..
-            } => self.connect_endpoint(candidate, &ws_url),
+            } => self.connect_endpoint(candidate, &ws_url, generation),
         }
     }
 
     /// Spec 4 steps 5-8: open the socket (consent dialog), check the version,
     /// read the target list once, start the event pump.
-    pub fn connect_endpoint(self: &Arc<Self>, candidate: Candidate, ws_url: &str) {
-        self.set_connection(
+    pub fn connect_endpoint(self: &Arc<Self>, candidate: Candidate, ws_url: &str, generation: u64) {
+        self.attempt_state(
+            generation,
             ConnectionState::AwaitingConsent,
             Some("Confirm the remote debugging permission in your browser.".into()),
             None,
@@ -372,12 +488,18 @@ impl BrowserHost {
                 candidate.user_data_dir.display()
             )),
         );
-        match self.link.open(ws_url, CONSENT_TIMEOUT) {
+        if !self.current(generation) {
+            return;
+        }
+        let consent_timeout =
+            Duration::from_millis(self.consent_timeout_ms.load(Ordering::Acquire));
+        match self.link.open(ws_url, consent_timeout) {
             Ok(()) => {}
             Err(OpenError::AlreadyOpen) => return,
             Err(OpenError::ConsentTimeout) => {
                 self.event("consent_timeout", Actor::Error, None, None);
-                self.set_connection(
+                self.attempt_state(
+                    generation,
                     ConnectionState::ConsentTimeout,
                     Some("The browser's permission dialog was not answered in time. Click Connect to try again.".into()),
                     None,
@@ -387,7 +509,8 @@ impl BrowserHost {
             }
             Err(OpenError::Refused(message)) => {
                 self.event("consent_denied", Actor::User, None, Some(&message));
-                self.set_connection(
+                self.attempt_state(
+                    generation,
                     ConnectionState::ConsentDenied,
                     Some("The browser refused the connection. Turn browser access on again when you are ready.".into()),
                     None,
@@ -396,7 +519,8 @@ impl BrowserHost {
                 return;
             }
             Err(OpenError::Unreachable(message)) => {
-                self.set_connection(
+                self.attempt_state(
+                    generation,
                     ConnectionState::StalePort,
                     Some("The browser endpoint went away before the connection opened. Start the browser and retry.".into()),
                     None,
@@ -410,7 +534,8 @@ impl BrowserHost {
                 } else {
                     ConnectionState::Off
                 };
-                self.set_connection(
+                self.attempt_state(
+                    generation,
                     state,
                     Some("Connection attempt cancelled.".into()),
                     None,
@@ -418,6 +543,11 @@ impl BrowserHost {
                 );
                 return;
             }
+        }
+        if !self.current(generation) {
+            // The toggle moved while the user was answering the dialog.
+            self.link.close(Vec::new(), OFF_DETACH_BUDGET);
+            return;
         }
         let version = self
             .link
@@ -434,7 +564,8 @@ impl BrowserHost {
         if !discovery::version_supported(major) {
             self.link.close(Vec::new(), OFF_DETACH_BUDGET);
             self.event("unsupported_version", Actor::Error, None, Some(&product));
-            self.set_connection(
+            self.attempt_state(
+                generation,
                 ConnectionState::UnsupportedVersion,
                 Some(format!(
                     "{} is too old; Chrome or Edge {MIN_BROWSER_MAJOR} or newer is required.",
@@ -470,8 +601,15 @@ impl BrowserHost {
                 }
             }),
         );
+        self.auto_dialog.store(true, Ordering::Release);
         self.event("connected", Actor::User, None, Some(&product));
-        self.set_connection(ConnectionState::Connected, Some(product), Some(info), None);
+        self.attempt_state(
+            generation,
+            ConnectionState::Connected,
+            Some(product),
+            Some(info),
+            None,
+        );
     }
 
     /// Settings "Disconnect": close the link while the toggle stays ON. The
@@ -582,6 +720,8 @@ impl BrowserHost {
     /// Hand a tab to another session (spec 7 "Primopredaja").
     pub fn transfer(&self, tab: &TabId, from: &str, to: &str) -> Result<(), Reason> {
         self.policy.write().transfer(tab, from, to)?;
+        // The new owner starts from its own snapshot (spec 7 "Primopredaja").
+        semantic::forget_refs(&self.link, tab);
         self.db.with(|conn| audit::lease_transferred(conn, tab, to));
         self.event(
             "transfer",
@@ -840,7 +980,7 @@ impl BrowserHost {
                     | ConnectionState::ConsentTimeout
             ) {
                 // Spec 4: a new discovery starts on the next agent request.
-                self.connect();
+                self.connect_automatically();
             }
             let mut result = ActionResult::from_reason(&request_id, reason);
             if let Some(detail) = connection.detail {
@@ -1018,7 +1158,7 @@ impl BrowserHost {
                     None
                 };
                 let settings = self.policy.read().settings.clone();
-                semantic::execute(semantic::Exec {
+                let result = semantic::execute(semantic::Exec {
                     link: &self.link,
                     ctx,
                     kind,
@@ -1026,9 +1166,44 @@ impl BrowserHost {
                     handle: handle.as_ref(),
                     settings: &settings,
                     commands_before,
-                })
+                });
+                self.closed_mid_action(ctx, kind, commands_before, result)
             }
         }
+    }
+
+    /// The tab closed or crashed while the action ran (spec 14.1 row 3, T15):
+    /// the send gate refuses the next command as `no_lease`, but for the
+    /// agent this is `target_closed`, failed (or `unknown` when a mutation
+    /// had already written), not a tab it never owned.
+    fn closed_mid_action(
+        &self,
+        ctx: &RequestCtx,
+        kind: ActionKind,
+        commands_before: u64,
+        result: ActionResult,
+    ) -> ActionResult {
+        if result.reason != Some(Reason::NoLease) {
+            return result;
+        }
+        let gone = ctx.tab.as_ref().is_some_and(|tab| {
+            self.policy.read().lease(tab).is_some_and(|l| {
+                l.owner == ctx.session && matches!(l.state, TabState::Closed | TabState::Crashed)
+            })
+        });
+        if !gone {
+            return result;
+        }
+        let wrote = self.link.commands_sent() > commands_before;
+        let outcome = if kind.mutates() && wrote {
+            Outcome::Unknown
+        } else {
+            Outcome::Failed
+        };
+        let mut closed =
+            ActionResult::from_reason(&ctx.request_id, Reason::TargetClosed).with_outcome(outcome);
+        closed.observed = result.observed;
+        closed
     }
 
     /// Timing, audit row, dedup entry, lease cleanup, state emit.

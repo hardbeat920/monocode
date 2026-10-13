@@ -215,38 +215,63 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn serve(mut stream: TcpStream, app: &AppHandle, inner: &Arc<Mutex<Inner>>) {
+/// Read and validate one request line.
+fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(3)));
+    let mut raw = String::new();
+    BufReader::new(stream)
+        .take(262_145)
+        .read_line(&mut raw)
+        .map_err(|e| e.to_string())?;
+    if raw.len() > 262_144 {
+        return Err("Request exceeds 256 KiB".into());
+    }
+    let request: Request = serde_json::from_str(&raw).map_err(|_| "Invalid control request")?;
+    if !request.input.is_object() || request.request_id.is_empty() || request.request_id.len() > 128
+    {
+        return Err("Invalid input or request ID".into());
+    }
+    Ok(request)
+}
+
+/// Browser actions never go through the window: the BrowserHost answers
+/// synchronously, and policy refusals are ordinary `blocked` results. Only
+/// an unknown token is a transport error.
+fn browser_reply(
+    request: Request,
+    handle: impl FnOnce(
+        &str,
+        crate::browser::protocol::ActionRequest,
+    ) -> Result<crate::browser::protocol::ActionResult, String>,
+) -> Result<Value, String> {
+    let result = handle(
+        &request.token,
+        crate::browser::protocol::ActionRequest {
+            request_id: request.request_id,
+            action: request.action,
+            input: request.input,
+        },
+    )?;
+    Ok(json!({"ok": true, "result": result}))
+}
+
+fn respond(mut stream: TcpStream, result: Result<Value, String>) {
+    let response = result.unwrap_or_else(|error| {
+        if error == APP_TURN_INACTIVE {
+            json!({"ok": false, "error": error, "retryable": false})
+        } else {
+            json!({"ok": false, "error": error})
+        }
+    });
+    let _ = writeln!(stream, "{response}");
+}
+
+fn serve(mut stream: TcpStream, app: &AppHandle, inner: &Arc<Mutex<Inner>>) {
     let result = (|| -> Result<Value, String> {
-        let mut raw = String::new();
-        BufReader::new(&mut stream)
-            .take(262_145)
-            .read_line(&mut raw)
-            .map_err(|e| e.to_string())?;
-        if raw.len() > 262_144 {
-            return Err("Request exceeds 256 KiB".into());
-        }
-        let request: Request = serde_json::from_str(&raw).map_err(|_| "Invalid control request")?;
-        if !request.input.is_object()
-            || request.request_id.is_empty()
-            || request.request_id.len() > 128
-        {
-            return Err("Invalid input or request ID".into());
-        }
+        let request = read_request(&mut stream)?;
         if request.namespace == crate::browser::protocol::NAMESPACE {
-            // Browser actions never go through the window: the BrowserHost
-            // answers synchronously, and policy refusals are ordinary
-            // `blocked` results. Only an unknown token is a transport error.
-            let result = crate::browser::handle_token_request(
-                &request.token,
-                crate::browser::protocol::ActionRequest {
-                    request_id: request.request_id,
-                    action: request.action,
-                    input: request.input,
-                },
-            )?;
-            return Ok(json!({"ok": true, "result": result}));
+            return browser_reply(request, crate::browser::handle_token_request);
         }
         let id = uuid::Uuid::new_v4().to_string();
         let (tx, rx) = mpsc::channel();
@@ -285,14 +310,32 @@ fn serve(mut stream: TcpStream, app: &AppHandle, inner: &Arc<Mutex<Inner>>) {
         }
         result
     })();
-    let response = result.unwrap_or_else(|error| {
-        if error == APP_TURN_INACTIVE {
-            json!({"ok": false, "error": error, "retryable": false})
-        } else {
-            json!({"ok": false, "error": error})
-        }
-    });
-    let _ = writeln!(stream, "{response}");
+    respond(stream, result);
+}
+
+/// The control transport's browser path without a Tauri app: the same
+/// request parsing, browser dispatch and reply framing as [`serve`], against
+/// a test host. Used by the browser module's end-to-end tests.
+#[cfg(test)]
+pub(crate) fn serve_browser_for_tests(
+    listener: TcpListener,
+    host: Arc<crate::browser::BrowserHost>,
+) {
+    for stream in listener.incoming() {
+        let Ok(mut stream) = stream else { return };
+        let host = host.clone();
+        std::thread::spawn(move || {
+            let result = read_request(&mut stream).and_then(|request| {
+                if request.namespace != crate::browser::protocol::NAMESPACE {
+                    return Err("Unknown control namespace".into());
+                }
+                browser_reply(request, |token, request| {
+                    host.handle_token_request(token, request)
+                })
+            });
+            respond(stream, result);
+        });
+    }
 }
 
 #[tauri::command]

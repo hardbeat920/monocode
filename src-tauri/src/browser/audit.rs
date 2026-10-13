@@ -294,6 +294,29 @@ pub fn lease_closed(conn: &Connection, tab: &TabId) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// Close every open row of `run_id` whose tab is not in `live`.
+pub fn close_leases_except(
+    conn: &Connection,
+    run_id: u64,
+    live: &std::collections::HashSet<String>,
+) -> rusqlite::Result<usize> {
+    let open: Vec<String> = {
+        let mut statement = conn
+            .prepare("SELECT tab_id FROM browser_leases WHERE closed_at IS NULL AND run_id = ?1")?;
+        let rows = statement.query_map(params![format!("{run_id:x}")], |row| row.get(0))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    let now = now_ms();
+    let mut closed = 0;
+    for tab in open.iter().filter(|tab| !live.contains(*tab)) {
+        closed += conn.execute(
+            "UPDATE browser_leases SET closed_at = ?2 WHERE tab_id = ?1 AND closed_at IS NULL",
+            params![tab, now],
+        )?;
+    }
+    Ok(closed)
+}
+
 pub fn lease_transferred(conn: &Connection, tab: &TabId, to: &str) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE browser_leases SET session_id = ?2 WHERE tab_id = ?1",
