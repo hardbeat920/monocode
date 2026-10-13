@@ -1,4 +1,5 @@
 import {
+  DashboardSquare,
   BellOff,
   ChevronDown,
   ChevronRight,
@@ -129,6 +130,8 @@ type Props = {
   onDismissUpdate?: () => void;
   /** The Monos section above the projects; absent while Monos are off. */
   monos?: MonoRailProps;
+  /** Opens the persistent kanban project board for the given project path. */
+  onOpenProjectBoard?: (path: string) => void;
 };
 
 export function ProjectRail({
@@ -167,6 +170,7 @@ export function ProjectRail({
   onOpenWhatsNew,
   onDismissUpdate,
   monos,
+  onOpenProjectBoard,
 }: Props) {
   const resize = useDragResize({
     min: PROJECT_RAIL_WIDTH_MIN,
@@ -446,6 +450,7 @@ export function ProjectRail({
                 onTogglePin={toggleProjectPin}
                 onContextMenu={onProjectContextMenu}
                 onOpenMenu={projectMenu.open}
+                onOpenBoard={onOpenProjectBoard}
                 groupLabels={groupLabels}
                 groupColors={groupColors}
                 groupCustomColors={groupCustomColors}
@@ -473,6 +478,7 @@ export function ProjectRail({
                       statsEnabled={visible}
                       searchActive={otherViewActive}
                       onSelect={onSelectProject}
+                      onOpenBoard={onOpenProjectBoard}
                       onTogglePin={toggleProjectPin}
                       onContextMenu={onProjectContextMenu}
                       onOpenMenu={projectMenu.open}
@@ -513,6 +519,7 @@ export function ProjectRail({
               sortable={projectSortable}
               pinned={false}
               searchActive={otherViewActive}
+              onOpenBoard={onOpenProjectBoard}
               onSelect={onSelectProject}
               onTogglePin={toggleProjectPin}
               onContextMenu={onProjectContextMenu}
@@ -594,6 +601,7 @@ function ProjectSection({
   pinned,
   searchActive,
   onSelect,
+  onOpenBoard,
   onTogglePin,
   onContextMenu,
   onOpenMenu,
@@ -615,6 +623,7 @@ function ProjectSection({
   pinned: boolean;
   searchActive: boolean;
   onSelect: (path: string) => void;
+  onOpenBoard?: (path: string) => void;
   onTogglePin: (path: string) => void;
   onContextMenu: (path: string, event: MouseEvent<HTMLElement>) => void;
   onOpenMenu: (path: string, x: number, y: number) => void;
@@ -647,6 +656,7 @@ function ProjectSection({
             onTogglePin={onTogglePin}
             onContextMenu={onContextMenu}
             onOpenMenu={onOpenMenu}
+            onOpenBoard={onOpenBoard}
             groupLabels={groupLabels}
             groupColors={groupColors}
             groupCustomColors={groupCustomColors}
@@ -704,6 +714,7 @@ function ProjectGroupSection({
   statsEnabled,
   searchActive,
   onSelect,
+  onOpenBoard,
   onTogglePin,
   onContextMenu,
   onOpenMenu,
@@ -725,6 +736,7 @@ function ProjectGroupSection({
   statsEnabled: boolean;
   searchActive: boolean;
   onSelect: (path: string) => void;
+  onOpenBoard?: (path: string) => void;
   onTogglePin: (path: string) => void;
   onContextMenu: (path: string, event: MouseEvent<HTMLElement>) => void;
   onOpenMenu: (path: string, x: number, y: number) => void;
@@ -843,6 +855,7 @@ function ProjectGroupSection({
               onTogglePin={onTogglePin}
               onContextMenu={onContextMenu}
               onOpenMenu={onOpenMenu}
+              onOpenBoard={onOpenBoard}
               groupLabels={groupLabels}
               groupColors={groupColors}
               groupCustomColors={groupCustomColors}
@@ -871,6 +884,7 @@ function ProjectCard({
   onTogglePin,
   onContextMenu,
   onOpenMenu,
+  onOpenBoard,
   groupLabels,
   groupColors,
   groupCustomColors,
@@ -888,6 +902,7 @@ function ProjectCard({
   onTogglePin: (path: string) => void;
   onContextMenu: (path: string, event: MouseEvent<HTMLElement>) => void;
   onOpenMenu: (path: string, x: number, y: number) => void;
+  onOpenBoard?: (path: string) => void;
   groupLabels: Record<string, string>;
   groupColors: Record<string, number>;
   groupCustomColors: Record<string, string>;
@@ -978,7 +993,7 @@ function ProjectCard({
         title={muteStatus ? `${cardTitle}\n${muteStatus}` : cardTitle}
         aria-label={muteStatus ? `${cardAriaLabel}, ${muteStatus}` : cardAriaLabel}
         aria-current={selected ? "true" : undefined}
-        className="flex min-w-0 flex-1 cursor-default items-center gap-2 text-left transition-[padding] duration-150 motion-reduce:transition-none group-hover:pr-6 group-has-[:focus-visible]:pr-6"
+        className="flex min-w-0 flex-1 cursor-default items-center gap-2 text-left transition-[padding] duration-150 motion-reduce:transition-none group-hover:pr-14 group-has-[:focus-visible]:pr-14"
       >
         <div className="project-card-logo grid size-4 shrink-0 place-items-center transition-opacity group-hover:opacity-0">
           {logoPath && !busy ? (
@@ -1040,6 +1055,22 @@ function ProjectCard({
           </span>
         ) : null}
       </button>
+      {onOpenBoard ? (
+        <button
+          type="button"
+          data-no-drag
+          title="Open project board"
+          aria-label="Open project board"
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            onOpenBoard(item.path);
+          }}
+          className="absolute right-7 top-1/2 hidden size-6 -translate-y-1/2 place-items-center rounded-md text-content/55 hover:bg-content/8 hover:text-content group-hover:grid group-has-[:focus-visible]:grid"
+        >
+          <DashboardSquare className="size-3.5" strokeWidth={1.75} />
+        </button>
+      ) : null}
       <button
         type="button"
         data-no-drag
