@@ -239,6 +239,9 @@ impl Watch {
                         .as_str()
                         .is_none_or(str::is_empty) =>
                 {
+                    // Into the lease now, not when the pump gets to it: the
+                    // snapshot after this action must see the new loader.
+                    targets::note_frame_navigated(run.link, &event);
                     navigating = true;
                     navigated = true;
                 }

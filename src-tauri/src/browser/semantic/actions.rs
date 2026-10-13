@@ -102,8 +102,13 @@ pub fn history(run: &Run<'_>, p: HistoryParams, delta: i64) -> Result<ActionResu
         Method::PageNavigateToHistoryEntry,
         json!({ "entryId": entry_id }),
     )?;
-    let (load_state, dialog) =
-        targets::wait_for_load(&subscription, None, Default::default(), run.ctx.deadline);
+    let (load_state, dialog) = targets::wait_for_load_tracked(
+        run.link,
+        &subscription,
+        None,
+        Default::default(),
+        run.ctx.deadline,
+    );
     refs::clear(&run.key());
     if let Some(lease) = run.link.policy().write().lease_mut(run.tab()) {
         lease.snapshot_version += 1;

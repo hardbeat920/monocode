@@ -5,7 +5,10 @@
 //! Everything here goes through [`Link::send`] with the caller's
 //! [`RequestCtx`] (agent work) or [`Link::send_system`] (module housekeeping
 //! such as resuming a paused popup or detaching a worker). The semantic layer
-//! builds on [`TabHandle`], [`navigate_and_wait`] and [`wait_for_load`].
+//! builds on [`TabHandle`], [`navigate_and_wait`], [`wait_for_load`] and
+//! [`wait_for_load_tracked`]; an action that watches navigation events itself
+//! hands them to [`note_frame_navigated`] so the lease is current when it
+//! returns.
 
 use std::sync::Arc;
 use std::thread;
@@ -396,7 +399,7 @@ pub fn navigate_and_wait(
     }
     let loader = string_field(&result, "loaderId");
     let (load_state, dialog) =
-        wait_for_load(&subscription, loader.as_deref(), wait_until, deadline);
+        wait_for_load_tracked(link, &subscription, loader.as_deref(), wait_until, deadline);
     let (seen_url, title) = {
         let state = link.policy().read();
         state
@@ -434,6 +437,35 @@ pub fn wait_for_load(
     wait_until: WaitUntil,
     deadline: Instant,
 ) -> (LoadState, Option<DialogInfo>) {
+    wait_for_load_with(subscription, loader, wait_until, deadline, &mut |_| {})
+}
+
+/// [`wait_for_load`] for an action that navigated the tab itself: every
+/// `Page.frameNavigated` seen on the way is applied to the lease table here
+/// (see [`note_frame_navigated`]), so `url` and `main_loader_id` describe the
+/// new document when this returns. The event pump runs on its own thread and
+/// may reach the same event only after the action returned; without this, a
+/// snapshot taken right after `navigate`, `back` or `tabs.open` recorded the
+/// old loader and every ref from it was `ref_stale` a moment later.
+pub fn wait_for_load_tracked(
+    link: &Link,
+    subscription: &Subscription,
+    loader: Option<&str>,
+    wait_until: WaitUntil,
+    deadline: Instant,
+) -> (LoadState, Option<DialogInfo>) {
+    wait_for_load_with(subscription, loader, wait_until, deadline, &mut |event| {
+        note_frame_navigated(link, event);
+    })
+}
+
+fn wait_for_load_with(
+    subscription: &Subscription,
+    loader: Option<&str>,
+    wait_until: WaitUntil,
+    deadline: Instant,
+    on_event: &mut dyn FnMut(&CdpEvent),
+) -> (LoadState, Option<DialogInfo>) {
     let mut dom_content_loaded = false;
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -454,6 +486,7 @@ pub fn wait_for_load(
             }
             continue;
         };
+        on_event(&event);
         match event.method.as_str() {
             "Page.lifecycleEvent" => {
                 let same_loader =
@@ -743,36 +776,10 @@ pub fn handle_event(link: &Link, event: &CdpEvent, notify: &dyn Fn(TabEvent)) {
             }
         }
         "Page.frameNavigated" => {
-            let Some(session) = &event.session else {
-                return;
-            };
-            let frame = &event.params["frame"];
-            let Some(frame_id) = string_field(frame, "id") else {
-                return;
-            };
-            let is_main = frame
-                .get("parentId")
-                .and_then(Value::as_str)
-                .is_none_or(str::is_empty);
-            let mut state = policy.write();
-            let Some(tab) = tab_holding(&state, session) else {
-                return;
-            };
-            let Some(lease) = state.lease_mut(&tab) else {
-                return;
-            };
-            if lease.cdp_session.as_ref() == Some(session) && is_main {
-                lease.url = string_field(frame, "url").unwrap_or_default();
-                lease.main_frame_id = Some(frame_id);
-                lease.main_loader_id = string_field(frame, "loaderId");
-                lease.main_execution_context = None;
-                lease.snapshot_version += 1;
-                lease.pending_dialog = None;
-                drop(state);
+            // The action that navigated may have applied this already
+            // (`wait_for_load_tracked`); the host still hears about it.
+            if let Some(tab) = note_frame_navigated(link, event) {
                 notify(TabEvent::Navigated(tab));
-            } else if let Some(frame_session) = lease.frames.get_mut(&frame_id) {
-                frame_session.loader_id = string_field(frame, "loaderId");
-                frame_session.execution_context_id = None;
             }
         }
         "Page.navigatedWithinDocument" => {
@@ -821,6 +828,51 @@ pub fn handle_event(link: &Link, event: &CdpEvent, notify: &dyn Fn(TabEvent)) {
             notify(TabEvent::DialogClosed(tab));
         }
         _ => {}
+    }
+}
+
+/// Apply a `Page.frameNavigated` event to the lease table: for the main
+/// frame the new `url`, frame and loader ids, a new `snapshot_version`, no
+/// execution context and no pending dialog; for an OOPIF frame its loader.
+/// Returns the tab whose main frame navigated.
+///
+/// The event pump and an action waiting on its own navigation
+/// ([`wait_for_load_tracked`]) both see the event, in whichever order their
+/// threads run. The loader id names the navigation, so the second
+/// application finds it recorded and changes nothing: the snapshot the
+/// action took in between keeps its version and its execution context.
+pub fn note_frame_navigated(link: &Link, event: &CdpEvent) -> Option<TabId> {
+    if event.method != "Page.frameNavigated" {
+        return None;
+    }
+    let session = event.session.as_ref()?;
+    let frame = &event.params["frame"];
+    let frame_id = string_field(frame, "id")?;
+    let is_main = frame
+        .get("parentId")
+        .and_then(Value::as_str)
+        .is_none_or(str::is_empty);
+    let loader = string_field(frame, "loaderId");
+    let mut state = link.policy().write();
+    let tab = tab_holding(&state, session)?;
+    let lease = state.lease_mut(&tab)?;
+    if lease.cdp_session.as_ref() == Some(session) && is_main {
+        if loader.is_some() && lease.main_loader_id == loader {
+            return Some(tab);
+        }
+        lease.url = string_field(frame, "url").unwrap_or_default();
+        lease.main_frame_id = Some(frame_id);
+        lease.main_loader_id = loader;
+        lease.main_execution_context = None;
+        lease.snapshot_version += 1;
+        lease.pending_dialog = None;
+        Some(tab)
+    } else {
+        if let Some(frame_session) = lease.frames.get_mut(&frame_id) {
+            frame_session.loader_id = loader;
+            frame_session.execution_context_id = None;
+        }
+        None
     }
 }
 
@@ -1073,11 +1125,18 @@ mod tests {
             assert_eq!(lease.main_loader_id.as_deref(), Some("L2"));
             assert_eq!(state.tabs_for("s1").len(), 1);
         }
-        assert!(events
+        // The pump reports it on its own thread; the lease above did not wait
+        // for that.
+        let until = Instant::now() + Duration::from_secs(2);
+        while !events
             .lock()
             .unwrap()
             .iter()
-            .any(|e| matches!(e, TabEvent::Navigated(_))));
+            .any(|e| matches!(e, TabEvent::Navigated(_)))
+        {
+            assert!(Instant::now() < until, "pump never reported the navigation");
+            thread::sleep(Duration::from_millis(5));
+        }
         // Tab limit: a second session with limit 1.
         {
             let mut state = policy.write();
@@ -1095,6 +1154,81 @@ mod tests {
         let err = open_tab(&link, &ctx2, Some("file:///etc/passwd"), WaitUntil::Load).unwrap_err();
         assert!(matches!(err, TabError::Reason(Reason::UrlDenied, _)));
         assert_eq!(server.received().len(), before);
+        link.close(Vec::new(), Duration::from_millis(200));
+    }
+
+    /// The lease reflects the navigation when `open_tab` returns even if the
+    /// event pump has not run yet (it is another thread; in production it can
+    /// get to `Page.frameNavigated` only after the action returned, and a
+    /// snapshot taken in between would record no loader). When the pump does
+    /// get there it finds the event applied and leaves the lease alone.
+    #[test]
+    fn navigation_updates_the_lease_before_returning_and_the_pump_applies_it_once() {
+        let server = navigating_fake();
+        let policy = policy();
+        let link = Link::new(policy.clone());
+        link.open(&server.url, Duration::from_secs(5)).unwrap();
+        // Deliberately no pump.
+        let ctx = admit(&policy, ActionKind::TabsOpen, None);
+        let opened = open_tab(&link, &ctx, Some("https://example.com/a"), WaitUntil::Load).unwrap();
+        assert!(opened.navigation.is_ok());
+        let tab = opened.handle.tab.clone();
+        let version = {
+            let state = policy.read();
+            let lease = state.lease(&tab).unwrap();
+            assert_eq!(lease.url, "https://example.com/a");
+            assert_eq!(lease.main_loader_id.as_deref(), Some("L2"));
+            assert_eq!(lease.main_frame_id.as_deref(), Some("T1"));
+            assert!(lease.snapshot_version >= 1);
+            lease.snapshot_version
+        };
+        // A snapshot right after the navigation created an isolated world.
+        policy
+            .write()
+            .lease_mut(&tab)
+            .unwrap()
+            .main_execution_context = Some(7);
+        // The pump reaches the same event later: the host hears about the
+        // navigation, the lease (and with it the snapshot) stays valid.
+        let events: Arc<Mutex<Vec<TabEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let seen = events.clone();
+        let notify = move |e: TabEvent| seen.lock().unwrap().push(e);
+        let frame_navigated = |loader: &str, url: &str| CdpEvent {
+            method: "Page.frameNavigated".into(),
+            params: json!({ "frame": { "id": "T1", "loaderId": loader, "url": url, "securityOrigin": "x", "mimeType": "text/html" }, "type": "Navigation" }),
+            session: Some(opened.handle.session.clone()),
+        };
+        handle_event(
+            &link,
+            &frame_navigated("L2", "https://example.com/a"),
+            &notify,
+        );
+        {
+            let state = policy.read();
+            let lease = state.lease(&tab).unwrap();
+            assert_eq!(lease.snapshot_version, version);
+            assert_eq!(lease.main_execution_context, Some(7));
+            assert_eq!(lease.main_loader_id.as_deref(), Some("L2"));
+        }
+        assert_eq!(
+            events.lock().unwrap().as_slice(),
+            &[TabEvent::Navigated(tab.clone())]
+        );
+        // A later navigation (the user typed a URL) is a new loader: applied.
+        handle_event(
+            &link,
+            &frame_navigated("L3", "https://example.com/b"),
+            &notify,
+        );
+        {
+            let state = policy.read();
+            let lease = state.lease(&tab).unwrap();
+            assert_eq!(lease.snapshot_version, version + 1);
+            assert_eq!(lease.main_loader_id.as_deref(), Some("L3"));
+            assert_eq!(lease.url, "https://example.com/b");
+            assert_eq!(lease.main_execution_context, None);
+        }
+        assert_eq!(events.lock().unwrap().len(), 2);
         link.close(Vec::new(), Duration::from_millis(200));
     }
 
