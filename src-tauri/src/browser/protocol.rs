@@ -1135,7 +1135,6 @@ pub enum BrowserMode {
     Attach,
 }
 
-/// How a thread gets browser access.
 impl BrowserMode {
     /// MonoCode starts the browser itself (managed or private).
     pub fn launches(self) -> bool {
@@ -1143,6 +1142,7 @@ impl BrowserMode {
     }
 }
 
+/// How a thread gets browser access.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AccessMode {

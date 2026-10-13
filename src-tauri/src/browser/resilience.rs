@@ -1805,6 +1805,38 @@ fn an_access_request_nobody_answers_expires_without_touching_the_browser() {
 }
 
 #[test]
+fn an_access_request_warms_the_monocode_browser_up_but_sends_nothing_to_pages() {
+    let world = Arc::new(World::managed(AccessMode::Ask));
+    world.host.turn_started("s1", "main", "/repo", None);
+    let waiting = world.spawn_act("s1", "tabs.open", json!({ "url": "https://example.com/" }));
+    assert!(wait_until(Duration::from_secs(5), || world.requested("s1")));
+    // The browser connects while the user decides, so an Allow late in the
+    // wait does not add a cold start on top of it.
+    world.wait_state(ConnectionState::Connected);
+    assert!(world.requested("s1"), "still waiting for the answer");
+    assert_eq!(world.server.connections(), 1);
+    assert!(!world
+        .sent()
+        .iter()
+        .any(|r| r.method == "Target.createTarget" || r.session.is_some()));
+
+    // "Not now": the action ends without a tab; the warm browser stays
+    // connected for the next thread that is allowed.
+    world.host.answer_request("s1", "main", false);
+    let (declined, _) = waiting.join().unwrap();
+    assert_eq!(declined.reason, Some(Reason::NotGranted), "{declined:?}");
+    assert!(!world
+        .sent()
+        .iter()
+        .any(|r| r.method == "Target.createTarget"));
+    world.grant("s2");
+    let opened = world.act("s2", "tabs.open", json!({}));
+    assert_eq!(opened.outcome, Outcome::Done, "{opened:?}");
+    assert_eq!(world.server.connections(), 1);
+    world.assert_idle();
+}
+
+#[test]
 fn off_and_revocation_answer_a_waiting_request_at_once() {
     // The full 45 s wait: each case must end long before it.
     let world = Arc::new(World::managed(AccessMode::Ask));
