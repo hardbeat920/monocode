@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { Plus, X } from "../../../shared/ui/icons";
-import { projectKey, projectName } from "../../../shared/lib/paths";
+import { prettyCwd, projectKey, projectName } from "../../../shared/lib/paths";
 import { loadRecents, projectRailItems } from "../../projects/model/recents";
 import {
   loadTabGroupColors,
@@ -31,14 +31,14 @@ function ProjectFace({ path }: { path: string }) {
         seed,
       )}
       name={resolveTabGroupMascot(key, loadTabGroupMascots())}
-      className="size-3 shrink-0"
+      className="size-4 shrink-0"
     />
   );
 }
 
 /**
- * The projects a Mono works on, under its model in the details panel. Each
- * can be taken away; more are added from the projects on the rail.
+ * The projects a Mono works on, one row each in its settings: face, name and
+ * folder. Each can be taken away; more are added from the projects on the rail.
  */
 export function MonoProjects({
   monoId,
@@ -56,23 +56,37 @@ export function MonoProjects({
       )
     : [];
   return (
-    <div className="flex min-w-0 flex-1 flex-col" data-mono-projects>
+    <div
+      className="flex min-w-0 flex-col divide-y divide-stroke"
+      data-mono-projects
+    >
       {projects.map((project) => (
         <div
           key={project.path}
-          title={project.path}
-          className="group flex h-7 min-w-0 items-center gap-2 text-content/85"
+          className="group flex min-h-12 min-w-0 items-center gap-3 px-3 py-2"
         >
-          <ProjectFace path={project.path} />
-          <span className="min-w-0 flex-1 truncate">{project.name}</span>
+          <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-content/5">
+            <ProjectFace path={project.path} />
+          </span>
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="truncate text-[13px] leading-5 text-content/90">
+              {project.name}
+            </span>
+            <span
+              className="truncate text-[11px] leading-4 text-content/40"
+              title={project.path}
+            >
+              {prettyCwd(project.path)}
+            </span>
+          </span>
           <button
             type="button"
             aria-label={`Remove ${project.name}`}
             title={`Remove ${project.name}`}
             onClick={() => removeMonoProject(monoId, project.path)}
-            className="grid size-5 shrink-0 place-items-center rounded text-content/45 opacity-0 hover:bg-content/8 hover:text-content focus-visible:opacity-100 group-hover:opacity-100"
+            className="grid size-6 shrink-0 place-items-center rounded-md text-content/45 opacity-0 hover:bg-content/8 hover:text-content focus-visible:opacity-100 group-hover:opacity-100"
           >
-            <X className="size-3" strokeWidth={1.75} />
+            <X className="size-3.5" strokeWidth={1.75} />
           </button>
         </div>
       ))}
@@ -82,9 +96,11 @@ export function MonoProjects({
         aria-haspopup="dialog"
         aria-expanded={adding}
         onClick={() => setAdding((open) => !open)}
-        className="-ml-1 flex h-7 w-fit items-center gap-1.5 rounded-md px-1 text-content/45 hover:bg-content/6 hover:text-content aria-expanded:bg-content/6 aria-expanded:text-content"
+        className="flex h-11 w-full items-center gap-3 px-3 text-left text-[13px] text-content/55 first:rounded-t-xl last:rounded-b-xl hover:bg-content/4 hover:text-content aria-expanded:bg-content/4 aria-expanded:text-content"
       >
-        <Plus className="size-3 shrink-0" strokeWidth={1.75} />
+        <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-dashed border-content/15">
+          <Plus className="size-3.5 shrink-0" strokeWidth={1.75} />
+        </span>
         Add project
       </button>
       {adding ? (

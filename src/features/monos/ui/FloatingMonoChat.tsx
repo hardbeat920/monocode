@@ -625,12 +625,6 @@ function ArtifactSheet({
             </p>
           ) : (
             <article data-artifact-reader={artifact.id}>
-              <h1 className="mb-1 text-[20px] leading-snug font-medium text-content">
-                {artifact.title}
-              </h1>
-              <p className="mb-5 text-[11px] text-content/45">
-                Updated {new Date(artifact.updatedAt).toLocaleString()}
-              </p>
               <ArtifactContent
                 artifact={artifact}
                 onOpenFile={(path) => void action({ kind: "openFile", path })}

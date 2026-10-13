@@ -524,6 +524,22 @@ describe("list_models catalog", () => {
     expect(haiku?.settings).toBeUndefined();
   });
 
+  it("records the concrete model behind live-catalog aliases", () => {
+    const models = modelsFromClaudeListModels([
+      { value: "opus", resolvedModel: "claude-opus-5-5", displayName: "Opus" },
+      {
+        value: "claude-fable-5-1[1m]",
+        resolvedModel: "claude-fable-5-1",
+        displayName: "Fable 5.1",
+      },
+    ]);
+
+    expect(models.map((model) => model.aliasTarget)).toEqual([
+      "claude-opus-5-5",
+      undefined,
+    ]);
+  });
+
   it("adds resolved versions to generic live-catalog alias labels", () => {
     const models = modelsFromClaudeListModels([
       {

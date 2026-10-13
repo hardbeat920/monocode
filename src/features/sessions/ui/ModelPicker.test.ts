@@ -75,7 +75,11 @@ vi.mock("../../../shared/ui/Popover", () => ({
     ),
 }));
 
-import { ModelControlPills, ModelPicker } from "./ModelPicker";
+import {
+  ModelControlPills,
+  ModelPicker,
+  ModelSettingRows,
+} from "./ModelPicker";
 import {
   resetHarnessModelOverlays,
   saveRecentModelChoice,
@@ -309,7 +313,7 @@ describe("model picker", () => {
     expect(options).not.toContain("Base model");
   });
 
-  it.each(["pill", "text"] as const)(
+  it.each(["pill", "text", "rows"] as const)(
     "uses project-specific OpenCode settings in %s controls",
     (variant) => {
       const model = "opencode:fixture/worktree";
@@ -335,21 +339,30 @@ describe("model picker", () => {
       const onSettingsChange = vi.fn();
       act(() =>
         root.render(
-          createElement(ModelControlPills, {
-            project: "/worktree",
-            harness: "opencode",
-            model,
-            values: {},
-            variant,
-            onSettingsChange,
-          }),
+          variant === "rows"
+            ? createElement(ModelSettingRows, {
+                project: "/worktree",
+                harness: "opencode",
+                model,
+                values: {},
+                onSettingsChange,
+                row: ({ control }) => control,
+              })
+            : createElement(ModelControlPills, {
+                project: "/worktree",
+                harness: "opencode",
+                model,
+                values: {},
+                variant,
+                onSettingsChange,
+              }),
         ),
       );
       const trigger = container.querySelector<HTMLButtonElement>(
         'button[aria-label="Variant: Project High"]',
       );
       expect(trigger).not.toBeNull();
-      expect(trigger?.querySelector("svg") != null).toBe(variant === "pill");
+      expect(trigger?.querySelector("svg")).not.toBeNull();
       act(() => trigger?.click());
       const option = [
         ...container.querySelectorAll<HTMLButtonElement>("button"),
@@ -359,6 +372,59 @@ describe("model picker", () => {
       expect(onSettingsChange).toHaveBeenCalledWith({ variant: "low" });
     },
   );
+
+  it("shows a saved Claude version's settings when only its alias is live", () => {
+    setHarnessModels("claude", [
+      {
+        id: "claude:opus",
+        harness: "claude",
+        name: "Opus 5.5",
+        nativeId: "opus",
+        aliasTarget: "claude-opus-5-5",
+        settings: [
+          {
+            id: "effort",
+            label: "Reasoning",
+            kind: "select",
+            value: "high",
+            options: [{ value: "high", label: "High" }],
+          },
+          {
+            id: "fast",
+            label: "Fast",
+            kind: "toggle",
+            value: "false",
+            options: [
+              { value: "true", label: "On" },
+              { value: "false", label: "Off" },
+            ],
+          },
+        ],
+      },
+    ]);
+    act(() =>
+      root.render(
+        createElement(ModelPicker, {
+          harness: "claude",
+          model: "claude:opus-5-5",
+          values: {},
+          onChange: vi.fn(),
+          onSettingsChange: vi.fn(),
+        }),
+      ),
+    );
+
+    act(() =>
+      container
+        .querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')!
+        .click(),
+    );
+    const rows = [
+      ...container.querySelectorAll<HTMLButtonElement>("button"),
+    ].map((button) => button.textContent ?? "");
+    expect(rows.some((row) => row.startsWith("Effort"))).toBe(true);
+    expect(rows.some((row) => row.startsWith("Fast"))).toBe(true);
+  });
 
   it("groups OpenCode models by provider and searches provider names", () => {
     setHarnessModels("opencode", [
@@ -867,9 +933,7 @@ describe("model picker", () => {
       );
       const effortRow = [
         ...container.querySelectorAll<HTMLButtonElement>("button"),
-      ].find((button) =>
-        button.textContent?.startsWith(settingLabel),
-      )!;
+      ].find((button) => button.textContent?.startsWith(settingLabel))!;
       hover(effortRow);
 
       expect(

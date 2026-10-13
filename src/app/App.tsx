@@ -18,6 +18,7 @@ import { acceptQuickLaunch } from "./model/quickLaunchSession";
 import { useWorkspaceNavigation } from "./hooks/useWorkspaceNavigation";
 import { useIdleSessionDetach } from "./hooks/useIdleSessionDetach";
 import { HarnessEventQueue } from "./model/harnessFlush";
+import { updateSessionState } from "./model/sessionState";
 import {
   handleAgentApp,
   canAccessAgentAppProject,
@@ -91,9 +92,12 @@ import { WhatsNewDialog } from "./shell/WhatsNewDialog";
 import { ProviderSignInDialog } from "../features/sessions/ui/ProviderSignInDialog";
 import { TitleBar, type Tab as TitleTab } from "./shell/TitleBar";
 import { WindowControls } from "./shell/WindowControls";
-import { MonoDetails } from "../features/monos/ui/MonoDetails";
+import {
+  MonoOverview,
+  type MonoOverviewTab,
+} from "../features/monos/ui/MonoOverview";
+import { MonoSettingsDialog } from "../features/monos/ui/MonoSettingsDialog";
 import { MonoActivityPanel } from "../features/monos/ui/MonoActivityPanel";
-import { MonoSessionsPanel } from "../features/monos/ui/MonoSessionsPanel";
 import {
   launchedSessionState,
   monoSpawnedSessions,
@@ -340,6 +344,7 @@ import {
 import { isEditTool } from "../integrations/harness/core/preview";
 import { MessageParts } from "../integrations/harness/core/streamText";
 import { sessionEditPaths } from "../features/sessions/model/checkpointEdits";
+import { useSessionChangeTotals } from "../features/sessions/ui/SessionReview";
 import {
   createEditedResendAttempt,
   createEditedResendCoordinator,
@@ -559,11 +564,13 @@ import {
   findMono,
   isMonoSession,
   listMonos,
+  loadOpenMono,
   monoForSession,
   monoLook,
   monosSnapshot,
   monoState,
   removeMono,
+  saveOpenMono,
   subscribeMonos,
   type MonoState,
 } from "../features/monos/model/mono";
@@ -624,15 +631,12 @@ import {
 import {
   getArtifact,
   saveArtifact,
+  artifactCards,
   recordArtifactCard,
   removeArtifactCard,
   ARTIFACT_DELETED_EVENT,
 } from "../features/artifacts/artifacts";
-import {
-  MonoChangesPanel,
-  type MonoChangesRequest,
-} from "../features/monos/ui/MonoChangesPanel";
-import { ArtifactPanel } from "../features/artifacts/ui/ArtifactPanel";
+import type { MonoChangesRequest } from "../features/monos/ui/MonoChangesView";
 import {
   claimDueAutomations,
   listAutomations,
@@ -1098,37 +1102,24 @@ function Workspace({
     () => windowTransfer?.activeTabId ?? resumed?.activeTabId ?? seed.tab.id,
   );
   const [monoViewId, setMonoViewId] = useState<string | null>(null);
-  const [monoDetailsOpen, setMonoDetailsOpen] = useState(false);
-  const [monoArtifact, setMonoArtifact] = useState<{
-    sessionId: string;
-    id: string;
-  } | null>(null);
-  const monoArtifactOpener = useRef<HTMLElement | null>(null);
-  const onOpenMonoArtifact = useCallback((sessionId: string, id: string) => {
-    monoArtifactOpener.current =
-      document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
-    setMonoDetailsOpen(false);
+  // A Mono opens with its overview beside the chat until it is hidden.
+  const [monoOverviewOpen, setMonoOverviewOpen] = useState(true);
+  const [monoOverviewTab, setMonoOverviewTab] =
+    useState<MonoOverviewTab>("sessions");
+  // The Mono whose settings dialog is open; another Mono's view closes it.
+  const [monoSettingsFor, setMonoSettingsFor] = useState<string | null>(null);
+  // A document opened from the chat shows on the overview's Documents tab,
+  // the same page the tab opens it on.
+  const onOpenMonoArtifact = useCallback((_sessionId: string, id: string) => {
     setMonoActivity(null);
-    setMonoSessions(null);
-    setMonoChanges(null);
-    setMonoArtifact({ sessionId, id });
+    setMonoShownSession(null);
+    setMonoOverviewDocument(id);
+    setMonoOverviewTab("documents");
+    setMonoOverviewOpen(true);
   }, []);
-  const onCloseMonoArtifact = useCallback(() => {
-    setMonoArtifact(null);
-    monoArtifactOpener.current?.focus();
-  }, []);
-  const [monoChanges, setMonoChanges] = useState<{
-    sessionId: string;
-    cwd: string;
-    request: MonoChangesRequest;
-  } | null>(null);
-  const monoChangesOpener = useRef<HTMLElement | null>(null);
-  const onCloseMonoChanges = useCallback(() => {
-    setMonoChanges(null);
-    monoChangesOpener.current?.focus();
-  }, []);
+  // What the overview's Changes tab was last asked to show.
+  const [monoChangesRequest, setMonoChangesRequest] =
+    useState<MonoChangesRequest>({});
   useEffect(() => {
     const listening = listen<string>(
       ARTIFACT_DELETED_EVENT,
@@ -1141,7 +1132,7 @@ function Workspace({
           sessionsRef.current = updated;
           setSessions(updated);
         }
-        setMonoArtifact((current) => (current?.id === id ? null : current));
+        setMonoOverviewDocument((current) => (current === id ? null : current));
       },
     );
     return () => {
@@ -1150,28 +1141,28 @@ function Workspace({
   }, []);
   const [monoActivity, setMonoActivity] =
     useState<MonoActivitySelection | null>(null);
-  const [monoSessions, setMonoSessions] =
-    useState<MonoActivitySelection | null>(null);
-  // A launched session shown in the sessions sidebar. It belongs to the list
-  // it was opened from, so reopening or closing that list leaves it.
-  const [monoShownSession, setMonoShownSession] = useState<{
-    from: MonoActivitySelection;
-    sessionId: string;
-  } | null>(null);
+  // A launched session or a document open over the overview's list. Hiding
+  // the overview leaves them, so it opens on its list again.
+  const [monoShownSession, setMonoShownSession] = useState<string | null>(null);
+  const [monoOverviewDocument, setMonoOverviewDocument] = useState<
+    string | null
+  >(null);
+  useEffect(() => {
+    if (monoOverviewOpen) return;
+    setMonoShownSession(null);
+    setMonoOverviewDocument(null);
+  }, [monoOverviewOpen]);
   // Whether the shown session, rather than the Mono's chat, holds focus.
   const [monoShownSessionFocused, setMonoShownSessionFocused] = useState(false);
   const shownMonoSessionId =
-    monoViewId && monoSessions && monoShownSession?.from === monoSessions
-      ? monoShownSession.sessionId
+    monoViewId && monoOverviewOpen && monoShownSession
+      ? monoShownSession
       : undefined;
   const shownMonoSessionIdRef = useRef(shownMonoSessionId);
   shownMonoSessionIdRef.current = shownMonoSessionId;
   const onShowMonoActivity = useCallback(
     (sessionId: string, turnId: string, blocks: Block[]) => {
-      setMonoDetailsOpen(false);
-      setMonoArtifact(null);
-      setMonoChanges(null);
-      setMonoSessions(null);
+      setMonoOverviewOpen(false);
       setMonoActivity((previous) =>
         previous?.sessionId === sessionId && previous.turnId === turnId
           ? null
@@ -1186,11 +1177,9 @@ function Workspace({
   const closeMonoView = useCallback(() => {
     monoViewRequest.current += 1;
     monoViewIdRef.current = null;
+    saveOpenMono(undefined);
     setMonoViewId(null);
     setMonoActivity(null);
-    setMonoSessions(null);
-    setMonoArtifact(null);
-    setMonoChanges(null);
   }, []);
   const [composerFocused, setComposerFocused] = useState(() => {
     if (windowTransfer) return true;
@@ -1624,15 +1613,21 @@ function Workspace({
           );
         },
         (batches) => {
-          const prev = sessionsRef.current;
-          const next = prev.map((session) => {
-            const events = batches.get(session.id);
-            return events ? applyHarnessEvents(session, events) : session;
-          });
-          if (!next.some((session, index) => session !== prev[index])) return;
-          sessionsRef.current = next;
-          syncDockBadge(next);
-          setSessions(next);
+          const previous = sessionsRef.current;
+          const next = updateSessionState(
+            sessionsRef,
+            setSessions,
+            (current) => {
+              const updated = current.map((session) => {
+                const events = batches.get(session.id);
+                return events ? applyHarnessEvents(session, events) : session;
+              });
+              return updated.some((session, index) => session !== current[index])
+                ? updated
+                : current;
+            },
+          );
+          if (next !== previous) syncDockBadge(next);
         },
       ),
   );
@@ -2637,14 +2632,16 @@ function Workspace({
 
   const onSelectProviderAccount = useCallback(
     (provider: ProviderAccountProvider, accountId: string) => {
-      if (!active || active.harness !== provider) return;
-      const currentId = active.providerAccountId ?? DEFAULT_PROVIDER_ACCOUNT_ID;
-      if (currentId === accountId) return;
+      const current = sessionsRef.current.find(
+        (session) => session.id === active?.id,
+      );
+      if (!current || current.harness !== provider) return;
 
-      if (active.blocks.length === 0 && !active.busy) {
-        setSessions((current) =>
-          current.map((session) =>
-            session.id === active.id
+      if (current.blocks.length === 0 && !current.busy) {
+        if (current.providerAccountId === accountId) return;
+        updateSessionState(sessionsRef, setSessions, (sessions) =>
+          sessions.map((session) =>
+            session.id === current.id
               ? { ...session, providerAccountId: accountId }
               : session,
           ),
@@ -2652,25 +2649,31 @@ function Workspace({
         return;
       }
 
+      const currentId = current.providerAccountId ?? DEFAULT_PROVIDER_ACCOUNT_ID;
+      if (currentId === accountId) return;
+
       // Provider thread ids are account-owned. Keep the current conversation
       // pinned to its account and open a clean one for the selected profile.
       const session = {
         ...newSession(
-          active.harness,
-          active.cwd,
-          active.model,
-          active.runtimeMode,
-          active.modelSettings,
+          current.harness,
+          current.cwd,
+          current.model,
+          current.runtimeMode,
+          current.modelSettings,
         ),
         providerAccountId: accountId,
       };
       const tab = newTab(session.id);
-      setSessions((current) => [...current, session]);
-      appendTab(tab, active.cwd);
+      updateSessionState(sessionsRef, setSessions, (sessions) => [
+        ...sessions,
+        session,
+      ]);
+      appendTab(tab, current.cwd);
       setActiveTabId(tab.id);
       setComposerFocused(true);
     },
-    [active, appendTab],
+    [active?.id, appendTab],
   );
 
   const onOpenWhatsNew = useCallback((version: string) => {
@@ -4141,38 +4144,28 @@ function Workspace({
     [activeTabId],
   );
 
-  // A Mono view covers the workspace, so its session changes open beside the
-  // chat instead of in a project tab hidden behind it.
-  const openMonoChanges = useCallback(
-    (
-      session: { sessionId: string; cwd: string },
-      request: MonoChangesRequest,
-    ) => {
-      monoChangesOpener.current =
-        document.activeElement instanceof HTMLElement
-          ? document.activeElement
-          : null;
-      setMonoDetailsOpen(false);
-      setMonoActivity(null);
-      setMonoSessions(null);
-      setMonoArtifact(null);
-      setMonoChanges({ ...session, request });
-    },
-    [],
-  );
+  // A Mono view covers the workspace, so its session changes open on the
+  // overview's Changes tab instead of in a project tab hidden behind it.
+  const openMonoChanges = useCallback((request: MonoChangesRequest) => {
+    setMonoActivity(null);
+    setMonoShownSession(null);
+    setMonoOverviewDocument(null);
+    setMonoChangesRequest(request);
+    setMonoOverviewTab("changes");
+    setMonoOverviewOpen(true);
+  }, []);
   const onOpenMonoDiff = useCallback(
     (path?: string, session?: { sessionId: string; cwd: string }) => {
       if (!session) {
         onOpenDiff(path);
         return;
       }
-      openMonoChanges(session, { path, tab: "changes" });
+      openMonoChanges({ path });
     },
     [onOpenDiff, openMonoChanges],
   );
   const onCommitMonoChanges = useCallback(
-    (session: { sessionId: string; cwd: string }) =>
-      openMonoChanges(session, { tab: "commit" }),
+    () => openMonoChanges({}),
     [openMonoChanges],
   );
 
@@ -4697,7 +4690,6 @@ function Workspace({
   const onOpenMono = useCallback(
     async (monoId: string) => {
       setMonoActivity(null);
-      setMonoSessions(null);
       workspaceNavigation.cancel();
       const request = ++monoViewRequest.current;
       setSearchViewOpen(false);
@@ -4715,7 +4707,15 @@ function Workspace({
         },
       });
       if (!session || request !== monoViewRequest.current) return;
+      // What the last Mono had open over its overview is its own; another
+      // Mono opens on its list.
+      if (monoViewIdRef.current !== session.id) {
+        setMonoShownSession(null);
+        setMonoShownSessionFocused(false);
+        setMonoOverviewDocument(null);
+      }
       monoViewIdRef.current = session.id;
+      saveOpenMono(monoId);
       setMonoViewId(session.id);
       setProjectTerminalFocused(false);
       setComposerFocused(true);
@@ -4723,6 +4723,18 @@ function Workspace({
     },
     [ensureOpenSession, workspaceNavigation.cancel],
   );
+
+  // A Mono open when the app last closed opens again; a moved window keeps
+  // what it carried.
+  const reopenedMono = useRef(false);
+  useEffect(() => {
+    if (reopenedMono.current) return;
+    reopenedMono.current = true;
+    if (windowTransfer || !monosEnabled) return;
+    const monoId = loadOpenMono();
+    if (monoId && findMono(monoId)) void onOpenMono(monoId);
+    else if (monoId) saveOpenMono(undefined);
+  }, [monosEnabled, onOpenMono, windowTransfer]);
 
   /** The shortcut opens the last Mono, or the first on the rail. */
   const onToggleMono = useCallback(() => {
@@ -4740,8 +4752,9 @@ function Workspace({
 
   /** A new Mono opens straight away, ready to be told what it works on. */
   const onCreateMono = useCallback(() => {
-    setMonoDetailsOpen(true);
-    void onOpenMono(createMono().id);
+    const monoId = createMono().id;
+    setMonoSettingsFor(monoId);
+    void onOpenMono(monoId);
   }, [onOpenMono]);
 
   const onResetMono = useCallback(
@@ -4873,50 +4886,43 @@ function Workspace({
     [ensureOpenSession, closeMonoView, setSidebarTab, onSelectHistorySession],
   );
 
-  // Show a launched session in the Mono's sidebar, where it can be followed,
-  // answered or stopped without leaving the chat.
-  const onShowMonoLaunchedSession = useCallback(
-    async (from: MonoActivitySelection, sessionId: string) => {
-      const session = await ensureOpenSession(sessionId);
-      if (!session) throw new Error("This session is no longer available.");
-      setMonoShownSession({ from, sessionId });
+  // A launched session opens over the overview, where it can be followed,
+  // answered or stopped without leaving the chat. Back lands on every session
+  // the Mono started; opening the one already shown hides it again.
+  const showMonoLaunchedSession = useCallback(
+    async (monoSessionId: string, launchedId: string) => {
+      if (shownMonoSessionIdRef.current === launchedId) {
+        setMonoShownSession(null);
+        return;
+      }
+      // Load it first, then switch in one step: the overview goes straight
+      // from what it shows to this session, never through the list.
+      const session = await ensureOpenSession(launchedId).catch(() => null);
+      if (monoViewIdRef.current !== monoSessionId) return;
+      setMonoActivity(null);
+      setMonoOverviewTab("sessions");
+      setMonoOverviewDocument(null);
+      setMonoOverviewOpen(true);
+      // One that is gone leaves the sessions list open, which says so.
+      if (!session) {
+        setMonoShownSession(null);
+        return;
+      }
+      setMonoShownSession(launchedId);
       setMonoShownSessionFocused(true);
       setProjectTerminalFocused(false);
       setComposerFocused(true);
     },
     [ensureOpenSession],
   );
-  // A card in the Mono's chat opens its session straight in the sidebar, with
-  // the turn's list behind it to go back to; the open card's click closes it.
   const onOpenMonoSession = useCallback(
-    async (
+    (
       monoSessionId: string,
-      turnId: string,
-      blocks: Block[],
+      _turnId: string,
+      _blocks: Block[],
       launchedId: string,
-    ) => {
-      if (shownMonoSessionIdRef.current === launchedId) {
-        setMonoSessions(null);
-        return;
-      }
-      const from = { sessionId: monoSessionId, turnId, blocks };
-      // Load it first, then switch in one step: the sidebar goes straight
-      // from the session it shows to this one, never through the list.
-      const session = await ensureOpenSession(launchedId).catch(() => null);
-      if (monoViewIdRef.current !== monoSessionId) return;
-      setMonoDetailsOpen(false);
-      setMonoArtifact(null);
-      setMonoChanges(null);
-      setMonoActivity(null);
-      setMonoSessions(from);
-      // One that is gone leaves the list open, which says so.
-      if (!session) return;
-      setMonoShownSession({ from, sessionId: launchedId });
-      setMonoShownSessionFocused(true);
-      setProjectTerminalFocused(false);
-      setComposerFocused(true);
-    },
-    [ensureOpenSession],
+    ) => showMonoLaunchedSession(monoSessionId, launchedId),
+    [showMonoLaunchedSession],
   );
 
   const openReminderSession = useCallback(
@@ -12488,50 +12494,37 @@ function Workspace({
     monoActivity,
     monoViewSession,
   );
-  const selectedMonoSessions = resolveMonoActivity(
-    monoSessions,
-    monoViewSession,
+  const monoSidebarOpen = monoOverviewOpen || !!selectedMonoActivity;
+  const monoViewBlocks = monoViewSession?.blocks;
+  const monoViewBusy = !!monoViewSession?.busy;
+  const monoViewCwd = monoViewSession ? sessionWorkCwd(monoViewSession) : "";
+  const monoEditedPaths = useMemo(
+    () =>
+      monoViewBlocks && !monoViewBusy
+        ? sessionEditPaths(monoViewBlocks)
+        : undefined,
+    [monoViewBlocks, monoViewBusy],
   );
-  const monoSidebarOpen =
-    monoDetailsOpen ||
-    !!selectedMonoActivity ||
-    !!selectedMonoSessions ||
-    (monoArtifact?.sessionId === monoViewSession?.id && !!monoArtifact) ||
-    (monoChanges?.sessionId === monoViewSession?.id && !!monoChanges);
-  const monoDetailsPanel =
-    monoViewMono && monoViewSession ? (
-      <MonoDetails
-        key={monoViewMono.id}
-        open={
-          monoDetailsOpen &&
-          !selectedMonoActivity &&
-          !selectedMonoSessions &&
-          monoArtifact?.sessionId !== monoViewSession.id &&
-          monoChanges?.sessionId !== monoViewSession.id
-        }
-        monoId={monoViewMono.id}
-        cwd={monoViewSession.cwd}
-        agent={monoLook(monoViewMono)}
-        state={monoState(monoViewSession)}
-        harness={monoViewSession.harness}
-        model={monoViewSession.model}
-        modelSettings={monoViewSession.modelSettings}
-        runtimeMode={monoViewSession.runtimeMode}
-        busy={!!monoViewSession.busy}
-        onModelChange={(harness, model) =>
-          onModelChange(monoViewSession.id, harness, model)
-        }
-        onModelSettingsChange={(settings) =>
-          onModelSettingsChange(monoViewSession.id, settings)
-        }
-        onRuntimeModeChange={(mode) =>
-          onRuntimeModeChange(monoViewSession.id, mode)
-        }
-        onClose={() => setMonoDetailsOpen(false)}
-        onReset={() => onResetMono(monoViewSession.id)}
-        windowControls={monoCovers && !IS_MAC ? <WindowControls /> : undefined}
-      />
-    ) : null;
+  // The session's changes, on the overview's tab instead of under a message.
+  const monoChangeTotals = useSessionChangeTotals(
+    monoViewSession?.id ?? "",
+    monoViewCwd,
+    {
+      enabled: !monoViewSession?.worktreeRemoved,
+      busy: monoViewBusy,
+      editedPaths: monoEditedPaths,
+    },
+  );
+  const monoLaunches = useMemo(
+    () => (monoViewBlocks ? monoSpawnedSessions(monoViewBlocks) : []),
+    [monoViewBlocks],
+  );
+  const monoDocuments = useMemo(
+    () => (monoViewBlocks ? artifactCards(monoViewBlocks) : []),
+    [monoViewBlocks],
+  );
+  // Another sidebar opened over it hides the overview until that one closes.
+  const monoOverviewShown = monoOverviewOpen && !selectedMonoActivity;
   const monoActivityPanel =
     monoViewMono && monoViewSession && selectedMonoActivity ? (
       <MonoActivityPanel
@@ -12555,11 +12548,6 @@ function Workspace({
   // Status for the cards of the sessions the open Mono launched, rebuilt only
   // when one changes state or title rather than on every streamed token. One
   // that is no longer open cannot be running, so it reads as done.
-  const monoViewBlocks = monoViewSession?.blocks;
-  const monoLaunches = useMemo(
-    () => (monoViewBlocks ? monoSpawnedSessions(monoViewBlocks) : []),
-    [monoViewBlocks],
-  );
   // A card names its session as the sidebar does. One that is not open has
   // its saved title fetched, rather than the prompt it was launched with, so
   // opening it does not rename the card.
@@ -12624,56 +12612,109 @@ function Workspace({
     : undefined;
   const monoShownSessionActive =
     !!monoShownSessionPane && monoShownSessionFocused;
-  const monoSessionsPanel =
-    monoViewMono && selectedMonoSessions ? (
-      <MonoSessionsPanel
-        key={`${monoViewMono.id}:${selectedMonoSessions.turnId}`}
+  const monoShownSessionView = monoShownSessionPane
+    ? {
+        sessionId: monoShownSessionPane.id,
+        title: sessionDisplayTitle(
+          monoShownSessionPane.title,
+          monoShownSessionPane.harness,
+        ),
+        pane: (
+          <SessionPane
+            {...sessionPaneProps}
+            session={monoShownSessionPane}
+            // The Mono view covers the workspace, so a review opens
+            // beside the chat rather than in a hidden tab.
+            onOpenDiff={onOpenMonoDiff}
+            // The Mono runs this session; handing it off or asking for a
+            // second opinion belongs in its own tab.
+            onSecondOpinion={undefined}
+            onHandoff={undefined}
+            visible={monoCovers}
+            focused={monoShownSessionActive && !projectTerminalFocused}
+            inSplit={false}
+            addToChatTarget={false}
+            composerFocused={
+              monoShownSessionActive &&
+              composerFocused &&
+              !projectTerminalFocused
+            }
+            composerFocusToken={composerFocusToken}
+          />
+        ),
+      }
+    : undefined;
+  const monoOverviewPanel =
+    monoViewMono && monoViewSession ? (
+      <MonoOverview
+        key={monoViewMono.id}
+        open={monoOverviewShown}
+        monoId={monoViewMono.id}
+        cwd={monoViewSession.cwd}
         agent={monoLook(monoViewMono)}
-        launches={monoSpawnedSessions(selectedMonoSessions.blocks)}
+        state={monoState(monoViewSession)}
+        launches={monoLaunches}
         sessions={sessions}
         history={history}
+        documents={monoDocuments}
+        changes={{
+          sessionId: monoViewSession.id,
+          cwd: monoViewCwd,
+          totals: monoChangeTotals,
+          request: monoChangesRequest,
+          textHarness: monoViewSession.harness,
+          projects: monoViewMono.projects,
+        }}
+        tab={monoOverviewTab}
+        onTabChange={setMonoOverviewTab}
         onOpenSession={(sessionId) =>
-          monoSessions
-            ? onShowMonoLaunchedSession(monoSessions, sessionId)
-            : undefined
+          showMonoLaunchedSession(monoViewSession.id, sessionId)
         }
-        shown={
-          monoShownSessionPane
-            ? {
-                sessionId: monoShownSessionPane.id,
-                title: sessionDisplayTitle(
-                  monoShownSessionPane.title,
-                  monoShownSessionPane.harness,
-                ),
-                pane: (
-                  <SessionPane
-                    {...sessionPaneProps}
-                    session={monoShownSessionPane}
-                    // The Mono view covers the workspace, so a review opens
-                    // beside the chat rather than in a hidden tab.
-                    onOpenDiff={onOpenMonoDiff}
-                    visible={monoCovers}
-                    focused={monoShownSessionActive && !projectTerminalFocused}
-                    inSplit={false}
-                    addToChatTarget={false}
-                    composerFocused={
-                      monoShownSessionActive &&
-                      composerFocused &&
-                      !projectTerminalFocused
-                    }
-                    composerFocusToken={composerFocusToken}
-                  />
-                ),
-              }
-            : undefined
-        }
-        onBack={() => {
+        shownSession={monoShownSessionView}
+        // Back lands on every session it started.
+        onBackFromSession={() => {
           setMonoShownSession(null);
           setMonoShownSessionFocused(false);
         }}
-        onOpenInWorkspace={onOpenMonoLaunchedSession}
-        onClose={() => setMonoSessions(null)}
+        onOpenSessionInWorkspace={onOpenMonoLaunchedSession}
+        onOpenDocument={(id) => {
+          setMonoShownSession(null);
+          setMonoOverviewDocument(id);
+        }}
+        shownDocumentId={monoOverviewDocument ?? undefined}
+        onBackFromDocument={() => setMonoOverviewDocument(null)}
+        onOpenFile={onOpenFile}
+        onClose={() => setMonoOverviewOpen(false)}
         windowControls={monoCovers && !IS_MAC ? <WindowControls /> : undefined}
+      />
+    ) : null;
+  const monoSettingsDialog =
+    monoCovers &&
+    monoViewMono &&
+    monoViewSession &&
+    monoSettingsFor === monoViewMono.id ? (
+      <MonoSettingsDialog
+        key={monoViewMono.id}
+        monoId={monoViewMono.id}
+        agent={monoLook(monoViewMono)}
+        status={monoState(monoViewSession).status}
+        cwd={monoViewSession.cwd}
+        harness={monoViewSession.harness}
+        model={monoViewSession.model}
+        modelSettings={monoViewSession.modelSettings}
+        runtimeMode={monoViewSession.runtimeMode}
+        busy={!!monoViewSession.busy}
+        onModelChange={(harness, model) =>
+          onModelChange(monoViewSession.id, harness, model)
+        }
+        onModelSettingsChange={(settings) =>
+          onModelSettingsChange(monoViewSession.id, settings)
+        }
+        onRuntimeModeChange={(mode) =>
+          onRuntimeModeChange(monoViewSession.id, mode)
+        }
+        onReset={() => onResetMono(monoViewSession.id)}
+        onClose={() => setMonoSettingsFor(null)}
       />
     ) : null;
   const monoRailState = useMemo(() => {
@@ -12753,18 +12794,21 @@ function Workspace({
           ? { look: monoLook(monoViewMono), state: monoState(monoViewSession) }
           : undefined
       }
-      onShowMonoDetails={
-        monoCovers && !monoDetailsOpen
+      onToggleMonoOverview={
+        monoCovers
           ? () => {
               setMonoActivity(null);
-              setMonoSessions(null);
-              setMonoDetailsOpen(true);
-              setMonoArtifact(null);
-              setMonoChanges(null);
+                      setMonoOverviewOpen(!monoOverviewShown);
             }
           : undefined
       }
-      hideWindowControls={monoCovers && monoSidebarOpen && !!monoDetailsPanel}
+      monoOverviewOpen={monoOverviewShown}
+      onOpenMonoSettings={
+        monoCovers && monoViewMono
+          ? () => setMonoSettingsFor(monoViewMono.id)
+          : undefined
+      }
+      hideWindowControls={monoCovers && monoSidebarOpen && !!monoOverviewPanel}
       activeId={monoViewSession ? "" : activeTabId}
       cwd={sidebarCwd}
       projectRailOpen={projectRailOpen}
@@ -13183,38 +13227,9 @@ function Workspace({
                       ))}
                     </main>
                   </div>
-                  {monoCovers ? monoDetailsPanel : null}
+                  {monoCovers ? monoOverviewPanel : null}
+                  {monoSettingsDialog}
                   {monoCovers ? monoActivityPanel : null}
-                  {monoCovers ? monoSessionsPanel : null}
-                  {monoViewMono &&
-                  monoArtifact &&
-                  monoArtifact.sessionId === monoViewSession?.id ? (
-                    <ArtifactPanel
-                      key={monoArtifact.id}
-                      id={monoArtifact.id}
-                      color={monoViewMono.color}
-                      onClose={onCloseMonoArtifact}
-                      onOpenFile={onOpenFile}
-                      windowControls={
-                        monoCovers && !IS_MAC ? <WindowControls /> : undefined
-                      }
-                    />
-                  ) : null}
-                  {monoViewMono &&
-                  monoChanges &&
-                  monoChanges.sessionId === monoViewSession?.id ? (
-                    <MonoChangesPanel
-                      sessionId={monoChanges.sessionId}
-                      cwd={monoChanges.cwd}
-                      request={monoChanges.request}
-                      color={monoViewMono.color}
-                      textHarness={monoViewSession?.harness}
-                      onClose={onCloseMonoChanges}
-                      windowControls={
-                        monoCovers && !IS_MAC ? <WindowControls /> : undefined
-                      }
-                    />
-                  ) : null}
                 </div>
               </div>
               {searchViewOpen ? (
