@@ -585,6 +585,33 @@ pub(crate) fn add_mcp_via_cli(
     Ok(())
 }
 
+/// Remove a user's MCP server through the provider's own CLI. Used only to
+/// replace MonoCode's own browser server entry when its executable moved.
+pub(crate) fn remove_mcp_via_cli(
+    provider: &str,
+    cwd: &str,
+    name: &str,
+    binary_path: Option<&str>,
+) -> Result<(), String> {
+    if !valid_mcp_name(name) {
+        return Err("Invalid MCP server name".into());
+    }
+    let args = match provider {
+        "claude" => vec![
+            "mcp".into(),
+            "remove".into(),
+            name.into(),
+            "--scope".into(),
+            "user".into(),
+        ],
+        "codex" => vec!["mcp".into(), "remove".into(), name.into()],
+        _ => return Err("Unsupported MCP provider".into()),
+    };
+    let binary = resolve_mcp_binary(provider, binary_path)?;
+    mcp_command(binary, args, cwd.to_owned(), Duration::from_secs(30))?;
+    Ok(())
+}
+
 pub(crate) fn opencode_major_version(cwd: &str, binary_path: Option<&str>) -> Result<u32, String> {
     let binary = resolve_mcp_binary("opencode", binary_path)?;
     let version = mcp_command(

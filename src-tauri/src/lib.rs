@@ -231,6 +231,16 @@ fn should_request_quit(code: Option<i32>) -> bool {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// `monocode browser ACTION ...`: the agent-facing browser CLI (spec 12.5).
+pub fn browser_cli(args: Vec<String>) -> i32 {
+    browser::agent::cli::run(args)
+}
+
+/// `monocode browser-mcp`: the browser tools as an MCP stdio server (spec 12.1).
+pub fn browser_mcp() -> i32 {
+    browser::agent::mcp::run()
+}
+
 pub fn run() {
     #[cfg(target_os = "macos")]
     macos::register_spellcheck_default();
@@ -327,6 +337,9 @@ pub fn run() {
             browser::browser_events_list,
             browser::browser_audit_clear,
             browser::browser_set_settings,
+            browser::agent::register::browser_mcp_status,
+            browser::agent::register::browser_mcp_register,
+            browser::agent::register::browser_agent_instructions,
             control::app_cli_path,
             default_cwd,
             home_dir,

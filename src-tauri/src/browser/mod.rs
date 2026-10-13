@@ -48,6 +48,7 @@
 // those land, parts of it have no caller inside this crate.
 #![allow(dead_code)]
 
+pub mod agent;
 pub mod audit;
 pub mod discovery;
 pub mod link;
