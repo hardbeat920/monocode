@@ -2679,7 +2679,7 @@ function Workspace({
           current.modelSettings,
         ),
         providerAccountId: accountId,
-        ...(active.cowId ? { workspaceMode: "cow" as const, cowSourceCwd: sessionWorkCwd(active), worktreeBase: undefined } : {}),
+        ...(current.cowId ? { workspaceMode: "cow" as const, cowSourceCwd: sessionWorkCwd(current), worktreeBase: undefined } : {}),
       };
       const tab = newTab(session.id);
       updateSessionState(sessionsRef, setSessions, (sessions) => [
