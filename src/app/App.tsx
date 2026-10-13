@@ -1077,7 +1077,7 @@ function Workspace({
   );
   const [sessionDeleteDialog, setSessionDeleteDialog] = useState<{
     title: string;
-    unusedWorktree: string;
+    loadUnusedWorktree: () => Promise<string | undefined>;
     cow?: boolean;
     resolve: (choice: SessionDeleteChoice) => void;
   }>();
@@ -5253,49 +5253,53 @@ function Workspace({
       if (mode === "delete" && !skipDeleteConfirm) {
         deleteConfirmationPending.current = true;
         let unusedWorktree: string | undefined;
-        if (seed?.cowId && seed.worktreeCwd) {
-          try {
-            const copies = await listCowWorkspaces(seed.cwd);
-            const copy = copies.find((entry) =>
-              entry.id === seed.cowId && sameProjectPath(entry.path, seed.worktreeCwd!),
-            );
-            if (
-              copy && copy.sessionId === sessionId &&
-              worktreeSessionIds(
-                { path: copy.path, sessionIds: copy.sessionIds ?? [] },
-                sessionsRef.current,
-              ).every((id) => id === sessionId)
-            ) unusedWorktree = copy.path;
-          } catch {
-            // A failed lookup must never offer filesystem cleanup.
-          }
-        } else if (seed?.worktreeCwd) {
-          try {
-            const { worktrees } = await listWorktrees(seed.cwd);
-            const tree = worktrees.find(
-              (entry) => pathKey(entry.path) === pathKey(seed.worktreeCwd!),
-            );
-            if (
-              tree &&
-              !tree.isMain &&
-              !tree.locked &&
-              tree.branch &&
-              worktreeSessionIds(tree, sessionsRef.current).every(
-                (id) => id === sessionId,
+        // Open confirmation before host lookups; CoW listing checks Git state for every copy.
+        const loadUnusedWorktree = async () => {
+          if (seed?.cowId && seed.worktreeCwd) {
+            try {
+              const copies = await listCowWorkspaces(seed.cwd);
+              const copy = copies.find((entry) =>
+                entry.id === seed.cowId && sameProjectPath(entry.path, seed.worktreeCwd!),
+              );
+              if (
+                copy && copy.sessionId === sessionId &&
+                worktreeSessionIds(
+                  { path: copy.path, sessionIds: copy.sessionIds ?? [] },
+                  sessionsRef.current,
+                ).every((id) => id === sessionId)
+              ) unusedWorktree = copy.path;
+            } catch {
+              // A failed lookup must never offer filesystem cleanup.
+            }
+          } else if (seed?.worktreeCwd) {
+            try {
+              const { worktrees } = await listWorktrees(seed.cwd);
+              const tree = worktrees.find(
+                (entry) => pathKey(entry.path) === pathKey(seed.worktreeCwd!),
+              );
+              if (
+                tree &&
+                !tree.isMain &&
+                !tree.locked &&
+                tree.branch &&
+                worktreeSessionIds(tree, sessionsRef.current).every(
+                  (id) => id === sessionId,
+                )
               )
-            )
-              unusedWorktree = tree.path;
-          } catch {
-            // A failed lookup must never offer filesystem cleanup.
+                unusedWorktree = tree.path;
+            } catch {
+              // A failed lookup must never offer filesystem cleanup.
+            }
           }
-        }
-        if (!unusedWorktree) {
+          return unusedWorktree;
+        };
+        if (!seed?.worktreeCwd) {
           deleteConfirmationPending.current = false;
         } else {
           const choice = await new Promise<SessionDeleteChoice>((resolve) => {
             setSessionDeleteDialog({
               title: label,
-              unusedWorktree,
+              loadUnusedWorktree,
               cow: !!seed?.cowId,
               resolve,
             });
@@ -13322,7 +13326,7 @@ function Workspace({
           {sessionDeleteDialog && (
             <DeleteSessionDialog
               title={sessionDeleteDialog.title}
-              unusedWorktree={sessionDeleteDialog.unusedWorktree}
+              loadUnusedWorktree={sessionDeleteDialog.loadUnusedWorktree}
               cow={sessionDeleteDialog.cow}
               onClose={(choice) => {
                 sessionDeleteDialog.resolve(choice);

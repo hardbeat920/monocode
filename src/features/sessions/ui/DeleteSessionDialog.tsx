@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { prettyCwd } from "../../../shared/lib/paths";
 import { Modal } from "../../../shared/ui/Modal";
 
@@ -9,16 +9,34 @@ export type SessionDeleteChoice = {
 
 export function DeleteSessionDialog({
   title,
-  unusedWorktree,
+  loadUnusedWorktree,
   cow = false,
   onClose,
 }: {
   title: string;
-  unusedWorktree: string;
+  loadUnusedWorktree: () => Promise<string | undefined>;
   cow?: boolean;
   onClose: (choice: SessionDeleteChoice) => void;
 }) {
   const [deleteWorktree, setDeleteWorktree] = useState(false);
+  const [unusedWorktree, setUnusedWorktree] = useState<string>();
+  const [checking, setChecking] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    setChecking(true);
+    setUnusedWorktree(undefined);
+    setDeleteWorktree(false);
+    void loadUnusedWorktree()
+      .catch(() => undefined)
+      .then((path) => {
+        if (cancelled) return;
+        setUnusedWorktree(path);
+        setChecking(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadUnusedWorktree]);
   return (
     <Modal
       title="Delete session?"
@@ -27,27 +45,33 @@ export function DeleteSessionDialog({
     >
       <div className="flex flex-col gap-4 p-4 text-[12px]">
         <p>“{title}” will be permanently deleted.</p>
-        <label className="flex items-start gap-2">
-          <input
-            type="checkbox"
-            checked={deleteWorktree}
-            onChange={(e) => setDeleteWorktree(e.target.checked)}
-            className="mt-0.5 accent-accent"
-          />
-          <span>
-            {cow
-              ? "Also delete the unused copy-on-write workspace"
-              : "Also delete the unused worktree"}
-            <span className="mt-1 block break-all text-[11px] text-content/45">
-              {prettyCwd(unusedWorktree)}
-            </span>
-            <span className="mt-1 block text-[11px] text-content/45">
+        {checking ? (
+          <p role="status" className="text-content/45">
+            Checking workspace cleanup availability…
+          </p>
+        ) : unusedWorktree ? (
+          <label className="flex items-start gap-2">
+            <input
+              type="checkbox"
+              checked={deleteWorktree}
+              onChange={(e) => setDeleteWorktree(e.target.checked)}
+              className="mt-0.5 accent-accent"
+            />
+            <span>
               {cow
-                ? "The branch is kept. If files have uncommitted changes, the workspace stays."
-                : "The branch is kept. If files have uncommitted changes, the worktree stays."}
+                ? "Also delete the unused copy-on-write workspace"
+                : "Also delete the unused worktree"}
+              <span className="mt-1 block break-all text-[11px] text-content/45">
+                {prettyCwd(unusedWorktree)}
+              </span>
+              <span className="mt-1 block text-[11px] text-content/45">
+                {cow
+                  ? "The branch is kept. If files have uncommitted changes, the workspace stays."
+                  : "The branch is kept. If files have uncommitted changes, the worktree stays."}
+              </span>
             </span>
-          </span>
-        </label>
+          </label>
+        ) : null}
         <div className="flex justify-end gap-2">
           <button
             type="button"

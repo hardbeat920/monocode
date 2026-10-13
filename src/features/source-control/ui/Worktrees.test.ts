@@ -991,7 +991,7 @@ it("offers to keep or delete the last session's worktree", async () => {
     root.render(
       createElement(DeleteSessionDialog, {
         title: "Feature",
-        unusedWorktree: tree.path,
+        loadUnusedWorktree: async () => tree.path,
         onClose,
       }),
     ),
