@@ -22,6 +22,7 @@ import {
 export {
   rankSkills,
   replaceSlashToken,
+  skillMatchesByNameOrInvocation,
   slashTokenAt,
   type SlashToken,
 } from "./slashCommands";
