@@ -7,6 +7,12 @@
 //! (`harness_spawn` -> provider CLI -> MCP child). Codex filters the
 //! environment of MCP children, so its entry also lists the two variables in
 //! `env_vars`, which makes Codex pass them through.
+//!
+//! OpenCode 2 is not supported: it starts MCP servers (and runs shell
+//! commands) from its shared background service, which MonoCode starts
+//! without a session's environment, so neither the MCP server nor the CLI
+//! ever sees the session token. OpenCode 1 runs one server per session and
+//! inherits it like the other providers.
 
 use std::path::{Path, PathBuf};
 
@@ -35,6 +41,35 @@ pub struct BrowserMcpRegistration {
     pub current: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config_path: Option<String>,
+    /// Why browser tools cannot work with this provider at all (neither MCP
+    /// nor CLI), when `supported` is false for a provider in [`MCP_PROVIDERS`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unsupported_reason: Option<String>,
+}
+
+/// Why OpenCode 2 cannot use the browser tools, for the UI and the agent.
+pub const OPENCODE_2_UNSUPPORTED: &str = "OpenCode 2 runs MCP servers and shell commands from its shared background service, which does not carry this session's MonoCode credential, so browser tools cannot work there yet. OpenCode 1 is supported.";
+
+/// The installed OpenCode's major version, cached per binary: asking runs
+/// `opencode --version`, and the instructions are needed on every turn.
+fn opencode_major(binary_path: Option<&str>) -> Option<u32> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<Option<String>, u32>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    let key = binary_path.map(str::to_owned);
+    if let Some(major) = cache.lock().ok()?.get(&key) {
+        return Some(*major);
+    }
+    let home = crate::dirs_home()?;
+    let major = crate::harness::opencode_major_version(&home, binary_path).ok()?;
+    cache.lock().ok()?.insert(key, major);
+    Some(major)
+}
+
+/// Why `provider` (at `opencode_major`, when known) cannot use the browser.
+fn unsupported_reason(provider: &str, opencode_major: Option<u32>) -> Option<&'static str> {
+    (provider == "opencode" && opencode_major == Some(2)).then_some(OPENCODE_2_UNSUPPORTED)
 }
 
 /// Where each provider keeps its user-scoped MCP servers.
@@ -139,14 +174,21 @@ fn existing_entry(provider: &str, path: &Path) -> Option<(Vec<String>, bool)> {
     Some((command, true))
 }
 
-fn status_at(locations: &Locations, provider: &str, exe: &str) -> BrowserMcpRegistration {
+fn status_at(
+    locations: &Locations,
+    provider: &str,
+    exe: &str,
+    opencode_major: Option<u32>,
+) -> BrowserMcpRegistration {
     let path = locations.config_path(provider);
     let entry = path
         .as_deref()
         .and_then(|path| existing_entry(provider, path));
+    let unsupported = unsupported_reason(provider, opencode_major);
     BrowserMcpRegistration {
         provider: provider.to_string(),
-        supported: path.is_some(),
+        supported: path.is_some() && unsupported.is_none(),
+        unsupported_reason: unsupported.map(str::to_owned),
         registered: entry.is_some(),
         current: entry.is_some_and(|(command, passes)| passes && command == expected_command(exe)),
         config_path: path.map(|path| path.to_string_lossy().into_owned()),
@@ -216,8 +258,12 @@ fn register_at(
     cwd: &str,
     exe: &str,
     binary_path: Option<&str>,
+    opencode_major: Option<u32>,
 ) -> Result<BrowserMcpRegistration, String> {
-    let before = status_at(locations, provider, exe);
+    let before = status_at(locations, provider, exe, opencode_major);
+    if let Some(reason) = &before.unsupported_reason {
+        return Err(reason.clone());
+    }
     if !before.supported {
         return Err(format!(
             "{provider} does not take MCP servers from MonoCode; it uses the browser CLI instead"
@@ -252,23 +298,33 @@ fn register_at(
         }
         "cursor" => crate::mcp::put_json_server(&path, SERVER_NAME, server, true)?,
         "opencode" => {
-            let major = crate::harness::opencode_major_version(cwd, binary_path)?;
+            let major = match opencode_major {
+                Some(major) => major,
+                None => crate::harness::opencode_major_version(cwd, binary_path)?,
+            };
+            if let Some(reason) = unsupported_reason(provider, Some(major)) {
+                return Err(reason.into());
+            }
             crate::mcp::put_opencode_server(&path, SERVER_NAME, server, major, true)?;
         }
         _ => return Err("Unsupported MCP provider".into()),
     }
-    Ok(status_at(locations, provider, exe))
+    Ok(status_at(locations, provider, exe, opencode_major))
 }
 
 /// Registration state of the browser MCP server for every provider.
 #[tauri::command]
-pub async fn browser_mcp_status() -> Result<Vec<BrowserMcpRegistration>, String> {
-    tauri::async_runtime::spawn_blocking(|| {
+pub async fn browser_mcp_status(
+    host: State<'_, crate::harness::HarnessHost>,
+) -> Result<Vec<BrowserMcpRegistration>, String> {
+    let opencode_binary = host.runtime_binary_path("opencode");
+    tauri::async_runtime::spawn_blocking(move || {
         let locations = Locations::from_env()?;
         let exe = current_exe()?;
+        let major = opencode_major(opencode_binary.as_deref());
         Ok(MCP_PROVIDERS
             .iter()
-            .map(|provider| status_at(&locations, provider, &exe))
+            .map(|provider| status_at(&locations, provider, &exe, major))
             .collect())
     })
     .await
@@ -289,7 +345,17 @@ pub async fn browser_mcp_register(
     tauri::async_runtime::spawn_blocking(move || {
         let locations = Locations::from_env()?;
         let exe = current_exe()?;
-        register_at(&locations, &provider, &cwd, &exe, binary_path.as_deref())
+        let major = (provider == "opencode")
+            .then(|| opencode_major(binary_path.as_deref()))
+            .flatten();
+        register_at(
+            &locations,
+            &provider,
+            &cwd,
+            &exe,
+            binary_path.as_deref(),
+            major,
+        )
     })
     .await
     .map_err(|e| e.to_string())?
@@ -297,10 +363,28 @@ pub async fn browser_mcp_register(
 
 /// Text the UI appends to a turn while the session has browser access.
 /// With MCP the tools describe themselves, so a short pointer is enough; a
-/// provider without MCP gets the CLI instructions (spec 12.5).
+/// provider without MCP gets the CLI instructions (spec 12.5); a provider
+/// that can use neither is told so, to pass on to the user.
 #[tauri::command]
-pub fn browser_agent_instructions(provider: String) -> String {
-    let body = if MCP_PROVIDERS.contains(&provider.as_str()) {
+pub async fn browser_agent_instructions(
+    host: State<'_, crate::harness::HarnessHost>,
+    provider: String,
+) -> Result<String, String> {
+    let binary_path = host.runtime_binary_path(&provider);
+    tauri::async_runtime::spawn_blocking(move || {
+        let major = (provider == "opencode")
+            .then(|| opencode_major(binary_path.as_deref()))
+            .flatten();
+        instructions_for(&provider, major)
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+fn instructions_for(provider: &str, opencode_major: Option<u32>) -> String {
+    let body = if let Some(reason) = unsupported_reason(provider, opencode_major) {
+        format!("The user enabled browser access in this thread, but MonoCode's browser tools do not work with this provider: {reason} Do not try the browser tools or the MonoCode browser CLI; tell the user if the task needs a browser.")
+    } else if MCP_PROVIDERS.contains(&provider) {
         "Browser access is enabled in this thread. Use the browser_* tools (MonoCode browser); start with browser_tabs to open your own tab, and take a browser_snapshot before acting on refs. If the tools are missing, the provider has not loaded MonoCode's browser server yet; tell the user it appears after the session restarts.".to_string()
     } else {
         super::cli::instructions()
@@ -335,24 +419,45 @@ mod tests {
             r#"{"mcpServers":{"other":{"command":"x"}},"theme":"dark"}"#,
         )
         .unwrap();
-        let status = status_at(&locations, "cursor", "/Apps/MonoCode/monocode");
+        let status = status_at(&locations, "cursor", "/Apps/MonoCode/monocode", None);
         assert!(status.supported && !status.registered && !status.current);
 
-        let first =
-            register_at(&locations, "cursor", "/", "/Apps/MonoCode/monocode", None).unwrap();
+        let first = register_at(
+            &locations,
+            "cursor",
+            "/",
+            "/Apps/MonoCode/monocode",
+            None,
+            None,
+        )
+        .unwrap();
         assert!(first.registered && first.current);
         // Idempotent: a second call changes nothing.
         let raw = std::fs::read_to_string(&cursor).unwrap();
-        register_at(&locations, "cursor", "/", "/Apps/MonoCode/monocode", None).unwrap();
+        register_at(
+            &locations,
+            "cursor",
+            "/",
+            "/Apps/MonoCode/monocode",
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(std::fs::read_to_string(&cursor).unwrap(), raw);
 
-        let moved = status_at(&locations, "cursor", "/Applications/MonoCode/monocode");
+        let moved = status_at(
+            &locations,
+            "cursor",
+            "/Applications/MonoCode/monocode",
+            None,
+        );
         assert!(moved.registered && !moved.current);
         let repaired = register_at(
             &locations,
             "cursor",
             "/",
             "/Applications/MonoCode/monocode",
+            None,
             None,
         )
         .unwrap();
@@ -380,7 +485,7 @@ mod tests {
         let original = "# my settings\nmodel = \"o4\"\n\n[mcp_servers.docs]\ncommand = \"npx\"\n";
         std::fs::write(&path, original).unwrap();
         let exe = r"C:\Program Files\MonoCode\monocode.exe";
-        let registered = register_at(&locations, "codex", "/", exe, None).unwrap();
+        let registered = register_at(&locations, "codex", "/", exe, None, None).unwrap();
         assert!(registered.current, "{registered:?}");
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(
@@ -405,7 +510,7 @@ mod tests {
             ),
         )
         .unwrap();
-        let stale = status_at(&locations, "codex", "/m");
+        let stale = status_at(&locations, "codex", "/m", None);
         assert!(stale.registered && !stale.current);
 
         // A layout appending cannot extend is refused, not corrupted.
@@ -429,26 +534,56 @@ mod tests {
                 .to_string(),
         )
         .unwrap();
-        assert!(status_at(&locations, "opencode", "/m").current);
+        assert!(status_at(&locations, "opencode", "/m", None).current);
         std::fs::write(
             &path,
             json!({"mcp": {"servers": {SERVER_NAME: {"type": "local", "command": ["/old", "browser-mcp"]}}}}).to_string(),
         )
         .unwrap();
-        let stale = status_at(&locations, "opencode", "/m");
+        let stale = status_at(&locations, "opencode", "/m", None);
         assert!(stale.registered && !stale.current);
 
-        let pi = status_at(&locations, "pi", "/m");
+        let pi = status_at(&locations, "pi", "/m", None);
         assert!(!pi.supported && !pi.registered);
-        assert!(register_at(&locations, "pi", "/", "/m", None).is_err());
+        assert!(register_at(&locations, "pi", "/", "/m", None, None).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn opencode_2_is_reported_unsupported_and_never_registered() {
+        let (locations, root) = sandbox();
+        let path = locations.config_path("opencode").unwrap();
+        let v2 = status_at(&locations, "opencode", "/m", Some(2));
+        assert!(!v2.supported && !v2.registered);
+        assert_eq!(
+            v2.unsupported_reason.as_deref(),
+            Some(OPENCODE_2_UNSUPPORTED)
+        );
+        assert_eq!(
+            register_at(&locations, "opencode", "/", "/m", None, Some(2)).unwrap_err(),
+            OPENCODE_2_UNSUPPORTED
+        );
+        assert!(!path.exists(), "nothing is written for OpenCode 2");
+        let v1 = status_at(&locations, "opencode", "/m", Some(1));
+        assert!(v1.supported && v1.unsupported_reason.is_none());
+        let json = serde_json::to_value(&v2).unwrap();
+        assert_eq!(json["unsupportedReason"], OPENCODE_2_UNSUPPORTED);
+        assert!(serde_json::to_value(&v1)
+            .unwrap()
+            .get("unsupportedReason")
+            .is_none());
         std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn instructions_point_mcp_providers_at_tools_and_others_at_the_cli() {
-        let mcp = browser_agent_instructions("claude".into());
+        let mcp = instructions_for("claude", None);
         assert!(mcp.contains("browser_tabs") && !mcp.contains(" browser --help"));
-        let cli = browser_agent_instructions("pi".into());
+        let cli = instructions_for("pi", None);
         assert!(cli.contains("browser --help") && cli.starts_with("<monocode_browser>"));
+        // OpenCode 1 takes the MCP server; OpenCode 2 can use neither path.
+        assert!(instructions_for("opencode", Some(1)).contains("browser_tabs"));
+        let opencode2 = instructions_for("opencode", Some(2));
+        assert!(opencode2.contains("OpenCode 2") && !opencode2.contains("browser --help"));
     }
 }

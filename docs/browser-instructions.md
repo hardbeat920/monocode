@@ -7,6 +7,14 @@ tool's name; the text injected into providers without MCP is the overview plus
 the CLI section. Keep the sections short: models read every word on every
 turn. Section names (`## name`) are looked up by code; do not rename them.
 
+Provider support: Claude, Codex, Cursor and OpenCode 1 get the MCP server;
+other providers get the CLI section. OpenCode 2 is not supported: it starts
+MCP servers and runs shell commands from its shared background service,
+which MonoCode starts without a session's environment, so neither the MCP
+server nor the CLI receives the session's MONOCODE_BROWSER_TOKEN. Its
+sessions get a note to tell the user instead of these instructions, and
+MonoCode does not register the MCP server with it.
+
 ## overview
 
 You can work in your own tabs in the user's Chrome or Edge through MonoCode.
