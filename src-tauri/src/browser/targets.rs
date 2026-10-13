@@ -857,13 +857,15 @@ fn on_attached(link: &Link, parent: &CdpSessionId, params: &Value, notify: &dyn 
             let allowed = policy.read().can_open_tab(&owner).is_ok();
             if !allowed {
                 // Over the limit: close it before its first script (spec 10.4).
+                // Count it first, so whoever observes the `closeTarget` frame
+                // (the action layer, tests) already sees the counter moved.
+                if let Some(lease) = policy.write().lease_mut(&parent_tab) {
+                    lease.popups_blocked += 1;
+                }
                 let _ = link.send_system(Command::browser(
                     Method::TargetCloseTarget,
                     json!({ "targetId": target.0 }),
                 ));
-                if let Some(lease) = policy.write().lease_mut(&parent_tab) {
-                    lease.popups_blocked += 1;
-                }
                 notify(TabEvent::PopupBlocked {
                     opener: parent_tab,
                     owner,
@@ -894,15 +896,17 @@ fn on_attached(link: &Link, parent: &CdpSessionId, params: &Value, notify: &dyn 
                     };
                 }
             }
-            if waiting {
-                resume(&child);
-            }
+            // Report before resuming: once the popup runs, observers (the
+            // action layer, the UI) must already see it as a tab of ours.
             if ready {
                 notify(TabEvent::PopupOpened {
                     tab,
                     opener: parent_tab,
                     owner,
                 });
+            }
+            if waiting {
+                resume(&child);
             }
         }
         _ => {
@@ -1239,7 +1243,16 @@ mod tests {
             })
             .unwrap();
         assert!(setup_idx < resume_idx);
-        assert!(events.lock().unwrap().iter().any(|e| matches!(e, TabEvent::PopupOpened { opener, owner, .. } if *opener == tab && owner == "s1")));
+        let saw_popup = || {
+            events.lock().unwrap().iter().any(|e| {
+                matches!(e, TabEvent::PopupOpened { opener, owner, .. } if *opener == tab && owner == "s1")
+            })
+        };
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline && !saw_popup() {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(saw_popup(), "PopupOpened event for the popup of {tab:?}");
 
         // Over the limit: the next popup is closed before its first script.
         {
