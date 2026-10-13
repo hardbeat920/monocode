@@ -87,6 +87,7 @@ import {
 import { useStableValue } from "../shared/hooks/useStableValue";
 import { Sidebar } from "./shell/Sidebar";
 import { ApprovalToasts } from "../features/sessions/ui/ApprovalToasts";
+import { BrowserNotice } from "../features/settings/ui/BrowserNotice";
 import { HarnessUpdateNotice } from "../features/providers/ui/HarnessUpdateNotice";
 import { WhatsNewDialog } from "./shell/WhatsNewDialog";
 import { ProviderSignInDialog } from "../features/sessions/ui/ProviderSignInDialog";
@@ -557,6 +558,17 @@ import {
   consumeOperatorCommand,
   operatorEnabledInThread,
 } from "../features/sessions/model/operatorCommand";
+import {
+  browserGrantStatus,
+  consumeBrowserCommand,
+} from "../features/sessions/model/browserCommand";
+import {
+  BROWSER_OFF_NOTICE,
+  browserStateSnapshot,
+  sessionBrowserGranted,
+  setSessionBrowserGrant,
+  showBrowserNotice,
+} from "../features/settings/model/browser";
 import {
   createMono,
   findMono,
@@ -6949,7 +6961,50 @@ function Workspace({
         flushHarnessEvents();
         return false;
       }
-      const submittedText = intent === "build" ? "Build approved plan" : text;
+      const typedText = intent === "build" ? "Build approved plan" : text;
+      // /browser switches this session's browser grant (spec 13.2). Alone it
+      // only switches; with a prompt it turns the grant on for that turn.
+      const browserCommand = consumeBrowserCommand(typedText);
+      if (browserCommand.matched) {
+        const status = (message: string) => {
+          enqueueHarnessEvent(sessionId, { type: "status", text: message });
+          flushHarnessEvents();
+        };
+        if (
+          options?.managed ||
+          options?.appRequestId ||
+          current.orchestrationLeadId ||
+          orchestrator.run(sessionId)
+        ) {
+          status(
+            "Use /browser from a regular session turn, outside an orchestration run.",
+          );
+          return false;
+        }
+        const browserState = browserStateSnapshot();
+        if (!browserState?.toggle_on) {
+          showBrowserNotice(BROWSER_OFF_NOTICE);
+          status(BROWSER_OFF_NOTICE.message);
+          return false;
+        }
+        const bare =
+          !browserCommand.text.trim() &&
+          attachments.length === 0 &&
+          !noteCard &&
+          !handoffCard;
+        const enable = !bare || !sessionBrowserGranted(browserState, sessionId);
+        void setSessionBrowserGrant(sessionId, enable).catch((error: unknown) =>
+          status(error instanceof Error ? error.message : String(error)),
+        );
+        if (bare) {
+          status(browserGrantStatus(enable));
+          return true;
+        }
+      }
+      const submittedText = browserCommand.text;
+      const browserAccess =
+        browserCommand.matched ||
+        sessionBrowserGranted(browserStateSnapshot(), sessionId);
       const operatorCommand = consumeOperatorCommand(submittedText);
       if (
         operatorCommand.matched &&
@@ -7866,6 +7921,7 @@ function Workspace({
                 ephemeral: current.ephemeral === true,
                 codexStore: mono ? "mono" : undefined,
                 controlsAgents:
+                  browserAccess ||
                   operatorAccess ||
                   orchestrator.run(sessionId)?.status === "active",
                 ...(editedProviderTurnId
@@ -7922,9 +7978,12 @@ function Workspace({
               intent: intent === "orchestrate" ? "plan" : intent,
               // A /operator user turn enables app access for this thread;
               // orchestration leads retain their separate control access.
+              // /browser tools reach the app over the same loopback.
               controlsAgents:
+                browserAccess ||
                 operatorAccess ||
                 orchestrator.run(sessionId)?.status === "active",
+              ...(browserCommand.matched ? { browserAccess: true } : {}),
               appAccess: operatorAccess,
               text,
               attachments: turnAttachments,
@@ -13433,6 +13492,7 @@ function Workspace({
             onFocusSession={onOpenApprovalSession}
             onApproval={onApproval}
           />
+          <BrowserNotice onOpenSettings={() => openSettings("browser")} />
           <ReminderNotices
             reminders={sessionReminders.due}
             error={sessionReminders.error}

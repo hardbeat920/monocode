@@ -1,4 +1,5 @@
 import {
+  AppWindow,
   Archive,
   ArrowLeft,
   Bot,
@@ -28,6 +29,7 @@ const SECTION_ICONS: Record<SettingsSectionId, IconComponent> = {
   chat: MessageSquare,
   providers: Bot,
   mcp: Globe,
+  browser: AppWindow,
   skills: Sparkles,
   monos: Ghost,
   inbox: Inbox,

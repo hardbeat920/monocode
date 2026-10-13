@@ -30,6 +30,8 @@ import {
   monoLook,
   updateMono,
 } from "../../monos/model/mono";
+import { resetBrowserStore } from "../model/browser";
+import { browserState } from "../model/browser.fixtures";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async () => undefined),
@@ -107,6 +109,7 @@ beforeEach(() => {
   root = createRoot(container);
   onSelectSection = vi.fn();
   vi.mocked(invoke).mockReset().mockResolvedValue(undefined);
+  resetBrowserStore(browserState());
 });
 
 afterEach(async () => {

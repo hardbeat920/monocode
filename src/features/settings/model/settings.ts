@@ -25,6 +25,7 @@ export type SettingsSectionId =
   | "chat"
   | "providers"
   | "mcp"
+  | "browser"
   | "skills"
   | "monos"
   | "inbox"
@@ -110,6 +111,15 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
       "tools servers connections oauth authenticate login claude codex cursor opencode",
   },
   {
+    id: "browser",
+    group: "agents",
+    label: "Browser",
+    description:
+      "Let agents open and use their own tabs in your Chrome or Edge, and see what they did there.",
+    keywords:
+      "chrome edge web page tabs automation remote debugging cdp /browser",
+  },
+  {
     id: "skills",
     group: "agents",
     label: "Skills",
@@ -184,6 +194,61 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     section: "mcp",
     label: "MCP servers",
     keywords: "claude tools connections oauth authenticate login add remove",
+  },
+  {
+    id: "browser-toggle",
+    section: "browser",
+    label: "Let agents use my browser",
+    keywords: "browser access chrome edge on off enable agents web",
+  },
+  {
+    id: "browser-choice",
+    section: "browser",
+    label: "Browser",
+    keywords: "chrome edge chromium beta dev canary profile user data folder",
+  },
+  {
+    id: "browser-separate-window",
+    section: "browser",
+    label: "Agent tabs in a separate window",
+    keywords: "browser window tabs background",
+  },
+  {
+    id: "browser-connection",
+    section: "browser",
+    label: "Browser connection",
+    keywords:
+      "connect disconnect consent allow remote debugging inspect chrome edge",
+  },
+  {
+    id: "browser-sessions",
+    section: "browser",
+    label: "Threads and tabs",
+    keywords: "browser revoke take back close agent tabs move",
+  },
+  {
+    id: "browser-audit",
+    section: "browser",
+    label: "Browser activity",
+    keywords: "audit log history actions clear",
+  },
+  {
+    id: "browser-upload-roots",
+    section: "browser",
+    label: "Upload folders",
+    keywords: "browser file upload folders allowed",
+  },
+  {
+    id: "browser-dotfiles",
+    section: "browser",
+    label: "Allow hidden files in uploads",
+    keywords: "dotfiles hidden upload browser",
+  },
+  {
+    id: "browser-limits",
+    section: "browser",
+    label: "Browser limits",
+    keywords: "tabs per thread total concurrent actions limit",
   },
   {
     id: "monos-enabled",

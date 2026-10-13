@@ -153,6 +153,8 @@ import {
   consumeOrchestratorCommand,
   ORCHESTRATOR_COMMAND,
 } from "../model/orchestratorCommand";
+import { BROWSER_COMMAND } from "../model/browserCommand";
+import { BrowserIndicator } from "./BrowserIndicator";
 import { consumeDraftCommand, DRAFT_COMMAND } from "../model/draftCommand";
 import {
   leadingModeCommand,
@@ -546,6 +548,7 @@ export function Composer({
             SESSION_FOLDER_COMMAND,
             MCP_COMMAND,
             OPERATOR_COMMAND,
+            BROWSER_COMMAND,
             ...(hideTopBar ? [] : [ORCHESTRATOR_COMMAND]),
             PLAN_COMMAND,
             ...(canSaveDraft && onSaveDraft ? [DRAFT_COMMAND] : []),
@@ -553,9 +556,12 @@ export function Composer({
             ...(supportsBtwHarness(harness) ? [BTW_COMMAND] : []),
             ...skills.filter(
               (skill) =>
-                ![OPERATOR_COMMAND.name, "mono", "monocode"].includes(
-                  skill.name,
-                ) &&
+                ![
+                  OPERATOR_COMMAND.name,
+                  BROWSER_COMMAND.name,
+                  "mono",
+                  "monocode",
+                ].includes(skill.name) &&
                 (skill.kind === "native" ||
                   (skill.name !== PLAN_COMMAND.name &&
                     skill.name !== COMPACT_COMMAND.name &&
@@ -1990,7 +1996,10 @@ export function Composer({
                   />
                 </>
               )}
-              <div className="ml-auto flex shrink-0 items-center">
+              <div className="ml-auto flex shrink-0 items-center gap-0.5">
+                {!remote && sessionId ? (
+                  <BrowserIndicator sessionId={sessionId} />
+                ) : null}
                 <ContextMeter
                   usage={context}
                   onCompact={

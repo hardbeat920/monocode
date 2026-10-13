@@ -625,6 +625,7 @@ describe("settings navigation", () => {
       "chat",
       "providers",
       "mcp",
+      "browser",
       "skills",
       "monos",
       "inbox",

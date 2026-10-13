@@ -208,6 +208,11 @@ import {
   remotePath,
   remoteProjectFor,
 } from "../../features/connections/model/remoteProjects";
+import {
+  sessionBrowserGranted,
+  setSessionBrowserGrant,
+  useBrowserState,
+} from "../../features/settings/model/browser";
 
 const MIN_WIDTH = 260;
 const MAX_WIDTH = 560;
@@ -1122,6 +1127,7 @@ function SidebarComponent({
     });
   };
 
+  const browserState = useBrowserState();
   const menuSessionIds = sessionMenu
     ? orderedSessionActionIds(
         sessionMenu.sessionId,
@@ -1228,6 +1234,18 @@ function SidebarComponent({
             label: menuSessions[0]?.linkedWorkItem
               ? "Edit GitHub issue or PR link…"
               : "Link GitHub issue or PR…",
+          },
+        ]
+      : []),
+    ...(!multipleMenuSessions &&
+    browserState?.toggle_on &&
+    !menuSessions[0]?.orchestrationLeadId
+      ? [
+          {
+            kind: "item" as const,
+            id: "browser-access",
+            label: "Browser access",
+            checked: sessionBrowserGranted(browserState, menuSessionIds[0]),
           },
         ]
       : []),
@@ -1371,6 +1389,16 @@ function SidebarComponent({
     }
     if (id === "link-work-item") {
       setLinkingSession(menuSessions[0] ?? null);
+      return;
+    }
+    if (id === "browser-access") {
+      // Same switch as /browser in that thread (spec 13.2).
+      void setSessionBrowserGrant(
+        sessionId,
+        !sessionBrowserGranted(browserState, sessionId),
+      ).catch((error) => {
+        console.error("Failed to change browser access:", error);
+      });
       return;
     }
     if (id === "folder-new") {
