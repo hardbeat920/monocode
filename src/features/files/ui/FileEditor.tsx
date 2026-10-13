@@ -39,6 +39,7 @@ import {
   MarkdownViewShell,
   useMarkdownMode,
 } from "../../sessions/ui/MarkdownModeToggle";
+import { loadFileViewMode, saveFileViewMode } from "../model/fileViewMode";
 import { useColorScheme } from "../../../shared/hooks/useColorScheme";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { isLightScheme } from "../../settings/model/appearance";
@@ -149,7 +150,7 @@ export function FileEditor({
   // Diff tabs open as source: the git gutter only renders in the editor.
   const [mode, setMode] = useMarkdownMode(
     showDiff ? `review:${path}` : path,
-    showDiff ? "source" : "preview",
+    showDiff ? "source" : loadFileViewMode(),
   );
   const sourceNavigationToken = useRef<number | undefined>(undefined);
   useEffect(() => {
@@ -461,7 +462,10 @@ export function FileEditor({
       {markdown || svg ? (
         <MarkdownViewShell
           mode={mode}
-          onModeChange={setMode}
+          onModeChange={(next) => {
+            setMode(next);
+            if (!showDiff) saveFileViewMode(next);
+          }}
           preview={
             markdown ? (
               <FilePreviewSearch

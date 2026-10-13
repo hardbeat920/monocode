@@ -4129,7 +4129,7 @@ function MonoRow({ mono }: { mono: Mono }) {
       </span>
       <Toggle
         label={`Show sessions started by ${look.name} in sidebar`}
-        on={mono.showStartedSessionsInSidebar !== false}
+        on={mono.showStartedSessionsInSidebar === true}
         onChange={(on) =>
           updateMono(mono.id, (entry) => ({
             ...entry,

@@ -3218,7 +3218,7 @@ function SessionListItem({
   return <li ref={ref}>{children}</li>;
 }
 
-const SessionCard = memo(function SessionCard({
+export const SessionCard = memo(function SessionCard({
   session,
   isActive,
   isSelected,
@@ -3228,6 +3228,9 @@ const SessionCard = memo(function SessionCard({
   needsApproval,
   dropTarget,
   compact = false,
+  modelInFooter = false,
+  statusLabel,
+  project,
   now,
   onSelect,
   onOpenWorkItem,
@@ -3249,6 +3252,13 @@ const SessionCard = memo(function SessionCard({
   needsApproval: boolean;
   dropTarget?: boolean;
   compact?: boolean;
+  /** Shows the model as its provider's mark beside the branch, so the title
+   * shares its row with the time and the card is a line shorter. */
+  modelInFooter?: boolean;
+  /** Stands in for the time, for a session with no state of its own to show. */
+  statusLabel?: string;
+  /** Names its project before the branch, where sessions span several. */
+  project?: string;
   now: number;
   onSelect: (
     sessionId: string,
@@ -3286,6 +3296,7 @@ const SessionCard = memo(function SessionCard({
     ? NO_BRANCH_LABEL
     : formatGitLabel(session.repo, session.branch);
   const time = formatRelative(session.updatedAt, now);
+  const headerRow = !(compact && !orchestrationExpanded) && !modelInFooter;
   const model =
     compact && !orchestrationExpanded
       ? null
@@ -3324,7 +3335,7 @@ const SessionCard = memo(function SessionCard({
           <span>Draft</span>
         </>
       ) : (
-        <span>{time}</span>
+        <span>{statusLabel ?? time}</span>
       )}
     </span>
   );
@@ -3594,7 +3605,7 @@ const SessionCard = memo(function SessionCard({
           }}
           className="rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-accent/50"
         >
-          {compact && !orchestrationExpanded ? null : (
+          {headerRow ? (
             <span className="relative flex items-center gap-2">
               <span className="flex min-w-0 flex-1 items-center gap-1.5">
                 <HarnessIcon
@@ -3610,10 +3621,10 @@ const SessionCard = memo(function SessionCard({
                 {status}
               </span>
             </span>
-          )}
+          ) : null}
           <span
             className={`relative flex min-w-0 items-center gap-1.5 ${
-              compact && !orchestrationExpanded ? "" : "mt-1"
+              headerRow ? "mt-1" : ""
             }`}
           >
             {session.pinned ? (
@@ -3626,12 +3637,12 @@ const SessionCard = memo(function SessionCard({
               text={title}
               className="line-clamp-1 text-[13px] font-semibold leading-snug text-content"
             />
-            {compact && !orchestrationExpanded ? (
-              <span className="flex shrink-0 items-center gap-1.5">
+            {headerRow ? null : (
+              <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-2">
                 {linkedUpdateDot}
                 {status}
               </span>
-            ) : null}
+            )}
           </span>
         </div>
         {orchestrationExpanded ? (
@@ -3641,18 +3652,44 @@ const SessionCard = memo(function SessionCard({
           />
         ) : null}
         <span className="relative mt-1 flex items-center gap-2">
-          {gitLabel ? (
+          {project && !gitLabel ? (
+            <span
+              className="flex min-w-0 flex-1 items-center gap-1 text-[11px] text-content/45"
+              title={session.cwd}
+            >
+              <Folder className="size-3 shrink-0" strokeWidth={1.75} />
+              <span className="min-w-0 truncate">{project}</span>
+            </span>
+          ) : gitLabel ? (
             <span
               className="flex min-w-0 flex-1 items-center gap-1 text-[11px] text-content/45"
               title={session.worktreeCwd ? `${session.cowId ? "Copy-on-write · " : ""}${gitLabel}\n${session.worktreeCwd}` : gitLabel}
             >
               {session.cowId ? <Copy className="size-3 shrink-0" strokeWidth={1.75} /> : <GitBranch className="size-3 shrink-0" strokeWidth={1.75} />}
-              <span className="min-w-0 truncate">{session.cowId ? `Copy-on-write · ${gitLabel}` : gitLabel}</span>
+              <span className="min-w-0 truncate">
+                {project ? `${project} · ` : ""}{session.cowId ? `Copy-on-write · ${gitLabel}` : gitLabel}
+              </span>
             </span>
           ) : (
             <span className="min-w-0 flex-1" />
           )}
           <span className="relative flex shrink-0 items-center gap-px">
+            {/* Just the provider's mark; the model's name slides out beside
+                it while the card is hovered or focused. */}
+            {modelInFooter && model ? (
+              <span
+                title={model}
+                className="flex min-w-0 items-center text-[11px] text-content/50"
+              >
+                <span className="max-w-0 truncate pr-0 opacity-0 transition-[max-width,opacity,padding] duration-200 ease-out group-focus-within:max-w-32 group-focus-within:pr-1.5 group-focus-within:opacity-100 group-hover:max-w-32 group-hover:pr-1.5 group-hover:opacity-100 motion-reduce:transition-none">
+                  {model}
+                </span>
+                <HarnessIcon
+                  harness={session.harness}
+                  className="size-3.5 shrink-0"
+                />
+              </span>
+            ) : null}
             {onArchive ? (
               <button
                 type="button"

@@ -1,6 +1,5 @@
 import {
   ArrowUp,
-  Chatting,
   Check,
   ChevronRight,
   CircleDashed,
@@ -55,7 +54,12 @@ import { Popover } from "../../../shared/ui/Popover";
 import { ProjectMascot } from "../../projects/ui/ProjectMascot";
 import { PixelMascot } from "../../projects/ui/PixelMascot";
 import type { MonoLook } from "../../monos/model/mono";
-import { monoSpawnedSessions } from "../../monos/model/monoSpawnedSessions";
+import {
+  monoSpawnedSessions,
+  type LaunchedSessionView,
+} from "../../monos/model/monoSpawnedSessions";
+import type { MonoSpawnedSession } from "../model/session";
+import { LaunchedSessionCard } from "../../monos/ui/LaunchedSessionCard";
 import type { MessageDelivery } from "../../monos/model/monoMessaging";
 import { monoReactionBlocks } from "../../monos/model/monoReaction";
 import type { ApprovalDecision } from "../../../integrations/harness";
@@ -207,8 +211,12 @@ type Props = {
   /** Inspect a Mono turn in the activity sidebar. */
   onShowWork?: (turnId: string, blocks: Block[]) => void;
   activeWorkTurnId?: string;
-  onShowSessions?: (turnId: string, blocks: Block[]) => void;
-  activeSessionsTurnId?: string;
+  /** Open one of a Mono turn's launched sessions in the sidebar. */
+  onOpenSession?: (turnId: string, blocks: Block[], sessionId: string) => void;
+  /** Launched sessions' live status by id, where this window tracks it. */
+  launchedSessions?: ReadonlyMap<string, LaunchedSessionView>;
+  /** The launched session open in the sidebar. */
+  openSessionId?: string;
   /** Marks when each message was sent, for one conversation kept over days. */
   daySeparators?: boolean;
   /** Leaves token and speed details out of each turn's footer. */
@@ -245,11 +253,6 @@ type Props = {
   ) => void;
   /** Session-level output shown after the latest reply and before its action row. */
   latestTurnAccessory?: ReactNode;
-  /**
-   * Session-level control in the action row of the latest turn that edited
-   * files. A Mono's chat never ends, so its review stays where it began.
-   */
-  editTurnAction?: ReactNode;
   /** False while another tab is in front; local transcript state is retained. */
   visible?: boolean;
   /** Kept mounted after its pane closed. Showing it again counts as a new visit. */
@@ -278,8 +281,9 @@ function AgentTranscriptComponent({
   onRetryMessage,
   onShowWork,
   activeWorkTurnId,
-  onShowSessions,
-  activeSessionsTurnId,
+  onOpenSession,
+  launchedSessions,
+  openSessionId,
   daySeparators = false,
   hideTurnMetrics = false,
   harness,
@@ -308,7 +312,6 @@ function AgentTranscriptComponent({
   onRevealReady,
   onNavigateReady,
   latestTurnAccessory,
-  editTurnAction,
 
   visible = true,
   parked = false,
@@ -628,13 +631,7 @@ function AgentTranscriptComponent({
       scrollerEl.removeEventListener("touchstart", onTouchStart);
       scrollerEl.removeEventListener("touchmove", onTouchMove);
     };
-  }, [
-    scrollerEl,
-    followTranscript,
-    setShowJump,
-    syncPinned,
-    visible,
-  ]);
+  }, [scrollerEl, followTranscript, setShowJump, syncPinned, visible]);
 
   useLayoutEffect(() => {
     stickToBottom.current = true;
@@ -733,11 +730,6 @@ function AgentTranscriptComponent({
     (latest, turn, index) =>
       turn[0].monoHabit || turn[0].role === "handoff" ? latest : index,
     -1,
-  );
-  const hasEditTurnAction = editTurnAction != null;
-  const editTurnIndex = useMemo(
-    () => (hasEditTurnAction ? lastEditTurnIndex(turns) : -1),
-    [hasEditTurnAction, turns],
   );
   const firstVisibleTurn = Math.max(0, turns.length - visibleTurnCount);
   const visibleTurns = turns.slice(firstVisibleTurn);
@@ -1001,12 +993,15 @@ function AgentTranscriptComponent({
 
   refreshChatMotion.current = useBottomChatMotion(
     scrollerEl,
-    visible && bottomAligned,
+    visible,
     stickToBottom,
     blocks,
-    !!busy && userTurnCount(blocks, managed) === 1,
+    bottomAligned && !!busy && userTurnCount(blocks, managed) === 1,
     !!busy,
     historicalBlockIds,
+    bottomAligned,
+    wheelHold,
+    bottomAligned,
   );
 
   return (
@@ -1142,6 +1137,32 @@ function AgentTranscriptComponent({
           // leaving the prompt and the answer to it.
           const turnId = turn[0].id;
           const spawnedSessions = inlineWork ? monoSpawnedSessions(turn) : [];
+          const launchCards = launchAnchors(items, spawnedSessions);
+          const renderLaunches = (
+            launches: readonly MonoSpawnedSession[],
+            key: string,
+            spacing: string,
+          ) => (
+            <div
+              key={key}
+              data-launched-sessions
+              className={`flex flex-col gap-2 px-4 pt-1 ${spacing}`}
+            >
+              {launches.map((launch) => (
+                <LaunchedSessionCard
+                  key={launch.sessionId}
+                  launch={launch}
+                  view={launchedSessions?.get(launch.sessionId)}
+                  open={openSessionId === launch.sessionId}
+                  onOpen={
+                    onOpenSession
+                      ? () => onOpenSession(turnId, turn, launch.sessionId)
+                      : undefined
+                  }
+                />
+              ))}
+            </div>
+          );
           const fold = inlineWork ? undefined : foldableWork(items);
           const folded = fold ? foldedBlocks(items, fold) : [];
           const summarizedWork = inlineWork
@@ -1150,11 +1171,6 @@ function AgentTranscriptComponent({
               )
             : folded;
           const workOpen = openWork[turnId] ?? false;
-          // The action keeps the pane's props, which go stale once parked.
-          const turnEditAction =
-            firstVisibleTurn + turnIndex === editTurnIndex && !parked
-              ? editTurnAction
-              : undefined;
           // The fold line is the turn's status line from the first token to
           // the last: the mark, and the clock beside it. It never moves, so a
           // turn settling does not shuffle the layout around the answer.
@@ -1237,14 +1253,29 @@ function AgentTranscriptComponent({
             item.type === "block"
               ? item.block.id === searchCurrent
               : item.blocks.some((block) => block.id === searchCurrent);
+          // A reaction hides the reply between two messages, so the next
+          // turn's message stacks onto this one as if nothing came between.
+          const stacksIntoNextTurn =
+            reactedOnly &&
+            stacksAfterReaction(
+              turn,
+              turns[firstVisibleTurn + turnIndex + 1],
+              daySeparators,
+            );
+          const stackedOnPreviousTurn =
+            inlineWork &&
+            !!previousTurn &&
+            previousTurn.every((block) => block.role === "user") &&
+            stacksAfterReaction(previousTurn, turn, daySeparators);
           const isCompactFollowUp = (item: TurnItem, index: number) => {
             const next = items[index + 1];
             return (
               inlineWork &&
               item.type === "block" &&
               item.block.role === "user" &&
-              next?.type === "block" &&
-              next.block.role === "user"
+              (next
+                ? next.type === "block" && next.block.role === "user"
+                : stacksIntoNextTurn)
             );
           };
           const renderItem = (item: TurnItem, itemIndex: number) =>
@@ -1300,7 +1331,13 @@ function AgentTranscriptComponent({
                 }
                 layout={transcriptLayout}
                 bubbleTail={!!agentMascot}
+                localMedia={isMonoChat}
                 compactFollowUp={isCompactFollowUp(item, itemIndex)}
+                stackedOnPrevious={
+                  itemIndex === 0
+                    ? stackedOnPreviousTurn
+                    : isCompactFollowUp(items[itemIndex - 1], itemIndex - 1)
+                }
                 delivery={messageDeliveries?.get(item.block.id)}
                 onRetryMessage={onRetryMessage}
                 visible={item.block.role === "user" ? visible : undefined}
@@ -1376,15 +1413,14 @@ function AgentTranscriptComponent({
                   workExpanded={activeWorkTurnId === turnId}
                   searchCurrent={
                     turn.some((block) => block.id === searchCurrent) &&
-                    !items.some(
-                      (item) =>
-                        item.type === "block"
-                          ? item.block.id === searchCurrent
-                          : item.blocks.some(
-                              (block) =>
-                                block.id === searchCurrent &&
-                                needsApproval(block),
-                            ),
+                    !items.some((item) =>
+                      item.type === "block"
+                        ? item.block.id === searchCurrent
+                        : item.blocks.some(
+                            (block) =>
+                              block.id === searchCurrent &&
+                              needsApproval(block),
+                          ),
                     )
                   }
                 />
@@ -1406,7 +1442,9 @@ function AgentTranscriptComponent({
             <div
               key={turn[0].id}
               data-transcript-turn={turnId}
-              className={`transcript-turn flex min-w-0 flex-col${
+              // A stacked message sits as close as one in the same turn, so
+              // the gap between turns gives way.
+              className={`transcript-turn flex min-w-0 flex-col${inlineWork && !reactedOnly ? " transcript-turn-mono" : ""}${stacksIntoNextTurn ? " -mb-1" : ""}${
                 isLastTurn ? " transcript-turn-live" : ""
               }${
                 promptAnchor && anchorTurn && isLastTurn && userBlock
@@ -1489,8 +1527,26 @@ function AgentTranscriptComponent({
                       {renderItem(item, itemIndex)}
                     </div>
                   );
-                  if (itemIndex !== foldLineAt) return row;
-                  return [foldLineRow, row];
+                  // A launch's cards follow the reply after it once that reply
+                  // has finished streaming (CSS holds them through its fade).
+                  // That never reverts, so a report back reopening the turn
+                  // does not take them away again.
+                  const launches = launchCards.afterItem.get(itemIndex);
+                  const cards =
+                    launches &&
+                    (settled ||
+                      itemIndex < items.length - 1 ||
+                      (item.type === "block" && !item.block.streaming))
+                      ? [
+                          renderLaunches(
+                            launches,
+                            `launches-${turnItemKey(item)}`,
+                            "pb-3",
+                          ),
+                        ]
+                      : [];
+                  if (itemIndex !== foldLineAt) return [row, ...cards];
+                  return [foldLineRow, row, ...cards];
                 })
                 .concat(foldLineAt >= items.length ? [foldLineRow] : [])}
               {settled &&
@@ -1505,6 +1561,14 @@ function AgentTranscriptComponent({
                       <OrchestrationPreview block={block} busy={!!busy} />
                     </div>
                   ))}
+              {/* Launches no reply followed wait for the turn to end. */}
+              {settled && launchCards.atEnd.length > 0
+                ? renderLaunches(
+                    launchCards.atEnd,
+                    "launches-end",
+                    artifacts.length > 0 ? "pb-1" : "pb-3",
+                  )
+                : null}
               {settled && artifacts.length > 0 ? (
                 <div
                   data-artifact-results
@@ -1526,11 +1590,10 @@ function AgentTranscriptComponent({
               {settled &&
               !reactedOnly &&
               (durationMs != null ||
-                turnEditAction ||
                 standaloneReply ||
-                (inlineWork && firstWork >= 0) ||
-                (spawnedSessions.length > 0 && onShowSessions)) ? (
+                (inlineWork && firstWork >= 0)) ? (
                 <TurnDuration
+                  revealOnHover={inlineWork}
                   elapsedMs={durationMs ?? null}
                   label={
                     standaloneReply ? (agentName ?? habit?.name) : undefined
@@ -1560,13 +1623,6 @@ function AgentTranscriptComponent({
                       : undefined
                   }
                   workExpanded={activeWorkTurnId === turnId}
-                  onShowSessions={
-                    spawnedSessions.length && onShowSessions
-                      ? () => onShowSessions(turnId, turn)
-                      : undefined
-                  }
-                  sessionsExpanded={activeSessionsTurnId === turnId}
-                  sessionCount={spawnedSessions.length}
                   harness={turnHarness}
                   fromHarness={turnHarness}
                   fromModel={turnModel?.id}
@@ -1578,7 +1634,6 @@ function AgentTranscriptComponent({
                   onHandoff={
                     onHandoff ? (target) => onHandoff(target, turn) : undefined
                   }
-                  extraAction={turnEditAction}
                 />
               ) : null}
             </div>
@@ -1604,13 +1659,16 @@ function TranscriptContent({
   bottomAligned: boolean;
   children: ReactNode;
 }) {
+  // The clip keeps the follow motion's in-flight offset out of scrollHeight.
   if (!bottomAligned) {
     return (
-      <div
-        data-transcript-content
-        className="mx-auto flex w-full min-w-0 max-w-4xl flex-col gap-1 pb-8"
-      >
-        {children}
+      <div className="mx-auto w-full min-w-0 max-w-4xl overflow-clip">
+        <div
+          data-transcript-content
+          className="flex min-w-0 flex-col gap-1 pb-8"
+        >
+          {children}
+        </div>
       </div>
     );
   }
@@ -1752,14 +1810,11 @@ function TurnDuration({
   onSaveNote,
   onShowWork,
   workExpanded,
-  onShowSessions,
-  sessionsExpanded,
-  sessionCount,
   fromHarness,
   fromModel,
   onSecondOpinion,
   onHandoff,
-  extraAction,
+  revealOnHover = false,
 }: {
   elapsedMs: number | null;
   label?: string;
@@ -1773,15 +1828,13 @@ function TurnDuration({
   onSaveNote?: (text: string) => void | Promise<void>;
   onShowWork?: () => void;
   workExpanded?: boolean;
-  onShowSessions?: () => void;
-  sessionsExpanded?: boolean;
-  sessionCount?: number;
   fromHarness?: HarnessId;
   /** The turn's own model, so a same-harness second opinion can hide it. */
   fromModel?: string;
   onSecondOpinion?: (target: ModelTarget) => void;
   onHandoff?: (target: ModelTarget) => void;
-  extraAction?: ReactNode;
+  /** Sit in the gap under the turn and show on hover, as a sent message's do. */
+  revealOnHover?: boolean;
 }) {
   const label =
     completionLabel ?? formatWorkingDuration(elapsedMs, modelName, true);
@@ -1795,7 +1848,7 @@ function TurnDuration({
     <div
       data-turn-actions
       aria-label={label}
-      className="flex w-full min-w-0 max-w-full items-center gap-2.5 overflow-hidden px-4 pt-1 pb-3 font-sans text-sm text-content/40"
+      className={`flex w-full min-w-0 max-w-full items-center gap-2.5 overflow-hidden px-4 pt-1 pb-3 font-sans text-sm text-content/40${revealOnHover ? " turn-actions-hover" : ""}`}
     >
       <span className="flex shrink-0 items-center gap-1">
         {output ? (
@@ -1820,19 +1873,6 @@ function TurnDuration({
             <ListBullet className="size-3.5" strokeWidth={1.75} />
           </button>
         ) : null}
-        {onShowSessions ? (
-          <button
-            type="button"
-            title={`${sessionsExpanded ? "Hide" : "Show"} sessions (${sessionCount})`}
-            aria-label={sessionsExpanded ? "Hide sessions" : "Show sessions"}
-            aria-expanded={!!sessionsExpanded}
-            onClick={onShowSessions}
-            className={`flex items-center gap-1 rounded-md p-1 outline-none hover:bg-content/8 hover:text-content/70 focus-visible:ring-1 focus-visible:ring-accent ${sessionsExpanded ? "bg-content/8 text-content/70" : "text-content/40"}`}
-          >
-            <Chatting className="size-3.5" strokeWidth={1.75} />
-            <span className="text-[11px] leading-none">{sessionCount}</span>
-          </button>
-        ) : null}
         {fromHarness && onHandoff ? (
           <HandoffButton from={fromHarness} onPick={onHandoff} />
         ) : null}
@@ -1845,7 +1885,6 @@ function TurnDuration({
             excludeFromModel
           />
         ) : null}
-        {extraAction}
         <TurnMetricsBadge metrics={metrics} elapsedMs={elapsedMs} />
       </span>
       {labelHidden ? null : (
@@ -2135,6 +2174,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
   layout,
   bubbleTail = false,
   compactFollowUp = false,
+  stackedOnPrevious = false,
   delivery,
   onRetryMessage,
   visible,
@@ -2143,6 +2183,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
   underLine = false,
   embedded = false,
   cwd,
+  localMedia = false,
   onApproval,
   onSaveNote,
   onSendDraft,
@@ -2162,6 +2203,8 @@ const TranscriptBlock = memo(function TranscriptBlock({
   layout: TranscriptLayout;
   bubbleTail?: boolean;
   compactFollowUp?: boolean;
+  /** True when this message stacks onto the one above it. */
+  stackedOnPrevious?: boolean;
   delivery?: MessageDelivery;
   onRetryMessage?: (blockId: string) => void;
   visible?: boolean;
@@ -2172,6 +2215,8 @@ const TranscriptBlock = memo(function TranscriptBlock({
   /** True when the parent surface already provides the horizontal gutter. */
   embedded?: boolean;
   cwd?: string;
+  /** Show local images and videos a reply links to, as Mono chats do. */
+  localMedia?: boolean;
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
   onSaveNote?: (text: string) => void | Promise<void>;
   onSendDraft?: (block: Block) => boolean | void;
@@ -2194,6 +2239,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
         layout={layout}
         bubbleTail={bubbleTail}
         compactFollowUp={compactFollowUp}
+        stackedOnPrevious={stackedOnPrevious}
         delivery={delivery}
         onRetryMessage={onRetryMessage}
         visible={visible ?? true}
@@ -2315,6 +2361,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
         revealOnMount={revealOnMount}
         cwd={cwd}
         onOpenFile={onOpenFile}
+        localMedia={localMedia}
       />
     </div>
   );
@@ -2330,11 +2377,9 @@ function MonoReactionBadge({ emoji, live }: { emoji: string; live: boolean }) {
       role="img"
       aria-label={`Reacted ${emoji}`}
       data-mono-reaction={emoji}
-      className={`${live ? "mono-reaction-in " : ""}absolute -top-4 -left-2 z-[1] rounded-full bg-background-base p-0.5 leading-none`}
+      className={`${live ? "mono-reaction-in " : ""}mono-reaction-badge absolute -top-2.5 -left-2.5 z-[1] grid h-[22px] place-items-center rounded-[8px] px-[7px] font-sans text-[11px] leading-none`}
     >
-      <span className="grid h-6 min-w-7 place-items-center rounded-full bg-content/10 px-1.5 font-sans text-[14px]">
-        {emoji}
-      </span>
+      {emoji}
     </span>
   );
 }
@@ -2344,6 +2389,7 @@ function UserMessageBlock({
   layout,
   bubbleTail = false,
   compactFollowUp = false,
+  stackedOnPrevious = false,
   delivery,
   onRetryMessage,
   visible,
@@ -2359,6 +2405,7 @@ function UserMessageBlock({
   layout: TranscriptLayout;
   bubbleTail?: boolean;
   compactFollowUp?: boolean;
+  stackedOnPrevious?: boolean;
   delivery?: MessageDelivery;
   onRetryMessage?: (blockId: string) => void;
   visible: boolean;
@@ -2391,7 +2438,7 @@ function UserMessageBlock({
   const messageAt = block.sentAt ?? block.startedAt;
   const chatSpacing = compactFollowUp
     ? "pt-1 pb-0"
-    : bubbleTail && block.sentAt != null
+    : bubbleTail && (block.sentAt != null || stackedOnPrevious)
       ? "pt-1 pb-5"
       : "pt-1.5 pb-5";
   // A Mono's chat shows sent images above the bubble, like photos in a
@@ -2811,6 +2858,49 @@ function TurnRow({
 }
 
 /** A turn item's identity, stable as the group it names grows. */
+/**
+ * Where a turn's launched sessions go: each after the first reply that came
+ * after its launch, so a Mono reporting back later in the same turn writes
+ * below them, as it happened. A launch no reply has followed goes at the end.
+ */
+function launchAnchors(
+  items: readonly TurnItem[],
+  launches: readonly MonoSpawnedSession[],
+): {
+  afterItem: Map<number, MonoSpawnedSession[]>;
+  atEnd: MonoSpawnedSession[];
+} {
+  const afterItem = new Map<number, MonoSpawnedSession[]>();
+  const atEnd: MonoSpawnedSession[] = [];
+  if (launches.length === 0) return { afterItem, atEnd };
+  const launched = items.map((item) =>
+    monoSpawnedSessions(
+      item.type === "block" ? [item.block] : item.blocks,
+      launches,
+    ).map((entry) => entry.sessionId),
+  );
+  for (const launch of launches) {
+    // The tool call that started it; the prompt also lists it, as a fallback.
+    const isPrompt = (index: number) => {
+      const item = items[index];
+      return item.type === "block" && item.block.role === "user";
+    };
+    const has = (index: number) => launched[index].includes(launch.sessionId);
+    let at = items.findIndex((_, index) => has(index) && !isPrompt(index));
+    if (at < 0) at = items.findIndex((_, index) => has(index));
+    const reply =
+      at < 0
+        ? -1
+        : items.findIndex(
+            (item, index) =>
+              index > at && item.type === "block" && isProseBlock(item.block),
+          );
+    if (reply < 0) atEnd.push(launch);
+    else afterItem.set(reply, [...(afterItem.get(reply) ?? []), launch]);
+  }
+  return { afterItem, atEnd };
+}
+
 function turnItemKey(item: TurnItem): string {
   return item.type === "block" ? item.block.id : item.blocks[0].id;
 }
@@ -3095,6 +3185,7 @@ function useLivePhaseScroll(
     );
     if (stickToBottom.current) el.scrollTop = el.scrollHeight;
     lastScrollTop.current = el.scrollTop;
+    markScrollEdges(el);
   }, [el]);
 
   useLayoutEffect(() => {
@@ -3120,6 +3211,7 @@ function useLivePhaseScroll(
         stickToBottom.current,
       );
       lastScrollTop.current = el.scrollTop;
+      markScrollEdges(el);
     };
     const onWheel = (e: WheelEvent) => {
       if (!nestedScrollAbsorbsWheel(el, e.deltaY)) return;
@@ -3139,6 +3231,13 @@ function useLivePhaseScroll(
       observer.disconnect();
     };
   }, [el, enabled, pin]);
+}
+
+/** Flags the edges with more to scroll to, so only those fade. */
+function markScrollEdges(el: HTMLElement) {
+  const below = el.scrollHeight - el.clientHeight - el.scrollTop;
+  el.dataset.fadeTop = String(el.scrollTop > 1);
+  el.dataset.fadeBottom = String(below > 1);
 }
 
 /** The live ticker shares the identity line instead of adding a work row. */
@@ -3173,7 +3272,10 @@ function MonoTurnHeader({
     () => blocks.filter((block) => !block.internal && !block.draft),
     [blocks],
   );
-  let status = useMemo(() => monoWorkStatus(activity, active), [activity, active]);
+  let status = useMemo(
+    () => monoWorkStatus(activity, active),
+    [activity, active],
+  );
   if (active && waitingForAnswers && !activity.some(needsApproval)) {
     status = { ...status, key: "question", label: "Waiting for answers…" };
   } else if (active && backgroundTasks?.length && status.kind === "think") {
@@ -4997,6 +5099,31 @@ function turnUserBlock(blocks: Block[], managed = false): Block | undefined {
   return undefined;
 }
 
+/**
+ * Whether a Mono turn that ended in only a reaction stacks into the next
+ * one: the next turn opens with a message of the user's own, in the same
+ * stretch of time.
+ */
+function stacksAfterReaction(
+  turn: Block[],
+  next: Block[] | undefined,
+  daySeparators: boolean,
+): boolean {
+  const start = next?.[0];
+  return (
+    !!start &&
+    turn.some((block) => !!block.monoReaction) &&
+    start.role === "user" &&
+    !start.internal &&
+    !start.monoHabit &&
+    !(
+      daySeparators &&
+      start.startedAt != null &&
+      opensNewStretch(start.startedAt, monoTurnLatestStart(turn))
+    )
+  );
+}
+
 function monoTurnUserBlock(
   blocks: Block[],
   deliveries?: ReadonlyMap<string, MessageDelivery>,
@@ -5011,23 +5138,6 @@ function monoTurnUserBlock(
       return block;
   }
   return blocks.find((block) => block.role === "user");
-}
-
-/** Matches the edit tools whose files the session's review records. */
-function lastEditTurnIndex(turns: Block[][]): number {
-  for (let index = turns.length - 1; index >= 0; index--) {
-    const edited = turns[index].some(
-      (block) =>
-        block.role === "tool" &&
-        isEditTool(
-          block.tool?.kind,
-          block.text || block.tool?.title,
-          block.tool?.preview,
-        ),
-    );
-    if (edited) return index;
-  }
-  return -1;
 }
 
 function sumDurations(durations: (number | undefined)[]): number | undefined {
@@ -5118,7 +5228,7 @@ function pinToBottom(el: HTMLElement | null) {
 /** Keep the live turn's min-height in lockstep with the visible transcript. */
 function syncTranscriptViewport(el: HTMLElement | null) {
   if (!el || el.clientHeight <= 0) return;
-  const inner = el.firstElementChild as HTMLElement | null;
+  const inner = el.querySelector<HTMLElement>("[data-transcript-content]");
   const pad = inner
     ? Number.parseFloat(getComputedStyle(inner).paddingBottom) || 0
     : 0;

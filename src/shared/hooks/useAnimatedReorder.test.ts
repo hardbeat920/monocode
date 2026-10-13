@@ -176,6 +176,30 @@ describe("workspace tab gestures", () => {
     expect(onReorder).not.toHaveBeenCalled();
   });
 
+  it("still drops a fast drag whose last moves report no button just before pointerup", () => {
+    const { press, onReorder } = setup();
+    press();
+    pointer("pointermove", 180);
+    // WebKit reads the live button state, so moves queued behind a quick
+    // release arrive with no buttons ahead of the pointerup.
+    browser.dispatchEvent(
+      Object.assign(new Event("pointermove"), {
+        clientX: 250,
+        clientY: 250,
+        pointerId: 1,
+        pointerType: "mouse",
+        buttons: 0,
+      }),
+    );
+    pointer("pointerup", 250);
+    vi.runAllTimers();
+
+    expect(onReorder).toHaveBeenCalledExactlyOnceWith(
+      ["changes", "explorer", "sessions"],
+      "sessions",
+    );
+  });
+
   it("previews and reorders vertical project rows", () => {
     const { press, tabs, onReorder } = setup(false, "y");
     press();

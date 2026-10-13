@@ -88,6 +88,7 @@ import Refresh01Icon from "@hugeicons/core-free-icons/Refresh01Icon";
 import RegexIcon from "@hugeicons/core-free-icons/RegexIcon";
 import ReplaceIcon from "@hugeicons/core-free-icons/ReplaceIcon";
 import RotateCcwIcon from "@hugeicons/core-free-icons/RotateCcwIcon";
+import SmilePlusIcon from "@hugeicons/core-free-icons/SmilePlusIcon";
 import Search01Icon from "@hugeicons/core-free-icons/Search01Icon";
 import Settings01Icon from "@hugeicons/core-free-icons/Settings01Icon";
 import Share02Icon from "@hugeicons/core-free-icons/Share02Icon";
@@ -265,6 +266,7 @@ export const SlidersHorizontal = wrap(
   PreferenceHorizontalIcon,
   "SlidersHorizontal",
 );
+export const SmilePlus = wrap(SmilePlusIcon, "SmilePlus");
 export const Sparkles = wrap(SparklesIcon, "Sparkles");
 export const Square = wrap(SquareIcon, "Square");
 export const SquarePlus = wrap(AddSquareIcon, "SquarePlus");
