@@ -93,6 +93,9 @@ pub const OFF_DETACH_BUDGET: Duration = Duration::from_millis(500);
 pub const ASK_WAIT: Duration = Duration::from_secs(45);
 /// How long the MonoCode browser may take to close before it is killed.
 const MANAGED_CLOSE_WAIT: Duration = Duration::from_secs(3);
+/// How long the MonoCode browser stays up after an access request was
+/// declined or expired while no thread may use it.
+pub const UNUSED_CLOSE_GRACE: Duration = Duration::from_secs(10);
 
 /// The MonoCode browser process this run started.
 struct ManagedBrowser {
@@ -121,6 +124,20 @@ impl ManagedBrowser {
             thread::sleep(Duration::from_millis(200));
         }
     }
+}
+
+/// Wait up to [`MANAGED_CLOSE_WAIT`] for the MonoCode browser to exit, kill
+/// it otherwise, then forget it (a private profile is deleted).
+fn stop_managed(mut managed: ManagedBrowser) {
+    let deadline = Instant::now() + MANAGED_CLOSE_WAIT;
+    while Instant::now() < deadline && !managed.exited() {
+        thread::sleep(Duration::from_millis(100));
+    }
+    if !managed.exited() {
+        let _ = managed.child.kill();
+        let _ = managed.child.wait();
+    }
+    managed.forget();
 }
 
 static HOST: OnceLock<Arc<BrowserHost>> = OnceLock::new();
@@ -167,6 +184,12 @@ pub struct BrowserHost {
     consent_timeout_ms: AtomicU64,
     /// [`ASK_WAIT`]; shorter in tests.
     ask_wait_ms: AtomicU64,
+    /// [`UNUSED_CLOSE_GRACE`]; shorter in tests.
+    unused_grace_ms: AtomicU64,
+    /// Bumped by every scheduled "close when unused"; only the latest fires.
+    unused_close: AtomicU64,
+    /// A MonoCode browser shutting down in the background (OFF, mode change).
+    closing: Mutex<Option<thread::JoinHandle<()>>>,
     /// Whether an agent request may still start a connection attempt that
     /// shows the browser's consent dialog. One per drop (spec 14.1 row 2,
     /// 14.2): restored when a connection is established or the toggle goes
@@ -244,6 +267,9 @@ impl BrowserHost {
             generation: AtomicU64::new(0),
             consent_timeout_ms: AtomicU64::new(CONSENT_TIMEOUT.as_millis() as u64),
             ask_wait_ms: AtomicU64::new(ASK_WAIT.as_millis() as u64),
+            unused_grace_ms: AtomicU64::new(UNUSED_CLOSE_GRACE.as_millis() as u64),
+            unused_close: AtomicU64::new(0),
+            closing: Mutex::new(None),
             auto_dialog: AtomicBool::new(true),
             profile: Mutex::new(None),
             managed: Mutex::new(None),
@@ -285,6 +311,24 @@ impl BrowserHost {
     pub(crate) fn set_ask_wait(&self, wait: Duration) {
         self.ask_wait_ms
             .store(wait.as_millis() as u64, Ordering::Release);
+    }
+
+    /// Shorter grace before an unused MonoCode browser closes, for tests.
+    #[cfg(test)]
+    pub(crate) fn set_unused_grace(&self, grace: Duration) {
+        self.unused_grace_ms
+            .store(grace.as_millis() as u64, Ordering::Release);
+    }
+
+    /// Treat `child` as the MonoCode browser this run started, for tests.
+    #[cfg(test)]
+    pub(crate) fn adopt_managed_for_tests(&self, child: Child, profile: PathBuf, ephemeral: bool) {
+        *self.managed.lock().unwrap_or_else(|e| e.into_inner()) = Some(ManagedBrowser {
+            child,
+            show_window: true,
+            profile,
+            ephemeral,
+        });
     }
 
     pub fn link(&self) -> &Link {
@@ -394,7 +438,9 @@ impl BrowserHost {
             if self.link.status() != LinkStatus::Closed {
                 self.link.close(detach, OFF_DETACH_BUDGET);
             }
-            self.close_managed_browser();
+            // A UI command: the process exit and a private profile's deletion
+            // take seconds, so they finish in the background.
+            self.close_managed_browser_later();
             self.set_connection(
                 ConnectionState::Off,
                 Some("Browser access is off.".into()),
@@ -505,8 +551,9 @@ impl BrowserHost {
         }
     }
 
-    /// Stop the MonoCode browser this run started: it closes its pages first
-    /// when the link is up, and is killed when it does not exit in time.
+    /// Stop the MonoCode browser this run started and wait until it is gone
+    /// (app exit, failed start): it closes its pages first when the link is
+    /// up, and is killed when it does not exit in time.
     pub fn close_managed_browser(&self) {
         self.close_managed_pages();
         let managed = self
@@ -514,16 +561,100 @@ impl BrowserHost {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .take();
-        let Some(mut managed) = managed else { return };
-        let deadline = Instant::now() + MANAGED_CLOSE_WAIT;
-        while Instant::now() < deadline && !managed.exited() {
-            thread::sleep(Duration::from_millis(100));
+        if let Some(managed) = managed {
+            stop_managed(managed);
         }
-        if !managed.exited() {
-            let _ = managed.child.kill();
-            let _ = managed.child.wait();
+        self.finish_closing();
+    }
+
+    /// [`Self::close_managed_browser`] for UI commands: the pages close now
+    /// (within [`OFF_DETACH_BUDGET`]), the process exit and the profile
+    /// cleanup run on a thread. The next start waits for it
+    /// ([`Self::finish_closing`]), so two browsers never share a profile.
+    fn close_managed_browser_later(&self) {
+        self.close_managed_pages();
+        let managed = self
+            .managed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        let Some(managed) = managed else { return };
+        let mut closing = self.closing.lock().unwrap_or_else(|e| e.into_inner());
+        let earlier = closing.take();
+        let spawned = thread::Builder::new()
+            .name("browser-close".into())
+            .spawn(move || {
+                if let Some(earlier) = earlier {
+                    let _ = earlier.join();
+                }
+                stop_managed(managed);
+            });
+        *closing = spawned.ok();
+    }
+
+    /// Wait for a background shutdown of the MonoCode browser to end.
+    fn finish_closing(&self) {
+        let closing = self
+            .closing
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        if let Some(closing) = closing {
+            let _ = closing.join();
         }
-        managed.forget();
+    }
+
+    /// After an access request was declined or expired: when no thread may
+    /// use the MonoCode browser once [`UNUSED_CLOSE_GRACE`] has passed, close
+    /// it instead of leaving it running until the switch goes off.
+    fn close_when_unused(self: &Arc<Self>) {
+        if !self.mode().launches() {
+            return;
+        }
+        let ticket = self.unused_close.fetch_add(1, Ordering::AcqRel) + 1;
+        let grace = Duration::from_millis(self.unused_grace_ms.load(Ordering::Acquire));
+        let host = self.clone();
+        let _ = thread::Builder::new()
+            .name("browser-unused".into())
+            .spawn(move || {
+                thread::sleep(grace);
+                // A start still running (the warm-up) ends first.
+                let deadline = Instant::now() + launch::START_TIMEOUT;
+                while host.connecting.load(Ordering::Acquire) != 0 && Instant::now() < deadline {
+                    thread::sleep(Duration::from_millis(100));
+                }
+                if host.unused_close.load(Ordering::Acquire) == ticket {
+                    host.close_if_unused();
+                }
+            });
+    }
+
+    fn close_if_unused(self: &Arc<Self>) {
+        {
+            let policy = self.policy.read();
+            if !policy.toggle_on || !policy.settings.mode.launches() || policy.anyone_has_access() {
+                return;
+            }
+        }
+        let running = self.link.status() != LinkStatus::Closed
+            || self
+                .managed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_some();
+        if !running {
+            return;
+        }
+        self.event("managed_closed_unused", Actor::System, None, None);
+        self.close_managed_pages();
+        if self.link.status() != LinkStatus::Closed {
+            self.link.close(Vec::new(), OFF_DETACH_BUDGET);
+        }
+        self.close_managed_browser_later();
+        if self.policy.read().toggle_on {
+            self.set_idle();
+        }
+        self.emit_state();
     }
 
     /// The link to the MonoCode browser dropped: when the window was closed
@@ -579,7 +710,7 @@ impl BrowserHost {
         if headless == Some(true) {
             self.close_managed_pages();
             self.disconnect();
-            self.close_managed_browser();
+            self.close_managed_browser_later();
         } else if self.link.is_open() {
             return Ok(());
         }
@@ -739,6 +870,8 @@ impl BrowserHost {
     /// it otherwise, then connect like to any other endpoint. No consent
     /// dialog: the browser was started by us with its own profile.
     fn run_connect_managed(self: &Arc<Self>, generation: u64) {
+        // A browser still shutting down holds its profile.
+        self.finish_closing();
         let private = self.mode() == BrowserMode::Private;
         let profile = if private {
             // The private browser still running keeps its profile; a new one
@@ -1247,7 +1380,7 @@ impl BrowserHost {
             if self.link.status() != LinkStatus::Closed {
                 self.disconnect();
             }
-            self.close_managed_browser();
+            self.close_managed_browser_later();
             if toggle_on {
                 self.set_idle();
             }
@@ -1362,7 +1495,7 @@ impl BrowserHost {
         self.wait_for_answer(session, true)
     }
 
-    fn wait_for_answer(&self, session: &str, owner: bool) -> bool {
+    fn wait_for_answer(self: &Arc<Self>, session: &str, owner: bool) -> bool {
         let deadline =
             Instant::now() + Duration::from_millis(self.ask_wait_ms.load(Ordering::Acquire));
         loop {
@@ -1380,6 +1513,7 @@ impl BrowserHost {
                     self.policy.write().withdraw_request(session);
                     self.event("grant_request_expired", Actor::System, Some(session), None);
                     self.emit_state();
+                    self.close_when_unused();
                 }
                 return false;
             }
@@ -1388,7 +1522,7 @@ impl BrowserHost {
     }
 
     /// The user's answer to an access request (`browser_answer_request`).
-    pub fn answer_request(&self, session: &str, window: &str, allow: bool) {
+    pub fn answer_request(self: &Arc<Self>, session: &str, window: &str, allow: bool) {
         if allow {
             self.set_grant(session, window, true);
             return;
@@ -1396,6 +1530,7 @@ impl BrowserHost {
         self.policy.write().decline_request(session);
         self.event("grant_declined", Actor::User, Some(session), None);
         self.emit_state();
+        self.close_when_unused();
     }
 
     /// Wait until the running connection attempt ends, then report where it

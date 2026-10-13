@@ -239,12 +239,17 @@ impl World {
     /// "MonoCode browser" already listens in it, so nothing is launched. The
     /// switch is ON and nothing is connected yet.
     fn managed(access: AccessMode) -> World {
+        World::launched(BrowserMode::Managed, access)
+    }
+
+    /// [`World::managed`] in `mode` (managed or private).
+    fn launched(mode: BrowserMode, access: AccessMode) -> World {
         let (server, page) = fake_browser();
         let dir = std::env::temp_dir().join(format!("monocode-res-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         write_port_file(&dir, &server);
         let host = BrowserHost::for_tests(BrowserSettings {
-            mode: BrowserMode::Managed,
+            mode,
             access,
             ..BrowserSettings::default()
         });
@@ -1867,4 +1872,149 @@ fn off_and_revocation_answer_a_waiting_request_at_once() {
     assert_eq!(world.server.connections(), before);
     assert_eq!(world.host.connection().state, ConnectionState::Off);
     world.assert_idle();
+}
+
+/// A stand-in for the MonoCode browser process: this test binary running the
+/// ignored test below, which sleeps until it is killed.
+fn browser_process() -> std::process::Child {
+    std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "browser::resilience::stand_in_browser_process",
+            "--ignored",
+            "--test-threads=1",
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap()
+}
+
+#[test]
+#[ignore = "the child process browser_process() starts"]
+fn stand_in_browser_process() {
+    thread::sleep(Duration::from_secs(60));
+}
+
+/// A private MonoCode browser that is "running": its own profile folder,
+/// where the fake listens, and a process that does not exit on its own.
+fn private_browser(world: &World) -> PathBuf {
+    let profile = std::env::temp_dir().join(format!("monocode-private-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&profile).unwrap();
+    write_port_file(&profile, &world.server);
+    world
+        .host
+        .adopt_managed_for_tests(browser_process(), profile.clone(), true);
+    profile
+}
+
+#[test]
+fn off_returns_at_once_and_the_private_browser_goes_away_in_the_background() {
+    let world = Arc::new(World::launched(BrowserMode::Private, AccessMode::Always));
+    let profile = private_browser(&world);
+    world.grant("s1");
+    world.page.lock().unwrap().list_pages = true;
+    let _ = world.open("s1");
+    assert!(world.host.connection().browser.unwrap().managed);
+
+    // The process does not exit by itself: it is killed after the close
+    // wait, and only then is the profile deleted. OFF does not wait for it.
+    let started = Instant::now();
+    world.host.set_toggle(false);
+    let took = started.elapsed();
+    assert!(took < Duration::from_secs(1), "OFF took {took:?}");
+    assert_eq!(world.host.connection().state, ConnectionState::Off);
+    assert!(world
+        .sent()
+        .iter()
+        .any(|r| r.method == "Target.closeTarget" && r.params["targetId"] == "U1"));
+    assert!(profile.exists(), "cleanup has not run yet");
+    assert!(
+        wait_until(Duration::from_secs(10), || !profile.exists()),
+        "the private profile is deleted after the process is gone"
+    );
+}
+
+#[test]
+fn a_new_start_waits_for_the_previous_browser_to_be_gone() {
+    let world = Arc::new(World::managed(AccessMode::Always));
+    world
+        .host
+        .adopt_managed_for_tests(browser_process(), world.dir.clone(), false);
+    world.grant("s1");
+    let _ = world.open("s1");
+    world.host.set_toggle(false);
+    let off_at = Instant::now();
+    // ON and an action right away: the old process still holds the profile,
+    // so the new connection is made only once it is gone.
+    world.host.set_toggle(true);
+    world.grant("s1");
+    let opened = world.act("s1", "tabs.open", json!({}));
+    assert_eq!(opened.outcome, Outcome::Done, "{opened:?}");
+    let waited = off_at.elapsed();
+    assert!(
+        waited >= Duration::from_millis(2500),
+        "connected after {waited:?}, before the old browser was gone"
+    );
+    assert_eq!(world.server.connections(), 2);
+}
+
+#[test]
+fn a_declined_request_closes_the_private_browser_nobody_may_use() {
+    let world = Arc::new(World::launched(BrowserMode::Private, AccessMode::Ask));
+    world.host.set_unused_grace(Duration::from_millis(400));
+    let profile = private_browser(&world);
+    world.page.lock().unwrap().list_pages = true;
+    world.host.turn_started("s1", "main", "/repo", None);
+    let waiting = world.spawn_act("s1", "tabs.list", json!({}));
+    assert!(wait_until(Duration::from_secs(5), || world.requested("s1")));
+    world.wait_state(ConnectionState::Connected);
+    world.host.answer_request("s1", "main", false);
+    let (declined, _) = waiting.join().unwrap();
+    assert_eq!(declined.reason, Some(Reason::NotGranted), "{declined:?}");
+    // Within the grace period the browser stays (the user may still allow
+    // another thread).
+    assert_eq!(world.host.connection().state, ConnectionState::Connected);
+    // Then it closes: its pages, the link, the process and the profile.
+    world.wait_state(ConnectionState::Idle);
+    assert_eq!(world.event_count("managed_closed_unused"), 1);
+    assert_eq!(world.host.link().status(), LinkStatus::Closed);
+    assert!(world
+        .sent()
+        .iter()
+        .any(|r| r.method == "Target.closeTarget" && r.params["targetId"] == "U1"));
+    assert!(wait_until(Duration::from_secs(10), || !profile.exists()));
+    assert!(world.host.policy().read().toggle_on, "the switch stays on");
+}
+
+#[test]
+fn an_expired_request_closes_the_browser_only_when_no_thread_has_access() {
+    let world = Arc::new(World::managed(AccessMode::Ask));
+    world.host.set_ask_wait(Duration::from_millis(300));
+    world.host.set_unused_grace(Duration::from_millis(300));
+    world.grant("s2");
+    let opened = world.act("s2", "tabs.open", json!({}));
+    assert_eq!(opened.outcome, Outcome::Done, "{opened:?}");
+
+    // s1 asks and nobody answers, but s2 still has access: the browser stays.
+    world.host.turn_started("s1", "main", "/repo", None);
+    let expired = world.act("s1", "tabs.list", json!({}));
+    assert_eq!(expired.reason, Some(Reason::NotGranted), "{expired:?}");
+    thread::sleep(Duration::from_millis(1200));
+    assert_eq!(world.host.connection().state, ConnectionState::Connected);
+    assert_eq!(world.event_count("managed_closed_unused"), 0);
+
+    // Once s2 loses access and s1's next request expires too, it closes.
+    world.host.revoke("s2");
+    let expired = world.act("s1", "tabs.list", json!({}));
+    assert_eq!(expired.reason, Some(Reason::NotGranted), "{expired:?}");
+    world.wait_state(ConnectionState::Idle);
+    assert_eq!(world.event_count("managed_closed_unused"), 1);
+    world.assert_idle();
+
+    // The next allowed thread starts it again.
+    world.grant("s2");
+    let listed = world.act("s2", "tabs.list", json!({}));
+    assert_eq!(listed.outcome, Outcome::Done, "{listed:?}");
+    assert_eq!(world.server.connections(), 2);
 }

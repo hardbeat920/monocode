@@ -434,6 +434,13 @@ impl PolicyState {
         }
     }
 
+    /// Some session may use the browser now or waits for the user's answer.
+    pub fn anyone_has_access(&self) -> bool {
+        self.sessions
+            .values()
+            .any(|auth| auth.granted || auth.requested)
+    }
+
     pub fn requested(&self, session: &str) -> bool {
         self.sessions
             .get(session)
