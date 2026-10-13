@@ -508,7 +508,7 @@ export function IconButton({
             }
           : undefined
       }
-      className={`grid size-6.5 place-items-center rounded-md ${
+      className={`grid size-6 place-items-center rounded-md ${
         disabled
           ? "text-content/25"
           : accent

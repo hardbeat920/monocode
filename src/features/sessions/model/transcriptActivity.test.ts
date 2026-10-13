@@ -907,6 +907,11 @@ describe("activityPhaseTitle", () => {
     ).toBe("Found it — the tokens live in globals.css.");
   });
 
+  it("titles a group by its calls when the agent's line is only punctuation", () => {
+    expect(title([note("n1", "."), read("r1", "a.ts")])).toBe("Read a.ts");
+    expect(title([note("n1", " … "), read("r1", "a.ts")])).toBe("Read a.ts");
+  });
+
   it("says what the calls add up to, in the tense of the moment", () => {
     expect(title([read("r1", "a.ts"), read("r2", "b.ts")], true)).toBe(
       "Reading 2 files",

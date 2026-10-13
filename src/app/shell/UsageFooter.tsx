@@ -73,9 +73,11 @@ export function UsageFooter({
   terminals = [],
   terminalOpen = false,
   onToggleTerminal,
-  projectTerminalOpen = false,
-  onToggleProjectTerminal,
   showBrowser = false,
+  onNewTerminal,
+  onToggleProjectTerminal,
+  projectTerminalActive = false,
+  projectTerminalOpen = false,
   onSelectAccount,
   onManageAccounts,
 }: {
@@ -85,11 +87,11 @@ export function UsageFooter({
   terminals?: RunningTerminal[];
   terminalOpen?: boolean;
   onToggleTerminal?: (fileId: string) => void;
-  /** The project's terminal dock is on screen. */
-  projectTerminalOpen?: boolean;
-  /** Show or hide the terminal dock, creating a terminal the first time. */
-  onToggleProjectTerminal?: () => void;
   showBrowser?: boolean;
+  onNewTerminal?: () => void;
+  onToggleProjectTerminal?: () => void;
+  projectTerminalActive?: boolean;
+  projectTerminalOpen?: boolean;
   onSelectAccount?: (
     provider: ProviderAccountProvider,
     accountId: string,
@@ -101,8 +103,17 @@ export function UsageFooter({
     providers.some((provider) => provider !== "opencode") ||
     (providers.includes("opencode") && opencode.status !== "unavailable");
   const showTerminals = terminals.length > 0;
-  const showTerminalButton = Boolean(onToggleProjectTerminal);
-  const terminalLabel = `${projectTerminalOpen ? "Hide" : "Show"} Terminal (${MOD}J)`;
+  const showTerminalButton = Boolean(
+    onNewTerminal || onToggleProjectTerminal,
+  );
+  const terminalLabel = !onNewTerminal
+    ? `${projectTerminalOpen ? "Hide" : "Show"} Terminal (${MOD}J)`
+    : projectTerminalActive
+      ? "Terminal"
+      : `New Terminal (${MOD}\`)`;
+  const onTerminalClick = projectTerminalActive
+    ? (onToggleProjectTerminal ?? onNewTerminal)
+    : (onNewTerminal ?? onToggleProjectTerminal);
   const ariaLabel = showUsage || session?.harness === "pi"
     ? "Provider usage"
     : showTerminals || showTerminalButton
@@ -151,7 +162,7 @@ export function UsageFooter({
               aria-label={terminalLabel}
               aria-pressed={projectTerminalOpen}
               title={terminalLabel}
-              onClick={onToggleProjectTerminal}
+              onClick={onTerminalClick}
             >
               <Terminal className="size-3.5" strokeWidth={1.75} aria-hidden />
               <span>Terminal</span>

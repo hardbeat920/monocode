@@ -17,7 +17,7 @@ export function MonoSidebar({
   children,
 }: {
   open: boolean;
-  kind: "details" | "activity" | "sessions";
+  kind: "details" | "sessions";
   label: string;
   color: string;
   windowControls?: ReactNode;
@@ -42,7 +42,6 @@ export function MonoSidebar({
       aria-hidden={!open || undefined}
       inert={!open || undefined}
       data-mono-details={kind === "details" ? "" : undefined}
-      data-mono-activity={kind === "activity" ? "" : undefined}
       data-mono-sessions={kind === "sessions" ? "" : undefined}
       data-open={open}
       style={

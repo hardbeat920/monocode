@@ -118,6 +118,42 @@ it("names only the open tab, with its count, and switches tabs", async () => {
   expect(onTabChange).toHaveBeenCalledWith("documents");
 });
 
+it("toggles activity from beside the panel toggle", async () => {
+  const onTabChange = await render("documents");
+  const button = () =>
+    container.querySelector<HTMLButtonElement>(
+      '[aria-label="Show activity"], [aria-label="Hide activity"]',
+    )!;
+  expect(button().getAttribute("aria-pressed")).toBe("false");
+  expect(
+    button().querySelector("[data-tab-label]")!.getAttribute("data-tab-label"),
+  ).toBe("closed");
+  act(() => button().click());
+  expect(onTabChange).toHaveBeenLastCalledWith("activity");
+  await render("activity", onTabChange);
+  expect(button().getAttribute("aria-label")).toBe("Hide activity");
+  expect(button().getAttribute("aria-pressed")).toBe("true");
+  expect(
+    button().querySelector("[data-tab-label]")!.getAttribute("data-tab-label"),
+  ).toBe("open");
+  expect(button().textContent).toBe("Activity");
+  act(() => button().click());
+  expect(onTabChange).toHaveBeenLastCalledWith("documents");
+});
+
+it("shows the picked turn's activity, or how to pick one", async () => {
+  await render("activity");
+  const panel = container.querySelector('[data-mono-overview="activity"]')!;
+  expect(panel.textContent).toContain(
+    "Select the activity on one of Broski's messages",
+  );
+  await render("activity", vi.fn(), {
+    activity: createElement("p", { "data-trail": "" }, "Steps"),
+  });
+  expect(panel.querySelector("[data-trail]")?.textContent).toBe("Steps");
+  expect(panel.textContent).not.toContain("Select the activity");
+});
+
 const changes = (totals: unknown) => ({
   changes: {
     sessionId: "mono",

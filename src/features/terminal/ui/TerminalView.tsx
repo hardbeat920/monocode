@@ -1,3 +1,4 @@
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import { useEffect, useRef } from "react";
 import {
@@ -148,6 +149,15 @@ function oscColors() {
   };
 }
 
+/**
+ * Open an HTTP(S) terminal link using the app's browser preference and the
+ * click's modifiers, ignoring other schemes and opener failures.
+ */
+function openTerminalLink(uri: string, event: MouseEvent) {
+  if (!/^https?:\/\//i.test(uri)) return;
+  return openLink(uri, event).catch(() => undefined);
+}
+
 export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
   const outerRef = useRef<HTMLDivElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
@@ -179,6 +189,7 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
         // Replaces xterm's own prompt, which uses window.confirm: the webview
         // has no confirm panel, so that never opens anything.
         activate: (event, uri, range) => {
+          if (!/^https?:\/\//i.test(uri)) return;
           void (async () => {
             if (
               oscLinkNeedsConfirm(oscLinkLabel(term, range), uri) &&
@@ -189,13 +200,14 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
             ) {
               return;
             }
-            await openLink(uri, event);
+            await openTerminalLink(uri, event);
           })().catch((error) => {
             console.error("Failed to open web link:", error);
           });
         },
       },
     });
+    term.loadAddon(new WebLinksAddon((event, uri) => { void openTerminalLink(uri, event); }));
     term.open(host);
     termRef.current = term;
     let closed = false;
