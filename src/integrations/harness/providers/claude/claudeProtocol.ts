@@ -502,8 +502,10 @@ export function turnStatusFromResult(rec: Record<string, unknown>): {
 
 /**
  * A `rate_limit_event` that refuses requests, with when its window resets.
- * `null` once requests are allowed again, or while extra usage is paying for
- * them and the turn goes on.
+ * `null` once requests are allowed again, while extra usage is paying for
+ * them and the turn goes on, or when only the extra-usage pool is refused:
+ * fast mode bills to it, and Claude Code drops to standard speed and goes on
+ * under the plan.
  */
 export function usageLimitFromRateLimitEvent(
   rec: Record<string, unknown>,
@@ -511,6 +513,7 @@ export function usageLimitFromRateLimitEvent(
   const info = asRecord(rec.rate_limit_info);
   if (stringField(info, "status") !== "rejected") return null;
   if (info?.isUsingOverage === true) return null;
+  if (stringField(info, "rateLimitType") === "overage") return null;
   const resetsAt = parseResetTimestamp(info?.resetsAt);
   return resetsAt != null ? { resetsAt } : {};
 }
