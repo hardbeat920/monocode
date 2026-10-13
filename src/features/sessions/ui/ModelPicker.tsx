@@ -296,7 +296,7 @@ function modelGroups(tab: ModelPickerTab, models: AgentModel[]): ModelGroup[] {
   return [...groups.values()];
 }
 
-/** Choose a harness model and its settings, with favorites and provider groups. */
+/** Model selection and settings control shared by the composer and session toolbar. */
 export function ModelPicker({
   harness,
   model,
