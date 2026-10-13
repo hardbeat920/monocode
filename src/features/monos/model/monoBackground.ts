@@ -1,4 +1,3 @@
-import { CHAT_BACKGROUND_OPACITY_DEFAULT } from "../../settings/model/appearance";
 import { clearProjectChatBackground } from "../../projects/model/chatBackground";
 import {
   clearProjectChatBackgroundSetting,
@@ -14,21 +13,15 @@ export function monoBackgroundKey(monoId: string): string {
   return `mono:${monoId}`;
 }
 
-/**
- * How a Mono's chat shows its image: always the Haze, dimmed the same on an
- * empty chat as in a running one. Only the image is the user's choice.
- */
+/** A Mono uses its own background settings on its entire conversation. */
 export function monoChatBackground(
   monoId: string,
 ): ProjectChatBackgroundSettings | null {
   const stored = loadProjectChatBackgroundSettings(monoBackgroundKey(monoId));
   if (!stored) return null;
   return {
-    path: stored.path,
-    emptyOpacity: CHAT_BACKGROUND_OPACITY_DEFAULT,
-    sessionOpacity: CHAT_BACKGROUND_OPACITY_DEFAULT,
+    ...stored,
     scope: "all",
-    effect: "gradient-blur",
   };
 }
 
