@@ -74,7 +74,15 @@ export function PanelStack({
   const content = new Map(pages.map((page) => [page.key, page.node]));
   const open = layers.filter((layer) => !layer.leaving);
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+    <div
+      className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
+      // A page that focuses its composer while still offscreen would scroll
+      // this clip box to reveal it, fighting the slide. It never scrolls.
+      onScroll={(event) => {
+        event.currentTarget.scrollLeft = 0;
+        event.currentTarget.scrollTop = 0;
+      }}
+    >
       <Covered covered={open.length > 0}>{children}</Covered>
       {layers.map((layer) => {
         const index = open.findIndex((entry) => entry.key === layer.key);

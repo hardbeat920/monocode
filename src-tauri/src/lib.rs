@@ -218,8 +218,10 @@ fn set_trackpad_zoom_enabled(
     trackpad_zoom::set_enabled(&window, enabled);
 }
 
+// Async so the window is built off the main thread. Building it from a sync
+// command deadlocks WebView2 on Windows and leaves the new window blank.
 #[tauri::command]
-fn open_new_window(app: tauri::AppHandle) -> Result<(), String> {
+async fn open_new_window(app: tauri::AppHandle) -> Result<(), String> {
     window::open_new_window(&app)
 }
 
@@ -233,7 +235,15 @@ pub fn run() {
     macos::register_spellcheck_default();
     #[cfg(windows)]
     windows::initialize().expect("Failed to initialize Windows process safety");
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // Closing to the tray leaves the process running without a taskbar entry,
+    // so a second launch must reopen it instead of starting another instance.
+    // Registered first so the duplicate exits before any setup runs.
+    #[cfg(target_os = "windows")]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+        let _ = window::show_hidden_or_open_new(app);
+    }));
+    let app = builder
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
@@ -243,6 +253,9 @@ pub fn run() {
                 .with_filter(window::is_workspace_window)
                 .build(),
         )
+        .register_uri_scheme_protocol(artifacts::HTML_SCHEME, |ctx, request| {
+            artifacts::serve_html(ctx.app_handle(), &request)
+        })
         .manage(harness::HarnessHost::new())
         .manage(pty::PtyHost::new())
         .manage(remote::RemoteConnections::default())
@@ -425,6 +438,7 @@ pub fn run() {
             fs::inspect_paths,
             fs::read_file_base64,
             fs::read_binary_file,
+            fs::allow_video_stream,
             fs::write_attachment,
             fs::save_generated_image,
             fs::delete_generated_images,

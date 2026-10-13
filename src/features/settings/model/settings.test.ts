@@ -449,6 +449,22 @@ describe("workspace navigation keybindings", () => {
       ),
     ).toBe(true);
   });
+  it("documents Escape stopping a busy session as a fixed binding", () => {
+    expect(KEYBINDINGS.find((row) => row.command === "Session: Stop")).toEqual({
+      command: "Session: Stop",
+      keys: "Esc",
+      when: "sessionBusy && !terminalFocus",
+      fixed: true,
+    });
+  });
+  it("ignores stored overrides for fixed bindings", () => {
+    localStorage.setItem(
+      KEYBINDING_OVERRIDES_KEY,
+      '{"Session: Stop":{"disabled":true}}',
+    );
+    expect(loadKeybindingOverrides()).toEqual({});
+    localStorage.removeItem(KEYBINDING_OVERRIDES_KEY);
+  });
   it("documents same-tab session switching", () => {
     expect(
       KEYBINDINGS.filter((row) => row.command.includes("in Current Tab")),
