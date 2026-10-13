@@ -178,11 +178,6 @@ export type HarnessSessionInput = {
   controlsAgents?: boolean;
   /** Grants this normal turn access to MonoCode's scoped app CLI. */
   appAccess?: boolean;
-  /**
-   * `/browser` in this turn: the session's browser grant is turned on at turn
-   * start. Left out, the grant the session already has is kept as is.
-   */
-  browserAccess?: boolean;
   onEvent: (event: HarnessEvent) => void;
 };
 

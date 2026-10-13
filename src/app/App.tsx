@@ -559,6 +559,7 @@ import {
   operatorEnabledInThread,
 } from "../features/sessions/model/operatorCommand";
 import {
+  browserGrantChange,
   browserGrantStatus,
   consumeBrowserCommand,
 } from "../features/sessions/model/browserCommand";
@@ -6967,6 +6968,9 @@ function Workspace({
       // /browser switches this session's browser grant (spec 13.2). Alone it
       // only switches; with a prompt it turns the grant on for that turn.
       const browserCommand = consumeBrowserCommand(typedText);
+      // The one grant change this submission makes; the turn waits for it,
+      // so control_authorize_turn never has to grant again (one grant_on).
+      let browserGrant: Promise<unknown> | undefined;
       if (browserCommand.matched) {
         const status = (message: string) => {
           enqueueHarnessEvent(sessionId, { type: "status", text: message });
@@ -6975,6 +6979,7 @@ function Workspace({
         if (
           options?.managed ||
           options?.appRequestId ||
+          intent === "orchestrate" ||
           current.orchestrationLeadId ||
           orchestrator.run(sessionId)
         ) {
@@ -6994,17 +6999,20 @@ function Workspace({
           attachments.length === 0 &&
           !noteCard &&
           !handoffCard;
-        const enable = !bare || !sessionBrowserGranted(browserState, sessionId);
-        void setSessionBrowserGrant(sessionId, enable).catch((error: unknown) =>
-          status(error instanceof Error ? error.message : String(error)),
-        );
+        const granted = sessionBrowserGranted(browserState, sessionId);
+        const enable = browserGrantChange(granted, bare);
+        if (enable !== null)
+          browserGrant = setSessionBrowserGrant(sessionId, enable).catch(
+            (error: unknown) =>
+              status(error instanceof Error ? error.message : String(error)),
+          );
         if (enable)
           void ensureBrowserMcp(current.harness, sessionWorkCwd(current)).catch(
             (error: unknown) =>
               console.warn("Browser MCP registration failed:", error),
           );
         if (bare) {
-          status(browserGrantStatus(enable));
+          status(browserGrantStatus(enable === true));
           return true;
         }
       }
@@ -7990,7 +7998,6 @@ function Workspace({
                 browserAccess ||
                 operatorAccess ||
                 orchestrator.run(sessionId)?.status === "active",
-              ...(browserCommand.matched ? { browserAccess: true } : {}),
               appAccess: operatorAccess,
               text,
               attachments: turnAttachments,
@@ -8100,6 +8107,7 @@ function Workspace({
           if (mono && !rawCommand) sendText = monoTurn(sendText, appContext);
           else if (appContext.length)
             sendText += `\n\n${appContext.join("\n\n")}`;
+          await browserGrant;
           await sendTurn(sendText);
           if (agentFiles) {
             recordAgentContext(

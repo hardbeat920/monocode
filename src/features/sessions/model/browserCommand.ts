@@ -28,6 +28,19 @@ export function consumeBrowserCommand(text: string): {
   };
 }
 
+/**
+ * The grant `/browser` sets, or null when it is already right. Alone it
+ * switches; with a prompt it only turns access on, so a thread that has
+ * access already makes no grant call at all.
+ */
+export function browserGrantChange(
+  granted: boolean,
+  bare: boolean,
+): boolean | null {
+  if (bare) return !granted;
+  return granted ? null : true;
+}
+
 /** Status line after `/browser` alone switched the grant (spec 13.2). */
 export function browserGrantStatus(enabled: boolean): string {
   return enabled

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { consumeBrowserCommand } from "./browserCommand";
+import { browserGrantChange, consumeBrowserCommand } from "./browserCommand";
 import { consumeOperatorCommand } from "./operatorCommand";
 
 describe("/browser", () => {
@@ -30,5 +30,17 @@ describe("/browser", () => {
       text: "list tabs",
       matched: true,
     });
+  });
+});
+
+describe("/browser grant", () => {
+  it("switches when alone", () => {
+    expect(browserGrantChange(false, true)).toBe(true);
+    expect(browserGrantChange(true, true)).toBe(false);
+  });
+
+  it("with a prompt grants once and leaves an existing grant alone", () => {
+    expect(browserGrantChange(false, false)).toBe(true);
+    expect(browserGrantChange(true, false)).toBeNull();
   });
 });
