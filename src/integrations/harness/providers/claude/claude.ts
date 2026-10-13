@@ -16,6 +16,7 @@ import {
   writeChild,
 } from "../../core/child";
 import {
+  apiRetryStatusText,
   askUserQuestionAllowInput,
   asRecord,
   assistantMessageId,
@@ -175,6 +176,8 @@ type Live = {
   pendingAssistantBoundary: boolean;
   manualCompaction: boolean;
   compactionConfirmed: boolean;
+  /** An API retry row is showing. */
+  apiRetrying: boolean;
 };
 
 type Resume = {
@@ -203,6 +206,7 @@ const tasksByThread = new Map<
 >();
 /** Task-list block key for TaskCreate/TaskUpdate items. */
 const CLAUDE_TASKS_KEY = "claude-tasks";
+const API_RETRY_STATUS_KEY = "claude-api-retry";
 const cancelledThreads = new Set<string>();
 
 let resolveClaudeBinaryImpl: () => Promise<{ path: string }> =
@@ -357,6 +361,7 @@ export async function stopClaudeSession(sessionId: string): Promise<void> {
   const live = liveByThread.get(sessionId);
   liveByThread.delete(sessionId);
   if (live) {
+    clearApiRetry(live);
     live.muteUpdates = true;
     for (const [, pending] of live.approvals) pending.resolve("deny");
     live.approvals.clear();
@@ -512,6 +517,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     pendingAssistantBoundary: false,
     manualCompaction: false,
     compactionConfirmed: false,
+    apiRetrying: false,
   };
   liveRef.current = live;
 
@@ -526,6 +532,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       liveByThread.delete(input.sessionId);
       const current = liveRef.current;
       if (!current?.muteUpdates) {
+        if (current) clearApiRetry(current);
         (current?.onEvent ?? input.onEvent)({ type: "session.ended", code });
       }
       current?.turnFailed?.(new Error("Claude Code exited"));
@@ -697,6 +704,15 @@ function handleLine(sessionId: string, live: Live, line: string): void {
     markInitialized(live);
     return;
   }
+
+  const retry = apiRetryStatusText(rec);
+  if (retry !== undefined) {
+    live.apiRetrying = true;
+    live.onEvent({ type: "status", key: API_RETRY_STATUS_KEY, text: retry });
+    return;
+  }
+  // Any output means the request went through.
+  if (type !== "system" && type !== "rate_limit_event") clearApiRetry(live);
 
   if (live.manualCompaction && type !== "system" && type !== "result") {
     return;
@@ -1700,8 +1716,15 @@ function maybeFinishTurn(live: Live): void {
   ]);
 }
 
+function clearApiRetry(live: Live): void {
+  if (!live.apiRetrying) return;
+  live.apiRetrying = false;
+  live.onEvent({ type: "status", key: API_RETRY_STATUS_KEY, text: "" });
+}
+
 function finishActiveTurn(live: Live, extraEvents: HarnessEvent[] = []): void {
   clearAwaitingResume(live);
+  clearApiRetry(live);
   live.turnEndPending = false;
   live.activeTurn = false;
   for (const event of extraEvents) live.onEvent(event);

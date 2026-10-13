@@ -4,6 +4,7 @@ import {
   modelsFromClaudeListModels,
 } from "./claudeCatalog";
 import {
+  apiRetryStatusText,
   applyClaudePromptEffortPrefix,
   applyClaudeTaskTool,
   askUserQuestionAllowInput,
@@ -274,6 +275,40 @@ describe("stream mapping", () => {
       name: "Read",
       input: { file_path: "a.ts" },
     });
+  });
+});
+
+describe("API retries", () => {
+  it("names the cause and the attempt", () => {
+    const retry = (extra: Record<string, unknown>) =>
+      apiRetryStatusText({
+        type: "system",
+        subtype: "api_retry",
+        attempt: 7,
+        max_retries: 10,
+        ...extra,
+      });
+    expect(retry({ error_status: null })).toBe(
+      "Connection error · retrying (7/10)…",
+    );
+    expect(retry({ error: "overloaded", error_status: 529 })).toBe(
+      "API overloaded · retrying (7/10)…",
+    );
+    expect(retry({ error_status: 429 })).toBe(
+      "Rate limited · retrying (7/10)…",
+    );
+    expect(retry({ error_status: 500 })).toBe(
+      "API error 500 · retrying (7/10)…",
+    );
+  });
+
+  it("ignores other system messages and incomplete retries", () => {
+    expect(
+      apiRetryStatusText({ type: "system", subtype: "status", attempt: 1 }),
+    ).toBeUndefined();
+    expect(
+      apiRetryStatusText({ type: "system", subtype: "api_retry", attempt: 1 }),
+    ).toBeUndefined();
   });
 });
 

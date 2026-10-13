@@ -477,6 +477,31 @@ export function statusTextFromSystem(
   return compact ? "Compacted context" : undefined;
 }
 
+/**
+ * Claude Code retries a failed API request itself (dropped connection, rate
+ * limit, overload) and reports each attempt as `system/api_retry`. Without a
+ * row for it, minutes of retries read as a turn that froze.
+ */
+export function apiRetryStatusText(
+  rec: Record<string, unknown>,
+): string | undefined {
+  if (stringField(rec, "type") !== "system") return undefined;
+  if (stringField(rec, "subtype") !== "api_retry") return undefined;
+  const { attempt, max_retries: max } = rec;
+  if (typeof attempt !== "number" || typeof max !== "number") return undefined;
+  return `${apiRetryReason(rec)} · retrying (${attempt}/${max})…`;
+}
+
+function apiRetryReason(rec: Record<string, unknown>): string {
+  const status = typeof rec.error_status === "number" ? rec.error_status : null;
+  if (rec.no_response) return "No response from the API";
+  if (rec.error === "overloaded" || status === 529) return "API overloaded";
+  if (rec.error === "rate_limit" || status === 429) return "Rate limited";
+  // No HTTP status at all: the request never got a response.
+  if (status === null) return "Connection error";
+  return `API error ${status}`;
+}
+
 export function turnStatusFromResult(rec: Record<string, unknown>): {
   status: "completed" | "failed" | "interrupted" | "cancelled";
   error?: string;
