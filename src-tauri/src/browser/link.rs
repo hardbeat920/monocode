@@ -522,8 +522,9 @@ impl Link {
         self.inner.commands_sent.load(Ordering::Relaxed)
     }
 
-    /// Called from the link thread when the socket closes for a reason other
-    /// than `Link::close`.
+    /// Called from the link thread once the socket is closed, whoever closed
+    /// it (`ClosedBy` says). For [`Link::close`] it runs before `close`
+    /// returns.
     pub fn set_on_closed(&self, hook: impl Fn(ClosedBy) + Send + Sync + 'static) {
         *self
             .inner
@@ -1084,16 +1085,21 @@ impl Loop {
                 sub.ready.notify_all();
             }
         }
+        // The hook (the host's bookkeeping: epoch, connection state) runs
+        // before `Link::close` returns, so whatever the closer records next
+        // is not overwritten by it a moment later.
+        {
+            let hook = self
+                .inner
+                .on_closed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if let Some(hook) = hook.as_ref() {
+                hook(closed_by);
+            }
+        }
         if let Some(closing) = self.closing.take() {
             let _ = closing.done.send(());
-        }
-        let hook = self
-            .inner
-            .on_closed
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        if let Some(hook) = hook.as_ref() {
-            hook(closed_by);
         }
     }
 }
@@ -1316,8 +1322,14 @@ mod tests {
         link.send(&ctx, click("S1")).unwrap();
         let detach = policy.write().set_toggle(false);
         assert_eq!(detach, vec![CdpSessionId("S1".into())]);
+        let closed = Arc::new(Mutex::new(None));
+        let seen = closed.clone();
+        link.set_on_closed(move |by| *seen.lock().unwrap() = Some(by));
         link.close(detach, Duration::from_millis(500));
         assert_eq!(link.status(), LinkStatus::Closed);
+        // The hook ran before `close` returned: the host's state written
+        // after a close is final.
+        assert_eq!(*closed.lock().unwrap(), Some(ClosedBy::Us));
         let methods: Vec<String> = server.received().into_iter().map(|r| r.method).collect();
         assert_eq!(
             methods,

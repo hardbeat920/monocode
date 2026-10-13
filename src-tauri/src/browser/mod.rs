@@ -1700,8 +1700,13 @@ mod tests {
             "{:?}",
             host.connection()
         );
-        assert!(host.connection().detail.unwrap().contains("144"));
         assert!(server.wait_for_close(Duration::from_secs(2)));
+        // The link's own close ran its hook before the refusal was recorded:
+        // the state stays, it is not turned into "Disconnected" a moment later.
+        thread::sleep(Duration::from_millis(50));
+        let connection = host.connection();
+        assert_eq!(connection.state, ConnectionState::UnsupportedVersion);
+        assert!(connection.detail.unwrap().contains("144"));
         host.turn_started("s1", "main", "/repo", Some(true));
         let blocked = host.handle_request("s1", request("r1", "tabs.open", json!({})));
         assert_eq!(blocked.reason, Some(Reason::BrowserUnsupported));
