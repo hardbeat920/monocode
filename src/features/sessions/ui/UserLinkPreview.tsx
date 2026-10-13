@@ -1,4 +1,5 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { githubHostOf } from "../../inbox/model/githubHost";
 import {
   useCallback,
   useEffect,
@@ -130,11 +131,17 @@ function GithubWorkItemPreview({
   const requestStarted = useRef(false);
   const tooltipId = useId();
   const [open, setOpen] = useState(false);
+  const host = githubHostOf(link.url);
   const [item, setItem] = useState<GithubWorkItem | null>(() =>
-    peekGithubWorkItem(workItem.repo, workItem.kind, workItem.number),
+    peekGithubWorkItem(workItem.repo, workItem.kind, workItem.number, host),
   );
   const [details, setDetails] = useState<GithubWorkItemDetails | null>(() =>
-    peekGithubWorkItemDetails(workItem.repo, workItem.kind, workItem.number),
+    peekGithubWorkItemDetails(
+      workItem.repo,
+      workItem.kind,
+      workItem.number,
+      host,
+    ),
   );
   const [loadState, setLoadState] = useState<
     "idle" | "loading" | "ready" | "unavailable"
@@ -153,10 +160,16 @@ function GithubWorkItemPreview({
     if (requestStarted.current) return;
     requestStarted.current = true;
     const cachedItem =
-      item ?? peekGithubWorkItem(workItem.repo, workItem.kind, workItem.number);
+      item ??
+      peekGithubWorkItem(workItem.repo, workItem.kind, workItem.number, host);
     const cachedDetails =
       details ??
-      peekGithubWorkItemDetails(workItem.repo, workItem.kind, workItem.number);
+      peekGithubWorkItemDetails(
+        workItem.repo,
+        workItem.kind,
+        workItem.number,
+        host,
+      );
     if (!cachedItem || !cachedDetails) setLoadState("loading");
 
     void Promise.allSettled([
@@ -167,6 +180,7 @@ function GithubWorkItemPreview({
             workItem.repo,
             workItem.kind,
             workItem.number,
+            { host },
           ),
       cachedDetails
         ? Promise.resolve(cachedDetails)
@@ -175,6 +189,7 @@ function GithubWorkItemPreview({
             workItem.repo,
             workItem.kind,
             workItem.number,
+            { host },
           ),
     ]).then(([itemResult, detailsResult]) => {
       if (!mounted.current) return;
@@ -189,7 +204,7 @@ function GithubWorkItemPreview({
           : "unavailable",
       );
     });
-  }, [cwd, details, item, workItem]);
+  }, [cwd, details, host, item, workItem]);
 
   const clearOpenTimer = () => {
     if (openTimer.current == null) return;

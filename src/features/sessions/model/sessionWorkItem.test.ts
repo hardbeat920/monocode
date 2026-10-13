@@ -58,6 +58,27 @@ describe("session work items", () => {
     expect(linkedWorkItemInboxKey(linked!)).toBe(inboxItemKey(item));
   });
 
+  it("does not match a saved link to the same repo slug on another server", () => {
+    const item = {
+      provider: "github",
+      kind: "pr",
+      repo: "acme/web",
+      number: 7,
+      url: "https://github.example.com/acme/web/pull/7",
+    } as InboxItem;
+    const dotcom = {
+      kind: "pr" as const,
+      repo: "acme/web",
+      number: 7,
+      url: "https://github.com/acme/web/pull/7",
+    };
+    expect(inboxItemMatchesLinkedWorkItem(item, dotcom)).toBe(false);
+    expect(linkedWorkItemInboxKey(dotcom)).not.toBe(inboxItemKey(item));
+    const same = { ...dotcom, url: item.url };
+    expect(inboxItemMatchesLinkedWorkItem(item, same)).toBe(true);
+    expect(linkedWorkItemInboxKey(same)).toBe(inboxItemKey(item));
+  });
+
   it("restores a linked PR from a persisted automation event", () => {
     expect(
       linkedWorkItemFromAutomationEvent({
@@ -143,6 +164,7 @@ describe("session work items", () => {
     expect(invoke).toHaveBeenCalledWith("git_github_work_item", {
       cwd: "/tmp/codex",
       repo: "openai/codex",
+      host: "github.com",
       kind: "pr",
       number: 42,
     });
@@ -174,6 +196,7 @@ describe("session work items", () => {
     expect(invoke).toHaveBeenCalledWith("git_github_pr_action", {
       cwd: "/tmp/codex",
       repo: "openai/codex",
+      host: "github.com",
       number: 42,
       action: "squash",
     });

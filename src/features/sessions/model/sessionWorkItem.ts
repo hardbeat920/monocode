@@ -1,5 +1,9 @@
 import { gitPrStatus } from "../../../platform/tauri/fs";
-import { githubHost, githubOrigin } from "../../inbox/model/githubHost";
+import {
+  githubHost,
+  githubHostOf,
+  githubOrigin,
+} from "../../inbox/model/githubHost";
 import {
   githubRepo,
   inboxIdentityKey,
@@ -148,7 +152,8 @@ export function inboxItemMatchesLinkedWorkItem(
     item.provider === "github" &&
     item.kind === linked.kind &&
     item.number === linked.number &&
-    item.repo.trim().toLowerCase() === linked.repo.trim().toLowerCase()
+    item.repo.trim().toLowerCase() === linked.repo.trim().toLowerCase() &&
+    githubHostOf(item.url) === githubHostOf(linked.url)
   );
 }
 

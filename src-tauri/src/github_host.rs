@@ -1,16 +1,24 @@
 //! The GitHub host MonoCode talks to through `gh`: github.com or a GitHub Enterprise Server.
 
+use std::cell::RefCell;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::RwLock;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 pub const DEFAULT_HOST: &str = "github.com";
+pub const HOST_CHANGED_EVENT: &str = "github-host-changed";
 
 static HOST: RwLock<Option<String>> = RwLock::new(None);
+
+thread_local! {
+    /// The host one command acts on, so an item keeps its own server even
+    /// after the configured host changes.
+    static SCOPED_HOST: RefCell<Option<String>> = const { RefCell::new(None) };
+}
 
 #[derive(Serialize, Deserialize, Default)]
 struct GithubHostConfig {
@@ -26,12 +34,39 @@ pub fn init(app: &AppHandle) {
     store(host);
 }
 
-/// The configured host, such as `github.com` or `github.example.com`.
+/// The host in effect: a command's scoped host, else the configured one.
 pub fn host() -> String {
+    if let Some(scoped) = SCOPED_HOST.with(|scoped| scoped.borrow().clone()) {
+        return scoped;
+    }
     HOST.read()
         .ok()
         .and_then(|host| host.clone())
         .unwrap_or_else(|| DEFAULT_HOST.to_string())
+}
+
+struct ScopeGuard(Option<String>);
+
+impl Drop for ScopeGuard {
+    fn drop(&mut self) {
+        let previous = self.0.take();
+        SCOPED_HOST.with(|scoped| *scoped.borrow_mut() = previous);
+    }
+}
+
+/// Runs `run` against `host` (an item's own server) instead of the configured host.
+/// `None` or an empty host keeps the configured host.
+pub fn with_host<T>(
+    host: Option<&str>,
+    run: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let Some(host) = host.map(str::trim).filter(|host| !host.is_empty()) else {
+        return run();
+    };
+    let host = normalize_github_host(host)?;
+    let previous = SCOPED_HOST.with(|scoped| scoped.replace(Some(host)));
+    let _guard = ScopeGuard(previous);
+    run()
 }
 
 pub fn is_enterprise() -> bool {
@@ -48,11 +83,10 @@ pub fn api_base() -> String {
     }
 }
 
-/// Points `gh` at the configured host for commands that do not name one.
+/// Points `gh` at the host in effect. Always set, so an inherited `GH_HOST`
+/// cannot redirect commands meant for github.com.
 pub fn apply_gh_env(cmd: &mut Command) {
-    if is_enterprise() {
-        cmd.env("GH_HOST", host());
-    }
+    cmd.env("GH_HOST", host());
 }
 
 #[tauri::command(async)]
@@ -62,12 +96,19 @@ pub fn github_host_get() -> String {
 
 #[tauri::command(async)]
 pub fn github_host_set(app: AppHandle, host: String) -> Result<String, String> {
+    let host = save_host(&app, host)?;
+    // Every window mirrors the host for its synchronous URL helpers.
+    let _ = app.emit(HOST_CHANGED_EVENT, host.clone());
+    Ok(host)
+}
+
+fn save_host(app: &AppHandle, host: String) -> Result<String, String> {
     let host = if host.trim().is_empty() {
         DEFAULT_HOST.to_string()
     } else {
         normalize_github_host(&host)?
     };
-    let path = config_path(&app)?;
+    let path = config_path(app)?;
     if host == DEFAULT_HOST {
         match fs::remove_file(&path) {
             Ok(()) => {}
@@ -153,5 +194,39 @@ mod tests {
         assert!(normalize_github_host("http://github.example.com").is_err());
         assert!(normalize_github_host("https://user@github.example.com").is_err());
         assert!(normalize_github_host("").is_err());
+    }
+
+    fn gh_host_env(cmd: &Command) -> Option<String> {
+        cmd.get_envs()
+            .find(|(key, _)| *key == "GH_HOST")
+            .and_then(|(_, value)| value)
+            .map(|value| value.to_string_lossy().into_owned())
+    }
+
+    #[test]
+    fn gh_host_is_set_explicitly_for_github_com() {
+        let mut cmd = Command::new("gh");
+        apply_gh_env(&mut cmd);
+        assert_eq!(gh_host_env(&cmd).as_deref(), Some(DEFAULT_HOST));
+    }
+
+    #[test]
+    fn scoped_host_applies_only_inside_the_command() {
+        let inside = with_host(Some("https://GitHub.Example.com/acme/web"), || {
+            let mut cmd = Command::new("gh");
+            apply_gh_env(&mut cmd);
+            Ok((host(), api_base(), gh_host_env(&cmd)))
+        })
+        .unwrap();
+        assert_eq!(inside.0, "github.example.com");
+        assert_eq!(inside.1, "https://github.example.com/api/v3");
+        assert_eq!(inside.2.as_deref(), Some("github.example.com"));
+        assert_eq!(host(), DEFAULT_HOST);
+        assert_eq!(with_host(None, || Ok(host())).unwrap(), DEFAULT_HOST);
+        assert!(with_host(Some("github.example.com:8443"), || Ok(())).is_err());
+        let failed: Result<(), String> =
+            with_host(Some("github.example.com"), || Err("boom".into()));
+        assert!(failed.is_err());
+        assert_eq!(host(), DEFAULT_HOST);
     }
 }

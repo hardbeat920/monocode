@@ -105,12 +105,14 @@ describe("GitHub work item link preview", () => {
       "acme/widgets",
       "pr",
       73,
+      { host: "github.com" },
     );
     expect(githubWorkItemDetails).toHaveBeenCalledWith(
       "/workspace/widgets",
       "acme/widgets",
       "pr",
       73,
+      { host: "github.com" },
     );
   });
 

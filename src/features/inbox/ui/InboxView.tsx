@@ -204,6 +204,7 @@ import {
   type InboxSessionPortal,
 } from "./InboxDiscussionPanel";
 import { inboxAskKey } from "../model/inboxAsk";
+import { githubHostOf } from "../model/githubHost";
 
 const MIN_WIDTH = 240;
 const MAX_WIDTH = 420;
@@ -738,7 +739,9 @@ export function InboxView({
       return;
     }
     let cancelled = false;
-    void githubWorkItem(cwd, target.repo, target.kind, target.number)
+    void githubWorkItem(cwd, target.repo, target.kind, target.number, {
+      host: githubHostOf(target.url),
+    })
       .then((item) => {
         if (cancelled) return;
         setTargetItem({
@@ -1236,6 +1239,7 @@ export function LinkedWorkItemPanel({
     target.repo,
     target.kind,
     target.number,
+    githubHostOf(target.url),
   );
   const [item, setItem] = useState<InboxItem | null>(() =>
     cachedItem ? { ...cachedItem, projectPath: cwd, provider: "github" } : null,
@@ -1263,13 +1267,20 @@ export function LinkedWorkItemPanel({
 
   useEffect(() => {
     let cancelled = false;
-    const cached = peekGithubWorkItem(target.repo, target.kind, target.number);
+    const cached = peekGithubWorkItem(
+      target.repo,
+      target.kind,
+      target.number,
+      githubHostOf(target.url),
+    );
     setItem(
       cached ? { ...cached, projectPath: cwd, provider: "github" } : null,
     );
     setError(null);
     setLoading(cached == null);
-    void githubWorkItem(cwd, target.repo, target.kind, target.number)
+    void githubWorkItem(cwd, target.repo, target.kind, target.number, {
+      host: githubHostOf(target.url),
+    })
       .then((next) => {
         if (cancelled) return;
         setItem({ ...next, projectPath: cwd, provider: "github" });
@@ -1771,6 +1782,7 @@ export function GithubPrActions({
         item.repo,
         item.number,
         action,
+        { host: githubHostOf(item.url) },
       );
       setConfirmation(null);
       setNotice(
@@ -2072,14 +2084,19 @@ export function InboxDetail({
               item.number,
             )
           : githubKind
-            ? peekGithubWorkItemDetails(item.repo, githubKind, item.number)
+            ? peekGithubWorkItemDetails(
+                item.repo,
+                githubKind,
+                item.number,
+                githubHostOf(item.url),
+              )
             : null;
   const cachedDiff = isPr
     ? gitlab
       ? peekGitlabMrDiff(item.repo, item.number)
       : azuredevops
         ? peekAzureDevOpsMrDiff(item.repo, item.number)
-        : peekGithubPrDiff(item.repo, item.number)
+        : peekGithubPrDiff(item.repo, item.number, false, githubHostOf(item.url))
     : null;
   const cachedThread = linear
     ? peekLinearIssueThread(item.id ?? "")
@@ -2094,7 +2111,12 @@ export function InboxDetail({
               item.number,
             )
           : githubKind
-            ? peekGithubWorkItemThread(item.repo, githubKind, item.number)
+            ? peekGithubWorkItemThread(
+                item.repo,
+                githubKind,
+                item.number,
+                githubHostOf(item.url),
+              )
             : null;
   const [details, setDetails] = useState<GithubWorkItemDetails | null>(cached);
   const [loading, setLoading] = useState(cached == null);
@@ -2176,6 +2198,7 @@ export function InboxDetail({
   const prChecksView = useGithubPrChecks({
     cwd: item.projectPath || cwd,
     repo: item.repo,
+    host: githubHostOf(item.url),
     number: item.number,
     enabled: prChecksEnabled,
     open: isPr && item.state.trim().toLowerCase() === "open",
@@ -2205,7 +2228,12 @@ export function InboxDetail({
                 item.number,
               )
             : githubKind
-              ? peekGithubWorkItemDetails(item.repo, githubKind, item.number)
+              ? peekGithubWorkItemDetails(
+                item.repo,
+                githubKind,
+                item.number,
+                githubHostOf(item.url),
+              )
               : null;
     if (cachedDetails) {
       setDetails(cachedDetails);
@@ -2238,7 +2266,7 @@ export function InboxDetail({
                   item.repo,
                   githubKind,
                   item.number,
-                  { maxAgeMs: panelMaxAge },
+                  { maxAgeMs: panelMaxAge, host: githubHostOf(item.url) },
                 )
               : Promise.reject(new Error("Unknown inbox item"));
     void pending
@@ -2405,6 +2433,7 @@ export function InboxDetail({
       item.repo,
       githubKind,
       item.number,
+      githubHostOf(item.url),
     );
     if (cachedThread) {
       setThread(cachedThread);
@@ -2420,7 +2449,7 @@ export function InboxDetail({
       item.repo,
       githubKind,
       item.number,
-      { maxAgeMs: panelMaxAge },
+      { maxAgeMs: panelMaxAge, host: githubHostOf(item.url) },
     )
       .then((next) => {
         if (cancelled) return;
@@ -2460,7 +2489,7 @@ export function InboxDetail({
       ? peekGitlabMrDiff(item.repo, item.number)
       : azuredevops
         ? peekAzureDevOpsMrDiff(item.repo, item.number)
-        : peekGithubPrDiff(item.repo, item.number, fullFile);
+        : peekGithubPrDiff(item.repo, item.number, fullFile, githubHostOf(item.url));
     if (cachedDiff) {
       setPrDiff(cachedDiff);
       setDiffLoading(false);
@@ -2477,6 +2506,7 @@ export function InboxDetail({
         : githubPrDiff(item.projectPath, item.repo, item.number, {
             fullContext: fullFile,
             maxAgeMs: panelMaxAge,
+            host: githubHostOf(item.url),
           });
     void pending
       .then((next) => {
@@ -2583,7 +2613,7 @@ export function InboxDetail({
         githubKind,
         item.number,
         body,
-        { inReplyTo: replyTo?.threadId },
+        { inReplyTo: replyTo?.threadId, host: githubHostOf(item.url) },
       );
       setReplyTo(null);
       try {
@@ -2595,6 +2625,7 @@ export function InboxDetail({
             item.number,
             {
               force: true,
+              host: githubHostOf(item.url),
             },
           ),
         );
@@ -2987,6 +3018,7 @@ export function InboxDetail({
                 onRefresh={prChecksView.refresh}
                 cwd={item.projectPath || cwd}
                 repo={item.repo}
+                host={githubHostOf(item.url)}
                 repair={
                   onRepairChecks &&
                   item.provider === "github" &&

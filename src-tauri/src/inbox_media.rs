@@ -13,8 +13,19 @@ const USER_AGENT: &str = "MonoCode";
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct MediaUrl {
     host: String,
+    /// Explicit non-default port; another service may share the hostname.
+    port: Option<u16>,
     path: String,
     url: String,
+}
+
+impl MediaUrl {
+    fn authority(&self) -> String {
+        match self.port {
+            Some(port) => format!("{}:{port}", self.host),
+            None => self.host.clone(),
+        }
+    }
 }
 
 /// Fetch an issue/PR image or video through the host, as a blob the webview
@@ -29,7 +40,8 @@ pub async fn fetch_inbox_media(url: String) -> Result<tauri::ipc::Response, Stri
 
 fn fetch_inbox_media_sync(url: &str) -> Result<Vec<u8>, String> {
     let mut current = parse_allowed_media_url(url)?;
-    let token = if github_auth_host(&current.host) {
+    let configured = crate::github_host::host();
+    let token = if github_auth_target(&current, &configured) {
         github_auth_token()
     } else {
         None
@@ -48,7 +60,7 @@ fn fetch_inbox_media_sync(url: &str) -> Result<Vec<u8>, String> {
             .set("Accept", "image/*,video/*,*/*;q=0.1")
             .set("User-Agent", USER_AGENT);
         if let Some(token) = token.as_ref() {
-            if github_auth_host(&current.host) {
+            if github_auth_target(&current, &configured) {
                 request = request.set("Authorization", &format!("Bearer {token}"));
             }
         }
@@ -159,12 +171,16 @@ fn parse_https_url(raw: &str) -> Result<MediaUrl, String> {
     if authority.starts_with('[') {
         return Err("Media URL is invalid".into());
     }
-    let host = authority
-        .split(':')
-        .next()
-        .unwrap_or("")
-        .trim_end_matches('.')
-        .to_ascii_lowercase();
+    let (host, port) = match authority.split_once(':') {
+        Some((host, port)) => {
+            let port = port
+                .parse::<u16>()
+                .map_err(|_| "Media URL is invalid".to_string())?;
+            (host, (port != 443).then_some(port))
+        }
+        None => (authority, None),
+    };
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
     if host.is_empty() || host == "localhost" || host.parse::<std::net::IpAddr>().is_ok() {
         return Err("Media URL is invalid".into());
     }
@@ -176,6 +192,7 @@ fn parse_https_url(raw: &str) -> Result<MediaUrl, String> {
     let url = raw.split('#').next().unwrap_or(raw).to_string();
     Ok(MediaUrl {
         host,
+        port,
         path: path.to_string(),
         url,
     })
@@ -196,19 +213,23 @@ fn redirect_target(base: &str, location: &str) -> Result<MediaUrl, String> {
     let joined = if let Some(rest) = location.strip_prefix("//") {
         format!("https://{rest}")
     } else if location.starts_with('/') {
-        format!("https://{}{}", base.host, location)
+        format!("https://{}{}", base.authority(), location)
     } else {
         let dir = base
             .path
             .rsplit_once('/')
             .map(|(head, _)| head)
             .unwrap_or("");
-        format!("https://{}{dir}/{location}", base.host)
+        format!("https://{}{dir}/{location}", base.authority())
     };
     parse_https_url(&joined)
 }
 
 fn is_allowed_media_target(url: &MediaUrl) -> bool {
+    // Only the default HTTPS port belongs to GitHub, its CDNs or Linear.
+    if url.port.is_some() {
+        return false;
+    }
     if is_github_site(&url.host) {
         return is_github_attachment_path(&url.path);
     }
@@ -247,14 +268,16 @@ fn is_github_asset_s3(host: &str) -> bool {
         || host.starts_with("github-production-media-"))
 }
 
-fn github_auth_host(host: &str) -> bool {
-    // JWT-signed githubusercontent URLs reject an extra Authorization header,
-    // and the `gh` token only belongs to the configured host.
-    let configured = crate::github_host::host();
+/// The `gh` token only belongs to the configured origin (default HTTPS port);
+/// JWT-signed githubusercontent URLs reject an extra Authorization header.
+fn github_auth_target(url: &MediaUrl, configured: &str) -> bool {
+    if url.port.is_some() {
+        return false;
+    }
     if configured == crate::github_host::DEFAULT_HOST {
-        host == "github.com" || host == "www.github.com"
+        url.host == "github.com" || url.host == "www.github.com"
     } else {
-        host == configured
+        url.host == configured
     }
 }
 
@@ -355,5 +378,52 @@ mod tests {
             "http://objects.githubusercontent.com/x"
         )
         .is_err());
+    }
+
+    #[test]
+    fn github_token_only_goes_to_the_configured_origin() {
+        let url = |raw: &str| parse_https_url(raw).unwrap();
+        let ghes = "github.example.com";
+        assert!(github_auth_target(
+            &url("https://github.example.com/user-attachments/assets/x"),
+            ghes
+        ));
+        assert!(github_auth_target(
+            &url("https://github.example.com:443/user-attachments/assets/x"),
+            ghes
+        ));
+        // Another HTTPS service on the same hostname must not get the token.
+        assert!(!github_auth_target(
+            &url("https://github.example.com:8443/user-attachments/assets/x"),
+            ghes
+        ));
+        assert!(!github_auth_target(
+            &url("https://github.com/user-attachments/assets/x"),
+            ghes
+        ));
+        assert!(github_auth_target(
+            &url("https://github.com/user-attachments/assets/x"),
+            "github.com"
+        ));
+        assert!(!github_auth_target(
+            &url("https://github.com:8443/user-attachments/assets/x"),
+            "github.com"
+        ));
+        assert!(
+            parse_allowed_media_url("https://github.com:8443/user-attachments/assets/x").is_err()
+        );
+    }
+
+    #[test]
+    fn relative_redirects_keep_the_port() {
+        let next = redirect_target(
+            "https://github.com:8443/user-attachments/assets/x",
+            "/login",
+        )
+        .unwrap();
+        assert_eq!(next.port, Some(8443));
+        assert_eq!(next.url, "https://github.com:8443/login");
+        assert!(!is_allowed_media_target(&next));
+        assert!(!github_auth_target(&next, "github.com"));
     }
 }

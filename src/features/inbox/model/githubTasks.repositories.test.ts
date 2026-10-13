@@ -2,15 +2,18 @@ import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearInboxCache,
+  githubPrAction,
   githubPrDiff,
   githubRepositories,
   githubWorkItemComment,
   githubWorkItemDetails,
   githubWorkItemThread,
+  inboxIdentityKey,
   listInboxItems,
   peekGithubWorkItemDetails,
   type GithubWorkItem,
 } from "./githubTasks";
+import { githubHostOf, setGithubHost } from "./githubHost";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
@@ -213,22 +216,79 @@ describe("repository-qualified GitHub item operations", () => {
     expect(invoke).toHaveBeenCalledWith("git_github_work_item_thread", {
       cwd: "/tmp/web",
       repo: "acme/web",
+      host: "github.com",
       kind: "pr",
       number: 10,
     });
     expect(invoke).toHaveBeenCalledWith("git_github_pr_diff", {
       cwd: "/tmp/web",
       repo: "acme/web",
+      host: "github.com",
       number: 10,
       fullContext: false,
     });
     expect(invoke).toHaveBeenCalledWith("git_github_work_item_comment", {
       cwd: "/tmp/web",
       repo: "acme/web",
+      host: "github.com",
       kind: "issue",
       number: 10,
       body: "Looks good",
       inReplyTo: "",
     });
+  });
+});
+
+describe("GitHub items on different servers", () => {
+  const ghes = "github.example.com";
+
+  it("acts on the item's own server even after the configured host changes", async () => {
+    setGithubHost(ghes);
+    try {
+      vi.mocked(invoke).mockResolvedValue({
+        ...workItem("acme/web", "pr"),
+        state: "merged",
+      } as never);
+      // A github.com item opened in another window must merge on github.com.
+      await githubPrAction("/tmp/web", "acme/web", 10, "squash", {
+        host: githubHostOf("https://github.com/acme/web/pull/10"),
+      });
+      expect(invoke).toHaveBeenCalledWith(
+        "git_github_pr_action",
+        expect.objectContaining({ repo: "acme/web", host: "github.com" }),
+      );
+      vi.mocked(invoke).mockResolvedValue(
+        "https://x/1#issuecomment-1" as never,
+      );
+      await githubWorkItemComment("/tmp/web", "acme/web", "pr", 10, "hi");
+      expect(invoke).toHaveBeenCalledWith(
+        "git_github_work_item_comment",
+        expect.objectContaining({ host: ghes }),
+      );
+    } finally {
+      setGithubHost(null);
+    }
+  });
+
+  it("keeps same-slug items on different servers apart", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({ body: "dotcom" } as never);
+    await githubWorkItemDetails("/tmp/web", "acme/web", "pr", 10, {
+      host: "github.com",
+    });
+    expect(peekGithubWorkItemDetails("acme/web", "pr", 10, ghes)).toBeNull();
+    expect(
+      peekGithubWorkItemDetails("acme/web", "pr", 10, "github.com")?.body,
+    ).toBe("dotcom");
+    const dotcom = {
+      provider: "github" as const,
+      kind: "pr" as const,
+      repo: "acme/web",
+      number: 10,
+      url: "https://github.com/acme/web/pull/10",
+    };
+    const enterprise = { ...dotcom, url: `https://${ghes}/acme/web/pull/10` };
+    // github.com keys stay unprefixed so seen state saved earlier still matches.
+    expect(inboxIdentityKey(dotcom)).toBe("acme/web:pr:10");
+    expect(inboxIdentityKey(enterprise)).toBe(`${ghes}/acme/web:pr:10`);
   });
 });

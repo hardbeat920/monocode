@@ -247,6 +247,7 @@ it("opens the only failed Actions job and shows its failed step and error", asyn
   expect(invoke).toHaveBeenCalledWith("git_github_check_details", {
     cwd: "/tmp/web",
     repo: "acme/web",
+    host: "github.com",
     jobId: "123",
   });
   expect(container.textContent).toContain("1 failed");
@@ -702,6 +703,7 @@ describe("Checks tab user behavior", () => {
     expect(invoke).toHaveBeenCalledWith("git_github_pr_checks", {
       cwd: "/tmp/web",
       repo: "acme/web",
+      host: "github.com",
       number: 157,
     });
     const summaryTab = container.querySelector<HTMLButtonElement>(
@@ -765,6 +767,7 @@ describe("Checks tab user behavior", () => {
     expect(invoke).toHaveBeenCalledWith("git_github_pr_checks", {
       cwd: "/tmp/web",
       repo: "acme/web",
+      host: "github.com",
       number: 157,
     });
     expect(

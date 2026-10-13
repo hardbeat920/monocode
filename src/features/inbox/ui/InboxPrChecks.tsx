@@ -1,4 +1,5 @@
 import { CheckRepairForm, type CheckRepair } from "./CheckRepairForm";
+import { githubHost } from "../model/githubHost";
 import {
   CheckRepairProgress,
   CheckRepairStatus,
@@ -155,6 +156,7 @@ function PrCheckRow({
   check,
   cwd,
   repo,
+  host,
   headOid,
   autoExpand,
   refreshToken,
@@ -168,6 +170,7 @@ function PrCheckRow({
   check: GithubPrCheck;
   cwd: string;
   repo: string;
+  host: string;
   headOid: string;
   autoExpand: boolean;
   refreshToken: unknown;
@@ -181,7 +184,7 @@ function PrCheckRow({
   const rowRef = useRef<HTMLLIElement>(null);
   const fixRef = useRef<HTMLButtonElement>(null);
   const fixOpen = Boolean(fixAnchor && fixAnchor === fixRef.current);
-  const jobId = githubActionsJobId(check.url, repo);
+  const jobId = githubActionsJobId(check.url, repo, host);
   const expandable = Boolean(cwd && jobId);
   const [expanded, setExpanded] = useState(autoExpand && expandable);
   useEffect(() => {
@@ -228,7 +231,7 @@ function PrCheckRow({
     setLoading(true);
     setError(null);
     // Routine polls keep evidence mounted while fetching updated job steps.
-    fetchGithubCheckDetails(cwd, repo, jobId)
+    fetchGithubCheckDetails(cwd, repo, jobId, host)
       .then(
         (result) => {
           if (active) setDetails(result);
@@ -434,6 +437,7 @@ function PrCheckRow({
                   annotations={details.annotations}
                   cwd={cwd}
                   repo={repo}
+                  host={host}
                   headOid={headOid}
                 />
               ) : null}
@@ -507,12 +511,15 @@ export function InboxPrChecks({
   onRefresh,
   cwd = "",
   repo = "",
+  host = githubHost(),
   repair,
 }: {
   view: GithubPrChecksView;
   onRefresh: () => void;
   cwd?: string;
   repo?: string;
+  /** Server of the pull request; check details run there. */
+  host?: string;
   repair?: CheckRepair;
 }) {
   const { checks, loading, refreshing, error, stale } = view;
@@ -697,6 +704,7 @@ export function InboxPrChecks({
           headOid={checks?.headOid ?? ""}
           cwd={cwd}
           repo={repo}
+          host={host}
           repair={repair}
           blocked={refreshing || stale || Boolean(error)}
           onClose={() => setSelection(null)}
@@ -803,6 +811,7 @@ export function InboxPrChecks({
                       fixAnchor={selection?.anchor}
                       cwd={cwd}
                       repo={repo}
+                      host={host}
                       headOid={checks?.headOid ?? ""}
                       autoExpand={
                         repairGroups.length === 0 &&

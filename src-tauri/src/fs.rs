@@ -1375,9 +1375,11 @@ pub async fn git_github_repositories(cwd: String) -> Result<Vec<String>, String>
 
 /// Open issues or pull requests for one GitHub repository, via `gh`.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn git_github_work_items(
     cwd: String,
     repo: String,
+    host: Option<String>,
     kind: String,
     assigned_to_me: bool,
     state: String,
@@ -1385,15 +1387,17 @@ pub async fn git_github_work_items(
     limit: Option<u32>,
 ) -> Result<Vec<GitHubWorkItem>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        git_github_work_items_for(
-            &expand_home(&cwd),
-            &repo,
-            &kind,
-            assigned_to_me,
-            &state,
-            &search,
-            limit.unwrap_or(40),
-        )
+        crate::github_host::with_host(host.as_deref(), || {
+            git_github_work_items_for(
+                &expand_home(&cwd),
+                &repo,
+                &kind,
+                assigned_to_me,
+                &state,
+                &search,
+                limit.unwrap_or(40),
+            )
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1405,11 +1409,14 @@ pub async fn git_github_work_items(
 pub async fn git_github_work_item(
     cwd: String,
     repo: String,
+    host: Option<String>,
     kind: String,
     number: i64,
 ) -> Result<GitHubWorkItem, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        git_github_work_item_for(&expand_home(&cwd), &repo, &kind, number)
+        crate::github_host::with_host(host.as_deref(), || {
+            git_github_work_item_for(&expand_home(&cwd), &repo, &kind, number)
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1431,11 +1438,14 @@ pub struct GitHubWorkItemDetails {
 pub async fn git_github_work_item_details(
     cwd: String,
     repo: String,
+    host: Option<String>,
     kind: String,
     number: i64,
 ) -> Result<GitHubWorkItemDetails, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        git_github_work_item_details_for(&expand_home(&cwd), &repo, &kind, number)
+        crate::github_host::with_host(host.as_deref(), || {
+            git_github_work_item_details_for(&expand_home(&cwd), &repo, &kind, number)
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1485,11 +1495,14 @@ pub struct GitHubWorkItemThread {
 pub async fn git_github_work_item_thread(
     cwd: String,
     repo: String,
+    host: Option<String>,
     kind: String,
     number: i64,
 ) -> Result<GitHubWorkItemThread, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        git_github_work_item_thread_for(&expand_home(&cwd), &repo, &kind, number)
+        crate::github_host::with_host(host.as_deref(), || {
+            git_github_work_item_thread_for(&expand_home(&cwd), &repo, &kind, number)
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1500,20 +1513,23 @@ pub async fn git_github_work_item_thread(
 pub async fn git_github_work_item_comment(
     cwd: String,
     repo: String,
+    host: Option<String>,
     kind: String,
     number: i64,
     body: String,
     in_reply_to: String,
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        git_github_work_item_comment_for(
-            &expand_home(&cwd),
-            &repo,
-            &kind,
-            number,
-            &body,
-            &in_reply_to,
-        )
+        crate::github_host::with_host(host.as_deref(), || {
+            git_github_work_item_comment_for(
+                &expand_home(&cwd),
+                &repo,
+                &kind,
+                number,
+                &body,
+                &in_reply_to,
+            )
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1524,11 +1540,14 @@ pub async fn git_github_work_item_comment(
 pub async fn git_github_pr_action(
     cwd: String,
     repo: String,
+    host: Option<String>,
     number: i64,
     action: String,
 ) -> Result<GitHubWorkItem, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        git_github_pr_action_for(&expand_home(&cwd), &repo, number, &action)
+        crate::github_host::with_host(host.as_deref(), || {
+            git_github_pr_action_for(&expand_home(&cwd), &repo, number, &action)
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1560,12 +1579,15 @@ const MAX_PR_DIFF_BYTES: usize = 2 * 1024 * 1024;
 pub async fn git_github_pr_diff(
     cwd: String,
     repo: String,
+    host: Option<String>,
     number: i64,
     full_context: Option<bool>,
 ) -> Result<GitHubPrDiff, String> {
     let full_context = full_context.unwrap_or(false);
     tauri::async_runtime::spawn_blocking(move || {
-        git_github_pr_diff_for(&expand_home(&cwd), &repo, number, full_context)
+        crate::github_host::with_host(host.as_deref(), || {
+            git_github_pr_diff_for(&expand_home(&cwd), &repo, number, full_context)
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1594,10 +1616,13 @@ pub struct GitHubPrChecks {
 pub async fn git_github_pr_checks(
     cwd: String,
     repo: String,
+    host: Option<String>,
     number: i64,
 ) -> Result<GitHubPrChecks, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        git_github_pr_checks_for(&expand_home(&cwd), &repo, number)
+        crate::github_host::with_host(host.as_deref(), || {
+            git_github_pr_checks_for(&expand_home(&cwd), &repo, number)
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1636,15 +1661,18 @@ struct GitHubCheckAnnotation {
 pub async fn git_github_check_details(
     cwd: String,
     repo: String,
+    host: Option<String>,
     job_id: String,
 ) -> Result<GitHubCheckDetails, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let host = crate::github_host::host();
-        github_check_details_with(&repo, &job_id, |endpoint| {
-            gh_checked(
-                &expand_home(&cwd),
-                &["api", "--hostname", host.as_str(), endpoint],
-            )
+        crate::github_host::with_host(host.as_deref(), || {
+            let host = crate::github_host::host();
+            github_check_details_with(&repo, &job_id, |endpoint| {
+                gh_checked(
+                    &expand_home(&cwd),
+                    &["api", "--hostname", host.as_str(), endpoint],
+                )
+            })
         })
     })
     .await

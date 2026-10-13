@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { githubHost } from "../model/githubHost";
 import { fetchGithubPrChecks, type GithubPrChecks } from "../model/githubPrChecks";
 
 const POLL_MS = 30_000;
@@ -25,6 +26,8 @@ export type GithubPrChecksView = {
 export function useGithubPrChecks(params: {
   cwd: string;
   repo: string;
+  /** Server of the pull request. */
+  host?: string;
   number: number;
   enabled: boolean;
   /** Open PRs poll; closed or merged ones load once and on demand. */
@@ -33,6 +36,7 @@ export function useGithubPrChecks(params: {
   revision?: number;
 }): GithubPrChecksView {
   const { cwd, repo, number, enabled, open, poll = true, revision = 0 } = params;
+  const host = params.host ?? githubHost();
   const [checks, setChecks] = useState<GithubPrChecks | null>(null);
   const [loading, setLoading] = useState(enabled);
   const [refreshing, setRefreshing] = useState(false);
@@ -80,7 +84,7 @@ export function useGithubPrChecks(params: {
     const initial = !hasDataRef.current;
     if (initial) setLoading(true);
     else setRefreshing(true);
-    fetchGithubPrChecks(cwd, repo, number)
+    fetchGithubPrChecks(cwd, repo, number, host)
       .then((next) => {
         if (!mountedRef.current || ticket.epoch !== epochRef.current) return;
         hasDataRef.current = true;
