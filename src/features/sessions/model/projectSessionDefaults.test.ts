@@ -110,7 +110,7 @@ describe("retargetSessionToProject", () => {
     expect(retargeted.providerAccountId).toBeUndefined();
   });
 
-  it("keeps provider-bound fields when the harness is unchanged", () => {
+  it("keeps the provider session but drops the account when the project changes", () => {
     setProjectDefaultModel("/repo/a", "claude", "claude:haiku-4.5");
     const blank: Session = {
       ...newSession("claude", "~", "claude:opus-5"),
@@ -120,6 +120,16 @@ describe("retargetSessionToProject", () => {
     const retargeted = retargetSessionToProject(blank, "/repo/a");
     expect(retargeted.harness).toBe("claude");
     expect(retargeted.providerSessionId).toBe("claude-session");
+    expect(retargeted.providerAccountId).toBeUndefined();
+  });
+
+  it("keeps the account when the session stays in the same project", () => {
+    const blank: Session = {
+      ...newSession("claude", "/repo/a", "claude:opus-5"),
+      providerAccountId: "claude-account",
+    };
+    const retargeted = retargetSessionToProject(blank, "/repo/a");
+    expect(retargeted.harness).toBe("claude");
     expect(retargeted.providerAccountId).toBe("claude-account");
   });
 });
