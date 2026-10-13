@@ -30,6 +30,7 @@ const CHAT_BACKGROUND_SESSION_OPACITY_KEY =
 const CHAT_BACKGROUND_SCOPE_KEY = "monocode.chatBackgroundScope";
 const NEW_THREAD_BACKGROUND_EFFECT_KEY = "monocode.newThreadBackgroundEffect";
 const CHANGES_VIEW_KEY = "monocode.changesView";
+const DIFF_PALETTE_KEY = "monocode.diffPalette";
 const SHOW_EXCLUDED_FILES_KEY = "monocode.showExcludedFiles";
 let chatBackgroundRevision = Date.now();
 let nativeGlassReady = false;
@@ -46,6 +47,7 @@ export type ChatBackgroundScope = "empty" | "all";
 export type NewThreadBackgroundEffect =
   "none" | "dither" | "ascii" | "halftone" | "scanlines" | "gradient-blur";
 export type ChangesView = "list" | "tree";
+export type DiffPalette = "default" | "colorblind" | "high-contrast";
 
 export const NEW_THREAD_BACKGROUND_EFFECTS: readonly NewThreadBackgroundEffect[] =
   ["none", "dither", "ascii", "halftone", "scanlines", "gradient-blur"];
@@ -87,6 +89,8 @@ export const SCHEME_CHANGE_EVENT = "monocode:schemechange";
 export const TRANSCRIPT_LAYOUT_DEFAULT: TranscriptLayout = "chat";
 
 export const CHANGES_VIEW_DEFAULT: ChangesView = "list";
+
+export const DIFF_PALETTE_DEFAULT: DiffPalette = "default";
 
 export const TRANSCRIPT_ANCHOR_DEFAULT = true;
 
@@ -282,6 +286,7 @@ export function applyThemeDarkLightness(value: number) {
     "--theme-dark-lightness",
     `${next}%`,
   );
+  refreshNativeTint();
   return next;
 }
 
@@ -295,16 +300,35 @@ export function applyThemeTint(hue: number, saturation: number) {
     "--theme-saturation",
     `${nextSaturation}%`,
   );
+  refreshNativeTint();
   return { hue: nextHue, saturation: nextSaturation };
 }
 
-export function initAppearance() {
-  document.documentElement.classList.toggle("is-mac", IS_MAC);
+const THEME_KEYS = new Set([
+  ACCENT_COLOR_KEY,
+  THEME_HUE_KEY,
+  THEME_SATURATION_KEY,
+  THEME_DARK_LIGHTNESS_KEY,
+  SCHEME_KEY,
+]);
+
+function applyStoredTheme() {
   applyAccentColor(loadAccentColor());
   applyThemeTint(loadThemeHue(), loadThemeSaturation());
   applyThemeDarkLightness(loadThemeDarkLightness());
   applyThemePreference(loadThemePreference());
+}
+
+export function initAppearance() {
+  document.documentElement.classList.toggle("is-mac", IS_MAC);
+  applyStoredTheme();
   watchSystemColorScheme();
+  // Settings applies a theme change only to its own window. Other windows
+  // hear about it through the storage event, which never fires in the
+  // window that wrote the value.
+  window.addEventListener("storage", (event) => {
+    if (event.key === null || THEME_KEYS.has(event.key)) applyStoredTheme();
+  });
   applySidebarOpacity(loadSidebarOpacity());
   applySidebarBlur(loadSidebarBlur());
   applyBodyGlass(loadBodyGlass());
@@ -312,6 +336,7 @@ export function initAppearance() {
   applyChatBackgroundEmptyOpacity(loadChatBackgroundEmptyOpacity());
   applyChatBackgroundSessionOpacity(loadChatBackgroundSessionOpacity());
   applyChatBackgroundScope(loadChatBackgroundScope());
+  applyDiffPalette(loadDiffPalette());
   void applyUiScale(loadUiScale());
 }
 
@@ -370,7 +395,7 @@ export function applyThemePreference(value: ThemePreference): ColorScheme {
   return next;
 }
 
-/** The page colour the native window sits behind while glass is off. */
+/** The page colour, also used by the native macOS glass tint. */
 function opaqueWindowBackground(): Rgb {
   const style = getComputedStyle(document.documentElement);
   const read = (name: string, fallback: number) => {
@@ -382,6 +407,23 @@ function opaqueWindowBackground(): Rgb {
     read("--theme-saturation", THEME_SATURATION_DEFAULT),
     read("--background-lightness", THEME_DARK_LIGHTNESS_DEFAULT),
   );
+}
+
+/** Compose both shared CSS tints into the native fill, including the shell's
+ * base tint, so the steady page and a newly exposed resize edge match. */
+function nativeWindowOpacity(): number {
+  const style = getComputedStyle(document.documentElement);
+  const glass = clamp(
+    Number.parseFloat(style.getPropertyValue("--sidebar-opacity")) ||
+      SIDEBAR_OPACITY_DEFAULT,
+    SIDEBAR_OPACITY_MIN,
+    SIDEBAR_OPACITY_MAX,
+  );
+  const storedBase = Number.parseFloat(
+    style.getPropertyValue("--window-background-opacity"),
+  );
+  const base = Number.isFinite(storedBase) ? clamp(storedBase, 0, 1) : 0.4;
+  return base + glass * (1 - base);
 }
 
 /** How long the page takes to reach opaque, from the same token the CSS uses. */
@@ -405,9 +447,10 @@ export function syncNativeGlass(scheme: ColorScheme) {
   const root = document.documentElement;
   const generation = ++glassSyncGeneration;
   const setWindow = () =>
-    invoke("set_window_glass_enabled", {
+    invoke<boolean>("set_window_glass_enabled", {
       enabled,
       background: opaqueWindowBackground(),
+      ...(IS_MAC ? { opacity: nativeWindowOpacity() } : {}),
     }).catch(() => {});
 
   if (glassFadeTimer !== undefined) {
@@ -416,19 +459,32 @@ export function syncNativeGlass(scheme: ColorScheme) {
   }
 
   if (enabled) {
-    void setWindow().finally(() => {
+    void setWindow().then((nativeTint) => {
       if (generation === glassSyncGeneration) {
+        // An older native host or browser preview has no native tint. Keep
+        // the CSS tint unless the window confirms it supplied one. If a
+        // later update fails, retain the tint already applied by AppKit.
+        if (IS_MAC && nativeTint === true) {
+          root.classList.add("has-native-glass-tint");
+        }
         root.classList.add("has-native-glass");
       }
     });
     return;
   }
 
-  root.classList.remove("has-native-glass");
+  root.classList.remove("has-native-glass", "has-native-glass-tint");
   glassFadeTimer = window.setTimeout(() => {
     glassFadeTimer = undefined;
     void setWindow();
   }, glassFadeMs());
+}
+
+/** Settings update the native colour too, once the launch cover has painted. */
+function refreshNativeTint() {
+  if (nativeGlassReady && IS_MAC) {
+    syncNativeGlass(isLightScheme() ? "light" : "dark");
+  }
 }
 
 /** Applies native transparency once the opaque launch cover can be removed. */
@@ -465,6 +521,7 @@ export function saveSidebarOpacity(value: number) {
 export function applySidebarOpacity(value: number) {
   const next = clamp(value, SIDEBAR_OPACITY_MIN, SIDEBAR_OPACITY_MAX);
   document.documentElement.style.setProperty("--sidebar-opacity", String(next));
+  refreshNativeTint();
   return next;
 }
 
@@ -713,6 +770,37 @@ export function applyChatBackgroundScope(value: ChatBackgroundScope) {
     "chat-background-empty-only",
     value === "empty",
   );
+  return value;
+}
+
+function isDiffPalette(value: unknown): value is DiffPalette {
+  return (
+    value === "default" || value === "colorblind" || value === "high-contrast"
+  );
+}
+
+export function loadDiffPalette(): DiffPalette {
+  try {
+    const raw = localStorage.getItem(DIFF_PALETTE_KEY);
+    return isDiffPalette(raw) ? raw : DIFF_PALETTE_DEFAULT;
+  } catch {
+    return DIFF_PALETTE_DEFAULT;
+  }
+}
+
+export function saveDiffPalette(value: DiffPalette) {
+  try {
+    localStorage.setItem(DIFF_PALETTE_KEY, value);
+  } catch {
+    // private mode / quota
+  }
+}
+
+/** Swaps the diff color tokens in index.css via an html class. */
+export function applyDiffPalette(value: DiffPalette) {
+  const root = document.documentElement.classList;
+  root.toggle("diff-palette-colorblind", value === "colorblind");
+  root.toggle("diff-palette-high-contrast", value === "high-contrast");
   return value;
 }
 

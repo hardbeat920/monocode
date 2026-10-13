@@ -39,6 +39,7 @@ import {
   MarkdownViewShell,
   useMarkdownMode,
 } from "../../sessions/ui/MarkdownModeToggle";
+import { loadFileViewMode, saveFileViewMode } from "../model/fileViewMode";
 import { useColorScheme } from "../../../shared/hooks/useColorScheme";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { isLightScheme } from "../../settings/model/appearance";
@@ -146,7 +147,11 @@ export function FileEditor({
   } | null>(null);
   const markdown = isMarkdownPath(path);
   const svg = isSvgPath(path);
-  const [mode, setMode] = useMarkdownMode(path);
+  // Diff tabs open as source: the git gutter only renders in the editor.
+  const [mode, setMode] = useMarkdownMode(
+    showDiff ? `review:${path}` : path,
+    showDiff ? "source" : loadFileViewMode(),
+  );
   const sourceNavigationToken = useRef<number | undefined>(undefined);
   useEffect(() => {
     if (
@@ -457,7 +462,10 @@ export function FileEditor({
       {markdown || svg ? (
         <MarkdownViewShell
           mode={mode}
-          onModeChange={setMode}
+          onModeChange={(next) => {
+            setMode(next);
+            if (!showDiff) saveFileViewMode(next);
+          }}
           preview={
             markdown ? (
               <FilePreviewSearch
@@ -773,8 +781,11 @@ export function CodeMirrorEditor({
       extensions: [
         minimalSetup,
         showDiff ? editorGitConfig.of(editorGit(gitOptions)) : [],
-        lineNumbers(),
-        foldGutter(),
+        // Diff tabs put the fold arrows first so each line number sits right
+        // beside its +/- glyph.
+        showDiff
+          ? [foldGutter(), lineNumbers()]
+          : [lineNumbers(), foldGutter()],
         highlightActiveLine(),
         highlightActiveLineGutter(),
         EditorView.lineWrapping,
@@ -1124,10 +1135,10 @@ function DiffChunkStat({
   return (
     <span className="flex min-w-0 shrink-0 items-center gap-1.5 font-sans text-[11px] font-semibold tabular-nums">
       {additions > 0 ? (
-        <span className="text-emerald-400">+{formatInteger(additions)}</span>
+        <span className="text-diff-add-fg">+{formatInteger(additions)}</span>
       ) : null}
       {deletions > 0 ? (
-        <span className="text-red-400">-{formatInteger(deletions)}</span>
+        <span className="text-diff-del-fg">-{formatInteger(deletions)}</span>
       ) : null}
     </span>
   );

@@ -54,6 +54,12 @@ export class TranscriptPool {
     // Attach before the pane's passive effects run, so anything that looks
     // for the transcript in the pane already finds a revisited one.
     if (container.parentElement !== host) host.appendChild(container);
+    if (
+      previous?.host === host &&
+      previous.onMouseDown === onMouseDown &&
+      sameElement(previous.element, element)
+    )
+      return;
     // Re-inserting keeps the map in least-recently-shown order.
     this.entries.delete(id);
     this.entries.set(id, { id, container, element, onMouseDown, host });
@@ -91,6 +97,25 @@ export class TranscriptPool {
   }
 }
 
+function sameElement(
+  previous: ReactElement<PooledProps>,
+  next: ReactElement<PooledProps>,
+) {
+  if (previous === next) return true;
+  if (previous.type !== next.type || previous.key !== next.key) return false;
+  const before = previous.props as Record<string, unknown>;
+  const after = next.props as Record<string, unknown>;
+  const keys = Object.keys(before);
+  return (
+    keys.length === Object.keys(after).length &&
+    keys.every(
+      (key) =>
+        Object.prototype.hasOwnProperty.call(after, key) &&
+        Object.is(before[key], after[key]),
+    )
+  );
+}
+
 function createContainer() {
   const node = document.createElement("div");
   node.className = "contents";
@@ -98,14 +123,18 @@ function createContainer() {
 }
 
 /** Renders every pooled transcript into its current container. */
-export function TranscriptPoolOutlet({ pool }: { pool: TranscriptPool }) {
+export const TranscriptPoolOutlet = memo(function TranscriptPoolOutlet({
+  pool,
+}: {
+  pool: TranscriptPool;
+}) {
   const entries = useSyncExternalStore(
     pool.subscribe,
     pool.getSnapshot,
     pool.getSnapshot,
   );
   return entries.map((entry) => <PooledEntry key={entry.id} entry={entry} />);
-}
+});
 
 const PooledEntry = memo(function PooledEntry({
   entry,

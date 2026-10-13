@@ -155,6 +155,7 @@ export type DiscoveredSkill = {
     | "grok"
     | "hermes"
     | "antigravity"
+    | "devin"
     | "monocode";
 };
 
@@ -312,12 +313,25 @@ export function gitUnstageAll(cwd: string): Promise<void> {
   return invoke<void>("git_unstage_all", { cwd });
 }
 
+export type GitFileLocation = { root: string; relative: string };
+
+/** Each path's repository root and repo-relative path, or null outside git. */
+export function gitLocateFiles(
+  paths: string[],
+): Promise<(GitFileLocation | null)[]> {
+  return invoke<(GitFileLocation | null)[]>("git_locate_files", { paths });
+}
+
+/** Commit the index, or only `paths` (staging them first) when given. */
 export function gitCommit(
   cwd: string,
   message: string,
   amend = false,
+  paths?: string[],
 ): Promise<void> {
-  return invoke<void>("git_commit", { cwd, message, amend });
+  return invoke<void>("git_commit", {
+    cwd, message, amend, ...(paths === undefined ? {} : { paths }),
+  });
 }
 
 export function gitHeadMessage(cwd: string): Promise<string> {
@@ -330,8 +344,10 @@ export type GitStagedContext = {
   patch: string;
 };
 
-export function gitStagedContext(cwd: string): Promise<GitStagedContext> {
-  return invoke<GitStagedContext>("git_staged_context", { cwd });
+export function gitStagedContext(cwd: string, paths?: readonly string[]): Promise<GitStagedContext> {
+  return invoke<GitStagedContext>("git_staged_context", {
+    cwd, ...(paths === undefined ? {} : { paths }),
+  });
 }
 
 export function gitPush(cwd: string): Promise<void> {
@@ -562,7 +578,7 @@ export function readTextFile(path: string): Promise<string> {
   return invoke<string>("read_text_file", { path });
 }
 
-/** Raw bytes for the image viewer. Arrives as an ArrayBuffer, not base64. */
+/** Raw bytes for media previews. Arrives as an ArrayBuffer, not base64. */
 export async function readBinaryFile(path: string): Promise<Uint8Array> {
   const buffer = await invoke<ArrayBuffer | string>("read_binary_file", {
     path,

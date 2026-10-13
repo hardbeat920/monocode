@@ -6,6 +6,7 @@ import {
   mergeHistorySummary,
   mergeProjectHistorySummary,
   replaceProjectHistory,
+  sameSessionSummaries,
 } from "./sessionHistory";
 import { newSession } from "../model/session";
 import type { SessionSummary } from "./sessionStore";
@@ -27,6 +28,20 @@ function summary(id: string, cwd: string, updatedAt = 1): SessionSummary {
 }
 
 describe("historyWithLiveSessions", () => {
+  it("carries visibility into both new and already-saved live summaries", () => {
+    const session = newSession("codex", "/tmp/project-a");
+    session.sidebarHidden = true;
+    session.blocks = [{ id: "u", role: "user", text: "Review" }];
+    const live = historyWithLiveSessions([], [session], session.cwd);
+    expect(live[0].sidebarHidden).toBe(true);
+    const merged = historyWithLiveSessions(
+      [{ ...live[0], sidebarHidden: undefined }],
+      [session],
+      session.cwd,
+    );
+    expect(merged[0].sidebarHidden).toBe(true);
+  });
+
   const run: OrchestrationRun = {
     version: 1,
     leadId: "lead",
@@ -53,6 +68,18 @@ describe("historyWithLiveSessions", () => {
       delivered: false,
     })),
   };
+
+  it("never lists an ephemeral session, even while it is working", () => {
+    const run = {
+      ...newSession("codex", "/tmp/project-a"),
+      id: "habit-run",
+      title: "Skull · Daily useful PR check",
+      ephemeral: true,
+      busy: true,
+      blocks: [{ id: "u", role: "user" as const, text: "check PRs" }],
+    };
+    expect(historyWithLiveSessions([], [run], "/tmp/project-a")).toEqual([]);
+  });
 
   it("groups live and already-saved workers under their lead before adoption effects run", () => {
     const sessions = ["lead", "worker-a", "worker-b"].map((id) => ({
@@ -120,7 +147,11 @@ describe("historyWithLiveSessions", () => {
       blocks: [{ id: "u", role: "user" as const, text: "Fix PR #42" }],
       busy: true,
     };
-    const rows = historyWithLiveSessions([summary("live", cwd)], [session], cwd);
+    const rows = historyWithLiveSessions(
+      [summary("live", cwd)],
+      [session],
+      cwd,
+    );
     expect(rows[0]).toMatchObject({
       title: "cursor · Fix tab title refresh",
       linkedWorkItem,
@@ -443,5 +474,33 @@ describe("pinned sessions", () => {
     ];
     const rows = historyWithLiveSessions(history, [], "/tmp/project-a");
     expect(rows.map((row) => row.id)).toEqual(["pin", "new"]);
+  });
+});
+
+describe("sameSessionSummaries", () => {
+  it("treats a live row's restamped clock as unchanged", () => {
+    const before = [summary("a", "/p", 1_000), summary("b", "/p", 500)];
+    const after = [{ ...before[0], updatedAt: 21_000 }, before[1]];
+    expect(sameSessionSummaries(before, after)).toBe(true);
+  });
+
+  it("lets the clock move once the relative time could show it", () => {
+    const before = [summary("a", "/p", 1_000)];
+    const after = [{ ...before[0], updatedAt: 31_000 }];
+    expect(sameSessionSummaries(before, after)).toBe(false);
+  });
+
+  it("notices a changed field, nested value, or order", () => {
+    const a = summary("a", "/p");
+    const b = summary("b", "/p");
+    expect(sameSessionSummaries([a], [{ ...a, title: "Renamed" }])).toBe(false);
+    expect(
+      sameSessionSummaries(
+        [{ ...a, linkedWorkItem: { url: "u1" } as never }],
+        [{ ...a, linkedWorkItem: { url: "u2" } as never }],
+      ),
+    ).toBe(false);
+    expect(sameSessionSummaries([a, b], [b, a])).toBe(false);
+    expect(sameSessionSummaries([a], [a, b])).toBe(false);
   });
 });

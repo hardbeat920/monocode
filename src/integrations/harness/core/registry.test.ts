@@ -12,6 +12,8 @@ import {
   runHarnessTextPrompt,
   canRewindHarnessLastTurn,
   compactHarnessContext,
+  configureHarnessIdlePark,
+  enforceHarnessIdleLimit,
   isLiveHarness,
   listHarnesses,
   refreshHarnessCatalogs,
@@ -61,6 +63,40 @@ describe("harness registry", () => {
         .filter((id) => id === "claude" || id === "codex" || id === "cursor")
         .sort(),
     ).toEqual(["claude", "codex", "cursor"]);
+  });
+
+  it("announces readiness when the provider accepts, while preserving the caller's acceptance callback", async () => {
+    let accepted!: () => void;
+    let finish!: () => void;
+    registerHarness(
+      stub("codex", {
+        async sendTurn(input) {
+          accepted = () => input.onAccepted?.();
+          await new Promise<void>((resolve) => {
+            finish = resolve;
+          });
+        },
+      }),
+    );
+    const onEvent = vi.fn();
+    const onAccepted = vi.fn();
+    const sending = sendHarnessTurn({
+      harness: "codex",
+      sessionId: "readiness",
+      cwd: "/tmp",
+      model: "codex:gpt-5.4",
+      runtimeMode: "supervised",
+      text: "Hello",
+      onEvent,
+      onAccepted,
+    });
+    await vi.waitFor(() => expect(accepted).toBeDefined());
+    expect(onEvent).not.toHaveBeenCalled();
+    accepted();
+    expect(onEvent).toHaveBeenCalledExactlyOnceWith({ type: "turn.ready" });
+    expect(onAccepted).toHaveBeenCalledOnce();
+    finish();
+    await sending;
   });
 
   it("advertises isolated text prompt support by harness", () => {
@@ -267,6 +303,25 @@ describe("harness registry", () => {
     expect(pi).toHaveBeenCalledOnce();
   });
 
+  it("forces a catalog probe past the live-list skip on request", async () => {
+    const pi = vi.fn(async () => {
+      setHarnessModels("pi", [
+        {
+          id: "pi:opus",
+          harness: "pi",
+          name: "Opus",
+          nativeId: "anthropic/opus",
+        },
+      ]);
+    });
+    registerHarness(stub("pi", { refreshCatalog: pi }));
+
+    await refreshHarnessCatalogs(["pi"]);
+    await refreshHarnessCatalogs(["pi"], { force: true });
+
+    expect(pi).toHaveBeenCalledTimes(2);
+  });
+
   it("skips catalog refresh when no harness is in use", async () => {
     const pi = vi.fn(async () => undefined);
     registerHarness(stub("pi", { refreshCatalog: pi }));
@@ -295,6 +350,93 @@ describe("harness registry", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(stopSession).toHaveBeenCalledWith("s1");
   });
+  describe("idle limit", () => {
+    const turn = (sessionId: string) =>
+      sendHarnessTurn({
+        harness: "cursor",
+        sessionId,
+        cwd: "/tmp",
+        model: "cursor:composer-2.5",
+        text: "hi",
+        runtimeMode: "supervised",
+        onEvent: () => undefined,
+      });
+
+    it("parks the longest-idle child once too many are warm", async () => {
+      vi.useFakeTimers();
+      const stopSession = vi.fn(async () => undefined);
+      registerHarness(stub("cursor", { stopSession }));
+      configureHarnessIdlePark({ limit: () => 2, keep: () => false });
+
+      for (const id of ["s1", "s2", "s3"]) await turn(id);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(stopSession.mock.calls).toEqual([["s1"]]);
+
+      // The rest still park on the idle timer.
+      await vi.advanceTimersByTimeAsync(HARNESS_IDLE_PARK_MS);
+      expect(stopSession.mock.calls.flat().sort()).toEqual(["s1", "s2", "s3"]);
+    });
+
+    it("spares the conversation on screen and never counts a running turn", async () => {
+      vi.useFakeTimers();
+      const stopSession = vi.fn(async () => undefined);
+      let finishRunning!: () => void;
+      registerHarness(
+        stub("cursor", {
+          stopSession,
+          async sendTurn(input) {
+            if (input.sessionId !== "running") return;
+            await new Promise<void>((resolve) => {
+              finishRunning = resolve;
+            });
+          },
+        }),
+      );
+      configureHarnessIdlePark({
+        limit: () => 1,
+        keep: (id) => id === "viewed",
+      });
+
+      const running = turn("running");
+      await turn("viewed");
+      await turn("other");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(stopSession.mock.calls).toEqual([["other"]]);
+
+      finishRunning();
+      await running;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(stopSession.mock.calls).toEqual([["other"], ["running"]]);
+    });
+
+    it("parks every idle child at a limit of zero, including the one on screen", async () => {
+      vi.useFakeTimers();
+      const stopSession = vi.fn(async () => undefined);
+      registerHarness(stub("cursor", { stopSession }));
+      configureHarnessIdlePark({ limit: () => 0, keep: () => true });
+
+      await turn("viewed");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(stopSession).toHaveBeenCalledWith("viewed");
+    });
+
+    it("applies a lowered limit straight away", async () => {
+      vi.useFakeTimers();
+      const stopSession = vi.fn(async () => undefined);
+      registerHarness(stub("cursor", { stopSession }));
+      let limit = 3;
+      configureHarnessIdlePark({ limit: () => limit, keep: () => false });
+
+      for (const id of ["s1", "s2", "s3"]) await turn(id);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(stopSession).not.toHaveBeenCalled();
+
+      limit = 1;
+      enforceHarnessIdleLimit();
+      expect(stopSession.mock.calls).toEqual([["s1"], ["s2"]]);
+    });
+  });
+
   it("serializes provider-state operations per session", async () => {
     const order: string[] = [];
     let releaseFirst!: () => void;
@@ -371,7 +513,12 @@ describe("harness registry", () => {
     bindHarnessSession("claude", "s2", "sess_2", "/repo");
 
     expect(bindSession).toHaveBeenCalledWith("s1", "sess_1", "/repo", "work");
-    expect(bindSession).toHaveBeenCalledWith("s2", "sess_2", "/repo", undefined);
+    expect(bindSession).toHaveBeenCalledWith(
+      "s2",
+      "sess_2",
+      "/repo",
+      undefined,
+    );
     expect(restoreTaskLists).toHaveBeenCalledTimes(1);
     expect(restoreTaskLists).toHaveBeenCalledWith("s1", [taskList]);
   });

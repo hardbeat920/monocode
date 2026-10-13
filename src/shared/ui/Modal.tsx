@@ -5,17 +5,20 @@ import { createPortal } from "react-dom";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import { LAYER } from "../lib/layers";
 import { GlassBackdrop } from "../../app/shell/GlassBackdrop";
+import { InDialog } from "./Popover";
 
-export type ModalSize = "sm" | "md";
+export type ModalSize = "sm" | "md" | "lg";
 
 const WIDTH: Record<ModalSize, string> = {
   sm: "w-[min(420px,calc(100vw-24px))]",
   md: "w-[min(560px,calc(100vw-24px))]",
+  lg: "w-[min(880px,calc(100vw-24px))]",
 };
 
 const TOP: Record<ModalSize, string> = {
   sm: "top-[22%]",
   md: "top-[10%]",
+  lg: "top-[8%]",
 };
 
 type Props = {
@@ -59,7 +62,9 @@ export function ModalPanel({
         event.key !== "Escape" ||
         event.defaultPrevented ||
         (event.target instanceof Element &&
-          event.target.closest("[data-dialog-popover]"))
+          event.target.closest("[data-dialog-popover]")) ||
+        // A popover open from its controls takes Escape first.
+        document.querySelector("[data-dialog-popover]")
       )
         return;
       event.preventDefault();
@@ -74,8 +79,8 @@ export function ModalPanel({
     <div
       className={
         popupHost
-          ? "relative w-full"
-          : `absolute left-1/2 ${fitViewport ? "top-1/2 -translate-y-1/2" : TOP[size]} ${WIDTH[size]} -translate-x-1/2`
+          ? "relative z-[1] w-full"
+          : `absolute z-[1] left-1/2 ${fitViewport ? "top-1/2 -translate-y-1/2" : TOP[size]} ${WIDTH[size]} -translate-x-1/2`
       }
     >
       <div
@@ -86,7 +91,7 @@ export function ModalPanel({
         onMouseDown={(event) => event.stopPropagation()}
         className={`relative isolate flex flex-col overflow-hidden rounded-2xl border border-content/7 shadow-2xl ${fitViewport ? "max-h-[calc(100dvh-32px)]" : ""} ${className ?? ""}`}
       >
-        <GlassBackdrop className="bg-background-base/55" />
+        <GlassBackdrop className="bg-background-base dark:bg-background-base/55" />
         <div className="modal-panel relative z-[1] flex min-h-0 flex-1 flex-col">
           <header
             className={
@@ -100,7 +105,7 @@ export function ModalPanel({
             >
               <h2
                 id={titleId}
-                className="text-xl font-medium leading-tight text-content"
+                className="text-md font-semibold leading-tight tracking-tight text-content"
               >
                 {title}
               </h2>
@@ -127,7 +132,7 @@ export function ModalPanel({
             ref={lockOverscroll}
             className="min-h-0 flex-1 overflow-y-auto overscroll-none"
           >
-            {children}
+            <InDialog.Provider value>{children}</InDialog.Provider>
           </div>
         </div>
       </div>
@@ -141,7 +146,7 @@ export function Modal(props: Props) {
   return createPortal(
     <div className="fixed inset-0" style={{ zIndex: LAYER.dialog }}>
       <div
-        className="modal-backdrop absolute inset-0 bg-black/40"
+        className="modal-backdrop absolute inset-0 z-0 bg-black/40"
         onMouseDown={props.onClose}
       />
       <ModalPanel {...props} />

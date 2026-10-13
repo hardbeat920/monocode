@@ -7,6 +7,7 @@ import type { AgentModel, ModelSetting } from "../../../../features/sessions/mod
 import { isTaskListToolName } from "../../../../features/sessions/model/taskList";
 import type { PiFlavor } from "./piFlavor";
 import { extractToolPreview, titleFromToolInput } from "../../core/preview";
+import { upstreamProviderName } from "../../core/providerNames";
 import { streamTextDelta } from "../../core/streamText";
 
 /** Images Pi RPC accepts on `prompt` / `steer`. */
@@ -63,6 +64,7 @@ export type PiExtensionUiRequest =
       method:
         "notify" | "setStatus" | "setWidget" | "setTitle" | "set_editor_text";
       title?: string;
+      statusKey?: string;
     };
 
 export type PiRpcResponse = {
@@ -143,7 +145,7 @@ export function buildPiSpawnArgs(
     resume?: string;
     /** Catalog probes and isolated jobs: do not write a session file. */
     noSession?: boolean;
-    /** Catalog probes and throwaway text jobs — never for live chat. */
+    /** Throwaway text jobs — never for live chat or catalog probes. */
     noExtensions?: boolean;
     /** Titles and other one-shot prompts: no tools, skills, or project context. */
     isolated?: boolean;
@@ -300,6 +302,8 @@ export function parseExtensionUiRequest(
     method === "setTitle" ||
     method === "set_editor_text"
   ) {
+    const statusKey =
+      method === "setStatus" ? stringField(rec, "statusKey") : undefined;
     return {
       id,
       method,
@@ -308,6 +312,7 @@ export function parseExtensionUiRequest(
         stringField(rec, "statusText") ??
         stringField(rec, "title") ??
         stringField(rec, "text"),
+      ...(statusKey ? { statusKey } : {}),
     };
   }
   return null;
@@ -392,10 +397,7 @@ export function contextFromUsage(
   rec: Record<string, unknown>,
   window?: number,
 ): { used?: number; window?: number } | null {
-  const usage =
-    asRecord(rec.usage) ??
-    assistantMessageUsage(rec) ??
-    asRecord(asRecord(asRecord(rec.assistantMessageEvent)?.partial)?.usage);
+  const usage = frameUsage(rec);
   if (!usage) return null;
   const used =
     numberField(usage, "totalTokens") ||
@@ -410,10 +412,7 @@ export function contextFromUsage(
 export function turnMetricsFromUsage(
   rec: Record<string, unknown>,
 ): TurnMetrics | null {
-  const usage =
-    asRecord(rec.usage) ??
-    assistantMessageUsage(rec) ??
-    asRecord(asRecord(asRecord(rec.assistantMessageEvent)?.partial)?.usage);
+  const usage = frameUsage(rec);
   if (!usage) return null;
   const inputTokens = numberField(usage, "input") ?? 0;
   const outputTokens = numberField(usage, "output") ?? 0;
@@ -431,6 +430,51 @@ export function turnMetricsFromUsage(
       ? { cacheHitPercent: (cacheReadTokens / cacheableInput) * 100 }
       : {}),
   };
+}
+
+/** What the current Pi turn has spent, summed response by response. */
+export type PiTurnUsage = {
+  done: Record<string, number>;
+  open: Record<string, number>;
+};
+
+const PI_USAGE_KEYS = ["input", "output", "cacheRead", "cacheWrite"] as const;
+
+/**
+ * Pi reports usage per assistant response: streaming frames restate that
+ * response's running count, `message_end` settles it, and `turn_end` repeats
+ * it. A turn with tool calls makes several responses, so add each settled one
+ * to the turn instead of letting the latest replace it.
+ */
+export function addPiTurnUsage(
+  spent: PiTurnUsage,
+  rec: Record<string, unknown>,
+): TurnMetrics | null {
+  if (stringField(rec, "type") === "turn_end") return null;
+  const usage = frameUsage(rec);
+  if (!usage) return null;
+  const response: Record<string, number> = {};
+  for (const key of PI_USAGE_KEYS) {
+    if (key in usage) response[key] = numberField(usage, key) ?? 0;
+  }
+  if (stringField(rec, "type") === "message_end") {
+    spent.done = sumUsage(spent.done, response);
+    spent.open = {};
+  } else {
+    spent.open = response;
+  }
+  return turnMetricsFromUsage({ usage: sumUsage(spent.done, spent.open) });
+}
+
+function sumUsage(
+  a: Record<string, number>,
+  b: Record<string, number>,
+): Record<string, number> {
+  const sum = { ...a };
+  for (const [key, value] of Object.entries(b)) {
+    sum[key] = (sum[key] ?? 0) + value;
+  }
+  return sum;
 }
 
 export function contextFromSessionStats(data: unknown): {
@@ -713,6 +757,29 @@ export function summarizeToolRequest(
   }
 }
 
+/**
+ * Copilot's /models endpoint also returns internal agents and dated legacy
+ * snapshots that never appear in its own model picker. omp drops the
+ * picker/policy flags, so hide those ids by name.
+ */
+const COPILOT_HIDDEN_MODELS = [
+  /^(exec-agent|copilot-search)-/,
+  /^trajectory-compaction$/,
+  /^gpt-3\.5-turbo/,
+  /^gpt-4(-0613|-o-preview)?$/,
+  /^gpt-4o-mini/,
+  /^gpt-4o-\d{4}-/,
+  /^gpt-4\.1-\d{4}-/,
+];
+
+export function isHiddenCopilotModel(provider: string, modelId: string) {
+  return (
+    provider === "github-copilot" &&
+    COPILOT_HIDDEN_MODELS.some((pattern) => pattern.test(modelId))
+  );
+}
+
+/** Build the Pi/omp picker catalog with provider labels, sorted by model name. */
 export function modelsFromRpcData(
   flavor: PiFlavor,
   data: unknown,
@@ -731,6 +798,7 @@ export function modelsFromRpcData(
     const modelId = stringField(model, "id");
     const provider = stringField(model, "provider");
     if (!modelId || !provider) continue;
+    if (isHiddenCopilotModel(provider, modelId)) continue;
     const nativeId = piNativeId(provider, modelId);
     if (seen.has(nativeId)) continue;
     seen.add(nativeId);
@@ -745,6 +813,7 @@ export function modelsFromRpcData(
       harness: flavor.id,
       name,
       nativeId,
+      provider: { id: provider, name: upstreamProviderName(provider) },
       ...(settings.length > 0 ? { settings } : {}),
       ...(contextWindow && contextWindow > 0 ? { contextWindow } : {}),
     });
@@ -790,6 +859,16 @@ function thinkingLabel(level: PiThinkingLevel): string {
   if (level === "xhigh") return "Extra High";
   if (level === "off") return "Off";
   return level.slice(0, 1).toUpperCase() + level.slice(1);
+}
+
+function frameUsage(
+  rec: Record<string, unknown>,
+): Record<string, unknown> | null {
+  return (
+    asRecord(rec.usage) ??
+    assistantMessageUsage(rec) ??
+    asRecord(asRecord(asRecord(rec.assistantMessageEvent)?.partial)?.usage)
+  );
 }
 
 function assistantMessageUsage(

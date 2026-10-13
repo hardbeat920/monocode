@@ -40,6 +40,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ComponentProps,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
@@ -157,13 +158,13 @@ import { HarnessIcon } from "../../features/sessions/ui/HarnessIcon";
 import { LiveAgentsPreview } from "../../features/sessions/ui/LiveAgentsPreview";
 import { ProjectRail } from "./ProjectRail";
 import { InboxNotificationMenu } from "../../features/inbox/ui/InboxNotificationMenu";
-import { prefetchGithubWorkItem } from "../../features/inbox/model/githubTasks";
 import { RailAction } from "./RailAction";
 import { TerminalSpinner } from "../../features/sessions/ui/TerminalSpinner";
 import { DevModeSlot, IconButton, TabVisitNav } from "./TitleBar";
 import { ProjectSearch } from "../../features/projects/ui/ProjectSearch";
 import { Popover } from "../../shared/ui/Popover";
 import { SearchableProjectPicker } from "../../features/projects/ui/SearchableProjectPicker";
+import { useRailTooltip } from "./RailTooltip";
 import { useProjectMenu } from "./useProjectMenu";
 import { SessionFiltersMenu } from "../../features/sessions/ui/SessionFiltersMenu";
 import { LinkSessionWorkItemDialog } from "../../features/sessions/ui/LinkSessionWorkItemDialog";
@@ -178,13 +179,35 @@ import { SidebarUpdateFooter } from "./SidebarUpdate";
 import { SourceControl } from "../../features/source-control/ui/SourceControl";
 import { GithubStarPrompt } from "./GithubStarPrompt";
 import {
+  isMonoSession,
+  listMonos,
+  MONO_STATUS_LABEL,
+  monoLook,
+  monosSnapshot,
+  subscribeMonos,
+  type MonoStatus,
+} from "../../features/monos/model/mono";
+import { MonoRailMascot } from "../../features/monos/ui/MonoRailMascot";
+import { useRailMonosPinned } from "../../features/settings/model/displayPrefs";
+import type { PickerMonos } from "../../features/projects/ui/SearchableProjectPicker";
+import { isHabitRun } from "../../features/monos/model/monoHabits";
+import {
+  unreadBadge,
+  unreadLabel,
+  type MonoRailProps,
+} from "./MonoRailSection";
+import {
   refreshRemoteProjectSessions,
   remoteRequest,
   remotePendingWorktree,
   remoteSessionFor,
   useRemoteProjectSessions,
 } from "../../features/connections/model/connections";
-import { parseRemotePath, remotePath, remoteProjectFor } from "../../features/connections/model/remoteProjects";
+import {
+  parseRemotePath,
+  remotePath,
+  remoteProjectFor,
+} from "../../features/connections/model/remoteProjects";
 
 const MIN_WIDTH = 260;
 const MAX_WIDTH = 560;
@@ -326,6 +349,10 @@ type Props = {
   updateNotice?: InstalledUpdate | null;
   onOpenWhatsNew?: (version: string) => void;
   onDismissUpdate?: () => void;
+  /** The Monos on the rail; absent while Monos are off. */
+  monos?: MonoRailProps;
+  /** A Mono fills the main area, which has no project sidebar. */
+  monoViewActive?: boolean;
 };
 
 function SidebarComponent({
@@ -417,6 +444,8 @@ function SidebarComponent({
   updateNotice = null,
   onOpenWhatsNew,
   onDismissUpdate,
+  monos,
+  monoViewActive = false,
 }: Props) {
   const remoteProject = isRemoteProjectPath(cwd);
   const tab: SidebarTabId = requestedTab;
@@ -424,7 +453,12 @@ function SidebarComponent({
   const hostProject = remoteProject ? remoteProjectFor(cwd) : undefined;
   const remoteChange = async (
     sessionId: string,
-    patch: { title?: string; archived?: boolean; pinned?: boolean; linkedWorkItem?: LinkedWorkItem | null },
+    patch: {
+      title?: string;
+      archived?: boolean;
+      pinned?: boolean;
+      linkedWorkItem?: LinkedWorkItem | null;
+    },
   ) => {
     if (!remote.machine || !hostProject) {
       window.alert("Connect this project's machine to change its sessions.");
@@ -447,9 +481,12 @@ function SidebarComponent({
       window.alert("Connect this project's machine to delete its sessions.");
       return;
     }
-    if (!window.confirm(
-      `Delete ${sessionIds.length === 1 ? "this conversation" : `${sessionIds.length} conversations`}? This can’t be undone.`,
-    )) return;
+    if (
+      !window.confirm(
+        `Delete ${sessionIds.length === 1 ? "this conversation" : `${sessionIds.length} conversations`}? This can’t be undone.`,
+      )
+    )
+      return;
     try {
       for (const sessionId of sessionIds) {
         await remoteRequest(remote.machine.id, "sessions.delete", {
@@ -468,20 +505,30 @@ function SidebarComponent({
     ? (sessionId: string) => onSelectRemoteSession?.(cwd, sessionId)
     : onSelectLocalSession;
   const onPrefetchSession = remoteProject ? undefined : onPrefetchLocalSession;
-  const onPlaceSessionOnPane = remoteProject ? undefined : onPlaceLocalSessionOnPane;
+  const onPlaceSessionOnPane = remoteProject
+    ? undefined
+    : onPlaceLocalSessionOnPane;
   const onRenameSession = remoteProject
-    ? (sessionId: string, title: string) => { void remoteChange(sessionId, { title }); }
+    ? (sessionId: string, title: string) => {
+        void remoteChange(sessionId, { title });
+      }
     : onRenameLocalSession;
   const onArchiveSession = remoteProject
-    ? (sessionId: string, archived: boolean) => { void remoteChange(sessionId, { archived }); }
+    ? (sessionId: string, archived: boolean) => {
+        void remoteChange(sessionId, { archived });
+      }
     : onArchiveLocalSession;
   const onArchiveSessions = remoteProject
     ? (sessionIds: readonly string[], archived: boolean) => {
-        void Promise.all(sessionIds.map((id) => remoteChange(id, { archived })));
+        void Promise.all(
+          sessionIds.map((id) => remoteChange(id, { archived })),
+        );
       }
     : onArchiveLocalSessions;
   const onPinSession = remoteProject
-    ? (sessionId: string, pinned: boolean) => { void remoteChange(sessionId, { pinned }); }
+    ? (sessionId: string, pinned: boolean) => {
+        void remoteChange(sessionId, { pinned });
+      }
     : onPinLocalSession;
   const onPinSessions = remoteProject
     ? (sessionIds: readonly string[], pinned: boolean) => {
@@ -489,10 +536,14 @@ function SidebarComponent({
       }
     : onPinLocalSessions;
   const onDeleteSession = remoteProject
-    ? (sessionId: string) => { void remoteDelete([sessionId]); }
+    ? (sessionId: string) => {
+        void remoteDelete([sessionId]);
+      }
     : onDeleteLocalSession;
   const onDeleteSessions = remoteProject
-    ? (sessionIds: readonly string[]) => { void remoteDelete(sessionIds); }
+    ? (sessionIds: readonly string[]) => {
+        void remoteDelete(sessionIds);
+      }
     : onDeleteLocalSessions;
   const onSetSessionLinkedWorkItem = remoteProject
     ? (sessionId: string, item: LinkedWorkItem | undefined) => {
@@ -502,43 +553,62 @@ function SidebarComponent({
   const activeRemoteId = activeSessionId
     ? remoteSessionFor(activeSessionId)
     : undefined;
-  const activeListedSessionId = remoteProject ? activeRemoteId : activeSessionId;
+  const activeListedSessionId = remoteProject
+    ? activeRemoteId
+    : activeSessionId;
   const listedBusySessionIds = remoteProject
-    ? new Set(remote.sessions.filter((session) => session.status === "running" && !session.needsInput).map((session) => session.id))
+    ? new Set(
+        remote.sessions
+          .filter(
+            (session) => session.status === "running" && !session.needsInput,
+          )
+          .map((session) => session.id),
+      )
     : busySessionIds;
   const listedApprovalSessionIds = remoteProject
-    ? new Set(remote.sessions.filter((session) => session.needsInput).map((session) => session.id))
+    ? new Set(
+        remote.sessions
+          .filter((session) => session.needsInput)
+          .map((session) => session.id),
+      )
     : approvalSessionIds;
-  const projectSessions: SessionSummary[] = useMemo(() => remoteProject
-    ? remote.sessions.map((session) => ({
-        id: session.id,
-        cwd,
-        harness: session.harness,
-        model: session.model ?? "",
-        runtimeMode: session.runtimeMode ?? "supervised",
-        providerSessionId: session.providerSessionId ?? undefined,
-        title: session.title,
-        createdAt: session.createdAt ?? session.updatedAt,
-        updatedAt: session.updatedAt,
-        archived: session.archived,
-        pinned: session.pinned,
-        linkedWorkItem: session.linkedWorkItem,
-        draft: session.draft,
-        repo: session.repo,
-        branch: session.branch,
-        worktreeCwd: session.worktreeCwd,
-      }))
-    : sessions, [remoteProject, remote.sessions, sessions, cwd]);
+  const projectSessions: SessionSummary[] = useMemo(
+    () =>
+      remoteProject
+        ? remote.sessions.map((session) => ({
+            id: session.id,
+            cwd,
+            harness: session.harness,
+            model: session.model ?? "",
+            runtimeMode: session.runtimeMode ?? "supervised",
+            providerSessionId: session.providerSessionId ?? undefined,
+            title: session.title,
+            createdAt: session.createdAt ?? session.updatedAt,
+            updatedAt: session.updatedAt,
+            archived: session.archived,
+            pinned: session.pinned,
+            linkedWorkItem: session.linkedWorkItem,
+            draft: session.draft,
+            repo: session.repo,
+            branch: session.branch,
+            worktreeCwd: session.worktreeCwd,
+          }))
+        : sessions,
+    [remoteProject, remote.sessions, sessions, cwd],
+  );
   const remoteExecutionCwd =
     remote.sessions.find((session) => session.id === activeRemoteId)?.cwd ??
     (activeSessionId ? remotePendingWorktree(activeSessionId) : undefined) ??
     (remoteProject && gitCwd && gitCwd !== cwd
-      ? parseRemotePath(gitCwd)?.hostPath ?? gitCwd
+      ? (parseRemotePath(gitCwd)?.hostPath ?? gitCwd)
       : undefined) ??
     undefined;
   const gitRoot =
     remoteProject && hostProject
-      ? remotePath(hostProject.environmentId, remoteExecutionCwd ?? hostProject.cwd)
+      ? remotePath(
+          hostProject.environmentId,
+          remoteExecutionCwd ?? hostProject.cwd,
+        )
       : gitCwd || cwd;
   const resize = useDragResize({
     min: MIN_WIDTH,
@@ -623,13 +693,19 @@ function SidebarComponent({
     : pending && sessions.length === 0;
   const worktreeFocus = useWorktreeFocus(cwd);
   const focusedWorktree = remoteProject ? undefined : worktreeFocus;
+  useSyncExternalStore(subscribeMonos, monosSnapshot);
   const listedSessions = mergeFolderSessionSummaries(
     projectSessions,
     remoteProject ? [] : openSessions,
     sessionFolders,
   ).filter(
     (session) =>
-      !session.orchestrationLeadId && inWorktreeFocus(session, focusedWorktree),
+      !isMonoSession(session.id) &&
+      !session.sidebarHidden &&
+      !("ephemeral" in session && session.ephemeral) &&
+      !isHabitRun(session.id) &&
+      !session.orchestrationLeadId &&
+      inWorktreeFocus(session, focusedWorktree),
   );
   const visibleSessions = [
     ...filterSessionsByQuery(
@@ -757,15 +833,19 @@ function SidebarComponent({
     compactProjectRail && showProjectRail && !railVisible;
   const inProject = looksLikeProject(cwd);
   const showSidebarFooter = !projectRailOpen;
+  const otherViewActive =
+    searchActive ||
+    inboxActive ||
+    notesActive ||
+    automationsActive ||
+    settingsOpen;
+  // A remembered Mono sits underneath these views; select it only while visible.
+  const railMonos = monos
+    ? { ...monos, activeId: otherViewActive ? undefined : monos.activeId }
+    : undefined;
   // A blank session has no project to browse, so the shell stands alone until
   // one is picked — whether or not the rail is open.
-  const sidebarAvailable =
-    !searchActive &&
-    !inboxActive &&
-    !notesActive &&
-    !automationsActive &&
-    !settingsOpen &&
-    inProject;
+  const sidebarAvailable = !otherViewActive && !monoViewActive && inProject;
   const sidebarVisible = open && sidebarAvailable;
   // With the sidebar collapsed beside the compact rail, its tab shortcuts
   // open the sidebar temporarily until the user clicks away.
@@ -781,6 +861,12 @@ function SidebarComponent({
   const drawerRendered = drawerVisible || drawerClosing;
   const drawerAnimation = useRef<Animation | null>(null);
   const panelOpen = open || drawerVisible;
+  // Keep the hidden explorer intact when a chat tab changes worktrees. Its
+  // rows and file icons only need rebuilding when Files is actually shown.
+  const explorer = useRef<{ cwd: string; rootLabel?: string } | null>(null);
+  if (panelOpen && tab === "files") {
+    explorer.current = { cwd: gitRoot, rootLabel: explorerRootLabel };
+  }
   const gitStatuses = useGitFileStatuses(gitRoot, panelOpen && tab === "files");
   const changeStats = useProjectDiffStats(gitRoot, panelOpen);
 
@@ -907,14 +993,16 @@ function SidebarComponent({
     if (remoteProject && !remote.loaded) return;
     const known = new Set(projectSessions.map((session) => session.id));
     const completedFolderSessions = new Map<string, string>();
-    for (const session of remoteProject ? [] : openSessions) known.add(session.id);
+    for (const session of remoteProject ? [] : openSessions)
+      known.add(session.id);
     if (activeListedSessionId) known.add(activeListedSessionId);
     if (remoteProject && activeSessionId) known.add(activeSessionId);
     if (remoteProject) {
       for (const folder of sessionFolders) {
         for (const shellId of folder.sessionIds) {
           const hostId = remoteSessionFor(shellId);
-          if (hostId && known.has(hostId)) completedFolderSessions.set(shellId, hostId);
+          if (hostId && known.has(hostId))
+            completedFolderSessions.set(shellId, hostId);
         }
       }
     }
@@ -937,7 +1025,9 @@ function SidebarComponent({
       const migrated = completedFolderSessions.size
         ? current.map((folder) => ({
             ...folder,
-            sessionIds: folder.sessionIds.map((id) => completedFolderSessions.get(id) ?? id),
+            sessionIds: folder.sessionIds.map(
+              (id) => completedFolderSessions.get(id) ?? id,
+            ),
           }))
         : current;
       const next = pruneSessionFolders(migrated, known);
@@ -945,7 +1035,18 @@ function SidebarComponent({
       saveSessionFolders(cwd, next);
       return next;
     });
-  }, [activeListedSessionId, activeSessionId, cwd, openSessions, pending, projectSessions, remoteProject, remote.loaded, sessionFolders, status]);
+  }, [
+    activeListedSessionId,
+    activeSessionId,
+    cwd,
+    openSessions,
+    pending,
+    projectSessions,
+    remoteProject,
+    remote.loaded,
+    sessionFolders,
+    status,
+  ]);
 
   useEffect(() => {
     if (tab !== "sessions") return;
@@ -1378,7 +1479,8 @@ function SidebarComponent({
       ) {
         selectionAnchorRef.current = null;
       }
-      const anchor = selectionAnchorRef.current ?? activeListedSessionId ?? sessionId;
+      const anchor =
+        selectionAnchorRef.current ?? activeListedSessionId ?? sessionId;
       const start = visibleIds.indexOf(anchor);
       const end = visibleIds.indexOf(sessionId);
       const range =
@@ -1493,7 +1595,11 @@ function SidebarComponent({
         compact={compact}
         now={now}
         onSelect={cardActions.select}
-        onOpenWorkItem={onOpenInboxItem && !remoteProject ? cardActions.openWorkItem : undefined}
+        onOpenWorkItem={
+          onOpenInboxItem && !remoteProject
+            ? cardActions.openWorkItem
+            : undefined
+        }
         onPrefetch={onPrefetchSession ? cardActions.prefetch : undefined}
         onPlaceOnPane={
           onPlaceSessionOnPane ? cardActions.placeOnPane : undefined
@@ -1566,6 +1672,9 @@ function SidebarComponent({
   const changeAdditions = changeStats?.additions ?? 0;
   const changeDeletions = changeStats?.deletions ?? 0;
   const hasChanges = (changeStats?.files ?? 0) > 0;
+  const hasUnseenFinished = listedSessions.some((session) =>
+    unseenFinishedIds.has(session.id),
+  );
   const hasChangeStats = changeAdditions > 0 || changeDeletions > 0;
   const changesLabel = hasChangeStats
     ? [
@@ -1616,6 +1725,30 @@ function SidebarComponent({
     );
   });
 
+  const workspaceHeader = (
+    <div
+      className="flex h-10 shrink-0 select-none items-center gap-1 border-b border-stroke pl-3 pr-1.5"
+      data-tauri-drag-region="deep"
+    >
+      <div className="flex min-w-0 flex-1 items-center">
+        {!remoteProject && cwd && cwd !== "~" ? (
+          <SidebarWorktreeSwitcher
+            cwd={cwd}
+            tabStats={worktreeTabStats}
+            onSelect={onSelectWorkspace}
+            pending={workspaceSwitchPending}
+            switchError={workspaceSwitchError}
+          />
+        ) : (
+          <span className="min-w-0 truncate text-sm font-medium leading-tight">
+            Workspace
+          </span>
+        )}
+      </div>
+      <WorkspaceTitleActions onSearch={onGoToFile} onNew={onNew} />
+    </div>
+  );
+
   const sidebarContent = (
     <aside
       ref={resize.setPaneRef}
@@ -1623,27 +1756,7 @@ function SidebarComponent({
     >
       {railVisible ? (
         <>
-          <div
-            className="flex h-10 shrink-0 select-none items-center gap-1 border-b border-stroke pl-3 pr-1.5"
-            data-tauri-drag-region="deep"
-          >
-            <div className="flex min-w-0 flex-1 items-center">
-              {!remoteProject && cwd && cwd !== "~" ? (
-                <SidebarWorktreeSwitcher
-                  cwd={cwd}
-                  tabStats={worktreeTabStats}
-                  onSelect={onSelectWorkspace}
-                  pending={workspaceSwitchPending}
-                  switchError={workspaceSwitchError}
-                />
-              ) : (
-                <span className="min-w-0 truncate text-sm font-medium leading-tight">
-                  Workspace
-                </span>
-              )}
-            </div>
-            <WorkspaceTitleActions onSearch={onGoToFile} onNew={onNew} />
-          </div>
+          {workspaceHeader}
           <div
             role="tablist"
             aria-label="Workspace"
@@ -1672,6 +1785,7 @@ function SidebarComponent({
               />
             </div>
           )}
+          {compactRailVisible ? workspaceHeader : null}
           {onSelectProject && !compactRailVisible ? (
             <SidebarProjectPicker
               cwd={cwd}
@@ -1719,17 +1833,19 @@ function SidebarComponent({
             />
           ) : cwd && cwd !== "~" ? (
             <div className="flex min-h-0 flex-1 flex-col">
-              <FileTree
-                key={gitRoot}
-                cwd={gitRoot}
-                rootLabel={explorerRootLabel}
-                onOpenFile={onOpenFile}
-                onOpenTerminal={remoteProject ? undefined : onOpenTerminal}
-                onFileMoved={onFileMoved}
-                onFileDeleted={onFileDeleted}
-                onSearch={onOpenFilesSearch}
-                gitStatuses={gitStatuses}
-              />
+              {explorer.current ? (
+                <FileTree
+                  key={explorer.current.cwd}
+                  cwd={explorer.current.cwd}
+                  rootLabel={explorer.current.rootLabel}
+                  onOpenFile={onOpenFile}
+                  onOpenTerminal={remoteProject ? undefined : onOpenTerminal}
+                  onFileMoved={onFileMoved}
+                  onFileDeleted={onFileDeleted}
+                  onSearch={onOpenFilesSearch}
+                  gitStatuses={gitStatuses}
+                />
+              ) : null}
             </div>
           ) : (
             <p className="px-3 py-2 text-[12px] text-content/50">
@@ -1759,7 +1875,7 @@ function SidebarComponent({
             sessionsLock(el);
             sessionsScrollRef.current = el;
           }}
-          className={`min-h-0 flex-1 overflow-y-auto overscroll-none ${
+          className={`sidebar-session-scroll min-h-0 flex-1 overflow-y-auto overscroll-none ${
             tab === "sessions" ? "" : "hidden"
           }`}
         >
@@ -1799,7 +1915,10 @@ function SidebarComponent({
                   <SessionsEmpty message="Sessions you start will show up here" />
                 )
               ) : (
-                <ul data-session-list className="flex flex-col gap-0.5 p-1.5">
+                <ul
+                  data-session-list
+                  className="flex flex-col gap-0.5 p-1.5 pb-10"
+                >
                   {sessionListEntries.map((entry, index) => {
                     if (entry.kind === "pinned" || entry.kind === "reminders") {
                       const isReminders = entry.kind === "reminders";
@@ -2061,19 +2180,19 @@ function SidebarComponent({
         {tab === "changes" ? (
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             <SourceControl
-                cwd={gitRoot}
-                enabled={panelOpen}
-                textHarness={textHarness}
-                selectedPath={selectedDiffPath}
-                selectedKind={selectedDiffKind}
-                selectedSha={selectedCommitSha}
-                onOpenFile={
-                  onOpenDiff ??
-                  ((path) => onOpenFile(path, undefined, { exact: true }))
-                }
-                onOpenAllChanges={onOpenAllChanges ?? (() => {})}
-                onOpenCommit={onOpenCommit ?? (() => {})}
-              />
+              cwd={gitRoot}
+              enabled={panelOpen}
+              textHarness={textHarness}
+              selectedPath={selectedDiffPath}
+              selectedKind={selectedDiffKind}
+              selectedSha={selectedCommitSha}
+              onOpenFile={
+                onOpenDiff ??
+                ((path) => onOpenFile(path, undefined, { exact: true }))
+              }
+              onOpenAllChanges={onOpenAllChanges ?? (() => {})}
+              onOpenCommit={onOpenCommit ?? (() => {})}
+            />
           </div>
         ) : null}
         {showSidebarFooter ? (
@@ -2192,7 +2311,10 @@ function SidebarComponent({
           activeTab={tab}
           tabShown={panelOpen}
           changesLabel={changesLabel}
+          changeAdditions={changeAdditions}
+          changeDeletions={changeDeletions}
           hasChanges={hasChanges}
+          hasUnseenFinished={hasUnseenFinished}
           inboxUnseen={inboxUnseen}
           onSelectProject={onSelectProject}
           onOpenProject={onOpenProject}
@@ -2211,6 +2333,8 @@ function SidebarComponent({
           onTogglePanel={onToggleProjectRail}
           onLeaveActive={onGoBack}
           titleBarAbove={titleBarAbove}
+          monos={railMonos}
+          monoViewActive={monoViewActive}
         />
       ) : null}
       {railMounted.current && onSelectProject && onOpenProject ? (
@@ -2249,6 +2373,7 @@ function SidebarComponent({
           updateNotice={updateNotice}
           onOpenWhatsNew={onOpenWhatsNew}
           onDismissUpdate={onDismissUpdate}
+          monos={railMonos}
         />
       ) : null}
       {sidebarVisible ? sidebarContent : null}
@@ -2432,7 +2557,10 @@ function CompactProjectRail({
   activeTab,
   tabShown,
   changesLabel,
+  changeAdditions,
+  changeDeletions,
   hasChanges,
+  hasUnseenFinished,
   inboxUnseen,
   onSelectProject,
   onOpenProject,
@@ -2451,6 +2579,8 @@ function CompactProjectRail({
   onTogglePanel,
   onLeaveActive,
   titleBarAbove,
+  monos,
+  monoViewActive = false,
 }: {
   cwd: string;
   recents: RecentProject[];
@@ -2459,7 +2589,11 @@ function CompactProjectRail({
   activeTab: SidebarTab;
   tabShown: boolean;
   changesLabel: string;
+  changeAdditions: number;
+  changeDeletions: number;
   hasChanges: boolean;
+  /** A session here finished a reply the user has not opened. */
+  hasUnseenFinished: boolean;
   inboxUnseen: boolean;
   onSelectProject?: (path: string) => void;
   onOpenProject?: () => void;
@@ -2478,7 +2612,32 @@ function CompactProjectRail({
   onTogglePanel?: () => void;
   onLeaveActive?: () => void;
   titleBarAbove: boolean;
+  /** Monos have no row here, so the project button lists them too. */
+  monos?: MonoRailProps;
+  /** A Mono fills the main area: no workspace tab is the current one. */
+  monoViewActive?: boolean;
 }) {
+  const monosSnap = useSyncExternalStore(subscribeMonos, monosSnapshot);
+  const monosPinned = useRailMonosPinned();
+  const monoItems = useMemo(() => {
+    if (!monos) return [];
+    return listMonos().map((mono) => ({
+      id: mono.id,
+      ...monoLook(mono),
+      status: monos.states.get(mono.id)?.status ?? "idle",
+    }));
+    // The roster is read through its snapshot.
+  }, [monos, monosSnap]);
+  const pickerMonos = useMemo((): PickerMonos | undefined => {
+    if (!monos) return undefined;
+    return {
+      // Pinned Monos have their own buttons; the picker keeps "New mono".
+      items: monosPinned ? [] : monoItems,
+      activeId: monos.activeId,
+      onOpen: monos.onOpen,
+      onCreate: monos.onCreate,
+    };
+  }, [monos, monoItems, monosPinned]);
   const [inboxMenu, setInboxMenu] = useState<{ x: number; y: number } | null>(
     null,
   );
@@ -2486,16 +2645,22 @@ function CompactProjectRail({
   const action = (active: boolean, open?: () => void) =>
     active && onLeaveActive ? onLeaveActive : open;
   const workspaceActive =
-    !searchActive && !inboxActive && !notesActive && !automationsActive;
+    !searchActive &&
+    !inboxActive &&
+    !notesActive &&
+    !automationsActive &&
+    !monoViewActive;
   const openWorkspaceTab = (nextTab: SidebarTab) => {
     if (!workspaceActive) onLeaveActive?.();
     onTabChange(nextTab);
   };
+  const railTooltip = useRailTooltip();
 
   return (
     <nav
       aria-label="Project shortcuts"
       data-compact-project-rail
+      {...railTooltip.handlers}
       className="sidebar-glass relative flex h-full w-12 shrink-0 flex-col items-center"
     >
       {titleBarAbove ? null : (
@@ -2517,9 +2682,42 @@ function CompactProjectRail({
       >
         <CompactRailAction
           label="Expand projects"
+          tooltip={false}
           icon={PanelLeft}
           onClick={onTogglePanel}
         />
+        {monos && monosPinned && monoItems.length ? (
+          <>
+            <div
+              role="group"
+              aria-label="Monos"
+              data-compact-rail-monos
+              className="flex flex-col items-center gap-1.5"
+            >
+              {monoItems.map((mono) => (
+                <CompactRailMono
+                  key={mono.id}
+                  name={mono.name}
+                  mascot={mono.mascot}
+                  color={mono.color}
+                  status={mono.status}
+                  active={mono.id === monos.activeId}
+                  unseen={
+                    mono.id === monos.activeId
+                      ? 0
+                      : (monos.unseenCounts?.get(mono.id) ?? 0)
+                  }
+                  onClick={() => monos.onOpen(mono.id)}
+                />
+              ))}
+            </div>
+            <span
+              aria-hidden
+              data-compact-rail-monos-divider
+              className="h-px w-6 shrink-0 bg-stroke"
+            />
+          </>
+        ) : null}
         {onSelectProject ? (
           <SearchableProjectPickerWithMenu
             cwd={cwd}
@@ -2531,6 +2729,7 @@ function CompactProjectRail({
             onOpenProject={onOpenProject}
             onRemoveProject={onRemoveProject}
             onOpenNotificationSettings={onOpenNotificationSettings}
+            monos={pickerMonos}
           />
         ) : null}
         <div
@@ -2543,16 +2742,32 @@ function CompactProjectRail({
             <CompactRailAction
               key={itemId}
               tab
-              label={itemId === "changes" ? changesLabel : TAB_LABELS[itemId]}
+              label={
+                itemId === "changes"
+                  ? changesLabel
+                  : itemId === "sessions" && hasUnseenFinished
+                    ? "Sessions, new replies"
+                    : TAB_LABELS[itemId]
+              }
+              tipLabel={TAB_LABELS[itemId]}
+              diff={
+                itemId === "changes"
+                  ? { additions: changeAdditions, deletions: changeDeletions }
+                  : undefined
+              }
               icon={COMPACT_TAB_ICONS[itemId]}
               active={workspaceActive && tabShown && activeTab === itemId}
-              dot={itemId === "changes" && hasChanges}
+              dot={
+                (itemId === "changes" && hasChanges) ||
+                (itemId === "sessions" && hasUnseenFinished)
+              }
               onClick={() => openWorkspaceTab(itemId)}
             />
           ))}
         </div>
         <CompactRailAction
-          label={`Search (${MOD}K)`}
+          label="Search"
+          shortcut={`${MOD}K`}
           icon={Search}
           active={searchActive}
           onClick={action(searchActive, onSearch)}
@@ -2589,7 +2804,9 @@ function CompactProjectRail({
       <div className="min-h-2 flex-1" />
       <div className="flex w-full flex-col items-center gap-1 py-1.5">
         <CompactRailAction
-          label={`Settings (${MOD},)`}
+          label="Settings"
+          shortcut={`${MOD},`}
+          tooltip={false}
           icon={Settings}
           onClick={onOpenSettings}
         />
@@ -2605,12 +2822,69 @@ function CompactProjectRail({
           }}
         />
       ) : null}
+      {railTooltip.tooltip}
     </nav>
+  );
+}
+
+function CompactRailMono({
+  name,
+  mascot,
+  color,
+  status,
+  active,
+  unseen,
+  onClick,
+}: {
+  name: string;
+  mascot: string;
+  color: string;
+  status: MonoStatus;
+  active: boolean;
+  /** Replies the user has not read. */
+  unseen: number;
+  onClick: () => void;
+}) {
+  const label = `${name}, ${MONO_STATUS_LABEL[status]}`;
+  return (
+    <button
+      type="button"
+      data-rail-tip={name}
+      data-rail-tip-detail={
+        unseen
+          ? `${MONO_STATUS_LABEL[status]} · ${unreadLabel(unseen)}`
+          : MONO_STATUS_LABEL[status]
+      }
+      aria-label={unseen ? `${label}, ${unreadLabel(unseen)}` : label}
+      aria-current={active ? "true" : undefined}
+      data-compact-rail-mono
+      onClick={onClick}
+      className={`relative grid size-8 shrink-0 place-items-center rounded-md active:scale-[0.97] ${
+        active
+          ? "bg-selection"
+          : "opacity-65 hover:bg-content/10 hover:opacity-100"
+      }`}
+    >
+      <MonoRailMascot name={mascot} color={color} status={status} />
+      {unseen ? (
+        <span
+          aria-hidden
+          data-mono-unread={unseen}
+          className="absolute -right-0.5 -top-0.5 grid h-3.5 min-w-3.5 place-items-center rounded-full bg-background-base px-0.5 text-[9px] font-medium tabular-nums leading-none text-content/80 ring-1 ring-content/15"
+        >
+          {unreadBadge(unseen)}
+        </span>
+      ) : null}
+    </button>
   );
 }
 
 function CompactRailAction({
   label,
+  shortcut,
+  tooltip = true,
+  tipLabel = label,
+  diff,
   icon: Icon,
   tab = false,
   active = false,
@@ -2619,6 +2893,12 @@ function CompactRailAction({
   onOpenContextMenu,
 }: {
   label: string;
+  shortcut?: string;
+  tooltip?: boolean;
+  /** The tooltip's name, when the accessible label carries more. */
+  tipLabel?: string;
+  /** Colored +n -n beside the tooltip's name. */
+  diff?: { additions: number; deletions: number };
   icon: typeof PanelLeft;
   tab?: boolean;
   active?: boolean;
@@ -2630,8 +2910,15 @@ function CompactRailAction({
     <button
       type="button"
       role={tab ? "tab" : undefined}
-      title={label}
-      aria-label={label}
+      data-rail-tip={tooltip ? tipLabel : undefined}
+      data-rail-tip-detail={tooltip ? shortcut : undefined}
+      data-rail-tip-additions={
+        tooltip && diff?.additions ? diff.additions : undefined
+      }
+      data-rail-tip-deletions={
+        tooltip && diff?.deletions ? diff.deletions : undefined
+      }
+      aria-label={shortcut ? `${label} (${shortcut})` : label}
       aria-selected={tab ? active : undefined}
       aria-pressed={tab ? undefined : active}
       disabled={!onClick}
@@ -3055,7 +3342,7 @@ function SessionListItem({
   return <li ref={ref}>{children}</li>;
 }
 
-const SessionCard = memo(function SessionCard({
+export const SessionCard = memo(function SessionCard({
   session,
   isActive,
   isSelected,
@@ -3065,6 +3352,9 @@ const SessionCard = memo(function SessionCard({
   needsApproval,
   dropTarget,
   compact = false,
+  modelInFooter = false,
+  statusLabel,
+  project,
   now,
   onSelect,
   onOpenWorkItem,
@@ -3086,6 +3376,13 @@ const SessionCard = memo(function SessionCard({
   needsApproval: boolean;
   dropTarget?: boolean;
   compact?: boolean;
+  /** Shows the model as its provider's mark beside the branch, so the title
+   * shares its row with the time and the card is a line shorter. */
+  modelInFooter?: boolean;
+  /** Stands in for the time, for a session with no state of its own to show. */
+  statusLabel?: string;
+  /** Names its project before the branch, where sessions span several. */
+  project?: string;
   now: number;
   onSelect: (
     sessionId: string,
@@ -3123,6 +3420,7 @@ const SessionCard = memo(function SessionCard({
     ? NO_BRANCH_LABEL
     : formatGitLabel(session.repo, session.branch);
   const time = formatRelative(session.updatedAt, now);
+  const headerRow = !(compact && !orchestrationExpanded) && !modelInFooter;
   const model =
     compact && !orchestrationExpanded
       ? null
@@ -3161,7 +3459,7 @@ const SessionCard = memo(function SessionCard({
           <span>Draft</span>
         </>
       ) : (
-        <span>{time}</span>
+        <span>{statusLabel ?? time}</span>
       )}
     </span>
   );
@@ -3181,11 +3479,6 @@ const SessionCard = memo(function SessionCard({
       data-tauri-drag-region="false"
       title={`Open ${linkedWorkItem.kind === "pr" ? "PR" : "issue"} #${linkedWorkItem.number} beside this session (${MOD}-click for GitHub)`}
       aria-label={`Open ${linkedWorkItem.kind === "pr" ? "PR" : "issue"} #${linkedWorkItem.number}`}
-      onPointerEnter={() => {
-        // Hover usually precedes the click by a few hundred ms, which is
-        // most of what the panel would otherwise spend waiting on GitHub.
-        if (onOpenWorkItem) prefetchGithubWorkItem(session.cwd, linkedWorkItem);
-      }}
       onPointerDown={(event) => event.stopPropagation()}
       onClick={(event) => {
         event.preventDefault();
@@ -3436,7 +3729,7 @@ const SessionCard = memo(function SessionCard({
           }}
           className="rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-accent/50"
         >
-          {compact && !orchestrationExpanded ? null : (
+          {headerRow ? (
             <span className="relative flex items-center gap-2">
               <span className="flex min-w-0 flex-1 items-center gap-1.5">
                 <HarnessIcon
@@ -3452,10 +3745,10 @@ const SessionCard = memo(function SessionCard({
                 {status}
               </span>
             </span>
-          )}
+          ) : null}
           <span
             className={`relative flex min-w-0 items-center gap-1.5 ${
-              compact && !orchestrationExpanded ? "" : "mt-1"
+              headerRow ? "mt-1" : ""
             }`}
           >
             {session.pinned ? (
@@ -3468,12 +3761,12 @@ const SessionCard = memo(function SessionCard({
               text={title}
               className="line-clamp-1 text-[13px] font-semibold leading-snug text-content"
             />
-            {compact && !orchestrationExpanded ? (
-              <span className="flex shrink-0 items-center gap-1.5">
+            {headerRow ? null : (
+              <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-2">
                 {linkedUpdateDot}
                 {status}
               </span>
-            ) : null}
+            )}
           </span>
         </div>
         {orchestrationExpanded ? (
@@ -3483,18 +3776,48 @@ const SessionCard = memo(function SessionCard({
           />
         ) : null}
         <span className="relative mt-1 flex items-center gap-2">
-          {gitLabel ? (
+          {project && !gitLabel ? (
             <span
               className="flex min-w-0 flex-1 items-center gap-1 text-[11px] text-content/45"
-              title={session.worktreeCwd ? `${gitLabel}\n${session.worktreeCwd}` : gitLabel}
+              title={session.cwd}
+            >
+              <Folder className="size-3 shrink-0" strokeWidth={1.75} />
+              <span className="min-w-0 truncate">{project}</span>
+            </span>
+          ) : gitLabel ? (
+            <span
+              className="flex min-w-0 flex-1 items-center gap-1 text-[11px] text-content/45"
+              title={
+                session.worktreeCwd
+                  ? `${gitLabel}\n${session.worktreeCwd}`
+                  : gitLabel
+              }
             >
               <GitBranch className="size-3 shrink-0" strokeWidth={1.75} />
-              <span className="min-w-0 truncate">{gitLabel}</span>
+              <span className="min-w-0 truncate">
+                {project ? `${project} · ${gitLabel}` : gitLabel}
+              </span>
             </span>
           ) : (
             <span className="min-w-0 flex-1" />
           )}
           <span className="relative flex shrink-0 items-center gap-px">
+            {/* Just the provider's mark; the model's name slides out beside
+                it while the card is hovered or focused. */}
+            {modelInFooter && model ? (
+              <span
+                title={model}
+                className="flex min-w-0 items-center text-[11px] text-content/50"
+              >
+                <span className="max-w-0 truncate pr-0 opacity-0 transition-[max-width,opacity,padding] duration-200 ease-out group-focus-within:max-w-32 group-focus-within:pr-1.5 group-focus-within:opacity-100 group-hover:max-w-32 group-hover:pr-1.5 group-hover:opacity-100 motion-reduce:transition-none">
+                  {model}
+                </span>
+                <HarnessIcon
+                  harness={session.harness}
+                  className="size-3.5 shrink-0"
+                />
+              </span>
+            ) : null}
             {onArchive ? (
               <button
                 type="button"
@@ -3704,6 +4027,44 @@ function DiffStat({
   additions: number;
   deletions: number;
 }) {
+  const containerRef = useRef<HTMLSpanElement>(null);
+  const contentRef = useRef<HTMLSpanElement>(null);
+
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    const content = contentRef.current;
+    if (!container || !content) return;
+
+    const fit = () => {
+      const availableWidth = container.getBoundingClientRect().width;
+      if (availableWidth <= 0) return;
+
+      // Measure at the normal size so the text can grow again after resizing.
+      let maxFontSize = 11;
+      content.style.fontSize = `${maxFontSize}px`;
+      if (content.getBoundingClientRect().width <= availableWidth) return;
+
+      // Font metrics can change at small sizes, so check the rendered width.
+      let minFontSize = 0;
+      while (maxFontSize - minFontSize > 0.1) {
+        const fontSize = (minFontSize + maxFontSize) / 2;
+        content.style.fontSize = `${fontSize}px`;
+        if (content.getBoundingClientRect().width > availableWidth) {
+          maxFontSize = fontSize;
+        } else {
+          minFontSize = fontSize;
+        }
+      }
+      content.style.fontSize = `${minFontSize}px`;
+    };
+
+    fit();
+    // Sidebar dragging writes its width directly to the DOM, without a render.
+    const observer = new ResizeObserver(fit);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [additions, deletions]);
+
   if (additions <= 0 && deletions <= 0) return null;
 
   const label = [
@@ -3715,19 +4076,25 @@ function DiffStat({
 
   return (
     <span
+      ref={containerRef}
       title={`${label} uncommitted`}
-      className="flex shrink-0 items-center gap-1.5 font-sans text-[11px] font-semibold tabular-nums"
+      className="flex h-full w-full min-w-0 items-center justify-center overflow-hidden"
     >
-      {additions > 0 ? (
-        <span className="text-emerald-400">
-          +<TightDiffNumber value={additions} />
-        </span>
-      ) : null}
-      {deletions > 0 ? (
-        <span className="text-red-400">
-          -<TightDiffNumber value={deletions} />
-        </span>
-      ) : null}
+      <span
+        ref={contentRef}
+        className="flex shrink-0 items-center gap-[0.55em] whitespace-nowrap font-sans text-[11px] font-semibold tabular-nums"
+      >
+        {additions > 0 ? (
+          <span className="text-diff-add-fg">
+            +<TightDiffNumber value={additions} />
+          </span>
+        ) : null}
+        {deletions > 0 ? (
+          <span className="text-diff-del-fg">
+            -<TightDiffNumber value={deletions} />
+          </span>
+        ) : null}
+      </span>
     </span>
   );
 }

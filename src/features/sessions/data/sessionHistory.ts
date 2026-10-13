@@ -2,6 +2,7 @@ import type { OrchestrationRun } from "../../orchestration/model/orchestration";
 import { summarizeOrchestration } from "../../orchestration/model/orchestrationSummary";
 import { fuzzyMatch } from "../../../shared/lib/fuzzy";
 import { projectName } from "../../../shared/lib/paths";
+import { plainEqual } from "../../../shared/hooks/useStableValue";
 import { sameProjectPath } from "../../projects/model/recents";
 import {
   sessionDisplayTitle,
@@ -107,6 +108,7 @@ export function summaryFromSession(
   return {
     id: session.id,
     orchestrationLeadId: session.orchestrationLeadId,
+    sidebarHidden: session.sidebarHidden,
     cwd: session.cwd,
     harness: session.harness,
     model: session.model,
@@ -127,6 +129,28 @@ export function summaryFromSession(
     createdAt: 0,
     updatedAt: Date.now(),
   };
+}
+
+/** Live summaries restamp `updatedAt` on every build; within this window a
+ * row counts as unchanged, matching the sidebar's 30s relative-time tick. */
+const LIVE_SUMMARY_STALE_MS = 30_000;
+
+/** Same rows in the same order, ignoring a live row's restamped clock. */
+export function sameSessionSummaries(
+  previous: readonly SessionSummary[],
+  next: readonly SessionSummary[],
+): boolean {
+  if (previous.length !== next.length) return false;
+  return previous.every((row, i) => {
+    const other = next[i];
+    if (row === other) return true;
+    if (
+      !other ||
+      Math.abs(row.updatedAt - other.updatedAt) >= LIVE_SUMMARY_STALE_MS
+    )
+      return false;
+    return plainEqual({ ...row, updatedAt: 0 }, { ...other, updatedAt: 0 });
+  });
 }
 
 /** Prefer the project's persisted origin name, then the overlay / folder name. */
@@ -178,7 +202,9 @@ export function historyWithLiveSessions(
   );
   const hint = projectGitHint(rows, gitOverlayForCwd(cwd, git));
   for (const session of sessions) {
-    if (session.inboxAsk || workerIds.has(session.id)) continue;
+    // Ephemeral sessions are never chats of the project, even while busy.
+    if (session.ephemeral || session.inboxAsk || workerIds.has(session.id))
+      continue;
     if (!sameProjectPath(session.cwd, cwd)) continue;
     const live = session.busy || sessionNeedsInput(session);
     if (!shouldPersistSession(session) && !live) continue;
@@ -193,11 +219,13 @@ export function historyWithLiveSessions(
         !!stored.draft !== draft ||
         stored.automationId !== automationId ||
         stored.title !== session.title ||
+        !!stored.sidebarHidden !== !!session.sidebarHidden ||
         stored.linkedWorkItem?.url !== linkedWorkItem?.url
       ) {
         rows[storedIndex] = {
           ...stored,
           title: session.title,
+          sidebarHidden: session.sidebarHidden,
           draft: draft || undefined,
           ...(automationId ? { automationId } : {}),
           ...(linkedWorkItem ? { linkedWorkItem } : {}),

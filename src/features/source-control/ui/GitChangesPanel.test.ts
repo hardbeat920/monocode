@@ -54,13 +54,16 @@ import {
   gitPull,
   gitPush,
   gitRangeContext,
+  gitStageFile,
+  gitUnstageFile,
+  notifyGitChanged,
 } from "../../../platform/tauri/fs";
 import {
   generateCommitMessage,
   generatePrContent,
 } from "../../../integrations/harness";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import type { GitDiffIndex } from "../../../platform/tauri/fs";
+import type { GitChangedFile, GitDiffIndex } from "../../../platform/tauri/fs";
 
 function index(overrides: Partial<GitDiffIndex> = {}): GitDiffIndex {
   return {
@@ -84,6 +87,8 @@ let container: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
+  // Keep delayed file invalidations from reaching the next test's mocks.
+  vi.useFakeTimers();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal(
     "ResizeObserver",
@@ -94,6 +99,9 @@ beforeEach(() => {
   );
   vi.mocked(gitDiffIndex).mockReset();
   vi.mocked(gitPull).mockReset();
+  vi.mocked(gitStageFile).mockReset().mockResolvedValue(undefined);
+  vi.mocked(gitUnstageFile).mockReset().mockResolvedValue(undefined);
+  vi.mocked(notifyGitChanged).mockClear();
   vi.mocked(generateCommitMessage).mockReset();
   invalidateWatchedFiles.mockReset();
   container = document.createElement("div");
@@ -170,6 +178,8 @@ describe("GitChangesPanel commit message generation", () => {
 
 afterEach(() => {
   act(() => root.unmount());
+  vi.clearAllTimers();
+  vi.useRealTimers();
   container.remove();
   document.body
     .querySelectorAll("[data-popover-side]")
@@ -200,6 +210,210 @@ async function openBranchMenu() {
   await act(async () => {});
   return document.querySelector<HTMLButtonElement>('[role="menuitem"]')!;
 }
+
+function changedFile(
+  relative: string,
+  overrides: Partial<GitChangedFile> = {},
+): GitChangedFile {
+  return {
+    path: `/repo/${relative}`,
+    relative,
+    status: "modified",
+    additions: 1,
+    deletions: 0,
+    staged: false,
+    unstaged: true,
+    ...overrides,
+  };
+}
+
+async function showTree() {
+  const toggle = container.querySelector<HTMLButtonElement>(
+    '[aria-label="View as Tree"]',
+  );
+  if (toggle) await act(async () => toggle.click());
+  let collapsed: HTMLButtonElement | null;
+  while (
+    (collapsed = container.querySelector<HTMLButtonElement>(
+      'button[title][aria-expanded="false"]',
+    ))
+  ) {
+    const folder = collapsed;
+    await act(async () => folder.click());
+  }
+}
+
+describe("GitChangesPanel folder actions", () => {
+  it.each(["/repo", "remote://machine/home/user/repo"])(
+    "stages a collapsed folder in one operation for %s",
+    async (cwd) => {
+      const files = [
+        changedFile("src/app.ts", { path: `${cwd}/src/app.ts` }),
+        changedFile("src/nested/new.ts", {
+          path: `${cwd}/src/nested/new.ts`,
+          status: "untracked",
+        }),
+        changedFile("src-other/other.ts"),
+        changedFile("docs/ready.md", { staged: true, unstaged: false }),
+      ];
+      vi.mocked(gitDiffIndex).mockResolvedValue(index({ files }));
+      await renderPanel(cwd);
+      await showTree();
+      const folder = container.querySelector<HTMLButtonElement>(
+        'button[title="src"]',
+      )!;
+      await act(async () => folder.click());
+      expect(folder.getAttribute("aria-expanded")).toBe("false");
+      expect(container.querySelector('button[title="src/app.ts"]')).toBeNull();
+
+      invalidateWatchedFiles.mockClear();
+      vi.mocked(notifyGitChanged).mockClear();
+      const reads = vi.mocked(gitDiffIndex).mock.calls.length;
+      await act(async () => {
+        container
+          .querySelector<HTMLButtonElement>(
+            '[aria-label="Stage Changes in src"]',
+          )!
+          .click();
+      });
+
+      expect(gitStageFile).toHaveBeenCalledExactlyOnceWith(cwd, "src");
+      expect(gitUnstageFile).not.toHaveBeenCalled();
+      expect(invalidateWatchedFiles).toHaveBeenCalledWith([
+        `${cwd}/src/app.ts`,
+        `${cwd}/src/nested/new.ts`,
+      ]);
+      expect(notifyGitChanged).toHaveBeenCalled();
+      expect(vi.mocked(gitDiffIndex).mock.calls.length).toBeGreaterThan(reads);
+      expect(folder.getAttribute("aria-expanded")).toBe("false");
+    },
+  );
+
+  it("stages a nested folder without toggling it or including its siblings", async () => {
+    vi.mocked(gitDiffIndex).mockResolvedValue(
+      index({
+        files: [
+          changedFile("src/app.ts"),
+          changedFile("src/nested/one.ts"),
+          changedFile("src/nested/deeper/two.ts"),
+          changedFile("src/nested-other/three.ts"),
+        ],
+      }),
+    );
+    await renderPanel();
+    await showTree();
+    const folder = container.querySelector<HTMLButtonElement>(
+      'button[title="src/nested"]',
+    )!;
+    invalidateWatchedFiles.mockClear();
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Stage Changes in src/nested"]',
+        )!
+        .click();
+    });
+
+    expect(gitStageFile).toHaveBeenCalledExactlyOnceWith("/repo", "src/nested");
+    expect(folder.getAttribute("aria-expanded")).toBe("true");
+    expect(invalidateWatchedFiles).toHaveBeenCalledWith([
+      "/repo/src/nested/one.ts",
+      "/repo/src/nested/deeper/two.ts",
+    ]);
+  });
+
+  it("unstages the staged folder including files that also have unstaged changes", async () => {
+    vi.mocked(gitDiffIndex).mockResolvedValue(
+      index({
+        files: [
+          changedFile("src/app.ts", { staged: true, unstaged: false }),
+          changedFile("src/nested/partial.ts", { staged: true }),
+          changedFile("docs/readme.md", { staged: true, unstaged: false }),
+        ],
+      }),
+    );
+    await renderPanel();
+    await showTree();
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Unstage Changes in src"]',
+        )!
+        .click();
+    });
+
+    expect(gitUnstageFile).toHaveBeenCalledExactlyOnceWith("/repo", "src");
+    expect(gitStageFile).not.toHaveBeenCalled();
+  });
+
+  it("disables folder and file mutations while a folder action is running", async () => {
+    vi.mocked(gitDiffIndex).mockResolvedValue(
+      index({
+        files: [changedFile("src/app.ts"), changedFile("docs/readme.md")],
+      }),
+    );
+    let finish!: () => void;
+    vi.mocked(gitStageFile).mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    await renderPanel();
+    await showTree();
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Stage Changes in src"]',
+        )!
+        .click();
+    });
+    const actions = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        'button[aria-label^="Stage Changes"], button[aria-label="Discard Changes"]',
+      ),
+    ];
+    expect(actions.length).toBeGreaterThan(2);
+    expect(actions.every((action) => action.disabled)).toBe(true);
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Stage Changes in docs"]',
+        )!
+        .click();
+    });
+    expect(gitStageFile).toHaveBeenCalledTimes(1);
+
+    await act(async () => finish());
+    expect(actions.every((action) => !action.disabled)).toBe(true);
+  });
+
+  it("reports errors and enables folder actions again", async () => {
+    const alert = vi.spyOn(window, "alert").mockImplementation(() => {});
+    vi.mocked(gitDiffIndex).mockResolvedValue(
+      index({ files: [changedFile("src/app.ts")] }),
+    );
+    vi.mocked(gitStageFile).mockRejectedValueOnce(
+      new Error("Git index is locked"),
+    );
+    await renderPanel();
+    await showTree();
+    invalidateWatchedFiles.mockClear();
+    const stage = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Stage Changes in src"]',
+    )!;
+    await act(async () => stage.click());
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150);
+    });
+
+    expect(alert).toHaveBeenCalledWith("Git index is locked");
+    expect(stage.disabled).toBe(false);
+    expect(invalidateWatchedFiles).not.toHaveBeenCalled();
+    alert.mockRestore();
+  });
+});
 
 describe("GitChangesPanel pull action", () => {
   it("disables Pull when the branch has no upstream", async () => {
