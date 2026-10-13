@@ -200,6 +200,9 @@ pub struct BrowserHost {
     managed: Mutex<Option<ManagedBrowser>>,
     /// "Open browser" asked for a visible window on the next start.
     force_window: AtomicBool,
+    /// The blank page the MonoCode browser starts with, until an agent tab
+    /// replaces it.
+    startup_pages: Mutex<Vec<TargetId>>,
     db: Db,
     app: Option<AppHandle>,
     run_id: u64,
@@ -274,6 +277,7 @@ impl BrowserHost {
             profile: Mutex::new(None),
             managed: Mutex::new(None),
             force_window: AtomicBool::new(false),
+            startup_pages: Mutex::new(Vec::new()),
             db,
             app,
             run_id,
@@ -504,6 +508,27 @@ impl BrowserHost {
             .browser
             .as_ref()
             .is_some_and(|browser| browser.managed)
+    }
+
+    /// The first agent tab in the MonoCode browser closes the blank page it
+    /// started with, unless the user has since used that page.
+    fn close_startup_pages(&self) {
+        let startup =
+            std::mem::take(&mut *self.startup_pages.lock().unwrap_or_else(|e| e.into_inner()));
+        if startup.is_empty() || !self.link.is_open() || !self.connected_to_managed() {
+            return;
+        }
+        let Ok(reply) = self
+            .link
+            .send_system(Command::browser(Method::TargetGetTargets, json!({})))
+        else {
+            return;
+        };
+        let still_blank: Vec<TargetId> = blank_pages(&reply)
+            .into_iter()
+            .filter(|target| startup.contains(target))
+            .collect();
+        targets::close_targets(&self.link, &still_blank);
     }
 
     /// Close every page of the MonoCode browser while the link is still up,
@@ -1108,10 +1133,16 @@ impl BrowserHost {
             );
             return;
         }
-        // Diagnostics only (spec 4 step 7): no attach, no adoption.
-        let _ = self
+        // Diagnostics only (spec 4 step 7): no attach, no adoption. The
+        // MonoCode browser's start page is remembered so the first agent tab
+        // can replace it.
+        let targets = self
             .link
             .send_system(Command::browser(Method::TargetGetTargets, json!({})));
+        *self.startup_pages.lock().unwrap_or_else(|e| e.into_inner()) = match targets {
+            Ok(reply) if managed => blank_pages(&reply),
+            _ => Vec::new(),
+        };
         let info = BrowserInfo {
             kind: candidate.kind,
             channel: candidate.channel.clone(),
@@ -1750,6 +1781,7 @@ impl BrowserHost {
                 };
                 match targets::open_tab(&self.link, ctx, params.url.as_deref(), WaitUntil::Load) {
                     Ok(opened) => {
+                        self.close_startup_pages();
                         let tab = opened.handle.tab.clone();
                         let url = opened.observed.url.clone().unwrap_or_default();
                         self.db.with(|conn| {
@@ -2057,6 +2089,25 @@ pub fn child_token(session: &str) -> Option<String> {
 pub fn handle_token_request(token: &str, request: ActionRequest) -> Result<ActionResult, String> {
     let host = host().ok_or("Browser module is not available")?;
     host.handle_token_request(token, request)
+}
+
+/// Pages of a `Target.getTargets` reply that still show a blank or new-tab
+/// page.
+fn blank_pages(reply: &Value) -> Vec<TargetId> {
+    reply["targetInfos"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|info| info["type"] == "page")
+        .filter(|info| {
+            let url = info["url"].as_str().unwrap_or("");
+            url == "about:blank"
+                || url.starts_with("chrome://newtab")
+                || url.starts_with("edge://newtab")
+        })
+        .filter_map(|info| info["targetId"].as_str())
+        .map(|id| TargetId(id.to_string()))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -2666,6 +2717,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn blank_pages_are_the_start_page_and_new_tab_pages_only() {
+        let reply = json!({ "targetInfos": [
+            { "targetId": "A", "type": "page", "url": "about:blank" },
+            { "targetId": "B", "type": "page", "url": "chrome://newtab/" },
+            { "targetId": "C", "type": "page", "url": "https://github.com/" },
+            { "targetId": "D", "type": "service_worker", "url": "about:blank" },
+        ]});
+        let ids: Vec<String> = blank_pages(&reply).into_iter().map(|t| t.0).collect();
+        assert_eq!(ids, vec!["A", "B"]);
+    }
+
     /// Managed mode with a MonoCode browser already listening on the fake.
     fn managed_host(server: &FakeCdp, access: AccessMode) -> (Arc<BrowserHost>, PathBuf) {
         let dir = profile_for(server);
@@ -2797,12 +2860,37 @@ mod tests {
         assert_eq!(opened.outcome, Outcome::Done, "{opened:?}");
         let info = host.connection().browser.unwrap();
         assert!(info.managed, "{info:?}");
+        // The start page made way for the agent's tab.
+        let targets = host
+            .link()
+            .send_system(Command::browser(Method::TargetGetTargets, json!({})))
+            .unwrap();
+        let pages = targets["targetInfos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|info| info["type"] == "page")
+            .count();
+        assert_eq!(pages, 1, "{targets}");
         let tab = opened.data.unwrap()["tab"].as_str().unwrap().to_string();
         let read = host.handle_request("s1", request("m2", "read", json!({ "tab": tab })));
         assert_eq!(read.outcome, Outcome::Done, "{read:?}");
         host.set_toggle(false);
-        assert!(launch::running(&dir).is_none());
+        // OFF closes the browser in the background.
+        assert!(eventually(|| launch::running(&dir).is_none()));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Up to 15 s for something OFF finishes in the background.
+    fn eventually(done: impl Fn() -> bool) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while Instant::now() < deadline {
+            if done() {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        done()
     }
 
     /// Private mode against the installed browser: every start gets a fresh
@@ -2827,8 +2915,8 @@ mod tests {
         assert_eq!(profiles.len(), 1);
         assert!(!root.join("browser-profile").exists());
         host.set_toggle(false);
-        let left = std::fs::read_dir(&private).map(|d| d.count()).unwrap_or(0);
-        assert_eq!(left, 0, "the private profile is deleted");
+        let left = || std::fs::read_dir(&private).map(|d| d.count()).unwrap_or(0);
+        assert!(eventually(|| left() == 0), "the private profile is deleted");
         let _ = std::fs::remove_dir_all(&root);
     }
 }
