@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="1030" viewBox="0 0 1120 1030" role="img" aria-labelledby="title desc">
+<title id="title">APFS copy-on-write: independent files, shared storage</title><desc id="desc">MonoCode validates an APFS repository and clones files with fclonefileat. Source and session have independent Git repositories. Unchanged data blocks are shared; session writes allocate new blocks. Ownership records and worker baselines remain outside the agent checkout.</desc>
+<defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#475569"/></marker></defs>
+<style>text{font-family:Arial,Helvetica,sans-serif;fill:#172033} .heading{font-size:30px;font-weight:700} .subtitle{font-size:18px;fill:#475569} .box-title{font-size:21px;font-weight:700} .body{font-size:18px} .label{font-size:17px;fill:#475569} .arrow{fill:none;stroke:#475569;stroke-width:2;marker-end:url(#arrow)}</style>
+<rect width="100%" height="100%" fill="#ffffff"/>
+
+<text x="45" y="53" class="heading">APFS copy-on-write: independent files, shared storage</text>
+<text x="45" y="85" class="subtitle">macOS only. Unsupported repositories fail explicitly; no normal-copy fallback.</text>
+<rect x="45" y="120" width="300" height="120" rx="12" fill="#eef4ff" stroke="#94a3b8"/>
+<text x="65" y="154" class="box-title">Choose isolation + base</text>
+<text x="65" y="184" class="body">New copy-on-write</text>
+<text x="65" y="210" class="body">Checkout or linked worktree</text>
+<rect x="405" y="120" width="300" height="120" rx="12" fill="#eef4ff" stroke="#94a3b8"/>
+<text x="425" y="154" class="box-title">Validate repository</text>
+<text x="425" y="184" class="body">APFS, paths and Git layout</text>
+<text x="425" y="210" class="body">Reject unsafe / unsupported inputs</text>
+<rect x="765" y="120" width="310" height="120" rx="12" fill="#eef4ff" stroke="#94a3b8"/>
+<text x="785" y="154" class="box-title">Native clone</text>
+<text x="785" y="184" class="body">fclonefileat for regular files</text>
+<text x="785" y="210" class="body">Capture and verify source state</text>
+<path d="M345 180 L405 180" class="arrow"/>
+<path d="M705 180 L765 180" class="arrow"/>
+<rect x="45" y="330" width="450" height="200" rx="12" fill="#eef4ff" stroke="#94a3b8"/>
+<text x="65" y="364" class="box-title">Source checkout</text>
+<text x="65" y="394" class="body">Working files, including current edits</text>
+<text x="65" y="420" class="body">Original .git / common Git directory</text>
+<text x="65" y="446" class="body">Source files stay unchanged</text>
+<rect x="625" y="330" width="450" height="200" rx="12" fill="#eef4ff" stroke="#94a3b8"/>
+<text x="645" y="364" class="box-title">Session checkout</text>
+<text x="645" y="394" class="body">Independent files and private .git</text>
+<text x="645" y="420" class="body">Own index, refs and objects; new mc/… branch</text>
+<text x="645" y="446" class="body">Normal Git operations target this checkout</text>
+<path d="M920 240 L920 330" class="arrow"/>
+<path d="M495 405 L625 405" class="arrow"/>
+<text x="560" y="389" class="label" text-anchor="middle">clone</text>
+<rect x="290" y="605" width="540" height="110" rx="12" fill="#e9f7ef" stroke="#94a3b8"/>
+<text x="310" y="639" class="box-title">Shared APFS data blocks</text>
+<text x="310" y="669" class="body">Unchanged file contents initially reference shared blocks</text>
+<path d="M270 530 L270 570 L440 570 L440 605" class="arrow"/>
+<path d="M850 530 L850 570 L680 570 L680 605" class="arrow"/>
+<text x="170" y="556" class="label">source references</text>
+<text x="860" y="556" class="label">copy references</text>
+<rect x="625" y="765" width="450" height="110" rx="12" fill="#fff4dd" stroke="#94a3b8"/>
+<text x="645" y="799" class="box-title">After a write in the session</text>
+<text x="645" y="829" class="body">APFS allocates changed blocks for the copy</text>
+<text x="645" y="855" class="body">Source continues to reference its original data</text>
+<path d="M1000 530 L1095 530 L1095 820 L1075 820" class="arrow"/>
+<text x="710" y="746" class="label">New storage only for changed data + metadata</text>
+<rect x="45" y="915" width="1030" height="80" rx="12" fill="#f6f7fa" stroke="#94a3b8" stroke-dasharray="7 5"/>
+<text x="65" y="949" class="box-title">App-owned records and worker baseline — outside the agent checkout</text>
+<text x="65" y="979" class="body">Ownership + directory identity in app data; baseline under project-cow/.baselines/&lt;cowId&gt;</text>
+<text x="45" y="900" class="subtitle">All files remain visible. Folder size does not measure how much physical storage APFS shares.</text>
+</svg>

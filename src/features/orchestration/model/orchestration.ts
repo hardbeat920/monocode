@@ -690,6 +690,7 @@ export class Orchestrator {
       lead.cwd,
       lead.worktreeCwd ?? lead.cwd,
       lead.branch,
+      lead.cowId,
     );
     if (!Number.isInteger(maxWorkers) || maxWorkers < 1 || maxWorkers > 4)
       throw new Error("Choose 1 to 4 workers");

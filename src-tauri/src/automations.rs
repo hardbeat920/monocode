@@ -257,9 +257,12 @@ fn validate_upsert(input: &AutomationUpsert, now: i64) -> Result<(), String> {
     }
     if !matches!(
         input.workspace_mode.as_str(),
-        "current" | "worktree" | "existing"
+        "current" | "worktree" | "existing" | "cow"
     ) {
         return Err("Invalid automation workspace mode.".into());
+    }
+    if input.workspace_mode == "cow" && input.reuse_session {
+        return Err("Copy-on-write automation runs require a new session.".into());
     }
     if input.workspace_mode == "existing" {
         let path = input.worktree_cwd.trim();

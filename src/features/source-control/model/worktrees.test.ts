@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import * as settings from "../../settings/model/settings";
 import { newFileTab, newTerminalFile } from "../../workspace/model/layout";
 import { newSession, sessionWorkCwd } from "../../sessions/model/session";
 import {
@@ -47,6 +48,85 @@ describe("worktree deletion preflight", () => {
 });
 
 describe("working-copy context", () => {
+  it("does not apply the CoW default when explicitly opening main from an active worktree", () => {
+    const source = {
+      ...newSession("codex", "/repo"),
+      worktreeCwd: tree.path,
+      blocks: [{ id: "u", role: "user" as const, text: "Build feature" }],
+    };
+    const preference = vi
+      .spyOn(settings, "loadDefaultIsolationMode")
+      .mockReturnValue("cow");
+    try {
+      const selected = sessionInWorktree(source, {
+        ...tree,
+        path: "/repo",
+        isMain: true,
+      });
+      expect(selected.id).not.toBe(source.id);
+      expect(sessionWorkCwd(selected)).toBe("/repo");
+      expect(selected.workspaceMode).toBeUndefined();
+      expect(selected.cowId).toBeUndefined();
+    } finally {
+      preference.mockRestore();
+    }
+  });
+
+  it.each(["cow", "worktree"] as const)(
+    "explicit working-copy selection overrides a pending %s default",
+    (workspaceMode) => {
+      const session = {
+        ...newSession("codex", "/repo"),
+        workspaceMode,
+        worktreeBase: "HEAD",
+        cowSourceCwd: "/repo-worktrees/donor",
+      };
+      for (const selectedTree of [
+        tree,
+        { ...tree, path: "/repo", isMain: true },
+      ]) {
+        const selected = sessionInWorktree(session, selectedTree);
+        expect(selected.id).toBe(session.id);
+        expect(sessionWorkCwd(selected)).toBe(selectedTree.path);
+        expect(selected.workspaceMode).toBeUndefined();
+        expect(selected.worktreeBase).toBeUndefined();
+        expect(selected.cowSourceCwd).toBeUndefined();
+      }
+    },
+  );
+
+  it("clears deleted copy ownership when continuing in a Git worktree", () => {
+    const session = {
+      ...newSession("codex", "/repo"),
+      cowId: "removed-copy",
+      cowSourceCwd: "/repo",
+      worktreeCwd: "/repo-cow/removed-copy",
+      worktreeRemoved: true,
+      blocks: [{ id: "u", role: "user" as const, text: "Build feature" }],
+    };
+    const selected = sessionInWorktree(session, tree);
+    expect(selected.id).toBe(session.id);
+    expect(selected.blocks.at(-1)?.handoff?.pending).toBe(true);
+    expect(sessionWorkCwd(selected)).toBe(tree.path);
+    expect(selected.cowId).toBeUndefined();
+    expect(selected.cowSourceCwd).toBeUndefined();
+    expect(selected.workspaceMode).toBeUndefined();
+  });
+
+  it("keeps ownership of an existing copy even when its conversation is empty", () => {
+    const source = {
+      ...newSession("codex", "/repo"),
+      cowId: "owned-copy",
+      worktreeCwd: "/repo-cow/owned-copy",
+    };
+    const selected = sessionInWorktree(source, tree);
+    expect(selected.id).not.toBe(source.id);
+    expect(selected.cowId).toBeUndefined();
+    expect(sessionWorkCwd(selected)).toBe(tree.path);
+    expect(source.cowId).toBe("owned-copy");
+    expect(sessionWorkCwd(source)).toBe("/repo-cow/owned-copy");
+  });
+
   it("lets an empty session select a worktree and return to main in place", () => {
     const session = {
       ...newSession("codex", "/repo"),
@@ -216,4 +296,16 @@ describe("sessions kept after worktree deletion", () => {
       expect(selected.providerSessionId).toBeUndefined();
     },
   );
+});
+
+ it.each(["cow", "worktree"] as const)("new %s drafts share the HEAD source default", (mode) => {
+  const preference = vi.spyOn(settings, "loadDefaultIsolationMode").mockReturnValue(mode);
+  try {
+    expect(newSession("codex", "/repo")).toMatchObject({ workspaceMode: mode, worktreeBase: "HEAD" });
+  } finally { preference.mockRestore(); }
+});
+
+it("detaches copy ownership and pending isolation when preserving a removed transcript", () => {
+  const session = { ...newSession("codex", "/repo"), cowId: "copy", worktreeCwd: "/copies/copy", workspaceMode: "cow" as const, worktreeBase: "feature", cowSourceCwd: "/donor" };
+  expect(detachSessionWorktree(session, "/repo", "/copies/copy")).toMatchObject({ worktreeRemoved: true, worktreeCwd: "/copies/copy", cowId: undefined, workspaceMode: undefined, worktreeBase: undefined, cowSourceCwd: undefined });
 });

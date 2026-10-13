@@ -1,3 +1,5 @@
+import { isRemoteProjectPath } from "../../features/projects/model/recents";
+import { listCowWorkspaces } from "../../features/source-control/model/cow";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
@@ -313,6 +315,30 @@ async function loadResumedWorkspaceOnce(): Promise<ResumedWorkspace | null> {
     workspace = workspaceFromResumed(sessions);
   }
 
+  if (workspace) {
+    const copyLists = new Map<
+      string,
+      Awaited<ReturnType<typeof listCowWorkspaces>>
+    >();
+    for (const session of workspace.sessions) {
+      if (!session.cowId || isRemoteProjectPath(session.cwd)) continue;
+      let copies = copyLists.get(session.cwd);
+      if (!copies) {
+        copies = await listCowWorkspaces(session.cwd).catch(() => undefined);
+        if (!copies) continue;
+        copyLists.set(session.cwd, copies);
+      }
+      if (
+        !copies.some(
+          (copy) =>
+            copy.id === session.cowId &&
+            copy.sessionId === session.id &&
+            sameProjectPath(copy.path, session.worktreeCwd ?? ""),
+        )
+      )
+        session.worktreeRemoved = true;
+    }
+  }
   bootingResumed = workspace;
   if (workspace) {
     await Promise.all(

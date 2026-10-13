@@ -1,3 +1,4 @@
+import { cowCapability } from "../../source-control/model/cow";
 import {
   ArrowUp,
   AiIdea,
@@ -247,6 +248,7 @@ type Props = {
   onCwdChange: (cwd: string) => void;
   onBranchChange?: () => void;
   onWorktreeChange?: (tree: Worktree) => Promise<void>;
+  cowId?: string;
   draftWorkspace?: boolean;
   workspaceMode?: WorkspaceMode;
   worktreeBase?: string;
@@ -370,6 +372,7 @@ export function Composer({
   onCwdChange,
   onBranchChange,
   onWorktreeChange,
+  cowId,
   draftWorkspace = false,
   workspaceMode,
   worktreeBase,
@@ -443,7 +446,7 @@ export function Composer({
   useEffect(() => {
     if (
       draftWorkspace &&
-      workspaceMode === "worktree" &&
+      (workspaceMode === "worktree" || workspaceMode === "cow") &&
       worktreeBase === "HEAD" &&
       draftBranches?.current
     ) {
@@ -455,6 +458,48 @@ export function Composer({
     onWorktreeBaseChange,
     workspaceMode,
     worktreeBase,
+  ]);
+  const workspaceShortcutRef = useRef({
+    sessionId,
+    cwd,
+    executionCwd,
+    draftResetToken,
+    draftWorkspace,
+    disabled,
+    enabled,
+    busy,
+    workspaceMode,
+    committedWorkspaceMode: workspaceMode,
+    resolvedWorktreeBase,
+    onWorkspaceModeChange,
+  });
+  useLayoutEffect(() => {
+    workspaceShortcutRef.current = {
+      sessionId,
+      cwd,
+      executionCwd,
+      draftResetToken,
+      draftWorkspace,
+      disabled,
+      enabled,
+      busy,
+      workspaceMode,
+      committedWorkspaceMode: workspaceMode,
+      resolvedWorktreeBase,
+      onWorkspaceModeChange,
+    };
+  }, [
+    sessionId,
+    cwd,
+    executionCwd,
+    draftResetToken,
+    draftWorkspace,
+    disabled,
+    enabled,
+    busy,
+    workspaceMode,
+    resolvedWorktreeBase,
+    onWorkspaceModeChange,
   ]);
   const [hasValue, setHasValue] = useState(
     () =>
@@ -1616,13 +1661,43 @@ export function Composer({
     }
     e.preventDefault();
     e.stopPropagation();
-    const next =
-      (workspaceMode ?? "current") === "current" ? "worktree" : "current";
-    if (next === "worktree" && !resolvedWorktreeBase) return;
-    onWorkspaceModeChange(
-      next,
-      next === "worktree" ? resolvedWorktreeBase : undefined,
-    );
+    const captured = workspaceShortcutRef.current;
+    void cowCapability(cwd)
+      .catch(() => ({ supported: false }))
+      .then((capability) => {
+        const latest = workspaceShortcutRef.current;
+        if (
+          !ref.current ||
+          latest.sessionId !== captured.sessionId ||
+          latest.cwd !== captured.cwd ||
+          latest.executionCwd !== captured.executionCwd ||
+          latest.draftResetToken !== captured.draftResetToken ||
+          latest.committedWorkspaceMode !== captured.committedWorkspaceMode ||
+          !latest.draftWorkspace ||
+          !latest.onWorkspaceModeChange ||
+          latest.disabled ||
+          !latest.enabled ||
+          latest.busy ||
+          submitLockRef.current
+        )
+          return;
+        const modes: WorkspaceMode[] = [
+          "current",
+          ...(latest.resolvedWorktreeBase ? ["worktree" as const] : []),
+          ...(capability.supported ? ["cow" as const] : []),
+        ];
+        const next =
+          modes[
+            (modes.indexOf(latest.workspaceMode ?? "current") + 1) %
+              modes.length
+          ];
+        // Advance rapid shortcuts without changing the committed-mode guard.
+        workspaceShortcutRef.current = { ...latest, workspaceMode: next };
+        latest.onWorkspaceModeChange(
+          next,
+          next !== "current" ? latest.resolvedWorktreeBase : undefined,
+        );
+      });
     ref.current?.focus();
   };
 
@@ -1978,12 +2053,16 @@ export function Composer({
                 <>
                   {onWorktreeChange ? (
                     <WorkspaceIdentity
-                      worktree={pathKey(cwd) !== pathKey(executionCwd)}
+                      worktree={
+                        !cowId && pathKey(cwd) !== pathKey(executionCwd)
+                      }
+                      cow={!!cowId}
                     />
                   ) : null}
                   <BranchPicker
                     cwd={executionCwd}
                     branch={branch}
+                    cow={!!cowId}
                     enabled={enabled && !busy}
                     onChange={onBranchChange}
                     onClose={() => ref.current?.focus()}

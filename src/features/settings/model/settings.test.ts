@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  loadDefaultIsolationMode,
+  saveDefaultIsolationMode,
   COMPOSER_RUNNER_DEFAULT,
   AUTOSAVE_DEFAULT,
   COLLAPSED_PROJECT_RAIL_MODE_DEFAULT,
@@ -671,5 +673,20 @@ describe("settings search", () => {
 
   it("caps the result list", () => {
     expect(searchSettings("e", 4)).toHaveLength(4);
+  });
+});
+
+describe("default isolation mode", () => {
+  beforeEach(mockLocalStorage);
+  it("defaults to local and persists each supported mode", () => {
+    expect(loadDefaultIsolationMode()).toBe("current");
+    for (const mode of ["current", "worktree", "cow"] as const) {
+      saveDefaultIsolationMode(mode);
+      expect(loadDefaultIsolationMode()).toBe(mode);
+    }
+  });
+  it("rejects unknown stored modes", () => {
+    localStorage.setItem("monocode.defaultIsolationMode", "copy");
+    expect(loadDefaultIsolationMode()).toBe("current");
   });
 });

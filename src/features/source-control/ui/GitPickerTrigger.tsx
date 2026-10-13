@@ -1,7 +1,7 @@
 import { useContext } from "react";
 import { NativePopupHost } from "../../../shared/ui/NativePopupHost";
 import type { ComponentPropsWithoutRef } from "react";
-import { FolderTree, GitBranch } from "../../../shared/ui/icons";
+import { Copy, FolderTree, GitBranch } from "../../../shared/ui/icons";
 
 type Props = Omit<
   ComponentPropsWithoutRef<"button">,
@@ -10,6 +10,7 @@ type Props = Omit<
   label: string;
   loading?: boolean;
   worktree?: boolean;
+  cow?: boolean;
   dimWhenDisabled?: boolean;
 };
 
@@ -18,12 +19,13 @@ export function GitPickerTrigger({
   label,
   loading = false,
   worktree = false,
+  cow = false,
   dimWhenDisabled = true,
   ...props
 }: Props) {
   const host = useContext(NativePopupHost);
   if (host) return null;
-  const Icon = worktree ? FolderTree : GitBranch;
+  const Icon = cow ? Copy : worktree ? FolderTree : GitBranch;
   return (
     <button
       type="button"
@@ -42,9 +44,9 @@ export function GitPickerTrigger({
           label
         )}
       </span>
-      {worktree && (
+      {(cow || worktree) && (
         <span className="shrink-0 rounded bg-content/8 px-1 text-[10px] text-content/45">
-          Worktree
+          {cow ? "Copy-on-write" : "Worktree"}
         </span>
       )}
     </button>

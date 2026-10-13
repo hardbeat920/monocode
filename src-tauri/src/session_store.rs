@@ -124,6 +124,14 @@ pub struct SessionUpsert {
     #[serde(default)]
     pub worktree_cwd: Option<String>,
     #[serde(default)]
+    pub cow_id: Option<String>,
+    #[serde(default)]
+    pub workspace_mode: Option<String>,
+    #[serde(default)]
+    pub worktree_base: Option<String>,
+    #[serde(default)]
+    pub cow_source_cwd: Option<String>,
+    #[serde(default)]
     pub worktree_removed: bool,
     #[serde(default)]
     pub linked_work_item: Option<Value>,
@@ -152,6 +160,8 @@ pub struct SessionSummary {
     pub branch: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub worktree_cwd: Option<String>,
+    #[serde(default)]
+    pub cow_id: Option<String>,
     #[serde(default)]
     pub worktree_removed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -203,6 +213,14 @@ pub struct SessionRecord {
     pub branch: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub worktree_cwd: Option<String>,
+    #[serde(default)]
+    pub cow_id: Option<String>,
+    #[serde(default)]
+    pub workspace_mode: Option<String>,
+    #[serde(default)]
+    pub worktree_base: Option<String>,
+    #[serde(default)]
+    pub cow_source_cwd: Option<String>,
     #[serde(default)]
     pub worktree_removed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -773,6 +791,10 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         ("context_window", "INTEGER"),
         ("archived", "INTEGER NOT NULL DEFAULT 0"),
         ("worktree_cwd", "TEXT"),
+        ("cow_id", "TEXT"),
+        ("workspace_mode", "TEXT"),
+        ("worktree_base", "TEXT"),
+        ("cow_source_cwd", "TEXT"),
         ("has_user_message", "INTEGER NOT NULL DEFAULT 0"),
         ("pinned", "INTEGER NOT NULL DEFAULT 0"),
         ("linked_work_item_json", "TEXT"),
@@ -946,6 +968,23 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             params![now_millis()],
         )?;
     }
+    if current < 20 {
+        // Migration 19 existed with either copy ownership or visibility.
+        // Rebuild once with both fields for databases from either branch.
+        conn.execute_batch(
+            "DROP INDEX IF EXISTS sessions_cwd_cover_idx;
+             CREATE INDEX sessions_cwd_cover_idx
+               ON sessions (cwd, has_user_message, updated_at DESC, id, harness,
+                            model, runtime_mode, title, provider_session_id,
+                            created_at, branch, archived, pinned,
+                            linked_work_item_json, worktree_cwd, worktree_removed,
+                            is_draft, automation_id, cow_id, sidebar_hidden);",
+        )?;
+        conn.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (20, ?1)",
+            params![now_millis()],
+        )?;
+    }
     // Create even when a version row already exists (another build may have
     // used the same numbers, or a previous run recorded the version without
     // the table). Restore writes into these; missing tables look like a
@@ -985,7 +1024,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
                         model, runtime_mode, title, provider_session_id,
                         created_at, branch, archived, pinned,
                         linked_work_item_json, worktree_cwd, worktree_removed,
-                        is_draft, automation_id, sidebar_hidden);",
+                        is_draft, automation_id, cow_id, sidebar_hidden);",
     )?;
     crate::notes::ensure_notes_table(conn)?;
     crate::reminders::ensure_table(conn)?;
@@ -1210,8 +1249,9 @@ pub(crate) fn upsert_session(
            provider_session_id, blocks_json, created_at, updated_at, branch,
            context_used, context_window, worktree_cwd, has_user_message,
            linked_work_item_json, provider_account_id, worktree_removed, is_draft,
-           automation_id, queued_messages_json, queue_status, sidebar_hidden
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)
+           automation_id, cow_id, workspace_mode, worktree_base, cow_source_cwd,
+           queued_messages_json, queue_status, sidebar_hidden
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28)
          ON CONFLICT(id) DO UPDATE SET
            cwd = excluded.cwd,
            harness = excluded.harness,
@@ -1232,6 +1272,10 @@ pub(crate) fn upsert_session(
            worktree_removed = excluded.worktree_removed,
            is_draft = excluded.is_draft,
            automation_id = excluded.automation_id,
+           cow_id = excluded.cow_id,
+           workspace_mode = excluded.workspace_mode,
+           worktree_base = excluded.worktree_base,
+           cow_source_cwd = excluded.cow_source_cwd,
            queued_messages_json = excluded.queued_messages_json,
            queue_status = excluded.queue_status,
            sidebar_hidden = excluded.sidebar_hidden",
@@ -1257,6 +1301,10 @@ pub(crate) fn upsert_session(
             i64::from(session.worktree_removed),
             i64::from(is_draft),
             automation_id,
+            session.cow_id,
+            session.workspace_mode,
+            session.worktree_base,
+            session.cow_source_cwd,
             queued_messages_json,
             session.queue_status,
             i64::from(session.sidebar_hidden),
@@ -1277,6 +1325,7 @@ pub(crate) fn upsert_session(
         provider_session_id: provider_session_id.map(str::to_owned),
         branch: branch.map(str::to_owned),
         worktree_cwd: worktree_cwd.map(str::to_owned),
+        cow_id: session.cow_id.clone(),
         worktree_removed: session.worktree_removed,
         repo: git.repo,
         additions: 0,
@@ -1635,7 +1684,7 @@ fn list_by_project(conn: &Connection, cwd: &str) -> rusqlite::Result<Vec<Session
                 created_at, updated_at, branch, archived, pinned,
                 linked_work_item_json,
                 (SELECT summary FROM orchestration_sidebar WHERE lead_id = sessions.id), worktree_cwd,
-                worktree_removed, is_draft, automation_id, sidebar_hidden
+                worktree_removed, is_draft, automation_id, cow_id, sidebar_hidden
          FROM sessions
          WHERE cwd = ?1
            AND has_user_message = 1
@@ -1649,7 +1698,7 @@ fn list_by_project(conn: &Connection, cwd: &str) -> rusqlite::Result<Vec<Session
         let pinned: i64 = row.get(11)?;
         let linked_work_item = optional_json(row.get(12)?);
         Ok(SessionSummary {
-            sidebar_hidden: row.get::<_, i64>(18)? != 0,
+            sidebar_hidden: row.get::<_, i64>(19)? != 0,
             id: row.get(0)?,
             orchestration_lead_id: None,
             orchestration: optional_json(row.get(13)?),
@@ -1676,6 +1725,7 @@ fn list_by_project(conn: &Connection, cwd: &str) -> rusqlite::Result<Vec<Session
             draft: row.get::<_, i64>(16)? != 0,
             linked_work_item,
             automation_id: nonempty(row.get(17)?),
+            cow_id: row.get(18)?,
         })
     })?;
     rows.collect()
@@ -1687,7 +1737,7 @@ fn list_linked(conn: &Connection) -> rusqlite::Result<Vec<SessionSummary>> {
                 created_at, updated_at, branch, archived, pinned,
                 linked_work_item_json,
                 (SELECT summary FROM orchestration_sidebar WHERE lead_id = sessions.id), worktree_cwd,
-                worktree_removed, is_draft, automation_id, sidebar_hidden
+                worktree_removed, is_draft, automation_id, cow_id, sidebar_hidden
          FROM sessions
          WHERE has_user_message = 1
            AND linked_work_item_json IS NOT NULL
@@ -1699,7 +1749,7 @@ fn list_linked(conn: &Connection) -> rusqlite::Result<Vec<SessionSummary>> {
         let archived: i64 = row.get(10)?;
         let pinned: i64 = row.get(11)?;
         Ok(SessionSummary {
-            sidebar_hidden: row.get::<_, i64>(18)? != 0,
+            sidebar_hidden: row.get::<_, i64>(19)? != 0,
             id: row.get(0)?,
             orchestration_lead_id: None,
             orchestration: optional_json(row.get(13)?),
@@ -1722,6 +1772,7 @@ fn list_linked(conn: &Connection) -> rusqlite::Result<Vec<SessionSummary>> {
             draft: row.get::<_, i64>(16)? != 0,
             linked_work_item: optional_json(row.get(12)?),
             automation_id: nonempty(row.get(17)?),
+            cow_id: row.get(18)?,
         })
     })?;
     rows.collect()
@@ -1930,7 +1981,8 @@ fn get_session_record(
                 provider_session_id, {blocks}, created_at, updated_at,
                 context_used, context_window, branch, worktree_cwd,
                 linked_work_item_json, provider_account_id, worktree_removed,
-                automation_id, queued_messages_json, queue_status, sidebar_hidden
+                automation_id, cow_id, workspace_mode, worktree_base, cow_source_cwd,
+                queued_messages_json, queue_status, sidebar_hidden
          FROM sessions
          WHERE id = ?1 AND inbox_ask IS NULL"
         ),
@@ -1953,7 +2005,7 @@ fn get_session_record(
                 )
             })?;
             Ok(SessionRecord {
-                sidebar_hidden: row.get::<_, i64>(21)? != 0,
+                sidebar_hidden: row.get::<_, i64>(25)? != 0,
                 id: row.get(0)?,
                 orchestration_lead_id: worker_parent(conn, session_id)?,
                 cwd: row.get(1)?,
@@ -1964,14 +2016,14 @@ fn get_session_record(
                 title: row.get(6)?,
                 provider_session_id: row.get(7)?,
                 blocks,
-                queued_messages: serde_json::from_str(&row.get::<_, String>(19)?).map_err(|e| {
+                queued_messages: serde_json::from_str(&row.get::<_, String>(23)?).map_err(|e| {
                     rusqlite::Error::FromSqlConversionFailure(
-                        19,
+                        23,
                         rusqlite::types::Type::Text,
                         Box::new(e),
                     )
                 })?,
-                queue_status: row.get(20)?,
+                queue_status: row.get(24)?,
                 context_used: row.get(11)?,
                 context_window: row.get(12)?,
                 branch: row.get(13)?,
@@ -1980,6 +2032,10 @@ fn get_session_record(
                 linked_work_item: optional_json(row.get(15)?),
                 provider_account_id: row.get(16)?,
                 automation_id: nonempty(row.get(18)?),
+                cow_id: row.get(19)?,
+                workspace_mode: row.get(20)?,
+                worktree_base: row.get(21)?,
+                cow_source_cwd: row.get(22)?,
                 created_at: row.get(9)?,
                 updated_at: row.get(10)?,
             })
@@ -2182,6 +2238,10 @@ mod tests {
             context_window: None,
             branch: None,
             worktree_cwd: None,
+            cow_id: None,
+            workspace_mode: None,
+            worktree_base: None,
+            cow_source_cwd: None,
             worktree_removed: false,
             linked_work_item: None,
             automation_id: None,
@@ -2312,16 +2372,21 @@ mod tests {
         let store = SessionStore::open_in_memory().unwrap();
         let conn = store.conn.lock().unwrap();
         upsert_session(&conn, &sample("s1", "/tmp/a", "A1")).unwrap();
-        for upgraded in [false, true] {
-            if upgraded {
-                // Exercise an existing v15 database with the old projection.
+        for version in [None, Some(15), Some(18), Some(19)] {
+            if let Some(version) = version {
+                // Exercise pre-CoW databases whose index lacks copy ownership.
                 conn.execute_batch(
                     "DROP INDEX sessions_cwd_cover_idx;
                      CREATE INDEX sessions_cwd_cover_idx
                        ON sessions (cwd, has_user_message, updated_at DESC, id, harness,
                                     model, runtime_mode, title, provider_session_id,
-                                    created_at, branch, archived, pinned, linked_work_item_json);
-                     DELETE FROM schema_migrations WHERE version IN (16, 17, 18, 19);",
+                                    created_at, branch, archived, pinned, linked_work_item_json,
+                                    worktree_cwd, worktree_removed, is_draft, automation_id);",
+                )
+                .unwrap();
+                conn.execute(
+                    "DELETE FROM schema_migrations WHERE version > ?1",
+                    params![version],
                 )
                 .unwrap();
                 migrate(&conn).unwrap();
@@ -2332,7 +2397,7 @@ mod tests {
                  SELECT id, cwd, harness, model, runtime_mode, title, provider_session_id,
                         created_at, updated_at, branch, archived, pinned,
                         linked_work_item_json, worktree_cwd, worktree_removed, is_draft,
-                        automation_id, sidebar_hidden,
+                        automation_id, cow_id, sidebar_hidden,
                         (SELECT summary FROM orchestration_sidebar WHERE lead_id = sessions.id)
                  FROM sessions
                  WHERE cwd = ?1
@@ -2461,6 +2526,11 @@ mod tests {
         let store = SessionStore::open_in_memory().unwrap();
         let conn = store.conn.lock().unwrap();
         let mut row = sample("queued", "/tmp/a", "Conversation");
+        row.cow_id = Some("queued-copy".into());
+        row.worktree_cwd = Some("/tmp/a-copies/queued".into());
+        row.workspace_mode = Some("cow".into());
+        row.worktree_base = Some("main".into());
+        row.cow_source_cwd = Some("/tmp/a".into());
         row.queued_messages = vec![
             json!({"id":"first", "text":"One", "attachments":[]}),
             json!({"id":"second", "text":"", "attachments":[{"id":"image", "kind":"image", "data":"bytes"}], "error":"Offline"}),
@@ -2479,6 +2549,11 @@ mod tests {
         assert!(stored.queued_messages.is_empty());
         assert_eq!(stored.queue_status, None);
         assert_eq!(stored.blocks, row.blocks);
+        assert_eq!(stored.cow_id, row.cow_id);
+        assert_eq!(stored.worktree_cwd, row.worktree_cwd);
+        assert_eq!(stored.workspace_mode, row.workspace_mode);
+        assert_eq!(stored.worktree_base, row.worktree_base);
+        assert_eq!(stored.cow_source_cwd, row.cow_source_cwd);
     }
 
     #[test]
@@ -2872,6 +2947,44 @@ mod tests {
             )
             .unwrap();
         assert_eq!(column, 1);
+    }
+
+    #[test]
+    fn copy_on_write_state_round_trips() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.conn.lock().unwrap();
+        let mut session = sample("copy", "/tmp/a", "CoW");
+        session.cow_id = Some("owned-copy".into());
+        session.worktree_cwd = Some("/tmp/a-copies/owned-copy".into());
+        assert_eq!(
+            upsert_session(&conn, &session).unwrap().cow_id.as_deref(),
+            Some("owned-copy")
+        );
+        assert_eq!(
+            list_by_project(&conn, "/tmp/a").unwrap()[0]
+                .cow_id
+                .as_deref(),
+            Some("owned-copy")
+        );
+        assert_eq!(
+            get_session(&conn, "copy")
+                .unwrap()
+                .unwrap()
+                .cow_id
+                .as_deref(),
+            Some("owned-copy")
+        );
+        session.cow_id = None;
+        session.worktree_cwd = None;
+        session.workspace_mode = Some("cow".into());
+        session.cow_source_cwd = Some("/tmp/a-copies/parent".into());
+        upsert_session(&conn, &session).unwrap();
+        let restored = get_session(&conn, "copy").unwrap().unwrap();
+        assert_eq!(restored.workspace_mode.as_deref(), Some("cow"));
+        assert_eq!(
+            restored.cow_source_cwd.as_deref(),
+            Some("/tmp/a-copies/parent")
+        );
     }
 
     #[test]
@@ -3278,7 +3391,7 @@ mod tests {
                  INSERT INTO schema_migrations (version, applied_at)
                    VALUES (1, 1), (2, 1), (3, 1), (4, 1), (5, 1), (6, 1), (7, 1),
                           (8, 1), (9, 1), (10, 1), (11, 1), (12, 1), (13, 1),
-                          (14, 1), (15, 1), (16, 1), (17, 1), (18, 1);",
+                          (14, 1), (15, 1), (16, 1), (17, 1), (18, 1), (19, 1);",
             )
             .unwrap();
         }

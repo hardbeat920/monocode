@@ -1,8 +1,10 @@
-import { useMemo, useState } from "react";
+import { listCowWorkspaces, type CowWorkspace } from "../model/cow";
+import { useEffect, useMemo, useState } from "react";
 import { CreateWorktreeDialog } from "./CreateWorktreeDialog";
 import { DeleteWorktreeDialog } from "./DeleteWorktreeDialog";
 import { SearchableProjectPicker } from "../../projects/ui/SearchableProjectPicker";
 import {
+  Copy,
   FolderOpen,
   FolderTree,
   GitBranch,
@@ -11,10 +13,18 @@ import {
   RefreshCw,
   Trash2,
 } from "../../../shared/ui/icons";
-import { revealPath } from "../../../platform/tauri/fs";
+import { revealPath, subscribeGitChanged } from "../../../platform/tauri/fs";
 import { useProjectWorktrees } from "../hooks/useProjectWorktrees";
-import { isEqualOrInside, pathKey, prettyCwd, projectName } from "../../../shared/lib/paths";
-import { loadArchivedProjects, type RecentProject } from "../../projects/model/recents";
+import {
+  isEqualOrInside,
+  pathKey,
+  prettyCwd,
+  projectName,
+} from "../../../shared/lib/paths";
+import {
+  loadArchivedProjects,
+  type RecentProject,
+} from "../../projects/model/recents";
 import type { Session } from "../../sessions/model/session";
 import {
   checkWorktreeRemoval,
@@ -59,10 +69,59 @@ export function WorktreesPage({
     cwd === "~" ? (projects[0]?.path ?? "") : cwd,
   );
   const { data, error: loadError, refresh } = useProjectWorktrees(project);
-  const worktrees = data?.worktrees.filter((tree) => !tree.isMain) ?? [];
   const [error, setError] = useState<string>();
+  const [cowError, setCowError] = useState<string>();
+  const [cowWorkspaces, setCowWorkspaces] = useState<CowWorkspace[]>([]);
+  const [cowRefresh, setCowRefresh] = useState(0);
+  const workspaces: (Worktree & { cowId?: string })[] = [
+    ...(data?.worktrees.filter((tree) => !tree.isMain) ?? []),
+    ...cowWorkspaces.map((workspace) => ({
+      path: workspace.path,
+      branch: workspace.branch ?? null,
+      head: workspace.head,
+      isMain: false,
+      locked: false,
+      prunable: false,
+      missing: false,
+      dirty: workspace.dirty ?? null,
+      unpushed: workspace.unpushed ?? null,
+      sessionIds: workspace.sessionIds ?? [],
+      cowId: workspace.id,
+    })),
+  ];
+  useEffect(() => {
+    setCowWorkspaces([]);
+    setCowError(undefined);
+  }, [project]);
+  useEffect(() => {
+    const refreshCopies = () => setCowRefresh((value) => value + 1);
+    const unsubscribe = subscribeGitChanged(refreshCopies);
+    window.addEventListener("focus", refreshCopies);
+    return () => {
+      unsubscribe();
+      window.removeEventListener("focus", refreshCopies);
+    };
+  }, []);
+  useEffect(() => {
+    let disposed = false;
+    if (project)
+      void listCowWorkspaces(project).then(
+        (rows) => {
+          if (!disposed) {
+            setCowWorkspaces(rows);
+            setCowError(undefined);
+          }
+        },
+        (error) => {
+          if (!disposed) setCowError(String(error));
+        },
+      );
+    return () => {
+      disposed = true;
+    };
+  }, [project, cowRefresh]);
   const [creating, setCreating] = useState(false);
-  const [deleting, setDeleting] = useState<Worktree>();
+  const [deleting, setDeleting] = useState<Worktree & { cowId?: string }>();
   const [refreshingAfterFailure, setRefreshingAfterFailure] = useState(false);
   return (
     <div
@@ -94,20 +153,22 @@ export function WorktreesPage({
       </div>
       <div className="flex items-center justify-between gap-3">
         <p className="min-w-0 flex-1 text-[12px] text-content/50">
-          Sessions can share a worktree. Deleting one keeps its sessions by
-          default and discards uncommitted changes. Its branch and commits are
-          kept.
+          Deleting an isolated workspace keeps its sessions by default and
+          discards uncommitted changes. Its branch and commits are kept.
         </p>
         <button
           type="button"
           title={
             loadError
               ? `Refresh failed: ${loadError}. Click to retry.`
-              : "Refresh worktrees"
+              : "Refresh workspaces"
           }
-          aria-label="Refresh worktrees"
+          aria-label="Refresh workspaces"
           disabled={!project}
-          onClick={refresh}
+          onClick={() => {
+            void refresh();
+            setCowRefresh((value) => value + 1);
+          }}
           className={`flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-content/8 px-2 text-[11px] hover:bg-content/12 disabled:opacity-40 active:scale-[0.97] ${loadError ? "text-red-400" : "text-content/65"}`}
         >
           <RefreshCw className="size-3.5" />
@@ -119,31 +180,38 @@ export function WorktreesPage({
           {error}
         </p>
       )}
+      {cowError && (
+        <p role="alert" className="break-words text-[12px] text-red-400">
+          {cowError}
+        </p>
+      )}
       {!project ? (
         <p className="text-[12px] text-content/50">
-          Add a project to manage its worktrees.
+          Add a project to manage its isolated workspaces.
         </p>
-      ) : !data && loadError ? (
+      ) : !data && !cowWorkspaces.length && loadError ? (
         <p role="alert" className="break-words text-[12px] text-red-400">
           {loadError}
         </p>
-      ) : !data ? (
+      ) : !data && !cowWorkspaces.length ? (
         <p className="flex items-center gap-2 text-[12px] text-content/50">
           <Loader className="size-4 animate-spin" />
-          Loading worktrees…
+          Loading workspaces…
         </p>
-      ) : !worktrees.length ? (
+      ) : !workspaces.length ? (
         <div className="flex flex-col items-center gap-2 rounded-xl border border-stroke px-4 py-8 text-center">
           <FolderTree className="size-5 text-content/35" />
-          <p className="text-[13px] font-medium">No additional worktrees</p>
+          <p className="text-[13px] font-medium">No isolated workspaces</p>
           <p className="text-[12px] text-content/50">
             Create a worktree to work on another branch in a separate folder.
           </p>
         </div>
       ) : (
         <div className="divide-y divide-stroke overflow-hidden rounded-xl border border-stroke">
-          {worktrees.map((tree) => {
+          {workspaces.map((tree) => {
             const count = worktreeSessionIds(tree, liveSessions).length;
+            const kind = tree.cowId ? "copy-on-write workspace" : "worktree";
+            const Icon = tree.cowId ? Copy : FolderTree;
             const blocked = tree.locked
               ? "Unlock this worktree in Git first"
               : !tree.branch
@@ -151,11 +219,16 @@ export function WorktreesPage({
                 : undefined;
             return (
               <div key={tree.path} className="flex items-start gap-3 p-4">
-                <FolderTree className="mt-0.5 size-4 shrink-0 text-content/45" />
+                <Icon className="mt-0.5 size-4 shrink-0 text-content/45" />
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-[13px] font-medium">
                       {projectName(tree.path)}
+                      {tree.cowId && (
+                        <span className="ml-2 text-[10px] text-content/40">
+                          Copy-on-write
+                        </span>
+                      )}
                     </span>
                     {pathKey(tree.path) === pathKey(project) && (
                       <span className="text-[10px] text-content/40">
@@ -176,7 +249,7 @@ export function WorktreesPage({
                   </p>
                   <p className="mt-2 flex flex-wrap gap-x-3 text-[11px] text-content/55">
                     <span>
-                      {count} session{count === 1 ? "" : "s"} in this worktree
+                      {count} session{count === 1 ? "" : "s"} in this {kind}
                     </span>
                     <span className={tree.dirty ? "text-amber-400" : ""}>
                       {tree.missing
@@ -212,7 +285,7 @@ export function WorktreesPage({
                   type="button"
                   disabled={!!blocked || refreshingAfterFailure || !!loadError}
                   aria-label={`Delete ${tree.branch ?? "worktree"}`}
-                  title={blocked ?? "Delete worktree"}
+                  title={blocked ?? `Delete ${kind}`}
                   onClick={() => {
                     setError(undefined);
                     setDeleting(tree);
@@ -247,6 +320,7 @@ export function WorktreesPage({
         <DeleteWorktreeDialog
           cwd={project}
           tree={deleting}
+          copyOnWrite={!!deleting.cowId}
           sessionCount={worktreeSessionIds(deleting, liveSessions).length}
           onRemove={async (cwd, path, force, deleteSessions) => {
             // Check predictable blockers before any conversation is destroyed.
@@ -292,6 +366,7 @@ export function WorktreesPage({
             }
             setDeleting(undefined);
             refresh();
+            setCowRefresh((value) => value + 1);
           }}
         />
       )}

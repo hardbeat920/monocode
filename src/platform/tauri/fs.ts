@@ -21,7 +21,7 @@ const isRemotePath = (value: unknown): boolean =>
   typeof value === "string"
     ? value.startsWith(REMOTE_PATH_PREFIX)
     : Array.isArray(value) && value.some(isRemotePath);
-const PATH_ARGS = ["path", "cwd", "parent", "from", "destParent", "paths"];
+const PATH_ARGS = ["path", "cwd", "parent", "from", "destParent", "paths", "projectCwd", "targetCwd", "toCwd"];
 
 /** Runs a command on the machine that owns its paths, so the same file and
  * Git UI works for a local project and one on a connected machine. */

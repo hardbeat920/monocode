@@ -2122,6 +2122,12 @@ mod tests {
         );
         let retried = store.apply("worker", &from, &to).unwrap();
         assert_eq!(retried.already_applied, 1);
+
+        // An independent CoW repository can commit the worker result. A clean
+        // Git status must not make its captured changes safe to discard.
+        assert!(git(&source.0, &["add", "a.txt"]));
+        assert!(git(&source.0, &["commit", "-m", "worker result"]));
+        assert!(!store.cleanup_safe("worker", &from).unwrap());
     }
 
     #[test]

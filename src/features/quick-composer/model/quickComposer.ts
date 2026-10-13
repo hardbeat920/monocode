@@ -108,7 +108,8 @@ export function parseQuickLaunch(value: unknown): QuickLaunch | null {
   if (
     raw.workspaceMode !== undefined &&
     raw.workspaceMode !== "current" &&
-    raw.workspaceMode !== "worktree"
+    raw.workspaceMode !== "worktree" &&
+    raw.workspaceMode !== "cow"
   )
     return null;
   if (
@@ -121,9 +122,16 @@ export function parseQuickLaunch(value: unknown): QuickLaunch | null {
     (typeof raw.worktreeCwd !== "string" || !raw.worktreeCwd.trim())
   )
     return null;
-  if (raw.workspaceMode === "worktree" && raw.worktreeCwd !== undefined)
+  if (
+    (raw.workspaceMode === "worktree" || raw.workspaceMode === "cow") &&
+    raw.worktreeCwd !== undefined
+  )
     return null;
-  if (raw.worktreeBase !== undefined && raw.workspaceMode !== "worktree")
+  if (
+    raw.worktreeBase !== undefined &&
+    raw.workspaceMode !== "worktree" &&
+    raw.workspaceMode !== "cow"
+  )
     return null;
   return {
     ...(raw.workspaceMode

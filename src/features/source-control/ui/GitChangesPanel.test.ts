@@ -48,14 +48,16 @@ vi.mock("../../inbox/model/inboxSelfActivity", () => ({
 }));
 
 import { GitChangesPanel } from "./GitChangesPanel";
+import { SourceControl } from "./SourceControl";
 import {
   gitDiffIndex,
+  gitStageFile,
+  gitUnstageFile,
+  gitCommit,
   gitPrCreate,
   gitPull,
   gitPush,
   gitRangeContext,
-  gitStageFile,
-  gitUnstageFile,
   notifyGitChanged,
 } from "../../../platform/tauri/fs";
 import {
@@ -244,7 +246,7 @@ async function showTree() {
 }
 
 describe("GitChangesPanel folder actions", () => {
-  it.each(["/repo", "remote://machine/home/user/repo"])(
+  it.each(["/repo", "/repo-cow/session", "remote://machine/home/user/repo"])(
     "stages a collapsed folder in one operation for %s",
     async (cwd) => {
       const files = [
@@ -499,4 +501,96 @@ describe("GitChangesPanel remote pull request", () => {
     );
     expect(openUrl).toHaveBeenCalledWith("https://example.test/pull/42");
   });
+});
+
+describe("SourceControl Git workflow parity", () => {
+  it.each(["/repo", "/repo-worktrees/feature", "/repo-cow/session"])(
+    "uses the same staged/unstaged controls and diff kinds in %s",
+    async (cwd) => {
+      vi.mocked(gitDiffIndex).mockResolvedValue(
+        index({
+          files: [
+            {
+              path: `${cwd}/change.ts`,
+              relative: "change.ts",
+              status: "modified",
+              additions: 1,
+              deletions: 0,
+              staged: true,
+              unstaged: true,
+            },
+          ],
+        }),
+      );
+      const onOpenFile = vi.fn();
+      const onOpenAllChanges = vi.fn();
+      await act(async () =>
+        root.render(
+          createElement(SourceControl, {
+            cwd,
+            enabled: true,
+            onOpenFile,
+            onOpenAllChanges,
+            onOpenCommit: vi.fn(),
+          }),
+        ),
+      );
+      expect(gitDiffIndex).toHaveBeenCalledWith(cwd);
+      expect(container.textContent).toContain("Staged Changes");
+      expect(
+        container.querySelector('[aria-label="Stage Changes"]'),
+      ).not.toBeNull();
+      expect(
+        container.querySelector('[aria-label="Unstage Changes"]'),
+      ).not.toBeNull();
+      const fileRows = [
+        ...container.querySelectorAll<HTMLButtonElement>(
+          'button[title="change.ts"]',
+        ),
+      ];
+      expect(fileRows).toHaveLength(2);
+      await act(async () => fileRows[0].click());
+      expect(onOpenFile).toHaveBeenLastCalledWith(`${cwd}/change.ts`, "staged");
+      await act(async () => fileRows[1].click());
+      expect(onOpenFile).toHaveBeenLastCalledWith(
+        `${cwd}/change.ts`,
+        "unstaged",
+      );
+      const allChanges = [
+        ...container.querySelectorAll<HTMLButtonElement>(
+          '[aria-label="Open All Changes"]',
+        ),
+      ];
+      await act(async () => allChanges[0].click());
+      expect(onOpenAllChanges).toHaveBeenLastCalledWith("staged");
+      await act(async () => allChanges[1].click());
+      expect(onOpenAllChanges).toHaveBeenLastCalledWith("unstaged");
+      await act(async () =>
+        container
+          .querySelector<HTMLButtonElement>('[aria-label="Stage Changes"]')!
+          .click(),
+      );
+      expect(gitStageFile).toHaveBeenCalledWith(cwd, "change.ts");
+      await act(async () =>
+        container
+          .querySelector<HTMLButtonElement>('[aria-label="Unstage Changes"]')!
+          .click(),
+      );
+      expect(gitUnstageFile).toHaveBeenCalledWith(cwd, "change.ts");
+      const message = container.querySelector<HTMLTextAreaElement>("textarea")!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(
+          HTMLTextAreaElement.prototype,
+          "value",
+        )!.set!.call(message, "Save changes");
+        message.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      const commit = [
+        ...container.querySelectorAll<HTMLButtonElement>("button"),
+      ].find((button) => button.textContent?.trim() === "Commit")!;
+      expect(commit.disabled).toBe(false);
+      await act(async () => commit.click());
+      expect(gitCommit).toHaveBeenCalledWith(cwd, "Save changes", false);
+    },
+  );
 });

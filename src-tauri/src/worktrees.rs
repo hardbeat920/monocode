@@ -100,7 +100,7 @@ pub(crate) fn contains_working_dir(root: &Path, cwd: &Path) -> bool {
     }
 }
 
-fn session_ids(conn: &rusqlite::Connection, path: &Path) -> Result<Vec<String>, String> {
+pub(crate) fn session_ids(conn: &rusqlite::Connection, path: &Path) -> Result<Vec<String>, String> {
     let mut query = conn
         .prepare("SELECT id, COALESCE(NULLIF(worktree_cwd, ''), cwd) FROM sessions WHERE worktree_removed = 0")
         .map_err(|e| e.to_string())?;
@@ -520,6 +520,18 @@ struct SessionBeforeRemoval {
     in_flight_cwd: Option<String>,
     in_flight_sort_index: Option<i64>,
     detached_cwd: String,
+    #[serde(default)]
+    cow_id: Option<String>,
+    #[serde(default)]
+    workspace_mode: Option<String>,
+    #[serde(default)]
+    worktree_base: Option<String>,
+    #[serde(default)]
+    cow_source_cwd: Option<String>,
+    #[serde(default)]
+    cow_root_identity: Option<(u64, u64)>,
+    #[serde(default)]
+    cow_git_identity: Option<(u64, u64)>,
 }
 
 /// Make sessions safe to reopen *before* touching Git. A small metadata journal
@@ -529,6 +541,7 @@ fn prepare_removal(
     path: &Path,
     project_cwd: &str,
     ids: &[String],
+    expected_copy_identity: Option<(u64, u64)>,
 ) -> Result<Vec<SessionBeforeRemoval>, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     let mut saved = Vec::new();
@@ -536,7 +549,8 @@ fn prepare_removal(
         let mut session = tx
             .query_row(
                 "SELECT s.cwd, s.worktree_cwd, s.branch, s.provider_session_id,
-                    s.context_used, s.context_window, f.cwd, f.sort_index
+                    s.context_used, s.context_window, f.cwd, f.sort_index,
+                    s.cow_id, s.workspace_mode, s.worktree_base, s.cow_source_cwd
              FROM sessions s LEFT JOIN in_flight_sessions f ON f.session_id = s.id
              WHERE s.id = ?1",
                 [id],
@@ -552,10 +566,20 @@ fn prepare_removal(
                         in_flight_cwd: row.get(6)?,
                         in_flight_sort_index: row.get(7)?,
                         detached_cwd: String::new(),
+                        cow_id: row.get(8)?,
+                        workspace_mode: row.get(9)?,
+                        worktree_base: row.get(10)?,
+                        cow_source_cwd: row.get(11)?,
+                        cow_root_identity: None,
+                        cow_git_identity: None,
                     })
                 },
             )
             .map_err(|e| e.to_string())?;
+        if expected_copy_identity.is_some() || session.cow_id.is_some() {
+            session.cow_root_identity = expected_copy_identity.or(cow_directory_identity(path)?);
+            session.cow_git_identity = cow_directory_identity(&path.join(".git"))?;
+        }
         session.detached_cwd = if contains_working_dir(path, &expand_home(&session.cwd)) {
             project_cwd.to_owned()
         } else {
@@ -565,7 +589,8 @@ fn prepare_removal(
             "UPDATE sessions SET worktree_removed = 1,
                worktree_cwd = COALESCE(NULLIF(worktree_cwd, ''), cwd),
                cwd = ?2, branch = NULL, provider_session_id = NULL,
-               context_used = NULL, context_window = NULL WHERE id = ?1",
+               context_used = NULL, context_window = NULL, cow_id = NULL,
+               workspace_mode = NULL, worktree_base = NULL, cow_source_cwd = NULL WHERE id = ?1",
             rusqlite::params![id, session.detached_cwd],
         )
         .map_err(|e| e.to_string())?;
@@ -598,7 +623,8 @@ fn finish_removal(
             .execute(
                 "UPDATE sessions SET cwd = ?2, worktree_cwd = ?3, branch = ?4,
                provider_session_id = ?5, context_used = ?6, context_window = ?7,
-               worktree_removed = 0
+               worktree_removed = 0, cow_id = ?10, workspace_mode = ?11,
+               worktree_base = ?12, cow_source_cwd = ?13
              WHERE id = ?1 AND worktree_removed = 1 AND cwd = ?8 AND worktree_cwd = ?9",
                 rusqlite::params![
                     session.id,
@@ -613,7 +639,11 @@ fn finish_removal(
                         .worktree_cwd
                         .as_deref()
                         .filter(|cwd| !cwd.is_empty())
-                        .unwrap_or(&session.cwd)
+                        .unwrap_or(&session.cwd),
+                    session.cow_id,
+                    session.workspace_mode,
+                    session.worktree_base,
+                    session.cow_source_cwd
                 ],
             )
             .map_err(|e| e.to_string())?;
@@ -650,7 +680,24 @@ pub(crate) fn reconcile_removals(conn: &rusqlite::Connection) -> Result<(), Stri
             .try_exists()
             .map_err(|e| e.to_string())?
         {
-            serde_json::from_str::<Vec<SessionBeforeRemoval>>(&json).map_err(|e| e.to_string())?
+            let saved = serde_json::from_str::<Vec<SessionBeforeRemoval>>(&json)
+                .map_err(|e| e.to_string())?;
+            let original_copy = if let Some(session) = saved
+                .iter()
+                .find(|session| session.cow_root_identity.is_some() || session.cow_id.is_some())
+            {
+                session.cow_root_identity.is_some()
+                    && cow_directory_identity(Path::new(&path))? == session.cow_root_identity
+                    && cow_directory_identity(&Path::new(&path).join(".git"))?
+                        == session.cow_git_identity
+            } else {
+                true
+            };
+            if original_copy {
+                saved
+            } else {
+                Vec::new()
+            }
         } else {
             Vec::new()
         };
@@ -676,7 +723,7 @@ fn remove_with_sessions(
     if !keep_sessions && !ids.is_empty() {
         return Err("Sessions still use this worktree. Move or delete those sessions first (including archived sessions).".into());
     }
-    let saved = prepare_removal(conn, Path::new(&tree.path), &main.path, &ids)?;
+    let saved = prepare_removal(conn, Path::new(&tree.path), &main.path, &ids, None)?;
     // Use the main copy even if Settings was opened directly on the target.
     if let Err(error) = remove(Path::new(&main.path), path, force) {
         finish_removal(conn, &tree.path, &saved).map_err(|restore| {
@@ -692,6 +739,94 @@ fn remove_with_sessions(
     Ok(WorktreeRemoval {
         session_ids: ids,
         project_cwd: main.path.clone(),
+    })
+}
+
+fn cow_directory_identity(path: &Path) -> Result<Option<(u64, u64)>, String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = match std::fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.to_string()),
+        };
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Ok(None);
+        }
+        Ok(Some((metadata.dev(), metadata.ino())))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok(None)
+    }
+}
+
+fn same_directory_identity(path: &Path, expected: &std::fs::Metadata) -> Result<bool, String> {
+    let actual = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.to_string()),
+    };
+    if !actual.is_dir() || actual.file_type().is_symlink() {
+        return Ok(false);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Ok(actual.dev() == expected.dev() && actual.ino() == expected.ino())
+    }
+    #[cfg(not(unix))]
+    {
+        // Native CoW is unavailable here; keep the recovery helper buildable.
+        Ok(actual.created().is_ok() && actual.created().ok() == expected.created().ok())
+    }
+}
+/// Reuse the durable session detachment journal for other owned workspace backends.
+pub(crate) fn remove_registered_workspace_with_sessions(
+    conn: &rusqlite::Connection,
+    path: &Path,
+    project_cwd: &str,
+    expected_identity: (u64, u64),
+    keep_sessions: bool,
+    remove: impl FnOnce() -> Result<(), String>,
+) -> Result<WorktreeRemoval, String> {
+    let ids = session_ids(conn, path)?;
+    if !keep_sessions && !ids.is_empty() {
+        return Err("Sessions still use this workspace. Move or delete those sessions first (including archived sessions).".into());
+    }
+    let identity = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if !identity.is_dir() || (identity.dev(), identity.ino()) != expected_identity {
+            return Err("Copy-on-write checkout was replaced".into());
+        }
+    }
+    let git_identity = std::fs::symlink_metadata(path.join(".git")).map_err(|e| e.to_string())?;
+    if !git_identity.is_dir() || git_identity.file_type().is_symlink() {
+        return Err("Copy-on-write Git directory was replaced".into());
+    }
+    let saved = prepare_removal(conn, path, project_cwd, &ids, Some(expected_identity))?;
+    let path_string = path_to_js(path);
+    if let Err(error) = remove() {
+        let survives = same_directory_identity(path, &identity)?
+            && same_directory_identity(&path.join(".git"), &git_identity)?;
+        if survives {
+            finish_removal(conn, &path_string, &saved).map_err(|restore| {
+                format!("{error}. Sessions remain detached until recovery on restart: {restore}")
+            })?;
+            return Err(error);
+        }
+        eprintln!("Workspace checkout removed; cleanup will need a retry: {error}");
+    }
+    if let Err(error) = finish_removal(conn, &path_string, &[]) {
+        eprintln!("Workspace removed; recovery journal cleanup will retry on restart: {error}");
+    }
+    Ok(WorktreeRemoval {
+        session_ids: ids,
+        project_cwd: project_cwd.to_owned(),
     })
 }
 
@@ -996,6 +1131,75 @@ mod tests {
     }
 
     #[test]
+    fn registered_copy_removal_detaches_owned_sessions_and_restores_failed_removals() {
+        let repo = repo();
+        let root = repo.0.join("repo").canonicalize().unwrap();
+        let copy = repo.0.join("copy");
+        std::fs::create_dir(&copy).unwrap();
+        std::fs::create_dir(copy.join(".git")).unwrap();
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.lock_conn().unwrap();
+        conn.execute(
+            "INSERT INTO sessions (id, cwd, harness, model, runtime_mode, title, blocks_json, created_at, updated_at, worktree_cwd, cow_id, workspace_mode, worktree_base, cow_source_cwd) VALUES ('owned', ?1, 'codex', 'test', 'supervised', 'Keep transcript', '[]', 0, 0, ?2, 'copy-id', 'cow', 'HEAD', ?1)",
+            rusqlite::params![path_to_js(&root), path_to_js(&copy)],
+        ).unwrap();
+        assert!(remove_registered_workspace_with_sessions(
+            &conn,
+            &copy,
+            &path_to_js(&root),
+            cow_directory_identity(&copy).unwrap().unwrap_or_default(),
+            false,
+            || panic!("must reject before deletion")
+        )
+        .is_err());
+        #[cfg(unix)]
+        assert!(remove_registered_workspace_with_sessions(
+            &conn,
+            &copy,
+            &path_to_js(&root),
+            (0, 0),
+            true,
+            || panic!("ownership mismatch must reject before deletion"),
+        )
+        .is_err());
+        assert!(remove_registered_workspace_with_sessions(
+            &conn,
+            &copy,
+            &path_to_js(&root),
+            cow_directory_identity(&copy).unwrap().unwrap_or_default(),
+            true,
+            || Err("failed".into())
+        )
+        .is_err());
+        let owner: Option<String> = conn
+            .query_row(
+                "SELECT cow_id FROM sessions WHERE id = 'owned'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(owner.as_deref(), Some("copy-id"));
+        let removed = remove_registered_workspace_with_sessions(
+            &conn,
+            &copy,
+            &path_to_js(&root),
+            cow_directory_identity(&copy).unwrap().unwrap_or_default(),
+            true,
+            || {
+                std::fs::remove_dir_all(&copy).unwrap();
+                Err("cleanup failed after removing checkout".into())
+            },
+        )
+        .unwrap();
+        assert_eq!(removed.session_ids, ["owned"]);
+        let row: (i64, Option<String>, Option<String>, Option<String>, Option<String>) = conn.query_row(
+            "SELECT worktree_removed, cow_id, workspace_mode, worktree_base, cow_source_cwd FROM sessions WHERE id = 'owned'", [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        ).unwrap();
+        assert_eq!(row, (1, None, None, None, None));
+    }
+
+    #[test]
     fn removal_preserves_shared_archived_and_direct_sessions() {
         let repo = repo();
         let root = repo.0.join("repo").canonicalize().unwrap();
@@ -1071,6 +1275,71 @@ mod tests {
         assert!(git(&root, &["rev-parse", "--verify", "refs/heads/feature"]).is_ok());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn startup_recovers_copy_removal_without_restoring_replaced_checkouts() {
+        for state in 0..8 {
+            let direct = state >= 4;
+            let state = state % 4;
+            let repo = repo();
+            let root = repo.0.join("repo");
+            let copy = repo.0.join("copy");
+            std::fs::create_dir(&copy).unwrap();
+            std::fs::create_dir(copy.join(".git")).unwrap();
+            let db = repo.0.join("copy-sessions.db");
+            {
+                let store = SessionStore::open(db.clone()).unwrap();
+                let conn = store.lock_conn().unwrap();
+                conn.execute(
+                    "INSERT INTO sessions (id, cwd, harness, model, runtime_mode, title, created_at, updated_at, worktree_cwd, cow_id, provider_session_id)
+                     VALUES ('copy-owner', ?1, 'codex', 'test', 'supervised', 'Keep transcript', 10, 20, ?2, ?3, 'provider')",
+                    rusqlite::params![path_to_js(&root), path_to_js(&copy), if direct { None } else { Some("copy-id") }],
+                ).unwrap();
+                prepare_removal(
+                    &conn,
+                    &copy,
+                    &path_to_js(&root),
+                    &["copy-owner".into()],
+                    cow_directory_identity(&copy).unwrap(),
+                )
+                .unwrap();
+                match state {
+                    1 => std::fs::remove_dir_all(&copy).unwrap(),
+                    2 => {
+                        std::fs::rename(&copy, repo.0.join("old-copy")).unwrap();
+                        std::fs::create_dir(&copy).unwrap();
+                        std::fs::create_dir(copy.join(".git")).unwrap();
+                    }
+                    3 => {
+                        std::fs::rename(copy.join(".git"), copy.join("old-git")).unwrap();
+                        std::fs::create_dir(copy.join(".git")).unwrap();
+                    }
+                    _ => {}
+                }
+            }
+            let store = SessionStore::open(db).unwrap();
+            let conn = store.lock_conn().unwrap();
+            let row: (bool, Option<String>, Option<String>, String) = conn.query_row(
+                "SELECT worktree_removed, cow_id, provider_session_id, title FROM sessions WHERE id = 'copy-owner'",
+                [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            ).unwrap();
+            assert_eq!(row.0, state != 0);
+            assert_eq!(
+                row.1.as_deref(),
+                if state == 0 && !direct {
+                    Some("copy-id")
+                } else {
+                    None
+                }
+            );
+            assert_eq!(
+                row.2.as_deref(),
+                if state == 0 { Some("provider") } else { None }
+            );
+            assert_eq!(row.3, "Keep transcript");
+        }
+    }
+
     #[test]
     fn startup_recovers_interruptions_before_and_after_git_removal() {
         type StoredContext = (
@@ -1101,7 +1370,7 @@ mod tests {
                     [&tree.path],
                 )
                 .unwrap();
-                prepare_removal(&conn, Path::new(&tree.path), &main, &["s1".into()]).unwrap();
+                prepare_removal(&conn, Path::new(&tree.path), &main, &["s1".into()], None).unwrap();
                 if git_removed {
                     remove(&root, Path::new(&tree.path), true).unwrap();
                 }

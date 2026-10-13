@@ -12,7 +12,7 @@ const bridge = vi.hoisted(() => ({
 }));
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (command: string) =>
-    command === "quick_git_state" ? bridge.request : undefined,
+    command === "quick_git_state" ? bridge.request : command === "cow_capability" ? { supported: true } : undefined,
   ),
 }));
 vi.mock("@tauri-apps/api/event", () => ({

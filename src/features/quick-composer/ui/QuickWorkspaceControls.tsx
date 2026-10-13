@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Folder, FolderTree } from "../../../shared/ui/icons";
+import { Copy, Folder, FolderTree } from "../../../shared/ui/icons";
 import { notifyGitChanged } from "../../../platform/tauri/fs";
 import { GitPickerTrigger } from "../../source-control/ui/GitPickerTrigger";
 import { useProjectBranchesState } from "../../source-control/hooks/useProjectBranches";
@@ -117,7 +117,7 @@ export function QuickWorkspaceControls({
     const request: QuickGitRequest = {
       id,
       kind,
-      choice: { ...value, base: value.mode === "worktree" ? base : undefined },
+      choice: { ...value, base: value.mode !== "current" ? base : undefined },
       branches: branches ?? undefined,
       anchor: {
         x: bounds.x,
@@ -142,8 +142,18 @@ export function QuickWorkspaceControls({
     }
   };
   const disabled = !enabled || !ready || !branches?.current;
-  const Icon = value.mode === "worktree" ? FolderTree : Folder;
-  const label = value.mode === "worktree" ? "New worktree" : "Current checkout";
+  const Icon =
+    value.mode === "cow"
+      ? Copy
+      : value.mode === "worktree"
+        ? FolderTree
+        : Folder;
+  const label =
+    value.mode === "cow"
+      ? "New copy-on-write"
+      : value.mode === "worktree"
+        ? "New worktree"
+        : "Current checkout";
   return (
     <div className="flex min-w-0 items-center gap-2">
       <button
@@ -164,13 +174,13 @@ export function QuickWorkspaceControls({
       </button>
       <GitPickerTrigger
         label={
-          value.mode === "worktree"
+          value.mode !== "current"
             ? `From ${base}`
             : branches?.current || (settled ? "No repo" : "Loading…")
         }
         aria-label={
-          value.mode === "worktree"
-            ? `Create worktree from ${base}`
+          value.mode !== "current"
+            ? `Select base branch ${base}`
             : "Choose branch"
         }
         aria-haspopup="dialog"
@@ -180,11 +190,11 @@ export function QuickWorkspaceControls({
         worktree={!!value.tree && !value.tree.isMain}
         onMouseDown={(event) => {
           event.preventDefault();
-          beginClick(value.mode === "worktree" ? "base" : "branch");
+          beginClick(value.mode !== "current" ? "base" : "branch");
         }}
         onClick={(event) =>
           void show(
-            value.mode === "worktree" ? "base" : "branch",
+            value.mode !== "current" ? "base" : "branch",
             event.currentTarget,
           )
         }

@@ -324,11 +324,13 @@ fn validate_workspace(request: &QuickLaunch) -> Result<(), String> {
     if request
         .workspace_mode
         .as_deref()
-        .is_some_and(|mode| !matches!(mode, "current" | "worktree"))
+        .is_some_and(|mode| !matches!(mode, "current" | "worktree" | "cow"))
         || request.worktree_base.as_deref().is_some_and(|base| {
-            base.trim().is_empty() || request.workspace_mode.as_deref() != Some("worktree")
+            base.trim().is_empty()
+                || !matches!(request.workspace_mode.as_deref(), Some("worktree" | "cow"))
         })
-        || (request.workspace_mode.as_deref() == Some("worktree") && request.worktree_cwd.is_some())
+        || (matches!(request.workspace_mode.as_deref(), Some("worktree" | "cow"))
+            && request.worktree_cwd.is_some())
     {
         return Err("Select a valid workspace for this session.".into());
     }
@@ -784,6 +786,11 @@ mod tests {
         let mut request: QuickLaunch = serde_json::from_value(input.clone()).unwrap();
         assert!(validate_workspace(&request).is_ok());
         assert_eq!(serde_json::to_value(&request).unwrap(), input);
+        request.workspace_mode = Some("cow".into());
+        assert!(validate_workspace(&request).is_ok());
+        request.worktree_base = Some(" ".into());
+        assert!(validate_workspace(&request).is_err());
+        request.worktree_base = Some("origin/develop".into());
         request.worktree_cwd = Some("/tmp/existing".into());
         assert!(validate_workspace(&request).is_err());
         request.workspace_mode = None;

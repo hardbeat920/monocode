@@ -106,7 +106,7 @@ beforeEach(() => {
   document.body.append(container);
   root = createRoot(container);
   onSelectSection = vi.fn();
-  vi.mocked(invoke).mockReset().mockResolvedValue(undefined);
+  vi.mocked(invoke).mockReset().mockImplementation(async (command) => command === "cow_list" ? [] : undefined);
 });
 
 afterEach(async () => {
@@ -120,6 +120,29 @@ afterEach(async () => {
 });
 
 describe("settings pages", () => {
+  it("shows the standard Git status and deletion control for CoW", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "cow_list") return [{ id: "copy", path: "/repo-cow/copy", sourceCwd: "/repo", projectCwd: "/repo", sessionId: "session", branch: "mc/copy", head: "abc", dirty: true, unpushed: 1 }];
+      if (command === "git_worktrees") return { worktrees: [], defaultRoot: "/repo-worktrees" };
+      return undefined;
+    });
+    await render("worktrees");
+    expect(container.textContent).toContain("Copy-on-write");
+    expect(container.textContent).toContain("Uncommitted changes");
+    expect(container.textContent).toContain("1 unpublished commit");
+    expect(container.querySelector<HTMLButtonElement>('[aria-label="Delete mc/copy"]')?.disabled).toBe(false);
+  });
+  it("persists session isolation with the existing radio control", async () => {
+    await render("worktrees");
+    const group = container.querySelector('[role="radiogroup"][aria-label="Start new session on"]')!;
+    const radios = [...group.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
+    expect(radios.map((radio) => radio.textContent)).toEqual(["Local", "New worktree", "New copy-on-write"]);
+    expect(radios[0].getAttribute("aria-checked")).toBe("true");
+    await act(async () => radios[2].click());
+    expect(localStorage.getItem("monocode.defaultIsolationMode")).toBe("cow");
+    expect(radios[2].getAttribute("aria-checked")).toBe("true");
+  });
+
   it("saves each Mono's session visibility and restores it when settings reopen", async () => {
     const mono = createMono();
     const other = createMono();

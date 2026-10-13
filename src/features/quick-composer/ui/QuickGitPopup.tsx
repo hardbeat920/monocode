@@ -198,7 +198,7 @@ export function QuickGitPopupPicker({
         finish({
           cwd: choice.cwd,
           mode,
-          ...(mode === "worktree" ? { base } : {}),
+          ...(mode !== "current" ? { base } : {}),
         })
       }
       onBaseChange={(base) => finish({ ...choice, base })}
