@@ -15,9 +15,19 @@ pub const INSTRUCTIONS: &str = include_str!("../../../../docs/browser-instructio
 
 /// The body of `## name` in [`INSTRUCTIONS`], trimmed.
 pub fn section(name: &str) -> Option<&'static str> {
+    // A Windows checkout with core.autocrlf may embed the file with CRLF
+    // line ends; normalise once so every lookup sees `\n`.
+    static NORMALISED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    section_in(
+        NORMALISED.get_or_init(|| INSTRUCTIONS.replace("\r\n", "\n")),
+        name,
+    )
+}
+
+fn section_in<'a>(text: &'a str, name: &str) -> Option<&'a str> {
     let heading = format!("\n## {name}\n");
-    let start = INSTRUCTIONS.find(&heading)? + heading.len();
-    let rest = &INSTRUCTIONS[start..];
+    let start = text.find(&heading)? + heading.len();
+    let rest = &text[start..];
     let end = rest.find("\n## ").unwrap_or(rest.len());
     Some(rest[..end].trim())
 }
@@ -593,6 +603,20 @@ mod tests {
             .map(|v| v.as_str().unwrap().to_string())
             .collect();
         (properties, required)
+    }
+
+    #[test]
+    fn sections_are_found_with_either_line_ending() {
+        let crlf = INSTRUCTIONS.replace("\r\n", "\n").replace('\n', "\r\n");
+        assert!(
+            section_in(&crlf, "overview").is_none(),
+            "raw CRLF needs normalising"
+        );
+        let normalised = crlf.replace("\r\n", "\n");
+        for name in ["overview", "cli", "browser_click"] {
+            assert_eq!(section_in(&normalised, name), section(name), "{name}");
+            assert!(!section(name).unwrap().contains('\r'));
+        }
     }
 
     #[test]
