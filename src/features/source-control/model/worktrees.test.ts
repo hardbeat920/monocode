@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { newFileTab, newTerminalFile } from "../../workspace/model/layout";
 import { newSession, sessionWorkCwd } from "../../sessions/model/session";
 import {
   sessionInWorktree,
+  switchSessionWorktree,
   detachSessionWorktree,
   assertWorktreeFilesClosed,
   worktreeSessionIds,
@@ -139,6 +140,45 @@ describe("working-copy context", () => {
     expect(source.worktreeCwd).toBe(tree.path);
   });
 
+  it("moves a conversation to another worktree in place with a handoff", () => {
+    const source = {
+      ...newSession("codex", "/repo"),
+      providerSessionId: "existing-agent-thread",
+      context: { used: 12 },
+      title: "Build feature",
+      blocks: [{ id: "u", role: "user" as const, text: "Build feature" }],
+    };
+    const moved = sessionInWorktree(source, tree, { move: true });
+    expect(moved.id).toBe(source.id);
+    expect(moved.title).toBe(source.title);
+    expect(moved.cwd).toBe("/repo");
+    expect(sessionWorkCwd(moved)).toBe(tree.path);
+    expect(moved.branch).toBe(tree.branch);
+    expect(moved.providerSessionId).toBeUndefined();
+    expect(moved.context).toBeUndefined();
+    expect(moved.blocks[0]).toEqual(source.blocks[0]);
+    const handoff = moved.blocks.at(-1);
+    expect(handoff?.handoff?.pending).toBe(true);
+    expect(handoff?.text).toContain(tree.path);
+    expect(sessionWorkCwd(source)).toBe("/repo");
+  });
+
+  it("moves a conversation back to the main checkout", () => {
+    const source = {
+      ...newSession("codex", "/repo"),
+      worktreeCwd: tree.path,
+      blocks: [{ id: "u", role: "user" as const, text: "Build feature" }],
+    };
+    const moved = sessionInWorktree(
+      source,
+      { ...tree, path: "/repo", branch: "main", isMain: true },
+      { move: true },
+    );
+    expect(moved.id).toBe(source.id);
+    expect(moved.worktreeCwd).toBeUndefined();
+    expect(moved.branch).toBe("main");
+  });
+
   it("leaves the current working copy and provider context unchanged when reselected", () => {
     const source = {
       ...newSession("codex", "/repo"),
@@ -216,4 +256,120 @@ describe("sessions kept after worktree deletion", () => {
       expect(selected.providerSessionId).toBeUndefined();
     },
   );
+});
+
+describe("switching a session's working copy", () => {
+  const conversation = () => ({
+    ...newSession("codex", "/repo"),
+    providerSessionId: "existing-agent-thread",
+    title: "Build feature",
+    blocks: [{ id: "u", role: "user" as const, text: "Build feature" }],
+  });
+
+  it("keeps the provider binding and checkpoint when saving the move fails", async () => {
+    const base = conversation();
+    const release = vi.fn(async () => {});
+    for (const persist of [
+      vi.fn(async () => null),
+      vi.fn(async () => {
+        throw new Error("disk full");
+      }),
+    ]) {
+      await expect(
+        switchSessionWorktree(base, tree, {
+          move: true,
+          persist,
+          release,
+          live: () => base,
+        }),
+      ).rejects.toThrow();
+      expect(persist).toHaveBeenCalledOnce();
+    }
+    expect(release).not.toHaveBeenCalled();
+    expect(base.providerSessionId).toBe("existing-agent-thread");
+    expect(sessionWorkCwd(base)).toBe("/repo");
+  });
+
+  it("saves the destination before releasing the old working copy", async () => {
+    const base = conversation();
+    const order: string[] = [];
+    const moved = await switchSessionWorktree(base, tree, {
+      move: true,
+      persist: async (session) => {
+        order.push(`persist:${sessionWorkCwd(session)}`);
+        return true;
+      },
+      release: async () => {
+        order.push("release");
+      },
+      live: () => base,
+    });
+    expect(order).toEqual([`persist:${tree.path}`, "release"]);
+    expect(sessionWorkCwd(moved)).toBe(tree.path);
+  });
+
+  it("completes the saved move when releasing the old binding fails", async () => {
+    const base = conversation();
+    const moved = await switchSessionWorktree(base, tree, {
+      move: true,
+      persist: async () => true,
+      release: async () => {
+        throw new Error("child already gone");
+      },
+      live: () => base,
+    });
+    expect(sessionWorkCwd(moved)).toBe(tree.path);
+    expect(moved.providerSessionId).toBeUndefined();
+  });
+
+  it("keeps a draft and rename made while the move was saving", async () => {
+    const base = conversation();
+    let live = base;
+    const draft = {
+      id: "d",
+      role: "user" as const,
+      text: "Then add tests",
+      draft: true,
+    };
+    const moved = await switchSessionWorktree(base, tree, {
+      move: true,
+      persist: async () => {
+        // onSaveDraft and a sidebar rename land during the save.
+        live = { ...live, title: "Renamed", blocks: [...live.blocks, draft] };
+        return true;
+      },
+      release: async () => {},
+      live: () => live,
+    });
+    expect(moved.title).toBe("Renamed");
+    expect(sessionWorkCwd(moved)).toBe(tree.path);
+    expect(moved.branch).toBe(tree.branch);
+    expect(moved.providerSessionId).toBeUndefined();
+    expect(moved.blocks.map((block) => block.id)).toEqual([
+      "u",
+      moved.blocks[1].id,
+      "d",
+    ]);
+    expect(moved.blocks[1].handoff?.pending).toBe(true);
+    expect(moved.blocks.at(-1)).toBe(draft);
+  });
+
+  it("drops a draft removed while the move was saving", async () => {
+    const draft = {
+      id: "d",
+      role: "user" as const,
+      text: "Then add tests",
+      draft: true,
+    };
+    const base = { ...conversation(), blocks: [...conversation().blocks, draft] };
+    const live = { ...base, blocks: base.blocks.filter((b) => b !== draft) };
+    const moved = await switchSessionWorktree(base, tree, {
+      move: true,
+      persist: async () => true,
+      release: async () => {},
+      live: () => live,
+    });
+    expect(moved.blocks.some((block) => block.id === "d")).toBe(false);
+    expect(moved.blocks.at(-1)?.handoff).toBeDefined();
+  });
 });

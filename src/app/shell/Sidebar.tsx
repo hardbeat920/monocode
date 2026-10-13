@@ -1,4 +1,8 @@
-import { NO_BRANCH_LABEL } from "../../features/source-control/model/worktrees";
+import {
+  NO_BRANCH_LABEL,
+  type Worktree,
+} from "../../features/source-control/model/worktrees";
+import { useProjectWorktrees } from "../../features/source-control/hooks/useProjectWorktrees";
 import {
   type WorktreeFocus,
   inWorktreeFocus,
@@ -54,6 +58,7 @@ import {
   type SidebarTabId,
 } from "../../features/settings/model/appearance";
 import { formatInteger } from "../../shared/lib/numbers";
+import { pathKey } from "../../shared/lib/paths";
 import {
   type GitFileDiffKind,
   type GitHistoryCommit,
@@ -281,6 +286,8 @@ type Props = {
     sessionId: string,
     item: LinkedWorkItem | undefined,
   ) => void;
+  /** Rebind a conversation to another working copy of this project. */
+  onMoveSessionToWorktree?: (sessionId: string, tree: Worktree) => void;
   reminders?: readonly SessionReminder[];
   onSetReminders?: (sessionIds: readonly string[], dueAt: number) => void;
   onCancelReminders?: (sessionIds: readonly string[]) => void;
@@ -378,6 +385,7 @@ function SidebarComponent({
   onPinSession: onPinLocalSession,
   onPinSessions: onPinLocalSessions,
   onSetSessionLinkedWorkItem: onSetLocalSessionLinkedWorkItem,
+  onMoveSessionToWorktree: onMoveLocalSessionToWorktree,
   reminders = [],
   onSetReminders,
   onCancelReminders,
@@ -523,6 +531,13 @@ function SidebarComponent({
         void remoteChange(sessionId, { linkedWorkItem: item ?? null });
       }
     : onSetLocalSessionLinkedWorkItem;
+  const onMoveSessionToWorktree = remoteProject
+    ? undefined
+    : onMoveLocalSessionToWorktree;
+  const projectWorktrees = useProjectWorktrees(
+    cwd,
+    !!onMoveSessionToWorktree,
+  ).data?.worktrees.filter((tree) => !tree.missing);
   const activeRemoteId = activeSessionId
     ? remoteSessionFor(activeSessionId)
     : undefined;
@@ -1171,6 +1186,34 @@ function SidebarComponent({
           },
         ]
       : []),
+    ...(!multipleMenuSessions &&
+    onMoveSessionToWorktree &&
+    projectWorktrees &&
+    projectWorktrees.length > 1
+      ? [
+          {
+            kind: "item" as const,
+            id: "move-worktree",
+            label: "Move to worktree",
+            disabled:
+              !menuSessions[0] || listedBusySessionIds.has(menuSessions[0].id),
+            submenu: projectWorktrees.map((tree, index) => {
+              const current =
+                !!menuSessions[0] &&
+                pathKey(menuSessions[0].worktreeCwd || menuSessions[0].cwd) ===
+                  pathKey(tree.path);
+              return {
+                kind: "item" as const,
+                id: `move-worktree:${index}`,
+                label: tree.branch ?? "Detached worktree",
+                description: tree.isMain ? "Main checkout" : tree.path,
+                checked: current,
+                disabled: current,
+              };
+            }),
+          },
+        ]
+      : []),
     {
       kind: "item",
       id: "reminder",
@@ -1307,6 +1350,11 @@ function SidebarComponent({
           console.error("Failed to copy session ID:", error);
         });
       }
+      return;
+    }
+    if (id.startsWith("move-worktree:")) {
+      const tree = projectWorktrees?.[Number(id.slice("move-worktree:".length))];
+      if (tree) onMoveSessionToWorktree?.(sessionId, tree);
       return;
     }
     if (id === "link-work-item") {
