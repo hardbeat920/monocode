@@ -23,6 +23,7 @@ import {
   assistantThinkingBlocks,
   assistantToolUses,
   contextFromResult,
+  outputSpeedFromResult,
   contextUsedFromAssistant,
   turnMetricsFromResult,
   buildClaudeSpawnArgs,
@@ -70,6 +71,7 @@ import {
   type ClaudeAgentTaskNotification,
   type ClaudeCliSettings,
   type ClaudeControlRequest,
+  type ClaudeOutputTally,
 } from "./claudeProtocol";
 import { isAgentToolName } from "../../core/preview";
 import { joinStreamText, snapshotRemainder } from "../../core/streamText";
@@ -175,6 +177,8 @@ type Live = {
   pendingAssistantBoundary: boolean;
   manualCompaction: boolean;
   compactionConfirmed: boolean;
+  /** Claude's model time and output so far; unknown until a resume reports. */
+  outputTally: ClaudeOutputTally | undefined;
 };
 
 type Resume = {
@@ -512,6 +516,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     pendingAssistantBoundary: false,
     manualCompaction: false,
     compactionConfirmed: false,
+    outputTally: canResume ? undefined : { apiMs: 0, outputTokens: 0 },
   };
   liveRef.current = live;
 
@@ -975,8 +980,18 @@ function handleResult(live: Live, rec: Record<string, unknown>): void {
     const context = contextFromResult(rec);
     if (context) live.onEvent({ type: "context", ...context });
   }
+  const speed = outputSpeedFromResult(live.outputTally, rec);
+  live.outputTally = speed.tally;
   const metrics = turnMetricsFromResult(rec);
-  if (metrics) live.onEvent({ type: "turn.metrics", ...metrics });
+  if (metrics) {
+    live.onEvent({
+      type: "turn.metrics",
+      ...metrics,
+      ...(speed.tokensPerSecond
+        ? { outputTokensPerSecond: speed.tokensPerSecond }
+        : {}),
+    });
+  }
 
   const result = turnStatusFromResult(rec);
   if (result.status === "failed" && result.error && !live.cancelled) {

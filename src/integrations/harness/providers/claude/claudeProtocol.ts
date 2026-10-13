@@ -1150,6 +1150,40 @@ export function turnMetricsFromResult(
   };
 }
 
+/** Claude's running totals of model time and output tokens for one process. */
+export type ClaudeOutputTally = { apiMs: number; outputTokens: number };
+
+/**
+ * Output speed for the turn a `result` closes, over the time spent in model
+ * requests rather than the whole turn, which also covers tool runs and
+ * approval waits.
+ *
+ * `duration_api_ms` and `modelUsage` are running totals for the process, and
+ * both count subagents, so the turn's share is the step since the previous
+ * result. `usage.output_tokens` only covers the main loop and would read low
+ * against time that includes subagents. A resumed process starts from the
+ * conversation's saved totals, so without a previous tally there is no speed.
+ */
+export function outputSpeedFromResult(
+  previous: ClaudeOutputTally | undefined,
+  rec: Record<string, unknown>,
+): { tally: ClaudeOutputTally | undefined; tokensPerSecond?: number } {
+  const apiMs = numberField(rec, "duration_api_ms");
+  const models = asRecord(rec.modelUsage);
+  // Results Claude writes without calling the model report zero time.
+  if (!apiMs || !models) return { tally: previous };
+  let outputTokens = 0;
+  for (const usage of Object.values(models)) {
+    outputTokens += numberField(asRecord(usage), "outputTokens");
+  }
+  const tally = { apiMs, outputTokens };
+  if (!previous) return { tally };
+  const spentMs = apiMs - previous.apiMs;
+  const spentTokens = outputTokens - previous.outputTokens;
+  if (spentMs <= 0 || spentTokens <= 0) return { tally };
+  return { tally, tokensPerSecond: spentTokens / (spentMs / 1000) };
+}
+
 /**
  * Context level from an `assistant` message. Callers must skip subagent
  * messages — subagents run their own window and would make the reading jump.

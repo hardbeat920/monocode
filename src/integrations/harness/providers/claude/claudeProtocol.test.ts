@@ -38,6 +38,7 @@ import {
   toolTitle,
   turnStatusFromResult,
   turnMetricsFromResult,
+  outputSpeedFromResult,
   isUsageLimitResult,
   usageLimitFromRateLimitEvent,
 } from "./claudeProtocol";
@@ -852,6 +853,57 @@ describe("turnMetricsFromResult", () => {
       outputTokens: 13,
       cacheHitPercent: (16_652 / (2 + 12_941 + 16_652)) * 100,
     });
+  });
+});
+
+describe("outputSpeedFromResult", () => {
+  const result = (apiMs: number, outputTokens: number) => ({
+    duration_ms: 60_000,
+    duration_api_ms: apiMs,
+    usage: { output_tokens: 10 },
+    modelUsage: { "claude-sonnet-5": { outputTokens } },
+  });
+
+  it("divides the turn's output by its model time, not the whole turn", () => {
+    const first = outputSpeedFromResult(
+      { apiMs: 0, outputTokens: 0 },
+      result(2_000, 100),
+    );
+    expect(first).toEqual({
+      tally: { apiMs: 2_000, outputTokens: 100 },
+      tokensPerSecond: 50,
+    });
+    // Totals run across the process and count subagents in every model.
+    expect(
+      outputSpeedFromResult(first.tally, {
+        ...result(6_000, 0),
+        modelUsage: {
+          "claude-sonnet-5": { outputTokens: 300 },
+          "claude-haiku-5": { outputTokens: 200 },
+        },
+      }),
+    ).toEqual({
+      tally: { apiMs: 6_000, outputTokens: 500 },
+      tokensPerSecond: 100,
+    });
+  });
+
+  it("has no speed until it knows where a resumed process started", () => {
+    expect(outputSpeedFromResult(undefined, result(90_000, 4_000))).toEqual({
+      tally: { apiMs: 90_000, outputTokens: 4_000 },
+    });
+  });
+
+  it("keeps the tally across results that made no model call", () => {
+    const tally = { apiMs: 2_000, outputTokens: 100 };
+    expect(
+      outputSpeedFromResult(tally, {
+        duration_ms: 0,
+        duration_api_ms: 0,
+        modelUsage: {},
+      }),
+    ).toEqual({ tally });
+    expect(outputSpeedFromResult(tally, { type: "result" })).toEqual({ tally });
   });
 });
 

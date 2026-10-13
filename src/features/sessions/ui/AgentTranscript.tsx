@@ -1923,10 +1923,13 @@ function TurnMetricsBadge({
   const [hovered, setHovered] = useState(false);
   if (!metrics || !hasTurnMetrics(metrics)) return null;
 
+  // Wall time also covers tool runs and approval waits, so it is only the
+  // fallback for providers that don't report time spent generating.
   const outputRate =
-    metrics.outputTokens != null && elapsedMs != null && elapsedMs > 0
+    metrics.outputTokensPerSecond ??
+    (metrics.outputTokens != null && elapsedMs != null && elapsedMs > 0
       ? metrics.outputTokens / (elapsedMs / 1000)
-      : undefined;
+      : undefined);
   const headline =
     [
       metrics.cacheHitPercent != null
