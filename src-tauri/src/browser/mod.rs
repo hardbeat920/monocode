@@ -694,16 +694,20 @@ impl BrowserHost {
 
     /// `/browser` on or off for a session (decision D2).
     pub fn set_grant(&self, session: &str, window: &str, enabled: bool) {
+        let was_granted = self.policy.read().granted(session);
         let detach = self.policy.write().set_grant(session, window, enabled);
         if self.link.is_open() {
             targets::detach_sessions(&self.link, &detach);
         }
-        self.event(
-            if enabled { "grant_on" } else { "grant_off" },
-            Actor::User,
-            Some(session),
-            None,
-        );
+        // Recorded only when the grant actually changed.
+        if enabled != was_granted {
+            self.event(
+                if enabled { "grant_on" } else { "grant_off" },
+                Actor::User,
+                Some(session),
+                None,
+            );
+        }
         self.emit_state();
     }
 
@@ -832,10 +836,10 @@ impl BrowserHost {
         cwd: &str,
         browser_access: Option<bool>,
     ) {
-        let dropping = {
-            let state = self.policy.read();
-            browser_access == Some(false) && state.granted(session)
-        };
+        // The audit records transitions, not turns: a frontend may authorize
+        // the same turn several times, and most turns keep the grant as is.
+        let was_granted = self.policy.read().granted(session);
+        let dropping = browser_access == Some(false) && was_granted;
         let detach: Vec<CdpSessionId> = if dropping {
             self.policy
                 .read()
@@ -859,7 +863,7 @@ impl BrowserHost {
                 Some(session),
                 Some("turn without browser access"),
             );
-        } else if browser_access == Some(true) {
+        } else if !was_granted && self.policy.read().granted(session) {
             self.event("grant_on", Actor::User, Some(session), None);
         }
         self.emit_state();
@@ -1681,6 +1685,46 @@ mod tests {
         host.audit_clear();
         assert!(host.audit_list(None, 50).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The audit records a grant when it changes, not on every turn: the
+    /// frontend may authorize one turn several times (seen as three
+    /// `grant_on` rows per turn in Ognjen's log).
+    #[test]
+    fn grant_events_record_transitions_only() {
+        let host =
+            BrowserHost::for_tests(settings_for(&std::env::temp_dir().join("monocode-grants")));
+        let count = |kind: &str| {
+            host.events_list(50)
+                .iter()
+                .filter(|e| e.kind == kind && e.session_id.as_deref() == Some("s1"))
+                .count()
+        };
+        for _ in 0..3 {
+            host.turn_started("s1", "main", "/repo", Some(true));
+        }
+        assert!(host.policy().read().granted("s1"));
+        // A turn that says nothing about the browser keeps the grant quietly,
+        // and granting again from Settings changes nothing.
+        host.turn_started("s1", "main", "/repo", None);
+        host.set_grant("s1", "main", true);
+        assert_eq!(count("grant_on"), 1);
+        assert_eq!(count("grant_off"), 0);
+        // Dropping it is recorded once, however often it is dropped again.
+        host.turn_started("s1", "main", "/repo", Some(false));
+        host.turn_started("s1", "main", "/repo", Some(false));
+        host.set_grant("s1", "main", false);
+        assert!(!host.policy().read().granted("s1"));
+        assert_eq!(count("grant_off"), 1);
+        assert_eq!(count("grant_on"), 1);
+        // A later grant is a new transition, from either path.
+        host.set_grant("s1", "main", true);
+        host.turn_started("s1", "main", "/repo", Some(true));
+        assert_eq!(count("grant_on"), 2);
+        host.turn_started("s1", "main", "/repo", Some(false));
+        host.turn_started("s1", "main", "/repo", Some(true));
+        assert_eq!(count("grant_on"), 3);
+        assert_eq!(count("grant_off"), 2);
     }
 
     #[test]
