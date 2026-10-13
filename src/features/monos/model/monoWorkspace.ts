@@ -20,7 +20,8 @@ const openingMonos = new Map<string, Promise<Session | undefined>>();
 
 /**
  * Load the Mono's conversation without opening or replacing a workspace tab.
- * A new one starts in the home folder: no single project is its own.
+ * A new one starts with Auto permissions in the home folder: no single
+ * project is its own.
  */
 export function ensureMonoSession(
   monoId: string,
@@ -53,7 +54,7 @@ async function loadMonoSession(
   const home = await host.home();
   // Removed while the home folder was looked up.
   if (!findMono(monoId)) return undefined;
-  const session = host.create(home);
+  const session: Session = { ...host.create(home), runtimeMode: "auto" };
   saveMonoSessionId(monoId, session.id);
   host.add(session);
   return session;

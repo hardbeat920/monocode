@@ -29,6 +29,14 @@ describe("highlightSource", () => {
     expect(token(lines[1], "// note")?.color).toBe(COMMENT_DARK);
   });
 
+  it("colors dotenv keys and leaves values as plain text", async () => {
+    const language = await languageForPath(".env");
+    const lines = highlightSource("# note\nAWS_BUCKET=bucket", language, "dark");
+    expect(token(lines[0], "# note")?.color).toBe(COMMENT_DARK);
+    expect(token(lines[1], "AWS_BUCKET")?.color).toBe("#a5d5fe");
+    expect(token(lines[1], "bucket")?.color).toBeUndefined();
+  });
+
   it("leaves unknown languages unstyled", () => {
     const lines = highlightSource("plain text", null, "dark");
     expect(lines).toEqual([[{ text: "plain text" }]]);

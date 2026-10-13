@@ -88,9 +88,9 @@ async function discoverViaAcp(workingDirectory?: string): Promise<AgentModel[]> 
         },
         REQUEST_TIMEOUT_MS,
       );
-      await acp
-        .request("authenticate", { methodId: "cursor_login" }, REQUEST_TIMEOUT_MS)
-        .catch(() => undefined);
+      // ACP reads existing CLI credentials at startup. `cursor_login` can
+      // launch a browser, so a catalog refresh must never request it. Missing
+      // credentials fall back to CLI discovery and the bundled model list.
       const listed = await acp.request<unknown>(
         "cursor/list_available_models",
         {},

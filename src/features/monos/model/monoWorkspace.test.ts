@@ -5,12 +5,7 @@ import { leafIds, newTab, splitPane } from "../../workspace/model/layout";
 import { planWorkspaceTabClose } from "../../workspace/model/workspaceTabGroups";
 import { createMono, findMono, saveMonoName, saveMonoSessionId } from "./mono";
 import { planAgentContext, recordAgentContext } from "./monoFiles";
-import {
-  loadMonoBaseline,
-  loadMonoRotation,
-  saveMonoBaseline,
-  saveMonoRotation,
-} from "./monoRotation";
+import { loadMonoRotation, saveMonoRotation } from "./monoRotation";
 import {
   detachMonoTabs,
   ensureMonoSession,
@@ -41,7 +36,7 @@ function monoFor(cwd: string, sessionId: string): string {
 const sessionOf = (monoId: string) => findMono(monoId)?.sessionId;
 
 it("loads an existing resident conversation without creating a session", async () => {
-  const agent = chat("resident");
+  const agent = { ...chat("resident"), runtimeMode: "full-access" as const };
   const monoId = monoFor(agent.cwd, agent.id);
   const host = {
     home: vi.fn().mockResolvedValue("/home"),
@@ -55,7 +50,7 @@ it("loads an existing resident conversation without creating a session", async (
   expect(host.add).not.toHaveBeenCalled();
 });
 
-it("starts a new Mono's conversation in the home folder, once", async () => {
+it("starts a new Mono's conversation with Auto permissions in the home folder, once", async () => {
   const monoId = createMono(["/project"]).id;
   const host = {
     home: vi.fn().mockResolvedValue("/home"),
@@ -65,6 +60,7 @@ it("starts a new Mono's conversation in the home folder, once", async () => {
   };
   const agent = (await ensureMonoSession(monoId, host))!;
   expect(agent.cwd).toBe("/home");
+  expect(agent.runtimeMode).toBe("auto");
   expect(sessionOf(monoId)).toBe(agent.id);
   expect(host.add).toHaveBeenCalledExactlyOnceWith(agent);
   host.load.mockResolvedValue(agent);
@@ -126,6 +122,7 @@ it("allows retrying an open after the home lookup fails", async () => {
 it("deletes the Mono's chat before replacing it with an empty provider session", async () => {
   const current = {
     ...chat("resident"),
+    runtimeMode: "auto-accept-edits" as const,
     busy: true,
     providerSessionId: "old-provider",
     providerAccountId: "old-account",
@@ -150,8 +147,6 @@ it("deletes the Mono's chat before replacing it with an empty provider session",
   };
   saveMonoRotation(current.id, rotation);
   saveMonoRotation("other-mono", rotation);
-  saveMonoBaseline(current.id, current.harness, 20_000);
-  saveMonoBaseline("other-mono", current.harness, 25_000);
 
   const stopped = { ...current, busy: false };
   const stop = vi.fn(async () => stopped);
@@ -180,13 +175,11 @@ it("deletes the Mono's chat before replacing it with an empty provider session",
   expect(sessionOf(monoId)).toBe(fresh.id);
   expect(findMono(monoId)?.name).toBe("Broski");
   expect(loadMonoRotation(current.id)).toBeUndefined();
-  expect(loadMonoBaseline(current.id, current.harness)).toBeUndefined();
   expect(
     planAgentContext(current.id, current.providerSessionId, files),
   ).toEqual({ soul: true, memory: true });
   expect(sessionOf(otherId)).toBe("other-mono");
   expect(loadMonoRotation("other-mono")).toEqual(rotation);
-  expect(loadMonoBaseline("other-mono", current.harness)).toBe(25_000);
   expect(planAgentContext("other-mono", "other-provider", files)).toEqual({
     soul: false,
     memory: false,

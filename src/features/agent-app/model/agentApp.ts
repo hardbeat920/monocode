@@ -16,9 +16,12 @@ import {
   type Session,
 } from "../../sessions/model/session";
 import {
+  addSessionToFolder,
+  createFolderWithSessions,
   loadSessionFolders,
   placeSessionInFolder,
   saveSessionFolders,
+  setFolderCustomColor,
 } from "../../sessions/model/sessionFolders";
 import {
   normalizeNoteTags,
@@ -26,6 +29,13 @@ import {
   type Note,
   type NoteUpsert,
 } from "../../notes";
+import {
+  ARTIFACT_KINDS,
+  type Artifact,
+  type ArtifactCard,
+  type ArtifactKind,
+  type ArtifactUpsert,
+} from "../../artifacts/artifacts";
 import type { QuickLaunch } from "../../quick-composer/model/quickComposer";
 import type { Worktree, Worktrees } from "../../source-control/model/worktrees";
 import { pathKey, projectName } from "../../../shared/lib/paths";
@@ -73,6 +83,7 @@ export type AppSessionListing = {
   model: string;
   busy: boolean;
   hasDraft: boolean;
+  archived: boolean;
 };
 
 export type AppSessionPlacement = {
@@ -101,6 +112,8 @@ export type AgentAppHost = {
     prompt: string,
     requestId: string,
   ): Promise<{ alreadySaved: boolean; draft: boolean }>;
+  stop(id: string): Promise<void>;
+  remove(id: string, mode: "archive" | "delete"): Promise<void>;
   worktrees(cwd: string): Promise<Worktrees>;
   createWorktree(
     cwd: string,
@@ -111,13 +124,23 @@ export type AgentAppHost = {
   notes(): Promise<Note[]>;
   note(id: string): Promise<Note | null>;
   saveNote(note: NoteUpsert): Promise<Note>;
+  artifacts?(): Promise<Artifact[]>;
+  artifact?(id: string): Promise<Artifact | null>;
+  saveArtifact?(artifact: ArtifactUpsert): Promise<Artifact>;
+  postArtifact?(sourceSessionId: string, card: ArtifactCard): void | Promise<void>;
   /** Whether the session is a Mono's own conversation, which owns memory. */
   isMono(sessionId: string): boolean;
   /**
    * The Mono a session works for: its own conversation or one of its habit
    * runs. Its projects are the ones it may name with "project".
    */
-  monoOf?(sessionId: string): { id: string; projects: readonly string[] } | undefined;
+  monoOf?(sessionId: string): {
+    id: string;
+    projects: readonly string[];
+    showStartedSessionsInSidebar?: boolean;
+    /** Files the sessions it starts into a folder named after it. */
+    folder?: { name: string; color: string };
+  } | undefined;
   /** A hidden run of one of a Mono's habits: it may remember, not schedule. */
   isHabitRun?(sessionId: string): boolean;
   /** Puts a card in the Mono's chat, or holds it for a habit run's report. */
@@ -151,6 +174,9 @@ const FIELDS = new Map<string, readonly string[]>([
   ["sessions.read", ["sessionId", "before", "limit", "maxChars", "project"]],
   ["sessions.send", ["sessionId", "prompt", "project", "notifyOnComplete"]],
   ["sessions.draft", ["sessionId", "prompt", "project"]],
+  ["sessions.stop", ["sessionId", "project"]],
+  ["sessions.archive", ["sessionId", "project"]],
+  ["sessions.delete", ["sessionId", "project"]],
   [
     "sessions.start",
     [
@@ -178,6 +204,9 @@ const FIELDS = new Map<string, readonly string[]>([
   ["notes.list", ["limit", "offset"]],
   ["notes.read", ["id"]],
   ["notes.write", ["id", "title", "body", "tags"]],
+  ["artifacts.list", ["kind", "limit", "offset"]],
+  ["artifacts.read", ["id"]],
+  ["artifacts.write", ["id", "kind", "title", "body", "summary"]],
   ["soul.read", []],
   ["soul.update", ["text", "expectedHash"]],
   ["memory.read", ["topic"]],
@@ -325,7 +354,8 @@ async function projectSession(
   if (!(await host.sessions(cwd)).some((session) => session.id === id))
     throw new Error("Session was not found in this project");
   const target = await host.session(id);
-  if (!target) throw new Error("Session was not found in this project");
+  if (!target || pathKey(target.cwd) !== pathKey(cwd))
+    throw new Error("Session was not found in this project");
   return target;
 }
 
@@ -339,6 +369,28 @@ export function notePreview(body: string): string {
     .slice(0, 2)
     .join("\n\n")
     .slice(0, 400);
+}
+
+/**
+ * Puts a session a Mono started into the sidebar folder named after it,
+ * making that folder in its color the first time.
+ */
+function fileInMonoFolder(
+  cwd: string,
+  sessionId: string,
+  folder: { name: string; color: string },
+): void {
+  const folders = loadSessionFolders(cwd);
+  const own = folders.find((entry) => entry.name === folder.name);
+  if (own) {
+    saveSessionFolders(cwd, addSessionToFolder(folders, own.id, sessionId));
+    return;
+  }
+  const created = createFolderWithSessions(folders, [sessionId], folder.name);
+  saveSessionFolders(
+    cwd,
+    setFolderCustomColor(created.folders, created.id, folder.color),
+  );
 }
 
 function startLaunch(
@@ -417,6 +469,9 @@ function startLaunch(
   return {
     cwd,
     prompt,
+    ...(host.monoOf?.(source.id)?.showStartedSessionsInSidebar !== true
+      ? { sidebarHidden: true }
+      : {}),
     ...(draft ? { draft: true } : {}),
     harness: chosenHarness,
     model: model.id,
@@ -766,6 +821,122 @@ async function handleHabits(
   throw new Error(`Unknown app action: ${action}`);
 }
 
+function artifactKind(value: unknown): ArtifactKind {
+  if (value === undefined) return "document";
+  if (ARTIFACT_KINDS.includes(value as ArtifactKind))
+    return value as ArtifactKind;
+  throw new Error('Unsupported artifact kind; use "document" or "html"');
+}
+
+async function handleArtifacts(
+  source: Session,
+  requestId: string,
+  action: string,
+  input: Record<string, unknown>,
+  host: AgentAppHost,
+): Promise<unknown> {
+  if (!(host.isMono(source.id) || host.isHabitRun?.(source.id)))
+    throw new Error("Only a Mono can create or read artifacts");
+  if (!host.artifact) throw new Error("Artifacts are unavailable");
+  if (action === "artifacts.list") {
+    if (!host.artifacts) throw new Error("Artifacts are unavailable");
+    const kind =
+      input.kind === undefined ? undefined : artifactKind(input.kind);
+    const limit = input.limit ?? 30;
+    const offset = input.offset ?? 0;
+    if (
+      !Number.isInteger(limit) ||
+      (limit as number) < 1 ||
+      (limit as number) > 100
+    )
+      throw new Error("limit must be an integer from 1 to 100");
+    if (!Number.isInteger(offset) || (offset as number) < 0)
+      throw new Error("offset must be a non-negative integer");
+    const artifacts = (await host.artifacts()).filter(
+      (artifact) => kind === undefined || artifact.kind === kind,
+    );
+    return {
+      total: artifacts.length,
+      offset,
+      artifacts: artifacts
+        .slice(offset as number, (offset as number) + (limit as number))
+        .map(({ id, kind, title, updatedAt }) => ({
+          id,
+          kind,
+          title,
+          updatedAt,
+        })),
+    };
+  }
+  if (action === "artifacts.read") {
+    const artifact = await host.artifact(requiredString(input.id, "id", 256));
+    if (!artifact) throw new Error("Artifact was not found");
+    return artifact;
+  }
+  if (!host.saveArtifact || !host.postArtifact)
+    throw new Error("Artifacts are unavailable");
+  const kind = artifactKind(input.kind);
+  const id = optionalString(input.id, "id", 256);
+  if (id && !/^[A-Za-z0-9_-]+$/.test(id))
+    throw new Error("Invalid artifact ID");
+  const title =
+    input.title === undefined
+      ? undefined
+      : requiredString(input.title, "title", 200);
+  const body = input.body === undefined ? undefined : noteBody(input.body);
+  const summary =
+    input.summary === undefined
+      ? undefined
+      : requiredString(input.summary, "summary", 280);
+  let artifact: Artifact;
+  if (id) {
+    if (title === undefined && body === undefined)
+      throw new Error("Supply title or body to update an artifact");
+    const current = await host.artifact(id);
+    if (!current) throw new Error("Artifact was not found");
+    if (current.kind !== kind)
+      throw new Error("An artifact's kind cannot be changed");
+    artifact = await host.saveArtifact({
+      id,
+      kind,
+      title: title ?? current.title,
+      body: body ?? current.body,
+    });
+  } else {
+    if (body === undefined)
+      throw new Error("body is required to create an artifact");
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId))
+      throw new Error("Invalid request ID");
+    const createdId = `artifact-${source.id}-${requestId}`;
+    const existing = await host.artifact(createdId);
+    if (
+      existing &&
+      (existing.kind !== kind ||
+        existing.title !== (title ?? noteTitle(body)) ||
+        existing.body !== body)
+    )
+      throw new Error("Request ID was already used for another artifact");
+    artifact =
+      existing ??
+      (await host.saveArtifact({
+        id: createdId,
+        kind,
+        title: title ?? noteTitle(body),
+        body,
+        sourceSessionId: source.id,
+        ...(looksLikeProject(source.cwd) ? { sourceCwd: source.cwd } : {}),
+      }));
+  }
+  const card: ArtifactCard = {
+    id: artifact.id,
+    kind: artifact.kind,
+    title: artifact.title,
+    ...(summary ? { summary } : {}),
+  };
+  await host.postArtifact(source.id, card);
+  return { ...card, saved: true, attached: true };
+}
+
 export async function handleAgentApp(
   source: Session,
   requestId: string,
@@ -774,6 +945,8 @@ export async function handleAgentApp(
   host: AgentAppHost,
 ): Promise<unknown> {
   fields(action, input);
+  if (action.startsWith("artifacts."))
+    return handleArtifacts(source, requestId, action, input, host);
   if (action.startsWith("soul."))
     return handleSoul(source, action, input, host);
   if (action.startsWith("memory."))
@@ -867,6 +1040,32 @@ export async function handleAgentApp(
       );
       return { sessionId: id, saved: true, ...result };
     }
+    case "sessions.stop":
+    case "sessions.archive":
+    case "sessions.delete": {
+      const id = requiredString(input.sessionId, "sessionId", 256);
+      if (id === source.id)
+        throw new Error("Cannot stop, archive or delete the calling session");
+      if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId))
+        throw new Error("Invalid request ID");
+      const target = await projectSession(source, id, input, host);
+      if (
+        target.orchestrationLeadId ||
+        host.isMono(id) ||
+        host.isHabitRun?.(id)
+      )
+        throw new Error("Only regular project sessions can be managed here");
+      if (action === "sessions.stop") {
+        await host.stop(id);
+        return { sessionId: id, stopped: true };
+      }
+      const mode = action === "sessions.archive" ? "archive" : "delete";
+      await host.remove(id, mode);
+      return {
+        sessionId: id,
+        [mode === "archive" ? "archived" : "deleted"]: true,
+      };
+    }
     case "sessions.start": {
       if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId))
         throw new Error(
@@ -909,6 +1108,9 @@ export async function handleAgentApp(
         );
       else if (notifyMonoId) await host.start(launch, id, undefined, notifyMonoId);
       else await host.start(launch, id);
+      const folder = host.monoOf?.(source.id)?.folder;
+      if (folder && !launch.sidebarHidden)
+        fileInMonoFolder(launch.cwd, id, folder);
       return {
         id,
         cwd: launch.cwd,

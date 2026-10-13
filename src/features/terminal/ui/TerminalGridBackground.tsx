@@ -30,6 +30,8 @@ const SPRITE_SCALE = 0.8;
 /** How hard the bubble chases its speaker; sprites move cell by cell. */
 const BUBBLE_EASE = 0.2;
 const FRAME_MS = 33;
+/** The slide transition, plus a frame of slack, while both boards show. */
+const SLIDE_MS = 800;
 
 const HEADING: Record<string, { x: number; y: number }> = {
   ArrowUp: { x: 0, y: -1 },
@@ -157,6 +159,7 @@ export function TerminalGridBackground() {
   const playingRef = useRef(false);
   const scoreRef = useRef(0);
   const livesRef = useRef(0);
+  const slideAtRef = useRef(0);
   const [playing, setPlaying] = useState(false);
   const [score, setScore] = useState(0);
   const [lives, setLives] = useState(3);
@@ -201,16 +204,53 @@ export function TerminalGridBackground() {
     ) as Record<HarnessId, HTMLImageElement>;
     const tintCanvas = document.createElement("canvas");
     const tintCtx = tintCanvas.getContext("2d");
+    // The cell outlines never move, so they're stroked once here and
+    // blitted each frame instead of thousands of strokeRects per paint.
+    const gridCanvas = document.createElement("canvas");
+    const gridCtx = gridCanvas.getContext("2d");
 
     let raf = 0;
     let cols = 0;
     let rows = 0;
+    let width = 0;
+    let height = 0;
+    let stamp = new Float32Array(0);
     let rgb = parseContentRgb();
     let surfaceRgb = parseSurfaceRgb();
     let lastFrame = 0;
 
+    const drawGrid = () => {
+      if (!gridCtx || width <= 0 || height <= 0) return;
+      const dpr = window.devicePixelRatio || 1;
+      gridCanvas.width = Math.floor(width * dpr);
+      gridCanvas.height = Math.floor(height * dpr);
+      gridCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      gridCtx.lineWidth = 1;
+      gridCtx.strokeStyle = `rgba(${rgb}, ${BORDER_OPACITY})`;
+      for (let y = 0; y < rows; y++) {
+        for (let x = 0; x < cols; x++) {
+          gridCtx.strokeRect(
+            x * PITCH + 0.5,
+            y * PITCH + 0.5,
+            CELL - 1,
+            CELL - 1,
+          );
+        }
+      }
+    };
+
+    // Hidden tabs collapse to zero size, so the loop parks itself there and
+    // the resize observer wakes it once the pane shows again.
+    const start = () => {
+      if (raf || document.hidden || width <= 0 || height <= 0) return;
+      lastFrame = 0;
+      raf = requestAnimationFrame(draw);
+    };
+
     const layout = () => {
-      const { width, height } = root.getBoundingClientRect();
+      const rect = root.getBoundingClientRect();
+      width = rect.width;
+      height = rect.height;
       if (width <= 0 || height <= 0) return;
 
       const dpr = window.devicePixelRatio || 1;
@@ -228,31 +268,34 @@ export function TerminalGridBackground() {
 
       cols = nextCols;
       rows = nextRows;
+      drawGrid();
+      start();
     };
 
     const paint = (board: Board, width: number, height: number) => {
       const { ctx, arcade } = board;
       const dim = arcade.controlled() ? 1 : board.game.idleDim;
-      const stamp = new Float32Array(cols * rows);
+      if (stamp.length === cols * rows) stamp.fill(0);
+      else stamp = new Float32Array(cols * rows);
       arcade.stamp(stamp, cols, rows);
 
       const fade = arcade.fade();
       ctx.clearRect(0, 0, width, height);
-      ctx.lineWidth = 1;
-      ctx.strokeStyle = `rgba(${rgb}, ${BORDER_OPACITY * fade})`;
 
       const peak = PEAK_OPACITY * dim;
       for (let y = 0; y < rows; y++) {
         for (let x = 0; x < cols; x++) {
-          const px = x * PITCH;
-          const py = y * PITCH;
           const fillOpacity = (stamp[y * cols + x] ?? 0) * peak;
           if (fillOpacity > 0.02) {
             ctx.fillStyle = `rgba(${rgb}, ${fillOpacity})`;
-            ctx.fillRect(px, py, CELL, CELL);
+            ctx.fillRect(x * PITCH, y * PITCH, CELL, CELL);
           }
-          ctx.strokeRect(px + 0.5, py + 0.5, CELL - 1, CELL - 1);
         }
+      }
+      if (fade > 0 && gridCanvas.width > 0) {
+        ctx.globalAlpha = fade;
+        ctx.drawImage(gridCanvas, 0, 0, width, height);
+        ctx.globalAlpha = 1;
       }
 
       const pickup = arcade.logoPickup();
@@ -324,8 +367,8 @@ export function TerminalGridBackground() {
       );
     };
 
-    const draw = (time: number) => {
-      if (document.hidden) {
+    function draw(time: number) {
+      if (document.hidden || width <= 0 || height <= 0) {
         raf = 0;
         return;
       }
@@ -334,11 +377,10 @@ export function TerminalGridBackground() {
       const dt = lastFrame ? time - lastFrame : FRAME_MS;
       lastFrame = time;
 
-      const { width, height } = root.getBoundingClientRect();
-      if (width <= 0 || height <= 0) return;
-
       const current = indexRef.current;
       const controlled = playingRef.current;
+      // Only the board on screen needs pixels, bar mid-slide when two show.
+      const sliding = time - slideAtRef.current < SLIDE_MS;
 
       for (let i = 0; i < boards.length; i++) {
         const board = boards[i];
@@ -347,7 +389,7 @@ export function TerminalGridBackground() {
         // moving so a slide doesn't reveal a frozen frame.
         if (controlled && i !== current) continue;
         board.arcade.step(dt);
-        paint(board, width, height);
+        if (i === current || sliding) paint(board, width, height);
       }
 
       const active = boards[current];
@@ -363,24 +405,21 @@ export function TerminalGridBackground() {
         livesRef.current = nextLives;
         setLives(nextLives);
       }
-    };
+    }
 
     layout();
-    raf = requestAnimationFrame(draw);
 
-    const onVisible = () => {
-      if (document.hidden || raf) return;
-      lastFrame = 0;
-      raf = requestAnimationFrame(draw);
-    };
-    document.addEventListener("visibilitychange", onVisible);
+    document.addEventListener("visibilitychange", start);
 
     const resizeObserver = new ResizeObserver(layout);
     resizeObserver.observe(root);
 
     const themeObserver = new MutationObserver(() => {
-      rgb = parseContentRgb();
+      const next = parseContentRgb();
       surfaceRgb = parseSurfaceRgb();
+      if (next === rgb) return;
+      rgb = next;
+      drawGrid();
     });
     themeObserver.observe(document.documentElement, {
       attributes: true,
@@ -389,7 +428,7 @@ export function TerminalGridBackground() {
 
     return () => {
       cancelAnimationFrame(raf);
-      document.removeEventListener("visibilitychange", onVisible);
+      document.removeEventListener("visibilitychange", start);
       resizeObserver.disconnect();
       themeObserver.disconnect();
       boardsRef.current = null;
@@ -422,6 +461,10 @@ export function TerminalGridBackground() {
     setPlaying(false);
   }, []);
 
+  useEffect(() => {
+    slideAtRef.current = performance.now();
+  }, [slide.index]);
+
   const showGame = useCallback((next: number) => {
     if (next === indexRef.current) return;
     setSlide({
@@ -434,7 +477,8 @@ export function TerminalGridBackground() {
     if (playing || hovered || GRID_GAMES.length < 2) return;
 
     const id = window.setInterval(() => {
-      if (document.hidden) return;
+      // A background tab has no layout box; don't re-render it to slide.
+      if (document.hidden || !rootRef.current?.offsetParent) return;
       setSlide((current) =>
         stepSlider(current.index, current.dir, GRID_GAMES.length),
       );
@@ -586,7 +630,7 @@ export function TerminalGridBackground() {
               <span className="text-content/25">·</span>
               {game.label}
               <span
-                className="inline-block h-3 w-1.5 bg-content/75 motion-safe:animate-pulse"
+                className="inline-block h-3 w-1.5 bg-content/75 motion-safe:group-hover:animate-pulse"
                 aria-hidden
               />
               <span className="text-content/40">]</span>

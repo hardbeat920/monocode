@@ -5,17 +5,20 @@ import { createPortal } from "react-dom";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import { LAYER } from "../lib/layers";
 import { GlassBackdrop } from "../../app/shell/GlassBackdrop";
+import { InDialog } from "./Popover";
 
-export type ModalSize = "sm" | "md";
+export type ModalSize = "sm" | "md" | "lg";
 
 const WIDTH: Record<ModalSize, string> = {
   sm: "w-[min(420px,calc(100vw-24px))]",
   md: "w-[min(560px,calc(100vw-24px))]",
+  lg: "w-[min(880px,calc(100vw-24px))]",
 };
 
 const TOP: Record<ModalSize, string> = {
   sm: "top-[22%]",
   md: "top-[10%]",
+  lg: "top-[8%]",
 };
 
 type Props = {
@@ -59,7 +62,9 @@ export function ModalPanel({
         event.key !== "Escape" ||
         event.defaultPrevented ||
         (event.target instanceof Element &&
-          event.target.closest("[data-dialog-popover]"))
+          event.target.closest("[data-dialog-popover]")) ||
+        // A popover open from its controls takes Escape first.
+        document.querySelector("[data-dialog-popover]")
       )
         return;
       event.preventDefault();
@@ -127,7 +132,7 @@ export function ModalPanel({
             ref={lockOverscroll}
             className="min-h-0 flex-1 overflow-y-auto overscroll-none"
           >
-            {children}
+            <InDialog.Provider value>{children}</InDialog.Provider>
           </div>
         </div>
       </div>

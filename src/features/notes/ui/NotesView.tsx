@@ -195,8 +195,9 @@ export function NotesView({
     if (creating) return;
     setCreating(true);
     try {
+      // A blank title marks the note's generated slug as pending.
       const note = await createNote({
-        title: "Untitled",
+        title: "",
         body: "",
         ...(cwd && looksLikeProject(cwd) ? { sourceCwd: cwd } : {}),
       });
@@ -584,6 +585,9 @@ function NoteEditor({
   const lastDropAt = useRef(0);
   const skipSave = useRef(false);
   const saveTimer = useRef<number | null>(null);
+  // Title the user finished typing (blur/close). Any later title edit drops
+  // it; a save clears it only if the same request is still current.
+  const finalizeRef = useRef<{ title: string } | null>(null);
   const onSavedRef = useRef(onSaved);
   bodyRef.current = body;
   noteRef.current = note;
@@ -638,7 +642,11 @@ function NoteEditor({
       }
       setSaveError(null);
     };
+    // Bound to the finished title so a newer partial edit never finalizes.
+    const finalizeRequest = finalizeRef.current;
+    const finalizeSlug = finalizeRequest?.title === nextTitle;
     if (
+      !finalizeSlug &&
       nextTitle === current.title &&
       nextBody === current.body &&
       sameTags(nextTags, current.tags) &&
@@ -653,8 +661,12 @@ function NoteEditor({
         title: nextTitle,
         body: nextBody,
         tags: nextTags,
+        ...(finalizeSlug ? { finalizeSlug } : {}),
         ...(nextProject ? { sourceCwd: nextProject.path } : {}),
       });
+      if (finalizeSlug && finalizeRef.current === finalizeRequest) {
+        finalizeRef.current = null;
+      }
       acceptSaved(saved);
       onSavedRef.current(saved);
       return saved;
@@ -784,6 +796,14 @@ function NoteEditor({
 
   useEffect(() => {
     return () => {
+      // Only notes whose slug is still pending need a finalizing save.
+      if (noteRef.current.slugPending) {
+        finalizeRef.current = {
+          title:
+            (editsRef.current.title ?? noteRef.current.title).trim() ||
+            noteTitle(bodyRef.current),
+        };
+      }
       void saveNow();
     };
   }, [saveNow]);
@@ -834,12 +854,16 @@ function NoteEditor({
             ref={titleFieldRef}
             value={title}
             onChange={(event) => {
+              finalizeRef.current = null;
               editNote({ title: event.target.value });
               scheduleSave();
             }}
             onBlur={() => {
               const next = title.trim() || noteTitle(body);
               if (next !== title) editNote({ title: next });
+              if (noteRef.current.slugPending) {
+                finalizeRef.current = { title: next };
+              }
               void saveNow();
             }}
             onKeyDown={onTitleKeyDown}

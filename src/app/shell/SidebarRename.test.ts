@@ -5,7 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatSessionTitle } from "../../features/sessions/model/session";
 import { formatReminderTime } from "../../features/sessions/model/sessionReminders";
 import { Sidebar } from "./Sidebar";
-import { loadSessionFolders } from "../../features/sessions/model/sessionFolders";
+import {
+  loadSessionFolders,
+  saveSessionFolders,
+} from "../../features/sessions/model/sessionFolders";
 import { useProjectDiffStats } from "../../features/source-control/hooks/useProjectDiffStats";
 import { copyText } from "../../platform/tauri/clipboard";
 import {
@@ -163,6 +166,27 @@ it("leaves the resident agent and its description out of the session list", () =
   expect(container.querySelector('[data-session-card="resident"]')).toBeNull();
   expect(container.querySelector("[data-mono]")).toBeNull();
   expect(container.textContent).not.toContain("Resident agent description");
+});
+
+it("omits hidden Mono launches from history, open sessions and folders", () => {
+  const hidden = {
+    ...props.sessions[0],
+    id: "hidden-launch",
+    title: "Mono background work",
+    sidebarHidden: true,
+  };
+  props.sessions = [...props.sessions, hidden];
+  props.openSessions = [hidden];
+  saveSessionFolders("/workspace/project", [
+    { id: "folder", name: "Work", sessionIds: [hidden.id], collapsed: false },
+  ]);
+  act(() => render());
+  expect(card()).not.toBeNull();
+  expect(container.querySelector('[data-session-card="hidden-launch"]')).toBeNull();
+  expect(container.textContent).not.toContain(hidden.title);
+  props.sessions = props.sessions.filter((session) => session.id !== hidden.id);
+  act(() => render());
+  expect(container.querySelector('[data-session-card="hidden-launch"]')).toBeNull();
 });
 
 describe("project rail visibility", () => {

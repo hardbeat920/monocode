@@ -105,7 +105,9 @@ describe("transcript turn cache", () => {
     expect(monoTurns[0]).toEqual(blocks);
     const items = cache.turnItems(monoTurns[0], true, { inlineWork: true });
     expect(cache.group(blocks.slice(), false, true)).toBe(monoTurns);
-    expect(cache.turnItems(monoTurns[0], true, { inlineWork: true })).toBe(items);
+    expect(cache.turnItems(monoTurns[0], true, { inlineWork: true })).toBe(
+      items,
+    );
     expect(cache.group(blocks)).toHaveLength(2);
   });
 
@@ -123,19 +125,38 @@ describe("transcript turn cache", () => {
       { id: "reply", role: "assistant", text: "Done" },
     ];
     const live = cache.turnItems(turn, false, { inlineWork: true });
-    expect(live[2]).toEqual({ type: "activity", blocks: turn.slice(2) });
+    expect(live[1]).toEqual({ type: "activity", blocks: turn.slice(1) });
     const settled = cache.turnItems(turn, true, { inlineWork: true });
-    expect(settled[3]).toEqual({ type: "block", block: turn[3] });
+    expect(settled[2]).toEqual({ type: "block", block: turn[3] });
     const ordinary = cache.turnItems(turn, false);
     expect(ordinary[3]).toEqual({ type: "block", block: turn[3] });
     expect(cache.turnItems(turn, false, { inlineWork: true })).toBe(live);
     expect(cache.turnItems(turn, true, { inlineWork: true })).toBe(settled);
   });
 
+  it("refreshes reply visibility when a queued follow-up is delivered without changing blocks", () => {
+    const cache = new TranscriptTurnCache();
+    const turn: Block[] = [
+      { id: "user", role: "user", text: "Review" },
+      { id: "intro", role: "assistant", text: "Checking." },
+      { id: "follow-up", role: "user", text: "Status?", sentAt: 10 },
+      { id: "reply", role: "assistant", text: "Checking browser security." },
+    ];
+    const pending = cache.turnItems(turn, false, {
+      inlineWork: true,
+      undeliveredMessageIds: new Set(["follow-up"]),
+    });
+    expect(pending).not.toContainEqual({ type: "block", block: turn[3] });
+    const delivered = cache.turnItems(turn, false, { inlineWork: true });
+    expect(delivered).toContainEqual({ type: "block", block: turn[3] });
+    expect(cache.turnItems(turn, false, { inlineWork: true })).toBe(delivered);
+    expect(delivered).not.toBe(pending);
+  });
+
   it("retains hidden completion prompts for identity while respecting managed visibility", () => {
     const cache = new TranscriptTurnCache();
     const blocks: Block[] = [
-      { id: "u", role: "user", text: "Inspect this" },
+      { id: "u", role: "user", text: "Inspect this", startedAt: 0 },
       { id: "a", role: "assistant", text: "Checking" },
       {
         id: "completion",
@@ -143,6 +164,8 @@ describe("transcript turn cache", () => {
         text: "Private completion prompt",
         internal: true,
         appRequestId: "mono-completion-result",
+        // A day later, so the reply opens a turn of its own.
+        startedAt: 24 * 60 * 60 * 1000,
       },
       { id: "reply", role: "assistant", text: "Done" },
     ];
@@ -156,5 +179,41 @@ describe("transcript turn cache", () => {
     });
     expect(managed[0]).toEqual({ type: "block", block: blocks[2] });
     expect(cache.turnItems(turns[1], true, { inlineWork: true })).toBe(visible);
+  });
+  it("keeps each merged Mono run's answer when a later run did more work", () => {
+    const cache = new TranscriptTurnCache();
+    const shell = (id: string): Block => ({
+      id,
+      role: "tool",
+      text: "bash ls",
+      tool: { kind: "shell", title: "bash ls", status: "completed" },
+    });
+    const blocks: Block[] = [
+      { id: "thanks", role: "user", text: "thanks :)", startedAt: 0 },
+      { id: "welcome", role: "assistant", text: "You're welcome!" },
+      {
+        id: "completion",
+        role: "user",
+        text: "Private completion prompt",
+        internal: true,
+        appRequestId: "mono-completion-review",
+        startedAt: 60_000,
+      },
+      shell("check"),
+      { id: "cancelled", role: "assistant", text: "The review was cancelled." },
+    ];
+    const turns = cache.group(blocks, false, true);
+    expect(turns).toHaveLength(1);
+    for (const settled of [true, false]) {
+      const prose = cache
+        .turnItems(turns[0], settled, { inlineWork: true })
+        .flatMap((item) =>
+          item.type === "block" && item.block.role === "assistant"
+            ? [item.block.id]
+            : [],
+        );
+      expect(prose).toContain("welcome");
+      if (settled) expect(prose).toEqual(["welcome", "cancelled"]);
+    }
   });
 });

@@ -166,9 +166,9 @@ describe("model picker", () => {
     const modelFlyout = container.querySelector<HTMLElement>(
       '[role="dialog"][aria-label="Models"]',
     )!;
-    expect(modelFlyout.style.height).toBe("404px");
-    expect(modelFlyout.dataset.minHeight).toBe("406");
-    expect(modelFlyout.dataset.maxHeight).toBe("406");
+    expect(modelFlyout.style.height).toBe("440px");
+    expect(modelFlyout.dataset.minHeight).toBe("442");
+    expect(modelFlyout.dataset.maxHeight).toBe("442");
     expect(
       container.querySelector('[role="tablist"][aria-orientation="vertical"]'),
     ).not.toBeNull();
@@ -224,6 +224,36 @@ describe("model picker", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["claude:opus-5", "Claude Opus 5 (1M context)", "Opus 5 (1M context)"],
+    [
+      "claude:opus-5-5",
+      "Claude Opus 5.5 (1M context)",
+      "Opus 5.5 (1M context)",
+    ],
+    ["claude:opus-5-5", "Opus 5.5 (1M context)", "Opus 5.5 (1M context)"],
+  ])("keeps %s version and context qualifier visible", (id, name, visible) => {
+    setHarnessModels("claude", [{ id, harness: "claude", name }]);
+    act(() =>
+      root.render(
+        createElement(ModelPicker, {
+          harness: "claude",
+          model: id,
+          values: {},
+          onChange: vi.fn(),
+          onSettingsChange: vi.fn(),
+        }),
+      ),
+    );
+
+    const trigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-haspopup="menu"]',
+    )!;
+    expect(trigger.querySelector("span")?.textContent).toBe(visible);
+    expect(trigger.getAttribute("aria-label")).toContain(name);
+    expect(trigger.title).toContain(name);
+  });
+
   it("lists Claude Opus 5.5 after Opus 5 in the built-in Claude catalog", () => {
     act(() =>
       root.render(
@@ -240,7 +270,9 @@ describe("model picker", () => {
     const trigger = container.querySelector<HTMLButtonElement>(
       'button[aria-haspopup="menu"]',
     )!;
-    expect(trigger.textContent).toContain("Claude Opus 5.5");
+    expect(trigger.querySelector("span")?.textContent).toBe("Opus 5.5");
+    expect(trigger.getAttribute("aria-label")).toContain("Claude Opus 5.5");
+    expect(trigger.title).toContain("Claude Opus 5.5");
 
     act(() => trigger.click());
     const modelRow = [
@@ -254,6 +286,59 @@ describe("model picker", () => {
     expect(options.indexOf("Claude Opus 5.5")).toBe(
       options.indexOf("Claude Opus 5") + 1,
     );
+  });
+
+  it("shows a saved Claude version's settings when only its alias is live", () => {
+    setHarnessModels("claude", [
+      {
+        id: "claude:opus",
+        harness: "claude",
+        name: "Opus 5.5",
+        nativeId: "opus",
+        aliasTarget: "claude-opus-5-5",
+        settings: [
+          {
+            id: "effort",
+            label: "Reasoning",
+            kind: "select",
+            value: "high",
+            options: [{ value: "high", label: "High" }],
+          },
+          {
+            id: "fast",
+            label: "Fast",
+            kind: "toggle",
+            value: "false",
+            options: [
+              { value: "true", label: "On" },
+              { value: "false", label: "Off" },
+            ],
+          },
+        ],
+      },
+    ]);
+    act(() =>
+      root.render(
+        createElement(ModelPicker, {
+          harness: "claude",
+          model: "claude:opus-5-5",
+          values: {},
+          onChange: vi.fn(),
+          onSettingsChange: vi.fn(),
+        }),
+      ),
+    );
+
+    act(() =>
+      container
+        .querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')!
+        .click(),
+    );
+    const rows = [
+      ...container.querySelectorAll<HTMLButtonElement>("button"),
+    ].map((button) => button.textContent ?? "");
+    expect(rows.some((row) => row.startsWith("Effort"))).toBe(true);
+    expect(rows.some((row) => row.startsWith("Fast"))).toBe(true);
   });
 
   it("groups OpenCode models by provider and searches provider names", () => {
@@ -336,6 +421,73 @@ describe("model picker", () => {
       ),
     ).toEqual(["OpenAI"]);
     expect(container.querySelectorAll('[role="option"]')).toHaveLength(2);
+  });
+
+  it("groups omp models by provider in keyboard order", () => {
+    // omp sorts by model name, so providers arrive interleaved.
+    setHarnessModels("omp", [
+      {
+        id: "omp:anthropic/claude-sonnet-5",
+        harness: "omp",
+        name: "Claude Sonnet 5",
+        nativeId: "anthropic/claude-sonnet-5",
+        provider: { id: "anthropic", name: "Anthropic" },
+      },
+      {
+        id: "omp:github-copilot/claude-sonnet-5",
+        harness: "omp",
+        name: "Claude Sonnet 5",
+        nativeId: "github-copilot/claude-sonnet-5",
+        provider: { id: "github-copilot", name: "GitHub Copilot" },
+      },
+      {
+        id: "omp:anthropic/claude-opus-5",
+        harness: "omp",
+        name: "Claude Opus 5",
+        nativeId: "anthropic/claude-opus-5",
+        provider: { id: "anthropic", name: "Anthropic" },
+      },
+    ]);
+    const onChange = vi.fn();
+
+    act(() =>
+      root.render(
+        createElement(ModelPicker, {
+          harness: "omp",
+          model: "omp:anthropic/claude-sonnet-5",
+          values: {},
+          hideSettings: true,
+          onChange,
+          onSettingsChange: vi.fn(),
+        }),
+      ),
+    );
+
+    act(() =>
+      container
+        .querySelector<HTMLButtonElement>('button[aria-haspopup="dialog"]')!
+        .click(),
+    );
+    expect(
+      [...container.querySelectorAll('[role="group"]')].map((group) =>
+        group.getAttribute("aria-label"),
+      ),
+    ).toEqual(["Anthropic", "GitHub Copilot"]);
+    const options = [
+      ...container.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+    ];
+    expect(options.map((option) => option.getAttribute("aria-label"))).toEqual(
+      [
+        "Claude Sonnet 5, Anthropic",
+        "Claude Opus 5, Anthropic",
+        "Claude Sonnet 5, GitHub Copilot",
+      ],
+    );
+    // The next row down is the next visible row, not the next catalog entry.
+    options[0].focus();
+    keyDown(options[0], "ArrowDown");
+    keyDown(options[0], "Enter");
+    expect(onChange).toHaveBeenCalledWith("omp", "omp:anthropic/claude-opus-5");
   });
 
   it("names the source of same-name favorites from different providers", () => {
@@ -688,76 +840,113 @@ describe("model picker", () => {
     expect(serviceTierPill.querySelectorAll("svg")).toHaveLength(2);
   });
 
-  it("shimmers only Codex max and ultra effort options", () => {
-    setHarnessModels("codex", [
-      {
-        id: "codex:gpt-5.6",
-        harness: "codex",
-        name: "GPT-5.6",
-        nativeId: "gpt-5.6",
-        settings: [
-          {
-            id: "reasoningEffort",
-            label: "Reasoning",
-            kind: "select",
-            value: "high",
-            options: [
-              { value: "low", label: "Low" },
-              { value: "high", label: "High" },
-              { value: "max", label: "Max" },
-              { value: "ultra", label: "Ultra" },
-            ],
-          },
-        ],
-      },
-    ]);
+  it.each([
+    {
+      harness: "codex" as const,
+      modelId: "codex:gpt-5.6",
+      settingId: "reasoningEffort",
+      settingLabel: "Reasoning",
+      values: { reasoningEffort: "high" },
+    },
+    {
+      harness: "opencode" as const,
+      modelId: "opencode:spark/spark-1",
+      settingId: "variant",
+      settingLabel: "Variant",
+      values: { variant: "high" },
+    },
+    {
+      harness: "claude" as const,
+      modelId: "claude:opus",
+      settingId: "effort",
+      settingLabel: "Effort",
+      values: { effort: "high" },
+    },
+    {
+      harness: "cursor" as const,
+      modelId: "cursor:gpt-5",
+      settingId: "effort",
+      settingLabel: "Effort",
+      values: { effort: "high" },
+    },
+  ])(
+    "shimmers max and ultra effort options for $harness",
+    ({ harness, modelId, settingId, settingLabel, values }) => {
+      const effortOptions = [
+        { value: "low", label: "Low" },
+        { value: "high", label: "High" },
+        { value: "max", label: "Max" },
+        { value: "ultra", label: "Ultra" },
+      ];
+      setHarnessModels(harness, [
+        {
+          id: modelId,
+          harness,
+          name: "Test model",
+          nativeId: modelId.split(":")[1] ?? modelId,
+          settings: [
+            {
+              id: settingId,
+              label: settingLabel,
+              kind: "select",
+              value: "high",
+              options: effortOptions,
+            },
+          ],
+        },
+      ]);
 
-    act(() =>
-      root.render(
-        createElement(ModelPicker, {
-          harness: "codex",
-          model: "codex:gpt-5.6",
-          values: { reasoningEffort: "high" },
-          onChange: vi.fn(),
-          onSettingsChange: vi.fn(),
-        }),
-      ),
-    );
+      act(() =>
+        root.render(
+          createElement(ModelPicker, {
+            harness,
+            model: modelId,
+            values,
+            onChange: vi.fn(),
+            onSettingsChange: vi.fn(),
+          }),
+        ),
+      );
 
-    act(() =>
-      container
-        .querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')
-        ?.click(),
-    );
-    const effortRow = [
-      ...container.querySelectorAll<HTMLButtonElement>("button"),
-    ].find((button) => button.textContent?.startsWith("Reasoning"))!;
-    hover(effortRow);
+      act(() =>
+        container
+          .querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')
+          ?.click(),
+      );
+      const effortRow = [
+        ...container.querySelectorAll<HTMLButtonElement>("button"),
+      ].find((button) => button.textContent?.startsWith(settingLabel))!;
+      hover(effortRow);
 
-    expect(container.querySelectorAll('[data-effort-tone="max"]')).toHaveLength(
-      1,
-    );
-    expect(
-      container.querySelectorAll('[data-effort-tone="ultra"]'),
-    ).toHaveLength(1);
-    expect(
-      container.querySelector('[data-effort-tone="max"] .codex-effort-tile'),
-    ).not.toBeNull();
-    expect(
-      container.querySelectorAll('[data-effort-tone="max"] .codex-effort-tile'),
-    ).toHaveLength(160);
-    const filledTiles = container.querySelectorAll(
-      '[data-effort-tone="max"] .codex-effort-tile--filled',
-    );
-    expect(filledTiles.length).toBeGreaterThanOrEqual(96);
-    expect(filledTiles.length).toBeLessThanOrEqual(112);
-    const high = [
-      ...container.querySelectorAll<HTMLButtonElement>(
-        '[role="menuitemradio"]',
-      ),
-    ].find((button) => button.textContent === "High")!;
-    expect(high.classList.contains("codex-effort-option")).toBe(false);
-  });
+      expect(
+        container.querySelectorAll('[data-effort-tone="max"]'),
+      ).toHaveLength(1);
+      expect(
+        container.querySelectorAll('[data-effort-tone="ultra"]'),
+      ).toHaveLength(1);
+      expect(
+        container.querySelector('[data-effort-tone="max"] .codex-effort-tile'),
+      ).not.toBeNull();
+      if (harness === "codex") {
+        expect(
+          container.querySelectorAll(
+            '[data-effort-tone="max"] .codex-effort-tile',
+          ),
+        ).toHaveLength(160);
+        const filledTiles = container.querySelectorAll(
+          '[data-effort-tone="max"] .codex-effort-tile--filled',
+        );
+        expect(filledTiles.length).toBeGreaterThanOrEqual(96);
+        expect(filledTiles.length).toBeLessThanOrEqual(112);
+      }
+      const high = [
+        ...container.querySelectorAll<HTMLButtonElement>(
+          '[role="menuitemradio"]',
+        ),
+      ].find((button) => button.textContent === "High")!;
+      expect(high.classList.contains("codex-effort-option")).toBe(false);
+    },
+  );
 
   it("groups the service tier inside the effort popover", () => {
     setHarnessModels("codex", [

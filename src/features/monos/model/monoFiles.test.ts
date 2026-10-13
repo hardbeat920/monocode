@@ -133,6 +133,10 @@ it("says how to keep memory and update the soul only at the user's request", () 
   );
   expect(full).not.toContain("never edit that file yourself");
   expect(full).toContain("app memory.add");
+  expect(full).toContain('app artifacts.write {"kind":"document"');
+  expect(full).toContain("Artifacts are separate from the user's Notes");
+  expect(full).toContain("without repeating its contents");
+  expect(full).not.toContain("app documents.write");
   expect(full).toContain('"notifyOnComplete":true');
   expect(full).toContain(
     "Submitted sessions notify you on completion by default",
@@ -140,6 +144,9 @@ it("says how to keep memory and update the soul only at the user's request", () 
   expect(full).toContain('set "notifyOnComplete":false on sessions.start');
   expect(full).toContain("waits for every session in that group to stop");
   expect(full).toContain("give one consolidated report");
+  expect(full).toContain("acknowledge the action in your current reply");
+  expect(full).toContain("dismisses your pending report for that session");
+  expect(full).toContain("do not generate a later completion notification");
   expect(full).toContain(
     "Sessions launched during later turns form separate groups",
   );

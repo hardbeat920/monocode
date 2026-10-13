@@ -254,6 +254,20 @@ export async function languageForPath(path: string): Promise<Extension | null> {
     const { shell } = await import("@codemirror/legacy-modes/mode/shell");
     return legacyLanguage(shell);
   }
+  if (name === ".env" || name.startsWith(".env.")) {
+    const { properties } =
+      await import("@codemirror/legacy-modes/mode/properties");
+    // Keys come out as "def", which the palette leaves uncolored and the
+    // built-in token table won't let us remap; rename them. Values stay plain.
+    return legacyLanguage({
+      ...properties,
+      token: (stream, state) => {
+        const style = properties.token(stream, state);
+        return style === "def" ? "envKey" : style;
+      },
+      tokenTable: { envKey: tags.labelName },
+    });
+  }
   if (extension === ".toml") {
     const { toml } = await import("@codemirror/legacy-modes/mode/toml");
     return legacyLanguage(toml);
