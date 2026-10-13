@@ -6,7 +6,7 @@ import { Popover } from "../../../shared/ui/Popover";
 type Look = { mascot: string; color: string };
 
 type Props = {
-  /** The rail's add-a-Mono button, which the intro opens beside. */
+  /** The rail's add-a-Mono button, retained as the outside-click anchor. */
   anchor: HTMLElement | null;
   /** The mascot and color the user's first Mono will have. */
   look: Look;
@@ -30,9 +30,9 @@ export function monoIntroCrowd(look: Look) {
 }
 
 /**
- * Meets a user who has no Mono yet, beside the rail's add button, inviting
- * them to make their first. It shows once ever and stays until they choose:
- * clicking away or Escape does not put it away.
+ * Meets a user who has no Mono yet, centered in the window, inviting them to
+ * make their first. It shows once ever and stays until they choose: clicking
+ * away or Escape does not put it away.
  */
 export function MonoIntroPopover({ anchor, look, onCreate, onLater }: Props) {
   const crowd = monoIntroCrowd(look);
@@ -41,9 +41,7 @@ export function MonoIntroPopover({ anchor, look, onCreate, onLater }: Props) {
   return (
     <Popover
       anchor={anchor}
-      side="right"
-      align="start"
-      gap={10}
+      centered
       rounded="rounded-md"
       width={360}
       role="dialog"
