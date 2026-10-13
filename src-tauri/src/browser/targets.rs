@@ -264,14 +264,21 @@ pub fn open_tab(
     wait_until: WaitUntil,
 ) -> Result<Opened, TabError> {
     let policy = link.policy();
-    let (separate_window, target_url) = {
+    let (separate_window, foreground, target_url) = {
         let mut state = policy.write();
         let target_url = match url.map(str::trim) {
             Some(url) if !url.is_empty() => check_url(url)?,
             _ => "about:blank".to_string(),
         };
         state.reserve_tab(&ctx.session)?;
-        (state.settings.separate_window, target_url)
+        // The MonoCode browser is ours: its window shows what the agent does.
+        // In the user's browser the tab stays in the background (spec 7).
+        let managed = state.settings.mode == super::protocol::BrowserMode::Managed;
+        (
+            state.settings.separate_window && !managed,
+            managed,
+            target_url,
+        )
     };
     let mut reservation = Reservation {
         policy,
@@ -282,7 +289,7 @@ pub fn open_tab(
         ctx,
         Command::browser(
             Method::TargetCreateTarget,
-            json!({ "url": "about:blank", "newWindow": separate_window, "background": true }),
+            json!({ "url": "about:blank", "newWindow": separate_window, "background": !foreground }),
         ),
     )?;
     let target = TargetId(string_field(&created, "targetId").ok_or_else(|| {
@@ -1008,7 +1015,13 @@ mod tests {
     use std::sync::Mutex;
 
     fn policy() -> Arc<Policy> {
-        let mut state = PolicyState::new(7, BrowserSettings::default());
+        let mut state = PolicyState::new(
+            7,
+            BrowserSettings {
+                mode: super::super::protocol::BrowserMode::Attach,
+                ..BrowserSettings::default()
+            },
+        );
         state.set_toggle(true);
         state.turn_started("s1", "main", "/repo", Some(true));
         Arc::new(Policy::new(state))

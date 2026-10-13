@@ -51,6 +51,7 @@
 pub mod agent;
 pub mod audit;
 pub mod discovery;
+pub mod launch;
 pub mod link;
 pub mod policy;
 pub mod protocol;
@@ -61,6 +62,8 @@ pub mod targets;
 #[cfg(test)]
 pub(crate) mod testing;
 
+use std::path::PathBuf;
+use std::process::Child;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::thread;
@@ -76,15 +79,26 @@ use discovery::{Candidate, Located, CONSENT_TIMEOUT};
 use link::{CdpSessionId, ClosedBy, Command, Link, LinkStatus, Method, OpenError, TargetId};
 use policy::{audit_url, now_ms, Dedup, Policy, PolicyState, RequestCtx, BUSY_WAIT};
 use protocol::{
-    ActionKind, ActionRequest, ActionResult, AuditEntry, BrowserInfo, BrowserSettings,
-    BrowserState, CommonInput, ConnectionInfo, ConnectionState, Outcome, Reason, TabId,
-    TabOverview, TabState, TabsCloseParams, TabsFocusParams, TabsListParams, TabsOpenParams,
+    AccessMode, ActionKind, ActionRequest, ActionResult, AuditEntry, BrowserInfo, BrowserMode,
+    BrowserSettings, BrowserState, CommonInput, ConnectionInfo, ConnectionState, Outcome, Reason,
+    TabId, TabOverview, TabState, TabsCloseParams, TabsFocusParams, TabsListParams, TabsOpenParams,
     WaitUntil, MIN_BROWSER_MAJOR, STATE_EVENT,
 };
 use targets::TabEvent;
 
 /// How long `OFF` waits for the browser to acknowledge our detaches (spec 5).
 pub const OFF_DETACH_BUDGET: Duration = Duration::from_millis(500);
+/// How long an agent action waits for the user to answer an access request.
+/// Below the 60 s tool timeout some MCP clients use.
+pub const ASK_WAIT: Duration = Duration::from_secs(50);
+/// How long the MonoCode browser may take to close before it is killed.
+const MANAGED_CLOSE_WAIT: Duration = Duration::from_secs(3);
+
+/// The MonoCode browser process this run started.
+struct ManagedBrowser {
+    child: Child,
+    show_window: bool,
+}
 
 static HOST: OnceLock<Arc<BrowserHost>> = OnceLock::new();
 
@@ -133,6 +147,11 @@ pub struct BrowserHost {
     /// 14.2): restored when a connection is established or the toggle goes
     /// ON, spent by the first automatic attempt that reaches the browser.
     auto_dialog: AtomicBool,
+    /// Profile folder of the MonoCode browser (managed mode).
+    profile: Mutex<Option<PathBuf>>,
+    managed: Mutex<Option<ManagedBrowser>>,
+    /// "Open browser" asked for a visible window on the next start.
+    force_window: AtomicBool,
     db: Db,
     app: Option<AppHandle>,
     run_id: u64,
@@ -156,9 +175,23 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
             .unwrap_or_default();
         (run_id, settings)
     };
+    let enabled = settings.enabled;
     let host = BrowserHost::create(run_id, settings, Db::App(app.clone()), Some(app.clone()));
+    if let Ok(dir) = app.path().app_data_dir() {
+        host.set_profile_dir(launch::profile_dir(&dir));
+    }
+    if enabled {
+        host.restore_toggle();
+    }
     HOST.set(host)
         .map_err(|_| "Browser module initialised twice".to_string())
+}
+
+/// App exit: the MonoCode browser goes with the app.
+pub fn shutdown() {
+    if let Some(host) = host() {
+        host.close_managed_browser();
+    }
 }
 
 impl BrowserHost {
@@ -184,6 +217,9 @@ impl BrowserHost {
             generation: AtomicU64::new(0),
             consent_timeout_ms: AtomicU64::new(CONSENT_TIMEOUT.as_millis() as u64),
             auto_dialog: AtomicBool::new(true),
+            profile: Mutex::new(None),
+            managed: Mutex::new(None),
+            force_window: AtomicBool::new(false),
             db,
             app,
             run_id,
@@ -306,15 +342,24 @@ impl BrowserHost {
             }
             policy.set_toggle(on)
         };
+        self.persist_enabled(on);
         if on {
             self.auto_dialog.store(true, Ordering::Release);
             self.event("toggle_on", Actor::User, None, None);
-            self.connect();
+            if self.mode() == BrowserMode::Attach {
+                self.connect();
+            } else {
+                // The MonoCode browser starts on the first agent action or
+                // "Open browser", not on the switch.
+                self.set_idle();
+            }
         } else {
             self.event("toggle_off", Actor::User, None, None);
+            self.close_managed_pages();
             if self.link.status() != LinkStatus::Closed {
                 self.link.close(detach, OFF_DETACH_BUDGET);
             }
+            self.close_managed_browser();
             self.set_connection(
                 ConnectionState::Off,
                 Some("Browser access is off.".into()),
@@ -323,6 +368,131 @@ impl BrowserHost {
             );
         }
         self.emit_state();
+    }
+
+    /// Startup with the switch remembered ON: nothing connects or starts
+    /// until an agent needs the browser.
+    fn restore_toggle(&self) {
+        {
+            let mut policy = self.policy.write();
+            self.generation.fetch_add(1, Ordering::AcqRel);
+            policy.set_toggle(true);
+        }
+        self.event("toggle_on", Actor::System, None, Some("remembered"));
+        self.set_idle();
+    }
+
+    fn mode(&self) -> BrowserMode {
+        self.policy.read().settings.mode
+    }
+
+    fn set_idle(&self) {
+        let detail = match self.mode() {
+            BrowserMode::Managed => "The MonoCode browser starts when an agent needs it.",
+            BrowserMode::Attach => "MonoCode connects to your browser when an agent needs it.",
+        };
+        self.set_connection(ConnectionState::Idle, Some(detail.into()), None, None);
+    }
+
+    fn persist_enabled(&self, on: bool) {
+        let settings = {
+            let mut policy = self.policy.write();
+            if policy.settings.enabled == on {
+                return;
+            }
+            policy.settings.enabled = on;
+            policy.settings.clone()
+        };
+        self.db.with(|conn| audit::save_settings(conn, &settings));
+    }
+
+    pub fn set_profile_dir(&self, dir: PathBuf) {
+        *self.profile.lock().unwrap_or_else(|e| e.into_inner()) = Some(dir);
+    }
+
+    fn profile_dir(&self) -> Option<PathBuf> {
+        self.profile
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    fn connected_to_managed(&self) -> bool {
+        self.connection()
+            .browser
+            .as_ref()
+            .is_some_and(|browser| browser.managed)
+    }
+
+    /// Close every page of the MonoCode browser while the link is still up,
+    /// so the browser exits on its own and does not offer to restore them.
+    fn close_managed_pages(&self) {
+        if !self.link.is_open() || !self.connected_to_managed() {
+            return;
+        }
+        let Ok(reply) = self
+            .link
+            .send_system(Command::browser(Method::TargetGetTargets, json!({})))
+        else {
+            return;
+        };
+        let pages: Vec<TargetId> = reply["targetInfos"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|info| info["type"] == "page")
+            .filter_map(|info| info["targetId"].as_str())
+            .map(|id| TargetId(id.to_string()))
+            .collect();
+        targets::close_targets(&self.link, &pages);
+    }
+
+    /// Stop the MonoCode browser this run started: it closes its pages first
+    /// when the link is up, and is killed when it does not exit in time.
+    pub fn close_managed_browser(&self) {
+        self.close_managed_pages();
+        let managed = self
+            .managed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        let Some(mut managed) = managed else { return };
+        let deadline = Instant::now() + MANAGED_CLOSE_WAIT;
+        while Instant::now() < deadline {
+            if matches!(managed.child.try_wait(), Ok(Some(_))) {
+                return;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        let _ = managed.child.kill();
+        let _ = managed.child.wait();
+    }
+
+    /// Settings "Open browser": the MonoCode browser with a visible window,
+    /// for signing in to sites. A headless one is restarted.
+    pub fn open_window(self: &Arc<Self>) -> Result<(), String> {
+        if self.mode() != BrowserMode::Managed {
+            return Err("Open browser is only for the MonoCode browser.".into());
+        }
+        if !self.policy.read().toggle_on {
+            return Err("Turn on browser access first.".into());
+        }
+        let headless = self
+            .managed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|managed| !managed.show_window);
+        if headless == Some(true) {
+            self.close_managed_pages();
+            self.disconnect();
+            self.close_managed_browser();
+        } else if self.link.is_open() {
+            return Ok(());
+        }
+        self.force_window.store(true, Ordering::Release);
+        self.connect();
+        Ok(())
     }
 
     /// Start discovery and connection on a background thread, if ON and not
@@ -393,6 +563,10 @@ impl BrowserHost {
 
     /// Discovery (spec 4 steps 1-4) then [`Self::connect_endpoint`].
     fn run_connect(self: &Arc<Self>, automatic: bool, generation: u64) {
+        if self.mode() == BrowserMode::Managed {
+            self.run_connect_managed(generation);
+            return;
+        }
         let before = self.connection();
         let choice = self.policy.read().settings.browser.clone();
         self.attempt_state(
@@ -468,26 +642,124 @@ impl BrowserHost {
         }
     }
 
+    /// Managed mode: reuse the MonoCode browser when it already runs, start
+    /// it otherwise, then connect like to any other endpoint. No consent
+    /// dialog: the browser was started by us with its own profile.
+    fn run_connect_managed(self: &Arc<Self>, generation: u64) {
+        let Some(profile) = self.profile_dir() else {
+            self.attempt_state(
+                generation,
+                ConnectionState::StalePort,
+                Some("MonoCode has no folder for its browser profile.".into()),
+                None,
+                None,
+            );
+            return;
+        };
+        self.attempt_state(
+            generation,
+            ConnectionState::Discovering,
+            Some("Starting the MonoCode browser…".into()),
+            None,
+            None,
+        );
+        let choice = self.policy.read().settings.browser.clone();
+        let exe = launch::find_executable(&choice);
+        let kind = exe.as_ref().map(|exe| exe.kind);
+        let active = match launch::running(&profile) {
+            Some(active) => active,
+            None => {
+                let Some(exe) = exe else {
+                    self.attempt_state(
+                        generation,
+                        ConnectionState::StalePort,
+                        Some("Chrome or Edge was not found on this computer. Install one of them, or switch to your own browser in Settings.".into()),
+                        None,
+                        Some("no browser executable".into()),
+                    );
+                    return;
+                };
+                let show_window = self.policy.read().settings.show_window
+                    || self.force_window.swap(false, Ordering::AcqRel);
+                let mut child = match launch::start(&exe, &profile, show_window) {
+                    Ok(child) => child,
+                    Err(error) => {
+                        self.attempt_state(
+                            generation,
+                            ConnectionState::StalePort,
+                            Some(format!(
+                                "The MonoCode browser could not start ({}).",
+                                exe.path.display()
+                            )),
+                            None,
+                            Some(error.to_string()),
+                        );
+                        return;
+                    }
+                };
+                self.event(
+                    "managed_started",
+                    Actor::System,
+                    None,
+                    Some(&exe.path.display().to_string()),
+                );
+                let ready = launch::wait_for_endpoint(&mut child, &profile, launch::START_TIMEOUT);
+                *self.managed.lock().unwrap_or_else(|e| e.into_inner()) =
+                    Some(ManagedBrowser { child, show_window });
+                match ready {
+                    Ok(active) => active,
+                    Err(message) => {
+                        self.close_managed_browser();
+                        self.attempt_state(
+                            generation,
+                            ConnectionState::StalePort,
+                            Some(format!("The MonoCode browser did not start. {message}")),
+                            None,
+                            Some(message),
+                        );
+                        return;
+                    }
+                }
+            }
+        };
+        if !self.current(generation) {
+            return;
+        }
+        let candidate = launch::candidate(&profile, kind.unwrap_or(protocol::BrowserKind::Chrome));
+        self.connect_endpoint(candidate, &discovery::ws_url(&active), generation);
+    }
+
     /// Spec 4 steps 5-8: open the socket (consent dialog), check the version,
     /// read the target list once, start the event pump.
     pub fn connect_endpoint(self: &Arc<Self>, candidate: Candidate, ws_url: &str, generation: u64) {
-        self.attempt_state(
-            generation,
-            ConnectionState::AwaitingConsent,
-            Some("Confirm the remote debugging permission in your browser.".into()),
-            None,
-            None,
-        );
-        self.event(
-            "consent_pending",
-            Actor::System,
-            None,
-            Some(&format!(
-                "{} ({})",
-                candidate.channel,
-                candidate.user_data_dir.display()
-            )),
-        );
+        let managed = candidate.channel == launch::CHANNEL;
+        if managed {
+            self.attempt_state(
+                generation,
+                ConnectionState::Discovering,
+                Some("Connecting to the MonoCode browser…".into()),
+                None,
+                None,
+            );
+        } else {
+            self.attempt_state(
+                generation,
+                ConnectionState::AwaitingConsent,
+                Some("Confirm the remote debugging permission in your browser.".into()),
+                None,
+                None,
+            );
+            self.event(
+                "consent_pending",
+                Actor::System,
+                None,
+                Some(&format!(
+                    "{} ({})",
+                    candidate.channel,
+                    candidate.user_data_dir.display()
+                )),
+            );
+        }
         if !self.current(generation) {
             return;
         }
@@ -591,6 +863,7 @@ impl BrowserHost {
             major,
             user_data_dir: candidate.user_data_dir.display().to_string(),
             tabs_total: 0,
+            managed,
         };
         let weak = Arc::downgrade(self);
         let _ = targets::spawn_pump(
@@ -636,7 +909,23 @@ impl BrowserHost {
     fn on_link_closed(&self, by: ClosedBy) {
         self.policy.write().connection_lost();
         let toggle_on = self.policy.read().toggle_on;
-        let (state, detail) = if toggle_on {
+        let managed = self.mode() == BrowserMode::Managed;
+        if managed {
+            // Closed by the user, or crashed: forget the process.
+            let mut slot = self.managed.lock().unwrap_or_else(|e| e.into_inner());
+            if slot
+                .as_mut()
+                .is_some_and(|m| matches!(m.child.try_wait(), Ok(Some(_))))
+            {
+                *slot = None;
+            }
+        }
+        let (state, detail) = if toggle_on && managed {
+            (
+                ConnectionState::Idle,
+                "The MonoCode browser closed; it starts again when an agent needs it.",
+            )
+        } else if toggle_on {
             (
                 ConnectionState::Disconnected,
                 "Connection to the browser ended; the next request asks for a new permission in the browser.",
@@ -819,9 +1108,34 @@ impl BrowserHost {
         }
     }
 
-    pub fn set_settings(&self, settings: BrowserSettings) {
-        self.policy.write().settings = settings.clone();
+    pub fn set_settings(self: &Arc<Self>, mut settings: BrowserSettings) {
+        let (mode_changed, toggle_on) = {
+            let mut policy = self.policy.write();
+            // The switch has its own command; settings never flip it.
+            settings.enabled = policy.toggle_on;
+            let changed = policy.settings.mode != settings.mode;
+            policy.settings = settings.clone();
+            (changed, policy.toggle_on)
+        };
         self.db.with(|conn| audit::save_settings(conn, &settings));
+        if mode_changed {
+            // The other kind of browser from now on: drop the current link
+            // (and the MonoCode browser) and wait for the next agent action.
+            self.event(
+                "mode_changed",
+                Actor::User,
+                None,
+                Some(&format!("{:?}", settings.mode)),
+            );
+            self.close_managed_pages();
+            if self.link.status() != LinkStatus::Closed {
+                self.disconnect();
+            }
+            self.close_managed_browser();
+            if toggle_on {
+                self.set_idle();
+            }
+        }
         self.emit_state();
     }
 
@@ -909,6 +1223,75 @@ impl BrowserHost {
         self.policy.read().session_for_token(token)
     }
 
+    /// Ask mode: put the request to the user in the session's thread and
+    /// wait for "Allow" (true) or "Not now", the end of the turn, OFF or
+    /// [`ASK_WAIT`] (false).
+    fn ask_user(&self, session: &str) -> bool {
+        let asked = {
+            let mut policy = self.policy.write();
+            policy.toggle_on && !policy.requested(session) && policy.request_grant(session)
+        };
+        if !asked {
+            // Another action of the session is already waiting, or the
+            // session cannot ask now.
+            return self.wait_for_answer(session, false);
+        }
+        self.event("grant_requested", Actor::System, Some(session), None);
+        self.emit_state();
+        self.wait_for_answer(session, true)
+    }
+
+    fn wait_for_answer(&self, session: &str, owner: bool) -> bool {
+        let deadline = Instant::now() + ASK_WAIT;
+        loop {
+            {
+                let policy = self.policy.read();
+                if policy.granted(session) {
+                    return true;
+                }
+                if !policy.toggle_on || !policy.requested(session) {
+                    return false;
+                }
+            }
+            if Instant::now() >= deadline {
+                if owner {
+                    self.policy.write().withdraw_request(session);
+                    self.event("grant_request_expired", Actor::System, Some(session), None);
+                    self.emit_state();
+                }
+                return false;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    /// The user's answer to an access request (`browser_answer_request`).
+    pub fn answer_request(&self, session: &str, window: &str, allow: bool) {
+        if allow {
+            self.set_grant(session, window, true);
+            return;
+        }
+        self.policy.write().decline_request(session);
+        self.event("grant_declined", Actor::User, Some(session), None);
+        self.emit_state();
+    }
+
+    /// Wait until the running connection attempt ends, then report where it
+    /// left the connection.
+    fn wait_for_connection(&self, budget: Duration) -> ConnectionInfo {
+        let deadline = Instant::now() + budget;
+        while Instant::now() < deadline {
+            let connection = self.connection();
+            if connection.state == ConnectionState::Connected
+                || self.connecting.load(Ordering::Acquire) == 0
+            {
+                return connection;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        self.connection()
+    }
+
     // --- the request path (spec 6 "Životni ciklus zahteva", 9.2, 11) -----------
 
     /// A request arriving over the control transport with a session token.
@@ -963,26 +1346,67 @@ impl BrowserHost {
             Dedup::Fresh => {}
         }
         let timeout = kind.effective_timeout(common.timeout_ms);
-        let admitted =
+        let mut admitted =
             self.policy
                 .read()
                 .admit(session, &request_id, kind, common.tab.as_ref(), timeout);
-        let ctx = match admitted {
+        if admitted.as_ref().err() == Some(&Reason::NotGranted)
+            && self.policy.read().settings.access == AccessMode::Ask
+            && self.ask_user(session)
+        {
+            admitted =
+                self.policy
+                    .read()
+                    .admit(session, &request_id, kind, common.tab.as_ref(), timeout);
+        }
+        let mut ctx = match admitted {
             Ok(ctx) => ctx,
             Err(reason) => {
                 let result = ActionResult::from_reason(&request_id, reason);
                 return self.finish(session, Some(kind), None, &request, started, 0, result);
             }
         };
-        let connection = self.connection();
+        let mut connection = self.connection();
+        if self.mode() == BrowserMode::Managed && connection.state != ConnectionState::Connected {
+            // The MonoCode browser starts on demand; the action waits for it.
+            self.connect_automatically();
+            connection = self.wait_for_connection(launch::START_TIMEOUT + Duration::from_secs(5));
+            if connection.state == ConnectionState::Connected {
+                // A fresh deadline and epochs for the action itself.
+                match self.policy.read().admit(
+                    session,
+                    &request_id,
+                    kind,
+                    common.tab.as_ref(),
+                    timeout,
+                ) {
+                    Ok(fresh) => ctx = fresh,
+                    Err(reason) => {
+                        let result = ActionResult::from_reason(&request_id, reason);
+                        return self.finish(
+                            session,
+                            Some(kind),
+                            None,
+                            &request,
+                            started,
+                            0,
+                            result,
+                        );
+                    }
+                }
+            }
+        }
         if let Some(reason) = connection.state.agent_reason() {
-            if matches!(
-                connection.state,
-                ConnectionState::Disconnected
-                    | ConnectionState::StalePort
-                    | ConnectionState::NeedsToggle
-                    | ConnectionState::ConsentTimeout
-            ) {
+            if self.mode() == BrowserMode::Attach
+                && matches!(
+                    connection.state,
+                    ConnectionState::Disconnected
+                        | ConnectionState::Idle
+                        | ConnectionState::StalePort
+                        | ConnectionState::NeedsToggle
+                        | ConnectionState::ConsentTimeout
+                )
+            {
                 // Spec 4: a new discovery starts on the next agent request.
                 self.connect_automatically();
             }
@@ -1453,6 +1877,24 @@ pub fn browser_set_session_grant(
 }
 
 #[tauri::command]
+pub fn browser_answer_request(
+    window: WebviewWindow,
+    session_id: String,
+    allow: bool,
+) -> Result<BrowserState, String> {
+    let host = require_host()?;
+    host.answer_request(&session_id, window.label(), allow);
+    Ok(host.state())
+}
+
+#[tauri::command]
+pub fn browser_open_window() -> Result<BrowserState, String> {
+    let host = require_host()?;
+    host.open_window()?;
+    Ok(host.state())
+}
+
+#[tauri::command]
 pub fn browser_close_tab(tab: String) -> Result<BrowserState, String> {
     let host = require_host()?;
     host.close_tab_by_user(&TabId(tab))?;
@@ -1520,6 +1962,8 @@ mod tests {
             browser: BrowserChoice::UserDataDir {
                 path: dir.display().to_string(),
             },
+            mode: BrowserMode::Attach,
+            access: AccessMode::Always,
             ..BrowserSettings::default()
         }
     }
@@ -1914,6 +2358,8 @@ mod tests {
         let mut settings = settings_for(&dir);
         settings.limits.tabs_per_session = 2;
         host.set_settings(settings.clone());
+        // The remembered switch follows the toggle, not the settings call.
+        settings.enabled = true;
         assert_eq!(host.state().settings, settings);
         host.disconnect();
         assert!(
@@ -1958,6 +2404,145 @@ mod tests {
         let again = host.handle_request("s1", request("b", "tabs.list", json!({})));
         assert_eq!(again.outcome, Outcome::Done, "{again:?}");
         host.set_toggle(false);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Managed mode with a MonoCode browser already listening on the fake.
+    fn managed_host(server: &FakeCdp, access: AccessMode) -> (Arc<BrowserHost>, PathBuf) {
+        let dir = profile_for(server);
+        let host = BrowserHost::for_tests(BrowserSettings {
+            access,
+            ..BrowserSettings::default()
+        });
+        host.set_profile_dir(dir.clone());
+        (host, dir)
+    }
+
+    #[test]
+    fn managed_mode_starts_on_the_first_action_and_remembers_the_switch() {
+        let server = FakeCdp::start();
+        let (host, dir) = managed_host(&server, AccessMode::Always);
+        host.set_toggle(true);
+        // The switch alone starts nothing.
+        assert_eq!(host.connection().state, ConnectionState::Idle);
+        assert!(server.received().is_empty());
+        assert!(host.policy().read().settings.enabled);
+        host.turn_started("s1", "main", "/repo", Some(true));
+        let listed = host.handle_request("s1", request("r1", "tabs.list", json!({})));
+        assert_eq!(listed.outcome, Outcome::Done, "{listed:?}");
+        let info = host.connection().browser.unwrap();
+        assert!(info.managed);
+        assert_eq!(info.channel, launch::CHANNEL);
+        // No consent step for our own browser.
+        assert!(!host
+            .events_list(50)
+            .iter()
+            .any(|event| event.kind == "consent_pending"));
+        host.set_toggle(false);
+        assert!(!host.policy().read().settings.enabled);
+        // A remembered switch comes back without connecting.
+        let restored = BrowserHost::for_tests(BrowserSettings {
+            enabled: true,
+            ..BrowserSettings::default()
+        });
+        restored.restore_toggle();
+        assert!(restored.policy().read().toggle_on);
+        assert_eq!(restored.connection().state, ConnectionState::Idle);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn wait_requested(host: &BrowserHost, session: &str) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if host
+                .state()
+                .sessions
+                .iter()
+                .any(|s| s.session_id == session && s.requested)
+            {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        false
+    }
+
+    #[test]
+    fn ask_mode_waits_for_the_users_answer() {
+        let server = FakeCdp::start();
+        let (host, dir) = managed_host(&server, AccessMode::Ask);
+        host.set_toggle(true);
+
+        // Allow: the waiting action runs.
+        host.turn_started("s1", "main", "/repo", None);
+        let waiting = {
+            let host = host.clone();
+            thread::spawn(move || host.handle_request("s1", request("a1", "tabs.list", json!({}))))
+        };
+        assert!(wait_requested(&host, "s1"));
+        host.answer_request("s1", "main", true);
+        let allowed = waiting.join().unwrap();
+        assert_eq!(allowed.outcome, Outcome::Done, "{allowed:?}");
+        assert!(host.policy().read().granted("s1"));
+        assert!(!host.policy().read().requested("s1"));
+
+        // Not now: not_granted, and no new prompt for the rest of the turn.
+        host.turn_started("s2", "main", "/repo", None);
+        let waiting = {
+            let host = host.clone();
+            thread::spawn(move || host.handle_request("s2", request("b1", "tabs.list", json!({}))))
+        };
+        assert!(wait_requested(&host, "s2"));
+        host.answer_request("s2", "main", false);
+        assert_eq!(waiting.join().unwrap().reason, Some(Reason::NotGranted));
+        let again = host.handle_request("s2", request("b2", "tabs.list", json!({})));
+        assert_eq!(again.reason, Some(Reason::NotGranted));
+        assert!(!host.policy().read().requested("s2"));
+
+        // The next turn may ask again; the turn ending withdraws the prompt.
+        host.turn_started("s2", "main", "/repo", None);
+        let waiting = {
+            let host = host.clone();
+            thread::spawn(move || host.handle_request("s2", request("b3", "tabs.list", json!({}))))
+        };
+        assert!(wait_requested(&host, "s2"));
+        host.turn_finished("s2");
+        assert_eq!(waiting.join().unwrap().reason, Some(Reason::NotGranted));
+        // Without a turn nobody is asked.
+        let idle = host.handle_request("s3", request("c1", "tabs.list", json!({})));
+        assert_eq!(idle.reason, Some(Reason::NotGranted));
+        assert!(!host.policy().read().requested("s3"));
+        host.set_toggle(false);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The whole managed path against the Chrome or Edge on this machine:
+    /// start, connect without consent, open a tab, read it, close the
+    /// browser on OFF. `cargo test -- --ignored managed_mode_drives`.
+    #[test]
+    #[ignore = "starts the Chrome or Edge installed on this machine"]
+    fn managed_mode_drives_a_real_browser() {
+        let dir = std::env::temp_dir().join(format!("monocode-managed-{}", uuid::Uuid::new_v4()));
+        let host = BrowserHost::for_tests(BrowserSettings {
+            access: AccessMode::Always,
+            show_window: false,
+            ..BrowserSettings::default()
+        });
+        host.set_profile_dir(dir.clone());
+        host.set_toggle(true);
+        host.turn_started("s1", "main", "/repo", Some(true));
+        let opened = host.handle_request(
+            "s1",
+            request("m1", "tabs.open", json!({ "url": "about:blank" })),
+        );
+        assert_eq!(opened.outcome, Outcome::Done, "{opened:?}");
+        let info = host.connection().browser.unwrap();
+        assert!(info.managed, "{info:?}");
+        let tab = opened.data.unwrap()["tab"].as_str().unwrap().to_string();
+        let read = host.handle_request("s1", request("m2", "read", json!({ "tab": tab })));
+        assert_eq!(read.outcome, Outcome::Done, "{read:?}");
+        host.set_toggle(false);
+        assert!(launch::running(&dir).is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

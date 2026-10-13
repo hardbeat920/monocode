@@ -330,6 +330,8 @@ pub fn run() {
             browser::browser_connect,
             browser::browser_disconnect,
             browser::browser_set_session_grant,
+            browser::browser_answer_request,
+            browser::browser_open_window,
             browser::browser_close_tab,
             browser::browser_close_all_tabs,
             browser::browser_release_tab,
@@ -702,6 +704,7 @@ pub fn run() {
         }
         tauri::RunEvent::Exit => {
             handle.state::<remote::RemoteConnections>().shutdown();
+            browser::shutdown();
             reap_harness_children(handle);
         }
         _ => {}

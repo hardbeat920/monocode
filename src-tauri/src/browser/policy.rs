@@ -90,6 +90,11 @@ pub struct SessionAuth {
     pub granted: bool,
     pub granted_since_ms: Option<i64>,
     pub turn: Option<Turn>,
+    /// An agent action waits for the user to answer the access request.
+    pub requested: bool,
+    /// The user said "Not now" during this turn; no new request until the
+    /// next turn.
+    pub declined: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -224,6 +229,8 @@ impl PolicyState {
                 granted: false,
                 granted_since_ms: None,
                 turn: None,
+                requested: false,
+                declined: false,
             });
         entry.window = window.to_string();
         entry.cwd = cwd.to_string();
@@ -282,6 +289,7 @@ impl PolicyState {
         for auth in self.sessions.values_mut() {
             auth.granted = false;
             auth.granted_since_ms = None;
+            auth.requested = false;
             auth.epoch = auth.epoch.next();
         }
         let mut detach = Vec::new();
@@ -334,6 +342,8 @@ impl PolicyState {
         auth.turn = Some(Turn {
             window: window.to_string(),
         });
+        // A new message from the user: the agent may ask again.
+        auth.declined = false;
         let revoke = match browser_access {
             Some(true) if !auth.granted => {
                 auth.granted = true;
@@ -354,6 +364,7 @@ impl PolicyState {
     pub fn turn_finished(&mut self, session: &str) {
         if let Some(auth) = self.sessions.get_mut(session) {
             auth.turn = None;
+            auth.requested = false;
             auth.epoch = auth.epoch.next();
             self.last_revocation = Some(Instant::now());
         }
@@ -378,12 +389,59 @@ impl PolicyState {
                 granted: false,
                 granted_since_ms: None,
                 turn: None,
+                requested: false,
+                declined: false,
             });
         if !auth.granted {
             auth.granted = true;
             auth.granted_since_ms = Some(now_ms());
         }
+        auth.requested = false;
+        auth.declined = false;
         Vec::new()
+    }
+
+    /// Ask mode: an action of a session without access asks the user. True
+    /// when the request is (or already was) put to the user; false when the
+    /// session cannot ask now (no active turn, or declined in this turn).
+    pub fn request_grant(&mut self, session: &str) -> bool {
+        let Some(auth) = self.sessions.get_mut(session) else {
+            return false;
+        };
+        if auth.granted {
+            return true;
+        }
+        if auth.declined || auth.turn.is_none() {
+            return false;
+        }
+        auth.requested = true;
+        true
+    }
+
+    /// "Not now": the waiting action gets `not_granted` and the session is
+    /// not asked again in this turn.
+    pub fn decline_request(&mut self, session: &str) {
+        if let Some(auth) = self.sessions.get_mut(session) {
+            auth.requested = false;
+            auth.declined = true;
+        }
+    }
+
+    /// The waiting action gave up (timeout, turn end); the prompt goes away.
+    pub fn withdraw_request(&mut self, session: &str) {
+        if let Some(auth) = self.sessions.get_mut(session) {
+            auth.requested = false;
+        }
+    }
+
+    pub fn requested(&self, session: &str) -> bool {
+        self.sessions
+            .get(session)
+            .is_some_and(|auth| auth.requested)
+    }
+
+    pub fn declined(&self, session: &str) -> bool {
+        self.sessions.get(session).is_some_and(|auth| auth.declined)
     }
 
     /// "Oduzmi browser pristup": epoch up, grant gone, leases released, tabs
@@ -394,6 +452,7 @@ impl PolicyState {
             auth.epoch = auth.epoch.next();
             auth.granted = false;
             auth.granted_since_ms = None;
+            auth.requested = false;
         }
         let mut detach = Vec::new();
         for lease in self.leases.values_mut() {
@@ -699,6 +758,7 @@ impl PolicyState {
                 turn_active: auth.turn.is_some(),
                 granted_since_ms: auth.granted_since_ms,
                 tabs: self.live_tabs(id),
+                requested: auth.requested,
             })
             .collect();
         rows.sort_by(|a, b| a.session_id.cmp(&b.session_id));

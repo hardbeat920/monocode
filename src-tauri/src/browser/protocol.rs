@@ -284,7 +284,7 @@ impl Reason {
         use Reason::*;
         match self {
             Off => "Browser access is switched off in MonoCode settings; ask the user to enable it.",
-            NotGranted => "This session has no browser access; ask the user to run /browser in this thread.",
+            NotGranted => "This thread has no browser access, or the user declined it; continue without the browser and do not retry in this turn. The user can allow it in MonoCode or with /browser.",
             Revoked => "Browser access for this session was revoked; nothing further will be sent.",
             TurnInactive => "No active turn; browser actions are only allowed while responding.",
             NoLease => "Tab is not owned by this session; use browser_tabs to list or open your own tabs.",
@@ -301,7 +301,7 @@ impl Reason {
             BrowserConsentDenied => "The user denied the browser connection; ask them to connect again from MonoCode settings.",
             BrowserUnsupported => "Chrome or Edge 144 or newer is required.",
             BrowserPolicyBlocked => "An administrator policy blocks remote debugging in this browser.",
-            BrowserDisconnected => "The browser connection dropped; the next connection needs the user's approval again.",
+            BrowserDisconnected => "The browser is not connected; MonoCode reconnects on the next action (the user's own browser asks them to approve it again).",
             RefStale => "Element refs are stale; call browser_snapshot and use fresh refs.",
             NotVisible => "Element is not visible.",
             NotEnabled => "Element is disabled.",
@@ -1027,6 +1027,9 @@ pub enum ConnectionState {
     PolicyBlocked,
     Connected,
     Disconnected,
+    /// The switch is on and nothing runs yet: the MonoCode browser starts, or
+    /// the user's browser is connected, on the first agent action.
+    Idle,
 }
 
 impl ConnectionState {
@@ -1043,7 +1046,7 @@ impl ConnectionState {
             ConsentDenied | ConsentTimeout => Reason::BrowserConsentDenied,
             UnsupportedVersion => Reason::BrowserUnsupported,
             PolicyBlocked => Reason::BrowserPolicyBlocked,
-            Disconnected => Reason::BrowserDisconnected,
+            Disconnected | Idle => Reason::BrowserDisconnected,
             Connected => return None,
         })
     }
@@ -1068,6 +1071,9 @@ pub struct BrowserInfo {
     pub user_data_dir: String,
     /// Number of our own tabs at connect time; diagnostics only.
     pub tabs_total: u32,
+    /// MonoCode started this browser with its own profile.
+    #[serde(default)]
+    pub managed: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1113,9 +1119,35 @@ impl Default for Limits {
     }
 }
 
+/// Which browser the agents use.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserMode {
+    /// MonoCode starts the installed Chrome or Edge with its own profile and
+    /// connects to it directly: no remote-debugging setup, no consent dialog.
+    #[default]
+    Managed,
+    /// Attach to the browser the user runs (spec 4): remote debugging on in
+    /// `chrome://inspect`, and the browser asks on every connection.
+    Attach,
+}
+
+/// How a thread gets browser access.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AccessMode {
+    /// The first action of a thread without access asks the user in that
+    /// thread and waits for the answer.
+    #[default]
+    Ask,
+    /// Every regular thread has access while the switch is on.
+    Always,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BrowserSettings {
+    /// Attach: the profile discovery looks at. Managed: which browser to start.
     pub browser: BrowserChoice,
     /// `Target.createTarget { newWindow: true }`; off by default (decision D3).
     pub separate_window: bool,
@@ -1124,6 +1156,12 @@ pub struct BrowserSettings {
     pub upload_roots: Vec<String>,
     pub allow_dotfiles: bool,
     pub protocol_trace: bool,
+    pub mode: BrowserMode,
+    pub access: AccessMode,
+    /// The main switch, remembered across restarts.
+    pub enabled: bool,
+    /// Managed mode: a visible window; off starts the browser headless.
+    pub show_window: bool,
 }
 
 impl Default for BrowserSettings {
@@ -1135,6 +1173,10 @@ impl Default for BrowserSettings {
             upload_roots: Vec::new(),
             allow_dotfiles: false,
             protocol_trace: false,
+            mode: BrowserMode::Managed,
+            access: AccessMode::Ask,
+            enabled: false,
+            show_window: true,
         }
     }
 }
@@ -1148,6 +1190,9 @@ pub struct SessionAccess {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub granted_since_ms: Option<i64>,
     pub tabs: u32,
+    /// An agent of this session waits for the user to allow the browser.
+    #[serde(default)]
+    pub requested: bool,
 }
 
 /// Whole module state, emitted as [`STATE_EVENT`] on every change.

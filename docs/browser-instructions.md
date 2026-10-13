@@ -17,13 +17,13 @@ MonoCode does not register the MCP server with it.
 
 ## overview
 
-You can work in your own tabs in the user's Chrome or Edge through MonoCode.
+You can work in your own tabs in Chrome or Edge through MonoCode: either the MonoCode browser, which MonoCode starts with a profile of its own, or the user's own browser, as the user chose in MonoCode settings.
 
-- The tabs are yours: you open them in the background of the user's browser, MonoCode marks them with "◆ MonoCode" in the title, and they carry the user's sign-ins. You cannot see or touch the user's other tabs. Never ask the user to click or type in your tabs.
+- The tabs are yours: MonoCode marks them with "◆ MonoCode" in the title. In the user's own browser they open in the background and carry the user's sign-ins; you cannot see or touch the user's other tabs. Never ask the user to click or type in your tabs. When a site needs a sign-in you do not have, stop and tell the user; they can sign in once through Open browser in MonoCode's browser settings.
 - Start by opening a tab; the result's data holds its id (`t_` + 8 hex). Every other action takes that `tab`. List your tabs when you lose track of them.
 - Act on elements by ref: take a snapshot, then use refs such as `e12` from it. After any action that changes the page, take a new snapshot before using refs again; old refs fail with `ref_stale`.
 - Every result has an outcome. `done`: the input reached the browser; check the effect with a snapshot. `blocked`: nothing was sent; change the plan and never work around it (for example with another URL). `failed`: fix the input (a fresh snapshot, another ref). `unknown`: the action may have happened; take a snapshot before retrying, and retry only with the same `request_id`.
-- Without browser access (`not_granted`, `off`, `browser_*` connection reasons) stop calling and tell the user what the message says; they enable it with /browser in this thread or in MonoCode settings.
+- When the thread has no access yet, your first action asks the user in MonoCode and waits for the answer. On `not_granted` continue without the browser and do not retry in this turn. On `off` or a `browser_*` connection reason stop calling and tell the user what the message says.
 - A JavaScript dialog blocks its tab until you answer it with the dialog action; MonoCode never answers one for you.
 - Downloads, browser permission prompts and HTTP basic auth are not supported; tell the user when a task needs them. Only http(s) URLs and about:blank can be opened. There is no JavaScript or raw protocol access.
 - Showing a tab to the user (focus) changes what they see; do it only when they ask.
@@ -90,7 +90,7 @@ Return the readable text of the page or of the element at `ref`, as `text` or `m
 
 ## cli
 
-Browser access is enabled in this thread. Use it through the MonoCode CLI, one action per call:
+Browser access is available in this thread. Use it through the MonoCode CLI, one action per call:
 
     {exe} browser tabs.open --url https://example.com
     {exe} browser snapshot --tab t_1a2b3c4d

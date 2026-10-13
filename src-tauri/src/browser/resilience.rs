@@ -202,6 +202,8 @@ impl World {
             browser: BrowserChoice::UserDataDir {
                 path: dir.display().to_string(),
             },
+            mode: super::protocol::BrowserMode::Attach,
+            access: super::protocol::AccessMode::Always,
             ..BrowserSettings::default()
         };
         tweak(&mut settings);
