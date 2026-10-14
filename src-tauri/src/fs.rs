@@ -4972,7 +4972,11 @@ fn git_remote_repository_names_for(root: &Path) -> Vec<String> {
     };
     let mut names = Vec::new();
     for line in remotes.lines() {
-        if let Some(name) = line.split_whitespace().nth(1).and_then(git_url_repo_name) {
+        let url = line.split_once('\t').and_then(|(_, url)| {
+            url.strip_suffix(" (fetch)")
+                .or_else(|| url.strip_suffix(" (push)"))
+        });
+        if let Some(name) = url.and_then(git_url_repo_name) {
             if !names.contains(&name) {
                 names.push(name);
             }
@@ -7148,6 +7152,30 @@ mod tests {
         std::fs::create_dir(&nested).unwrap();
         assert_eq!(git_remote_repository_names_for(&nested), names);
         assert!(!names.iter().any(|name| name.contains("secret")));
+    }
+
+    #[test]
+    fn repository_names_preserve_spaces_in_local_remote_urls() {
+        let dir = tmp("local-remotes-with-spaces");
+        assert!(init_git(
+            &dir.0,
+            "main",
+            Some("/home/me/Team Projects/widget.git")
+        ));
+        assert!(git(
+            &dir.0,
+            &[
+                "remote",
+                "set-url",
+                "--push",
+                "origin",
+                "/home/me/Team Projects/shared widget.git"
+            ]
+        ));
+        assert_eq!(
+            git_remote_repository_names_for(&dir.0),
+            vec!["widget", "shared widget"]
+        );
     }
 
     #[test]

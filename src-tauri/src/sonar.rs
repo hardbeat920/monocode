@@ -431,7 +431,7 @@ pub async fn sonar_issue_content(
                     project_keys: vec![],
                     token: String::new(),
                 };
-                sonar_text(&public, path, &[])
+                sonar_text(&public, path, &[]).map_err(|e| e.to_string())
             },
         )
     })
@@ -445,7 +445,7 @@ fn fetch_issue_content(
     branch: &str,
     key: &str,
     mut get: impl FnMut(&str, &[(&str, &str)]) -> Result<Value, String>,
-    mut text: impl FnMut(&str, &[(&str, &str)]) -> Result<String, String>,
+    mut text: impl FnMut(&str, &[(&str, &str)]) -> Result<String, SonarTextError>,
     mut documentation: impl FnMut(&str) -> Result<String, String>,
 ) -> Result<SonarIssueContent, String> {
     let data = get(
@@ -559,6 +559,7 @@ fn fetch_issue_content(
                             }
                         }
                         Ok(_) => {}
+                        Err(SonarTextError::NotFound) => {}
                         Err(e) => errors.push(format!("Main branch comparison: {e}")),
                     }
                 }
@@ -800,11 +801,44 @@ fn normalize_site(raw: &str) -> Result<String, String> {
 }
 
 fn sonar_get(config: &SonarConfig, path: &str, query: &[(&str, &str)]) -> Result<Value, String> {
-    serde_json::from_str(&sonar_text(config, path, query)?)
+    serde_json::from_str(&sonar_text(config, path, query).map_err(|e| e.to_string())?)
         .map_err(|_| "Sonar returned invalid JSON".into())
 }
 
-fn sonar_text(config: &SonarConfig, path: &str, query: &[(&str, &str)]) -> Result<String, String> {
+#[derive(Debug)]
+enum SonarTextError {
+    NotFound,
+    Other(String),
+}
+
+impl std::fmt::Display for SonarTextError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFound => f.write_str(
+                "Sonar project or API endpoint was not found. Check the server URL and project key",
+            ),
+            Self::Other(message) => f.write_str(message),
+        }
+    }
+}
+
+impl From<String> for SonarTextError {
+    fn from(message: String) -> Self {
+        Self::Other(message)
+    }
+}
+
+impl From<&str> for SonarTextError {
+    fn from(message: &str) -> Self {
+        Self::Other(message.into())
+    }
+}
+
+fn sonar_text(
+    config: &SonarConfig,
+    path: &str,
+    query: &[(&str, &str)],
+) -> Result<String, SonarTextError> {
     // Do not follow redirects with credentials to another host.
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(20))
@@ -823,9 +857,9 @@ fn sonar_text(config: &SonarConfig, path: &str, query: &[(&str, &str)]) -> Resul
         Ok(response) => response,
         Err(ureq::Error::Status(401, _)) => return Err("Sonar token is invalid or expired".into()),
         Err(ureq::Error::Status(403, _)) => return Err("Sonar denied access. Use a personal access token with Browse permission on the project".into()),
-        Err(ureq::Error::Status(404, _)) => return Err("Sonar project or API endpoint was not found. Check the server URL and project key".into()),
+        Err(ureq::Error::Status(404, _)) => return Err(SonarTextError::NotFound),
         Err(ureq::Error::Status(429, _)) => return Err("Sonar rate limit reached. Wait a few minutes before refreshing".into()),
-        Err(ureq::Error::Status(status, _)) => return Err(format!("Sonar request failed ({status})")),
+        Err(ureq::Error::Status(status, _)) => return Err(format!("Sonar request failed ({status})").into()),
         Err(_) => return Err("Could not reach Sonar".into()),
     };
     if !(200..300).contains(&response.status()) {
@@ -1146,6 +1180,81 @@ mod tests {
         assert_eq!(result.source.last().unwrap().line, 19);
         assert!(result.issue.get("flows").is_some());
         assert!(result.errors.is_empty());
+    }
+
+    #[test]
+    fn main_branch_comparison_skips_only_not_found() {
+        for (error, expected_errors) in [
+            (SonarTextError::NotFound, vec![]),
+            (
+                SonarTextError::Other("Access denied".into()),
+                vec!["Main branch comparison: Access denied"],
+            ),
+            (
+                SonarTextError::Other(SonarTextError::NotFound.to_string()),
+                vec!["Main branch comparison: Sonar project or API endpoint was not found. Check the server URL and project key"],
+            ),
+        ] {
+            let mut error = Some(error);
+            let result = fetch_issue_content(
+                &config(), "org_app", "develop", "i",
+                |path, _| match path {
+                    "/api/issues/search" => Ok(json!({"issues":[{"key":"i","component":"org_app:new.ts","rule":"ts:S1","line":1}]})),
+                    "/api/rules/show" => Ok(json!({"rule":{"htmlDesc":"<p>Guidance</p>"}})),
+                    "/api/project_branches/list" => Ok(json!({"branches":[{"name":"main","isMain":true,"analysisDate":"2026-10-14"}]})),
+                    _ => Err("Metadata unavailable".into()),
+                },
+                |_, query| {
+                    if query.contains(&("branch", "main")) {
+                        Err(error.take().unwrap())
+                    } else {
+                        Ok("new source\n".into())
+                    }
+                },
+                |_| panic!("Instance rule guidance is available"),
+            ).unwrap();
+            assert!(error.is_none(), "Main branch source must be requested");
+            assert!(!result.source.is_empty());
+            assert!(result.comparison.is_none());
+            assert_eq!(result.errors, expected_errors);
+        }
+    }
+
+    #[test]
+    fn sonar_text_distinguishes_http_not_found_from_other_failures() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        for status in [404, 403, 500] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let mut config = config();
+            config.site = format!("http://{}", listener.local_addr().unwrap());
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0];
+                    stream.read_exact(&mut byte).unwrap();
+                    request.push(byte[0]);
+                }
+                write!(
+                    stream,
+                    "HTTP/1.1 {status} Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+                .unwrap();
+            });
+            let error = sonar_text(&config, "/api/sources/raw", &[]).unwrap_err();
+            server.join().unwrap();
+            assert_eq!(matches!(error, SonarTextError::NotFound), status == 404);
+            if status == 403 {
+                assert!(error.to_string().contains("Sonar denied access"));
+            } else if status == 500 {
+                assert_eq!(error.to_string(), "Sonar request failed (500)");
+            }
+        }
     }
 
     #[test]
