@@ -6,8 +6,17 @@ import { invoke } from "@tauri-apps/api/core";
 import { copyMessage } from "../../../platform/tauri/clipboard";
 import { ARTIFACTS_CHANGED_EVENT, type Artifact } from "../artifacts";
 import { ArtifactReader } from "./ArtifactPanel";
+import { downloadFile } from "../../../platform/tauri/download";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("../../../platform/tauri/download", () => ({ downloadFile: vi.fn() }));
+vi.mock("./HtmlArtifactFrame", () => ({
+  HtmlArtifactFrame: () => createElement("div", { "data-html-preview": true }),
+}));
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(),
+  convertFileSrc: (path: string) => `asset:${path}`,
+}));
 vi.mock("../../sessions/ui/AgentMarkdown", () => ({
   AgentMarkdown: ({ text }: { text: string }) =>
     createElement("div", null, text),
@@ -29,6 +38,8 @@ let container: HTMLDivElement;
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(invoke).mockReset();
+  vi.mocked(downloadFile).mockReset().mockResolvedValue(undefined);
+  vi.mocked(copyMessage).mockResolvedValue(undefined);
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   container = document.createElement("div");
   document.body.append(container);
@@ -40,6 +51,36 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
+
+it.each([
+  ["document", "md"],
+  ["html", "html"],
+] as const)(
+  "downloads %s artifacts as .%s with the original text",
+  async (kind, extension) => {
+    const artifact: Artifact = {
+      ...report,
+      kind,
+      title: 'Review / "résumé" 🎉'.repeat(20),
+      body: "Résumé 🎉\n<script>example</script>",
+    };
+    vi.mocked(invoke).mockResolvedValue(artifact);
+    await act(async () =>
+      root.render(
+        createElement(ArtifactReader, { id: artifact.id, onClose: vi.fn() }),
+      ),
+    );
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[aria-label^="Download "]')!
+        .click(),
+    );
+    expect(downloadFile).toHaveBeenCalledWith(
+      `${artifact.title}.${extension}`,
+      { text: artifact.body },
+    );
+  },
+);
 
 it("loads document artifacts through their own command and closes with Escape", async () => {
   vi.mocked(invoke).mockResolvedValue(report);
@@ -66,6 +107,35 @@ it("loads document artifacts through their own command and closes with Escape", 
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })),
   );
   expect(onClose).toHaveBeenCalledOnce();
+});
+
+it("shows text-save errors and clears them when switching artifacts", async () => {
+  vi.mocked(invoke).mockResolvedValue(report);
+  vi.mocked(downloadFile).mockRejectedValueOnce(
+    new Error("File is too large to save (maximum 8 MB)."),
+  );
+  const onClose = vi.fn();
+  await act(async () =>
+    root.render(createElement(ArtifactReader, { id: report.id, onClose })),
+  );
+  await act(async () =>
+    container
+      .querySelector<HTMLButtonElement>('[aria-label^="Download "]')!
+      .click(),
+  );
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+    "maximum 8 MB",
+  );
+
+  const next = { ...report, id: "other-document", title: "Other report" };
+  vi.mocked(invoke).mockResolvedValue(next);
+  await act(async () =>
+    root.render(createElement(ArtifactReader, { id: next.id, onClose })),
+  );
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+  expect(
+    container.querySelector('[aria-label="Download Other report.md"]'),
+  ).not.toBeNull();
 });
 
 it("keeps a revised document when an older read finishes after refresh", async () => {

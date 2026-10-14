@@ -4,8 +4,14 @@ import { copyMessage } from "../../../platform/tauri/clipboard";
 import { IconButton } from "../../../app/shell/TitleBar";
 import { MonoSidebarHeader } from "../../monos/ui/MonoSidebar";
 import { PageHeader } from "../../monos/ui/monoPanelParts";
-import { artifactLabel, deleteArtifact } from "../artifacts";
+import { artifactLabel, deleteArtifact, type ArtifactKind } from "../artifacts";
 import { ArtifactContent, useArtifact } from "./ArtifactContent";
+import { DownloadButton } from "../../../shared/ui/DownloadButton";
+
+const DOWNLOAD_EXTENSIONS: Record<ArtifactKind, string> = {
+  document: "md",
+  html: "html",
+};
 
 /**
  * A document's title, body and actions. With `onBack` it is a page over a
@@ -63,6 +69,11 @@ export function ArtifactReader({
   };
   const actions = artifact ? (
     <>
+      <DownloadButton
+        key={artifact.id}
+        name={`${artifact.title}.${DOWNLOAD_EXTENSIONS[artifact.kind]}`}
+        source={{ text: artifact.body }}
+      />
       <IconButton
         label={`Delete ${noun}`}
         disabled={deleting}

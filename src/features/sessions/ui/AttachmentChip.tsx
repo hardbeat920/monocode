@@ -4,6 +4,7 @@ import { attachmentPreviewSrc, isAttachmentFolder } from "../model/attachments";
 import type { Attachment } from "../model/session";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
 import { ImageLightbox } from "../../../shared/ui/ImageLightbox";
+import { DownloadButton } from "../../../shared/ui/DownloadButton";
 
 type Props = {
   attachment: Attachment;
@@ -16,13 +17,21 @@ export function AttachmentChip({ attachment, onRemove, photo = false }: Props) {
   const [previewOpen, setPreviewOpen] = useState(false);
   const preview = attachmentPreviewSrc(attachment);
   const image = attachment.kind === "image" && preview;
+  const downloadUrl = attachment.data
+    ? `data:${attachment.mimeType};base64,${attachment.data}`
+    : preview;
+  const downloadSource = attachment.path
+    ? { path: attachment.path }
+    : downloadUrl
+      ? { url: downloadUrl }
+      : undefined;
+  const layout = image && !onRemove ? "flex-col items-start" : "items-center";
+  const surface = image ? "" : "bg-content/10 py-0.5 pl-1 pr-1";
 
   return (
     <>
       <div
-        className={`group relative flex min-w-0 items-center gap-1.5 rounded-md ${
-          image ? "" : "bg-content/10 py-0.5 pl-1 pr-1"
-        }`}
+        className={`group relative flex min-w-0 gap-1.5 rounded-md ${layout} ${surface} ${onRemove ? "" : "self-start"}`}
         title={attachment.path ?? attachment.name}
       >
         {image ? (
@@ -78,6 +87,9 @@ export function AttachmentChip({ attachment, onRemove, photo = false }: Props) {
           >
             <X className="size-3" strokeWidth={2} />
           </button>
+        ) : null}
+        {!onRemove && !isAttachmentFolder(attachment) && downloadSource ? (
+          <DownloadButton name={attachment.name} source={downloadSource} />
         ) : null}
       </div>
       {image && previewOpen ? (

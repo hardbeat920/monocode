@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { basename, pickFiles as pickFilePaths } from "../../../platform/tauri/fs";
+import { readBlobBase64 } from "../../../shared/lib/blobBase64";
 import type { Attachment, AttachmentKind } from "./session";
 
 export const MAX_ATTACHMENTS = 20;
@@ -391,7 +392,7 @@ async function attachmentFromBlob(file: File): Promise<Attachment | null> {
   const kind = kindFromMime(mimeType);
   const name = file.name.trim() || fallbackName(mimeType);
   const previewUrl = kind === "image" ? URL.createObjectURL(file) : undefined;
-  const data = await readBlobBase64(file);
+  const data = file.size > MAX_EMBED_BYTES ? null : await readBlobBase64(file);
   if (kind === "image" && isVisionImage(mimeType) && data) {
     return {
       id: crypto.randomUUID(),
@@ -526,22 +527,4 @@ function fileUri(path: string): string {
   const normalized = path.replace(/\\/g, "/");
   const abs = normalized.startsWith("/") ? normalized : `/${normalized}`;
   return `file://${abs.split("/").map(encodeURIComponent).join("/")}`;
-}
-
-function readBlobBase64(file: File): Promise<string | null> {
-  if (file.size > MAX_EMBED_BYTES) return Promise.resolve(null);
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result;
-      if (typeof result !== "string") {
-        resolve(null);
-        return;
-      }
-      const comma = result.indexOf(",");
-      resolve(comma >= 0 ? result.slice(comma + 1) : result);
-    };
-    reader.onerror = () => resolve(null);
-    reader.readAsDataURL(file);
-  });
 }

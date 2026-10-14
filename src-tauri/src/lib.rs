@@ -460,6 +460,7 @@ pub fn run() {
             fs::omp_active_assistant_texts,
             fs::claude_shell_commands,
             fs::write_text_file,
+            fs::save_download,
             skills::list_skills,
             search::search_project,
             search::cancel_project_search,

@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { DownloadButton } from "../../../shared/ui/DownloadButton";
+import { mediaExtension } from "../../../shared/lib/mediaMime";
 import {
   fetchInboxMedia,
   sniffInboxMedia,
@@ -71,24 +73,34 @@ export function InboxMedia({ src, alt }: Props) {
         >
           <MediaFallback src={src} alt={alt} />
         </video>
+        <DownloadButton
+          name={`video.${mediaExtension(state.type.mime)}`}
+          source={{ url: state.url }}
+        />
       </span>
     );
   }
 
   const label = alt?.trim() || "Image";
   return (
-    <img
-      src={state.url}
-      alt={alt ?? ""}
-      title={label}
-      draggable={false}
-      className="inbox-media my-2 inline-block max-h-[28rem] w-full max-w-xl cursor-zoom-in rounded-[10px] border border-content/10 bg-content/6 object-contain"
-      onClick={(event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        void openUrl(src);
-      }}
-    />
+    <span className="inbox-media my-2 inline-block w-full max-w-xl">
+      <img
+        src={state.url}
+        alt={alt ?? ""}
+        title={label}
+        draggable={false}
+        className="block max-h-[28rem] w-full cursor-zoom-in rounded-[10px] border border-content/10 bg-content/6 object-contain"
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          void openUrl(src);
+        }}
+      />
+      <DownloadButton
+        name={`image.${mediaExtension(state.type.mime)}`}
+        source={{ url: state.url }}
+      />
+    </span>
   );
 }
 

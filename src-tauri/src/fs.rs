@@ -5899,6 +5899,58 @@ pub async fn write_text_file(path: String, content: String) -> Result<(), String
         .map_err(|e| e.to_string())?
 }
 
+/// Save a downloaded file locally. Source paths never route to a remote host.
+#[tauri::command]
+pub async fn save_download(
+    path: String,
+    from: Option<String>,
+    data: Option<String>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || save_download_sync(&path, from, data))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn save_download_sync(
+    path: &str,
+    from: Option<String>,
+    data: Option<String>,
+) -> Result<(), String> {
+    // A save dialog returns a literal path on this computer, not a workspace path.
+    let destination = Path::new(path);
+    if destination.is_dir() {
+        return Err("Cannot save a file to a directory.".into());
+    }
+    match (from, data) {
+        (Some(from), None) => {
+            let source = expand_home(&from);
+            let metadata = std::fs::metadata(&source).map_err(|e| e.to_string())?;
+            if !metadata.is_file() {
+                return Err(
+                    "Folders cannot be downloaded. Choose a file inside the folder.".into(),
+                );
+            }
+            if same_entry(&source, destination) {
+                return Ok(());
+            }
+            let mut input = std::fs::File::open(source).map_err(|e| e.to_string())?;
+            write_file_sync(destination, |output| {
+                std::io::copy(&mut input, output)
+                    .map(|_| ())
+                    .map_err(|e| e.to_string())
+            })
+        }
+        (None, Some(data)) => {
+            let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data)
+                .map_err(|_| "Download data is not valid base64.".to_string())?;
+            write_file_sync(destination, |file| {
+                file.write_all(&bytes).map_err(|e| e.to_string())
+            })
+        }
+        _ => Err("Choose one download source.".into()),
+    }
+}
+
 fn write_text_file_sync(path: &str, content: &str) -> Result<(), String> {
     if content.len() as u64 > MAX_TEXT_FILE_BYTES {
         return Err(format!(
@@ -5907,11 +5959,20 @@ fn write_text_file_sync(path: &str, content: &str) -> Result<(), String> {
         ));
     }
 
-    let requested = expand_home(path);
+    write_file_sync(&expand_home(path), |file| {
+        file.write_all(content.as_bytes())
+            .map_err(|e| e.to_string())
+    })
+}
+
+fn write_file_sync(
+    requested: &Path,
+    write: impl FnOnce(&mut std::fs::File) -> Result<(), String>,
+) -> Result<(), String> {
     let destination = if requested.exists() {
-        std::fs::canonicalize(&requested).map_err(|e| format!("{}: {e}", requested.display()))?
+        std::fs::canonicalize(requested).map_err(|e| format!("{}: {e}", requested.display()))?
     } else {
-        requested
+        requested.to_path_buf()
     };
     if destination.is_dir() {
         return Err("Cannot save text to a directory.".into());
@@ -5952,8 +6013,7 @@ fn write_text_file_sync(path: &str, content: &str) -> Result<(), String> {
     let (temporary_path, mut file) =
         temporary.ok_or_else(|| "Could not create a temporary save file.".to_string())?;
     let write_result = (|| -> Result<(), String> {
-        file.write_all(content.as_bytes())
-            .map_err(|e| e.to_string())?;
+        write(&mut file)?;
         file.sync_all().map_err(|e| e.to_string())?;
         if let Ok(meta) = std::fs::metadata(&destination) {
             std::fs::set_permissions(&temporary_path, meta.permissions())
@@ -6632,6 +6692,74 @@ mod tests {
             resolve_project_location_sync(&path_to_js(&missing), None).unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn downloaded_local_files_preserve_bytes_even_when_saved_over_the_source() {
+        let dir = tmp("download-copy");
+        let source = dir.0.join("source.bin").to_string_lossy().into_owned();
+        let destination = dir.0.join("copy.bin").to_string_lossy().into_owned();
+        std::fs::write(&source, [0, 255, 42]).unwrap();
+        save_download_sync(&destination, Some(source.clone()), None).unwrap();
+        save_download_sync(&source, Some(source.clone()), None).unwrap();
+        assert_eq!(std::fs::read(&source).unwrap(), [0, 255, 42]);
+        assert_eq!(std::fs::read(&destination).unwrap(), [0, 255, 42]);
+    }
+
+    #[test]
+    fn downloaded_binary_bytes_round_trip_and_replace_existing_files() {
+        let dir = tmp("download");
+        let path = dir.0.join("file.bin");
+        let path_string = path.to_string_lossy();
+        save_download_sync(&path_string, None, Some("AP8q".into())).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), [0, 255, 42]);
+        save_download_sync(&path_string, None, Some("/wA=".into())).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), [255, 0]);
+        assert_eq!(std::fs::read_dir(&dir.0).unwrap().count(), 1);
+        assert!(save_download_sync(&dir.0.to_string_lossy(), None, Some("AA==".into())).is_err());
+    }
+
+    #[test]
+    fn downloads_reject_invalid_sources_without_changing_the_destination() {
+        let dir = tmp("download-invalid");
+        let destination = dir.0.join("file.bin").to_string_lossy().into_owned();
+        std::fs::write(&destination, "original").unwrap();
+        assert!(save_download_sync(&destination, None, None).is_err());
+        assert!(
+            save_download_sync(&destination, Some(destination.clone()), Some("AA==".into()))
+                .is_err()
+        );
+        assert!(save_download_sync(&destination, None, Some("!invalid".into())).is_err());
+        let error = save_download_sync(
+            &destination,
+            Some(dir.0.to_string_lossy().into_owned()),
+            None,
+        )
+        .unwrap_err();
+        assert!(error.contains("Folders cannot be downloaded"));
+        assert_eq!(std::fs::read(&destination).unwrap(), b"original");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn downloads_handle_symlinks_and_hard_links_without_truncating_the_source() {
+        let dir = tmp("download-alias");
+        let source = dir.0.join("original.bin");
+        let symlink = dir.0.join("symlink.bin");
+        let hard_link = dir.0.join("hardlink.bin");
+        std::fs::write(&source, [0, 255, 42]).unwrap();
+        std::os::unix::fs::symlink(&source, &symlink).unwrap();
+        std::fs::hard_link(&source, &hard_link).unwrap();
+        for alias in [symlink, hard_link] {
+            save_download_sync(
+                &alias.to_string_lossy(),
+                Some(source.to_string_lossy().into_owned()),
+                None,
+            )
+            .unwrap();
+            assert_eq!(std::fs::read(&source).unwrap(), [0, 255, 42]);
+            assert_eq!(std::fs::read(alias).unwrap(), [0, 255, 42]);
+        }
     }
 
     #[test]
