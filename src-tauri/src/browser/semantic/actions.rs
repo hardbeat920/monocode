@@ -17,7 +17,7 @@ use super::super::protocol::{
 use super::super::targets::{self, TabError};
 use super::element::{self, Needs, PAGE_JS, READ_JS, SELECT_JS};
 use super::observe::{self, Watch};
-use super::{describe, refs, Fail, Run};
+use super::{cursor, describe, refs, Fail, Run};
 
 /// How long `upload` waits for a file chooser after the click (spec 10.2).
 const CHOOSER_WAIT: Duration = Duration::from_secs(5);
@@ -743,14 +743,18 @@ pub fn screenshot(run: &Run<'_>, p: ScreenshotParams) -> Result<ActionResult, Fa
             });
         }
     }
-    let shot = run
-        .send(run.main(), Method::PageCaptureScreenshot, params)
-        .map_err(|fail| match fail {
-            Fail::Cdp(CdpError::Timeout, _) | Fail::Reason(Reason::Timeout, _) => {
-                Fail::reason(Reason::ScreenshotUnavailableBackground)
-            }
-            other => other,
-        })?;
+    // The agent gets the page without MonoCode's own cursor on it.
+    let concealed = cursor::conceal(run);
+    let shot = run.send(run.main(), Method::PageCaptureScreenshot, params);
+    if concealed {
+        cursor::reveal(run);
+    }
+    let shot = shot.map_err(|fail| match fail {
+        Fail::Cdp(CdpError::Timeout, _) | Fail::Reason(Reason::Timeout, _) => {
+            Fail::reason(Reason::ScreenshotUnavailableBackground)
+        }
+        other => other,
+    })?;
     let data = shot["data"].as_str().unwrap_or("");
     if data.is_empty() {
         return Err(Fail::reason(Reason::ScreenshotUnavailableBackground));

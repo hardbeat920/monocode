@@ -14,6 +14,7 @@ use super::super::protocol::{
     ActionResult, ClickParams, HoverParams, Modifier, MouseButton, PressParams, Reason,
     ScrollDirection, ScrollParams, TypeParams,
 };
+use super::cursor;
 use super::element::{self, Element, Needs, EDIT_JS, PAGE_JS};
 use super::observe::{self, Watch};
 use super::{describe, Fail, Run};
@@ -66,9 +67,16 @@ pub fn click(run: &Run<'_>, p: ClickParams) -> Result<ActionResult, Fail> {
             ..Needs::default()
         },
     )?;
-    let point = prepared
+    let mut point = prepared
         .point
         .ok_or_else(|| Fail::reason(Reason::NotVisible))?;
+    if cursor::glide(run, point) {
+        let now = element::recheck(run, &el, true)?;
+        if now != point {
+            cursor::jump(run, now);
+            point = now;
+        }
+    }
     let modifiers = modifier_bits(p.modifiers.as_deref().unwrap_or(&[]));
     let (button, buttons) = match p.button.unwrap_or_default() {
         MouseButton::Left => ("left", 1),
@@ -77,6 +85,7 @@ pub fn click(run: &Run<'_>, p: ClickParams) -> Result<ActionResult, Fail> {
     };
     let mut watch = Watch::start(run);
     watch.count_mutations(run);
+    cursor::click(run);
     let mut events = vec![json!({
         "type": "mouseMoved", "x": point.x, "y": point.y, "modifiers": modifiers,
     })];
@@ -125,9 +134,16 @@ pub fn hover(run: &Run<'_>, p: HoverParams) -> Result<ActionResult, Fail> {
             ..Needs::default()
         },
     )?;
-    let point = prepared
+    let mut point = prepared
         .point
         .ok_or_else(|| Fail::reason(Reason::NotVisible))?;
+    if cursor::glide(run, point) {
+        let now = element::recheck(run, &el, false)?;
+        if now != point {
+            cursor::jump(run, now);
+            point = now;
+        }
+    }
     let mut watch = Watch::start(run);
     watch.input(
         run,
@@ -178,6 +194,10 @@ pub fn type_text(run: &Run<'_>, p: TypeParams) -> Result<ActionResult, Fail> {
             ..Needs::default()
         },
     )?;
+    // Show where the text goes; no hit test, `type` never needed one.
+    if let Ok(point) = element::point(run, &el) {
+        cursor::glide(run, point);
+    }
     let clear = p.clear.unwrap_or(false);
     let submit = p.submit.unwrap_or(false);
     let mut watch = Watch::start(run);

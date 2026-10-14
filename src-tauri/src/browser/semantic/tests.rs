@@ -47,6 +47,8 @@ struct Model {
     /// Never answer `mouseReleased` (a dialog opened by the click handler).
     hold_release: bool,
     history_index: i64,
+    /// What `monocodeCursor("move")` reports as the glide time.
+    glide_ms: u64,
 }
 
 impl Default for Model {
@@ -62,6 +64,7 @@ impl Default for Model {
             on_release: Vec::new(),
             hold_release: false,
             history_index: 1,
+            glide_ms: 0,
         }
     }
 }
@@ -170,6 +173,13 @@ fn respond(
                         result(json!({ "x": 0, "y": model.scroll_y }))
                     }
                     _ => result(Value::Null),
+                };
+            }
+            if function.contains("function monocodeCursor(") {
+                return match args[0].as_str().unwrap_or("") {
+                    "move" if args[5] == json!(true) => result(json!({ "ms": 0 })),
+                    "move" => result(json!({ "ms": model.glide_ms })),
+                    _ => result(json!({ "ok": true })),
                 };
             }
             if function.contains("function monocodeRead(") {
@@ -1054,4 +1064,125 @@ fn revocation_mid_action_sends_nothing_further() {
     assert_eq!(result.outcome, Outcome::Blocked, "{result:?}");
     assert_eq!(result.reason, Some(Reason::Revoked));
     assert!(h.since(mark).is_empty());
+}
+
+/// Which `monocodeCursor` operation a logged command is, if any.
+fn cursor_op(r: &Received) -> Option<String> {
+    let function = r.params["functionDeclaration"].as_str()?;
+    if r.method != "Runtime.callFunctionOn" || !function.contains("function monocodeCursor(") {
+        return None;
+    }
+    r.params["arguments"][0]["value"]
+        .as_str()
+        .map(str::to_string)
+}
+
+#[test]
+fn the_visible_cursor_glides_before_a_click_and_stays_out_of_screenshots() {
+    let h = Harness::new();
+    h.snapshot();
+
+    // No glide (hidden tab, reduced motion): one cursor move before the
+    // input, the press right before the mouse goes down, no extra checks.
+    let mark = h.mark();
+    let click = h.act(ActionKind::Click, json!({ "ref": "e2" }));
+    assert_eq!(click.outcome, Outcome::Done, "{click:?}");
+    let log = h.since(mark);
+    let ops: Vec<String> = log.iter().filter_map(cursor_op).collect();
+    assert_eq!(ops, vec!["move", "click"]);
+    let mv = log
+        .iter()
+        .position(|r| cursor_op(r).as_deref() == Some("move"))
+        .unwrap();
+    let press = log
+        .iter()
+        .position(|r| cursor_op(r).as_deref() == Some("click"))
+        .unwrap();
+    let first_input = log
+        .iter()
+        .position(|r| r.method == "Input.dispatchMouseEvent")
+        .unwrap();
+    assert!(mv < press && press < first_input);
+    assert_eq!(log[mv].params["arguments"][1]["value"], json!(60.0));
+    assert_eq!(log[mv].params["arguments"][2]["value"], json!(25.0));
+    // The cursor lives in our isolated world, on the main frame.
+    assert_eq!(log[mv].params["executionContextId"], json!(70));
+    assert_eq!(log[mv].session.as_deref(), Some(MAIN));
+    assert_eq!(
+        methods(&log)
+            .iter()
+            .filter(|m| *m == "DOM.getContentQuads")
+            .count(),
+        1
+    );
+
+    // With a glide the action waits for it, then checks the point again
+    // (the page had time to move) before pressing. The second move starts
+    // where the first one ended.
+    h.model.lock().unwrap().glide_ms = 30;
+    let mark = h.mark();
+    let click = h.act(ActionKind::Click, json!({ "ref": "e2" }));
+    assert_eq!(click.outcome, Outcome::Done, "{click:?}");
+    let log = h.since(mark);
+    let mv = log
+        .iter()
+        .position(|r| cursor_op(r).as_deref() == Some("move"))
+        .unwrap();
+    assert_eq!(log[mv].params["arguments"][3]["value"], json!(60.0));
+    assert_eq!(log[mv].params["arguments"][4]["value"], json!(25.0));
+    let after: Vec<String> = methods(&log[mv + 1..]);
+    let first_input = after
+        .iter()
+        .position(|m| m == "Input.dispatchMouseEvent")
+        .unwrap();
+    assert!(
+        after[..first_input]
+            .iter()
+            .any(|m| m == "DOM.getContentQuads"),
+        "{after:?}"
+    );
+    let hit_after_glide = log[mv + 1..].iter().any(|r| {
+        r.params["functionDeclaration"]
+            .as_str()
+            .is_some_and(|f| f.contains("function monocodeHitTest("))
+    });
+    assert!(hit_after_glide);
+
+    // The same point, so no jump.
+    assert!(!log.iter().any(|r| cursor_op(r).as_deref() == Some("move")
+        && r.params["arguments"][5]["value"] == json!(true)));
+
+    // Hover glides too.
+    let mark = h.mark();
+    let hover = h.act(ActionKind::Hover, json!({ "ref": "e2" }));
+    assert_eq!(hover.outcome, Outcome::Done, "{hover:?}");
+    let ops: Vec<String> = h.since(mark).iter().filter_map(cursor_op).collect();
+    assert_eq!(ops, vec!["move"]);
+
+    // Screenshots hide the cursor and show it again afterwards.
+    let mark = h.mark();
+    let shot = h.act(ActionKind::Screenshot, json!({}));
+    assert_eq!(shot.outcome, Outcome::Done, "{shot:?}");
+    let log = h.since(mark);
+    let conceal = log
+        .iter()
+        .position(|r| cursor_op(r).as_deref() == Some("conceal"))
+        .unwrap();
+    let capture = log
+        .iter()
+        .position(|r| r.method == "Page.captureScreenshot")
+        .unwrap();
+    let reveal = log
+        .iter()
+        .position(|r| cursor_op(r).as_deref() == Some("reveal"))
+        .unwrap();
+    assert!(conceal < capture && capture < reveal);
+}
+
+#[test]
+fn screenshots_of_tabs_without_a_cursor_send_no_cursor_calls() {
+    let h = Harness::new();
+    let shot = h.act(ActionKind::Screenshot, json!({}));
+    assert_eq!(shot.outcome, Outcome::Done, "{shot:?}");
+    assert!(!h.sent().iter().any(|r| cursor_op(r).is_some()));
 }

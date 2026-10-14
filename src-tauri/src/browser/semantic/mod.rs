@@ -34,6 +34,8 @@
 //! - [`observe`]: the post-action observation window (navigation, dialog,
 //!   popup, tab closed) and input dispatch that never hangs on a dialog.
 //! - [`input`]: `click`, `hover`, `type`, `press`, `scroll` and the key table.
+//! - [`cursor`]: the visible MonoCode cursor that glides to the point of a
+//!   click, hover or type, so the user can follow the agent.
 //! - [`actions`]: `navigate`, `back`, `forward`, `select`, `upload`, `dialog`,
 //!   `wait`, `screenshot`, `read`.
 //!
@@ -54,6 +56,7 @@
 //! actionability, quads) never make a later failure `unknown`.
 
 mod actions;
+mod cursor;
 mod element;
 mod input;
 mod observe;
@@ -95,7 +98,11 @@ pub struct Exec<'a> {
 
 /// Run one semantic action. Returns exactly one result and never panics.
 pub fn execute(exec: Exec<'_>) -> ActionResult {
-    refs::prune(host_id(exec.link), &exec.link.policy().read());
+    {
+        let state = exec.link.policy().read();
+        refs::prune(host_id(exec.link), &state);
+        cursor::prune(host_id(exec.link), &state);
+    }
     let request_id = exec.ctx.request_id.as_str();
     let Some(handle) = exec.handle else {
         return ActionResult::from_reason(request_id, Reason::InvalidRequest)

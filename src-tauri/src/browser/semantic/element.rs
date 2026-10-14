@@ -402,6 +402,16 @@ pub fn prepare(run: &Run<'_>, el: &Element, needs: Needs) -> Result<Prepared, Fa
     Ok(Prepared { facts, point })
 }
 
+/// Steps 5 and 6 again, after time passed since [`prepare`] (the visible
+/// cursor's glide): the input point now, hit-tested when `hit`.
+pub fn recheck(run: &Run<'_>, el: &Element, hit: bool) -> Result<Point, Fail> {
+    let point = point(run, el)?;
+    if hit {
+        hit_test(run, el, point)?;
+    }
+    Ok(point)
+}
+
 /// `DOM.scrollIntoViewIfNeeded` (spec 9.2 step 4).
 pub fn scroll_into_view(run: &Run<'_>, el: &Element) -> Result<(), Fail> {
     match run.send(
@@ -594,7 +604,9 @@ fn closed_root_hit(run: &Run<'_>, el: &Element, point: Point) -> Hit {
             "x": point.local_x.round() as i64,
             "y": point.local_y.round() as i64,
             "includeUserAgentShadowDOM": true,
-            "ignorePointerEventsNone": true,
+            // `true` would hit-test `pointer-events: none` elements, which a
+            // real click passes through (the visible cursor among them).
+            "ignorePointerEventsNone": false,
         }),
     ) else {
         return ok;

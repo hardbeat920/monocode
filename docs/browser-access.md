@@ -41,6 +41,8 @@ In your own Chrome or Edge, agent tabs open in the background of your current wi
 
 Revoking a thread, switching browser access off or a dropped connection leaves the tabs open.
 
+While you watch an agent tab, a dark MonoCode cursor with a `◆ MonoCode` label shows where the agent points: it glides to what the agent clicks, hovers or types into, and pulses on a click. It fades after a few seconds without actions and goes away when you take the tab back. It never takes clicks, the page cannot see inside it, and the agent's screenshots leave it out. In a background tab, or with reduced motion turned on in your system, it jumps instead of gliding, so the agent is not slowed down.
+
 ## Hand a tab to a thread
 
 A tab you open yourself belongs to no thread. To let a thread work in it, open Settings → Browser and click **Show my tabs** under **Give a tab to a thread**. The list shows the web pages in the browser that no thread holds. Pick a thread next to a tab and click **Give**. The thread gets browser access with the tab. The control shows while browser access is on and MonoCode is connected to the browser.

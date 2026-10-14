@@ -703,10 +703,11 @@ pub fn close_targets(link: &Link, targets: &[TargetId]) {
     }
 }
 
-/// Script run in our isolated world to take the marker off a page the user
-/// takes back (spec 13.1 "Preuzmi tab"); `marker.js` defines the hook.
+/// Script run in our isolated world to take the marker and the visible
+/// cursor off a page the user takes back (spec 13.1 "Preuzmi tab");
+/// `marker.js` and `cursor.js` define the hooks.
 const MARKER_RELEASE_FN: &str =
-    "function() { return typeof globalThis.__monocodeMarkerRelease === 'function' ? globalThis.__monocodeMarkerRelease() : false; }";
+    "function() { if (typeof globalThis.__monocodeCursorRemove === 'function') { globalThis.__monocodeCursorRemove(); } return typeof globalThis.__monocodeMarkerRelease === 'function' ? globalThis.__monocodeMarkerRelease() : false; }";
 
 /// Strip the title prefix and restore the favicon in the current document of
 /// `session` before detaching from it. Best effort: the isolated world of the
@@ -1756,6 +1757,7 @@ mod tests {
         assert!(MARKER_JS.contains("addScriptToEvaluateOnNewDocument"));
         assert!(MARKER_JS.contains("globalThis.__monocodeMarkerRelease = "));
         assert!(MARKER_RELEASE_FN.contains("__monocodeMarkerRelease"));
+        assert!(MARKER_RELEASE_FN.contains("__monocodeCursorRemove"));
         assert!(MARKER_JS.contains(super::super::protocol::MARKER_PREFIX));
     }
 }
