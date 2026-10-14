@@ -1,31 +1,22 @@
 import { expect, test, type Locator } from "@playwright/test";
 
 async function setOverflow(strip: Locator, overflow: number) {
-  await strip.evaluate((el, extra) => {
+  const width = await strip.evaluate((el, extra) => {
     const row = el.parentElement!;
     const fixture = row.parentElement!;
     const inset = fixture.getBoundingClientRect().width - row.clientWidth;
     const add = row.querySelector<HTMLButtonElement>(
       '[aria-label="Connect an inbox source"]',
     );
-    fixture.style.width = `${el.firstElementChild!.scrollWidth + (add?.offsetWidth ?? 0) + inset - extra}px`;
+    const width =
+      el.firstElementChild!.scrollWidth + (add?.offsetWidth ?? 0) - extra;
+    fixture.style.width = `${width + inset}px`;
     el.scrollLeft = 0;
+    return width;
   }, overflow);
   await expect
-    .poll(() =>
-      strip.evaluate((el) => {
-        const row = el.parentElement!;
-        const add = row.querySelector<HTMLButtonElement>(
-          '[aria-label="Connect an inbox source"]',
-        );
-        return (
-          el.firstElementChild!.scrollWidth +
-          (add?.offsetWidth ?? 0) -
-          row.clientWidth
-        );
-      }),
-    )
-    .toBe(overflow);
+    .poll(() => strip.evaluate((el) => el.parentElement!.clientWidth))
+    .toBe(width);
 }
 
 test.beforeEach(async ({ page }) => {
@@ -175,10 +166,23 @@ test("reduced motion still reaches either edge in one click", async ({
   await setOverflow(page.getByRole("tablist"), 25);
   const right = page.getByRole("button", { name: "Scroll tabs right" });
   const left = page.getByRole("button", { name: "Scroll tabs left" });
-  await right.click();
+  const clickWithoutMotion = async (button: Locator, distance: number) => {
+    const movement = await button.evaluate(async (el) => {
+      const first =
+        el.parentElement!.querySelector<HTMLElement>('[role="tab"]')!;
+      const before = first.getBoundingClientRect().left;
+      (el as HTMLButtonElement).click();
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve()),
+      );
+      return first.getBoundingClientRect().left - before;
+    });
+    expect(movement).toBeCloseTo(distance, 0);
+  };
+  await clickWithoutMotion(right, -25);
   await expect(right).toHaveCount(0);
   await expect(left).toBeVisible();
-  await left.click();
+  await clickWithoutMotion(left, 25);
   await expect(left).toHaveCount(0);
   await expect(right).toBeVisible();
 });

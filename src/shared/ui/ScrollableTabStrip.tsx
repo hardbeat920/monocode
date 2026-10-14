@@ -8,6 +8,7 @@ import {
 import { ChevronLeft, ChevronRight, Plus } from "./icons";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
 
+// Match px-2 padding, size-3.5 plus that padding, and size-6 pagers below.
 const ADD_PADDING = 16;
 const COMPACT_ADD_WIDTH = 30;
 const PAGER_WIDTH = 24;
