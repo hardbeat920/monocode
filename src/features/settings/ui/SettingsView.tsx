@@ -313,6 +313,7 @@ import { PixelMascot } from "../../projects/ui/PixelMascot";
 import {
   defaultMonoName,
   listMonos,
+  monoForSession,
   monoLook,
   monoProjectsPhrase,
   monosSnapshot,
@@ -492,6 +493,9 @@ export function SettingsView({
 
   const browserSessionName = useCallback(
     (sessionId: string) => {
+      // A Mono's conversation goes by the Mono's name.
+      const mono = monoForSession(sessionId);
+      if (mono) return monoLook(mono).name;
       const session =
         liveSessions?.find((entry) => entry.id === sessionId) ??
         sessions.find((entry) => entry.id === sessionId);

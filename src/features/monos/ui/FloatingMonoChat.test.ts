@@ -12,7 +12,10 @@ const native = vi.hoisted(() => ({
   listen: vi.fn(),
   hide: vi.fn(),
 }));
-vi.mock("@tauri-apps/api/core", () => ({ invoke: native.invoke }));
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: native.invoke,
+  isTauri: () => false,
+}));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ hide: native.hide }),
 }));

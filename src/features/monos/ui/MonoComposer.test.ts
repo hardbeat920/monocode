@@ -27,6 +27,35 @@ vi.mock("../../../shared/ui/EmojiPicker", async () => {
   };
 });
 
+// The browser's prompt and indicator are covered on their own; here they
+// show which session they were given and hand over a picked element.
+vi.mock("../../sessions/ui/BrowserIndicator", async () => {
+  const { createElement } = await import("react");
+  return {
+    BrowserRequestPrompt: ({ sessionId }: { sessionId: string }) =>
+      createElement("div", { "data-browser-request": sessionId }),
+    BrowserIndicator: ({
+      sessionId,
+      cwd,
+      onPicked,
+    }: {
+      sessionId: string;
+      cwd?: string;
+      onPicked?: (picked: { text: string; image?: string }) => void;
+    }) =>
+      createElement(
+        "button",
+        {
+          type: "button",
+          "data-browser-indicator": `${sessionId}:${cwd}`,
+          onClick: () =>
+            onPicked?.({ text: "<picked_element ref=e3>", image: "iVBOR" }),
+        },
+        "globe",
+      ),
+  };
+});
+
 let container: HTMLDivElement;
 let root: Root;
 const file = {
@@ -232,4 +261,36 @@ it("inserts a picked emoji where the cursor was, beside attach", async () => {
   // The floating chat keeps its inline input, without the extra row.
   render();
   expect(container.querySelector('button[aria-label="Add emoji"]')).toBeNull();
+});
+
+it("shows the Mono's browser prompt, and its indicator beside the controls", () => {
+  render();
+  expect(container.querySelector("[data-browser-request]")).toBeNull();
+  expect(container.querySelector("[data-browser-indicator]")).toBeNull();
+
+  // The floating chat has no controls row: the prompt only.
+  render({ browser: { sessionId: "mono-session" } });
+  expect(
+    container
+      .querySelector("[data-browser-request]")
+      ?.getAttribute("data-browser-request"),
+  ).toBe("mono-session");
+  expect(container.querySelector("[data-browser-indicator]")).toBeNull();
+
+  render({
+    browser: { sessionId: "mono-session", cwd: "/repo" },
+    controls: createElement("span", null, "model"),
+  });
+  const indicator = container.querySelector<HTMLButtonElement>(
+    "[data-browser-indicator]",
+  )!;
+  expect(indicator.getAttribute("data-browser-indicator")).toBe(
+    "mono-session:/repo",
+  );
+  type("Look at this");
+  act(() => indicator.click());
+  expect(field().value).toBe("Look at this\n\n<picked_element ref=e3>\n\n");
+  expect(
+    container.querySelector('[title="picked-element.png"]'),
+  ).not.toBeNull();
 });

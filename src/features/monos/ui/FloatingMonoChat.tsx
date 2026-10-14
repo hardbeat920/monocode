@@ -487,6 +487,9 @@ function FloatingConversation({
         <MonoComposer
           sessionId={`floating:${session.id}`}
           name={mono.name}
+          // The prompt only: this window has no row for the indicator, and
+          // the browser's tabs are one click away in the main window.
+          browser={{ sessionId: session.id }}
           enabled={!session.worktreeRemoved}
           focusToken={focus}
           onSubmit={async (text, attachments) => {

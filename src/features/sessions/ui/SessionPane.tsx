@@ -1192,6 +1192,11 @@ const LocalSessionPane = memo(function LocalSessionPane({
                     onSubmit={(text, attachments) =>
                       onSubmit(session.id, text, attachments)
                     }
+                    browser={
+                      remote
+                        ? undefined
+                        : { sessionId: session.id, cwd: workCwd }
+                    }
                     // The plan's usage, as the session footer shows it,
                     // which a Mono in full view covers. Its account moves
                     // with the usage-limit notice, not here. A narrow chat
