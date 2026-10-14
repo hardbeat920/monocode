@@ -527,11 +527,61 @@ fn gather(run: &Run<'_>) -> Result<(Vec<AxNode>, Vec<FrameCtx>, usize), Fail> {
 
 /// `snapshot` (spec 8).
 pub fn snapshot(run: &Run<'_>, p: SnapshotParams) -> Result<ActionResult, Fail> {
-    snapshot_inner(run, p).map_err(timeout_as_snapshot)
+    let taken = take(run, &p, false).map_err(timeout_as_snapshot)?;
+    let Taken {
+        header,
+        body,
+        version,
+        url,
+        title,
+        refs,
+        truncated,
+        picked,
+        ..
+    } = taken;
+    let mut message = format!(
+        "Snapshot v{version} of {url}: {refs} refs{}. Act with refs like `e3`; take a new snapshot after the page changes.",
+        if truncated {
+            " (truncated; use scope with a ref for the rest)"
+        } else {
+            ""
+        }
+    );
+    if let Some(number) = picked {
+        message.push_str(&format!(" The user pointed at e{number} in the browser."));
+    }
+    Ok(ActionResult::done(run.id(), message)
+        .with_data(json!({
+            "snapshot": format!("{header}{body}"),
+            "version": version,
+            "url": url,
+            "title": title,
+            "refs": refs,
+            "truncated": truncated,
+            "picked": picked.map(|number| format!("e{number}")),
+        }))
+        .with_observed(run.observed_now()))
 }
 
-fn snapshot_inner(run: &Run<'_>, p: SnapshotParams) -> Result<ActionResult, Fail> {
-    let mode = p.mode.unwrap_or_default();
+/// One rendered snapshot.
+struct Taken {
+    header: String,
+    body: String,
+    version: u64,
+    url: String,
+    title: String,
+    refs: usize,
+    truncated: bool,
+    picked: Option<u32>,
+    /// The previous whole-page snapshot of this document in the same mode,
+    /// when this one is a whole-page snapshot too.
+    previous: Option<refs::LastSnapshot>,
+}
+
+/// Gather and render a snapshot. Without a `mode` in `p` it is the mode of
+/// the document's last whole-page snapshot when `inherit` (an action's
+/// snapshot looks like the one the agent asked for), else the default.
+fn take(run: &Run<'_>, p: &SnapshotParams, inherit: bool) -> Result<Taken, Fail> {
     let max_nodes = p.max_nodes.unwrap_or(MAX_NODES).clamp(1, MAX_NODES);
     let scope = match p.scope.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(raw) => {
@@ -543,6 +593,7 @@ fn snapshot_inner(run: &Run<'_>, p: SnapshotParams) -> Result<ActionResult, Fail
         }
         None => None,
     };
+    let whole_page = scope.is_none() && max_nodes == MAX_NODES;
     let (arena, frames, root) = gather(run)?;
     let start = match &scope {
         Some((raw, node)) => arena
@@ -573,24 +624,42 @@ fn snapshot_inner(run: &Run<'_>, p: SnapshotParams) -> Result<ActionResult, Fail
             strip_marker(&lease.title).to_string(),
         )
     };
-    let rendered = refs::with_snapshot_table(&run.key(), loader.as_deref(), version, |table| {
-        // Backend ids are unique within a session; same-process frames share
-        // their parent's session, so the node's own tree names its frame.
-        let picked = refs::picked(table).and_then(|(session, backend)| {
-            let node = arena
-                .iter()
-                .find(|n| n.backend == Some(*backend) && frames[n.frame].session == *session)?;
-            Some((node.frame, *backend))
+    let (rendered, previous) =
+        refs::with_snapshot_table(&run.key(), loader.as_deref(), version, |table| {
+            let mode = match (p.mode, inherit, &table.last) {
+                (Some(mode), _, _) => mode,
+                (None, true, Some(last)) => last.mode,
+                _ => SnapshotMode::default(),
+            };
+            // Backend ids are unique within a session; same-process frames share
+            // their parent's session, so the node's own tree names its frame.
+            let picked = refs::picked(table).and_then(|(session, backend)| {
+                let node = arena
+                    .iter()
+                    .find(|n| n.backend == Some(*backend) && frames[n.frame].session == *session)?;
+                Some((node.frame, *backend))
+            });
+            let opts = RenderOpts {
+                mode,
+                max_nodes,
+                picked,
+            };
+            let rendered = render(&arena, start, &opts, &mut |frame, backend, role, name| {
+                table.assign(&frames[frame], backend, role, name)
+            });
+            let previous = if whole_page {
+                let previous = table.last.take().filter(|last| last.mode == mode);
+                table.last = Some(refs::LastSnapshot {
+                    version,
+                    mode,
+                    body: rendered.text.clone(),
+                });
+                previous
+            } else {
+                None
+            };
+            (rendered, previous)
         });
-        let opts = RenderOpts {
-            mode,
-            max_nodes,
-            picked,
-        };
-        render(&arena, start, &opts, &mut |frame, backend, role, name| {
-            table.assign(&frames[frame], backend, role, name)
-        })
-    });
     let mut header = format!(
         "url: {url}\ntitle: {}\nsnapshot: v{version}, {} refs{}\n",
         quoted(&clip(&title, MAX_NAME)),
@@ -606,30 +675,237 @@ fn snapshot_inner(run: &Run<'_>, p: SnapshotParams) -> Result<ActionResult, Fail
             "picked: e{number} is the element the user pointed at in the browser\n"
         ));
     }
-    let text = format!("{header}{}", rendered.text);
-    let mut message = format!(
-        "Snapshot v{version} of {url}: {} refs{}. Act with refs like `e3`; take a new snapshot after the page changes.",
-        rendered.refs,
-        if rendered.truncated {
-            " (truncated; use scope with a ref for the rest)"
-        } else {
-            ""
-        }
+    Ok(Taken {
+        header,
+        body: rendered.text,
+        version,
+        url,
+        title,
+        refs: rendered.refs,
+        truncated: rendered.truncated,
+        picked: rendered.picked,
+        previous,
+    })
+}
+
+/// The page snapshot an action returns (see [`after_action`]).
+pub struct Inline {
+    pub text: String,
+    pub version: u64,
+    /// `full`, `changes` or `unchanged`.
+    pub kind: &'static str,
+}
+
+/// Snapshot of the page after an action: the whole page when there is no
+/// earlier snapshot of this document (a navigation starts a new one), else
+/// only what changed since the last one, when that is clearly shorter.
+pub fn after_action(run: &Run<'_>) -> Result<Inline, Fail> {
+    let params = SnapshotParams {
+        tab: run.tab().clone(),
+        scope: None,
+        mode: None,
+        max_nodes: None,
+        timeout_ms: None,
+    };
+    let taken = take(run, &params, true).map_err(timeout_as_snapshot)?;
+    let version = taken.version;
+    let full = || Inline {
+        text: format!("{}{}", taken.header, taken.body),
+        version,
+        kind: "full",
+    };
+    let Some(previous) = &taken.previous else {
+        return Ok(full());
+    };
+    let head = format!(
+        "url: {}\ntitle: {}\n",
+        taken.url,
+        quoted(&clip(&taken.title, MAX_NAME))
     );
-    if let Some(number) = rendered.picked {
-        message.push_str(&format!(" The user pointed at e{number} in the browser."));
+    match changes(&previous.body, &taken.body) {
+        Some(Changes::None) => Ok(Inline {
+            text: format!(
+                "{head}snapshot: v{version}, no change since v{} ({} refs)\n",
+                previous.version, taken.refs
+            ),
+            version,
+            kind: "unchanged",
+        }),
+        Some(Changes::Some {
+            text,
+            added,
+            removed,
+        }) if text.len() * 10 < (taken.header.len() + taken.body.len()) * 6 => {
+            let mut summary = format!(
+                "{head}snapshot: v{version}, changes since v{}: {added} line(s) added, {removed} removed; lines not shown are as before and their refs still work\n",
+                previous.version
+            );
+            if let Some(number) = taken.picked {
+                summary.push_str(&format!(
+                    "picked: e{number} is the element the user pointed at in the browser\n"
+                ));
+            }
+            Ok(Inline {
+                text: format!("{summary}{text}"),
+                version,
+                kind: "changes",
+            })
+        }
+        _ => Ok(full()),
     }
-    Ok(ActionResult::done(run.id(), message)
-        .with_data(json!({
-            "snapshot": text,
-            "version": version,
-            "url": url,
-            "title": title,
-            "refs": rendered.refs,
-            "truncated": rendered.truncated,
-            "picked": rendered.picked.map(|number| format!("e{number}")),
-        }))
-        .with_observed(run.observed_now()))
+}
+
+/// What [`changes`] found between two snapshot bodies.
+#[derive(Debug, PartialEq)]
+pub enum Changes {
+    None,
+    Some {
+        text: String,
+        added: usize,
+        removed: usize,
+    },
+}
+
+/// Lines of change context shown around each change.
+const CONTEXT: usize = 1;
+/// Largest middle part (old lines x new lines) compared line by line.
+const MAX_DIFF_CELLS: usize = 1_000_000;
+
+/// A line diff of two snapshot bodies in unified style: `-` for a removed
+/// line, `+` for an added one, a space for context, and an `@@` line naming
+/// where in the page each group of changes is. `None` when the bodies are
+/// too different to compare cheaply.
+pub fn changes(old: &str, new: &str) -> Option<Changes> {
+    let a: Vec<&str> = old.lines().collect();
+    let b: Vec<&str> = new.lines().collect();
+    let prefix = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
+    let suffix = a[prefix..]
+        .iter()
+        .rev()
+        .zip(b[prefix..].iter().rev())
+        .take_while(|(x, y)| x == y)
+        .count();
+    let (am, bm) = (&a[prefix..a.len() - suffix], &b[prefix..b.len() - suffix]);
+    if am.is_empty() && bm.is_empty() {
+        return Some(Changes::None);
+    }
+    if am.len().saturating_mul(bm.len()) > MAX_DIFF_CELLS {
+        return None;
+    }
+    // Longest common subsequence of the middle parts.
+    let width = bm.len() + 1;
+    let mut lcs = vec![0u32; (am.len() + 1) * width];
+    for i in (0..am.len()).rev() {
+        for j in (0..bm.len()).rev() {
+            lcs[i * width + j] = if am[i] == bm[j] {
+                lcs[(i + 1) * width + j + 1] + 1
+            } else {
+                lcs[(i + 1) * width + j].max(lcs[i * width + j + 1])
+            };
+        }
+    }
+    #[derive(Clone, Copy, PartialEq)]
+    enum Op {
+        Same(usize),
+        Removed(usize),
+        Added(usize),
+    }
+    let mut ops: Vec<Op> = (0..prefix).map(Op::Same).collect();
+    let (mut i, mut j) = (0, 0);
+    while i < am.len() || j < bm.len() {
+        if i < am.len() && j < bm.len() && am[i] == bm[j] {
+            ops.push(Op::Same(prefix + j));
+            i += 1;
+            j += 1;
+        } else if i < am.len()
+            && (j == bm.len() || lcs[(i + 1) * width + j] >= lcs[i * width + j + 1])
+        {
+            // Removals before additions, as in a unified diff.
+            ops.push(Op::Removed(prefix + i));
+            i += 1;
+        } else {
+            ops.push(Op::Added(prefix + j));
+            j += 1;
+        }
+    }
+    for k in 0..suffix {
+        ops.push(Op::Same(b.len() - suffix + k));
+    }
+    let changed: Vec<usize> = ops
+        .iter()
+        .enumerate()
+        .filter(|(_, op)| !matches!(op, Op::Same(..)))
+        .map(|(k, _)| k)
+        .collect();
+    let mut text = String::new();
+    let (mut added, mut removed) = (0, 0);
+    let mut k = 0;
+    while k < changed.len() {
+        // One group: changes whose context windows touch.
+        let first = changed[k];
+        let mut last = first;
+        while k + 1 < changed.len() && changed[k + 1] <= last + 2 * CONTEXT + 1 {
+            k += 1;
+            last = changed[k];
+        }
+        k += 1;
+        let from = first.saturating_sub(CONTEXT);
+        let to = (last + CONTEXT).min(ops.len() - 1);
+        let anchor = match ops[from] {
+            Op::Same(j) | Op::Added(j) => where_in(&b, j),
+            Op::Removed(i) => where_in(&a, i),
+        };
+        text.push_str(&format!("@@ {anchor}\n"));
+        for op in &ops[from..=to] {
+            match *op {
+                Op::Same(j) => text.push_str(&format!(" {}\n", b[j])),
+                Op::Removed(i) => {
+                    removed += 1;
+                    text.push_str(&format!("-{}\n", a[i]));
+                }
+                Op::Added(j) => {
+                    added += 1;
+                    text.push_str(&format!("+{}\n", b[j]));
+                }
+            }
+        }
+    }
+    Some(Changes::Some {
+        text,
+        added,
+        removed,
+    })
+}
+
+/// The ancestors of line `at` (by indentation), outermost first, as
+/// `role "name"` without attributes: `main > list > listitem`.
+fn where_in(lines: &[&str], at: usize) -> String {
+    let indent = |line: &str| line.len() - line.trim_start().len();
+    let label = |line: &str| {
+        let line = line.trim_start().trim_start_matches("- ");
+        let end = line.find(" [").unwrap_or(line.len());
+        let end = line[..end].find(": ").unwrap_or(end);
+        clip(&line[..end], 60)
+    };
+    let Some(line) = lines.get(at) else {
+        return "end of page".into();
+    };
+    let mut depth = indent(line);
+    let mut path = Vec::new();
+    for line in lines[..at].iter().rev() {
+        if depth == 0 || path.len() == 3 {
+            break;
+        }
+        if indent(line) < depth {
+            depth = indent(line);
+            path.push(label(line));
+        }
+    }
+    if path.is_empty() {
+        return "top of page".into();
+    }
+    path.reverse();
+    path.join(" > ")
 }
 
 #[cfg(test)]
@@ -793,5 +1069,50 @@ mod tests {
     fn clip_squashes_whitespace() {
         assert_eq!(clip("  a \n\t b  ", 10), "a b");
         assert_eq!(clip("abcdef", 4), "abc…");
+    }
+
+    #[test]
+    fn changes_show_only_what_differs_with_where_it_is() {
+        let old = "- document \"App\" [ref=e1]\n  - main\n    - list\n      - listitem\n        - button \"Mark done\" [ref=e5]\n      - listitem\n        - button \"Mark done\" [ref=e6]\n  - contentinfo\n    - link \"Help\" [ref=e9]\n";
+        assert_eq!(changes(old, old), Some(Changes::None));
+        let new = old.replace(
+            "        - button \"Mark done\" [ref=e5]\n",
+            "        - button \"Done\" [ref=e5]\n        - status \"Saved\"\n",
+        );
+        let Some(Changes::Some {
+            text,
+            added,
+            removed,
+        }) = changes(old, &new)
+        else {
+            panic!("expected changes");
+        };
+        assert_eq!((added, removed), (2, 1));
+        assert_eq!(
+            text,
+            "@@ document \"App\" > main > list\n       - listitem\n-        - button \"Mark done\" [ref=e5]\n+        - button \"Done\" [ref=e5]\n+        - status \"Saved\"\n       - listitem\n"
+        );
+        // Two changes far apart are two groups.
+        let far = new.replace(
+            "link \"Help\" [ref=e9]",
+            "link \"Help\" [disabled] [ref=e9]",
+        );
+        let Some(Changes::Some { text, .. }) = changes(old, &far) else {
+            panic!("expected changes");
+        };
+        assert_eq!(text.matches("@@ ").count(), 2, "{text}");
+        assert!(
+            text.contains("@@ document \"App\"\n   - contentinfo\n-    - link"),
+            "{text}"
+        );
+        // A line added at the very top.
+        let top = format!("- banner [ref=e20]\n{old}");
+        let Some(Changes::Some { text, .. }) = changes(old, &top) else {
+            panic!("expected changes");
+        };
+        assert!(
+            text.starts_with("@@ top of page\n+- banner [ref=e20]\n"),
+            "{text}"
+        );
     }
 }

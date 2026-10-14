@@ -1509,8 +1509,12 @@ fn the_cli_drives_the_fake_browser_and_maps_outcomes_to_exit_codes() {
         creds.clone(),
     );
     assert_eq!(code, 0, "{out}");
-    let opened: Value = serde_json::from_str(&out).unwrap();
+    // The JSON result comes first; the page snapshot follows as text.
+    let (json_line, snapshot) = out.split_once("\n\n").unwrap();
+    let opened: Value = serde_json::from_str(json_line).unwrap();
     let tab = opened["data"]["tab"].as_str().unwrap().to_string();
+    assert!(opened["data"].get("snapshot").is_none(), "{out}");
+    assert!(snapshot.starts_with("url: https://example.com/"), "{out}");
 
     // A done snapshot prints only its text.
     let (text, code) = cli::execute_with(&["snapshot", "--tab", &tab], creds.clone());
@@ -1559,8 +1563,8 @@ fn the_cli_drives_the_fake_browser_and_maps_outcomes_to_exit_codes() {
         world.presses(&world.cdp_session(&TabId(tab.clone()))),
         presses
     );
-    let first: Value = serde_json::from_str(&first).unwrap();
-    let second: Value = serde_json::from_str(&second).unwrap();
+    let first: Value = serde_json::from_str(first.lines().next().unwrap()).unwrap();
+    let second: Value = serde_json::from_str(second.lines().next().unwrap()).unwrap();
     assert_eq!(first["outcome"], second["outcome"]);
 
     // Turn over: blocked/turn_inactive. Revoked token: blocked/revoked.

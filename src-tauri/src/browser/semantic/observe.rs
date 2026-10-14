@@ -13,7 +13,7 @@
 //! once the dialog is answered. [`Watch::input`] therefore waits for either
 //! the response or `Page.javascriptDialogOpening`, whichever comes first.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -32,6 +32,18 @@ use super::{refs, Fail, Run};
 
 /// Observation window after input (spec 9.2 step 8: up to 500 ms).
 pub const WINDOW: Duration = Duration::from_millis(500);
+/// With DOM mutations counted, the window ends early once the page has been
+/// quiet this long: no mutation, no request of its own in flight and no
+/// navigation started.
+const QUIET: Duration = Duration::from_millis(100);
+/// Never end the window before this, so a navigation the input started has
+/// time to show up.
+const MIN_WINDOW: Duration = Duration::from_millis(100);
+/// How often the mutation counter is read while watching.
+const MUTATION_POLL: Duration = Duration::from_millis(50);
+/// While a fetch or XHR the input started is in flight, the window may grow
+/// to this, so the result (and the snapshot after it) shows its answer.
+const SETTLE_MAX: Duration = Duration::from_millis(1500);
 /// Shorter window for actions that rarely start navigations (hover, scroll).
 pub const SHORT_WINDOW: Duration = Duration::from_millis(150);
 /// Extra time for the event pump to register a popup we saw attach.
@@ -198,24 +210,72 @@ impl Watch {
             (Some(_), None) => true,
             (None, _) => false,
         };
-        let until = (Instant::now() + window).min(run.ctx.deadline);
+        let started = Instant::now();
+        let until = (started + window).min(run.ctx.deadline);
+        let settle_cap = (started + SETTLE_MAX.max(window)).min(run.ctx.deadline);
         let mut navigating = false;
         let mut navigated = false;
         let mut same_document = false;
         let mut loaded = false;
         let mut closed = false;
         let mut popup_seen = false;
+        // Quiet tracking, only where mutations are counted (click, type, press).
+        let settle = self.count_mutations;
+        let mut quiet_since = started;
+        let mut next_poll = started + MUTATION_POLL;
+        let mut requests: HashSet<String> = HashSet::new();
+        let mut mutations = 0u64;
+        let mut loaded_at: Option<Instant> = None;
         while self.dialog.is_none() && !closed {
-            let deadline = if navigating && !loaded {
-                run.ctx.deadline
+            let end = if settle && !requests.is_empty() {
+                settle_cap
             } else {
                 until
             };
-            let Some(event) = self.next_event(deadline) else {
-                if Instant::now() >= deadline {
+            let deadline = if navigating && !loaded {
+                run.ctx.deadline
+            } else if settle && !navigating {
+                next_poll.min(end)
+            } else if let (true, Some(at)) = (settle, loaded_at) {
+                (at + QUIET).min(end)
+            } else {
+                end
+            };
+            let event = self.next_event(deadline);
+            let now = Instant::now();
+            // Never read the page behind a dialog that just opened: it is frozen.
+            let frozen = self.dialog.is_some()
+                || event
+                    .as_ref()
+                    .is_some_and(|e| e.method == "Page.javascriptDialogOpening");
+            if settle && !navigating && !frozen && now >= next_poll {
+                let count = self.read_mutations(run);
+                if count > 0 {
+                    mutations += count;
+                    quiet_since = now;
+                }
+                next_poll = now + MUTATION_POLL;
+            }
+            let Some(event) = event else {
+                if navigating && !loaded {
+                    if now >= deadline || self.session.is_closed() {
+                        break;
+                    }
+                    continue;
+                }
+                if loaded_at.is_some_and(|at| settle && at.elapsed() >= QUIET) {
                     break;
                 }
-                if self.session.is_closed() {
+                if now >= end || self.session.is_closed() {
+                    break;
+                }
+                if settle
+                    && !navigating
+                    && !popup_seen
+                    && requests.is_empty()
+                    && now.duration_since(started) >= MIN_WINDOW
+                    && now.duration_since(quiet_since) >= QUIET
+                {
                     break;
                 }
                 continue;
@@ -260,6 +320,22 @@ impl Watch {
                 "Page.frameStoppedLoading" if navigating && main_frame_event => loaded = true,
                 "Page.loadEventFired" if navigating => loaded = true,
                 "Page.javascriptDialogOpening" => self.dialog = Some(dialog_info(params)),
+                "Network.requestWillBeSent"
+                    if settle && matches!(params["type"].as_str(), Some("XHR" | "Fetch")) =>
+                {
+                    if let Some(id) = params["requestId"].as_str() {
+                        requests.insert(id.to_string());
+                        quiet_since = Instant::now();
+                    }
+                }
+                "Network.loadingFinished" | "Network.loadingFailed" if settle => {
+                    if params["requestId"]
+                        .as_str()
+                        .is_some_and(|id| requests.remove(id))
+                    {
+                        quiet_since = Instant::now();
+                    }
+                }
                 "Inspector.targetCrashed" => closed = true,
                 "Target.attachedToTarget" if params["targetInfo"]["type"] == "page" => {
                     popup_seen = true;
@@ -276,7 +352,29 @@ impl Watch {
                 }
                 _ => {}
             }
-            if navigating && loaded && Instant::now() >= until {
+            if navigating && loaded {
+                let at = *loaded_at.get_or_insert_with(Instant::now);
+                // The new page is there; a short quiet spell catches a
+                // dialog or popup it opens on load.
+                if Instant::now() >= until || settle && at.elapsed() >= QUIET {
+                    break;
+                }
+            }
+            // A busy page (images, console) still ends on time or when quiet.
+            let now = Instant::now();
+            let end = if settle && !requests.is_empty() {
+                settle_cap
+            } else {
+                until
+            };
+            if !navigating
+                && (now >= end
+                    || settle
+                        && !popup_seen
+                        && requests.is_empty()
+                        && now.duration_since(started) >= MIN_WINDOW
+                        && now.duration_since(quiet_since) >= QUIET)
+            {
                 break;
             }
         }
@@ -313,17 +411,8 @@ impl Watch {
         }
         let mut stale = navigated;
         if self.count_mutations && !navigated && self.dialog.is_none() {
-            if let Ok(frame) = element::main_frame(run) {
-                if let Ok(value) = element::call_frame(
-                    run,
-                    &frame,
-                    PAGE_JS,
-                    &[element::arg(json!("mutations"))],
-                    false,
-                ) {
-                    stale = value["count"].as_u64().unwrap_or(0) >= STALE_MUTATIONS;
-                }
-            }
+            mutations += self.read_mutations(run);
+            stale = mutations >= STALE_MUTATIONS;
         }
         let dialog = self
             .dialog
@@ -342,6 +431,21 @@ impl Watch {
             // The core adds them for every action (`Host::report_signals`).
             signals: None,
         })
+    }
+
+    /// DOM mutation records since the last read (0 when it cannot be read).
+    fn read_mutations(&self, run: &Run<'_>) -> u64 {
+        element::main_frame(run)
+            .and_then(|frame| {
+                element::call_frame(
+                    run,
+                    &frame,
+                    PAGE_JS,
+                    &[element::arg(json!("mutations"))],
+                    false,
+                )
+            })
+            .map_or(0, |value| value["count"].as_u64().unwrap_or(0))
     }
 
     fn new_tab(&self, run: &Run<'_>) -> Option<NewTabInfo> {
@@ -368,6 +472,10 @@ impl Watch {
             .is_some_and(|l| l.popups_blocked > self.blocked_before)
     }
 }
+
+/// Part of a `done` message when the page changed; dropped when the result
+/// carries a fresh snapshot.
+pub const STALE_HINT: &str = "Refs may be stale; take a new snapshot.";
 
 /// One-line summary of what followed, appended to `done` messages.
 pub fn summary(observed: &Observed) -> String {
@@ -403,7 +511,7 @@ pub fn summary(observed: &Observed) -> String {
         parts.push("A popup was closed because the tab limit was reached.".into());
     }
     if observed.snapshot_stale && observed.dialog.is_none() {
-        parts.push("Refs may be stale; take a new snapshot.".into());
+        parts.push(STALE_HINT.into());
     }
     parts.join(" ")
 }

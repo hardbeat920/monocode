@@ -67,6 +67,17 @@ pub struct RefTable {
     /// The element the user pointed at in this document, as
     /// `(CDP session, backendNodeId)`; snapshots mark it.
     picked: Option<(CdpSessionId, i64)>,
+    /// The last whole-page snapshot of this document, so the snapshot an
+    /// action returns can be sent as the changes since then.
+    pub last: Option<LastSnapshot>,
+}
+
+/// Body of the last whole-page snapshot (no scope, default size).
+#[derive(Clone, Debug)]
+pub struct LastSnapshot {
+    pub version: u64,
+    pub mode: super::super::protocol::SnapshotMode,
+    pub body: String,
 }
 
 impl RefTable {

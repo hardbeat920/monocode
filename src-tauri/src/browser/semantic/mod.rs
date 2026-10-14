@@ -148,10 +148,119 @@ pub fn execute(exec: Exec<'_>) -> ActionResult {
             "tabs.* actions are handled by the browser core.",
         )),
     };
-    match outcome {
+    let mut result = match outcome {
         Ok(result) => result,
         Err(fail) => run.fail(fail, exec.kind.mutates()),
+    };
+    if returns_snapshot(exec.kind) && wants_snapshot(input) {
+        attach_snapshot(&run, &mut result);
     }
+    result
+}
+
+/// Actions whose result carries the page snapshot after them, so the agent
+/// sees the effect without another call (and another model turn).
+fn returns_snapshot(kind: ActionKind) -> bool {
+    matches!(
+        kind,
+        ActionKind::Navigate
+            | ActionKind::Back
+            | ActionKind::Forward
+            | ActionKind::Click
+            | ActionKind::Hover
+            | ActionKind::Type
+            | ActionKind::Press
+            | ActionKind::Scroll
+            | ActionKind::Select
+            | ActionKind::Upload
+            | ActionKind::Dialog
+            | ActionKind::Wait
+            | ActionKind::TabsOpen
+    )
+}
+
+/// Unless the input says `snapshot: false`.
+pub fn wants_snapshot(input: &Value) -> bool {
+    input.get("snapshot") != Some(&Value::Bool(false))
+}
+
+/// Time a snapshot after an action may take, on top of the action's own.
+const SNAPSHOT_BUDGET: Duration = Duration::from_secs(10);
+
+/// Add the page snapshot after an action to a `done` result: `data.snapshot`
+/// (the text: the whole page, or only the changes since the last snapshot of
+/// this document) and `data.snapshot_version`. Best effort: when it cannot
+/// be taken the result keeps telling the agent to take one. Nothing is taken
+/// while a dialog blocks the page.
+fn attach_snapshot(run: &Run<'_>, result: &mut ActionResult) {
+    if result.outcome != Outcome::Done
+        || result.observed.dialog.is_some()
+        || run.lease(|l| l.pending_dialog.is_some()).unwrap_or(true)
+    {
+        return;
+    }
+    // The action may have used its whole time limit (a slow load).
+    let mut ctx = run.ctx.clone();
+    ctx.deadline = ctx
+        .deadline
+        .max(std::time::Instant::now() + SNAPSHOT_BUDGET);
+    let after = Run {
+        link: run.link,
+        ctx: &ctx,
+        handle: run.handle,
+        settings: run.settings,
+        mutated: Cell::new(false),
+    };
+    let Ok(inline) = snapshot::after_action(&after) else {
+        return;
+    };
+    let mut data = match result.data.take() {
+        Some(Value::Object(map)) => map,
+        Some(other) => {
+            let mut map = serde_json::Map::new();
+            map.insert("value".into(), other);
+            map
+        }
+        None => serde_json::Map::new(),
+    };
+    data.insert("snapshot".into(), Value::String(inline.text));
+    data.insert("snapshot_version".into(), inline.version.into());
+    result.data = Some(Value::Object(data));
+    result.observed.snapshot_stale = false;
+    let message = result.message.replace(observe::STALE_HINT, "");
+    result.message = format!(
+        "{} {}",
+        message.trim_end(),
+        match inline.kind {
+            "unchanged" => "The page snapshot did not change.",
+            "changes" => "The changes to the page snapshot follow.",
+            _ => "The page snapshot follows.",
+        }
+    );
+}
+
+/// [`attach_snapshot`] for a tab the core just opened (`tabs.open`).
+pub fn attach_snapshot_for(
+    link: &Link,
+    ctx: &RequestCtx,
+    handle: &TabHandle,
+    settings: &BrowserSettings,
+    input: &Value,
+    result: &mut ActionResult,
+) {
+    if !wants_snapshot(input) {
+        return;
+    }
+    let mut ctx = ctx.clone();
+    ctx.tab = Some(handle.tab.clone());
+    let run = Run {
+        link,
+        ctx: &ctx,
+        handle,
+        settings,
+        mutated: Cell::new(false),
+    };
+    attach_snapshot(&run, result);
 }
 
 /// Identity of the browser host owning `link` (its policy's address).

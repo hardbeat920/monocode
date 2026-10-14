@@ -274,6 +274,11 @@ pub fn data_text(data: Option<&Value>) -> Option<&str> {
     })
 }
 
+/// The page snapshot an action (not `snapshot` itself) returned.
+pub fn data_snapshot(data: Option<&Value>) -> Option<&str> {
+    data?.get("snapshot").and_then(Value::as_str)
+}
+
 /// Base64 image of a screenshot result and its media type.
 pub fn data_image(data: Option<&Value>) -> Option<(&str, String)> {
     let data = data?;

@@ -21,8 +21,8 @@ You can work in your own tabs in Chrome or Edge through MonoCode: either the Mon
 
 - The tabs are yours: MonoCode marks them with "◆ MonoCode" in the title. A tab the user opened in the MonoCode browser is free until a thread adopts it; when the user mentions a page they opened, list your tabs and adopt it. In the user's own browser they can also hand you one of their tabs, which then shows up in your list. In the user's own browser they open in the background and carry the user's sign-ins; you cannot see or touch the user's other tabs. Never ask the user to click or type in your tabs. When a site needs a sign-in you do not have, stop and tell the user; they can sign in once through Open browser in MonoCode's browser settings.
 - Start by opening a tab; the result's data holds its id (`t_` + 8 hex). Every other action takes that `tab`. List your tabs when you lose track of them.
-- Act on elements by ref: take a snapshot, then use refs such as `e12` from it. After any action that changes the page, take a new snapshot before using refs again; old refs fail with `ref_stale`.
-- Every result has an outcome. `done`: the input reached the browser; check the effect with a snapshot. `blocked`: nothing was sent; change the plan and never work around it (for example with another URL). `failed`: fix the input (a fresh snapshot, another ref). `unknown`: the action may have happened; take a snapshot before retrying, and retry only with the same `request_id`.
+- Act on elements by ref (`e12`) from a snapshot. Opening a page and every action that can change it (navigate, click, type, press, select, hover, scroll, upload, dialog, wait, back) already return the page snapshot after it: the whole page after a navigation, otherwise only the lines that changed since your last snapshot (`+` added, `-` removed, `@@` names where), or that nothing changed. Refs you have not seen change keep working, so you rarely need a separate snapshot call. Pass `snapshot: false` when you do not need it. Refs from before a navigation fail with `ref_stale`.
+- Every result has an outcome. `done`: the input reached the browser; check the effect in the snapshot that came with it. `blocked`: nothing was sent; change the plan and never work around it (for example with another URL). `failed`: fix the input (a fresh snapshot, another ref). `unknown`: the action may have happened; take a snapshot before retrying, and retry only with the same `request_id`.
 - When the thread has no access yet, your first action asks the user in MonoCode and waits for the answer. On `not_granted` continue without the browser and do not retry in this turn. On `off` or a `browser_*` connection reason stop calling and tell the user what the message says.
 - A JavaScript dialog blocks its tab until you answer it with the dialog action; MonoCode never answers one for you.
 - Downloads, browser permission prompts and HTTP basic auth are not supported; tell the user when a task needs them. Only http(s) URLs and about:blank can be opened. There is no JavaScript or raw protocol access.
@@ -36,15 +36,15 @@ Manage your own browser tabs. action "list" returns the tabs this session owns, 
 
 ## browser_navigate
 
-Load an http(s) URL (or about:blank) in one of your tabs and wait for `wait_until` (default load). A load that times out still returns done with `observed.load_state: "timeout"`; take a snapshot to see what loaded.
+Load an http(s) URL (or about:blank) in one of your tabs and wait for `wait_until` (default load). A load that times out still returns done with `observed.load_state: "timeout"`; the snapshot with the result shows what loaded.
 
 ## browser_snapshot
 
-Return the tab's accessibility tree as compact text with refs (`e12`) for the elements you can act on. Call it before acting and after every action that changes the page. `scope` limits it to the subtree of a ref; `mode: "full"` adds static text. An element the user pointed at in the browser is marked `[picked by the user]`, and the header names its ref.
+Return the tab's accessibility tree as compact text with refs (`e12`) for the elements you can act on. Actions already return the snapshot after them, so call this when you need the whole page again or a part of it. `scope` limits it to the subtree of a ref; `mode: "full"` adds static text. An element the user pointed at in the browser is marked `[picked by the user]`, and the header names its ref.
 
 ## browser_click
 
-Click an element by ref from the latest snapshot. Optional `button` (left, right, middle), `count` (1 or 2) and `modifiers`. done means the click was delivered, not that the page reacted; check `observed` and take a snapshot.
+Click an element by ref from the latest snapshot. Optional `button` (left, right, middle), `count` (1 or 2) and `modifiers`. done means the click was delivered, not that the page reacted; check `observed` and the snapshot that comes with the result.
 
 ## browser_hover
 
@@ -76,7 +76,7 @@ Answer the JavaScript dialog (alert, confirm, prompt, beforeunload) waiting on a
 
 ## browser_wait
 
-Wait on a tab until a condition holds: `for` "time" (value in ms, at most 10000), "text" (value appears on the page), "ref" (element appears), "url" (prefix or glob) or "load". Prefer a snapshot over waiting for time.
+Wait on a tab until a condition holds: `for` "time" (value in ms, at most 10000), "text" (value appears on the page), "ref" (element appears), "url" (prefix or glob) or "load". Prefer waiting for text or a ref over waiting for time.
 
 ## browser_back
 
@@ -106,4 +106,4 @@ Browser access is available in this thread. Use it through the MonoCode CLI, one
     {exe} browser snapshot --tab t_1a2b3c4d
     {exe} browser click --tab t_1a2b3c4d --ref e12
 
-Run `{exe} browser --help` for every action and its fields. Each call prints one JSON result (`outcome`, `reason`, `message`, `retryable`, `observed`, `data`); a snapshot prints its text instead. The exit code is 0 for done, 2 blocked, 3 failed, 4 unknown. After an `unknown` result, take a snapshot and retry only with `--request-id` set to the reported `request_id`. The CLI uses a session credential already in your environment; never print it.
+Run `{exe} browser --help` for every action and its fields. Each call prints one JSON result (`outcome`, `reason`, `message`, `retryable`, `observed`, `data`); a snapshot prints its text instead, and an action that changes the page prints the page snapshot (or its changes) as text after the JSON line (`--snapshot false` leaves it out). The exit code is 0 for done, 2 blocked, 3 failed, 4 unknown. After an `unknown` result, take a snapshot and retry only with `--request-id` set to the reported `request_id`. The CLI uses a session credential already in your environment; never print it.

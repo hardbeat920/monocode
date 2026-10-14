@@ -246,7 +246,8 @@ fn initialize(params: &Value) -> Value {
 /// Map one action result onto an MCP `CallToolResult` (spec 12.4).
 ///
 /// - done: the message and the compact envelope; snapshot and read put their
-///   text first, screenshot adds an image block.
+///   text first, screenshot adds an image block, and the page snapshot of
+///   an action follows the message as its own text block.
 /// - blocked, failed, unknown: `isError`, with the reason and whether a retry
 ///   can help spelled out so the model need not parse JSON.
 pub fn tool_result(kind: Option<ActionKind>, result: &ActionResult) -> Value {
@@ -268,16 +269,22 @@ pub fn tool_result(kind: Option<ActionKind>, result: &ActionResult) -> Value {
                     envelope.data = client::data_without(result.data.as_ref(), &client::IMAGE_KEYS);
                 }
             }
-            _ => {}
+            // An action's page snapshot follows the summary as its own text.
+            _ => {
+                if let Some(text) = client::data_snapshot(result.data.as_ref()) {
+                    content.push(json!({"type": "text", "text": text}));
+                    envelope.data = client::data_without(result.data.as_ref(), &["snapshot"]);
+                }
+            }
         }
         let summary = format!("{}\n{}", result.message, compact(&envelope));
         // The text the agent asked for leads; the envelope follows it. An
         // image goes after the text that explains it.
         match kind {
-            Some(ActionKind::Screenshot) => {
-                content.insert(0, json!({"type": "text", "text": summary}))
-            }
-            _ => content.push(json!({"type": "text", "text": summary})),
+            Some(
+                ActionKind::Snapshot | ActionKind::Read | ActionKind::Console | ActionKind::Network,
+            ) => content.push(json!({"type": "text", "text": summary})),
+            _ => content.insert(0, json!({"type": "text", "text": summary})),
         }
         return json!({"content": content, "isError": false});
     }

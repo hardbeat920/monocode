@@ -178,6 +178,13 @@ fn timeout() -> Value {
     })
 }
 
+fn snapshot() -> Value {
+    json!({
+        "type": "boolean",
+        "description": "false: leave out the page snapshot that the result otherwise includes."
+    })
+}
+
 fn request_id() -> Value {
     json!({
         "type": "string",
@@ -234,6 +241,10 @@ pub fn input_schema(name: &str) -> Option<Value> {
                     "free",
                     json!({"type": "string", "pattern": "^f_[0-9a-f]{8}$", "description": "adopt: a free tab id from list (MonoCode browser only)."}),
                 ),
+                (
+                    "snapshot",
+                    json!({"type": "boolean", "description": "open with url: false leaves out the page snapshot the result otherwise includes."}),
+                ),
             ],
             &["action"],
         ),
@@ -251,6 +262,7 @@ pub fn input_schema(name: &str) -> Option<Value> {
                         "Page event to wait for; default load.",
                     ),
                 ),
+                ("snapshot", snapshot()),
                 ("timeout_ms", timeout()),
             ],
             &["tab", "url"],
@@ -295,6 +307,7 @@ pub fn input_schema(name: &str) -> Option<Value> {
                         "description": "Keys held during the click."
                     }),
                 ),
+                ("snapshot", snapshot()),
                 ("timeout_ms", timeout()),
             ],
             &["tab", "ref"],
@@ -303,6 +316,7 @@ pub fn input_schema(name: &str) -> Option<Value> {
             vec![
                 ("tab", tab()),
                 ("ref", element("Element")),
+                ("snapshot", snapshot()),
                 ("timeout_ms", timeout()),
             ],
             &["tab", "ref"],
@@ -323,6 +337,7 @@ pub fn input_schema(name: &str) -> Option<Value> {
                     "submit",
                     json!({"type": "boolean", "description": "Press Enter after typing."}),
                 ),
+                ("snapshot", snapshot()),
                 ("timeout_ms", timeout()),
             ],
             &["tab", "ref", "text"],
@@ -335,6 +350,7 @@ pub fn input_schema(name: &str) -> Option<Value> {
                     json!({"type": "string", "minLength": 1, "description": "Key or Modifier+Key, e.g. Enter, Escape, Control+A."}),
                 ),
                 ("ref", element("Element to focus first; the")),
+                ("snapshot", snapshot()),
                 ("timeout_ms", timeout()),
             ],
             &["tab", "key"],
@@ -347,6 +363,7 @@ pub fn input_schema(name: &str) -> Option<Value> {
                     "values",
                     json!({"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "Option values or visible labels."}),
                 ),
+                ("snapshot", snapshot()),
                 ("timeout_ms", timeout()),
             ],
             &["tab", "ref", "values"],
@@ -369,6 +386,7 @@ pub fn input_schema(name: &str) -> Option<Value> {
                     "amount",
                     json!({"type": "integer", "minimum": 1, "description": "Pixels; default 600."}),
                 ),
+                ("snapshot", snapshot()),
                 ("timeout_ms", timeout()),
             ],
             &["tab"],
@@ -381,6 +399,7 @@ pub fn input_schema(name: &str) -> Option<Value> {
                     "paths",
                     json!({"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "Absolute paths, or relative to the session's working directory."}),
                 ),
+                ("snapshot", snapshot()),
                 ("timeout_ms", timeout()),
             ],
             &["tab", "ref", "paths"],
@@ -396,6 +415,7 @@ pub fn input_schema(name: &str) -> Option<Value> {
                     "text",
                     json!({"type": "string", "description": "Answer for a prompt dialog."}),
                 ),
+                ("snapshot", snapshot()),
                 ("timeout_ms", timeout()),
             ],
             &["tab", "action"],
@@ -414,6 +434,7 @@ pub fn input_schema(name: &str) -> Option<Value> {
                     "value",
                     json!({"type": ["string", "integer"], "description": "time: milliseconds; text: text to find; ref: element ref; url: prefix or glob. Not used for load."}),
                 ),
+                ("snapshot", snapshot()),
                 ("timeout_ms", timeout()),
             ],
             &["tab", "for"],
@@ -422,6 +443,7 @@ pub fn input_schema(name: &str) -> Option<Value> {
             vec![
                 ("tab", tab()),
                 ("direction", one_of(&["back", "forward"], "Default back.")),
+                ("snapshot", snapshot()),
                 ("timeout_ms", timeout()),
             ],
             &["tab"],
@@ -551,7 +573,7 @@ pub fn map_call(name: &str, arguments: Option<&Value>) -> Result<Mapped, String>
             let action = take_str(&mut args, "action")?;
             let (kind, allowed): (ActionKind, &[&str]) = match action.as_deref() {
                 Some("list") => (ActionKind::TabsList, &[]),
-                Some("open") => (ActionKind::TabsOpen, &["url"]),
+                Some("open") => (ActionKind::TabsOpen, &["url", "snapshot"]),
                 Some("close") => (ActionKind::TabsClose, &["tab"]),
                 Some("focus") => (ActionKind::TabsFocus, &["tab", "user_visible"]),
                 Some("adopt") => (ActionKind::TabsAdopt, &["free"]),
@@ -780,7 +802,7 @@ mod tests {
         assert!(map_call("browser_tabs", Some(&json!({"action": "evaluate"}))).is_err());
         let (props, required) = properties("browser_tabs");
         assert_eq!(required, BTreeSet::from(["action".to_string()]));
-        assert_eq!(props.len(), 6);
+        assert_eq!(props.len(), 7);
     }
 
     #[test]

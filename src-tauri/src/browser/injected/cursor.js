@@ -236,7 +236,7 @@ function monocodeCursor(op, x, y, fromX, fromY, jump) {
     if (distance < 2) {
       return { ms: 0 };
     }
-    const ms = Math.round(Math.min(380, Math.max(160, 140 + distance * 0.4)));
+    const ms = Math.round(Math.min(200, Math.max(90, 70 + distance * 0.2)));
     cursor.glide = cursor.wrap.animate([{ transform: at(from) }, { transform: at(to) }], {
       duration: ms,
       easing: EASE,

@@ -56,12 +56,15 @@ Fields can also come as one JSON object (--json '{"tab":"t_1a2b3c4d"}',
 --input FILE, or --input - for stdin); flags given as well override it.
 Boolean flags take true or false, or nothing for true.
 
-Take a snapshot first and act on its refs (e12). After every action that
-changes the page, take a new snapshot; old refs fail with ref_stale.
+Act on refs (e12) from a snapshot. Actions that can change the page print
+the page snapshot after them below the JSON line: the whole page after a
+navigation, otherwise only the changed lines (+ added, - removed). Refs you
+have not seen change keep working; refs from before a navigation fail with
+ref_stale. --snapshot false leaves the snapshot out.
 
 Output is one JSON result: outcome (done, blocked, failed, unknown), reason,
 message, retryable, observed, data. A done snapshot, console or network
-prints only its text; pass --envelope for the JSON. Exit code: 0 done, 2 blocked, 3 failed,
+prints only its text; pass --envelope for the whole JSON. Exit code: 0 done, 2 blocked, 3 failed,
 4 unknown, 1 when the CLI itself could not run the call.
 
 blocked means nothing was sent: change the plan, never work around it.
@@ -102,7 +105,7 @@ const INTEGERS: [&str; 8] = [
     "limit",
 ];
 /// Flags that may stand alone for `true`.
-const BOOLEANS: [&str; 4] = ["clear", "submit", "full_page", "user_visible"];
+const BOOLEANS: [&str; 5] = ["clear", "submit", "full_page", "user_visible", "snapshot"];
 /// Repeatable flags collected into an array.
 const LISTS: [&str; 3] = ["values", "paths", "modifiers"];
 
@@ -224,6 +227,15 @@ fn render(call: &Call, mut result: ActionResult) -> (String, i32) {
                             )
                         }
                     }
+                }
+            }
+            // The page snapshot after the action goes below the JSON, as text.
+            _ if !call.envelope => {
+                if let Some(text) = client::data_snapshot(result.data.as_ref()) {
+                    let text = text.to_string();
+                    result.data = client::data_without(result.data.as_ref(), &["snapshot"]);
+                    let json = serde_json::to_string(&result).unwrap_or_else(|_| "{}".into());
+                    return (format!("{json}\n\n{text}"), code);
                 }
             }
             _ => {}

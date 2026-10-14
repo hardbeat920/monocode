@@ -669,6 +669,16 @@ fn wait_for_load_with(
             "Page.loadEventFired" | "Page.navigatedWithinDocument" => {
                 return (LoadState::Load, None);
             }
+            // A page restored from the back/forward cache is already loaded:
+            // Chrome sends no `load` for it, only this (with `frameStoppedLoading`).
+            "Page.frameNavigated"
+                if event.params["type"] == "BackForwardCacheRestore"
+                    && event.params["frame"]["parentId"]
+                        .as_str()
+                        .is_none_or(str::is_empty) =>
+            {
+                return (LoadState::Load, None);
+            }
             "Page.javascriptDialogOpening" => {
                 return (
                     if dom_content_loaded {
@@ -1759,6 +1769,36 @@ mod tests {
             Instant::now() + Duration::from_millis(50),
         );
         assert_eq!(state, LoadState::Timeout);
+        // A main-frame restore from the back/forward cache fires no `load`;
+        // the restore itself means the page is there. A subframe's does not.
+        let sub = link.subscribe(EventFilter::session(&session));
+        server.emit(
+            "Page.frameNavigated",
+            json!({ "frame": { "id": "C", "parentId": "F", "loaderId": "L2" }, "type": "BackForwardCacheRestore" }),
+            Some("S1"),
+        );
+        let (state, _) = wait_for_load(
+            &sub,
+            None,
+            WaitUntil::Load,
+            Instant::now() + Duration::from_millis(300),
+        );
+        assert_eq!(state, LoadState::Timeout);
+        let sub = link.subscribe(EventFilter::session(&session));
+        server.emit(
+            "Page.frameNavigated",
+            json!({ "frame": { "id": "F", "loaderId": "L1" }, "type": "BackForwardCacheRestore" }),
+            Some("S1"),
+        );
+        let started = Instant::now();
+        let (state, _) = wait_for_load(
+            &sub,
+            None,
+            WaitUntil::Load,
+            Instant::now() + Duration::from_secs(5),
+        );
+        assert_eq!(state, LoadState::Load);
+        assert!(started.elapsed() < Duration::from_secs(2));
         link.close(Vec::new(), Duration::from_millis(200));
     }
 

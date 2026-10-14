@@ -27,7 +27,7 @@ use super::Run;
 pub const CURSOR_JS: &str = include_str!("../injected/cursor.js");
 
 /// Longest glide the action waits for, whatever the page reports.
-const MAX_GLIDE: Duration = Duration::from_millis(400);
+const MAX_GLIDE: Duration = Duration::from_millis(250);
 
 /// Last cursor position per tab, so the cursor continues from there on the
 /// next document instead of appearing out of nowhere.

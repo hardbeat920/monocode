@@ -596,6 +596,9 @@ pub struct NavigateParams {
     pub wait_until: Option<WaitUntil>,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
+    /// `false`: leave the page snapshot out of the result (it is included by default).
+    #[serde(default)]
+    pub snapshot: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -641,6 +644,9 @@ pub struct ClickParams {
     pub modifiers: Option<Vec<Modifier>>,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
+    /// `false`: leave the page snapshot out of the result (it is included by default).
+    #[serde(default)]
+    pub snapshot: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -651,6 +657,9 @@ pub struct HoverParams {
     pub element: String,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
+    /// `false`: leave the page snapshot out of the result (it is included by default).
+    #[serde(default)]
+    pub snapshot: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -666,6 +675,9 @@ pub struct TypeParams {
     pub submit: Option<bool>,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
+    /// `false`: leave the page snapshot out of the result (it is included by default).
+    #[serde(default)]
+    pub snapshot: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -678,6 +690,9 @@ pub struct PressParams {
     pub element: Option<String>,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
+    /// `false`: leave the page snapshot out of the result (it is included by default).
+    #[serde(default)]
+    pub snapshot: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -689,6 +704,9 @@ pub struct SelectParams {
     pub values: Vec<String>,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
+    /// `false`: leave the page snapshot out of the result (it is included by default).
+    #[serde(default)]
+    pub snapshot: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -713,6 +731,9 @@ pub struct ScrollParams {
     pub amount: Option<u32>,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
+    /// `false`: leave the page snapshot out of the result (it is included by default).
+    #[serde(default)]
+    pub snapshot: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -724,6 +745,9 @@ pub struct UploadParams {
     pub paths: Vec<String>,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
+    /// `false`: leave the page snapshot out of the result (it is included by default).
+    #[serde(default)]
+    pub snapshot: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -742,6 +766,9 @@ pub struct DialogParams {
     pub text: Option<String>,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
+    /// `false`: leave the page snapshot out of the result (it is included by default).
+    #[serde(default)]
+    pub snapshot: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -765,6 +792,9 @@ pub struct WaitParams {
     pub value: Option<Value>,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
+    /// `false`: leave the page snapshot out of the result (it is included by default).
+    #[serde(default)]
+    pub snapshot: Option<bool>,
 }
 
 /// `back` and `forward` share this record.
@@ -774,6 +804,9 @@ pub struct HistoryParams {
     pub tab: TabId,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
+    /// `false`: leave the page snapshot out of the result (it is included by default).
+    #[serde(default)]
+    pub snapshot: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -786,6 +819,9 @@ pub struct TabsOpenParams {
     /// http(s) only; defaults to `about:blank`.
     #[serde(default)]
     pub url: Option<String>,
+    /// `false`: leave the page snapshot out of the result (it is included by default).
+    #[serde(default)]
+    pub snapshot: Option<bool>,
 }
 
 /// `tabs.adopt`: take a free tab of the MonoCode browser (from `tabs.list`).
@@ -906,6 +942,9 @@ pub struct NetworkParams {
 pub struct CommonInput {
     #[serde(default)]
     pub tab: Option<TabId>,
+    /// `false` turns off the page snapshot an action returns.
+    #[serde(default)]
+    pub snapshot: Option<bool>,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
 }

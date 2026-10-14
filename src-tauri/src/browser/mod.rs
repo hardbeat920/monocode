@@ -2130,7 +2130,7 @@ impl BrowserHost {
                             "url": url,
                             "title": opened.observed.title.clone().unwrap_or_default(),
                         });
-                        match opened.navigation {
+                        let mut result = match opened.navigation {
                             Ok(()) => ActionResult::done(
                                 request_id,
                                 format!(
@@ -2145,7 +2145,19 @@ impl BrowserHost {
                                 )),
                         }
                         .with_data(data)
-                        .with_observed(opened.observed)
+                        .with_observed(opened.observed);
+                        if params.url.is_some() {
+                            let settings = self.policy.read().settings.clone();
+                            semantic::attach_snapshot_for(
+                                &self.link,
+                                ctx,
+                                &opened.handle,
+                                &settings,
+                                input,
+                                &mut result,
+                            );
+                        }
+                        result
                     }
                     Err(error) => error.into_result(
                         request_id,
@@ -3400,7 +3412,7 @@ mod tests {
             request(
                 "p1",
                 "tabs.open",
-                json!({ "url": "https://example.com/form" }),
+                json!({ "url": "https://example.com/form", "snapshot": false }),
             ),
         );
         assert_eq!(opened.outcome, Outcome::Done, "{opened:?}");

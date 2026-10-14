@@ -409,7 +409,7 @@ fn snapshot_covers_oopifs_and_click_goes_through_the_pipeline() {
     assert_eq!(h.policy.read().lease(h.tab()).unwrap().snapshot_version, 1);
 
     let mark = h.mark();
-    let click = h.act(ActionKind::Click, json!({ "ref": "e2" }));
+    let click = h.act(ActionKind::Click, json!({ "ref": "e2", "snapshot": false }));
     assert_eq!(click.outcome, Outcome::Done, "{click:?}");
     assert!(
         click.message.starts_with("Clicked e2 (button \"Save\")."),
@@ -460,7 +460,7 @@ fn snapshot_covers_oopifs_and_click_goes_through_the_pipeline() {
     let mark = h.mark();
     let click = h.act(
         ActionKind::Click,
-        json!({ "ref": "e6", "count": 2, "modifiers": ["Shift"] }),
+        json!({ "ref": "e6", "count": 2, "modifiers": ["Shift"], "snapshot": false }),
     );
     assert_eq!(click.outcome, Outcome::Done, "{click:?}");
     let log = h.since(mark);
@@ -730,6 +730,8 @@ fn dialogs_are_reported_never_answered_until_asked() {
     assert_eq!(dialog.kind, DialogType::Confirm);
     assert_eq!(dialog.message, "Delete 3 items?");
     assert!(click.message.contains("browser_dialog"));
+    // The page is frozen: no snapshot is taken behind the dialog.
+    assert!(click.data.is_none(), "{click:?}");
     assert!(started.elapsed() < Duration::from_secs(5));
     // Nothing answered it on its own.
     assert!(!h
@@ -766,6 +768,112 @@ fn dialogs_are_reported_never_answered_until_asked() {
 }
 
 #[test]
+fn actions_return_the_page_snapshot_or_its_changes() {
+    let h = Harness::new();
+    // No snapshot of this document yet: the whole page comes back.
+    let opened = h.act(
+        ActionKind::Navigate,
+        json!({ "url": "https://example.com/" }),
+    );
+    assert_eq!(opened.outcome, Outcome::Done, "{opened:?}");
+    let data = opened.data.clone().unwrap();
+    let text = data["snapshot"].as_str().unwrap();
+    assert!(text.contains("button \"Save\" [ref=e2]"), "{text}");
+    assert!(
+        opened.message.ends_with("The page snapshot follows."),
+        "{}",
+        opened.message
+    );
+    assert!(
+        !opened.message.contains("take a new snapshot"),
+        "{}",
+        opened.message
+    );
+    assert!(!opened.observed.snapshot_stale);
+    let version = data["snapshot_version"].as_u64().unwrap();
+    // The same page after a click: only that nothing changed, and the refs
+    // of the earlier snapshot keep working.
+    let click = h.act(ActionKind::Click, json!({ "ref": "e2" }));
+    assert_eq!(click.outcome, Outcome::Done, "{click:?}");
+    let text = click.data.as_ref().unwrap()["snapshot"].as_str().unwrap();
+    assert!(
+        text.contains(&format!(
+            "snapshot: v{}, no change since v{version}",
+            version + 1
+        )),
+        "{text}"
+    );
+    assert!(click.message.ends_with("The page snapshot did not change."));
+    let again = h.act(ActionKind::Hover, json!({ "ref": "e2", "snapshot": false }));
+    assert_eq!(again.outcome, Outcome::Done, "{again:?}");
+    assert!(again.data.is_none(), "{again:?}");
+    // A navigation starts a new document: the whole page again.
+    h.model.lock().unwrap().on_release = vec![
+        Event::new(
+            "Page.frameRequestedNavigation",
+            json!({ "frameId": "F1", "reason": "anchorClick", "url": "https://example.com/next", "disposition": "currentTab" }),
+            Some(MAIN),
+        ),
+        Event::new(
+            "Page.frameNavigated",
+            json!({ "frame": { "id": "F1", "loaderId": "L5", "url": "https://example.com/next" } }),
+            Some(MAIN),
+        ),
+        Event::new(
+            "Page.lifecycleEvent",
+            json!({ "frameId": "F1", "loaderId": "L5", "name": "load" }),
+            Some(MAIN),
+        ),
+    ];
+    let away = h.act(ActionKind::Click, json!({ "ref": "e2" }));
+    assert!(away.observed.navigated);
+    let text = away.data.as_ref().unwrap()["snapshot"].as_str().unwrap();
+    assert!(text.contains("url: https://example.com/next"), "{text}");
+    assert!(text.contains("button \"Save\" [ref=e2]"), "{text}");
+    // Its refs work right away.
+    h.model.lock().unwrap().on_release.clear();
+    let next = h.act(ActionKind::Click, json!({ "ref": "e2", "snapshot": false }));
+    assert_eq!(next.outcome, Outcome::Done, "{next:?}");
+}
+
+#[test]
+fn a_click_waits_for_the_request_it_started() {
+    let h = Harness::new();
+    h.snapshot();
+    h.model.lock().unwrap().on_release = vec![Event::new(
+        "Network.requestWillBeSent",
+        json!({ "requestId": "R1", "type": "Fetch", "request": { "url": "https://example.com/api" } }),
+        Some(MAIN),
+    )];
+    let server = h.server.clone();
+    let finisher = std::thread::spawn(move || {
+        assert!(server.wait_for(
+            |log| log
+                .iter()
+                .any(|r| r.params["type"] == json!("mouseReleased")),
+            Duration::from_secs(5)
+        ));
+        std::thread::sleep(Duration::from_millis(700));
+        server.emit(
+            "Network.loadingFinished",
+            json!({ "requestId": "R1" }),
+            Some(MAIN),
+        );
+    });
+    let started = std::time::Instant::now();
+    let click = h.act(ActionKind::Click, json!({ "ref": "e2", "snapshot": false }));
+    finisher.join().unwrap();
+    assert_eq!(click.outcome, Outcome::Done, "{click:?}");
+    // Past the usual 500 ms window: the answer was still on its way.
+    assert!(
+        started.elapsed() >= Duration::from_millis(700),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(started.elapsed() < Duration::from_secs(3));
+}
+
+#[test]
 fn click_that_navigates_waits_for_load_and_invalidates_refs() {
     let h = Harness::new();
     h.snapshot();
@@ -786,7 +894,7 @@ fn click_that_navigates_waits_for_load_and_invalidates_refs() {
             Some(MAIN),
         ),
     ];
-    let click = h.act(ActionKind::Click, json!({ "ref": "e2" }));
+    let click = h.act(ActionKind::Click, json!({ "ref": "e2", "snapshot": false }));
     assert_eq!(click.outcome, Outcome::Done, "{click:?}");
     assert!(click.observed.navigated);
     assert_eq!(click.observed.load_state, Some(LoadState::Load));
