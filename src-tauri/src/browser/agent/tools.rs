@@ -204,8 +204,8 @@ pub fn input_schema(name: &str) -> Option<Value> {
                 (
                     "action",
                     one_of(
-                        &["list", "open", "close", "focus"],
-                        "list your tabs, open a new one, close one, or show one to the user.",
+                        &["list", "open", "close", "focus", "adopt"],
+                        "list your tabs, open a new one, close one, show one to the user, or adopt a free tab.",
                     ),
                 ),
                 (
@@ -219,6 +219,10 @@ pub fn input_schema(name: &str) -> Option<Value> {
                 (
                     "user_visible",
                     json!({"type": "boolean", "description": "focus: must be true; switches the user's visible tab."}),
+                ),
+                (
+                    "free",
+                    json!({"type": "string", "pattern": "^f_[0-9a-f]{8}$", "description": "adopt: a free tab id from list (MonoCode browser only)."}),
                 ),
             ],
             &["action"],
@@ -498,7 +502,8 @@ pub fn map_call(name: &str, arguments: Option<&Value>) -> Result<Mapped, String>
                 Some("open") => (ActionKind::TabsOpen, &["url"]),
                 Some("close") => (ActionKind::TabsClose, &["tab"]),
                 Some("focus") => (ActionKind::TabsFocus, &["tab", "user_visible"]),
-                _ => return Err("action must be one of list, open, close, focus.".into()),
+                Some("adopt") => (ActionKind::TabsAdopt, &["free"]),
+                _ => return Err("action must be one of list, open, close, focus, adopt.".into()),
             };
             if let Some(extra) = args.keys().find(|key| !allowed.contains(&key.as_str())) {
                 return Err(format!(
@@ -567,6 +572,7 @@ mod tests {
             TabsOpen => round::<TabsOpenParams>(input),
             TabsClose => round::<TabsCloseParams>(input),
             TabsFocus => round::<TabsFocusParams>(input),
+            TabsAdopt => round::<TabsAdoptParams>(input),
             Screenshot => round::<ScreenshotParams>(input),
             Read => round::<ReadParams>(input),
         }
@@ -699,6 +705,10 @@ mod tests {
                 json!({"action": "focus", "tab": "t_0a1b2c3d", "user_visible": true}),
                 ActionKind::TabsFocus,
             ),
+            (
+                json!({"action": "adopt", "free": "f_0a1b2c3d"}),
+                ActionKind::TabsAdopt,
+            ),
         ];
         for (args, kind) in cases {
             let mapped = map_call("browser_tabs", Some(&args)).unwrap();
@@ -716,7 +726,7 @@ mod tests {
         assert!(map_call("browser_tabs", Some(&json!({"action": "evaluate"}))).is_err());
         let (props, required) = properties("browser_tabs");
         assert_eq!(required, BTreeSet::from(["action".to_string()]));
-        assert_eq!(props.len(), 5);
+        assert_eq!(props.len(), 6);
     }
 
     #[test]
@@ -747,7 +757,7 @@ mod tests {
         for tool in TOOLS {
             match tool.name {
                 "browser_tabs" => {
-                    for action in ["list", "open", "close", "focus"] {
+                    for action in ["list", "open", "close", "focus", "adopt"] {
                         let mapped =
                             map_call(tool.name, Some(&json!({ "action": action }))).unwrap();
                         reached.insert(mapped.kind.name());

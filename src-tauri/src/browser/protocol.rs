@@ -410,6 +410,8 @@ pub enum ActionKind {
     TabsClose,
     #[serde(rename = "tabs.focus")]
     TabsFocus,
+    #[serde(rename = "tabs.adopt")]
+    TabsAdopt,
     #[serde(rename = "screenshot")]
     Screenshot,
     #[serde(rename = "read")]
@@ -417,7 +419,7 @@ pub enum ActionKind {
 }
 
 impl ActionKind {
-    pub const ALL: [ActionKind; 19] = [
+    pub const ALL: [ActionKind; 20] = [
         ActionKind::Snapshot,
         ActionKind::Navigate,
         ActionKind::Click,
@@ -435,6 +437,7 @@ impl ActionKind {
         ActionKind::TabsOpen,
         ActionKind::TabsClose,
         ActionKind::TabsFocus,
+        ActionKind::TabsAdopt,
         ActionKind::Screenshot,
         ActionKind::Read,
     ];
@@ -459,6 +462,7 @@ impl ActionKind {
             TabsOpen => "tabs.open",
             TabsClose => "tabs.close",
             TabsFocus => "tabs.focus",
+            TabsAdopt => "tabs.adopt",
             Screenshot => "screenshot",
             Read => "read",
         }
@@ -469,9 +473,13 @@ impl ActionKind {
     }
 
     /// Whether the action targets a tab the session must hold a lease on.
-    /// `tabs.list` and `tabs.open` are the only session-level actions.
+    /// `tabs.list`, `tabs.open` and `tabs.adopt` are the only session-level
+    /// actions.
     pub fn requires_lease(self) -> bool {
-        !matches!(self, ActionKind::TabsList | ActionKind::TabsOpen)
+        !matches!(
+            self,
+            ActionKind::TabsList | ActionKind::TabsOpen | ActionKind::TabsAdopt
+        )
     }
 
     /// Whether the action can change page or browser state. Mutating actions
@@ -492,7 +500,7 @@ impl ActionKind {
             Navigate | Back | Forward => Duration::from_secs(30),
             Wait => Duration::from_secs(10),
             Snapshot | Read | Screenshot => Duration::from_secs(15),
-            TabsList | TabsOpen | TabsClose | TabsFocus => Duration::from_secs(5),
+            TabsList | TabsOpen | TabsClose | TabsFocus | TabsAdopt => Duration::from_secs(5),
         }
     }
 
@@ -504,7 +512,7 @@ impl ActionKind {
             }
             Navigate | Back | Forward | Wait => Duration::from_secs(120),
             Snapshot | Read | Screenshot => Duration::from_secs(60),
-            TabsList | TabsOpen | TabsClose | TabsFocus => Duration::from_secs(10),
+            TabsList | TabsOpen | TabsClose | TabsFocus | TabsAdopt => Duration::from_secs(10),
         }
     }
 
@@ -765,6 +773,14 @@ pub struct TabsOpenParams {
     /// http(s) only; defaults to `about:blank`.
     #[serde(default)]
     pub url: Option<String>,
+}
+
+/// `tabs.adopt`: take a free tab of the MonoCode browser (from `tabs.list`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TabsAdoptParams {
+    /// The free tab's id, `f_` + 8 hex.
+    pub free: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -28,6 +28,7 @@ Actions and their fields (* required). Every action except tabs.* also takes
   tabs.close     --tab*          Close one of your tabs.
   tabs.focus     --tab* --user-visible true
                                  Show the tab to the user; only when asked.
+  tabs.adopt     --free*         Take a free tab (MonoCode browser) listed by tabs.list.
   navigate       --tab* --url* --wait-until load|domcontentloaded
   snapshot       --tab* --scope REF --mode interactive|full --max-nodes N
   click          --tab* --ref* --button left|right|middle --count 1|2

@@ -128,7 +128,8 @@ pub fn execute(exec: Exec<'_>) -> ActionResult {
         ActionKind::TabsList
         | ActionKind::TabsOpen
         | ActionKind::TabsClose
-        | ActionKind::TabsFocus => Err(Fail::detail(
+        | ActionKind::TabsFocus
+        | ActionKind::TabsAdopt => Err(Fail::detail(
             Reason::InvalidRequest,
             "tabs.* actions are handled by the browser core.",
         )),

@@ -708,6 +708,11 @@ impl PolicyState {
         tab
     }
 
+    /// Drop a lease whose adoption failed: the page was never ours.
+    pub fn forget_lease(&mut self, tab: &TabId) {
+        self.leases.remove(tab);
+    }
+
     pub fn new_tab_id(&self) -> TabId {
         loop {
             let id = TabId(format!(

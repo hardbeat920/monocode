@@ -81,8 +81,8 @@ use policy::{audit_url, now_ms, Dedup, Policy, PolicyState, RequestCtx, BUSY_WAI
 use protocol::{
     AccessMode, ActionKind, ActionRequest, ActionResult, AuditEntry, BrowserInfo, BrowserMode,
     BrowserSettings, BrowserState, CommonInput, ConnectionInfo, ConnectionState, Outcome, Reason,
-    TabId, TabOverview, TabState, TabsCloseParams, TabsFocusParams, TabsListParams, TabsOpenParams,
-    WaitUntil, MIN_BROWSER_MAJOR, STATE_EVENT,
+    TabId, TabOverview, TabState, TabsAdoptParams, TabsCloseParams, TabsFocusParams,
+    TabsListParams, TabsOpenParams, WaitUntil, MIN_BROWSER_MAJOR, STATE_EVENT,
 };
 use targets::TabEvent;
 
@@ -1334,6 +1334,67 @@ impl BrowserHost {
         Ok(())
     }
 
+    /// Pages no thread holds, for the user's "Give to a thread" list. In the
+    /// user's own browser these are their own tabs; only the UI sees them.
+    pub fn user_tabs(&self) -> Result<Vec<targets::FreeTab>, String> {
+        if !self.link.is_open() {
+            return Err("MonoCode is not connected to the browser.".into());
+        }
+        let mut tabs = targets::free_tabs(&self.link).map_err(|e| format!("{e:?}"))?;
+        // Pages of the browser itself (settings, new tab page) are no use.
+        tabs.retain(|tab| tab.url.starts_with("http://") || tab.url.starts_with("https://"));
+        Ok(tabs)
+    }
+
+    /// The user hands one of the browser's tabs to a thread, which gets
+    /// browser access with it (the hand-over is the user's consent).
+    pub fn give_tab(&self, free_id: &str, session: &str, window: &str) -> Result<TabId, String> {
+        let free = self
+            .user_tabs()?
+            .into_iter()
+            .find(|tab| tab.id == free_id)
+            .ok_or("That tab is gone or another thread already holds it.")?;
+        if !self.policy.read().granted(session) {
+            self.set_grant(session, window, true);
+        }
+        let handle = targets::adopt_tab(&self.link, targets::Sender::System, session, &free)
+            .map_err(|error| match error {
+                targets::TabError::Reason(reason, message) => {
+                    message.unwrap_or_else(|| reason.message().to_string())
+                }
+                targets::TabError::Cdp(error) => format!("{error:?}"),
+            })?;
+        self.adopted(&handle, session, &free, Actor::User);
+        Ok(handle.tab)
+    }
+
+    fn adopted(
+        &self,
+        handle: &targets::TabHandle,
+        owner: &str,
+        free: &targets::FreeTab,
+        actor: Actor,
+    ) {
+        self.db.with(|conn| {
+            audit::lease_opened(
+                conn,
+                self.run_id,
+                &handle.tab,
+                &handle.target.0,
+                owner,
+                None,
+                &free.url,
+            )
+        });
+        self.event(
+            "tab_adopted",
+            actor,
+            Some(owner),
+            Some(&audit_url(&free.url)),
+        );
+        self.emit_state();
+    }
+
     /// Settings "Close tab" for any agent tab, whoever owns it.
     pub fn close_tab_by_user(&self, tab: &TabId) -> Result<(), String> {
         let target = {
@@ -1764,15 +1825,74 @@ impl BrowserHost {
                 }
                 let tabs = self.policy.read().tabs_for(&ctx.session);
                 let count = tabs.len();
-                ActionResult::done(
-                    request_id,
-                    match count {
-                        0 => "No open tabs. Use tabs.open to open one.".to_string(),
-                        1 => "1 open tab.".to_string(),
-                        n => format!("{n} open tabs."),
-                    },
-                )
-                .with_data(json!({ "tabs": tabs }))
+                let mut message = match count {
+                    0 => "No open tabs. Use tabs.open to open one.".to_string(),
+                    1 => "1 open tab.".to_string(),
+                    n => format!("{n} open tabs."),
+                };
+                // In the MonoCode browser, tabs the user opened are free for
+                // any thread to adopt. The user's own browser stays private.
+                let free = if self.mode().launches() {
+                    targets::free_tabs(&self.link).unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                if !free.is_empty() {
+                    message.push_str(&format!(
+                        " {} free tab(s) the user opened; tabs.adopt with `free` takes one.",
+                        free.len()
+                    ));
+                }
+                ActionResult::done(request_id, message)
+                    .with_data(json!({ "tabs": tabs, "free": free }))
+            }
+            ActionKind::TabsAdopt => {
+                let params = match parse_params::<TabsAdoptParams>(request_id, input) {
+                    Ok(params) => params,
+                    Err(result) => return *result,
+                };
+                if !self.mode().launches() {
+                    return ActionResult::from_reason(request_id, Reason::NoLease).with_message(
+                        "Only tabs of the MonoCode browser can be adopted. In the user's own browser, the user hands a tab to this thread in MonoCode.",
+                    );
+                }
+                let free = targets::free_tabs(&self.link)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .find(|tab| tab.id == params.free);
+                let Some(free) = free else {
+                    return ActionResult::from_reason(request_id, Reason::NoLease).with_message(
+                        format!(
+                            "{} is not a free tab; call tabs.list for the current ones.",
+                            params.free
+                        ),
+                    );
+                };
+                match targets::adopt_tab(
+                    &self.link,
+                    targets::Sender::Agent(ctx),
+                    &ctx.session,
+                    &free,
+                ) {
+                    Ok(handle) => {
+                        self.adopted(&handle, &ctx.session, &free, Actor::Agent);
+                        ActionResult::done(
+                            request_id,
+                            format!(
+                                "Adopted the tab at {} as {}. Take a snapshot before acting on it.",
+                                free.url, handle.tab.0
+                            ),
+                        )
+                        .with_data(
+                            json!({ "tab": handle.tab, "url": free.url, "title": free.title }),
+                        )
+                    }
+                    Err(error) => error.into_result(
+                        request_id,
+                        true,
+                        self.link.commands_sent() > commands_before,
+                    ),
+                }
             }
             ActionKind::TabsOpen => {
                 let params = match parse_params::<TabsOpenParams>(request_id, input) {
@@ -2194,6 +2314,22 @@ pub fn browser_answer_request(
 ) -> Result<BrowserState, String> {
     let host = require_host()?;
     host.answer_request(&session_id, window.label(), allow);
+    Ok(host.state())
+}
+
+#[tauri::command]
+pub fn browser_user_tabs() -> Result<Vec<targets::FreeTab>, String> {
+    require_host()?.user_tabs()
+}
+
+#[tauri::command]
+pub fn browser_give_tab(
+    window: WebviewWindow,
+    free: String,
+    session_id: String,
+) -> Result<BrowserState, String> {
+    let host = require_host()?;
+    host.give_tab(&free, &session_id, window.label())?;
     Ok(host.state())
 }
 
@@ -2891,6 +3027,69 @@ mod tests {
             thread::sleep(Duration::from_millis(100));
         }
         done()
+    }
+
+    /// Tabs the user opened in the MonoCode browser: an agent adopts one, the
+    /// user hands another to a second thread. Needs network for example.com.
+    #[test]
+    #[ignore = "starts the Chrome or Edge installed on this machine"]
+    fn user_tabs_can_be_adopted_and_handed_over() {
+        let dir = std::env::temp_dir().join(format!("monocode-adopt-{}", uuid::Uuid::new_v4()));
+        let host = BrowserHost::for_tests(BrowserSettings {
+            access: AccessMode::Always,
+            show_window: false,
+            ..BrowserSettings::default()
+        });
+        host.set_profile_dir(dir.clone());
+        host.set_toggle(true);
+        host.turn_started("s1", "main", "/repo", Some(true));
+        let listed = host.handle_request("s1", request("a0", "tabs.list", json!({})));
+        assert_eq!(listed.outcome, Outcome::Done, "{listed:?}");
+        let user_page = |url: &str| {
+            host.link()
+                .send_system(Command::browser(
+                    Method::TargetCreateTarget,
+                    json!({ "url": url }),
+                ))
+                .unwrap();
+            thread::sleep(Duration::from_millis(1500));
+        };
+        user_page("https://example.com/?user=1");
+        let listed = host.handle_request("s1", request("a1", "tabs.list", json!({})));
+        let data = listed.data.unwrap();
+        let free = data["free"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tab| tab["url"].as_str().unwrap().contains("user=1"))
+            .unwrap_or_else(|| panic!("{data}"))["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let adopted =
+            host.handle_request("s1", request("a2", "tabs.adopt", json!({ "free": free })));
+        assert_eq!(adopted.outcome, Outcome::Done, "{adopted:?}");
+        let tab = adopted.data.unwrap()["tab"].as_str().unwrap().to_string();
+        let read = host.handle_request("s1", request("a3", "read", json!({ "tab": tab })));
+        assert_eq!(read.outcome, Outcome::Done, "{read:?}");
+        // Adopted once: no longer free.
+        let again = host.handle_request("s1", request("a4", "tabs.adopt", json!({ "free": free })));
+        assert_eq!(again.reason, Some(Reason::NoLease));
+
+        user_page("https://example.com/?user=2");
+        let mine = host
+            .user_tabs()
+            .unwrap()
+            .into_iter()
+            .find(|tab| tab.url.contains("user=2"))
+            .unwrap();
+        assert!(!host.policy().read().granted("s2"));
+        host.give_tab(&mine.id, "s2", "main").unwrap();
+        assert!(host.policy().read().granted("s2"));
+        assert_eq!(host.policy().read().tabs_for("s2").len(), 1);
+        host.set_toggle(false);
+        assert!(eventually(|| launch::running(&dir).is_none()));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Private mode against the installed browser: every start gets a fresh

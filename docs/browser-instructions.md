@@ -19,7 +19,7 @@ MonoCode does not register the MCP server with it.
 
 You can work in your own tabs in Chrome or Edge through MonoCode: either the MonoCode browser, which MonoCode starts with a profile of its own, or the user's own browser, as the user chose in MonoCode settings.
 
-- The tabs are yours: MonoCode marks them with "◆ MonoCode" in the title. In the user's own browser they open in the background and carry the user's sign-ins; you cannot see or touch the user's other tabs. Never ask the user to click or type in your tabs. When a site needs a sign-in you do not have, stop and tell the user; they can sign in once through Open browser in MonoCode's browser settings.
+- The tabs are yours: MonoCode marks them with "◆ MonoCode" in the title. A tab the user opened in the MonoCode browser is free until a thread adopts it; when the user mentions a page they opened, list your tabs and adopt it. In the user's own browser they can also hand you one of their tabs, which then shows up in your list. In the user's own browser they open in the background and carry the user's sign-ins; you cannot see or touch the user's other tabs. Never ask the user to click or type in your tabs. When a site needs a sign-in you do not have, stop and tell the user; they can sign in once through Open browser in MonoCode's browser settings.
 - Start by opening a tab; the result's data holds its id (`t_` + 8 hex). Every other action takes that `tab`. List your tabs when you lose track of them.
 - Act on elements by ref: take a snapshot, then use refs such as `e12` from it. After any action that changes the page, take a new snapshot before using refs again; old refs fail with `ref_stale`.
 - Every result has an outcome. `done`: the input reached the browser; check the effect with a snapshot. `blocked`: nothing was sent; change the plan and never work around it (for example with another URL). `failed`: fix the input (a fresh snapshot, another ref). `unknown`: the action may have happened; take a snapshot before retrying, and retry only with the same `request_id`.
@@ -30,7 +30,7 @@ You can work in your own tabs in Chrome or Edge through MonoCode: either the Mon
 
 ## browser_tabs
 
-Manage your own browser tabs. action "list" returns the tabs this session owns; "open" opens a new background tab (optional http(s) `url`) and returns its `tab` id; "close" closes one of your tabs; "focus" brings one to the front of the user's browser and requires `user_visible: true` (only when the user asks to see it).
+Manage your own browser tabs. action "list" returns the tabs this session owns, and in the MonoCode browser also `free` tabs the user opened; "adopt" takes one of those by its `free` id (`f_` + 8 hex), after which it is your tab; "open" opens a new background tab (optional http(s) `url`) and returns its `tab` id; "close" closes one of your tabs; "focus" brings one to the front of the user's browser and requires `user_visible: true` (only when the user asks to see it).
 
 ## browser_navigate
 

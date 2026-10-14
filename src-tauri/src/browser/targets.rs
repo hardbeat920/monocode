@@ -379,6 +379,134 @@ pub fn open_tab(
     })
 }
 
+/// A page in the browser that no session holds: a tab the user opened in the
+/// MonoCode browser, or (for the user's hand-over) any tab of theirs.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct FreeTab {
+    /// `f_` + 8 hex, what an agent passes to `tabs.adopt`.
+    pub id: String,
+    #[serde(skip)]
+    pub target: TargetId,
+    pub url: String,
+    pub title: String,
+}
+
+/// The `f_` id of a target: short, stable while the target lives, and not
+/// the raw protocol id.
+pub fn free_id(target: &TargetId) -> String {
+    let hex: String = target
+        .0
+        .chars()
+        .filter(char::is_ascii_hexdigit)
+        .take(8)
+        .collect();
+    format!("f_{}", hex.to_ascii_lowercase())
+}
+
+/// Page targets nobody holds a live lease on. System read, so it works for
+/// the UI as well as for an admitted agent action.
+pub fn free_tabs(link: &Link) -> Result<Vec<FreeTab>, CdpError> {
+    let reply = link.send_system(Command::browser(Method::TargetGetTargets, json!({})))?;
+    let state = link.policy().read();
+    Ok(reply["targetInfos"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|info| info["type"] == "page")
+        .filter_map(|info| {
+            let target = TargetId(info["targetId"].as_str()?.to_string());
+            let held = state
+                .lease_for_target(&target)
+                .is_some_and(|lease| lease.is_live());
+            (!held).then(|| FreeTab {
+                id: free_id(&target),
+                url: info["url"].as_str().unwrap_or("").to_string(),
+                title: info["title"].as_str().unwrap_or("").to_string(),
+                target,
+            })
+        })
+        .collect())
+}
+
+/// Take an existing page into `owner`'s lease: attach, set the session up,
+/// mark it. Used by `tabs.adopt` (agent, MonoCode browser) and by the user
+/// handing one of their tabs to a thread (system sender). The page is not
+/// navigated.
+pub fn adopt_tab(
+    link: &Link,
+    sender: Sender<'_>,
+    owner: &str,
+    free: &FreeTab,
+) -> Result<TabHandle, TabError> {
+    let policy = link.policy();
+    let tab = {
+        let mut state = policy.write();
+        if state
+            .lease_for_target(&free.target)
+            .is_some_and(|lease| lease.is_live())
+        {
+            return Err(TabError::detail(
+                Reason::NoLease,
+                "Another thread already holds this tab.",
+            ));
+        }
+        state.reserve_tab(owner)?;
+        let lease = new_lease(
+            &state,
+            &free.target,
+            None,
+            owner,
+            None,
+            &free.url,
+            &free.title,
+        );
+        state.unreserve_tab(owner);
+        state.insert_lease(lease)
+    };
+    let attached = send(
+        link,
+        sender,
+        Command::browser(
+            Method::TargetAttachToTarget,
+            json!({ "targetId": free.target.0, "flatten": true }),
+        ),
+    );
+    let session = match attached
+        .ok()
+        .and_then(|value| string_field(&value, "sessionId"))
+    {
+        Some(session) => CdpSessionId(session),
+        None => {
+            // The page stays open; it just is not ours.
+            policy.write().forget_lease(&tab);
+            return Err(TabError::detail(
+                Reason::TargetClosed,
+                "The tab could not be attached; it may have closed.",
+            ));
+        }
+    };
+    if let Some(lease) = policy.write().lease_mut(&tab) {
+        lease.cdp_session = Some(session.clone());
+    }
+    if let Err(error) = setup_session(link, sender, &session) {
+        policy.write().forget_lease(&tab);
+        let _ = link.send_system(Command::browser(
+            Method::TargetDetachFromTarget,
+            json!({ "sessionId": session.0 }),
+        ));
+        return Err(error.into());
+    }
+    if let Some(lease) = policy.write().lease_mut(&tab) {
+        lease.state = TabState::Open;
+        lease.snapshot_version += 1;
+    }
+    Ok(TabHandle {
+        tab,
+        target: free.target.clone(),
+        session,
+    })
+}
+
 /// `Page.navigate` and wait for the requested load state (spec 9.1
 /// `navigate`, 10.4). Returns what the module observed; a navigation error
 /// (`errorText`, DNS failure, blocked scheme) is `navigation_failed`.
