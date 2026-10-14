@@ -5951,6 +5951,19 @@ fn save_download_sync(
     }
 }
 
+/// Export text without applying the editor's file-size limit.
+#[tauri::command]
+pub async fn save_text_download(path: String, content: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        write_file_sync(Path::new(&path), |file| {
+            file.write_all(content.as_bytes())
+                .map_err(|e| e.to_string())
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 fn write_text_file_sync(path: &str, content: &str) -> Result<(), String> {
     if content.len() as u64 > MAX_TEXT_FILE_BYTES {
         return Err(format!(
@@ -6760,6 +6773,22 @@ mod tests {
             assert_eq!(std::fs::read(&source).unwrap(), [0, 255, 42]);
             assert_eq!(std::fs::read(alias).unwrap(), [0, 255, 42]);
         }
+    }
+
+    #[test]
+    fn text_downloads_exceed_the_editor_limit_without_changing_editor_saves() {
+        let dir = tmp("text-download");
+        let path = dir.0.join("report.md");
+        let content = format!("{}Résumé 🎉", "x".repeat(MAX_TEXT_FILE_BYTES as usize));
+        assert!(write_text_file_sync(&path.to_string_lossy(), &content).is_err());
+        assert!(!path.exists());
+        tauri::async_runtime::block_on(save_text_download(
+            path.to_string_lossy().into_owned(),
+            content.clone(),
+        ))
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), content);
+        assert_eq!(std::fs::read_dir(&dir.0).unwrap().count(), 1);
     }
 
     #[test]

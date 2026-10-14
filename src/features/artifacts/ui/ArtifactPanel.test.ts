@@ -111,9 +111,7 @@ it("loads document artifacts through their own command and closes with Escape", 
 
 it("shows text-save errors and clears them when switching artifacts", async () => {
   vi.mocked(invoke).mockResolvedValue(report);
-  vi.mocked(downloadFile).mockRejectedValueOnce(
-    new Error("File is too large to save (maximum 8 MB)."),
-  );
+  vi.mocked(downloadFile).mockRejectedValueOnce(new Error("Disk full"));
   const onClose = vi.fn();
   await act(async () =>
     root.render(createElement(ArtifactReader, { id: report.id, onClose })),
@@ -124,7 +122,7 @@ it("shows text-save errors and clears them when switching artifacts", async () =
       .click(),
   );
   expect(container.querySelector('[role="alert"]')?.textContent).toContain(
-    "maximum 8 MB",
+    "Disk full",
   );
 
   const next = { ...report, id: "other-document", title: "Other report" };

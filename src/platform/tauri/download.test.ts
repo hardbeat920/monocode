@@ -66,7 +66,7 @@ it("propagates save failures for the control to display", async () => {
 
 it("writes artifact text directly without fetching or encoding a data URL", async () => {
   await downloadFile("report.md", { text: "Résumé 🎉\n# Findings" });
-  expect(invoke).toHaveBeenCalledWith("write_text_file", {
+  expect(invoke).toHaveBeenCalledWith("save_text_download", {
     path: "/downloads/result.bin",
     content: "Résumé 🎉\n# Findings",
   });

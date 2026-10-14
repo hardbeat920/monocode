@@ -17,7 +17,7 @@ export async function downloadFile(
   });
   if (!destination) return;
   if ("text" in source) {
-    await invoke("write_text_file", {
+    await invoke("save_text_download", {
       path: destination,
       content: source.text,
     });
