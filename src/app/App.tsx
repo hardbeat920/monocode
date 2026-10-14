@@ -558,6 +558,11 @@ import {
   operatorEnabledInThread,
 } from "../features/sessions/model/operatorCommand";
 import {
+  consumeStageCommand,
+  sessionChangedFiles,
+  stageTurnPrompt,
+} from "../features/sessions/model/stageCommand";
+import {
   createMono,
   findMono,
   isMonoSession,
@@ -6984,13 +6989,40 @@ function Workspace({
         ? operatorCommand.text.trim() ||
           "Explain what you can do in MonoCode with the app CLI."
         : submittedText;
+      // `/stage` is a MonoCode command, so expand it before native slash routing.
+      const stageCommand = operatorCommand.matched
+        ? { text: promptText, matched: false }
+        : consumeStageCommand(submittedText);
+      // Plan mode forbids edits and orchestration replaces the request.
+      if (stageCommand.matched && intent !== "default") {
+        enqueueHarnessEvent(sessionId, {
+          type: "status",
+          text: "Use /stage from a regular session turn, outside Plan or Orchestrator mode.",
+        });
+        flushHarnessEvents();
+        return false;
+      }
       const rawCommand =
         !operatorCommand.matched &&
+        !stageCommand.matched &&
         isNativeCommandPrompt(submittedText, current.harness);
       const ciContext = options?.ciRepair?.prompt ?? options?.ciContext;
       const harnessText =
         options?.ciRepair?.prompt ??
-        (rawCommand ? submittedText : composeNoteMessage(noteCard, promptText));
+        (rawCommand
+          ? submittedText
+          : composeNoteMessage(
+              noteCard,
+              stageCommand.matched
+                ? stageTurnPrompt(
+                    stageCommand.text,
+                    sessionChangedFiles(
+                      current.blocks,
+                      sessionWorkCwd(current),
+                    ),
+                  )
+                : promptText,
+            ));
 
       const pendingSwitch = pendingComposerSwitch(current);
 

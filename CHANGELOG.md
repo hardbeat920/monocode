@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Remote hosts can run on **Linux without systemd**, such as containers and Firecracker microVMs. Setup starts the host as a detached background process there instead of a systemd user service, so it keeps running after SSH disconnects, and the next connect starts it again if it has stopped. Machines with systemd keep the user service and lingering.
+- **`/stage`** asks the agent to stage only the files it changed in the current session, naming each path instead of staging the whole repository. Other changes in the working tree stay unstaged, nothing is committed, and the prompt lists the files MonoCode recorded the agent editing. Text after the command is passed along as extra instructions, such as `/stage skip the lockfile`.
 
 ## [0.13.0] - 2026-10-12
 
