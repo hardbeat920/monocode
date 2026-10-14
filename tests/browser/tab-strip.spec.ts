@@ -82,3 +82,43 @@ test("selecting a hidden tab brings it into the viewport", async ({ page }) => {
   expect(tab!.x).toBeGreaterThanOrEqual(strip!.x - 1);
   expect(tab!.x + tab!.width).toBeLessThanOrEqual(strip!.x + strip!.width + 1);
 });
+
+for (const overflow of [8, 25, 60]) {
+  test(`one click reaches either edge with ${overflow}px of overflow`, async ({
+    page,
+  }) => {
+    const strip = page.getByRole("tablist");
+    const left = page.getByRole("button", { name: "Scroll tabs left" });
+    const right = page.getByRole("button", { name: "Scroll tabs right" });
+    await strip.evaluate((el, extra) => {
+      const row = el.parentElement!;
+      const fixture = row.parentElement!;
+      const inset = fixture.getBoundingClientRect().width - row.clientWidth;
+      fixture.style.width = `${el.firstElementChild!.scrollWidth + 30 + inset - extra}px`;
+      el.scrollLeft = 0;
+    }, overflow);
+    await expect(left).toHaveCount(0);
+    await expect(right).toBeVisible();
+    const first = page.getByRole("tab", { name: "GitHub", exact: true });
+    const initialX = (await first.boundingBox())!.x;
+    await right.click();
+    await expect(right).toHaveCount(0);
+    await expect(left).toBeVisible();
+    await expect
+      .poll(async () => (await first.boundingBox())!.x)
+      .toBeCloseTo(initialX - overflow, 0);
+    const last = await page
+      .getByRole("tab", { name: "Jira", exact: true })
+      .boundingBox();
+    const viewport = await strip.boundingBox();
+    expect(last!.x + last!.width).toBeLessThanOrEqual(
+      viewport!.x + viewport!.width + 1,
+    );
+    await left.click();
+    await expect(left).toHaveCount(0);
+    await expect(right).toBeVisible();
+    await expect
+      .poll(async () => (await first.boundingBox())!.x)
+      .toBeCloseTo(initialX, 0);
+  });
+}

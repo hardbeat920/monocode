@@ -35,6 +35,8 @@ export function ScrollableTabStrip({
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const [compact, setCompact] = useState(false);
   const [overflowing, setOverflowing] = useState(false);
+  const leftWidthRef = useRef(0);
+  const animationRef = useRef<number | null>(null);
   const [edges, setEdges] = useState({ left: false, right: false });
 
   useLayoutEffect(() => {
@@ -54,10 +56,16 @@ export function ScrollableTabStrip({
       // allows the controls to disappear as soon as the tabs fit again.
       const pinnedWidth = addWidth ? (nextCompact ? 30 : addWidth) : 0;
       setOverflowing(content.scrollWidth + pinnedWidth > row.clientWidth + 1);
-      const max = strip.scrollWidth - strip.clientWidth;
+      // Use the content's position relative to the whole row. Adding a pager
+      // must not change either the destination or the visible content position.
+      const max = Math.max(
+        0,
+        content.scrollWidth + pinnedWidth - row.clientWidth,
+      );
+      const position = strip.scrollLeft - leftWidthRef.current;
       const next = {
-        left: max > 1 && strip.scrollLeft > 1,
-        right: max > 1 && strip.scrollLeft < max - 1,
+        left: max > 1 && position > 1,
+        right: max > 1 && position < max - 1,
       };
       setEdges((prev) =>
         prev.left === next.left && prev.right === next.right ? prev : next,
@@ -71,6 +79,8 @@ export function ScrollableTabStrip({
     strip.addEventListener("scroll", sync, { passive: true });
     sync();
     return () => {
+      if (animationRef.current !== null)
+        cancelAnimationFrame(animationRef.current);
       observer.disconnect();
       strip.removeEventListener("scroll", sync);
     };
@@ -78,10 +88,62 @@ export function ScrollableTabStrip({
 
   useLayoutEffect(() => {
     const strip = stripRef.current;
+    const width = overflowing && edges.left ? 24 : 0;
+    const previous = leftWidthRef.current;
+    leftWidthRef.current = width;
+    if (strip && previous !== width) strip.scrollLeft += width - previous;
+  }, [overflowing, edges.left]);
+
+  const scroll = (side: "left" | "right") => {
+    const row = rowRef.current;
+    const strip = stripRef.current;
+    const content = contentRef.current;
+    if (!row || !strip || !content) return;
+    if (animationRef.current !== null)
+      cancelAnimationFrame(animationRef.current);
+    const pinnedWidth = add
+      ? compact
+        ? 30
+        : (addLabelRef.current?.offsetWidth ?? 0) + 16
+      : 0;
+    const max = Math.max(
+      0,
+      content.scrollWidth + pinnedWidth - row.clientWidth,
+    );
+    const start = Math.max(0, strip.scrollLeft - leftWidthRef.current);
+    const target = Math.max(
+      0,
+      Math.min(
+        max,
+        start +
+          (side === "left" ? -1 : 1) * Math.max(48, strip.clientWidth * 0.7),
+      ),
+    );
+    const duration = window.matchMedia("(prefers-reduced-motion: reduce)")
+      .matches
+      ? 0
+      : 200;
+    const started = performance.now();
+    const frame = (now: number) => {
+      const progress = duration ? Math.min(1, (now - started) / duration) : 1;
+      const eased = 1 - (1 - progress) ** 3;
+      strip.scrollLeft =
+        start + (target - start) * eased + leftWidthRef.current;
+      animationRef.current = progress < 1 ? requestAnimationFrame(frame) : null;
+    };
+    animationRef.current = requestAnimationFrame(frame);
+  };
+
+  useLayoutEffect(() => {
+    const strip = stripRef.current;
     const selected = strip?.querySelector<HTMLElement>(
       '[aria-selected="true"]',
     );
     if (!strip || !selected) return;
+    if (animationRef.current !== null) {
+      cancelAnimationFrame(animationRef.current);
+      animationRef.current = null;
+    }
     // Scroll only this row, without moving any surrounding page or pane.
     const tab = selected.getBoundingClientRect();
     const viewport = strip.getBoundingClientRect();
@@ -96,15 +158,7 @@ export function ScrollableTabStrip({
         type="button"
         aria-label={`Scroll tabs ${side}`}
         title={`Scroll tabs ${side}`}
-        onClick={() => {
-          const strip = stripRef.current;
-          strip?.scrollBy({
-            left:
-              (side === "left" ? -1 : 1) *
-              Math.max(48, strip.clientWidth * 0.7),
-            behavior: "smooth",
-          });
-        }}
+        onClick={() => scroll(side)}
         className="grid size-6 shrink-0 place-items-center rounded-md text-content/50 hover:bg-content/5 hover:text-content"
       >
         {side === "left" ? (
@@ -129,6 +183,10 @@ export function ScrollableTabStrip({
         role="tablist"
         aria-label={label}
         onWheel={(event) => {
+          if (animationRef.current !== null) {
+            cancelAnimationFrame(animationRef.current);
+            animationRef.current = null;
+          }
           if (event.deltaX === 0 && event.deltaY !== 0 && overflowing) {
             event.currentTarget.scrollLeft += event.deltaY;
           }
