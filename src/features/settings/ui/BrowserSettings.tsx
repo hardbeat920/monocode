@@ -16,9 +16,11 @@ import {
   connectionView,
   DEFAULT_BROWSER_SETTINGS,
   disconnectBrowser,
+  giveBrowserTab,
   inspectPages,
   listBrowserAudit,
   listBrowserMcpStatus,
+  listUserBrowserTabs,
   MANAGED_BROWSER_CHANNELS,
   openBrowserWindow,
   registerBrowserMcp,
@@ -39,12 +41,16 @@ import {
   type BrowserState,
   type BrowserTab,
   type ConnectionView,
+  type FreeBrowserTab,
 } from "../model/browser";
 import { MCP_PROVIDER_LABELS } from "../model/mcp";
 import { Group, Row, Select, settingDomId, Toggle } from "./SettingsControls";
 
 /** Resolves a session id to the name the sidebar shows. */
 export type BrowserSessionName = (sessionId: string) => string;
+
+/** A thread the user can hand a browser tab to. */
+export type BrowserThreadOption = { value: string; label: string };
 
 const CUSTOM_PROFILE = "custom";
 const OUTCOMES: BrowserOutcome[] = ["done", "blocked", "failed", "unknown"];
@@ -64,10 +70,13 @@ function clockTime(ms: number): string {
 export function BrowserSettings({
   sessionName,
   cwd,
+  threads = [],
 }: {
   sessionName: BrowserSessionName;
   /** Project the provider CLIs are asked about when registering. */
   cwd: string;
+  /** The app's threads, newest first, for "Give a tab to a thread". */
+  threads?: BrowserThreadOption[];
 }) {
   const state = useBrowserState();
   const [error, setError] = useState<string | null>(null);
@@ -141,7 +150,15 @@ export function BrowserSettings({
             onChange={(mode) => save({ mode: mode as BrowserMode })}
           />
         </Row>
-        {managed ? null : <AttachSteps state={state} />}
+        {managed ? (
+          <p className="border-b border-content/5 px-4 py-2.5 text-[12px] leading-relaxed text-content/45">
+            Any thread&apos;s agent can take a tab you open in the MonoCode
+            browser, or you can hand one to a thread with{" "}
+            {'"Give a tab to a thread"'} below.
+          </p>
+        ) : (
+          <AttachSteps state={state} />
+        )}
         <Row
           id="browser-access-mode"
           label="Thread access"
@@ -211,7 +228,12 @@ export function BrowserSettings({
         )}
       </Group>
       <ConnectionGroup state={state} run={run} />
-      <SessionsGroup state={state} sessionName={sessionName} run={run} />
+      <SessionsGroup
+        state={state}
+        sessionName={sessionName}
+        threads={threads}
+        run={run}
+      />
       <AuditGroup state={state} sessionName={sessionName} />
       <AdvancedGroup
         settings={state.settings}
@@ -418,6 +440,10 @@ function AttachSteps({ state }: { state: BrowserState }) {
           controlled by automated software.
         </li>
       </ol>
+      <p className="mt-2">
+        Agents never see your own tabs. To let a thread use one, hand it over
+        with {'"Give a tab to a thread"'} below once MonoCode is connected.
+      </p>
       <p className="mt-2 text-content/45">
         The MonoCode browser needs none of this.
       </p>
@@ -476,10 +502,12 @@ function ConsentGuide({ state }: { state: BrowserState }) {
 function SessionsGroup({
   state,
   sessionName,
+  threads,
   run,
 }: {
   state: BrowserState;
   sessionName: BrowserSessionName;
+  threads: BrowserThreadOption[];
   run: (action: () => Promise<unknown>) => void;
 }) {
   const rows = state.sessions.filter(
@@ -516,6 +544,13 @@ function SessionsGroup({
         ) : undefined
       }
     >
+      {state.toggle_on && state.connection.state === "connected" ? (
+        <GiveTabRow
+          state={state}
+          threads={giveTargets(threads, granted, sessionName)}
+          run={run}
+        />
+      ) : null}
       {rows.length === 0 && orphans.length === 0 ? (
         <p className="px-4 py-3.5 text-[12px] text-content/45">
           {state.settings.access === "always"
@@ -577,6 +612,183 @@ function SessionsGroup({
         );
       })}
     </Group>
+  );
+}
+
+/** The app's threads, then any thread with access the app did not list. */
+function giveTargets(
+  threads: BrowserThreadOption[],
+  granted: { session_id: string }[],
+  sessionName: BrowserSessionName,
+): BrowserThreadOption[] {
+  const known = new Set(threads.map((thread) => thread.value));
+  return [
+    ...threads,
+    ...granted
+      .filter((session) => !known.has(session.session_id))
+      .map((session) => ({
+        value: session.session_id,
+        label: sessionName(session.session_id),
+      })),
+  ];
+}
+
+/**
+ * The browser's free pages, loaded on request. A page leaves the list once
+ * it is given away; a failed load or hand-over goes to the caller's `run`.
+ */
+function useFreeTabs(run: (action: () => Promise<unknown>) => void) {
+  const [tabs, setTabs] = useState<FreeBrowserTab[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const load = () => {
+    setLoading(true);
+    run(() =>
+      listUserBrowserTabs()
+        .then(setTabs)
+        .finally(() => setLoading(false)),
+    );
+  };
+  const give = (free: string, sessionId: string) =>
+    run(() =>
+      giveBrowserTab(free, sessionId).then(() =>
+        setTabs((list) => list?.filter((tab) => tab.id !== free) ?? null),
+      ),
+    );
+  return { tabs, loading, load, give };
+}
+
+const NO_FREE_TABS =
+  "No tab is free to give. Open a web page in the browser, then click Refresh.";
+
+function RefreshLabel() {
+  return (
+    <>
+      <RefreshCw className="size-3.5" strokeWidth={1.75} />
+      Refresh
+    </>
+  );
+}
+
+/** Settings: hand one of the browser's free pages to a chosen thread. */
+function GiveTabRow({
+  state,
+  threads,
+  run,
+}: {
+  state: BrowserState;
+  threads: BrowserThreadOption[];
+  run: (action: () => Promise<unknown>) => void;
+}) {
+  const { tabs, loading, load, give } = useFreeTabs(run);
+  return (
+    <div className="border-b border-content/5 last:border-b-0">
+      <Row
+        id="browser-give-tab"
+        label="Give a tab to a thread"
+        description={
+          browserLaunches(state.settings.mode)
+            ? "Pick a tab you opened in the MonoCode browser and the thread that should have it. The thread gets browser access with it."
+            : "Pick one of your own tabs and the thread that should have it. The thread gets browser access, and its agent sees only that tab of yours."
+        }
+      >
+        <SecondaryButton disabled={loading} onClick={load}>
+          {tabs ? <RefreshLabel /> : "Show my tabs"}
+        </SecondaryButton>
+      </Row>
+      {tabs ? (
+        tabs.length ? (
+          <ul className="space-y-1 px-4 pt-2.5 pb-3.5">
+            {tabs.map((tab) => (
+              <FreeTabItem
+                key={tab.id}
+                tab={tab}
+                threads={threads}
+                onGive={(sessionId) => give(tab.id, sessionId)}
+              />
+            ))}
+          </ul>
+        ) : (
+          <p className="px-4 pt-2.5 pb-3.5 text-[12px] text-content/45">
+            {NO_FREE_TABS}
+          </p>
+        )
+      ) : null}
+    </div>
+  );
+}
+
+function FreeTabSummary({ tab }: { tab: FreeBrowserTab }) {
+  return (
+    <div className="min-w-0 flex-1">
+      <div className="truncate text-content">{tab.title || "Untitled"}</div>
+      <div className="truncate text-content/45">{browserTabHost(tab.url)}</div>
+    </div>
+  );
+}
+
+function FreeTabItem({
+  tab,
+  threads,
+  onGive,
+}: {
+  tab: FreeBrowserTab;
+  threads: BrowserThreadOption[];
+  onGive: (sessionId: string) => void;
+}) {
+  const [to, setTo] = useState("");
+  return (
+    <li className="flex items-center gap-2 rounded-lg bg-content/3 px-2.5 py-1.5 text-[12px]">
+      <FreeTabSummary tab={tab} />
+      <Select
+        label="Give tab to"
+        value={to}
+        options={[{ value: "", label: "Choose a thread…" }, ...threads]}
+        onChange={setTo}
+      />
+      <SecondaryButton disabled={!to} onClick={() => onGive(to)}>
+        Give
+      </SecondaryButton>
+    </li>
+  );
+}
+
+/**
+ * The thread indicator's "Add a tab from the browser…": the same free pages,
+ * each given to this thread with one click.
+ */
+export function AddFreeTab({
+  sessionId,
+  run,
+}: {
+  sessionId: string;
+  run: (action: () => Promise<unknown>) => void;
+}) {
+  const { tabs, loading, load, give } = useFreeTabs(run);
+  return (
+    <div className="px-1 pt-2">
+      <SecondaryButton disabled={loading} onClick={load}>
+        {tabs ? <RefreshLabel /> : "Add a tab from the browser…"}
+      </SecondaryButton>
+      {tabs ? (
+        tabs.length ? (
+          <ul className="mt-2 space-y-1">
+            {tabs.map((tab) => (
+              <li
+                key={tab.id}
+                className="flex items-center gap-2 rounded-lg bg-content/3 px-2.5 py-1.5 text-[12px]"
+              >
+                <FreeTabSummary tab={tab} />
+                <SecondaryButton onClick={() => give(tab.id, sessionId)}>
+                  Add
+                </SecondaryButton>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-2 text-[12px] text-content/45">{NO_FREE_TABS}</p>
+        )
+      ) : null}
+    </div>
   );
 }
 

@@ -41,6 +41,17 @@ In your own Chrome or Edge, agent tabs open in the background of your current wi
 
 Revoking a thread, switching browser access off or a dropped connection leaves the tabs open.
 
+## Hand a tab to a thread
+
+A tab you open yourself belongs to no thread. To let a thread work in it, open Settings → Browser and click **Show my tabs** under **Give a tab to a thread**. The list shows the web pages in the browser that no thread holds. Pick a thread next to a tab and click **Give**. The thread gets browser access with the tab. The control shows while browser access is on and MonoCode is connected to the browser.
+
+The globe in a thread with access has the same control for that thread: click it, then **Add a tab from the browser…**, and click **Add** next to a tab.
+
+- **Your Chrome or Edge**: agents never see your own tabs, so handing one over is the only way a thread gets one of them. The agent can use that tab and none of your others.
+- **MonoCode browser**: tabs you open there are free, and any thread's agent with access can take one by itself. You can also give one to a thread yourself.
+
+**Take back** returns a tab to you.
+
 ## What the switch covers
 
 Turning browser access off stops every MonoCode browser action before it reaches the browser. An action already sent can still finish, and nothing a site already did is undone. The switch covers MonoCode's own browser tools only; other programs, extensions or tools you gave an agent yourself reach the browser their own way.

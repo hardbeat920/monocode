@@ -258,6 +258,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "browser revoke take back close agent tabs move",
   },
   {
+    id: "browser-give-tab",
+    section: "browser",
+    label: "Give a tab to a thread",
+    keywords: "browser hand over share my tab adopt free tabs thread agent",
+  },
+  {
     id: "browser-audit",
     section: "browser",
     label: "Browser activity",

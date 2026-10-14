@@ -126,6 +126,14 @@ export type BrowserState = {
   global_epoch: { run: number; seq: number };
 };
 
+/** A web page in the browser that no thread holds (`targets::FreeTab`). */
+export type FreeBrowserTab = {
+  /** `f_` + 8 hex; valid while the page stays free. */
+  id: string;
+  url: string;
+  title: string;
+};
+
 export type BrowserOutcome = "done" | "blocked" | "failed" | "unknown";
 
 export type BrowserAuditEntry = {
@@ -304,6 +312,24 @@ export const releaseBrowserTab = (tab: string) =>
 export const closeBrowserTab = (tab: string) =>
   command("browser_close_tab", { tab });
 export const closeAllBrowserTabs = () => command("browser_close_all_tabs");
+
+/**
+ * The http(s) pages in the connected browser that no thread holds. Fails
+ * with the backend's message while MonoCode is not connected.
+ */
+export function listUserBrowserTabs(): Promise<FreeBrowserTab[]> {
+  return invoke<FreeBrowserTab[]>("browser_user_tabs");
+}
+
+/**
+ * The user hands a free page to a thread. The thread gets browser access
+ * with it, so a thread the user turned off counts as allowed again.
+ */
+export const giveBrowserTab = (free: string, sessionId: string) =>
+  command("browser_give_tab", { free, sessionId }).then((state) => {
+    markTurnedOff(sessionId, false);
+    return state;
+  });
 export const saveBrowserSettings = (settings: BrowserSettings) =>
   command("browser_set_settings", { settings });
 

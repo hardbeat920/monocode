@@ -498,6 +498,24 @@ export function SettingsView({
     },
     [liveSessions, sessions],
   );
+  // Threads a browser tab can be handed to: the ones the sidebar lists,
+  // without orchestration workers, newest first.
+  const browserThreads = useMemo(
+    () =>
+      sessions
+        .filter(
+          (session) =>
+            !session.archived &&
+            !session.sidebarHidden &&
+            !session.orchestrationLeadId,
+        )
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .map((session) => ({
+          value: session.id,
+          label: browserSessionName(session.id),
+        })),
+    [sessions, browserSessionName],
+  );
 
   useEffect(() => setRevealed(anchor), [anchor, notificationSettingsRequest]);
 
@@ -611,7 +629,11 @@ export function SettingsView({
                 <McpSettings cwd={cwd} recents={recents} />
               ) : null}
               {section === "browser" ? (
-                <BrowserSettings sessionName={browserSessionName} cwd={cwd} />
+                <BrowserSettings
+                  sessionName={browserSessionName}
+                  cwd={cwd}
+                  threads={browserThreads}
+                />
               ) : null}
               {section === "providers" ? (
                 <ProvidersPage cwd={cwd} recents={recents} />

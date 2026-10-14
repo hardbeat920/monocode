@@ -75,6 +75,10 @@ beforeEach(() => {
         },
       ];
     if (command === "browser_audit_clear") return undefined;
+    if (command === "browser_user_tabs")
+      return [
+        { id: "f_0000000a", url: "https://docs.example.org/a", title: "Docs" },
+      ];
     if (command === "browser_mcp_status")
       return [
         {
@@ -173,6 +177,80 @@ it("lists threads with their tabs and acts on them", async () => {
   expect(invoke).toHaveBeenCalledWith("browser_close_all_tabs", undefined);
 });
 
+it("gives one of the browser's free tabs to a thread", async () => {
+  await act(async () =>
+    root.render(
+      createElement(BrowserSettings, {
+        sessionName: (id: string) => (id === "s1" ? "Fix login" : id),
+        cwd: "/repo",
+        threads: [{ value: "s2", label: "Write docs" }],
+      }),
+    ),
+  );
+  const row = container.querySelector('[data-setting-id="browser-give-tab"]')!;
+  expect(row.textContent).toContain("Give a tab to a thread");
+  await act(async () => button("Show my tabs").click());
+  expect(invoke).toHaveBeenCalledWith("browser_user_tabs");
+  expect(container.textContent).toContain("docs.example.org");
+  expect(button("Give").disabled).toBe(true);
+
+  await act(async () =>
+    container
+      .querySelector<HTMLButtonElement>(
+        '[aria-label="Give tab to: Choose a thread…"]',
+      )!
+      .click(),
+  );
+  const options = Array.from(
+    document.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+  ).map((node) => node.textContent);
+  // The app's threads, then threads with access the app did not list.
+  expect(options).toEqual(["Choose a thread…", "Write docs", "Fix login"]);
+  const target = Array.from(
+    document.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+  ).find((node) => node.textContent === "Write docs")!;
+  await act(async () => target.click());
+  await act(async () => button("Give").click());
+  expect(invoke).toHaveBeenCalledWith("browser_give_tab", {
+    free: "f_0000000a",
+    sessionId: "s2",
+  });
+  expect(container.textContent).toContain("No tab is free to give.");
+});
+
+it("shows the hand-over only while connected, with a hint per mode", async () => {
+  await renderSettings();
+  expect(container.textContent).toContain(
+    "Any thread's agent can take a tab you open in the MonoCode browser",
+  );
+  await act(async () =>
+    resetBrowserStore({
+      ...state,
+      settings: attach,
+      connection: { state: "idle", since_ms: 0 },
+    }),
+  );
+  expect(container.textContent).toContain("Agents never see your own tabs.");
+  expect(
+    container.querySelector('[data-setting-id="browser-give-tab"]'),
+  ).toBeNull();
+});
+
+it("shows the error when the free tabs cannot be listed", async () => {
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "browser_user_tabs")
+      throw new Error("MonoCode is not connected to the browser.");
+    if (command === "browser_audit_list" || command === "browser_mcp_status")
+      return [];
+    return state;
+  });
+  await renderSettings();
+  await act(async () => button("Show my tabs").click());
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe(
+    "MonoCode is not connected to the browser.",
+  );
+});
+
 it("guides the user to turn on remote debugging", async () => {
   state = browserState({
     connection: { state: "needs_toggle", since_ms: 0 },
@@ -260,6 +338,18 @@ it("shows the thread indicator only while the thread has access", async () => {
   const off = Array.from(
     document.querySelectorAll<HTMLButtonElement>("button"),
   ).find((node) => node.textContent === "Turn off")!;
+  const add = Array.from(
+    document.querySelectorAll<HTMLButtonElement>("button"),
+  ).find((node) => node.textContent === "Add a tab from the browser…")!;
+  await act(async () => add.click());
+  const give = Array.from(
+    document.querySelectorAll<HTMLButtonElement>("button"),
+  ).find((node) => node.textContent === "Add")!;
+  await act(async () => give.click());
+  expect(invoke).toHaveBeenCalledWith("browser_give_tab", {
+    free: "f_0000000a",
+    sessionId: "s1",
+  });
   await act(async () => off.click());
   expect(invoke).toHaveBeenCalledWith("browser_set_session_grant", {
     sessionId: "s1",

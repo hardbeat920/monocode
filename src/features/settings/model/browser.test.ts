@@ -14,7 +14,9 @@ import {
   DEFAULT_BROWSER_SETTINGS,
   disconnectBrowser,
   ensureBrowserMcp,
+  giveBrowserTab,
   inspectPages,
+  listUserBrowserTabs,
   openBrowserWindow,
   resetBrowserStore,
   revokeBrowserSession,
@@ -299,6 +301,28 @@ describe("browser store", () => {
     expect(browserAccessTurnedOff("s1")).toBe(true);
     await setSessionBrowserGrant("s1", true);
     expect(browserAccessTurnedOff("s1")).toBe(false);
+  });
+
+  it("lists the free tabs and gives one to a thread", async () => {
+    const free = [
+      { id: "f_0000000a", url: "https://example.com/", title: "Example" },
+    ];
+    vi.mocked(invoke).mockResolvedValueOnce(free);
+    await expect(listUserBrowserTabs()).resolves.toEqual(free);
+    expect(invoke).toHaveBeenCalledWith("browser_user_tabs");
+
+    vi.mocked(invoke).mockResolvedValue(
+      browserState({ sessions: [granted("s2")], tabs: [browserTab()] }),
+    );
+    await setSessionBrowserGrant("s2", false);
+    expect(browserAccessTurnedOff("s2")).toBe(true);
+    await giveBrowserTab("f_0000000a", "s2");
+    expect(invoke).toHaveBeenCalledWith("browser_give_tab", {
+      free: "f_0000000a",
+      sessionId: "s2",
+    });
+    expect(browserStateSnapshot()?.tabs).toHaveLength(1);
+    expect(browserAccessTurnedOff("s2")).toBe(false);
   });
 
   it("does not toast after the user disconnects", async () => {

@@ -10,7 +10,7 @@ import {
   setSessionBrowserGrant,
   useBrowserState,
 } from "../../settings/model/browser";
-import { BrowserTabRow } from "../../settings/ui/BrowserSettings";
+import { AddFreeTab, BrowserTabRow } from "../../settings/ui/BrowserSettings";
 
 const INDICATOR = {
   granted: {
@@ -98,6 +98,9 @@ export function BrowserIndicator({ sessionId }: { sessionId: string }) {
               The agent hasn't opened a tab yet.
             </p>
           )}
+          {state?.connection.state === "connected" ? (
+            <AddFreeTab sessionId={sessionId} run={run} />
+          ) : null}
           {error ? (
             <p role="alert" className="px-1 pt-2 text-[12px] text-red-400">
               {error}
