@@ -91,6 +91,14 @@ export type AppSessionPlacement = {
   besideSessionId: string;
 };
 
+/** What `sessions.send` does with a prompt for a busy session. */
+export type WhenBusy = "steer" | "followUp";
+export type AppSendResult = {
+  alreadySubmitted: boolean;
+  delivery: "sent" | "steered" | "queued";
+  queuedMessageId?: string;
+};
+
 export type AgentAppHost = {
   start(
     launch: QuickLaunch,
@@ -105,8 +113,8 @@ export type AgentAppHost = {
     id: string,
     prompt: string,
     requestId: string,
-    notifyMonoId?: string,
-  ): Promise<{ alreadySubmitted: boolean }>;
+    options: { notifyMonoId?: string; whenBusy?: WhenBusy },
+  ): Promise<AppSendResult>;
   draft(
     id: string,
     prompt: string,
@@ -172,7 +180,10 @@ const FIELDS = new Map<string, readonly string[]>([
   ["models.list", []],
   ["sessions.list", ["project"]],
   ["sessions.read", ["sessionId", "before", "limit", "maxChars", "project"]],
-  ["sessions.send", ["sessionId", "prompt", "project", "notifyOnComplete"]],
+  [
+    "sessions.send",
+    ["sessionId", "prompt", "project", "notifyOnComplete", "whenBusy"],
+  ],
   ["sessions.draft", ["sessionId", "prompt", "project"]],
   ["sessions.stop", ["sessionId", "project"]],
   ["sessions.archive", ["sessionId", "project"]],
@@ -264,6 +275,12 @@ function completionRecipient(
   if (input.draft === true)
     throw new Error("An unsent draft cannot send a completion notification");
   return source.id;
+}
+
+function parseWhenBusy(value: unknown): WhenBusy | undefined {
+  if (value === undefined || value === "steer" || value === "followUp")
+    return value;
+  throw new Error('whenBusy must be "steer" or "followUp"');
 }
 
 function optionalString(
@@ -1004,6 +1021,7 @@ export async function handleAgentApp(
     case "sessions.send": {
       const id = requiredString(input.sessionId, "sessionId", 256);
       const prompt = agentPrompt(input.prompt);
+      const whenBusy = parseWhenBusy(input.whenBusy);
       const notifyMonoId = completionRecipient(source, input, host);
       if (id === source.id)
         throw new Error(
@@ -1012,16 +1030,21 @@ export async function handleAgentApp(
       if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId))
         throw new Error("Invalid request ID");
       await projectSession(source, id, input, host);
-      const result = await host.send(
+      const { alreadySubmitted, delivery, queuedMessageId } = await host.send(
         id,
         prompt,
         `app-${source.id}-${requestId}`,
-        ...(notifyMonoId ? [notifyMonoId] : []),
+        {
+          ...(notifyMonoId ? { notifyMonoId } : {}),
+          ...(whenBusy ? { whenBusy } : {}),
+        },
       );
       return {
         sessionId: id,
         submitted: true,
-        ...result,
+        alreadySubmitted,
+        delivery,
+        ...(queuedMessageId ? { queuedMessageId } : {}),
         ...(notifyMonoId ? { notifyOnComplete: true } : {}),
       };
     }

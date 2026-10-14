@@ -132,11 +132,25 @@ Actions:
                   reasoning are omitted. Omit before for the newest page;
                   pass nextBefore from a result for older exchanges. maxChars
                   caps each message (200-6000, default 1200).
-  sessions.send  {"sessionId":"...","prompt":"...","notifyOnComplete":true}
-                  Submit a follow-up to an idle session in this project.
-                  A busy session is rejected. Reuse --request-id on retries.
-                  Optional notifyOnComplete:true asks for a completion report
-                  in the calling Mono's chat. It waits until that Mono is idle.
+  sessions.send  {"sessionId":"...","prompt":"...","whenBusy":"steer",
+                  "notifyOnComplete":true}
+                  Send a prompt to a session in this project. An idle
+                  session runs it as a new turn. Without whenBusy, a busy
+                  session returns an error. whenBusy:"steer" adds the prompt
+                  to the running turn, like Steer in MonoCode. A harness that
+                  cannot steer mid-turn returns an error. whenBusy:"followUp"
+                  adds it to the session's queue in MonoCode, where the user
+                  can edit or remove it. It is sent after the turn ends,
+                  unless the queue is paused (for example after Stop). A
+                  busy Mono's own chat does not accept whenBusy.
+                  The result's delivery is sent, steered or queued. Queued
+                  results also have queuedMessageId. omp reads steering
+                  between tool calls. Current omp can move a long shell
+                  command to the background, so the prompt arrives while
+                  that command runs. Reuse --request-id on retries.
+                  Optional notifyOnComplete:true asks for a completion
+                  report in the calling Mono's chat when the turn that uses
+                  the prompt ends. It waits until that Mono is idle.
   sessions.draft {"sessionId":"...","prompt":"..."}
                   Save an unsent draft in an idle project session. Existing
                   drafts are preserved; send or remove one in MonoCode first.
@@ -647,6 +661,8 @@ mod tests {
             assert!(parse_args_for(&args(&[action]), false).is_err());
         }
         assert!(app_help().contains("draft:true"));
+        assert!(app_help().contains(r#""whenBusy":"steer""#));
+        assert!(app_help().contains(r#"whenBusy:"followUp""#));
         assert!(app_help().contains("inherit this"));
         assert!(parse_args_for(&args(&["delegate"]), true).is_err());
         assert!(

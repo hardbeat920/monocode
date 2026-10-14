@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Operator CLI `sessions.send` can **steer or queue a follow-up on a busy session** with `whenBusy`. `"steer"` adds the prompt to the running turn, the same as Steer in MonoCode. `"followUp"` adds it to the session's follow-up queue, where the user can see, edit, or remove it. It is sent after the turn ends, unless the queue is paused, for example after Stop. Without `whenBusy`, a busy session is still rejected, and a busy Mono's own chat does not accept `whenBusy`. The result reports `delivery` as `sent`, `steered`, or `queued`, with `queuedMessageId` for queued messages. A CLI steer to Hermes, or to a harness that cannot steer mid-turn, returns an error instead of queuing. Retries with the same `--request-id` do not deliver the message twice, and `notifyOnComplete` reports when the turn that uses the message ends. omp reads steering between tool calls; current omp can move a long shell command to the background, so the steer arrives while that command runs.
+
 ## [0.13.0] - 2026-10-12
 
 ### Added

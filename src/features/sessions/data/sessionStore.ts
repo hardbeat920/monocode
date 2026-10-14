@@ -146,6 +146,10 @@ export function isPersistableId(value: string): boolean {
   return /^[A-Za-z0-9_-]+$/.test(value);
 }
 
+function isAppRequestId(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9_-]{1,512}$/.test(value);
+}
+
 function persistableMeta(
   session: Session,
   includeQueue = true,
@@ -292,6 +296,9 @@ function sanitizeQueuedMessages(value: unknown): QueuedMessage[] {
           message.intent ?? "",
         )
           ? { intent: message.intent }
+          : {}),
+        ...(isAppRequestId(message.appRequestId)
+          ? { appRequestId: message.appRequestId }
           : {}),
         ...(typeof message.error === "string" && message.error
           ? { error: message.error }
@@ -918,12 +925,11 @@ function sanitizeBlock(
     (block.intent === "plan" || block.intent === "orchestrate")
   )
     next.intent = block.intent;
-  if (
-    block.role === "user" &&
-    typeof block.appRequestId === "string" &&
-    /^[A-Za-z0-9_-]{1,512}$/.test(block.appRequestId)
-  )
+  if (block.role === "user" && isAppRequestId(block.appRequestId)) {
     next.appRequestId = block.appRequestId;
+    const appDelivery = sanitizeAppDelivery(block.appDelivery);
+    if (appDelivery) next.appDelivery = appDelivery;
+  }
   if (
     block.role === "user" &&
     typeof block.providerTurnId === "string" &&
@@ -1237,6 +1243,19 @@ function sanitizeTurnModel(value: unknown): TurnModel | undefined {
     return undefined;
   }
   return { harness: harness as HarnessId, id, name };
+}
+
+function sanitizeAppDelivery(value: unknown): Block["appDelivery"] {
+  if (!value || typeof value !== "object") return undefined;
+  const delivery = value as Record<string, unknown>;
+  if (delivery.via === "steered") return { via: "steered" };
+  if (
+    delivery.via !== "queued" ||
+    typeof delivery.queuedMessageId !== "string" ||
+    !isPersistableId(delivery.queuedMessageId)
+  )
+    return undefined;
+  return { via: "queued", queuedMessageId: delivery.queuedMessageId };
 }
 
 function sanitizeInterjection(

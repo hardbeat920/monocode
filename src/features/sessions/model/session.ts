@@ -269,6 +269,10 @@ export type MonoSessionCompletion = {
   sessionCount?: number;
 };
 
+/** How a CLI `whenBusy` request reached its user turn, so a retry reports the same delivery. */
+export type AppDelivery =
+  { via: "steered" } | { via: "queued"; queuedMessageId: string };
+
 export type QueuedMessage = {
   id: string;
   /** User bubble already shown optimistically in a Mono's conversation. */
@@ -280,6 +284,8 @@ export type QueuedMessage = {
   intent?: TurnIntent;
   /** An app notification that must wait for an idle Mono, never steer its work. */
   monoSessionCompletion?: MonoSessionCompletion;
+  /** Stable CLI request that queued this follow-up, for safe retries. */
+  appRequestId?: string;
   /** Delivery failed; the message remains available to retry or edit. */
   error?: string;
 };
@@ -336,6 +342,8 @@ export type Block = {
   intent?: Extract<TurnIntent, "plan" | "orchestrate">;
   /** Stable CLI request that submitted this turn, for safe retries. */
   appRequestId?: string;
+  /** Set when the CLI request in `appRequestId` steered or queued this turn. */
+  appDelivery?: AppDelivery;
   /** Provider-reported token metrics for this user turn, when available. */
   turnMetrics?: TurnMetrics;
   tool?: {

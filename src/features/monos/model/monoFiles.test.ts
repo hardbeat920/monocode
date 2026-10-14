@@ -138,6 +138,8 @@ it("says how to keep memory and update the soul only at the user's request", () 
   expect(full).toContain("without repeating its contents");
   expect(full).not.toContain("app documents.write");
   expect(full).toContain('"notifyOnComplete":true');
+  expect(full).toContain('"whenBusy":"steer"');
+  expect(full).toContain('"whenBusy":"followUp"');
   expect(full).toContain(
     "Submitted sessions notify you on completion by default",
   );

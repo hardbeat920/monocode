@@ -103,7 +103,7 @@ function fixture() {
     session: vi.fn(async (id) =>
       id === "other" ? { ...newSession("codex", source.cwd), id } : null,
     ),
-    send: vi.fn(async () => ({ alreadySubmitted: false })),
+    send: vi.fn(async () => ({ alreadySubmitted: false, delivery: "sent" })),
     draft: vi.fn(async () => ({ alreadySaved: false, draft: true })),
     stop: vi.fn(async () => {}),
     remove: vi.fn(async () => {}),
@@ -482,7 +482,7 @@ describe("agent app commands", () => {
       "other",
       "Fix the findings",
       "app-lead-monitored-send",
-      "lead",
+      { notifyMonoId: "lead" },
     );
   });
 
@@ -630,11 +630,17 @@ describe("agent app commands", () => {
         { sessionId: "other", prompt: "Continue the review" },
         host,
       ),
-    ).toMatchObject({ sessionId: "other", submitted: true });
+    ).toEqual({
+      sessionId: "other",
+      submitted: true,
+      alreadySubmitted: false,
+      delivery: "sent",
+    });
     expect(host.send).toHaveBeenCalledWith(
       "other",
       "Continue the review",
       "app-lead-send-1",
+      {},
     );
     await expect(
       handleAgentApp(
@@ -655,6 +661,75 @@ describe("agent app commands", () => {
       ),
     ).rejects.toThrow("not found in this project");
     expect(host.send).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([null, "", "queue", 1, true])(
+    "rejects whenBusy=%j before touching the target session",
+    async (whenBusy) => {
+      const { source, host } = fixture();
+      await expect(
+        handleAgentApp(
+          source,
+          "busy-invalid",
+          "sessions.send",
+          { sessionId: "other", prompt: "Continue the review", whenBusy },
+          host,
+        ),
+      ).rejects.toThrow('whenBusy must be "steer" or "followUp"');
+      expect(host.sessions).not.toHaveBeenCalled();
+      expect(host.session).not.toHaveBeenCalled();
+      expect(host.send).not.toHaveBeenCalled();
+    },
+  );
+
+  it("reports a queued or steered prompt as submitted with its delivery", async () => {
+    const { source, host } = fixture();
+    vi.mocked(host.send).mockResolvedValueOnce({
+      alreadySubmitted: false,
+      delivery: "queued",
+      queuedMessageId: "q1",
+    });
+    expect(
+      await handleAgentApp(
+        source,
+        "queued",
+        "sessions.send",
+        {
+          sessionId: "other",
+          prompt: "Continue the review",
+          whenBusy: "followUp",
+        },
+        host,
+      ),
+    ).toEqual({
+      sessionId: "other",
+      submitted: true,
+      alreadySubmitted: false,
+      delivery: "queued",
+      queuedMessageId: "q1",
+    });
+    vi.mocked(host.send).mockResolvedValueOnce({
+      alreadySubmitted: true,
+      delivery: "steered",
+    });
+    expect(
+      await handleAgentApp(
+        source,
+        "steered",
+        "sessions.send",
+        {
+          sessionId: "other",
+          prompt: "Continue the review",
+          whenBusy: "steer",
+        },
+        host,
+      ),
+    ).toEqual({
+      sessionId: "other",
+      submitted: true,
+      alreadySubmitted: true,
+      delivery: "steered",
+    });
   });
 
   it("saves an unsent draft in another listed project session", async () => {
