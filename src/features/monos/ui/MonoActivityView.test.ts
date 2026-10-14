@@ -3,18 +3,11 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Block } from "../../sessions/model/session";
-import { MonoActivityPanel } from "./MonoActivityPanel";
+import { MonoActivityView } from "./MonoActivityView";
 
 let container: HTMLDivElement;
 let root: Root;
-const onClose = vi.fn();
 const onApproval = vi.fn();
-const agent = {
-  name: "Captain Awesome",
-  mascot: "cat",
-  color: "#6ba",
-  projects: [],
-};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -39,12 +32,10 @@ afterEach(() => {
 function render(blocks: Block[], live = false) {
   act(() =>
     root.render(
-      createElement(MonoActivityPanel, {
-        agent,
+      createElement(MonoActivityView, {
         blocks,
         live,
         cwd: "/repo",
-        onClose,
         onApproval,
       }),
     ),
@@ -79,20 +70,11 @@ it("shows the complete chronological trail", () => {
     },
     { id: "reply", role: "assistant", text: "Your instructions are updated." },
   ]);
-  expect(container.querySelector("aside")?.getAttribute("aria-label")).toBe(
-    "Captain Awesome activity",
-  );
   expect(
     Array.from(container.querySelectorAll("[data-mono-activity-block]")).map(
       (el) => el.getAttribute("data-mono-activity-block"),
     ),
   ).toEqual(["thinking", "intro", "read", "progress", "write", "reply"]);
-  act(() =>
-    container
-      .querySelector<HTMLButtonElement>('[aria-label="Hide activity"]')!
-      .click(),
-  );
-  expect(onClose).toHaveBeenCalledOnce();
 });
 
 it("updates a live trail and keeps approval controls actionable", () => {
