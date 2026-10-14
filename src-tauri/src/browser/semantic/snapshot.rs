@@ -21,6 +21,7 @@
 
 use std::collections::HashMap;
 
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::super::link::{CdpError, Method};
@@ -99,15 +100,12 @@ fn ax_string(value: &Value) -> Option<String> {
     }
 }
 
-fn flags(node: &Value) -> Vec<String> {
+fn flags(properties: &[AxProperty]) -> Vec<String> {
     let mut out = Vec::new();
-    let Some(properties) = node["properties"].as_array() else {
-        return out;
-    };
     let mut href = None;
     for property in properties {
-        let name = property["name"].as_str().unwrap_or("");
-        let value = &property["value"]["value"];
+        let name = property.name.as_str();
+        let value = &property.value.value;
         let truthy = matches!(value, Value::Bool(true)) || value.as_str() == Some("true");
         match name {
             "checked" | "pressed" => {
@@ -147,46 +145,104 @@ fn flags(node: &Value) -> Vec<String> {
     out
 }
 
-/// Add one `getFullAXTree` answer to the arena; returns the root's index.
-pub fn add_tree(arena: &mut Vec<AxNode>, nodes: &[Value], frame: usize) -> Option<usize> {
-    let base = arena.len();
-    let mut index: HashMap<&str, usize> = HashMap::new();
-    for (offset, node) in nodes.iter().enumerate() {
-        if let Some(id) = node["nodeId"].as_str() {
-            index.insert(id, base + offset);
+/// One node of a `getFullAXTree` answer, with only the fields the snapshot
+/// reads; the rest (name sources, ignored reasons, ...) is skipped while
+/// parsing, which is most of the answer's size.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RawAxNode {
+    #[serde(default)]
+    node_id: String,
+    #[serde(default)]
+    ignored: bool,
+    role: Option<AxValue>,
+    name: Option<AxValue>,
+    value: Option<AxValue>,
+    #[serde(default)]
+    properties: Vec<AxProperty>,
+    #[serde(default)]
+    child_ids: Vec<String>,
+    #[serde(rename = "backendDOMNodeId")]
+    backend_dom_node_id: Option<i64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct AxValue {
+    #[serde(default)]
+    value: Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct AxProperty {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    value: AxValue,
+}
+
+#[derive(Default, Deserialize)]
+struct AxTree {
+    #[serde(default)]
+    nodes: Vec<RawAxNode>,
+}
+
+impl AxValue {
+    fn into_string(self) -> String {
+        match self.value {
+            Value::String(s) => s,
+            _ => String::new(),
         }
     }
-    let mut has_parent = vec![false; nodes.len()];
-    for node in nodes {
-        let role = node["role"]["value"].as_str().unwrap_or("").to_string();
-        let mut name = node["name"]["value"].as_str().unwrap_or("").to_string();
-        if role == "RootWebArea" {
-            name = strip_marker(&name).to_string();
-        }
-        let children: Vec<usize> = node["childIds"]
-            .as_array()
-            .map(|ids| {
-                ids.iter()
-                    .filter_map(|id| id.as_str().and_then(|id| index.get(id).copied()))
+}
+
+/// Add one `getFullAXTree` answer to the arena; returns the root's index.
+pub fn add_tree(arena: &mut Vec<AxNode>, nodes: Vec<RawAxNode>, frame: usize) -> Option<usize> {
+    let base = arena.len();
+    let children: Vec<Vec<usize>> = {
+        let index: HashMap<&str, usize> = nodes
+            .iter()
+            .enumerate()
+            .map(|(offset, node)| (node.node_id.as_str(), base + offset))
+            .collect();
+        nodes
+            .iter()
+            .map(|node| {
+                node.child_ids
+                    .iter()
+                    .filter_map(|id| index.get(id.as_str()).copied())
                     .collect()
             })
-            .unwrap_or_default();
-        for child in &children {
-            has_parent[child - base] = true;
+            .collect()
+    };
+    let mut has_parent = vec![false; nodes.len()];
+    for child in children.iter().flatten() {
+        has_parent[child - base] = true;
+    }
+    arena.reserve(nodes.len());
+    for (node, children) in nodes.into_iter().zip(children) {
+        let role = node.role.map(AxValue::into_string).unwrap_or_default();
+        let mut name = node.name.map(AxValue::into_string).unwrap_or_default();
+        if role == "RootWebArea" {
+            name = strip_marker(&name).to_string();
         }
         arena.push(AxNode {
             role,
             name,
-            value: ax_string(&node["value"]["value"]).filter(|v| !v.is_empty()),
-            flags: flags(node),
-            backend: node["backendDOMNodeId"].as_i64(),
-            ignored: node["ignored"].as_bool().unwrap_or(false),
+            value: node
+                .value
+                .and_then(|v| ax_string(&v.value))
+                .filter(|v| !v.is_empty()),
+            flags: flags(&node.properties),
+            backend: node.backend_dom_node_id,
+            ignored: node.ignored,
             children,
             frame,
             frame_root: false,
         });
     }
-    (0..nodes.len()).find(|i| !has_parent[*i]).map(|i| base + i)
+    (0..has_parent.len())
+        .find(|i| !has_parent[*i])
+        .map(|i| base + i)
 }
 
 /// Collapse whitespace and cut to `max` characters with an ellipsis.
@@ -258,10 +314,10 @@ impl Renderer<'_> {
         }
         // Mark before recursing so a malformed (cyclic) tree terminates.
         self.keep[i] = Some(false);
-        let node = &self.arena[i];
+        let arena = self.arena;
+        let node = &arena[i];
         let mut keep = !node.ignored && ref_worthy(node, self.opts.mode) || self.is_picked(node);
-        let children = node.children.clone();
-        for child in children {
+        for &child in &node.children {
             if self.keep(child) {
                 keep = true;
             }
@@ -271,8 +327,13 @@ impl Renderer<'_> {
     }
 
     fn kept_children(&mut self, i: usize) -> Vec<usize> {
-        let children = self.arena[i].children.clone();
-        children.into_iter().filter(|c| self.keep(*c)).collect()
+        let arena = self.arena;
+        arena[i]
+            .children
+            .iter()
+            .copied()
+            .filter(|c| self.keep(*c))
+            .collect()
     }
 
     fn count_kept(&mut self, i: usize) -> usize {
@@ -297,10 +358,11 @@ impl Renderer<'_> {
             self.skipped += self.count_kept(i);
             return;
         }
-        let node = self.arena[i].clone();
+        let arena = self.arena;
+        let node = &arena[i];
         let children = self.kept_children(i);
-        let picked = self.is_picked(&node);
-        let worthy = ref_worthy(&node, self.opts.mode) || picked;
+        let picked = self.is_picked(node);
+        let worthy = ref_worthy(node, self.opts.mode) || picked;
         let unnamed = node.name.trim().is_empty();
         let duplicate_text =
             node.role == "StaticText" && parent_name.is_some_and(|p| p.contains(node.name.trim()));
@@ -433,13 +495,13 @@ fn timeout_as_snapshot(fail: Fail) -> Fail {
     }
 }
 
-fn fetch(run: &Run<'_>, frame: &FrameCtx, frame_id: Option<&str>) -> Result<Vec<Value>, Fail> {
+fn fetch(run: &Run<'_>, frame: &FrameCtx, frame_id: Option<&str>) -> Result<Vec<RawAxNode>, Fail> {
     let params = match frame_id {
         Some(id) => json!({ "frameId": id }),
         None => json!({}),
     };
-    let tree = run.send(&frame.session, Method::AccessibilityGetFullAXTree, params)?;
-    Ok(tree["nodes"].as_array().cloned().unwrap_or_default())
+    let tree: AxTree = run.send_as(&frame.session, Method::AccessibilityGetFullAXTree, params)?;
+    Ok(tree.nodes)
 }
 
 /// Main frame plus iframes, as one arena.
@@ -447,7 +509,7 @@ fn gather(run: &Run<'_>) -> Result<(Vec<AxNode>, Vec<FrameCtx>, usize), Fail> {
     let main = element::main_frame(run)?;
     let mut arena = Vec::new();
     let nodes = fetch(run, &main, None)?;
-    let root = add_tree(&mut arena, &nodes, 0).ok_or_else(|| {
+    let root = add_tree(&mut arena, nodes, 0).ok_or_else(|| {
         Fail::detail(
             Reason::SnapshotTimeout,
             "The page has no accessibility tree yet; wait for it to load and retry.",
@@ -517,7 +579,7 @@ fn gather(run: &Run<'_>) -> Result<(Vec<AxNode>, Vec<FrameCtx>, usize), Fail> {
         };
         let index = frames.len();
         frames.push(frame);
-        if let Some(child_root) = add_tree(&mut arena, &nodes, index) {
+        if let Some(child_root) = add_tree(&mut arena, nodes, index) {
             arena[child_root].frame_root = true;
             arena[i].children.push(child_root);
         }
@@ -983,6 +1045,10 @@ mod tests {
         ]
     }
 
+    fn raw(nodes: Vec<Value>) -> Vec<RawAxNode> {
+        serde_json::from_value(Value::Array(nodes)).unwrap()
+    }
+
     fn numbering() -> impl FnMut(usize, i64, &str, &str) -> u32 {
         let mut seen: HashMap<i64, u32> = HashMap::new();
         move |_, backend, _, _| {
@@ -994,7 +1060,7 @@ mod tests {
     #[test]
     fn interactive_snapshot_keeps_refs_and_structure_only() {
         let mut arena = Vec::new();
-        let root = add_tree(&mut arena, &sample(), 0).unwrap();
+        let root = add_tree(&mut arena, raw(sample()), 0).unwrap();
         let opts = RenderOpts {
             mode: SnapshotMode::Interactive,
             max_nodes: MAX_NODES,
@@ -1016,7 +1082,7 @@ mod tests {
     #[test]
     fn the_picked_element_is_shown_with_a_ref_and_marked() {
         let mut arena = Vec::new();
-        let root = add_tree(&mut arena, &sample(), 0).unwrap();
+        let root = add_tree(&mut arena, raw(sample()), 0).unwrap();
         let opts = RenderOpts {
             mode: SnapshotMode::Interactive,
             max_nodes: MAX_NODES,
@@ -1040,7 +1106,7 @@ mod tests {
     #[test]
     fn full_snapshot_adds_text_without_repeating_names() {
         let mut arena = Vec::new();
-        let root = add_tree(&mut arena, &sample(), 0).unwrap();
+        let root = add_tree(&mut arena, raw(sample()), 0).unwrap();
         let opts = RenderOpts {
             mode: SnapshotMode::Full,
             max_nodes: MAX_NODES,
@@ -1066,7 +1132,7 @@ mod tests {
         }
         nodes[0]["childIds"] = json!(children);
         let mut arena = Vec::new();
-        let root = add_tree(&mut arena, &nodes, 0).unwrap();
+        let root = add_tree(&mut arena, raw(nodes), 0).unwrap();
         let opts = RenderOpts {
             mode: SnapshotMode::Interactive,
             max_nodes: 10,

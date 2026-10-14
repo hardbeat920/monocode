@@ -395,6 +395,19 @@ impl Run<'_> {
             .map_err(|error| Fail::Cdp(error, method.name()))
     }
 
+    /// [`Self::send`] that reads the answer straight into `T`.
+    pub fn send_as<T: serde::de::DeserializeOwned>(
+        &self,
+        session: &CdpSessionId,
+        method: Method,
+        params: Value,
+    ) -> Result<T, Fail> {
+        self.check_time()?;
+        self.link
+            .send_as(self.ctx, Command::in_session(session, method, params))
+            .map_err(|error| Fail::Cdp(error, method.name()))
+    }
+
     /// A command that can change the page.
     pub fn send_mut(
         &self,

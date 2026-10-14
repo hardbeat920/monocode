@@ -21,6 +21,9 @@ use std::sync::{mpsc, Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use serde::de::DeserializeOwned;
+use serde::Deserialize;
+use serde_json::value::RawValue;
 use serde_json::{json, Value};
 use tungstenite::client::IntoClientRequest;
 use tungstenite::protocol::WebSocketConfig;
@@ -470,7 +473,45 @@ struct SendRequest {
     ctx: SendCtx,
     command: Command,
     timeout: Duration,
-    reply: mpsc::Sender<Result<Value, CdpError>>,
+    reply: mpsc::Sender<Reply>,
+}
+
+/// The browser's answer to a command, still as JSON text: the caller reads
+/// it (as a `Value` or straight into its own types) on its own thread, so a
+/// large answer is parsed once and never copied as a tree.
+type Reply = Result<Box<RawValue>, CdpError>;
+
+fn read_reply<T: DeserializeOwned>(reply: &RawValue) -> Result<T, CdpError> {
+    serde_json::from_str(reply.get()).map_err(|error| CdpError::Protocol {
+        code: 0,
+        message: format!("unreadable answer: {error}"),
+    })
+}
+
+fn null_reply() -> Box<RawValue> {
+    RawValue::from_string("null".into()).expect("null is JSON")
+}
+
+/// One message from the browser: a command's answer (`id`) or an event.
+#[derive(Deserialize)]
+struct Frame<'a> {
+    id: Option<u64>,
+    #[serde(borrow)]
+    result: Option<&'a RawValue>,
+    error: Option<FrameError>,
+    method: Option<String>,
+    #[serde(default)]
+    params: Value,
+    #[serde(rename = "sessionId")]
+    session_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct FrameError {
+    #[serde(default)]
+    code: i64,
+    #[serde(default)]
+    message: String,
 }
 
 enum LinkMsg {
@@ -483,7 +524,7 @@ enum LinkMsg {
 }
 
 struct Pending {
-    reply: mpsc::Sender<Result<Value, CdpError>>,
+    reply: mpsc::Sender<Reply>,
     deadline: Instant,
     method: Method,
     agent: bool,
@@ -660,11 +701,21 @@ impl Link {
     /// Send on behalf of an agent request. Blocks until the browser answers,
     /// the command times out, or the gate refuses it.
     pub fn send(&self, ctx: &RequestCtx, command: Command) -> Result<Value, CdpError> {
+        self.send_as(ctx, command)
+    }
+
+    /// [`Self::send`] that reads the answer straight into `T` (fields it
+    /// does not name are skipped without building them).
+    pub fn send_as<T: DeserializeOwned>(
+        &self,
+        ctx: &RequestCtx,
+        command: Command,
+    ) -> Result<T, CdpError> {
         let timeout = command
             .method
             .timeout()
             .min(ctx.remaining().max(Duration::from_millis(50)));
-        self.dispatch(SendCtx::Agent(ctx.clone()), command, timeout)
+        read_reply(&self.dispatch(SendCtx::Agent(ctx.clone()), command, timeout)?)
     }
 
     /// Send a module-internal lifecycle command (ping, detach on OFF, close on
@@ -672,7 +723,7 @@ impl Link {
     /// browser-level allowlist; never used for agent input.
     pub fn send_system(&self, command: Command) -> Result<Value, CdpError> {
         let timeout = command.method.timeout();
-        self.dispatch(SendCtx::System, command, timeout)
+        read_reply(&self.dispatch(SendCtx::System, command, timeout)?)
     }
 
     /// [`Self::send_system`] that gives up after `budget` when that is
@@ -683,15 +734,10 @@ impl Link {
         budget: Duration,
     ) -> Result<Value, CdpError> {
         let timeout = command.method.timeout().min(budget);
-        self.dispatch(SendCtx::System, command, timeout)
+        read_reply(&self.dispatch(SendCtx::System, command, timeout)?)
     }
 
-    fn dispatch(
-        &self,
-        ctx: SendCtx,
-        command: Command,
-        timeout: Duration,
-    ) -> Result<Value, CdpError> {
+    fn dispatch(&self, ctx: SendCtx, command: Command, timeout: Duration) -> Reply {
         let tx = self
             .inner
             .tx
@@ -1021,40 +1067,36 @@ impl Loop {
     }
 
     fn dispatch(&mut self, text: &str) {
-        let Ok(value) = serde_json::from_str::<Value>(text) else {
+        // Only the envelope is read here; a command's answer stays text until
+        // the caller reads it, so a large answer (a whole accessibility tree)
+        // does not hold up the events behind it.
+        let Ok(frame) = serde_json::from_str::<Frame<'_>>(text) else {
             log::debug!("browser-link: unparseable frame ({} bytes)", text.len());
             return;
         };
-        if let Some(id) = value.get("id").and_then(Value::as_u64) {
+        if let Some(id) = frame.id {
             if self.ping == Some(id) {
                 self.ping = None;
             }
             if let Some(pending) = self.pending.remove(&id) {
-                let result = match value.get("error") {
+                let result = match frame.error {
                     Some(error) => Err(CdpError::Protocol {
-                        code: error.get("code").and_then(Value::as_i64).unwrap_or(0),
-                        message: error
-                            .get("message")
-                            .and_then(Value::as_str)
-                            .unwrap_or("")
-                            .to_string(),
+                        code: error.code,
+                        message: error.message,
                     }),
-                    None => Ok(value.get("result").cloned().unwrap_or(Value::Null)),
+                    None => Ok(frame.result.map_or_else(null_reply, ToOwned::to_owned)),
                 };
                 let _ = pending.reply.send(result);
             }
             return;
         }
-        let Some(method) = value.get("method").and_then(Value::as_str) else {
+        let Some(method) = frame.method else {
             return;
         };
         let event = CdpEvent {
-            method: method.to_string(),
-            params: value.get("params").cloned().unwrap_or(Value::Null),
-            session: value
-                .get("sessionId")
-                .and_then(Value::as_str)
-                .map(|s| CdpSessionId(s.to_string())),
+            method,
+            params: frame.params,
+            session: frame.session_id.map(CdpSessionId),
         };
         // Console and network events are recorded here, on the link thread,
         // before the reply to any later command is routed: an action that
