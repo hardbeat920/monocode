@@ -27,6 +27,20 @@ import {
 } from "../features/agent-app/model/agentApp";
 import { submitWithSettlement } from "./model/managedSubmission";
 import {
+  createTurnWatchers,
+  deliverAppSteer,
+  forgetAppSteer,
+  planAppSend,
+  priorAppSend,
+  QUEUED_FOLLOW_UP_ARCHIVED,
+  QUEUED_FOLLOW_UP_REMOVED,
+  queueAppFollowUp,
+  queuedAppDelivery,
+  recordAppSteer,
+  steerBlockReason,
+  steerRunningTurn,
+} from "./model/appSessionSend";
+import {
   submitAfterProjectSync,
   type SubmissionAcceptance,
 } from "./model/submissionAcceptance";
@@ -1584,6 +1598,7 @@ function Workspace({
     canForward: false,
   });
   const turnGen = useRef(new Map<string, number>());
+  const turnWatchers = useRef(createTurnWatchers());
   const editedResends = useRef(createEditedResendCoordinator()).current;
   const lastPersisted = useRef(new Map<string, string>());
   const lastBoundProvider = useRef(new Map<string, string>());
@@ -1692,7 +1707,13 @@ function Workspace({
       );
       if (!open?.busy) return open;
 
-      turnGen.current.set(sessionId, (turnGen.current.get(sessionId) ?? 0) + 1);
+      const gen = (turnGen.current.get(sessionId) ?? 0) + 1;
+      turnGen.current.set(sessionId, gen);
+      // Nothing runs under this gen; settling it refuses a late attach.
+      turnWatchers.current.settle(sessionId, gen, {
+        status: "cancelled",
+        text: "",
+      });
       flushHarnessEvents();
       await Promise.all(
         sessionChildHarnesses(open).map(async (harness) => {
@@ -5392,6 +5413,13 @@ function Workspace({
               }
 
               const { removal } = change;
+              for (const queued of change.session?.queuedMessages ?? [])
+                turnWatchers.current.cancel(
+                  queued.id,
+                  change.mode === "archive"
+                    ? QUEUED_FOLLOW_UP_ARCHIVED
+                    : QUEUED_FOLLOW_UP_REMOVED,
+                );
               lastPersisted.current.delete(sessionId);
               pendingPersist.current.delete(sessionId);
               const closingFiles = filesInWorkspaceTabs(removal.closedTabs);
@@ -6253,11 +6281,16 @@ function Workspace({
         }
         for (const session of projectSessions) {
           pendingPersist.current.delete(session.id);
+          for (const queued of session.queuedMessages ?? [])
+            turnWatchers.current.cancel(queued.id);
           if (session.busy) {
-            turnGen.current.set(
-              session.id,
-              (turnGen.current.get(session.id) ?? 0) + 1,
-            );
+            const gen = (turnGen.current.get(session.id) ?? 0) + 1;
+            turnGen.current.set(session.id, gen);
+            // Nothing runs under this gen; settling it refuses a late attach.
+            turnWatchers.current.settle(session.id, gen, {
+              status: "cancelled",
+              text: "",
+            });
             for (const id of sessionChildHarnesses(session)) {
               void cancelHarnessTurn(id, session.id);
             }
@@ -6271,6 +6304,9 @@ function Workspace({
       } else {
         for (const session of projectSessions) {
           if (session.busy) continue;
+          // The session leaves memory, so its queue no longer drains here.
+          for (const queued of session.queuedMessages ?? [])
+            turnWatchers.current.cancel(queued.id, QUEUED_FOLLOW_UP_ARCHIVED);
           if (shouldPersistSession(session)) {
             rememberLoadedSession(loadedSessionCache.current, session);
           }
@@ -6903,13 +6939,14 @@ function Workspace({
           )
         : undefined;
       if (intent === "build" && !approvedPlan?.text.trim()) return false;
-      if (options?.queuedMessageId) {
-        const mode =
-          options.followUpBehavior === "steer" ? "steer" : "dispatch";
-        if (!queuedMessageForSubmit(current, options.queuedMessageId, mode)) {
-          return false;
-        }
-      }
+      const queuedItem = options?.queuedMessageId
+        ? queuedMessageForSubmit(
+            current,
+            options.queuedMessageId,
+            options.followUpBehavior === "steer" ? "steer" : "dispatch",
+          )
+        : undefined;
+      if (options?.queuedMessageId && !queuedItem) return false;
       const noteCard =
         options && "noteCard" in options ? options.noteCard : current.noteCard;
       const handoffCard =
@@ -7175,26 +7212,37 @@ function Workspace({
           flushHarnessEvents();
           return false;
         }
-        dismissNoticesForContinuedSession(sessionId);
         const visible = displayAttachments(attachments);
         const cards = userTurnCards(noteCard);
-        const nextSessions = sessionsRef.current.map((s) => {
-          if (s.id !== sessionId) return s;
-          let next: Session = {
-            ...s,
-            inboxCard: rawCommand ? s.inboxCard : undefined,
-            noteCard: rawCommand ? s.noteCard : undefined,
-            handoffCard: rawCommand ? s.handoffCard : undefined,
-          };
-          if (options?.queuedMessageId) {
-            next = dequeueQueuedMessage(next, options.queuedMessageId);
-          }
-          return appendSteerUser(next, submittedText, visible, cards);
-        });
-        sessionsRef.current = nextSessions;
-        setSessions(nextSessions);
-        void (async () => {
-          try {
+        return steerRunningTurn({
+          watchers: turnWatchers.current,
+          sessionId,
+          gen: turnGen.current.get(sessionId) ?? 0,
+          queued: options?.queuedMessageId
+            ? { id: options.queuedMessageId, watcher: options.onSettled }
+            : undefined,
+          record: () => {
+            dismissNoticesForContinuedSession(sessionId);
+            const nextSessions = sessionsRef.current.map((s) => {
+              if (s.id !== sessionId) return s;
+              let next: Session = {
+                ...s,
+                inboxCard: rawCommand ? s.inboxCard : undefined,
+                noteCard: rawCommand ? s.noteCard : undefined,
+                handoffCard: rawCommand ? s.handoffCard : undefined,
+              };
+              if (options?.queuedMessageId) {
+                next = dequeueQueuedMessage(next, options.queuedMessageId);
+              }
+              return appendSteerUser(next, submittedText, visible, {
+                ...cards,
+                ...queuedAppDelivery(queuedItem),
+              });
+            });
+            sessionsRef.current = nextSessions;
+            setSessions(nextSessions);
+          },
+          steer: async () => {
             const prepared = await prepareAttachments(attachments);
             const prompt = await preparePrompt(harnessText, {
               harness: current.harness,
@@ -7213,19 +7261,16 @@ function Workspace({
               ),
               attachments: prepared,
             });
-          } catch (error: unknown) {
-            const message =
-              error instanceof Error
-                ? error.message
-                : `${current.harness} could not steer the active turn`;
+          },
+          fallbackError: `${current.harness} could not steer the active turn`,
+          fail: (message) => {
             enqueueHarnessEvent(sessionId, {
               type: "session.error",
               message,
             });
             flushHarnessEvents();
-          }
-        })();
-        return true;
+          },
+        });
       }
 
       if (
@@ -7360,7 +7405,7 @@ function Workspace({
         ...(intent === "plan" || intent === "orchestrate" ? { intent } : {}),
         ...(options?.appRequestId
           ? { appRequestId: options.appRequestId }
-          : {}),
+          : queuedAppDelivery(queuedItem)),
         // The orchestrator writes these turns, not the user; hide them.
         ...(options?.managed || options?.monoSessionCompletion
           ? { internal: true }
@@ -7504,6 +7549,12 @@ function Workspace({
       if (!options?.resendEdited) {
         flushSync(commitSubmittedTurn);
       }
+      // The commit above dequeued the item; its CLI watcher follows this turn.
+      const onSettled =
+        options?.onSettled ??
+        (options?.queuedMessageId
+          ? turnWatchers.current.take(options.queuedMessageId)
+          : undefined);
 
       const launchTitleGeneration = (workCwd: string) => {
         if (
@@ -7567,7 +7618,7 @@ function Workspace({
           void forgetHarnessSession(pendingSwitch.from, sessionId);
         }
         editedResend?.reject();
-        options?.onSettled?.({
+        onSettled?.({
           status: "failed",
           text: "",
           error: "Harness is not connected",
@@ -7756,9 +7807,15 @@ function Workspace({
         const pendingEditedEvents: HarnessEvent[] = [];
         const applyTurnEvent = (event: HarnessEvent) => {
           orchestrator.observe(sessionId, event);
-          if (options?.onSettled && event.type === "message.delta")
+          if (
+            event.type === "message.delta" &&
+            (onSettled || turnWatchers.current.watching(sessionId, gen))
+          )
             controlText = (controlText + event.text).slice(-20_000);
-          if (options?.onSettled && event.type === "message.completed")
+          if (
+            event.type === "message.completed" &&
+            (onSettled || turnWatchers.current.watching(sessionId, gen))
+          )
             controlText += "\n";
           if (event.type === "session.error")
             controlOutcome.error = event.message;
@@ -8221,11 +8278,12 @@ function Workspace({
         .finally(() => {
           editedResend?.reject();
           if (editedResend) editedResends.finish(sessionId);
-          options?.onSettled?.(
+          const outcome: ControlOutcome =
             turnGen.current.get(sessionId) !== gen
               ? { status: "cancelled", text: controlText }
-              : controlOutcome,
-          );
+              : controlOutcome;
+          onSettled?.(outcome);
+          turnWatchers.current.settle(sessionId, gen, outcome);
         });
       return true;
     },
@@ -8996,6 +9054,7 @@ function Workspace({
             : session,
         ),
       );
+      turnWatchers.current.cancel(messageId);
     },
     [],
   );
@@ -10017,6 +10076,7 @@ function Workspace({
       setSessions(started);
 
       void (async () => {
+        let failure: string | undefined;
         try {
           await compactHarnessContext({
             harness: current.harness,
@@ -10047,16 +10107,27 @@ function Workspace({
           });
         } catch (error: unknown) {
           if (turnGen.current.get(sessionId) !== gen) return;
+          failure =
+            error instanceof Error
+              ? error.message
+              : `${current.harness} could not compact this context`;
           enqueueHarnessEvent(sessionId, {
             type: "session.error",
-            message:
-              error instanceof Error
-                ? error.message
-                : `${current.harness} could not compact this context`,
+            message: failure,
           });
         } finally {
-          if (turnGen.current.get(sessionId) !== gen) return;
-          flushHarnessEvents();
+          const cancelled = turnGen.current.get(sessionId) !== gen;
+          if (!cancelled) flushHarnessEvents();
+          turnWatchers.current.settle(
+            sessionId,
+            gen,
+            cancelled
+              ? { status: "cancelled", text: "" }
+              : failure === undefined
+                ? { status: "completed", text: "" }
+                : { status: "failed", text: "", error: failure },
+          );
+          if (cancelled) return;
           const finished = sessionsRef.current.map((session) =>
             session.id === sessionId ? { ...session, busy: false } : session,
           );
@@ -10085,7 +10156,13 @@ function Workspace({
         }
       }
       const session = sessionsRef.current.find((s) => s.id === sessionId);
-      turnGen.current.set(sessionId, (turnGen.current.get(sessionId) ?? 0) + 1);
+      const gen = (turnGen.current.get(sessionId) ?? 0) + 1;
+      turnGen.current.set(sessionId, gen);
+      // Nothing runs under this gen; settling it refuses a late attach.
+      turnWatchers.current.settle(sessionId, gen, {
+        status: "cancelled",
+        text: "",
+      });
       flushHarnessEvents();
       const cancelling = Promise.all(
         (session ? sessionChildHarnesses(session) : []).map(async (id) => {
@@ -10884,7 +10961,12 @@ function Workspace({
               isMonoSession(target.id)
                 ? readMonoConversation(target, options)
                 : sessionConversationPage(target, options),
-            send: async (id, prompt, requestId, notifyMonoId) => {
+            send: async (
+              id,
+              prompt,
+              requestId,
+              { notifyMonoId, whenBusy } = {},
+            ) => {
               const target = await ensureOpenSessionRef.current(id);
               if (
                 !target ||
@@ -10905,22 +10987,26 @@ function Workspace({
                   model: current.model,
                 });
               };
-              const previous = target.blocks.find(
-                (block) => block.appRequestId === requestId,
-              );
-              if (previous) {
-                if (previous.text !== prompt)
-                  throw new Error(
-                    "Request ID was already used with another prompt",
-                  );
-                if (previous.draft)
-                  throw new Error("Request ID belongs to an unsent draft");
+              const prior = priorAppSend(target, requestId, prompt);
+              if (prior) {
                 rememberFollowUp();
-                return { alreadySubmitted: true };
+                return prior;
               }
-              if (target.busy)
-                throw new Error("Session is busy; try again when it finishes");
-              if (sessionDraftBlock(target))
+              flushHarnessEvents();
+              const latest =
+                sessionsRef.current.find((session) => session.id === id) ??
+                target;
+              const plan = planAppSend({
+                harness: latest.harness,
+                busy: !!latest.busy,
+                whenBusy,
+                steerable:
+                  isLiveHarness(latest.harness) &&
+                  canSteerHarness(latest.harness),
+                steerBlocked: steerBlockReason(latest, prompt),
+                mono: isMonoSession(id),
+              });
+              if (plan === "send" && sessionDraftBlock(target))
                 throw new Error(
                   "Session already has a draft; send or remove it first",
                 );
@@ -10933,6 +11019,75 @@ function Workspace({
                     prompt,
                   )
                 : undefined;
+              if (plan === "queue") {
+                const queuedMessageId = crypto.randomUUID();
+                updateSessionState(sessionsRef, setSessions, (sessions) =>
+                  sessions.map((session) =>
+                    session.id === id
+                      ? queueAppFollowUp(session, {
+                          id: queuedMessageId,
+                          prompt,
+                          requestId,
+                        })
+                      : session,
+                  ),
+                );
+                if (onSettled) {
+                  turnWatchers.current.hold(queuedMessageId, onSettled);
+                  onSettled.accept();
+                }
+                rememberFollowUp();
+                return {
+                  alreadySubmitted: false,
+                  delivery: "queued",
+                  queuedMessageId,
+                };
+              }
+              if (plan === "steer") {
+                const gen = turnGen.current.get(id) ?? 0;
+                const result = await deliverAppSteer({
+                  watchers: turnWatchers.current,
+                  sessionId: id,
+                  gen,
+                  watcher: onSettled,
+                  record: () => {
+                    updateSessionState(sessionsRef, setSessions, (sessions) =>
+                      sessions.map((session) =>
+                        session.id === id
+                          ? recordAppSteer(session, prompt, requestId)
+                          : session,
+                      ),
+                    );
+                  },
+                  steer: async () => {
+                    const cwd = sessionWorkCwd(latest);
+                    const text = await preparePrompt(prompt, {
+                      harness: latest.harness,
+                      sessionId: id,
+                      cwd,
+                    });
+                    await steerHarnessTurn({
+                      harness: latest.harness,
+                      sessionId: id,
+                      cwd,
+                      model: latest.model,
+                      modelSettings: latest.modelSettings,
+                      text,
+                    });
+                  },
+                  forget: () => {
+                    updateSessionState(sessionsRef, setSessions, (sessions) =>
+                      sessions.map((session) =>
+                        session.id === id
+                          ? forgetAppSteer(session, requestId)
+                          : session,
+                      ),
+                    );
+                  },
+                });
+                rememberFollowUp();
+                return result;
+              }
               const accepted = onSettled
                 ? await submitWithSettlement({
                     submit: (onSettled) =>
@@ -10953,7 +11108,7 @@ function Workspace({
               }
               rememberFollowUp();
               onSettled?.accept();
-              return { alreadySubmitted: false };
+              return { alreadySubmitted: false, delivery: "sent" };
             },
             draft: async (id, prompt, requestId) => {
               const target = await ensureOpenSessionRef.current(id);

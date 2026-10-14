@@ -416,6 +416,63 @@ describe("sanitizeSessionForPersist", () => {
     });
   });
 
+  it("persists a queued follow-up's CLI request ID and drops a malformed one", () => {
+    const session = newSession("codex", "/repo");
+    session.queuedMessages = [
+      {
+        id: "q-1",
+        text: "Then run the tests",
+        attachments: [],
+        appRequestId: "app-source-request-2",
+      },
+      {
+        id: "q-2",
+        text: "Then lint",
+        attachments: [],
+        appRequestId: "bad id!",
+      },
+    ];
+    const queued = sanitizeSessionForPersist(session).queuedMessages;
+    expect(queued?.map((message) => message.id)).toEqual(["q-1", "q-2"]);
+    expect(queued?.[0].appRequestId).toBe("app-source-request-2");
+    expect(queued?.[1].appRequestId).toBeUndefined();
+  });
+
+  it("persists how a CLI request reached its user turn and drops unknown deliveries", () => {
+    const session = newSession("codex", "/repo");
+    session.blocks = [
+      {
+        id: "queued",
+        role: "user",
+        text: "Then run the tests",
+        appRequestId: "app-source-request-3",
+        appDelivery: { via: "queued", queuedMessageId: "q-1" },
+      },
+      {
+        id: "steered",
+        role: "user",
+        text: "Also check the docs",
+        appRequestId: "app-source-request-4",
+        appDelivery: { via: "steered" },
+      },
+      {
+        id: "other",
+        role: "user",
+        text: "Then lint",
+        appRequestId: "app-source-request-5",
+        appDelivery: { via: "other" } as unknown as Block["appDelivery"],
+      },
+    ];
+    const [queued, steered, other] = sanitizeSessionForPersist(session).blocks;
+    expect(queued).toMatchObject({
+      appRequestId: "app-source-request-3",
+      appDelivery: { via: "queued", queuedMessageId: "q-1" },
+    });
+    expect(steered.appDelivery).toEqual({ via: "steered" });
+    expect(other.appRequestId).toBe("app-source-request-5");
+    expect(other.appDelivery).toBeUndefined();
+  });
+
   it("keeps an unsent user turn appended to a started thread", () => {
     const session = newSession("codex", "/repo");
     session.blocks = [
