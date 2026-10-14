@@ -2029,6 +2029,7 @@ export function Composer({
                 {!remote && sessionId ? (
                   <BrowserIndicator
                     sessionId={sessionId}
+                    cwd={executionCwd}
                     onPicked={insertBrowserPick}
                   />
                 ) : null}

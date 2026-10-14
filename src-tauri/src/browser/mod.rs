@@ -1379,6 +1379,83 @@ impl BrowserHost {
         Ok(handle.tab)
     }
 
+    /// "Open this branch's app" in the thread's browser menu: a new tab at
+    /// `url` (a local dev server), held by `session`. Like handing over a
+    /// tab, the user's click is the thread's browser access. Waits for the
+    /// MonoCode browser to start when it is not running yet.
+    pub fn open_app(
+        self: &Arc<Self>,
+        session: &str,
+        window: &str,
+        url: &str,
+    ) -> Result<TabId, String> {
+        let url = policy::check_url(url).map_err(|reason| reason.message().to_string())?;
+        if !diagnostics::is_local_url(&url) {
+            return Err("Only an app on this computer can be opened from here.".into());
+        }
+        if !self.policy.read().toggle_on {
+            return Err("Turn on browser access first.".into());
+        }
+        if !self.link.is_open() {
+            if !self.mode().launches() {
+                return Err("MonoCode is not connected to your browser.".into());
+            }
+            self.connect_automatically();
+            let connection =
+                self.wait_for_connection(launch::START_TIMEOUT + Duration::from_secs(5));
+            if connection.state != ConnectionState::Connected {
+                return Err(connection
+                    .detail
+                    .unwrap_or_else(|| "The MonoCode browser did not start.".into()));
+            }
+        }
+        if !self.policy.read().granted(session) {
+            self.set_grant(session, window, true);
+        }
+        // Blank first, so the tab is ours (marker, console) before the
+        // app's first script runs; then the app.
+        let managed = self.mode().launches();
+        let created = self
+            .link
+            .send_system(Command::browser(
+                Method::TargetCreateTarget,
+                json!({ "url": "about:blank", "background": !managed }),
+            ))
+            .map_err(|error| format!("{error:?}"))?;
+        let target = created["targetId"]
+            .as_str()
+            .map(|id| TargetId(id.to_string()))
+            .ok_or("The browser opened no tab.")?;
+        let free = targets::FreeTab {
+            id: targets::free_id(&target),
+            target: target.clone(),
+            url: url.clone(),
+            title: String::new(),
+        };
+        let handle = match targets::adopt_tab(&self.link, targets::Sender::System, session, &free) {
+            Ok(handle) => handle,
+            Err(error) => {
+                targets::close_targets(&self.link, &[target]);
+                return Err(match error {
+                    targets::TabError::Reason(reason, message) => {
+                        message.unwrap_or_else(|| reason.message().to_string())
+                    }
+                    targets::TabError::Cdp(error) => format!("{error:?}"),
+                });
+            }
+        };
+        self.adopted(&handle, session, &free, Actor::User);
+        self.close_startup_pages();
+        self.link
+            .send_system(Command::in_session(
+                &handle.session,
+                Method::PageNavigate,
+                json!({ "url": url }),
+            ))
+            .map_err(|error| format!("The tab opened, but not the app: {error:?}"))?;
+        Ok(handle.tab)
+    }
+
     fn adopted(
         &self,
         handle: &targets::TabHandle,
@@ -1963,8 +2040,21 @@ impl BrowserHost {
                         free.len()
                     ));
                 }
+                // Where this thread's branch serves its app, so the agent
+                // checks its own worktree, not another thread's port.
+                let apps = crate::devservers::for_session(&ctx.session);
+                if let Some(app) = apps.iter().find(|app| app.page).or(apps.first()) {
+                    message.push_str(&format!(
+                        " This worktree's app runs at {}; open it with tabs.open.",
+                        app.url
+                    ));
+                }
+                let apps: Vec<Value> = apps
+                    .iter()
+                    .map(|app| json!({ "url": app.url, "process": app.process, "page": app.page }))
+                    .collect();
                 ActionResult::done(request_id, message)
-                    .with_data(json!({ "tabs": tabs, "free": free }))
+                    .with_data(json!({ "tabs": tabs, "free": free, "apps": apps }))
             }
             ActionKind::TabsAdopt => {
                 let params = match parse_params::<TabsAdoptParams>(request_id, input) {
@@ -2502,6 +2592,21 @@ pub fn browser_give_tab(
 }
 
 #[tauri::command]
+pub async fn browser_open_app(
+    window: WebviewWindow,
+    session_id: String,
+    url: String,
+) -> Result<BrowserState, String> {
+    let host = require_host()?;
+    let label = window.label().to_string();
+    let state = host.clone();
+    tauri::async_runtime::spawn_blocking(move || host.open_app(&session_id, &label, &url))
+        .await
+        .map_err(|e| e.to_string())??;
+    Ok(state.state())
+}
+
+#[tauri::command]
 pub async fn browser_pick_element(
     session_id: String,
     tab: String,
@@ -2864,6 +2969,52 @@ mod tests {
         );
         let stale = host.handle_request("s1", request("r3", "tabs.open", json!({})));
         assert_eq!(stale.reason, Some(Reason::BrowserUnavailable));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn opening_a_branchs_app_gives_the_thread_a_tab_at_the_app() {
+        let server = FakeCdp::start();
+        let dir = profile_for(&server);
+        let host = BrowserHost::for_tests(settings_for(&dir));
+        assert!(host
+            .open_app("s1", "main", "http://localhost:5174/")
+            .unwrap_err()
+            .contains("Turn on"));
+        host.set_toggle(true);
+        assert!(wait_state(&host, ConnectionState::Connected));
+        assert!(
+            host.open_app("s1", "main", "https://example.com/").is_err(),
+            "only an app on this computer"
+        );
+        assert!(!host.policy().read().granted("s1"));
+
+        let tab = host
+            .open_app("s1", "main", "http://localhost:5174/")
+            .unwrap();
+        // The click is the thread's access, and the tab is its own.
+        assert!(host.policy().read().granted("s1"));
+        let tabs = host.policy().read().tabs_for("s1");
+        assert_eq!(tabs.len(), 1);
+        assert_eq!(tabs[0].tab, tab);
+        let received = server.received();
+        let created = received
+            .iter()
+            .position(|r| r.method == "Target.createTarget")
+            .unwrap();
+        assert_eq!(received[created].params["url"], "about:blank");
+        // Marker and console are set up before the app loads.
+        let marker = received
+            .iter()
+            .position(|r| r.method == "Page.addScriptToEvaluateOnNewDocument")
+            .unwrap();
+        let navigate = received
+            .iter()
+            .position(|r| r.method == "Page.navigate")
+            .unwrap();
+        assert!(created < marker && marker < navigate);
+        assert_eq!(received[navigate].params["url"], "http://localhost:5174/");
+        assert!(received[navigate].session.is_some());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

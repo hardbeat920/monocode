@@ -13,6 +13,7 @@ pub mod control_cli;
 mod cursor_store;
 mod devin_config;
 mod devin_usage;
+mod devservers;
 mod external_editor;
 mod fs;
 mod gitlab;
@@ -334,6 +335,8 @@ pub fn run() {
             browser::browser_open_window,
             browser::browser_user_tabs,
             browser::browser_give_tab,
+            browser::browser_open_app,
+            devservers::dev_servers,
             browser::browser_pick_element,
             browser::browser_cancel_pick,
             browser::browser_close_tab,

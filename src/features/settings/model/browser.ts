@@ -346,6 +346,32 @@ export const giveBrowserTab = (free: string, sessionId: string) =>
     markTurnedOff(sessionId, false);
     return state;
   });
+/** A local dev server of a thread's checkout (`devservers::DevServer`). */
+export type BranchApp = {
+  port: number;
+  /** `http://localhost:<port>`. */
+  url: string;
+  pid: number;
+  process: string;
+  checkout: string;
+  /** `/` answers with HTML: an app to open, not only an API. */
+  page: boolean;
+};
+
+/** Dev servers the checkout holding `cwd` runs (its worktree's app). */
+export function listBranchApps(cwd: string): Promise<BranchApp[]> {
+  return invoke<BranchApp[]>("dev_servers", { cwd });
+}
+
+/**
+ * "Open this branch's app": a new tab of the thread at the app's address.
+ * Like handing over a tab, it gives the thread browser access.
+ */
+export const openBranchApp = (sessionId: string, url: string) =>
+  command("browser_open_app", { sessionId, url }).then((state) => {
+    markTurnedOff(sessionId, false);
+    return state;
+  });
 /** An element the user picked in a thread's tab (`pick::PickedElement`). */
 export type PickedBrowserElement = {
   tab: string;
@@ -458,8 +484,11 @@ export async function ensureBrowserMcp(
 }
 
 /** The `<monocode_browser>` block a turn carries while it has the browser tools. */
-export function browserAgentInstructions(provider: string): Promise<string> {
-  return invoke<string>("browser_agent_instructions", { provider });
+export function browserAgentInstructions(
+  provider: string,
+  cwd?: string,
+): Promise<string> {
+  return invoke<string>("browser_agent_instructions", { provider, cwd });
 }
 
 // ---------------------------------------------------------------------------

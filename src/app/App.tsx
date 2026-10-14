@@ -8152,6 +8152,7 @@ function Workspace({
             );
             const browserContext = await browserAgentInstructions(
               current.harness,
+              workCwd,
             ).catch(() => "");
             if (browserContext)
               appContext.push(

@@ -1,10 +1,13 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Globe } from "../../../shared/ui/icons";
 import { Popover } from "../../../shared/ui/Popover";
 import { SecondaryButton } from "../../../shared/ui/SecondaryButton";
 import {
   answerBrowserRequest,
+  type BranchApp,
   cancelBrowserPick,
+  listBranchApps,
+  openBranchApp,
   pickBrowserElement,
   type PickedBrowserElement,
   sessionBrowserAccess,
@@ -33,13 +36,16 @@ const INDICATOR = {
 /**
  * The thread's browser indicator (spec 13.2): shown while the thread has
  * /browser, it lists the thread's tabs with the same actions as Settings,
- * plus "Point at an element", whose result goes to `onPicked`.
+ * plus "Point at an element", whose result goes to `onPicked`, and the app
+ * the thread's worktree serves (`cwd`), to open in a tab of the thread.
  */
 export function BrowserIndicator({
   sessionId,
+  cwd,
   onPicked,
 }: {
   sessionId: string;
+  cwd?: string;
   onPicked?: (picked: PickedBrowserElement) => void;
 }) {
   const state = useBrowserState();
@@ -77,6 +83,7 @@ export function BrowserIndicator({
     },
     [onPicked, picking, sessionId],
   );
+  const apps = useBranchApps(open && !!indicator ? cwd : undefined);
   if (!indicator) return null;
   const tabs = sessionBrowserTabs(state, sessionId);
   const { label, className } = INDICATOR[indicator];
@@ -138,6 +145,17 @@ export function BrowserIndicator({
               The agent hasn't opened a tab yet.
             </p>
           )}
+          {apps.length ? (
+            <BranchApps
+              apps={apps}
+              run={(url) =>
+                run(async () => {
+                  await openBranchApp(sessionId, url);
+                  setOpen(false);
+                })
+              }
+            />
+          ) : null}
           {picking ? (
             <p className="flex items-center gap-2 px-1 pt-2 text-[12px] text-content/65">
               <span className="min-w-0 flex-1">
@@ -159,6 +177,67 @@ export function BrowserIndicator({
           ) : null}
         </Popover>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * The pages the worktree at `cwd` serves, read when the menu opens and
+ * every few seconds while it stays open (a dev server may be starting).
+ */
+function useBranchApps(cwd: string | undefined): BranchApp[] {
+  const [apps, setApps] = useState<BranchApp[]>([]);
+  useEffect(() => {
+    if (!cwd) {
+      setApps([]);
+      return;
+    }
+    let live = true;
+    const load = () =>
+      void listBranchApps(cwd)
+        .then((found) => {
+          if (live) setApps(found.filter((app) => app.page));
+        })
+        .catch(() => {
+          if (live) setApps([]);
+        });
+    load();
+    const timer = window.setInterval(load, 4000);
+    return () => {
+      live = false;
+      window.clearInterval(timer);
+    };
+  }, [cwd]);
+  return apps;
+}
+
+/** "Open this branch's app": one row per page the worktree serves. */
+function BranchApps({
+  apps,
+  run,
+}: {
+  apps: BranchApp[];
+  run: (url: string) => void;
+}) {
+  return (
+    <div className="px-1 pt-2">
+      <p className="pb-1 text-[12px] text-content/45">This branch's app</p>
+      <ul className="space-y-1">
+        {apps.map((app) => (
+          <li
+            key={app.port}
+            className="flex items-center gap-2 rounded-lg bg-content/3 px-2.5 py-1.5 text-[12px]"
+          >
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-content">localhost:{app.port}</div>
+              <div className="truncate text-content/45">{app.process}</div>
+            </div>
+            <SecondaryButton onClick={() => run(app.url)}>
+              Open in a tab
+            </SecondaryButton>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

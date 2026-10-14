@@ -408,19 +408,32 @@ pub async fn browser_mcp_register(
 pub async fn browser_agent_instructions(
     host: State<'_, crate::harness::HarnessHost>,
     provider: String,
+    cwd: Option<String>,
 ) -> Result<String, String> {
     let binary_path = host.runtime_binary_path(&provider);
     tauri::async_runtime::spawn_blocking(move || {
         let major = (provider == "opencode")
             .then(|| opencode_major(binary_path.as_deref()))
             .flatten();
-        instructions_for(&provider, major)
+        // Where the thread's branch serves its app (spec: one browser for
+        // every worktree, each thread on its own port).
+        let app = match cwd.filter(|cwd| !cwd.trim().is_empty()) {
+            Some(cwd) if unsupported_reason(&provider, major).is_none() => {
+                let dir = crate::fs::expand_home(&cwd);
+                Some(crate::devservers::agent_note(
+                    &dir,
+                    &crate::devservers::for_dir(&dir),
+                ))
+            }
+            _ => None,
+        };
+        instructions_for(&provider, major, app.as_deref())
     })
     .await
     .map_err(|e| e.to_string())
 }
 
-fn instructions_for(provider: &str, opencode_major: Option<u32>) -> String {
+fn instructions_for(provider: &str, opencode_major: Option<u32>, app: Option<&str>) -> String {
     let body = if let Some(reason) = unsupported_reason(provider, opencode_major) {
         format!("The user enabled browser access in this thread, but MonoCode's browser tools do not work with this provider: {reason} Do not try the browser tools or the MonoCode browser CLI; tell the user if the task needs a browser.")
     } else if MCP_PROVIDERS.contains(&provider) {
@@ -428,7 +441,10 @@ fn instructions_for(provider: &str, opencode_major: Option<u32>) -> String {
     } else {
         super::cli::instructions()
     };
-    format!("<monocode_browser>\n{body}\n</monocode_browser>")
+    match app {
+        Some(app) => format!("<monocode_browser>\n{body}\n{app}\n</monocode_browser>"),
+        None => format!("<monocode_browser>\n{body}\n</monocode_browser>"),
+    }
 }
 
 #[cfg(test)]
@@ -616,13 +632,16 @@ mod tests {
 
     #[test]
     fn instructions_point_mcp_providers_at_tools_and_others_at_the_cli() {
-        let mcp = instructions_for("claude", None);
+        let mcp = instructions_for("claude", None, None);
         assert!(mcp.contains("browser_tabs") && !mcp.contains(" browser --help"));
-        let cli = instructions_for("pi", None);
+        let cli = instructions_for("pi", None, None);
         assert!(cli.contains("browser --help") && cli.starts_with("<monocode_browser>"));
         // OpenCode 1 takes the MCP server; OpenCode 2 can use neither path.
-        assert!(instructions_for("opencode", Some(1)).contains("browser_tabs"));
-        let opencode2 = instructions_for("opencode", Some(2));
+        assert!(instructions_for("opencode", Some(1), None).contains("browser_tabs"));
+        let opencode2 = instructions_for("opencode", Some(2), None);
         assert!(opencode2.contains("OpenCode 2") && !opencode2.contains("browser --help"));
+        // The thread's app goes inside the block, after the instructions.
+        let with_app = instructions_for("claude", None, Some("APP NOTE"));
+        assert!(with_app.ends_with("\nAPP NOTE\n</monocode_browser>"));
     }
 }

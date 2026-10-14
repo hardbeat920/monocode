@@ -55,6 +55,15 @@ Agents can read the console of their own tabs and see which requests failed, so 
 
 This needs no extra permission: a thread with browser access has it for its own tabs, and never for yours. None of it is stored in the activity list or after MonoCode closes.
 
+## Each branch's app
+
+When a thread's worktree runs a dev server (`npm run dev`, `vite`, `next dev`, `python -m http.server` and the like), MonoCode finds the port it listens on and keeps it with that worktree. Five threads on five branches can each run their app at the same time, and each one checks its own.
+
+- **The agent knows where its app is.** While the thread has the browser, every turn tells the agent the address its worktree serves, such as `http://localhost:5174`, and that servers on other ports may belong to other branches. Listing its tabs gives the agent the same address, so a server it starts during the turn is found too.
+- **Open this branch's app.** The globe in the thread shows **This branch's app** with the worktree's pages. **Open in a tab** opens one in a tab of that thread, which gets browser access with it, as with handing over a tab.
+
+A server counts as the worktree's when MonoCode started it, through the thread's agent or a MonoCode terminal in that worktree, even after the command that started it has exited. On macOS and Linux, a server started elsewhere (another terminal or an editor) also counts when it runs inside the worktree's folder. Only ports that answer web requests on `localhost` are listed; databases, the agent's own ports and browsers are left out.
+
 ## Hand a tab to a thread
 
 A tab you open yourself belongs to no thread. To let a thread work in it, open Settings → Browser and click **Show my tabs** under **Give a tab to a thread**. The list shows the web pages in the browser that no thread holds. Pick a thread next to a tab and click **Give**. The thread gets browser access with the tab. The control shows while browser access is on and MonoCode is connected to the browser.

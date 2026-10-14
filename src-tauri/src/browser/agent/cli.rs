@@ -23,7 +23,8 @@ Usage: {exe} browser ACTION [--FIELD VALUE ...] [--json JSON | --input FILE|-]
 
 Actions and their fields (* required). Every action except tabs.* also takes
 --timeout-ms.
-  tabs.list                      Your tabs.
+  tabs.list                      Your tabs, and this worktree's running app
+                                 (data.apps).
   tabs.open      --url           Open a background tab; data.tab is its id.
   tabs.close     --tab*          Close one of your tabs.
   tabs.focus     --tab* --user-visible true

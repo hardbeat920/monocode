@@ -992,6 +992,7 @@ pub fn harness_spawn(
     let mut child =
         spawn_managed(&mut cmd).map_err(|e| format!("Failed to start {command}: {e}"))?;
     let pid = child.id();
+    crate::devservers::note_spawn(pid, &workdir, Some(&session_id));
 
     let stdin = child
         .stdin

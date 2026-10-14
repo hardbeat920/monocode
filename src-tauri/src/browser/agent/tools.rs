@@ -215,7 +215,7 @@ pub fn input_schema(name: &str) -> Option<Value> {
                     "action",
                     one_of(
                         &["list", "open", "close", "focus", "adopt"],
-                        "list your tabs, open a new one, close one, show one to the user, or adopt a free tab.",
+                        "list your tabs (and the address of this worktree's running app), open a new one, close one, show one to the user, or adopt a free tab.",
                     ),
                 ),
                 (
