@@ -40,7 +40,7 @@ Load an http(s) URL (or about:blank) in one of your tabs and wait until it loads
 
 ## browser_snapshot
 
-Return the tab's accessibility tree as compact text with refs (`e12`) for the elements you can act on. Actions already return the snapshot after them, so call this when you need the whole page again or a part of it. `scope` limits it to the subtree of a ref; `mode: "full"` adds static text. An element the user pointed at in the browser is marked `[picked by the user]`, and the header names its ref.
+Return the tab's accessibility tree as compact text with refs (`e12`) for the elements you can act on. Actions already return the snapshot after them, so call this when you need the whole page again or a part of it. `scope` limits it to the subtree of a ref; `mode: "full"` adds static text. Links to the page's own site show only their path (`href=/orders/7`). An element the user pointed at in the browser is marked `[picked by the user]`, and the header names its ref.
 
 ## browser_click
 

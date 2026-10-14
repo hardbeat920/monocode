@@ -140,7 +140,7 @@ fn flags(properties: &[AxProperty]) -> Vec<String> {
         }
     }
     if let Some(href) = href.filter(|h| !h.is_empty()) {
-        out.push(format!("href={}", clip(&href, MAX_HREF)));
+        out.push(format!("href={href}"));
     }
     out
 }
@@ -266,6 +266,18 @@ pub struct RenderOpts {
     /// `(frame, backendNodeId)` of the element the user pointed at: always
     /// shown, with a ref, and marked.
     pub picked: Option<(usize, i64)>,
+    /// Origin of the page (`https://host:port`): links to it are shown as
+    /// their path, which is most of a link's line on a typical page.
+    pub origin: Option<String>,
+}
+
+/// `href` as shown: the path when it is on the page's own origin, and cut
+/// to a length a model reads at a glance.
+fn shown_href(href: &str, origin: Option<&str>) -> String {
+    let local = origin
+        .and_then(|origin| href.strip_prefix(origin))
+        .filter(|rest| rest.starts_with('/'));
+    clip(local.unwrap_or(href), MAX_HREF)
 }
 
 pub struct Rendered {
@@ -402,7 +414,17 @@ impl Renderer<'_> {
             line.push_str(&quoted(&clip(&node.name, max)));
         }
         for flag in &node.flags {
-            line.push_str(&format!(" [{flag}]"));
+            match flag.strip_prefix("href=") {
+                // The document's own address is in the header.
+                Some(_) if node.role == "RootWebArea" => {}
+                // A list item's level is its indentation.
+                None if node.role == "listitem" && flag.starts_with("level=") => {}
+                Some(href) => {
+                    let href = shown_href(href, self.opts.origin.as_deref());
+                    line.push_str(&format!(" [href={href}]"));
+                }
+                None => line.push_str(&format!(" [{flag}]")),
+            }
         }
         if node.role == "Iframe" && children.iter().any(|c| self.arena[*c].frame_root) {
             line.push_str(" [frame]");
@@ -707,6 +729,11 @@ fn take(run: &Run<'_>, p: &SnapshotParams, inherit: bool) -> Result<Taken, Fail>
                 mode,
                 max_nodes,
                 picked,
+                origin: url::Url::parse(&url)
+                    .ok()
+                    .map(|u| u.origin())
+                    .filter(url::Origin::is_tuple)
+                    .map(|o| o.ascii_serialization()),
             };
             let rendered = render(&arena, start, &opts, &mut |frame, backend, role, name| {
                 table.assign(&frames[frame], backend, role, name)
@@ -1065,6 +1092,7 @@ mod tests {
             mode: SnapshotMode::Interactive,
             max_nodes: MAX_NODES,
             picked: None,
+            origin: None,
         };
         let out = render(&arena, root, &opts, &mut numbering());
         assert_eq!(
@@ -1077,6 +1105,21 @@ mod tests {
         );
         assert_eq!(out.refs, 5);
         assert!(!out.truncated);
+        // Links on the page's own origin show their path.
+        for (origin, shown) in [("https://x", "/reset"), ("https://y", "https://x/reset")] {
+            let opts = RenderOpts {
+                mode: SnapshotMode::Interactive,
+                max_nodes: MAX_NODES,
+                picked: None,
+                origin: Some(origin.into()),
+            };
+            let out = render(&arena, root, &opts, &mut numbering());
+            assert!(
+                out.text.contains(&format!("[href={shown}] [ref=e4]")),
+                "{}",
+                out.text
+            );
+        }
     }
 
     #[test]
@@ -1087,6 +1130,7 @@ mod tests {
             mode: SnapshotMode::Interactive,
             max_nodes: MAX_NODES,
             picked: Some((0, 106)),
+            origin: None,
         };
         let out = render(&arena, root, &opts, &mut numbering());
         assert!(out
@@ -1111,6 +1155,7 @@ mod tests {
             mode: SnapshotMode::Full,
             max_nodes: MAX_NODES,
             picked: None,
+            origin: None,
         };
         let out = render(&arena, root, &opts, &mut numbering());
         assert!(out
@@ -1137,6 +1182,7 @@ mod tests {
             mode: SnapshotMode::Interactive,
             max_nodes: 10,
             picked: None,
+            origin: None,
         };
         let out = render(&arena, root, &opts, &mut numbering());
         assert!(out.truncated);
