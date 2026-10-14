@@ -308,6 +308,7 @@ pub fn run() {
             remote::remote_connect,
             remote::remote_disconnect,
             remote::remote_request,
+            remote::remote_download,
             remote::remote_ssh_begin,
             remote::remote_ssh_reconnect,
             remote::remote_ssh_poll,

@@ -2,13 +2,13 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
-import { readBinaryFile, REMOTE_PATH_PREFIX } from "./fs";
+import { invokeWorkspace, REMOTE_PATH_PREFIX } from "./fs";
 import { downloadFile } from "./download";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ save: vi.fn() }));
 vi.mock("./fs", () => ({
-  readBinaryFile: vi.fn(),
+  invokeWorkspace: vi.fn(),
   REMOTE_PATH_PREFIX: "remote://",
 }));
 
@@ -28,25 +28,24 @@ it("copies a local file directly without the preview size limit", async () => {
     path: "/downloads/result.bin",
     from: "/workspace/report.pdf",
   });
-  expect(readBinaryFile).not.toHaveBeenCalled();
+  expect(invokeWorkspace).not.toHaveBeenCalled();
 });
 
 it("cancels without reading or writing anything", async () => {
   vi.mocked(save).mockResolvedValue(null);
   await downloadFile("image.png", { path: "/workspace/image.png" });
   expect(invoke).not.toHaveBeenCalled();
-  expect(readBinaryFile).not.toHaveBeenCalled();
+  expect(invokeWorkspace).not.toHaveBeenCalled();
 });
 
-it("saves remote bytes to the local destination", async () => {
+it("routes remote files to native streaming without reading bytes into the renderer", async () => {
   const path = `${REMOTE_PATH_PREFIX}machine/workspace/report.pdf`;
-  vi.mocked(readBinaryFile).mockResolvedValue(new Uint8Array([0, 255, 42]));
   await downloadFile("report.pdf", { path });
-  expect(readBinaryFile).toHaveBeenCalledWith(path);
-  expect(invoke).toHaveBeenCalledWith("save_download", {
-    path: "/downloads/result.bin",
-    data: "AP8q",
+  expect(invokeWorkspace).toHaveBeenCalledWith("download_file", {
+    path,
+    destination: "/downloads/result.bin",
   });
+  expect(invoke).not.toHaveBeenCalled();
 });
 
 it("preserves binary data from inline attachments", async () => {
@@ -82,16 +81,4 @@ it.each([
     title: "Download file",
     defaultPath: expected,
   });
-});
-
-it("preserves a larger binary payload", async () => {
-  const bytes = Uint8Array.from({ length: 25000 }, (_, i) => i % 256);
-  vi.mocked(readBinaryFile).mockResolvedValue(bytes);
-  await downloadFile("large.bin", {
-    path: `${REMOTE_PATH_PREFIX}machine/large.bin`,
-  });
-  const args = vi.mocked(invoke).mock.calls[0][1] as { data: string };
-  expect(
-    Uint8Array.from(atob(args.data), (char) => char.charCodeAt(0)),
-  ).toEqual(bytes);
 });

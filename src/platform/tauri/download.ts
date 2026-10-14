@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
-import { readBinaryFile, REMOTE_PATH_PREFIX } from "./fs";
+import { invokeWorkspace, REMOTE_PATH_PREFIX } from "./fs";
 import { readBlobBase64 } from "../../shared/lib/blobBase64";
 
 export type DownloadSource =
@@ -23,18 +23,21 @@ export async function downloadFile(
     });
     return;
   }
-  if ("path" in source && !source.path.startsWith(REMOTE_PATH_PREFIX)) {
-    await invoke("save_download", { path: destination, from: source.path });
+  if ("path" in source) {
+    if (source.path.startsWith(REMOTE_PATH_PREFIX)) {
+      await invokeWorkspace("download_file", {
+        path: source.path,
+        destination,
+      });
+    } else {
+      await invoke("save_download", { path: destination, from: source.path });
+    }
     return;
   }
-  let blob: Blob;
-  if ("path" in source) blob = new Blob([await readBinaryFile(source.path)]);
-  else {
-    const response = await fetch(source.url);
-    if (!response.ok)
-      throw new Error(`Could not read file (${response.status}).`);
-    blob = await response.blob();
-  }
+  const response = await fetch(source.url);
+  if (!response.ok)
+    throw new Error(`Could not read file (${response.status}).`);
+  const blob = await response.blob();
   // Match write_attachment's transport and browser-native base64 encoding.
   const data = await readBlobBase64(blob);
   if (data === null) throw new Error("Could not read file for download.");

@@ -116,6 +116,84 @@ async function setup(providers: RemoteProvider[] = ["codex"]) {
 }
 
 describe("remote host API", () => {
+  it("streams files above the preview limit through the authenticated download route", async () => {
+    const s = await setup();
+    const path = join(s.project.cwd, "large.bin");
+    const bytes = Buffer.alloc(11 * 1024 * 1024, 0xa5);
+    writeFileSync(path, bytes);
+    expect(
+      (
+        await s.call("workspace.run", {
+          command: "read_binary_file",
+          args: { path },
+        })
+      ).status,
+    ).toBe(400);
+    const response = await fetch(s.url.replace(/\/rpc$/, "/download"), {
+      method: "POST",
+      headers: { Authorization: `Bearer ${s.first.token}` },
+      body: JSON.stringify({
+        version: 1,
+        environmentId: s.store.environmentId,
+        params: { path },
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe(
+      "application/octet-stream",
+    );
+    expect(Buffer.from(await response.arrayBuffer()).equals(bytes)).toBe(true);
+  });
+
+  it("keeps download authentication, environment identity and project boundaries enforced", async () => {
+    const s = await setup();
+    const file = join(s.project.cwd, "file.bin");
+    writeFileSync(file, "contents");
+    const outside = mkdtempSync(join(tmpdir(), "monocode-download-outside-"));
+    cleanups.push(async () =>
+      rmSync(outside, { recursive: true, force: true }),
+    );
+    const privateFile = join(outside, "private.bin");
+    writeFileSync(privateFile, "outside the project");
+    const send = async (
+      path: string,
+      token = s.first.token,
+      environmentId = s.store.environmentId,
+      origin?: string,
+    ) => {
+      const response = await fetch(s.url.replace(/\/rpc$/, "/download"), {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(origin ? { Origin: origin } : {}),
+        },
+        // A caller cannot bypass the download's identity check using the describe method.
+        body: JSON.stringify({
+          version: 1,
+          environmentId,
+          method: "environment.describe",
+          params: { path },
+        }),
+      });
+      await response.arrayBuffer();
+      return response.status;
+    };
+    expect(await send(file, "invalid")).toBe(401);
+    expect(await send(file, s.first.token, "wrong-host")).toBe(400);
+    expect(
+      await send(
+        file,
+        s.first.token,
+        s.store.environmentId,
+        "https://example.com",
+      ),
+    ).toBe(403);
+    expect(await send(privateFile)).toBe(400);
+    expect(await send(s.project.cwd)).toBe(400);
+    s.store.revokeDevice(s.first.id);
+    expect(await send(file)).toBe(401);
+  });
+
   it("rejects a credential revoked while its request body is arriving", async () => {
     const s = await setup();
     const authenticated = vi.spyOn(s.store, "authenticated");

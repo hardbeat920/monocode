@@ -5978,7 +5978,7 @@ fn write_text_file_sync(path: &str, content: &str) -> Result<(), String> {
     })
 }
 
-fn write_file_sync(
+pub(crate) fn write_file_sync(
     requested: &Path,
     write: impl FnOnce(&mut std::fs::File) -> Result<(), String>,
 ) -> Result<(), String> {
