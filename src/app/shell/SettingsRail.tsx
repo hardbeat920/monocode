@@ -18,8 +18,10 @@ import {
 import { useLockOverscroll } from "../../shared/hooks/useLockOverscroll";
 import {
   settingsSectionsByGroup,
+  type SettingsBadge,
   type SettingsSectionId,
 } from "../../features/settings/model/settings";
+import { SectionBadge } from "../../features/settings/ui/SettingsControls";
 
 const SECTION_ICONS: Record<SettingsSectionId, IconComponent> = {
   general: SlidersHorizontal,
@@ -63,6 +65,7 @@ export function SettingsNav({ section, onSelect, onClose }: Props) {
               <NavRow
                 key={item.id}
                 label={item.label}
+                badge={item.badge}
                 icon={SECTION_ICONS[item.id]}
                 active={item.id === section}
                 onClick={() => onSelect(item.id)}
@@ -80,11 +83,13 @@ export function SettingsNav({ section, onSelect, onClose }: Props) {
 
 function NavRow({
   label,
+  badge,
   icon: Icon,
   active = false,
   onClick,
 }: {
   label: string;
+  badge?: SettingsBadge;
   icon: IconComponent;
   active?: boolean;
   onClick: () => void;
@@ -104,6 +109,7 @@ function NavRow({
       <span className="min-w-0 flex-1 truncate text-sm font-medium leading-tight">
         {label}
       </span>
+      {badge ? <SectionBadge badge={badge} /> : null}
     </button>
   );
 }

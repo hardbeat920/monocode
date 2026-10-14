@@ -10,6 +10,7 @@ import {
 } from "react";
 import { Check, ChevronDown } from "../../../shared/ui/icons";
 import { Popover } from "../../../shared/ui/Popover";
+import type { SettingsBadge } from "../model/settings";
 import { playCue } from "../model/sounds";
 
 /**
@@ -18,6 +19,18 @@ import { playCue } from "../model/sounds";
  */
 
 export const settingDomId = (id: string) => `setting-${id}`;
+
+/** The small tag after a section's name, such as "Beta". */
+export function SectionBadge({ badge }: { badge: SettingsBadge }) {
+  return (
+    <span
+      title={badge.hint}
+      className="shrink-0 rounded-full border border-content/15 px-1.5 py-px text-[10px] font-medium leading-tight tracking-wide text-content/55 uppercase"
+    >
+      {badge.label}
+    </span>
+  );
+}
 
 /** The row or group Settings just jumped to, so it can flash where you landed. */
 export const RevealedSetting = createContext<string | null>(null);

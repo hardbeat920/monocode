@@ -46,6 +46,7 @@ import {
   Group,
   RevealedSetting,
   Row,
+  SectionBadge,
   Select,
   settingDomId,
   Toggle,
@@ -370,6 +371,7 @@ import {
   type KeybindingOverride,
   saveTabAnimationsEnabled,
   searchSettings,
+  settingsSectionBadge,
   settingsSectionDescription,
   settingsSectionLabel,
   COLLAPSED_PROJECT_RAIL_MODE_DEFAULT,
@@ -378,6 +380,7 @@ import {
   type FileTabMode,
   type FollowUpBehavior,
   type ModelControls,
+  type SettingsBadge,
   type SettingsSearchResult,
   type SettingsSectionId,
 } from "../model/settings";
@@ -614,6 +617,7 @@ export function SettingsView({
               <PageHeader
                 title={settingsSectionLabel(section)}
                 description={settingsSectionDescription(section)}
+                badge={settingsSectionBadge(section)}
               />
               {section === "general" ? (
                 <GeneralPage onOpenWhatsNew={onOpenWhatsNew} />
@@ -4207,14 +4211,17 @@ function MonoRow({ mono }: { mono: Mono }) {
 function PageHeader({
   title,
   description,
+  badge,
 }: {
   title: string;
   description: string;
+  badge?: SettingsBadge;
 }) {
   return (
     <header className="pb-4">
-      <h1 className="text-[20px] font-semibold leading-tight text-content">
+      <h1 className="flex items-center gap-2 text-[20px] font-semibold leading-tight text-content">
         {title}
+        {badge ? <SectionBadge badge={badge} /> : null}
       </h1>
       {description ? (
         <p className="mt-1.5 max-w-xl text-[13px] leading-relaxed text-content/45">

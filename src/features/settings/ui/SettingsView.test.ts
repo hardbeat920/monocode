@@ -646,6 +646,15 @@ describe("settings pages", () => {
     expect(document.activeElement).toBe(project.closest("fieldset"));
   });
 
+  it("marks the browser section as beta in its header", async () => {
+    await render("browser");
+    const badge = container.querySelector("h1 [title]");
+    expect(badge?.textContent).toBe("Beta");
+    expect(badge?.getAttribute("title")).toContain("in development");
+    await render("general");
+    expect(container.querySelector("h1 [title]")).toBeNull();
+  });
+
   it("gives every section a rail group", () => {
     const groups = new Set(SETTINGS_SECTIONS.map((section) => section.group));
     expect([...groups]).toEqual(["app", "agents", "workspace"]);

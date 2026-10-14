@@ -48,7 +48,11 @@ export type SettingsSection = {
   description: string;
   /** Extra words search matches the section on, beyond its label. */
   keywords?: string;
+  /** A short tag next to the label, for a section still in development. */
+  badge?: SettingsBadge;
 };
+
+export type SettingsBadge = { label: string; hint: string };
 
 export const SETTINGS_SECTIONS: SettingsSection[] = [
   {
@@ -117,7 +121,11 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description:
       "Let agents open and use their own tabs in the MonoCode browser or your own browser, and see what they did there.",
     keywords:
-      "chrome edge web page tabs automation remote debugging cdp /browser monocode browser sign in",
+      "chrome edge web page tabs automation remote debugging cdp /browser monocode browser sign in beta",
+    badge: {
+      label: "Beta",
+      hint: "Still in development and testing. Behavior and settings may change.",
+    },
   },
   {
     id: "skills",
@@ -679,6 +687,12 @@ export function settingsSectionLabel(id: SettingsSectionId): string {
   return (
     SETTINGS_SECTIONS.find((section) => section.id === id)?.label ?? "General"
   );
+}
+
+export function settingsSectionBadge(
+  id: SettingsSectionId,
+): SettingsBadge | undefined {
+  return SETTINGS_SECTIONS.find((section) => section.id === id)?.badge;
 }
 
 export function settingsSectionDescription(id: SettingsSectionId): string {
