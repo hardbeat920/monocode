@@ -18,7 +18,15 @@ export type ReorderExternalDrop<T extends string> = {
   onEnd?: (id: T) => void;
 };
 
-/** Direct manipulation for a row or column of equal-sized items. */
+/** How long a button-less move waits for a late pointerup before cancelling. */
+const LOST_POINTERUP_GRACE = 150;
+
+/**
+ * Direct manipulation for a row or column of items. Items may differ in size
+ * and margins; the container is assumed to space them with a uniform gap and
+ * non-collapsing margins (flex or grid), so slots can be laid out from measured
+ * sizes.
+ */
 export function useAnimatedReorder<T extends string>(
   ids: T[],
   onReorder: (ids: T[], movedId: T) => void,
@@ -63,6 +71,44 @@ export function useAnimatedReorder<T extends string>(
         const size = axis === "x" ? rect.width : rect.height;
         return { start, size, end: start + size };
       });
+      // Margins travel with their item, so an item with its own trailing
+      // spacing keeps it in every slot, including the last one. Whatever
+      // spacing remains between the first pair is the container's gap.
+      const margins = tabs.map((element) => {
+        const style = window.getComputedStyle(element);
+        const margin = (value: string) => parseFloat(value) || 0;
+        return axis === "x"
+          ? {
+              before: margin(style.marginLeft),
+              after: margin(style.marginRight),
+            }
+          : {
+              before: margin(style.marginTop),
+              after: margin(style.marginBottom),
+            };
+      });
+      const gap =
+        rects[1].start - rects[0].end - margins[0].after - margins[1].before;
+      const origin = rects[0].start - margins[0].before;
+      /** Start position of each item when the dragged item is moved to index `to`. */
+      const layout = (to: number) => {
+        const starts: number[] = [];
+        let position = origin;
+        for (const index of moveItem(
+          items.map((_, i) => i),
+          from,
+          to,
+        )) {
+          position += margins[index].before;
+          starts[index] = position;
+          position += rects[index].size + margins[index].after + gap;
+        }
+        return starts;
+      };
+      // Offsets at which the dragged item sits exactly in each destination
+      // slot. Choosing the nearest slot, rather than the nearest original item,
+      // keeps every position reachable when items differ in size.
+      const slots = items.map((_, to) => layout(to)[from] - rects[from].start);
       const transform = (offset: number) =>
         axis === "x"
           ? `translate3d(${offset}px, 0, 0)`
@@ -94,6 +140,7 @@ export function useAnimatedReorder<T extends string>(
       let pointerPosition = startPosition;
       let overExternalTarget = false;
       let finishTimer: ReturnType<typeof setTimeout> | undefined;
+      let lostPointerUpTimer: ReturnType<typeof setTimeout> | undefined;
 
       function releasePointer() {
         for (const element of tabs) delete element.dataset.reordering;
@@ -116,6 +163,7 @@ export function useAnimatedReorder<T extends string>(
         window.removeEventListener("blur", onCancel);
         window.removeEventListener("scroll", onScroll, true);
         window.clearTimeout(finishTimer);
+        window.clearTimeout(lostPointerUpTimer);
         window.cancelAnimationFrame(frame);
         for (const element of tabs) {
           element.style.removeProperty("transition");
@@ -130,13 +178,13 @@ export function useAnimatedReorder<T extends string>(
         setDraggingId(null);
       }
 
+      /** Shifts every other item to where it sits when the dragged item occupies slot `to`. */
       function preview(to: number) {
-        const reordered = moveItem(items, from, to);
+        const starts = layout(to);
         for (let index = 0; index < tabs.length; index++) {
           if (index === from) continue;
-          const slot = reordered.indexOf(items[index]);
           tabs[index].style.transform = transform(
-            rects[slot].start - rects[index].start,
+            starts[index] - rects[index].start,
           );
         }
       }
@@ -150,24 +198,22 @@ export function useAnimatedReorder<T extends string>(
           0,
         );
         const offset = Math.max(
-          rects[0].start - rects[from].start,
+          slots[0],
           Math.min(
             pointerPosition - startPosition + scrollOffset,
-            rects[rects.length - 1].end - rects[from].end,
+            slots[slots.length - 1],
           ),
         );
         if (moveHandle) {
           handle.style.transform = transform(offset);
         }
-        const center = rects[from].start + rects[from].size / 2 + offset;
-        const next = rects.reduce((nearest, rect, index) => {
-          const distance = Math.abs(center - rect.start - rect.size / 2);
-          const previous = rects[nearest];
-          return distance <
-            Math.abs(center - previous.start - previous.size / 2)
-            ? index
-            : nearest;
-        }, from);
+        const next = slots.reduce(
+          (nearest, slot, index) =>
+            Math.abs(offset - slot) < Math.abs(offset - slots[nearest])
+              ? index
+              : nearest,
+          from,
+        );
         if (next !== destination) {
           destination = next;
           preview(next);
@@ -182,14 +228,23 @@ export function useAnimatedReorder<T extends string>(
       function onMove(ev: globalThis.PointerEvent) {
         if (ev.pointerId !== pointerId || settling) return;
         // The button is already up but its pointerup never reached us: drop
-        // the drag instead of leaving the item stuck to the cursor.
+        // the drag instead of leaving the item stuck to the cursor. WebKit
+        // reads the live button state, so a quick release also reports no
+        // buttons on the moves queued ahead of its pointerup; give that
+        // pointerup a moment to arrive before giving up.
         if (
           ev.type === "pointermove" &&
           ev.pointerType === "mouse" &&
           ev.buttons === 0
         ) {
-          stop(false);
-          return;
+          if (!lostPointerUpTimer)
+            lostPointerUpTimer = setTimeout(
+              () => stop(false),
+              LOST_POINTERUP_GRACE,
+            );
+        } else if (ev.type === "pointermove") {
+          window.clearTimeout(lostPointerUpTimer);
+          lostPointerUpTimer = undefined;
         }
         pointerPosition = ev[coordinate];
         if (!active) {
@@ -220,6 +275,8 @@ export function useAnimatedReorder<T extends string>(
 
       function stop(commit: boolean, event?: globalThis.PointerEvent) {
         if (settling) return;
+        window.clearTimeout(lostPointerUpTimer);
+        lostPointerUpTimer = undefined;
         if (!active) {
           reset();
           return;
@@ -237,7 +294,7 @@ export function useAnimatedReorder<T extends string>(
         const to = commit ? destination : from;
         preview(to);
         handle.style.transition = transition;
-        handle.style.transform = transform(rects[to].start - rects[from].start);
+        handle.style.transform = transform(slots[to]);
         const finish = () => {
           // Clear the preview and commit the order before the next browser paint.
           flushSync(() => {

@@ -5,7 +5,6 @@ import {
   DashboardSquare,
   Inbox,
   PanelLeft,
-  PanelRightToggle,
   Settings,
   StickyNote,
   Terminal,
@@ -88,6 +87,9 @@ export type Tab = {
   previewFileId?: string;
 };
 
+/** How far below the tab bar a dragged tab must go before it targets a pane. */
+const PANE_DROP_PULL = 32;
+
 type Props = {
   tabs: Tab[];
   activeId: string;
@@ -97,8 +99,11 @@ type Props = {
    * project-scoped belongs beside it.
    */
   mono?: { look: MonoLook; state: MonoState };
-  onShowMonoDetails?: () => void;
-  /** The full-height Mono details panel owns these while it is open. */
+  /** Shows or hides the Mono's overview panel beside its chat. */
+  onToggleMonoOverview?: () => void;
+  monoOverviewOpen?: boolean;
+  onOpenMonoSettings?: () => void;
+  /** The full-height Mono panel owns these while it is open. */
   hideWindowControls?: boolean;
   projectRailOpen?: boolean;
   sessionSidebarOpen?: boolean;
@@ -503,7 +508,7 @@ export function IconButton({
             }
           : undefined
       }
-      className={`grid size-6.5 place-items-center rounded-md ${
+      className={`grid size-6 place-items-center rounded-md ${
         disabled
           ? "text-content/25"
           : accent
@@ -618,7 +623,9 @@ function TitleBarComponent({
   activeId,
   cwd,
   mono,
-  onShowMonoDetails,
+  onToggleMonoOverview,
+  monoOverviewOpen = false,
+  onOpenMonoSettings,
   hideWindowControls = false,
   projectRailOpen = true,
   sessionSidebarOpen = true,
@@ -646,12 +653,24 @@ function TitleBarComponent({
 }: Props) {
   const tabIds = tabs.map((tab) => tab.id);
   const { displayed, setTabNode, finishMotion } = useTabCloseMotion(tabs);
+  const tabStripRef = useRef<HTMLDivElement | null>(null);
+  const paneDropArmed = useRef(false);
   const externalTabDrop = useMemo<ReorderExternalDrop<string> | undefined>(
-    () =>
-      onPlaceOnPane
+    () => {
+      // A sideways drag sags, so only a deliberate pull below the tab bar
+      // targets a pane. Once armed it stays armed until the pointer is back
+      // over the tabs.
+      const pulledBelowTabs = (event: PointerEvent) => {
+        const bottom = tabStripRef.current?.getBoundingClientRect().bottom ?? 0;
+        if (event.clientY <= bottom) paneDropArmed.current = false;
+        else if (event.clientY >= bottom + PANE_DROP_PULL)
+          paneDropArmed.current = true;
+        return paneDropArmed.current;
+      };
+      return onPlaceOnPane
         ? {
             onMove: (tabId, event) => {
-              if (tabId === activeId) {
+              if (tabId === activeId || !pulledBelowTabs(event)) {
                 setExternalPaneDrop(null);
                 return false;
               }
@@ -664,21 +683,24 @@ function TitleBarComponent({
               return over != null;
             },
             onDrop: (tabId, event) => {
-              if (tabId === activeId) return false;
+              if (tabId === activeId || !pulledBelowTabs(event)) return false;
               const over = paneDropFromPoint(event.clientX, event.clientY);
               if (!over) return false;
               onPlaceOnPane(tabId, over.id, over.edge);
               return true;
             },
-            onEnd: () => setExternalPaneDrop(null),
+            onEnd: () => {
+              paneDropArmed.current = false;
+              setExternalPaneDrop(null);
+            },
           }
-        : undefined,
+        : undefined;
+    },
     [activeId, onPlaceOnPane],
   );
   const sortable = useAnimatedReorder(tabIds, onReorder, "x", externalTabDrop);
   const paneToTabDrop = useExternalTitleTabDrop();
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
-  const tabStripRef = useRef<HTMLDivElement | null>(null);
   const setTabStripRef = useCallback(
     (el: HTMLDivElement | null) => {
       tabStripRef.current = el;
@@ -871,14 +893,36 @@ function TitleBarComponent({
     Boolean(onOpenInbox || onOpenNotes || onOpenSettings);
   const trailingControls =
     showTrailingActions ||
-    (mono && onShowMonoDetails) ||
+    (mono && (onToggleMonoOverview || onOpenMonoSettings)) ||
     (!IS_MAC && !hideWindowControls) ? (
       <div className="flex h-full shrink-0 items-stretch">
-        {mono && onShowMonoDetails ? (
-          <div className="flex items-center px-3">
-            <IconButton label="Show Mono details" onClick={onShowMonoDetails}>
-              <PanelRightToggle className="size-3.5" strokeWidth={1.75} />
-            </IconButton>
+        {mono && (onToggleMonoOverview || onOpenMonoSettings) ? (
+          <div className="flex items-center gap-1 px-3">
+            {onToggleMonoOverview ? (
+              <button
+                type="button"
+                aria-pressed={monoOverviewOpen}
+                title={monoOverviewOpen ? "Hide overview" : "Show overview"}
+                data-tauri-drag-region="false"
+                onClick={onToggleMonoOverview}
+                className={`flex h-6 items-center gap-1.5 rounded-md px-2 text-[12px] ${
+                  monoOverviewOpen
+                    ? "bg-content/10 text-content"
+                    : "bg-content/5 text-content/70 hover:bg-content/8 hover:text-content"
+                }`}
+              >
+                <DashboardSquare className="size-3.5" strokeWidth={1.75} />
+                Overview
+              </button>
+            ) : null}
+            {onOpenMonoSettings ? (
+              <IconButton
+                label={`${mono.look.name} settings`}
+                onClick={onOpenMonoSettings}
+              >
+                <Settings className="size-3.5" strokeWidth={1.75} />
+              </IconButton>
+            ) : null}
           </div>
         ) : null}
         {showTrailingActions ? (

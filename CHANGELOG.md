@@ -7,6 +7,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Remote hosts can run on **Linux without systemd**, such as containers and Firecracker microVMs. Setup starts the host as a detached background process there instead of a systemd user service, so it keeps running after SSH disconnects, and the next connect starts it again if it has stopped. Machines with systemd keep the user service and lingering.
+
+## [0.13.0] - 2026-10-12
+
+### Added
+
+- Monos and habit runs can create **HTML visual artifacts** with `app artifacts.write` using `kind: "html"`, alongside Markdown documents. Visuals run in a sandboxed frame, follow the app's theme, fit their content height, and refresh when revised. Scripts and public HTTPS assets are supported; access to the app, network requests through fetch, nested frames, and form submissions are blocked. Clicked web links open in the user's browser.
+- Mono replies display linked **local images and videos inline**, including workspace-relative media references. Images open in the file viewer when clicked, and videos have playback controls. Previews load as they approach the visible chat, reserve their space to avoid layout shifts, and fall back to the original link when a linked file cannot be displayed. Local videos stream without reading the whole file into memory; only the requested video file is added to the asset scope.
+- The Mono composer has an **emoji picker** with search, categories, recent picks, and a saved skin-tone preference. Picks replace the selected text or insert at the caret and return focus to the composer. Its bundled catalog works offline across platforms and filters out emoji versions and country flags the system's font cannot draw.
+- **Model and effort controls** sit beneath the Mono composer, alongside its context usage meter. Compact plan-usage chips show Claude Code, Codex, OpenCode, and Devin usage beside the attachment and emoji buttons when available.
+- Sessions a Mono starts appear as **status cards beneath its replies**, showing their title, provider, project, and whether they are working, need input, are drafts, failed, stopped, or finished. Cards open the session inside the overview and remain visible when a later completion report continues the turn.
+- The Mono overview's Sessions tab has **search and filters** for provider, status, time, archived sessions, and unavailable sessions. Search also matches project names. Sessions appear newest first and load another page as the list nears its end; changing the search or filters resets paging. Empty tabs and searches show guidance for the current state.
+- MonoCode **reopens the last open Mono on launch** when it still exists and Monos are enabled. Closing the Mono clears that choice, and windows transferred from another window retain their own view.
+
+### Changed
+
+- A unified **Mono overview** replaces the separate details, sessions, artifacts, and changes sidebars, with Sessions, Documents, Habits, and Changes tabs. It opens beside the chat by default and can be toggled from the title bar. The default width is 400 pixels, and resizing allows up to 960 pixels or 62% of the window. Tabs show item counts; the folded Changes icon has an accent dot when changes are present.
+- Mono settings open in a **dialog** from the title bar, with General, Soul, and Memory sections. General brings together model settings, permissions, projects, sidebar preferences, and conversation reset. Clicking the mascot opens the mascot and color popover, and the name field sits directly beneath it.
+- Mono-started sessions launch without creating workspace tabs by default and open over the overview's session list, with **Back**, **Open in workspace**, and **Hide overview** controls. New launches stay out of the project sidebar unless **Show sessions in sidebar** is enabled in that Mono's settings; optional folder grouping remains available.
+- The overview's **Changes** tab groups repositories into project tabs with their logo or mascot and changed-file count. Worktrees share their project's tab and have a checkout picker. Attached Git projects appear even before they have changes, and repositories remain available after committing so their work can still be pushed. Each checkout retains its commit draft when switching projects or overview tabs.
+- Mono commits now use the repository's **real Git staging area**, shared with the project's Changes panel. The view lists staged and unstaged files, supports staging or unstaging files, folders, or all changes, and offers discard, list/tree views, commit, push, sync, and pull request actions. Generated messages and commits use all staged changes in the active checkout. Fully committed Mono files leave its session review; partially staged files retain their remaining review.
+- Clicking a changed file opens its **inline diff editor** over the Changes list, with Back navigation. Changed images and videos open in the media preview instead.
+- Documents and visuals open inside the overview's **Documents** tab. Reply cards use compact title chips with document or chart icons, and the reader keeps its title in the navigation header without repeating the title and update timestamp above the content. Copy and delete controls remain available.
+- Mono session cards show their project and place the model's provider mark beside the branch in the footer, revealing the model name on hover or focus so titles have more room.
+- Habits in the overview are grouped into **Up next today**, **Done today**, and **Later**, with group counts and paused habits last. When nothing is scheduled today, the remaining group is labeled Scheduled.
+- Streamed replies show text **as it arrives**, with word fades adapting to the stream's cadence between 120 and 400 milliseconds. The earlier paced reveal remains available through `localStorage["monocode.pacedReveal"] = "1"`. Transcript following glides with incoming content, bounds the speed of Mono reply reveals, and respects entrance-animation settings.
+- Mono turn actions appear on hover or keyboard focus in a reserved gap and stay visible while their panel is open. Reaction badges use translucent chips at the message corner, and the next user message stacks with a message answered only by a reaction. Handoff and second-opinion controls are hidden in the Mono view.
+- New conversations show an **empty context ring** before usage is reported. A zero-usage ring no longer draws a progress dot.
+- Regression coverage now includes Mono overview navigation, settings and popovers, memory editing, session search and paging, habit grouping, multi-repository staging and commits, HTML artifact persistence, local media references, session-state synchronization, Cursor catalog fallbacks, emoji data, and reply pacing. Chromium and WebKit tests cover the emoji picker, tab drags, Mono completion layout, and interrupted scroll glides; Linux drag fixtures mock native window controls, and wheel-interruption checks wait for scrolling to settle.
+
+### Fixed
+
+- Cursor model discovery uses existing CLI credentials without starting the **browser login flow**. Missing credentials or ACP failures fall back to CLI discovery and then the bundled model catalog.
+- Background agent updates preserve pending **account changes, session titles, newly opened sessions, and streamed output** when several updates arrive before React renders, including under Strict Mode.
+- Switching Monos clears the previous Mono's open session, document, focus, search, and filters so its overview does not leak into another conversation.
+- Saved Mono session summaries and habits are cached so returning to their lists avoids a blank reload. Session lookup also finds saved sessions moved to another project; loading cards reserve their space, and unavailable sessions can be inspected through the filter.
+- Reused sessions are recovered from successful **follow-up receipts** as well as launch receipts, using saved metadata or session listings. Merely listing or reading a session does not create a chat card.
+- Completion reports and session cards attach without shifting Mono transcript spacing or interrupting reply fades. Ready completion prompts stay hidden while being delivered; waiting or failed prompts remain visible, including failures that need a retry.
+- Manual scrolling interrupts Mono reply glides, ambiguous wheel gestures pause following, and scrolling a nested code block keeps its own scroll behavior. Following offsets no longer enlarge the transcript's scroll range, and focusing a session during the overview's slide animation no longer scrolls the surrounding panel out of place.
+- Session and artifact cards fit narrow panes, truncating long titles and project labels instead of overflowing their container. Popovers opened from dialogs stay above them, and Escape closes the popover before the dialog.
+- Video previews defer releasing their source until the element is actually gone, preventing Linux WebKit from stalling without metadata when React replays effects during an in-progress load.
+- Opening a particular file in a multi-file diff expands that file even when the other files start folded.
+- Sideways tab drags require a deliberate pull below the tab bar before targeting a pane. Fast releases in WebKit keep their reorder even when queued pointer moves report no held buttons, while missed releases still cancel the drag.
+
+## [0.12.0] - 2026-10-10
+
+### Added
+
+- **Video previews** open common video containers, including MP4, MOV, WebM, and MKV, in the file pane with playback controls, dimensions, duration, file size, and format. Playback depends on the platform's supported codecs; unreadable or unsupported local videos offer retry and external playback.
+- Settings → Providers → Advanced → **Keep idle agents ready** controls how many finished conversations keep their agent CLI running for quick follow-ups. Choose None, 1, 2, 3, or 5; the default is 3. Excess agents stop in order of longest idle time, preserving resume state and favoring the conversation on screen. Running turns are excluded, lowering the limit takes effect immediately, and idle agents otherwise stop after three minutes instead of five.
+- Monos can answer with an **emoji reaction** attached to the user message. Reaction-only replies hide their redundant reply bubble, thinking, and tool activity while retaining errors. New reactions animate with reduced-motion support, and notifications describe the reaction.
+- Mono rail badges show **unread reply counts**, including habit posts, instead of a single dot. Counts clear when the Mono is opened, display up to `99+`, and are included in accessible labels.
+
+### Changed
+
+- A Mono's latest turn that edited files has a compact **changes button** showing added and removed line counts and opening the diff. Ordinary sessions retain the full review card; older transcript pages, drafts, and pending inbox questions do not show an unrelated review.
+- Floating macOS Mono chats use a more compact **440-point width and up to 560-point height**, including the Mono rail, while fitting smaller screen work areas.
+- Native browser scrollbars are hidden throughout the app while preserving horizontal and vertical scrolling. Custom editor and terminal scrollbar controls remain available.
+- Streamed agent output batches stdout lines and server events about once per 16-millisecond window, and foreground chat updates are limited to about 30 per second. Unchanged sidebar, live-agent, and Mono rail data reuse their existing values, and output in other tabs avoids rerendering the visible pane tree.
+- Terminal title polling reads foreground commands directly from `/proc` on Linux and skips process lookups while the shell owns the foreground. The animated terminal background caches static outlines, pauses while hidden, draws only the visible board during transitions, and pulses its cursor only on hover. The resident Quick Composer is prepared only when its shortcut is enabled.
+- The README and contributing guide have shorter quick starts with focused guides for provider setup, platform installation, source builds, and agent access.
+- Regression coverage now includes video playback and hidden-tab pauses in Chromium and WebKit, returning to streamed transcripts, reaction rendering, unread counts, idle-agent limits, shared-turn edit attribution, checkpoint recovery, review caching, and theme synchronization. Checkpoint filename fixtures account for Windows removing trailing spaces, browser tests use more stable playback and animation checks, and CI uploads traces when browser tests fail.
+
+### Fixed
+
+- Theme changes synchronize across open windows, including the color scheme, accent, tint, and dark-theme lightness, without requiring a reload. In #909 by @ognjeeen; fixes #894.
+- **New Window** opens a working window on Windows instead of a blank gray frame caused by creating WebView2 on the main thread. In #908 by @ognjeeen; fixes #907.
+- Launching MonoCode again on Windows restores the running instance and its hidden windows instead of starting another process with a duplicate tray icon. In #905 by @ognjeeen; fixes #860.
+- **Reveal in file manager** runs off the main thread, preventing Linux from becoming unresponsive while `xdg-open` waits for the file manager to close. In #902 by @spuder; fixes #901.
+- Manual wheel, pointer, keyboard, and touch scrolling consistently pause transcript following. Scrolling within nested content stays independent, and layout changes or browser-clamped offsets do not incorrectly stop following.
+- Session reviews retain the original checkpoint boundary across interrupted turns and continuations. Older interrupted checkpoints can recover transcript-confirmed changes for review without enabling unsafe undo. Reviews shared by overlapping sessions display only files supported by that session's successful structured edit tools.
+- Committed changes disappear from the current review and stay dismissed if those files are edited again. Review cards and Mono changes buttons share cached status, refresh after workspace changes, and ignore stale responses from an earlier turn.
+- Returning to a hidden transcript tab does not replay the fade animation for words already shown.
+- Video previews pause when their workspace tab or window is hidden, prevent hidden playback from restarting, and release their source when closed. Restoring a source after React replays effects also restarts loading, preventing a blank preview.
+- Subagent mascots render at the same visual scale as neighboring line icons while keeping a fixed icon slot and stable row alignment.
+
 ## [0.11.0] - 2026-10-09
 
 ### Added
@@ -1402,7 +1480,10 @@ First public release. macOS (Apple Silicon) only.
 - Updater endpoint and minisign public key are injected at release time rather than committed, so forks do not inherit the maintainer's update channel.
 - macOS release builds sign with `APPLE_SIGNING_IDENTITY` via a config overlay; the committed default remains ad-hoc `-` for community builds.
 
-[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/hardbeat920/monocode/compare/v0.12.0...v0.13.0
+[0.12.0]: https://github.com/hardbeat920/monocode/compare/v0.11.0...v0.12.0
+[0.11.0]: https://github.com/hardbeat920/monocode/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/hardbeat920/monocode/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/hardbeat920/monocode/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/hardbeat920/monocode/compare/v0.7.1...v0.8.0

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { copyMessage } from "../../../platform/tauri/clipboard";
 import type { Block } from "../model/session";
 import { AgentTranscript, MonoActivityTrail } from "./AgentTranscript";
-import { WORD_FADE_MS } from "./wordFade";
+import { PACED_REVEAL_KEY, WORD_FADE_MS } from "./wordFade";
 
 vi.mock("../../../platform/tauri/clipboard", () => ({
   copyMessage: vi.fn().mockResolvedValue(undefined),
@@ -47,14 +47,19 @@ beforeEach(() => {
   document.body.append(container);
   // Exercise the shipped visibility rule with the real Markdown reveal.
   resultStyles = document.createElement("style");
-  resultStyles.textContent = readFileSync("src/styles/index.css", "utf8").match(
-    /\.transcript-turn:has\(\[data-artifact-results\]\)[^{]+\{[^}]+\}/,
-  )![0];
+  resultStyles.textContent = [
+    ...readFileSync("src/styles/index.css", "utf8").matchAll(
+      /\.transcript-turn(?::has\(\[data-artifact-results\]\)| > :has\(\.word-fading\) ~ \[data-launched-sessions\])[^{]*\{[^}]+\}/g,
+    ),
+  ]
+    .map((rule) => rule[0])
+    .join("\n");
   document.head.append(resultStyles);
   root = createRoot(container);
 });
 
 afterEach(() => {
+  localStorage.removeItem(PACED_REVEAL_KEY);
   act(() => root.unmount());
   container.remove();
   resultStyles.remove();
@@ -134,15 +139,22 @@ it("shows a document below its reply in the originating turn and opens it", () =
   expect(onOpenArtifact).toHaveBeenCalledWith(card.id);
 });
 
-it("shows sessions beside the footer actions only for the turn that launched them", () => {
-  const onShowSessions = vi.fn();
+it("shows launched sessions as cards with live status, only in their turn", () => {
+  const onOpenSession = vi.fn();
   const launches = [
     {
       sessionId: "app-mono-review",
-      cwd: "/repo",
+      cwd: "/repo/web",
       title: "PR review",
       harness: "codex" as const,
       model: "gpt-6",
+    },
+    {
+      sessionId: "app-mono-fix",
+      cwd: "/repo/api",
+      title: "Fix the build",
+      harness: "claude" as const,
+      model: "opus",
     },
   ];
   const blocks: Block[] = [
@@ -157,40 +169,264 @@ it("shows sessions beside the footer actions only for the turn that launched the
     },
     { id: "answer", role: "assistant", text: "Started your reviewer." },
   ];
-  render(blocks, { onShowSessions, onShowWork: vi.fn(), onSaveNote: vi.fn() });
-  const button = container.querySelector<HTMLButtonElement>(
-    '[aria-label="Show sessions"]',
-  )!;
+  const launchedSessions = new Map([
+    ["app-mono-review", { state: "working" as const, title: "Review #42" }],
+    ["app-mono-fix", { state: "done" as const, title: "Fix the build" }],
+  ]);
+  render(blocks, {
+    onOpenSession,
+    launchedSessions,
+    onShowWork: vi.fn(),
+    onSaveNote: vi.fn(),
+  });
+  const cards = [
+    ...container.querySelectorAll<HTMLButtonElement>("[data-launched-session]"),
+  ];
+  expect(cards).toHaveLength(2);
   expect(
-    container.querySelectorAll('[aria-label="Show sessions"]'),
-  ).toHaveLength(1);
+    cards[0]
+      .closest("[data-transcript-turn]")
+      ?.getAttribute("data-transcript-turn"),
+  ).toBe("user");
+  // The live title, its state and project; the rail no longer lists them.
+  expect(cards.map((card) => card.dataset.state)).toEqual(["working", "done"]);
+  expect(cards[0].textContent).toContain("Review #42");
+  expect(cards[0].textContent).toContain("web");
+  expect(cards[0].querySelector(".animate-spin")).not.toBeNull();
+  expect(cards[1].getAttribute("aria-label")).toBe(
+    "Open session Fix the build, done",
+  );
+  expect(container.querySelector('[aria-label="Show sessions"]')).toBeNull();
+  act(() => cards[1].click());
+  expect(onOpenSession).toHaveBeenCalledWith(
+    "user",
+    blocks.slice(2),
+    "app-mono-fix",
+  );
+  render(blocks, {
+    onOpenSession,
+    launchedSessions,
+    openSessionId: "app-mono-fix",
+  });
   expect(
-    button
+    container
+      .querySelector('[data-launched-session="app-mono-fix"]')
+      ?.getAttribute("aria-pressed"),
+  ).toBe("true");
+});
+
+it("keeps launched sessions under the reply that started them when the Mono reports back", () => {
+  const launch = {
+    sessionId: "app-mono-article",
+    cwd: "/repo",
+    title: "Write an article",
+    harness: "codex" as const,
+    model: "gpt-6",
+  };
+  const blocks: Block[] = [
+    {
+      id: "user",
+      role: "user",
+      text: "Write two articles",
+      startedAt: 1000,
+      durationMs: 1000,
+      monoSpawnedSessions: [launch],
+    },
+    tool("start"),
+    { id: "started", role: "assistant", text: "Both are running." },
+    // The app's hidden prompt when the session finishes; the Mono's report
+    // back joins the same message.
+    {
+      id: "completion",
+      role: "user",
+      text: "Session finished",
+      internal: true,
+      appRequestId: "mono-completion-app-mono-article",
+      startedAt: 5000,
+    },
+    tool("read"),
+    { id: "report", role: "assistant", text: "Both finished." },
+  ];
+  render(blocks, { onOpenSession: vi.fn(), agentName: "MonoSkull" });
+  expect(container.querySelectorAll("[data-transcript-turn]")).toHaveLength(1);
+  const started = container.querySelector('[data-chat-message="started"]')!;
+  const cards = container.querySelector("[data-launched-sessions]")!;
+  const report = container.querySelector('[data-chat-message="report"]')!;
+  expect(container.querySelectorAll("[data-launched-sessions]")).toHaveLength(
+    1,
+  );
+  expect(
+    started.compareDocumentPosition(cards) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  expect(
+    cards.compareDocumentPosition(report) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+});
+
+it("keeps launched session cards in place while the Mono's report back arrives", () => {
+  const launch = {
+    sessionId: "app-mono-article",
+    cwd: "/repo",
+    title: "Write an article",
+    harness: "codex" as const,
+    model: "gpt-6",
+  };
+  const user: Block = {
+    id: "user",
+    role: "user",
+    text: "Write two articles",
+    startedAt: 1000,
+    monoSpawnedSessions: [launch],
+  };
+  const started: Block = {
+    id: "started",
+    role: "assistant",
+    text: "Both are running.",
+  };
+  const completion: Block = {
+    id: "completion",
+    role: "user",
+    text: "Session finished",
+    internal: true,
+    appRequestId: "mono-completion-app-mono-article",
+    startedAt: 5000,
+  };
+  const props = { onOpenSession: vi.fn(), agentName: "MonoCrab" };
+  const cards = () => container.querySelector("[data-launched-sessions]");
+
+  // While the reply streams, the cards wait under it.
+  render([user, tool("start"), { ...started, streaming: true }], {
+    ...props,
+    busy: true,
+  });
+  expect(cards()).toBeNull();
+  render([{ ...user, durationMs: 2000 }, tool("start"), started], props);
+  const shown = cards();
+  expect(shown).not.toBeNull();
+
+  // The session finishing reopens the same message: the cards stay put
+  // through the hidden prompt, the Mono's work and its report.
+  const reopened = [{ ...user, durationMs: 2000 }, tool("start"), started];
+  render([...reopened, completion], { ...props, busy: true });
+  expect(cards()).toBe(shown);
+  render([...reopened, completion, tool("read", "in_progress")], {
+    ...props,
+    busy: true,
+  });
+  expect(cards()).toBe(shown);
+  render(
+    [
+      ...reopened,
+      { ...completion, durationMs: 3000 },
+      tool("read"),
+      { id: "report", role: "assistant", text: "Both finished." },
+    ],
+    props,
+  );
+  expect(cards()).toBe(shown);
+  expect(
+    cards()!.compareDocumentPosition(
+      container.querySelector('[data-chat-message="report"]')!,
+    ) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+});
+
+it("shows reused sessions in the requesting Mono after its handoff reply, before its completion report", () => {
+  const launches = [
+    {
+      id: "app-other-mono-one",
+      title: "Meaning in everyday life",
+      harness: "codex",
+      model: "gpt-6",
+    },
+    {
+      id: "app-other-mono-two",
+      title: "Growth through change",
+      harness: "codex",
+      model: "gpt-6",
+    },
+  ];
+  const receipt = (id: string, action: string, result: unknown): Block => ({
+    ...tool(id),
+    text: `monocode app ${action}`,
+    tool: { status: "completed", detail: JSON.stringify({ ok: true, result }) },
+  });
+  const blocks: Block[] = [
+    { id: "old", role: "user", text: "Earlier task", durationMs: 1000 },
+    { id: "old-answer", role: "assistant", text: "Earlier answer" },
+    {
+      id: "user",
+      role: "user",
+      text: "Write two articles",
+      startedAt: 1000,
+      durationMs: 1000,
+    },
+    receipt("list", "sessions.list", {
+      cwd: "/repo/formshare",
+      sessions: launches,
+    }),
+    // This prose splits the listing and sends into separate folded groups.
+    {
+      id: "assigning",
+      role: "assistant",
+      text: "Assigning two existing sessions.",
+    },
+    ...launches.map((entry) =>
+      receipt(`send-${entry.id}`, "sessions.send", {
+        sessionId: entry.id,
+        submitted: true,
+        notifyOnComplete: true,
+      }),
+    ),
+    {
+      id: "started",
+      role: "assistant",
+      text: "Both article sessions are running.",
+    },
+    {
+      id: "completion",
+      role: "user",
+      text: "Both finished",
+      internal: true,
+      appRequestId: "mono-completion-batch-articles",
+      startedAt: 5000,
+      durationMs: 1000,
+    },
+    { id: "report", role: "assistant", text: "Both articles are finished." },
+  ];
+  const onOpenSession = vi.fn();
+  render(blocks, { onOpenSession, agentName: "MonoShroom" });
+  expect(container.querySelectorAll("[data-transcript-turn]")).toHaveLength(2);
+  const cards = container.querySelector("[data-launched-sessions]")!;
+  expect(cards).not.toBeNull();
+  expect(container.querySelectorAll("[data-launched-session]")).toHaveLength(2);
+  expect(
+    cards
       .closest("[data-transcript-turn]")
       ?.getAttribute("data-transcript-turn"),
   ).toBe("user");
   expect(
-    [...button.parentElement!.querySelectorAll("button")].map((entry) =>
-      entry.getAttribute("aria-label"),
-    ),
-  ).toEqual([
-    "Copy response",
-    "Save as note",
-    "Show activity",
-    "Show sessions",
-  ]);
-  expect(button.title).toBe("Show sessions (1)");
-  act(() => button.click());
-  expect(onShowSessions).toHaveBeenCalledWith("user", blocks.slice(2));
-  render(blocks, { onShowSessions, activeSessionsTurnId: "user" });
-  expect(
     container
-      .querySelector('[aria-label="Hide sessions"]')
-      ?.getAttribute("aria-expanded"),
-  ).toBe("true");
+      .querySelector('[data-chat-message="started"]')!
+      .compareDocumentPosition(cards) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  expect(
+    cards.compareDocumentPosition(
+      container.querySelector('[data-chat-message="report"]')!,
+    ) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  act(() =>
+    cards.querySelector<HTMLButtonElement>("[data-launched-session]")!.click(),
+  );
+  expect(onOpenSession).toHaveBeenCalledWith(
+    "user",
+    blocks.slice(2),
+    launches[0].id,
+  );
 });
 
 it("waits for the final reply's reveal, then shows its artifact before the actions", () => {
+  localStorage.setItem(PACED_REVEAL_KEY, "1");
   const user: Block = {
     id: "user",
     role: "user",
@@ -208,14 +444,15 @@ it("waits for the final reply's reveal, then shows its artifact before the actio
     ],
   };
   const actions = {
-    onShowSessions: vi.fn(),
+    onOpenSession: vi.fn(),
     onShowWork: vi.fn(),
     agentName: "MonoInvader",
   };
   render([user, tool("call", "in_progress")], { ...actions, busy: true });
   expect(container.querySelector("[data-turn-actions]")).toBeNull();
   expect(container.querySelector("[data-artifact-results]")).toBeNull();
-  expect(container.querySelector('[aria-label="Show sessions"]')).toBeNull();
+  // Session cards wait for the reply, so it never lands above them.
+  expect(container.querySelector("[data-launched-sessions]")).toBeNull();
   expect(
     container.querySelector('[data-mono-work] [aria-label="Show activity"]'),
   ).not.toBeNull();
@@ -245,9 +482,11 @@ it("waits for the final reply's reveal, then shows its artifact before the actio
   );
   const answer = container.querySelector('[data-chat-message="answer"]')!;
   const cards = container.querySelector("[data-artifact-results]")!;
+  const sessions = container.querySelector("[data-launched-sessions]")!;
   const footer = container.querySelector("[data-turn-actions]")!;
   expect(answer.textContent).toBe("");
   expect(getComputedStyle(cards).display).toBe("none");
+  expect(getComputedStyle(sessions).display).toBe("none");
   expect(getComputedStyle(footer).display).toBe("none");
   act(() => vi.advanceTimersByTime(100));
   expect(answer.textContent!.length).toBeGreaterThan(0);
@@ -267,10 +506,20 @@ it("waits for the final reply's reveal, then shows its artifact before the actio
       .display,
   ).not.toBe("none");
   expect(
+    getComputedStyle(finished.querySelector("[data-launched-sessions]")!)
+      .display,
+  ).not.toBe("none");
+  expect(
     getComputedStyle(finished.querySelector("[data-turn-actions]")!).display,
   ).not.toBe("none");
   finished.remove();
-  expect(footer.querySelector('[aria-label="Show sessions"]')).not.toBeNull();
+  // Reply, then its sessions, then its artifacts.
+  expect(
+    answer.compareDocumentPosition(sessions) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  expect(
+    sessions.compareDocumentPosition(cards) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
   expect(footer.querySelector('[aria-label="Show activity"]')).not.toBeNull();
   expect(
     answer.compareDocumentPosition(cards) & Node.DOCUMENT_POSITION_FOLLOWING,
@@ -656,6 +905,34 @@ it("keeps interrupted Mono messages together above one working indicator", () =>
     props,
   );
   expect(container.querySelectorAll(".transcript-turn")).toHaveLength(2);
+});
+
+it("stacks the next message onto one the Mono only reacted to", () => {
+  const props = {
+    agentName: "Captain",
+    agentMascot: { mascot: "cat" as const, color: "#6ba" },
+  };
+  const blocks: Block[] = [
+    { id: "thanks", role: "user", text: "thanks :)", startedAt: 1000 },
+    { id: "reaction", role: "assistant", text: "<reaction>😊</reaction>" },
+    { id: "next", role: "user", text: "one more thing", startedAt: 2000 },
+  ];
+  render(blocks, props);
+  const stacked = container.querySelectorAll<HTMLElement>(
+    '[data-message-stack="true"]',
+  );
+  expect([...stacked].map((row) => row.dataset.promptAnchor)).toEqual([
+    "thanks",
+  ]);
+  expect(container.querySelector('[data-mono-reaction="😊"]')).not.toBeNull();
+  // It opens a turn, but sits as close as a message sent mid-turn.
+  expect(
+    container
+      .querySelector('[data-prompt-anchor="next"]')!
+      .classList.contains("pt-1"),
+  ).toBe(true);
+  render(blocks.slice(0, 2), props);
+  expect(container.querySelector('[data-message-stack="true"]')).toBeNull();
 });
 
 it("shows answers to mid-turn follow-ups immediately and retains them during later work", () => {

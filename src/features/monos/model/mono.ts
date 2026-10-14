@@ -41,7 +41,7 @@ export type Mono = {
   color: string;
   /** Project folders it works on, in the order they were added. */
   projects: string[];
-  /** New sessions appear in the project sidebar unless explicitly disabled. */
+  /** New sessions stay out of the project sidebar unless turned on. */
   showStartedSessionsInSidebar?: boolean;
   /** Files the sessions it starts into a sidebar folder named after it. */
   useSidebarFolders?: boolean;
@@ -239,24 +239,24 @@ export function createMono(projects: readonly string[] = []): Mono {
   return mono;
 }
 
-const INTRO_DISMISSED_KEY = "monocode:mono-intro-dismissed";
+const OPEN_MONO_KEY = "monocode:open-mono";
 
-/** Whether the user passed on the intro that meets them before any Mono. */
-export function monoIntroDismissed(): boolean {
+/** The Mono whose conversation was open, so the next launch reopens it. */
+export function loadOpenMono(): string | undefined {
   try {
-    return localStorage.getItem(INTRO_DISMISSED_KEY) === "1";
+    return localStorage.getItem(OPEN_MONO_KEY) ?? undefined;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
-export function dismissMonoIntro(): void {
+export function saveOpenMono(monoId: string | undefined): void {
   try {
-    localStorage.setItem(INTRO_DISMISSED_KEY, "1");
+    if (monoId) localStorage.setItem(OPEN_MONO_KEY, monoId);
+    else localStorage.removeItem(OPEN_MONO_KEY);
   } catch {
-    // It shows again next launch; harmless.
+    // The next launch opens the workspace instead; harmless.
   }
-  window.dispatchEvent(new CustomEvent(MONOS_CHANGED));
 }
 
 function uniqueProjects(paths: readonly string[]): string[] {
@@ -350,7 +350,7 @@ export function monosSnapshot(): string {
   try {
     return `${localStorage.getItem(ROSTER_KEY) ?? ""}|${JSON.stringify(
       loadTabGroupLabels(),
-    )}|${monoIntroDismissed()}`;
+    )}`;
   } catch {
     return "";
   }

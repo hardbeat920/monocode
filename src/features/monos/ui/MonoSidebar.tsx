@@ -4,8 +4,8 @@ import { useDragResize } from "../../../shared/hooks/useDragResize";
 import { PanelRightToggle } from "../../../shared/ui/icons";
 
 const MIN_WIDTH = 340;
-let rememberedWidth = MIN_WIDTH;
-let rememberedArtifactWidth = 560;
+const DEFAULT_WIDTH = 400;
+let rememberedWidth = DEFAULT_WIDTH;
 
 /** The shared frame for a Mono's details and turn sidebars. */
 export function MonoSidebar({
@@ -17,26 +17,22 @@ export function MonoSidebar({
   children,
 }: {
   open: boolean;
-  kind: "details" | "activity" | "sessions" | "artifact" | "changes";
+  kind: "details" | "sessions";
   label: string;
   color: string;
   windowControls?: ReactNode;
   children: ReactNode;
 }) {
-  // Readers (documents, diffs) need room; the turn sidebars stay narrow.
-  const reader = kind === "artifact" || kind === "changes";
   const resize = useDragResize({
-    min: reader ? 360 : MIN_WIDTH,
-    max: () =>
-      reader
-        ? Math.min(840, Math.round(window.innerWidth * 0.58))
-        : Math.min(440, Math.round(window.innerWidth * 0.4)),
-    defaultWidth: reader ? 560 : MIN_WIDTH,
-    initial: reader ? rememberedArtifactWidth : rememberedWidth,
+    min: MIN_WIDTH,
+    // The overview hosts whole sessions and documents, so it may grow wide;
+    // either way the chat keeps a good share.
+    max: () => Math.min(960, Math.round(window.innerWidth * 0.62)),
+    defaultWidth: DEFAULT_WIDTH,
+    initial: rememberedWidth,
     direction: "left",
     onCommit: (width) => {
-      if (reader) rememberedArtifactWidth = width;
-      else rememberedWidth = width;
+      rememberedWidth = width;
     },
   });
   return (
@@ -46,10 +42,7 @@ export function MonoSidebar({
       aria-hidden={!open || undefined}
       inert={!open || undefined}
       data-mono-details={kind === "details" ? "" : undefined}
-      data-mono-activity={kind === "activity" ? "" : undefined}
       data-mono-sessions={kind === "sessions" ? "" : undefined}
-      data-mono-artifact={kind === "artifact" ? "" : undefined}
-      data-mono-changes={kind === "changes" ? "" : undefined}
       data-open={open}
       style={
         {

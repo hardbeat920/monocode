@@ -1,13 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { newFileTab, newTerminalFile } from "../../workspace/model/layout";
 import { newSession, sessionWorkCwd } from "../../sessions/model/session";
 import {
   sessionInWorktree,
   detachSessionWorktree,
   assertWorktreeFilesClosed,
+  worktreeDeletedExternally,
   worktreeSessionIds,
   type Worktree,
 } from "./worktrees";
+
+const dirs = vi.hoisted(() => new Set<string>());
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: async (_command: string, args: { path: string }) =>
+    dirs.has(args.path) ? { path: args.path, identity: "dir" } : null,
+}));
 
 const tree: Worktree = {
   path: "/repo-worktrees/feature",
@@ -216,4 +223,18 @@ describe("sessions kept after worktree deletion", () => {
       expect(selected.providerSessionId).toBeUndefined();
     },
   );
+});
+
+describe("worktrees removed outside the app", () => {
+  it("detects a deleted worktree only while its parent folder remains", async () => {
+    dirs.clear();
+    dirs.add("/repo-worktrees");
+    dirs.add(tree.path);
+    expect(await worktreeDeletedExternally(tree.path)).toBe(false);
+    dirs.delete(tree.path);
+    expect(await worktreeDeletedExternally(tree.path)).toBe(true);
+    // An unmounted volume takes the parent with it; keep the session bound.
+    dirs.delete("/repo-worktrees");
+    expect(await worktreeDeletedExternally(tree.path)).toBe(false);
+  });
 });

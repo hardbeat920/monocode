@@ -1398,6 +1398,76 @@ describe("claude subagents", () => {
     );
   });
 
+  it("ignores the empty result a resume emits for a replayed background task", async () => {
+    const { events, turn } = await startTurn("s1");
+    let settled = false;
+    void turn.then(() => {
+      settled = true;
+    });
+
+    // After a resume, the CLI re-reports a background task the session had
+    // started and answers it with an empty zero-turn result before the real
+    // turn runs.
+    emit({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "bash_1",
+      status: "stopped",
+      summary:
+        "Background shell command didn't finish before the previous session ended",
+      session_id: "sess_1",
+    });
+    emit({ type: "system", subtype: "init", session_id: "sess_1" });
+    emit({
+      type: "result",
+      subtype: "success",
+      session_id: "sess_1",
+      num_turns: 0,
+      result: "",
+      origin: { kind: "task-notification" },
+    });
+
+    await new Promise((r) => setTimeout(r, 30));
+    expect(settled).toBe(false);
+    expect(events.some((event) => event.type === "message.completed")).toBe(
+      false,
+    );
+
+    emitFollowUpTurn("hello");
+    await turn;
+    expect(settled).toBe(true);
+  });
+
+  it("drops a usage limit reported for a replayed background task", async () => {
+    const { events, turn } = await startTurn("s1");
+
+    emit({ type: "system", subtype: "init", session_id: "sess_1" });
+    emit({
+      type: "rate_limit_event",
+      session_id: "sess_1",
+      rate_limit_info: { status: "rejected", resetsAt: 1 },
+    });
+    emit({
+      type: "result",
+      subtype: "success",
+      session_id: "sess_1",
+      num_turns: 0,
+      result: "",
+      origin: { kind: "task-notification" },
+    });
+    emit({
+      type: "result",
+      subtype: "error_during_execution",
+      session_id: "sess_1",
+      is_error: true,
+      num_turns: 1,
+      result: "Something else went wrong",
+    });
+
+    await turn.catch(() => {});
+    expect(events.some((event) => event.type === "usage.limited")).toBe(false);
+  });
+
   it("does not end the turn on a subagent result", async () => {
     const { events, turn } = await startTurn("s1");
     let settled = false;
