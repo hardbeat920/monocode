@@ -90,33 +90,30 @@ export function ScrollableTabStrip({
       strip.scrollLeft += tab.right - viewport.right;
   }, [activeKey, compact]);
 
-  const arrow = (side: "left" | "right") => (
-    <div className="w-6 shrink-0">
-      {edges[side] ? (
-        <button
-          type="button"
-          aria-label={`Scroll tabs ${side}`}
-          title={`Scroll tabs ${side}`}
-          onClick={() => {
-            const strip = stripRef.current;
-            strip?.scrollBy({
-              left:
-                (side === "left" ? -1 : 1) *
-                Math.max(48, strip.clientWidth * 0.7),
-              behavior: "smooth",
-            });
-          }}
-          className="grid size-6 place-items-center rounded-md text-content/50 hover:bg-content/5 hover:text-content"
-        >
-          {side === "left" ? (
-            <ChevronLeft className="size-3.5" />
-          ) : (
-            <ChevronRight className="size-3.5" />
-          )}
-        </button>
-      ) : null}
-    </div>
-  );
+  const arrow = (side: "left" | "right") =>
+    edges[side] ? (
+      <button
+        type="button"
+        aria-label={`Scroll tabs ${side}`}
+        title={`Scroll tabs ${side}`}
+        onClick={() => {
+          const strip = stripRef.current;
+          strip?.scrollBy({
+            left:
+              (side === "left" ? -1 : 1) *
+              Math.max(48, strip.clientWidth * 0.7),
+            behavior: "smooth",
+          });
+        }}
+        className="grid size-6 shrink-0 place-items-center rounded-md text-content/50 hover:bg-content/5 hover:text-content"
+      >
+        {side === "left" ? (
+          <ChevronLeft className="size-3.5" />
+        ) : (
+          <ChevronRight className="size-3.5" />
+        )}
+      </button>
+    ) : null;
 
   return (
     <div
