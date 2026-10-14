@@ -5,7 +5,7 @@
 //! tab's viewport (spec 5); the element pipeline in [`super::element`] has
 //! already turned the ref into such a point.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
@@ -54,28 +54,44 @@ pub fn click(run: &Run<'_>, p: ClickParams) -> Result<ActionResult, Fail> {
         ));
     }
     let el = element::locate(run, &p.element)?;
-    let prepared = element::prepare(
+    element::prepare(
         run,
         &el,
         Needs {
             visible: true,
             enabled: true,
             scroll: true,
-            stable: true,
-            point: true,
-            hit: true,
             ..Needs::default()
         },
     )?;
-    let mut point = prepared
-        .point
-        .ok_or_else(|| Fail::reason(Reason::NotVisible))?;
-    if cursor::glide(run, point) {
-        let now = element::recheck(run, &el, true)?;
-        if now != point {
-            cursor::jump(run, now);
-            point = now;
+    // Stability (spec 9.2 step 5) is measured across the cursor's glide
+    // to the element's box, instead of in a pause of its own; the input
+    // point and hit test come after both.
+    let measured = Instant::now();
+    let first = element::rect(run, &el)?;
+    let aim = match first {
+        Some(rect) => {
+            let (dx, dy) = element::frame_offset(run, &el.node.frame)?;
+            let (x, y) = (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
+            let aim = element::Point {
+                x: x + dx,
+                y: y + dy,
+                local_x: x,
+                local_y: y,
+            };
+            Some((aim, cursor::start_glide(run, aim)))
         }
+        None => None,
+    };
+    run.pause(element::stable_after(measured).saturating_duration_since(Instant::now()));
+    element::wait_stable_since(run, &el, first)?;
+    if let Some((_, Some(glided))) = aim {
+        run.pause(glided.saturating_duration_since(Instant::now()));
+    }
+    let point = element::recheck(run, &el, true)?;
+    if aim.is_some_and(|(aim, _)| (aim.x - point.x).abs() >= 1.0 || (aim.y - point.y).abs() >= 1.0)
+    {
+        cursor::jump(run, point);
     }
     let modifiers = modifier_bits(p.modifiers.as_deref().unwrap_or(&[]));
     let (button, buttons) = match p.button.unwrap_or_default() {

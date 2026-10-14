@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
@@ -52,6 +52,18 @@ fn call(run: &Run<'_>, args: Value) -> Option<Value> {
 /// Move the cursor to `point` and wait for the glide. `true` when the
 /// cursor actually glided, so the caller knows time passed.
 pub fn glide(run: &Run<'_>, point: Point) -> bool {
+    match start_glide(run, point) {
+        Some(until) => {
+            run.pause(until.saturating_duration_since(Instant::now()));
+            true
+        }
+        None => false,
+    }
+}
+
+/// [`glide`] without waiting for it: when the glide ends, or `None` when
+/// the cursor jumped (hidden tab, reduced motion, already there).
+pub fn start_glide(run: &Run<'_>, point: Point) -> Option<Instant> {
     let from = last().get(&run.key()).copied();
     let (from_x, from_y) = match from {
         Some((x, y)) => (json!(x), json!(y)),
@@ -61,16 +73,13 @@ pub fn glide(run: &Run<'_>, point: Point) -> bool {
         run,
         json!(["move", point.x, point.y, from_x, from_y, false]),
     );
-    if moved.is_none() {
-        return false;
-    }
+    let moved = moved?;
     last().insert(run.key(), (point.x, point.y));
-    let ms = moved.as_ref().and_then(|v| v["ms"].as_u64()).unwrap_or(0);
+    let ms = moved["ms"].as_u64().unwrap_or(0);
     if ms == 0 {
-        return false;
+        return None;
     }
-    run.pause(Duration::from_millis(ms).min(MAX_GLIDE));
-    true
+    Some(Instant::now() + Duration::from_millis(ms).min(MAX_GLIDE))
 }
 
 /// Put the cursor at `point` at once (the target moved during the glide).

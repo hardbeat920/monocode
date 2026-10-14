@@ -360,7 +360,8 @@ pub fn facts(run: &Run<'_>, el: &Element) -> Result<Facts, Fail> {
     Ok(serde_json::from_value(value).unwrap_or_default())
 }
 
-fn rect(run: &Run<'_>, el: &Element) -> Result<Option<Rect>, Fail> {
+/// The element's border box in its frame now; `detached` when it left.
+pub fn rect(run: &Run<'_>, el: &Element) -> Result<Option<Rect>, Fail> {
     let value = call(run, el, ACTIONABILITY_JS, &[arg(json!("rect"))])?;
     let facts: Facts = serde_json::from_value(value).unwrap_or_default();
     if !facts.connected {
@@ -431,20 +432,34 @@ pub fn scroll_into_view(run: &Run<'_>, el: &Element) -> Result<(), Fail> {
 }
 
 fn wait_stable(run: &Run<'_>, el: &Element) -> Result<(), Fail> {
+    let first = rect(run, el)?;
+    run.pause(STABLE_GAP);
+    wait_stable_since(run, el, first)
+}
+
+/// Spec 9.2 step 5 when `first` was measured at least [`STABLE_GAP`] ago
+/// (the caller spent that time on something else, such as the cursor's
+/// glide): stable when the box is still the same, else measured again
+/// until it holds still or the budget runs out.
+pub fn wait_stable_since(run: &Run<'_>, el: &Element, mut first: Option<Rect>) -> Result<(), Fail> {
     let until = Instant::now() + STABLE_BUDGET;
     loop {
-        let first = rect(run, el)?;
-        run.pause(STABLE_GAP);
         let second = rect(run, el)?;
         match (first, second) {
             (Some(a), Some(b)) if a.close_to(&b) => return Ok(()),
             (None, None) => return Ok(()),
-            _ => {}
+            (_, second) => first = second,
         }
         if Instant::now() >= until || run.ctx.expired() {
             return Err(Fail::reason(Reason::NotStable));
         }
+        run.pause(STABLE_GAP);
     }
+}
+
+/// Earliest moment a box measured now can be compared for stability.
+pub fn stable_after(measured: Instant) -> Instant {
+    measured + STABLE_GAP
 }
 
 /// Offset of an OOPIF's viewport inside the tab's viewport: the content
