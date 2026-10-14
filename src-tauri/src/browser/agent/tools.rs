@@ -60,7 +60,7 @@ const COMMIT: Hints = Hints {
     destructive: true,
 };
 
-pub const TOOLS: [Tool; 15] = [
+pub const TOOLS: [Tool; 17] = [
     Tool {
         name: "browser_tabs",
         title: "Browser tabs",
@@ -134,6 +134,16 @@ pub const TOOLS: [Tool; 15] = [
     Tool {
         name: "browser_read",
         title: "Read page text",
+        hints: OBSERVE,
+    },
+    Tool {
+        name: "browser_console",
+        title: "Console messages",
+        hints: OBSERVE,
+    },
+    Tool {
+        name: "browser_network",
+        title: "Failed requests",
         hints: OBSERVE,
     },
 ];
@@ -446,7 +456,49 @@ pub fn input_schema(name: &str) -> Option<Value> {
             ],
             &["tab"],
         ),
+        "browser_console" => object(
+            vec![
+                ("tab", tab()),
+                (
+                    "level",
+                    one_of(
+                        &["all", "warning", "error"],
+                        "all (default): everything logged; warning: errors and warnings; error: errors and uncaught exceptions only.",
+                    ),
+                ),
+                ("since", since()),
+                ("limit", limit()),
+                ("timeout_ms", timeout()),
+            ],
+            &["tab"],
+        ),
+        "browser_network" => object(
+            vec![
+                ("tab", tab()),
+                ("since", since()),
+                ("limit", limit()),
+                ("timeout_ms", timeout()),
+            ],
+            &["tab"],
+        ),
         _ => return None,
+    })
+}
+
+fn since() -> Value {
+    json!({
+        "type": "integer",
+        "minimum": 0,
+        "description": "Only entries after this point: next_since from your previous call."
+    })
+}
+
+fn limit() -> Value {
+    json!({
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 200,
+        "description": "Newest entries to return; default 50."
     })
 }
 
@@ -575,6 +627,8 @@ mod tests {
             TabsAdopt => round::<TabsAdoptParams>(input),
             Screenshot => round::<ScreenshotParams>(input),
             Read => round::<ReadParams>(input),
+            Console => round::<ConsoleParams>(input),
+            Network => round::<NetworkParams>(input),
         }
     }
 

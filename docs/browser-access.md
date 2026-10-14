@@ -21,13 +21,15 @@ Open Settings → Browser and switch on **Let agents use my browser**. MonoCode 
 - **Ask in the thread** (the default): the first time an agent needs the browser, its thread shows "This agent wants to use the browser." above the composer. **Allow for this thread** gives the thread access, and it keeps it. **Not now** tells the agent to go on without the browser; it does not ask again until your next message. The agent waits for your answer for about 45 seconds. With the MonoCode browser, the browser already starts while you decide.
 - **Always on**: every thread can use the browser without asking.
 
+A thread you set to **Full access** in the composer's access picker gets the browser without asking, in both modes.
+
 `/browser` at the start of a composer message works in both modes.
 
 - `/browser` alone switches access on or off for that thread.
 - `/browser` followed by a prompt turns access on and sends the prompt, for example `/browser check the pricing page on example.com`.
 - The thread's menu in the sidebar has the same **Browser access** switch.
 
-A thread you turn off asks again the next time its agent needs the browser, even with Always on. Access lasts until you turn it off, revoke it in Settings, switch off browser access for all agents, or restart MonoCode. Another thread or an agent cannot turn it on for a thread. Orchestration runs and their workers, and sessions another agent starts through the app, never get the browser on their own.
+A thread you turn off asks again the next time its agent needs the browser, even with Always on or Full access. Access lasts until you turn it off, revoke it in Settings, switch off browser access for all agents, or restart MonoCode. Another thread or an agent cannot turn it on for a thread. Orchestration runs and their workers, and sessions another agent starts through the app, never get the browser on their own.
 
 A thread with access shows a globe next to the context meter: steady while it has access, pulsing while an action runs, and amber when one of its tabs waits on a dialog. Click it to see the thread's tabs.
 
@@ -42,6 +44,15 @@ In your own Chrome or Edge, agent tabs open in the background of your current wi
 Revoking a thread, switching browser access off or a dropped connection leaves the tabs open.
 
 While you watch an agent tab, a dark MonoCode cursor with a `◆ MonoCode` label shows where the agent points: it glides to what the agent clicks, hovers or types into, and pulses on a click. It fades after a few seconds without actions and goes away when you take the tab back. It never takes clicks, the page cannot see inside it, and the agent's screenshots leave it out. In a background tab, or with reduced motion turned on in your system, it jumps instead of gliding, so the agent is not slowed down.
+
+## Console and network
+
+Agents can read the console of their own tabs and see which requests failed, so they can debug a web app they work on without asking you to open DevTools. They see console messages, uncaught JavaScript errors with the file and line, the browser's own warnings, and requests that came back with an error status or failed. After every action, the agent hears whether the page logged new errors or had failed requests since its last look.
+
+- On a local server (an address like `localhost:5173`), MonoCode listens to the console from the moment the page opens, and shows the agent the start of a local server's error response.
+- On other sites it listens to the console only once the agent asks for it, because some sites notice that and treat the browser as a bot. Failed requests are recorded on every site; the agent sees other sites' addresses without their query.
+
+This needs no extra permission: a thread with browser access has it for its own tabs, and never for yours. None of it is stored in the activity list or after MonoCode closes.
 
 ## Hand a tab to a thread
 

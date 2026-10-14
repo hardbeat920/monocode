@@ -21,6 +21,9 @@
 //!   four outcome classes, reasons, tab and connection state, settings.
 //! - [`semantic`]: work package 2; the core calls [`semantic::execute`] for
 //!   every action it does not handle itself (`tabs.*`).
+//! - [`diagnostics`]: console messages, uncaught exceptions and failed
+//!   requests of agent tabs, recorded on the link thread; read by the
+//!   `console` and `network` actions and summarised in `observed.signals`.
 //!
 //! # How the other work packages talk to this one
 //!
@@ -50,6 +53,7 @@
 
 pub mod agent;
 pub mod audit;
+pub mod diagnostics;
 pub mod discovery;
 pub mod launch;
 pub mod link;
@@ -1796,8 +1800,9 @@ impl BrowserHost {
             thread::sleep(Duration::from_millis(20));
         }
         let commands_before = self.link.commands_sent();
-        let result = self.run_action(&ctx, kind, &request.input, commands_before);
+        let mut result = self.run_action(&ctx, kind, &request.input, commands_before);
         self.policy.write().end_action(ctx.tab.as_ref());
+        self.report_signals(&ctx, kind, &mut result);
         let commands_sent = self.link.commands_sent().saturating_sub(commands_before);
         self.finish(
             session,
@@ -2009,6 +2014,54 @@ impl BrowserHost {
                 self.closed_mid_action(ctx, kind, commands_before, result)
             }
         }
+    }
+
+    /// Console errors and failed requests of the action's tab that no result
+    /// reported yet go into `observed.signals` and the message, so the agent
+    /// hears about a broken page without asking: those the action caused and
+    /// those the page produced on its own since the last result.
+    fn report_signals(&self, ctx: &RequestCtx, kind: ActionKind, result: &mut ActionResult) {
+        if result.outcome == Outcome::Blocked
+            || matches!(
+                kind,
+                ActionKind::Console
+                    | ActionKind::Network
+                    | ActionKind::TabsList
+                    | ActionKind::TabsClose
+            )
+        {
+            return;
+        }
+        let tab = ctx.tab.clone().or_else(|| {
+            result
+                .data
+                .as_ref()
+                .and_then(|d| d.get("tab"))
+                .and_then(Value::as_str)
+                .map(|t| TabId(t.to_string()))
+        });
+        let Some(tab) = tab else {
+            return;
+        };
+        let session = {
+            let state = self.policy.read();
+            state
+                .lease(&tab)
+                .filter(|l| l.owner == ctx.session)
+                .and_then(|l| l.cdp_session.clone())
+        };
+        let Some(session) = session else {
+            return;
+        };
+        let Some(signals) = self.link.diagnostics().take_signals(&session) else {
+            return;
+        };
+        result.observed.signals = Some(signals);
+        result.message = format!(
+            "{} {}",
+            result.message.trim_end(),
+            diagnostics::signals_message(signals)
+        );
     }
 
     /// The tab closed or crashed while the action ran (spec 14.1 row 3, T15):
@@ -2385,7 +2438,7 @@ pub fn browser_set_settings(settings: BrowserSettings) -> Result<BrowserState, S
 
 #[cfg(test)]
 mod tests {
-    use super::protocol::{BrowserChoice, TabInfo, ISOLATED_WORLD};
+    use super::protocol::{BrowserChoice, ConsoleLevel, TabInfo, ISOLATED_WORLD};
     use super::testing::{FakeCdp, Response};
     use super::*;
 
@@ -2923,6 +2976,255 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
         false
+    }
+
+    /// A fake Chrome whose pages log, throw and fail requests, for the
+    /// console and network actions and the signals every result carries.
+    fn noisy_fake() -> FakeCdp {
+        use super::testing::Event;
+        let counter = Arc::new(AtomicU64::new(1));
+        FakeCdp::start_with(move |received| {
+            let session = received.session.as_deref();
+            match received.method.as_str() {
+                "Page.navigate" => {
+                    let url = received.params["url"].as_str().unwrap_or("").to_string();
+                    let mut events = vec![Event::new(
+                        "Page.frameNavigated",
+                        json!({ "frame": { "id": "T1", "loaderId": "L2", "url": url } }),
+                        session,
+                    )];
+                    if url.starts_with("http://localhost") {
+                        events.extend([
+                            Event::new(
+                                "Runtime.exceptionThrown",
+                                json!({ "exceptionDetails": {
+                                    "text": "Uncaught",
+                                    "exception": { "type": "object", "subtype": "error", "description": "TypeError: user.map is not a function" },
+                                    "stackTrace": { "callFrames": [{ "functionName": "App", "url": "http://localhost:5173/src/App.tsx", "lineNumber": 11, "columnNumber": 4 }] }
+                                } }),
+                                session,
+                            ),
+                            Event::new(
+                                "Network.requestWillBeSent",
+                                json!({ "requestId": "R1", "type": "Fetch", "request": { "method": "GET", "url": "http://localhost:5173/api/user" } }),
+                                session,
+                            ),
+                            Event::new(
+                                "Network.responseReceived",
+                                json!({ "requestId": "R1", "type": "Fetch", "response": { "url": "http://localhost:5173/api/user", "status": 500, "statusText": "Internal Server Error" } }),
+                                session,
+                            ),
+                            Event::new("Network.loadingFinished", json!({ "requestId": "R1" }), session),
+                        ]);
+                    }
+                    events.push(Event::new(
+                        "Page.lifecycleEvent",
+                        json!({ "frameId": "T1", "loaderId": "L2", "name": "load" }),
+                        session,
+                    ));
+                    Response::ResultThen(json!({ "frameId": "T1", "loaderId": "L2" }), events)
+                }
+                // Chrome replays the messages it kept before it answers.
+                "Runtime.enable" => Response::EventsThen(
+                    vec![Event::new(
+                        "Runtime.consoleAPICalled",
+                        json!({ "type": "warning", "executionContextId": 3, "args": [{ "type": "string", "value": "kept by the browser" }] }),
+                        session,
+                    )],
+                    json!({}),
+                ),
+                "Network.getResponseBody" => Response::Result(
+                    json!({ "body": "{\"error\": \"db down\"}", "base64Encoded": false }),
+                ),
+                _ => super::testing::default_response(received, &counter),
+            }
+        })
+    }
+
+    #[test]
+    fn console_network_and_signals_reach_the_agent() {
+        let server = noisy_fake();
+        let dir = profile_for(&server);
+        let host = BrowserHost::for_tests(settings_for(&dir));
+        host.set_toggle(true);
+        assert!(wait_state(&host, ConnectionState::Connected));
+        host.turn_started("s1", "main", "/repo", Some(true));
+        let methods = |server: &FakeCdp| -> Vec<String> {
+            server.received().into_iter().map(|r| r.method).collect()
+        };
+
+        // A local server: capture is on before its scripts run, and the
+        // result of the very action that loaded it reports the trouble.
+        let opened = host.handle_request(
+            "s1",
+            request(
+                "c1",
+                "tabs.open",
+                json!({ "url": "http://localhost:5173/" }),
+            ),
+        );
+        assert_eq!(opened.outcome, Outcome::Done, "{opened:?}");
+        let tab = opened.data.as_ref().unwrap()["tab"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let sent = methods(&server);
+        let enable = sent.iter().position(|m| m == "Runtime.enable").unwrap();
+        let navigate = sent.iter().position(|m| m == "Page.navigate").unwrap();
+        assert!(enable < navigate, "{sent:?}");
+        assert_eq!(
+            opened.observed.signals,
+            Some(protocol::PageSignals {
+                console_errors: 1,
+                failed_requests: 1
+            })
+        );
+        assert!(
+            opened
+                .message
+                .contains("1 new console error and 1 failed request"),
+            "{}",
+            opened.message
+        );
+
+        let console = host.handle_request("s1", request("c2", "console", json!({ "tab": tab })));
+        assert_eq!(console.outcome, Outcome::Done, "{console:?}");
+        let data = console.data.unwrap();
+        let text = data["text"].as_str().unwrap();
+        assert!(
+            text.contains(
+                "error (uncaught exception): Uncaught TypeError: user.map is not a function"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("at App (http://localhost:5173/src/App.tsx:12:5)"),
+            "{text}"
+        );
+        assert!(
+            !console.message.contains("capture started"),
+            "{}",
+            console.message
+        );
+        let next = data["next_since"].as_u64().unwrap();
+
+        let network = host.handle_request("s1", request("c3", "network", json!({ "tab": tab })));
+        let text = network.data.as_ref().unwrap()["text"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            text.contains("GET http://localhost:5173/api/user: 500 Internal Server Error (fetch)"),
+            "{text}"
+        );
+        assert!(text.contains(r#"body: {"error": "db down"}"#), "{text}");
+        assert!(methods(&server)
+            .iter()
+            .any(|m| m == "Network.getResponseBody"));
+
+        // Read once, reported once: the next result is quiet...
+        let quiet = host.handle_request(
+            "s1",
+            request(
+                "c4",
+                "wait",
+                json!({ "tab": tab, "for": "time", "value": 1 }),
+            ),
+        );
+        assert_eq!(quiet.outcome, Outcome::Done, "{quiet:?}");
+        assert_eq!(quiet.observed.signals, None);
+        // ...until the page breaks again on its own.
+        let session = host
+            .policy()
+            .read()
+            .lease(&TabId(tab.clone()))
+            .unwrap()
+            .cdp_session
+            .clone()
+            .unwrap();
+        server.emit(
+            "Runtime.consoleAPICalled",
+            json!({ "type": "error", "executionContextId": 3, "args": [{ "type": "string", "value": "save failed" }] }),
+            Some(&session.0),
+        );
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while host
+            .link()
+            .diagnostics()
+            .console(&session, ConsoleLevel::All, next, 10)
+            .entries
+            .is_empty()
+        {
+            assert!(Instant::now() < deadline, "the error never arrived");
+            thread::sleep(Duration::from_millis(5));
+        }
+        let fresh = host.handle_request(
+            "s1",
+            request(
+                "c5",
+                "console",
+                json!({ "tab": tab, "since": next, "level": "error" }),
+            ),
+        );
+        let text = fresh.data.unwrap()["text"].as_str().unwrap().to_string();
+        assert!(text.contains("error (console): save failed"), "{text}");
+        assert!(!text.contains("TypeError"), "{text}");
+
+        // A remote site: capture goes off before it loads, and comes back
+        // only when the agent asks, with what the browser kept.
+        host.handle_request("s1", request("c6", "network", json!({ "tab": tab })));
+        let before = methods(&server).len();
+        let away = host.handle_request(
+            "s1",
+            request(
+                "c7",
+                "navigate",
+                json!({ "tab": tab, "url": "https://example.com/" }),
+            ),
+        );
+        assert_eq!(away.outcome, Outcome::Done, "{away:?}");
+        let sent = methods(&server)[before..].to_vec();
+        assert_eq!(
+            sent.first().map(String::as_str),
+            Some("Runtime.disable"),
+            "{sent:?}"
+        );
+        assert!(!host.link().diagnostics().capturing(&session));
+        let asked = host.handle_request(
+            "s1",
+            request("c8", "console", json!({ "tab": tab, "level": "warning" })),
+        );
+        assert!(
+            asked.message.contains("Console capture started now"),
+            "{}",
+            asked.message
+        );
+        let text = asked.data.unwrap()["text"].as_str().unwrap().to_string();
+        assert!(
+            text.contains("warning (console): kept by the browser"),
+            "{text}"
+        );
+        assert!(host.link().diagnostics().capturing(&session));
+        // Asked once, it stays on for this tab even on remote pages.
+        let before = methods(&server).len();
+        host.handle_request(
+            "s1",
+            request(
+                "c9",
+                "navigate",
+                json!({ "tab": tab, "url": "https://example.org/" }),
+            ),
+        );
+        assert!(!methods(&server)[before..]
+            .iter()
+            .any(|m| m == "Runtime.disable"));
+
+        // Another session's agent cannot read this tab.
+        host.turn_started("s2", "main", "/repo", Some(true));
+        let foreign = host.handle_request("s2", request("x1", "console", json!({ "tab": tab })));
+        assert_eq!(foreign.reason, Some(Reason::NoLease));
+        host.set_toggle(false);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

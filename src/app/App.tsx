@@ -7053,9 +7053,9 @@ function Workspace({
         }
       }
       const submittedText = browserCommand.text;
-      // Without /browser the access mode decides: "Always on" grants the
-      // thread first, "Ask" carries the tools and the first browser action
-      // asks the user in the thread.
+      // Without /browser the access mode decides: "Always on" (or the
+      // thread's "Full access") grants the thread first, "Ask" carries the
+      // tools and the first browser action asks the user in the thread.
       const browserSnapshot = browserStateSnapshot();
       const browserTurn: BrowserTurnAccess = browserCommand.matched
         ? "granted"
@@ -7065,6 +7065,7 @@ function Workspace({
             granted: sessionBrowserGranted(browserSnapshot, sessionId),
             eligible: browserEligible,
             turnedOff: browserAccessTurnedOff(sessionId),
+            fullAccess: current.runtimeMode === "full-access",
           });
       if (browserTurn === "grant")
         browserGrant = setSessionBrowserGrant(sessionId, true).catch(

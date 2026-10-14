@@ -416,10 +416,14 @@ pub enum ActionKind {
     Screenshot,
     #[serde(rename = "read")]
     Read,
+    #[serde(rename = "console")]
+    Console,
+    #[serde(rename = "network")]
+    Network,
 }
 
 impl ActionKind {
-    pub const ALL: [ActionKind; 20] = [
+    pub const ALL: [ActionKind; 22] = [
         ActionKind::Snapshot,
         ActionKind::Navigate,
         ActionKind::Click,
@@ -440,6 +444,8 @@ impl ActionKind {
         ActionKind::TabsAdopt,
         ActionKind::Screenshot,
         ActionKind::Read,
+        ActionKind::Console,
+        ActionKind::Network,
     ];
 
     pub fn name(self) -> &'static str {
@@ -465,6 +471,8 @@ impl ActionKind {
             TabsAdopt => "tabs.adopt",
             Screenshot => "screenshot",
             Read => "read",
+            Console => "console",
+            Network => "network",
         }
     }
 
@@ -487,7 +495,10 @@ impl ActionKind {
     /// `failed` (spec 6, 11.2).
     pub fn mutates(self) -> bool {
         use ActionKind::*;
-        !matches!(self, Snapshot | Read | Screenshot | TabsList | Wait | Hover)
+        !matches!(
+            self,
+            Snapshot | Read | Screenshot | TabsList | Wait | Hover | Console | Network
+        )
     }
 
     /// Default and maximum action timeouts (spec 9.5).
@@ -500,6 +511,7 @@ impl ActionKind {
             Navigate | Back | Forward => Duration::from_secs(30),
             Wait => Duration::from_secs(10),
             Snapshot | Read | Screenshot => Duration::from_secs(15),
+            Console | Network => Duration::from_secs(10),
             TabsList | TabsOpen | TabsClose | TabsFocus | TabsAdopt => Duration::from_secs(5),
         }
     }
@@ -512,6 +524,7 @@ impl ActionKind {
             }
             Navigate | Back | Forward | Wait => Duration::from_secs(120),
             Snapshot | Read | Screenshot => Duration::from_secs(60),
+            Console | Network => Duration::from_secs(30),
             TabsList | TabsOpen | TabsClose | TabsFocus | TabsAdopt => Duration::from_secs(10),
         }
     }
@@ -844,6 +857,49 @@ pub struct ReadParams {
     pub timeout_ms: Option<u64>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ConsoleLevel {
+    /// Errors and uncaught exceptions only.
+    Error,
+    /// Errors and warnings.
+    Warning,
+    /// Everything the page logged, `console.log` and `console.debug` included.
+    #[default]
+    All,
+}
+
+/// `console`: what the page logged, uncaught exceptions and the browser's
+/// own messages (CSP, mixed content), oldest first.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConsoleParams {
+    pub tab: TabId,
+    #[serde(default)]
+    pub level: Option<ConsoleLevel>,
+    /// Only entries after this `seq` (the `next_since` of a previous call).
+    #[serde(default)]
+    pub since: Option<u64>,
+    /// Most recent entries to return; default 50, at most 200.
+    #[serde(default)]
+    pub limit: Option<u32>,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+}
+
+/// `network`: requests that failed (HTTP 4xx/5xx, network or CORS errors).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NetworkParams {
+    pub tab: TabId,
+    #[serde(default)]
+    pub since: Option<u64>,
+    #[serde(default)]
+    pub limit: Option<u32>,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+}
+
 /// Pull `tab` and `timeout_ms` out of an action's raw input without knowing
 /// its full parameter record. Used by the host before dispatch.
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -914,6 +970,19 @@ pub struct Observed {
     pub new_tab: Option<NewTabInfo>,
     #[serde(default)]
     pub popup_blocked: bool,
+    /// Console errors and failed requests on this tab the agent was not told
+    /// about yet, whether this action caused them or the page did on its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signals: Option<PageSignals>,
+}
+
+/// New trouble on a tab since the last result that reported it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PageSignals {
+    #[serde(default)]
+    pub console_errors: u32,
+    #[serde(default)]
+    pub failed_requests: u32,
 }
 
 /// The one result shape every action returns, over MCP and CLI alike.

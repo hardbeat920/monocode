@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
+use super::diagnostics;
 use super::link::{
     CdpError, CdpEvent, CdpSessionId, Command, EventFilter, Link, Method, Subscription, TargetId,
 };
@@ -132,10 +133,15 @@ fn string_field(value: &Value, key: &str) -> Option<String> {
 /// Spec 5 "Attach model", step 2: what every page session of ours gets once.
 /// `Target.setAutoAttach` here is session-scoped, so popups and OOPIFs of
 /// this tab arrive paused (`waitForDebuggerOnStart`) and nothing else does.
+///
+/// `Network` and `Log` record failed requests and the browser's own messages
+/// of this tab ([`diagnostics`]); console capture starts only when `url`, the
+/// page the tab is about to show, is a local server.
 pub fn setup_session(
     link: &Link,
     sender: Sender<'_>,
     session: &CdpSessionId,
+    url: &str,
 ) -> Result<(), CdpError> {
     send(
         link,
@@ -178,6 +184,23 @@ pub fn setup_session(
             json!({ "source": MARKER_JS, "worldName": ISOLATED_WORLD, "runImmediately": true }),
         ),
     )?;
+    send(
+        link,
+        sender,
+        Command::in_session(
+            session,
+            Method::NetworkEnable,
+            // No request bodies in events; response bodies are kept only
+            // briefly, for `network` to show a local server's error page.
+            json!({ "maxTotalBufferSize": 8_000_000, "maxResourceBufferSize": 1_000_000, "maxPostDataSize": 0 }),
+        ),
+    )?;
+    send(
+        link,
+        sender,
+        Command::in_session(session, Method::LogEnable, json!({})),
+    )?;
+    diagnostics::sync_runtime(link, sender, session, url)?;
     Ok(())
 }
 
@@ -338,7 +361,7 @@ pub fn open_tab(
     if let Some(lease) = policy.write().lease_mut(&tab) {
         lease.cdp_session = Some(session.clone());
     }
-    if let Err(error) = setup_session(link, Sender::Agent(ctx), &session) {
+    if let Err(error) = setup_session(link, Sender::Agent(ctx), &session, &target_url) {
         mark_closed(policy, &tab);
         let _ = link.send_system(Command::browser(
             Method::TargetCloseTarget,
@@ -488,7 +511,7 @@ pub fn adopt_tab(
     if let Some(lease) = policy.write().lease_mut(&tab) {
         lease.cdp_session = Some(session.clone());
     }
-    if let Err(error) = setup_session(link, sender, &session) {
+    if let Err(error) = setup_session(link, sender, &session, &free.url) {
         policy.write().forget_lease(&tab);
         let _ = link.send_system(Command::browser(
             Method::TargetDetachFromTarget,
@@ -519,6 +542,9 @@ pub fn navigate_and_wait(
     deadline: Instant,
 ) -> Result<Observed, TabError> {
     let url = check_url(url)?;
+    // Console capture follows the page: on before a local server's scripts
+    // run, off before a remote site can notice it.
+    diagnostics::sync_runtime(link, Sender::Agent(ctx), &handle.session, &url)?;
     let subscription = link.subscribe(EventFilter::session(&handle.session));
     let result = link.send(
         ctx,
@@ -915,6 +941,14 @@ pub fn handle_event(link: &Link, event: &CdpEvent, notify: &dyn Fn(TabEvent)) {
             // The action that navigated may have applied this already
             // (`wait_for_load_tracked`); the host still hears about it.
             if let Some(tab) = note_frame_navigated(link, event) {
+                // A link, a redirect or the page itself moved the tab: console
+                // capture follows the new page (idempotent after an agent
+                // navigation that already set it).
+                if let (Some(session), Some(url)) =
+                    (&event.session, event.params["frame"]["url"].as_str())
+                {
+                    let _ = diagnostics::sync_runtime(link, Sender::System, session, url);
+                }
                 notify(TabEvent::Navigated(tab));
             }
         }
@@ -1103,7 +1137,13 @@ fn on_attached(link: &Link, parent: &CdpSessionId, params: &Value, notify: &dyn 
                 );
                 state.insert_lease(lease)
             };
-            let ready = setup_session(link, Sender::System, &child).is_ok();
+            let ready = setup_session(
+                link,
+                Sender::System,
+                &child,
+                info["url"].as_str().unwrap_or(""),
+            )
+            .is_ok();
             {
                 let mut state = policy.write();
                 if let Some(lease) = state.lease_mut(&tab) {
@@ -1243,10 +1283,15 @@ mod tests {
                 "Target.setAutoAttach",
                 "Emulation.setFocusEmulationEnabled",
                 "Page.addScriptToEvaluateOnNewDocument",
+                "Network.enable",
+                "Log.enable",
                 "Page.navigate",
             ]
         );
         let received = server.received();
+        // No request bodies in events; no console capture on a remote site.
+        assert_eq!(received[7].params["maxPostDataSize"], json!(0));
+        assert_eq!(received[7].session.as_deref(), Some("S2"));
         assert_eq!(received[0].params["background"], json!(true));
         assert_eq!(received[0].params["newWindow"], json!(false));
         assert_eq!(received[0].params["url"], json!("about:blank"));

@@ -27,6 +27,7 @@ You can work in your own tabs in Chrome or Edge through MonoCode: either the Mon
 - A JavaScript dialog blocks its tab until you answer it with the dialog action; MonoCode never answers one for you.
 - Downloads, browser permission prompts and HTTP basic auth are not supported; tell the user when a task needs them. Only http(s) URLs and about:blank can be opened. There is no JavaScript or raw protocol access.
 - Showing a tab to the user (focus) changes what they see; do it only when they ask.
+- When you test a web app, check the console and network actions: they show JavaScript errors and failed requests the page itself may hide. A result whose `observed.signals` counts new console errors or failed requests means the page broke since your last look; read them before you go on.
 
 ## browser_tabs
 
@@ -87,6 +88,14 @@ Capture the tab (or the element at `ref`) as an image. Background tabs do not al
 ## browser_read
 
 Return the readable text of the page or of the element at `ref`, as `text` or `markdown`. Long pages come in parts: pass `offset` to continue.
+
+## browser_console
+
+Read what the page in your tab logged: `console.*` messages, uncaught exceptions with their stack, and the browser's own errors and warnings (CSP, mixed content). Errors point to `url:line:column` in the page's scripts. `level` narrows it to `error` or `warning`; pass the `next_since` of your previous call as `since` to see only what is new. On a local server (localhost) everything is captured from the start; elsewhere capture starts with your first call, which replays the messages the browser kept and keeps capturing on that tab.
+
+## browser_network
+
+List requests of your tab that failed: HTTP 4xx and 5xx responses, network errors and CORS blocks, with method, URL, status and resource type. For a local server the start of the error response body is included. Addresses of other sites are shown without their query. Pass `next_since` from your previous call as `since` for only new failures.
 
 ## cli
 

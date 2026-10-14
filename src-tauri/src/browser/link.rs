@@ -17,7 +17,7 @@ use std::collections::{HashMap, VecDeque};
 use std::io::ErrorKind;
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Condvar, Mutex};
+use std::sync::{mpsc, Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -26,6 +26,7 @@ use tungstenite::client::IntoClientRequest;
 use tungstenite::protocol::WebSocketConfig;
 use tungstenite::{Message, WebSocket};
 
+use super::diagnostics::Diagnostics;
 use super::policy::{GateError, Policy, RequestCtx};
 use super::protocol::{ActionResult, Outcome, Reason};
 
@@ -96,6 +97,13 @@ pub enum Method {
     AccessibilityGetPartialAXTree,
     RuntimeCallFunctionOn,
     RuntimeRunIfWaitingForDebugger,
+    /// Console messages and uncaught exceptions of an agent tab
+    /// ([`super::diagnostics`]); never sent for a tab the agent does not hold.
+    RuntimeEnable,
+    RuntimeDisable,
+    NetworkEnable,
+    NetworkGetResponseBody,
+    LogEnable,
     InputDispatchMouseEvent,
     InputDispatchKeyEvent,
     InputInsertText,
@@ -140,6 +148,11 @@ impl Method {
             AccessibilityGetPartialAXTree => "Accessibility.getPartialAXTree",
             RuntimeCallFunctionOn => "Runtime.callFunctionOn",
             RuntimeRunIfWaitingForDebugger => "Runtime.runIfWaitingForDebugger",
+            RuntimeEnable => "Runtime.enable",
+            RuntimeDisable => "Runtime.disable",
+            NetworkEnable => "Network.enable",
+            NetworkGetResponseBody => "Network.getResponseBody",
+            LogEnable => "Log.enable",
             InputDispatchMouseEvent => "Input.dispatchMouseEvent",
             InputDispatchKeyEvent => "Input.dispatchKeyEvent",
             InputInsertText => "Input.insertText",
@@ -472,6 +485,9 @@ struct LinkInner {
     tx: Mutex<Option<mpsc::Sender<LinkMsg>>>,
     stream: Mutex<Option<TcpStream>>,
     subs: Mutex<Vec<Arc<SubInner>>>,
+    /// Console and network record of each page session, filled by the link
+    /// thread itself (see [`Loop::dispatch`]).
+    diagnostics: Mutex<Diagnostics>,
     on_closed: Mutex<Option<ClosedHook>>,
     commands_sent: AtomicU64,
     /// Commands the link refused at the gate; diagnostics.
@@ -496,6 +512,7 @@ impl Link {
                 tx: Mutex::new(None),
                 stream: Mutex::new(None),
                 subs: Mutex::new(Vec::new()),
+                diagnostics: Mutex::new(Diagnostics::default()),
                 on_closed: Mutex::new(None),
                 commands_sent: AtomicU64::new(0),
                 commands_refused: AtomicU64::new(0),
@@ -516,6 +533,14 @@ impl Link {
 
     pub fn is_open(&self) -> bool {
         matches!(self.status(), LinkStatus::Open)
+    }
+
+    /// The console and network record of the page sessions on this link.
+    pub fn diagnostics(&self) -> MutexGuard<'_, Diagnostics> {
+        self.inner
+            .diagnostics
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
     }
 
     pub fn commands_sent(&self) -> u64 {
@@ -548,6 +573,8 @@ impl Link {
         let result = self.handshake(ws_url, consent_timeout);
         match result {
             Ok((socket, rx)) => {
+                // Session ids of an earlier connection never come back.
+                *self.diagnostics() = Diagnostics::default();
                 let inner = self.inner.clone();
                 *self.inner.status.lock().unwrap_or_else(|e| e.into_inner()) = LinkStatus::Open;
                 thread::Builder::new()
@@ -1017,6 +1044,21 @@ impl Loop {
                 .and_then(Value::as_str)
                 .map(|s| CdpSessionId(s.to_string())),
         };
+        // Console and network events are recorded here, on the link thread,
+        // before the reply to any later command is routed: an action that
+        // reads the record after its own command returned sees every event
+        // the browser sent before that reply. They are not fanned out; a busy
+        // page would otherwise push lifecycle events out of the bounded
+        // subscriber queues.
+        let consumed = self
+            .inner
+            .diagnostics
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .record(&event);
+        if consumed {
+            return;
+        }
         let mut subs = self.inner.subs.lock().unwrap_or_else(|e| e.into_inner());
         subs.retain(|sub| !sub.closed.load(Ordering::Acquire));
         for sub in subs.iter() {

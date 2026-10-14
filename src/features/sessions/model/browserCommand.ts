@@ -54,7 +54,8 @@ export type BrowserTurnAccess = "granted" | "grant" | "ask" | null;
 /**
  * What a turn without `/browser` does about the browser:
  * - `granted`: the thread has access; the turn carries the browser tools.
- * - `grant`: "Always on" grants the thread first, then carries the tools.
+ * - `grant`: "Always on", or a thread the user gave "Full access", grants
+ *   the thread first, then carries the tools.
  * - `ask`: the turn carries the tools without a grant; the first browser
  *   action asks the user in the thread and waits for the answer.
  * - null: no browser tools.
@@ -63,7 +64,8 @@ export type BrowserTurnAccess = "granted" | "grant" | "ask" | null;
  * orchestration runs, managed and app-request turns never get the browser
  * on their own. A grant the thread already has still counts, as it always
  * did. A thread the user turned off in this run asks instead of being
- * granted again.
+ * granted again, with "Full access" too: `/browser` off is the more
+ * specific choice.
  */
 export function browserTurnAccess(input: {
   toggleOn: boolean;
@@ -71,11 +73,14 @@ export function browserTurnAccess(input: {
   granted: boolean;
   eligible: boolean;
   turnedOff: boolean;
+  /** The thread runs with "Full access" in the composer's access picker. */
+  fullAccess?: boolean;
 }): BrowserTurnAccess {
   if (!input.toggleOn) return null;
   if (input.granted) return "granted";
   if (!input.eligible) return null;
-  return input.access === "always" && !input.turnedOff ? "grant" : "ask";
+  const always = input.access === "always" || input.fullAccess === true;
+  return always && !input.turnedOff ? "grant" : "ask";
 }
 
 /** The line an "ask" turn adds to the `<monocode_browser>` block. */

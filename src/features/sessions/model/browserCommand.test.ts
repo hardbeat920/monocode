@@ -82,6 +82,20 @@ describe("browser access for a turn without /browser", () => {
     expect(browserTurnAccess({ ...base, access: "always" })).toBe("grant");
   });
 
+  it("grants a Full access thread first, even in Ask mode", () => {
+    expect(browserTurnAccess({ ...base, fullAccess: true })).toBe("grant");
+    expect(browserTurnAccess({ ...base, fullAccess: false })).toBe("ask");
+    expect(
+      browserTurnAccess({ ...base, fullAccess: true, eligible: false }),
+    ).toBeNull();
+    expect(
+      browserTurnAccess({ ...base, fullAccess: true, toggleOn: false }),
+    ).toBeNull();
+    expect(
+      browserTurnAccess({ ...base, fullAccess: true, turnedOff: true }),
+    ).toBe("ask");
+  });
+
   it("gives orchestration, managed and app-request turns nothing", () => {
     expect(browserTurnAccess({ ...base, eligible: false })).toBeNull();
     expect(

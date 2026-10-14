@@ -38,6 +38,8 @@
 //!   click, hover or type, so the user can follow the agent.
 //! - [`actions`]: `navigate`, `back`, `forward`, `select`, `upload`, `dialog`,
 //!   `wait`, `screenshot`, `read`.
+//! - [`devtools`]: `console` and `network`, read from the link's record of
+//!   the tab ([`crate::browser::diagnostics`]).
 //!
 //! Result payloads (`ActionResult::data`), for the CLI/MCP adapters:
 //!
@@ -49,6 +51,8 @@
 //! - `select`: `{selected}`; `upload`: `{files}` (base names);
 //!   `scroll`: `{x, y}` (window scroll position); `dialog`: `{type, message,
 //!   action}`; `wait`: `{for}`.
+//! - `console`: `{text, count, errors, next_since, level}`; `network`:
+//!   `{text, count, next_since}`. `text` is the readable listing.
 //!
 //! Outcome classes (spec 11.2): a failure before the first command that can
 //! change the page is `failed` (or `blocked`) with its reason; a CDP failure
@@ -57,6 +61,7 @@
 
 mod actions;
 mod cursor;
+mod devtools;
 mod element;
 mod input;
 mod observe;
@@ -132,6 +137,8 @@ pub fn execute(exec: Exec<'_>) -> ActionResult {
         ActionKind::Wait => params(input).and_then(|p| actions::wait(&run, p)),
         ActionKind::Screenshot => params(input).and_then(|p| actions::screenshot(&run, p)),
         ActionKind::Read => params(input).and_then(|p| actions::read(&run, p)),
+        ActionKind::Console => params(input).and_then(|p| devtools::console(&run, p)),
+        ActionKind::Network => params(input).and_then(|p| devtools::network(&run, p)),
         ActionKind::TabsList
         | ActionKind::TabsOpen
         | ActionKind::TabsClose

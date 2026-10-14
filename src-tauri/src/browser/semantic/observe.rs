@@ -339,6 +339,8 @@ impl Watch {
             dialog,
             new_tab: self.new_tab(run),
             popup_blocked: self.blocked(run),
+            // The core adds them for every action (`Host::report_signals`).
+            signals: None,
         })
     }
 

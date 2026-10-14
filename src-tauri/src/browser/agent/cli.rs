@@ -46,6 +46,10 @@ Actions and their fields (* required). Every action except tabs.* also takes
                  The image is written to --out FILE (default: a temporary
                  file) and data.path names it.
   read           --tab* --ref --format text|markdown --offset N
+  console        --tab* --level all|warning|error --since N --limit N
+                 Console messages, uncaught exceptions and browser warnings.
+  network        --tab* --since N --limit N
+                 Failed requests: HTTP 4xx/5xx, network and CORS errors.
 
 Fields can also come as one JSON object (--json '{"tab":"t_1a2b3c4d"}',
 --input FILE, or --input - for stdin); flags given as well override it.
@@ -55,8 +59,8 @@ Take a snapshot first and act on its refs (e12). After every action that
 changes the page, take a new snapshot; old refs fail with ref_stale.
 
 Output is one JSON result: outcome (done, blocked, failed, unknown), reason,
-message, retryable, observed, data. A done snapshot prints only its text;
-pass --envelope for the JSON. Exit code: 0 done, 2 blocked, 3 failed,
+message, retryable, observed, data. A done snapshot, console or network
+prints only its text; pass --envelope for the JSON. Exit code: 0 done, 2 blocked, 3 failed,
 4 unknown, 1 when the CLI itself could not run the call.
 
 blocked means nothing was sent: change the plan, never work around it.
@@ -69,7 +73,7 @@ sessions it starts. They are already in your environment; never print them.
 "#;
 
 /// Flags whose value is text.
-const STRINGS: [&str; 13] = [
+const STRINGS: [&str; 14] = [
     "tab",
     "ref",
     "url",
@@ -83,15 +87,18 @@ const STRINGS: [&str; 13] = [
     "for",
     "wait_until",
     "format",
+    "level",
 ];
 /// Flags whose value is a non-negative integer.
-const INTEGERS: [&str; 6] = [
+const INTEGERS: [&str; 8] = [
     "timeout_ms",
     "max_nodes",
     "count",
     "amount",
     "quality",
     "offset",
+    "since",
+    "limit",
 ];
 /// Flags that may stand alone for `true`.
 const BOOLEANS: [&str; 4] = ["clear", "submit", "full_page", "user_visible"];
@@ -182,6 +189,12 @@ fn render(call: &Call, mut result: ActionResult) -> (String, i32) {
             ActionKind::Snapshot if !call.envelope => {
                 if let Some(text) = client::data_text(result.data.as_ref()) {
                     return (text.to_string(), code);
+                }
+            }
+            // The message carries the summary (and whether capture just started).
+            ActionKind::Console | ActionKind::Network if !call.envelope => {
+                if let Some(text) = client::data_text(result.data.as_ref()) {
+                    return (format!("{}\n{text}", result.message), code);
                 }
             }
             ActionKind::Screenshot => {

@@ -56,6 +56,9 @@ pub enum Response {
     Delay(Duration, Value),
     /// Answer right away, then emit the events in order.
     ResultThen(Value, Vec<Event>),
+    /// Emit the events, then answer: how Chrome replays what it kept on
+    /// `Runtime.enable` or `Log.enable`.
+    EventsThen(Vec<Event>, Value),
 }
 
 type Responder = Box<dyn FnMut(&Received) -> Response + Send>;
@@ -369,6 +372,11 @@ fn serve(mut socket: WebSocket<TcpStream>, responder: &Mutex<Responder>, shared:
                     Response::ResultThen(value, events) => {
                         let mut frames = vec![result_frame(id, &session, value)];
                         frames.extend(events.iter().map(event_frame));
+                        frames
+                    }
+                    Response::EventsThen(events, value) => {
+                        let mut frames: Vec<_> = events.iter().map(event_frame).collect();
+                        frames.push(result_frame(id, &session, value));
                         frames
                     }
                 };

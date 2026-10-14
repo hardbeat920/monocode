@@ -254,7 +254,9 @@ pub fn tool_result(kind: Option<ActionKind>, result: &ActionResult) -> Value {
     let mut envelope = result.clone();
     if result.outcome == Outcome::Done {
         match kind {
-            Some(ActionKind::Snapshot | ActionKind::Read) => {
+            Some(
+                ActionKind::Snapshot | ActionKind::Read | ActionKind::Console | ActionKind::Network,
+            ) => {
                 if let Some(text) = client::data_text(result.data.as_ref()) {
                     content.push(json!({"type": "text", "text": text}));
                     envelope.data = client::data_without(result.data.as_ref(), &client::TEXT_KEYS);
