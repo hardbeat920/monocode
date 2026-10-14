@@ -4,6 +4,9 @@ import { Popover } from "../../../shared/ui/Popover";
 import { SecondaryButton } from "../../../shared/ui/SecondaryButton";
 import {
   answerBrowserRequest,
+  cancelBrowserPick,
+  pickBrowserElement,
+  type PickedBrowserElement,
   sessionBrowserAccess,
   sessionBrowserIndicator,
   sessionBrowserTabs,
@@ -29,13 +32,21 @@ const INDICATOR = {
 
 /**
  * The thread's browser indicator (spec 13.2): shown while the thread has
- * /browser, it lists the thread's tabs with the same actions as Settings.
+ * /browser, it lists the thread's tabs with the same actions as Settings,
+ * plus "Point at an element", whose result goes to `onPicked`.
  */
-export function BrowserIndicator({ sessionId }: { sessionId: string }) {
+export function BrowserIndicator({
+  sessionId,
+  onPicked,
+}: {
+  sessionId: string;
+  onPicked?: (picked: PickedBrowserElement) => void;
+}) {
   const state = useBrowserState();
   const indicator = sessionBrowserIndicator(state, sessionId);
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [picking, setPicking] = useState<string | null>(null);
   const anchor = useRef<HTMLDivElement>(null);
   const run = useCallback((action: () => Promise<unknown>) => {
     setError(null);
@@ -43,6 +54,29 @@ export function BrowserIndicator({ sessionId }: { sessionId: string }) {
       setError(err instanceof Error ? err.message : String(err)),
     );
   }, []);
+  const pick = useCallback(
+    (tab: string) => {
+      setError(null);
+      if (picking === tab) {
+        void cancelBrowserPick();
+        return;
+      }
+      setPicking(tab);
+      pickBrowserElement(sessionId, tab)
+        .then((picked) => {
+          if (!picked) return;
+          onPicked?.(picked);
+          setOpen(false);
+        })
+        .catch((err: unknown) =>
+          setError(err instanceof Error ? err.message : String(err)),
+        )
+        .finally(() =>
+          setPicking((current) => (current === tab ? null : current)),
+        );
+    },
+    [onPicked, picking, sessionId],
+  );
   if (!indicator) return null;
   const tabs = sessionBrowserTabs(state, sessionId);
   const { label, className } = INDICATOR[indicator];
@@ -90,7 +124,13 @@ export function BrowserIndicator({ sessionId }: { sessionId: string }) {
           {tabs.length ? (
             <ul className="space-y-1">
               {tabs.map((tab) => (
-                <BrowserTabRow key={tab.tab} tab={tab} run={run} />
+                <BrowserTabRow
+                  key={tab.tab}
+                  tab={tab}
+                  run={run}
+                  onPick={onPicked ? () => pick(tab.tab) : undefined}
+                  picking={picking === tab.tab}
+                />
               ))}
             </ul>
           ) : (
@@ -98,6 +138,17 @@ export function BrowserIndicator({ sessionId }: { sessionId: string }) {
               The agent hasn't opened a tab yet.
             </p>
           )}
+          {picking ? (
+            <p className="flex items-center gap-2 px-1 pt-2 text-[12px] text-content/65">
+              <span className="min-w-0 flex-1">
+                Click the element in the browser window. The agent gets it in
+                your message.
+              </span>
+              <SecondaryButton onClick={() => void cancelBrowserPick()}>
+                Cancel
+              </SecondaryButton>
+            </p>
+          ) : null}
           {state?.connection.state === "connected" ? (
             <AddFreeTab sessionId={sessionId} run={run} />
           ) : null}

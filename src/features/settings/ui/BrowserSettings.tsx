@@ -2,7 +2,13 @@ import { ask } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { copyText } from "../../../platform/tauri/clipboard";
 import { pickFolders } from "../../../platform/tauri/fs";
-import { Copy, RefreshCw, RotateCcw, X } from "../../../shared/ui/icons";
+import {
+  Copy,
+  CursorMagicSelection,
+  RefreshCw,
+  RotateCcw,
+  X,
+} from "../../../shared/ui/icons";
 import { SecondaryButton } from "../../../shared/ui/SecondaryButton";
 import {
   BROWSER_CHANNELS,
@@ -113,8 +119,8 @@ export function BrowserSettings({
         title="Browser access"
         description={
           managed
-            ? "Agents open their own tabs in the MonoCode browser, a Chrome or Edge window with its own profile. Your own browser and its tabs stay out of their reach."
-            : "Agents open their own tabs in your Chrome or Edge, next to yours and signed in as you. They never see or touch your own tabs."
+            ? "Agents open their own tabs in the MonoCode browser: your installed Chrome, Edge, Brave, Vivaldi, Opera or Arc with a profile of its own. Your own browser and its tabs stay out of their reach."
+            : "Agents open their own tabs in your own browser, next to yours and signed in as you. They never see or touch your own tabs."
         }
       >
         <Row
@@ -135,8 +141,8 @@ export function BrowserSettings({
             isPrivate
               ? "Like the MonoCode browser, with a fresh profile every time it starts. Nothing is kept when it closes: no sign-ins, cookies or history."
               : managed
-                ? "MonoCode starts Chrome or Edge with its own profile. Nothing to set up, and your own browser does not need to run."
-                : "MonoCode connects to the Chrome or Edge you run, signed in as you."
+                ? "MonoCode starts an installed browser with its own profile. Nothing to set up, and your own browser does not need to run."
+                : "MonoCode connects to the Chrome, Edge, Brave, Vivaldi, Opera or Arc you run, signed in as you."
           }
         >
           <Select
@@ -145,7 +151,7 @@ export function BrowserSettings({
             options={[
               { value: "managed", label: "MonoCode browser" },
               { value: "private", label: "Private MonoCode browser" },
-              { value: "attach", label: "Your Chrome or Edge" },
+              { value: "attach", label: "Your own browser" },
             ]}
             onChange={(mode) => save({ mode: mode as BrowserMode })}
           />
@@ -269,7 +275,7 @@ function BrowserChoiceRow({
       description={
         choice.kind === "user_data_dir"
           ? `Profile folder: ${choice.path}`
-          : "Automatic tries Chrome, then Edge, then their Beta, Dev and Canary builds. Pick a profile folder for Snap, Flatpak or portable installs."
+          : "Automatic tries Chrome, then Edge, their Beta, Dev and Canary builds, then Brave, Vivaldi, Opera and Arc. Pick a profile folder for Snap, Flatpak or portable installs."
       }
     >
       <Select
@@ -310,7 +316,7 @@ function ManagedChoiceRow({
     <Row
       id="browser-choice"
       label="Which browser to start"
-      description="Automatic starts Chrome, or Edge when Chrome is not installed."
+      description="Automatic starts Chrome, or else the first of Edge, Brave, Vivaldi, Opera and Arc that is installed."
     >
       <Select
         label="Which browser to start"
@@ -405,7 +411,7 @@ function ConnectionGroup({
 }
 
 /** Guided consent (spec 13.3): the steps for the browser that was chosen. */
-/** Your Chrome or Edge: what the user has to do before agents can use it. */
+/** Your own browser: what the user has to do before agents can use it. */
 function AttachSteps({ state }: { state: BrowserState }) {
   const pages = inspectPages(state);
   return (
@@ -797,11 +803,17 @@ export function BrowserTabRow({
   tab,
   others = [],
   run,
+  onPick,
+  picking = false,
 }: {
   tab: BrowserTab;
   /** Threads with access the tab can move to. */
   others?: { value: string; label: string }[];
   run: (action: () => Promise<unknown>) => void;
+  /** The thread indicator: "Point at an element" in this tab. */
+  onPick?: () => void;
+  /** A pick runs in this tab now. */
+  picking?: boolean;
 }) {
   const released = tab.state === "revoked";
   return (
@@ -821,6 +833,18 @@ export function BrowserTabRow({
             if (to) run(() => transferBrowserTab(tab.tab, tab.session_id, to));
           }}
         />
+      ) : null}
+      {onPick && !released && tab.state === "open" ? (
+        <button
+          type="button"
+          title="Point at an element in this tab for the agent"
+          aria-label="Point at an element"
+          aria-pressed={picking}
+          onClick={onPick}
+          className={`grid size-7 shrink-0 place-items-center rounded-md hover:bg-content/10 hover:text-content ${picking ? "bg-teal-400/15 text-teal-600 dark:text-teal-300" : "text-content/55"}`}
+        >
+          <CursorMagicSelection className="size-3.5" strokeWidth={1.75} />
+        </button>
       ) : null}
       {!released ? (
         <SecondaryButton

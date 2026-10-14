@@ -64,6 +64,9 @@ pub struct RefTable {
     /// Isolated-world execution contexts of same-process subframes (the
     /// main frame and OOPIF roots are cached on the lease).
     worlds: HashMap<(String, String), i64>,
+    /// The element the user pointed at in this document, as
+    /// `(CDP session, backendNodeId)`; snapshots mark it.
+    picked: Option<(CdpSessionId, i64)>,
 }
 
 impl RefTable {
@@ -149,6 +152,30 @@ pub fn with_snapshot_table<R>(
         table.versions.remove(0);
     }
     f(table)
+}
+
+/// The user pointed at a node of the tab's current document (`loader`). A
+/// table of another document is replaced; returns the node's ref when a
+/// snapshot already gave it one.
+pub fn set_picked(
+    tab: &RefKey,
+    loader: Option<&str>,
+    session: &CdpSessionId,
+    backend: i64,
+) -> Option<u32> {
+    let mut store = store();
+    let table = store.entry(tab.clone()).or_default();
+    if table.loader.as_deref() != loader {
+        *table = RefTable::default();
+        table.loader = loader.map(str::to_string);
+    }
+    table.picked = Some((session.clone(), backend));
+    table.by_node.get(&(session.0.clone(), backend)).copied()
+}
+
+/// The node the user pointed at in the table's document, if any.
+pub fn picked(table: &RefTable) -> Option<&(CdpSessionId, i64)> {
+    table.picked.as_ref()
 }
 
 /// Cached isolated world of a same-process subframe.
@@ -253,6 +280,31 @@ mod tests {
             frame_id: Some("F".into()),
             owners: Vec::new(),
         }
+    }
+
+    #[test]
+    fn a_pick_lives_as_long_as_its_document() {
+        let key = RefKey {
+            host: 0x9177,
+            tab: TabId("t_pick".into()),
+        };
+        let main = frame("S1");
+        let number = with_snapshot_table(&key, Some("L1"), 1, |table| {
+            table.assign(&main, 42, "button", "Save")
+        });
+        assert_eq!(
+            set_picked(&key, Some("L1"), &main.session, 42),
+            Some(number)
+        );
+        with_snapshot_table(&key, Some("L1"), 2, |table| {
+            assert_eq!(picked(table), Some(&(main.session.clone(), 42)));
+        });
+        // Another document: the pick and the refs are gone.
+        with_snapshot_table(&key, Some("L2"), 3, |table| {
+            assert!(picked(table).is_none());
+        });
+        assert_eq!(set_picked(&key, Some("L3"), &main.session, 42), None);
+        clear(&key);
     }
 
     #[test]

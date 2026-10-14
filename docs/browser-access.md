@@ -10,9 +10,9 @@ Open Settings → Browser and switch on **Let agents use my browser**. MonoCode 
 
 **Browser** in Settings → Browser has three choices.
 
-- **MonoCode browser** (the default): MonoCode starts the Chrome or Edge you have installed, with its own profile in MonoCode's app data. It needs no setup, and your own Chrome does not have to run. **Which browser to start** picks Chrome or Edge; Automatic starts Chrome, or Edge when Chrome is not installed. Click **Open browser** to bring up its window and sign in to the sites your agents need. The profile keeps those sign-ins for next time. Switch off **Show browser window** to run it without a window.
+- **MonoCode browser** (the default): MonoCode starts a browser you have installed, with its own profile in MonoCode's app data. It works with Chrome, Edge, Brave, Vivaldi, Opera and Arc (Arc on macOS only). It needs no setup, and your own browser does not have to run. **Which browser to start** picks one of them; Automatic starts Chrome, or else the first of Edge, Brave, Vivaldi, Opera and Arc that is installed. Click **Open browser** to bring up its window and sign in to the sites your agents need. The profile keeps those sign-ins for next time. Switch off **Show browser window** to run it without a window.
 - **Private MonoCode browser**: the MonoCode browser with a fresh profile every time it starts. MonoCode deletes the profile when the browser closes, so nothing is kept: no sign-ins, cookies or history. Use it when agents should see sites as a new visitor.
-- **Your Chrome or Edge**: MonoCode connects to the browser you already run, signed in as you. The first time, open `chrome://inspect/#remote-debugging` (Chrome) or `edge://inspect` (Edge) and turn on remote debugging. When MonoCode connects, the browser asks whether to allow the connection; choose Allow. Every new connection asks again. While MonoCode is connected, the browser shows a bar saying it is controlled by automated software. The browser draws that bar and MonoCode cannot hide it.
+- **Your own browser**: MonoCode connects to the Chrome, Edge, Brave, Vivaldi, Opera or Arc you already run, signed in as you. The first time, open `chrome://inspect/#remote-debugging` (Chrome, Vivaldi, Opera, Arc), `brave://inspect/#remote-debugging` (Brave) or `edge://inspect` (Edge) and turn on remote debugging. When MonoCode connects, the browser asks whether to allow the connection; choose Allow. Every new connection asks again. While MonoCode is connected, the browser shows a bar saying it is controlled by automated software. The browser draws that bar and MonoCode cannot hide it.
 
 ## Give a thread access
 
@@ -35,11 +35,12 @@ A thread with access shows a globe next to the context meter: steady while it ha
 
 ## Agent tabs
 
-In your own Chrome or Edge, agent tabs open in the background of your current window, with `◆ MonoCode` in front of their title. Settings → Browser can open them in separate windows instead. For every tab you can:
+In your own browser, agent tabs open in the background of your current window, with `◆ MonoCode` in front of their title. Settings → Browser can open them in separate windows instead. For every tab you can:
 
 - **Take back**: the agent loses the tab; it stays open for you.
 - **Move to…**: hand the tab to another thread that has access.
 - **Close**: close it in the browser.
+- **Point at an element** (the cursor button, in the thread's globe only): the browser comes to the front and highlights what your pointer is over. Click the element you mean. Your message gets a line naming it for the agent, with a picture of it, and the agent's next snapshot of that tab marks it. Click the button again or **Cancel** to stop. It needs a visible browser window.
 
 Revoking a thread, switching browser access off or a dropped connection leaves the tabs open.
 
@@ -60,7 +61,7 @@ A tab you open yourself belongs to no thread. To let a thread work in it, open S
 
 The globe in a thread with access has the same control for that thread: click it, then **Add a tab from the browser…**, and click **Add** next to a tab.
 
-- **Your Chrome or Edge**: agents never see your own tabs, so handing one over is the only way a thread gets one of them. The agent can use that tab and none of your others.
+- **Your own browser**: agents never see your own tabs, so handing one over is the only way a thread gets one of them. The agent can use that tab and none of your others.
 - **MonoCode browser**: tabs you open there are free, and any thread's agent with access can take one by itself. You can also give one to a thread yourself.
 
 **Take back** returns a tab to you.

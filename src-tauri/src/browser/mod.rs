@@ -24,6 +24,9 @@
 //! - [`diagnostics`]: console messages, uncaught exceptions and failed
 //!   requests of agent tabs, recorded on the link thread; read by the
 //!   `console` and `network` actions and summarised in `observed.signals`.
+//! - [`pick`]: "Point at an element": the user picks an element of a thread's
+//!   tab with the browser's inspect highlight; the composer gets a line
+//!   naming it and the agent's next snapshot marks it.
 //!
 //! # How the other work packages talk to this one
 //!
@@ -57,6 +60,7 @@ pub mod diagnostics;
 pub mod discovery;
 pub mod launch;
 pub mod link;
+pub mod pick;
 pub mod policy;
 pub mod protocol;
 #[cfg(test)]
@@ -207,6 +211,8 @@ pub struct BrowserHost {
     /// The blank page the MonoCode browser starts with, until an agent tab
     /// replaces it.
     startup_pages: Mutex<Vec<TargetId>>,
+    /// Cancels the element pick running now, if any (one at a time).
+    picking: Mutex<Option<Arc<AtomicBool>>>,
     db: Db,
     app: Option<AppHandle>,
     run_id: u64,
@@ -282,6 +288,7 @@ impl BrowserHost {
             managed: Mutex::new(None),
             force_window: AtomicBool::new(false),
             startup_pages: Mutex::new(Vec::new()),
+            picking: Mutex::new(None),
             db,
             app,
             run_id,
@@ -1399,6 +1406,114 @@ impl BrowserHost {
         self.emit_state();
     }
 
+    /// "Point at an element" in the thread indicator: the user picks an
+    /// element in `tab`, one of `session`'s tabs. `None` when they cancelled.
+    /// Blocks until the click, a cancel or [`pick::PICK_TIMEOUT`].
+    pub fn pick_element(
+        &self,
+        session: &str,
+        tab: &TabId,
+    ) -> Result<Option<pick::PickedElement>, String> {
+        if !self.link.is_open() {
+            return Err("MonoCode is not connected to the browser.".into());
+        }
+        let headless = self
+            .managed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .is_some_and(|managed| !managed.show_window);
+        if headless {
+            return Err("The MonoCode browser runs without a window. Turn its window on in Settings to point at elements.".into());
+        }
+        let target = {
+            let state = self.policy.read();
+            let lease = state.lease(tab).ok_or("That tab is gone.")?;
+            if lease.owner != session {
+                return Err("That tab belongs to another thread.".into());
+            }
+            if lease.state != TabState::Open {
+                return Err("That tab is not open.".into());
+            }
+            pick::PickTab {
+                tab: tab.clone(),
+                main: lease
+                    .cdp_session
+                    .clone()
+                    .ok_or("That tab is still opening.")?,
+                frames: lease
+                    .frames
+                    .values()
+                    .map(|frame| frame.cdp_session.clone())
+                    .collect(),
+                url: lease.url.clone(),
+            }
+        };
+        let cancel = Arc::new(AtomicBool::new(false));
+        let previous = self
+            .picking
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .replace(cancel.clone());
+        if let Some(previous) = previous {
+            previous.store(true, Ordering::Release);
+        }
+        let alive = || {
+            self.policy
+                .read()
+                .lease(tab)
+                .is_some_and(|lease| lease.state == TabState::Open && lease.owner == session)
+        };
+        let outcome = pick::wait_for_pick(&self.link, &target, &cancel, pick::PICK_TIMEOUT, alive);
+        {
+            let mut picking = self.picking.lock().unwrap_or_else(|e| e.into_inner());
+            if picking.as_ref().is_some_and(|c| Arc::ptr_eq(c, &cancel)) {
+                *picking = None;
+            }
+        }
+        match outcome? {
+            pick::Outcome::Picked(node) => {
+                let loader = self
+                    .policy
+                    .read()
+                    .lease(tab)
+                    .and_then(|lease| lease.main_loader_id.clone());
+                let number = semantic::mark_picked(
+                    &self.link,
+                    tab,
+                    loader.as_deref(),
+                    &node.session,
+                    node.backend,
+                );
+                let picked = pick::describe(&self.link, &target, &node, number);
+                self.event(
+                    "element_picked",
+                    Actor::User,
+                    Some(session),
+                    Some(&audit_url(&target.url)),
+                );
+                Ok(Some(picked))
+            }
+            pick::Outcome::Cancelled => Ok(None),
+            pick::Outcome::TimedOut => Err("No element was picked within two minutes.".into()),
+            pick::Outcome::TabGone => {
+                Err("The tab closed or changed hands while you were picking.".into())
+            }
+        }
+    }
+
+    /// Stop the element pick running now.
+    pub fn cancel_pick(&self) {
+        let running = self
+            .picking
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        if let Some(cancel) = running {
+            cancel.store(true, Ordering::Release);
+        }
+    }
+
     /// Settings "Close tab" for any agent tab, whoever owns it.
     pub fn close_tab_by_user(&self, tab: &TabId) -> Result<(), String> {
         let target = {
@@ -2387,6 +2502,23 @@ pub fn browser_give_tab(
 }
 
 #[tauri::command]
+pub async fn browser_pick_element(
+    session_id: String,
+    tab: String,
+) -> Result<Option<pick::PickedElement>, String> {
+    let host = require_host()?;
+    tauri::async_runtime::spawn_blocking(move || host.pick_element(&session_id, &TabId(tab)))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub fn browser_cancel_pick() -> Result<(), String> {
+    require_host()?.cancel_pick();
+    Ok(())
+}
+
+#[tauri::command]
 pub fn browser_open_window() -> Result<BrowserState, String> {
     let host = require_host()?;
     host.open_window()?;
@@ -3039,6 +3171,167 @@ mod tests {
                 _ => super::testing::default_response(received, &counter),
             }
         })
+    }
+
+    /// A page with one button; every inspect mode the user is in gets a
+    /// click on it while `click` is set.
+    fn pickable_fake(click: Arc<AtomicBool>) -> FakeCdp {
+        use super::testing::Event;
+        let counter = Arc::new(AtomicU64::new(1));
+        FakeCdp::start_with(move |received| {
+            let session = received.session.as_deref();
+            match received.method.as_str() {
+                "Page.navigate" => {
+                    let url = received.params["url"].as_str().unwrap_or("").to_string();
+                    Response::ResultThen(
+                        json!({ "frameId": "T1", "loaderId": "L2" }),
+                        vec![
+                            Event::new(
+                                "Page.frameNavigated",
+                                json!({ "frame": { "id": "T1", "loaderId": "L2", "url": url } }),
+                                session,
+                            ),
+                            Event::new(
+                                "Page.lifecycleEvent",
+                                json!({ "frameId": "T1", "loaderId": "L2", "name": "load" }),
+                                session,
+                            ),
+                        ],
+                    )
+                }
+                "Overlay.setInspectMode"
+                    if received.params["mode"] == "searchForNode"
+                        && click.load(Ordering::Acquire) =>
+                {
+                    Response::ResultThen(
+                        json!({}),
+                        vec![Event::new(
+                            "Overlay.inspectNodeRequested",
+                            json!({ "backendNodeId": 77 }),
+                            session,
+                        )],
+                    )
+                }
+                "DOM.describeNode" => Response::Result(json!({
+                    "node": { "localName": "button", "attributes": ["id", "save", "style", "x"] }
+                })),
+                "Accessibility.getPartialAXTree" => Response::Result(json!({ "nodes": [
+                    { "backendDOMNodeId": 77, "role": { "value": "button" }, "name": { "value": "Save" } }
+                ]})),
+                "Accessibility.getFullAXTree" => Response::Result(json!({ "nodes": [
+                    { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Form" }, "backendDOMNodeId": 1, "childIds": ["2", "3"] },
+                    { "nodeId": "2", "role": { "value": "link" }, "name": { "value": "Home" }, "backendDOMNodeId": 76, "childIds": [] },
+                    { "nodeId": "3", "role": { "value": "button" }, "name": { "value": "Save" }, "backendDOMNodeId": 77, "childIds": [] },
+                ]})),
+                "DOM.getBoxModel" => Response::Result(json!({ "model": {
+                    "border": [10.0, 10.0, 90.0, 10.0, 90.0, 40.0, 10.0, 40.0]
+                }})),
+                "Page.getLayoutMetrics" => Response::Result(json!({
+                    "cssLayoutViewport": { "pageX": 0, "pageY": 0, "clientWidth": 800, "clientHeight": 600 }
+                })),
+                "Page.captureScreenshot" => Response::Result(json!({ "data": "iVBORw0KGgo=" })),
+                _ => super::testing::default_response(received, &counter),
+            }
+        })
+    }
+
+    #[test]
+    fn a_picked_element_reaches_the_composer_and_the_agents_snapshot() {
+        let click = Arc::new(AtomicBool::new(true));
+        let server = pickable_fake(click.clone());
+        let dir = profile_for(&server);
+        let host = BrowserHost::for_tests(settings_for(&dir));
+        host.set_toggle(true);
+        assert!(wait_state(&host, ConnectionState::Connected));
+        host.turn_started("s1", "main", "/repo", Some(true));
+        let opened = host.handle_request(
+            "s1",
+            request(
+                "p1",
+                "tabs.open",
+                json!({ "url": "https://example.com/form" }),
+            ),
+        );
+        assert_eq!(opened.outcome, Outcome::Done, "{opened:?}");
+        let tab = TabId(
+            opened.data.as_ref().unwrap()["tab"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+        );
+
+        let picked = host.pick_element("s1", &tab).unwrap().unwrap();
+        assert_eq!(picked.role, "button");
+        assert_eq!(picked.name, "Save");
+        assert_eq!(picked.tag, "<button id=\"save\">");
+        assert_eq!(picked.reference, None);
+        assert_eq!(picked.image.as_deref(), Some("iVBORw0KGgo="));
+        assert!(
+            picked
+                .text
+                .contains(&format!("in tab {} (https://example.com/form)", tab.0))
+                && picked.text.ends_with("marks it [picked by the user]."),
+            "{}",
+            picked.text
+        );
+        let sent: Vec<(String, Value)> = server
+            .received()
+            .into_iter()
+            .map(|r| (r.method, r.params))
+            .collect();
+        let at = |method: &str, mode: Option<&str>| {
+            sent.iter()
+                .position(|(m, p)| m == method && mode.is_none_or(|mode| p["mode"] == mode))
+                .unwrap_or_else(|| panic!("{method} not sent: {sent:?}"))
+        };
+        assert!(
+            at("Page.bringToFront", None) < at("Overlay.setInspectMode", Some("searchForNode"))
+        );
+        assert!(at("DOM.enable", None) < at("Overlay.enable", None));
+        // Inspect mode ends before the element is photographed.
+        assert!(at("Overlay.setInspectMode", Some("none")) < at("Page.captureScreenshot", None));
+        assert!(at("Overlay.disable", None) < at("DOM.disable", None));
+
+        let snapshot =
+            host.handle_request("s1", request("p2", "snapshot", json!({ "tab": tab.0 })));
+        assert_eq!(snapshot.outcome, Outcome::Done, "{snapshot:?}");
+        let data = snapshot.data.unwrap();
+        let text = data["snapshot"].as_str().unwrap();
+        assert!(
+            text.contains("- button \"Save\" [ref=e3] [picked by the user]"),
+            "{text}"
+        );
+        assert!(text.contains("picked: e3 is the element"), "{text}");
+        assert_eq!(data["picked"], "e3");
+        assert!(
+            snapshot.message.contains("pointed at e3"),
+            "{}",
+            snapshot.message
+        );
+
+        // Picked again after the snapshot: the ref comes along.
+        let again = host.pick_element("s1", &tab).unwrap().unwrap();
+        assert_eq!(again.reference.as_deref(), Some("e3"));
+        assert!(again.text.ends_with(", ref e3."), "{}", again.text);
+
+        // Another thread's tab is not the user's to pick in for this one.
+        let other = host.pick_element("s2", &tab).unwrap_err();
+        assert!(other.contains("another thread"), "{other}");
+
+        // No click: the user cancels.
+        click.store(false, Ordering::Release);
+        let waiting = {
+            let host = host.clone();
+            let tab = tab.clone();
+            thread::spawn(move || host.pick_element("s1", &tab))
+        };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while host.picking.lock().unwrap().is_none() {
+            assert!(Instant::now() < deadline, "the pick never started");
+            thread::sleep(Duration::from_millis(5));
+        }
+        host.cancel_pick();
+        assert_eq!(waiting.join().unwrap(), Ok(None));
     }
 
     #[test]

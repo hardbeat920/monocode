@@ -25,7 +25,14 @@ export type BrowserConnectionState =
   /** Switch on, nothing running yet: the first agent action starts or connects. */
   | "idle";
 
-export type BrowserKind = "chrome" | "edge" | "chromium";
+export type BrowserKind =
+  | "chrome"
+  | "edge"
+  | "chromium"
+  | "brave"
+  | "vivaldi"
+  | "opera"
+  | "arc";
 
 export type BrowserInfo = {
   kind: BrowserKind;
@@ -58,7 +65,7 @@ export type BrowserLimits = {
 };
 
 /**
- * `managed`: MonoCode starts Chrome or Edge with its own profile.
+ * `managed`: MonoCode starts an installed Chromium browser with its own profile.
  * `attach`: MonoCode connects to the browser the user runs.
  */
 export type BrowserMode = "managed" | "private" | "attach";
@@ -176,10 +183,19 @@ export const BROWSER_CHANNELS: { channel: string; label: string }[] = [
   { channel: "msedge-beta", label: "Edge Beta" },
   { channel: "msedge-dev", label: "Edge Dev" },
   { channel: "msedge-canary", label: "Edge Canary" },
+  { channel: "brave", label: "Brave" },
+  { channel: "vivaldi", label: "Vivaldi" },
+  { channel: "opera", label: "Opera" },
+  { channel: "arc", label: "Arc (macOS)" },
 ];
 
-/** What the MonoCode browser can start; Automatic tries Chrome, then Edge. */
-export const MANAGED_BROWSER_CHANNELS = BROWSER_CHANNELS.slice(0, 2);
+/**
+ * What the MonoCode browser can start; Automatic tries Chrome, then Edge,
+ * Brave, Vivaldi, Opera and Arc.
+ */
+export const MANAGED_BROWSER_CHANNELS = BROWSER_CHANNELS.filter(
+  (entry) => !/-(beta|dev|canary)$/.test(entry.channel),
+);
 
 export const BROWSER_AUDIT_LIMIT = 50;
 
@@ -330,6 +346,39 @@ export const giveBrowserTab = (free: string, sessionId: string) =>
     markTurnedOff(sessionId, false);
     return state;
   });
+/** An element the user picked in a thread's tab (`pick::PickedElement`). */
+export type PickedBrowserElement = {
+  tab: string;
+  url: string;
+  role: string;
+  name: string;
+  tag: string;
+  /** `e12` when a snapshot already gave the element a ref. */
+  ref?: string;
+  /** PNG of the element, base64. */
+  image?: string;
+  /** The line for the agent. */
+  text: string;
+};
+
+/**
+ * "Point at an element": the browser highlights what the pointer is over in
+ * `tab` until the user clicks. `null` when the pick was cancelled.
+ */
+export function pickBrowserElement(
+  sessionId: string,
+  tab: string,
+): Promise<PickedBrowserElement | null> {
+  return invoke<PickedBrowserElement | null>("browser_pick_element", {
+    sessionId,
+    tab,
+  });
+}
+
+export function cancelBrowserPick(): Promise<void> {
+  return invoke<void>("browser_cancel_pick");
+}
+
 export const saveBrowserSettings = (settings: BrowserSettings) =>
   command("browser_set_settings", { settings });
 
@@ -498,13 +547,24 @@ export function inspectPages(
     url: "chrome://inspect/#remote-debugging",
   };
   const edge = { label: "Edge", url: "edge://inspect" };
+  const brave = { label: "Brave", url: "brave://inspect/#remote-debugging" };
+  const pageOf = (kind: BrowserKind) =>
+    kind === "edge" ? edge : kind === "brave" ? brave : chrome;
   const found = state.connection.browser?.kind;
-  if (found === "edge") return [edge];
-  if (found) return [chrome];
+  if (found) return [pageOf(found)];
   const choice = state.settings.browser;
-  if (choice.kind === "channel")
-    return choice.channel.startsWith("msedge") ? [edge] : [chrome];
+  if (choice.kind === "channel") return [pageOf(channelKind(choice.channel))];
   return [chrome, edge];
+}
+
+/** The browser behind a channel id (`discovery::channel_kind`). */
+export function channelKind(channel: string): BrowserKind {
+  if (channel.startsWith("msedge")) return "edge";
+  if (channel.startsWith("chrome")) return "chrome";
+  for (const kind of ["brave", "vivaldi", "opera", "arc"] as const) {
+    if (channel.startsWith(kind)) return kind;
+  }
+  return "chromium";
 }
 
 export type ConnectionAction = "connect" | "retry" | "disconnect" | null;
@@ -568,7 +628,7 @@ function attachView(state: BrowserState): ConnectionView {
       };
     case "discovering":
       return {
-        message: "Looking for Chrome or Edge…",
+        message: "Looking for your browser…",
         tone: "pending",
         action: null,
         guide: false,
@@ -613,7 +673,7 @@ function attachView(state: BrowserState): ConnectionView {
       };
     case "unsupported_version":
       return {
-        message: "Chrome or Edge 144 or newer is required.",
+        message: "A browser built on Chromium 144 or newer is required.",
         tone: "error",
         action: "retry",
         guide: false,

@@ -115,7 +115,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     group: "agents",
     label: "Browser",
     description:
-      "Let agents open and use their own tabs in the MonoCode browser or your Chrome or Edge, and see what they did there.",
+      "Let agents open and use their own tabs in the MonoCode browser or your own browser, and see what they did there.",
     keywords:
       "chrome edge web page tabs automation remote debugging cdp /browser monocode browser sign in",
   },

@@ -3,7 +3,10 @@ import { listen } from "@tauri-apps/api/event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   answerBrowserRequest,
+  BROWSER_CHANNELS,
   browserAccessTurnedOff,
+  cancelBrowserPick,
+  channelKind,
   browserNoticeSnapshot,
   browserProductLabel,
   browserStateSnapshot,
@@ -17,7 +20,9 @@ import {
   giveBrowserTab,
   inspectPages,
   listUserBrowserTabs,
+  MANAGED_BROWSER_CHANNELS,
   openBrowserWindow,
+  pickBrowserElement,
   resetBrowserStore,
   revokeBrowserSession,
   sessionBrowserGranted,
@@ -160,6 +165,63 @@ describe("browser state views", () => {
         },
       }).map((page) => page.url),
     ).toEqual(["edge://inspect"]);
+    expect(
+      inspectPages({
+        ...base,
+        settings: {
+          ...base.settings,
+          browser: { kind: "channel", channel: "brave" },
+        },
+      }).map((page) => page.url),
+    ).toEqual(["brave://inspect/#remote-debugging"]);
+    expect(
+      inspectPages({
+        ...base,
+        connection: {
+          state: "consent_denied",
+          since_ms: 0,
+          browser: {
+            kind: "vivaldi",
+            channel: "vivaldi",
+            product: "Chrome/146.0.0.0",
+            major: 146,
+            user_data_dir: "/home/o/.config/vivaldi",
+            tabs_total: 0,
+            managed: false,
+          },
+        },
+      }).map((page) => page.url),
+    ).toEqual(["chrome://inspect/#remote-debugging"]);
+  });
+
+  it("knows the other Chromium browsers and starts only stable builds", () => {
+    expect(channelKind("msedge-dev")).toBe("edge");
+    expect(channelKind("chrome-canary")).toBe("chrome");
+    expect(channelKind("brave")).toBe("brave");
+    expect(channelKind("opera")).toBe("opera");
+    expect(channelKind("arc")).toBe("arc");
+    expect(channelKind("custom")).toBe("chromium");
+    expect(MANAGED_BROWSER_CHANNELS.map((entry) => entry.channel)).toEqual([
+      "chrome",
+      "msedge",
+      "brave",
+      "vivaldi",
+      "opera",
+      "arc",
+    ]);
+    expect(BROWSER_CHANNELS).toHaveLength(12);
+  });
+
+  it("asks the backend for an element pick and can cancel it", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce(null);
+    await expect(pickBrowserElement("s1", "t_1")).resolves.toBeNull();
+    expect(invoke).toHaveBeenCalledWith("browser_pick_element", {
+      sessionId: "s1",
+      tab: "t_1",
+    });
+    vi.mocked(invoke).mockResolvedValueOnce(undefined);
+    await cancelBrowserPick();
+    expect(invoke).toHaveBeenCalledWith("browser_cancel_pick");
   });
 
   it("shows the thread indicator only with a grant, dialog over busy", () => {

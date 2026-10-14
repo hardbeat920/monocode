@@ -28,8 +28,10 @@ import {
   filesFromClipboard,
   mergeAttachments,
   pickAttachments,
+  pngAttachment,
   revokeAttachment,
 } from "../model/attachments";
+import type { PickedBrowserElement } from "../../settings/model/browser";
 import { resizeComposer } from "../model/composerResize";
 import {
   isFileReferenceText,
@@ -120,7 +122,11 @@ import { QuestionForm } from "./QuestionForm";
 import { MessageQueue } from "./MessageQueue";
 import { SkillPicker } from "../../skills/ui/SkillPicker";
 import { pathKey, projectKey } from "../../../shared/lib/paths";
-import { consumeQuoteRequest, type QuoteRequest } from "../model/quoteDraft";
+import {
+  appendComposerInsert,
+  consumeQuoteRequest,
+  type QuoteRequest,
+} from "../model/quoteDraft";
 import { useTabGroupLogos } from "../../projects/hooks/useTabGroupLogos";
 import { useProjectBranchesState } from "../../source-control/hooks/useProjectBranches";
 import {
@@ -977,6 +983,26 @@ export function Composer({
     setSlash(token);
     setMention(token ? null : mentionTokenAt(el.value, cursor));
   };
+
+  /** "Point at an element": the line for the agent and the element's picture. */
+  const insertBrowserPick = useCallback(
+    (picked: PickedBrowserElement) => {
+      const el = ref.current;
+      if (!el) return;
+      const next = appendComposerInsert(el.value, picked.text);
+      el.value = next;
+      resizeComposer(el);
+      setDraft(next);
+      draftRevisionRef.current += 1;
+      syncHasValue(next, attachmentsRef.current);
+      el.setSelectionRange(next.length, next.length);
+      el.focus();
+      if (picked.image && attachmentsSupported) {
+        addAttachments([pngAttachment("picked-element.png", picked.image)]);
+      }
+    },
+    [addAttachments, attachmentsSupported, syncHasValue],
+  );
 
   const openSessionFolderPicker = useCallback(() => {
     setSessionFolders(loadSessionFolders(cwd));
@@ -2001,7 +2027,10 @@ export function Composer({
               )}
               <div className="ml-auto flex shrink-0 items-center gap-0.5">
                 {!remote && sessionId ? (
-                  <BrowserIndicator sessionId={sessionId} />
+                  <BrowserIndicator
+                    sessionId={sessionId}
+                    onPicked={insertBrowserPick}
+                  />
                 ) : null}
                 <ContextMeter
                   usage={context}

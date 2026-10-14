@@ -66,7 +66,7 @@ mod element;
 mod input;
 mod observe;
 mod refs;
-mod snapshot;
+pub(crate) mod snapshot;
 #[cfg(test)]
 mod tests;
 
@@ -162,6 +162,27 @@ pub fn forget_refs(link: &Link, tab: &TabId) {
         host: host_id(link),
         tab: tab.clone(),
     });
+}
+
+/// The user pointed at `backend` in `tab` ([`crate::browser::pick`]): the
+/// tab's next snapshot marks it. Returns its ref when a snapshot of this
+/// document already gave it one.
+pub fn mark_picked(
+    link: &Link,
+    tab: &TabId,
+    loader: Option<&str>,
+    session: &CdpSessionId,
+    backend: i64,
+) -> Option<u32> {
+    refs::set_picked(
+        &refs::RefKey {
+            host: host_id(link),
+            tab: tab.clone(),
+        },
+        loader,
+        session,
+        backend,
+    )
 }
 
 fn host_id(link: &Link) -> usize {

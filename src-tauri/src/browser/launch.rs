@@ -1,5 +1,5 @@
-//! The MonoCode browser (`BrowserMode::Managed`): the installed Chrome or Edge
-//! started by MonoCode with a profile of its own, so agents get a browser
+//! The MonoCode browser (`BrowserMode::Managed`): an installed Chromium
+//! browser (Chrome, Edge, Brave, Vivaldi, Opera or Arc) started by MonoCode with a profile of its own, so agents get a browser
 //! without the user's remote-debugging setup or consent dialog.
 //!
 //! The browser runs with `--remote-debugging-port=0` on its own profile
@@ -64,15 +64,23 @@ pub fn running(profile: &Path) -> Option<ActivePort> {
 }
 
 /// Executables to try for `choice`, in order. `Auto` and a custom profile
-/// folder look for Chrome, then Edge; a channel looks for that browser.
+/// folder look for Chrome, then Edge, then the other Chromium browsers; a
+/// channel looks for that browser.
 fn wanted(choice: &BrowserChoice) -> Vec<BrowserKind> {
     match choice {
         BrowserChoice::Channel { channel } => vec![discovery::channel_kind(channel)],
-        BrowserChoice::Auto | BrowserChoice::UserDataDir { .. } => {
-            vec![BrowserKind::Chrome, BrowserKind::Edge]
-        }
+        BrowserChoice::Auto | BrowserChoice::UserDataDir { .. } => AUTO.to_vec(),
     }
 }
+
+const AUTO: [BrowserKind; 6] = [
+    BrowserKind::Chrome,
+    BrowserKind::Edge,
+    BrowserKind::Brave,
+    BrowserKind::Vivaldi,
+    BrowserKind::Opera,
+    BrowserKind::Arc,
+];
 
 /// Well-known install locations per platform. `env` reads environment
 /// variables (a seam for tests).
@@ -83,16 +91,33 @@ pub fn known_paths(
 ) -> Vec<PathBuf> {
     match os {
         Platform::Windows => {
-            let relative: &[&str] = match kind {
-                BrowserKind::Edge => &["Microsoft", "Edge", "Application", "msedge.exe"],
+            let relatives: &[&[&str]] = match kind {
+                BrowserKind::Edge => &[&["Microsoft", "Edge", "Application", "msedge.exe"]],
                 BrowserKind::Chrome | BrowserKind::Chromium => {
-                    &["Google", "Chrome", "Application", "chrome.exe"]
+                    &[&["Google", "Chrome", "Application", "chrome.exe"]]
                 }
+                BrowserKind::Brave => {
+                    &[&["BraveSoftware", "Brave-Browser", "Application", "brave.exe"]]
+                }
+                BrowserKind::Vivaldi => &[&["Vivaldi", "Application", "vivaldi.exe"]],
+                // The per-user install lives under Local\Programs; opera.exe
+                // is a launcher that passes the switches on.
+                BrowserKind::Opera => {
+                    &[&["Programs", "Opera", "opera.exe"], &["Opera", "opera.exe"]]
+                }
+                // Arc for Windows is a store package with no stable path.
+                BrowserKind::Arc => &[],
             };
             ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"]
                 .iter()
                 .filter_map(|var| env(var))
-                .map(|base| relative.iter().fold(base, |path, part| path.join(part)))
+                .flat_map(|base| {
+                    relatives.iter().map(move |relative| {
+                        relative
+                            .iter()
+                            .fold(base.clone(), |path, part| path.join(part))
+                    })
+                })
                 .collect()
         }
         Platform::MacOs => {
@@ -101,6 +126,10 @@ pub fn known_paths(
                 BrowserKind::Chrome | BrowserKind::Chromium => {
                     "Google Chrome.app/Contents/MacOS/Google Chrome"
                 }
+                BrowserKind::Brave => "Brave Browser.app/Contents/MacOS/Brave Browser",
+                BrowserKind::Vivaldi => "Vivaldi.app/Contents/MacOS/Vivaldi",
+                BrowserKind::Opera => "Opera.app/Contents/MacOS/Opera",
+                BrowserKind::Arc => "Arc.app/Contents/MacOS/Arc",
             };
             let mut paths = vec![Path::new("/Applications").join(app)];
             if let Some(home) = env("HOME") {
@@ -113,6 +142,10 @@ pub fn known_paths(
                 BrowserKind::Edge => &["microsoft-edge", "microsoft-edge-stable"],
                 BrowserKind::Chrome => &["google-chrome", "google-chrome-stable"],
                 BrowserKind::Chromium => &["chromium", "chromium-browser"],
+                BrowserKind::Brave => &["brave-browser", "brave-browser-stable", "brave"],
+                BrowserKind::Vivaldi => &["vivaldi", "vivaldi-stable"],
+                BrowserKind::Opera => &["opera"],
+                BrowserKind::Arc => &[],
             };
             let dirs: Vec<PathBuf> = env("PATH")
                 .map(|path| std::env::split_paths(&path).collect())
@@ -129,8 +162,15 @@ pub fn known_paths(
 pub fn find_executable(choice: &BrowserChoice) -> Option<Executable> {
     let os = Platform::current();
     let mut kinds = wanted(choice);
-    if os == Platform::Linux && kinds.contains(&BrowserKind::Chrome) {
-        kinds.push(BrowserKind::Chromium);
+    // Linux distributions ship Chromium itself; it comes right after Chrome
+    // and Edge.
+    if os == Platform::Linux {
+        if let Some(at) = kinds
+            .iter()
+            .rposition(|kind| matches!(kind, BrowserKind::Chrome | BrowserKind::Edge))
+        {
+            kinds.insert(at + 1, BrowserKind::Chromium);
+        }
     }
     kinds.into_iter().find_map(|kind| {
         known_paths(kind, os, |var| std::env::var_os(var).map(PathBuf::from))
@@ -245,13 +285,50 @@ mod tests {
         assert_eq!(mac.len(), 2);
         let linux = known_paths(BrowserKind::Chrome, Platform::Linux, env);
         assert_eq!(linux[0], PathBuf::from("/usr/bin/google-chrome"));
+        assert_eq!(
+            known_paths(BrowserKind::Arc, Platform::MacOs, env)[0],
+            PathBuf::from("/Applications/Arc.app/Contents/MacOS/Arc")
+        );
+        assert_eq!(
+            known_paths(BrowserKind::Brave, Platform::Linux, env)[0],
+            PathBuf::from("/usr/bin/brave-browser")
+        );
+        assert!(known_paths(BrowserKind::Arc, Platform::Linux, env).is_empty());
+    }
+
+    #[test]
+    fn windows_paths_of_the_other_chromium_browsers() {
+        let env = |var: &str| match var {
+            "ProgramFiles" => Some(PathBuf::from(r"C:\Program Files")),
+            "LOCALAPPDATA" => Some(PathBuf::from(r"C:\Users\o\AppData\Local")),
+            _ => None,
+        };
+        let opera = known_paths(BrowserKind::Opera, Platform::Windows, env);
+        assert!(opera.contains(
+            &PathBuf::from(r"C:\Users\o\AppData\Local")
+                .join("Programs")
+                .join("Opera")
+                .join("opera.exe")
+        ));
+        let brave = known_paths(BrowserKind::Brave, Platform::Windows, env);
+        assert!(brave[0].ends_with(PathBuf::from("Application").join("brave.exe")));
+        let vivaldi = known_paths(BrowserKind::Vivaldi, Platform::Windows, env);
+        assert!(vivaldi[1].starts_with(r"C:\Users\o\AppData\Local"));
+        assert!(known_paths(BrowserKind::Arc, Platform::Windows, env).is_empty());
     }
 
     #[test]
     fn choice_decides_which_browser_starts() {
         assert_eq!(
-            wanted(&BrowserChoice::Auto),
-            vec![BrowserKind::Chrome, BrowserKind::Edge]
+            wanted(&BrowserChoice::Auto)[..2],
+            [BrowserKind::Chrome, BrowserKind::Edge]
+        );
+        assert_eq!(wanted(&BrowserChoice::Auto).len(), 6);
+        assert_eq!(
+            wanted(&BrowserChoice::Channel {
+                channel: "brave".into()
+            }),
+            vec![BrowserKind::Brave]
         );
         assert_eq!(
             wanted(&BrowserChoice::Channel {

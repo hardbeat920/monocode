@@ -1143,6 +1143,27 @@ pub enum BrowserKind {
     Chrome,
     Edge,
     Chromium,
+    Brave,
+    Vivaldi,
+    Opera,
+    /// macOS only; the Windows build installs as a store package MonoCode
+    /// cannot start or find.
+    Arc,
+}
+
+impl BrowserKind {
+    /// The browser's name in messages.
+    pub fn label(self) -> &'static str {
+        match self {
+            BrowserKind::Chrome => "Chrome",
+            BrowserKind::Edge => "Edge",
+            BrowserKind::Chromium => "Chromium",
+            BrowserKind::Brave => "Brave",
+            BrowserKind::Vivaldi => "Vivaldi",
+            BrowserKind::Opera => "Opera",
+            BrowserKind::Arc => "Arc",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

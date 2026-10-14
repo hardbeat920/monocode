@@ -207,13 +207,21 @@ fn quoted(text: &str) -> String {
 pub struct RenderOpts {
     pub mode: SnapshotMode,
     pub max_nodes: u32,
+    /// `(frame, backendNodeId)` of the element the user pointed at: always
+    /// shown, with a ref, and marked.
+    pub picked: Option<(usize, i64)>,
 }
 
 pub struct Rendered {
     pub text: String,
     pub refs: usize,
     pub truncated: bool,
+    /// The ref of the picked element, when it was rendered.
+    pub picked: Option<u32>,
 }
+
+/// Flag on the line of the element the user pointed at.
+pub const PICKED_FLAG: &str = "[picked by the user]";
 
 fn ref_worthy(node: &AxNode, mode: SnapshotMode) -> bool {
     if node.ignored || node.backend.is_none() {
@@ -233,9 +241,17 @@ struct Renderer<'a> {
     refs: usize,
     budget_hit: bool,
     skipped: usize,
+    picked: Option<u32>,
 }
 
 impl Renderer<'_> {
+    fn is_picked(&self, node: &AxNode) -> bool {
+        !node.ignored
+            && node
+                .backend
+                .is_some_and(|backend| self.opts.picked == Some((node.frame, backend)))
+    }
+
     fn keep(&mut self, i: usize) -> bool {
         if let Some(known) = self.keep[i] {
             return known;
@@ -243,7 +259,7 @@ impl Renderer<'_> {
         // Mark before recursing so a malformed (cyclic) tree terminates.
         self.keep[i] = Some(false);
         let node = &self.arena[i];
-        let mut keep = !node.ignored && ref_worthy(node, self.opts.mode);
+        let mut keep = !node.ignored && ref_worthy(node, self.opts.mode) || self.is_picked(node);
         let children = node.children.clone();
         for child in children {
             if self.keep(child) {
@@ -283,17 +299,19 @@ impl Renderer<'_> {
         }
         let node = self.arena[i].clone();
         let children = self.kept_children(i);
-        let worthy = ref_worthy(&node, self.opts.mode);
+        let picked = self.is_picked(&node);
+        let worthy = ref_worthy(&node, self.opts.mode) || picked;
         let unnamed = node.name.trim().is_empty();
         let duplicate_text =
             node.role == "StaticText" && parent_name.is_some_and(|p| p.contains(node.name.trim()));
-        let skip_line = node.ignored
-            || node.role == "InlineTextBox"
-            || node.role == "ListMarker"
-            || (DROP_ROLES.contains(&node.role.as_str()) && unnamed)
-            || (!worthy && unnamed && children.len() <= 1)
-            || duplicate_text
-            || (node.role == "StaticText" && !worthy);
+        let skip_line = !picked
+            && (node.ignored
+                || node.role == "InlineTextBox"
+                || node.role == "ListMarker"
+                || (DROP_ROLES.contains(&node.role.as_str()) && unnamed)
+                || (!worthy && unnamed && children.len() <= 1)
+                || duplicate_text
+                || (node.role == "StaticText" && !worthy));
         if skip_line {
             for child in children {
                 self.emit(child, depth, parent_name, assign);
@@ -332,6 +350,11 @@ impl Renderer<'_> {
                 let number = assign(node.frame, backend, &node.role, &node.name);
                 line.push_str(&format!(" [ref=e{number}]"));
                 self.refs += 1;
+                if picked {
+                    line.push(' ');
+                    line.push_str(PICKED_FLAG);
+                    self.picked = Some(number);
+                }
             }
         }
         if let Some(value) = node.value.as_deref() {
@@ -368,6 +391,7 @@ pub fn render(
         refs: 0,
         budget_hit: false,
         skipped: 0,
+        picked: None,
     };
     renderer.emit(root, 0, None, assign);
     let mut truncated = renderer.budget_hit;
@@ -388,10 +412,15 @@ pub fn render(
             "[... {remaining} more nodes; use scope with a ref to see a part of the page]\n"
         ));
     }
+    // A picked line cut off by the size limit is not in the text.
+    let picked = renderer
+        .picked
+        .filter(|number| text.contains(&format!("[ref=e{number}] {PICKED_FLAG}")));
     Rendered {
         text,
         refs: renderer.refs,
         truncated,
+        picked,
     }
 }
 
@@ -544,13 +573,25 @@ fn snapshot_inner(run: &Run<'_>, p: SnapshotParams) -> Result<ActionResult, Fail
             strip_marker(&lease.title).to_string(),
         )
     };
-    let opts = RenderOpts { mode, max_nodes };
     let rendered = refs::with_snapshot_table(&run.key(), loader.as_deref(), version, |table| {
+        // Backend ids are unique within a session; same-process frames share
+        // their parent's session, so the node's own tree names its frame.
+        let picked = refs::picked(table).and_then(|(session, backend)| {
+            let node = arena
+                .iter()
+                .find(|n| n.backend == Some(*backend) && frames[n.frame].session == *session)?;
+            Some((node.frame, *backend))
+        });
+        let opts = RenderOpts {
+            mode,
+            max_nodes,
+            picked,
+        };
         render(&arena, start, &opts, &mut |frame, backend, role, name| {
             table.assign(&frames[frame], backend, role, name)
         })
     });
-    let header = format!(
+    let mut header = format!(
         "url: {url}\ntitle: {}\nsnapshot: v{version}, {} refs{}\n",
         quoted(&clip(&title, MAX_NAME)),
         rendered.refs,
@@ -560,8 +601,13 @@ fn snapshot_inner(run: &Run<'_>, p: SnapshotParams) -> Result<ActionResult, Fail
             ""
         }
     );
+    if let Some(number) = rendered.picked {
+        header.push_str(&format!(
+            "picked: e{number} is the element the user pointed at in the browser\n"
+        ));
+    }
     let text = format!("{header}{}", rendered.text);
-    let message = format!(
+    let mut message = format!(
         "Snapshot v{version} of {url}: {} refs{}. Act with refs like `e3`; take a new snapshot after the page changes.",
         rendered.refs,
         if rendered.truncated {
@@ -570,6 +616,9 @@ fn snapshot_inner(run: &Run<'_>, p: SnapshotParams) -> Result<ActionResult, Fail
             ""
         }
     );
+    if let Some(number) = rendered.picked {
+        message.push_str(&format!(" The user pointed at e{number} in the browser."));
+    }
     Ok(ActionResult::done(run.id(), message)
         .with_data(json!({
             "snapshot": text,
@@ -578,6 +627,7 @@ fn snapshot_inner(run: &Run<'_>, p: SnapshotParams) -> Result<ActionResult, Fail
             "title": title,
             "refs": rendered.refs,
             "truncated": rendered.truncated,
+            "picked": rendered.picked.map(|number| format!("e{number}")),
         }))
         .with_observed(run.observed_now()))
 }
@@ -654,6 +704,7 @@ mod tests {
         let opts = RenderOpts {
             mode: SnapshotMode::Interactive,
             max_nodes: MAX_NODES,
+            picked: None,
         };
         let out = render(&arena, root, &opts, &mut numbering());
         assert_eq!(
@@ -669,12 +720,37 @@ mod tests {
     }
 
     #[test]
+    fn the_picked_element_is_shown_with_a_ref_and_marked() {
+        let mut arena = Vec::new();
+        let root = add_tree(&mut arena, &sample(), 0).unwrap();
+        let opts = RenderOpts {
+            mode: SnapshotMode::Interactive,
+            max_nodes: MAX_NODES,
+            picked: Some((0, 106)),
+        };
+        let out = render(&arena, root, &opts, &mut numbering());
+        assert!(out
+            .text
+            .contains("\n  - paragraph [ref=e4] [picked by the user]\n"));
+        assert_eq!(out.picked, Some(4));
+        // Another frame's node with the same backend id is not the pick.
+        let opts = RenderOpts {
+            picked: Some((1, 106)),
+            ..opts
+        };
+        let out = render(&arena, root, &opts, &mut numbering());
+        assert!(!out.text.contains(PICKED_FLAG));
+        assert_eq!(out.picked, None);
+    }
+
+    #[test]
     fn full_snapshot_adds_text_without_repeating_names() {
         let mut arena = Vec::new();
         let root = add_tree(&mut arena, &sample(), 0).unwrap();
         let opts = RenderOpts {
             mode: SnapshotMode::Full,
             max_nodes: MAX_NODES,
+            picked: None,
         };
         let out = render(&arena, root, &opts, &mut numbering());
         assert!(out
@@ -700,6 +776,7 @@ mod tests {
         let opts = RenderOpts {
             mode: SnapshotMode::Interactive,
             max_nodes: 10,
+            picked: None,
         };
         let out = render(&arena, root, &opts, &mut numbering());
         assert!(out.truncated);

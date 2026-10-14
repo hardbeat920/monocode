@@ -27,6 +27,7 @@ You can work in your own tabs in Chrome or Edge through MonoCode: either the Mon
 - A JavaScript dialog blocks its tab until you answer it with the dialog action; MonoCode never answers one for you.
 - Downloads, browser permission prompts and HTTP basic auth are not supported; tell the user when a task needs them. Only http(s) URLs and about:blank can be opened. There is no JavaScript or raw protocol access.
 - Showing a tab to the user (focus) changes what they see; do it only when they ask.
+- The user can point at an element in one of your tabs; their message then says "Element I picked in the browser" with the tab and a ref, or asks you to take a snapshot of that tab, where the element is marked `[picked by the user]`. That is the element they mean.
 - When you test a web app, check the console and network actions: they show JavaScript errors and failed requests the page itself may hide. A result whose `observed.signals` counts new console errors or failed requests means the page broke since your last look; read them before you go on.
 
 ## browser_tabs
@@ -39,7 +40,7 @@ Load an http(s) URL (or about:blank) in one of your tabs and wait for `wait_unti
 
 ## browser_snapshot
 
-Return the tab's accessibility tree as compact text with refs (`e12`) for the elements you can act on. Call it before acting and after every action that changes the page. `scope` limits it to the subtree of a ref; `mode: "full"` adds static text.
+Return the tab's accessibility tree as compact text with refs (`e12`) for the elements you can act on. Call it before acting and after every action that changes the page. `scope` limits it to the subtree of a ref; `mode: "full"` adds static text. An element the user pointed at in the browser is marked `[picked by the user]`, and the header names its ref.
 
 ## browser_click
 

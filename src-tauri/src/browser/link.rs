@@ -83,6 +83,7 @@ pub enum Method {
     PageSetInterceptFileChooserDialog,
     PageBringToFront,
     DomEnable,
+    DomDisable,
     DomGetDocument,
     DomDescribeNode,
     DomResolveNode,
@@ -108,6 +109,12 @@ pub enum Method {
     InputDispatchKeyEvent,
     InputInsertText,
     EmulationSetFocusEmulationEnabled,
+    /// The user points at an element of an agent tab ([`super::pick`]);
+    /// never sent for an agent.
+    OverlayEnable,
+    OverlayDisable,
+    OverlaySetInspectMode,
+    OverlayHideHighlight,
 }
 
 impl Method {
@@ -134,6 +141,7 @@ impl Method {
             PageSetInterceptFileChooserDialog => "Page.setInterceptFileChooserDialog",
             PageBringToFront => "Page.bringToFront",
             DomEnable => "DOM.enable",
+            DomDisable => "DOM.disable",
             DomGetDocument => "DOM.getDocument",
             DomDescribeNode => "DOM.describeNode",
             DomResolveNode => "DOM.resolveNode",
@@ -157,6 +165,10 @@ impl Method {
             InputDispatchKeyEvent => "Input.dispatchKeyEvent",
             InputInsertText => "Input.insertText",
             EmulationSetFocusEmulationEnabled => "Emulation.setFocusEmulationEnabled",
+            OverlayEnable => "Overlay.enable",
+            OverlayDisable => "Overlay.disable",
+            OverlaySetInspectMode => "Overlay.setInspectMode",
+            OverlayHideHighlight => "Overlay.hideHighlight",
         }
     }
 

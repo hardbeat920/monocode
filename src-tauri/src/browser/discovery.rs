@@ -3,8 +3,9 @@
 //!
 //! Discovery never launches a browser and never passes
 //! `--remote-debugging-port`; the user enables remote debugging in
-//! `chrome://inspect/#remote-debugging` (or `edge://inspect`) and the browser
-//! writes the file for us.
+//! `chrome://inspect/#remote-debugging` (or `edge://inspect`, and the same
+//! page in Brave, Vivaldi, Opera and Arc) and the browser writes the file for
+//! us.
 
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
@@ -19,8 +20,9 @@ pub const CONSENT_TIMEOUT: Duration = Duration::from_secs(90);
 /// The file the browser writes next to its profile when remote debugging is on.
 pub const ACTIVE_PORT_FILE: &str = "DevToolsActivePort";
 
-/// Channel ids in discovery order (spec 4, step 1).
-pub const CHANNELS: [&str; 8] = [
+/// Channel ids in discovery order (spec 4, step 1): Chrome and Edge with
+/// their test builds, then the other Chromium browsers.
+pub const CHANNELS: [&str; 12] = [
     "chrome",
     "msedge",
     "chrome-beta",
@@ -29,6 +31,10 @@ pub const CHANNELS: [&str; 8] = [
     "msedge-beta",
     "msedge-dev",
     "msedge-canary",
+    "brave",
+    "vivaldi",
+    "opera",
+    "arc",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,6 +70,34 @@ pub fn channel_kind(channel: &str) -> BrowserKind {
         BrowserKind::Edge
     } else if channel.starts_with("chrome") {
         BrowserKind::Chrome
+    } else if channel.starts_with("brave") {
+        BrowserKind::Brave
+    } else if channel.starts_with("vivaldi") {
+        BrowserKind::Vivaldi
+    } else if channel.starts_with("opera") {
+        BrowserKind::Opera
+    } else if channel.starts_with("arc") {
+        BrowserKind::Arc
+    } else {
+        BrowserKind::Chromium
+    }
+}
+
+/// The browser behind a profile folder the user picked, from its path.
+fn path_kind(path: &str) -> BrowserKind {
+    let lower = path.to_ascii_lowercase().replace('\\', "/");
+    if lower.contains("edge") {
+        BrowserKind::Edge
+    } else if lower.contains("brave") {
+        BrowserKind::Brave
+    } else if lower.contains("vivaldi") {
+        BrowserKind::Vivaldi
+    } else if lower.contains("opera") {
+        BrowserKind::Opera
+    } else if lower.contains("/arc/") {
+        BrowserKind::Arc
+    } else if lower.contains("chrome") {
+        BrowserKind::Chrome
     } else {
         BrowserKind::Chromium
     }
@@ -93,6 +127,17 @@ pub fn user_data_dir_in(channel: &str, base: &Path, os: Platform) -> Option<Path
         (Platform::Windows, "msedge-canary") => {
             base.join("Microsoft").join("Edge SxS").join("User Data")
         }
+        (Platform::Windows, "brave") => base
+            .join("BraveSoftware")
+            .join("Brave-Browser")
+            .join("User Data"),
+        (Platform::Windows, "vivaldi") => base.join("Vivaldi").join("User Data"),
+        // Opera keeps its profile under Roaming, next to `base` (Local).
+        (Platform::Windows, "opera") => base
+            .parent()?
+            .join("Roaming")
+            .join("Opera Software")
+            .join("Opera Stable"),
         (Platform::MacOs, channel) => {
             let support = base.join("Library").join("Application Support");
             match channel {
@@ -104,6 +149,10 @@ pub fn user_data_dir_in(channel: &str, base: &Path, os: Platform) -> Option<Path
                 "msedge-beta" => support.join("Microsoft Edge Beta"),
                 "msedge-dev" => support.join("Microsoft Edge Dev"),
                 "msedge-canary" => support.join("Microsoft Edge Canary"),
+                "brave" => support.join("BraveSoftware").join("Brave-Browser"),
+                "vivaldi" => support.join("Vivaldi"),
+                "opera" => support.join("com.operasoftware.Opera"),
+                "arc" => support.join("Arc").join("User Data"),
                 _ => return None,
             }
         }
@@ -118,6 +167,9 @@ pub fn user_data_dir_in(channel: &str, base: &Path, os: Platform) -> Option<Path
                 "msedge-beta" => config.join("microsoft-edge-beta"),
                 "msedge-dev" => config.join("microsoft-edge-dev"),
                 "msedge-canary" => config.join("microsoft-edge-canary"),
+                "brave" => config.join("BraveSoftware").join("Brave-Browser"),
+                "vivaldi" => config.join("vivaldi"),
+                "opera" => config.join("opera"),
                 _ => return None,
             }
         }
@@ -158,17 +210,9 @@ pub fn candidates_in(
             if !exists(&dir) {
                 return Vec::new();
             }
-            let lower = path.to_ascii_lowercase();
-            let kind = if lower.contains("edge") {
-                BrowserKind::Edge
-            } else if lower.contains("chrome") {
-                BrowserKind::Chrome
-            } else {
-                BrowserKind::Chromium
-            };
             vec![Candidate {
                 channel: "custom".into(),
-                kind,
+                kind: path_kind(path),
                 user_data_dir: dir,
             }]
         }
@@ -303,10 +347,20 @@ pub fn locate_with(
 
 /// The instruction shown in `NeedsToggle` (UI and agent alike).
 pub fn setup_instruction(kind: Option<BrowserKind>) -> String {
+    const AFTER: &str =
+        "turn on remote debugging, then retry. Retrying without that step will not help.";
     match kind {
-        Some(BrowserKind::Edge) => "Open edge://inspect in Edge and turn on remote debugging, then retry. Retrying without that step will not help.".to_string(),
-        Some(BrowserKind::Chrome) | Some(BrowserKind::Chromium) => "Open chrome://inspect/#remote-debugging in Chrome and turn on remote debugging, then retry. Retrying without that step will not help.".to_string(),
-        None => "Open chrome://inspect/#remote-debugging (Chrome) or edge://inspect (Edge), turn on remote debugging, then retry. Retrying without that step will not help.".to_string(),
+        Some(kind) => format!("Open {} in {} and {AFTER}", inspect_page(kind), kind.label()),
+        None => format!("Open chrome://inspect/#remote-debugging (Chrome, Brave, Vivaldi, Opera, Arc) or edge://inspect (Edge), {AFTER}"),
+    }
+}
+
+/// Where a browser turns remote debugging on.
+pub fn inspect_page(kind: BrowserKind) -> &'static str {
+    match kind {
+        BrowserKind::Edge => "edge://inspect",
+        BrowserKind::Brave => "brave://inspect/#remote-debugging",
+        _ => "chrome://inspect/#remote-debugging",
     }
 }
 
@@ -333,7 +387,10 @@ pub fn policy_blocks_debugging(kind: BrowserKind) -> Option<String> {
         Platform::Linux => {
             let dir = match kind {
                 BrowserKind::Edge => "/etc/opt/edge/policies/managed",
-                BrowserKind::Chrome | BrowserKind::Chromium => "/etc/opt/chrome/policies/managed",
+                BrowserKind::Chrome => "/etc/opt/chrome/policies/managed",
+                BrowserKind::Chromium => "/etc/chromium/policies/managed",
+                BrowserKind::Brave => "/etc/brave/policies/managed",
+                BrowserKind::Vivaldi | BrowserKind::Opera | BrowserKind::Arc => return None,
             };
             linux_policy_blocks(Path::new(dir))
         }
@@ -341,6 +398,8 @@ pub fn policy_blocks_debugging(kind: BrowserKind) -> Option<String> {
             let domain = match kind {
                 BrowserKind::Edge => "com.microsoft.Edge",
                 BrowserKind::Chrome | BrowserKind::Chromium => "com.google.Chrome",
+                BrowserKind::Brave => "com.brave.Browser",
+                BrowserKind::Vivaldi | BrowserKind::Opera | BrowserKind::Arc => return None,
             };
             let output = std::process::Command::new("defaults")
                 .args([
@@ -358,6 +417,8 @@ pub fn policy_blocks_debugging(kind: BrowserKind) -> Option<String> {
             let key = match kind {
                 BrowserKind::Edge => r"Software\Policies\Microsoft\Edge",
                 BrowserKind::Chrome | BrowserKind::Chromium => r"Software\Policies\Google\Chrome",
+                BrowserKind::Brave => r"Software\Policies\BraveSoftware\Brave",
+                BrowserKind::Vivaldi | BrowserKind::Opera | BrowserKind::Arc => return None,
             };
             for hive in ["HKLM", "HKCU"] {
                 let output = std::process::Command::new("reg")
@@ -439,6 +500,66 @@ mod tests {
         assert!(user_data_dir_in("firefox", home, Platform::Linux).is_none());
         assert_eq!(channel_kind("msedge-dev"), BrowserKind::Edge);
         assert_eq!(channel_kind("chrome"), BrowserKind::Chrome);
+    }
+
+    #[test]
+    fn other_chromium_browsers_have_their_profile_folders() {
+        let win = Path::new(r"C:\Users\o\AppData\Local");
+        assert_eq!(
+            user_data_dir_in("brave", win, Platform::Windows).unwrap(),
+            win.join("BraveSoftware")
+                .join("Brave-Browser")
+                .join("User Data")
+        );
+        // Forward slashes, so the parent folder is found on every test host.
+        let local = Path::new("C:/Users/o/AppData/Local");
+        assert_eq!(
+            user_data_dir_in("opera", local, Platform::Windows).unwrap(),
+            Path::new("C:/Users/o/AppData")
+                .join("Roaming")
+                .join("Opera Software")
+                .join("Opera Stable")
+        );
+        assert!(user_data_dir_in("arc", win, Platform::Windows).is_none());
+        let mac = Path::new("/Users/o");
+        assert_eq!(
+            user_data_dir_in("arc", mac, Platform::MacOs).unwrap(),
+            PathBuf::from("/Users/o/Library/Application Support/Arc/User Data")
+        );
+        assert_eq!(
+            user_data_dir_in("vivaldi", mac, Platform::MacOs).unwrap(),
+            PathBuf::from("/Users/o/Library/Application Support/Vivaldi")
+        );
+        let linux = Path::new("/home/o");
+        assert_eq!(
+            user_data_dir_in("brave", linux, Platform::Linux).unwrap(),
+            PathBuf::from("/home/o/.config/BraveSoftware/Brave-Browser")
+        );
+        assert_eq!(
+            user_data_dir_in("opera", linux, Platform::Linux).unwrap(),
+            PathBuf::from("/home/o/.config/opera")
+        );
+        assert!(user_data_dir_in("arc", linux, Platform::Linux).is_none());
+        for (channel, kind) in [
+            ("brave", BrowserKind::Brave),
+            ("vivaldi", BrowserKind::Vivaldi),
+            ("opera", BrowserKind::Opera),
+            ("arc", BrowserKind::Arc),
+        ] {
+            assert_eq!(channel_kind(channel), kind);
+            assert!(CHANNELS.contains(&channel));
+        }
+        assert_eq!(
+            path_kind(r"C:\Users\o\AppData\Local\BraveSoftware\Brave-Browser\User Data"),
+            BrowserKind::Brave
+        );
+        assert_eq!(
+            path_kind("/Users/o/Library/Application Support/Arc/User Data"),
+            BrowserKind::Arc
+        );
+        assert_eq!(path_kind("/snap/chromium/current"), BrowserKind::Chromium);
+        assert!(setup_instruction(Some(BrowserKind::Brave)).contains("brave://inspect"));
+        assert!(setup_instruction(Some(BrowserKind::Opera)).contains("in Opera"));
     }
 
     #[test]
