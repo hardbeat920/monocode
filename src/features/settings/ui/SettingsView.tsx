@@ -44,6 +44,14 @@ import { JiraSettings } from "./JiraSettings";
 import { GradientBlurBackground } from "./GradientBlurBackground";
 import { McpSettings } from "./McpSettings";
 import { InboxProviderMark } from "../../inbox/ui/InboxProviderMark";
+import {
+  setInboxConnectorEnabled,
+  useInboxConnectors,
+} from "../../inbox/model/inboxConnectors";
+import {
+  INBOX_SOURCE_LABELS,
+  type InboxSource,
+} from "../../inbox/model/inboxFilters";
 import { RemoveProjectDialog } from "../../projects/ui/RemoveProjectDialog";
 import { WindowControls } from "../../../app/shell/WindowControls";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
@@ -1200,6 +1208,7 @@ function InboxPage({
   notificationSettingsRequest?: number;
 }) {
   const revealed = useContext(RevealedSetting);
+  const connectors = useInboxConnectors();
   return (
     <>
       <div
@@ -1214,74 +1223,87 @@ function InboxPage({
           highlighted={revealed === "project-notifications"}
         />
       </div>
-      <Group
-        id="github"
-        title={
-          <span className="flex items-center gap-2">
-            <InboxProviderMark provider="github" className="size-4 shrink-0" />
-            GitHub
-          </span>
-        }
+      <InboxConnectorGroup
+        source="github"
+        enabled={connectors.github}
         description="Pull requests, reviews, and issues, read through the GitHub CLI."
       >
         <GithubSettings />
-      </Group>
+      </InboxConnectorGroup>
 
-      <Group
-        id="gitlab"
-        title={
-          <span className="flex items-center gap-2">
-            <InboxProviderMark provider="gitlab" className="size-4 shrink-0" />
-            GitLab
-          </span>
-        }
+      <InboxConnectorGroup
+        source="gitlab"
+        enabled={connectors.gitlab}
         description="Merge requests from GitLab.com or a self-managed instance."
       >
         <GitlabSettings />
-      </Group>
+      </InboxConnectorGroup>
 
-      <Group
-        id="azuredevops"
-        title={
-          <span className="flex items-center gap-2">
-            <InboxProviderMark
-              provider="azuredevops"
-              className="size-4 shrink-0"
-            />
-            ADO
-          </span>
-        }
+      <InboxConnectorGroup
+        source="azuredevops"
+        enabled={connectors.azuredevops}
         description="Pull requests and Boards work items from your ADO organization."
       >
         <AzureDevOpsSettings />
-      </Group>
+      </InboxConnectorGroup>
 
-      <Group
-        id="jira"
-        title={
-          <span className="flex items-center gap-2">
-            <InboxProviderMark provider="jira" className="size-4 shrink-0" />
-            Jira
-          </span>
-        }
+      <InboxConnectorGroup
+        source="jira"
+        enabled={connectors.jira}
         description="Jira Cloud issues from the projects you pick."
       >
         <JiraSettings />
-      </Group>
+      </InboxConnectorGroup>
 
-      <Group
-        id="linear"
-        title={
-          <span className="flex items-center gap-2">
-            <InboxProviderMark provider="linear" className="size-4 shrink-0" />
-            Linear
-          </span>
-        }
+      <InboxConnectorGroup
+        source="linear"
+        enabled={connectors.linear}
         description="Issues assigned to you, from the teams you pick."
       >
         <LinearSettings />
-      </Group>
+      </InboxConnectorGroup>
     </>
+  );
+}
+
+function InboxConnectorGroup({
+  source,
+  enabled,
+  description,
+  children,
+}: {
+  source: InboxSource;
+  enabled: boolean;
+  description: string;
+  children: ReactNode;
+}) {
+  const name = INBOX_SOURCE_LABELS[source];
+  return (
+    <Group
+      id={source}
+      title={
+        <span className="flex items-center gap-2">
+          <InboxProviderMark provider={source} className="size-4 shrink-0" />
+          {name}
+        </span>
+      }
+      description={description}
+      titleAction={
+        <Toggle
+          label={`Enable ${name} inbox connector`}
+          className="translate-y-0.5"
+          on={enabled}
+          onChange={(on) => setInboxConnectorEnabled(source, on)}
+        />
+      }
+    >
+      {enabled ? children : (
+        <Row
+          label="Disabled in Inbox"
+          description="Saved connection details are kept."
+        />
+      )}
+    </Group>
   );
 }
 
@@ -4193,6 +4215,7 @@ function PageHeader({
 function Group({
   id,
   title,
+  titleAction,
   description,
   action,
   children,
@@ -4200,6 +4223,7 @@ function Group({
   /** Matches a `SETTINGS_INDEX` id when the whole card is the search target. */
   id?: string;
   title: ReactNode;
+  titleAction?: ReactNode;
   description?: string;
   action?: ReactNode;
   children: ReactNode;
@@ -4215,7 +4239,10 @@ function Group({
     >
       <div className="flex items-end gap-4 pb-2.5">
         <div className="min-w-0 flex-1">
-          <h2 className="text-[13px] font-semibold text-content">{title}</h2>
+          <div className="flex items-center justify-between gap-4">
+            <h2 className="min-w-0 text-[13px] font-semibold text-content">{title}</h2>
+            {titleAction}
+          </div>
           {description ? (
             <p className="mt-1 text-[12px] leading-relaxed text-content/45">
               {description}
@@ -4451,11 +4478,13 @@ function Toggle({
   on,
   onChange,
   disabled = false,
+  className = "",
 }: {
   label: string;
   on: boolean;
   onChange: (on: boolean) => void;
   disabled?: boolean;
+  className?: string;
 }) {
   return (
     <button
@@ -4470,7 +4499,7 @@ function Toggle({
       }}
       className={`relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
         on ? "bg-accent" : "bg-content/20"
-      }`}
+      } ${className}`}
     >
       <span
         className={`absolute top-0.5 size-4 rounded-full bg-white transition-[left] ${

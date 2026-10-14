@@ -5,6 +5,7 @@ import {
   type InboxKind,
   type InboxProvider,
 } from "./githubTasks";
+import { loadInboxConnectors, type InboxConnectors } from "./inboxConnectors";
 import { normalizeProjectPath } from "../../projects/model/recents";
 import { timeFilterStart, type SessionTimeFilter } from "../../sessions/model/sessionFilters";
 
@@ -74,25 +75,29 @@ export const INBOX_SOURCE_LABELS: Record<InboxSource, string> = {
 
 export function visibleInboxSources(
   connections: InboxSourceConnections,
+  enabled: InboxConnectors = loadInboxConnectors(),
 ): InboxSource[] {
   const sources: InboxSource[] = [];
-  if (connections.github !== false) sources.push("github");
-  if (connections.linear !== false) sources.push("linear");
-  if (connections.jira !== false) sources.push("jira");
-  if (connections.gitlab !== false) sources.push("gitlab");
-  if (connections.azuredevops !== false) sources.push("azuredevops");
+  if (enabled.github && connections.github !== false) sources.push("github");
+  if (enabled.linear && connections.linear !== false) sources.push("linear");
+  if (enabled.jira && connections.jira !== false) sources.push("jira");
+  if (enabled.gitlab && connections.gitlab !== false) sources.push("gitlab");
+  if (enabled.azuredevops && connections.azuredevops !== false)
+    sources.push("azuredevops");
   return sources;
 }
 
 export function connectableInboxSources(
   connections: InboxSourceConnections,
+  enabled: InboxConnectors = loadInboxConnectors(),
 ): ConnectableInboxSource[] {
   const sources: ConnectableInboxSource[] = [];
-  if (connections.github === false) sources.push("github");
-  if (connections.linear === false) sources.push("linear");
-  if (connections.jira === false) sources.push("jira");
-  if (connections.gitlab === false) sources.push("gitlab");
-  if (connections.azuredevops === false) sources.push("azuredevops");
+  if (enabled.github && connections.github === false) sources.push("github");
+  if (enabled.linear && connections.linear === false) sources.push("linear");
+  if (enabled.jira && connections.jira === false) sources.push("jira");
+  if (enabled.gitlab && connections.gitlab === false) sources.push("gitlab");
+  if (enabled.azuredevops && connections.azuredevops === false)
+    sources.push("azuredevops");
   return sources;
 }
 
@@ -104,8 +109,9 @@ export function isTrackerSource(source?: InboxSource): boolean {
 export function resolveInboxSource(
   source: InboxSource,
   connections: InboxSourceConnections,
+  enabled: InboxConnectors = loadInboxConnectors(),
 ): InboxSource {
-  const visible = visibleInboxSources(connections);
+  const visible = visibleInboxSources(connections, enabled);
   return visible.includes(source) ? source : (visible[0] ?? "github");
 }
 

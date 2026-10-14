@@ -1,4 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
+import {
+  loadInboxConnectors,
+  subscribeInboxConnectors,
+  type InboxConnectors,
+} from "./inboxConnectors";
 import { clearKnownInboxItems } from "./inboxSeen";
 import {
   linearConnected,
@@ -187,6 +192,17 @@ type InboxListCache = InboxListResult & {
 let inboxListCache: InboxListCache | null = null;
 let inboxCacheGeneration = 0;
 const inboxListInflight = new Map<string, Promise<InboxListResult>>();
+// Connector changes invalidate only Inbox lists; repository, detail and CI
+// caches remain available to the rest of the workspace.
+let lastInboxConnectors = loadInboxConnectors();
+subscribeInboxConnectors(() => {
+  const enabled = loadInboxConnectors();
+  if (enabled === lastInboxConnectors) return;
+  lastInboxConnectors = enabled;
+  inboxCacheGeneration += 1;
+  inboxListCache = null;
+  inboxListInflight.clear();
+});
 const repoByPath = new Map<string, string>();
 const repositoriesByPath = new Map<string, string[]>();
 const workItemByKey = new Map<string, GithubWorkItem>();
@@ -233,6 +249,7 @@ export function clearInboxCache() {
 export function inboxListCacheKey(
   projects: readonly { path: string }[],
   query: InboxQuery,
+  enabled: InboxConnectors = loadInboxConnectors(),
 ): string {
   const paths = uniqueInboxProjects(projects)
     .map((project) => normalizeProjectPath(project.path))
@@ -240,7 +257,16 @@ export function inboxListCacheKey(
     .join("|");
   const teams = [...(query.linearHiddenTeamIds ?? [])].sort().join(",");
   const jiraProjects = [...(query.jiraHiddenProjectIds ?? [])].sort().join(",");
-  return `${query.assignedToMe ? 1 : 0}:${query.state}:${paths}:${teams}:${jiraProjects}`;
+  const connectors = [
+    enabled.github,
+    enabled.linear,
+    enabled.jira,
+    enabled.gitlab,
+    enabled.azuredevops,
+  ]
+    .map((value) => (value ? 1 : 0))
+    .join("");
+  return `${query.assignedToMe ? 1 : 0}:${query.state}:${paths}:${teams}:${jiraProjects}:${connectors}`;
 }
 
 export function peekInboxList(
@@ -696,15 +722,17 @@ export async function listInboxItems(
   query: InboxQuery,
   options?: { force?: boolean },
 ): Promise<InboxListResult> {
-  const key = inboxListCacheKey(projects, query);
+  const enabled = loadInboxConnectors();
+  const key = inboxListCacheKey(projects, query, enabled);
   if (!options?.force && inboxListIsFresh(projects, query)) {
     return peekInboxList(projects, query) ?? { items: [], errors: {} };
   }
   const pending = inboxListInflight.get(key);
   if (pending) return pending;
   const generation = inboxCacheGeneration;
-  const promise = fetchInboxItems(projects, query)
+  const promise = fetchInboxItems(projects, query, enabled, generation)
     .then((result) => {
+      if (generation !== inboxCacheGeneration) return { items: [], errors: {} };
       // Keep the last GitHub snapshot usable while the backend waits for a
       // rate-limit reset. Other providers can continue refreshing normally.
       if (result.errors.github && inboxListCache?.key === key) {
@@ -736,46 +764,62 @@ export async function listInboxItems(
 async function fetchInboxItems(
   projects: readonly { path: string }[],
   query: InboxQuery,
+  enabled: InboxConnectors,
+  generation: number,
 ): Promise<InboxListResult> {
+  const active = (provider: InboxProvider) =>
+    enabled[provider] &&
+    loadInboxConnectors()[provider] &&
+    generation === inboxCacheGeneration;
   const unique = uniqueInboxProjects(projects);
   const preferredPaths = unique.map((project) => project.path);
-  const discovery = await Promise.allSettled(
-    unique.map((project) => githubRepositories(project.path)),
-  );
-  const resolved = discovery.flatMap((result, index) =>
-    result.status === "fulfilled"
-      ? result.value.map((repo) => ({ path: unique[index]!.path, repo }))
-      : [],
-  );
-  const grouped = groupProjectsByRepo(resolved);
-  const githubJobs = grouped.flatMap((project) =>
-    (["issue", "pr"] as const).map(async (kind) => {
-      const items = await listGithubWorkItems(project.path, project.repo, {
-        ...query,
-        kind,
-      });
-      return items.map((item) => ({
-        ...item,
-        projectPath: project.path,
-        provider: "github" as const,
-        repo: item.repo || project.repo,
-      }));
-    }),
-  );
-  const discoveryFailures = discovery.filter(
-    (result): result is PromiseRejectedResult => result.status === "rejected",
-  );
-  const github = collectInboxResults(
-    [...(await Promise.allSettled(githubJobs)), ...discoveryFailures],
-    preferredPaths,
-  );
   const errors: InboxProviderErrors = {};
-  if (github.error && unique.length > 0) errors.github = github.error;
+  let githubItems: InboxItem[] = [];
+  if (active("github")) {
+    const discovery = await Promise.allSettled(
+      unique.map((project) => githubRepositories(project.path)),
+    );
+    if (active("github")) {
+      const resolved = discovery.flatMap((result, index) =>
+        result.status === "fulfilled"
+          ? result.value.map((repo) => ({ path: unique[index]!.path, repo }))
+          : [],
+      );
+      const grouped = groupProjectsByRepo(resolved);
+      const githubJobs = grouped.flatMap((project) =>
+        (["issue", "pr"] as const).map(async (kind) => {
+          const items = await listGithubWorkItems(project.path, project.repo, {
+            ...query,
+            kind,
+          });
+          return items.map((item) => ({
+            ...item,
+            projectPath: project.path,
+            provider: "github" as const,
+            repo: item.repo || project.repo,
+          }));
+        }),
+      );
+      const discoveryFailures = discovery.filter(
+        (result): result is PromiseRejectedResult => result.status === "rejected",
+      );
+      const github = collectInboxResults(
+        [...(await Promise.allSettled(githubJobs)), ...discoveryFailures],
+        preferredPaths,
+      );
+      githubItems = github.items;
+      if (github.error && unique.length > 0) errors.github = github.error;
+    }
+  }
 
   let linearItems: InboxItem[] = [];
-  if ((await linearConnected()).connected) {
+  if (
+    active("linear") &&
+    (await linearConnected()).connected &&
+    active("linear")
+  ) {
     try {
-      linearItems = await fetchLinearInboxItems(query);
+      linearItems = await fetchLinearInboxItems(query, () => active("linear"));
     } catch (error) {
       errors.linear = inboxErrorMessage(error);
     }
@@ -783,32 +827,42 @@ async function fetchInboxItems(
 
   let jiraItems: InboxItem[] = [];
   try {
-    if ((await jiraConnected()).connected) {
-      jiraItems = await fetchJiraInboxItems(query);
+    if (active("jira") && (await jiraConnected()).connected && active("jira")) {
+      jiraItems = await fetchJiraInboxItems(query, () => active("jira"));
     }
   } catch (error) {
     errors.jira = inboxErrorMessage(error);
   }
 
   let gitlabItems: InboxItem[] = [];
-  if ((await gitlabConnected()).connected) {
+  if (
+    active("gitlab") &&
+    (await gitlabConnected()).connected &&
+    active("gitlab")
+  ) {
     const gitlab = await fetchRepositoryInboxItems(
       "gitlab",
       unique,
       query,
       preferredPaths,
+      () => active("gitlab"),
     );
     gitlabItems = gitlab.items;
     if (gitlab.error) errors.gitlab = gitlab.error;
   }
 
   let azureDevOpsItems: InboxItem[] = [];
-  if ((await azureDevOpsConnected()).connected) {
+  if (
+    active("azuredevops") &&
+    (await azureDevOpsConnected()).connected &&
+    active("azuredevops")
+  ) {
     const azuredevops = await fetchRepositoryInboxItems(
       "azuredevops",
       unique,
       query,
       preferredPaths,
+      () => active("azuredevops"),
     );
     azureDevOpsItems = azuredevops.items;
     if (azuredevops.error) errors.azuredevops = azuredevops.error;
@@ -817,7 +871,7 @@ async function fetchInboxItems(
   return {
     items: dedupeInboxItems(
       [
-        ...github.items,
+        ...githubItems,
         ...linearItems,
         ...jiraItems,
         ...gitlabItems,
@@ -834,6 +888,7 @@ async function fetchRepositoryInboxItems(
   projects: readonly { path: string }[],
   query: InboxQuery,
   preferredPaths: readonly string[],
+  active: () => boolean,
 ): Promise<{ items: InboxItem[]; error?: string }> {
   const { findRepo, listTodos, listWorkItems, toInboxItem } =
     provider === "gitlab"
@@ -861,6 +916,7 @@ async function fetchRepositoryInboxItems(
       }
     }),
   );
+  if (!active()) return { items: [] };
   const grouped = groupProjectsByRepo(
     resolved.filter((project) => project.repo.length > 0),
   );
@@ -899,13 +955,17 @@ async function fetchRepositoryInboxItems(
   return collectInboxResults(await Promise.allSettled(jobs), preferredPaths);
 }
 
-async function fetchLinearInboxItems(query: InboxQuery): Promise<InboxItem[]> {
+async function fetchLinearInboxItems(
+  query: InboxQuery,
+  active: () => boolean,
+): Promise<InboxItem[]> {
   const hiddenIds = query.linearHiddenTeamIds ?? loadHiddenLinearTeamIds();
   let teamIds: string[] | null = null;
   if (hiddenIds.length > 0) {
     teamIds = linearTeamIdsForFetch(await listLinearTeams(), hiddenIds);
     if (teamIds?.length === 0) return [];
   }
+  if (!active()) return [];
   const issues = await listLinearIssues({
     assignedToMe: query.assignedToMe,
     state: query.state,
@@ -942,13 +1002,17 @@ function linearIssueToInboxItem(issue: LinearIssue): InboxItem {
   };
 }
 
-async function fetchJiraInboxItems(query: InboxQuery): Promise<InboxItem[]> {
+async function fetchJiraInboxItems(
+  query: InboxQuery,
+  active: () => boolean,
+): Promise<InboxItem[]> {
   const hiddenIds = query.jiraHiddenProjectIds ?? loadHiddenJiraProjectIds();
   let projectIds: string[] | null = null;
   if (hiddenIds.length > 0) {
     projectIds = jiraProjectIdsForFetch(await listJiraProjects(), hiddenIds);
     if (projectIds?.length === 0) return [];
   }
+  if (!active()) return [];
   const issues = await listJiraIssues({
     assignedToMe: query.assignedToMe,
     state: query.state,

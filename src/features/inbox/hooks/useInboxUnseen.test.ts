@@ -3,6 +3,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { InboxItem } from "../model/githubTasks";
+import { setInboxConnectorEnabled } from "../model/inboxConnectors";
 import { inboxItemKey } from "../model/githubTasks";
 import {
   isInboxEntryUnseen,
@@ -313,5 +314,52 @@ describe("Inbox activity polling", () => {
     expect(isInboxEntryUnseen(entry)).toBe(false);
     expect(activity.unseen).toBe(false);
     expect(activity.linkedSessionUpdateIds.has(session.id)).toBe(false);
+  });
+});
+
+
+describe("disabled Inbox connector activity", () => {
+  function disableAll() {
+    for (const provider of ["github", "linear", "jira", "gitlab", "azuredevops"] as const)
+      setInboxConnectorEnabled(provider, false);
+  }
+
+  it("removes unread and linked indicators immediately while keeping their unread state", async () => {
+    const entry = { key: inboxItemKey(remote), updatedAt: remote.updatedAt };
+    seedInboxSeenIfNeeded([{ ...entry, updatedAt: "2026-09-12T12:00:00Z" }]);
+    listInboxItems.mockResolvedValue({ items: [remote], errors: {} });
+    await mount();
+    expect(activity.unseen).toBe(true);
+    expect(activity.linkedSessionUpdateIds.has(session.id)).toBe(true);
+
+    await act(async () => setInboxConnectorEnabled("github", false));
+    expect(activity.unseen).toBe(false);
+    expect(activity.linkedSessionUpdateIds.size).toBe(0);
+    expect(activity.linkedSessionUpdates.size).toBe(0);
+    expect(isInboxEntryUnseen(entry)).toBe(true);
+
+    await act(async () => setInboxConnectorEnabled("github", true));
+    expect(activity.unseen).toBe(true);
+    expect(activity.linkedSessionUpdateIds.has(session.id)).toBe(true);
+  });
+
+  it("stops polling completely with every connector disabled", async () => {
+    vi.useFakeTimers();
+    disableAll();
+    await mount();
+    await act(async () => vi.advanceTimersByTimeAsync(10 * 60_000));
+    expect(listInboxItems).not.toHaveBeenCalled();
+    expect(activity.unseen).toBe(false);
+  });
+
+  it("ignores a poll that finishes after a connector was disabled", async () => {
+    let finish!: (value: { items: InboxItem[]; errors: {} }) => void;
+    listInboxItems.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    await mount();
+    await act(async () => disableAll());
+    await act(async () => finish({ items: [remote], errors: {} }));
+    expect(activity.unseen).toBe(false);
+    expect(activity.linkedSessionUpdates.size).toBe(0);
+    expect(playCue).not.toHaveBeenCalled();
   });
 });

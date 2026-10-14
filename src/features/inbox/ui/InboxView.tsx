@@ -100,6 +100,7 @@ import {
   type InboxFilters,
   type InboxSource,
 } from "../model/inboxFilters";
+import { useInboxConnectors } from "../model/inboxConnectors";
 import { copyText } from "../../../platform/tauri/clipboard";
 import { projectKey, projectName } from "../../../shared/lib/paths";
 import { IS_MAC } from "../../../platform/tauri/platform";
@@ -408,6 +409,7 @@ export function InboxView({
   target = null,
   onOpenIntegrations,
 }: Props) {
+  const enabledConnectors = useInboxConnectors();
   const [discussionOpen, setDiscussionOpen] = useState(false);
   const listLock = useLockOverscroll<HTMLDivElement>();
   const listScrollRef = useRef<HTMLDivElement>(null);
@@ -440,7 +442,8 @@ export function InboxView({
     () => peekInboxForRail(recents, cwd)?.errors ?? {},
   );
   const [refresh, setRefresh] = useState(0);
-  const targetSelectionKey = target ? linkedWorkItemInboxKey(target) : null;
+  const targetSelectionKey =
+    enabledConnectors.github && target ? linkedWorkItemInboxKey(target) : null;
   const [selectedKey, setSelectedKey] = useState<string | null>(
     targetSelectionKey,
   );
@@ -448,7 +451,7 @@ export function InboxView({
   const [filters, setFilters] = useState(loadInboxFilters);
   const [connections, setConnections] = useState(loadInboxConnections);
   const [source, setSource] = useState(() =>
-    resolveInboxSource(loadInboxSource(), connections),
+    resolveInboxSource(loadInboxSource(), connections, enabledConnectors),
   );
   const [connectMenuOpen, setConnectMenuOpen] = useState(false);
   const connectButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -516,10 +519,10 @@ export function InboxView({
   });
 
   useEffect(() => {
-    if (!target) return;
+    if (!target || !enabledConnectors.github) return;
     setSource("github");
     setSearchInput("");
-  }, [target]);
+  }, [target, enabledConnectors.github]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -577,30 +580,35 @@ export function InboxView({
     const read = () => {
       const generation = ++latest;
       void Promise.allSettled([
-        githubStatus(),
-        linearConnected(),
-        jiraConnected(),
-        gitlabConnected(),
-        azureDevOpsConnected(),
+        enabledConnectors.github ? githubStatus() : Promise.resolve(null),
+        enabledConnectors.linear ? linearConnected() : Promise.resolve(null),
+        enabledConnectors.jira ? jiraConnected() : Promise.resolve(null),
+        enabledConnectors.gitlab ? gitlabConnected() : Promise.resolve(null),
+        enabledConnectors.azuredevops
+          ? azureDevOpsConnected()
+          : Promise.resolve(null),
       ]).then(([github, linear, jira, gitlab, azuredevops]) => {
         if (cancelled || generation !== latest) return;
         setConnections((prev) => ({
           github:
             github.status === "fulfilled"
-              ? github.value.connected
+              ? github.value?.connected ?? prev.github
               : prev.github,
           linear:
             linear.status === "fulfilled"
-              ? linear.value.connected
+              ? linear.value?.connected ?? prev.linear
               : prev.linear,
-          jira: jira.status === "fulfilled" ? jira.value.connected : prev.jira,
+          jira:
+            jira.status === "fulfilled"
+              ? jira.value?.connected ?? prev.jira
+              : prev.jira,
           gitlab:
             gitlab.status === "fulfilled"
-              ? gitlab.value.connected
+              ? gitlab.value?.connected ?? prev.gitlab
               : prev.gitlab,
           azuredevops:
             azuredevops.status === "fulfilled"
-              ? azuredevops.value.connected
+              ? azuredevops.value?.connected ?? prev.azuredevops
               : prev.azuredevops,
         }));
       });
@@ -617,7 +625,7 @@ export function InboxView({
       window.removeEventListener(GITLAB_CHANGE_EVENT, read);
       window.removeEventListener(AZUREDEVOPS_CHANGE_EVENT, read);
     };
-  }, []);
+  }, [enabledConnectors]);
 
   useEffect(() => {
     saveInboxConnections(connections);
@@ -634,21 +642,28 @@ export function InboxView({
 
   // Disconnecting can pull the tab out from under the current selection.
   useEffect(() => {
-    const next = resolveInboxSource(source, connections);
+    const next = resolveInboxSource(source, connections, enabledConnectors);
     if (next === source) return;
     setSource(next);
     saveInboxSource(next);
-  }, [connections, source]);
+  }, [connections, source, enabledConnectors]);
 
-  const visibleSources = visibleInboxSources(connections);
-  const connectableSources = connectableInboxSources(connections);
+  const visibleSources = visibleInboxSources(connections, enabledConnectors);
+  const connectableSources = connectableInboxSources(
+    connections,
+    enabledConnectors,
+  );
   const sourceAvailable = visibleSources.includes(source);
   const noSourcesConnected = visibleSources.length === 0;
+  const noConnectorsEnabled = !Object.values(enabledConnectors).some(Boolean);
 
   // The roster has to come from Linear, not from the fetched issues: hiding a
   // team drops its issues, so a derived list could never offer it back.
   useEffect(() => {
-    if (source !== "linear") return;
+    if (source !== "linear" || !enabledConnectors.linear) {
+      setLinearTeams([]);
+      return;
+    }
     let cancelled = false;
     void listLinearTeams()
       .then((teams) => {
@@ -660,11 +675,14 @@ export function InboxView({
     return () => {
       cancelled = true;
     };
-  }, [source, linearHiddenTeamIds]);
+  }, [source, linearHiddenTeamIds, enabledConnectors.linear]);
 
   // Same for Jira: hidden projects are excluded from the fetch itself.
   useEffect(() => {
-    if (source !== "jira") return;
+    if (source !== "jira" || !enabledConnectors.jira) {
+      setJiraProjects([]);
+      return;
+    }
     let cancelled = false;
     void listJiraProjects()
       .then((next) => {
@@ -676,11 +694,21 @@ export function InboxView({
     return () => {
       cancelled = true;
     };
-  }, [source, jiraHiddenProjectIds]);
+  }, [source, jiraHiddenProjectIds, enabledConnectors.jira]);
 
   useEffect(() => {
     const force = refresh !== prevRefresh.current;
     prevRefresh.current = refresh;
+    if (noConnectorsEnabled) {
+      setItems([]);
+      setProviderErrors({});
+      setLoading(false);
+      setRevalidating(false);
+      return;
+    }
+    setItems((current) =>
+      current.filter((item) => enabledConnectors[item.provider]),
+    );
     const cached = peekInboxList(projects, fetchQuery);
     if (cached) {
       setItems(cached.items);
@@ -725,11 +753,12 @@ export function InboxView({
     return () => {
       cancelled = true;
     };
-  }, [fetchQuery, projects, refresh]);
+  }, [fetchQuery, projects, refresh, enabledConnectors, noConnectorsEnabled]);
 
   useEffect(() => {
     if (
       !target ||
+      !enabledConnectors.github ||
       items.some((item) => inboxItemMatchesLinkedWorkItem(item, target))
     ) {
       return;
@@ -750,7 +779,11 @@ export function InboxView({
     return () => {
       cancelled = true;
     };
-  }, [cwd, items, target, targetSelectionKey]);
+  }, [cwd, items, target, targetSelectionKey, enabledConnectors.github]);
+
+  useEffect(() => {
+    if (!enabledConnectors.github) setTargetItem(null);
+  }, [enabledConnectors.github]);
 
   const visibleItems = useMemo(() => {
     if (!sourceAvailable) return [];
@@ -808,7 +841,7 @@ export function InboxView({
 
   const searchNarrowed = searchInput.trim().length > 0;
   const narrowedByUser = searchNarrowed || filtersActive;
-  const sourceError = providerErrors[source] ?? null;
+  const sourceError = sourceAvailable ? providerErrors[source] ?? null : null;
 
   const selectedByKey = visibleItems.find(
     (item) => inboxItemKey(item) === selectedKey,
@@ -1014,7 +1047,18 @@ export function InboxView({
         ref={setListScrollRef}
         className="min-h-0 flex-1 overflow-y-auto overscroll-none"
       >
-        {noSourcesConnected ? (
+        {noConnectorsEnabled ? (
+          <div className="px-3 py-3 text-[12px] text-content/50">
+            <p>Enable a connector in Inbox Settings to start using the Inbox.</p>
+            <button
+              type="button"
+              onClick={() => onOpenIntegrations("github")}
+              className="mt-2 text-content/80 hover:text-content"
+            >
+              Open Inbox Settings
+            </button>
+          </div>
+        ) : noSourcesConnected ? (
           <p className="px-3 py-3 text-[12px] text-content/50">
             Add a connection to start using the Inbox.
           </p>

@@ -40,6 +40,7 @@ import {
   linkedSessionSeenAt,
   subscribeLinkedSessionSeen,
 } from "../model/linkedSessionSeen";
+import { loadInboxConnectors, useInboxConnectors } from "../model/inboxConnectors";
 import { loadHiddenLinearTeamIds } from "../model/linear";
 import { JIRA_CHANGE_EVENT, loadHiddenJiraProjectIds } from "../model/jira";
 import type { RecentProject } from "../../projects/model/recents";
@@ -68,12 +69,15 @@ const POLL_MS = 2 * 60_000;
 const HIDDEN_POLL_MS = 5 * 60_000;
 const POLL_TICK_MS = 30_000;
 
-type ProjectSeenEntry = InboxSeenEntry & NotificationSubject;
+type ProjectSeenEntry = InboxSeenEntry & NotificationSubject & {
+  provider: InboxProvider;
+};
 
 function seenEntries(items: readonly InboxItem[]): ProjectSeenEntry[] {
   return items.map((item) => ({
     key: inboxItemKey(item),
     updatedAt: item.updatedAt,
+    provider: item.provider,
     ...inboxNotificationSubject(item),
   }));
 }
@@ -104,6 +108,7 @@ export function useInboxActivity(
   sessions: readonly SessionSummary[],
   options?: { onAppeared?: (items: InboxItem[]) => void },
 ): InboxActivity {
+  const enabledConnectors = useInboxConnectors();
   const [unseen, setUnseen] = useState(false);
   const [workItems, setWorkItems] = useState<
     ReadonlyMap<string, GithubWorkItem>
@@ -118,15 +123,26 @@ export function useInboxActivity(
 
   const applyUnseen = useCallback(() => {
     const preferences = loadNotificationPreferences();
+    const enabled = loadInboxConnectors();
     // Category choices and mute affect badges, never the item's unread state.
     setUnseen(
       inboxHasUnseenItems(
-        entriesRef.current.filter((entry) =>
-          allowsProjectNotificationIndicator(entry, preferences),
+        entriesRef.current.filter(
+          (entry) =>
+            enabled[entry.provider] &&
+            allowsProjectNotificationIndicator(entry, preferences),
         ),
       ),
     );
   }, []);
+
+  useLayoutEffect(() => {
+    entriesRef.current = entriesRef.current.filter(
+      (entry) => enabledConnectors[entry.provider],
+    );
+    if (!enabledConnectors.github) setWorkItems(new Map());
+    applyUnseen();
+  }, [enabledConnectors, applyUnseen]);
 
   useLayoutEffect(() => {
     sessionsRef.current = sessions;
@@ -158,7 +174,7 @@ export function useInboxActivity(
 
   useEffect(() => {
     const projects = inboxProjectsForRail(recents, cwd);
-    if (projects.length === 0) {
+    if (projects.length === 0 || !Object.values(enabledConnectors).some(Boolean)) {
       entriesRef.current = [];
       applyUnseen();
       return;
@@ -185,8 +201,12 @@ export function useInboxActivity(
         jiraHiddenProjectIds: loadHiddenJiraProjectIds(),
       };
       try {
-        const listed = await listInboxItems(projects, query, { force });
-        if (cancelled) return;
+        const result = await listInboxItems(projects, query, { force });
+        if (cancelled || enabledConnectors !== loadInboxConnectors()) return;
+        const listed = {
+          ...result,
+          items: result.items.filter((item) => enabledConnectors[item.provider]),
+        };
         const visible = applyInboxFilters(listed.items, filters, "");
         rememberNotificationProjects(
           listed.items.map(inboxNotificationProject),
@@ -314,11 +334,14 @@ export function useInboxActivity(
       window.removeEventListener(JIRA_CHANGE_EVENT, onJiraChange);
       stopSelfActivity();
     };
-  }, [applyUnseen, cwd, recents]);
+  }, [applyUnseen, cwd, recents, enabledConnectors]);
 
   const updates = useMemo(
-    () => linkedSessionUpdates(sessions, workItems, linkedSessionSeenAt),
-    [sessions, workItems, linkedSeenRevision],
+    () =>
+      enabledConnectors.github
+        ? linkedSessionUpdates(sessions, workItems, linkedSessionSeenAt)
+        : new Map<string, LinkedSessionUpdate>(),
+    [sessions, workItems, linkedSeenRevision, enabledConnectors.github],
   );
   const linkedIndicators = useMemo(() => {
     const preferences = loadNotificationPreferences();

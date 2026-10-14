@@ -19,6 +19,7 @@ import {
   saveInboxConnections,
   visibleInboxSources,
 } from "./inboxFilters";
+import type { InboxConnectors } from "./inboxConnectors";
 import type { InboxItem } from "./githubTasks";
 
 function item(
@@ -711,5 +712,41 @@ describe("inbox connection cache", () => {
       gitlab: null,
       azuredevops: null,
     });
+  });
+});
+
+
+describe("disabled Inbox connectors", () => {
+  const enabled: InboxConnectors = {
+    github: false,
+    linear: true,
+    jira: false,
+    gitlab: true,
+    azuredevops: false,
+  };
+
+  it("hides disabled connected and unresolved sources from tabs", () => {
+    expect(visibleInboxSources({
+      github: true, linear: true, jira: null, gitlab: true, azuredevops: null,
+    }, enabled)).toEqual(["linear", "gitlab"]);
+  });
+
+  it("hides disabled disconnected sources from Add connection", () => {
+    expect(connectableInboxSources({
+      github: false, linear: false, jira: false, gitlab: false, azuredevops: false,
+    }, enabled)).toEqual(["linear", "gitlab"]);
+  });
+
+  it("selects the next enabled connected source after switching one off", () => {
+    expect(resolveInboxSource("github", {
+      github: true, linear: true, jira: true, gitlab: true, azuredevops: true,
+    }, enabled)).toBe("linear");
+  });
+
+  it("shows no source tabs or connect actions when every connector is off", () => {
+    const disabled = Object.fromEntries(Object.keys(enabled).map((key) => [key, false])) as InboxConnectors;
+    const connections = { github: true, linear: false, jira: null, gitlab: true, azuredevops: false };
+    expect(visibleInboxSources(connections, disabled)).toEqual([]);
+    expect(connectableInboxSources(connections, disabled)).toEqual([]);
   });
 });
