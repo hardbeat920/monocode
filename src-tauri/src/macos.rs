@@ -696,8 +696,8 @@ pub(crate) fn install_dock_menu(app: &AppHandle) {
 /// paints Tauri's embedded icns edge-to-edge. Wrap that binary in a real
 /// `.app` so macOS applies the plate, mask, and padding.
 #[cfg(debug_assertions)]
-pub(crate) fn ensure_dev_bundle() {
-    if let Err(err) = relaunch_from_dev_bundle() {
+pub(crate) fn ensure_dev_bundle(version: &str, bundle_version: &str) {
+    if let Err(err) = relaunch_from_dev_bundle(version, bundle_version) {
         eprintln!("monocode: macos dev bundle: {err}");
     }
 }
@@ -745,14 +745,14 @@ fn existing_bundle_root_from_exe(exe: &Path) -> Option<(std::path::PathBuf, Stri
 }
 
 #[cfg(debug_assertions)]
-fn relaunch_from_dev_bundle() -> Result<(), String> {
+fn relaunch_from_dev_bundle(version: &str, bundle_version: &str) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::process::CommandExt;
     use std::process::Command;
 
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     if let Some((app, app_name)) = existing_bundle_root_from_exe(&exe) {
-        write_dev_bundle_icons(&app, &app_name)?;
+        write_dev_bundle_icons(&app, &app_name, version, bundle_version)?;
         return Ok(());
     }
     let app_name = dev_bundle_name_from_env(DEV_BUNDLE_DEFAULT_NAME);
@@ -763,7 +763,7 @@ fn relaunch_from_dev_bundle() -> Result<(), String> {
         .join(dev_bundle_dir_name(&app_name));
     let macos_dir = app.join("Contents/MacOS");
     std::fs::create_dir_all(&macos_dir).map_err(|e| e.to_string())?;
-    write_dev_bundle_icons(&app, &app_name)?;
+    write_dev_bundle_icons(&app, &app_name, version, bundle_version)?;
 
     let bundled = macos_dir.join("monocode");
     let _ = std::fs::remove_file(&bundled);
@@ -796,11 +796,19 @@ fn relaunch_from_dev_bundle() -> Result<(), String> {
 }
 
 #[cfg(debug_assertions)]
-fn write_dev_bundle_icons(app: &Path, app_name: &str) -> Result<(), String> {
+fn write_dev_bundle_icons(
+    app: &Path,
+    app_name: &str,
+    version: &str,
+    bundle_version: &str,
+) -> Result<(), String> {
     let resources = app.join("Contents/Resources");
     std::fs::create_dir_all(&resources).map_err(|e| e.to_string())?;
-    std::fs::write(app.join("Contents/Info.plist"), dev_bundle_plist(app_name))
-        .map_err(|e| e.to_string())?;
+    std::fs::write(
+        app.join("Contents/Info.plist"),
+        dev_bundle_plist(app_name, version, bundle_version),
+    )
+    .map_err(|e| e.to_string())?;
     std::fs::write(resources.join("AppIcon.icns"), DEV_ICNS).map_err(|e| e.to_string())?;
     std::fs::write(resources.join("Assets.car"), DEV_ASSETS_CAR).map_err(|e| e.to_string())?;
     let _ = std::process::Command::new("/usr/bin/touch")
@@ -864,8 +872,10 @@ fn escape_plist_text(value: &str) -> String {
 }
 
 #[cfg(debug_assertions)]
-fn dev_bundle_plist(app_name: &str) -> Vec<u8> {
+fn dev_bundle_plist(app_name: &str, version: &str, bundle_version: &str) -> Vec<u8> {
     let app_name = escape_plist_text(app_name);
+    let version = escape_plist_text(version);
+    let bundle_version = escape_plist_text(bundle_version);
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -890,9 +900,9 @@ fn dev_bundle_plist(app_name: &str) -> Vec<u8> {
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.75</string>
+	<string>{version}</string>
 	<key>CFBundleVersion</key>
-	<string>0.1.75.5</string>
+	<string>{bundle_version}</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
 	<key>NSHighResolutionCapable</key>
@@ -977,7 +987,7 @@ mod tests {
 
     #[test]
     fn dev_bundle_plist_uses_the_provided_app_name() {
-        let plist = String::from_utf8(dev_bundle_plist("MonoCode Dev")).unwrap();
+        let plist = String::from_utf8(dev_bundle_plist("MonoCode Dev", "1.2.3", "1.2.3")).unwrap();
         assert!(plist.contains("<string>MonoCode Dev</string>"));
         assert!(!plist.contains("<string>MonoCode</string>"));
     }

@@ -777,14 +777,14 @@ function ProjectGroupSection({
             if (groupSortable.consumeClick()) return;
             onToggleCollapsed();
           }}
-          className="flex min-w-0 flex-1 cursor-default items-center gap-2 text-left transition-[padding] duration-150 motion-reduce:transition-none group-hover:pr-6 group-has-[:focus-visible]:pr-6"
+          className="flex min-w-0 flex-1 cursor-default items-center gap-2 text-left transition-[padding] duration-150 motion-reduce:transition-none group-hover:pr-6 group-has-[button:focus-visible]:pr-6"
         >
           <div className="grid size-4 shrink-0 place-items-center">
             {group.collapsed ? (
               <>
                 <span
                   data-group-mascot
-                  className="grid size-4 place-items-center group-hover:hidden group-has-[:focus-visible]:hidden"
+                  className="grid size-4 place-items-center group-hover:hidden group-has-[button:focus-visible]:hidden"
                 >
                   <ProjectMascot
                     project={group.id}
@@ -795,7 +795,7 @@ function ProjectGroupSection({
                 </span>
                 <ChevronRight
                   data-group-chevron
-                  className="hidden size-3.5 group-hover:block group-has-[:focus-visible]:block"
+                  className="hidden size-3.5 group-hover:block group-has-[button:focus-visible]:block"
                   strokeWidth={1.75}
                 />
               </>
@@ -820,7 +820,7 @@ function ProjectGroupSection({
             event.stopPropagation();
             openMenu(event.currentTarget);
           }}
-          className="absolute right-1 top-1/2 hidden size-6 -translate-y-1/2 place-items-center rounded-md text-content/55 hover:bg-content/8 hover:text-content group-hover:grid group-has-[:focus-visible]:grid"
+          className="absolute right-1 top-1/2 hidden size-6 -translate-y-1/2 place-items-center rounded-md text-content/55 hover:bg-content/8 hover:text-content group-hover:grid group-has-[button:focus-visible]:grid"
         >
           <MoreHorizontal className="size-4" strokeWidth={1.75} />
         </button>
@@ -977,7 +977,7 @@ function ProjectCard({
           muteStatus ? `${cardAriaLabel}, ${muteStatus}` : cardAriaLabel
         }
         aria-current={selected ? "true" : undefined}
-        className="flex min-w-0 flex-1 cursor-default items-center gap-2 text-left transition-[padding] duration-150 motion-reduce:transition-none group-hover:pr-6 group-has-[:focus-visible]:pr-6"
+        className="flex min-w-0 flex-1 cursor-default items-center gap-2 text-left transition-[padding] duration-150 motion-reduce:transition-none group-hover:pr-6 group-has-[button:focus-visible]:pr-6"
       >
         <div className="project-card-logo grid size-4 shrink-0 place-items-center transition-opacity group-hover:opacity-0">
           {logoPath && !busy ? (
@@ -1009,7 +1009,7 @@ function ProjectCard({
           </span>
         ) : null}
         {hasChanges ? (
-          <span className="project-card-stats shrink-0 group-hover:hidden group-has-[:focus-visible]:hidden">
+          <span className="project-card-stats shrink-0 group-hover:hidden group-has-[button:focus-visible]:hidden">
             <ProjectDiffStat additions={additions} deletions={deletions} />
           </span>
         ) : null}
@@ -1063,7 +1063,7 @@ function ProjectCard({
             event.detail === 0 ? rect.bottom : event.clientY,
           );
         }}
-        className="absolute right-1 top-1/2 hidden size-6 -translate-y-1/2 place-items-center rounded-md text-content/55 hover:bg-content/8 hover:text-content group-hover:grid group-has-[:focus-visible]:grid"
+        className="absolute right-1 top-1/2 hidden size-6 -translate-y-1/2 place-items-center rounded-md text-content/55 hover:bg-content/8 hover:text-content group-hover:grid group-has-[button:focus-visible]:grid"
       >
         <MoreHorizontal className="size-4" strokeWidth={1.75} />
       </button>
