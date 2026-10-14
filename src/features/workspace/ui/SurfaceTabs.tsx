@@ -212,9 +212,7 @@ export function SurfaceTabs({
   const fileIds = files.map((file) => file.id);
   const sortable = useAnimatedReorder(fileIds, onReorder);
   const { displayed, setTabNode, finishMotion } = useTabCloseMotion(files);
-  const motionKey = displayed
-    .map((entry) => `${entry.id}:${entry.opening}:${entry.closing}`)
-    .join("\0");
+  const opening = displayed.some((entry) => entry.opening);
   const menuFile = menu
     ? files.find((file) => file.id === menu.fileId)
     : undefined;
@@ -264,16 +262,16 @@ export function SurfaceTabs({
   useLayoutEffect(() => {
     if (sortable.draggingId) return;
     const strip = stripRef.current;
-    const selected = strip
-      ?.querySelector<HTMLElement>('[aria-selected="true"]')
-      ?.closest<HTMLElement>("[data-tab-slot-id]");
+    const selected = strip?.querySelector<HTMLElement>(
+      '[aria-selected="true"]',
+    );
     if (!strip || !selected) return;
     const tab = selected.getBoundingClientRect();
     const viewport = strip.getBoundingClientRect();
     if (tab.left < viewport.left) strip.scrollLeft += tab.left - viewport.left;
     else if (tab.right > viewport.right)
       strip.scrollLeft += tab.right - viewport.right;
-  }, [activeFileId, sortable.draggingId, motionKey]);
+  }, [activeFileId, sortable.draggingId, opening]);
 
   return (
     <div className="flex h-9 min-w-0 shrink-0 border-b border-stroke">
