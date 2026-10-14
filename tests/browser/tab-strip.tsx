@@ -27,12 +27,16 @@ function Fixture() {
         <ScrollableTabStrip
           label="Inbox source"
           activeKey={active}
-          add={{
-            label: "Add connection",
-            ariaLabel: "Connect an inbox source",
-            expanded: false,
-            onClick() {},
-          }}
+          add={
+            new URLSearchParams(location.search).has("no-add")
+              ? undefined
+              : {
+                  label: "Add connection",
+                  ariaLabel: "Connect an inbox source",
+                  expanded: false,
+                  onClick() {},
+                }
+          }
         >
           {sources.map((source) => (
             <button

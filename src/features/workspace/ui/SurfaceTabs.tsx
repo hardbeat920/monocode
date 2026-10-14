@@ -28,7 +28,7 @@ import { displayPath } from "../../../shared/lib/paths";
 import { IS_MAC, IS_WIN } from "../../../platform/tauri/platform";
 import { releaseNotesTitle } from "../../../app/model/releaseNotes";
 import { terminalTabLabel } from "../../terminal/model/terminalTab";
-import { ScrollableTabStrip } from "../../../shared/ui/ScrollableTabStrip";
+import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { useAnimatedReorder } from "../../../shared/hooks/useAnimatedReorder";
 import { useTabCloseMotion } from "../hooks/useTabCloseMotion";
 import { TabWidthMotion } from "../../../app/shell/ClosingTab";
@@ -205,12 +205,16 @@ export function SurfaceTabs({
   label = "Open files",
   trailing,
 }: Props) {
-  const activeTabRef = useRef<HTMLDivElement | null>(null);
+  const stripRef = useRef<HTMLDivElement>(null);
+  const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const [menu, setMenu] = useState<SurfaceTabMenu | null>(null);
   const [fileActionError, setFileActionError] = useState<string | null>(null);
   const fileIds = files.map((file) => file.id);
   const sortable = useAnimatedReorder(fileIds, onReorder);
   const { displayed, setTabNode, finishMotion } = useTabCloseMotion(files);
+  const motionKey = displayed
+    .map((entry) => `${entry.id}:${entry.opening}:${entry.closing}`)
+    .join("\0");
   const menuFile = menu
     ? files.find((file) => file.id === menu.fileId)
     : undefined;
@@ -259,18 +263,28 @@ export function SurfaceTabs({
 
   useLayoutEffect(() => {
     if (sortable.draggingId) return;
-    activeTabRef.current?.scrollIntoView({
-      inline: "nearest",
-      block: "nearest",
-    });
-  }, [activeFileId, sortable.draggingId]);
+    const strip = stripRef.current;
+    const selected = strip
+      ?.querySelector<HTMLElement>('[aria-selected="true"]')
+      ?.closest<HTMLElement>("[data-tab-slot-id]");
+    if (!strip || !selected) return;
+    const tab = selected.getBoundingClientRect();
+    const viewport = strip.getBoundingClientRect();
+    if (tab.left < viewport.left) strip.scrollLeft += tab.left - viewport.left;
+    else if (tab.right > viewport.right)
+      strip.scrollLeft += tab.right - viewport.right;
+  }, [activeFileId, sortable.draggingId, motionKey]);
 
   return (
     <div className="flex h-9 min-w-0 shrink-0 border-b border-stroke">
-      <ScrollableTabStrip
-        label={label}
-        activeKey={activeFileId}
-        className="pl-1.5 pr-2.5"
+      <div
+        ref={(el) => {
+          stripRef.current = el;
+          lockOverscroll(el);
+        }}
+        role="tablist"
+        aria-label={label}
+        className="scrollbar-none flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto overscroll-none pl-1.5 pr-2.5"
       >
         {onPaneDragStart ? (
           <div
@@ -308,7 +322,6 @@ export function SurfaceTabs({
                 if (closing) return;
                 setTabNode(file.id, el);
                 sortable.setItemRef(file.id, el);
-                if (el && file.id === activeFileId) activeTabRef.current = el;
               }}
               className={
                 closing || opening
@@ -444,7 +457,7 @@ export function SurfaceTabs({
             }}
           />
         ) : null}
-      </ScrollableTabStrip>
+      </div>
       {trailing}
       {menu && menuFile ? (
         <ExplorerMenu

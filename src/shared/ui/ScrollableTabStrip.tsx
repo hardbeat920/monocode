@@ -8,6 +8,23 @@ import {
 import { ChevronLeft, ChevronRight, Plus } from "./icons";
 import { useLockOverscroll } from "../hooks/useLockOverscroll";
 
+const ADD_PADDING = 16;
+const COMPACT_ADD_WIDTH = 30;
+const PAGER_WIDTH = 24;
+const EDGE_TOLERANCE = 1;
+
+function measureStrip(
+  row: HTMLElement,
+  content: HTMLElement,
+  addLabel: HTMLElement | null,
+) {
+  const addWidth = addLabel ? addLabel.offsetWidth + ADD_PADDING : 0;
+  const compact = content.scrollWidth + addWidth > row.clientWidth;
+  const pinnedWidth = addWidth ? (compact ? COMPACT_ADD_WIDTH : addWidth) : 0;
+  const max = Math.max(0, content.scrollWidth + pinnedWidth - row.clientWidth);
+  return { compact, max };
+}
+
 /** Natural-width tabs, with edge controls and an optional pinned add action. */
 export function ScrollableTabStrip({
   children,
@@ -33,11 +50,16 @@ export function ScrollableTabStrip({
   const contentRef = useRef<HTMLDivElement>(null);
   const addLabelRef = useRef<HTMLSpanElement>(null);
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
-  const [compact, setCompact] = useState(false);
-  const [overflowing, setOverflowing] = useState(false);
+  const hasAdd = Boolean(add);
+  const [layout, setLayout] = useState({
+    compact: false,
+    overflowing: false,
+    left: false,
+    right: false,
+  });
+  const { compact, overflowing } = layout;
   const leftWidthRef = useRef(0);
   const animationRef = useRef<number | null>(null);
-  const [edges, setEdges] = useState({ left: false, right: false });
 
   useLayoutEffect(() => {
     const row = rowRef.current;
@@ -45,30 +67,21 @@ export function ScrollableTabStrip({
     const content = contentRef.current;
     if (!row || !strip || !content) return;
     const sync = () => {
-      // Measure the full label even while it is hidden, so expanding the add
-      // action never creates a resize loop at the breakpoint.
-      const addWidth = addLabelRef.current
-        ? addLabelRef.current.offsetWidth + 16
-        : 0;
-      const nextCompact = content.scrollWidth + addWidth > row.clientWidth;
-      setCompact(nextCompact);
-      // Decide from the row's total room, excluding the arrow slots. This
-      // allows the controls to disappear as soon as the tabs fit again.
-      const pinnedWidth = addWidth ? (nextCompact ? 30 : addWidth) : 0;
-      setOverflowing(content.scrollWidth + pinnedWidth > row.clientWidth + 1);
-      // Use the content's position relative to the whole row. Adding a pager
-      // must not change either the destination or the visible content position.
-      const max = Math.max(
-        0,
-        content.scrollWidth + pinnedWidth - row.clientWidth,
-      );
+      const { compact, max } = measureStrip(row, content, addLabelRef.current);
       const position = strip.scrollLeft - leftWidthRef.current;
       const next = {
-        left: max > 1 && position > 1,
-        right: max > 1 && position < max - 1,
+        compact,
+        overflowing: max > EDGE_TOLERANCE,
+        left: max > EDGE_TOLERANCE && position > EDGE_TOLERANCE,
+        right: max > EDGE_TOLERANCE && position < max - EDGE_TOLERANCE,
       };
-      setEdges((prev) =>
-        prev.left === next.left && prev.right === next.right ? prev : next,
+      setLayout((prev) =>
+        prev.compact === next.compact &&
+        prev.overflowing === next.overflowing &&
+        prev.left === next.left &&
+        prev.right === next.right
+          ? prev
+          : next,
       );
     };
     const observer = new ResizeObserver(sync);
@@ -84,15 +97,15 @@ export function ScrollableTabStrip({
       observer.disconnect();
       strip.removeEventListener("scroll", sync);
     };
-  }, [Boolean(add)]);
+  }, [hasAdd]);
 
   useLayoutEffect(() => {
     const strip = stripRef.current;
-    const width = overflowing && edges.left ? 24 : 0;
+    const width = overflowing && layout.left ? PAGER_WIDTH : 0;
     const previous = leftWidthRef.current;
     leftWidthRef.current = width;
     if (strip && previous !== width) strip.scrollLeft += width - previous;
-  }, [overflowing, edges.left]);
+  }, [overflowing, layout.left]);
 
   const scroll = (side: "left" | "right") => {
     const row = rowRef.current;
@@ -101,22 +114,15 @@ export function ScrollableTabStrip({
     if (!row || !strip || !content) return;
     if (animationRef.current !== null)
       cancelAnimationFrame(animationRef.current);
-    const pinnedWidth = add
-      ? compact
-        ? 30
-        : (addLabelRef.current?.offsetWidth ?? 0) + 16
-      : 0;
-    const max = Math.max(
-      0,
-      content.scrollWidth + pinnedWidth - row.clientWidth,
-    );
+    const { max } = measureStrip(row, content, addLabelRef.current);
     const start = Math.max(0, strip.scrollLeft - leftWidthRef.current);
     const target = Math.max(
       0,
       Math.min(
         max,
         start +
-          (side === "left" ? -1 : 1) * Math.max(48, strip.clientWidth * 0.7),
+          (side === "left" ? -1 : 1) *
+            Math.max(PAGER_WIDTH * 2, strip.clientWidth * 0.7),
       ),
     );
     const duration = window.matchMedia("(prefers-reduced-motion: reduce)")
@@ -153,7 +159,7 @@ export function ScrollableTabStrip({
   }, [activeKey, compact]);
 
   const arrow = (side: "left" | "right") =>
-    edges[side] ? (
+    layout[side] ? (
       <button
         type="button"
         aria-label={`Scroll tabs ${side}`}

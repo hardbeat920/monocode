@@ -32,19 +32,13 @@ test("tabs stay separate, arrows track edges, and the compact add action stays p
   );
   for (let i = 1; i < boxes.length; i++)
     expect(boxes[i].left).toBeGreaterThanOrEqual(boxes[i - 1].right);
-  for (let i = 0; i < 8 && (await right.count()); i++) {
-    await right.click();
-    await page.waitForTimeout(250);
-  }
+  await right.click();
   await expect(right).toHaveCount(0);
   await expect(left).toBeVisible();
   expect((await add.boundingBox())?.x).toBe(pinned?.x);
   const viewport = await strip.boundingBox();
   expect(viewport!.x + viewport!.width).toBe(pinned!.x);
-  for (let i = 0; i < 8 && (await left.count()); i++) {
-    await left.click();
-    await page.waitForTimeout(250);
-  }
+  await left.click();
   await expect(left).toHaveCount(0);
   await expect(right).toBeVisible();
   await assertNoLeftSpacer();
@@ -83,7 +77,7 @@ test("selecting a hidden tab brings it into the viewport", async ({ page }) => {
   expect(tab!.x + tab!.width).toBeLessThanOrEqual(strip!.x + strip!.width + 1);
 });
 
-for (const overflow of [8, 25, 60]) {
+for (const overflow of [2, 8, 25, 60]) {
   test(`one click reaches either edge with ${overflow}px of overflow`, async ({
     page,
   }) => {
@@ -94,7 +88,7 @@ for (const overflow of [8, 25, 60]) {
       const row = el.parentElement!;
       const fixture = row.parentElement!;
       const inset = fixture.getBoundingClientRect().width - row.clientWidth;
-      fixture.style.width = `${el.firstElementChild!.scrollWidth + 30 + inset - extra}px`;
+      fixture.style.width = `${el.firstElementChild!.scrollWidth + row.querySelector<HTMLButtonElement>('[aria-label="Connect an inbox source"]')!.offsetWidth + inset - extra}px`;
       el.scrollLeft = 0;
     }, overflow);
     await expect(left).toHaveCount(0);
@@ -121,4 +115,42 @@ for (const overflow of [8, 25, 60]) {
       .poll(async () => (await first.boundingBox())!.x)
       .toBeCloseTo(initialX, 0);
   });
+}
+
+for (const hasAdd of [true, false]) {
+  for (const overflow of [0, 1, 2]) {
+    test(`${hasAdd ? "pinned add" : "no add"} at ${overflow}px overflow`, async ({
+      page,
+    }) => {
+      if (!hasAdd) await page.goto("/tests/browser/tab-strip.html?no-add");
+      const strip = page.getByRole("tablist");
+      await strip.evaluate((el, extra) => {
+        const row = el.parentElement!;
+        const fixture = row.parentElement!;
+        const inset = fixture.getBoundingClientRect().width - row.clientWidth;
+        const add = row.querySelector<HTMLButtonElement>(
+          '[aria-label="Connect an inbox source"]',
+        );
+        fixture.style.width = `${el.firstElementChild!.scrollWidth + (add?.offsetWidth ?? 0) + inset - extra}px`;
+        el.scrollLeft = 0;
+      }, overflow);
+      const right = page.getByRole("button", { name: "Scroll tabs right" });
+      const left = page.getByRole("button", { name: "Scroll tabs left" });
+      await expect(left).toHaveCount(0);
+      if (overflow <= 1) {
+        await expect(right).toHaveCount(0);
+        expect(
+          await strip.evaluate((el) => el.scrollWidth - el.clientWidth),
+        ).toBe(overflow);
+      } else {
+        await expect(right).toBeVisible();
+        await right.click();
+        await expect(right).toHaveCount(0);
+        await expect(left).toBeVisible();
+        await left.click();
+        await expect(left).toHaveCount(0);
+        await expect(right).toBeVisible();
+      }
+    });
+  }
 }
