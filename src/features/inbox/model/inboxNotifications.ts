@@ -28,7 +28,9 @@ export type InboxObservation = {
  */
 function observationKey(item: InboxItem): string {
   if (item.provider === "jira") {
-    return `jira:${item.teamId || item.repo.toLowerCase()}:${item.id || item.identifier || item.number}`;
+    // Jira URLs are {site}/browse/{key}; include the site so identical issue
+    // keys on different Jira instances stay distinct.
+    return `jira:${urlHost(item.url)}:${item.teamId || item.repo.toLowerCase()}:${item.id || item.identifier || item.number}`;
   }
   if (item.provider === "linear") {
     return `linear:${item.projectId || item.teamId || "unknown"}:${item.id || item.identifier || item.number}`;
@@ -50,14 +52,27 @@ function remoteRepoIdentity(url: string, repo: string | undefined): string {
       .split("/")
       .filter(Boolean);
     if (segments.length === 0) return fallback;
-    // Azure DevOps URLs are /org/project/_git/repo; item URLs elsewhere are
-    // /owner/repo/pull|issues/N, so the repository is the leading segments.
+    // Azure DevOps URLs are /org/project/_git/repo; GitLab nests repos under
+    // /group/sub/.../repo/-/...; GitHub is /owner/repo/pull|issues/N.
     const gitIndex = segments.indexOf("_git");
+    const dashIndex = segments.indexOf("-");
     const nameSegments =
-      gitIndex >= 0 ? segments.slice(0, gitIndex + 2) : segments.slice(0, 2);
+      gitIndex >= 0
+        ? segments.slice(0, gitIndex + 2)
+        : dashIndex >= 0
+          ? segments.slice(0, dashIndex)
+          : segments.slice(0, 2);
     return `${parsed.host.toLowerCase()}/${nameSegments.join("/")}`.toLowerCase();
   } catch {
     return fallback;
+  }
+}
+
+function urlHost(url: string): string {
+  try {
+    return new URL(url).host.toLowerCase();
+  } catch {
+    return "unknown";
   }
 }
 

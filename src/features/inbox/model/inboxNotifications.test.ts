@@ -129,6 +129,52 @@ it("keeps a stable identity across provider URL shapes", () => {
   expect(tracker.observe([jira, badUrl], "two").appeared).toEqual([]);
 });
 
+it("distinguishes GitLab repos nested in the same subgroup", () => {
+  const tracker = new InboxNotificationTracker();
+  const mr = (repoPath: string): InboxItem => ({
+    provider: "gitlab",
+    kind: "mr",
+    repo: repoPath,
+    number: 7,
+    title: "MR",
+    url: `https://gitlab.example.com/${repoPath}/-/merge_requests/7`,
+    updatedAt: "2026-09-14T08:00:00Z",
+    state: "open",
+    labels: [],
+    assignees: [],
+    draft: false,
+  });
+  const first = mr("group/sub/api");
+  tracker.observe([first], "scope");
+  // Same MR number in a sibling repo of the same subgroup is a different item.
+  const sibling = mr("group/sub/web");
+  expect(tracker.observe([first, sibling], "scope").appeared).toEqual([sibling]);
+  // Same repo re-observed does not re-appear.
+  expect(tracker.observe([first, sibling], "scope").appeared).toEqual([]);
+});
+
+it("distinguishes identical Jira issue keys across sites", () => {
+  const tracker = new InboxNotificationTracker();
+  const issue = (site: string): InboxItem => ({
+    provider: "jira",
+    kind: "issue",
+    repo: "ENG",
+    id: "10042",
+    identifier: "ENG-2",
+    title: "Ticket",
+    url: `${site}/browse/ENG-2`,
+    updatedAt: "2026-09-14T08:00:00Z",
+    state: "open",
+    labels: [],
+    assignees: [],
+    draft: false,
+  });
+  const first = issue("https://acme.atlassian.net");
+  tracker.observe([first], "scope");
+  const otherSite = issue("https://other.atlassian.net");
+  expect(tracker.observe([first, otherSite], "scope").appeared).toEqual([otherSite]);
+});
+
 it("does not replay open items when the local project scope changes", () => {
   const tracker = new InboxNotificationTracker();
   const a = item("acme/app", "2026-09-14T08:00:00Z");
