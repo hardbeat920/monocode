@@ -1,12 +1,10 @@
 import { File, X } from "../../../shared/ui/icons";
 import { useState } from "react";
+import { useT } from "../../../shared/i18n/useT";
 import { ProjectLogoIcon } from "../../projects/ui/ProjectLogoIcon";
 import { ProjectMascot } from "../../projects/ui/ProjectMascot";
 import { useTabGroupLogos } from "../../projects/hooks/useTabGroupLogos";
-import {
-  noteSourceProject,
-  type NoteCardMeta,
-} from "../notes";
+import { noteSourceProject, type NoteCardMeta } from "../notes";
 import { projectKey } from "../../../shared/lib/paths";
 import {
   loadTabGroupColors,
@@ -24,6 +22,7 @@ type Props = {
 };
 
 export function NoteMiniCard({ card, onDismiss, embedded = false }: Props) {
+  const t = useT();
   const logos = useTabGroupLogos();
   const [mascots] = useState(loadTabGroupMascots);
   const [colors] = useState(loadTabGroupColors);
@@ -50,11 +49,12 @@ export function NoteMiniCard({ card, onDismiss, embedded = false }: Props) {
             strokeWidth={1.75}
           />
           <span className="min-w-0 truncate text-[11px] text-content/50">
-            Note{!embedded && card.slug ? ` · ${card.slug}` : ""}
+            {t("notes.card.label")}
+            {!embedded && card.slug ? ` · ${card.slug}` : ""}
           </span>
         </span>
         <span className="mt-1 line-clamp-1 text-[13px] font-semibold leading-snug text-content">
-          {card.title || "Untitled"}
+          {card.title || t("notes.untitled")}
         </span>
         {!embedded && project ? (
           <span className="mt-1 flex min-w-0 items-center gap-1.5 text-[11px] text-content/45">
@@ -79,8 +79,10 @@ export function NoteMiniCard({ card, onDismiss, embedded = false }: Props) {
       {onDismiss ? (
         <button
           type="button"
-          title="Remove"
-          aria-label={`Remove note ${card.title || "Untitled"}`}
+          title={t("notes.card.remove")}
+          aria-label={t("notes.card.removeNamed", {
+            title: card.title || t("notes.untitled"),
+          })}
           onClick={onDismiss}
           className="absolute right-1.5 top-1.5 grid size-5 place-items-center rounded text-content/40 hover:bg-content/10 hover:text-content"
         >

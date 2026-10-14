@@ -1,3 +1,4 @@
+import { t } from "../../../shared/i18n/locale";
 import { dropContextWindow, type ContextUsage } from "./contextUsage";
 import type { UserQuestionPrompt } from "./userQuestion";
 import type { HandoffComposerCard } from "./handoff";
@@ -419,19 +420,35 @@ export const RUNTIME_MODES: RuntimeMode[] = [
 
 export const DEFAULT_RUNTIME_MODE: RuntimeMode = "supervised";
 
+// Getters keep the text current when the language changes after import.
 export const RUNTIME_MODE_LABEL: Record<RuntimeMode, string> = {
-  supervised: "Supervised",
-  "auto-accept-edits": "Auto-accept edits",
-  auto: "Auto",
-  "full-access": "Full access",
+  get supervised() {
+    return t("sessions.mode.supervised.label");
+  },
+  get "auto-accept-edits"() {
+    return t("sessions.mode.autoAcceptEdits.label");
+  },
+  get auto() {
+    return t("sessions.mode.auto.label");
+  },
+  get "full-access"() {
+    return t("sessions.mode.fullAccess.label");
+  },
 };
 
 export const RUNTIME_MODE_HINT: Record<RuntimeMode, string> = {
-  supervised: "Ask before commands and file changes.",
-  "auto-accept-edits": "Auto-approve edits, ask before other actions.",
-  auto: "An AI reviewer can approve or deny actions.",
-  "full-access":
-    "Allow commands, edits, and supported MCP confirmations in non-plan turns without prompts.",
+  get supervised() {
+    return t("sessions.mode.supervised.hint");
+  },
+  get "auto-accept-edits"() {
+    return t("sessions.mode.autoAcceptEdits.hint");
+  },
+  get auto() {
+    return t("sessions.mode.auto.hint");
+  },
+  get "full-access"() {
+    return t("sessions.mode.fullAccess.hint");
+  },
 };
 
 export type WorkspaceMode = "current" | "worktree";
@@ -781,7 +798,7 @@ export function sessionDisplayTitle(title: string, harness: HarnessId): string {
   const prefix = `${HARNESS_LABEL[harness]} · `;
   if (title.startsWith(prefix)) return title.slice(prefix.length);
   if (title === HARNESS_LABEL[harness] || title === HARNESS_TITLE[harness]) {
-    return "New session";
+    return t("sessions.session.newTitle");
   }
   return title;
 }

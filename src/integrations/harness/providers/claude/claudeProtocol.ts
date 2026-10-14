@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/i18n/locale";
 import type {
   Attachment,
   RuntimeMode,
@@ -474,7 +475,7 @@ export function statusTextFromSystem(
     text && !LIFECYCLE_STATUSES.has(text.toLowerCase().replace(/[\s.…]+$/, ""));
   if (notable) return text;
   // Compaction is worth one row even when the CLI sends no prose with it.
-  return compact ? "Compacted context" : undefined;
+  return compact ? t("integrations.status.compactedContext") : undefined;
 }
 
 export function turnStatusFromResult(rec: Record<string, unknown>): {
@@ -497,7 +498,10 @@ export function turnStatusFromResult(rec: Record<string, unknown>): {
   }
   if (joined.includes("cancel")) return { status: "cancelled" };
   const error = errors.find((item) => !item.startsWith("[ede_diagnostic]"));
-  return { status: "failed", error: error ?? "Claude turn failed." };
+  return {
+    status: "failed",
+    error: error ?? t("integrations.turn.failed", { provider: "Claude" }),
+  };
 }
 
 /**

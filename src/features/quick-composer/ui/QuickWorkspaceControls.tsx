@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Folder, FolderTree } from "../../../shared/ui/icons";
+import { useT } from "../../../shared/i18n/useT";
 import { notifyGitChanged } from "../../../platform/tauri/fs";
 import { GitPickerTrigger } from "../../source-control/ui/GitPickerTrigger";
 import { useProjectBranchesState } from "../../source-control/hooks/useProjectBranches";
@@ -28,6 +29,7 @@ export function QuickWorkspaceControls({
   onClose: () => void;
   onError?: (error: string) => void;
 }) {
+  const t = useT();
   const [ready, setReady] = useState(false);
   const [open, setOpen] = useState<QuickGitKind | null>(null);
   const activeKind = useRef<QuickGitKind | null>(null);
@@ -143,13 +145,16 @@ export function QuickWorkspaceControls({
   };
   const disabled = !enabled || !ready || !branches?.current;
   const Icon = value.mode === "worktree" ? FolderTree : Folder;
-  const label = value.mode === "worktree" ? "New worktree" : "Current checkout";
+  const label =
+    value.mode === "worktree"
+      ? t("quickComposer.workspace.newWorktree")
+      : t("quickComposer.workspace.currentCheckout");
   return (
     <div className="flex min-w-0 items-center gap-2">
       <button
         type="button"
         disabled={disabled}
-        aria-label={`Workspace ${label}`}
+        aria-label={t("quickComposer.workspace.aria", { label })}
         aria-haspopup="dialog"
         aria-expanded={open === "workspace"}
         onMouseDown={(event) => {
@@ -165,13 +170,16 @@ export function QuickWorkspaceControls({
       <GitPickerTrigger
         label={
           value.mode === "worktree"
-            ? `From ${base}`
-            : branches?.current || (settled ? "No repo" : "Loading…")
+            ? t("quickComposer.workspace.from", { base })
+            : branches?.current ||
+              (settled
+                ? t("quickComposer.workspace.noRepo")
+                : t("quickComposer.workspace.loading"))
         }
         aria-label={
           value.mode === "worktree"
-            ? `Create worktree from ${base}`
-            : "Choose branch"
+            ? t("quickComposer.workspace.createFrom", { base })
+            : t("quickComposer.workspace.chooseBranch")
         }
         aria-haspopup="dialog"
         aria-expanded={open === "branch" || open === "base"}

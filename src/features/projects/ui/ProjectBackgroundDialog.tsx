@@ -1,4 +1,5 @@
 import { useState, type CSSProperties, type ReactNode } from "react";
+import { useT } from "../../../shared/i18n/useT";
 import { Loader } from "../../../shared/ui/icons";
 import { Modal } from "../../../shared/ui/Modal";
 import { SearchableSelect } from "../../../shared/ui/SearchableSelect";
@@ -58,6 +59,7 @@ export function ProjectBackgroundDialog({
   locked = false,
   onClose,
 }: Props) {
+  const t = useT();
   const initial = loadProjectChatBackgroundSettings(project);
   const [path, setPath] = useState(initial?.path ?? null);
   const [emptyOpacity, setEmptyOpacity] = useState(
@@ -173,8 +175,8 @@ export function ProjectBackgroundDialog({
 
   return (
     <Modal
-      title="Background Image"
-      description={`Choose a background image for ${name}`}
+      title={t("projects.background.title")}
+      description={t("projects.background.description", { name })}
       size="sm"
       fitViewport
       onClose={onClose}
@@ -208,7 +210,7 @@ export function ProjectBackgroundDialog({
               )
             ) : (
               <div className="grid h-40 place-items-center text-[12px] text-content/40">
-                No background selected
+                {t("projects.background.none")}
               </div>
             )}
           </div>
@@ -221,14 +223,16 @@ export function ProjectBackgroundDialog({
             {busy ? (
               <Loader className="size-3.5 animate-spin" aria-hidden />
             ) : null}
-            {path ? "Change image" : "Choose image"}
+            {path
+              ? t("projects.background.changeImage")
+              : t("projects.background.chooseImage")}
           </button>
           <p className="mt-1.5 text-[11px] leading-relaxed text-content/45">
             {locked
-              ? `Shown behind ${name}'s chat, dimmed with the Haze effect.`
+              ? t("projects.background.hintLocked", { name })
               : path
-                ? "This image overrides the global background for this project."
-                : "This project currently follows the global Appearance setting."}
+                ? t("projects.background.hintOverride")
+                : t("projects.background.hintGlobal")}
           </p>
           {error ? (
             <p className="mt-1.5 text-[12px] text-red-400">{error}</p>
@@ -240,7 +244,7 @@ export function ProjectBackgroundDialog({
             <div className="flex items-center justify-between gap-4">
               <div className="min-w-0 flex-1">
                 <span className="text-[13px] font-medium text-content">
-                  Background effect
+                  {t("projects.background.effect")}
                 </span>
                 <p className="text-[11px] text-content/45 line-clamp-1">
                   {NEW_THREAD_BACKGROUND_EFFECT_DESCRIPTIONS[effect]}
@@ -248,7 +252,7 @@ export function ProjectBackgroundDialog({
               </div>
               <div className="w-36 shrink-0">
                 <SearchableSelect
-                  label="Project background effect"
+                  label={t("projects.background.effectLabel")}
                   variant="transparent"
                   value={effect}
                   options={NEW_THREAD_BACKGROUND_EFFECTS.map((option) => ({
@@ -268,15 +272,21 @@ export function ProjectBackgroundDialog({
 
         {locked ? null : (
           <>
-            <ProjectBackgroundRow label="Show on">
+            <ProjectBackgroundRow label={t("projects.background.showOn")}>
               <div
                 role="radiogroup"
-                aria-label="Show project background on"
+                aria-label={t("projects.background.showOnLabel")}
                 className="grid w-44 grid-cols-2 gap-0.5 rounded-md border border-content/10 p-0.5 text-[12px]"
               >
                 {[
-                  { value: "empty" as const, label: "Empty only" },
-                  { value: "all" as const, label: "All sessions" },
+                  {
+                    value: "empty" as const,
+                    label: t("projects.background.scopeEmpty"),
+                  },
+                  {
+                    value: "all" as const,
+                    label: t("projects.background.scopeAll"),
+                  },
                 ].map((option) => (
                   <button
                     key={option.value}
@@ -296,14 +306,16 @@ export function ProjectBackgroundDialog({
               </div>
             </ProjectBackgroundRow>
 
-            <ProjectBackgroundRow label="Empty chat visibility">
+            <ProjectBackgroundRow
+              label={t("projects.background.emptyVisibility")}
+            >
               <div className="flex w-56 items-center gap-3">
                 <input
                   type="range"
                   min={Math.round(CHAT_BACKGROUND_OPACITY_MIN * 100)}
                   max={Math.round(CHAT_BACKGROUND_OPACITY_MAX * 100)}
                   value={Math.round(emptyOpacity * 100)}
-                  aria-label="Project background visibility in empty chats"
+                  aria-label={t("projects.background.emptyVisibilityLabel")}
                   className="sidebar-opacity-slider min-w-0 flex-1"
                   onChange={(event) =>
                     updateOpacity("empty", Number(event.target.value))
@@ -315,14 +327,16 @@ export function ProjectBackgroundDialog({
               </div>
             </ProjectBackgroundRow>
 
-            <ProjectBackgroundRow label="Session visibility">
+            <ProjectBackgroundRow
+              label={t("projects.background.sessionVisibility")}
+            >
               <div className="flex w-56 items-center gap-3">
                 <input
                   type="range"
                   min={Math.round(CHAT_BACKGROUND_OPACITY_MIN * 100)}
                   max={Math.round(CHAT_BACKGROUND_OPACITY_MAX * 100)}
                   value={Math.round(sessionOpacity * 100)}
-                  aria-label="Project background visibility in sessions"
+                  aria-label={t("projects.background.sessionVisibilityLabel")}
                   className="sidebar-opacity-slider min-w-0 flex-1"
                   onChange={(event) =>
                     updateOpacity("session", Number(event.target.value))
@@ -343,7 +357,7 @@ export function ProjectBackgroundDialog({
             disabled={busy}
             className="w-full rounded-md border border-content/10 px-2.5 py-1.5 text-[12px] text-red-400 hover:border-red-400/40 hover:bg-red-400/10 disabled:opacity-40"
           >
-            Remove background image
+            {t("projects.background.remove")}
           </button>
         ) : null}
       </div>

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useT } from "../../../shared/i18n/useT";
 import { Copy, PanelRightToggle, Trash2 } from "../../../shared/ui/icons";
 import { copyMessage } from "../../../platform/tauri/clipboard";
 import { IconButton } from "../../../app/shell/TitleBar";
@@ -22,6 +23,7 @@ export function ArtifactReader({
   onClose: () => void;
   onOpenFile?: (path: string) => void;
 }) {
+  const t = useT();
   const leave = onBack ?? onClose;
   const { artifact, loaded, error, setError } = useArtifact(id);
   const [copied, setCopied] = useState(false);
@@ -45,10 +47,20 @@ export function ArtifactReader({
     return () => window.removeEventListener("keydown", escape);
   }, [leave]);
 
-  const label = artifact ? artifactLabel(artifact.kind) : "Document";
-  const noun = label.toLowerCase();
+  const label = artifact
+    ? artifactLabel(artifact.kind)
+    : t("artifacts.kind.document");
+  const noun = artifact
+    ? t(`artifacts.noun.${artifact.kind}`)
+    : t("artifacts.noun.document");
   const onDelete = async () => {
-    if (!artifact || deleting || !window.confirm(`Delete “${artifact.title}”?`))
+    if (
+      !artifact ||
+      deleting ||
+      !window.confirm(
+        t("artifacts.reader.confirmDelete", { title: artifact.title }),
+      )
+    )
       return;
     setDeleting(true);
     setError(null);
@@ -56,7 +68,7 @@ export function ArtifactReader({
       await deleteArtifact(artifact.id);
       if (mounted.current) leave();
     } catch {
-      setError(`Could not delete this ${noun}.`);
+      setError(t("artifacts.reader.deleteFailed", { noun }));
     } finally {
       setDeleting(false);
     }
@@ -64,18 +76,22 @@ export function ArtifactReader({
   const actions = artifact ? (
     <>
       <IconButton
-        label={`Delete ${noun}`}
+        label={t("artifacts.reader.delete", { noun })}
         disabled={deleting}
         onClick={() => void onDelete()}
       >
         <Trash2 className="size-3.5" />
       </IconButton>
       <IconButton
-        label={copied ? "Copied" : `Copy ${noun}`}
+        label={
+          copied
+            ? t("artifacts.reader.copied")
+            : t("artifacts.reader.copy", { noun })
+        }
         onClick={() =>
           void copyMessage(artifact.body).then(
             () => setCopied(true),
-            () => setError(`Could not copy this ${noun}.`),
+            () => setError(t("artifacts.reader.copyFailed", { noun })),
           )
         }
       >
@@ -88,7 +104,11 @@ export function ArtifactReader({
       {onBack ? (
         <PageHeader title={artifact?.title ?? label} onBack={onBack}>
           {actions}
-          <IconButton label="Hide overview" active onClick={onClose}>
+          <IconButton
+            label={t("artifacts.reader.hideOverview")}
+            active
+            onClick={onClose}
+          >
             <PanelRightToggle className="size-3.5" strokeWidth={1.75} />
           </IconButton>
         </PageHeader>
@@ -98,7 +118,7 @@ export function ArtifactReader({
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-none px-4 py-3">
         {!loaded ? (
           <p role="status" className="text-[13px] text-content/50">
-            Loading document…
+            {t("artifacts.reader.loading")}
           </p>
         ) : error && !artifact ? (
           <p role="alert" className="text-[13px] text-content/65">
@@ -106,7 +126,7 @@ export function ArtifactReader({
           </p>
         ) : !artifact ? (
           <p role="status" className="text-[13px] text-content/50">
-            This document is no longer available.
+            {t("artifacts.reader.unavailable")}
           </p>
         ) : (
           <article data-artifact-reader={artifact.id}>
@@ -117,7 +137,7 @@ export function ArtifactReader({
               </p>
             ) : null}
             <span role="status" className="sr-only">
-              {copied ? `${label} copied` : ""}
+              {copied ? t("artifacts.reader.labelCopied", { label }) : ""}
             </span>
           </article>
         )}

@@ -12,7 +12,7 @@ import {
   readHarnessTextFile,
 } from "../../core/child";
 import {
-  HERMES_AUTH_HELP,
+  hermesAuthHelp,
   hermesBackgroundDispatch,
   hermesCurrentModelId,
   hermesModeId,
@@ -405,7 +405,7 @@ async function prompt(live: Live, input: SendTurnInput): Promise<void> {
     live.onEvent({
       type: "session.error",
       message: /auth|credential|api key|provider|configure/i.test(detail)
-        ? `${detail.trim()}\n\n${HERMES_AUTH_HELP}`
+        ? `${detail.trim()}\n\n${hermesAuthHelp()}`
         : detail,
     });
     throw error;

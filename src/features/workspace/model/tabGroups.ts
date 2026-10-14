@@ -1,6 +1,10 @@
+import { t } from "../../../shared/i18n/locale";
 import type { Tab } from "../../../app/shell/TitleBar";
 import { projectKey, projectName } from "../../../shared/lib/paths";
-import { knownProjectPaths, notifyProjectPathsChanged } from "../../projects/model/recents";
+import {
+  knownProjectPaths,
+  notifyProjectPathsChanged,
+} from "../../projects/model/recents";
 
 /** Chrome-like palette — saturated enough to read on dark glass. */
 export const TAB_GROUP_COLORS = [
@@ -343,9 +347,11 @@ export function resolveTabGroupCustomColor(
 export function resolveTabGroupLabel(
   project: string,
   overrides?: Record<string, string>,
-  fallback = "Group",
+  fallback?: string,
 ): string {
-  return overrides?.[project]?.trim() || fallback;
+  return (
+    overrides?.[project]?.trim() || (fallback ?? t("workspace.group.fallback"))
+  );
 }
 
 export function resolveTabGroupColorIndex(
@@ -455,7 +461,10 @@ export function sharedGroupProject(tabs: { project: string }[]): string | null {
   return tabs.every((tab) => tab.project.trim() === first) ? first : null;
 }
 
-function withGroup<T extends GroupedTab>(tab: T, groupId: string | undefined): T {
+function withGroup<T extends GroupedTab>(
+  tab: T,
+  groupId: string | undefined,
+): T {
   if (!groupId) {
     if (!tab.groupId) return tab;
     const next = { ...tab };
@@ -676,7 +685,10 @@ export function joinTabOnto<T extends GroupedTab>(
   return { tabs: next, groupId, created };
 }
 
-export function ungroupTabs<T extends GroupedTab>(tabs: T[], groupId: string): T[] {
+export function ungroupTabs<T extends GroupedTab>(
+  tabs: T[],
+  groupId: string,
+): T[] {
   return tabs.map((tab) =>
     tab.groupId === groupId ? withGroup(tab, undefined) : tab,
   );

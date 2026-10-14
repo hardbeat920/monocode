@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/i18n/locale";
 import type {
   Attachment,
   RuntimeMode,
@@ -628,7 +629,10 @@ function mapTurnTerminal(
   if (status === "failed" && error) {
     events.push({ type: "session.error", message: error });
   } else if (status === "failed") {
-    events.push({ type: "session.error", message: "Codex turn failed." });
+    events.push({
+      type: "session.error",
+      message: t("integrations.turn.failed", { provider: "Codex" }),
+    });
   }
   return {
     events,
@@ -985,7 +989,7 @@ function mapSubAgentActivity(
       title,
       kind: "agent",
       status: "failed",
-      detail: "Subagent interrupted.",
+      detail: t("integrations.subagent.interrupted"),
     };
   }
   if (kind === "interacted") {
@@ -1241,11 +1245,11 @@ function collabAgentFailureDetail(
     ) {
       return [];
     }
-    return [stringField(state, "message") ?? "Subagent failed."];
+    return [stringField(state, "message") ?? t("integrations.subagent.failed")];
   });
   if (errors.length > 0) return [...new Set(errors)].join("\n");
   return stringField(item, "status") === "failed"
-    ? "Subagent operation failed."
+    ? t("integrations.subagent.operationFailed")
     : undefined;
 }
 

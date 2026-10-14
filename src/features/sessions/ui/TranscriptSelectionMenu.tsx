@@ -2,6 +2,7 @@ import { FilePlusCorner, MessageSquarePlus } from "../../../shared/ui/icons";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Popover } from "../../../shared/ui/Popover";
 import { type TranscriptSelection } from "../model/transcriptSelection";
+import { useT } from "../../../shared/i18n/useT";
 
 type Props = {
   selection: TranscriptSelection | null;
@@ -16,6 +17,7 @@ export function TranscriptSelectionMenu({
   onAddToNotes,
   onDismiss,
 }: Props) {
+  const t = useT();
   const onDismissRef = useRef(onDismiss);
   onDismissRef.current = onDismiss;
 
@@ -44,13 +46,13 @@ export function TranscriptSelectionMenu({
         onDismiss();
       }}
       role="toolbar"
-      aria-label="Selected text actions"
+      aria-label={t("sessions.selection.actions")}
       className="p-1"
     >
       <div className="flex min-w-36 flex-col items-stretch gap-0.5">
         {onAddToChat ? (
           <SelectionAction
-            label="Add to chat"
+            label={t("sessions.selection.addToChat")}
             onSelect={() => onAddToChat(selection.text)}
             onDismiss={onDismiss}
           >
@@ -63,7 +65,7 @@ export function TranscriptSelectionMenu({
         ) : null}
         {onAddToNotes ? (
           <SelectionAction
-            label="Add to notes"
+            label={t("sessions.selection.addToNotes")}
             onSelect={() => onAddToNotes(selection.text)}
             onDismiss={onDismiss}
           >
@@ -90,6 +92,7 @@ function SelectionAction({
   onSelect: () => void | Promise<void>;
   onDismiss: () => void;
 }) {
+  const t = useT();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   return (
@@ -122,7 +125,7 @@ function SelectionAction({
           role="alert"
           className="max-w-xs px-2.5 py-1 text-xs text-content/70"
         >
-          Could not save note. {error}
+          {t("sessions.selection.saveNoteFailed", { error })}
         </span>
       )}
     </>

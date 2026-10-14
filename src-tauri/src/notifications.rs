@@ -27,7 +27,7 @@ fn handle_click(app: &AppHandle, identifier: &str) {
 }
 
 #[cfg(target_os = "macos")]
-pub use platform::install_delegate;
+pub use platform::{install_delegate, refresh_actions};
 
 /// Each platform constructs only the variants it can reach, so the lint is
 /// silenced for the whole enum rather than per target.
@@ -341,10 +341,22 @@ mod platform {
         let center = UNUserNotificationCenter::currentNotificationCenter();
         center.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
         DELEGATE.with(|slot| *slot.borrow_mut() = Some(delegate));
+        register_category(&center);
+    }
 
+    /// Re-registers the "Show" button in the current language. Does nothing
+    /// until the delegate is installed, since the center needs a bundle.
+    pub fn refresh_actions() {
+        if DELEGATE.with(|slot| slot.borrow().is_none()) {
+            return;
+        }
+        register_category(&UNUserNotificationCenter::currentNotificationCenter());
+    }
+
+    fn register_category(center: &UNUserNotificationCenter) {
         let show = UNNotificationAction::actionWithIdentifier_title_options(
             &NSString::from_str(SHOW_ACTION),
-            &NSString::from_str("Show"),
+            &NSString::from_str(crate::i18n::t(crate::i18n::Text::NotificationShow)),
             UNNotificationActionOptions::Foreground,
         );
         let category =
@@ -452,7 +464,10 @@ mod platform {
             .body(&escape_markup(body))
             .icon("monocode")
             // Servers only report the click when a "default" action exists.
-            .action("default", "Show");
+            .action(
+                "default",
+                crate::i18n::t(crate::i18n::Text::NotificationShow),
+            );
         if sound {
             notification.sound_name("message-new-instant");
         }
@@ -655,7 +670,10 @@ mod platform {
             .text1(subtitle)
             .text2(body)
             .sound(sound)
-            .add_button("Show", &show_action(session_id))
+            .add_button(
+                crate::i18n::t(crate::i18n::Text::NotificationShow),
+                &show_action(session_id),
+            )
             .on_activated(move |action| {
                 let session = action
                     .as_deref()

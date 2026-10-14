@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { useT } from "../../../shared/i18n/useT";
 import {
   fetchInboxMedia,
   sniffInboxMedia,
@@ -17,6 +18,7 @@ type LoadState =
   | { status: "error" };
 
 export function InboxMedia({ src, alt }: Props) {
+  const t = useT();
   const [state, setState] = useState<LoadState>({ status: "loading" });
 
   useEffect(() => {
@@ -75,7 +77,7 @@ export function InboxMedia({ src, alt }: Props) {
     );
   }
 
-  const label = alt?.trim() || "Image";
+  const label = alt?.trim() || t("inbox.media.image");
   return (
     <img
       src={state.url}

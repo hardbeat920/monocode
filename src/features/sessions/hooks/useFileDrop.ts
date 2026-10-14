@@ -1,3 +1,4 @@
+import { t } from "../../../shared/i18n/locale";
 import { useEffect, useState, type RefObject } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
@@ -130,9 +131,7 @@ export function useFileDrop({
         setFileDrag(false);
         if (!over || !supported) return;
         if (event.payload.paths.length === 0) {
-          onError(
-            "This drag did not provide a file. Save the image, then drag the saved file here.",
-          );
+          onError(t("sessions.fileDrop.noFile"));
           return;
         }
         nativeDropAt = Date.now();

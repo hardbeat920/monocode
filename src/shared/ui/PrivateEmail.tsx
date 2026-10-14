@@ -1,11 +1,13 @@
 import { useState } from "react";
 import { useMaskEmails } from "../../features/settings/model/displayPrefs";
+import { useT } from "../i18n/useT";
 
 /**
  * With email masking on, keep account emails private in screenshots until
  * explicitly revealed; otherwise show them as plain text.
  */
 export function PrivateEmail({ email }: { email: string }) {
+  const t = useT();
   const masked = useMaskEmails();
   const [revealed, setRevealed] = useState(false);
   const [wasMasked, setWasMasked] = useState(masked);
@@ -21,7 +23,9 @@ export function PrivateEmail({ email }: { email: string }) {
       </span>
     );
   }
-  const action = revealed ? "Hide email" : "Reveal email";
+  const action = revealed
+    ? t("shared.privateEmail.hide")
+    : t("shared.privateEmail.reveal");
 
   return (
     <button

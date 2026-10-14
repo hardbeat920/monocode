@@ -1,9 +1,37 @@
+import { t } from "../../../shared/i18n/locale";
+
+/** `label` is read at render time so it follows the active language. */
 export const NOTIFICATION_CATEGORIES = [
-  { id: "pullRequests", label: "Pull requests / Merge requests" },
-  { id: "issues", label: "Issues and Linear tasks" },
-  { id: "agentFinished", label: "Agent finished" },
-  { id: "agentInput", label: "Agent approvals and questions" },
-  { id: "reminders", label: "Reminders" },
+  {
+    id: "pullRequests",
+    get label() {
+      return t("settings.notifications.category.pullRequests");
+    },
+  },
+  {
+    id: "issues",
+    get label() {
+      return t("settings.notifications.category.issues");
+    },
+  },
+  {
+    id: "agentFinished",
+    get label() {
+      return t("settings.notifications.category.agentFinished");
+    },
+  },
+  {
+    id: "agentInput",
+    get label() {
+      return t("settings.notifications.category.agentInput");
+    },
+  },
+  {
+    id: "reminders",
+    get label() {
+      return t("settings.notifications.category.reminders");
+    },
+  },
 ] as const;
 
 export type NotificationCategory =

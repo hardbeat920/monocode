@@ -10,7 +10,7 @@ import {
   watchChild,
 } from "../../core/child";
 import {
-  AUTH_HELP,
+  authHelp,
   askQuestionResponse,
   askQuestionsFromAcp,
   asRecord,
@@ -282,7 +282,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       if (/not authenticated|Authentication required|XAI_API_KEY/i.test(line)) {
         emit({
           type: "session.error",
-          message: `${line.trim()}\n\n${AUTH_HELP}`,
+          message: `${line.trim()}\n\n${authHelp()}`,
         });
       }
     },
@@ -474,7 +474,7 @@ async function prompt(live: Live, input: SendTurnInput): Promise<void> {
     live.onEvent({
       type: "session.error",
       message: /auth|login|credential|api key|XAI_API_KEY/i.test(detail)
-        ? `${detail.trim()}\n\n${AUTH_HELP}`
+        ? `${detail.trim()}\n\n${authHelp()}`
         : detail,
     });
     throw error;

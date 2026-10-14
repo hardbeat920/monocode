@@ -1,5 +1,6 @@
 import { isSingleEmoji } from "../../sessions/model/emojiMessage";
 import type { Block } from "../../sessions/model/session";
+import { t } from "../../../shared/i18n/locale";
 
 /**
  * A Mono can answer with only an emoji on the user's message, as a friend
@@ -27,7 +28,7 @@ function partialReaction(block: Block): boolean {
 /** How a reply reads outside the chat, such as in a notification. */
 export function monoReplyText(text: string): string {
   const emoji = monoReaction(text);
-  return emoji ? `Reacted ${emoji} to your message` : text;
+  return emoji ? t("monos.reaction.reacted", { emoji }) : text;
 }
 
 const reacted = new WeakMap<Block, Map<string, Block>>();
@@ -80,7 +81,9 @@ export function monoReactionBlocks(blocks: Block[]): Block[] {
       // The reaction is the whole answer: the thinking and steps behind it
       // would only draw an empty reply. Errors still show.
       const after = out.splice(target + 1);
-      out.push(...after.filter((step) => step.role === "system" && step.notice));
+      out.push(
+        ...after.filter((step) => step.role === "system" && step.notice),
+      );
       out[target] = withReaction(out[target], emoji, "monoReaction");
     } else out.push(withReaction(block, emoji, "text"));
   }

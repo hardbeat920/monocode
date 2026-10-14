@@ -1,3 +1,4 @@
+import { t } from "../../../shared/i18n/locale";
 import { composeToolTitle } from "../../../integrations/harness/core/preview";
 import { isInFlightSession } from "./inFlight";
 import { displayPath } from "../../../shared/lib/paths";
@@ -40,9 +41,7 @@ export function liveAgentsFromSessions(
         isLiveAgentSession(session) &&
         (isInFlightSession(session) || unseenFinishedIds.has(session.id)),
     )
-    .map((session) =>
-      toLiveAgent(session, unseenFinishedIds.has(session.id)),
-    )
+    .map((session) => toLiveAgent(session, unseenFinishedIds.has(session.id)))
     .sort(compareLiveAgents);
 }
 
@@ -70,11 +69,11 @@ function toLiveAgent(session: Session, unseenFinished: boolean): LiveAgent {
     title: sessionDisplayTitle(session.title, session.harness),
     harness: session.harness,
     activity: done
-      ? "Done"
+      ? t("sessions.activity.done")
       : pendingQuestion
         ? pendingQuestion.title ||
           pendingQuestion.questions[0]?.prompt ||
-          "Question"
+          t("sessions.question.defaultTitle")
         : activityLabel(activityBlock, session.cwd),
     startedAt: turnStartedAt(session.blocks),
     durationMs: done ? turnDurationMs(session.blocks) : undefined,
@@ -118,9 +117,9 @@ function turnDurationMs(blocks: Block[]): number | undefined {
 }
 
 function activityLabel(block: Block | undefined, cwd: string): string {
-  if (!block) return "Working";
+  if (!block) return t("sessions.activity.working");
   if (block.role === "handoff" && block.handoff?.status === "preparing") {
-    return "Preparing a handoff";
+    return t("sessions.activity.handoffPreparing");
   }
   const preview = block.tool?.preview;
   const path = preview?.path
@@ -134,6 +133,6 @@ function activityLabel(block: Block | undefined, cwd: string): string {
       query: preview?.query,
       previewKind: preview?.kind,
       cwd,
-    }) || "Working"
+    }) || t("sessions.activity.working")
   );
 }

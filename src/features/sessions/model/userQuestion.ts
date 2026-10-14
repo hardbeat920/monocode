@@ -1,3 +1,4 @@
+import { t } from "../../../shared/i18n/locale";
 /** Shared clarifying-question model for every harness that can ask the user. */
 
 export const CUSTOM_OPTION_ID = "__custom__";
@@ -51,7 +52,7 @@ export function questionsFromUnknown(value: unknown): UserQuestion[] {
 
 export function questionPromptTitle(questions: UserQuestion[]): string {
   const first = questions[0];
-  return first?.header || first?.prompt || "Question";
+  return first?.header || first?.prompt || t("sessions.question.defaultTitle");
 }
 
 export function questionIsComplete(
@@ -182,7 +183,8 @@ function optionsFromUnknown(value: unknown): UserQuestionOption[] {
       stringField(rec, "text") ??
       stringField(rec, "id");
     if (!label) return [];
-    const description = stringField(rec, "description") ?? stringField(rec, "detail");
+    const description =
+      stringField(rec, "description") ?? stringField(rec, "detail");
     return [
       {
         id: uniqueId(

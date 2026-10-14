@@ -1,6 +1,13 @@
+import { useT } from "../../../shared/i18n/useT";
 import { MarkdownDocumentPreview } from "../../sessions/ui/MarkdownDocumentPreview";
 
 /** Keep the skill's YAML header readable without interpreting it as Markdown. */
 export function SkillDocumentPreview({ text }: { text: string }) {
-  return <MarkdownDocumentPreview text={text} metadataLabel="Skill metadata" />;
+  const t = useT();
+  return (
+    <MarkdownDocumentPreview
+      text={text}
+      metadataLabel={t("skills.preview.metadata")}
+    />
+  );
 }

@@ -4,6 +4,7 @@ import { IconButton } from "../../../app/shell/TitleBar";
 import { useDragResize } from "../../../shared/hooks/useDragResize";
 import { inboxItemRef, type InboxItem } from "../model/githubTasks";
 import { inboxAskKey } from "../model/inboxAsk";
+import { useT } from "../../../shared/i18n/useT";
 
 export type InboxSessionPortal = { sessionId: string; host: HTMLElement };
 let rememberedWidth = 440;
@@ -22,6 +23,7 @@ export function InboxDiscussionPanel({
   onRestart: (item: InboxItem) => Promise<string>;
   onMount: (portal: InboxSessionPortal | null) => void;
 }) {
+  const t = useT();
   const host = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -61,12 +63,12 @@ export function InboxDiscussionPanel({
   return (
     <aside
       ref={resize.setPaneRef}
-      aria-label={`Ask about ${inboxItemRef(item)}`}
+      aria-label={t("inbox.discussion.askAbout", { ref: inboxItemRef(item) })}
       className="relative flex min-h-0 shrink-0 flex-col border-l border-stroke max-[1100px]:absolute max-[1100px]:inset-0 max-[1100px]:z-10 max-[1100px]:!w-auto"
     >
       <div
         role="separator"
-        aria-label="Resize discussion"
+        aria-label={t("inbox.discussion.resize")}
         aria-orientation="vertical"
         onPointerDown={resize.onPointerDown}
         onDoubleClick={resize.onDoubleClick}
@@ -74,25 +76,25 @@ export function InboxDiscussionPanel({
       />
       <header className="flex h-11 shrink-0 items-center border-b border-stroke px-3">
         <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
-          Ask · {inboxItemRef(item)}
+          {t("inbox.discussion.title", { ref: inboxItemRef(item) })}
         </span>
         <IconButton
-          label="Restart conversation"
+          label={t("inbox.discussion.restart")}
           disabled={loading}
           onClick={() => {
             setLoading(true);
             setError(null);
             void onRestart(item)
-              .then(sessionId => {
+              .then((sessionId) => {
                 if (host.current) onMount({ sessionId, host: host.current });
               })
-              .catch(reason => setError(String(reason)))
+              .catch((reason) => setError(String(reason)))
               .finally(() => setLoading(false));
           }}
         >
           <RotateCcw className="size-3.5" />
         </IconButton>
-        <IconButton label="Close panel" onClick={onClose}>
+        <IconButton label={t("inbox.discussion.closePanel")} onClick={onClose}>
           <PanelLeft className="size-3.5" />
         </IconButton>
       </header>

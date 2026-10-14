@@ -1,17 +1,17 @@
 import { BundleType, getBundleType, getVersion } from "@tauri-apps/api/app";
 import { ask, message } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updater";
+import {
+  check,
+  type DownloadEvent,
+  type Update,
+} from "@tauri-apps/plugin-updater";
 import { announceUpdateAvailable } from "../../features/settings/model/sounds";
 import { rememberInstalledUpdate } from "./updateNotice";
+import { t } from "../../shared/i18n/locale";
 
 export type UpdaterPhase =
-  | "idle"
-  | "checking"
-  | "current"
-  | "available"
-  | "downloading"
-  | "error";
+  "idle" | "checking" | "current" | "available" | "downloading" | "error";
 
 export type UpdaterSnapshot = {
   phase: UpdaterPhase;
@@ -49,14 +49,16 @@ export async function packageManagedInstall(): Promise<PackageManagedInstall | n
 
 export function packageManagerHint(kind: PackageManagedInstall): string {
   return kind === "deb"
-    ? `Download one .deb from ${RELEASES_URL} and run: sudo apt install ./MonoCode_X.Y.Z_amd64.deb\nReplace the file name with the one you downloaded.`
-    : `Download one .rpm from ${RELEASES_URL} and run: sudo dnf install ./MonoCode-X.Y.Z-1.x86_64.rpm\nReplace the file name with the one you downloaded.`;
+    ? t("app.updater.packageHintDeb", { url: RELEASES_URL })
+    : t("app.updater.packageHintRpm", { url: RELEASES_URL });
 }
 
 function isTargetMissingError(error: unknown): boolean {
   const text = error instanceof Error ? error.message : String(error);
   // tauri-plugin-updater Error::TargetsNotFound / Error::TargetNotFound.
-  return /none of the fallback platforms|the platform `[^`]*` was not found/i.test(text);
+  return /none of the fallback platforms|the platform `[^`]*` was not found/i.test(
+    text,
+  );
 }
 
 function isUpdaterNotConfiguredError(error: unknown): boolean {
@@ -115,7 +117,7 @@ export async function runUpdateFlow(
       const current: UpdaterSnapshot = { phase: "current", currentVersion };
       onProgress?.(current);
       if (manual) {
-        await message("You're on the latest version.", { title: "MonoCode" });
+        await message(t("app.updater.latest"), { title: "MonoCode" });
       }
       return current;
     }
@@ -134,8 +136,12 @@ export async function runUpdateFlow(
     const notes = update.body?.trim();
     const detail = notes ? `\n\n${notes}` : "";
     const yes = await ask(
-      `MonoCode ${update.version} is available (you have ${currentVersion}).${detail}\n\nInstall now?`,
-      { title: "Update available", kind: "info" },
+      t("app.updater.availablePrompt", {
+        version: update.version,
+        current: currentVersion,
+        detail,
+      }),
+      { title: t("app.updater.availableTitle"), kind: "info" },
     );
     if (!yes) return available;
 
@@ -146,10 +152,9 @@ export async function runUpdateFlow(
       const idle: UpdaterSnapshot = { phase: "idle", currentVersion };
       onProgress?.(idle);
       if (manual) {
-        await message(
-          `Automatic updates aren't configured for this build.\n\nDownload releases at ${RELEASES_URL}`,
-          { title: "MonoCode" },
-        );
+        await message(t("app.updater.notConfigured", { url: RELEASES_URL }), {
+          title: "MonoCode",
+        });
       }
       return idle;
     }
@@ -160,10 +165,9 @@ export async function runUpdateFlow(
       const idle: UpdaterSnapshot = { phase: "idle", currentVersion };
       onProgress?.(idle);
       if (manual) {
-        await message(
-          `Automatic updates aren't available for this install yet.\n\nDownload releases at ${RELEASES_URL}`,
-          { title: "MonoCode" },
-        );
+        await message(t("app.updater.notAvailable", { url: RELEASES_URL }), {
+          title: "MonoCode",
+        });
       }
       return idle;
     }
@@ -172,7 +176,7 @@ export async function runUpdateFlow(
     const failed: UpdaterSnapshot = { phase: "error", currentVersion, error };
     onProgress?.(failed);
     if (manual) {
-      await message(`Couldn't check for updates.\n\n${error}`, {
+      await message(t("app.updater.checkFailed", { error }), {
         title: "MonoCode",
       });
     }
@@ -240,7 +244,9 @@ export async function installPendingUpdate(
       error,
     };
     onProgress?.(failed);
-    await message(`Couldn't install the update.\n\n${error}`, { title: "MonoCode" });
+    await message(t("app.updater.installFailed", { error }), {
+      title: "MonoCode",
+    });
     return failed;
   }
 }

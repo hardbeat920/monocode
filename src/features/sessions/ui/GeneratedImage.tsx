@@ -3,6 +3,7 @@ import { readBinaryFile } from "../../../platform/tauri/fs";
 import { formatFileSize, sniffImageMime } from "../../files/model/filePreview";
 import { ImageLightbox } from "../../../shared/ui/ImageLightbox";
 import type { GeneratedImageMeta } from "../model/session";
+import { useT } from "../../../shared/i18n/useT";
 
 type State =
   | { status: "loading" }
@@ -10,6 +11,7 @@ type State =
   | { status: "error" };
 
 export function GeneratedImage({ image }: { image: GeneratedImageMeta }) {
+  const t = useT();
   const [state, setState] = useState<State>({ status: "loading" });
   const [open, setOpen] = useState(false);
 
@@ -41,7 +43,7 @@ export function GeneratedImage({ image }: { image: GeneratedImageMeta }) {
   if (state.status === "loading") {
     return (
       <div className="px-4 py-3 text-xs text-content/45" role="status">
-        Loading generated image…
+        {t("sessions.media.loadingGenerated")}
       </div>
     );
   }
@@ -49,7 +51,7 @@ export function GeneratedImage({ image }: { image: GeneratedImageMeta }) {
   if (state.status === "error") {
     return (
       <div className="px-4 py-3 text-xs text-content/50" role="alert">
-        Could not open generated image.
+        {t("sessions.media.generatedFailed")}
       </div>
     );
   }
@@ -59,8 +61,8 @@ export function GeneratedImage({ image }: { image: GeneratedImageMeta }) {
     <div className="min-w-0 px-4 pb-3 pt-3">
       <button
         type="button"
-        aria-label={`Open ${image.name} full screen`}
-        title={`Open ${image.name} full screen`}
+        aria-label={t("sessions.media.openFullScreen", { name: image.name })}
+        title={t("sessions.media.openFullScreen", { name: image.name })}
         onClick={() => setOpen(true)}
         className="block max-w-full cursor-zoom-in overflow-hidden rounded-xl border border-content/10 bg-content/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       >
@@ -76,7 +78,11 @@ export function GeneratedImage({ image }: { image: GeneratedImageMeta }) {
         <span>{formatFileSize(state.size)}</span>
       </div>
       {open ? (
-        <ImageLightbox src={state.url} alt={alt} onClose={() => setOpen(false)} />
+        <ImageLightbox
+          src={state.url}
+          alt={alt}
+          onClose={() => setOpen(false)}
+        />
       ) : null}
     </div>
   );

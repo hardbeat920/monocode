@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/i18n/locale";
 import { TurnNotReadyError } from "../../core/types";
 import {
   modelContextWindow,
@@ -198,7 +199,7 @@ export async function compactOpenCodeContext(
   const model = parseOpenCodeModelSlug(nativeModelId(input.model));
   if (!model) {
     throw new Error(
-      "OpenCode models use provider/model ids. Wait for the catalog to load, then pick a model.",
+      t("integrations.opencode.modelIdRequired"),
     );
   }
   live.onEvent = input.onEvent;
@@ -232,7 +233,7 @@ export async function rewindOpenCodeLastTurn(
   live.onEvent = input.onEvent;
   await live.turns;
   if (live.activeTurn) {
-    throw new Error("Stop the current turn before editing the last message");
+    throw new Error(t("integrations.turn.stopBeforeEdit"));
   }
 
   const messageID = await latestOpenCodeUserMessageId(live);
@@ -281,7 +282,7 @@ export async function steerOpenCodeTurn(input: SteerTurnInput): Promise<void> {
   const parsed = parseOpenCodeModelSlug(nativeModelId(input.model));
   if (!parsed) {
     throw new Error(
-      "OpenCode models use provider/model ids. Wait for the catalog to load, then pick a model.",
+      t("integrations.opencode.modelIdRequired"),
     );
   }
 
@@ -535,7 +536,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       (error) => {
         if (live.muteUpdates || live.cancelled) return;
         const message =
-          error?.trim() || "OpenCode event stream ended unexpectedly.";
+          error?.trim() || t("integrations.opencode.streamEnded");
         // prompt_async has no response body to await; the SSE stream is its
         // only completion channel. Reusing a Live after this point accepts the
         // next prompt but can never observe it, which looks like a dead thread.
@@ -622,7 +623,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   const parsed = parseOpenCodeModelSlug(nativeModelId(input.model));
   if (!parsed) {
     throw new Error(
-      "OpenCode models use provider/model ids. Wait for the catalog to load, then pick a model.",
+      t("integrations.opencode.modelIdRequired"),
     );
   }
   const parts = toOpenCodePromptParts(input.text, input.attachments);
@@ -796,7 +797,7 @@ function finishAwaitedInbox(
         new Error(
           outcome.kind === "failed"
             ? sessionErrorMessage(outcome.error)
-            : "OpenCode compaction was interrupted",
+            : t("integrations.opencode.compactionInterrupted"),
         ),
       );
     return;
@@ -1599,7 +1600,9 @@ function waitForServerUrl(
       if (exited() !== undefined) {
         reject(
           new Error(
-            `OpenCode server exited before startup completed (code: ${String(exited())}).`,
+            t("integrations.opencode.serverExitedEarly", {
+              code: String(exited()),
+            }),
           ),
         );
         return;

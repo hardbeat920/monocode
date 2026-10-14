@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/i18n/locale";
 import { TurnNotReadyError } from "../../core/types";
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import { taskListFromToolInput } from "../../../../features/sessions/model/taskList";
@@ -299,13 +300,13 @@ export async function rewindLastTurn(
     await applyModel(flavor, live, input);
   }
   if (live.activeTurn) {
-    throw new Error("Stop the current turn before editing the last message");
+    throw new Error(t("integrations.turn.stopBeforeEdit"));
   }
 
   const forkMessages = await live.rpc.request({ type: "get_fork_messages" });
   const messages = forkMessagesFromRpcData(forkMessages.data);
   const last = messages[messages.length - 1];
-  if (!last) throw new Error("No user message to edit");
+  if (!last) throw new Error(t("integrations.turn.noMessageToEdit"));
 
   const fork = await live.rpc.request({ type: "fork", entryId: last.entryId });
   if (asRecord(fork.data)?.cancelled === true) {
@@ -772,7 +773,10 @@ function handleFrame(
       }
     }
     if (type === "advisor_yielded") {
-      live.onEvent({ type: "status", text: "Advisor reviewed this turn" });
+      live.onEvent({
+        type: "status",
+        text: t("integrations.pi.advisorReviewed"),
+      });
       return;
     }
     if (type === "session_info_update") {
@@ -997,7 +1001,8 @@ function flushTurnError(flavor: PiFlavor, live: Live): void {
   live.turnError = null;
   live.onEvent({
     type: "session.error",
-    message: message || `${flavor.label} turn failed`,
+    message:
+      message || t("integrations.pi.turnFailed", { provider: flavor.label }),
   });
 }
 
@@ -1189,7 +1194,7 @@ async function applyModel(
           text:
             error instanceof Error
               ? error.message
-              : "Fast mode is unavailable for the current model.",
+              : t("integrations.pi.fastUnavailable"),
         });
       }
     }

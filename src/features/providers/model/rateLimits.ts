@@ -1,4 +1,5 @@
 import { asRecord } from "../../../integrations/harness/providers/codex/codexProtocol";
+import { t } from "../../../shared/i18n/locale";
 
 export type RateLimitProvider = "claude" | "codex" | "opencode" | "devin";
 
@@ -154,19 +155,26 @@ export function formatUsagePercent(usedPercent: number): string {
  * original status-bar copy.
  */
 export function formatWindowLabel(windowMinutes: number): string {
-  if (windowMinutes === WEEKLY_WINDOW_MINUTES) return "wk";
-  if (windowMinutes === MONTHLY_WINDOW_MINUTES) return "mo";
-  if (windowMinutes === SESSION_WINDOW_MINUTES) return "5h";
-  if (windowMinutes === 60) return "1h";
-  if (windowMinutes < 60) return `${windowMinutes}m`;
+  if (windowMinutes === WEEKLY_WINDOW_MINUTES)
+    return t("providers.window.week");
+  if (windowMinutes === MONTHLY_WINDOW_MINUTES)
+    return t("providers.window.month");
+  if (windowMinutes === SESSION_WINDOW_MINUTES)
+    return t("providers.meter.fiveHours");
+  if (windowMinutes === 60) return t("providers.duration.hours", { hours: 1 });
+  if (windowMinutes < 60)
+    return t("providers.duration.minutes", { minutes: windowMinutes });
   if (windowMinutes % (60 * 24 * 7) === 0) {
-    return `${windowMinutes / (60 * 24 * 7)}wk`;
+    return t("providers.window.weeks", {
+      count: windowMinutes / (60 * 24 * 7),
+    });
   }
   if (windowMinutes % (60 * 24) === 0) {
-    return `${windowMinutes / (60 * 24)}d`;
+    return t("providers.duration.days", { days: windowMinutes / (60 * 24) });
   }
-  if (windowMinutes % 60 === 0) return `${windowMinutes / 60}h`;
-  return `${windowMinutes}m`;
+  if (windowMinutes % 60 === 0)
+    return t("providers.duration.hours", { hours: windowMinutes / 60 });
+  return t("providers.duration.minutes", { minutes: windowMinutes });
 }
 
 /**
@@ -174,22 +182,27 @@ export function formatWindowLabel(windowMinutes: number): string {
  * "6d 7h". Returns "now" once the window has already reset.
  */
 export function formatResetDuration(ms: number): string {
-  if (ms <= 0) return "now";
+  if (ms <= 0) return t("providers.duration.now");
   const totalMins = Math.floor(ms / 60_000);
-  if (totalMins < 60) return `${totalMins}m`;
+  if (totalMins < 60)
+    return t("providers.duration.minutes", { minutes: totalMins });
   const hours = Math.floor(totalMins / 60);
   const mins = totalMins % 60;
   if (hours >= 24) {
     const days = Math.floor(hours / 24);
     const remHours = hours % 24;
-    return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
+    return remHours > 0
+      ? t("providers.duration.daysHours", { days, hours: remHours })
+      : t("providers.duration.days", { days });
   }
-  return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+  return mins > 0
+    ? t("providers.duration.hoursMinutes", { hours, minutes: mins })
+    : t("providers.duration.hours", { hours });
 }
 
 export function formatResetCountdown(ms: number): string {
-  const duration = formatResetDuration(ms);
-  return duration === "now" ? "Resets now" : `Resets in ${duration}`;
+  if (ms <= 0) return t("providers.tooltip.resetsNow");
+  return t("providers.tooltip.resetsIn", { duration: formatResetDuration(ms) });
 }
 
 /**
@@ -212,9 +225,15 @@ export function rateLimitWindowTooltip(
   showRemaining = false,
 ): string {
   const pct = clampUsedPercent(window.usedPercent);
-  const usage = `${formatUsagePercent(showRemaining ? 100 - pct : pct)} ${showRemaining ? "remaining" : "used"}`;
+  const usage = t(
+    showRemaining ? "providers.tooltip.remaining" : "providers.tooltip.used",
+    { percent: formatUsagePercent(showRemaining ? 100 - pct : pct) },
+  );
   if (window.resetsAt == null) {
-    return `${usage} · ${formatWindowLabel(window.windowMinutes)} window`;
+    return t("providers.tooltip.window", {
+      usage,
+      window: formatWindowLabel(window.windowMinutes),
+    });
   }
   return `${usage} · ${formatResetCountdown(window.resetsAt - now)}`;
 }
@@ -283,11 +302,11 @@ export function parseClaudeOAuthUsage(body: string): ProviderRateLimits {
   try {
     parsed = JSON.parse(body);
   } catch {
-    return errorRateLimits("claude", "Claude usage response was not JSON");
+    return errorRateLimits("claude", t("providers.error.claudeNotJson"));
   }
   const rec = asRecord(parsed);
   if (!rec) {
-    return errorRateLimits("claude", "Claude usage response was empty");
+    return errorRateLimits("claude", t("providers.error.claudeEmpty"));
   }
   return {
     provider: "claude",
@@ -361,12 +380,21 @@ export function parseDevinUsage(usage: DevinUsage): ProviderRateLimits {
         };
   return {
     provider: "devin",
-    session: window(usage.dailyRemainingPercent, usage.dailyResetsAt, DAILY_WINDOW_MINUTES),
-    weekly: window(usage.weeklyRemainingPercent, usage.weeklyResetsAt, WEEKLY_WINDOW_MINUTES),
+    session: window(
+      usage.dailyRemainingPercent,
+      usage.dailyResetsAt,
+      DAILY_WINDOW_MINUTES,
+    ),
+    weekly: window(
+      usage.weeklyRemainingPercent,
+      usage.weeklyResetsAt,
+      WEEKLY_WINDOW_MINUTES,
+    ),
     monthly: null,
     resetCredits: null,
     extraUsageBalance:
-      usage.extraUsageBalanceMicros == null || !Number.isFinite(usage.extraUsageBalanceMicros)
+      usage.extraUsageBalanceMicros == null ||
+      !Number.isFinite(usage.extraUsageBalanceMicros)
         ? null
         : usage.extraUsageBalanceMicros / 1_000_000,
     updatedAt: Date.now(),

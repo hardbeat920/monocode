@@ -11,6 +11,7 @@ import { Check, ChevronDown, Search } from "./icons";
 import { LAYER } from "../lib/layers";
 import type { PopoverAlign } from "../lib/popover";
 import { Popover } from "./Popover";
+import { useT } from "../i18n/useT";
 
 export type SearchableSelectOption = {
   value: string;
@@ -23,9 +24,9 @@ export function SearchableSelect({
   value,
   options,
   onChange,
-  placeholder = "Choose an option…",
-  searchPlaceholder = "Search options…",
-  emptyLabel = "No matching options",
+  placeholder: placeholderProp,
+  searchPlaceholder: searchPlaceholderProp,
+  emptyLabel: emptyLabelProp,
   disabled = false,
   layer,
   variant = "field",
@@ -45,6 +46,11 @@ export function SearchableSelect({
   searchable?: boolean;
   align?: PopoverAlign;
 }) {
+  const t = useT();
+  const placeholder = placeholderProp ?? t("shared.select.placeholder");
+  const searchPlaceholder =
+    searchPlaceholderProp ?? t("shared.select.searchPlaceholder");
+  const emptyLabel = emptyLabelProp ?? t("shared.select.empty");
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -231,7 +237,7 @@ export function SearchableSelect({
           constrainHeight={longMenu}
           layer={popoverLayer}
           role="dialog"
-          aria-label={`${label} options`}
+          aria-label={t("shared.select.optionsLabel", { label })}
           data-dialog-popover
           onDismiss={(reason) => close(reason === "escape")}
           className="flex flex-col overflow-hidden"

@@ -4,6 +4,7 @@ import {
   type GithubWorkItemThread,
 } from "./githubTasks";
 import type { LinkedSessionUpdate } from "./linkedSessionUpdates";
+import { t, translate, type TranslateFn } from "../../../shared/i18n/locale";
 
 export type LinkedWorkItemActivityKind =
   "comment" | "review" | "review_comment" | "commit";
@@ -163,23 +164,32 @@ export function linkedWorkItemTerminalState(
   return state === "closed" ? "pr_closed" : undefined;
 }
 
-function countLabel(count: number, singular: string): string {
-  return `${count} ${singular}${count === 1 ? "" : "s"}`;
+function summarize(card: LinkedWorkItemUpdateCard, tr: TranslateFn): string {
+  const parts = [
+    card.counts.commits
+      ? tr("inbox.linkedUpdate.commits", { count: card.counts.commits })
+      : "",
+    card.counts.reviews
+      ? tr("inbox.linkedUpdate.reviews", { count: card.counts.reviews })
+      : "",
+    card.counts.comments
+      ? tr("inbox.linkedUpdate.comments", { count: card.counts.comments })
+      : "",
+  ].filter(Boolean);
+  if (parts.length > 0) return parts.join(" · ");
+  if (card.status === "loading") return tr("inbox.linkedUpdate.loading");
+  if (card.status === "error") return tr("inbox.linkedUpdate.error");
+  return tr("inbox.linkedUpdate.changed");
 }
 
 export function linkedWorkItemUpdateSummary(
   card: LinkedWorkItemUpdateCard,
 ): string {
-  const parts = [
-    card.counts.commits ? countLabel(card.counts.commits, "new commit") : "",
-    card.counts.reviews ? countLabel(card.counts.reviews, "new review") : "",
-    card.counts.comments ? countLabel(card.counts.comments, "new comment") : "",
-  ].filter(Boolean);
-  if (parts.length > 0) return parts.join(" · ");
-  if (card.status === "loading") return "Loading change details…";
-  if (card.status === "error") return "Updated on GitHub · details unavailable";
-  return "Metadata or status changed";
+  return summarize(card, t);
 }
+
+/** The activity prompt goes to an agent, so it always reads in English. */
+const englishT = ((key, params) => translate("en", key, params)) as TranslateFn;
 
 export function linkedWorkItemActivityPrompt(
   card: LinkedWorkItemUpdateCard,
@@ -200,7 +210,7 @@ export function linkedWorkItemActivityPrompt(
   });
   if (details.length === 0) {
     details.push(
-      `- ${linkedWorkItemUpdateSummary(card)}; current state: ${card.state}`,
+      `- ${summarize(card, englishT)}; current state: ${card.state}`,
     );
   }
   const context = [

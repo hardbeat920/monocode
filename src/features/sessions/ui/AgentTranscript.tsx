@@ -82,6 +82,8 @@ import { resolveModel } from "../model/models";
 import { harnessForTurn } from "../model/secondOpinion";
 import { TranscriptTurnCache } from "../model/transcriptTurnCache";
 import { Shimmer } from "../../../shared/ui/Shimmer";
+import { useT } from "../../../shared/i18n/useT";
+import { getLocaleTag, t as translateNow } from "../../../shared/i18n/locale";
 import {
   hasPendingApproval,
   HARNESS_TITLE,
@@ -318,6 +320,7 @@ function AgentTranscriptComponent({
   onScrollerChange,
   managed = false,
 }: Props) {
+  const t = useT();
   const isMonoChat = !!agentMascot;
   const blocks = useMemo(() => {
     // A Mono's reaction sits on the message it answers, not in a bubble.
@@ -1024,7 +1027,7 @@ function AgentTranscriptComponent({
                 onReturnToLatest();
               }}
             >
-              Back to latest messages
+              {t("sessions.transcript.backToLatest")}
             </button>
           </div>
         ) : null}
@@ -1035,8 +1038,8 @@ function AgentTranscriptComponent({
           >
             <span className="inline-block rounded-md bg-background-base px-2.5 py-1.5">
               {loadingEarlier
-                ? "Loading earlier messages…"
-                : "Couldn't load earlier messages. Scroll up to retry."}
+                ? t("sessions.transcript.loadingEarlier")
+                : t("sessions.transcript.loadEarlierScrollFailed")}
             </span>
           </div>
         ) : null}
@@ -1049,10 +1052,10 @@ function AgentTranscriptComponent({
               disabled={loadingEarlier}
             >
               {loadingEarlier
-                ? "Loading earlier messages…"
+                ? t("sessions.transcript.loadingEarlier")
                 : loadEarlierError
-                  ? "Couldn't load messages. Try again"
-                  : "Load earlier messages"}
+                  ? t("sessions.transcript.loadEarlierFailed")
+                  : t("sessions.transcript.loadEarlier")}
             </button>
           </div>
         ) : null}
@@ -1192,9 +1195,9 @@ function AgentTranscriptComponent({
                 paused={waitingForApproval}
                 waitingLabel={
                   managed && waitingForApproval
-                    ? "Waiting for orchestrator"
+                    ? t("sessions.transcript.waitingForOrchestrator")
                     : pendingQuestion
-                      ? "Waiting for answers"
+                      ? t("sessions.transcript.waitingForAnswers")
                       : undefined
                 }
                 background={backgroundTasks}
@@ -1698,10 +1701,10 @@ export function dayStamp(at: number, now = Date.now()): [string, string] {
   yesterday.setDate(today.getDate() - 1);
   const day =
     date.toDateString() === today.toDateString()
-      ? "Today"
+      ? translateNow("sessions.transcript.day.today")
       : date.toDateString() === yesterday.toDateString()
-        ? "Yesterday"
-        : new Intl.DateTimeFormat(undefined, {
+        ? translateNow("sessions.transcript.day.yesterday")
+        : new Intl.DateTimeFormat(getLocaleTag(), {
             weekday: "short",
             month: "short",
             day: "numeric",
@@ -1737,11 +1740,18 @@ function InitialThinking({
   live: boolean;
   embedded?: boolean;
 }) {
+  const t = useT();
   return (
     <div
       className={`min-w-0 pt-3 pb-1 font-sans text-sm text-content/50 ${embedded ? "" : "px-4"}`}
     >
-      {live ? <Shimmer duration={1.6}>Thinking…</Shimmer> : "Thinking…"}
+      {live ? (
+        <Shimmer duration={1.6}>
+          {t("sessions.transcript.thinkingEllipsis")}
+        </Shimmer>
+      ) : (
+        t("sessions.transcript.thinkingEllipsis")
+      )}
     </div>
   );
 }
@@ -1765,11 +1775,12 @@ function LiveFoldTitle({
   background?: string[];
   modelName?: string;
 }) {
+  const t = useT();
   const elapsedMs = useElapsedFrom(startedAt, paused);
   // Yielding with a command still going is not the end of the turn. The clock
   // keeps running and the line says what it is waiting on.
   const text = paused
-    ? (waitingLabel ?? "Waiting for approval")
+    ? (waitingLabel ?? t("sessions.transcript.waitingForApproval"))
     : background?.length
       ? `${formatWorkingDuration(elapsedMs, modelName)} · ${backgroundLabel(background)}`
       : formatWorkingDuration(elapsedMs, modelName);
@@ -1788,9 +1799,9 @@ function LiveFoldTitle({
 }
 
 function backgroundLabel(tasks: string[]): string {
-  return tasks.length === 1
-    ? "running in background"
-    : `${tasks.length} tasks running in background`;
+  return translateNow("sessions.transcript.backgroundTasks", {
+    count: tasks.length,
+  });
 }
 
 /**
@@ -1836,6 +1847,7 @@ function TurnDuration({
   /** Sit in the gap under the turn and show on hover, as a sent message's do. */
   revealOnHover?: boolean;
 }) {
+  const t = useT();
   const label =
     completionLabel ?? formatWorkingDuration(elapsedMs, modelName, true);
   const dot = (
@@ -1864,8 +1876,16 @@ function TurnDuration({
         {onShowWork ? (
           <button
             type="button"
-            title={workExpanded ? "Hide activity" : "Show activity"}
-            aria-label={workExpanded ? "Hide activity" : "Show activity"}
+            title={
+              workExpanded
+                ? t("sessions.transcript.hideActivity")
+                : t("sessions.transcript.showActivity")
+            }
+            aria-label={
+              workExpanded
+                ? t("sessions.transcript.hideActivity")
+                : t("sessions.transcript.showActivity")
+            }
             aria-expanded={!!workExpanded}
             onClick={onShowWork}
             className={`rounded-md p-1 outline-none hover:bg-content/8 hover:text-content/70 focus-visible:ring-1 focus-visible:ring-accent ${workExpanded ? "bg-content/8 text-content/70" : "text-content/40"}`}
@@ -1919,6 +1939,7 @@ function TurnMetricsBadge({
   metrics?: TurnMetrics;
   elapsedMs: number | null;
 }) {
+  const t = useT();
   const root = useRef<HTMLDivElement>(null);
   const [hovered, setHovered] = useState(false);
   if (!metrics || !hasTurnMetrics(metrics)) return null;
@@ -1930,23 +1951,33 @@ function TurnMetricsBadge({
   const headline =
     [
       metrics.cacheHitPercent != null
-        ? `Cache hit ${Math.round(metrics.cacheHitPercent)}%`
+        ? t("sessions.transcript.metrics.cacheHit", {
+            percent: Math.round(metrics.cacheHitPercent),
+          })
         : null,
       outputRate != null
-        ? `Output ${formatMetricCount(outputRate)} tok/s`
+        ? t("sessions.transcript.metrics.outputRate", {
+            rate: formatMetricCount(outputRate),
+          })
         : null,
     ]
       .filter(Boolean)
-      .join(" · ") || "Turn tokens";
+      .join(" · ") || t("sessions.transcript.metrics.turnTokens");
   const detail = [
     metrics.inputTokens != null
-      ? `${formatMetricCount(metrics.inputTokens)} input`
+      ? t("sessions.transcript.metrics.input", {
+          value: formatMetricCount(metrics.inputTokens),
+        })
       : null,
     metrics.outputTokens != null
-      ? `${formatMetricCount(metrics.outputTokens)} output`
+      ? t("sessions.transcript.metrics.output", {
+          value: formatMetricCount(metrics.outputTokens),
+        })
       : null,
     metrics.cacheReadTokens != null
-      ? `${formatMetricCount(metrics.cacheReadTokens)} cached`
+      ? t("sessions.transcript.metrics.cached", {
+          value: formatMetricCount(metrics.cacheReadTokens),
+        })
       : null,
   ]
     .filter(Boolean)
@@ -1965,8 +1996,8 @@ function TurnMetricsBadge({
       <span
         role="img"
         tabIndex={0}
-        aria-label={`Turn metrics: ${label}`}
-        title="Turn metrics"
+        aria-label={t("sessions.transcript.metrics.ariaLabel", { label })}
+        title={t("sessions.transcript.metrics.title")}
         className="grid rounded-md p-1 text-content/40 outline-none hover:bg-content/8 hover:text-content/70 focus-visible:ring-1 focus-visible:ring-accent"
       >
         <ChartBreakoutSquare className="size-3.5" strokeWidth={1.75} />
@@ -2001,7 +2032,7 @@ function hasTurnMetrics(metrics: TurnMetrics): boolean {
 }
 
 function formatMetricCount(value: number): string {
-  return new Intl.NumberFormat(undefined, {
+  return new Intl.NumberFormat(getLocaleTag(), {
     notation: "compact",
     maximumFractionDigits: value >= 1000 ? 1 : 0,
   }).format(Math.max(0, Math.round(value)));
@@ -2009,7 +2040,7 @@ function formatMetricCount(value: number): string {
 
 /** Wall-clock stamp for a finished turn, in the reader's own locale. */
 function formatClockTime(epochMs: number): string {
-  return new Date(epochMs).toLocaleTimeString(undefined, {
+  return new Date(epochMs).toLocaleTimeString(getLocaleTag(), {
     hour: "numeric",
     minute: "2-digit",
   });
@@ -2018,12 +2049,14 @@ function formatClockTime(epochMs: number): string {
 function CopyTurnButton({
   text,
   attachments,
-  label = "Copy response",
+  label: labelProp,
 }: {
   text: string;
   attachments?: Attachment[];
   label?: string;
 }) {
+  const t = useT();
+  const label = labelProp ?? t("sessions.transcript.copyResponse");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -2042,8 +2075,8 @@ function CopyTurnButton({
       <button
         type="button"
         disabled={pending}
-        title={copied ? "Copied" : label}
-        aria-label={copied ? "Copied" : label}
+        title={copied ? t("sessions.transcript.copied") : label}
+        aria-label={copied ? t("sessions.transcript.copied") : label}
         className="-ml-1 rounded-md p-1 text-content/40 hover:bg-content/8 hover:text-content/70"
         onClick={(event) => {
           event.stopPropagation();
@@ -2073,7 +2106,7 @@ function CopyTurnButton({
       </button>
       {error && (
         <span role="alert" className="max-w-xs text-xs text-content/70">
-          Copy failed. {error}
+          {t("sessions.transcript.copyFailed", { error })}
         </span>
       )}
     </>
@@ -2087,6 +2120,7 @@ function SaveNoteButton({
   text: string;
   onSave: (text: string) => void | Promise<void>;
 }) {
+  const t = useT();
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -2105,8 +2139,16 @@ function SaveNoteButton({
       <button
         type="button"
         disabled={pending}
-        title={saved ? "Saved to Notes" : "Save as note"}
-        aria-label={saved ? "Saved to Notes" : "Save as note"}
+        title={
+          saved
+            ? t("sessions.transcript.savedToNotes")
+            : t("sessions.transcript.saveAsNote")
+        }
+        aria-label={
+          saved
+            ? t("sessions.transcript.savedToNotes")
+            : t("sessions.transcript.saveAsNote")
+        }
         className="rounded-md p-1 text-content/40 hover:bg-content/8 hover:text-content/70"
         onClick={async () => {
           setError(null);
@@ -2133,7 +2175,7 @@ function SaveNoteButton({
       </button>
       {error && (
         <span role="alert" className="max-w-xs text-xs text-content/70">
-          Could not save note. {error}
+          {t("sessions.transcript.saveNoteFailed", { error })}
         </span>
       )}
     </>
@@ -2147,7 +2189,10 @@ function EditLastTurnButton({
   onEdit: () => void;
   editing?: boolean;
 }) {
-  const label = editing ? "Cancel edit" : "Edit and resend";
+  const t = useT();
+  const label = editing
+    ? t("sessions.transcript.cancelEdit")
+    : t("sessions.transcript.editAndResend");
   return (
     <button
       type="button"
@@ -2372,10 +2417,11 @@ const TranscriptBlock = memo(function TranscriptBlock({
  * left keeps it clear of the hover actions below.
  */
 function MonoReactionBadge({ emoji, live }: { emoji: string; live: boolean }) {
+  const t = useT();
   return (
     <span
       role="img"
-      aria-label={`Reacted ${emoji}`}
+      aria-label={t("sessions.transcript.reacted", { emoji })}
       data-mono-reaction={emoji}
       className={`${live ? "mono-reaction-in " : ""}mono-reaction-badge absolute -top-2.5 -left-2.5 z-[1] grid h-[22px] place-items-center rounded-[8px] px-[7px] font-sans text-[11px] leading-none`}
     >
@@ -2417,6 +2463,7 @@ function UserMessageBlock({
   onSendDraft?: (block: Block) => boolean | void;
   onRemoveDraft?: (block: Block) => boolean | void;
 }) {
+  const t = useT();
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(false);
   const [singleLine, setSingleLine] = useState(false);
@@ -2538,7 +2585,9 @@ function UserMessageBlock({
     delivery && delivery.status !== "pending" ? (
       <div className="flex max-w-full items-center gap-2 px-3 pt-1 font-sans text-xs text-content/50">
         <span role={delivery.error ? "alert" : "status"}>
-          {delivery.error ? `Not sent · ${delivery.error}` : "Not sent"}
+          {delivery.error
+            ? t("sessions.transcript.notSentError", { error: delivery.error })
+            : t("sessions.transcript.notSent")}
         </span>
         {onRetryMessage ? (
           <button
@@ -2546,7 +2595,9 @@ function UserMessageBlock({
             onClick={() => onRetryMessage(block.id)}
             className="shrink-0 rounded px-1 py-0.5 text-content/70 hover:bg-content/8"
           >
-            {delivery.status === "failed" ? "Retry" : "Resume"}
+            {delivery.status === "failed"
+              ? t("sessions.transcript.retry")
+              : t("sessions.transcript.resume")}
           </button>
         ) : null}
       </div>
@@ -2684,7 +2735,9 @@ function UserMessageBlock({
                   className="mt-1 rounded px-1 py-0.5 text-xs text-content/60 hover:bg-content/8 hover:text-content"
                   onClick={toggle}
                 >
-                  {expanded ? "Show less" : "Show more"}
+                  {expanded
+                    ? t("sessions.transcript.showLess")
+                    : t("sessions.transcript.showMore")}
                 </button>
               ) : null}
               {block.ciContext ? (
@@ -2694,11 +2747,10 @@ function UserMessageBlock({
                 >
                   <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded text-xs text-content/50 transition-colors hover:text-content/80 focus-visible:outline focus-visible:outline-1 focus-visible:outline-content/40 [&::-webkit-details-marker]:hidden">
                     <ChevronRight className="size-3 shrink-0 transition-transform group-open/ci:rotate-90" />
-                    <span>CI context</span>
+                    <span>{t("sessions.transcript.ci.title")}</span>
                   </summary>
                   <p className="mt-2 text-xs text-content/50">
-                    CI instructions and failure details included with this
-                    request.
+                    {t("sessions.transcript.ci.description")}
                   </p>
                   <pre className="mt-2 max-h-72 min-w-0 overflow-auto overscroll-contain rounded-md bg-content/5 p-2.5 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words text-content/70">
                     {block.ciContext}
@@ -2709,27 +2761,27 @@ function UserMessageBlock({
                 <div className="mt-2 flex items-center justify-between gap-4 border-t border-dashed border-content/20 pt-2">
                   <span className="flex items-center gap-1.5 text-xs text-content/50">
                     <CircleDashed className="size-3.5" strokeWidth={1.75} />
-                    Draft
+                    {t("sessions.transcript.draft.label")}
                   </span>
                   <span className="flex items-center gap-1">
                     <button
                       type="button"
-                      title="Remove draft"
-                      aria-label="Remove draft"
+                      title={t("sessions.transcript.draft.removeTitle")}
+                      aria-label={t("sessions.transcript.draft.removeTitle")}
                       onClick={() => onRemoveDraft?.(block)}
                       className="flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-content/55 hover:bg-content/10 hover:text-content"
                     >
                       <Trash2 className="size-3.5" strokeWidth={1.75} />
-                      Remove
+                      {t("sessions.transcript.draft.remove")}
                     </button>
                     <button
                       type="button"
-                      title="Send draft"
-                      aria-label="Send draft"
+                      title={t("sessions.transcript.draft.sendTitle")}
+                      aria-label={t("sessions.transcript.draft.sendTitle")}
                       onClick={() => onSendDraft?.(block)}
                       className="primary-action flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-transform duration-150 active:scale-[0.97]"
                     >
-                      Send
+                      {t("sessions.transcript.draft.send")}
                       <ArrowUp className="size-3.5" strokeWidth={2.25} />
                     </button>
                   </span>
@@ -2768,7 +2820,7 @@ function UserMessageBlock({
               <CopyTurnButton
                 text={text}
                 attachments={block.attachments}
-                label="Copy message"
+                label={t("sessions.transcript.copyMessage")}
               />
             ) : null}
             {onEdit ? (
@@ -2780,7 +2832,7 @@ function UserMessageBlock({
             {messageAt != null ? (
               <time
                 dateTime={new Date(messageAt).toISOString()}
-                title={new Date(messageAt).toLocaleString()}
+                title={new Date(messageAt).toLocaleString(getLocaleTag())}
                 className="ml-1 font-sans text-xs text-content/40"
               >
                 {formatClockTime(messageAt)}
@@ -2926,6 +2978,7 @@ function WorkFoldLine({
   open: boolean;
   onToggle: () => void;
 }) {
+  const t = useT();
   const icon = (
     <span className="relative flex size-3.5 shrink-0 items-center justify-center">
       {open ? (
@@ -3006,7 +3059,11 @@ function WorkFoldLine({
     <button
       type="button"
       aria-expanded={open}
-      aria-label={open ? "Hide the work" : "Show the work"}
+      aria-label={
+        open
+          ? t("sessions.transcript.hideWork")
+          : t("sessions.transcript.showWork")
+      }
       aria-live={live ? "polite" : undefined}
       onClick={onToggle}
       className={`group ${row}`}
@@ -3264,6 +3321,7 @@ function MonoTurnHeader({
   workExpanded?: boolean;
   searchCurrent: boolean;
 }) {
+  const t = useT();
   const activity = useMemo(
     () => blocks.filter((block) => !block.internal && !block.draft),
     [blocks],
@@ -3273,15 +3331,18 @@ function MonoTurnHeader({
     [activity, active],
   );
   if (active && waitingForAnswers && !activity.some(needsApproval)) {
-    status = { ...status, key: "question", label: "Waiting for answers…" };
+    status = {
+      ...status,
+      key: "question",
+      label: t("sessions.transcript.waitingForAnswersEllipsis"),
+    };
   } else if (active && backgroundTasks?.length && status.kind === "think") {
     status = {
       ...status,
       key: "background",
-      label:
-        backgroundTasks.length === 1
-          ? "Waiting for background task…"
-          : `Waiting for ${backgroundTasks.length} background tasks…`,
+      label: t("sessions.transcript.waitingForBackgroundTasks", {
+        count: backgroundTasks.length,
+      }),
     };
   }
   const mark = agentMascot ? (
@@ -3342,8 +3403,16 @@ function MonoTurnHeader({
           {onShowWork ? (
             <button
               type="button"
-              title={workExpanded ? "Hide activity" : "Show activity"}
-              aria-label={workExpanded ? "Hide activity" : "Show activity"}
+              title={
+                workExpanded
+                  ? t("sessions.transcript.hideActivity")
+                  : t("sessions.transcript.showActivity")
+              }
+              aria-label={
+                workExpanded
+                  ? t("sessions.transcript.hideActivity")
+                  : t("sessions.transcript.showActivity")
+              }
               aria-expanded={!!workExpanded}
               onClick={onShowWork}
               className="min-w-0 flex-1 cursor-pointer text-left outline-none transition-opacity duration-150 hover:opacity-70 focus-visible:opacity-70"
@@ -3408,6 +3477,7 @@ export function MonoActivityTrail({
   onOpenFile,
   onOpenDiff,
 }: Omit<ActivityPhasesProps, "done" | "padded"> & { live?: boolean }) {
+  const t = useT();
   const steps = blocks.filter(
     (block) =>
       !block.internal &&
@@ -3430,7 +3500,7 @@ export function MonoActivityTrail({
   }
   return (
     <ol
-      aria-label="Activity in chronological order"
+      aria-label={t("sessions.transcript.activityChronological")}
       className="flex min-w-0 flex-col gap-3"
     >
       {segments.map((segment) => {
@@ -3526,6 +3596,7 @@ function ActivityPhaseGroup({
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string) => void;
 }) {
+  const t = useT();
   const [override, setOverride] = useState<boolean | null>(null);
   const waiting = phase.steps.some(needsApproval);
   const open = waiting || (override ?? active);
@@ -3600,7 +3671,9 @@ function ActivityPhaseGroup({
         type="button"
         aria-expanded={open}
         aria-label={
-          open ? `Hide the steps for ${title}` : `Show the steps for ${title}`
+          open
+            ? t("sessions.transcript.hideSteps", { title })
+            : t("sessions.transcript.showSteps", { title })
         }
         onClick={() => setOverride(!open)}
         className="group flex w-full min-w-0 items-center gap-1.5 py-1 text-left"
@@ -3858,6 +3931,7 @@ function SubagentPanel({
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string) => void;
 }) {
+  const t = useT();
   const name = subagentName(block);
   const brief = subagentBrief(block);
   const model = subagentModelName(block);
@@ -3897,7 +3971,10 @@ function SubagentPanel({
       {model || status ? (
         <span className="flex min-w-0 max-w-[55%] shrink-0 items-baseline gap-2 font-sans text-[12px] text-content/40">
           {model ? (
-            <span className="truncate" title={`Model: ${model}`}>
+            <span
+              className="truncate"
+              title={t("sessions.transcript.subagent.model", { model })}
+            >
               {model}
             </span>
           ) : null}
@@ -3912,7 +3989,7 @@ function SubagentPanel({
   if (steps.length === 0 && !report) {
     return (
       <div
-        aria-label={`Subagent: ${name}`}
+        aria-label={t("sessions.transcript.subagent.label", { name })}
         title={brief}
         className="-mx-1.5 flex min-w-0 items-center gap-2 px-1.5 py-1"
       >
@@ -3928,7 +4005,11 @@ function SubagentPanel({
       <button
         type="button"
         aria-expanded={open}
-        aria-label={open ? `Hide ${name}'s work` : `Show ${name}'s work`}
+        aria-label={
+          open
+            ? t("sessions.transcript.subagent.hideWork", { name })
+            : t("sessions.transcript.subagent.showWork", { name })
+        }
         title={brief}
         onClick={onToggle}
         // An open row keeps the wash it lit up under the cursor, so the panel
@@ -4052,17 +4133,20 @@ function agentStepBlock(step: AgentStep): Block {
  * the agent is working, and the count says how far it has got.
  */
 function subagentStatusLine(block: Block, steps: AgentStep[]): string {
-  if (toolCallState(block) === "rejected") return "failed";
+  if (toolCallState(block) === "rejected")
+    return translateNow("sessions.transcript.subagent.failed");
   const tools = steps.filter((step) => step.kind === "tool").length;
   if (tools === 0) return "";
-  const count = tools === 1 ? "1 step" : `${tools} steps`;
+  const count = translateNow("sessions.transcript.subagent.steps", {
+    count: tools,
+  });
   // A step that failed inside a run that went on to finish still has to say so
   // here, or the row reads clean until someone opens the trail.
   const failed = steps.filter(
     (step) => step.kind === "tool" && isFailedStatus(step.status),
   ).length;
   if (!failed) return count;
-  return `${count}, ${failed === 1 ? "1 failed" : `${failed} failed`}`;
+  return `${count}, ${translateNow("sessions.transcript.subagent.failedSteps", { count: failed })}`;
 }
 
 /** Whether the line that titled a group has more in it than the header shows. */
@@ -4187,6 +4271,7 @@ function ActivityStatusRow({ block }: { block: Block }) {
  * you a note you wanted to read.
  */
 function ActivityInterjectionRow({ block }: { block: Block }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const meta = block.interjection;
   if (!meta) return null;
@@ -4213,7 +4298,9 @@ function ActivityInterjectionRow({ block }: { block: Block }) {
   if (!block.text.trim()) {
     return (
       <div
-        aria-label={`${chrome.label} note`}
+        aria-label={t("sessions.transcript.interjection.note", {
+          label: chrome.label,
+        })}
         className="flex min-w-0 items-center gap-1.5 py-1"
       >
         {label}
@@ -4227,7 +4314,11 @@ function ActivityInterjectionRow({ block }: { block: Block }) {
         type="button"
         aria-expanded={open}
         aria-label={
-          open ? `Hide the ${chrome.label} note` : `${chrome.label}: ${summary}`
+          open
+            ? t("sessions.transcript.interjection.hideNote", {
+                label: chrome.label,
+              })
+            : `${chrome.label}: ${summary}`
         }
         onClick={() => setOpen((value) => !value)}
         className="group flex min-w-0 items-center gap-1.5 py-1 text-left"
@@ -4261,8 +4352,10 @@ function ActivityThinkingRow({
   bare?: boolean;
   onOpenFile?: (path: string) => void;
 }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
-  const text = proseSummary(block.text) || "Thinking";
+  const text =
+    proseSummary(block.text) || t("sessions.transcript.thinking.label");
   // In a group the rail is the bullet, so there is nothing to breathe while
   // reasoning streams in — the line itself does.
   const pulse = block.streaming ? "zen-thinking-pulse" : "";
@@ -4285,7 +4378,7 @@ function ActivityThinkingRow({
   if (!expandable) {
     return (
       <div
-        aria-label={`Thinking: ${text}`}
+        aria-label={t("sessions.transcript.thinking.aria", { text })}
         className="flex min-w-0 items-center gap-1.5 py-1"
       >
         {icon}
@@ -4299,7 +4392,11 @@ function ActivityThinkingRow({
       <button
         type="button"
         aria-expanded={open}
-        aria-label={open ? "Hide thinking" : `Show thinking: ${text}`}
+        aria-label={
+          open
+            ? t("sessions.transcript.thinking.hide")
+            : t("sessions.transcript.thinking.show", { text })
+        }
         onClick={() => setOpen((value) => !value)}
         className="group flex min-w-0 items-center gap-1.5 py-1 text-left"
       >
@@ -4310,7 +4407,7 @@ function ActivityThinkingRow({
           }`}
         >
           {/* Open, the body starts with the paragraph the summary came from. */}
-          {open ? "Thinking" : text}
+          {open ? t("sessions.transcript.thinking.label") : text}
         </span>
       </button>
       {open ? (
@@ -4344,6 +4441,7 @@ function ActivityNoteRow({
   expandable?: boolean;
   onOpenFile?: (path: string) => void;
 }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const text = proseSummary(block.text);
   const icon = bare ? null : (
@@ -4353,7 +4451,7 @@ function ActivityNoteRow({
   if (!expandable) {
     return (
       <div
-        aria-label={`Agent said: ${text}`}
+        aria-label={t("sessions.transcript.agentSaid", { text })}
         className="flex min-w-0 items-center gap-1.5 py-1"
       >
         {icon}
@@ -4369,7 +4467,11 @@ function ActivityNoteRow({
       <button
         type="button"
         aria-expanded={open}
-        aria-label={open ? "Hide the full note" : `Agent said: ${text}`}
+        aria-label={
+          open
+            ? t("sessions.transcript.hideFullNote")
+            : t("sessions.transcript.agentSaid", { text })
+        }
         onClick={() => setOpen((value) => !value)}
         className="group flex min-w-0 items-center gap-1.5 py-1 text-left"
       >
@@ -4404,6 +4506,7 @@ function ActivityToolRow({
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string) => void;
 }) {
+  const t = useT();
   const [errorOpen, setErrorOpen] = useState(false);
   const appCall = monoCodeToolCall(block);
   if (appCall) {
@@ -4433,7 +4536,7 @@ function ActivityToolRow({
     <div className="flex min-w-0 flex-col">
       {errorDetail ? (
         <div
-          aria-label={`Failed tool call: ${label}`}
+          aria-label={t("sessions.transcript.tool.failedCall", { label })}
           className="group flex min-w-0 items-center gap-1.5 py-1"
         >
           {bare ? null : <ActivityToolIcon state={state} live={live} />}
@@ -4447,7 +4550,11 @@ function ActivityToolRow({
           <button
             type="button"
             aria-expanded={errorOpen}
-            aria-label={`${errorOpen ? "Hide" : "Show"} error details for ${label}`}
+            aria-label={
+              errorOpen
+                ? t("sessions.transcript.tool.hideErrorDetails", { label })
+                : t("sessions.transcript.tool.showErrorDetails", { label })
+            }
             onClick={() => setErrorOpen((value) => !value)}
             className="-m-1 shrink-0 rounded p-1"
           >
@@ -4459,7 +4566,7 @@ function ActivityToolRow({
         </div>
       ) : (
         <div
-          aria-label={`Tool call: ${label}`}
+          aria-label={t("sessions.transcript.tool.call", { label })}
           className="flex min-w-0 items-center gap-1.5 py-1"
         >
           {bare ? null : <ActivityToolIcon state={state} live={live} />}
@@ -4495,6 +4602,7 @@ function MonoCodeCallRow({
   call: MonoCodeToolCall;
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
 }) {
+  const t = useT();
   const state = toolCallState(block);
   const output =
     block.tool?.detail?.trim() || block.tool?.preview?.output?.trim();
@@ -4503,10 +4611,10 @@ function MonoCodeCallRow({
   const pendingApproval = needsApproval(block);
   const command = `monocode app ${call.action}`;
   const verb = pendingApproval
-    ? "Run"
+    ? t("sessions.transcript.monocode.run")
     : state === "pending"
-      ? "Running"
-      : "Ran";
+      ? t("sessions.transcript.monocode.running")
+      : t("sessions.transcript.monocode.ran");
   const summary = (
     <>
       <span
@@ -4536,7 +4644,15 @@ function MonoCodeCallRow({
         <button
           type="button"
           aria-expanded={errorOpen}
-          aria-label={`${errorOpen ? "Hide" : "Show"} error details for MonoCode: ${call.label}`}
+          aria-label={
+            errorOpen
+              ? t("sessions.transcript.monocode.hideErrorDetails", {
+                  label: call.label,
+                })
+              : t("sessions.transcript.monocode.showErrorDetails", {
+                  label: call.label,
+                })
+          }
           onClick={() => setErrorOpen((value) => !value)}
           className="flex w-full min-w-0 items-center gap-1.5 py-1 text-left"
         >
@@ -4637,21 +4753,45 @@ function formatWorkingDuration(
 ): string {
   const who = modelName?.trim();
   const elapsed = formatElapsed(elapsedMs);
-  const verb = done ? (who ? "worked" : "Worked") : who ? "working" : "Working";
   if (elapsed == null) {
-    if (done) return who ? `${who} ${verb}` : verb;
-    return who ? `${who} ${verb}…` : `${verb}…`;
+    if (done)
+      return who
+        ? translateNow("sessions.transcript.duration.whoWorked", { who })
+        : translateNow("sessions.transcript.duration.worked");
+    return who
+      ? translateNow("sessions.transcript.duration.whoWorking", { who })
+      : translateNow("sessions.transcript.duration.working");
   }
-  return who ? `${who} ${verb} for ${elapsed}` : `${verb} for ${elapsed}`;
+  if (done)
+    return who
+      ? translateNow("sessions.transcript.duration.whoWorkedFor", {
+          who,
+          elapsed,
+        })
+      : translateNow("sessions.transcript.duration.workedFor", { elapsed });
+  return who
+    ? translateNow("sessions.transcript.duration.whoWorkingFor", {
+        who,
+        elapsed,
+      })
+    : translateNow("sessions.transcript.duration.workingFor", { elapsed });
 }
 
 function formatElapsed(elapsedMs: number | null): string | null {
   if (elapsedMs == null) return null;
   const totalSec = Math.max(1, Math.round(elapsedMs / 1000));
-  if (totalSec < 60) return `${totalSec}s`;
+  if (totalSec < 60)
+    return translateNow("sessions.transcript.elapsed.seconds", {
+      seconds: totalSec,
+    });
   const minutes = Math.floor(totalSec / 60);
   const seconds = totalSec % 60;
-  return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
+  return seconds
+    ? translateNow("sessions.transcript.elapsed.minutesSeconds", {
+        minutes,
+        seconds,
+      })
+    : translateNow("sessions.transcript.elapsed.minutes", { minutes });
 }
 
 function ToolCall({
@@ -4669,6 +4809,7 @@ function ToolCall({
   onOpenDiff?: (path: string) => void;
   embedded?: boolean;
 }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const preview = block.tool?.preview;
   const label = toolCallLabel(block, cwd);
@@ -4677,10 +4818,10 @@ function ToolCall({
   const state = toolCallState(block);
   const stateLabel =
     state === "accepted"
-      ? "Accepted"
+      ? t("sessions.transcript.tool.accepted")
       : state === "rejected"
-        ? "Rejected"
-        : "Pending";
+        ? t("sessions.transcript.tool.rejected")
+        : t("sessions.transcript.tool.pending");
   const editTool = isEditTool(
     block.tool?.kind,
     block.text || block.tool?.title,
@@ -4739,7 +4880,10 @@ function ToolCall({
         <button
           type="button"
           aria-expanded={open}
-          aria-label={`${stateLabel} tool call: ${label}`}
+          aria-label={t("sessions.transcript.tool.stateCall", {
+            state: stateLabel,
+            label,
+          })}
           onClick={() => setOpen((value) => !value)}
           className="flex w-full min-w-0 items-center gap-2 rounded-lg py-1.5 text-left"
         >
@@ -4758,7 +4902,10 @@ function ToolCall({
         </button>
       ) : (
         <div
-          aria-label={`${stateLabel} tool call: ${label}`}
+          aria-label={t("sessions.transcript.tool.stateCall", {
+            state: stateLabel,
+            label,
+          })}
           className="flex w-full min-w-0 items-center gap-2"
         >
           <ToolCallIcon state={state} />
@@ -4803,6 +4950,7 @@ function ToolCallSummary({
   failed?: boolean;
   status?: ToolCallState;
 }) {
+  const t = useT();
   const { action, target, fileName, filePath, isFile, previewMatchesFile } =
     resolveToolCallDisplay(label, preview, cwd);
   if (!action || !target) {
@@ -4838,7 +4986,9 @@ function ToolCallSummary({
   return (
     <span className="flex min-w-0 flex-1 items-center gap-1.5 font-mono text-[13px]">
       <span className={`shrink-0 font-sans text-sm ${actionTone}`}>
-        {action}
+        {action in TOOL_ACTION_KEYS
+          ? t(TOOL_ACTION_KEYS[action as keyof typeof TOOL_ACTION_KEYS])
+          : action}
       </span>
       {isFile ? (
         canPreview ? (
@@ -4900,6 +5050,19 @@ function ToolCallSummary({
   );
 }
 
+/** Display text for the verbs `resolveToolCallDisplay` matches; the verbs stay English for matching. */
+const TOOL_ACTION_KEYS = {
+  Read: "sessions.transcript.tool.action.read",
+  Find: "sessions.transcript.tool.action.find",
+  Skill: "sessions.transcript.tool.action.skill",
+  List: "sessions.transcript.tool.action.list",
+  Edit: "sessions.transcript.tool.action.edit",
+  Write: "sessions.transcript.tool.action.write",
+  Delete: "sessions.transcript.tool.action.delete",
+  Move: "sessions.transcript.tool.action.move",
+  Create: "sessions.transcript.tool.action.create",
+} as const;
+
 function ToolCallIcon({ state }: { state: ToolCallState }) {
   if (state === "rejected") {
     return <X className="size-3.5 shrink-0 text-red-400" strokeWidth={2} />;
@@ -4922,6 +5085,7 @@ function ApprovalControls({
   block: Block;
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
 }) {
+  const t = useT();
   const approval = block.approval;
   if (!approval || approval.decided || !onApproval) return null;
   return (
@@ -4931,25 +5095,28 @@ function ApprovalControls({
         className="rounded-md bg-content px-2.5 py-0.5 text-[11px] hover:bg-content/80     text-background-base"
         onClick={() => onApproval(approval.requestId, "allow")}
       >
-        Allow
+        {t("sessions.transcript.approval.allow")}
       </button>
       <button
         type="button"
         className="rounded-md bg-content/10 px-2.5 py-0.5 text-[11px] text-content/70 hover:bg-content/20"
         onClick={() => onApproval(approval.requestId, "deny")}
       >
-        Deny
+        {t("sessions.transcript.approval.deny")}
       </button>
     </div>
   );
 }
 
 function HandoffDivider({ block }: { block: Block }) {
+  const t = useT();
   const meta = block.handoff;
   if (!meta) return null;
 
   const preparing = meta.status === "preparing";
-  const label = preparing ? "Preparing a handoff" : HARNESS_TITLE[meta.to];
+  const label = preparing
+    ? t("sessions.transcript.handoff.preparing")
+    : HARNESS_TITLE[meta.to];
 
   return (
     <div className="px-4 py-5">
@@ -4959,8 +5126,10 @@ function HandoffDivider({ block }: { block: Block }) {
           role="separator"
           aria-label={
             preparing
-              ? `Preparing a handoff to ${HARNESS_TITLE[meta.to]}`
-              : `Continued with ${label}`
+              ? t("sessions.transcript.handoff.preparingTo", {
+                  harness: HARNESS_TITLE[meta.to],
+                })
+              : t("sessions.transcript.handoff.continuedWith", { label })
           }
           className="flex max-w-[min(100%,20rem)] items-center gap-1.5 px-1.5 font-sans text-[12px] text-content/55"
         >
@@ -4989,17 +5158,17 @@ function interjectionChrome(meta: InterjectionMeta): {
 } {
   const label =
     meta.customType === "advisor"
-      ? "Advisor"
+      ? translateNow("sessions.transcript.interjection.advisor")
       : meta.customType === "custom"
-        ? "Notice"
+        ? translateNow("sessions.transcript.interjection.notice")
         : meta.customType;
   const severityText =
     meta.severity === "blocker"
-      ? "Blocker"
+      ? translateNow("sessions.transcript.interjection.blocker")
       : meta.severity === "concern"
-        ? "Concern"
+        ? translateNow("sessions.transcript.interjection.concern")
         : meta.severity === "nit"
-          ? "Nit"
+          ? translateNow("sessions.transcript.interjection.nit")
           : undefined;
   const severityClass =
     meta.severity === "blocker"
@@ -5017,6 +5186,7 @@ const INTERJECTION_BODY =
 /** A mid-turn interjection, e.g. OMP advisor notes: a labeled boundary with
  * a collapsible advisory body below it. */
 function InterjectionDivider({ block }: { block: Block }) {
+  const t = useT();
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(false);
   const textRef = useRef<HTMLPreElement>(null);
@@ -5047,7 +5217,7 @@ function InterjectionDivider({ block }: { block: Block }) {
         <div className="h-px min-w-4 flex-1 bg-content/12" />
         <div
           role="separator"
-          aria-label={`Interjection: ${label}`}
+          aria-label={t("sessions.transcript.interjection.aria", { label })}
           className="flex items-center gap-2 px-1.5 font-sans text-[12px] text-content/55"
         >
           <span>{label}</span>
@@ -5074,7 +5244,9 @@ function InterjectionDivider({ block }: { block: Block }) {
               onClick={() => setExpanded((value) => !value)}
               className="mt-1 py-1 font-sans text-xs text-content/55 hover:text-content"
             >
-              {expanded ? "Show less" : "Show more"}
+              {expanded
+                ? t("sessions.transcript.showLess")
+                : t("sessions.transcript.showMore")}
             </button>
           ) : null}
         </div>

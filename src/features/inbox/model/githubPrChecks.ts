@@ -1,4 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getLocaleTag, t } from "../../../shared/i18n/locale";
+import type { TextKey } from "../../../shared/i18n/catalog";
 
 export type GithubPrCheckState =
   "pass" | "fail" | "pending" | "skipping" | "cancel" | "unknown";
@@ -76,18 +78,19 @@ export const CHECK_STATES: readonly GithubPrCheckState[] = [
   "skipping",
 ];
 
-const CHECK_STATE_LABELS: Record<GithubPrCheckState, string> = {
-  pass: "passed",
-  fail: "failed",
-  pending: "in progress",
-  cancel: "cancelled",
-  unknown: "unknown",
-  skipping: "skipped",
+const CHECK_STATE_LABELS: Record<GithubPrCheckState, TextKey> = {
+  pass: "inbox.checks.state.pass",
+  fail: "inbox.checks.state.fail",
+  pending: "inbox.checks.state.pending",
+  cancel: "inbox.checks.state.cancel",
+  unknown: "inbox.checks.state.unknown",
+  skipping: "inbox.checks.state.skipping",
 };
 
 export function checkStateLabel(state: GithubPrCheckState): string {
-  const label = CHECK_STATE_LABELS[state];
-  return label.charAt(0).toUpperCase() + label.slice(1);
+  const label = t(CHECK_STATE_LABELS[state]);
+  const tag = getLocaleTag();
+  return label.charAt(0).toLocaleUpperCase(tag) + label.slice(1);
 }
 
 /** Group checks by outcome; the sort is stable so each group keeps its arrival order. */
@@ -117,7 +120,7 @@ export function describeCheckCounts(
   counts: Record<GithubPrCheckState, number>,
 ): string | null {
   const parts = CHECK_STATES.filter((state) => counts[state] > 0).map(
-    (state) => `${counts[state]} ${CHECK_STATE_LABELS[state]}`,
+    (state) => `${counts[state]} ${t(CHECK_STATE_LABELS[state])}`,
   );
   return parts.length > 0 ? parts.join(", ") : null;
 }
@@ -142,7 +145,7 @@ export function summarizePrChecks(input: {
   checks: readonly GithubPrCheck[] | null;
 }): GithubPrChecksOverall {
   if (input.loading) {
-    return { kind: "loading", description: "Loading checks" };
+    return { kind: "loading", description: t("inbox.checks.loading") };
   }
   if (input.error) {
     const counts = input.checks ? countChecks(input.checks) : null;
@@ -150,8 +153,8 @@ export function summarizePrChecks(input: {
     return {
       kind: "error",
       description: saved
-        ? `Checks failed to load, showing saved results that may be out of date: ${saved}`
-        : "Checks failed to load",
+        ? t("inbox.checks.loadFailedSaved", { saved })
+        : t("inbox.checks.loadFailed"),
     };
   }
   const checks = input.checks ?? [];
@@ -160,31 +163,35 @@ export function summarizePrChecks(input: {
     return {
       kind: "fail",
       failed: counts.fail,
-      description: describeCheckCounts(counts) ?? "No checks reported",
+      description:
+        describeCheckCounts(counts) ?? t("inbox.checks.noneReported"),
     };
   }
   if (counts.pending > 0) {
     return {
       kind: "pending",
-      description: describeCheckCounts(counts) ?? "No checks reported",
+      description:
+        describeCheckCounts(counts) ?? t("inbox.checks.noneReported"),
     };
   }
   if (counts.cancel > 0 || counts.unknown > 0) {
     return {
       kind: "neutral",
-      description: describeCheckCounts(counts) ?? "No checks reported",
+      description:
+        describeCheckCounts(counts) ?? t("inbox.checks.noneReported"),
     };
   }
   if (counts.pass > 0) {
     return {
       kind: "pass",
-      description: describeCheckCounts(counts) ?? "No checks reported",
+      description:
+        describeCheckCounts(counts) ?? t("inbox.checks.noneReported"),
     };
   }
   // Empty or skipping-only: neutral, but the skipped count still gets said.
   return {
     kind: "neutral",
-    description: describeCheckCounts(counts) ?? "No checks reported",
+    description: describeCheckCounts(counts) ?? t("inbox.checks.noneReported"),
   };
 }
 
@@ -200,14 +207,21 @@ export function checkDuration(
     return null;
   }
   const totalSeconds = Math.round((end - start) / 1000);
-  if (totalSeconds < 60) return `${totalSeconds}s`;
+  if (totalSeconds < 60)
+    return t("inbox.duration.seconds", { seconds: totalSeconds });
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   if (minutes < 60) {
-    return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+    return t("inbox.duration.minutes", {
+      minutes,
+      seconds: String(seconds).padStart(2, "0"),
+    });
   }
   const hours = Math.floor(minutes / 60);
-  return `${hours}h ${String(minutes % 60).padStart(2, "0")}m`;
+  return t("inbox.duration.hours", {
+    hours,
+    minutes: String(minutes % 60).padStart(2, "0"),
+  });
 }
 
 export function isHttpUrl(url: string | null): url is string {

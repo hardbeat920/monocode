@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/i18n/locale";
 import { TurnNotReadyError } from "../../core/types";
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import { AcpSubagents } from "../../core/acpSubagents";
@@ -1063,7 +1064,9 @@ function settleCursorBackgroundAgents(
       title: live.agentTools.get(callId),
       kind: "agent",
       status,
-      ...(status === "failed" ? { detail: "Subagent failed." } : {}),
+      ...(status === "failed"
+        ? { detail: t("integrations.subagent.failed") }
+        : {}),
     });
   }
   live.backgroundAgentTools.clear();

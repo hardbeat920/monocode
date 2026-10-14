@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { useT } from "../../../shared/i18n/useT";
 import { isImeComposition } from "../../../shared/lib/keyboard";
 import { ArrowUp, Plus, SmilePlus } from "../../../shared/ui/icons";
 import { AttachmentChip } from "../../sessions/ui/AttachmentChip";
@@ -92,6 +93,7 @@ export function MonoComposer({
   controls,
   tools,
 }: Props) {
+  const t = useT();
   const [text, setText] = useState(() => getComposerDraft(sessionId) ?? "");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const autocorrect = useComposerAutocorrect();
@@ -230,10 +232,7 @@ export function MonoComposer({
             return;
           }
           if (incoming.length === 0) {
-            if (dropped)
-              setDropError(
-                "Nothing to attach from that drop — the file may have been moved, renamed, or deleted.",
-              );
+            if (dropped) setDropError(t("monos.composer.dropEmpty"));
             return;
           }
           add(incoming);
@@ -250,7 +249,7 @@ export function MonoComposer({
             setPendingReads(pendingReadsRef.current);
         });
     },
-    [],
+    [t],
   );
   const readDropped = useCallback(
     (read: () => Promise<Attachment[]>) => {
@@ -310,8 +309,8 @@ export function MonoComposer({
   const attachButton = (className: string, tool = false) => (
     <button
       type="button"
-      title="Attach files"
-      aria-label="Attach files"
+      title={t("monos.composer.attach")}
+      aria-label={t("monos.composer.attach")}
       disabled={!enabled || submitting}
       onClick={() => readAttachments(pickAttachments)}
       className={className}
@@ -326,8 +325,8 @@ export function MonoComposer({
     <textarea
       ref={field}
       rows={1}
-      aria-label={`Message ${name}`}
-      placeholder={`Message ${name}`}
+      aria-label={t("monos.composer.message", { name })}
+      placeholder={t("monos.composer.message", { name })}
       spellCheck={autocorrect}
       autoCorrect={autocorrect ? "on" : "off"}
       disabled={!enabled || submitting}
@@ -357,8 +356,12 @@ export function MonoComposer({
   const sendButton = (className: string) => (
     <button
       type="submit"
-      aria-label="Send"
-      title={pendingReads ? "Reading attachments…" : "Send"}
+      aria-label={t("monos.composer.send")}
+      title={
+        pendingReads
+          ? t("monos.composer.readingAttachments")
+          : t("monos.composer.send")
+      }
       disabled={!ready}
       className={`primary-action grid size-6.5 place-items-center rounded-md transition-[background-color,color,transform] duration-150 active:scale-90 disabled:cursor-default ${className}`}
     >
@@ -380,7 +383,7 @@ export function MonoComposer({
       >
         {fileDrag ? (
           <div className="pointer-events-none absolute inset-0 z-20 grid place-items-center rounded-lg bg-accent/8 text-[12px] text-content/70">
-            Drop files to attach
+            {t("monos.composer.dropHint")}
           </div>
         ) : null}
         {dropError ? (
@@ -453,8 +456,8 @@ export function MonoComposer({
           <button
             ref={emojiButton}
             type="button"
-            title="Emoji"
-            aria-label="Add emoji"
+            title={t("monos.composer.emoji")}
+            aria-label={t("monos.composer.addEmoji")}
             aria-expanded={emojiOpen}
             disabled={!enabled || submitting}
             onClick={toggleEmoji}

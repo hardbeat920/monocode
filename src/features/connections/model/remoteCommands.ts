@@ -1,4 +1,5 @@
 import { setRemoteCommandRunner } from "../../../platform/tauri/fs";
+import { t } from "../../../shared/i18n/locale";
 import { remoteMachineFor, remoteRequest } from "./connections";
 import { parseRemotePath, remotePath } from "./remoteProjects";
 
@@ -60,9 +61,8 @@ const PATH_RESULTS = new Set([
 /** Commands whose result entries carry a `path`. */
 const ENTRY_RESULTS = new Set(["list_dir", "list_project_files", "stat_files"]);
 
-const UNAVAILABLE = "This isn’t available for projects on another machine yet.";
-const OUTDATED =
-  "Update MonoCode Host in Connections settings to use this project’s files.";
+const unavailable = () => t("connections.error.unavailable");
+const outdated = () => t("connections.error.outdatedHost");
 
 /** Runs a file command whose paths are `remote://` paths on the machine that
  * owns them, translating paths both ways so callers never see host paths. */
@@ -70,34 +70,38 @@ export async function runRemoteCommand(
   command: string,
   args: Record<string, unknown>,
 ): Promise<unknown> {
-  if (!HOST_COMMANDS.has(command)) throw new Error(UNAVAILABLE);
+  if (!HOST_COMMANDS.has(command)) throw new Error(unavailable());
   let environmentId: string | undefined;
   const toHost = (value: unknown): unknown => {
     if (Array.isArray(value)) return value.map(toHost);
     if (typeof value !== "string") return value;
     const parsed = parseRemotePath(value);
     if (!parsed || (environmentId && parsed.environmentId !== environmentId))
-      throw new Error(
-        "Files can only be copied or moved within one machine.",
-      );
+      throw new Error(t("connections.error.oneMachine"));
     environmentId = parsed.environmentId;
     return parsed.hostPath;
   };
   const hostArgs = Object.fromEntries(
     Object.entries(args).map(([key, value]) => [
       key,
-      PATH_ARGS.includes(key) && !(key === "paths" && (command === "git_commit" || command === "git_staged_context"))
+      PATH_ARGS.includes(key) &&
+      !(
+        key === "paths" &&
+        (command === "git_commit" || command === "git_staged_context")
+      )
         ? toHost(value)
-        : key === "options" && value && typeof value === "object" && !Array.isArray(value)
+        : key === "options" &&
+            value &&
+            typeof value === "object" &&
+            !Array.isArray(value)
           ? { ...value, cwd: toHost((value as Record<string, unknown>).cwd) }
           : value,
     ]),
   );
-  if (!environmentId) throw new Error(UNAVAILABLE);
+  if (!environmentId) throw new Error(unavailable());
   const env = environmentId;
   const machine = await remoteMachineFor(env);
-  if (!machine)
-    throw new Error("This project’s machine isn’t connected on this computer.");
+  if (!machine) throw new Error(t("connections.error.machineNotConnected"));
   let result: unknown;
   try {
     result = await remoteRequest(machine.id, "workspace.run", {
@@ -105,8 +109,12 @@ export async function runRemoteCommand(
       args: hostArgs,
     });
   } catch (reason) {
-    if (/Unsupported (host method|remote operation|workspace command)/i.test(String(reason)))
-      throw new Error(OUTDATED);
+    if (
+      /Unsupported (host method|remote operation|workspace command)/i.test(
+        String(reason),
+      )
+    )
+      throw new Error(outdated());
     throw reason;
   }
   const fromHost = (path: string) => remotePath(env, path);
@@ -121,7 +129,11 @@ export async function runRemoteCommand(
       ...entry,
       path: fromHost(entry.path),
     }));
-  if ((command === "git_diff_index" || command === "git_diff_files") && result && typeof result === "object") {
+  if (
+    (command === "git_diff_index" || command === "git_diff_files") &&
+    result &&
+    typeof result === "object"
+  ) {
     const index = result as { files: { path: string }[] };
     const root = String(hostArgs.cwd).replace(/[\\/]+$/, "");
     return {
@@ -144,7 +156,11 @@ export async function runRemoteCommand(
       path: fromHost(`${root}/${file.path}`),
     }));
   }
-  if (command === "git_commit_file_diff" && result && typeof result === "object") {
+  if (
+    command === "git_commit_file_diff" &&
+    result &&
+    typeof result === "object"
+  ) {
     const diff = result as { path: string };
     const root = String(hostArgs.cwd).replace(/[\\/]+$/, "");
     return { ...diff, path: fromHost(`${root}/${diff.path}`) };
@@ -153,15 +169,24 @@ export async function runRemoteCommand(
     const search = result as { matches: { path: string }[] };
     return {
       ...search,
-      matches: search.matches.map((match) => ({ ...match, path: fromHost(match.path) })),
+      matches: search.matches.map((match) => ({
+        ...match,
+        path: fromHost(match.path),
+      })),
     };
   }
   if (command === "git_worktrees" && result && typeof result === "object") {
-    const worktrees = result as { defaultRoot: string; worktrees: { path: string }[] };
+    const worktrees = result as {
+      defaultRoot: string;
+      worktrees: { path: string }[];
+    };
     return {
       ...worktrees,
       defaultRoot: fromHost(worktrees.defaultRoot),
-      worktrees: worktrees.worktrees.map((tree) => ({ ...tree, path: fromHost(tree.path) })),
+      worktrees: worktrees.worktrees.map((tree) => ({
+        ...tree,
+        path: fromHost(tree.path),
+      })),
     };
   }
   return result;

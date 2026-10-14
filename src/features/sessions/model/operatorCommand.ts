@@ -1,3 +1,4 @@
+import { t } from "../../../shared/i18n/locale";
 import type { BuiltinSkill } from "../../skills/model/skills";
 import type { Block } from "./session";
 
@@ -5,8 +6,9 @@ export const OPERATOR_COMMAND: BuiltinSkill = {
   kind: "builtin",
   name: "operator",
   invocation: "operator",
-  description:
-    "Give this thread access to MonoCode sessions, folders, and notes.",
+  get description() {
+    return t("sessions.command.operator.description");
+  },
   scope: "builtin",
   source: "monocode",
 };

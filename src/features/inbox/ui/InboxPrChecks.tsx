@@ -39,6 +39,8 @@ import {
   type GithubPrCheckState,
   type GithubCheckDetails,
 } from "../model/githubPrChecks";
+import { useT } from "../../../shared/i18n/useT";
+import { getLocaleTag } from "../../../shared/i18n/locale";
 
 const TAB =
   "relative flex h-9 items-center gap-1.5 text-[12px] leading-none select-none";
@@ -96,8 +98,11 @@ export function PrChecksTab({
   selected: boolean;
   onSelect: () => void;
 }) {
+  const t = useT();
   const mark = overallMark(overall);
-  const label = `Checks: ${overall.description}`;
+  const label = t("inbox.checks.tabLabel", {
+    description: overall.description,
+  });
   const failClass =
     mark.className.split(" ").find((entry) => entry.startsWith("text-")) ?? "";
   return (
@@ -110,7 +115,7 @@ export function PrChecksTab({
       onClick={onSelect}
       className={`${TAB} ${selected ? "text-content" : "text-content/50 hover:text-content"}`}
     >
-      <span className="leading-none">Checks</span>
+      <span className="leading-none">{t("inbox.checks.tab")}</span>
       <mark.Icon
         className={`size-3.5 shrink-0 ${mark.className}`}
         strokeWidth={1.75}
@@ -178,6 +183,7 @@ function PrCheckRow({
   wideStatus: boolean;
   revealToken?: number;
 }) {
+  const t = useT();
   const rowRef = useRef<HTMLLIElement>(null);
   const fixRef = useRef<HTMLButtonElement>(null);
   const fixOpen = Boolean(fixAnchor && fixAnchor === fixRef.current);
@@ -259,8 +265,9 @@ function PrCheckRow({
     ?.message.split(/\r?\n/)
     .find((line) => line.trim());
   const subtitle =
-    failureMessage || (failedStep ? `Failed at ${failedStep}` : status);
-  const title = `${check.name} · ${status}${duration ? `, took ${duration}` : ""}${workflow ? `, ${workflow}` : ""}`;
+    failureMessage ||
+    (failedStep ? t("inbox.checks.failedAt", { step: failedStep }) : status);
+  const title = `${check.name} · ${status}${duration ? t("inbox.checks.took", { duration }) : ""}${workflow ? `, ${workflow}` : ""}`;
   const url = check.url;
   const linked = isHttpUrl(url);
   const body = (
@@ -293,7 +300,9 @@ function PrCheckRow({
         ) : null}
         <span className="sr-only">
           {meta}
-          {failureMessage && failedStep ? `; Failed at ${failedStep}` : ""}
+          {failureMessage && failedStep
+            ? `; ${t("inbox.checks.failedAt", { step: failedStep })}`
+            : ""}
         </span>
       </span>
     </>
@@ -310,7 +319,7 @@ function PrCheckRow({
         {expandable ? (
           <button
             type="button"
-            aria-label={`${check.name} details`}
+            aria-label={t("inbox.checks.details", { name: check.name })}
             aria-expanded={expanded}
             aria-controls={detailsId}
             onClick={() => setExpanded(!expanded)}
@@ -357,8 +366,8 @@ function PrCheckRow({
             disabled={fixDisabled}
             aria-haspopup="dialog"
             aria-expanded={fixOpen}
-            aria-label={`Fix ${check.name} with AI`}
-            title="Fix with AI"
+            aria-label={t("inbox.checks.fixOne", { name: check.name })}
+            title={t("inbox.repair.title")}
             className="grid size-7 shrink-0 place-items-center rounded-lg bg-content/[0.03] text-content/65 hover:bg-selection hover:text-content focus-visible:outline focus-visible:outline-1 focus-visible:outline-content/50"
           >
             <Sparkles className="size-3.5" strokeWidth={1.75} />
@@ -369,7 +378,12 @@ function PrCheckRow({
         {expandable ? (
           <button
             type="button"
-            aria-label={`${expanded ? "Collapse" : "Expand"} ${check.name} details`}
+            aria-label={t(
+              expanded
+                ? "inbox.checks.collapseDetails"
+                : "inbox.checks.expandDetails",
+              { name: check.name },
+            )}
             aria-expanded={expanded}
             aria-controls={detailsId}
             onClick={() => setExpanded(!expanded)}
@@ -386,8 +400,8 @@ function PrCheckRow({
         {linked ? (
           <button
             type="button"
-            title="View full log on GitHub"
-            aria-label={`View ${check.name} on GitHub`}
+            title={t("inbox.checks.viewLog")}
+            aria-label={t("inbox.checks.viewOnGithub", { name: check.name })}
             onClick={() => void openUrl(url)}
             className={`${REFRESH_BUTTON} opacity-60 group-hover/check:opacity-100 focus-visible:opacity-100`}
           >
@@ -411,19 +425,19 @@ function PrCheckRow({
                 className="size-4 shrink-0 animate-spin"
                 strokeWidth={1.75}
               />
-              Loading steps…
+              {t("inbox.checks.loadingSteps")}
             </p>
           ) : null}
           {error ? (
             <div role="alert" className="space-y-2 text-content/60">
-              <p>Could not load job details.</p>
+              <p>{t("inbox.checks.loadDetailsFailed")}</p>
               <p className="break-words text-[11px]">{error}</p>
               <button
                 type="button"
                 onClick={() => setRetry((value) => value + 1)}
                 className="rounded px-2 py-1 hover:bg-content/5"
               >
-                Retry details
+                {t("inbox.checks.retryDetails")}
               </button>
             </div>
           ) : null}
@@ -441,12 +455,15 @@ function PrCheckRow({
                 <details className="group/steps">
                   <summary className="flex cursor-pointer list-none items-center gap-1 text-[11px] text-content/50 hover:text-content [&::-webkit-details-marker]:hidden">
                     <ChevronRight className="size-3 transition-transform group-open/steps:rotate-90 motion-reduce:transition-none" />
-                    View run steps
+                    {t("inbox.checks.viewSteps")}
                     <span className="ml-auto pl-2 text-right text-[10px] text-content/35 @max-[420px]/checks:hidden">
                       {describeCheckCounts(countChecks(details.steps))}
                     </span>
                   </summary>
-                  <ol className="space-y-1" aria-label={`${check.name} steps`}>
+                  <ol
+                    className="space-y-1"
+                    aria-label={t("inbox.checks.steps", { name: check.name })}
+                  >
                     {details.steps.map((step, index) => {
                       const stepMark = checkMark(step.state);
                       return (
@@ -473,15 +490,13 @@ function PrCheckRow({
                   </ol>
                 </details>
               ) : (
-                <p className="text-content/50">
-                  No steps reported for this job.
-                </p>
+                <p className="text-content/50">{t("inbox.checks.noSteps")}</p>
               )}
               {check.state === "fail" &&
               !details.annotations.length &&
               !details.notice ? (
                 <p className="mt-3 text-content/50">
-                  No error annotations reported. View the full log on GitHub.
+                  {t("inbox.checks.noAnnotations")}
                 </p>
               ) : null}
               {details.notice ? (
@@ -515,6 +530,7 @@ export function InboxPrChecks({
   repo?: string;
   repair?: CheckRepair;
 }) {
+  const t = useT();
   const { checks, loading, refreshing, error, stale } = view;
   const repairGroups = useCheckRepairs(cwd, repo, repair?.number, view);
   const revealScope = JSON.stringify([
@@ -539,9 +555,9 @@ export function InboxPrChecks({
   } | null>(null);
   const selectionValid = Boolean(
     selection &&
-      checks &&
-      selection.scope === revealScope &&
-      selectedChecksStillFailed(selection.checks, checks.checks),
+    checks &&
+    selection.scope === revealScope &&
+    selectedChecksStillFailed(selection.checks, checks.checks),
   );
   useEffect(() => {
     if (selection && !selectionValid) setSelection(null);
@@ -561,13 +577,13 @@ export function InboxPrChecks({
         </p>
         <button
           type="button"
-          title="Retry loading checks"
-          aria-label="Retry loading checks"
+          title={t("inbox.checks.retryLoading")}
+          aria-label={t("inbox.checks.retryLoading")}
           onClick={onRefresh}
           className="inline-flex h-7 items-center gap-1.5 rounded-md border border-content/15 px-3 text-[12px] text-content/80 hover:bg-content/5"
         >
           <RefreshCw className="size-3.5" strokeWidth={1.75} />
-          Retry
+          {t("inbox.checks.retry")}
         </button>
       </div>
     );
@@ -586,19 +602,19 @@ export function InboxPrChecks({
       (state === "pass" || state === "skipping"),
   }));
   const headline = counts.fail
-    ? `${counts.fail} ${counts.fail === 1 ? "check needs" : "checks need"} a fix`
+    ? t("inbox.checks.headlineFail", { count: counts.fail })
     : counts.pending
-      ? `${counts.pending} ${counts.pending === 1 ? "check is" : "checks are"} running`
+      ? t("inbox.checks.headlinePending", { count: counts.pending })
       : attention
-        ? `${attention} ${attention === 1 ? "check needs" : "checks need"} attention`
+        ? t("inbox.checks.headlineAttention", { count: attention })
         : counts.pass
-          ? "Checks passed"
-          : "No checks ran";
+          ? t("inbox.checks.headlinePassed")
+          : t("inbox.checks.headlineNone");
   const summary = describeCheckCounts({ ...counts, fail: 0 });
   return (
     <section
       data-inbox-pr-checks
-      aria-label="Pull request checks"
+      aria-label={t("inbox.checks.sectionLabel")}
       className="@container/checks flex min-w-0 flex-col gap-2"
     >
       <div className="mb-3 flex min-w-0 flex-wrap items-start justify-between gap-3 px-2">
@@ -610,7 +626,9 @@ export function InboxPrChecks({
               </h2>
               {summary ? (
                 <p className="mt-1 text-[12px] text-content/55">
-                  {summary.charAt(0).toUpperCase() + summary.slice(1)}.
+                  {summary.charAt(0).toLocaleUpperCase(getLocaleTag()) +
+                    summary.slice(1)}
+                  .
                 </p>
               ) : null}
               <span className="sr-only">{describeCheckCounts(counts)}</span>
@@ -631,14 +649,14 @@ export function InboxPrChecks({
                 })
               }
               aria-haspopup="dialog"
-              aria-label="Fix all failed"
+              aria-label={t("inbox.checks.fixAll")}
               aria-expanded={Boolean(
                 selection && selection.anchor === allFixRef.current,
               )}
               className="primary-action inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-[12px] font-medium focus-visible:outline focus-visible:outline-1 focus-visible:outline-content/50"
             >
               <Sparkles className="size-3.5" strokeWidth={1.75} />
-              Fix all failed
+              {t("inbox.checks.fixAll")}
               <span
                 aria-hidden="true"
                 className="ml-1 border-l border-current/20 pl-2 text-[10px] opacity-55"
@@ -649,8 +667,8 @@ export function InboxPrChecks({
           ) : null}
           <button
             type="button"
-            title="Refresh checks"
-            aria-label="Refresh checks"
+            title={t("inbox.checks.refresh")}
+            aria-label={t("inbox.checks.refresh")}
             disabled={refreshing}
             onClick={onRefresh}
             className={REFRESH_BUTTON}
@@ -686,7 +704,7 @@ export function InboxPrChecks({
       ) : null}
       {stale && error ? (
         <p role="status" className="px-2 text-[12px] text-content/55">
-          Saved results may be out of date.
+          {t("inbox.checks.savedOutOfDate")}
         </p>
       ) : null}
       {selection && selectionValid && repair ? (
@@ -706,18 +724,18 @@ export function InboxPrChecks({
         <div className="flex items-center justify-between gap-3 py-2">
           <div
             className="inline-flex gap-0.5 rounded-lg border border-stroke bg-content/[0.02] p-0.5"
-            aria-label="Filter checks"
+            aria-label={t("inbox.checks.filter")}
           >
             {(
               [
-                ["attention", "Needs attention", attention],
-                ["all", "All checks", rows.length],
+                ["attention", t("inbox.filters.needsAttention"), attention],
+                ["all", t("inbox.checks.allChecks"), rows.length],
               ] as const
             ).map(([value, label, count]) => (
               <button
                 key={value}
                 type="button"
-                aria-label={`${label}: ${count}`}
+                aria-label={t("inbox.checks.filterOption", { label, count })}
                 aria-pressed={activeFilter === value}
                 disabled={value === "attention" && !attention}
                 onClick={() => {
@@ -733,12 +751,14 @@ export function InboxPrChecks({
             ))}
           </div>
           <span className="text-[10px] text-content/40 @max-[420px]/checks:hidden">
-            {counts.fail ? "Failures first" : ""}
+            {counts.fail ? t("inbox.checks.failuresFirst") : ""}
           </span>
         </div>
       ) : null}
       {rows.length === 0 ? (
-        <p className="text-[13px] text-content/45">No checks reported</p>
+        <p className="text-[13px] text-content/45">
+          {t("inbox.checks.noneReported")}
+        </p>
       ) : (
         <>
           {groups.map((group) =>
@@ -789,8 +809,7 @@ export function InboxPrChecks({
                           : undefined
                       }
                       onFix={
-                        repair &&
-                        check.state === "fail"
+                        repair && check.state === "fail"
                           ? (anchor) =>
                               setSelection({
                                 checks: [check],

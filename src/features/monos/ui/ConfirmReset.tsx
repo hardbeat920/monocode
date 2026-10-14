@@ -1,5 +1,6 @@
 import { useRef, useState, type ReactNode, type RefObject } from "react";
 import { Modal } from "../../../shared/ui/Modal";
+import { useT } from "../../../shared/i18n/useT";
 
 /** A destructive reset that asks first, then reports a failure in place. */
 export function ConfirmReset({
@@ -25,6 +26,7 @@ export function ConfirmReset({
     ref: RefObject<HTMLButtonElement | null>,
   ) => ReactNode;
 }) {
+  const t = useT();
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -73,7 +75,7 @@ export function ConfirmReset({
                 onClick={close}
                 className="rounded-md px-3 py-1.5 text-[12px] text-content/70 enabled:hover:bg-content/8 disabled:opacity-50"
               >
-                Cancel
+                {t("monos.reset.cancel")}
               </button>
               <button
                 type="button"
@@ -81,7 +83,7 @@ export function ConfirmReset({
                 onClick={() => void reset()}
                 className="rounded-md bg-red-500/20 px-3 py-1.5 text-[12px] font-medium text-red-300 enabled:hover:bg-red-500/30 disabled:opacity-50"
               >
-                {busy ? "Resetting…" : label}
+                {busy ? t("monos.reset.busy") : label}
               </button>
             </div>
           </div>

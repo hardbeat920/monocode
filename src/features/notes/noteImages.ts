@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { t } from "../../shared/i18n/locale";
 import {
   attachmentsFromFiles,
   attachmentsFromPaths,
@@ -38,7 +39,7 @@ async function saveNoteImageAttachments(
 ): Promise<NoteImageAsset[]> {
   const images = attachments.filter((file) => file.kind === "image");
   if (images.length === 0) {
-    throw new Error("Drop a PNG, JPG, GIF, WebP, or SVG image.");
+    throw new Error(t("notes.images.unsupported"));
   }
 
   const saved: NoteImageAsset[] = [];
@@ -79,7 +80,7 @@ async function saveNoteImageAttachments(
   if (saved.length === 0) {
     if (failure instanceof Error) throw failure;
     if (failure) throw new Error(String(failure));
-    throw new Error("None of the dropped images could be added to the note.");
+    throw new Error(t("notes.images.noneAdded"));
   }
   return saved;
 }

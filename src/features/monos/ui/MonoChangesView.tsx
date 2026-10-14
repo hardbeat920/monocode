@@ -5,6 +5,7 @@ import {
   useState,
   type ComponentProps,
 } from "react";
+import { useT } from "../../../shared/i18n/useT";
 import { Popover } from "../../../shared/ui/Popover";
 import {
   Check,
@@ -75,6 +76,7 @@ export function MonoChangesView({
   /** Projects given to the Mono; each has a tab even before it has changes. */
   attachedProjects: readonly string[];
 }) {
+  const t = useT();
   const { projects, outside, loaded, error } = useSessionProjects(
     sessionId,
     cwd,
@@ -90,10 +92,19 @@ export function MonoChangesView({
         )
       : undefined) ??
     projects[0];
-  const [indexes, setIndexes] = useState<ReadonlyMap<string, GitDiffIndex | null>>(new Map());
-  const updateIndex = useCallback((root: string, index: GitDiffIndex | null) => {
-    setIndexes((previous) => previous.get(root) === index ? previous : new Map(previous).set(root, index));
-  }, []);
+  const [indexes, setIndexes] = useState<
+    ReadonlyMap<string, GitDiffIndex | null>
+  >(new Map());
+  const updateIndex = useCallback(
+    (root: string, index: GitDiffIndex | null) => {
+      setIndexes((previous) =>
+        previous.get(root) === index
+          ? previous
+          : new Map(previous).set(root, index),
+      );
+    },
+    [],
+  );
 
   // A changed file, open with its changes over its checkout's list until Back.
   const [diff, setDiff] = useState<{ root: string; path: string } | null>(null);
@@ -146,7 +157,9 @@ export function MonoChangesView({
             <div
               key={`${sessionId}:${cwd}:${entry.root}`}
               role="tabpanel"
-              aria-label={`Commit ${projectName(entry.root)}`}
+              aria-label={t("monos.changes.commit", {
+                name: projectName(entry.root),
+              })}
               hidden={entry.root !== project.root}
               className="absolute inset-0 flex h-full flex-col"
             >
@@ -168,15 +181,18 @@ export function MonoChangesView({
           {loaded && !error ? (
             <EmptyState icon={FileDiff}>
               {outside.length > 0
-                ? "These files aren’t in a Git repository, so there’s nothing to commit."
-                : `Give ${agentName} a project to work on, and its changes show up here to commit.`}
+                ? t("monos.changes.outsideRepo")
+                : t("monos.changes.noProject", { name: agentName })}
             </EmptyState>
           ) : null}
         </div>
       )}
       {error ? (
-        <p role="alert" className="shrink-0 border-t border-stroke px-4 py-2 text-[12px] text-red-400">
-          Couldn’t load repositories: {error}
+        <p
+          role="alert"
+          className="shrink-0 border-t border-stroke px-4 py-2 text-[12px] text-red-400"
+        >
+          {t("monos.changes.loadFailed", { error })}
         </p>
       ) : null}
     </div>
@@ -211,6 +227,7 @@ function ProjectTabs({
   indexes: ReadonlyMap<string, GitDiffIndex | null>;
   onSelect: (root: string) => void;
 }) {
+  const t = useT();
   const { groupLabels, groupColors, groupCustomColors, groupMascots } =
     useProjectAppearance();
   const groupLogos = useTabGroupLogos();
@@ -232,7 +249,7 @@ function ProjectTabs({
   return (
     <div
       role="tablist"
-      aria-label="Projects"
+      aria-label={t("monos.changes.projects")}
       // Sideways only, with the native bounce at either end.
       className="flex h-9 shrink-0 items-center gap-px overflow-x-auto overflow-y-hidden overscroll-x-contain border-b border-stroke px-2"
     >
@@ -248,7 +265,8 @@ function ProjectTabs({
         );
         const target =
           checkouts.find(
-            (entry) => entry.root === (active ? selected.root : lastRoots.get(main)),
+            (entry) =>
+              entry.root === (active ? selected.root : lastRoots.get(main)),
           ) ?? checkouts[0];
         return (
           <div
@@ -324,6 +342,7 @@ function CheckoutPicker({
   indexes: ReadonlyMap<string, GitDiffIndex | null>;
   onSelect: (root: string) => void;
 }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLButtonElement>(null);
   return (
@@ -331,7 +350,7 @@ function CheckoutPicker({
       <button
         ref={anchor}
         type="button"
-        aria-label={`Switch ${project} working copy`}
+        aria-label={t("monos.changes.switchCopy", { project })}
         aria-haspopup="listbox"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
@@ -348,7 +367,7 @@ function CheckoutPicker({
           maxHeight={320}
           onDismiss={() => setOpen(false)}
           role="listbox"
-          aria-label={`${project} working copies`}
+          aria-label={t("monos.changes.copies", { project })}
           className="overflow-y-auto overscroll-none p-1.5"
         >
           {checkouts.map(({ root, main, files }) => {
@@ -376,7 +395,9 @@ function CheckoutPicker({
                     {branch ?? projectName(root)}
                   </span>
                   <span className="block truncate text-[10px] text-content/40">
-                    {root === main ? "Project folder" : prettyCwd(root)}
+                    {root === main
+                      ? t("monos.changes.projectFolder")
+                      : prettyCwd(root)}
                   </span>
                 </span>
                 {files.length > 0 ? (
@@ -384,7 +405,9 @@ function CheckoutPicker({
                     {files.length}
                   </span>
                 ) : null}
-                {root === selected ? <Check className="size-3.5 shrink-0" /> : null}
+                {root === selected ? (
+                  <Check className="size-3.5 shrink-0" />
+                ) : null}
               </button>
             );
           })}
@@ -470,15 +493,13 @@ function useSessionProjects(
           const attachedLocations = located.slice(0, attached.length);
           const locations = located.slice(attached.length);
           const roots = [
-            ...new Set(
-              located.flatMap(
-                (location) => location?.root ?? [],
-              ),
-            ),
+            ...new Set(located.flatMap((location) => location?.root ?? [])),
           ];
           const mains = new Map(
             await Promise.all(
-              roots.map(async (root) => [root, await mainCheckout(root)] as const),
+              roots.map(
+                async (root) => [root, await mainCheckout(root)] as const,
+              ),
             ),
           );
           if (disposed || current !== generation) return;
@@ -504,7 +525,11 @@ function useSessionProjects(
           }));
           for (const [root, group] of byRoot) {
             if (!previous.some((project) => project.root === root)) {
-              projects.push({ root, main: mains.get(root) ?? root, files: group });
+              projects.push({
+                root,
+                main: mains.get(root) ?? root,
+                files: group,
+              });
             }
           }
           for (const location of attachedLocations) {

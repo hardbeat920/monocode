@@ -16,14 +16,20 @@ import {
   workspaceFromResumed,
   type ResumedWorkspace,
 } from "../../features/sessions/model/inFlight";
-import { leafIds, type WorkspaceTab } from "../../features/workspace/model/layout";
+import {
+  leafIds,
+  type WorkspaceTab,
+} from "../../features/workspace/model/layout";
 import { killPty } from "../../platform/tauri/pty";
 import {
   projectTerminalFileIds,
   type DockSide,
   type ProjectTerminalDock,
 } from "../../features/projects/model/projectTerminal";
-import { sessionWorkCwd, type Session } from "../../features/sessions/model/session";
+import {
+  sessionWorkCwd,
+  type Session,
+} from "../../features/sessions/model/session";
 import { sessionChildHarnesses } from "../../features/sessions/model/handoff";
 import {
   getSession,
@@ -42,8 +48,13 @@ import {
   parseWorkspaceSnapshot,
 } from "../../features/workspace/model/workspaceSnapshot";
 import { loadWindowTransfer } from "./windowTransferBootstrap";
+import { t } from "../../shared/i18n/locale";
 import type { WindowTransferPayload } from "./windowTransfer";
-import { lastProjectPath, normalizeProjectPath, sameProjectPath } from "../../features/projects/model/recents";
+import {
+  lastProjectPath,
+  normalizeProjectPath,
+  sameProjectPath,
+} from "../../features/projects/model/recents";
 import type { ProjectReturnMemory } from "../../features/projects/model/projectReturn";
 
 export type { ResumedWorkspace };
@@ -169,7 +180,7 @@ export async function askQuitConfirmation(
       confirmed = await ask(quitWhileBusyMessage(inFlight), {
         title: "MonoCode",
         kind: "warning",
-        okLabel: "Quit",
+        okLabel: t("app.lifecycle.quit"),
       });
     } catch {
       confirmed = false;
@@ -320,7 +331,8 @@ async function loadResumedWorkspaceOnce(): Promise<ResumedWorkspace | null> {
         // Idle transcripts already came from disk. Rewriting every open chat
         // here serialized/indexed the entire workspace before first paint.
         .filter(
-          (session) => interrupted.has(session.id) && shouldPersistSession(session),
+          (session) =>
+            interrupted.has(session.id) && shouldPersistSession(session),
         )
         .map((session) => upsertSession(session).catch(() => null)),
     );
@@ -359,10 +371,10 @@ export async function confirmReload(
   hasUnsavedFiles: boolean,
 ): Promise<boolean> {
   if (!hasUnsavedFiles) return true;
-  return ask("Reload MonoCode and discard unsaved changes?", {
+  return ask(t("app.lifecycle.reloadPrompt"), {
     title: "MonoCode",
     kind: "warning",
-    okLabel: "Reload",
+    okLabel: t("app.lifecycle.reload"),
   });
 }
 
@@ -392,7 +404,7 @@ export async function persistQuitState(
   // A quit ends the process, so a swallowed write is work that never comes
   // back: let it reject and let the caller call the quit off. An unload is a
   // reload, where best effort is enough and failing loudly helps nobody.
-  const write = <T,>(pending: Promise<T>): Promise<T | null> =>
+  const write = <T>(pending: Promise<T>): Promise<T | null> =>
     mode === "quit" ? pending : pending.catch(() => null);
 
   await Promise.all(
@@ -425,7 +437,9 @@ export async function persistQuitState(
   }
 }
 
-async function persistBootingResume(workspace: ResumedWorkspace): Promise<void> {
+async function persistBootingResume(
+  workspace: ResumedWorkspace,
+): Promise<void> {
   await Promise.all(
     workspace.sessions
       .filter(shouldPersistSession)
@@ -443,12 +457,10 @@ async function persistBootingResume(workspace: ResumedWorkspace): Promise<void> 
     ),
   ).catch(() => undefined);
   await replaceInFlightSessions(
-    workspace.sessions
-      .filter(wasTurnInterrupted)
-      .map((session) => ({
-        sessionId: session.id,
-        cwd: session.cwd,
-      })),
+    workspace.sessions.filter(wasTurnInterrupted).map((session) => ({
+      sessionId: session.id,
+      cwd: session.cwd,
+    })),
   ).catch(() => undefined);
 }
 
@@ -466,10 +478,11 @@ async function confirmAndCloseWindow(
   try {
     const refs = inFlightRefs(sessions, tabs);
     if (refs.length > 0) {
-      const ok = await ask(
-        "Close this window and stop its running chats? Other windows will stay open.",
-        { title: "MonoCode", kind: "warning", okLabel: "Close window" },
-      );
+      const ok = await ask(t("app.lifecycle.closeWindowPrompt"), {
+        title: "MonoCode",
+        kind: "warning",
+        okLabel: t("app.lifecycle.closeWindow"),
+      });
       if (!ok) return;
     }
     quitting = true;

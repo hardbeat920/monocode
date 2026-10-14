@@ -1,3 +1,4 @@
+import { t } from "../../../shared/i18n/locale";
 import { basename } from "../../../platform/tauri/fs";
 import type { FilePaneTab } from "../../workspace/model/layout";
 
@@ -18,7 +19,7 @@ export type RunningTerminal = {
 /** Default tab label from the working directory. */
 export function defaultTerminalTitle(cwd: string): string {
   const name = basename(cwd);
-  if (!name || name === "/") return "Terminal";
+  if (!name || name === "/") return t("terminal.tab.default");
   return name;
 }
 
@@ -38,7 +39,7 @@ export function applyTerminalMeta(
   const foreground =
     patch.foreground === undefined
       ? file.foreground
-      : (patch.foreground?.trim() || undefined);
+      : patch.foreground?.trim() || undefined;
   if (
     path === file.path &&
     cwd === file.cwd &&
@@ -89,8 +90,7 @@ export function runningTerminalChipLabel(terminals: RunningTerminal[]): string {
     .join(" · ");
 }
 
-const OSC_CWD =
-  /\x1b\]7;file:\/\/[^/]*(\/[^\x07\x1b]*)(?:\x07|\x1b\\)/g;
+const OSC_CWD = /\x1b\]7;file:\/\/[^/]*(\/[^\x07\x1b]*)(?:\x07|\x1b\\)/g;
 
 function decodeOscPath(raw: string): string {
   try {

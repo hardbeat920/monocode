@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { MessageSquarePlus } from "../../../shared/ui/icons";
+import { useT } from "../../../shared/i18n/useT";
 import { Popover } from "../../../shared/ui/Popover";
 import {
   formatEditorSelectionReference,
@@ -18,6 +19,7 @@ export function EditorSelectionMenu({
   selection: EditorSelectionTarget | null;
   onDismiss: () => void;
 }) {
+  const t = useT();
   const onDismissRef = useRef(onDismiss);
   onDismissRef.current = onDismiss;
 
@@ -44,7 +46,7 @@ export function EditorSelectionMenu({
       gap={6}
       onDismiss={onDismiss}
       role="toolbar"
-      aria-label="Selected code actions"
+      aria-label={t("files.selectionMenu.label")}
       className="p-1"
     >
       <button
@@ -61,7 +63,7 @@ export function EditorSelectionMenu({
           className="size-3.5"
           strokeWidth={1.75}
         />
-        Add to chat
+        {t("files.selectionMenu.addToChat")}
       </button>
     </Popover>
   );

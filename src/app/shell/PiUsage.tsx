@@ -13,6 +13,7 @@ import {
   RATE_LIMIT_POLL_MS,
 } from "../../features/providers/model/rateLimits";
 import { UsageProviderChip, type UsageChipVariant } from "./UsageProviderChip";
+import { useT } from "../../shared/i18n/useT";
 
 export function PiUsage({
   model,
@@ -23,6 +24,7 @@ export function PiUsage({
   now: number;
   variant?: UsageChipVariant;
 }) {
+  const t = useT();
   const provider = piUsageProvider(model);
   if (!provider) {
     return (
@@ -30,12 +32,12 @@ export function PiUsage({
         className="inline-flex items-center gap-1.5 whitespace-nowrap"
         title={
           !model || model === "pi:default"
-            ? "Send a message so Pi can report its configured provider."
-            : "Subscription usage is not supported for this Pi provider."
+            ? t("app.piUsage.sendMessageHint")
+            : t("app.piUsage.unsupportedProvider")
         }
       >
         <HarnessIcon harness="pi" className="size-3 shrink-0" />
-        <span>pi · Usage unavailable</span>
+        <span>pi · {t("app.piUsage.unavailable")}</span>
       </span>
     );
   }
@@ -58,6 +60,7 @@ function PiProviderUsage({
   now: number;
   variant: UsageChipVariant;
 }) {
+  const t = useT();
   const [limits, setLimits] = useState(() =>
     idleRateLimits(piBillingProvider(provider)),
   );
@@ -109,7 +112,7 @@ function PiProviderUsage({
         now={now}
         variant={variant}
         presentation={{
-          sourceLabel: "Pi's saved OAuth account",
+          sourceLabel: t("app.piUsage.sourceLabel"),
           harness: "pi",
           label:
             provider === "anthropic" ? "Pi · Anthropic" : "Pi · OpenAI Codex",
@@ -117,8 +120,8 @@ function PiProviderUsage({
       />
       <button
         type="button"
-        aria-label="Refresh Pi usage"
-        title="Refresh Pi usage"
+        aria-label={t("app.piUsage.refresh")}
+        title={t("app.piUsage.refresh")}
         disabled={fetching}
         onClick={() => refreshRef.current(true)}
         className="grid size-6 shrink-0 place-items-center rounded text-content/40 hover:bg-content/10 hover:text-content disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-accent"

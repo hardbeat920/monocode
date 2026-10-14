@@ -1,5 +1,6 @@
 import type { ExplorerMenuItem } from "../../files/ui/ExplorerMenu";
 import { reminderTime } from "../model/sessionReminders";
+import { t } from "../../../shared/i18n/locale";
 
 export function sessionReminderPresets(now = new Date()) {
   const timeInHours = (hours: 1 | 3) => {
@@ -8,19 +9,31 @@ export function sessionReminderPresets(now = new Date()) {
   };
 
   return [
-    { kind: "item", id: "reminder:1h", label: `In 1 hour (${timeInHours(1)})` },
+    {
+      kind: "item",
+      id: "reminder:1h",
+      label: t("sessions.reminders.inOneHour", { time: timeInHours(1) }),
+    },
     {
       kind: "item",
       id: "reminder:3h",
-      label: `In 3 hours (${timeInHours(3)})`,
+      label: t("sessions.reminders.inThreeHours", { time: timeInHours(3) }),
     },
     {
       kind: "item",
       id: "reminder:evening",
-      label: "This evening (18:00)",
+      label: t("sessions.reminders.thisEvening"),
       disabled: reminderTime("reminder:evening", now) == null,
     },
-    { kind: "item", id: "reminder:tomorrow", label: "Tomorrow (9:00)" },
-    { kind: "item", id: "reminder:next-week", label: "Next week (Mon 9:00)" },
+    {
+      kind: "item",
+      id: "reminder:tomorrow",
+      label: t("sessions.reminders.tomorrow"),
+    },
+    {
+      kind: "item",
+      id: "reminder:next-week",
+      label: t("sessions.reminders.nextWeek"),
+    },
   ] satisfies ExplorerMenuItem[];
 }

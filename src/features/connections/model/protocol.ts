@@ -2,6 +2,7 @@ import type { Block, Session, RuntimeMode } from "../../sessions/model/session";
 import type { UserQuestionReply } from "../../sessions/model/userQuestion";
 import type { AgentModel } from "../../sessions/model/models";
 import type { LinkedWorkItem } from "../../sessions/model/session";
+import { t } from "../../../shared/i18n/locale";
 
 export const HOST_PROTOCOL_VERSION = 1;
 export const REMOTE_PROVIDERS = [
@@ -241,7 +242,7 @@ export function requireHostDescriptor(value: HostDescriptor): HostDescriptor {
     !Array.isArray(value.providers) ||
     !value.providers.every(isRemoteProvider)
   ) {
-    throw new Error("This machine is running an incompatible MonoCode Host");
+    throw new Error(t("connections.error.incompatibleHost"));
   }
   return value;
 }

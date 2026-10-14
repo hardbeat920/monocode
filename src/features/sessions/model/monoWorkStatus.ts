@@ -1,3 +1,4 @@
+import { t } from "../../../shared/i18n/locale";
 import { isReadTool } from "../../../integrations/harness/core/preview";
 import type { Block } from "./session";
 import {
@@ -12,12 +13,14 @@ import {
   type ActivityPhaseKind,
 } from "./transcriptActivity";
 
-const THINKING_LABELS = [
-  "Thinking…",
-  "Pondering…",
-  "Considering…",
-  "Working it through…",
-];
+function thinkingLabels(): string[] {
+  return [
+    t("sessions.monoStatus.thinking1"),
+    t("sessions.monoStatus.thinking2"),
+    t("sessions.monoStatus.thinking3"),
+    t("sessions.monoStatus.thinking4"),
+  ];
+}
 
 export type MonoWorkStatus = {
   key: string;
@@ -43,7 +46,7 @@ export function monoWorkStatus(
   if (waiting) {
     return {
       key: `approval:${waiting.id}`,
-      label: "Waiting for approval…",
+      label: t("sessions.monoStatus.waitingApproval"),
       kind: toolCategory(waiting),
       active: true,
     };
@@ -59,26 +62,27 @@ export function monoWorkStatus(
     }
   }
   if (!latest || !isToolBlock(latest)) {
+    const labels = thinkingLabels();
     return {
       key: latest?.id ?? "thinking",
-      label: THINKING_LABELS[Math.max(0, thought) % THINKING_LABELS.length],
+      label: labels[Math.max(0, thought) % labels.length],
       kind: "think",
       active: true,
     };
   }
   const kind = toolCategory(latest);
   const label = {
-    run: "Running command…",
-    edit: "Editing file…",
+    run: t("sessions.monoStatus.runCommand"),
+    edit: t("sessions.monoStatus.editFile"),
     research: isReadTool(
       latest.tool?.kind,
       latest.text || latest.tool?.title,
       latest.tool?.preview,
     )
-      ? "Reading file…"
-      : "Exploring project…",
-    agent: "Running agent…",
-    other: "Using tool…",
+      ? t("sessions.monoStatus.readFile")
+      : t("sessions.monoStatus.exploreProject"),
+    agent: t("sessions.monoStatus.runAgent"),
+    other: t("sessions.monoStatus.useTool"),
   }[kind];
   return { key: latest.id, label, kind, active: true };
 }

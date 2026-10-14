@@ -1,3 +1,4 @@
+import { t } from "../../../shared/i18n/locale";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { projectKey } from "../../../shared/lib/paths";
@@ -13,10 +14,10 @@ export async function pickImageFile(directory: string): Promise<string | null> {
     defaultPath: directory,
     multiple: false,
     directory: false,
-    title: "Choose project logo",
+    title: t("projects.logo.pickTitle"),
     filters: [
       {
-        name: "Images",
+        name: t("projects.pick.images"),
         extensions: ["png", "jpg", "jpeg", "gif", "webp", "svg"],
       },
     ],
@@ -52,7 +53,9 @@ async function forgetLogoFile(path: string | null): Promise<void> {
   await invoke("forget_logo_file", { path }).catch(() => undefined);
 }
 
-export async function pickAndSetProjectLogo(projectPath: string): Promise<string | null> {
+export async function pickAndSetProjectLogo(
+  projectPath: string,
+): Promise<string | null> {
   const sourcePath = await pickImageFile(projectPath);
   if (!sourcePath) return null;
   const project = projectKey(projectPath);

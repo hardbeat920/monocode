@@ -13,8 +13,17 @@ import {
 } from "../../../shared/ui/icons";
 import { revealPath } from "../../../platform/tauri/fs";
 import { useProjectWorktrees } from "../hooks/useProjectWorktrees";
-import { isEqualOrInside, pathKey, prettyCwd, projectName } from "../../../shared/lib/paths";
-import { loadArchivedProjects, type RecentProject } from "../../projects/model/recents";
+import {
+  isEqualOrInside,
+  pathKey,
+  prettyCwd,
+  projectName,
+} from "../../../shared/lib/paths";
+import { useT } from "../../../shared/i18n/useT";
+import {
+  loadArchivedProjects,
+  type RecentProject,
+} from "../../projects/model/recents";
 import type { Session } from "../../sessions/model/session";
 import {
   checkWorktreeRemoval,
@@ -38,6 +47,7 @@ export function WorktreesPage({
   onCheckRemove?: RemoveWorktree;
   onDeleteSessions?: (sessionIds: readonly string[]) => Promise<boolean>;
 }) {
+  const t = useT();
   const projects = useMemo(() => {
     const choices: RecentProject[] = [];
     const seen = new Set<string>();
@@ -89,29 +99,27 @@ export function WorktreesPage({
           className="flex h-7.5 items-center gap-1.5 rounded-md px-2 text-[11px] hover:bg-content/12 disabled:opacity-40 active:scale-[0.97]"
         >
           <Plus className="size-3" />
-          Create worktree
+          {t("scm.worktreesPage.create")}
         </button>
       </div>
       <div className="flex items-center justify-between gap-3">
         <p className="min-w-0 flex-1 text-[12px] text-content/50">
-          Sessions can share a worktree. Deleting one keeps its sessions by
-          default and discards uncommitted changes. Its branch and commits are
-          kept.
+          {t("scm.worktreesPage.description")}
         </p>
         <button
           type="button"
           title={
             loadError
-              ? `Refresh failed: ${loadError}. Click to retry.`
-              : "Refresh worktrees"
+              ? t("scm.worktreesPage.refreshFailed", { error: loadError })
+              : t("scm.worktreesPage.refresh")
           }
-          aria-label="Refresh worktrees"
+          aria-label={t("scm.worktreesPage.refresh")}
           disabled={!project}
           onClick={refresh}
           className={`flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-content/8 px-2 text-[11px] hover:bg-content/12 disabled:opacity-40 active:scale-[0.97] ${loadError ? "text-red-400" : "text-content/65"}`}
         >
           <RefreshCw className="size-3.5" />
-          <span>Refresh</span>
+          <span>{t("scm.worktreesPage.refreshButton")}</span>
         </button>
       </div>
       {error && (
@@ -121,7 +129,7 @@ export function WorktreesPage({
       )}
       {!project ? (
         <p className="text-[12px] text-content/50">
-          Add a project to manage its worktrees.
+          {t("scm.worktreesPage.noProject")}
         </p>
       ) : !data && loadError ? (
         <p role="alert" className="break-words text-[12px] text-red-400">
@@ -130,14 +138,16 @@ export function WorktreesPage({
       ) : !data ? (
         <p className="flex items-center gap-2 text-[12px] text-content/50">
           <Loader className="size-4 animate-spin" />
-          Loading worktrees…
+          {t("scm.worktreesPage.loading")}
         </p>
       ) : !worktrees.length ? (
         <div className="flex flex-col items-center gap-2 rounded-xl border border-stroke px-4 py-8 text-center">
           <FolderTree className="size-5 text-content/35" />
-          <p className="text-[13px] font-medium">No additional worktrees</p>
+          <p className="text-[13px] font-medium">
+            {t("scm.worktreesPage.emptyTitle")}
+          </p>
           <p className="text-[12px] text-content/50">
-            Create a worktree to work on another branch in a separate folder.
+            {t("scm.worktreesPage.emptyDescription")}
           </p>
         </div>
       ) : (
@@ -145,9 +155,9 @@ export function WorktreesPage({
           {worktrees.map((tree) => {
             const count = worktreeSessionIds(tree, liveSessions).length;
             const blocked = tree.locked
-              ? "Unlock this worktree in Git first"
+              ? t("scm.worktreesPage.blockedLocked")
               : !tree.branch
-                ? "Create a branch before deleting this detached worktree"
+                ? t("scm.worktreesPage.blockedDetached")
                 : undefined;
             return (
               <div key={tree.path} className="flex items-start gap-3 p-4">
@@ -159,7 +169,7 @@ export function WorktreesPage({
                     </span>
                     {pathKey(tree.path) === pathKey(project) && (
                       <span className="text-[10px] text-content/40">
-                        Selected project folder
+                        {t("scm.worktreesPage.selectedFolder")}
                       </span>
                     )}
                   </div>
@@ -170,37 +180,47 @@ export function WorktreesPage({
                     <GitBranch className="size-3 shrink-0" />
                     <span className="min-w-0 break-all">
                       {tree.branch
-                        ? `Current branch: ${tree.branch}`
-                        : `Detached at ${tree.head.slice(0, 7)}`}
+                        ? t("scm.worktreesPage.currentBranch", {
+                            branch: tree.branch,
+                          })
+                        : t("scm.worktreesPage.detachedAt", {
+                            head: tree.head.slice(0, 7),
+                          })}
                     </span>
                   </p>
                   <p className="mt-2 flex flex-wrap gap-x-3 text-[11px] text-content/55">
                     <span>
-                      {count} session{count === 1 ? "" : "s"} in this worktree
+                      {t("scm.worktreesPage.sessionCount", { count })}
                     </span>
                     <span className={tree.dirty ? "text-amber-400" : ""}>
                       {tree.missing
-                        ? "Missing folder"
+                        ? t("scm.worktreesPage.missingFolder")
                         : tree.dirty == null
-                          ? "Status unavailable"
+                          ? t("scm.worktreesPage.statusUnavailable")
                           : tree.dirty
-                            ? "Uncommitted changes"
-                            : "Clean"}
+                            ? t("scm.worktreesPage.uncommitted")
+                            : t("scm.worktreesPage.clean")}
                     </span>
                     {!!tree.unpushed && (
                       <span>
-                        {tree.unpushed} unpublished commit
-                        {tree.unpushed === 1 ? "" : "s"}
+                        {t("scm.worktreesPage.unpublished", {
+                          count: tree.unpushed,
+                        })}
                       </span>
                     )}
-                    {tree.locked && <span>Locked</span>}
+                    {tree.locked && (
+                      <span>{t("scm.worktreesPage.locked")}</span>
+                    )}
                   </p>
                 </div>
                 <button
                   type="button"
                   disabled={tree.missing}
-                  aria-label={`Reveal ${tree.branch ?? "worktree"}`}
-                  title="Reveal folder"
+                  aria-label={t("scm.worktreesPage.revealAria", {
+                    name:
+                      tree.branch ?? t("scm.worktreesPage.worktreeFallback"),
+                  })}
+                  title={t("scm.worktreesPage.reveal")}
                   onClick={() =>
                     void revealPath(tree.path).catch((e) => setError(String(e)))
                   }
@@ -211,8 +231,11 @@ export function WorktreesPage({
                 <button
                   type="button"
                   disabled={!!blocked || refreshingAfterFailure || !!loadError}
-                  aria-label={`Delete ${tree.branch ?? "worktree"}`}
-                  title={blocked ?? "Delete worktree"}
+                  aria-label={t("scm.worktreesPage.deleteAria", {
+                    name:
+                      tree.branch ?? t("scm.worktreesPage.worktreeFallback"),
+                  })}
+                  title={blocked ?? t("scm.worktreesPage.delete")}
                   onClick={() => {
                     setError(undefined);
                     setDeleting(tree);
@@ -228,7 +251,9 @@ export function WorktreesPage({
       )}
       {data && (
         <p className="break-all text-[11px] text-content/40">
-          New worktrees are created in {prettyCwd(data.defaultRoot)}.
+          {t("scm.worktreesPage.createdIn", {
+            path: prettyCwd(data.defaultRoot),
+          })}
         </p>
       )}
       {creating && (
@@ -256,14 +281,10 @@ export function WorktreesPage({
             try {
               if (sessionIds.length && deleteSessions) {
                 if (!onDeleteSessions) {
-                  throw new Error(
-                    "Sessions still use this worktree and could not be deleted.",
-                  );
+                  throw new Error(t("scm.worktreesPage.sessionsInUse"));
                 }
                 if (!(await onDeleteSessions(sessionIds))) {
-                  throw new Error(
-                    "Some sessions could not be deleted, so the worktree was kept.",
-                  );
+                  throw new Error(t("scm.worktreesPage.sessionsNotDeleted"));
                 }
                 sessionsDeleted = true;
               }
@@ -271,7 +292,9 @@ export function WorktreesPage({
             } catch (error) {
               const failure = sessionsDeleted
                 ? new Error(
-                    `The sessions were deleted, but the worktree was kept. ${String(error)}`,
+                    t("scm.worktreesPage.partialFailure", {
+                      error: String(error),
+                    }),
                   )
                 : error;
               // A partial deletion invalidates the dialog's saved session IDs.

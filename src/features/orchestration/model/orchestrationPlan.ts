@@ -1,5 +1,11 @@
-import { HARNESSES, type Block, type HarnessId, type Session } from "../../sessions/model/session";
+import {
+  HARNESSES,
+  type Block,
+  type HarnessId,
+  type Session,
+} from "../../sessions/model/session";
 import { isEqualOrInside, pathKey } from "../../../shared/lib/paths";
+import { t } from "../../../shared/i18n/locale";
 
 export type OrchestrationChoice = {
   harness: HarnessId;
@@ -123,15 +129,13 @@ export function validateOrchestrationSettings(
     Number(input.maxWorkers) < 1 ||
     Number(input.maxWorkers) > 4
   )
-    throw new Error("Choose 1 to 4 parallel workers");
+    throw new Error(t("orchestration.error.parallelRange"));
   if (
     !Array.isArray(input.choices) ||
     !input.choices.length ||
     input.choices.length > 4096
   )
-    throw new Error(
-      "No worker models are available, or the model catalog is too large. Check your connected harnesses.",
-    );
+    throw new Error(t("orchestration.error.noWorkerModels"));
   const choices = input.choices.map((value) => {
     const item = record(value);
     const harness = required(item.harness, "a harness", 32) as HarnessId;
@@ -372,7 +376,7 @@ export function restoreOrchestrationProposal(
     return {
       ...value,
       status: "invalid",
-      error: "Planning was interrupted. Generate the assignments again.",
+      error: t("orchestration.error.planningInterrupted"),
     };
   if (value.status === "starting") return { ...value, status: "ready" };
   return value;

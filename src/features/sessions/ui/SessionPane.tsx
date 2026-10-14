@@ -123,6 +123,7 @@ import type { SessionFolderTarget } from "../model/sessionFolders";
 import { markLinkedSessionUpdateSeen } from "../../inbox/model/linkedSessionSeen";
 import { RemoteSession } from "../../connections/ui/RemoteSession";
 import { isRemoteProjectPath } from "../../projects/model/recents";
+import { useT } from "../../../shared/i18n/useT";
 import type { HostSession } from "../../connections/model/protocol";
 
 export type SessionPaneProps = {
@@ -371,6 +372,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
   onPaneDragStart,
   transcriptPool,
 }: Props) {
+  const t = useT();
   const orchestrationRuns = useSyncExternalStore(
     orchestrator.subscribe,
     orchestrator.snapshot,
@@ -598,7 +600,9 @@ const LocalSessionPane = memo(function LocalSessionPane({
       const sessionTitle = sessionDisplayTitle(session.title, session.harness);
       await createNote({
         title:
-          sessionTitle && sessionTitle !== "New session"
+          sessionTitle &&
+            sessionTitle !== "New session" &&
+            sessionTitle !== t("sessions.session.newTitle")
             ? sessionTitle
             : noteTitle(text),
         body: text,
@@ -844,8 +848,8 @@ const LocalSessionPane = memo(function LocalSessionPane({
           </span>
           <button
             type="button"
-            title={`Close Pane (${MOD}W)`}
-            aria-label="Close pane"
+            title={t("sessions.pane.closePaneTitle", { shortcut: `${MOD}W` })}
+            aria-label={t("sessions.pane.closePane")}
             data-no-drag
             className="grid size-5 shrink-0 place-items-center rounded text-content/50 hover:bg-content/10 hover:text-content"
             onPointerDown={(e) => e.stopPropagation()}
@@ -905,7 +909,9 @@ const LocalSessionPane = memo(function LocalSessionPane({
                 </div>
               ) : session.inboxAsk ? (
                 <div className="scrollbar-none h-full min-h-0 overflow-y-auto">
-                  <DiscussionEmpty message="Explore this item with your agent." />
+                  <DiscussionEmpty
+                    message={t("sessions.pane.discussionEmpty")}
+                  />
                 </div>
               ) : (
                 <EmptySession
@@ -1245,7 +1251,10 @@ const LocalSessionPane = memo(function LocalSessionPane({
                             its current thread is. It rotates threads itself,
                             so there is nothing to compact here. */}
                         <div className="grid size-6.5 place-items-center rounded-md transition-colors hover:bg-content/8">
-                          <ContextMeter usage={session.context} empty={isEmpty} />
+                          <ContextMeter
+                            usage={session.context}
+                            empty={isEmpty}
+                          />
                         </div>
                       </>
                     }

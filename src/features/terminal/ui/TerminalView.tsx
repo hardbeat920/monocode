@@ -10,6 +10,7 @@ import {
   subscribePty,
   writePty,
 } from "../../../platform/tauri/pty";
+import { t } from "../../../shared/i18n/locale";
 import { isOscColorQuery, oscColorReply } from "../model/terminalChrome";
 import {
   isMacTerminalClearShortcut,
@@ -20,7 +21,10 @@ import {
   scanOscCwd,
   type TerminalMetaPatch,
 } from "../model/terminalTab";
-import { isLightScheme, SCHEME_CHANGE_EVENT } from "../../settings/model/appearance";
+import {
+  isLightScheme,
+  SCHEME_CHANGE_EVENT,
+} from "../../settings/model/appearance";
 import {
   applyTerminalChrome,
   fitTerminal,
@@ -49,7 +53,10 @@ function cssColor(expr: string, fallback: string): string {
 function cssHexColor(expr: string, fallback: string): string {
   const color = cssColor(expr, fallback);
   if (/^#[\da-f]{6}$/i.test(color)) return color;
-  const channels = color.match(/[\d.]+/g)?.slice(0, 3).map(Number);
+  const channels = color
+    .match(/[\d.]+/g)
+    ?.slice(0, 3)
+    .map(Number);
   if (!channels || channels.length < 3 || channels.some(Number.isNaN)) {
     return fallback;
   }
@@ -132,18 +139,12 @@ const stoppingPtys = new Map<string, Promise<void>>();
 function oscColors() {
   const light = isLightScheme();
   return {
-    fg: cssHexColor(
-      "var(--color-content)",
-      light ? "#2e2e2e" : "#ebebeb",
-    ),
+    fg: cssHexColor("var(--color-content)", light ? "#2e2e2e" : "#ebebeb"),
     bg: cssHexColor(
       "var(--color-background-base)",
       light ? "#f7f7f7" : "#171717",
     ),
-    cursor: cssHexColor(
-      "var(--color-accent)",
-      light ? "#4078f2" : "#4da3f5",
-    ),
+    cursor: cssHexColor("var(--color-accent)", light ? "#4078f2" : "#4da3f5"),
   };
 }
 
@@ -264,7 +265,7 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
         (code) => {
           if (closed) return;
           const status = code == null ? "" : ` (${code})`;
-          term.writeln(`\r\n[process exited${status}]`);
+          term.writeln(`\r\n${t("terminal.view.exited", { status })}`);
         },
       );
       didStart = true;

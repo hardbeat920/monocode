@@ -24,6 +24,7 @@ import {
   type DecorationSet,
   type ViewUpdate,
 } from "@codemirror/view";
+import { t } from "../../../shared/i18n/locale";
 import type { UnifiedLine } from "../../source-control/model/unifiedDiff";
 
 const DIFF_CONFIG = { scanLimit: 5_000, timeout: 100 };
@@ -818,7 +819,7 @@ const gitOverview = ViewPlugin.fromClass(
     constructor(readonly view: EditorView) {
       this.dom = document.createElement("div");
       this.dom.className = "cm-gitOverview";
-      this.dom.title = "Changes";
+      this.dom.title = t("files.git.changes");
       this.dom.addEventListener("mousedown", (event) => {
         this.onMouseDown(event);
       });
@@ -910,9 +911,12 @@ const gitHunkActions = ViewPlugin.fromClass(
       this.bar = document.createElement("div");
       this.bar.className = "cm-gitHunkBar";
       this.bar.hidden = true;
-      this.commentButton = hunkButton("Comment on line", COMMENT_SVG);
-      this.revertButton = hunkButton("Revert change", UNDO_SVG);
-      this.stageButton = hunkButton("Stage change", PLUS_SVG);
+      this.commentButton = hunkButton(
+        t("files.git.commentOnLine"),
+        COMMENT_SVG,
+      );
+      this.revertButton = hunkButton(t("files.git.revertChange"), UNDO_SVG);
+      this.stageButton = hunkButton(t("files.git.stageChange"), PLUS_SVG);
       this.bar.append(this.commentButton, this.revertButton, this.stageButton);
       this.commentButton.addEventListener("mousedown", (event) => {
         this.onAction(event, "comment");

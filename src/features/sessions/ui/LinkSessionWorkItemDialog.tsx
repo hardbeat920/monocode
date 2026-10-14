@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { Modal } from "../../../shared/ui/Modal";
+import { useT } from "../../../shared/i18n/useT";
 import type { LinkedWorkItem } from "../model/session";
 import { parseGithubWorkItemUrl } from "../model/sessionWorkItem";
 
@@ -14,6 +15,7 @@ export function LinkSessionWorkItemDialog({
   onSave: (item: LinkedWorkItem | undefined) => void;
   onClose: () => void;
 }) {
+  const t = useT();
   const [url, setUrl] = useState(initial?.url ?? "");
   const [error, setError] = useState("");
 
@@ -21,7 +23,7 @@ export function LinkSessionWorkItemDialog({
     event.preventDefault();
     const item = parseGithubWorkItemUrl(url.trim());
     if (!item) {
-      setError("Enter a valid GitHub issue or pull request URL.");
+      setError(t("sessions.linkWorkItem.invalidUrl"));
       return;
     }
     onSave(item);
@@ -29,7 +31,11 @@ export function LinkSessionWorkItemDialog({
 
   return (
     <Modal
-      title={initial ? "Edit GitHub link" : "Link GitHub issue or PR"}
+      title={
+        initial
+          ? t("sessions.linkWorkItem.editTitle")
+          : t("sessions.linkWorkItem.linkTitle")
+      }
       description={sessionTitle}
       size="sm"
       onClose={onClose}
@@ -37,13 +43,13 @@ export function LinkSessionWorkItemDialog({
       <form onSubmit={submit} className="flex flex-col gap-4 p-4 text-[12px]">
         <label className="flex flex-col gap-1.5">
           <span className="font-medium text-content/80">
-            Issue or pull request URL
+            {t("sessions.linkWorkItem.urlLabel")}
           </span>
           <input
             autoFocus
             type="url"
             value={url}
-            aria-label="GitHub issue or pull request URL"
+            aria-label={t("sessions.linkWorkItem.urlAriaLabel")}
             aria-invalid={error ? true : undefined}
             aria-describedby={error ? "linked-work-item-error" : undefined}
             placeholder="https://github.com/owner/repo/pull/123"
@@ -65,8 +71,7 @@ export function LinkSessionWorkItemDialog({
             </span>
           ) : (
             <span className="text-[11px] text-content/45">
-              Paste the full github.com URL. The linked item will appear on the
-              session card.
+              {t("sessions.linkWorkItem.hint")}
             </span>
           )}
         </label>
@@ -77,7 +82,7 @@ export function LinkSessionWorkItemDialog({
               onClick={() => onSave(undefined)}
               className="mr-auto rounded-md px-3 py-1.5 text-red-400 hover:bg-red-400/10 active:scale-[0.97]"
             >
-              Remove link
+              {t("sessions.linkWorkItem.remove")}
             </button>
           ) : null}
           <button
@@ -85,13 +90,15 @@ export function LinkSessionWorkItemDialog({
             onClick={onClose}
             className="rounded-md px-3 py-1.5 hover:bg-content/8 active:scale-[0.97]"
           >
-            Cancel
+            {t("sessions.linkWorkItem.cancel")}
           </button>
           <button
             type="submit"
             className="rounded-md bg-accent px-3 py-1.5 font-medium text-white hover:brightness-110 active:scale-[0.97]"
           >
-            {initial ? "Update link" : "Link"}
+            {initial
+              ? t("sessions.linkWorkItem.update")
+              : t("sessions.linkWorkItem.link")}
           </button>
         </div>
       </form>

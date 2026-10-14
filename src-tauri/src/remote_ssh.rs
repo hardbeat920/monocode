@@ -263,7 +263,7 @@ pub fn detect_platform(
     job: &Arc<Job>,
     askpass: &Askpass,
 ) -> Result<HostPlatform, String> {
-    job.message("Checking the remote machine…");
+    job.message(crate::i18n::t(crate::i18n::Text::RemoteChecking));
     let output = run_remote_command(
         target,
         String::new(),

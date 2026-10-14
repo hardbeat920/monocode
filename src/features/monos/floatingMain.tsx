@@ -24,6 +24,7 @@ import { FloatingMonoChat } from "./ui/FloatingMonoChat";
 import { homeDir } from "../../platform/tauri/fs";
 import { setHomeDir } from "../../shared/lib/paths";
 import "../../styles/index.css";
+import { initLocale } from "../../shared/i18n/locale";
 
 let appearanceKey = "";
 function applyFloatingAppearance() {
@@ -59,6 +60,7 @@ window.addEventListener("storage", applyFloatingAppearance);
 void homeDir()
   .then(setHomeDir)
   .catch(() => undefined);
+initLocale();
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <FloatingMonoChat onShown={applyFloatingAppearance} />

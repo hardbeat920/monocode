@@ -1,5 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
-import { HARNESS_TITLE, sessionDisplayTitle, type Session } from "../../sessions/model/session";
+import {
+  HARNESS_TITLE,
+  sessionDisplayTitle,
+  type Session,
+} from "../../sessions/model/session";
 import { loadSoundsEnabled, playCue } from "../../settings/model/sounds";
 import {
   allowsProjectNotification,
@@ -7,6 +11,7 @@ import {
 } from "./notificationPreferences";
 import { monoReplyText } from "../../monos/model/monoReaction";
 import { knownNotificationProject } from "./notificationProjects";
+import { t } from "../../../shared/i18n/locale";
 
 const KEY = "monocode.notifications";
 
@@ -183,7 +188,9 @@ export function notificationText(
       return {
         title,
         subtitle,
-        body: clip(prompt || `${harness} has a question for you`),
+        body: clip(
+          prompt || t("settings.notifications.banner.question", { harness }),
+        ),
       };
     }
     const pending = session.blocks.find(
@@ -195,7 +202,11 @@ export function notificationText(
     return {
       title,
       subtitle,
-      body: clip(what ? `Approve: ${what}` : `${harness} needs your approval`),
+      body: clip(
+        what
+          ? t("settings.notifications.banner.approve", { what })
+          : t("settings.notifications.banner.needsApproval", { harness }),
+      ),
     };
   }
   const reply = [...session.blocks]
@@ -204,7 +215,10 @@ export function notificationText(
   return {
     title,
     subtitle,
-    body: clip((reply && monoReplyText(reply.text)) || `${harness} finished`),
+    body: clip(
+      (reply && monoReplyText(reply.text)) ||
+        t("settings.notifications.banner.finished", { harness }),
+    ),
   };
 }
 

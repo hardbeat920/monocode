@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
+import { getLocaleTag, t as translate } from "../../../shared/i18n/locale";
+import { useT } from "../../../shared/i18n/useT";
 import { isImeComposition } from "../../../shared/lib/keyboard";
 import { SearchableSelect } from "../../../shared/ui/SearchableSelect";
-import { AUTOMATION_WEEKDAYS } from "../../automations/model/automations";
 import {
   addHabit,
   nextHabitRunAt,
@@ -10,17 +11,25 @@ import {
 import { when } from "./HabitPage";
 import { AutoTextarea, PageHeader, Property, Section } from "./monoPanelParts";
 
-const KINDS = [
-  { value: "daily", label: "Daily" },
-  { value: "weekdays", label: "Weekdays" },
-  { value: "weekly", label: "Weekly" },
-  { value: "hourly", label: "Hourly" },
-] as const;
+const kinds = () =>
+  [
+    { value: "daily", label: translate("monos.newHabit.daily") },
+    { value: "weekdays", label: translate("monos.newHabit.weekdays") },
+    { value: "weekly", label: translate("monos.newHabit.weekly") },
+    { value: "hourly", label: translate("monos.newHabit.hourly") },
+  ] as const;
 
-const DAYS = AUTOMATION_WEEKDAYS.map((label, value) => ({
-  value: String(value),
-  label,
-}));
+/** Sunday first, as `dayOfWeek` counts; 2023-01-01 was a Sunday. */
+const days = () => {
+  const format = new Intl.DateTimeFormat(getLocaleTag(), {
+    weekday: "long",
+    timeZone: "UTC",
+  });
+  return Array.from({ length: 7 }, (_, value) => ({
+    value: String(value),
+    label: format.format(Date.UTC(2023, 0, 1 + value)),
+  }));
+};
 
 const MINUTES = [0, 15, 30, 45].map((value) => ({
   value: String(value),
@@ -40,6 +49,7 @@ export function NewHabitPage({
   onBack: () => void;
   onCreated: () => void;
 }) {
+  const t = useT();
   const [name, setName] = useState("");
   const [instructions, setInstructions] = useState("");
   const [schedule, setSchedule] = useState<HabitSchedule>({
@@ -69,14 +79,16 @@ export function NewHabitPage({
       .catch((reason: unknown) => {
         setSaving(false);
         setError(
-          reason instanceof Error ? reason.message : "Could not add the habit.",
+          reason instanceof Error
+            ? reason.message
+            : t("monos.newHabit.addFailed"),
         );
       });
   };
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-new-habit>
-      <PageHeader title="New habit" onBack={onBack}>
+      <PageHeader title={t("monos.newHabit.title")} onBack={onBack}>
         <button
           type="button"
           disabled={!ready}
@@ -84,7 +96,7 @@ export function NewHabitPage({
           data-tauri-drag-region="false"
           className="h-6 rounded-md bg-content/10 px-2 text-[12px] text-content enabled:hover:bg-content/[0.14] disabled:opacity-40"
         >
-          Create
+          {t("monos.newHabit.create")}
         </button>
       </PageHeader>
 
@@ -92,10 +104,10 @@ export function NewHabitPage({
         <div className="px-2 pt-3">
           <input
             ref={nameRef}
-            aria-label="Name"
+            aria-label={t("monos.newHabit.name")}
             value={name}
             maxLength={80}
-            placeholder="Name"
+            placeholder={t("monos.newHabit.name")}
             onChange={(event) => setName(event.target.value)}
             onKeyDown={(event) => {
               if (
@@ -110,15 +122,15 @@ export function NewHabitPage({
         </div>
 
         <dl className="flex flex-col gap-0.5 px-4 py-3">
-          <Property label="Runs">
+          <Property label={t("monos.habit.runs")}>
             <ScheduleFields schedule={schedule} onChange={setSchedule} />
           </Property>
-          <Property label="Next">
+          <Property label={t("monos.habit.next")}>
             {when(nextHabitRunAt(schedule, Date.now()))}
           </Property>
         </dl>
 
-        <Section title="What it does">
+        <Section title={t("monos.habit.whatItDoes")}>
           <Instructions
             value={instructions}
             onChange={setInstructions}
@@ -140,13 +152,14 @@ function ScheduleFields({
   schedule: HabitSchedule;
   onChange: (schedule: HabitSchedule) => void;
 }) {
+  const t = useT();
   const kind = schedule.scheduleKind;
   return (
     <span className="flex flex-wrap items-center gap-1.5 py-0.5">
       <SearchableSelect
-        label="Repeats"
+        label={t("monos.newHabit.repeats")}
         value={kind}
-        options={KINDS}
+        options={kinds()}
         variant="pill"
         searchable={false}
         onChange={(value) =>
@@ -158,11 +171,11 @@ function ScheduleFields({
       />
       {kind === "weekly" ? (
         <>
-          <span className="text-content/45">on</span>
+          <span className="text-content/45">{t("monos.newHabit.on")}</span>
           <SearchableSelect
-            label="Day"
+            label={t("monos.newHabit.day")}
             value={String(schedule.dayOfWeek)}
-            options={DAYS}
+            options={days()}
             variant="pill"
             searchable={false}
             onChange={(value) =>
@@ -171,10 +184,10 @@ function ScheduleFields({
           />
         </>
       ) : null}
-      <span className="text-content/45">at</span>
+      <span className="text-content/45">{t("monos.newHabit.at")}</span>
       {kind === "hourly" ? (
         <SearchableSelect
-          label="Minute"
+          label={t("monos.newHabit.minute")}
           value={String(schedule.minute)}
           options={MINUTES}
           variant="pill"
@@ -184,7 +197,7 @@ function ScheduleFields({
       ) : (
         <input
           type="time"
-          aria-label="Time"
+          aria-label={t("monos.newHabit.time")}
           value={schedule.time}
           required
           onChange={(event) => {
@@ -208,13 +221,14 @@ function Instructions({
   onChange: (value: string) => void;
   onSubmit: () => void;
 }) {
+  const t = useT();
   return (
     <AutoTextarea
-      aria-label="What it does"
+      aria-label={t("monos.habit.whatItDoes")}
       value={value}
       rows={3}
       maxLength={4_000}
-      placeholder="What it should do on each run, and when it's worth telling you about."
+      placeholder={t("monos.newHabit.instructionsPlaceholder")}
       onChange={(event) => onChange(event.target.value)}
       onKeyDown={(event) => {
         if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {

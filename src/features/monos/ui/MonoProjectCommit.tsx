@@ -1,6 +1,7 @@
 import { ask } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useT } from "../../../shared/i18n/useT";
 import {
   Check,
   ChevronDown,
@@ -145,6 +146,7 @@ export function MonoProjectCommit({
   /** The file, opened with its changes over the list. */
   onOpenFile: (path: string) => void;
 }) {
+  const t = useT();
   const { pr, reload: reloadPr } = usePrStatus(root, index?.branch);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
@@ -237,12 +239,14 @@ export function MonoProjectCommit({
     const untracked = file.status === "untracked";
     const ok = await ask(
       untracked
-        ? `Delete untracked file ${name}?`
-        : `Discard changes in ${name}? This cannot be undone.`,
+        ? t("monos.commit.deleteUntracked", { name })
+        : t("monos.commit.discardChanges", { name }),
       {
         title: "MonoCode",
         kind: "warning",
-        okLabel: untracked ? "Delete" : "Discard",
+        okLabel: untracked
+          ? t("monos.commit.delete")
+          : t("monos.commit.discard"),
       },
     );
     if (!ok) return;
@@ -297,13 +301,13 @@ export function MonoProjectCommit({
       ? Promise.resolve(true)
       : confirmNative(
           kind === "pr"
-            ? `Create a pull request from default branch "${index.branch}"?`
-            : `Push to default branch "${index.branch}"?`,
+            ? t("monos.commit.confirmPr", { branch: index.branch })
+            : t("monos.commit.confirmPush", { branch: index.branch }),
         );
 
   const openCreatedPr = async () => {
     const content = await generatePrContent(root, textHarness);
-    if (!content) throw new Error("Could not prepare pull request content");
+    if (!content) throw new Error(t("monos.commit.prepareFailed"));
     const url = await gitPrCreate(
       root,
       content.title,
@@ -362,9 +366,7 @@ export function MonoProjectCommit({
     setBusy(createPr ? "pr" : "commit");
     // Only files committed whole leave the session's review.
     const committed = files.filter((entry) =>
-      staged.some(
-        (file) => file.relative === entry.relative && !file.unstaged,
-      ),
+      staged.some((file) => file.relative === entry.relative && !file.unstaged),
     );
     try {
       await gitCommit(root, message, false);
@@ -382,10 +384,10 @@ export function MonoProjectCommit({
       if (createPr) await openCreatedPr();
       setStatus(
         createPr
-          ? "Pull request created"
+          ? t("monos.commit.prCreated")
           : push
-            ? "Committed and pushed"
-            : "Committed",
+            ? t("monos.commit.committedPushed")
+            : t("monos.commit.committed"),
       );
     } catch (error) {
       fail(error);
@@ -438,7 +440,7 @@ export function MonoProjectCommit({
             ref={messageRef}
             rows={1}
             value={message}
-            placeholder={`Message (${MOD}↩ to commit)`}
+            placeholder={t("monos.commit.placeholder", { mod: MOD })}
             disabled={!!busy && busy !== "generate"}
             onChange={(event) => setMessage(event.target.value)}
             onKeyDown={(event) => {
@@ -457,13 +459,13 @@ export function MonoProjectCommit({
             type="button"
             aria-label={
               busy === "generate"
-                ? "Cancel commit message generation"
-                : "Generate commit message"
+                ? t("monos.commit.cancelGenerate")
+                : t("monos.commit.generate")
             }
             title={
               busy === "generate"
-                ? "Cancel commit message generation"
-                : "Generate commit message"
+                ? t("monos.commit.cancelGenerate")
+                : t("monos.commit.generate")
             }
             disabled={
               busy === "generate" ? false : !!busy || staged.length === 0
@@ -505,12 +507,12 @@ export function MonoProjectCommit({
             ) : (
               <Check className="size-3.5" strokeWidth={2} />
             )}
-            Commit
+            {t("monos.commit.commit")}
           </button>
           <button
             type="button"
-            aria-label="Commit options"
-            title="Commit options"
+            aria-label={t("monos.commit.options")}
+            title={t("monos.commit.options")}
             aria-expanded={menuOpen}
             disabled={!!busy || !index?.branch}
             onClick={() => setMenuOpen((open) => !open)}
@@ -525,7 +527,7 @@ export function MonoProjectCommit({
           {menuOpen ? (
             <div
               role="menu"
-              aria-label="Commit options"
+              aria-label={t("monos.commit.options")}
               className="absolute top-full right-0 z-30 mt-1 min-w-48 rounded-md border border-content/10 bg-background-base py-1 shadow-lg"
             >
               <button
@@ -535,7 +537,7 @@ export function MonoProjectCommit({
                 onClick={() => void commit(true)}
                 className="flex h-7 w-full items-center px-3 text-left text-[12px] text-content hover:bg-content/10 disabled:opacity-40"
               >
-                Commit & Push
+                {t("monos.commit.commitPush")}
               </button>
               <button
                 type="button"
@@ -544,7 +546,7 @@ export function MonoProjectCommit({
                 onClick={() => void commit(true, true)}
                 className="flex h-7 w-full items-center px-3 text-left text-[12px] text-content hover:bg-content/10 disabled:opacity-40"
               >
-                Commit, Push & Create PR
+                {t("monos.commit.commitPushPr")}
               </button>
             </div>
           ) : null}
@@ -572,7 +574,8 @@ export function MonoProjectCommit({
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-none py-1">
         {changed.length === 0 ? (
           <p role="status" className="px-3 py-2 text-[12px] text-content/45">
-            {status ?? (index ? "No uncommitted changes" : "Loading changes…")}
+            {status ??
+              (index ? t("monos.commit.noChanges") : t("monos.commit.loading"))}
           </p>
         ) : (
           <>
@@ -586,7 +589,7 @@ export function MonoProjectCommit({
             ) : null}
             {staged.length > 0 ? (
               <FileSection
-                title="Staged Changes"
+                title={t("monos.commit.staged")}
                 count={staged.length}
                 open={commitOpen}
                 onToggle={() => setCommitOpen((open) => !open)}
@@ -594,23 +597,19 @@ export function MonoProjectCommit({
                 onToggleView={toggleView}
                 headerActions={[
                   {
-                    title: "Unstage All Changes",
+                    title: t("monos.commit.unstageAll"),
                     icon: <Minus className="size-3.5" strokeWidth={1.75} />,
                     onClick: () =>
                       void runStaging("unstage", () => gitUnstageAll(root)),
                   },
                 ]}
               >
-                <ChangeList
-                  {...changeListProps}
-                  files={staged}
-                  kind="staged"
-                />
+                <ChangeList {...changeListProps} files={staged} kind="staged" />
               </FileSection>
             ) : null}
             {unstaged.length > 0 ? (
               <FileSection
-                title="Changes"
+                title={t("monos.commit.changes")}
                 count={unstaged.length}
                 open={restOpen}
                 onToggle={() => setRestOpen((open) => !open)}
@@ -618,7 +617,7 @@ export function MonoProjectCommit({
                 onToggleView={toggleView}
                 headerActions={[
                   {
-                    title: "Stage All Changes",
+                    title: t("monos.commit.stageAll"),
                     icon: <Plus className="size-3.5" strokeWidth={1.75} />,
                     onClick: () =>
                       void runStaging("stage", () => gitStageAll(root)),

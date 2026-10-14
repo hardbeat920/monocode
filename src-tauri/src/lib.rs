@@ -17,6 +17,7 @@ mod fs;
 mod gitlab;
 mod harness;
 mod harness_updates;
+mod i18n;
 mod inbox_media;
 mod jira;
 mod jsonc;
@@ -266,6 +267,7 @@ pub fn run() {
             control::init(app.handle())?;
             reminders::init(app.handle());
             checkpoint::init(app.handle())?;
+            i18n::init(app.handle());
             menu::install(app.handle())?;
             #[cfg(target_os = "windows")]
             tray::install(app.handle())?;
@@ -547,6 +549,7 @@ pub fn run() {
             set_window_background_blur,
             set_dock_badge,
             set_trackpad_zoom_enabled,
+            i18n::set_app_locale,
             #[cfg(target_os = "macos")]
             menu::keybindings_set_overrides,
             #[cfg(target_os = "macos")]

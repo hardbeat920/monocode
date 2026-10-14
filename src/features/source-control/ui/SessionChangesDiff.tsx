@@ -12,6 +12,7 @@ import {
   subscribeReviewChanged,
   type CheckpointFile,
 } from "../../sessions/model/checkpoint";
+import { useT } from "../../../shared/i18n/useT";
 import { forEachConcurrent } from "../../../shared/lib/concurrent";
 import { buildUnifiedFile, type UnifiedFileDiff } from "../model/unifiedDiff";
 import { UnifiedDiffView, type UnifiedDiffFileModel } from "./UnifiedDiffView";
@@ -43,6 +44,7 @@ export function SessionChangesDiff({
   paths,
   initialExpansion,
 }: Props) {
+  const t = useT();
   const scope = paths == null ? undefined : JSON.stringify(paths);
   // Only the load order uses the focus; moving it must not restart the load.
   const focusRef = useRef(focusPath);
@@ -67,7 +69,8 @@ export function SessionChangesDiff({
       void sessionCheckpointStatus(sessionId, cwd)
         .then(async (status) => {
           if (disposed || current !== generation) return;
-          const allowed = scope == null ? null : new Set<string>(JSON.parse(scope));
+          const allowed =
+            scope == null ? null : new Set<string>(JSON.parse(scope));
           const scoped = allowed
             ? status.files.filter((file) => allowed.has(file.path))
             : status.files;
@@ -141,21 +144,21 @@ export function SessionChangesDiff({
         tooLarge: loaded?.tooLarge,
         emptyMessage:
           loaded == null
-            ? "Loading…"
+            ? t("scm.diff.loading")
             : loaded.error
               ? loaded.error
               : unified != null &&
                   unified.additions === 0 &&
                   unified.deletions === 0 &&
                   !loaded.binary
-                ? "No textual diff"
+                ? t("scm.diff.noTextualDiff")
                 : undefined,
         additions: file.additions,
         deletions: file.deletions,
         blocks: unified?.blocks ?? [],
       };
     });
-  }, [diffs, files]);
+  }, [diffs, files, t]);
 
   const totals = useMemo(
     () =>
@@ -172,7 +175,7 @@ export function SessionChangesDiff({
   if (!cwd || cwd === "~") {
     return (
       <p className="grid h-full place-items-center text-[13px] text-content/45">
-        No project folder
+        {t("scm.diff.noProjectFolder")}
       </p>
     );
   }
@@ -181,7 +184,7 @@ export function SessionChangesDiff({
       <div className="grid h-full place-items-center p-6 text-center">
         <AlertCircle className="mx-auto mb-3 size-5 text-red-400" />
         <p className="text-[13px] text-content">
-          Couldn’t load session changes
+          {t("scm.diff.sessionLoadFailed")}
         </p>
         <p className="mt-1 text-[12px] text-content/50">{error}</p>
       </div>
@@ -197,7 +200,7 @@ export function SessionChangesDiff({
   if (files.length === 0) {
     return (
       <p className="grid h-full place-items-center text-[13px] text-content/45">
-        No session changes
+        {t("scm.diff.noSessionChanges")}
       </p>
     );
   }

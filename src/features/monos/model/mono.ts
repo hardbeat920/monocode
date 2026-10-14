@@ -19,6 +19,7 @@ import {
   projectMascot,
 } from "../../projects/model/projectMascots";
 import { removeMonoBackground } from "./monoBackground";
+import { t } from "../../../shared/i18n/locale";
 
 /** The project palette's colors, plus indigo for a Mono's ninth preset. */
 export const MONO_COLORS = [
@@ -390,10 +391,18 @@ export function monoLook(mono: Mono): MonoLook {
 }
 
 /** Its projects as a phrase: "app", "app and site", "app, site and api". */
-export function monoProjectsPhrase(projects: readonly MonoProject[]): string {
+export function monoProjectsPhrase(
+  projects: readonly MonoProject[],
+  /** Text for the model stays English whatever language the app shows. */
+  forModel = false,
+): string {
   const names = projects.map((project) => project.name);
   if (names.length <= 1) return names[0] ?? "";
-  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  const head = names.slice(0, -1).join(", ");
+  const last = names[names.length - 1];
+  return forModel
+    ? `${head} and ${last}`
+    : t("monos.projects.join", { head, last });
 }
 
 /** Plain one-line take on a step's title, for the Mono's status. */
@@ -418,9 +427,15 @@ export type MonoState = {
 };
 
 export const MONO_STATUS_LABEL: Record<MonoStatus, string> = {
-  working: "Working",
-  "needs-you": "Needs you",
-  idle: "Idle",
+  get working() {
+    return t("monos.status.working");
+  },
+  get "needs-you"() {
+    return t("monos.status.needsYou");
+  },
+  get idle() {
+    return t("monos.status.idle");
+  },
 };
 
 /** The agent's state, with the step it is on or the call it is waiting for. */
@@ -445,17 +460,17 @@ export function monoState(
     return {
       status: "needs-you",
       activity: approval?.tool?.title
-        ? `Approve ${plainLine(approval.tool.title)}`
-        : "Waiting for approval",
+        ? t("monos.activity.approve", { title: plainLine(approval.tool.title) })
+        : t("monos.activity.waitingApproval"),
     };
   }
   if (!session.worktreeRemoved && session.usageLimit) {
-    return { status: "needs-you", activity: "Usage limit reached" };
+    return { status: "needs-you", activity: t("monos.activity.usageLimit") };
   }
   if (!session.busy) return { status: "idle" };
   const last = blocks[blocks.length - 1];
   if (last?.role === "assistant" && !last.tool && last.streaming) {
-    return { status: "working", activity: "Writing a reply" };
+    return { status: "working", activity: t("monos.activity.writingReply") };
   }
   // Only a step from the current turn says what it is doing now.
   for (let i = blocks.length - 1; i >= 0; i--) {
@@ -465,7 +480,7 @@ export function monoState(
       return { status: "working", activity: plainLine(block.tool.title) };
     }
   }
-  return { status: "working", activity: "Thinking" };
+  return { status: "working", activity: t("monos.activity.thinking") };
 }
 
 function latest(

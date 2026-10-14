@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/i18n/locale";
 import { promptBlocks, type PromptContentBlock } from "../../../../features/sessions/model/attachments";
 import type { AgentModel } from "../../../../features/sessions/model/models";
 import type { Attachment, RuntimeMode } from "../../../../features/sessions/model/session";
@@ -9,8 +10,9 @@ export type HermesBackgroundDispatch = {
   transcripts: string[];
 };
 
-export const HERMES_AUTH_HELP =
-  "Configure Hermes with `hermes model`, then verify it with `hermes acp --check`.";
+export function hermesAuthHelp(): string {
+  return t("integrations.hermes.authHelp");
+}
 
 /**
  * Hermes writes ordinary provider-health warnings to stderr. Only promote
@@ -33,7 +35,7 @@ export function hermesStderrAuthError(line: string): string | null {
   ) {
     return null;
   }
-  return `${message}\n\n${HERMES_AUTH_HELP}`;
+  return `${message}\n\n${hermesAuthHelp()}`;
 }
 
 /** Hermes accepts the standard ACP text, image, and resource-link blocks. */
@@ -57,12 +59,22 @@ export function hermesModeId(
 export function hermesStartupError(error: unknown): Error {
   const detail = error instanceof Error ? error.message : String(error);
   if (/auth|credential|api key|provider|configure|setup/i.test(detail)) {
-    return new Error(`${detail.trim()}\n\n${HERMES_AUTH_HELP}`);
+    return new Error(`${detail.trim()}\n\n${hermesAuthHelp()}`);
   }
   if (/timed out/i.test(detail)) {
-    return new Error(`Hermes Agent did not start. ${HERMES_AUTH_HELP}`);
+    return new Error(
+      t("integrations.provider.didNotStart", {
+        provider: "Hermes Agent",
+        detail: hermesAuthHelp(),
+      }),
+    );
   }
-  return new Error(`Hermes Agent did not start. ${detail}`);
+  return new Error(
+    t("integrations.provider.didNotStart", {
+      provider: "Hermes Agent",
+      detail,
+    }),
+  );
 }
 
 export function hermesSessionId(result: unknown): string | undefined {

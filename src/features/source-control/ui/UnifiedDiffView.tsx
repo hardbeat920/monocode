@@ -18,12 +18,16 @@ import {
   useState,
 } from "react";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
+import { useT } from "../../../shared/i18n/useT";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { useColorScheme } from "../../../shared/hooks/useColorScheme";
 import { formatInteger } from "../../../shared/lib/numbers";
 import type { ColorScheme } from "../../settings/model/appearance";
 import { basename } from "../../../platform/tauri/fs";
-import { highlightDiffFile, type SyntaxToken } from "../../files/editor/syntaxTokens";
+import {
+  highlightDiffFile,
+  type SyntaxToken,
+} from "../../files/editor/syntaxTokens";
 import { DiffCommentComposer } from "./DiffCommentComposer";
 import {
   expandFold,
@@ -95,6 +99,7 @@ export function UnifiedDiffView({
   onDiscardFile,
   onStageHunk,
 }: Props) {
+  const t = useT();
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const colorScheme = useColorScheme();
   const [open, setOpen] = useState<Set<string>>(() =>
@@ -187,12 +192,14 @@ export function UnifiedDiffView({
 
   if (files.length === 0) {
     return (
-      <p className="px-4 py-6 text-[13px] text-content/45">No file changes</p>
+      <p className="px-4 py-6 text-[13px] text-content/45">
+        {t("scm.unified.noFileChanges")}
+      </p>
     );
   }
 
   const count = fileCount ?? files.length;
-  const fileLabel = count === 1 ? "1 file" : `${count} files`;
+  const fileLabel = t("scm.unified.fileCount", { count });
   const additions =
     totals?.additions ?? files.reduce((sum, file) => sum + file.additions, 0);
   const deletions =
@@ -214,8 +221,8 @@ export function UnifiedDiffView({
         <span className="ml-auto flex items-center gap-0.5">
           <button
             type="button"
-            title="Expand all files"
-            aria-label="Expand all files"
+            title={t("scm.unified.expandAll")}
+            aria-label={t("scm.unified.expandAll")}
             onClick={() => setOpen(new Set(files.map((file) => file.id)))}
             className="grid size-7 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content"
           >
@@ -223,8 +230,8 @@ export function UnifiedDiffView({
           </button>
           <button
             type="button"
-            title="Collapse all files"
-            aria-label="Collapse all files"
+            title={t("scm.unified.collapseAll")}
+            aria-label={t("scm.unified.collapseAll")}
             disabled={open.size === 0}
             onClick={() => setOpen(new Set())}
             className="grid size-7 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content disabled:opacity-40"
@@ -243,8 +250,7 @@ export function UnifiedDiffView({
       >
         {truncated ? (
           <p className="px-3 py-3 text-[12px] text-content/45">
-            Diff is too large to display in full. File list is shown without
-            patches.
+            {t("scm.unified.truncated")}
           </p>
         ) : null}
         <div
@@ -317,6 +323,7 @@ const FileSection = memo(function FileSection({
   onStageHunk,
   bindRef,
 }: FileSectionProps) {
+  const t = useT();
   const Chevron = expanded ? ChevronDown : ChevronRight;
   const name = basename(file.path);
   const sectionRef = useRef<HTMLElement | null>(null);
@@ -381,9 +388,7 @@ const FileSection = memo(function FileSection({
         className={`${
           fileLayout === "stacked" ? "sticky top-0 z-30 backdrop-blur-xl" : ""
         } flex items-center gap-2 bg-content/2 px-3 py-1.5 ${
-          fileLayout === "stacked" || expanded
-            ? "border-b border-stroke"
-            : ""
+          fileLayout === "stacked" || expanded ? "border-b border-stroke" : ""
         }`}
       >
         <button
@@ -407,7 +412,7 @@ const FileSection = memo(function FileSection({
         </button>
         {file.canDiscard && onDiscardFile ? (
           <IconButton
-            title="Discard file"
+            title={t("scm.unified.discardFile")}
             disabled={busy}
             onClick={() => onDiscardFile(file.id)}
           >
@@ -417,8 +422,8 @@ const FileSection = memo(function FileSection({
         {file.canStage && onStageFile ? (
           <button
             type="button"
-            title="Stage file"
-            aria-label="Stage file"
+            title={t("scm.unified.stageFile")}
+            aria-label={t("scm.unified.stageFile")}
             disabled={busy}
             onClick={() => onStageFile(file.id)}
             className="grid size-4 place-items-center rounded-[3px] bg-content text-background-base hover:opacity-80 disabled:opacity-40"
@@ -510,10 +515,13 @@ function FileBody({
   onReveal: (foldId: string, direction: "up" | "down" | "all") => void;
   onStageHunk?: (id: string, pos: number) => void;
 }) {
-  if (file.binary) return <EmptyBody>Binary file changed</EmptyBody>;
-  if (file.tooLarge) return <EmptyBody>Diff is too large to display</EmptyBody>;
+  const t = useT();
+  if (file.binary)
+    return <EmptyBody>{t("scm.unified.binaryChanged")}</EmptyBody>;
+  if (file.tooLarge) return <EmptyBody>{t("scm.unified.tooLarge")}</EmptyBody>;
   if (file.emptyMessage) return <EmptyBody>{file.emptyMessage}</EmptyBody>;
-  if (file.blocks.length === 0) return <EmptyBody>No textual diff</EmptyBody>;
+  if (file.blocks.length === 0)
+    return <EmptyBody>{t("scm.diff.noTextualDiff")}</EmptyBody>;
 
   return (
     <VirtualRows
@@ -868,6 +876,7 @@ function FoldBar({
   hidden: number;
   onReveal: (direction: "up" | "down" | "all") => void;
 }) {
+  const t = useT();
   return (
     <div
       className="flex items-center gap-1 bg-content/8 px-2"
@@ -875,8 +884,8 @@ function FoldBar({
     >
       <button
         type="button"
-        title="Expand upward"
-        aria-label="Expand unmodified lines upward"
+        title={t("scm.unified.expandUp")}
+        aria-label={t("scm.unified.expandUpAria")}
         onClick={() => onReveal("up")}
         className="grid size-5 place-items-center rounded text-content/40 hover:bg-content/10 hover:text-content"
       >
@@ -884,8 +893,8 @@ function FoldBar({
       </button>
       <button
         type="button"
-        title="Expand downward"
-        aria-label="Expand unmodified lines downward"
+        title={t("scm.unified.expandDown")}
+        aria-label={t("scm.unified.expandDownAria")}
         onClick={() => onReveal("down")}
         className="grid size-5 place-items-center rounded text-content/40 hover:bg-content/10 hover:text-content"
       >
@@ -896,7 +905,7 @@ function FoldBar({
         onClick={() => onReveal("all")}
         className="min-w-0 flex-1 py-1 text-left font-mono text-[11px] text-content/45 hover:text-content/70"
       >
-        {hidden} unmodified {hidden === 1 ? "line" : "lines"}
+        {t("scm.unified.unmodifiedLines", { count: hidden })}
       </button>
     </div>
   );
@@ -919,6 +928,7 @@ const DiffLineRow = memo(function DiffLineRow({
   onStage?: () => void;
   onComment?: (anchor: DOMRect) => void;
 }) {
+  const t = useT();
   if (line.kind === "hunk") {
     return (
       <div
@@ -936,6 +946,10 @@ const DiffLineRow = memo(function DiffLineRow({
   const added = line.kind === "add";
   const deleted = line.kind === "del";
   const number = deleted ? line.oldNumber : line.newNumber;
+  const commentLabel =
+    number == null
+      ? t("scm.unified.commentOnLineBare")
+      : t("scm.unified.commentOnLine", { line: number });
   const row = added ? "bg-diff-add-bg" : deleted ? "bg-diff-del-bg" : "";
   const gutterTint = added
     ? "bg-diff-add-gutter"
@@ -967,8 +981,8 @@ const DiffLineRow = memo(function DiffLineRow({
         {onComment ? (
           <button
             type="button"
-            title={`Comment on line ${number ?? ""}`.trim()}
-            aria-label={`Comment on line ${number ?? ""}`.trim()}
+            title={commentLabel}
+            aria-label={commentLabel}
             onClick={(event) =>
               onComment(event.currentTarget.getBoundingClientRect())
             }
@@ -984,8 +998,8 @@ const DiffLineRow = memo(function DiffLineRow({
         {onStage ? (
           <button
             type="button"
-            title="Stage hunk"
-            aria-label="Stage hunk"
+            title={t("scm.unified.stageHunk")}
+            aria-label={t("scm.unified.stageHunk")}
             onClick={onStage}
             className={`absolute top-0.5 left-full z-10 ml-0.5 grid size-4 place-items-center rounded-[3px] bg-white text-[11px] font-bold text-black ${
               hovered ? "opacity-100" : "pointer-events-none opacity-0"
@@ -1010,7 +1024,9 @@ const DiffLineRow = memo(function DiffLineRow({
       >
         <span aria-hidden="true">{added ? "+" : deleted ? "−" : ""}</span>
         {added || deleted ? (
-          <span className="sr-only">{added ? "Added: " : "Removed: "}</span>
+          <span className="sr-only">
+            {added ? t("scm.unified.added") : t("scm.unified.removed")}
+          </span>
         ) : null}
       </span>
       <span

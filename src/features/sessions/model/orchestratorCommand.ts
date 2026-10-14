@@ -1,10 +1,13 @@
+import { t } from "../../../shared/i18n/locale";
 import type { BuiltinSkill } from "../../skills/model/skills";
 
 export const ORCHESTRATOR_COMMAND: BuiltinSkill = {
   kind: "builtin",
   name: "orchestrator",
   invocation: "orchestrator",
-  description: "Plan and coordinate agent work.",
+  get description() {
+    return t("sessions.command.orchestrator.description");
+  },
   scope: "builtin",
   source: "monocode",
 };

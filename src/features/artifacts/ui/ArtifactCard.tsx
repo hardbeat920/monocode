@@ -1,5 +1,6 @@
+import { useT } from "../../../shared/i18n/useT";
 import { ChartBreakoutSquare, File } from "../../../shared/ui/icons";
-import { artifactLabel, type ArtifactCard as Card } from "../artifacts";
+import { type ArtifactCard as Card } from "../artifacts";
 
 export function ArtifactIcon({
   kind,
@@ -24,13 +25,14 @@ export function ArtifactCard({
   card: Card;
   onOpen?: (id: string) => void;
 }) {
-  const label = artifactLabel(card.kind);
+  const t = useT();
+  const noun = t(`artifacts.noun.${card.kind}`);
   return (
     <button
       type="button"
       data-artifact-card={card.id}
-      aria-label={`Open ${label.toLowerCase()} ${card.title}`}
-      title={`Open ${label.toLowerCase()}`}
+      aria-label={t("artifacts.card.openNamed", { noun, title: card.title })}
+      title={t("artifacts.card.open", { noun })}
       onClick={() => onOpen?.(card.id)}
       disabled={!onOpen}
       className="flex w-fit max-w-[min(24rem,100%)] min-w-0 items-center gap-2.5 min-h-[38px] rounded-xl border border-content/10 py-2 pr-3.5 pl-3 text-left font-sans transition-colors hover:border-content/20 hover:bg-content/5 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent disabled:opacity-60"

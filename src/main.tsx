@@ -10,6 +10,12 @@ import {
 } from "./features/settings/model/appearance";
 import { initSounds } from "./features/settings/model/sounds";
 import {
+  getLocale,
+  initLocale,
+  subscribeLocale,
+} from "./shared/i18n/locale";
+import { syncNativeLocale } from "./platform/tauri/locale";
+import {
   abortQuit,
   askQuitConfirmation,
   commitQuit,
@@ -30,6 +36,11 @@ const appLoaded = import("./app/App");
 
 initAppearance();
 initSounds();
+initLocale();
+// Native menus, the tray, and notifications are built in Rust, so they follow
+// the webview's language. Sync once at boot, then on every change.
+void syncNativeLocale(getLocale());
+subscribeLocale(() => void syncNativeLocale(getLocale()));
 // Prime the real home directory before the first render so every `~/` file
 // reference resolves consistently. The IPC call is local and failures remain
 // best-effort, falling back to inference from a session's cwd.

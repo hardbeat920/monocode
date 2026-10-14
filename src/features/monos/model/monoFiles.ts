@@ -326,7 +326,7 @@ export function monoProjectsBrief(look: Pick<MonoLook, "projects">): string {
     look.projects.length === 1
       ? "this project"
       : `these ${look.projects.length} projects`
-  } (${monoProjectsPhrase(look.projects)}) with your full tools, in their folders:\n${list}\nWork in the folder the task is about, using its full path; only these are yours to change.`;
+  } (${monoProjectsPhrase(look.projects, true)}) with your full tools, in their folders:\n${list}\nWork in the folder the task is about, using its full path; only these are yours to change.`;
 }
 
 /** The blocks this turn adds to the user's message. */

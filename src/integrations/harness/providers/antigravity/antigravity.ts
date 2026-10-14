@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/i18n/locale";
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import { AcpSubagents } from "../../core/acpSubagents";
 import type { RuntimeMode } from "../../../../features/sessions/model/session";
@@ -80,13 +81,12 @@ const PROMPT_TIMEOUT_MS = 30 * 60_000;
 // surface a status note instead of killing the turn.
 const STALL_NOTIFY_MS = 120_000;
 
-const AUTH_HELP = "Run `agy` once in Terminal to sign in.";
-
 function antigravityError(error: unknown): Error {
   const detail = error instanceof Error ? error.message : String(error);
-  if (detail.includes(AUTH_HELP)) return new Error(detail);
+  const help = t("integrations.antigravity.authHelp");
+  if (detail.includes(help)) return new Error(detail);
   return new Error(/auth|login|sign.in|credential|api.key/i.test(detail)
-    ? `${detail.trim()}\n\n${AUTH_HELP}` : detail);
+    ? `${detail.trim()}\n\n${help}` : detail);
 }
 
 function isTimeout(error: unknown): boolean {
@@ -326,7 +326,7 @@ function noteActivity(live: Live): void {
     live.stallNotified = true;
     live.onEvent({
       type: "status",
-      text: "Antigravity has been quiet for two minutes — its post-turn work may be stuck. Stop and resend to recover.",
+      text: t("integrations.antigravity.stalled"),
     });
   }, STALL_NOTIFY_MS);
 }
@@ -540,7 +540,9 @@ async function startLive(input: SendTurnInput, life: number): Promise<Live> {
       if (acpSessionId && droppedBinding) {
         emit({
           type: "status",
-          text: "Antigravity could not restore the previous conversation — starting a new session.",
+          text: t("integrations.provider.restoreFallback", {
+            provider: "Antigravity",
+          }),
         });
       }
     }
@@ -706,7 +708,10 @@ async function prompt(live: Live, input: SendTurnInput): Promise<void> {
     if (stopReason != null && stopReason !== "end_turn") {
       live.onEvent({
         type: "session.error",
-        message: `Antigravity ended the turn (${String(stopReason)}).`,
+        message: t("integrations.turn.ended", {
+          provider: "Antigravity",
+          reason: String(stopReason),
+        }),
       });
       return;
     }

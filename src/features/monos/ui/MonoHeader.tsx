@@ -4,6 +4,7 @@ import {
   type MonoState,
 } from "../model/mono";
 import { PixelMascot } from "../../projects/ui/PixelMascot";
+import { useT } from "../../../shared/i18n/useT";
 import { MonoStatus } from "./MonoStatus";
 
 type Props = {
@@ -23,6 +24,7 @@ export function MonoHeader({
   state = { status: "idle" },
   greeting = false,
 }: Props) {
+  const t = useT();
   return (
     <header
       className={`flex flex-col items-center px-6 text-center font-sans ${
@@ -43,8 +45,10 @@ export function MonoHeader({
       {greeting ? (
         <p className="mt-3 max-w-sm text-[13px] leading-relaxed text-content/50">
           {agent.projects.length
-            ? `I can see every session, note and folder in ${monoProjectsPhrase(agent.projects)}. Ask what’s going on, or hand me work.`
-            : "Add the projects I should work on in my settings, or just ask me something."}
+            ? t("monos.header.greeting", {
+                projects: monoProjectsPhrase(agent.projects),
+              })
+            : t("monos.header.greetingNoProjects")}
         </p>
       ) : (
         <MonoStatus

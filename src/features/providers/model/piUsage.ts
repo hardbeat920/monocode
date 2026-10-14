@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { asRecord } from "../../../integrations/harness/providers/codex/codexProtocol";
+import { t } from "../../../shared/i18n/locale";
 import { parsePiModelRef } from "../../../integrations/harness/providers/pi/piProtocol";
 import {
   errorRateLimits,
@@ -55,7 +56,7 @@ export async function fetchPiUsage(
     ) {
       return errorRateLimits(
         billingProvider,
-        "Pi usage response was unexpected. Try refreshing.",
+        t("providers.error.piUnexpected"),
       );
     }
     return {
@@ -66,10 +67,7 @@ export async function fetchPiUsage(
       updatedAt: Date.now(),
     };
   } catch {
-    return errorRateLimits(
-      billingProvider,
-      "Could not fetch Pi usage. Try refreshing.",
-    );
+    return errorRateLimits(billingProvider, t("providers.error.piFetchFailed"));
   }
 }
 

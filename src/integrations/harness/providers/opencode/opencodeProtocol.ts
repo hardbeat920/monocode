@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/i18n/locale";
 import type {
   Attachment,
   RuntimeMode,
@@ -131,7 +132,9 @@ export function assertSupportedOpenCodeVersion(
 ): OpenCodeApiGeneration {
   if (!version) {
     throw new Error(
-      `Unable to determine OpenCode version. MonoCode requires v${MINIMUM_OPENCODE_VERSION} or newer.`,
+      t("integrations.opencode.versionUnknown", {
+        minimum: MINIMUM_OPENCODE_VERSION,
+      }),
     );
   }
   const generation = openCodeApiGeneration(version);
@@ -139,16 +142,22 @@ export function assertSupportedOpenCodeVersion(
   const major = Number.parseInt(version.split(".")[0] ?? "", 10);
   if (major === 1) {
     throw new Error(
-      `OpenCode v${version} is too old. Upgrade to v${MINIMUM_OPENCODE_VERSION} or newer.`,
+      t("integrations.opencode.versionTooOld", {
+        version,
+        minimum: MINIMUM_OPENCODE_VERSION,
+      }),
     );
   }
   if (major === 2) {
     throw new Error(
-      `OpenCode v${version} is too old. Upgrade to v${MINIMUM_OPENCODE_V2_VERSION} or newer.`,
+      t("integrations.opencode.versionTooOld", {
+        version,
+        minimum: MINIMUM_OPENCODE_V2_VERSION,
+      }),
     );
   }
   throw new Error(
-    `OpenCode v${version} is not supported. MonoCode supports OpenCode v1 and v2.`,
+    t("integrations.opencode.versionUnsupported", { version }),
   );
 }
 
@@ -486,14 +495,14 @@ export function permissionTitle(permission: string, patterns: string[]): string 
 }
 
 export function sessionErrorMessage(error: unknown): string {
-  if (!error || typeof error !== "object") return "OpenCode session failed.";
+  if (!error || typeof error !== "object") return t("integrations.opencode.sessionFailed");
   const rec = error as Record<string, unknown>;
   const data = asRecord(rec.data);
   const message =
     stringField(data, "message") ??
     stringField(rec, "message") ??
     stringField(asRecord(rec.error), "message");
-  return message ?? "OpenCode session failed.";
+  return message ?? t("integrations.opencode.sessionFailed");
 }
 
 /**

@@ -17,6 +17,8 @@ use objc2_app_kit::{
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use serde::Deserialize;
 
+use crate::i18n::Text;
+
 const WIDTH: f64 = 260.0;
 const PORTRAIT_SIZE: f64 = 28.0;
 const ROW_HEIGHT: f64 = 34.0;
@@ -31,7 +33,7 @@ const SPRITE_SCALE: f64 = 2.0;
 
 pub(super) struct Action {
     pub id: &'static str,
-    pub title: &'static str,
+    text: Text,
     symbol: &'static str,
     /// Tinted red, like other menus' destructive items.
     destructive: bool,
@@ -42,17 +44,24 @@ pub(super) struct Action {
 pub(super) const ACTIONS: [Action; 2] = [
     Action {
         id: "mono-chat-composer",
-        title: "Quick Composer",
+        text: Text::QuickComposer,
         symbol: "square.and.pencil",
         destructive: false,
     },
     Action {
         id: "mono-chat-quit",
-        title: "Quit MonoCode",
+        text: Text::QuitMonoCode,
         symbol: "power",
         destructive: true,
     },
 ];
+
+impl Action {
+    /// The title in the current language.
+    pub fn title(&self) -> &'static str {
+        crate::i18n::t(self.text)
+    }
+}
 
 #[derive(Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -85,7 +94,7 @@ pub(super) fn decorate(tray: &tauri::tray::TrayIcon) -> tauri::Result<()> {
                     continue;
                 }
                 let title = item.title().to_string();
-                if let Some(action) = ACTIONS.iter().find(|a| a.title == title) {
+                if let Some(action) = ACTIONS.iter().find(|a| a.title() == title) {
                     let image = action_icon(action);
                     item.setImage(image.as_deref());
                     show_image(&item);
@@ -102,7 +111,9 @@ pub(super) fn decorate(tray: &tauri::tray::TrayIcon) -> tauri::Result<()> {
                     item.setImage(Some(&image));
                     show_image(&item);
                     let view = row(&title, Some(&image), &NSColor::labelColor(), mtm);
-                    view.setToolTip(Some(&NSString::from_str("Open floating chat")));
+                    view.setToolTip(Some(&NSString::from_str(crate::i18n::t(
+                        Text::OpenFloatingChat,
+                    ))));
                     item.setView(Some(&view));
                 }
             }
@@ -256,7 +267,10 @@ fn style_menu(menu: &NSMenu, mtm: MainThreadMarker) {
         NSView::alloc(mtm),
         NSRect::new(NSPoint::ZERO, NSSize::new(WIDTH, 30.0)),
     );
-    let title = NSTextField::labelWithString(&NSString::from_str("Monos"), mtm);
+    let title = NSTextField::labelWithString(
+        &NSString::from_str(crate::i18n::t(Text::MonoMenuHeader)),
+        mtm,
+    );
     title.setFont(Some(&NSFont::systemFontOfSize_weight(13.0, unsafe {
         NSFontWeightSemibold
     })));
@@ -460,7 +474,7 @@ mod tests {
     fn every_menu_action_draws_a_portrait_sized_symbol() {
         objc2::exception::catch(|| {
             for action in &ACTIONS {
-                let title = action.title;
+                let title = action.title();
                 let image = action_icon(action).unwrap_or_else(|| panic!("{title}"));
                 assert_eq!(image.size(), NSSize::new(PORTRAIT_SIZE, PORTRAIT_SIZE));
                 assert_eq!(image.isTemplate(), !action.destructive);

@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/i18n/locale";
 import {
   gitRangeContext,
   gitStagedContext,
@@ -39,8 +40,8 @@ export async function generateOpenCodeCommitMessage(
   const snippet = output.trim().replace(/\s+/g, " ").slice(0, 240);
   throw new Error(
     snippet
-      ? `Could not generate a commit message. Model replied: ${snippet}`
-      : "Could not generate a commit message. OpenCode returned no text.",
+      ? t("integrations.git.commitMessageReply", { reply: snippet })
+      : t("integrations.git.commitMessageEmpty", { provider: "OpenCode" }),
   );
 }
 

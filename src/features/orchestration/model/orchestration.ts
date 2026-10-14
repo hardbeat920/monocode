@@ -1,7 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
-import { HARNESSES, type HarnessId, type Session } from "../../sessions/model/session";
+import {
+  HARNESSES,
+  type HarnessId,
+  type Session,
+} from "../../sessions/model/session";
 import { pathKey } from "../../../shared/lib/paths";
-import type { ApprovalDecision, HarnessEvent } from "../../../integrations/harness/core/types";
+import { t } from "../../../shared/i18n/locale";
+import type {
+  ApprovalDecision,
+  HarnessEvent,
+} from "../../../integrations/harness/core/types";
 import { pendingApprovalForSession } from "../../notifications/model/approvalToast";
 import type { UserQuestionReply } from "../../sessions/model/userQuestion";
 import {
@@ -570,7 +578,7 @@ export class Orchestrator {
     },
   ) {
     if (this.starting.has(leadId))
-      throw new Error("The run is already starting");
+      throw new Error(t("orchestration.error.alreadyStarting"));
     this.starting.add(leadId);
     try {
       await this.startRun(leadId, allowedHarnesses, maxWorkers, approved);
@@ -584,7 +592,7 @@ export class Orchestrator {
     proposal: OrchestrationProposal,
   ) {
     if (proposal.status !== "ready")
-      throw new Error("Review a completed proposal before starting");
+      throw new Error(t("orchestration.error.reviewFirst"));
     const settings = validateOrchestrationSettings(proposal.settings);
     const planned = validateProposedTasks(
       proposal.tasks,
@@ -600,7 +608,7 @@ export class Orchestrator {
         proposal.checkoutCwd ?? proposal.cwd,
       )
     )
-      throw new Error("Return to the proposal's checkout before starting");
+      throw new Error(t("orchestration.error.returnToCheckout"));
     const available = this.host!.choices();
     const allowedModels = settings.choices.filter((choice) =>
       available.some(
@@ -618,9 +626,7 @@ export class Orchestrator {
           ),
       )
     )
-      throw new Error(
-        "An assigned model is no longer available. Change that assignment before starting.",
-      );
+      throw new Error(t("orchestration.error.modelUnavailable"));
     const ids = new Map(planned.map((task) => [task.id, crypto.randomUUID()]));
     const tasks: OrchestrationTask[] = await Promise.all(
       planned.map(async (task) => ({
@@ -648,7 +654,7 @@ export class Orchestrator {
         proposal.checkoutCwd ?? proposal.cwd,
       )
     )
-      throw new Error("Return to the proposal's checkout before starting");
+      throw new Error(t("orchestration.error.returnToCheckout"));
     await this.start(
       leadId,
       [...new Set(allowedModels.map((choice) => choice.harness))],
@@ -679,12 +685,12 @@ export class Orchestrator {
     },
   ) {
     const lead = this.host?.session(leadId);
-    if (!lead) throw new Error("The orchestration lead is unavailable");
+    if (!lead) throw new Error(t("orchestration.error.leadUnavailable"));
     if (lead.busy)
       throw new Error(
         this.run(leadId)?.status === "paused"
-          ? "Wait for the lead's interrupted turn to finish before resuming orchestration"
-          : "Wait for the lead's current turn to finish",
+          ? t("orchestration.error.waitLeadResume")
+          : t("orchestration.error.waitLeadTurn"),
       );
     const workspace = workspaceIdentity(
       lead.cwd,
@@ -692,41 +698,40 @@ export class Orchestrator {
       lead.branch,
     );
     if (!Number.isInteger(maxWorkers) || maxWorkers < 1 || maxWorkers > 4)
-      throw new Error("Choose 1 to 4 workers");
+      throw new Error(t("orchestration.error.chooseWorkers"));
     const available = this.host!.choices().map((choice) => choice.harness);
     if (
       !allowedHarnesses.length ||
       allowedHarnesses.some((id) => !available.includes(id))
     )
-      throw new Error("Choose installed worker harnesses");
+      throw new Error(t("orchestration.error.chooseHarnesses"));
     const previous = this.run(leadId);
     if (
       previous?.status === "active" ||
       (approved && previous?.status === "paused")
     )
-      throw new Error("Stop the current run before starting another proposal");
+      throw new Error(t("orchestration.error.stopCurrent"));
     if (previous?.tasks.some(activeTask))
       throw new Error(
         previous.status === "paused"
-          ? "Wait for interrupted agents to stop before resuming orchestration"
-          : "Stop active workers before changing the run",
+          ? t("orchestration.error.waitAgentsResume")
+          : t("orchestration.error.stopWorkers"),
       );
     if (
       previous?.status === "paused" &&
       !sameCheckout(orchestrationCheckoutCwd(previous), workspace.checkoutCwd)
     )
-      throw new Error(
-        "Return the lead to its original checkout before resuming orchestration",
-      );
+      throw new Error(t("orchestration.error.returnLead"));
     const blocker = this.resumeBlocker(leadId, workspace.checkoutCwd);
     if (blocker) {
       const label = blocker.title.trim() || blocker.id;
       throw new Error(
-        `"${label}" is still running in this checkout. Stop it before ${
+        t(
           previous?.status === "paused"
-            ? "resuming orchestration"
-            : "starting orchestration"
-        }.`,
+            ? "orchestration.error.blockerResume"
+            : "orchestration.error.blockerStart",
+          { label },
+        ),
       );
     }
     const [canonicalRoot] = await this.store.scopes(workspace.checkoutCwd, [

@@ -1,14 +1,29 @@
 import { invoke } from "@tauri-apps/api/core";
-import { appendReadyHandoff, buildDeterministicHandoff } from "../../sessions/model/handoff";
+import {
+  appendReadyHandoff,
+  buildDeterministicHandoff,
+} from "../../sessions/model/handoff";
 import {
   invokeWorkspace,
   notifyGitChanged,
   resolveProjectLocation,
 } from "../../../platform/tauri/fs";
-import { isFilesystemTab, type FilePaneTab } from "../../workspace/model/layout";
-import { isEqualOrInside, parentPath, pathKey } from "../../../shared/lib/paths";
+import {
+  isFilesystemTab,
+  type FilePaneTab,
+} from "../../workspace/model/layout";
+import {
+  isEqualOrInside,
+  parentPath,
+  pathKey,
+} from "../../../shared/lib/paths";
 import { isBlankSession } from "../../projects/model/projectReturn";
-import { newSession, sessionWorkCwd, type Session } from "../../sessions/model/session";
+import { t } from "../../../shared/i18n/locale";
+import {
+  newSession,
+  sessionWorkCwd,
+  type Session,
+} from "../../sessions/model/session";
 
 export type Worktree = {
   path: string;
@@ -43,10 +58,7 @@ export async function createWorktree(
   return tree;
 }
 
-export async function createOrchestrationWorktree(
-  cwd: string,
-  branch: string,
-) {
+export async function createOrchestrationWorktree(cwd: string, branch: string) {
   const tree = await invoke<Worktree>("git_orchestration_worktree_create", {
     cwd,
     branch,
@@ -80,7 +92,10 @@ export function temporaryWorktreeBranchName(
 }
 
 export function orchestrationWorktreeBranchName(id: string): string {
-  const token = id.replace(/[^a-zA-Z0-9]/g, "").slice(0, 12).toLowerCase();
+  const token = id
+    .replace(/[^a-zA-Z0-9]/g, "")
+    .slice(0, 12)
+    .toLowerCase();
   return `mc/orch-${token || Date.now().toString(36)}`;
 }
 
@@ -106,10 +121,7 @@ export async function removeWorktree(
   return result;
 }
 
-export async function removeOrchestrationWorktree(
-  cwd: string,
-  path: string,
-) {
+export async function removeOrchestrationWorktree(cwd: string, path: string) {
   const result = await invoke<{ sessionIds: string[]; projectCwd: string }>(
     "git_orchestration_worktree_remove",
     { cwd, path },
@@ -118,10 +130,7 @@ export async function removeOrchestrationWorktree(
   return result;
 }
 
-export async function removeOrchestrationBranch(
-  cwd: string,
-  branch: string,
-) {
+export async function removeOrchestrationBranch(cwd: string, branch: string) {
   await invoke<void>("git_orchestration_branch_remove", { cwd, branch });
   notifyGitChanged();
 }
@@ -150,9 +159,7 @@ export function assertWorktreeFilesClosed(
         (isFilesystemTab(file) && isEqualOrInside(file.path, path)),
     )
   ) {
-    throw new Error(
-      "Close the files and terminals open in this worktree first.",
-    );
+    throw new Error(t("scm.worktrees.closeFilesFirst"));
   }
 }
 
@@ -176,14 +183,15 @@ export function worktreeSessionIds(
   return [...ids];
 }
 
+/** English only. Prefer `noBranchLabel()`, which follows the language. */
 export const NO_BRANCH_LABEL = "No branch selected";
 
+export const noBranchLabel = () => t("scm.worktrees.noBranchSelected");
+
 /** Keep the transcript and project identity while requiring a new working copy. */
-export function detachSessionWorktree<T extends { cwd: string; worktreeCwd?: string }>(
-  session: T,
-  projectCwd: string,
-  path: string,
-) {
+export function detachSessionWorktree<
+  T extends { cwd: string; worktreeCwd?: string },
+>(session: T, projectCwd: string, path: string) {
   return {
     ...session,
     cwd: isEqualOrInside(session.cwd, path) ? projectCwd : session.cwd,

@@ -1,3 +1,4 @@
+import { t } from "../../../shared/i18n/locale";
 import {
   composeToolTitle,
   isAgentTool,
@@ -76,7 +77,7 @@ export function toolCallLabel(block: Block, cwd?: string): string {
       query: preview?.query,
       previewKind: preview?.kind,
       cwd,
-    }) || "Working"
+    }) || t("sessions.activity.working")
   );
 }
 
@@ -723,7 +724,7 @@ export function subagentBrief(block: Block): string {
   const stripped = name
     .replace(/^(?:agent|task|subagent)\b[\s:·-]*/i, "")
     .trim();
-  return stripped || "Subagent";
+  return stripped || t("sessions.activity.subagent");
 }
 
 /** Past this a name stops being a name and starts being the brief again. */
@@ -774,7 +775,9 @@ export function subagentFailureSummary(blocks: Block[]): string | undefined {
       toolCallState(block) === "rejected",
   ).length;
   if (failed === 0) return undefined;
-  return failed === 1 ? "Subagent failed" : `${failed} subagents failed`;
+  return failed === 1
+    ? t("sessions.activity.subagentFailed")
+    : t("sessions.activity.subagentsFailed", { count: failed });
 }
 
 /**
@@ -986,7 +989,7 @@ function tallySteps(steps: Block[]): PhaseTally {
 function fileLabel(paths: Set<string>): string {
   const [first] = paths;
   if (paths.size === 1 && first) return leafName(first) || first;
-  return `${paths.size} files`;
+  return t("sessions.activity.filesCount", { count: paths.size });
 }
 
 /** What the calls of one kind add up to: "Edited 2 files", "Ran 3 commands". */
@@ -997,37 +1000,74 @@ function workSummary(
 ): string {
   switch (kind) {
     case "edit":
-      return `${live ? "Editing" : "Edited"} ${fileLabel(tally.edits)}`;
+      return t(
+        live ? "sessions.activity.editing" : "sessions.activity.edited",
+        {
+          file: fileLabel(tally.edits),
+        },
+      );
     case "research":
       if (tally.reads.size > 0 && tally.searches === 0) {
-        return `${live ? "Reading" : "Read"} ${fileLabel(tally.reads)}`;
+        return t(
+          live ? "sessions.activity.reading" : "sessions.activity.read",
+          {
+            file: fileLabel(tally.reads),
+          },
+        );
       }
       if (tally.reads.size === 0) {
-        return live ? "Searching the project" : "Searched the project";
+        return t(
+          live ? "sessions.activity.searching" : "sessions.activity.searched",
+        );
       }
-      return live ? "Exploring the project" : "Explored the project";
+      return t(
+        live ? "sessions.activity.exploring" : "sessions.activity.explored",
+      );
     case "run":
-      if (tally.backgroundLive > 0) return "Running in background";
+      if (tally.backgroundLive > 0) {
+        return t("sessions.activity.runningInBackground");
+      }
       if (tally.runs === 0 && tally.background > 0) {
-        return "Finished in background";
+        return t("sessions.activity.finishedInBackground");
       }
       return tally.runs === 1
-        ? live
-          ? "Running a command"
-          : "Ran a command"
-        : `${live ? "Running" : "Ran"} ${tally.runs} commands`;
+        ? t(
+            live
+              ? "sessions.activity.runningCommand"
+              : "sessions.activity.ranCommand",
+          )
+        : t(
+            live
+              ? "sessions.activity.runningCommands"
+              : "sessions.activity.ranCommands",
+            { count: tally.runs },
+          );
     case "agent":
       return tally.agents === 1
-        ? live
-          ? "Running a subagent"
-          : "Ran a subagent"
-        : `${live ? "Running" : "Ran"} ${tally.agents} subagents`;
+        ? t(
+            live
+              ? "sessions.activity.runningSubagent"
+              : "sessions.activity.ranSubagent",
+          )
+        : t(
+            live
+              ? "sessions.activity.runningSubagents"
+              : "sessions.activity.ranSubagents",
+            { count: tally.agents },
+          );
     default:
       return tally.others === 1
-        ? live
-          ? "Running a tool"
-          : "Ran a tool"
-        : `${live ? "Running" : "Ran"} ${tally.others} tools`;
+        ? t(
+            live
+              ? "sessions.activity.runningTool"
+              : "sessions.activity.ranTool",
+          )
+        : t(
+            live
+              ? "sessions.activity.runningTools"
+              : "sessions.activity.ranTools",
+            { count: tally.others },
+          );
   }
 }
 
@@ -1052,14 +1092,15 @@ export function workSummaryLine(steps: Block[], live = false): string {
   const tally = tallySteps(steps);
   const notes =
     tally.notes === 1
-      ? "1 note"
+      ? t("sessions.activity.oneNote")
       : tally.notes > 1
-        ? `${tally.notes} notes`
+        ? t("sessions.activity.notes", { count: tally.notes })
         : "";
   if (tally.order.length === 0) {
     if (notes) return notes;
-    if (steps.length > 0 && steps.every(isStatusStep)) return "Status update";
-    return live ? "Thinking" : "Thought";
+    if (steps.length > 0 && steps.every(isStatusStep))
+      return t("sessions.activity.statusUpdate");
+    return t(live ? "sessions.activity.thinking" : "sessions.activity.thought");
   }
   const running = live ? currentWorkKind(steps) : undefined;
   return [
@@ -1090,7 +1131,11 @@ export function activityPhaseTitle(phase: ActivityPhase, live = false): string {
     const summary = proseSummary(phase.headline.text);
     if (hasReadableText(summary)) return summary;
     if (!summary)
-      return phase.headline.role === "reasoning" ? "Thinking" : "Working";
+      return t(
+        phase.headline.role === "reasoning"
+          ? "sessions.activity.thinking"
+          : "sessions.activity.working",
+      );
   }
   return workSummaryLine(phase.steps, live);
 }

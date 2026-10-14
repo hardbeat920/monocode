@@ -20,6 +20,7 @@ import { invalidateWatchedFiles } from "../../files/model/fileWatch";
 import { basename, notifyGitChanged } from "../../../platform/tauri/fs";
 import { formatInteger } from "../../../shared/lib/numbers";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
+import { useT } from "../../../shared/i18n/useT";
 
 type Props = {
   sessionId: string;
@@ -45,6 +46,7 @@ export function SessionReview({
   onOpenDiff,
   onCommit,
 }: Props) {
+  const t = useT();
   const { files, setFiles, error, load, filesRef } = useSessionReviewFiles(
     sessionId,
     cwd,
@@ -70,7 +72,7 @@ export function SessionReview({
           className="rounded-xl border border-content/12 bg-content/3 px-3 py-2.5"
         >
           <p className="text-[12px] font-medium text-content/80">
-            Couldn’t record changes
+            {t("sessions.review.recordFailed")}
           </p>
           <p className="mt-1 text-[11px] text-content/50">{error}</p>
         </div>
@@ -116,8 +118,8 @@ export function SessionReview({
           </span>
           <div className="min-w-0 flex-1">
             <div className="truncate text-[12px] font-medium text-content/80">
-              <span title="Workspace changes recorded during the latest turn">
-                Changed {files.length} {files.length === 1 ? "file" : "files"}
+              <span title={t("sessions.review.changedTitle")}>
+                {t("sessions.review.changedFiles", { count: files.length })}
               </span>
             </div>
             <div className="flex items-center gap-1.5 font-sans text-[11px] font-semibold tabular-nums -mt-0.5">
@@ -134,43 +136,43 @@ export function SessionReview({
               type="button"
               title={
                 canUndoAll
-                  ? "Undo the recorded changes"
+                  ? t("sessions.review.undoTitle")
                   : undoLocked
-                    ? "Undo is unavailable while another session is running in this project"
-                    : "Undo is unavailable because the workspace was shared, the branch moved, or a recorded file changed afterward"
+                    ? t("sessions.review.undoLocked")
+                    : t("sessions.review.undoUnavailable")
               }
               disabled={disabled || !canUndoAll}
               onClick={() => run("undo")}
               className="h-7 rounded-md px-2.5 text-[11px] text-content/50 hover:bg-content/8 hover:text-content disabled:opacity-35"
             >
-              Undo
+              {t("sessions.review.undo")}
             </button>
             <button
               type="button"
-              title="Keep the recorded changes and dismiss this card"
+              title={t("sessions.review.keepTitle")}
               disabled={disabled}
               onClick={() => run("keep")}
               className="h-7 rounded-md px-2.5 text-[11px] text-content/50 hover:bg-content/8 hover:text-content disabled:opacity-35"
             >
-              Keep
+              {t("sessions.review.keep")}
             </button>
             {onCommit ? (
               <button
                 type="button"
-                title="Commit these changes"
+                title={t("sessions.review.commitTitle")}
                 onClick={() => onCommit({ sessionId, cwd })}
                 className="h-7 rounded-md px-2.5 text-[11px] text-content/50 hover:bg-content/8 hover:text-content"
               >
-                Commit
+                {t("sessions.review.commit")}
               </button>
             ) : null}
             <button
               type="button"
-              title="Review changes"
+              title={t("sessions.review.reviewTitle")}
               onClick={() => onOpenDiff(undefined, { sessionId, cwd })}
               className="h-7 rounded-md border border-content/12 bg-content/8 px-2.5 text-[11px] font-medium text-content/75 hover:bg-content/12 hover:text-content"
             >
-              Review
+              {t("sessions.review.review")}
             </button>
           </div>
         </div>
@@ -204,8 +206,8 @@ export function SessionReview({
             )}
             <span>
               {expanded
-                ? "Show fewer files"
-                : `Show ${hiddenFileCount} more ${hiddenFileCount === 1 ? "file" : "files"}`}
+                ? t("sessions.review.showFewer")
+                : t("sessions.review.showMore", { count: hiddenFileCount })}
             </span>
           </button>
         ) : null}
@@ -350,13 +352,14 @@ function FileRow({
 }
 
 function DiffCounts({ file }: { file: CheckpointFile }) {
+  const t = useT();
   if (!file.exact) {
     return (
       <span
-        title="This older checkpoint has no exact before/after diff"
+        title={t("sessions.review.diffUnavailableTitle")}
         className="shrink-0 text-[11px] font-medium text-content/45"
       >
-        Diff unavailable
+        {t("sessions.review.diffUnavailable")}
       </span>
     );
   }

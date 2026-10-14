@@ -6,6 +6,7 @@ import { useLockOverscroll } from "../hooks/useLockOverscroll";
 import { LAYER } from "../lib/layers";
 import { GlassBackdrop } from "../../app/shell/GlassBackdrop";
 import { InDialog } from "./Popover";
+import { useT } from "../i18n/useT";
 
 export type ModalSize = "sm" | "md" | "lg";
 
@@ -45,6 +46,7 @@ export function ModalPanel({
   fitViewport = false,
   children,
 }: Props) {
+  const t = useT();
   const popupHost = useContext(NativePopupHost);
   const closeRef = useRef<HTMLButtonElement>(null);
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
@@ -121,7 +123,7 @@ export function ModalPanel({
             <button
               ref={closeRef}
               type="button"
-              aria-label="Close"
+              aria-label={t("common.close")}
               onClick={onClose}
               className="grid size-7 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/8 hover:text-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             >

@@ -18,6 +18,7 @@ import {
   type RuntimeMode,
 } from "../model/session";
 import { Popover } from "../../../shared/ui/Popover";
+import { useT } from "../../../shared/i18n/useT";
 
 type Props = {
   value: RuntimeMode;
@@ -45,6 +46,7 @@ export function AccessPicker({
   side = "top",
   variant = "pill",
 }: Props) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(() =>
     Math.max(0, RUNTIME_MODES.indexOf(value)),
@@ -92,7 +94,7 @@ export function AccessPicker({
       <button
         type="button"
         data-access-picker-trigger
-        title={`${RUNTIME_MODE_HINT[value]}${busy ? " Changes apply to the next turn." : ""}`}
+        title={`${RUNTIME_MODE_HINT[value]}${busy ? ` ${t("sessions.access.busyTitle")}` : ""}`}
         aria-label={RUNTIME_MODE_LABEL[value]}
         aria-expanded={open}
         aria-haspopup="listbox"
@@ -138,7 +140,7 @@ export function AccessPicker({
           autoFocus
           onDismiss={(reason) => dismiss(reason === "escape")}
           role="listbox"
-          aria-label="Access"
+          aria-label={t("sessions.access.aria")}
           data-access-picker
           tabIndex={-1}
           onKeyDown={onMenuKey}
@@ -180,8 +182,7 @@ export function AccessPicker({
           })}
           {busy ? (
             <p className="px-2 py-1.5 text-[11px] leading-4 text-content/50">
-              Access changes apply to the next turn. Stop and resend to apply
-              them now.
+              {t("sessions.access.busyNote")}
             </p>
           ) : null}
         </Popover>

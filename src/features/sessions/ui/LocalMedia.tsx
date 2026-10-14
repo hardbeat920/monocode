@@ -6,6 +6,7 @@ import {
   sniffImageMime,
   videoMimeForPath,
 } from "../../files/model/filePreview";
+import { useT } from "../../../shared/i18n/useT";
 
 /** Whether a path names a file `LocalMedia` can show. */
 export function isLocalMediaPath(path: string): boolean {
@@ -35,6 +36,7 @@ export function LocalMedia({
   onOpen?: () => void;
   fallback: ReactNode;
 }) {
+  const t = useT();
   const boxRef = useRef<HTMLSpanElement>(null);
   const [near, setNear] = useState(false);
   const [media, setMedia] = useState<Media | null>(null);
@@ -115,7 +117,7 @@ export function LocalMedia({
         <img
           src={media.url}
           alt={label}
-          title={onOpen ? "Open image" : undefined}
+          title={onOpen ? t("sessions.media.openImage") : undefined}
           draggable={false}
           onClick={onOpen}
           onError={() => setFailed(true)}

@@ -40,6 +40,8 @@ Monos are experimental agents that work across your projects. They keep a memory
 
 MonoCode is still early. If something breaks, [report a bug](https://github.com/hardbeat920/monocode/issues).
 
+MonoCode is available in English and Türkçe. Change the language in Settings > Appearance.
+
 ## Guides
 
 - [Provider setup](docs/providers.md)

@@ -7,6 +7,7 @@ import {
 } from "react";
 import { hexToHsv, hsvToHex, normalizeHex, type Hsv } from "../lib/colorUtils";
 import { Pipette } from "./icons";
+import { useT } from "../i18n/useT";
 
 type Props = {
   value: string;
@@ -36,6 +37,7 @@ export function ColorSwatchRow({
   className?: string;
   size?: "sm" | "lg";
 }) {
+  const t = useT();
   const hit = size === "lg" ? "size-9" : "size-5";
   const dot = size === "lg" ? "size-7" : "size-3.5";
   const pipetteActive =
@@ -45,7 +47,8 @@ export function ColorSwatchRow({
       className={className ?? "flex items-center justify-between gap-1 px-0.5"}
     >
       {colors.map((color, index) => {
-        const label = labels?.[index] ?? `Color ${index + 1}`;
+        const label =
+          labels?.[index] ?? t("shared.color.numbered", { index: index + 1 });
         const selected =
           customColor == null &&
           (colorIndex === index || (colorIndex == null && index === 0));
@@ -73,8 +76,8 @@ export function ColorSwatchRow({
       })}
       <button
         type="button"
-        title="Custom color"
-        aria-label="Custom color"
+        title={t("shared.color.custom")}
+        aria-label={t("shared.color.custom")}
         aria-expanded={customPickerOpen}
         aria-pressed={customColor != null}
         onMouseDown={(event) => event.preventDefault()}
@@ -109,6 +112,7 @@ export function ColorSwatchRow({
 }
 
 export function ColorPickerPopover({ value, onChange }: Props) {
+  const t = useT();
   const [hsv, setHsv] = useState<Hsv>(() => hexToHsv(value));
   const svRef = useRef<HTMLDivElement>(null);
   const hueRef = useRef<HTMLDivElement>(null);
@@ -197,7 +201,7 @@ export function ColorPickerPopover({ value, onChange }: Props) {
       <div
         ref={svRef}
         role="slider"
-        aria-label="Saturation and brightness"
+        aria-label={t("shared.color.saturation")}
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={Math.round(hsv.s)}
@@ -220,7 +224,7 @@ export function ColorPickerPopover({ value, onChange }: Props) {
       <div
         ref={hueRef}
         role="slider"
-        aria-label="Hue"
+        aria-label={t("shared.color.hue")}
         aria-valuemin={0}
         aria-valuemax={360}
         aria-valuenow={Math.round(hsv.h)}
@@ -250,7 +254,7 @@ export function ColorPickerPopover({ value, onChange }: Props) {
           type="text"
           value={preview}
           spellCheck={false}
-          aria-label="Hex color"
+          aria-label={t("shared.color.hex")}
           onChange={(e) => onHexInput(e.target.value)}
           className="min-w-0 flex-1 rounded-md border border-content/10 bg-content/5 px-2 py-1 font-mono text-[12px] text-content outline-none ring-accent/40 focus:ring-1"
         />

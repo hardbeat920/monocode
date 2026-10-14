@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/i18n/locale";
 import {
   questionsFromUnknown,
   selectedAnswerLabels,
@@ -63,9 +64,7 @@ export function codexQuestions(params: unknown): UserQuestion[] {
   // The shared question UI stores answers in the transcript and is not a
   // secure credential-entry surface. Never send secret questions to it.
   if (raw.some((question) => asRecord(question)?.isSecret === true)) {
-    throw new Error(
-      "Codex requested secret input. MonoCode cannot collect secret answers securely.",
-    );
+    throw new Error(t("integrations.codex.secretInput"));
   }
   const questions = questionsFromUnknown({
     questions: raw.map((question) => {

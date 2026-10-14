@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/i18n/locale";
 import { homeDir } from "../../../../platform/tauri/fs";
 import {
   setHarnessModels,
@@ -102,9 +103,7 @@ export async function discoverCodexModels(
           .catch(() => null);
 
         if (account && !account.account && account.requiresOpenaiAuth) {
-          throw new Error(
-            "Codex CLI is not authenticated. Run `codex login` and try again.",
-          );
+          throw new Error(t("integrations.codex.notAuthenticated"));
         }
 
         return await listAllModels(rpc);

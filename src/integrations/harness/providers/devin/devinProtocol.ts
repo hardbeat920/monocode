@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/i18n/locale";
 import { promptBlocks, type PromptContentBlock } from "../../../../features/sessions/model/attachments";
 import type { AgentModel, ModelSetting } from "../../../../features/sessions/model/models";
 import type { Attachment, RuntimeMode, ToolPreview } from "../../../../features/sessions/model/session";
@@ -5,8 +6,9 @@ import { nativeCommandInvocation, type NativeCommand } from "../../core/nativeCo
 import type { HarnessEvent } from "../../core/types";
 import { asRecord, eventsFromAcpUpdate, stringField } from "../antigravity/antigravityProtocol";
 
-export const DEVIN_AUTH_HELP =
-  "Run `devin auth login` in a terminal, then retry.";
+export function devinAuthHelp(): string {
+  return t("integrations.devin.authHelp");
+}
 
 /** Devin only advertises a browser method; an API key rides on its `_meta`. */
 export const DEVIN_AUTH_METHOD = "devin-browser";
@@ -157,9 +159,16 @@ export function devinStartupError(error: unknown): Error {
   const auth = withAuthHelp(detail);
   if (auth) return new Error(auth);
   if (/timed out/i.test(detail)) {
-    return new Error(`Devin did not start. ${DEVIN_AUTH_HELP}`);
+    return new Error(
+      t("integrations.provider.didNotStart", {
+        provider: "Devin",
+        detail: devinAuthHelp(),
+      }),
+    );
   }
-  return new Error(`Devin did not start. ${detail}`);
+  return new Error(
+    t("integrations.provider.didNotStart", { provider: "Devin", detail }),
+  );
 }
 
 /**
@@ -171,7 +180,7 @@ export function devinTurnError(error: unknown): Error {
   const auth = withAuthHelp(detail);
   if (auth) return new Error(auth);
   if (/timed out/i.test(detail)) {
-    return new Error("Devin stopped responding before the turn finished.");
+    return new Error(t("integrations.devin.stoppedResponding"));
   }
   return new Error(detail);
 }
@@ -192,11 +201,9 @@ export function devinRestoreError(error: unknown): Error {
   const auth = withAuthHelp(detail);
   if (auth) return new Error(auth);
   if (/timed out/i.test(detail)) {
-    return new Error(
-      "Devin timed out restoring the previous conversation. Send again to retry.",
-    );
+    return new Error(t("integrations.devin.restoreTimedOut"));
   }
-  return new Error(`Devin could not restore the previous conversation. ${detail}`);
+  return new Error(t("integrations.devin.restoreFailed", { detail }));
 }
 
 function errorDetail(error: unknown): string {
@@ -204,9 +211,10 @@ function errorDetail(error: unknown): string {
 }
 
 function withAuthHelp(detail: string): string | null {
-  if (detail.includes(DEVIN_AUTH_HELP)) return detail;
+  const help = devinAuthHelp();
+  if (detail.includes(help)) return detail;
   if (/auth|credential|api key|log ?in|sign.in/i.test(detail)) {
-    return `${detail}\n\n${DEVIN_AUTH_HELP}`;
+    return `${detail}\n\n${help}`;
   }
   return null;
 }

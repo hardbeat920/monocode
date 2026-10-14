@@ -1,5 +1,6 @@
 import { invoke as invokeLocal } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { t } from "../../shared/i18n/locale";
 import { slash } from "../../shared/lib/paths";
 import { REMOTE_PATH_PREFIX } from "../../shared/lib/remotePaths";
 import type { InterjectionMeta } from "../../features/sessions/model/session";
@@ -34,7 +35,7 @@ export function invokeWorkspace<T>(command: string, args?: Record<string, unknow
   if (args && (PATH_ARGS.some((key) => isRemotePath(args[key])) || remoteOptions)) {
     if (!remoteRunner)
       return Promise.reject(
-        new Error("Connect this project’s machine to open its files."),
+        new Error(t("platform.fs.connectMachine")),
       );
     return remoteRunner(command, args) as Promise<T>;
   }
@@ -506,7 +507,9 @@ export function homeDir(): Promise<string> {
  * projects can be opened in one pass; the dialog still returns a bare string
  * when only one was taken.
  */
-export async function pickFolders(title = "Open projects"): Promise<string[]> {
+export async function pickFolders(
+  title = t("platform.fs.openProjects"),
+): Promise<string[]> {
   const selected = await open({
     directory: true,
     multiple: true,
@@ -518,7 +521,9 @@ export async function pickFolders(title = "Open projects"): Promise<string[]> {
   return typeof selected === "string" && selected ? [slash(selected)] : [];
 }
 
-export async function pickFiles(title = "Attach files"): Promise<string[] | null> {
+export async function pickFiles(
+  title = t("platform.fs.attachFiles"),
+): Promise<string[] | null> {
   const selected = await open({
     multiple: true,
     directory: false,

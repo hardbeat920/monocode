@@ -1,8 +1,20 @@
 import { useMemo } from "react";
+import { t } from "../../../shared/i18n/locale";
+import { useLocale } from "../../../shared/i18n/useT";
 import type { GithubPrDiff } from "../model/githubTasks";
-import { mergePrDiff, parsePrPatch, type PrDiffFile } from "../../source-control/model/prDiff";
-import { blocksFromLines, type UnifiedLine } from "../../source-control/model/unifiedDiff";
-import { UnifiedDiffView, type UnifiedDiffFileModel } from "../../source-control/ui/UnifiedDiffView";
+import {
+  mergePrDiff,
+  parsePrPatch,
+  type PrDiffFile,
+} from "../../source-control/model/prDiff";
+import {
+  blocksFromLines,
+  type UnifiedLine,
+} from "../../source-control/model/unifiedDiff";
+import {
+  UnifiedDiffView,
+  type UnifiedDiffFileModel,
+} from "../../source-control/ui/UnifiedDiffView";
 
 type Props = {
   diff: GithubPrDiff;
@@ -13,11 +25,13 @@ type Props = {
 };
 
 export function InboxPrDiff({ diff, fullFile = false, focusPath }: Props) {
+  // The empty-diff messages are translated inside toModel, so rebuild on a language change.
+  const locale = useLocale();
   const files = useMemo(() => {
     const parsed = mergePrDiff(diff.files, parsePrPatch(diff.patch));
     const context = fullFile ? Number.POSITIVE_INFINITY : undefined;
     return parsed.map((file) => toModel(file, diff.truncated, context));
-  }, [diff, fullFile]);
+  }, [diff, fullFile, locale]);
 
   return (
     <UnifiedDiffView
@@ -49,8 +63,8 @@ function toModel(
     emptyMessage:
       !file.binary && file.lines.length === 0
         ? truncated
-          ? "Patch unavailable because this change is too large"
-          : "No textual diff"
+          ? t("inbox.prDiff.tooLarge")
+          : t("inbox.prDiff.noTextualDiff")
         : undefined,
     additions: file.additions,
     deletions: file.deletions,

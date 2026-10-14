@@ -14,6 +14,7 @@ import type { JiraProject } from "../model/jira";
 import type { LinearTeam } from "../model/linear";
 import { Popover } from "../../../shared/ui/Popover";
 import { ProjectLogoIcon } from "../../projects/ui/ProjectLogoIcon";
+import { useT } from "../../../shared/i18n/useT";
 
 export const INBOX_FILTER_MENU_WIDTH = 228;
 
@@ -42,30 +43,6 @@ type Props = {
   onClose: () => void;
 };
 
-const TIME_OPTIONS: { id: InboxTimeFilter; label: string }[] = [
-  { id: "all", label: "All time" },
-  { id: "today", label: "Today" },
-  { id: "7d", label: "Last 7 days" },
-  { id: "30d", label: "Last 30 days" },
-];
-
-const KIND_OPTIONS: {
-  id: InboxKind;
-  label: string;
-  icon: ReactNode;
-}[] = [
-  {
-    id: "issue",
-    label: "Issues",
-    icon: <CircleDot className="size-3.5 shrink-0" strokeWidth={1.75} />,
-  },
-  {
-    id: "pr",
-    label: "Pull requests",
-    icon: <GitPullRequest className="size-3.5 shrink-0" strokeWidth={1.75} />,
-  },
-];
-
 export function InboxFiltersMenu({
   x,
   y,
@@ -82,6 +59,29 @@ export function InboxFiltersMenu({
   onJiraProjectsChange,
   onClose,
 }: Props) {
+  const t = useT();
+  const timeOptions: { id: InboxTimeFilter; label: string }[] = [
+    { id: "all", label: t("inbox.filters.allTime") },
+    { id: "today", label: t("inbox.filters.today") },
+    { id: "7d", label: t("inbox.filters.last7Days") },
+    { id: "30d", label: t("inbox.filters.last30Days") },
+  ];
+  const kindOptions: {
+    id: InboxKind;
+    label: string;
+    icon: ReactNode;
+  }[] = [
+    {
+      id: "issue",
+      label: t("inbox.filters.issues"),
+      icon: <CircleDot className="size-3.5 shrink-0" strokeWidth={1.75} />,
+    },
+    {
+      id: "pr",
+      label: t("inbox.filters.pullRequests"),
+      icon: <GitPullRequest className="size-3.5 shrink-0" strokeWidth={1.75} />,
+    },
+  ];
   const hiddenProjects = new Set(filters.hiddenProjects);
   const hiddenLinearProjects = new Set(filters.hiddenLinearProjects);
   const hiddenTeams = new Set(hiddenLinearTeamIds);
@@ -150,48 +150,48 @@ export function InboxFiltersMenu({
       maxHeight={480}
       onDismiss={onClose}
       role="menu"
-      aria-label="Filter inbox"
+      aria-label={t("inbox.filters.menuLabel")}
       onContextMenu={(event) => event.preventDefault()}
       className="overflow-y-auto overscroll-none p-1"
     >
       <FilterItem
         label={
           source === "gitlab" || source === "azuredevops"
-            ? "Needs attention"
-            : "Assigned to me"
+            ? t("inbox.filters.needsAttention")
+            : t("inbox.filters.assignedToMe")
         }
         checked={filters.assignedToMe}
         onClick={toggleAssigned}
       />
 
-      <SectionLabel>Status</SectionLabel>
+      <SectionLabel>{t("inbox.filters.status")}</SectionLabel>
       <FilterItem
-        label="Open"
+        label={t("inbox.filters.open")}
         checked={filters.status.open}
         onClick={() => toggleStatus("open")}
       />
       {!tracker ? (
         <FilterItem
-          label="Draft"
+          label={t("inbox.filters.draft")}
           checked={filters.status.draft}
           onClick={() => toggleStatus("draft")}
         />
       ) : null}
       <FilterItem
-        label="Closed"
+        label={t("inbox.filters.closed")}
         checked={filters.status.closed}
         onClick={() => toggleStatus("closed")}
       />
       {!tracker ? (
         <FilterItem
-          label="Merged"
+          label={t("inbox.filters.merged")}
           checked={filters.status.merged}
           onClick={() => toggleStatus("merged")}
         />
       ) : null}
 
-      <SectionLabel>Time</SectionLabel>
-      {TIME_OPTIONS.map((option) => (
+      <SectionLabel>{t("inbox.filters.time")}</SectionLabel>
+      {timeOptions.map((option) => (
         <FilterItem
           key={option.id}
           label={option.label}
@@ -202,13 +202,13 @@ export function InboxFiltersMenu({
 
       {!tracker ? (
         <>
-          <SectionLabel>Type</SectionLabel>
-          {KIND_OPTIONS.map((option) => (
+          <SectionLabel>{t("inbox.filters.type")}</SectionLabel>
+          {kindOptions.map((option) => (
             <FilterItem
               key={option.id}
               label={
                 source === "gitlab" && option.id === "pr"
-                  ? "Merge requests"
+                  ? t("inbox.filters.mergeRequests")
                   : option.label
               }
               checked={!hiddenKinds.has(option.id)}
@@ -221,7 +221,7 @@ export function InboxFiltersMenu({
 
       {source === "linear" && linearTeams.length > 0 ? (
         <>
-          <SectionLabel>Teams</SectionLabel>
+          <SectionLabel>{t("inbox.filters.teams")}</SectionLabel>
           {linearTeams.map((team) => (
             <FilterItem
               key={team.id}
@@ -235,7 +235,7 @@ export function InboxFiltersMenu({
 
       {source === "linear" && linearProjects.length > 0 ? (
         <>
-          <SectionLabel>Projects</SectionLabel>
+          <SectionLabel>{t("inbox.filters.projects")}</SectionLabel>
           {linearProjects.map((project) => (
             <FilterItem
               key={project.id}
@@ -249,7 +249,7 @@ export function InboxFiltersMenu({
 
       {source === "jira" && jiraProjects.length > 0 ? (
         <>
-          <SectionLabel>Projects</SectionLabel>
+          <SectionLabel>{t("inbox.filters.projects")}</SectionLabel>
           {jiraProjects.map((project) => (
             <FilterItem
               key={project.id}
@@ -268,7 +268,7 @@ export function InboxFiltersMenu({
       ) &&
       projects.length > 0 ? (
         <>
-          <SectionLabel>Projects</SectionLabel>
+          <SectionLabel>{t("inbox.filters.projects")}</SectionLabel>
           {projects.map((project) => (
             <FilterItem
               key={project.path}
@@ -308,7 +308,7 @@ export function InboxFiltersMenu({
             }}
             className="flex h-7 w-full items-center rounded-lg px-2 text-left text-[13px] leading-none text-content/70 hover:bg-content/5 hover:text-content"
           >
-            Clear filters
+            {t("inbox.filters.clear")}
           </button>
         </>
       ) : null}

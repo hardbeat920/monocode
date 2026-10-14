@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/i18n/locale";
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import { AcpSubagents } from "../../core/acpSubagents";
 import type { RuntimeMode } from "../../../../features/sessions/model/session";
@@ -63,23 +64,27 @@ const SESSION_TIMEOUT_MS = 45_000;
 const CONTROL_TIMEOUT_MS = 15_000;
 const PROMPT_TIMEOUT_MS = 30 * 60_000;
 
-const AUTH_HELP =
-  "fx has no Vercel AI Gateway credential it can read from here. " +
-  "Run `fx login` (or `fx setup`) in a terminal, or export AI_GATEWAY_API_KEY " +
-  "so it does not depend on the macOS Keychain.";
+function authHelp(): string {
+  return t("integrations.fx.authHelp");
+}
 
 /** fx rejects `initialize` itself when it cannot read a credential. */
 function fxStartupError(error: unknown): Error {
   const detail = error instanceof Error ? error.message : String(error);
   if (/needs access|AI Gateway|API key|Keychain/i.test(detail)) {
-    return new Error(`${detail.trim()}\n\n${AUTH_HELP}`);
+    return new Error(`${detail.trim()}\n\n${authHelp()}`);
   }
   if (/timed out/i.test(detail)) {
     return new Error(
-      `fx did not answer initialize within ${INIT_TIMEOUT_MS / 1000}s. ${AUTH_HELP}`,
+      t("integrations.fx.initTimeout", {
+        seconds: INIT_TIMEOUT_MS / 1000,
+        help: authHelp(),
+      }),
     );
   }
-  return new Error(`fx did not start. ${detail}`);
+  return new Error(
+    t("integrations.provider.didNotStart", { provider: "fx", detail }),
+  );
 }
 
 const CLIENT_CAPABILITIES = {
@@ -464,7 +469,7 @@ async function prompt(live: Live, input: SendTurnInput): Promise<void> {
     live.onEvent({
       type: "session.error",
       message: /needs access|AI Gateway|API key|Keychain/i.test(detail)
-        ? `${detail.trim()}\n\n${AUTH_HELP}`
+        ? `${detail.trim()}\n\n${authHelp()}`
         : detail,
     });
     throw error;

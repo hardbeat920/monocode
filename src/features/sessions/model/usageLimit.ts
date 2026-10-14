@@ -1,3 +1,4 @@
+import { getLocaleTag, t } from "../../../shared/i18n/locale";
 import { formatResetDuration } from "../../providers/model/rateLimits";
 import type { Session, UsageLimit } from "./session";
 
@@ -31,12 +32,15 @@ export const USAGE_LIMIT_RESUME_GRACE_MS = 30_000;
 export function formatUsageLimitReset(resetsAt: number, now: number): string {
   const reset = new Date(resetsAt);
   const sameDay = reset.toDateString() === new Date(now).toDateString();
-  const when = reset.toLocaleString(undefined, {
+  const when = reset.toLocaleString(getLocaleTag(), {
     ...(sameDay ? {} : { month: "short", day: "numeric" }),
     hour: "numeric",
     minute: "2-digit",
   });
-  return `${when} · in ${formatResetDuration(resetsAt - now)}`;
+  return t("sessions.usageLimit.reset", {
+    when,
+    duration: formatResetDuration(resetsAt - now),
+  });
 }
 
 /** Idle, armed, and past its reset: time to send the continue turn. */

@@ -1,5 +1,6 @@
 import type { CiRepairRequest } from "./ciRepair";
 import { sameProjectPath } from "../../projects/model/recents";
+import { t } from "../../../shared/i18n/locale";
 
 export type CiRepairOutcome = "completed" | "failed" | "cancelled";
 export type TrackedCiRepair = CiRepairRequest["target"] & {
@@ -191,13 +192,11 @@ export function trackCiRepair(
   save(repair);
   try {
     const accepted = submit((phase) => {
-      const current = getCiRepairs().find((item) => item.id === repair.id) ?? repair;
+      const current =
+        getCiRepairs().find((item) => item.id === repair.id) ?? repair;
       save({ ...current, phase });
     });
-    if (!accepted)
-      throw new Error(
-        "Could not start this fix. Choose another chat and try again.",
-      );
+    if (!accepted) throw new Error(t("inbox.repair.startFailed"));
   } catch (error) {
     save(repair, true);
     throw error;

@@ -34,6 +34,8 @@ import {
   updateMono,
   type MonoState,
 } from "../../features/monos/model/mono";
+import { t as translate } from "../../shared/i18n/locale";
+import { useT } from "../../shared/i18n/useT";
 
 export type MonoRailProps = {
   /** The Mono open in the main area, if any. */
@@ -55,7 +57,7 @@ export function unreadBadge(count: number): string {
 }
 
 export function unreadLabel(count: number): string {
-  return count === 1 ? "1 new reply" : `${count} new replies`;
+  return translate("app.monoRail.newReplies", { count });
 }
 
 /**
@@ -71,6 +73,7 @@ export function MonoRailSection({
   onCreate,
   onDelete,
 }: MonoRailProps) {
+  const t = useT();
   const snapshot = useSyncExternalStore(subscribeMonos, monosSnapshot);
   const monos = useMemo(() => listMonos(), [snapshot]);
   const ids = monos.map((mono) => mono.id);
@@ -95,12 +98,12 @@ export function MonoRailSection({
     <div className="mb-2 shrink-0" data-mono-rail>
       <div className="flex items-center gap-1 px-3 pb-1.5 pt-1">
         <span className="min-w-0 flex-1 truncate px-1 text-xs leading-5 text-content/50">
-          Monos
+          {t("app.monoRail.title")}
         </span>
         <button
           type="button"
-          title="New mono"
-          aria-label="New mono"
+          title={t("app.monoRail.newMono")}
+          aria-label={t("app.monoRail.newMono")}
           onClick={onCreate}
           className="grid size-5 shrink-0 place-items-center rounded-md text-content/50 hover:bg-content/8 hover:text-content"
         >
@@ -115,7 +118,7 @@ export function MonoRailSection({
           const unseen = selected ? 0 : (unseenCounts?.get(mono.id) ?? 0);
           const projects = look.projects.length
             ? monoProjectsPhrase(look.projects)
-            : "No projects yet";
+            : t("app.monoRail.noProjects");
           const status =
             state.status === "idle"
               ? undefined
@@ -162,7 +165,7 @@ export function MonoRailSection({
                 title={[look.name, projects, status].filter(Boolean).join("\n")}
                 aria-label={[
                   look.name,
-                  status ?? "idle",
+                  status ?? t("app.monoRail.idle"),
                   unseen ? unreadLabel(unseen) : undefined,
                   projects,
                 ]
@@ -202,8 +205,8 @@ export function MonoRailSection({
               <button
                 type="button"
                 data-no-drag
-                title="Mono options"
-                aria-label={`${look.name} options`}
+                title={t("app.monoRail.options")}
+                aria-label={t("app.monoRail.optionsFor", { name: look.name })}
                 aria-haspopup="menu"
                 onPointerDown={(event) => event.stopPropagation()}
                 onClick={(event) => {
@@ -263,6 +266,7 @@ function MonoMenu({
   onDelete: () => void;
   onClose: () => void;
 }) {
+  const t = useT();
   useSyncExternalStore(subscribeMonos, monosSnapshot);
   const mono = findMono(monoId);
   const input = useRef<HTMLInputElement>(null);
@@ -293,7 +297,7 @@ function MonoMenu({
         onClose();
       }}
       role="menu"
-      aria-label="Mono options"
+      aria-label={t("app.monoRail.options")}
       onContextMenu={(event) => event.preventDefault()}
       className="p-2"
     >
@@ -302,7 +306,7 @@ function MonoMenu({
         value={name}
         placeholder={defaultMonoName(mono.mascot)}
         maxLength={40}
-        aria-label="Mono name"
+        aria-label={t("app.monoRail.name")}
         onChange={(event) => setName(event.target.value)}
         onBlur={commitName}
         onKeyDown={(event) => {
@@ -336,7 +340,7 @@ function MonoMenu({
         className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[13px] text-content/85 hover:bg-content/8"
       >
         <ImagePlus className="size-3.5 shrink-0" strokeWidth={1.75} />
-        Background image
+        {t("app.monoRail.backgroundImage")}
       </button>
       <button
         type="button"
@@ -345,7 +349,7 @@ function MonoMenu({
         className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[13px] text-red-400 hover:bg-content/8"
       >
         <Trash2 className="size-3.5 shrink-0" strokeWidth={1.75} />
-        Delete mono…
+        {t("app.monoRail.delete")}
       </button>
     </Popover>
   );

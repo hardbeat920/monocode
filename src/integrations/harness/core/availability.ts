@@ -1,3 +1,4 @@
+import { t } from "../../../shared/i18n/locale";
 import type { HarnessId } from "../../../features/sessions/model/session";
 import { HARNESSES } from "../../../features/sessions/model/session";
 import {
@@ -35,7 +36,10 @@ export {
  * We only ever check whether the binary exists, never whether it is
  * authenticated, so the hint must not blame a login.
  */
-const CLI: Record<HarnessId, { name: string; install?: string }> = {
+const CLI: Record<
+  HarnessId,
+  { name: string; install?: string | (() => string) }
+> = {
   claude: { name: "Claude Code CLI" },
   codex: { name: "Codex CLI" },
   cursor: { name: "Cursor CLI" },
@@ -49,8 +53,7 @@ const CLI: Record<HarnessId, { name: string; install?: string }> = {
   fx: { name: "fx CLI", install: "curl -fsSL https://fx.sh/setup.sh | bash" },
   hermes: {
     name: "Hermes Agent CLI",
-    install:
-      "Install from hermes-agent.nousresearch.com, then run hermes model",
+    install: () => t("integrations.availability.hermesInstall"),
   },
   antigravity: { name: "Antigravity ACP server (agy_acp_server.par)" },
   devin: {
@@ -72,9 +75,10 @@ let inflight: Promise<void> | null = null;
 const PROBE_TTL_MS = 30_000;
 
 export function harnessUnavailableHint(id: HarnessId): string {
-  const { name, install } = CLI[id];
+  const { name, install: rawInstall } = CLI[id];
+  const install = typeof rawInstall === "function" ? rawInstall() : rawInstall;
   const how = install ? ` (\`${install}\`)` : "";
-  return `${name} not found${how}. Install it, or restart MonoCode if it is already installed.`;
+  return t("integrations.availability.notFound", { name, install: how });
 }
 
 export function probeHarnessAvailability(

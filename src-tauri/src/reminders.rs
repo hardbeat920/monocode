@@ -388,7 +388,7 @@ pub(crate) fn init(app: &AppHandle) {
                 identifier,
                 "MonoCode".into(),
                 reminder.title,
-                "Reminder: continue this conversation.".into(),
+                crate::i18n::t(crate::i18n::Text::ReminderBody).into(),
                 preferences.sound,
             ));
         }

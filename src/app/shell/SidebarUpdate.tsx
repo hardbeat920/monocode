@@ -8,6 +8,7 @@ import {
 } from "../model/updater";
 import type { InstalledUpdate } from "../model/updateNotice";
 import { UpdateRailCard } from "./UpdateRailCard";
+import { useT } from "../../shared/i18n/useT";
 
 // The sidebar row only earns its space when there is something to act on: an
 // update waiting to be installed, or one already downloading. Every other phase
@@ -98,6 +99,7 @@ export function SidebarUpdate({
   snapshot: UpdaterSnapshot;
   onSnapshot: (next: UpdaterSnapshot) => void;
 }) {
+  const t = useT();
   const busy = snapshot.phase === "downloading";
   // `busy` only flips after installPendingUpdate awaits readAppVersion, so a
   // second click can still land. The ref closes that window immediately.
@@ -114,8 +116,12 @@ export function SidebarUpdate({
   }, [busy, onSnapshot]);
 
   const label = busy
-    ? `Downloading${snapshot.progress != null ? ` ${snapshot.progress}%` : "…"}`
-    : `Update to ${snapshot.availableVersion}`;
+    ? snapshot.progress != null
+      ? t("app.update.downloadingProgress", { progress: snapshot.progress })
+      : t("app.update.downloading")
+    : t("app.update.updateTo", {
+        version: snapshot.availableVersion ?? "",
+      });
 
   return (
     <button

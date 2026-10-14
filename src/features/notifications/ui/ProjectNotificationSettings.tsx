@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useT } from "../../../shared/i18n/useT";
 import { Check, ChevronRight, Folder, Minus } from "../../../shared/ui/icons";
 import { NotificationMuteControl } from "./NotificationMuteControl";
 import { SecondaryButton } from "../../../shared/ui/SecondaryButton";
@@ -40,6 +41,7 @@ export function ProjectNotificationSettings({
   notificationSettingsRequest = 0,
   highlighted = false,
 }: Props) {
+  const t = useT();
   const notificationProjects = useNotificationProjects([
     cwd,
     notificationProjectPath ?? "",
@@ -103,25 +105,23 @@ export function ProjectNotificationSettings({
       });
       setError(null);
     } catch {
-      setError("Could not save notification preferences. Please try again.");
+      setError(t("settings.notifications.saveFailed"));
     }
   }
 
   return (
     <section
       id="settings-project-notifications"
-      aria-label="Project notifications"
+      aria-label={t("settings.notifications.projects.title")}
       className="@container/notifications"
     >
       <div className="flex flex-wrap items-end gap-4 pb-2.5">
         <div className="min-w-[min(100%,240px)] flex-1">
           <h2 className="text-[13px] font-semibold text-content">
-            Project notifications
+            {t("settings.notifications.projects.title")}
           </h2>
           <p className="mt-1 text-[12px] leading-relaxed text-content/45">
-            Choose sounds, banners and sidebar indicators by category. Mute
-            pauses them without changing your choices. Unread items stay marked
-            in Inbox.
+            {t("settings.notifications.projects.description")}
           </p>
         </div>
         {projects.length ? (
@@ -134,7 +134,9 @@ export function ProjectNotificationSettings({
                 setSelected([]);
               }}
             >
-              {selecting ? "Done" : "Select projects"}
+              {selecting
+                ? t("settings.notifications.projects.done")
+                : t("settings.notifications.projects.select")}
             </SecondaryButton>
           </div>
         ) : null}
@@ -154,7 +156,7 @@ export function ProjectNotificationSettings({
             role="status"
             className="px-4 py-3.5 text-[12px] leading-relaxed text-content/45"
           >
-            Open a project or connect an Inbox provider to configure its notifications.
+            {t("settings.notifications.projects.empty")}
           </p>
         ) : null}
         {projects.length ? (
@@ -163,7 +165,7 @@ export function ProjectNotificationSettings({
               <div className="flex min-h-9 flex-wrap items-center justify-between gap-3 border-b border-content/5 px-4 py-3.5">
                 <label className="flex cursor-pointer items-center gap-2.5 text-[12px] text-content/55 hover:text-content/80">
                   <ProjectSelection
-                    label="Select all projects"
+                    label={t("settings.notifications.projects.selectAll")}
                     checked={selectedIds.length === projects.length}
                     mixed={
                       selectedIds.length > 0 &&
@@ -176,11 +178,18 @@ export function ProjectNotificationSettings({
                     }
                   />
                   {selectedIds.length
-                    ? `${selectedIds.length} selected`
-                    : "Select all projects"}
+                    ? t("settings.notifications.projects.selectedCount", {
+                        count: selectedIds.length,
+                      })
+                    : t("settings.notifications.projects.selectAll")}
                 </label>
                 {selectedIds.length ? (
-                  <div role="group" aria-label="Mute selected projects">
+                  <div
+                    role="group"
+                    aria-label={t(
+                      "settings.notifications.projects.muteSelected",
+                    )}
+                  >
                     <NotificationMuteControl projectIds={selectedIds} />
                   </div>
                 ) : null}
@@ -229,7 +238,12 @@ export function ProjectNotificationSettings({
                       <div className="flex min-w-[min(100%,200px)] flex-1 items-center gap-3">
                         {selecting ? (
                           <ProjectSelection
-                            label={`Select ${project.name}`}
+                            label={t(
+                              "settings.notifications.projects.selectOne",
+                              {
+                                name: project.name,
+                              },
+                            )}
                             checked={selectedIds.includes(project.id)}
                             onChange={(checked) =>
                               setSelected((current) =>
@@ -242,7 +256,10 @@ export function ProjectNotificationSettings({
                         ) : null}
                         <button
                           type="button"
-                          aria-label={`Notification categories for ${project.name}`}
+                          aria-label={t(
+                            "settings.notifications.projects.categoriesFor",
+                            { name: project.name },
+                          )}
                           aria-expanded={isExpanded}
                           aria-controls={panelId}
                           onClick={() =>
@@ -285,13 +302,21 @@ export function ProjectNotificationSettings({
                             </p>
                             <p className="mt-1 text-[12px] leading-relaxed text-content/45">
                               {project.kind === "local"
-                                ? "Local project · "
+                                ? t("settings.notifications.projects.local")
                                 : ""}
                               {muted
-                                ? "All notifications paused"
+                                ? t("settings.notifications.projects.paused")
                                 : enabledCount === categories.length
-                                  ? "All categories enabled"
-                                  : `${enabledCount} of ${categories.length} enabled`}
+                                  ? t(
+                                      "settings.notifications.projects.allEnabled",
+                                    )
+                                  : t(
+                                      "settings.notifications.projects.someEnabled",
+                                      {
+                                        enabled: enabledCount,
+                                        total: categories.length,
+                                      },
+                                    )}
                             </p>
                           </div>
                           <ChevronRight
@@ -322,8 +347,7 @@ export function ProjectNotificationSettings({
                             role="status"
                             className="pt-3.5 text-[12px] leading-relaxed text-content/45"
                           >
-                            Your category choices apply when notifications
-                            resume. You can edit them while muted.
+                            {t("settings.notifications.projects.mutedHint")}
                           </p>
                         ) : null}
                         {categories.map((category) => (
@@ -336,7 +360,13 @@ export function ProjectNotificationSettings({
                               <input
                                 type="checkbox"
                                 role="switch"
-                                aria-label={`${category.label} for ${project.name}`}
+                                aria-label={t(
+                                  "settings.notifications.projects.categoryFor",
+                                  {
+                                    category: category.label,
+                                    project: project.name,
+                                  },
+                                )}
                                 aria-describedby={
                                   muted ? muteHintId : undefined
                                 }

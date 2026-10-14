@@ -1,11 +1,18 @@
-import { leafIds, newTab, type WorkspaceTab } from "../../workspace/model/layout";
-import type { DockSide, ProjectTerminalDock } from "../../projects/model/projectTerminal";
+import { t } from "../../../shared/i18n/locale";
+import {
+  leafIds,
+  newTab,
+  type WorkspaceTab,
+} from "../../workspace/model/layout";
+import type {
+  DockSide,
+  ProjectTerminalDock,
+} from "../../projects/model/projectTerminal";
 import { sessionNeedsInput, type Session } from "./session";
 import { stopStreaming } from "../../../integrations/harness/core/apply";
 import type { ProjectReturnMemory } from "../../projects/model/projectReturn";
 
-export const INTERRUPT_MESSAGE =
-  "Turn interrupted when MonoCode quit.";
+export const INTERRUPT_MESSAGE = "Turn interrupted when MonoCode quit.";
 
 export const CONTINUE_PROMPT = "Continue from where you left off.";
 
@@ -62,10 +69,7 @@ export function inFlightRefs(
 }
 
 export function quitWhileBusyMessage(count: number): string {
-  if (count === 1) {
-    return "1 chat is still running. Quit anyway? It will resume when you reopen MonoCode.";
-  }
-  return `${count} chats are still running. Quit anyway? They will resume when you reopen MonoCode.`;
+  return t("sessions.inFlight.quitWhileBusy", { count });
 }
 
 /**
@@ -84,7 +88,7 @@ export function markTurnInterrupted(session: Session): Session {
       {
         id: crypto.randomUUID(),
         role: "system",
-        text: INTERRUPT_MESSAGE,
+        text: t("sessions.inFlight.interrupted"),
         notice: "interrupt",
       },
     ],
@@ -124,7 +128,10 @@ export function canAutoContinue(session: Session): boolean {
 
 function lastBlockIsInterrupt(session: Session): boolean {
   const last = session.blocks[session.blocks.length - 1];
-  return last?.role === "system" && last.text === INTERRUPT_MESSAGE;
+  return (
+    last?.role === "system" &&
+    (last.notice === "interrupt" || last.text === INTERRUPT_MESSAGE)
+  );
 }
 
 export function inFlightSnapshotKey(refs: InFlightRef[]): string {

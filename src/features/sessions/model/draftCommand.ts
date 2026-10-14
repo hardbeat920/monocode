@@ -1,10 +1,13 @@
+import { t } from "../../../shared/i18n/locale";
 import type { BuiltinSkill } from "../../skills/model/skills";
 
 export const DRAFT_COMMAND: BuiltinSkill = {
   kind: "builtin",
   name: "draft",
   invocation: "draft",
-  description: "Save this message without starting the agent.",
+  get description() {
+    return t("sessions.command.draft.description");
+  },
   scope: "builtin",
   source: "monocode",
 };

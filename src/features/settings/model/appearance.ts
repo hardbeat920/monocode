@@ -1,6 +1,7 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { hslToRgb, isHexColor, type Rgb } from "../../../shared/lib/colorUtils";
 import { IS_LINUX, IS_MAC } from "../../../platform/tauri/platform";
+import { t } from "../../../shared/i18n/locale";
 import { readFlag, writeFlag } from "./storageFlags";
 import { applyUiScale, loadUiScale } from "./uiScale";
 import {
@@ -55,28 +56,53 @@ export const NEW_THREAD_BACKGROUND_EFFECTS: readonly NewThreadBackgroundEffect[]
 export const NEW_THREAD_BACKGROUND_EFFECT_DEFAULT: NewThreadBackgroundEffect =
   "none";
 
+/** Getters keep the text current when the language changes. */
 export const NEW_THREAD_BACKGROUND_EFFECT_LABELS: Record<
   NewThreadBackgroundEffect,
   string
 > = {
-  none: "None",
-  dither: "Dither",
-  ascii: "ASCII",
-  halftone: "Halftone",
-  scanlines: "Scanlines",
-  "gradient-blur": "Haze",
+  get none() {
+    return t("settings.appearance.effect.none.label");
+  },
+  get dither() {
+    return t("settings.appearance.effect.dither.label");
+  },
+  get ascii() {
+    return t("settings.appearance.effect.ascii.label");
+  },
+  get halftone() {
+    return t("settings.appearance.effect.halftone.label");
+  },
+  get scanlines() {
+    return t("settings.appearance.effect.scanlines.label");
+  },
+  get "gradient-blur"() {
+    return t("settings.appearance.effect.gradient-blur.label");
+  },
 };
 
 export const NEW_THREAD_BACKGROUND_EFFECT_DESCRIPTIONS: Record<
   NewThreadBackgroundEffect,
   string
 > = {
-  none: "Shows the original artwork.",
-  dither: "Rebuilds the artwork with a dithered color palette.",
-  ascii: "Recreates the artwork with colored characters on black.",
-  halftone: "Recreates the artwork with colored print dots on black.",
-  scanlines: "Adds a pronounced horizontal display-line texture.",
-  "gradient-blur": "Blurs and fades the artwork into the background below.",
+  get none() {
+    return t("settings.appearance.effect.none.description");
+  },
+  get dither() {
+    return t("settings.appearance.effect.dither.description");
+  },
+  get ascii() {
+    return t("settings.appearance.effect.ascii.description");
+  },
+  get halftone() {
+    return t("settings.appearance.effect.halftone.description");
+  },
+  get scanlines() {
+    return t("settings.appearance.effect.scanlines.description");
+  },
+  get "gradient-blur"() {
+    return t("settings.appearance.effect.gradient-blur.description");
+  },
 };
 
 export const THEME_PREFERENCE_DEFAULT: ThemePreference = "dark";

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { t } from "../../../shared/i18n/locale";
 import {
   MAX_ATTACHMENTS,
   persistableAttachment,
@@ -12,7 +13,10 @@ export async function storeQuickAttachments(
   return Promise.all(
     files.map(async (file) => {
       if (file.path) return file;
-      if (!file.data) throw new Error(`Could not attach ${file.name}.`);
+      if (!file.data)
+        throw new Error(
+          t("quickComposer.attachments.couldNotAttach", { name: file.name }),
+        );
       const path = await invoke<string>("write_attachment", {
         name: file.name,
         data: file.data,
@@ -24,7 +28,10 @@ export async function storeQuickAttachments(
 
 export function quickLaunchAttachments(files: Attachment[]): Attachment[] {
   return files.map((file) => {
-    if (!file.path) throw new Error(`Could not attach ${file.name}.`);
+    if (!file.path)
+      throw new Error(
+        t("quickComposer.attachments.couldNotAttach", { name: file.name }),
+      );
     return persistableAttachment(file);
   });
 }

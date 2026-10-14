@@ -1,3 +1,4 @@
+import { t } from "../../../shared/i18n/locale";
 import { invoke } from "@tauri-apps/api/core";
 import { isMonoSession } from "../../monos/model/mono";
 import { sanitizeMonoSpawnedSessions } from "../../monos/model/monoSpawnedSessions";
@@ -1142,9 +1143,7 @@ function sanitizeBtwThreads(
         ...(providerThreadId ? { providerThreadId } : {}),
         ...(interrupted
           ? {
-              error:
-                error ||
-                "This by-the-way request was interrupted before reload.",
+              error: error || t("sessions.btw.interruptedBeforeReload"),
             }
           : error
             ? { error }

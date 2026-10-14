@@ -6,6 +6,7 @@ import { prettyCwd } from "../../../shared/lib/paths";
 import { Modal } from "../../../shared/ui/Modal";
 import { SearchableSelect } from "../../../shared/ui/SearchableSelect";
 import { Loader } from "../../../shared/ui/icons";
+import { useT } from "../../../shared/i18n/useT";
 
 export function CreateWorktreeDialog({
   cwd,
@@ -20,6 +21,7 @@ export function CreateWorktreeDialog({
   onCreated: (tree: Worktree) => void | Promise<void>;
   onCancel: () => void;
 }) {
+  const t = useT();
   const { branches } = useProjectBranchesState(baseCwd, true);
   const [name, setName] = useState("");
   const [base, setBase] = useState("HEAD");
@@ -43,7 +45,11 @@ export function CreateWorktreeDialog({
     () => [
       {
         value: "HEAD",
-        label: `Current commit${branches?.current ? ` (${branches.current})` : ""}`,
+        label: branches?.current
+          ? t("scm.createWorktree.currentCommitNamed", {
+              branch: branches.current,
+            })
+          : t("scm.createWorktree.currentCommit"),
         keywords: "HEAD current commit",
       },
       ...(branches?.branches ?? []).map((branch) => {
@@ -53,7 +59,7 @@ export function CreateWorktreeDialog({
         return { value: ref, label: ref };
       }),
     ],
-    [branches],
+    [branches, t],
   );
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -73,7 +79,7 @@ export function CreateWorktreeDialog({
     "h-9 rounded-md border border-content/10 bg-background-base px-2.5 text-[13px] outline-none focus:border-content/25 disabled:opacity-50";
   return (
     <Modal
-      title="Create worktree"
+      title={t("scm.createWorktree.title")}
       size="sm"
       onClose={() => {
         if (!busy) onCancel();
@@ -84,45 +90,51 @@ export function CreateWorktreeDialog({
         onSubmit={(e) => void submit(e)}
       >
         <p className="text-[12px] text-content/55">
-          An independent working copy of {prettyCwd(cwd)}. Existing uncommitted
-          changes stay in their current working copy.
+          {t("scm.createWorktree.description", { path: prettyCwd(cwd) })}
         </p>
         <div className="flex flex-col gap-1.5 text-[12px] text-content/70">
-          <span>Branch</span>
+          <span>{t("scm.createWorktree.branch")}</span>
           <SearchableSelect
-            label="Branch type"
+            label={t("scm.createWorktree.branchType")}
             disabled={busy}
             value={existing ? "existing" : "new"}
             options={[
-              { value: "new", label: "Create a new branch" },
-              { value: "existing", label: "Use an existing local branch" },
+              { value: "new", label: t("scm.createWorktree.newBranchOption") },
+              {
+                value: "existing",
+                label: t("scm.createWorktree.existingBranchOption"),
+              },
             ]}
             onChange={(value) => {
               setExisting(value === "existing");
               setName("");
             }}
-            searchPlaceholder="Search options…"
+            searchPlaceholder={t("scm.createWorktree.searchOptions")}
             layer={LAYER.dialogPopover}
           />
         </div>
         <div className="flex flex-col gap-1.5 text-[12px] text-content/70">
-          <span>{existing ? "Existing branch" : "New branch name"}</span>
+          <span>
+            {existing
+              ? t("scm.createWorktree.existingBranch")
+              : t("scm.createWorktree.newBranchName")}
+          </span>
           {existing ? (
             <SearchableSelect
-              label="Existing branch"
+              label={t("scm.createWorktree.existingBranch")}
               value={name}
               disabled={busy}
               options={localBranches}
               onChange={setName}
-              placeholder="Choose a branch…"
-              searchPlaceholder="Search local branches…"
-              emptyLabel="No matching local branches"
+              placeholder={t("scm.createWorktree.chooseBranch")}
+              searchPlaceholder={t("scm.createWorktree.searchLocalBranches")}
+              emptyLabel={t("scm.createWorktree.noLocalBranches")}
               layer={LAYER.dialogPopover}
             />
           ) : (
             <input
               ref={input}
-              aria-label="New branch name"
+              aria-label={t("scm.createWorktree.newBranchName")}
               className={field}
               value={name}
               disabled={busy}
@@ -135,21 +147,23 @@ export function CreateWorktreeDialog({
         </div>
         {!existing && (
           <div className="flex flex-col gap-1.5 text-[12px] text-content/70">
-            <span>Start from</span>
+            <span>{t("scm.createWorktree.startFrom")}</span>
             <SearchableSelect
-              label="Start from"
+              label={t("scm.createWorktree.startFrom")}
               value={base}
               disabled={busy}
               options={baseOptions}
               onChange={setBase}
-              searchPlaceholder="Search branches and refs…"
+              searchPlaceholder={t("scm.createWorktree.searchRefs")}
               layer={LAYER.dialogPopover}
             />
           </div>
         )}
         {defaultRoot && (
           <p className="break-all text-[11px] text-content/40">
-            Created in {prettyCwd(defaultRoot)}
+            {t("scm.createWorktree.createdIn", {
+              path: prettyCwd(defaultRoot),
+            })}
           </p>
         )}
         {error && (
@@ -164,15 +178,15 @@ export function CreateWorktreeDialog({
             onClick={onCancel}
             className="rounded-md px-3 py-1.5 text-[12px] hover:bg-content/8 active:scale-[0.97]"
           >
-            Cancel
+            {t("scm.common.cancel")}
           </button>
           <button
             type="submit"
             disabled={busy || !name.trim()}
             className="inline-flex items-center gap-1.5 rounded-md bg-content px-3 py-1.5 text-[12px] font-medium text-background-base disabled:opacity-40 active:scale-[0.97]"
           >
-            {busy && <Loader className="size-3.5 animate-spin" />}Create
-            worktree
+            {busy && <Loader className="size-3.5 animate-spin" />}
+            {t("scm.createWorktree.submit")}
           </button>
         </div>
       </form>

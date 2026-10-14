@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
+import { t } from "../../../shared/i18n/locale";
 import {
   applySessionSync,
   type HostCommand,
@@ -39,12 +40,16 @@ export function remotePendingWorktree(shellId: string): string | undefined {
 }
 
 /** The host checkout currently used by a remote tab. */
-export function remoteTabCwd(project: string, shellId?: string): string | undefined {
+export function remoteTabCwd(
+  project: string,
+  shellId?: string,
+): string | undefined {
   if (!shellId) return undefined;
   const sessionId = remoteSessionFor(shellId);
   return (
-    (sessionId ? cachedRemoteSessionSummary(project, sessionId)?.cwd : undefined) ??
-    remotePendingWorktree(shellId)
+    (sessionId
+      ? cachedRemoteSessionSummary(project, sessionId)?.cwd
+      : undefined) ?? remotePendingWorktree(shellId)
   );
 }
 
@@ -83,14 +88,24 @@ export function rememberRemoteSession(shellId: string, sessionId?: string) {
 const pendingPrefix = (project: string, environment: string) =>
   `monocode.remote-command.v1:${JSON.stringify([project, environment])}:`;
 
-type PendingEntry = { command: HostCommand; shellId?: string; followup?: HostCommand };
+type PendingEntry = {
+  command: HostCommand;
+  shellId?: string;
+  followup?: HostCommand;
+};
 const readPendingEntry = (value: string): PendingEntry => {
   const parsed = JSON.parse(value) as PendingEntry | HostCommand;
   return "command" in parsed ? parsed : { command: parsed };
 };
 
-export const pendingRemoteFollowup = (project: string, environment: string, id: string) => {
-  const value = localStorage.getItem(`${pendingPrefix(project, environment)}${id}`);
+export const pendingRemoteFollowup = (
+  project: string,
+  environment: string,
+  id: string,
+) => {
+  const value = localStorage.getItem(
+    `${pendingPrefix(project, environment)}${id}`,
+  );
   return value ? readPendingEntry(value).followup : undefined;
 };
 
@@ -111,7 +126,8 @@ export const pendingRemoteCommand = (
         if (
           sessionId === undefined ||
           (sessionId === null
-            ? command.type === "create" && (!entry.shellId || entry.shellId === shellId)
+            ? command.type === "create" &&
+              (!entry.shellId || entry.shellId === shellId)
             : command.type !== "create" && command.sessionId === sessionId)
         )
           return command;
@@ -133,14 +149,16 @@ export const savePendingRemoteCommand = (
   try {
     localStorage.setItem(
       `${pendingPrefix(project, environment)}${command.commandId}`,
-      JSON.stringify({ command, shellId,
-        followup: followup ?? pendingRemoteFollowup(project, environment, command.commandId),
+      JSON.stringify({
+        command,
+        shellId,
+        followup:
+          followup ??
+          pendingRemoteFollowup(project, environment, command.commandId),
       } satisfies PendingEntry),
     );
   } catch {
-    throw new Error(
-      "Cannot save your request locally. Free up app storage before sending.",
-    );
+    throw new Error(t("connections.error.saveLocally"));
   }
 };
 export const clearPendingRemoteCommand = (
@@ -202,8 +220,9 @@ export async function loadRemoteSession(
   } catch {
     snapshot = applySessionSync(undefined, await sync());
   }
-  return withRemoteAttachmentPreviews(machineId, snapshot, known,
-    (params) => remoteRequest(machineId, "attachments.read", params));
+  return withRemoteAttachmentPreviews(machineId, snapshot, known, (params) =>
+    remoteRequest(machineId, "attachments.read", params),
+  );
 }
 
 /** The connected machine for an environment, from the last machine list read. */
@@ -309,8 +328,9 @@ function watchMachineStatus(machineId: string): () => void {
   if (existing) {
     existing.count++;
   } else {
-    const watcher: { count: number; timer?: ReturnType<typeof setTimeout> } =
-      { count: 1 };
+    const watcher: { count: number; timer?: ReturnType<typeof setTimeout> } = {
+      count: 1,
+    };
     statusWatchers.set(machineId, watcher);
     let failures = 0;
     const poll = async () => {
@@ -339,7 +359,9 @@ function watchMachineStatus(machineId: string): () => void {
 }
 
 /** Whether a machine is reachable; undefined until the first check returns. */
-export function useRemoteMachineOnline(machineId?: string): boolean | undefined {
+export function useRemoteMachineOnline(
+  machineId?: string,
+): boolean | undefined {
   const [online, setOnline] = useState(() =>
     machineId ? machineOnline.get(machineId) : undefined,
   );

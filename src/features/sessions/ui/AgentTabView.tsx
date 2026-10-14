@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { AgentTranscript } from "./AgentTranscript";
 import { TranscriptFind } from "./TranscriptFind";
 import {
@@ -15,7 +21,11 @@ import {
   type Session,
 } from "../model/session";
 import { createNote, noteTitle } from "../../notes";
-import { loadNotesEnabled, subscribeNotesEnabled } from "../../settings/model/settings";
+import {
+  loadNotesEnabled,
+  subscribeNotesEnabled,
+} from "../../settings/model/settings";
+import { useT } from "../../../shared/i18n/useT";
 
 /**
  * One orchestration worker, watched from its lead's workspace.
@@ -38,6 +48,7 @@ export function AgentTabView({
   focused?: boolean;
   onOpenFile?: (path: string) => void;
 }) {
+  const t = useT();
   const navigateBlockRef = useRef<
     ((blockId: string | null, query?: string) => boolean) | null
   >(null);
@@ -79,7 +90,9 @@ export function AgentTabView({
       const sessionTitle = sessionDisplayTitle(session.title, session.harness);
       await createNote({
         title:
-          sessionTitle && sessionTitle !== "New session"
+          sessionTitle &&
+            sessionTitle !== "New session" &&
+            sessionTitle !== t("sessions.session.newTitle")
             ? sessionTitle
             : noteTitle(text),
         body: text,
@@ -105,8 +118,7 @@ export function AgentTabView({
     return (
       <div className="grid h-full place-items-center px-6 text-center">
         <p className="max-w-sm text-[12px] leading-5 text-content/45">
-          This agent is no longer running. Its work is summarised in the
-          orchestrator's conversation.
+          {t("sessions.tabView.notRunning")}
         </p>
       </div>
     );
@@ -141,7 +153,7 @@ export function AgentTabView({
           {model} · {HARNESS_TITLE[session.harness]}
         </span>
         <span className="ml-auto shrink-0">
-          Run by the orchestrator · read-only
+          {t("sessions.tabView.readOnly")}
         </span>
       </footer>
     </div>

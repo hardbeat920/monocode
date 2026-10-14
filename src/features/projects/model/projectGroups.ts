@@ -1,6 +1,10 @@
+import { t } from "../../../shared/i18n/locale";
 import { pathKey } from "../../../shared/lib/paths";
 import { PROJECT_MASCOTS } from "./projectMascots";
-import { TAB_GROUP_COLORS, tabGroupColor } from "../../workspace/model/tabGroups";
+import {
+  TAB_GROUP_COLORS,
+  tabGroupColor,
+} from "../../workspace/model/tabGroups";
 import { notifyProjectPathsChanged } from "./recents";
 
 const GROUPS_KEY = "monocode.projectGroups";
@@ -202,9 +206,10 @@ export function projectGroupColor(group: ProjectGroup): string {
 
 export function nextProjectGroupName(groups: ProjectGroup[]): string {
   const names = new Set(groups.map((group) => group.name.toLocaleLowerCase()));
-  if (!names.has("new group")) return "New group";
+  const base = t("projects.groups.newGroup");
+  if (!names.has(base.toLocaleLowerCase())) return base;
   for (let suffix = 2; ; suffix += 1) {
-    const name = `New group ${suffix}`;
+    const name = t("projects.groups.newGroupNumbered", { number: suffix });
     if (!names.has(name.toLocaleLowerCase())) return name;
   }
 }

@@ -40,6 +40,7 @@ import {
   type RecentProject,
 } from "../../projects/model/recents";
 import { recordInboxSelfActivity } from "./inboxSelfActivity";
+import { getLocaleTag, t } from "../../../shared/i18n/locale";
 
 export type GithubTaskKind = "issue" | "pr";
 export type GithubPrAction =
@@ -403,7 +404,7 @@ export function inboxPersonAvatarUrl(
 export function formatRelativeTime(
   iso: string,
   now = Date.now(),
-  locale?: string,
+  locale: string = getLocaleTag(),
 ): string {
   const then = Date.parse(iso);
   if (!Number.isFinite(then)) return "";
@@ -585,11 +586,11 @@ export async function githubPrAction(
 export function githubReviewDecisionLabel(decision: string): string {
   switch (decision.trim().toUpperCase()) {
     case "APPROVED":
-      return "Approved";
+      return t("inbox.review.approved");
     case "CHANGES_REQUESTED":
-      return "Changes requested";
+      return t("inbox.review.changesRequested");
     case "REVIEW_REQUIRED":
-      return "Review required";
+      return t("inbox.review.reviewRequired");
     default:
       return "";
   }
@@ -598,13 +599,13 @@ export function githubReviewDecisionLabel(decision: string): string {
 export function githubReviewStateLabel(state: string): string {
   switch (state.trim().toUpperCase()) {
     case "APPROVED":
-      return "Approved";
+      return t("inbox.review.approved");
     case "CHANGES_REQUESTED":
-      return "Requested changes";
+      return t("inbox.review.requestedChanges");
     case "DISMISSED":
-      return "Dismissed";
+      return t("inbox.review.dismissed");
     case "COMMENTED":
-      return "Commented";
+      return t("inbox.review.commented");
     default:
       return "";
   }
@@ -614,26 +615,26 @@ export function gitlabAttentionLabel(reason: string): string {
   const action = reason.trim().toLowerCase();
   switch (action) {
     case "assigned":
-      return "Assigned to you";
+      return t("inbox.attention.assigned");
     case "mentioned":
     case "directly_addressed":
-      return "Mentioned you";
+      return t("inbox.attention.mentioned");
     case "review_requested":
-      return "Review requested";
+      return t("inbox.attention.reviewRequested");
     case "review_submitted":
-      return "Review submitted";
+      return t("inbox.attention.reviewSubmitted");
     case "approval_required":
-      return "Approval required";
+      return t("inbox.attention.approvalRequired");
     case "build_failed":
-      return "Pipeline failed";
+      return t("inbox.attention.pipelineFailed");
     case "unmergeable":
-      return "Cannot be merged";
+      return t("inbox.attention.unmergeable");
     case "merge_train_removed":
-      return "Removed from merge train";
+      return t("inbox.attention.mergeTrainRemoved");
     case "member_access_requested":
-      return "Access requested";
+      return t("inbox.attention.accessRequested");
     case "marked":
-      return "Added to your to-dos";
+      return t("inbox.attention.marked");
     default:
       return action
         .split("_")
@@ -1172,6 +1173,22 @@ export function inboxItemStatus(item: {
   if (item.state === "merged") return "Merged";
   if (item.state === "closed") return "Closed";
   return "Open";
+}
+
+/** Display text for a status returned by `inboxItemStatus`; anything else passes through. */
+export function inboxStatusLabel(status: string): string {
+  switch (status) {
+    case "Open":
+      return t("inbox.filters.open");
+    case "Draft":
+      return t("inbox.filters.draft");
+    case "Closed":
+      return t("inbox.filters.closed");
+    case "Merged":
+      return t("inbox.filters.merged");
+    default:
+      return status;
+  }
 }
 
 export function matchesInboxQuery(item: InboxItem, query: string): boolean {

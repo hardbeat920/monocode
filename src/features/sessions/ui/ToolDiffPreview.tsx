@@ -3,6 +3,7 @@ import type { ToolPreview } from "../model/session";
 import { FilePreview } from "../../files/ui/FilePreview";
 import { Popover } from "../../../shared/ui/Popover";
 import { X } from "../../../shared/ui/icons";
+import { useT } from "../../../shared/i18n/useT";
 
 type Props = {
   preview: ToolPreview;
@@ -26,6 +27,7 @@ export function ToolDiffPreview({
   className,
   children,
 }: Props) {
+  const t = useT();
   const id = useId();
   const trigger = useRef<HTMLButtonElement>(null);
   const surface = useRef<HTMLDivElement>(null);
@@ -69,12 +71,12 @@ export function ToolDiffPreview({
 
   const description =
     status === "pending"
-      ? "Proposed changes"
+      ? t("sessions.diff.proposed")
       : status === "rejected"
-        ? "Attempted changes · tool did not complete"
+        ? t("sessions.diff.attempted")
         : preview.contentOnly
-          ? "Written content · previous contents unavailable"
-          : "Change preview";
+          ? t("sessions.diff.written")
+          : t("sessions.diff.changePreview");
 
   return (
     <>
@@ -84,8 +86,10 @@ export function ToolDiffPreview({
         className={`${className ?? ""} focus-visible:outline-2 focus-visible:outline-sky-400/60`}
         aria-label={
           onOpen
-            ? `Open ${label}`
-            : `Preview ${preview.contentOnly ? "written content" : "changes"}: ${label}`
+            ? t("sessions.diff.open", { label })
+            : preview.contentOnly
+              ? t("sessions.diff.previewWritten", { label })
+              : t("sessions.diff.previewChanges", { label })
         }
         aria-haspopup="dialog"
         aria-expanded={open}
@@ -158,7 +162,7 @@ export function ToolDiffPreview({
             <span className="min-w-0 flex-1">{description}</span>
             <button
               type="button"
-              aria-label="Close preview"
+              aria-label={t("sessions.diff.closePreview")}
               className="shrink-0 rounded p-0.5 hover:bg-content/8 hover:text-content"
               onClick={() => dismiss(true)}
             >

@@ -1,3 +1,4 @@
+import { t } from "../../../shared/i18n/locale";
 import { pathKey } from "../../../shared/lib/paths";
 import type { HarnessId } from "../../sessions/model/session";
 
@@ -6,7 +7,7 @@ const SELECTIONS_KEY = "monocode.providerAccountSelections.v1";
 const CHANGE_EVENT = "monocode-provider-accounts-changed";
 
 export const DEFAULT_PROVIDER_ACCOUNT_ID = "default";
-const DEFAULT_PROVIDER_ACCOUNT_LABEL = "Default account";
+const defaultProviderAccountLabel = () => t("providers.account.default");
 
 /** Legacy sessions predate persisted account ids and belong to the default profile. */
 export function sameProviderAccountId(
@@ -73,7 +74,7 @@ export function providerAccounts(
   const stored = readRecord<StoredAccounts>(ACCOUNTS_KEY);
   const seen = new Set<string>([DEFAULT_PROVIDER_ACCOUNT_ID]);
   const accounts = Array.isArray(stored[provider]) ? stored[provider] : [];
-  let defaultLabel = DEFAULT_PROVIDER_ACCOUNT_LABEL;
+  let defaultLabel = defaultProviderAccountLabel();
   let foundDefault = false;
   const profiles = accounts.flatMap((account) => {
     const id = validAccountId(account?.id) ? account.id : "";
@@ -194,7 +195,7 @@ function serializeProviderAccounts(
     if (!label) return [];
     if (
       account.id === DEFAULT_PROVIDER_ACCOUNT_ID &&
-      label === DEFAULT_PROVIDER_ACCOUNT_LABEL
+      label === defaultProviderAccountLabel()
     ) {
       return [];
     }
@@ -241,7 +242,7 @@ export function providerAccountLabel(
 ): string {
   return (
     providerAccounts(provider).find((account) => account.id === accountId)
-      ?.label ?? "Default account"
+      ?.label ?? defaultProviderAccountLabel()
   );
 }
 

@@ -1,10 +1,13 @@
+import { t } from "../../../shared/i18n/locale";
 import type { BuiltinSkill } from "../../skills/model/skills";
 
 export const MCP_COMMAND: BuiltinSkill = {
   kind: "builtin",
   name: "mcp",
   invocation: "mcp",
-  description: "Find an MCP server for this message.",
+  get description() {
+    return t("sessions.command.mcp.description");
+  },
   scope: "builtin",
   source: "monocode",
 };

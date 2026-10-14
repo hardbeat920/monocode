@@ -7,6 +7,7 @@ import {
   type DragEvent,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { t } from "../../../shared/i18n/locale";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
   attachmentsFromFiles,
@@ -37,8 +38,7 @@ function releaseCaptures(files: Attachment[]) {
 }
 
 type CapturedClipboardPaste =
-  | { files: Attachment[]; warning?: string }
-  | { error: unknown };
+  { files: Attachment[]; warning?: string } | { error: unknown };
 
 function discardCapturedPaste(paste: CapturedClipboardPaste) {
   if ("files" in paste) paste.files.forEach(revokeAttachment);
@@ -106,7 +106,9 @@ export function useQuickAttachments(
           incoming.length > accepted.length &&
           next.length + accepted.length >= MAX_ATTACHMENTS
         )
-          onError(`You can attach up to ${MAX_ATTACHMENTS} files.`);
+          onError(
+            t("quickComposer.attachments.tooMany", { max: MAX_ATTACHMENTS }),
+          );
         const stored = await storeQuickAttachments(accepted);
         if (!alive.current) {
           stored.forEach(revokeAttachment);

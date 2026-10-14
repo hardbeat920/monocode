@@ -1,3 +1,4 @@
+import { getLocaleTag } from "../../../shared/i18n/locale";
 import { invoke } from "@tauri-apps/api/core";
 import type { HarnessId } from "./session";
 
@@ -34,7 +35,7 @@ export function reminderTime(preset: string, now = new Date()): number | null {
 }
 
 export function formatReminderTime(dueAt: number): string {
-  return new Date(dueAt).toLocaleString(undefined, {
+  return new Date(dueAt).toLocaleString(getLocaleTag(), {
     weekday: "short",
     month: "short",
     day: "numeric",

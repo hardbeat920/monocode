@@ -7,6 +7,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
+import { useT } from "../../../shared/i18n/useT";
 import { ALT, MOD, SHIFT } from "../../../platform/tauri/platform";
 import { ChevronDown, ChevronUp, X } from "../../../shared/ui/icons";
 import { keybindingPressed } from "../../settings/model/settings";
@@ -148,6 +149,7 @@ export function FilePreviewSearch({
   contentVersion: string;
   children: ReactNode;
 }) {
+  const t = useT();
   const rootRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -193,10 +195,12 @@ export function FilePreviewSearch({
     clearHighlights(ownerRef.current);
     requestAnimationFrame(() => {
       rootRef.current
-        ?.querySelector<HTMLElement>('[aria-label="Markdown preview"]')
+        ?.querySelector<HTMLElement>(
+          `[aria-label="${t("sessions.markdown.previewRegion")}"]`,
+        )
         ?.focus();
     });
-  }, []);
+  }, [t]);
 
   const step = useCallback((delta: number) => {
     const matches = matchesRef.current;
@@ -333,11 +337,14 @@ export function FilePreviewSearch({
   };
 
   const count = result.invalid
-    ? "Invalid regex"
+    ? t("files.find.invalidRegex")
     : query && total === 0
-      ? "No results"
+      ? t("files.find.noResults")
       : total > 0
-        ? `${current + 1} of ${total}${result.capped ? "+" : ""}`
+        ? t("files.find.count", {
+            current: current + 1,
+            total: `${total}${result.capped ? "+" : ""}`,
+          })
         : "";
 
   return (
@@ -349,7 +356,7 @@ export function FilePreviewSearch({
       {open ? (
         <div
           role="search"
-          aria-label="Find in preview"
+          aria-label={t("files.find.inPreview")}
           className="relative z-30 flex h-[35px] shrink-0 items-center gap-1 border-b border-stroke px-2 py-1 text-content"
           onKeyDown={onKeyDown}
         >
@@ -364,8 +371,8 @@ export function FilePreviewSearch({
               ref={inputRef}
               type="text"
               value={query}
-              aria-label="Find"
-              placeholder="Find"
+              aria-label={t("files.find.label")}
+              placeholder={t("files.find.label")}
               autoComplete="off"
               autoCorrect="off"
               autoCapitalize="off"
@@ -386,41 +393,43 @@ export function FilePreviewSearch({
           </div>
           <FindToggle
             label="Aa"
-            title={`Match Case (${ALT}C)`}
+            title={t("files.find.matchCase", { shortcut: `${ALT}C` })}
             pressed={caseSensitive}
             onClick={() => toggle(setCaseSensitive)}
           />
           <FindToggle
             label="ab"
-            title={`Match Whole Word (${ALT}W)`}
+            title={t("files.find.wholeWord", { shortcut: `${ALT}W` })}
             pressed={wholeWord}
             onClick={() => toggle(setWholeWord)}
           />
           <FindToggle
             label=".*"
-            title={`Use Regular Expression (${ALT}R)`}
+            title={t("files.find.regex", { shortcut: `${ALT}R` })}
             pressed={regexp}
             onClick={() => toggle(setRegexp)}
           />
           <FindButton
-            label="Previous Match"
-            title={`Previous Match (${MOD}${SHIFT}G)`}
+            label={t("files.find.previous")}
+            title={t("files.find.previousTitle", {
+              shortcut: `${MOD}${SHIFT}G`,
+            })}
             disabled={total === 0}
             onClick={() => step(-1)}
           >
             <ChevronUp className="size-3.5" strokeWidth={1.75} />
           </FindButton>
           <FindButton
-            label="Next Match"
-            title={`Next Match (${MOD}G)`}
+            label={t("files.find.next")}
+            title={t("files.find.nextTitle", { shortcut: `${MOD}G` })}
             disabled={total === 0}
             onClick={() => step(1)}
           >
             <ChevronDown className="size-3.5" strokeWidth={1.75} />
           </FindButton>
           <FindButton
-            label="Close"
-            title="Close (Escape)"
+            label={t("files.find.close")}
+            title={t("files.find.closeTitle")}
             onClick={closeSearch}
           >
             <X className="size-3.5" strokeWidth={1.75} />

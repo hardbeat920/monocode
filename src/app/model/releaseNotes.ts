@@ -1,4 +1,5 @@
 import bundledChangelog from "../../../CHANGELOG.md?raw";
+import { getLocale, getLocaleTag, t } from "../../shared/i18n/locale";
 
 export type ReleaseNotesTabSource = {
   version: string;
@@ -10,7 +11,7 @@ export type ReleaseNotesDocument = {
 };
 
 export function releaseNotesTitle(version: string): string {
-  return `What's new in MonoCode ${version}`;
+  return t("app.releaseNotes.title", { version });
 }
 
 export function releaseNotesForVersion(
@@ -98,5 +99,15 @@ export function formatReleaseDate(iso: string): string {
   if (!match) return iso;
   const month = MONTHS[Number(match[2]) - 1];
   if (!month) return iso;
+  if (getLocale() !== "en") {
+    return new Date(
+      Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])),
+    ).toLocaleDateString(getLocaleTag(), {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      timeZone: "UTC",
+    });
+  }
   return `${Number(match[3])} ${month} ${match[1]}`;
 }

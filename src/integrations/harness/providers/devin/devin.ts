@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/i18n/locale";
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import type { RuntimeMode } from "../../../../features/sessions/model/session";
 import { AcpSubagents } from "../../core/acpSubagents";
@@ -30,7 +31,7 @@ import {
 } from "../antigravity/antigravityProtocol";
 import { readDevinApiKey } from "./devinAuth";
 import {
-  DEVIN_AUTH_HELP,
+  devinAuthHelp,
   devinAsksBeforeEdits,
   devinAuthenticateParams,
   devinAuthMethodId,
@@ -285,7 +286,9 @@ export async function startDevinAcp(
   const { path } = await resolveDevinBinary();
   const apiKey = await readDevinApiKey(path);
   if (!apiKey && options.allowBrowser === false) {
-    throw new Error(`Devin is not logged in. ${DEVIN_AUTH_HELP}`);
+    throw new Error(
+      t("integrations.devin.notLoggedIn", { help: devinAuthHelp() }),
+    );
   }
   // Stopped while the binary and login were being resolved: spawn nothing.
   if (rpc.isClosed) throw new Error("Devin session stopped");
@@ -455,7 +458,7 @@ async function startLive(input: HarnessSessionInput, startup: Startup): Promise<
       if (acpSessionId && canLoad) {
         emit({
           type: "status",
-          text: "Devin could not restore the previous conversation — starting a new session.",
+          text: t("integrations.provider.restoreFallback", { provider: "Devin" }),
         });
       }
     }
@@ -531,7 +534,7 @@ async function applyModelSelection(
       live.staleModel = modelId;
       live.onEvent({
         type: "status",
-        text: `Devin no longer offers the model "${modelId}"; using its current model. Pick another model to change it.`,
+        text: t("integrations.devin.modelUnavailable", { model: modelId }),
       });
     }
   }
@@ -615,7 +618,10 @@ async function prompt(
     if (stopReason != null && stopReason !== "end_turn") {
       live.onEvent({
         type: "session.error",
-        message: `Devin ended the turn (${String(stopReason)}).`,
+        message: t("integrations.turn.ended", {
+          provider: "Devin",
+          reason: String(stopReason),
+        }),
       });
       return;
     }

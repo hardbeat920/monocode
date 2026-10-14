@@ -1,5 +1,6 @@
 //! Remote host connections. The renderer receives machine metadata, never the
 //! saved bearer credential. Workspace requests never fall back to local calls.
+use crate::i18n::{t, Text};
 use crate::remote_ssh::{self, Job, JobView, SshTarget, Tunnel, Tunnels};
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -424,7 +425,7 @@ fn start_ssh_job(
             let mut machine = if let Some(mut existing) = existing {
                 if upgrade {
                     let platform = remote_ssh::detect_platform(&target, &job, &askpass)?;
-                    job.message("Updating MonoCode Host on the machine…");
+                    job.message(t(Text::RemoteUpdatingHost));
                     let output = remote_ssh::run_script(
                         &target,
                         platform,
@@ -442,12 +443,12 @@ fn start_ssh_job(
                         .ok_or("Host did not report a valid port")?;
                     existing.ssh = Some(target.clone());
                 } else {
-                    job.message("Reconnecting to the machine…");
+                    job.message(t(Text::RemoteReconnecting));
                 }
                 existing
             } else {
                 let platform = remote_ssh::detect_platform(&target, &job, &askpass)?;
-                job.message("Installing or starting MonoCode Host…");
+                job.message(t(Text::RemoteInstallingHost));
                 let output = remote_ssh::run_script(
                     &target,
                     platform,
@@ -463,7 +464,7 @@ fn start_ssh_job(
                     .and_then(|v| u16::try_from(v).ok())
                     .filter(|p| *p > 0)
                     .ok_or("Host did not report a valid port")?;
-                job.message("Pairing this desktop with the host…");
+                job.message(t(Text::RemotePairing));
                 let pair = remote_ssh::run_script(
                     &target,
                     platform,
@@ -498,7 +499,7 @@ fn start_ssh_job(
                     ssh: Some(target.clone()),
                 }
             };
-            job.message("Opening the secure connection…");
+            job.message(t(Text::RemoteOpeningTunnel));
             let tunnel = Tunnel::start(&target, Some(&job), Some(&askpass))?;
             let descriptor = rpc(
                 &format!("http://127.0.0.1:{}", tunnel.port),

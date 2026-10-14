@@ -26,6 +26,7 @@ import {
   type Panel,
   type ViewUpdate,
 } from "@codemirror/view";
+import { t } from "../../../shared/i18n/locale";
 import { MOD, ALT, SHIFT } from "../../../platform/tauri/platform";
 import { keybindingPressed } from "../../settings/model/settings";
 import {
@@ -47,7 +48,10 @@ export function matchIndexAtSelection(
   while (low <= high) {
     const middle = (low + high) >> 1;
     const match = matches[middle];
-    if (match.from < selection.from || (match.from === selection.from && match.to < selection.to)) {
+    if (
+      match.from < selection.from ||
+      (match.from === selection.from && match.to < selection.to)
+    ) {
       low = middle + 1;
     } else if (
       match.from > selection.from ||
@@ -235,22 +239,34 @@ class FindPanel implements Panel {
     this.query = getSearchQuery(view.state);
     panels.set(view, this);
 
-    this.searchField = inputField("Find", {
+    this.searchField = inputField(t("files.find.label"), {
       name: "search",
       "main-field": "true",
       value: this.query.search,
     });
-    this.replaceField = inputField("Replace", {
+    this.replaceField = inputField(t("files.editorSearch.replace"), {
       name: "replace",
       value: this.query.replace,
     });
     this.count = elt("span", { class: "cm-find-count" });
-    this.caseButton = toggleButton("Aa", "Match Case", `${ALT}C`);
-    this.wordButton = toggleButton("ab", "Match Whole Word", `${ALT}W`);
-    this.regexButton = toggleButton(".*", "Use Regular Expression", `${ALT}R`);
+    this.caseButton = toggleButton(
+      "Aa",
+      t("files.editorSearch.matchCase"),
+      `${ALT}C`,
+    );
+    this.wordButton = toggleButton(
+      "ab",
+      t("files.editorSearch.wholeWord"),
+      `${ALT}W`,
+    );
+    this.regexButton = toggleButton(
+      ".*",
+      t("files.editorSearch.regex"),
+      `${ALT}R`,
+    );
     this.expandButton = iconButton(
       "cm-find-expand",
-      "Toggle Replace",
+      t("files.editorSearch.toggleReplace"),
       `${MOD}${ALT}F`,
       svgIcon("M6 4l4 4-4 4"),
     );
@@ -258,19 +274,19 @@ class FindPanel implements Panel {
 
     const prevButton = iconButton(
       "cm-find-step",
-      "Previous Match",
+      t("files.find.previous"),
       `${MOD}${SHIFT}G`,
       svgIcon("M4 10l4-4 4 4"),
     );
     const nextButton = iconButton(
       "cm-find-step",
-      "Next Match",
+      t("files.find.next"),
       `${MOD}G`,
       svgIcon("M4 6l4 4 4-4"),
     );
     const closeButton = iconButton(
       "cm-find-close",
-      "Close",
+      t("files.find.close"),
       "Escape",
       svgIcon("M4.5 4.5l7 7M11.5 4.5l-7 7"),
     );
@@ -282,8 +298,10 @@ class FindPanel implements Panel {
       elt(
         "div",
         { class: "cm-find-replace-actions" },
-        textButton("Replace", () => replaceNext(this.view)),
-        textButton("All", () => replaceAll(this.view)),
+        textButton(t("files.editorSearch.replace"), () =>
+          replaceNext(this.view),
+        ),
+        textButton(t("files.editorSearch.all"), () => replaceAll(this.view)),
       ),
     );
 
@@ -464,7 +482,7 @@ class FindPanel implements Panel {
       return;
     }
     if (!this.query.valid) {
-      this.count.textContent = "Invalid regex";
+      this.count.textContent = t("files.find.invalidRegex");
       this.count.dataset.state = "invalid";
       this.dom.classList.add("is-invalid");
       this.dom.classList.remove("is-empty");
@@ -472,18 +490,23 @@ class FindPanel implements Panel {
     }
 
     const total = this.matches.length;
-    const current = matchIndexAtSelection(this.matches, this.view.state.selection.main);
+    const current = matchIndexAtSelection(
+      this.matches,
+      this.view.state.selection.main,
+    );
     const capped = this.countCapped;
     this.dom.classList.toggle("is-empty", total === 0);
     this.dom.classList.remove("is-invalid");
     if (total === 0) {
-      this.count.textContent = "No results";
+      this.count.textContent = t("files.find.noResults");
       this.count.dataset.state = "empty";
       return;
     }
     const suffix = capped ? "+" : "";
     this.count.textContent =
-      current > 0 ? `${current} of ${total}${suffix}` : `${total}${suffix}`;
+      current > 0
+        ? t("files.find.count", { current, total: `${total}${suffix}` })
+        : `${total}${suffix}`;
     this.count.dataset.state = "ok";
   }
 

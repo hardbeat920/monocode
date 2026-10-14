@@ -4,12 +4,14 @@ import {
   type ReleaseNotesTabSource,
 } from "../model/releaseNotes";
 import { AgentMarkdown } from "../../features/sessions/ui/AgentMarkdown";
+import { useT } from "../../shared/i18n/useT";
 
 export function ReleaseNotesSurface({
   source,
 }: {
   source: ReleaseNotesTabSource;
 }) {
+  const t = useT();
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const markdown = releaseNotesMarkdown(source);
 
@@ -19,14 +21,14 @@ export function ReleaseNotesSurface({
       className="h-full overflow-y-auto overscroll-none"
     >
       <article
-        aria-label="Release notes"
+        aria-label={t("app.releaseNotes.ariaLabel")}
         className="mx-auto w-full max-w-3xl px-8 py-10"
       >
         {markdown ? (
           <AgentMarkdown text={markdown} streaming={false} />
         ) : (
           <p className="text-[13px] text-content/60">
-            Release notes for this version are not available in this build.
+            {t("app.releaseNotes.unavailable")}
           </p>
         )}
       </article>

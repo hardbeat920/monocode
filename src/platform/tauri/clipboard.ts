@@ -7,9 +7,12 @@ import {
   MAX_EMBED_BYTES,
 } from "../../features/sessions/model/attachments";
 import type { Attachment } from "../../features/sessions/model/session";
+import { t } from "../../shared/i18n/locale";
 
 type CopiedFile = { name: string; mimeType: string; data: string };
 
+/** What the native clipboard command reports for an empty clipboard. */
+const NO_CLIPBOARD_IMAGE = "The clipboard does not contain an image.";
 const FILES_ATTRIBUTE = 'data-monocode-files="';
 const MAX_CLIPBOARD_METADATA_CHARS = 64 * 1024;
 const MAX_CLIPBOARD_BASE64_CHARS = Math.ceil(MAX_EMBED_BYTES / 3) * 4;
@@ -60,7 +63,7 @@ export async function copyMessage(
         });
       }
       if (data === undefined)
-        throw new Error("File content is no longer available.");
+        throw new Error(t("platform.clipboard.contentUnavailable"));
       files.push({
         name: attachment.name,
         mimeType: attachment.mimeType,
@@ -68,12 +71,14 @@ export async function copyMessage(
       });
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      throw new Error(`Could not copy ${attachment.name}: ${reason}`);
+      throw new Error(
+        t("platform.clipboard.copyFailed", { name: attachment.name, reason }),
+      );
     }
   }
   const payload = textWithFolderPaths(text, folderPaths);
   if (!files.length) {
-    if (!payload) throw new Error("No copyable content is available.");
+    if (!payload) throw new Error(t("platform.clipboard.nothingToCopy"));
     return copyText(payload);
   }
   const escape = (value: string) =>
@@ -166,7 +171,7 @@ export async function copyText(text: string): Promise<void> {
     el.select();
     const ok = document.execCommand("copy");
     el.remove();
-    if (!ok) throw new Error("copy failed");
+    if (!ok) throw new Error(t("platform.clipboard.copyFailedShort"));
   }
 }
 
@@ -226,15 +231,17 @@ export async function nativeClipboardAttachments(
     const { files, consumed } = await attachmentsFromClipboardPaths(paths);
     if (!files.length)
       throw new Error(
-        `Nothing to attach from ${
-          paths.length === 1 ? "that path" : "those paths"
-        } — the file may have been moved, renamed, or deleted.`,
+        t("platform.clipboard.nothingToAttach", { count: paths.length }),
       );
     return {
       files,
       ...(consumed < paths.length
         ? {
-            warning: `Attached ${files.length} of ${paths.length} copied files. A turn carries up to ${MAX_ATTACHMENTS}.`,
+            warning: t("platform.clipboard.partialAttach", {
+              attached: files.length,
+              total: paths.length,
+              max: MAX_ATTACHMENTS,
+            }),
           }
         : {}),
     };
@@ -245,7 +252,11 @@ export async function nativeClipboardAttachments(
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     // An empty clipboard is a no-op. A real read failure still surfaces.
-    if (reason === "The clipboard does not contain an image.") return { files: [] };
+    if (
+      reason === NO_CLIPBOARD_IMAGE ||
+      reason === t("platform.clipboard.noImage")
+    )
+      return { files: [] };
     throw error;
   }
 }
@@ -276,9 +287,9 @@ export async function readClipboardImage(): Promise<File> {
     buffer = await invoke<ArrayBuffer>("clipboard_image");
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(reason || "The clipboard could not be read.");
+    throw new Error(reason || t("platform.clipboard.unreadable"));
   }
   if (!buffer?.byteLength)
-    throw new Error("The clipboard does not contain an image.");
+    throw new Error(t("platform.clipboard.noImage"));
   return new File([buffer], "clipboard-image.png", { type: "image/png" });
 }

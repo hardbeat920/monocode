@@ -13,6 +13,7 @@ import {
 } from "../../settings/model/settings";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { TerminalGridBackground } from "../../terminal/ui/TerminalGridBackground";
+import { useT } from "../../../shared/i18n/useT";
 
 type Props = {
   cwd: string;
@@ -21,6 +22,7 @@ type Props = {
 };
 
 export function EmptySession({ cwd, composer, hasChatBackground }: Props) {
+  const t = useT();
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const arcadeEnabled = useSyncExternalStore(
     subscribeGridArcadeEnabled,
@@ -41,8 +43,8 @@ export function EmptySession({ cwd, composer, hasChatBackground }: Props) {
     getProjectLabel,
   );
   const title = project
-    ? `What should we work on in ${project}?`
-    : "What should we work on?";
+    ? t("sessions.empty.titleInProject", { project })
+    : t("sessions.empty.title");
 
   return (
     <div

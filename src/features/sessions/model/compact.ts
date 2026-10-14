@@ -1,10 +1,13 @@
+import { t } from "../../../shared/i18n/locale";
 import type { BuiltinSkill } from "../../skills/model/skills";
 
 export const COMPACT_COMMAND: BuiltinSkill = {
   kind: "builtin",
   name: "compact",
   invocation: "compact",
-  description: "Summarize older conversation context to free space.",
+  get description() {
+    return t("sessions.command.compact.description");
+  },
   scope: "builtin",
   source: "monocode",
 };

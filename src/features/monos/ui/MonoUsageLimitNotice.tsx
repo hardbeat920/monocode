@@ -5,6 +5,7 @@ import {
   useSyncExternalStore,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
+import { useT } from "../../../shared/i18n/useT";
 import { ChevronDown } from "../../../shared/ui/icons";
 import { Popover } from "../../../shared/ui/Popover";
 import {
@@ -36,6 +37,7 @@ export function MonoUsageLimitNotice({
   onResume: () => void;
   onResumeAtReset: (enabled: boolean) => void;
 }) {
+  const t = useT();
   const snapshot = useSyncExternalStore(
     subscribeProviderAccounts,
     () =>
@@ -63,7 +65,7 @@ export function MonoUsageLimitNotice({
             values={session.modelSettings}
             project={session.cwd}
             hideSettings
-            triggerLabel="Choose another model"
+            triggerLabel={t("monos.usage.chooseModel")}
             onChange={onModelChange}
             onSettingsChange={() => {}}
           />
@@ -89,6 +91,7 @@ function AccountPicker({
   accounts: ProviderAccount[];
   onSelect: (accountId: string) => void;
 }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const button = useRef<HTMLButtonElement>(null);
@@ -128,7 +131,7 @@ function AccountPicker({
       <button
         ref={button}
         type="button"
-        aria-label="Choose another account"
+        aria-label={t("monos.usage.chooseAccount")}
         aria-haspopup="menu"
         aria-expanded={open}
         data-mono-account-picker
@@ -142,7 +145,7 @@ function AccountPicker({
         }}
         className="flex h-6.5 shrink-0 items-center gap-1 rounded-md bg-selection px-1.5 text-[11px] text-content hover:bg-selection-hover"
       >
-        <span>Choose another account</span>
+        <span>{t("monos.usage.chooseAccount")}</span>
         <ChevronDown
           className={`size-3 shrink-0 text-content/50 ${open ? "rotate-180" : ""}`}
           strokeWidth={1.75}
@@ -158,7 +161,7 @@ function AccountPicker({
           onDismiss={(reason) => dismiss(reason === "escape")}
           ignore="[data-mono-account-picker]"
           role="menu"
-          aria-label="Choose another account"
+          aria-label={t("monos.usage.chooseAccount")}
           aria-activedescendant={`${menuId}-${active}`}
           tabIndex={-1}
           onKeyDown={onKeyDown}

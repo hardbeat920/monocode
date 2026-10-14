@@ -1,10 +1,13 @@
+import { t } from "../../../shared/i18n/locale";
 import type { BuiltinSkill } from "../../skills/model/skills";
 
 export const PLAN_COMMAND: BuiltinSkill = {
   kind: "builtin",
   name: "plan",
   invocation: "plan",
-  description: "Create a reviewable implementation plan before changing files.",
+  get description() {
+    return t("sessions.command.plan.description");
+  },
   scope: "builtin",
   source: "monocode",
 };
@@ -80,9 +83,9 @@ export function planTitle(text: string): string {
   for (const line of text.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("```") || trimmed === "---") continue;
-    return unwrapMarkdown(trimmed).slice(0, 80) || "Plan";
+    return unwrapMarkdown(trimmed).slice(0, 80) || t("sessions.plan.title");
   }
-  return "Plan";
+  return t("sessions.plan.title");
 }
 
 /** First prose paragraph that is not the title heading. */
@@ -109,12 +112,13 @@ export function planSummary(text: string): string {
 }
 
 export function planMeta(text: string): string[] {
-  const parts: string[] = ["Plan"];
+  const parts: string[] = [t("sessions.plan.title")];
   const headings = text.match(/^\s{0,3}#{1,6}\s+/gm)?.length ?? 0;
-  if (headings > 1) parts.push(`${headings} sections`);
-  if (/```\s*mermaid\b/i.test(text)) parts.push("diagram");
+  if (headings > 1)
+    parts.push(t("sessions.plan.sections", { count: headings }));
+  if (/```\s*mermaid\b/i.test(text)) parts.push(t("sessions.plan.diagram"));
   const words = text.trim().split(/\s+/).filter(Boolean).length;
-  if (words > 0) parts.push(`${words} words`);
+  if (words > 0) parts.push(t("sessions.plan.words", { count: words }));
   return parts;
 }
 

@@ -1,7 +1,11 @@
+import { t } from "../../../shared/i18n/locale";
 import type { TaskListItem, TaskListItemStatus } from "./session";
 
 export function isTaskListToolName(value: string): boolean {
-  const name = value.trim().toLowerCase().replace(/[\s_-]+/g, "");
+  const name = value
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, "");
   return ["todowrite", "writetodos", "updatetodos"].some(
     (candidate) => name === candidate || name.endsWith(candidate),
   );
@@ -20,8 +24,7 @@ export function taskListFromToolInput(
     const row = asRecord(todo);
     const text = [row?.content, row?.activeForm, row?.text]
       .find(
-        (value): value is string =>
-          typeof value === "string" && !!value.trim(),
+        (value): value is string => typeof value === "string" && !!value.trim(),
       )
       ?.trim();
     if (!text) return [];
@@ -82,8 +85,12 @@ export function legacyTaskListFromText(text: string): TaskListItem[] | null {
 export function taskListProgressLabel(items: TaskListItem[]): string {
   const completed = items.filter((item) => item.status === "completed").length;
   const actionable = items.filter((item) => item.status !== "cancelled").length;
-  if (actionable > 0 && completed === actionable) return "Complete";
-  return `${completed} of ${actionable || items.length}`;
+  if (actionable > 0 && completed === actionable)
+    return t("sessions.taskList.complete");
+  return t("sessions.taskList.progress", {
+    completed,
+    total: actionable || items.length,
+  });
 }
 
 function taskListMark(status: TaskListItemStatus): string {

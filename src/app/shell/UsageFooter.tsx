@@ -54,6 +54,7 @@ import {
   subscribeProviderAccounts,
   type ProviderAccountProvider,
 } from "../../features/providers/model/providerAccounts";
+import { useT } from "../../shared/i18n/useT";
 
 const CLOCK_MS = 30_000;
 
@@ -95,6 +96,7 @@ export function UsageFooter({
   ) => void;
   onManageAccounts?: (provider: ProviderAccountProvider) => void;
 }) {
+  const t = useT();
   const opencode = useCachedRateLimits("opencode");
   const showUsage =
     providers.some((provider) => provider !== "opencode") ||
@@ -104,18 +106,19 @@ export function UsageFooter({
     onNewTerminal || onToggleProjectTerminal,
   );
   const terminalLabel = projectTerminalActive
-    ? "Terminal"
-    : `New Terminal (${MOD}\`)`;
+    ? t("app.usageFooter.terminal")
+    : t("app.usageFooter.newTerminal", { shortcut: `${MOD}\`` });
   const onTerminalClick = projectTerminalActive
     ? (onToggleProjectTerminal ?? onNewTerminal)
     : (onNewTerminal ?? onToggleProjectTerminal);
-  const ariaLabel = showUsage || session?.harness === "pi"
-    ? "Provider usage"
-    : showTerminals || showTerminalButton
-      ? "Terminals"
-      : session
-        ? "Session"
-        : undefined;
+  const ariaLabel =
+    showUsage || session?.harness === "pi"
+      ? t("app.usageFooter.providerUsage")
+      : showTerminals || showTerminalButton
+        ? t("app.usageFooter.terminals")
+        : session
+          ? t("app.usageFooter.session")
+          : undefined;
 
   return (
     <footer
@@ -159,7 +162,7 @@ export function UsageFooter({
               onClick={onTerminalClick}
             >
               <Terminal className="size-3.5" strokeWidth={1.75} aria-hidden />
-              <span>Terminal</span>
+              <span>{t("app.usageFooter.terminal")}</span>
             </button>
           ) : null}
         </div>
@@ -198,6 +201,7 @@ export function UsageChips({
   fallback?: ReactNode;
   variant?: UsageChipVariant;
 }) {
+  const t = useT();
   const wantClaude = providers.includes("claude");
   const wantCodex = providers.includes("codex");
   const wantOpencode = providers.includes("opencode");
@@ -227,16 +231,10 @@ export function UsageChips({
   const devin = useCachedRateLimits("devin");
   const claude = claudeAccountAvailable
     ? cachedClaude
-    : unavailableRateLimits(
-        "claude",
-        "This conversation uses a removed account",
-      );
+    : unavailableRateLimits("claude", t("app.usageFooter.removedAccount"));
   const codex = codexAccountAvailable
     ? cachedCodex
-    : unavailableRateLimits(
-        "codex",
-        "This conversation uses a removed account",
-      );
+    : unavailableRateLimits("codex", t("app.usageFooter.removedAccount"));
 
   useEffect(
     () =>
@@ -314,7 +312,7 @@ export function UsageChips({
           const message =
             error instanceof Error
               ? error.message
-              : "Could not use Codex reset";
+              : t("app.usageFooter.codexResetFailed");
           setCachedRateLimits(
             "codex",
             codexAccountId,
@@ -335,7 +333,7 @@ export function UsageChips({
       await tracked;
       return outcome!;
     },
-    [codexAccountId],
+    [codexAccountId, t],
   );
 
   const reconnectProvider = useCallback(
@@ -496,8 +494,8 @@ export function UsageChips({
       <button
         type="button"
         className={USAGE_REFRESH_CLASSES[variant]}
-        aria-label="Refresh usage"
-        title="Refresh usage"
+        aria-label={t("app.usageFooter.refreshUsage")}
+        title={t("app.usageFooter.refreshUsage")}
         disabled={refreshing}
         onClick={() => void refresh()}
       >
@@ -522,6 +520,7 @@ function TerminalLiveMark() {
 }
 
 function SessionChip({ session }: { session: UsageFooterSession }) {
+  const t = useT();
   const trigger = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const [loginState, setLoginState] = useState<ProviderSignInState>("idle");
@@ -553,7 +552,9 @@ function SessionChip({ session }: { session: UsageFooterSession }) {
       setLoginState("complete");
     } catch (error) {
       setLoginError(
-        error instanceof Error ? error.message : "Could not complete sign-in",
+        error instanceof Error
+          ? error.message
+          : t("app.usageFooter.signInFailed"),
       );
       setLoginState("error");
     }
@@ -577,17 +578,21 @@ function SessionChip({ session }: { session: UsageFooterSession }) {
         ref={trigger}
         type="button"
         className="-mx-1 inline-flex h-5 min-w-0 shrink-0 items-center gap-1.5 whitespace-nowrap rounded px-1 text-content/55 transition-[background-color,color,transform] duration-150 ease-out hover:bg-content/10 hover:text-content focus-visible:outline-2 focus-visible:outline-accent active:scale-[0.97]"
-        aria-label={`${HARNESS_TITLE[session.harness]} sign-in required`}
+        aria-label={t("app.usageFooter.signInRequired", {
+          provider: HARNESS_TITLE[session.harness],
+        })}
         aria-expanded={open}
         aria-haspopup="dialog"
-        title={`${HARNESS_TITLE[session.harness]} sign-in required`}
+        title={t("app.usageFooter.signInRequired", {
+          provider: HARNESS_TITLE[session.harness],
+        })}
         onClick={() => setOpen((value) => !value)}
       >
         <HarnessIcon harness={session.harness} className="size-3 shrink-0" />
         <span>{HARNESS_LABEL[session.harness]}</span>
         {authRequired ? (
           <span className="text-[10px] text-amber-600 dark:text-amber-300">
-            sign in
+            {t("app.usageFooter.signIn")}
           </span>
         ) : null}
       </button>
@@ -601,7 +606,9 @@ function SessionChip({ session }: { session: UsageFooterSession }) {
           autoFocus
           onDismiss={dismiss}
           role="dialog"
-          aria-label={`${HARNESS_TITLE[session.harness]} sign-in`}
+          aria-label={t("app.usageFooter.signInDialog", {
+            provider: HARNESS_TITLE[session.harness],
+          })}
           tabIndex={-1}
           className="text-content"
         >
@@ -626,21 +633,31 @@ function RunningTerminalChip({
   open: boolean;
   onToggle?: (fileId: string) => void;
 }) {
+  const t = useT();
   const root = useRef<HTMLButtonElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const label = runningTerminalChipLabel(terminals);
   const many = terminals.length > 1;
   const title = terminals
-    .map((terminal) => `"${terminal.process}" in ${terminal.label}`)
+    .map((terminal) =>
+      t("app.usageFooter.processIn", {
+        process: terminal.process,
+        terminal: terminal.label,
+      }),
+    )
     .join("\n");
   const ariaLabel =
     terminals.length === 1
       ? panelOpen
-        ? `Hide ${terminals[0]?.process}`
-        : `Show ${terminals[0]?.process}`
+        ? t("app.usageFooter.hideProcess", {
+            process: String(terminals[0]?.process),
+          })
+        : t("app.usageFooter.showProcess", {
+            process: String(terminals[0]?.process),
+          })
       : panelOpen
-        ? "Hide running terminals"
-        : `${terminals.length} terminals are running processes`;
+        ? t("app.usageFooter.hideRunningTerminals")
+        : t("app.usageFooter.terminalsRunning", { count: terminals.length });
 
   const toggle = (fileId: string) => {
     setMenuOpen(false);
@@ -680,7 +697,7 @@ function RunningTerminalChip({
           autoFocus
           onDismiss={() => setMenuOpen(false)}
           role="menu"
-          aria-label="Running terminals"
+          aria-label={t("app.usageFooter.runningTerminals")}
           className="min-w-[12rem] p-1"
         >
           {terminals.map((terminal) => (

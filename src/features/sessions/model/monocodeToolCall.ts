@@ -1,3 +1,5 @@
+import type { TextKey } from "../../../shared/i18n/catalog";
+import { t } from "../../../shared/i18n/locale";
 import type { Block } from "./session";
 
 export type MonoCodeToolCall = {
@@ -6,24 +8,24 @@ export type MonoCodeToolCall = {
   command: string;
 };
 
-const ACTION_LABELS: Record<string, string> = {
-  "models.list": "List models",
-  "sessions.list": "List sessions",
-  "sessions.read": "Read a session",
-  "sessions.send": "Continue a session",
-  "sessions.draft": "Save a draft",
-  "sessions.start": "Start a session",
-  "sessions.stop": "Stop a session",
-  "sessions.archive": "Archive a session",
-  "sessions.delete": "Delete a session",
-  "folders.list": "List folders",
-  "folders.move": "Move a session",
-  "notes.list": "List notes",
-  "notes.read": "Read a note",
-  "notes.write": "Write a note",
-  "artifacts.list": "List artifacts",
-  "artifacts.read": "Read an artifact",
-  "artifacts.write": "Write an artifact",
+const ACTION_LABEL_KEYS: Record<string, TextKey> = {
+  "models.list": "sessions.cliAction.modelsList",
+  "sessions.list": "sessions.cliAction.sessionsList",
+  "sessions.read": "sessions.cliAction.sessionsRead",
+  "sessions.send": "sessions.cliAction.sessionsSend",
+  "sessions.draft": "sessions.cliAction.sessionsDraft",
+  "sessions.start": "sessions.cliAction.sessionsStart",
+  "sessions.stop": "sessions.cliAction.sessionsStop",
+  "sessions.archive": "sessions.cliAction.sessionsArchive",
+  "sessions.delete": "sessions.cliAction.sessionsDelete",
+  "folders.list": "sessions.cliAction.foldersList",
+  "folders.move": "sessions.cliAction.foldersMove",
+  "notes.list": "sessions.cliAction.notesList",
+  "notes.read": "sessions.cliAction.notesRead",
+  "notes.write": "sessions.cliAction.notesWrite",
+  "artifacts.list": "sessions.cliAction.artifactsList",
+  "artifacts.read": "sessions.cliAction.artifactsRead",
+  "artifacts.write": "sessions.cliAction.artifactsWrite",
 };
 
 /** Conservatively parse one shell invocation; compound commands use the shell row. */
@@ -102,9 +104,9 @@ export function monoCodeToolCall(block: Block): MonoCodeToolCall | undefined {
   if (action === "--help" || action === "help" || action === "-h") {
     return words.length > 3
       ? undefined
-      : { action: "--help", label: "View CLI commands", command };
+      : { action: "--help", label: t("sessions.cliAction.help"), command };
   }
-  if (!Object.prototype.hasOwnProperty.call(ACTION_LABELS, action))
+  if (!Object.prototype.hasOwnProperty.call(ACTION_LABEL_KEYS, action))
     return undefined;
   for (let index = 3; index < words.length; index += 2) {
     if (
@@ -113,7 +115,7 @@ export function monoCodeToolCall(block: Block): MonoCodeToolCall | undefined {
     )
       return undefined;
   }
-  return { action, label: ACTION_LABELS[action], command };
+  return { action, label: t(ACTION_LABEL_KEYS[action]), command };
 }
 
 /** A group of only MonoCode calls can be named for the app, not the shell. */
@@ -130,5 +132,7 @@ export function monoCodeWorkSummary(
   if (calls.length === 0 || calls.some((block) => !monoCodeToolCall(block))) {
     return undefined;
   }
-  return live ? "Using MonoCode" : "Used MonoCode";
+  return live
+    ? t("sessions.activity.usingMonoCode")
+    : t("sessions.activity.usedMonoCode");
 }

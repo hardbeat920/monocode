@@ -1,3 +1,4 @@
+import { t } from "../../../shared/i18n/locale";
 import type { Block } from "./session";
 
 /** A vertical span in viewport coordinates. */
@@ -54,9 +55,11 @@ export function promptLabel(block: Block): string {
   const text = textShown ? firstLine(block.text) : "";
   if (text) return text;
   if (card) {
-    if (card.kind === "handoff") return "Handoff";
+    if (card.kind === "handoff") return t("sessions.prompt.handoff");
     const request = firstLine(card.request ?? "");
-    return request ? `Second opinion: ${request}` : "Second opinion";
+    return request
+      ? t("sessions.prompt.secondOpinionWith", { request })
+      : t("sessions.prompt.secondOpinion");
   }
   if (block.noteCard?.title) return block.noteCard.title;
   const files = block.attachments ?? [];
@@ -64,7 +67,7 @@ export function promptLabel(block: Block): string {
     const [first] = files;
     return files.length > 1 ? `${first.name} +${files.length - 1}` : first.name;
   }
-  return "Empty message";
+  return t("sessions.prompt.empty");
 }
 
 function firstLine(text: string): string {

@@ -1,5 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type { Block, Session } from "../sessions/model/session";
+import { t } from "../../shared/i18n/locale";
 
 /** Extend this union when a renderer and storage support for a new kind exist. */
 export type ArtifactKind = "document" | "html";
@@ -24,9 +25,9 @@ export const ARTIFACT_DELETED_EVENT = "monocode:artifact-deleted";
 export function artifactLabel(kind: ArtifactKind): string {
   switch (kind) {
     case "document":
-      return "Document";
+      return t("artifacts.kind.document");
     case "html":
-      return "Visual";
+      return t("artifacts.kind.html");
   }
 }
 

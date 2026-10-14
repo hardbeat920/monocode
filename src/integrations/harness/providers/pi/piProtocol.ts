@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/i18n/locale";
 import type { Attachment, ToolPreview, TurnMetrics } from "../../../../features/sessions/model/session";
 import {
   attachmentPathText,
@@ -280,7 +281,7 @@ export function parseExtensionUiRequest(
     return {
       id,
       method,
-      title: stringField(rec, "title") ?? "Choose an option",
+      title: stringField(rec, "title") ?? t("integrations.pi.chooseOption"),
       options,
     };
   }

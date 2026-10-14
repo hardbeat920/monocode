@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DEVIN_ASK_EDITS_RULE,
-  DEVIN_AUTH_HELP,
+  devinAuthHelp,
   devinApiKeyFromCredentials,
   devinAskEditsConfig,
   devinAsksBeforeEdits,
@@ -167,7 +167,7 @@ describe("devin auth helpers", () => {
 
   it("adds login help to authentication failures only", () => {
     expect(devinStartupError(new Error("ACP host has not authenticated")).message)
-      .toContain(DEVIN_AUTH_HELP);
+      .toContain(devinAuthHelp());
     expect(devinStartupError(new Error("boom")).message).toBe(
       "Devin did not start. boom",
     );
@@ -179,7 +179,7 @@ describe("devin auth helpers", () => {
     );
     expect(devinTurnError(new Error("boom")).message).toBe("boom");
     expect(devinTurnError(new Error("api key expired")).message).toContain(
-      DEVIN_AUTH_HELP,
+      devinAuthHelp(),
     );
   });
 });

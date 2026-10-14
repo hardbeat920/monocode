@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- MonoCode is available in **Türkçe**. Choose English or Türkçe under **Settings > Appearance > Language**. The default follows your system language. Menus, the tray, and the Dock menu switch with the app. Dates, times, and plural forms follow the selected language. Agent prompts and provider output stay in English.
+
 ## [0.13.0] - 2026-10-12
 
 ### Added

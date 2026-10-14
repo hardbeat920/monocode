@@ -16,6 +16,7 @@ use tauri::{
     WebviewWindowBuilder,
 };
 
+use crate::i18n::{t, Text};
 use crate::window::{is_workspace_window, workspace_windows, MONO_CHAT_PREFIX};
 
 mod menu_bar;
@@ -175,7 +176,7 @@ struct MonoChatState(Mutex<Inner>);
 pub fn init(app: &AppHandle) -> tauri::Result<()> {
     app.manage(MonoChatState::default());
     let mut tray = TrayIconBuilder::with_id(TRAY)
-        .tooltip("Chat with a Mono")
+        .tooltip(t(Text::MonoMenuTooltip))
         .menu(&menu(app, &[], &[])?)
         .icon_as_template(true)
         .on_menu_event(|app, event| {
@@ -196,6 +197,21 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
         tray.set_visible(false)?;
     }
     Ok(())
+}
+
+/// Rebuilds the menu bar Mono menu and its tooltip in the current language.
+pub fn refresh_menu(app: &AppHandle) -> tauri::Result<()> {
+    let Some(tray) = app.tray_by_id(TRAY) else {
+        return Ok(());
+    };
+    let (roster, mascots) = {
+        let state = app.state::<MonoChatState>();
+        let inner = state.0.lock().unwrap();
+        (inner.monos.clone(), inner.menu_mascots.clone())
+    };
+    tray.set_tooltip(Some(t(Text::MonoMenuTooltip)))?;
+    tray.set_menu(Some(menu(app, &roster, &mascots)?))?;
+    menu_bar::decorate(&tray)
 }
 
 fn menu_bar_hidden_marker(app: &AppHandle) -> Option<std::path::PathBuf> {
@@ -274,15 +290,14 @@ fn menu(
     monos: &[MonoEntry],
     mascots: &[menu_bar::MenuMascot],
 ) -> tauri::Result<Menu<tauri::Wry>> {
-    let header = MenuItemBuilder::with_id("mono-chat-header", "Monos")
+    let header = MenuItemBuilder::with_id("mono-chat-header", t(Text::MonoMenuHeader))
         .enabled(false)
         .build(app)?;
     let mut builder = MenuBuilder::new(app).item(&header).separator();
     if monos.is_empty() {
-        let empty =
-            MenuItemBuilder::with_id("mono-chat-empty", "Create a Mono in MonoCode to chat here")
-                .enabled(false)
-                .build(app)?;
+        let empty = MenuItemBuilder::with_id("mono-chat-empty", t(Text::MonoMenuEmpty))
+            .enabled(false)
+            .build(app)?;
         builder = builder.item(&empty);
     } else {
         for mono in monos {
@@ -299,7 +314,7 @@ fn menu(
     for action in &menu_bar::ACTIONS {
         builder = builder
             .separator()
-            .item(&MenuItemBuilder::with_id(action.id, action.title).build(app)?);
+            .item(&MenuItemBuilder::with_id(action.id, action.title()).build(app)?);
     }
     builder.build()
 }
@@ -396,7 +411,7 @@ pub fn mono_chat_sync(
             view.monos = monos.clone();
             if !monos.iter().any(|m| m.id == *id) {
                 view.session = None;
-                view.error = Some("That Mono is no longer available.".into());
+                view.error = Some(t(Text::MonoUnavailable).into());
             }
         }
         inner.monos = monos;
@@ -607,7 +622,7 @@ fn build(app: &AppHandle, mono_id: &str) -> tauri::Result<WebviewWindow> {
         label(mono_id),
         WebviewUrl::App("mono-chat.html".into()),
     )
-    .title("Mono chat")
+    .title(t(Text::MonoChatWindowTitle))
     .inner_size(WIDTH, height)
     .min_inner_size(370.0, 420.0)
     .resizable(true)

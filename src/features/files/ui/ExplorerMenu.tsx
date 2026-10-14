@@ -7,6 +7,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
+import { useT } from "../../../shared/i18n/useT";
 import { LAYER } from "../../../shared/lib/layers";
 import { Check, ChevronRight } from "../../../shared/ui/icons";
 import { Popover } from "../../../shared/ui/Popover";
@@ -64,7 +65,7 @@ export function ExplorerMenu({
   ownerId,
   onBack,
   items,
-  ariaLabel = "File actions",
+  ariaLabel,
   header,
   width = MENU_WIDTH,
   onPick,
@@ -72,6 +73,7 @@ export function ExplorerMenu({
   onMouseEnter,
   onMouseLeave,
 }: Props) {
+  const t = useT();
   const menuId = useId();
   const menuRef = useRef<HTMLDivElement>(null);
   const submenuRef = useRef<HTMLDivElement>(null);
@@ -286,7 +288,7 @@ export function ExplorerMenu({
         data-explorer-menu={menuId}
         role="menu"
         tabIndex={-1}
-        aria-label={ariaLabel}
+        aria-label={ariaLabel ?? t("files.menu.label")}
         aria-activedescendant={`${menuId}-${active}`}
         onKeyDown={onMenuKey}
         onContextMenu={(e) => e.preventDefault()}

@@ -22,6 +22,7 @@ import {
 } from "../model/githubTasks";
 import { MOD } from "../../../platform/tauri/platform";
 import { AgentMarkdown } from "../../sessions/ui/AgentMarkdown";
+import { useT } from "../../../shared/i18n/useT";
 
 export type InboxReplyTarget = {
   id: string;
@@ -125,6 +126,7 @@ export function InboxComments({
   replyMode,
   onReply,
 }: Props) {
+  const t = useT();
   const commitCount = thread?.commits?.length ?? 0;
   if (
     thread &&
@@ -150,8 +152,8 @@ export function InboxComments({
         : total + 1 + comment.replies.length,
     0,
   );
-  const label = count === 1 ? "1 comment" : `${count} comments`;
-  const commitLabel = commitCount === 1 ? "1 commit" : `${commitCount} commits`;
+  const label = t("inbox.comments.count", { count });
+  const commitLabel = t("inbox.comments.commitCount", { count: commitCount });
   const moreOn =
     provider === "linear"
       ? "Linear"
@@ -168,7 +170,7 @@ export function InboxComments({
       <div className="flex items-center gap-2 text-[12px] text-content/50">
         {thread.commits ? (
           <>
-            <h2 className="text-content/70">Activity</h2>
+            <h2 className="text-content/70">{t("inbox.comments.activity")}</h2>
             <span>
               {label}
               {commitCount > 0 ? ` · ${commitLabel}` : ""}
@@ -178,7 +180,7 @@ export function InboxComments({
           <h2 className="text-content/70">{label}</h2>
         )}
         {thread.truncated ? (
-          <span>Latest comments · more on {moreOn}</span>
+          <span>{t("inbox.comments.latest", { provider: moreOn })}</span>
         ) : null}
         {loading ? (
           <LoaderCircle
@@ -246,6 +248,7 @@ export function InboxCommentForm({
   onCancelReply: () => void;
   onSubmit: (body: string) => Promise<void>;
 }) {
+  const t = useT();
   const [draft, setDraft] = useState("");
   const field = useRef<HTMLTextAreaElement>(null);
   const canPost = draft.trim().length > 0 && !posting;
@@ -292,12 +295,14 @@ export function InboxCommentForm({
       {replyTo ? (
         <div className="flex items-center gap-2 text-[12px] text-content/50">
           <span className="min-w-0 truncate">
-            Replying to {replyTo.author || "comment"}
+            {t("inbox.comments.replyingTo", {
+              author: replyTo.author || t("inbox.comments.commentNoun"),
+            })}
           </span>
           <button
             type="button"
-            title="Cancel reply"
-            aria-label="Cancel reply"
+            title={t("inbox.comments.cancelReply")}
+            aria-label={t("inbox.comments.cancelReply")}
             onClick={onCancelReply}
             className="grid size-5 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content"
           >
@@ -312,7 +317,9 @@ export function InboxCommentForm({
           value={draft}
           disabled={posting}
           placeholder={
-            replyTo ? `Write a reply (${MOD}↩)` : `Leave a comment (${MOD}↩)`
+            replyTo
+              ? t("inbox.comments.replyPlaceholder", { shortcut: `${MOD}↩` })
+              : t("inbox.comments.commentPlaceholder", { shortcut: `${MOD}↩` })
           }
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={onKeyDown}
@@ -324,7 +331,11 @@ export function InboxCommentForm({
             disabled={!canPost}
             className="inline-flex h-7 items-center rounded-md bg-content px-3 text-[12px] text-background-base hover:bg-content/80 disabled:cursor-default disabled:opacity-40"
           >
-            {posting ? "Posting..." : replyTo ? "Reply" : "Comment"}
+            {posting
+              ? t("inbox.comments.posting")
+              : replyTo
+                ? t("inbox.comments.reply")
+                : t("inbox.comments.comment")}
           </button>
         </div>
       </div>
@@ -334,10 +345,11 @@ export function InboxCommentForm({
 }
 
 function CommentsPending() {
+  const t = useT();
   return (
     <div className="flex items-center gap-2 border-t border-stroke pt-5 text-[12px] text-content/45">
       <LoaderCircle className="size-3.5 animate-spin" strokeWidth={1.75} />
-      Loading comments
+      {t("inbox.comments.loading")}
     </div>
   );
 }
@@ -360,13 +372,15 @@ function InboxComment({
   replyMode?: "thread" | "parent";
   onReply?: (target: InboxReplyTarget) => void;
 }) {
+  const t = useT();
+  const resolvedLabel = t("inbox.comments.resolved");
   const time = formatRelativeTime(comment.createdAt);
   const review = githubReviewStateLabel(comment.state);
   const location = commentLocation(comment);
   const meta = [
     review,
     location,
-    comment.resolved ? "Resolved" : "",
+    comment.resolved ? resolvedLabel : "",
     time,
   ].filter((part) => part.length > 0);
   const hasBody = comment.body.trim().length > 0;
@@ -403,14 +417,14 @@ function InboxComment({
                 type="button"
                 title={
                   provider === "linear"
-                    ? "Open in Linear"
+                    ? t("inbox.miniCard.openIn", { provider: "Linear" })
                     : provider === "jira"
-                      ? "Open in Jira"
+                      ? t("inbox.miniCard.openIn", { provider: "Jira" })
                       : provider === "gitlab"
-                        ? "Open on GitLab"
+                        ? t("inbox.comments.openOn", { provider: "GitLab" })
                         : provider === "azuredevops"
-                          ? "Open on ADO"
-                          : "Open on GitHub"
+                          ? t("inbox.comments.openOn", { provider: "ADO" })
+                          : t("inbox.comments.openOn", { provider: "GitHub" })
                 }
                 onClick={() => void openUrl(comment.url)}
                 className="hover:text-content"
@@ -424,7 +438,7 @@ function InboxComment({
                     ? "text-emerald-400/90"
                     : comment.state === "CHANGES_REQUESTED"
                       ? "text-rose-400/90"
-                      : comment.resolved && part === "Resolved"
+                      : comment.resolved && part === resolvedLabel
                         ? "text-emerald-400/80"
                         : "min-w-0 truncate"
                 }
@@ -448,7 +462,7 @@ function InboxComment({
               }
               className="hover:text-content"
             >
-              Reply
+              {t("inbox.comments.reply")}
             </button>
           </span>
         ) : null}
@@ -508,6 +522,7 @@ const CLAMPED_BODY_PX = 180;
 
 /** Bot reviews and long write-ups start clamped so the timeline stays scannable. */
 function CollapsibleBody({ children }: { children: ReactNode }) {
+  const t = useT();
   const inner = useRef<HTMLDivElement>(null);
   const [overflows, setOverflows] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -544,7 +559,9 @@ function CollapsibleBody({ children }: { children: ReactNode }) {
           onClick={() => setExpanded((current) => !current)}
           className="mt-1.5 text-[12px] text-content/50 hover:text-content"
         >
-          {expanded ? "Show less" : "Show more"}
+          {expanded
+            ? t("inbox.comments.showLess")
+            : t("inbox.comments.showMore")}
         </button>
       ) : null}
     </>
@@ -635,18 +652,19 @@ function InboxTimelineComment({
   first: boolean;
   last: boolean;
 }) {
+  const t = useT();
   const author = comment.author || "ghost";
   const state = comment.state.trim().toUpperCase();
   if (isReviewEvent(comment)) {
     const time = formatRelativeTime(comment.createdAt);
     const verb =
       state === "APPROVED"
-        ? "approved"
+        ? t("inbox.comments.approved")
         : state === "CHANGES_REQUESTED"
-          ? "requested changes"
+          ? t("inbox.comments.requestedChanges")
           : state === "DISMISSED"
-            ? "had a review dismissed"
-            : "reviewed";
+            ? t("inbox.comments.reviewDismissed")
+            : t("inbox.comments.reviewed");
     const Icon =
       state === "APPROVED"
         ? CheckCircle
@@ -716,6 +734,7 @@ function InboxCommitRun({
   first: boolean;
   last: boolean;
 }) {
+  const t = useT();
   const name = author || "ghost";
   const time = formatRelativeTime(commits[commits.length - 1].committedDate);
   return (
@@ -732,9 +751,11 @@ function InboxCommitRun({
       >
         <TimelineEventLine
           name={name}
-          action={`added ${
-            commits.length === 1 ? "a commit" : `${commits.length} commits`
-          }`}
+          action={
+            commits.length === 1
+              ? t("inbox.comments.addedCommit")
+              : t("inbox.comments.addedCommits", { count: commits.length })
+          }
           time={time}
         />
       </TimelineStop>
@@ -780,6 +801,7 @@ function InboxCommitStop({
   commit: InboxCommit;
   last: boolean;
 }) {
+  const t = useT();
   return (
     <li className="flex gap-3">
       {/* The rail runs through commit dots, so a push reads as one stretch. */}
@@ -791,7 +813,9 @@ function InboxCommitStop({
       <div className={`min-w-0 flex-1 ${last ? "" : TIMELINE_GAP}`}>
         <button
           type="button"
-          title={commit.url ? "Open commit" : commit.messageHeadline}
+          title={
+            commit.url ? t("inbox.linked.openCommit") : commit.messageHeadline
+          }
           disabled={!commit.url}
           onClick={() => void openUrl(commit.url)}
           className="group flex h-5 w-full min-w-0 items-center gap-3 text-left text-[12px]"

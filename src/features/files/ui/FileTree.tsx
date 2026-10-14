@@ -25,6 +25,8 @@ import {
   wellFormedFileName,
   type NameIssue,
 } from "../model/fileName";
+import { t } from "../../../shared/i18n/locale";
+import { useT } from "../../../shared/i18n/useT";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import {
   loadShowExcludedFiles,
@@ -95,11 +97,13 @@ type Clip = { mode: "copy" | "cut"; path: string; isDir: boolean };
 type MenuTarget = { path: string; isDir: boolean; isRoot: boolean };
 type MenuState = { x: number; y: number; target: MenuTarget };
 
-const REVEAL_LABEL = IS_MAC
-  ? "Reveal in Finder"
-  : IS_WIN
-    ? "Reveal in File Explorer"
-    : "Open Containing Folder";
+function revealLabel(): string {
+  return IS_MAC
+    ? t("files.tree.revealMac")
+    : IS_WIN
+      ? t("files.tree.revealWin")
+      : t("files.tree.revealOther");
+}
 
 type TreeCtxValue = {
   expanded: Set<string>;
@@ -177,56 +181,60 @@ function explorerItems(
     !!clip?.isDir &&
     (pasteParent === clip.path || pasteParent.startsWith(`${clip.path}/`));
   return [
-    { kind: "item", id: "new-file", label: "New File" },
-    { kind: "item", id: "new-folder", label: "New Folder" },
+    { kind: "item", id: "new-file", label: t("files.tree.newFile") },
+    { kind: "item", id: "new-folder", label: t("files.tree.newFolder") },
     { kind: "sep" },
     {
       kind: "item",
       id: "cut",
-      label: "Cut",
+      label: t("files.tree.cut"),
       shortcut: `${MOD}X`,
       disabled: target.isRoot,
     },
     {
       kind: "item",
       id: "copy",
-      label: "Copy",
+      label: t("files.tree.copy"),
       shortcut: `${MOD}C`,
       disabled: target.isRoot,
     },
     {
       kind: "item",
       id: "paste",
-      label: "Paste",
+      label: t("files.tree.paste"),
       shortcut: `${MOD}V`,
       disabled: pasteBlocked,
     },
     {
       kind: "item",
       id: "duplicate",
-      label: "Duplicate",
+      label: t("files.tree.duplicate"),
       disabled: target.isRoot,
     },
     { kind: "sep" },
     {
       kind: "item",
       id: "copy-path",
-      label: "Copy Path",
+      label: t("files.tree.copyPath"),
       shortcut: `${MOD}${SHIFT}C`,
     },
-    { kind: "item", id: "copy-relative-path", label: "Copy Relative Path" },
+    {
+      kind: "item",
+      id: "copy-relative-path",
+      label: t("files.tree.copyRelativePath"),
+    },
     { kind: "sep" },
     {
       kind: "item",
       id: "rename",
-      label: "Rename",
+      label: t("files.tree.rename"),
       shortcut: "F2",
       disabled: target.isRoot,
     },
     {
       kind: "item",
       id: "delete",
-      label: "Delete",
+      label: t("files.tree.delete"),
       shortcut: "⌫",
       disabled: target.isRoot,
       danger: true,
@@ -237,11 +245,11 @@ function explorerItems(
           {
             kind: "item" as const,
             id: "open-terminal",
-            label: "Open in Terminal",
+            label: t("files.tree.openTerminal"),
           },
         ]
       : []),
-    { kind: "item", id: "reveal", label: REVEAL_LABEL },
+    { kind: "item", id: "reveal", label: revealLabel() },
   ];
 }
 
@@ -257,6 +265,7 @@ export const FileTree = memo(function FileTree({
   onSearch,
   gitStatuses,
 }: Props) {
+  const t = useT();
   const [expanded, setExpanded] = useState(() => loadExpanded(cwd));
   const [selectedPath, setSelectedPath] = useState(() => loadSelected(cwd));
   const [children, setChildren] = useState<FsEntry[] | null>(() =>
@@ -546,8 +555,8 @@ export const FileTree = memo(function FileTree({
     const label = basename(path);
     const ok = window.confirm(
       isDir
-        ? `Delete folder “${label}” and everything inside it?`
-        : `Delete “${label}”?`,
+        ? t("files.tree.confirmDeleteFolder", { name: label })
+        : t("files.tree.confirmDelete", { name: label }),
     );
     if (!ok) return;
     await deletePath(path);
@@ -592,7 +601,7 @@ export const FileTree = memo(function FileTree({
       clip.isDir &&
       (destParent === clip.path || destParent.startsWith(`${clip.path}/`))
     ) {
-      throw new Error("Cannot paste a folder into itself.");
+      throw new Error(t("files.tree.pasteIntoSelf"));
     }
     const from = clip.path;
     const mode = clip.mode;
@@ -1014,14 +1023,20 @@ export const FileTree = memo(function FileTree({
           className="flex h-9 shrink-0 items-center gap-px overflow-visible border-b border-stroke px-2"
           onContextMenu={(e) => e.stopPropagation()}
         >
-          <HeaderIcon label="New File" onClick={() => startCreate(false)}>
+          <HeaderIcon
+            label={t("files.tree.newFile")}
+            onClick={() => startCreate(false)}
+          >
             <FilePlus className="size-3.5" strokeWidth={1.75} />
           </HeaderIcon>
-          <HeaderIcon label="New Folder" onClick={() => startCreate(true)}>
+          <HeaderIcon
+            label={t("files.tree.newFolder")}
+            onClick={() => startCreate(true)}
+          >
             <FolderPlus className="size-3.5" strokeWidth={1.75} />
           </HeaderIcon>
           <HeaderIcon
-            label="Collapse All"
+            label={t("files.tree.collapseAll")}
             onClick={() => {
               setCreating(null);
               setRenaming(null);
@@ -1034,7 +1049,9 @@ export const FileTree = memo(function FileTree({
           </HeaderIcon>
           {onSearch ? (
             <HeaderIcon
-              label={`Search in files (${MOD}Shift+F)`}
+              label={t("files.tree.searchInFiles", {
+                shortcut: `${MOD}Shift+F`,
+              })}
               onClick={onSearch}
             >
               <Search className="size-3.5" strokeWidth={1.75} />
@@ -1086,7 +1103,7 @@ export const FileTree = memo(function FileTree({
             </p>
           ) : null}
           {rootOpen ? (
-            <div role="tree" aria-label={`${name} files`}>
+            <div role="tree" aria-label={t("files.tree.filesOf", { name })}>
               <TreeChildren
                 parent={cwd}
                 depth={0}
@@ -1359,6 +1376,7 @@ export function NameRow({
   onCommit: (raw: string) => Promise<void>;
   onCancel: () => void;
 }) {
+  const t = useT();
   const inputRef = useRef<HTMLInputElement>(null);
   const finished = useRef(false);
   const [value, setValue] = useState(initial);
@@ -1430,7 +1448,7 @@ export function NameRow({
           autoComplete="off"
           autoCorrect="off"
           autoCapitalize="off"
-          aria-label="Type file name. Press Enter to confirm or Escape to cancel."
+          aria-label={t("files.tree.nameInput")}
           onChange={(e) => {
             setValue(e.target.value);
             setSubmitError(null);
@@ -1458,6 +1476,20 @@ export function NameRow({
   );
 }
 
+/** Stands in for the name while a message is split around the bold name. */
+const NAME_MARK = "\u0001";
+
+function boldName(message: string, name: string): ReactNode {
+  const [before, ...rest] = message.split(NAME_MARK);
+  return (
+    <>
+      {before}
+      <span className="font-semibold">{name}</span>
+      {rest.join(NAME_MARK)}
+    </>
+  );
+}
+
 function NameIssueView({
   depth,
   issue,
@@ -1467,36 +1499,32 @@ function NameIssueView({
   issue: NameIssue | null;
   fallback: string | null;
 }) {
+  const t = useT();
   let body: ReactNode = null;
   if (fallback) {
     body = fallback;
   } else if (issue) {
     switch (issue.kind) {
       case "empty":
-        body = "A file or folder name must be provided.";
+        body = t("files.tree.issue.empty");
         break;
       case "slash":
-        body = "A file or folder name cannot start with a slash.";
+        body = t("files.tree.issue.slash");
         break;
       case "exists":
-        body = (
-          <>
-            A file or folder <span className="font-semibold">{issue.name}</span>{" "}
-            already exists at this location. Please choose a different name.
-          </>
+        body = boldName(
+          t("files.tree.issue.exists", { name: NAME_MARK }),
+          issue.name,
         );
         break;
       case "invalid":
-        body = (
-          <>
-            The name <span className="font-semibold">{issue.name}</span> is not
-            valid as a file or folder name. Please choose a different name.
-          </>
+        body = boldName(
+          t("files.tree.issue.invalid", { name: NAME_MARK }),
+          issue.name,
         );
         break;
       case "whitespace":
-        body =
-          "Leading or trailing whitespace detected in file or folder name.";
+        body = t("files.tree.issue.whitespace");
         break;
     }
   }

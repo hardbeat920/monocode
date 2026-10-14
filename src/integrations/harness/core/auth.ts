@@ -1,3 +1,4 @@
+import { t } from "../../../shared/i18n/locale";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { homeDir } from "../../../platform/tauri/fs";
 import { supportsAccountProfiles } from "../../../features/providers/model/providerAccounts";
@@ -73,7 +74,9 @@ async function runHarnessLogin(
   const resolve = LOGIN_RESOLVERS[harness];
   if (!args || !resolve) {
     throw new Error(
-      `${HARNESS_TITLE[harness]} does not offer a single browser sign-in flow.`,
+      t("integrations.auth.noBrowserSignIn", {
+        provider: HARNESS_TITLE[harness],
+      }),
     );
   }
 
@@ -107,7 +110,14 @@ async function runHarnessLogin(
         finish(
           new Error(
             detail ||
-              `${HARNESS_TITLE[harness]} sign-in exited${code == null ? " unexpectedly" : ` with code ${code}`}.`,
+              (code == null
+                ? t("integrations.auth.exitedUnexpectedly", {
+                    provider: HARNESS_TITLE[harness],
+                  })
+                : t("integrations.auth.exitedWithCode", {
+                    provider: HARNESS_TITLE[harness],
+                    code,
+                  })),
           ),
         );
       },
@@ -126,7 +136,9 @@ async function runHarnessLogin(
         .finally(() => {
           finish(
             new Error(
-              `${HARNESS_TITLE[harness]} sign-in timed out. Please try again.`,
+              t("integrations.auth.timedOut", {
+                provider: HARNESS_TITLE[harness],
+              }),
             ),
           );
         });
@@ -143,7 +155,10 @@ async function runHarnessLogin(
       const message = error instanceof Error ? error.message : String(error);
       finish(
         new Error(
-          `Could not start ${HARNESS_TITLE[harness]} sign-in: ${message}`,
+          t("integrations.auth.startFailed", {
+            provider: HARNESS_TITLE[harness],
+            error: message,
+          }),
         ),
       );
     });

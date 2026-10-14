@@ -4,6 +4,7 @@ import { useWorktreeFocus, type WorktreeFocus } from "../model/worktreeFocus";
 import { createWorktree } from "../model/worktrees";
 import { pathKey, prettyCwd } from "../../../shared/lib/paths";
 import { Popover } from "../../../shared/ui/Popover";
+import { useT } from "../../../shared/i18n/useT";
 import {
   Check,
   ChevronsUpDown,
@@ -30,6 +31,7 @@ export function SidebarWorktreeSwitcher({
   /** Open tabs per worktree path key; hidden worktrees can still hold some. */
   tabStats?: ReadonlyMap<string, { tabs: number; busy: boolean }>;
 }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -52,14 +54,16 @@ export function SidebarWorktreeSwitcher({
       path: main?.path ?? cwd,
       branch: main?.branch ?? null,
       isMain: true,
-      label: main?.branch ?? "Project folder",
-      detail: "Project folder · all sessions",
+      label: main?.branch ?? t("scm.sidebarSwitcher.projectFolder"),
+      detail: t("scm.sidebarSwitcher.projectFolderDetail"),
     },
     ...worktrees.map((tree) => ({
       path: tree.path,
       branch: tree.branch,
       isMain: false,
-      label: tree.branch ?? `Detached ${tree.head.slice(0, 7)}`,
+      label:
+        tree.branch ??
+        t("scm.worktreePicker.detachedHead", { head: tree.head.slice(0, 7) }),
       detail: prettyCwd(tree.path),
     })),
   ].filter((tree) =>
@@ -151,23 +155,25 @@ export function SidebarWorktreeSwitcher({
     focus &&
     worktrees.find((tree) => pathKey(tree.path) === pathKey(focus.path));
   const title = focus
-    ? (focused?.branch ?? focus.branch ?? "Detached worktree")
-    : "Workspace";
+    ? (focused?.branch ??
+      focus.branch ??
+      t("scm.sidebarSwitcher.detachedWorktree"))
+    : t("scm.sidebarSwitcher.workspace");
   return (
     <>
       <button
         ref={anchor}
         type="button"
         data-tauri-drag-region="false"
-        aria-label="Switch working copy"
+        aria-label={t("scm.sidebarSwitcher.switch")}
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-busy={pending || creating}
         disabled={creating}
         title={
           focus
-            ? `${focus.branch ?? "detached"}\n${prettyCwd(focus.path)}`
-            : (main?.branch ?? "Project folder")
+            ? `${focus.branch ?? t("scm.sidebarSwitcher.detached")}\n${prettyCwd(focus.path)}`
+            : (main?.branch ?? t("scm.sidebarSwitcher.projectFolder"))
         }
         onClick={() => {
           if (open) closePicker();
@@ -184,7 +190,9 @@ export function SidebarWorktreeSwitcher({
         {pending || creating ? (
           <Loader
             aria-label={
-              creating ? "Creating worktree" : "Switching working copy"
+              creating
+                ? t("scm.sidebarSwitcher.creating")
+                : t("scm.sidebarSwitcher.switching")
             }
             className="size-3.5 shrink-0 animate-spin text-content/45"
           />
@@ -203,19 +211,21 @@ export function SidebarWorktreeSwitcher({
             if (!creating) closePicker();
           }}
           role="dialog"
-          aria-label="Working copies"
+          aria-label={t("scm.worktreePicker.listLabel")}
           className="flex flex-col overflow-hidden"
         >
           <label className="flex h-11 shrink-0 items-center gap-2.5 border-b border-stroke px-3 text-content/45 focus-within:text-content/70">
             <Search className="size-4 shrink-0" strokeWidth={1.75} />
-            <span className="sr-only">Search working copies</span>
+            <span className="sr-only">
+              {t("scm.worktreePicker.searchLabel")}
+            </span>
             <input
               ref={search}
               value={query}
               disabled={creating}
               autoComplete="off"
               spellCheck={false}
-              placeholder="Search or create a worktree..."
+              placeholder={t("scm.sidebarSwitcher.searchPlaceholder")}
               onChange={(event) => {
                 setQuery(event.target.value);
                 setActive(0);
@@ -246,13 +256,13 @@ export function SidebarWorktreeSwitcher({
           </label>
           <div
             role="listbox"
-            aria-label="Working copies"
+            aria-label={t("scm.worktreePicker.listLabel")}
             className="min-h-0 flex-1 overflow-y-auto overscroll-none p-1.5"
           >
             {!data && !error ? (
               <div className="flex items-center gap-2 p-2 text-[12px] text-content/50">
                 <Loader className="size-3.5 animate-spin" />
-                Loading working copies…
+                {t("scm.worktreePicker.loadingList")}
               </div>
             ) : null}
             {rows.map((tree, index) => {
@@ -296,7 +306,7 @@ export function SidebarWorktreeSwitcher({
             })}
             {data && rows.length === 0 ? (
               <p className="px-2.5 py-5 text-center text-[12px] text-content/45">
-                No matching working copies
+                {t("scm.worktreePicker.noMatches")}
               </p>
             ) : null}
           </div>
@@ -311,7 +321,9 @@ export function SidebarWorktreeSwitcher({
                 type="button"
                 disabled={creating}
                 onClick={() => void create()}
-                title={`Create worktree ${createName}`}
+                title={t("scm.sidebarSwitcher.createNamed", {
+                  name: createName,
+                })}
                 className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] text-content/75 hover:bg-content/8 hover:text-content disabled:opacity-60"
               >
                 {creating ? (
@@ -320,7 +332,7 @@ export function SidebarWorktreeSwitcher({
                   <Plus className="size-4 shrink-0" strokeWidth={1.75} />
                 )}
                 <span className="min-w-0 truncate">
-                  Create worktree {createName}
+                  {t("scm.sidebarSwitcher.createNamed", { name: createName })}
                 </span>
               </button>
             </div>
@@ -333,8 +345,11 @@ export function SidebarWorktreeSwitcher({
 
 /** Tabs a worktree keeps open while another one is shown. */
 function OpenTabs({ stats }: { stats?: { tabs: number; busy: boolean } }) {
+  const t = useT();
   if (!stats?.tabs) return null;
-  const label = `${stats.tabs} open tab${stats.tabs === 1 ? "" : "s"}${stats.busy ? ", working" : ""}`;
+  const label = stats.busy
+    ? t("scm.sidebarSwitcher.openTabsWorking", { count: stats.tabs })
+    : t("scm.sidebarSwitcher.openTabs", { count: stats.tabs });
   return (
     <span
       title={label}

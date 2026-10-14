@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { t } from "../../../shared/i18n/locale";
 import { AgentMarkdown } from "../../sessions/ui/AgentMarkdown";
 import { HtmlArtifactFrame } from "./HtmlArtifactFrame";
 import {
@@ -29,7 +30,7 @@ export function useArtifact(id: string) {
         },
         () => {
           if (!live || token !== request) return;
-          setError("Could not load this document.");
+          setError(t("artifacts.reader.loadFailed"));
           setLoaded(true);
         },
       );

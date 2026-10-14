@@ -44,6 +44,7 @@ import {
 } from "../model/session";
 import { HarnessIcon } from "./HarnessIcon";
 import { Popover } from "../../../shared/ui/Popover";
+import { useT } from "../../../shared/i18n/useT";
 
 type Props = {
   from: HarnessId;
@@ -80,15 +81,16 @@ export function HandoffButton({
   from,
   onPick,
 }: Pick<Props, "from" | "onPick">) {
+  const t = useT();
   return (
     <SecondOpinionButton
       from={from}
       onPick={onPick}
       icon={Replace}
-      title="Handoff"
-      disabledTitle="Install another provider to hand off"
-      description="Hand this session to another agent to continue the work."
-      menuLabel="Hand this session to another agent"
+      title={t("sessions.secondOpinion.handoff")}
+      disabledTitle={t("sessions.secondOpinion.handoffDisabled")}
+      description={t("sessions.secondOpinion.handoffDescription")}
+      menuLabel={t("sessions.secondOpinion.handoffMenuLabel")}
     />
   );
 }
@@ -106,6 +108,7 @@ export function BuildTargetButton({
   disabled?: boolean;
   onPick: (target: ModelTarget) => void;
 }) {
+  const t = useT();
   return (
     <SecondOpinionButton
       from={from}
@@ -113,10 +116,10 @@ export function BuildTargetButton({
       fromSettings={settings}
       onPick={onPick}
       icon={ChevronDown}
-      title="Build with another model"
-      disabledTitle="No build providers are available"
-      description="Choose the model and provider that should build this plan."
-      menuLabel="Build this plan with another model or provider"
+      title={t("sessions.secondOpinion.buildTitle")}
+      disabledTitle={t("sessions.secondOpinion.buildDisabled")}
+      description={t("sessions.secondOpinion.buildDescription")}
+      menuLabel={t("sessions.secondOpinion.buildMenuLabel")}
       includeCurrent
       disabled={disabled}
       triggerClassName="flex h-6 w-6 shrink-0 items-center justify-center rounded-r-md border-l border-background-base/20 bg-content text-background-base hover:bg-content/90 disabled:pointer-events-none disabled:opacity-40"
@@ -130,15 +133,22 @@ export function SecondOpinionButton({
   fromSettings,
   onPick,
   icon: Icon = MessageMultiple,
-  title = "Second opinion",
-  disabledTitle = "No different model available for a second opinion",
-  description = "Send this turn to another agent to review the work.",
-  menuLabel = "Send this turn to another agent",
+  title: titleProp,
+  disabledTitle: disabledTitleProp,
+  description: descriptionProp,
+  menuLabel: menuLabelProp,
   includeCurrent = false,
   excludeFromModel = false,
   disabled: disabledByCaller = false,
   triggerClassName,
 }: Props) {
+  const t = useT();
+  const title = titleProp ?? t("sessions.secondOpinion.title");
+  const disabledTitle =
+    disabledTitleProp ?? t("sessions.secondOpinion.disabled");
+  const description =
+    descriptionProp ?? t("sessions.secondOpinion.description");
+  const menuLabel = menuLabelProp ?? t("sessions.secondOpinion.menuLabel");
   const availabilityVersion = useSyncExternalStore(
     subscribeHarnessAvailability,
     getHarnessAvailabilitySnapshot,
@@ -491,7 +501,9 @@ export function SecondOpinionButton({
               maxHeight={SUBMENU_MAX_HEIGHT}
               layer={LAYER.submenu}
               role="menu"
-              aria-label={`${HARNESS_TITLE[activeHarness]} models`}
+              aria-label={t("sessions.secondOpinion.modelsMenu", {
+                harness: HARNESS_TITLE[activeHarness],
+              })}
               ignore={SELF}
               onMouseEnter={() =>
                 setMenuLevel((level) =>
@@ -564,7 +576,9 @@ export function SecondOpinionButton({
               width={EFFORT_MENU_WIDTH}
               layer={LAYER.submenu + 1}
               role="menu"
-              aria-label={`${activeModel.name} effort`}
+              aria-label={t("sessions.secondOpinion.effortMenu", {
+                model: activeModel.name,
+              })}
               ignore={SELF}
               onMouseEnter={() => setMenuLevel("effort")}
               data-provider-target

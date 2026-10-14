@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/i18n/locale";
 import { execChild } from "../../core/child";
 
 export type OpenCodeV2Service = {
@@ -31,9 +32,9 @@ export async function resolveOpenCodeV2ServiceUrl(
   const started = await execChild(path, ["service", "start"], cwd, "opencode").catch(
     (error: unknown) => {
       throw new Error(
-        `Could not start the OpenCode background service: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        t("integrations.opencode.serviceStartFailed", {
+          error: error instanceof Error ? error.message : String(error),
+        }),
       );
     },
   );

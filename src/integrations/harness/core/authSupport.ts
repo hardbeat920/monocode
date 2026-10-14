@@ -33,6 +33,9 @@ export function isHarnessAuthError(message: string): boolean {
     /\b(?:sign-in|login|session) (?:has )?expired\b/i,
     /\bplease (?:sign|log) in\b/i,
     /\brun [`'"]?\S+ (?:auth )?login\b/i,
+    // Turkish copy of MonoCode's own login help (see catalog/integrations.ts).
+    /oturum açılmamış/i,
+    /`[^`\s]+ (?:auth )?login`[^.]*çalıştırın/i,
   ].some((pattern) => pattern.test(message));
 }
 

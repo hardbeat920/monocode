@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { useT } from "../../../shared/i18n/useT";
 import { Clock, Pause, Play, Trash2, Zap } from "../../../shared/ui/icons";
 import { mascotPath } from "../../projects/model/projectMascots";
 import type { MonoState } from "../model/mono";
@@ -103,6 +104,7 @@ export function HabitRow({
   actions: HabitActions;
   onOpen: () => void;
 }) {
+  const t = useT();
   const runningSince = useHabitRunning(habit.id);
   const running = runningSince != null;
   const starting = !running && habitStarting(habit);
@@ -140,14 +142,17 @@ export function HabitRow({
           <span className="truncate text-[11px] leading-4 text-content/40">
             {running ? (
               <>
-                Running now · <RunningFor since={runningSince} />
+                {t("monos.habit.runningNow")} ·{" "}
+                <RunningFor since={runningSince} />
               </>
             ) : starting ? (
-              "Starting…"
+              t("monos.habit.startingEllipsis")
             ) : habit.enabled ? (
               habitScheduleLabel(habit.schedule)
             ) : (
-              `Paused · ${habitScheduleLabel(habit.schedule)}`
+              t("monos.habit.pausedWithSchedule", {
+                schedule: habitScheduleLabel(habit.schedule),
+              })
             )}
           </span>
         </span>
@@ -155,7 +160,11 @@ export function HabitRow({
       <span className="flex shrink-0 items-center pr-2 opacity-0 transition-opacity group-hover/habit:opacity-100 focus-within:opacity-100">
         <HabitButton
           label={
-            running ? "Already running" : starting ? "Starting" : "Run now"
+            running
+              ? t("monos.habit.alreadyRunning")
+              : starting
+                ? t("monos.habit.starting")
+                : t("monos.habit.runNow")
           }
           disabled={running || starting}
           onClick={() => actions.runNow(habit.id)}
@@ -163,7 +172,9 @@ export function HabitRow({
           <Zap className="size-3.5" strokeWidth={1.75} />
         </HabitButton>
         <HabitButton
-          label={habit.enabled ? "Pause" : "Resume"}
+          label={
+            habit.enabled ? t("monos.habit.pause") : t("monos.habit.resume")
+          }
           onClick={() => actions.toggle(habit.id)}
         >
           {habit.enabled ? (
@@ -172,7 +183,10 @@ export function HabitRow({
             <Play className="size-3.5" strokeWidth={1.75} />
           )}
         </HabitButton>
-        <HabitButton label="Remove" onClick={() => actions.remove(habit.id)}>
+        <HabitButton
+          label={t("monos.habit.remove")}
+          onClick={() => actions.remove(habit.id)}
+        >
           <Trash2 className="size-3.5" strokeWidth={1.75} />
         </HabitButton>
       </span>
@@ -209,7 +223,7 @@ export function HabitsList({
   habits,
   actions,
   onOpen,
-  empty = <Empty>No habits yet</Empty>,
+  empty,
 }: {
   habits: Habit[] | undefined;
   actions: HabitActions;
@@ -217,10 +231,12 @@ export function HabitsList({
   /** Shown once loaded with none. */
   empty?: ReactNode;
 }) {
+  const t = useT();
   const now = useTodayTick();
   // Blank for the moment it loads, rather than a line the list replaces.
   if (!habits) return null;
-  if (habits.length === 0) return <>{empty}</>;
+  if (habits.length === 0)
+    return <>{empty ?? <Empty>{t("monos.habit.none")}</Empty>}</>;
   // The day in three parts: what is still to come today, what already ran,
   // and the rest, soonest first with paused ones last.
   const today = habitsToday(habits, now);
@@ -257,14 +273,17 @@ export function HabitsList({
   return (
     <div className="flex flex-col gap-4 pt-1">
       {group(
-        "Up next today",
+        t("monos.habit.upNextToday"),
         upcoming.map((item) => item.habit),
       )}
       {group(
-        "Done today",
+        t("monos.habit.doneToday"),
         done.map((item) => item.habit),
       )}
-      {group(today.length ? "Later" : "Scheduled", later)}
+      {group(
+        today.length ? t("monos.habit.later") : t("monos.habit.scheduled"),
+        later,
+      )}
     </div>
   );
 }
@@ -297,6 +316,7 @@ export function TodayHabits({
   actions: HabitActions;
   onOpen: (id: string) => void;
 }) {
+  const t = useT();
   const now = useTodayTick();
   if (!habits) return null;
   if (habits.length === 0) return <HabitsEmpty />;
@@ -319,9 +339,11 @@ export function TodayHabits({
   return (
     <>
       {upcoming.length ? (
-        <Section title="Upcoming">{cards(upcoming)}</Section>
+        <Section title={t("monos.habit.upcoming")}>{cards(upcoming)}</Section>
       ) : null}
-      {done.length ? <Section title="Done">{cards(done)}</Section> : null}
+      {done.length ? (
+        <Section title={t("monos.habit.done")}>{cards(done)}</Section>
+      ) : null}
     </>
   );
 }
@@ -365,6 +387,7 @@ const CLOCK_GLOW_PATH = mascotPath(CLOCK_GLOW);
 
 /** Empty state for a Mono with no habits yet. */
 export function HabitsEmpty() {
+  const t = useT();
   return (
     <div className="flex flex-col items-center justify-center gap-4 border-t border-stroke px-6 py-10 text-center">
       <svg
@@ -377,7 +400,7 @@ export function HabitsEmpty() {
         <path d={CLOCK_GLOW_PATH} opacity={0.4} />
         <path d={CLOCK_PATH} />
       </svg>
-      <p className="text-[12px] text-content/45">No habits yet</p>
+      <p className="text-[12px] text-content/45">{t("monos.habit.none")}</p>
     </div>
   );
 }

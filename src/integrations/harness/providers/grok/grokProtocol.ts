@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/i18n/locale";
 import { promptBlocks, type PromptContentBlock } from "../../../../features/sessions/model/attachments";
 import type { AgentModel, ModelSetting, ModelSettingChoice } from "../../../../features/sessions/model/models";
 import type { Attachment, RuntimeMode, ToolPreview } from "../../../../features/sessions/model/session";
@@ -14,8 +15,9 @@ import {
   extractToolPreview,
 } from "../../core/preview";
 
-export const AUTH_HELP =
-  "Grok Build is not signed in. Run `grok login` in a terminal, or set XAI_API_KEY.";
+export function authHelp(): string {
+  return t("integrations.grok.authHelp");
+}
 
 export const TEXT_MODEL = "grok-4.6";
 
@@ -169,12 +171,19 @@ export function grokAuthMethodId(init: unknown): string | null {
 export function grokAuthError(error: unknown): Error {
   const detail = error instanceof Error ? error.message : String(error);
   if (/auth|login|credential|api key|XAI_API_KEY/i.test(detail)) {
-    return new Error(`${detail.trim()}\n\n${AUTH_HELP}`);
+    return new Error(`${detail.trim()}\n\n${authHelp()}`);
   }
   if (/timed out/i.test(detail)) {
-    return new Error(`Grok Build did not start. ${AUTH_HELP}`);
+    return new Error(
+      t("integrations.provider.didNotStart", {
+        provider: "Grok Build",
+        detail: authHelp(),
+      }),
+    );
   }
-  return new Error(`Grok Build did not start. ${detail}`);
+  return new Error(
+    t("integrations.provider.didNotStart", { provider: "Grok Build", detail }),
+  );
 }
 
 export function pickAutoOption(

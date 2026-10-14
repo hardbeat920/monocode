@@ -1,3 +1,4 @@
+import { useT } from "../../../shared/i18n/useT";
 import { lazySurface } from "../../../shared/ui/lazySurface";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { memo, useSyncExternalStore } from "react";
@@ -303,6 +304,7 @@ function PlanSurface({
     target?: PlanBuildTarget,
   ) => void;
 }) {
+  const t = useT();
   const plan = file.plan;
   const [mode, setMode] = useMarkdownMode(file.path);
   const session = plan
@@ -316,9 +318,7 @@ function PlanSurface({
   if (!block || !plan) {
     return (
       <div className="grid h-full place-items-center p-6 text-center">
-        <p className="text-[13px] text-content/70">
-          This plan is no longer in the session.
-        </p>
+        <p className="text-[13px] text-content/70">{t("files.plan.missing")}</p>
       </div>
     );
   }
@@ -331,10 +331,10 @@ function PlanSurface({
     block.plan?.status === "built";
   const buildLabel =
     block.plan?.status === "building"
-      ? "Building…"
+      ? t("files.plan.building")
       : block.plan?.status === "built"
-        ? "Built"
-        : "Build";
+        ? t("files.plan.built")
+        : t("files.plan.build");
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col">
@@ -377,7 +377,7 @@ function PlanSurface({
         }
         source={
           <textarea
-            aria-label="Plan markdown"
+            aria-label={t("files.plan.markdown")}
             spellCheck={false}
             value={block.text}
             disabled={

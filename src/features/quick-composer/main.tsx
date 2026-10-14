@@ -16,6 +16,7 @@ import {
 import { QuickGitPopup } from "./ui/QuickGitPopup";
 import { QuickComposer } from "./ui/QuickComposer";
 import "../../styles/index.css";
+import { initLocale } from "../../shared/i18n/locale";
 
 /**
  * Only the theme, not the workspace's glass, backgrounds, or scale: the panel
@@ -37,6 +38,7 @@ function applyAppearance() {
 
 applyAppearance();
 
+initLocale();
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     {new URLSearchParams(window.location.search).get("popup") === "git" ? (

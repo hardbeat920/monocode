@@ -1,3 +1,4 @@
+import { t } from "../../../shared/i18n/locale";
 import { isHexColor } from "../../../shared/lib/colorUtils";
 import { compareSessionSummaries } from "../data/sessionHistory";
 import type { SessionSummary } from "../data/sessionStore";
@@ -63,7 +64,7 @@ export function folderContaining(
 
 export function uniqueFolderName(
   folders: SessionFolder[],
-  base = "New folder",
+  base = t("sessions.folder.newName"),
 ): string {
   const names = new Set(folders.map((folder) => folder.name));
   if (!names.has(base)) return base;
@@ -479,7 +480,8 @@ export function rebaseSessionFolderSettings(from: string, to: string): void {
     for (const storeKey of [PINNED_COLLAPSED_KEY, REMINDERS_COLLAPSED_KEY]) {
       const raw = localStorage.getItem(storeKey);
       const parsed: unknown = raw ? JSON.parse(raw) : {};
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+        continue;
       const state = { ...(parsed as Record<string, unknown>) };
       if (!(oldKey in state)) continue;
       if (!(newKey in state)) state[newKey] = state[oldKey];

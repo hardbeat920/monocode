@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/i18n/locale";
 import { TurnNotReadyError } from "../../core/types";
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import { sameProviderAccountId } from "../../../../features/providers/model/providerAccounts";
@@ -1553,7 +1554,8 @@ function completeAgentTask(
       task.toolUseId,
       task.description,
       status,
-      detail ?? (status === "failed" ? "Subagent failed." : undefined),
+      detail ??
+        (status === "failed" ? t("integrations.subagent.failed") : undefined),
     );
   }
   maybeFinishTurn(live);

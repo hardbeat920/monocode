@@ -1,3 +1,4 @@
+import { t } from "../../../shared/i18n/locale";
 import { stopStreaming } from "../../../integrations/harness/core/apply";
 import { forgetHarnessSession } from "../../../integrations/harness/core/registry";
 import {
@@ -7,7 +8,10 @@ import {
   sessionChildHarnesses,
 } from "./handoff";
 import { flushSessionCheckpoint } from "./checkpoint";
-import { isFilesystemTab, type WorkspaceTab } from "../../workspace/model/layout";
+import {
+  isFilesystemTab,
+  type WorkspaceTab,
+} from "../../workspace/model/layout";
 import { orchestrator } from "../../orchestration/model/orchestration";
 import {
   newSession,
@@ -152,9 +156,10 @@ async function removeSession(
   if (stopped) await flushSessionCheckpoint(sessionId);
   let savedSummary: SessionSummary | undefined;
   if (options.mode === "delete") {
-    const imagePaths = stopped?.blocks.flatMap((block) =>
-      block.role === "image" && block.image ? [block.image.path] : [],
-    ) ?? [];
+    const imagePaths =
+      stopped?.blocks.flatMap((block) =>
+        block.role === "image" && block.image ? [block.image.path] : [],
+      ) ?? [];
     await orchestrator.deleteSession(sessionId, () =>
       deleteSession(sessionId, imagePaths),
     );
@@ -165,7 +170,7 @@ async function removeSession(
   } else {
     if (stopped && shouldPersistSession(stopped)) {
       const saved = await upsertSession(stopped);
-      if (!saved) throw new Error("The conversation could not be saved.");
+      if (!saved) throw new Error(t("sessions.removal.saveFailed"));
       savedSummary = saved;
     }
     await setSessionArchived(sessionId, true);

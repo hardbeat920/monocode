@@ -8,6 +8,7 @@ import {
 } from "../../settings/model/mcp";
 import { mcpPickerServers } from "../model/mcpPicker";
 import type { HarnessId } from "../model/session";
+import { useT } from "../../../shared/i18n/useT";
 
 export function McpServerPicker({
   connections,
@@ -28,6 +29,7 @@ export function McpServerPicker({
   onManage: () => void;
   onDismiss: (reason: "escape" | "outside") => void;
 }) {
+  const t = useT();
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const listboxId = `mcp-server-picker-${useId()}`;
@@ -70,7 +72,7 @@ export function McpServerPicker({
       ref={picker}
       data-mcp-picker
       role="dialog"
-      aria-label="Choose an MCP server"
+      aria-label={t("sessions.mcp.dialogAria")}
       onKeyDown={(event) => {
         if (event.nativeEvent.isComposing) return;
         if (event.key === "Escape") {
@@ -93,7 +95,7 @@ export function McpServerPicker({
               ? `${listboxId}-option-${active}`
               : undefined
           }
-          aria-label="Search MCP servers"
+          aria-label={t("sessions.mcp.searchAria")}
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={(event) => {
@@ -116,12 +118,12 @@ export function McpServerPicker({
             }
           }}
           className="min-w-0 flex-1 bg-transparent text-[13px] text-content outline-none placeholder:text-content/40"
-          placeholder="Search MCP servers…"
+          placeholder={t("sessions.mcp.searchPlaceholder")}
         />
         <button
           type="button"
-          aria-label="Close MCP picker"
-          title="Back to the conversation (Esc)"
+          aria-label={t("sessions.mcp.closeAria")}
+          title={t("sessions.mcp.closeTitle")}
           onClick={() => onDismiss("escape")}
           className="grid size-7 shrink-0 place-items-center rounded-md text-content/45 transition-colors hover:bg-content/8 hover:text-content focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
         >
@@ -132,12 +134,12 @@ export function McpServerPicker({
         ref={lockOverscroll}
         id={listboxId}
         role="listbox"
-        aria-label="MCP servers"
+        aria-label={t("sessions.mcp.listAria")}
         className="max-h-[min(184px,45vh)] overflow-y-auto overscroll-none p-1"
       >
         {loading ? (
           <p className="px-2 py-2 text-[12px] text-content/50">
-            Checking MCP servers…
+            {t("sessions.mcp.checking")}
           </p>
         ) : error ? (
           <p role="alert" className="px-2 py-2 text-[12px] text-red-400">
@@ -145,7 +147,7 @@ export function McpServerPicker({
           </p>
         ) : servers.length === 0 ? (
           <p className="px-2 py-2 text-[12px] text-content/50">
-            {query ? "No matching MCP servers" : "No MCP servers found"}
+            {query ? t("sessions.mcp.noMatches") : t("sessions.mcp.empty")}
           </p>
         ) : (
           servers.map((server, index) => {
@@ -189,10 +191,10 @@ export function McpServerPicker({
                   className={`max-w-[40%] shrink-0 truncate text-[11px] ${server.availability === "authentication" ? "text-amber-400" : "text-content/45"}`}
                 >
                   {server.availability === "authentication"
-                    ? "Needs authentication"
+                    ? t("sessions.mcp.needsAuth")
                     : server.availability === "unavailable"
                       ? server.detail
-                      : "Available"}
+                      : t("sessions.mcp.available")}
                 </span>
               </button>
             );
@@ -205,7 +207,7 @@ export function McpServerPicker({
         className="flex w-full items-center gap-2 border-t border-content/10 px-3 py-2 text-left text-[12px] text-content/65 hover:bg-content/5 hover:text-content"
       >
         <Settings className="size-3.5" />
-        Manage MCP Servers…
+        {t("sessions.mcp.manage")}
       </button>
     </div>
   );
