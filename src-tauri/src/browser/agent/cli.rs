@@ -38,6 +38,11 @@ Actions and their fields (* required). Every action except tabs.* also takes
   type           --tab* --ref* --text* --clear --submit
   press          --tab* --key* (Enter, Escape, Control+A) --ref
   select         --tab* --ref* --values* (repeatable)
+  fill           --tab* --fields* JSON --then-click REF
+                 Several fields in one call, in order, e.g. --fields
+                 '[{"ref":"e3","text":"Ana"},{"ref":"e5","values":["rs"]},
+                 {"ref":"e7","checked":true}]'; --then-click e9 clicks
+                 Save afterwards.
   scroll         --tab* --ref | --direction up|down|left|right --amount PX
   upload         --tab* --ref* --paths* (repeatable)
   dialog         --tab* --action* accept|dismiss --text
@@ -78,9 +83,10 @@ sessions it starts. They are already in your environment; never print them.
 "#;
 
 /// Flags whose value is text.
-const STRINGS: [&str; 14] = [
+const STRINGS: [&str; 15] = [
     "tab",
     "ref",
+    "then_click",
     "url",
     "text",
     "key",
@@ -109,6 +115,8 @@ const INTEGERS: [&str; 8] = [
 const BOOLEANS: [&str; 5] = ["clear", "submit", "full_page", "user_visible", "snapshot"];
 /// Repeatable flags collected into an array.
 const LISTS: [&str; 3] = ["values", "paths", "modifiers"];
+/// Flags whose value is JSON.
+const JSONS: [&str; 1] = ["fields"];
 
 pub fn help() -> String {
     USAGE.replace("{exe}", &exe())
@@ -370,6 +378,11 @@ fn parse(args: &[String], stdin: &mut dyn Read) -> Result<Parsed, String> {
                     .parse()
                     .map_err(|_| format!("{flag} takes a whole number, not {value}"))?;
                 fields.insert(name, json!(number));
+            }
+            field if JSONS.contains(&field) => {
+                let parsed: Value =
+                    serde_json::from_str(value).map_err(|e| format!("{flag} takes JSON: {e}"))?;
+                fields.insert(name, parsed);
             }
             field if LISTS.contains(&field) => {
                 let items: Vec<Value> = if value.trim_start().starts_with('[') {

@@ -63,6 +63,7 @@ mod actions;
 mod cursor;
 mod devtools;
 mod element;
+mod fill;
 mod input;
 mod observe;
 mod refs;
@@ -132,6 +133,7 @@ pub fn execute(exec: Exec<'_>) -> ActionResult {
         ActionKind::Press => params(input).and_then(|p| input::press(&run, p)),
         ActionKind::Scroll => params(input).and_then(|p| input::scroll(&run, p)),
         ActionKind::Select => params(input).and_then(|p| actions::select(&run, p)),
+        ActionKind::Fill => params(input).and_then(|p| fill::fill(&run, p)),
         ActionKind::Upload => params(input).and_then(|p| actions::upload(&run, p)),
         ActionKind::Dialog => params(input).and_then(|p| actions::dialog(&run, p)),
         ActionKind::Wait => params(input).and_then(|p| actions::wait(&run, p)),
@@ -172,6 +174,7 @@ fn returns_snapshot(kind: ActionKind) -> bool {
             | ActionKind::Press
             | ActionKind::Scroll
             | ActionKind::Select
+            | ActionKind::Fill
             | ActionKind::Upload
             | ActionKind::Dialog
             | ActionKind::Wait

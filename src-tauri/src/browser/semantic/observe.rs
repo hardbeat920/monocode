@@ -24,7 +24,7 @@ use super::super::link::{CdpEvent, CdpSessionId, Command, EventFilter, Method, S
 use super::super::policy::now_ms;
 use super::super::protocol::{
     strip_marker, DialogInfo, DialogType, LoadState, NewTabInfo, Observed, Reason, TabId, TabState,
-    WaitUntil,
+    WaitUntil, LOAD_GRACE,
 };
 use super::super::targets;
 use super::element::{self, PAGE_JS};
@@ -230,10 +230,18 @@ impl Watch {
         let mut mutations = 0u64;
         let mut loaded_at: Option<Instant> = None;
         let mut fetched = false;
+        // A navigation waits for `load`, but not long past the new document
+        // being parsed (see `WaitUntil::Usable`).
+        let mut parsed_at: Option<Instant> = None;
+        let load_deadline = |parsed_at: Option<Instant>| {
+            parsed_at.map_or(run.ctx.deadline, |at| {
+                (at + LOAD_GRACE).min(run.ctx.deadline)
+            })
+        };
         while self.dialog.is_none() && !closed {
             let end = if settle && fetched { settle_cap } else { until };
             let deadline = if navigating && !loaded {
-                run.ctx.deadline
+                load_deadline(parsed_at)
             } else if settle && !navigating {
                 next_poll.min(end)
             } else if let (true, Some(at)) = (settle, loaded_at) {
@@ -333,6 +341,11 @@ impl Watch {
                 {
                     loaded = true;
                 }
+                "Page.lifecycleEvent"
+                    if navigating && main_frame_event && params["name"] == "DOMContentLoaded" =>
+                {
+                    parsed_at.get_or_insert(now);
+                }
                 "Page.frameStoppedLoading" if navigating && main_frame_event => loaded = true,
                 "Page.loadEventFired" if navigating => loaded = true,
                 "Page.javascriptDialogOpening" => self.dialog = Some(dialog_info(params)),
@@ -362,6 +375,9 @@ impl Watch {
             }
             // A busy page (images, console) still ends on time or when quiet.
             let now = Instant::now();
+            if navigating && !loaded && now >= load_deadline(parsed_at) {
+                break;
+            }
             let end = if settle && fetched { settle_cap } else { until };
             if !navigating
                 && (now >= end
@@ -379,9 +395,15 @@ impl Watch {
             navigated = true;
             load_state = Some(if loaded {
                 LoadState::Load
+            } else if parsed_at.is_some() {
+                LoadState::Domcontentloaded
             } else if self.dialog.is_none() && !closed {
-                let (state, dialog) =
-                    targets::wait_for_load(&self.session, None, WaitUntil::Load, run.ctx.deadline);
+                let (state, dialog) = targets::wait_for_load(
+                    &self.session,
+                    None,
+                    WaitUntil::Usable,
+                    run.ctx.deadline,
+                );
                 if dialog.is_some() {
                     self.dialog = dialog;
                 }

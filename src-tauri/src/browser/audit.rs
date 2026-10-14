@@ -407,6 +407,16 @@ pub fn redact_params(action: ActionKind, input: &Value) -> Value {
             // `type` text, `dialog` prompt text: length and a short hash only.
             (_, "text") => hash_text(value),
             (ActionKind::Wait, "value") if waits_for_text => hash_text(value),
+            // `fill`: the text of each field, like `type`.
+            (ActionKind::Fill, "fields") => match value {
+                Value::Array(fields) => Value::Array(
+                    fields
+                        .iter()
+                        .map(|field| redact_params(ActionKind::Type, field))
+                        .collect(),
+                ),
+                other => other.clone(),
+            },
             (_, "url") => match value {
                 Value::String(url) => Value::String(audit_url(url)),
                 other => other.clone(),
@@ -651,6 +661,18 @@ mod tests {
             &json!({ "tab": "t_1", "action": "accept", "text": "secret" }),
         );
         assert_eq!(dialog["text"]["len"], 6);
+        let fill = redact_params(
+            ActionKind::Fill,
+            &json!({ "tab": "t_1", "fields": [
+                { "ref": "e3", "text": "hunter2" },
+                { "ref": "e4", "checked": true },
+            ], "then_click": "e9" }),
+        );
+        assert_eq!(fill["fields"][0]["ref"], "e3");
+        assert_eq!(fill["fields"][0]["text"]["len"], 7);
+        assert_eq!(fill["fields"][1]["checked"], true);
+        assert_eq!(fill["then_click"], "e9");
+        assert!(fill.to_string().find("hunter2").is_none());
         assert_eq!(redact_params(ActionKind::Click, &Value::Null), json!({}));
     }
 }

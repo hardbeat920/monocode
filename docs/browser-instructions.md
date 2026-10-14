@@ -21,7 +21,7 @@ You can work in your own tabs in Chrome or Edge through MonoCode: either the Mon
 
 - The tabs are yours: MonoCode marks them with "◆ MonoCode" in the title. A tab the user opened in the MonoCode browser is free until a thread adopts it; when the user mentions a page they opened, list your tabs and adopt it. In the user's own browser they can also hand you one of their tabs, which then shows up in your list. In the user's own browser they open in the background and carry the user's sign-ins; you cannot see or touch the user's other tabs. Never ask the user to click or type in your tabs. When a site needs a sign-in you do not have, stop and tell the user; they can sign in once through Open browser in MonoCode's browser settings.
 - Start by opening a tab; the result's data holds its id (`t_` + 8 hex). Every other action takes that `tab`. List your tabs when you lose track of them.
-- Act on elements by ref (`e12`) from a snapshot. Opening a page and every action that can change it (navigate, click, type, press, select, hover, scroll, upload, dialog, wait, back) already return the page snapshot after it: the whole page after a navigation, otherwise only the lines that changed since your last snapshot (`+` added, `-` removed, `@@` names where), including page text such as a "Saved" or error message, or that nothing changed. Refs you have not seen change keep working, so you rarely need a separate snapshot call. Pass `snapshot: false` when you do not need it. Refs from before a navigation fail with `ref_stale`.
+- Act on elements by ref (`e12`) from a snapshot. Opening a page and every action that can change it (navigate, click, type, press, select, fill, hover, scroll, upload, dialog, wait, back) already return the page snapshot after it: the whole page after a navigation, otherwise only the lines that changed since your last snapshot (`+` added, `-` removed, `@@` names where), including page text such as a "Saved" or error message, or that nothing changed. Refs you have not seen change keep working, so you rarely need a separate snapshot call. Pass `snapshot: false` when you do not need it. Refs from before a navigation fail with `ref_stale`.
 - Every result has an outcome. `done`: the input reached the browser; check the effect in the snapshot that came with it. `blocked`: nothing was sent; change the plan and never work around it (for example with another URL). `failed`: fix the input (a fresh snapshot, another ref). `unknown`: the action may have happened; take a snapshot before retrying, and retry only with the same `request_id`.
 - When the thread has no access yet, your first action asks the user in MonoCode and waits for the answer. On `not_granted` continue without the browser and do not retry in this turn. On `off` or a `browser_*` connection reason stop calling and tell the user what the message says.
 - A JavaScript dialog blocks its tab until you answer it with the dialog action; MonoCode never answers one for you.
@@ -36,7 +36,7 @@ Manage your own browser tabs. action "list" returns the tabs this session owns, 
 
 ## browser_navigate
 
-Load an http(s) URL (or about:blank) in one of your tabs and wait for `wait_until` (default load). A load that times out still returns done with `observed.load_state: "timeout"`; the snapshot with the result shows what loaded.
+Load an http(s) URL (or about:blank) in one of your tabs and wait until it loads; by default at most a second after the page is parsed, so slow images and ads do not hold you up (`observed.load_state: "domcontentloaded"` then). `wait_until: "load"` waits for the full load. A load that times out still returns done with `observed.load_state: "timeout"`; the snapshot with the result shows what loaded.
 
 ## browser_snapshot
 
@@ -61,6 +61,10 @@ Press a key or combination such as `Enter`, `Escape`, `Tab`, `ArrowDown` or `Con
 ## browser_select
 
 Choose options in a native `<select>` element by value or visible label (`values`). For custom dropdowns, click them instead.
+
+## browser_fill
+
+Fill several form fields in one call, in order: each field is a ref with `text` (replaces the content), `values` (options of a native `<select>`) or `checked` (a checkbox, radio button or switch). `then_click` clicks a button (such as Save) once every field is filled. The first field that fails stops the rest, and the message says which were filled. Use it instead of typing field by field.
 
 ## browser_scroll
 

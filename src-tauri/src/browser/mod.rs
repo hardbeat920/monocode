@@ -2109,7 +2109,7 @@ impl BrowserHost {
                     Ok(params) => params,
                     Err(result) => return *result,
                 };
-                match targets::open_tab(&self.link, ctx, params.url.as_deref(), WaitUntil::Load) {
+                match targets::open_tab(&self.link, ctx, params.url.as_deref(), WaitUntil::Usable) {
                     Ok(opened) => {
                         self.close_startup_pages();
                         let tab = opened.handle.tab.clone();

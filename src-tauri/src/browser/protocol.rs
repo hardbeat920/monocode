@@ -390,6 +390,8 @@ pub enum ActionKind {
     Press,
     #[serde(rename = "select")]
     Select,
+    #[serde(rename = "fill")]
+    Fill,
     #[serde(rename = "scroll")]
     Scroll,
     #[serde(rename = "upload")]
@@ -423,7 +425,7 @@ pub enum ActionKind {
 }
 
 impl ActionKind {
-    pub const ALL: [ActionKind; 22] = [
+    pub const ALL: [ActionKind; 23] = [
         ActionKind::Snapshot,
         ActionKind::Navigate,
         ActionKind::Click,
@@ -431,6 +433,7 @@ impl ActionKind {
         ActionKind::Type,
         ActionKind::Press,
         ActionKind::Select,
+        ActionKind::Fill,
         ActionKind::Scroll,
         ActionKind::Upload,
         ActionKind::Dialog,
@@ -458,6 +461,7 @@ impl ActionKind {
             Type => "type",
             Press => "press",
             Select => "select",
+            Fill => "fill",
             Scroll => "scroll",
             Upload => "upload",
             Dialog => "dialog",
@@ -508,6 +512,7 @@ impl ActionKind {
             Click | Hover | Type | Press | Select | Scroll | Upload | Dialog => {
                 Duration::from_secs(10)
             }
+            Fill => Duration::from_secs(30),
             Navigate | Back | Forward => Duration::from_secs(30),
             Wait => Duration::from_secs(10),
             Snapshot | Read | Screenshot => Duration::from_secs(15),
@@ -522,6 +527,7 @@ impl ActionKind {
             Click | Hover | Type | Press | Select | Scroll | Upload | Dialog => {
                 Duration::from_secs(30)
             }
+            Fill => Duration::from_secs(60),
             Navigate | Back | Forward | Wait => Duration::from_secs(120),
             Snapshot | Read | Screenshot => Duration::from_secs(60),
             Console | Network => Duration::from_secs(30),
@@ -582,10 +588,18 @@ pub struct SnapshotParams {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum WaitUntil {
-    #[default]
     Load,
     Domcontentloaded,
+    /// `load`, but no longer than [`LOAD_GRACE`] after `DOMContentLoaded`:
+    /// the default, so slow images, ads and analytics do not hold up an
+    /// agent whose page is already parsed. Not an agent-visible value.
+    #[default]
+    #[serde(skip)]
+    Usable,
 }
+
+/// How long [`WaitUntil::Usable`] waits for `load` once the document is parsed.
+pub const LOAD_GRACE: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -707,6 +721,39 @@ pub struct SelectParams {
     /// `false`: leave the page snapshot out of the result (it is included by default).
     #[serde(default)]
     pub snapshot: Option<bool>,
+}
+
+/// `fill`: several form fields in one action, in order.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FillParams {
+    pub tab: TabId,
+    pub fields: Vec<FillField>,
+    /// Ref of a button to click once every field is filled.
+    #[serde(default)]
+    pub then_click: Option<String>,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+    /// `false`: leave the page snapshot out of the result (it is included by default).
+    #[serde(default)]
+    pub snapshot: Option<bool>,
+}
+
+/// One field of [`FillParams`]: exactly one of `text`, `values`, `checked`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FillField {
+    #[serde(rename = "ref")]
+    pub element: String,
+    /// Replaces the content of a text field.
+    #[serde(default)]
+    pub text: Option<String>,
+    /// Options of a native `<select>`, by value or visible label.
+    #[serde(default)]
+    pub values: Option<Vec<String>>,
+    /// State of a checkbox, radio button or switch.
+    #[serde(default)]
+    pub checked: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

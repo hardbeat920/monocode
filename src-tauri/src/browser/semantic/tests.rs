@@ -51,6 +51,8 @@ struct Model {
     glide_ms: u64,
     /// Plain text the page shows under its controls, when set.
     status: Option<String>,
+    /// State of a checkbox; every click on the page flips it.
+    checked: Option<bool>,
 }
 
 impl Default for Model {
@@ -68,6 +70,7 @@ impl Default for Model {
             history_index: 1,
             glide_ms: 0,
             status: None,
+            checked: None,
         }
     }
 }
@@ -201,6 +204,12 @@ fn respond(
                     _ => result(json!({ "ok": true })),
                 };
             }
+            if function.contains("function monocodeChecked(") {
+                return match model.checked {
+                    Some(checked) => result(json!({ "kind": "checkbox", "checked": checked })),
+                    None => result(json!({ "kind": "none" })),
+                };
+            }
             if function.contains("function monocodeRead(") {
                 let offset = args[1].as_u64().unwrap_or(0) as usize;
                 let limit = args[2].as_u64().unwrap_or(0) as usize;
@@ -224,6 +233,9 @@ fn respond(
             Response::Hold
         }
         "Input.dispatchMouseEvent" if params["type"] == "mouseReleased" => {
+            if let Some(checked) = model.checked.as_mut() {
+                *checked = !*checked;
+            }
             let events = std::mem::take(&mut model.on_release);
             Response::ResultThen(json!({}), events)
         }
@@ -715,6 +727,118 @@ fn type_press_and_select_send_the_spec_sequences() {
     assert!(missing.message.contains("xxl"));
     let not_select = h.act(ActionKind::Select, json!({ "ref": "e2", "values": ["m"] }));
     assert_eq!(not_select.reason, Some(Reason::OptionNotFound));
+}
+
+#[test]
+fn fill_goes_field_by_field_and_stops_at_the_first_failure() {
+    let h = Harness::new();
+    h.snapshot();
+    {
+        let mut model = h.model.lock().unwrap();
+        model.facts.insert(
+            (MAIN.into(), 12),
+            json!({ "editable": true, "text_like": true }),
+        );
+        model.facts.insert(
+            (MAIN.into(), 14),
+            json!({ "select": true, "tag": "select" }),
+        );
+        model.checked = Some(false);
+    }
+    let fields = json!([
+        { "ref": "e3", "text": "Ana" },
+        { "ref": "e7", "values": ["m"] },
+        { "ref": "e2", "checked": true },
+    ]);
+    let mark = h.mark();
+    let filled = h.act(
+        ActionKind::Fill,
+        json!({ "fields": fields, "snapshot": false }),
+    );
+    assert_eq!(filled.outcome, Outcome::Done, "{filled:?}");
+    assert!(
+        filled.message.starts_with("Filled 3 fields (e3, e7, e2)."),
+        "{}",
+        filled.message
+    );
+    let log = h.since(mark);
+    let insert = log.iter().find(|r| r.method == "Input.insertText").unwrap();
+    assert_eq!(insert.params["text"], "Ana");
+    assert!(log.iter().any(|r| r.params["functionDeclaration"]
+        .as_str()
+        .is_some_and(|f| f.contains("function monocodeSelect("))));
+    assert_eq!(h.model.lock().unwrap().checked, Some(true));
+
+    // A checkbox already in the wanted state is not clicked.
+    let mark = h.mark();
+    let again = h.act(
+        ActionKind::Fill,
+        json!({ "fields": [{ "ref": "e2", "checked": true }], "snapshot": false }),
+    );
+    assert_eq!(again.outcome, Outcome::Done, "{again:?}");
+    assert!(mouse(&h.since(mark)).is_empty());
+
+    // Every field is checked before the first one is touched.
+    let mark = h.mark();
+    let bad = h.act(
+        ActionKind::Fill,
+        json!({ "fields": [{ "ref": "e3", "text": "x" }, { "ref": "e2", "text": "y", "checked": true }] }),
+    );
+    assert_eq!(bad.reason, Some(Reason::InvalidRequest));
+    assert!(bad.message.contains("e2"), "{}", bad.message);
+    assert!(h.since(mark).is_empty());
+
+    // The first failure stops the rest and says what was filled.
+    let stopped = h.act(
+        ActionKind::Fill,
+        json!({ "fields": [
+            { "ref": "e3", "text": "Ana" },
+            { "ref": "e7", "values": ["xxl"] },
+            { "ref": "e2", "checked": false },
+        ] }),
+    );
+    assert_eq!(stopped.reason, Some(Reason::OptionNotFound), "{stopped:?}");
+    assert!(
+        stopped
+            .message
+            .starts_with("Filled 1 field (e3). Field e7: No option matches"),
+        "{}",
+        stopped.message
+    );
+    assert!(
+        stopped.message.ends_with("Not filled: e2."),
+        "{}",
+        stopped.message
+    );
+    let data = stopped.data.unwrap();
+    assert_eq!(data["failed"], "e7");
+    assert_eq!(data["not_filled"], json!(["e2"]));
+    assert_eq!(h.model.lock().unwrap().checked, Some(true));
+
+    // then_click presses the button once the fields are filled.
+    let mark = h.mark();
+    let saved = h.act(
+        ActionKind::Fill,
+        json!({ "fields": [{ "ref": "e3", "text": "Bo" }], "then_click": "e2", "snapshot": false }),
+    );
+    assert_eq!(saved.outcome, Outcome::Done, "{saved:?}");
+    assert!(
+        saved
+            .message
+            .starts_with("Filled 1 field (e3), then clicked e2."),
+        "{}",
+        saved.message
+    );
+    let log = h.since(mark);
+    let insert = log
+        .iter()
+        .position(|r| r.method == "Input.insertText")
+        .unwrap();
+    let release = log
+        .iter()
+        .position(|r| r.method == "Input.dispatchMouseEvent" && r.params["type"] == "mouseReleased")
+        .unwrap();
+    assert!(insert < release);
 }
 
 #[test]

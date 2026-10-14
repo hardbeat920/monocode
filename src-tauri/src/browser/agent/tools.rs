@@ -60,7 +60,7 @@ const COMMIT: Hints = Hints {
     destructive: true,
 };
 
-pub const TOOLS: [Tool; 17] = [
+pub const TOOLS: [Tool; 18] = [
     Tool {
         name: "browser_tabs",
         title: "Browser tabs",
@@ -100,6 +100,11 @@ pub const TOOLS: [Tool; 17] = [
         name: "browser_select",
         title: "Select option",
         hints: ACT,
+    },
+    Tool {
+        name: "browser_fill",
+        title: "Fill form",
+        hints: COMMIT,
     },
     Tool {
         name: "browser_scroll",
@@ -259,7 +264,7 @@ pub fn input_schema(name: &str) -> Option<Value> {
                     "wait_until",
                     one_of(
                         &["load", "domcontentloaded"],
-                        "Page event to wait for; default load.",
+                        "Page event to wait for. Default: load, but at most a second after the page is parsed.",
                     ),
                 ),
                 ("snapshot", snapshot()),
@@ -367,6 +372,38 @@ pub fn input_schema(name: &str) -> Option<Value> {
                 ("timeout_ms", timeout()),
             ],
             &["tab", "ref", "values"],
+        ),
+        "browser_fill" => object(
+            vec![
+                ("tab", tab()),
+                (
+                    "fields",
+                    json!({
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 50,
+                        "description": "Filled in this order. Each names a ref and exactly one of text, values or checked.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "ref": element("Field"),
+                                "text": {"type": "string", "description": "Replaces the field's content."},
+                                "values": {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "Options of a native <select>, by value or visible label."},
+                                "checked": {"type": "boolean", "description": "State of a checkbox, radio button or switch."}
+                            },
+                            "required": ["ref"],
+                            "additionalProperties": false
+                        }
+                    }),
+                ),
+                (
+                    "then_click",
+                    element("Button to click once every field is filled (such as Save);"),
+                ),
+                ("snapshot", snapshot()),
+                ("timeout_ms", timeout()),
+            ],
+            &["tab", "fields"],
         ),
         "browser_scroll" => object(
             vec![
@@ -637,6 +674,7 @@ mod tests {
             Type => round::<TypeParams>(input),
             Press => round::<PressParams>(input),
             Select => round::<SelectParams>(input),
+            Fill => round::<FillParams>(input),
             Scroll => round::<ScrollParams>(input),
             Upload => round::<UploadParams>(input),
             Dialog => round::<DialogParams>(input),
@@ -668,6 +706,14 @@ mod tests {
                 "integer" => json!(schema["minimum"].as_u64().unwrap_or(1).max(1)),
                 "boolean" => json!(true),
                 "array" => json!([sample(&schema["items"])]),
+                "object" => Value::Object(
+                    schema["properties"]
+                        .as_object()
+                        .unwrap()
+                        .iter()
+                        .map(|(key, property)| (key.clone(), sample(property)))
+                        .collect(),
+                ),
                 other => panic!("no sample for {other}"),
             },
             Value::Array(_) => json!("x"),

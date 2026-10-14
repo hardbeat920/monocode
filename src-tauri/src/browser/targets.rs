@@ -23,7 +23,7 @@ use super::link::{
 use super::policy::{check_url, now_ms, FrameSession, Lease, Policy, PolicyState, RequestCtx};
 use super::protocol::{
     strip_marker, ActionResult, DialogInfo, DialogType, LoadState, Observed, Outcome, Reason,
-    TabId, TabState, WaitUntil, ISOLATED_WORLD,
+    TabId, TabState, WaitUntil, ISOLATED_WORLD, LOAD_GRACE,
 };
 
 /// The marker script (spec 7, decision D12), embedded at build time.
@@ -628,8 +628,9 @@ fn wait_for_load_with(
     on_event: &mut dyn FnMut(&CdpEvent),
 ) -> (LoadState, Option<DialogInfo>) {
     let mut dom_content_loaded = false;
+    let mut until = deadline;
     loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
+        let remaining = until.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             return (
                 if dom_content_loaded {
@@ -659,8 +660,14 @@ fn wait_for_load_with(
                     Some("load") => return (LoadState::Load, None),
                     Some("DOMContentLoaded") => {
                         dom_content_loaded = true;
-                        if wait_until == WaitUntil::Domcontentloaded {
-                            return (LoadState::Domcontentloaded, None);
+                        match wait_until {
+                            WaitUntil::Domcontentloaded => {
+                                return (LoadState::Domcontentloaded, None)
+                            }
+                            WaitUntil::Usable => {
+                                until = until.min(Instant::now() + LOAD_GRACE);
+                            }
+                            WaitUntil::Load => {}
                         }
                     }
                     _ => {}
@@ -1747,6 +1754,23 @@ mod tests {
             Instant::now() + Duration::from_millis(300),
         );
         assert_eq!(state, LoadState::Domcontentloaded);
+        // The default waits for `load` only a short while after the
+        // document is parsed.
+        let sub = link.subscribe(EventFilter::session(&session));
+        server.emit(
+            "Page.lifecycleEvent",
+            json!({ "frameId": "F", "loaderId": "NEW", "name": "DOMContentLoaded" }),
+            Some("S1"),
+        );
+        let started = Instant::now();
+        let (state, _) = wait_for_load(
+            &sub,
+            Some("NEW"),
+            WaitUntil::Usable,
+            Instant::now() + Duration::from_secs(10),
+        );
+        assert_eq!(state, LoadState::Domcontentloaded);
+        assert!(started.elapsed() < LOAD_GRACE + Duration::from_millis(900));
         let sub = link.subscribe(EventFilter::session(&session));
         server.emit(
             "Page.javascriptDialogOpening",

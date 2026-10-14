@@ -12,7 +12,7 @@ use super::super::policy::{check_upload_path, check_url};
 use super::super::protocol::{
     ActionResult, DialogAction, DialogParams, DialogType, HistoryParams, ImageFormat,
     NavigateParams, Observed, ReadFormat, ReadParams, Reason, ScreenshotParams, SelectParams,
-    UploadParams, WaitFor, WaitParams,
+    UploadParams, WaitFor, WaitParams, WaitUntil,
 };
 use super::super::targets::{self, TabError};
 use super::element::{self, Needs, PAGE_JS, READ_JS, SELECT_JS};
@@ -164,6 +164,7 @@ pub fn select(run: &Run<'_>, p: SelectParams) -> Result<ActionResult, Fail> {
         ));
     }
     let mut watch = Watch::start(run);
+    watch.count_mutations(run);
     let session = el.node.frame.session.clone();
     let answer = watch.input(
         run,
@@ -288,6 +289,7 @@ pub fn upload(run: &Run<'_>, p: UploadParams) -> Result<ActionResult, Fail> {
             ));
         }
         let mut watch = Watch::start(run);
+        watch.count_mutations(run);
         let session = el.node.frame.session.clone();
         watch.input(
             run,
@@ -639,7 +641,7 @@ pub fn wait(run: &Run<'_>, p: WaitParams) -> Result<ActionResult, Fail> {
                     let (state, _) = targets::wait_for_load(
                         &subscription,
                         None,
-                        Default::default(),
+                        WaitUntil::Load,
                         (Instant::now() + Duration::from_millis(250)).min(run.ctx.deadline),
                     );
                     if state == super::super::protocol::LoadState::Load {
