@@ -1,4 +1,32 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
+
+async function setOverflow(strip: Locator, overflow: number) {
+  await strip.evaluate((el, extra) => {
+    const row = el.parentElement!;
+    const fixture = row.parentElement!;
+    const inset = fixture.getBoundingClientRect().width - row.clientWidth;
+    const add = row.querySelector<HTMLButtonElement>(
+      '[aria-label="Connect an inbox source"]',
+    );
+    fixture.style.width = `${el.firstElementChild!.scrollWidth + (add?.offsetWidth ?? 0) + inset - extra}px`;
+    el.scrollLeft = 0;
+  }, overflow);
+  await expect
+    .poll(() =>
+      strip.evaluate((el) => {
+        const row = el.parentElement!;
+        const add = row.querySelector<HTMLButtonElement>(
+          '[aria-label="Connect an inbox source"]',
+        );
+        return (
+          el.firstElementChild!.scrollWidth +
+          (add?.offsetWidth ?? 0) -
+          row.clientWidth
+        );
+      }),
+    )
+    .toBe(overflow);
+}
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/tests/browser/tab-strip.html");
@@ -84,13 +112,7 @@ for (const overflow of [2, 8, 25, 60]) {
     const strip = page.getByRole("tablist");
     const left = page.getByRole("button", { name: "Scroll tabs left" });
     const right = page.getByRole("button", { name: "Scroll tabs right" });
-    await strip.evaluate((el, extra) => {
-      const row = el.parentElement!;
-      const fixture = row.parentElement!;
-      const inset = fixture.getBoundingClientRect().width - row.clientWidth;
-      fixture.style.width = `${el.firstElementChild!.scrollWidth + row.querySelector<HTMLButtonElement>('[aria-label="Connect an inbox source"]')!.offsetWidth + inset - extra}px`;
-      el.scrollLeft = 0;
-    }, overflow);
+    await setOverflow(strip, overflow);
     await expect(left).toHaveCount(0);
     await expect(right).toBeVisible();
     const first = page.getByRole("tab", { name: "GitHub", exact: true });
@@ -124,16 +146,7 @@ for (const hasAdd of [true, false]) {
     }) => {
       if (!hasAdd) await page.goto("/tests/browser/tab-strip.html?no-add");
       const strip = page.getByRole("tablist");
-      await strip.evaluate((el, extra) => {
-        const row = el.parentElement!;
-        const fixture = row.parentElement!;
-        const inset = fixture.getBoundingClientRect().width - row.clientWidth;
-        const add = row.querySelector<HTMLButtonElement>(
-          '[aria-label="Connect an inbox source"]',
-        );
-        fixture.style.width = `${el.firstElementChild!.scrollWidth + (add?.offsetWidth ?? 0) + inset - extra}px`;
-        el.scrollLeft = 0;
-      }, overflow);
+      await setOverflow(strip, overflow);
       const right = page.getByRole("button", { name: "Scroll tabs right" });
       const left = page.getByRole("button", { name: "Scroll tabs left" });
       await expect(left).toHaveCount(0);
@@ -154,3 +167,18 @@ for (const hasAdd of [true, false]) {
     });
   }
 }
+
+test("reduced motion still reaches either edge in one click", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await setOverflow(page.getByRole("tablist"), 25);
+  const right = page.getByRole("button", { name: "Scroll tabs right" });
+  const left = page.getByRole("button", { name: "Scroll tabs left" });
+  await right.click();
+  await expect(right).toHaveCount(0);
+  await expect(left).toBeVisible();
+  await left.click();
+  await expect(left).toHaveCount(0);
+  await expect(right).toBeVisible();
+});

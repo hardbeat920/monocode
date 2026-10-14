@@ -11,6 +11,7 @@ import { useLockOverscroll } from "../hooks/useLockOverscroll";
 const ADD_PADDING = 16;
 const COMPACT_ADD_WIDTH = 30;
 const PAGER_WIDTH = 24;
+const MIN_SCROLL_STEP = 48;
 const EDGE_TOLERANCE = 1;
 
 function measureStrip(
@@ -30,13 +31,11 @@ export function ScrollableTabStrip({
   children,
   label,
   activeKey,
-  className = "",
   add,
 }: {
   children: ReactNode;
   label: string;
   activeKey?: string;
-  className?: string;
   add?: {
     label: string;
     ariaLabel: string;
@@ -122,7 +121,7 @@ export function ScrollableTabStrip({
         max,
         start +
           (side === "left" ? -1 : 1) *
-            Math.max(PAGER_WIDTH * 2, strip.clientWidth * 0.7),
+            Math.max(MIN_SCROLL_STEP, strip.clientWidth * 0.7),
       ),
     );
     const duration = window.matchMedia("(prefers-reduced-motion: reduce)")
@@ -176,10 +175,7 @@ export function ScrollableTabStrip({
     ) : null;
 
   return (
-    <div
-      ref={rowRef}
-      className={`flex min-w-0 flex-1 items-center ${className}`}
-    >
+    <div ref={rowRef} className="flex min-w-0 flex-1 items-center">
       {overflowing ? arrow("left") : null}
       <div
         ref={(el) => {
