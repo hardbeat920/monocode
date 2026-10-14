@@ -61,7 +61,7 @@ it.each([
     const artifact: Artifact = {
       ...report,
       kind,
-      title: 'Review / "résumé" 🎉'.repeat(20),
+      title: `Review / "résumé" ${"🎉".repeat(100)}`,
       body: "Résumé 🎉\n<script>example</script>",
     };
     vi.mocked(invoke).mockResolvedValue(artifact);
@@ -75,10 +75,13 @@ it.each([
         .querySelector<HTMLButtonElement>('[aria-label^="Download "]')!
         .click(),
     );
-    expect(downloadFile).toHaveBeenCalledWith(
-      `${"Review - -résumé- 🎉".repeat(20)}.${extension}`,
-      { text: artifact.body },
-    );
+    const [name, source] = vi.mocked(downloadFile).mock.calls[0];
+    expect(source).toEqual({ text: artifact.body });
+    // Truncated on a whole emoji, as close to the byte limit as it fits.
+    expect(name).toMatch(new RegExp(`^Review - -résumé- (🎉)+\\.${extension}$`, "u"));
+    const bytes = new TextEncoder().encode(name).length;
+    expect(bytes).toBeLessThanOrEqual(200);
+    expect(bytes).toBeGreaterThan(196);
   },
 );
 

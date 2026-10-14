@@ -4,7 +4,12 @@ import { copyMessage } from "../../../platform/tauri/clipboard";
 import { IconButton } from "../../../app/shell/TitleBar";
 import { MonoSidebarHeader } from "../../monos/ui/MonoSidebar";
 import { PageHeader } from "../../monos/ui/monoPanelParts";
-import { artifactLabel, deleteArtifact, type ArtifactKind } from "../artifacts";
+import {
+  artifactLabel,
+  deleteArtifact,
+  type Artifact,
+  type ArtifactKind,
+} from "../artifacts";
 import { ArtifactContent, useArtifact } from "./ArtifactContent";
 import { DownloadButton } from "../../../shared/ui/DownloadButton";
 
@@ -12,6 +17,22 @@ const DOWNLOAD_EXTENSIONS: Record<ArtifactKind, string> = {
   document: "md",
   html: "html",
 };
+
+/** A filename for the title, kept under the 255-byte name limit with room for
+ * the temporary file written beside it while saving. */
+function downloadName({ title, kind }: Artifact): string {
+  const extension = `.${DOWNLOAD_EXTENSIONS[kind]}`;
+  const encoder = new TextEncoder();
+  let budget = 200 - extension.length;
+  let name = "";
+  // Whole code points, so a multibyte character is never split.
+  for (const char of title.replace(/[\\/:*?"<>|]+/g, "-")) {
+    budget -= encoder.encode(char).length;
+    if (budget < 0) break;
+    name += char;
+  }
+  return name + extension;
+}
 
 /**
  * A document's title, body and actions. With `onBack` it is a page over a
@@ -71,7 +92,7 @@ export function ArtifactReader({
     <>
       <DownloadButton
         key={artifact.id}
-        name={`${artifact.title.replace(/[\\/:*?"<>|]+/g, "-")}.${DOWNLOAD_EXTENSIONS[artifact.kind]}`}
+        name={downloadName(artifact)}
         source={{ text: artifact.body }}
       />
       <IconButton
