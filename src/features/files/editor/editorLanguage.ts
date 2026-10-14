@@ -167,9 +167,25 @@ export async function languageForPath(path: string): Promise<Extension | null> {
     const { css } = await import("@codemirror/lang-css");
     return css();
   }
+  if ([".scss", ".sass"].includes(extension)) {
+    const { sass } = await import("@codemirror/lang-sass");
+    return sass({ indented: extension === ".sass" });
+  }
+  if (extension === ".less") {
+    const { less } = await import("@codemirror/lang-less");
+    return less();
+  }
   if ([".html", ".htm"].includes(extension)) {
     const { html } = await import("@codemirror/lang-html");
     return html();
+  }
+  if (extension === ".vue") {
+    const { vue } = await import("@codemirror/lang-vue");
+    return vue();
+  }
+  if (extension === ".svelte") {
+    const { svelte } = await import("@replit/codemirror-lang-svelte");
+    return svelte();
   }
   if ([".md", ".mdx", ".markdown"].includes(extension)) {
     const { markdown } = await import("@codemirror/lang-markdown");

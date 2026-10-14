@@ -3,7 +3,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { PROJECT_MASCOTS } from "../../projects/model/projectMascots";
-import { MonoIntroPopover, monoIntroCrowd } from "./MonoIntro";
+import { MonoIntroCard, monoIntroCrowd } from "./MonoIntro";
 
 let root: Root;
 let container: HTMLElement;
@@ -35,16 +35,15 @@ it("brings every other mascot to line up behind the user's mono", () => {
   expect(crowd.map((mascot) => mascot.color)).not.toContain(look.color);
 });
 
-it("creates the first mono or puts it off", () => {
+it("creates the first mono or hides monos", () => {
   const onCreate = vi.fn();
-  const onLater = vi.fn();
+  const onHide = vi.fn();
   act(() =>
     root.render(
-      createElement(MonoIntroPopover, {
-        anchor: container,
+      createElement(MonoIntroCard, {
         look,
         onCreate,
-        onLater,
+        onHide,
       }),
     ),
   );
@@ -54,17 +53,10 @@ it("creates the first mono or puts it off", () => {
     document.body.querySelectorAll("[data-mono-intro-stage] svg"),
   ).toHaveLength(PROJECT_MASCOTS.length);
 
-  act(() => button("Create your mono").click());
+  act(() => button("Create mono").click());
   expect(onCreate).toHaveBeenCalledOnce();
-  act(() => button("Not now").click());
-  expect(onLater).toHaveBeenCalledOnce();
-
-  // Only a choice puts it away.
-  act(() => {
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
-    document.body.dispatchEvent(
-      new PointerEvent("pointerdown", { bubbles: true }),
-    );
-  });
-  expect(document.body.textContent).toContain("Meet Monos");
+  act(() =>
+    document.body.querySelector<HTMLElement>('[role="switch"]')!.click(),
+  );
+  expect(onHide).toHaveBeenCalledOnce();
 });

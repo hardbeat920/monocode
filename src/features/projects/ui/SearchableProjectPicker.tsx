@@ -130,11 +130,24 @@ export function SearchableProjectPicker({
       <button
         type="button"
         title={
-          activeMono
-            ? `${activeMono.name}\n${MONO_STATUS_LABEL[activeMono.status ?? "idle"]}`
-            : inProject
-              ? cwd
-              : undefined
+          compact
+            ? undefined
+            : activeMono
+              ? `${activeMono.name}\n${MONO_STATUS_LABEL[activeMono.status ?? "idle"]}`
+              : inProject
+                ? cwd
+                : undefined
+        }
+        // The compact rail draws its own instant tooltip from these.
+        data-rail-tip={
+          compact
+            ? (activeMono?.name ?? (inProject ? label : action))
+            : undefined
+        }
+        data-rail-tip-detail={
+          compact && activeMono
+            ? MONO_STATUS_LABEL[activeMono.status ?? "idle"]
+            : undefined
         }
         aria-label={
           activeMono

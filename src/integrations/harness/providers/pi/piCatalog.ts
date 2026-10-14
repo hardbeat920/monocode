@@ -42,6 +42,8 @@ function refreshCatalog(flavor: PiFlavor): Promise<void> {
 
 /**
  * Probe models in the supplied directory, or the user's home directory.
+ * Load extensions for both flavors: they can register providers and models,
+ * and stripping them can prevent a configured default provider from loading.
  * Pi merges startup snapshots until the five-second minimum and one-second
  * quiet period are met; this heuristic can miss providers registering later.
  * omp returns its first snapshot. The 45-second deadline starts after spawn
@@ -91,7 +93,6 @@ async function discoverModels(flavor: PiFlavor, workingDirectory?: string) {
       path,
       buildPiSpawnArgs(flavor, {
         noSession: true,
-        noExtensions: flavor.id !== "pi",
       }),
       cwd,
       undefined,

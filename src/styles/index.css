@@ -2411,39 +2411,7 @@ html:not(.theme-light) .markdown-code-token {
   background: color-mix(in srgb, var(--color-content) 6%, transparent);
 }
 
-/* Messaging-app bubbles. The tail is a sibling shape that inherits the
-   bubble's fill and only covers what sits outside the rounded corner, so
-   translucent bubbles never darken where the two meet. */
-.agent-chat-bubble {
-  position: relative;
-}
-
-.agent-chat-bubble-tail-left::after,
-.agent-chat-bubble-tail-right::after {
-  content: "";
-  position: absolute;
-  bottom: calc(var(--agent-bubble-radius, 12px) / -3);
-  width: calc(var(--agent-bubble-radius, 12px) * 4 / 3);
-  height: calc(var(--agent-bubble-radius, 12px) * 4 / 3);
-  background: inherit;
-  pointer-events: none;
-  -webkit-mask: var(--agent-bubble-tail) center / 100% 100% no-repeat;
-  mask: var(--agent-bubble-tail) center / 100% 100% no-repeat;
-  /* Drawn against an 18px left corner and scaled to the bubble's radius.
-     It only fills what lies outside the corner, so nothing is painted twice. */
-  --agent-bubble-tail: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M9 15.6C9.05 16.3 9.05 17.4 9.05 18.6C9.05 20 8.3 21.4 7.4 22.6Q6.9 23.4 7.8 23.5C9.6 23.3 11.6 22.3 13.2 21.5C15 20.5 16.2 19.6 17.2 18.8C17.9 18.25 18.6 18 19.6 18L18 18A18 18 0 0 1 9 15.6Z'/%3E%3C/svg%3E");
-}
-
-.agent-chat-bubble-tail-left::after {
-  left: 0;
-}
-
-.agent-chat-bubble-tail-right::after {
-  right: 0;
-  transform: scaleX(-1);
-}
-
-/* New bubbles pop up from their tail corner with a little overshoot, the
+/* New bubbles pop up from their bottom corner with a little overshoot, the
    way a sent message lifts off the composer. */
 .agent-chat-bubble-in-left,
 .agent-chat-bubble-in-right {
@@ -2606,10 +2574,22 @@ html.theme-light .mono-pill {
   margin-top: 2px;
 }
 
-/* The activity panel is narrow: its steps read at the panel's size. */
+/* The activity panel's steps and what was said between them read at the
+   size of the commands they run. */
 .mono-activity-steps .text-sm {
-  font-size: 12px;
-  line-height: 18px;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.mono-activity-prose .mono-run-report.agent-markdown {
+  font-size: 13px;
+}
+
+/* Reader frames supply their own inset, so a leading heading's mt-6 would
+   only double the top padding. */
+[data-artifact-reader] .agent-markdown > :first-child,
+[data-artifact-reader] .agent-markdown > .agent-markdown-block:first-child > * {
+  margin-top: 0;
 }
 
 .agent-chat-bubble-md.agent-markdown > :first-child,

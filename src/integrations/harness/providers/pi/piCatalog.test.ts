@@ -122,13 +122,13 @@ it("includes models registered three seconds after RPC starts answering", async 
   expectStopped();
 });
 
-it("preserves extension isolation and immediate discovery for omp", async () => {
+it("loads extensions and preserves immediate discovery for omp", async () => {
   const models = await discoverOmpModels("/workspace");
   expect(models.map((model) => model.id)).toEqual(["omp:meta/shared-id"]);
   expect(mocks.spawnChild).toHaveBeenCalledWith(
     expect.any(String),
     "/fake/pi",
-    expect.arrayContaining(["--no-extensions"]),
+    ["--mode", "rpc", "--no-session"],
     "/workspace",
     undefined,
     "omp",
