@@ -28,7 +28,7 @@ import { displayPath } from "../../../shared/lib/paths";
 import { IS_MAC, IS_WIN } from "../../../platform/tauri/platform";
 import { releaseNotesTitle } from "../../../app/model/releaseNotes";
 import { terminalTabLabel } from "../../terminal/model/terminalTab";
-import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
+import { ScrollableTabStrip } from "../../../shared/ui/ScrollableTabStrip";
 import { useAnimatedReorder } from "../../../shared/hooks/useAnimatedReorder";
 import { useTabCloseMotion } from "../hooks/useTabCloseMotion";
 import { TabWidthMotion } from "../../../app/shell/ClosingTab";
@@ -205,7 +205,6 @@ export function SurfaceTabs({
   label = "Open files",
   trailing,
 }: Props) {
-  const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const activeTabRef = useRef<HTMLDivElement | null>(null);
   const [menu, setMenu] = useState<SurfaceTabMenu | null>(null);
   const [fileActionError, setFileActionError] = useState<string | null>(null);
@@ -268,11 +267,10 @@ export function SurfaceTabs({
 
   return (
     <div className="flex h-9 min-w-0 shrink-0 border-b border-stroke">
-      <div
-        ref={lockOverscroll}
-        role="tablist"
-        aria-label={label}
-        className="scrollbar-none flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto overscroll-none pl-1.5 pr-2.5"
+      <ScrollableTabStrip
+        label={label}
+        activeKey={activeFileId}
+        className="pl-1.5 pr-2.5"
       >
         {onPaneDragStart ? (
           <div
@@ -446,7 +444,7 @@ export function SurfaceTabs({
             }}
           />
         ) : null}
-      </div>
+      </ScrollableTabStrip>
       {trailing}
       {menu && menuFile ? (
         <ExplorerMenu
