@@ -13,6 +13,8 @@
 //!   from `docs/browser-instructions.md`.
 //! - [`register`]: Tauri commands that register the MCP server with a
 //!   provider and give the UI the text to inject.
+//! - [`server_binary`]: which executable that registration names (a per-build
+//!   copy on Windows, so a running server never locks `MonoCode.exe`).
 //!
 //! Neither client keeps state, chooses a session or sees a CDP id: identity is
 //! the token the provider process inherited, and every decision is the host's.
@@ -21,4 +23,5 @@ pub mod cli;
 pub mod client;
 pub mod mcp;
 pub mod register;
+pub mod server_binary;
 pub mod tools;

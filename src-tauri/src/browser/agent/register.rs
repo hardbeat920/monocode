@@ -8,6 +8,10 @@
 //! environment of MCP children, so its entry also lists the two variables in
 //! `env_vars`, which makes Codex pass them through.
 //!
+//! The executable named in the entry comes from [`super::server_binary`]: on
+//! Windows a per-build copy in the app data directory, so a session holding
+//! `browser-mcp` open never locks `MonoCode.exe` against a rebuild or update.
+//!
 //! OpenCode 2 is not supported: it starts MCP servers (and runs shell
 //! commands) from its shared background service, which MonoCode starts
 //! without a session's environment, so neither the MCP server nor the CLI
@@ -18,7 +22,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use serde_json::{json, Value};
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 
 use super::mcp::SERVER_NAME;
 use crate::browser::protocol::{ENV_ENDPOINT, ENV_TOKEN};
@@ -112,10 +116,25 @@ fn expected_command(exe: &str) -> Vec<String> {
     vec![exe.to_string(), SUBCOMMAND.to_string()]
 }
 
-fn current_exe() -> Result<String, String> {
-    std::env::current_exe()
-        .map(|path| path.to_string_lossy().into_owned())
-        .map_err(|error| error.to_string())
+/// Where Windows keeps the copies `browser-mcp` runs from.
+fn copies_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("bin"))
+}
+
+/// The executable the entry should name; `install` creates it when needed.
+fn server_exe(dir: &Path, install: bool) -> Result<String, String> {
+    use super::server_binary;
+    let source = server_binary::source_executable()?;
+    let path = if install {
+        server_binary::install(&source, dir, server_binary::uses_copy())?
+    } else {
+        server_binary::planned(&source, dir, server_binary::uses_copy())?
+    };
+    Ok(path.to_string_lossy().into_owned())
 }
 
 /// Command line of the existing entry, and whether it passes the
@@ -315,16 +334,25 @@ fn register_at(
 /// Registration state of the browser MCP server for every provider.
 #[tauri::command]
 pub async fn browser_mcp_status(
+    app: AppHandle,
     host: State<'_, crate::harness::HarnessHost>,
 ) -> Result<Vec<BrowserMcpRegistration>, String> {
     let opencode_binary = host.runtime_binary_path("opencode");
+    let dir = copies_dir(&app)?;
     tauri::async_runtime::spawn_blocking(move || {
         let locations = Locations::from_env()?;
-        let exe = current_exe()?;
+        let exe = server_exe(&dir, false)?;
+        // An entry naming a copy that is not there yet (a new build) is
+        // stale; registering makes the copy.
+        let present = Path::new(&exe).is_file();
         let major = opencode_major(opencode_binary.as_deref());
         Ok(MCP_PROVIDERS
             .iter()
-            .map(|provider| status_at(&locations, provider, &exe, major))
+            .map(|provider| {
+                let mut status = status_at(&locations, provider, &exe, major);
+                status.current &= present;
+                status
+            })
             .collect())
     })
     .await
@@ -337,17 +365,28 @@ pub async fn browser_mcp_status(
 /// Sessions already running see the tools from their next start.
 #[tauri::command]
 pub async fn browser_mcp_register(
+    app: AppHandle,
     host: State<'_, crate::harness::HarnessHost>,
     provider: String,
     cwd: String,
 ) -> Result<BrowserMcpRegistration, String> {
     let binary_path = host.runtime_binary_path(&provider);
+    let dir = copies_dir(&app)?;
     tauri::async_runtime::spawn_blocking(move || {
         let locations = Locations::from_env()?;
-        let exe = current_exe()?;
         let major = (provider == "opencode")
             .then(|| opencode_major(binary_path.as_deref()))
             .flatten();
+        // Refuse before copying anything for a provider that cannot use it.
+        if let Some(reason) = unsupported_reason(&provider, major) {
+            return Err(reason.to_string());
+        }
+        if !MCP_PROVIDERS.contains(&provider.as_str()) {
+            return Err(format!(
+                "{provider} does not take MCP servers from MonoCode; it uses the browser CLI instead"
+            ));
+        }
+        let exe = server_exe(&dir, true)?;
         register_at(
             &locations,
             &provider,
