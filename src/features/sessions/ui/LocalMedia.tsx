@@ -93,7 +93,16 @@ export function LocalMedia({
     };
   }, [near, path]);
 
-  if (failed) return <>{fallback}</>;
+  const download = media ? (
+    <DownloadButton name={path.replace(/.*[/\\]/, "")} source={{ path }} />
+  ) : null;
+  if (failed)
+    return (
+      <>
+        {fallback}
+        {download}
+      </>
+    );
   // One fixed 16:9 box from placeholder to playback, so loading never moves
   // the chat; media fits inside it, letterboxed.
   return (
@@ -125,9 +134,7 @@ export function LocalMedia({
           />
         )}
       </span>
-      {media ? (
-        <DownloadButton name={path.replace(/.*[/\\]/, "")} source={{ path }} />
-      ) : null}
+      {download}
     </span>
   );
 }

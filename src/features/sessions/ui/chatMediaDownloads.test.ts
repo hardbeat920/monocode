@@ -156,3 +156,44 @@ it("falls back when local media cannot be read", async () => {
   expect(container.textContent).toBe("Missing file");
   expect(container.querySelector("button")).toBeNull();
 });
+
+it.each(["/video.mov", "remote://machine/video.mp4", "/image.png"])(
+  "keeps the path-backed download after a playback error for %s",
+  async (path) => {
+    await act(async () =>
+      root.render(
+        createElement(LocalMedia, {
+          path,
+          label: "Media",
+          fallback: "Preview unavailable",
+        }),
+      ),
+    );
+    const preview = container.querySelector("video, img")!;
+    expect(preview).not.toBeNull();
+    act(() => preview.dispatchEvent(new Event("error")));
+    expect(container.querySelector("video, img")).toBeNull();
+    expect(container.textContent).toContain("Preview unavailable");
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[aria-label^="Download "]')!
+        .click(),
+    );
+    expect(downloadFile).toHaveBeenCalledWith(path.split("/").pop(), { path });
+  },
+);
+
+it("omits the download when video stream authorization fails", async () => {
+  vi.mocked(invoke).mockRejectedValue(new Error("Missing"));
+  await act(async () =>
+    root.render(
+      createElement(LocalMedia, {
+        path: "/missing.mov",
+        label: "Video",
+        fallback: "Missing file",
+      }),
+    ),
+  );
+  expect(container.textContent).toBe("Missing file");
+  expect(container.querySelector("button")).toBeNull();
+});
