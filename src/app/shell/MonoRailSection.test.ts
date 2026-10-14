@@ -85,3 +85,38 @@ it("counts a mono's unread replies, except the one open", () => {
   render({ activeId: mono.id, unseenCounts: new Map([[mono.id, 3]]) });
   expect(badge()).toBeNull();
 });
+
+const header = () =>
+  container.querySelector<HTMLButtonElement>("button[aria-expanded]");
+
+it("collapses the monos from the header, and remembers it", () => {
+  createMono();
+  render();
+  expect(container.querySelectorAll("[data-mono-status]")).toHaveLength(1);
+
+  act(() => header()?.click());
+  expect(header()?.getAttribute("aria-expanded")).toBe("false");
+  expect(container.querySelectorAll("[data-mono-status]")).toHaveLength(0);
+
+  act(() => root.unmount());
+  root = createRoot(container);
+  render();
+  expect(header()?.getAttribute("aria-expanded")).toBe("false");
+  expect(container.querySelectorAll("[data-mono-status]")).toHaveLength(0);
+
+  act(() => header()?.click());
+  expect(container.querySelectorAll("[data-mono-status]")).toHaveLength(1);
+});
+
+it("expands the monos when one is added from the collapsed header", () => {
+  createMono();
+  const onCreate = render();
+  act(() => header()?.click());
+  act(() =>
+    container
+      .querySelector<HTMLButtonElement>('[aria-label="New mono"]')
+      ?.click(),
+  );
+  expect(onCreate).toHaveBeenCalledOnce();
+  expect(header()?.getAttribute("aria-expanded")).toBe("true");
+});

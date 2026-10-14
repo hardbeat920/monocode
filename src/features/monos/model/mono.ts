@@ -239,6 +239,25 @@ export function createMono(projects: readonly string[] = []): Mono {
   return mono;
 }
 
+const RAIL_COLLAPSED_KEY = "monocode:mono-rail-collapsed";
+
+export function loadMonoRailCollapsed(): boolean {
+  try {
+    return localStorage.getItem(RAIL_COLLAPSED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function saveMonoRailCollapsed(collapsed: boolean): void {
+  try {
+    if (collapsed) localStorage.setItem(RAIL_COLLAPSED_KEY, "1");
+    else localStorage.removeItem(RAIL_COLLAPSED_KEY);
+  } catch {
+    // The section opens expanded next launch; harmless.
+  }
+}
+
 const OPEN_MONO_KEY = "monocode:open-mono";
 
 /** The Mono whose conversation was open, so the next launch reopens it. */
