@@ -59,6 +59,8 @@ pub struct Watch {
     blocked_before: u32,
     dialog: Option<DialogInfo>,
     count_mutations: bool,
+    /// Fetch and XHR requests of the tab already in flight before the input.
+    fetches_before: HashSet<String>,
 }
 
 pub fn dialog_info(params: &Value) -> DialogInfo {
@@ -106,6 +108,7 @@ impl Watch {
             blocked_before,
             dialog: None,
             count_mutations: false,
+            fetches_before: run.link.diagnostics().pending_fetches(run.main()),
         }
     }
 
@@ -226,12 +229,9 @@ impl Watch {
         let mut requests: HashSet<String> = HashSet::new();
         let mut mutations = 0u64;
         let mut loaded_at: Option<Instant> = None;
+        let mut fetched = false;
         while self.dialog.is_none() && !closed {
-            let end = if settle && !requests.is_empty() {
-                settle_cap
-            } else {
-                until
-            };
+            let end = if settle && fetched { settle_cap } else { until };
             let deadline = if navigating && !loaded {
                 run.ctx.deadline
             } else if settle && !navigating {
@@ -252,6 +252,22 @@ impl Watch {
                 let count = self.read_mutations(run);
                 if count > 0 {
                     mutations += count;
+                    quiet_since = now;
+                }
+                // Network events go to the tab's diagnostics record, not to
+                // subscribers: read the fetches it still sees in flight.
+                let pending: HashSet<String> = run
+                    .link
+                    .diagnostics()
+                    .pending_fetches(run.main())
+                    .difference(&self.fetches_before)
+                    .cloned()
+                    .collect();
+                if pending != requests {
+                    // Once the input started a request, its answer gets
+                    // until `settle_cap` and a quiet spell to show up.
+                    fetched |= !pending.is_empty();
+                    requests = pending;
                     quiet_since = now;
                 }
                 next_poll = now + MUTATION_POLL;
@@ -320,22 +336,6 @@ impl Watch {
                 "Page.frameStoppedLoading" if navigating && main_frame_event => loaded = true,
                 "Page.loadEventFired" if navigating => loaded = true,
                 "Page.javascriptDialogOpening" => self.dialog = Some(dialog_info(params)),
-                "Network.requestWillBeSent"
-                    if settle && matches!(params["type"].as_str(), Some("XHR" | "Fetch")) =>
-                {
-                    if let Some(id) = params["requestId"].as_str() {
-                        requests.insert(id.to_string());
-                        quiet_since = Instant::now();
-                    }
-                }
-                "Network.loadingFinished" | "Network.loadingFailed" if settle => {
-                    if params["requestId"]
-                        .as_str()
-                        .is_some_and(|id| requests.remove(id))
-                    {
-                        quiet_since = Instant::now();
-                    }
-                }
                 "Inspector.targetCrashed" => closed = true,
                 "Target.attachedToTarget" if params["targetInfo"]["type"] == "page" => {
                     popup_seen = true;
@@ -362,11 +362,7 @@ impl Watch {
             }
             // A busy page (images, console) still ends on time or when quiet.
             let now = Instant::now();
-            let end = if settle && !requests.is_empty() {
-                settle_cap
-            } else {
-                until
-            };
+            let end = if settle && fetched { settle_cap } else { until };
             if !navigating
                 && (now >= end
                     || settle

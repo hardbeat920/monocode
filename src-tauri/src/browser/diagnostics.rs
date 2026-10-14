@@ -589,6 +589,20 @@ impl Diagnostics {
         }
     }
 
+    /// Ids of the tab's fetch and XHR requests still in flight.
+    pub fn pending_fetches(&self, session: &CdpSessionId) -> HashSet<String> {
+        self.tabs
+            .get(session)
+            .map(|log| {
+                log.inflight
+                    .iter()
+                    .filter(|(_, r)| matches!(r.resource.as_str(), "xhr" | "fetch"))
+                    .map(|(id, _)| id.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// Console errors and failed requests not reported yet, and mark them
     /// reported. `None` when there are none.
     pub fn take_signals(&mut self, session: &CdpSessionId) -> Option<PageSignals> {
