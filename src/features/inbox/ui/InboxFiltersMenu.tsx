@@ -1,10 +1,11 @@
+import { sonarBranchKey, type SonarBranch } from "../model/sonar";
 import { Check, CircleDot, GitPullRequest } from "../../../shared/ui/icons";
 import { type ReactNode } from "react";
 import type { InboxKind } from "../model/githubTasks";
+import { isTrackerSource } from "../model/inboxProviders";
 import {
   DEFAULT_INBOX_FILTERS,
   hasActiveInboxFilters,
-  isTrackerSource,
   type InboxFilters,
   type InboxSource,
   type InboxTimeFilter,
@@ -32,6 +33,7 @@ type Props = {
   hiddenLinearTeamIds: string[];
   jiraProjects: JiraProject[];
   hiddenJiraProjectIds: string[];
+  sonarBranches?: SonarBranch[];
   source: InboxSource;
   filters: InboxFilters;
   onChange: (filters: InboxFilters) => void;
@@ -76,6 +78,7 @@ export function InboxFiltersMenu({
   jiraProjects,
   hiddenJiraProjectIds,
   source,
+  sonarBranches = [],
   filters,
   onChange,
   onLinearTeamsChange,
@@ -247,6 +250,52 @@ export function InboxFiltersMenu({
         </>
       ) : null}
 
+      {source === "sonar" ? (
+        <>
+          <SectionLabel>Scanned branches</SectionLabel>
+          {sonarBranches.length === 0 ? (
+            <p className="px-2 py-1 text-[12px] text-content/45">
+              No scanned branches
+            </p>
+          ) : null}
+          {[...new Set(sonarBranches.map((branch) => branch.projectKey))].map(
+            (projectKey) => (
+              <div key={projectKey}>
+                <div
+                  title={projectKey}
+                  className="truncate px-2 pb-0.5 pt-2 text-[11px] text-content/45"
+                >
+                  {sonarBranches.find(
+                    (branch) => branch.projectKey === projectKey,
+                  )?.repositoryName || projectKey}
+                </div>
+                {sonarBranches
+                  .filter((branch) => branch.projectKey === projectKey)
+                  .map((branch) => {
+                    const key = sonarBranchKey(branch.projectKey, branch.name);
+                    return (
+                      <FilterItem
+                        key={key}
+                        label={`${branch.name}${branch.isMain ? " (main)" : ""}`}
+                        checked={!filters.hiddenSonarBranches.includes(key)}
+                        onClick={() => {
+                          const hidden = new Set(filters.hiddenSonarBranches);
+                          if (hidden.has(key)) hidden.delete(key);
+                          else hidden.add(key);
+                          onChange({
+                            ...filters,
+                            hiddenSonarBranches: [...hidden],
+                          });
+                        }}
+                      />
+                    );
+                  })}
+              </div>
+            ),
+          )}
+        </>
+      ) : null}
+
       {source === "jira" && jiraProjects.length > 0 ? (
         <>
           <SectionLabel>Projects</SectionLabel>
@@ -340,6 +389,7 @@ function FilterItem({
       type="button"
       role="menuitemcheckbox"
       aria-checked={checked}
+      title={label}
       onMouseDown={(event) => event.preventDefault()}
       onClick={onClick}
       className="flex h-7 w-full items-center gap-2 rounded-lg px-2 text-left text-[13px] leading-none text-content hover:bg-content/5"

@@ -40,6 +40,7 @@ import {
 } from "../../../shared/ui/ColorPickerPopover";
 import { Popover } from "../../../shared/ui/Popover";
 import { SecondaryButton } from "../../../shared/ui/SecondaryButton";
+import { SonarSettings } from "./SonarSettings";
 import { JiraSettings } from "./JiraSettings";
 import { GradientBlurBackground } from "./GradientBlurBackground";
 import { McpSettings } from "./McpSettings";
@@ -1254,6 +1255,19 @@ function InboxPage({
         description="Pull requests and Boards work items from your ADO organization."
       >
         <AzureDevOpsSettings />
+      </Group>
+
+      <Group
+        id="sonar"
+        title={
+          <span className="flex items-center gap-2">
+            <InboxProviderMark provider="sonar" className="size-4 shrink-0" />
+            Sonar
+          </span>
+        }
+        description="Code findings from scanned branches in SonarQube Cloud or Server."
+      >
+        <SonarSettings />
       </Group>
 
       <Group

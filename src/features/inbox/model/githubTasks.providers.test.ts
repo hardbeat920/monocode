@@ -53,6 +53,7 @@ describe.each([
       if (command === "git_github_work_items") return [];
       if (command === `${commandPrefix}_status`) return { connected };
       if (
+        command === "sonar_status" ||
         command === "linear_status" ||
         command === "jira_status" ||
         command === "gitlab_status" ||

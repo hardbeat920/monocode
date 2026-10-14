@@ -77,3 +77,18 @@ describe("self-authored Inbox activity", () => {
     unsubscribe();
   });
 });
+
+it("scopes Sonar self activity to its exact project and branch despite number zero", () => {
+  const target = {
+    provider: "sonar" as const,
+    kind: "sonar" as const,
+    id: "same-issue",
+    repo: "org_App",
+    branch: "main",
+  };
+  recordInboxSelfActivity(target);
+  const item = { ...target, number: 0, projectPath: "" };
+  expect(consumeInboxSelfActivity({ ...item, branch: "feature" })).toBe(false);
+  expect(consumeInboxSelfActivity({ ...item, repo: "org_app" })).toBe(false);
+  expect(consumeInboxSelfActivity(item)).toBe(true);
+});

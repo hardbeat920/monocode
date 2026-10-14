@@ -1,3 +1,9 @@
+import {
+  sonarConnected,
+  SONAR_CHANGE_EVENT,
+  type SonarBranch,
+} from "../model/sonar";
+import { SonarIssueDetail } from "./SonarIssueDetail";
 import { useGithubPrChecks } from "../hooks/useGithubPrChecks";
 import { summarizePrChecks } from "../model/githubPrChecks";
 import type { CiRepairRequest } from "../model/ciRepair";
@@ -69,6 +75,7 @@ import {
   peekInboxList,
   formatRelativeTime,
   inboxPersonAvatarUrl,
+  updateCachedInboxItem,
   type GithubLabel,
   type GithubPrAction,
   type GithubPrDiff,
@@ -94,12 +101,14 @@ import {
   saveInboxConnections,
   saveInboxSource,
   visibleInboxSources,
-  INBOX_SOURCE_LABELS,
-  isTrackerSource,
   type ConnectableInboxSource,
   type InboxFilters,
   type InboxSource,
 } from "../model/inboxFilters";
+import {
+  INBOX_PROVIDER_LABELS,
+  isTrackerSource,
+} from "../model/inboxProviders";
 import { copyText } from "../../../platform/tauri/clipboard";
 import { projectKey, projectName } from "../../../shared/lib/paths";
 import { IS_MAC } from "../../../platform/tauri/platform";
@@ -302,7 +311,7 @@ function InboxSourceTab({
   selected: boolean;
   onSelect: (source: InboxSource) => void;
 }) {
-  const label = INBOX_SOURCE_LABELS[source];
+  const label = INBOX_PROVIDER_LABELS[source];
   return (
     <button
       type="button"
@@ -445,6 +454,9 @@ export function InboxView({
     targetSelectionKey,
   );
   const [targetItem, setTargetItem] = useState<InboxItem | null>(null);
+  const [sonarBranches, setSonarBranches] = useState<SonarBranch[]>(
+    () => peekInboxForRail(recents, cwd)?.sonarBranches ?? [],
+  );
   const [filters, setFilters] = useState(loadInboxFilters);
   const [connections, setConnections] = useState(loadInboxConnections);
   const [source, setSource] = useState(() =>
@@ -562,9 +574,11 @@ export function InboxView({
     const onChange = () => setRefresh((value) => value + 1);
     window.addEventListener(GITLAB_CHANGE_EVENT, onChange);
     window.addEventListener(AZUREDEVOPS_CHANGE_EVENT, onChange);
+    window.addEventListener(SONAR_CHANGE_EVENT, onChange);
     return () => {
       window.removeEventListener(GITLAB_CHANGE_EVENT, onChange);
       window.removeEventListener(AZUREDEVOPS_CHANGE_EVENT, onChange);
+      window.removeEventListener(SONAR_CHANGE_EVENT, onChange);
     };
   }, []);
 
@@ -582,7 +596,8 @@ export function InboxView({
         jiraConnected(),
         gitlabConnected(),
         azureDevOpsConnected(),
-      ]).then(([github, linear, jira, gitlab, azuredevops]) => {
+        sonarConnected(),
+      ]).then(([github, linear, jira, gitlab, azuredevops, sonar]) => {
         if (cancelled || generation !== latest) return;
         setConnections((prev) => ({
           github:
@@ -593,6 +608,8 @@ export function InboxView({
             linear.status === "fulfilled"
               ? linear.value.connected
               : prev.linear,
+          sonar:
+            sonar.status === "fulfilled" ? sonar.value.connected : prev.sonar,
           jira: jira.status === "fulfilled" ? jira.value.connected : prev.jira,
           gitlab:
             gitlab.status === "fulfilled"
@@ -610,12 +627,14 @@ export function InboxView({
     window.addEventListener(JIRA_CHANGE_EVENT, read);
     window.addEventListener(GITLAB_CHANGE_EVENT, read);
     window.addEventListener(AZUREDEVOPS_CHANGE_EVENT, read);
+    window.addEventListener(SONAR_CHANGE_EVENT, read);
     return () => {
       cancelled = true;
       window.removeEventListener(LINEAR_CHANGE_EVENT, read);
       window.removeEventListener(JIRA_CHANGE_EVENT, read);
       window.removeEventListener(GITLAB_CHANGE_EVENT, read);
       window.removeEventListener(AZUREDEVOPS_CHANGE_EVENT, read);
+      window.removeEventListener(SONAR_CHANGE_EVENT, read);
     };
   }, []);
 
@@ -684,6 +703,7 @@ export function InboxView({
     const cached = peekInboxList(projects, fetchQuery);
     if (cached) {
       setItems(cached.items);
+      setSonarBranches(cached.sonarBranches ?? []);
       setProviderErrors(cached.errors);
       setLoading(false);
     }
@@ -701,6 +721,7 @@ export function InboxView({
       .then((next) => {
         if (cancelled) return;
         setItems(next.items);
+        setSonarBranches(next.sonarBranches ?? []);
         setProviderErrors(next.errors);
       })
       .catch((err: unknown) => {
@@ -712,6 +733,7 @@ export function InboxView({
           github: message,
           linear: message,
           jira: message,
+          sonar: message,
           gitlab: message,
           azuredevops: message,
         });
@@ -818,6 +840,7 @@ export function InboxView({
   const selected =
     selectedByKey ?? (waitingForTarget ? null : visibleItems[0]) ?? null;
   const updateInboxItem = useCallback((next: InboxItem) => {
+    if (next.provider === "sonar") updateCachedInboxItem(next);
     const key = inboxItemKey(next);
     setItems((current) =>
       current.map((entry) => (inboxItemKey(entry) === key ? next : entry)),
@@ -1005,6 +1028,14 @@ export function InboxView({
           </button>
         </div>
       )}
+      {source === "sonar" && sourceError && visibleItems.length > 0 ? (
+        <p
+          role="alert"
+          className="whitespace-pre-line px-3 py-2 text-[12px] text-content/50"
+        >
+          {sourceError}
+        </p>
+      ) : null}
       {readStatusError ? (
         <p role="alert" className="px-3 py-2 text-xs text-red-400">
           {readStatusError}
@@ -1029,12 +1060,12 @@ export function InboxView({
             {narrowedByUser
               ? searchNarrowed
                 ? isTrackerSource(source)
-                  ? `No matching ${INBOX_SOURCE_LABELS[source]} issues`
+                  ? `No matching ${INBOX_PROVIDER_LABELS[source]} issues`
                   : source === "gitlab"
                     ? "No matching issues or merge requests"
                     : "No matching issues or pull requests"
                 : isTrackerSource(source)
-                  ? `No ${INBOX_SOURCE_LABELS[source]} issues match these filters`
+                  ? `No ${INBOX_PROVIDER_LABELS[source]} issues match these filters`
                   : source === "gitlab" || source === "azuredevops"
                     ? activeFilters.assignedToMe
                       ? "Nothing needs your attention"
@@ -1043,7 +1074,7 @@ export function InboxView({
                         : "No ADO items match these filters"
                     : "No issues or pull requests match these filters"
               : isTrackerSource(source)
-                ? `No ${INBOX_SOURCE_LABELS[source]} issues`
+                ? `No ${INBOX_PROVIDER_LABELS[source]} issues`
                 : source === "gitlab"
                   ? projects.length === 0
                     ? "Open a project to fill the inbox"
@@ -1110,6 +1141,7 @@ export function InboxView({
       x={filterMenu.x}
       y={filterMenu.y}
       projects={projectOptions}
+      sonarBranches={sonarBranches}
       linearProjects={linearProjects}
       linearTeams={linearTeams}
       hiddenLinearTeamIds={linearHiddenTeamIds}
@@ -1438,6 +1470,19 @@ function InboxDetailBody({
       </div>
     );
   }
+  if (item.provider === "sonar")
+    return (
+      <SonarIssueDetail
+        key={inboxItemKey(item)}
+        item={item}
+        cwd={cwd}
+        projects={projects}
+        revision={revision}
+        onItemChange={onItemChange}
+        onStart={onStart}
+        onDiscuss={onDiscuss}
+      />
+    );
   return (
     <InboxDetail
       key={inboxItemKey(item)}
@@ -1524,8 +1569,13 @@ function InboxCard({
       : "Issue";
   const time = formatRelativeTime(item.updatedAt);
   const name = projectName(item.projectPath);
-  const tracker = item.provider === "linear" || item.provider === "jira";
-  const source = tracker ? item.teamName || item.repo : item.repo || name;
+  const tracker = isTrackerSource(item.provider);
+  const source =
+    item.provider === "sonar"
+      ? `${item.projectName || item.repo} / ${item.branch}`
+      : tracker
+        ? item.teamName || item.repo
+        : item.repo || name;
   const attentionLabel =
     item.provider === "gitlab" || item.provider === "azuredevops"
       ? gitlabAttentionLabel(item.attentionReason ?? "")

@@ -4956,6 +4956,31 @@ fn git_branch_name(root: &Path, name: &str) -> Result<String, String> {
     Ok(normalized)
 }
 
+/// Repository names from configured Git remotes, read locally without contacting them.
+#[tauri::command]
+pub async fn git_repository_names(cwd: String) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        git_remote_repository_names_for(&expand_home(&cwd))
+    })
+    .await
+    .map_err(|error| error.to_string())
+}
+
+fn git_remote_repository_names_for(root: &Path) -> Vec<String> {
+    let Some(remotes) = git_run(root, &["remote", "-v"]) else {
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    for line in remotes.lines() {
+        if let Some(name) = line.split_whitespace().nth(1).and_then(git_url_repo_name) {
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+    }
+    names
+}
+
 fn git_origin_repo(root: &Path) -> Option<String> {
     git_url_repo_name(&git_stdout(root, &["remote", "get-url", "origin"])?)
 }
@@ -7096,6 +7121,40 @@ mod tests {
             && git(dir, &["config", "user.email", "monocode@test"])
             && git(dir, &["config", "commit.gpgsign", "false"])
             && git(dir, &["config", "core.autocrlf", "false"])
+    }
+
+    #[test]
+    fn repository_names_read_all_remotes_without_using_the_folder_name() {
+        let dir = tmp("renamed-checkout");
+        if !init_git(
+            &dir.0,
+            "main",
+            Some("https://user:secret@github.com/acme/widget.git"),
+        ) {
+            return;
+        }
+        assert!(git(
+            &dir.0,
+            &[
+                "remote",
+                "add",
+                "upstream",
+                "git@bitbucket.org:acme/original-widget.git"
+            ]
+        ));
+        let names = git_remote_repository_names_for(&dir.0);
+        assert_eq!(names, vec!["widget", "original-widget"]);
+        let nested = dir.0.join("src");
+        std::fs::create_dir(&nested).unwrap();
+        assert_eq!(git_remote_repository_names_for(&nested), names);
+        assert!(!names.iter().any(|name| name.contains("secret")));
+    }
+
+    #[test]
+    fn repository_names_are_empty_without_remotes() {
+        let dir = tmp("no-remotes");
+        assert!(init_git(&dir.0, "main", None));
+        assert!(git_remote_repository_names_for(&dir.0).is_empty());
     }
 
     #[test]
