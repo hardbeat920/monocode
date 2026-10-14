@@ -12,3 +12,43 @@ export const VISUAL_REPLIES_CONTEXT = [
   "Skip diagrams for simple facts, yes/no answers, and code edits.",
   "</monocode_visuals>",
 ].join("\n");
+
+const OWED_KEY = "monocode.visualRepliesOwed";
+
+function readOwed(): string[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(OWED_KEY) ?? "[]");
+    return Array.isArray(parsed)
+      ? parsed.filter((id): id is string => typeof id === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeOwed(ids: string[]): void {
+  try {
+    localStorage.setItem(OWED_KEY, JSON.stringify(ids));
+  } catch {
+    // Without the record a reload skips the hint, which is harmless.
+  }
+}
+
+/**
+ * Whether the session's provider session has not heard the hint yet. Kept
+ * across reloads, since the restored provider session no longer looks fresh.
+ */
+export function visualRepliesOwed(sessionId: string): boolean {
+  return readOwed().includes(sessionId);
+}
+
+export function oweVisualReplies(sessionId: string): void {
+  const owed = readOwed();
+  if (!owed.includes(sessionId)) writeOwed([...owed, sessionId]);
+}
+
+export function settleVisualReplies(sessionId: string): void {
+  const owed = readOwed();
+  if (owed.includes(sessionId))
+    writeOwed(owed.filter((id) => id !== sessionId));
+}

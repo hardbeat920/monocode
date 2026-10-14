@@ -554,7 +554,12 @@ import {
   type TabVisitHistory,
 } from "../features/workspace/model/tabVisitHistory";
 import { preparePrompt } from "../features/sessions/model/promptPreparation";
-import { VISUAL_REPLIES_CONTEXT } from "../features/sessions/model/visualReplies";
+import {
+  oweVisualReplies,
+  settleVisualReplies,
+  VISUAL_REPLIES_CONTEXT,
+  visualRepliesOwed,
+} from "../features/sessions/model/visualReplies";
 import {
   consumeOperatorCommand,
   operatorEnabledInThread,
@@ -1368,9 +1373,6 @@ function Workspace({
   const queueDispatchingRef = useRef(new Set<string>());
   const [queueDispatchVersion, setQueueDispatchVersion] = useState(0);
   const usageResumingRef = useRef(new Set<string>());
-  // Sessions whose provider session a native command started, so it has not
-  // yet heard that replies can draw.
-  const visualRepliesOwed = useRef(new Set<string>());
   const usageResetLookups = useRef(new WeakSet<UsageLimit>());
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
@@ -8025,14 +8027,13 @@ function Workspace({
           // A fresh provider session hears once that replies can draw, on its
           // first regular prompt even when a native command started it.
           const visualRepliesDue =
-            !current.providerSessionId ||
-            visualRepliesOwed.current.has(sessionId);
+            !current.providerSessionId || visualRepliesOwed(sessionId);
           const visualRepliesHinted =
             !rawCommand && visualRepliesDue && loadVisualReplies();
           // Owed until a send delivers it, since that send may bind the
           // provider session and still fail.
           if ((rawCommand && visualRepliesDue) || visualRepliesHinted) {
-            visualRepliesOwed.current.add(sessionId);
+            oweVisualReplies(sessionId);
           }
           if (visualRepliesHinted) appContext.push(VISUAL_REPLIES_CONTEXT);
           // A Mono reads who it is ahead of the message, so it never takes it
@@ -8047,7 +8048,7 @@ function Workspace({
             !providerFailureSeen &&
             turnGen.current.get(sessionId) === gen
           ) {
-            visualRepliesOwed.current.delete(sessionId);
+            settleVisualReplies(sessionId);
           }
           if (agentFiles) {
             recordAgentContext(
