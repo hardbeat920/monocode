@@ -411,6 +411,11 @@ fn download_to_path(
     let mut reader = match response {
         Ok(response) if response.status() == 200 => response.into_reader(),
         Ok(_) => return Err("Invalid host download response".into()),
+        // Hosts without the route reject it as forbidden, and native requests
+        // carry no origin, so 403 here only ever means an outdated host.
+        Err(ureq::Error::Status(403, _)) => {
+            return Err("Update MonoCode Host in Connections settings to download files.".into());
+        }
         Err(ureq::Error::Status(status, response)) => {
             let mut bytes = Vec::new();
             response
@@ -426,12 +431,10 @@ fn download_to_path(
                         .and_then(Value::as_str)
                         .map(str::to_owned)
                 });
-            if status == 404 || message.as_deref() == Some("Unsupported request origin or route") {
-                return Err(
-                    "Update MonoCode Host in Connections settings to download files.".into(),
-                );
-            }
-            return Err(message.unwrap_or_else(|| format!("Host returned HTTP {status}")));
+            return Err(match message {
+                Some(message) => format!("Host rejected request: {message}"),
+                None => format!("Host returned HTTP {status}"),
+            });
         }
         Err(ureq::Error::Transport(error)) if connection_refused(&error) => {
             return Err(
@@ -810,6 +813,94 @@ mod tests {
             assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
         }
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_chunked_download_cut_short_is_an_error_and_keeps_the_destination() {
+        use std::{io::BufRead, net::TcpListener, thread};
+        let dir = std::env::temp_dir().join(format!("monocode-chunked-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        let destination = dir.join("file.bin");
+        std::fs::write(&destination, b"original").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut request = std::io::BufReader::new(&mut socket);
+            let mut size = 0;
+            loop {
+                let mut line = String::new();
+                request.read_line(&mut line).unwrap();
+                if let Some((key, value)) = line.split_once(':') {
+                    if key.eq_ignore_ascii_case("content-length") {
+                        size = value.trim().parse().unwrap();
+                    }
+                }
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            request.read_exact(&mut vec![0; size]).unwrap();
+            drop(request);
+            // One chunk, then the connection closes without the final chunk.
+            write!(
+                socket,
+                "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n5\r\nhello\r\n"
+            )
+            .unwrap();
+        });
+        let result = download_to_path(
+            &endpoint,
+            "test-token",
+            "env",
+            "/repo/file.bin",
+            &destination,
+        );
+        server.join().unwrap();
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&destination).unwrap(), b"original");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn an_outdated_host_without_the_download_route_asks_for_an_update() {
+        use std::{io::BufRead, net::TcpListener, thread};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut request = std::io::BufReader::new(&mut socket);
+            let mut size = 0;
+            loop {
+                let mut line = String::new();
+                request.read_line(&mut line).unwrap();
+                if let Some((key, value)) = line.split_once(':') {
+                    if key.eq_ignore_ascii_case("content-length") {
+                        size = value.trim().parse().unwrap();
+                    }
+                }
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            request.read_exact(&mut vec![0; size]).unwrap();
+            drop(request);
+            let body = r#"{"error":"Unsupported request origin or route"}"#;
+            write!(
+                socket,
+                "HTTP/1.1 403 Forbidden\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+        let destination =
+            std::env::temp_dir().join(format!("monocode-403-{}", uuid::Uuid::new_v4()));
+        let error =
+            download_to_path(&endpoint, "t", "env", "/repo/a.bin", &destination).unwrap_err();
+        server.join().unwrap();
+        assert!(error.contains("Update MonoCode Host"));
+        assert!(!destination.exists());
     }
 
     #[test]

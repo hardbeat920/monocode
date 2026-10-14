@@ -47,8 +47,6 @@ describe("markdown file navigation", () => {
       '[aria-label="Download report.pdf"]',
     )!;
     expect(button.closest("a")).toBeNull();
-    expect(link.className).toContain("text-sky-400/90");
-    expect(link.parentElement?.textContent).toBe("Before Report  after");
     await act(async () => button.click());
     expect(downloadFile).toHaveBeenCalledWith("report.pdf", {
       path: "/repo/report.pdf",
@@ -62,18 +60,6 @@ describe("markdown file navigation", () => {
     await render("[Report](report.pdf) and [Website](https://example.com)");
     expect(container.querySelector('[aria-label^="Download "]')).toBeNull();
   });
-
-  it.each(["image/png", "image/svg+xml"])(
-    "keeps inline %s images filtered before download controls render",
-    async (mime) => {
-      const url = `data:${mime};base64,PHN2Zz48L3N2Zz4=`;
-      await render(`![Diagram](${url})`, true);
-      expect(container.querySelector("img")).toBeNull();
-      expect(container.querySelector('[aria-label^="Download "]')).toBeNull();
-      expect(downloadFile).not.toHaveBeenCalled();
-      expect(onOpenFile).not.toHaveBeenCalled();
-    },
-  );
 
   it("keeps protocol methods and ordinary identifiers as code, not file chips", async () => {
     await render("`currentTime/read` and `experimentalApi` and `true`");

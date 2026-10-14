@@ -25,8 +25,8 @@ it("copies a local file directly without the preview size limit", async () => {
     defaultPath: "report.pdf",
   });
   expect(invoke).toHaveBeenCalledWith("save_download", {
-    path: "/downloads/result.bin",
-    from: "/workspace/report.pdf",
+    destination: "/downloads/result.bin",
+    source: { path: "/workspace/report.pdf" },
   });
   expect(invokeWorkspace).not.toHaveBeenCalled();
 });
@@ -51,8 +51,8 @@ it("routes remote files to native streaming without reading bytes into the rende
 it("preserves binary data from inline attachments", async () => {
   await downloadFile("image.png", { url: "data:image/png;base64,AP8q" });
   expect(invoke).toHaveBeenCalledWith("save_download", {
-    path: "/downloads/result.bin",
-    data: "AP8q",
+    destination: "/downloads/result.bin",
+    source: { data: "AP8q" },
   });
 });
 
@@ -65,9 +65,9 @@ it("propagates save failures for the control to display", async () => {
 
 it("writes artifact text directly without fetching or encoding a data URL", async () => {
   await downloadFile("report.md", { text: "Résumé 🎉\n# Findings" });
-  expect(invoke).toHaveBeenCalledWith("save_text_download", {
-    path: "/downloads/result.bin",
-    content: "Résumé 🎉\n# Findings",
+  expect(invoke).toHaveBeenCalledWith("save_download", {
+    destination: "/downloads/result.bin",
+    source: { text: "Résumé 🎉\n# Findings" },
   });
 });
 
@@ -81,4 +81,13 @@ it.each([
     title: "Download file",
     defaultPath: expected,
   });
+});
+
+it("reports a failed fetch instead of saving an empty file", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 404 }));
+  await expect(
+    downloadFile("image.png", { url: "blob:gone" }),
+  ).rejects.toThrow("Could not read file (404).");
+  expect(invoke).not.toHaveBeenCalled();
+  vi.unstubAllGlobals();
 });

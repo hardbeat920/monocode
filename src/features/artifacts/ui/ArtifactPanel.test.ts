@@ -76,7 +76,7 @@ it.each([
         .click(),
     );
     expect(downloadFile).toHaveBeenCalledWith(
-      `${artifact.title}.${extension}`,
+      `${"Review - -résumé- 🎉".repeat(20)}.${extension}`,
       { text: artifact.body },
     );
   },

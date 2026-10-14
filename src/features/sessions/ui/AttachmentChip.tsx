@@ -25,7 +25,12 @@ export function AttachmentChip({ attachment, onRemove, photo = false }: Props) {
     : downloadUrl
       ? { url: downloadUrl }
       : undefined;
-  const layout = image && !onRemove ? "flex-col items-start" : "items-center";
+  const layout =
+    image && !onRemove
+      ? photo
+        ? "flex-col items-end"
+        : "flex-col items-start"
+      : "items-center";
   const surface = image ? "" : "bg-content/10 py-0.5 pl-1 pr-1";
 
   return (

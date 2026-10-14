@@ -434,6 +434,14 @@ function mimeFromFile(file: File): string {
   return fromName;
 }
 
+/** `name` with the conventional extension for `mime`, unless it has one. */
+export function withMimeExtension(name: string, mime: string): string {
+  if (extension(name)) return name;
+  const type = mime.split(";", 1)[0].trim().toLowerCase();
+  const ext = Object.keys(MIME_BY_EXT).find((key) => MIME_BY_EXT[key] === type);
+  return ext ? `${name}.${ext}` : name;
+}
+
 function mimeFromName(name: string): string {
   const ext = extension(name);
   if (!ext) return "application/octet-stream";

@@ -33,7 +33,9 @@ export function DownloadButton({
           setError(null);
           void downloadFile(name, source)
             .catch((reason: unknown) => {
-              setError(`Could not download ${name}: ${String(reason)}`);
+              const detail =
+                reason instanceof Error ? reason.message : String(reason);
+              setError(`Could not download ${name}: ${detail}`);
             })
             .finally(() => {
               pending.current = false;

@@ -5899,30 +5899,29 @@ pub async fn write_text_file(path: String, content: String) -> Result<(), String
         .map_err(|e| e.to_string())?
 }
 
-/// Save a downloaded file locally. Source paths never route to a remote host.
+/// What a download saves: a file on this computer, base64 bytes, or text.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DownloadSource {
+    Path(String),
+    Data(String),
+    Text(String),
+}
+
+/// Save a download locally without the editor's size limit. Source paths never
+/// route to a remote host.
 #[tauri::command]
-pub async fn save_download(
-    path: String,
-    from: Option<String>,
-    data: Option<String>,
-) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || save_download_sync(&path, from, data))
+pub async fn save_download(destination: String, source: DownloadSource) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || save_download_sync(&destination, source))
         .await
         .map_err(|e| e.to_string())?
 }
 
-fn save_download_sync(
-    path: &str,
-    from: Option<String>,
-    data: Option<String>,
-) -> Result<(), String> {
+fn save_download_sync(destination: &str, source: DownloadSource) -> Result<(), String> {
     // A save dialog returns a literal path on this computer, not a workspace path.
-    let destination = Path::new(path);
-    if destination.is_dir() {
-        return Err("Cannot save a file to a directory.".into());
-    }
-    match (from, data) {
-        (Some(from), None) => {
+    let destination = Path::new(destination);
+    match source {
+        DownloadSource::Path(from) => {
             let source = expand_home(&from);
             let metadata = std::fs::metadata(&source).map_err(|e| e.to_string())?;
             if !metadata.is_file() {
@@ -5940,28 +5939,17 @@ fn save_download_sync(
                     .map_err(|e| e.to_string())
             })
         }
-        (None, Some(data)) => {
+        DownloadSource::Data(data) => {
             let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data)
                 .map_err(|_| "Download data is not valid base64.".to_string())?;
             write_file_sync(destination, |file| {
                 file.write_all(&bytes).map_err(|e| e.to_string())
             })
         }
-        _ => Err("Choose one download source.".into()),
+        DownloadSource::Text(text) => write_file_sync(destination, |file| {
+            file.write_all(text.as_bytes()).map_err(|e| e.to_string())
+        }),
     }
-}
-
-/// Export text without applying the editor's file-size limit.
-#[tauri::command]
-pub async fn save_text_download(path: String, content: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        write_file_sync(Path::new(&path), |file| {
-            file.write_all(content.as_bytes())
-                .map_err(|e| e.to_string())
-        })
-    })
-    .await
-    .map_err(|e| e.to_string())?
 }
 
 fn write_text_file_sync(path: &str, content: &str) -> Result<(), String> {
@@ -5988,7 +5976,7 @@ pub(crate) fn write_file_sync(
         requested.to_path_buf()
     };
     if destination.is_dir() {
-        return Err("Cannot save text to a directory.".into());
+        return Err("Cannot save a file to a directory.".into());
     }
 
     let parent = destination
@@ -6707,14 +6695,18 @@ mod tests {
         );
     }
 
+    fn from(path: &str) -> DownloadSource {
+        DownloadSource::Path(path.into())
+    }
+
     #[test]
     fn downloaded_local_files_preserve_bytes_even_when_saved_over_the_source() {
         let dir = tmp("download-copy");
         let source = dir.0.join("source.bin").to_string_lossy().into_owned();
         let destination = dir.0.join("copy.bin").to_string_lossy().into_owned();
         std::fs::write(&source, [0, 255, 42]).unwrap();
-        save_download_sync(&destination, Some(source.clone()), None).unwrap();
-        save_download_sync(&source, Some(source.clone()), None).unwrap();
+        save_download_sync(&destination, from(&source)).unwrap();
+        save_download_sync(&source, from(&source)).unwrap();
         assert_eq!(std::fs::read(&source).unwrap(), [0, 255, 42]);
         assert_eq!(std::fs::read(&destination).unwrap(), [0, 255, 42]);
     }
@@ -6724,12 +6716,17 @@ mod tests {
         let dir = tmp("download");
         let path = dir.0.join("file.bin");
         let path_string = path.to_string_lossy();
-        save_download_sync(&path_string, None, Some("AP8q".into())).unwrap();
+        save_download_sync(&path_string, DownloadSource::Data("AP8q".into())).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), [0, 255, 42]);
-        save_download_sync(&path_string, None, Some("/wA=".into())).unwrap();
+        save_download_sync(&path_string, DownloadSource::Data("/wA=".into())).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), [255, 0]);
         assert_eq!(std::fs::read_dir(&dir.0).unwrap().count(), 1);
-        assert!(save_download_sync(&dir.0.to_string_lossy(), None, Some("AA==".into())).is_err());
+        let error = save_download_sync(
+            &dir.0.to_string_lossy(),
+            DownloadSource::Data("AA==".into()),
+        )
+        .unwrap_err();
+        assert_eq!(error, "Cannot save a file to a directory.");
     }
 
     #[test]
@@ -6737,18 +6734,8 @@ mod tests {
         let dir = tmp("download-invalid");
         let destination = dir.0.join("file.bin").to_string_lossy().into_owned();
         std::fs::write(&destination, "original").unwrap();
-        assert!(save_download_sync(&destination, None, None).is_err());
-        assert!(
-            save_download_sync(&destination, Some(destination.clone()), Some("AA==".into()))
-                .is_err()
-        );
-        assert!(save_download_sync(&destination, None, Some("!invalid".into())).is_err());
-        let error = save_download_sync(
-            &destination,
-            Some(dir.0.to_string_lossy().into_owned()),
-            None,
-        )
-        .unwrap_err();
+        assert!(save_download_sync(&destination, DownloadSource::Data("!invalid".into())).is_err());
+        let error = save_download_sync(&destination, from(&dir.0.to_string_lossy())).unwrap_err();
         assert!(error.contains("Folders cannot be downloaded"));
         assert_eq!(std::fs::read(&destination).unwrap(), b"original");
     }
@@ -6764,12 +6751,7 @@ mod tests {
         std::os::unix::fs::symlink(&source, &symlink).unwrap();
         std::fs::hard_link(&source, &hard_link).unwrap();
         for alias in [symlink, hard_link] {
-            save_download_sync(
-                &alias.to_string_lossy(),
-                Some(source.to_string_lossy().into_owned()),
-                None,
-            )
-            .unwrap();
+            save_download_sync(&alias.to_string_lossy(), from(&source.to_string_lossy())).unwrap();
             assert_eq!(std::fs::read(&source).unwrap(), [0, 255, 42]);
             assert_eq!(std::fs::read(alias).unwrap(), [0, 255, 42]);
         }
@@ -6782,10 +6764,10 @@ mod tests {
         let content = format!("{}Résumé 🎉", "x".repeat(MAX_TEXT_FILE_BYTES as usize));
         assert!(write_text_file_sync(&path.to_string_lossy(), &content).is_err());
         assert!(!path.exists());
-        tauri::async_runtime::block_on(save_text_download(
-            path.to_string_lossy().into_owned(),
-            content.clone(),
-        ))
+        save_download_sync(
+            &path.to_string_lossy(),
+            DownloadSource::Text(content.clone()),
+        )
         .unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), content);
         assert_eq!(std::fs::read_dir(&dir.0).unwrap().count(), 1);

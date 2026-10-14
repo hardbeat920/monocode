@@ -3,7 +3,7 @@ import { readBinaryFile } from "../../../platform/tauri/fs";
 import { formatFileSize, sniffImageMime } from "../../files/model/filePreview";
 import { ImageLightbox } from "../../../shared/ui/ImageLightbox";
 import { DownloadButton } from "../../../shared/ui/DownloadButton";
-import { mediaExtension } from "../../../shared/lib/mediaMime";
+import { withMimeExtension } from "../model/attachments";
 import type { GeneratedImageMeta } from "../model/session";
 
 type State =
@@ -75,11 +75,7 @@ export function GeneratedImage({ image }: { image: GeneratedImageMeta }) {
       </button>
       <div className="mt-1 -ml-1 flex min-w-0 items-center gap-2.5 font-sans text-sm text-content/40">
         <DownloadButton
-          name={
-            /\.[a-z0-9]+$/i.test(image.name)
-              ? image.name
-              : `${image.name}.${mediaExtension(image.mimeType)}`
-          }
+          name={withMimeExtension(image.name, image.mimeType)}
           source={{ path: image.path }}
         />
         <span

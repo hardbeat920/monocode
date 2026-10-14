@@ -14,6 +14,7 @@ import { request } from "node:http";
 import { HostEngine } from "./engine";
 import { HostStore } from "./store";
 import { createHostServer } from "./server";
+import { WorkspaceCommands } from "./workspace-commands";
 import { HostChildBackend } from "./child-backend";
 import { configureChildBackend } from "../src/integrations/harness/core/child";
 import type { SendTurnInput } from "../src/integrations/harness/core/types";
@@ -190,8 +191,38 @@ describe("remote host API", () => {
     ).toBe(403);
     expect(await send(privateFile)).toBe(400);
     expect(await send(s.project.cwd)).toBe(400);
+    // Opening the file yields, so a revocation can land before streaming starts.
+    vi.spyOn(s.store, "authenticated")
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(false);
+    expect(await send(file)).toBe(401);
     s.store.revokeDevice(s.first.id);
     expect(await send(file)).toBe(401);
+  });
+
+  it("closes the file when a client abandons a download", async () => {
+    const s = await setup();
+    const path = join(s.project.cwd, "large.bin");
+    writeFileSync(path, Buffer.alloc(32 * 1024 * 1024));
+    const download = vi.spyOn(WorkspaceCommands.prototype, "download");
+    const abort = new AbortController();
+    const response = await fetch(s.url.replace(/\/rpc$/, "/download"), {
+      method: "POST",
+      headers: { Authorization: `Bearer ${s.first.token}` },
+      body: JSON.stringify({
+        version: 1,
+        environmentId: s.store.environmentId,
+        params: { path },
+      }),
+      signal: abort.signal,
+    });
+    await response.body!.getReader().read();
+    abort.abort();
+    const stream = await download.mock.results[0].value;
+    await vi.waitFor(() => expect(stream.closed).toBe(true));
+    download.mockRestore();
+    expect((await s.call("environment.describe")).status).toBe(200);
   });
 
   it("rejects a credential revoked while its request body is arriving", async () => {

@@ -71,7 +71,7 @@ export function ArtifactReader({
     <>
       <DownloadButton
         key={artifact.id}
-        name={`${artifact.title}.${DOWNLOAD_EXTENSIONS[artifact.kind]}`}
+        name={`${artifact.title.replace(/[\\/:*?"<>|]+/g, "-")}.${DOWNLOAD_EXTENSIONS[artifact.kind]}`}
         source={{ text: artifact.body }}
       />
       <IconButton

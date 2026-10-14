@@ -16,33 +16,19 @@ export async function downloadFile(
     defaultPath: name.replace(/.*[/\\]/, "") || "download",
   });
   if (!destination) return;
-  if ("text" in source) {
-    await invoke("save_text_download", {
-      path: destination,
-      content: source.text,
-    });
+  if ("path" in source && source.path.startsWith(REMOTE_PATH_PREFIX)) {
+    await invokeWorkspace("download_file", { path: source.path, destination });
     return;
   }
-  if ("path" in source) {
-    if (source.path.startsWith(REMOTE_PATH_PREFIX)) {
-      await invokeWorkspace("download_file", {
-        path: source.path,
-        destination,
-      });
-    } else {
-      await invoke("save_download", { path: destination, from: source.path });
-    }
+  if (!("url" in source)) {
+    await invoke("save_download", { destination, source });
     return;
   }
   const response = await fetch(source.url);
   if (!response.ok)
     throw new Error(`Could not read file (${response.status}).`);
-  const blob = await response.blob();
   // Match write_attachment's transport and browser-native base64 encoding.
-  const data = await readBlobBase64(blob);
+  const data = await readBlobBase64(await response.blob());
   if (data === null) throw new Error("Could not read file for download.");
-  await invoke("save_download", {
-    path: destination,
-    data,
-  });
+  await invoke("save_download", { destination, source: { data } });
 }

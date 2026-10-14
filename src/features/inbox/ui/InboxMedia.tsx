@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { DownloadButton } from "../../../shared/ui/DownloadButton";
-import { mediaExtension } from "../../../shared/lib/mediaMime";
+import { withMimeExtension } from "../../sessions/model/attachments";
 import {
   fetchInboxMedia,
   sniffInboxMedia,
@@ -74,7 +74,7 @@ export function InboxMedia({ src, alt }: Props) {
           <MediaFallback src={src} alt={alt} />
         </video>
         <DownloadButton
-          name={`video.${mediaExtension(state.type.mime)}`}
+          name={withMimeExtension("video", state.type.mime)}
           source={{ url: state.url }}
         />
       </span>
@@ -97,7 +97,7 @@ export function InboxMedia({ src, alt }: Props) {
         }}
       />
       <DownloadButton
-        name={`image.${mediaExtension(state.type.mime)}`}
+        name={withMimeExtension("image", state.type.mime)}
         source={{ url: state.url }}
       />
     </span>

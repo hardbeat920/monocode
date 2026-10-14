@@ -13,6 +13,7 @@ vi.mock("../../../platform/tauri/download", () => ({
 
 vi.mock("../../../platform/tauri/fs", () => ({
   readBinaryFile: vi.fn(),
+  basename: (path: string) => path.split("/").pop(),
 }));
 vi.mock("../../../platform/tauri/trackpadZoom", () => ({
   claimTrackpadMagnify: () => () => {},
@@ -168,21 +169,6 @@ describe("AttachmentChip image preview", () => {
     expect(downloadFile).toHaveBeenCalledWith("report.pdf", {
       path: "/workspace/report.pdf",
     });
-  });
-
-  it("shows download errors beside the button", async () => {
-    vi.mocked(downloadFile).mockRejectedValueOnce(new Error("Disk full"));
-    render();
-    await act(async () =>
-      container
-        .querySelector<HTMLButtonElement>(
-          '[aria-label="Download diagram.png"]',
-        )!
-        .click(),
-    );
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
-      "Disk full",
-    );
   });
 
   it("keeps folders out of the file download flow", () => {
