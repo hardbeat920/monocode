@@ -12,8 +12,18 @@ test("active tab reveal scrolls only the file row", async ({ page }) => {
   await ancestor.evaluate((el) => {
     el.scrollTop = 0;
   });
-  await page.getByRole("button", { name: "Select last", exact: true }).click();
   const strip = page.getByRole("tablist");
+  expect(
+    await strip.evaluate((el) => el.scrollWidth - el.clientWidth),
+  ).toBeGreaterThan(0);
+  expect(
+    await ancestor.evaluate(
+      (el) =>
+        el.querySelector('[role="tablist"]')!.getBoundingClientRect().bottom -
+        el.getBoundingClientRect().bottom,
+    ),
+  ).toBeGreaterThan(0);
+  await page.getByRole("button", { name: "Select last", exact: true }).click();
   const selected = page.locator('[data-tab-slot-id="c"]');
   await expect
     .poll(async () => {
