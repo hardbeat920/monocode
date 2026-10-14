@@ -58,7 +58,8 @@ Boolean flags take true or false, or nothing for true.
 
 Act on refs (e12) from a snapshot. Actions that can change the page print
 the page snapshot after them below the JSON line: the whole page after a
-navigation, otherwise only the changed lines (+ added, - removed). Refs you
+navigation, otherwise only the changed lines (+ added, - removed),
+including page text such as a "Saved" message. Refs you
 have not seen change keep working; refs from before a navigation fail with
 ref_stale. --snapshot false leaves the snapshot out.
 

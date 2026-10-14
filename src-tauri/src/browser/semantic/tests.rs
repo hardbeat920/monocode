@@ -49,6 +49,8 @@ struct Model {
     history_index: i64,
     /// What `monocodeCursor("move")` reports as the glide time.
     glide_ms: u64,
+    /// Plain text the page shows under its controls, when set.
+    status: Option<String>,
 }
 
 impl Default for Model {
@@ -65,6 +67,7 @@ impl Default for Model {
             hold_release: false,
             history_index: 1,
             glide_ms: 0,
+            status: None,
         }
     }
 }
@@ -82,15 +85,31 @@ fn respond(
     let session = received.session.clone().unwrap_or_default();
     let params = &received.params;
     match received.method.as_str() {
-        "Accessibility.getFullAXTree" if session == MAIN => Response::Result(json!({ "nodes": [
-            ax("1", "RootWebArea", "\u{25C6} MonoCode \u{B7} Shop", 1, &["2", "3", "4", "5", "6", "7"]),
-            ax("2", "button", "Save", 11, &[]),
-            ax("3", "textbox", "Email", 12, &[]),
-            ax("4", "Iframe", "", 13, &[]),
-            ax("5", "combobox", "Size", 14, &[]),
-            ax("6", "button", "Upload", 15, &[]),
-            ax("7", "button", "Choose file", 16, &[]),
-        ]})),
+        "Accessibility.getFullAXTree" if session == MAIN => {
+            let mut children = vec!["2", "3", "4", "5", "6", "7"];
+            if model.status.is_some() {
+                children.push("8");
+            }
+            let mut nodes = vec![
+                ax(
+                    "1",
+                    "RootWebArea",
+                    "\u{25C6} MonoCode \u{B7} Shop",
+                    1,
+                    &children,
+                ),
+                ax("2", "button", "Save", 11, &[]),
+                ax("3", "textbox", "Email", 12, &[]),
+                ax("4", "Iframe", "", 13, &[]),
+                ax("5", "combobox", "Size", 14, &[]),
+                ax("6", "button", "Upload", 15, &[]),
+                ax("7", "button", "Choose file", 16, &[]),
+            ];
+            if let Some(status) = &model.status {
+                nodes.push(ax("8", "StaticText", status, 17, &[]));
+            }
+            Response::Result(json!({ "nodes": nodes }))
+        }
         "Accessibility.getFullAXTree" => Response::Result(json!({ "nodes": [
             ax("c1", "RootWebArea", "Ad", 1, &["c2"]),
             ax("c2", "link", "Buy", 5, &[]),
@@ -804,6 +823,15 @@ fn actions_return_the_page_snapshot_or_its_changes() {
         "{text}"
     );
     assert!(click.message.ends_with("The page snapshot did not change."));
+    // Plain text the page shows after an action is part of the changes,
+    // though interactive snapshots leave text out.
+    h.model.lock().unwrap().status = Some("Saved".into());
+    let saved = h.act(ActionKind::Click, json!({ "ref": "e2" }));
+    let text = saved.data.as_ref().unwrap()["snapshot"].as_str().unwrap();
+    assert!(text.contains("changes since"), "{text}");
+    assert!(text.contains("\n+  - text \"Saved\" [ref=e"), "{text}");
+    let whole = h.snapshot();
+    assert!(!whole.contains("Saved"), "{whole}");
     let again = h.act(ActionKind::Hover, json!({ "ref": "e2", "snapshot": false }));
     assert_eq!(again.outcome, Outcome::Done, "{again:?}");
     assert!(again.data.is_none(), "{again:?}");

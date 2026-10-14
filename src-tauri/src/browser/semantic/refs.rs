@@ -72,7 +72,9 @@ pub struct RefTable {
     pub last: Option<LastSnapshot>,
 }
 
-/// Body of the last whole-page snapshot (no scope, default size).
+/// The last whole-page snapshot (no scope, default size): the mode the agent
+/// asked for, and the page rendered with its text (full mode), which the
+/// changes after an action are computed on.
 #[derive(Clone, Debug)]
 pub struct LastSnapshot {
     pub version: u64,

@@ -573,7 +573,9 @@ struct Taken {
     refs: usize,
     truncated: bool,
     picked: Option<u32>,
-    /// The previous whole-page snapshot of this document in the same mode,
+    /// The page with its text (full mode), for whole-page snapshots only.
+    text_body: String,
+    /// The previous whole-page snapshot of this document (its full-mode body),
     /// when this one is a whole-page snapshot too.
     previous: Option<refs::LastSnapshot>,
 }
@@ -624,7 +626,7 @@ fn take(run: &Run<'_>, p: &SnapshotParams, inherit: bool) -> Result<Taken, Fail>
             strip_marker(&lease.title).to_string(),
         )
     };
-    let (rendered, previous) =
+    let (rendered, previous, text_body) =
         refs::with_snapshot_table(&run.key(), loader.as_deref(), version, |table| {
             let mode = match (p.mode, inherit, &table.last) {
                 (Some(mode), _, _) => mode,
@@ -647,18 +649,33 @@ fn take(run: &Run<'_>, p: &SnapshotParams, inherit: bool) -> Result<Taken, Fail>
             let rendered = render(&arena, start, &opts, &mut |frame, backend, role, name| {
                 table.assign(&frames[frame], backend, role, name)
             });
-            let previous = if whole_page {
-                let previous = table.last.take().filter(|last| last.mode == mode);
+            // Changes after an action are computed on the page with its text
+            // (full mode), so a message such as "Saved" shows up even when the
+            // agent reads interactive snapshots. Text nodes get refs too.
+            let (previous, text_body) = if whole_page {
+                let text_body = if mode == SnapshotMode::Full {
+                    rendered.text.clone()
+                } else {
+                    let opts = RenderOpts {
+                        mode: SnapshotMode::Full,
+                        ..opts
+                    };
+                    render(&arena, start, &opts, &mut |frame, backend, role, name| {
+                        table.assign(&frames[frame], backend, role, name)
+                    })
+                    .text
+                };
+                let previous = table.last.take();
                 table.last = Some(refs::LastSnapshot {
                     version,
                     mode,
-                    body: rendered.text.clone(),
+                    body: text_body.clone(),
                 });
-                previous
+                (previous, text_body)
             } else {
-                None
+                (None, String::new())
             };
-            (rendered, previous)
+            (rendered, previous, text_body)
         });
     let mut header = format!(
         "url: {url}\ntitle: {}\nsnapshot: v{version}, {} refs{}\n",
@@ -685,6 +702,7 @@ fn take(run: &Run<'_>, p: &SnapshotParams, inherit: bool) -> Result<Taken, Fail>
         truncated: rendered.truncated,
         picked: rendered.picked,
         previous,
+        text_body,
     })
 }
 
@@ -722,7 +740,7 @@ pub fn after_action(run: &Run<'_>) -> Result<Inline, Fail> {
         taken.url,
         quoted(&clip(&taken.title, MAX_NAME))
     );
-    match changes(&previous.body, &taken.body) {
+    match changes(&previous.body, &taken.text_body) {
         Some(Changes::None) => Ok(Inline {
             text: format!(
                 "{head}snapshot: v{version}, no change since v{} ({} refs)\n",
