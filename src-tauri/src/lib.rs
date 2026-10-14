@@ -231,6 +231,19 @@ fn should_request_quit(code: Option<i32>) -> bool {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let context = tauri::generate_context!();
+    #[cfg(all(debug_assertions, target_os = "macos"))]
+    {
+        let version = context.package_info().version.to_string();
+        let bundle_version = context
+            .config()
+            .bundle
+            .macos
+            .bundle_version
+            .as_deref()
+            .unwrap_or(&version);
+        macos::ensure_dev_bundle(&version, bundle_version);
+    }
     #[cfg(target_os = "macos")]
     macos::register_spellcheck_default();
     #[cfg(windows)]
@@ -616,7 +629,7 @@ pub fn run() {
             project_logo::remove_project_logo,
             project_logo::forget_logo_file,
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building MonoCode");
 
     app.run(|handle, event| match event {
@@ -685,11 +698,6 @@ fn reap_harness_children(handle: &tauri::AppHandle) {
     if let Some(host) = handle.try_state::<pty::PtyHost>() {
         host.kill_all();
     }
-}
-
-#[cfg(all(debug_assertions, target_os = "macos"))]
-pub fn ensure_macos_dev_bundle() {
-    macos::ensure_dev_bundle();
 }
 
 #[cfg(test)]
