@@ -157,6 +157,32 @@ describe("AgentMarkdown code fence highlighting", () => {
   });
 });
 
+describe("AgentMarkdown code wrapping", () => {
+  it("wraps Markdown/text languages and files, but not code or unlabeled blocks", () => {
+    const labels = [
+      "markdown",
+      "docs/readme.md",
+      "text",
+      "notes/output.txt",
+      "typescript",
+      "",
+      "unknown",
+    ];
+    const markup = renderToStaticMarkup(
+      createElement(AgentMarkdown, {
+        text: labels
+          .map((label) => `\`\`\`${label}\nsample\n\`\`\``)
+          .join("\n\n"),
+      }),
+    );
+    const defaults = Array.from(
+      markup.matchAll(/aria-label="Wrap lines" aria-pressed="(true|false)"/g),
+      (match) => match[1] === "true",
+    );
+    expect(defaults).toEqual([true, true, true, true, false, false, false]);
+  });
+});
+
 describe("AgentMarkdown note images", () => {
   it("keeps app-owned note image references for the async image resolver", () => {
     const markup = renderToStaticMarkup(

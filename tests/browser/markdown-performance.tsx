@@ -40,8 +40,8 @@ function Fixture() {
     let timer: number | undefined;
     Object.assign(window, {
       markdownSource: prompt,
-      showMarkdownExample: (text: string) =>
-        setReply({ id: "reply", role: "assistant", text }),
+      showMarkdownExample: (text: string, streaming = false) =>
+        setReply({ id: "reply", role: "assistant", text, streaming }),
       startMarkdownStream: () => {
         let end = 0;
         timer = window.setInterval(() => {

@@ -1768,12 +1768,17 @@ header[data-tauri-drag-region] button {
   margin-block: 0;
 }
 
-.agent-markdown .markdown-code-copy {
-  appearance: none;
+.agent-markdown .markdown-code-actions {
   position: absolute;
   z-index: 2;
   top: 6px;
   right: 8px;
+  display: flex;
+  gap: 4px;
+}
+
+.agent-markdown .markdown-code-action {
+  appearance: none;
   display: grid;
   width: 24px;
   height: 24px;
@@ -1790,13 +1795,20 @@ header[data-tauri-drag-region] button {
     background-color 160ms ease;
 }
 
-.agent-markdown .markdown-code-copy:hover {
+.agent-markdown .markdown-code-action:hover {
   background: color-mix(in srgb, var(--color-content) 10%, transparent);
   color: var(--color-content);
 }
 
-.agent-markdown .markdown-code-copy:focus-visible {
+.agent-markdown .markdown-code-action:focus-visible {
   background: color-mix(in srgb, var(--color-content) 10%, transparent);
+  color: var(--color-content);
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.agent-markdown .markdown-code-wrap[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--color-content) 8%, transparent);
   color: var(--color-content);
 }
 
@@ -1867,7 +1879,7 @@ header[data-tauri-drag-region] button {
   z-index: 1;
   top: 10px;
   left: 34px;
-  right: 12px;
+  right: 70px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1876,12 +1888,6 @@ header[data-tauri-drag-region] button {
   font-weight: 500;
   color: color-mix(in srgb, var(--color-content) 65%, transparent);
   pointer-events: none;
-}
-
-.agent-markdown
-  .markdown-code-shell:has(.markdown-code-copy)
-  .markdown-code-path {
-  right: 42px;
 }
 
 .agent-markdown .markdown-code-path-link {
@@ -1911,7 +1917,7 @@ header[data-tauri-drag-region] button {
   z-index: 1;
   top: 10px;
   left: 34px;
-  right: 12px;
+  right: 70px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1932,12 +1938,6 @@ header[data-tauri-drag-region] button {
   [data-streamdown="code-block-header"]
   > span {
   visibility: hidden;
-}
-
-.agent-markdown
-  .markdown-code-shell:has(.markdown-code-fallback-label:empty)
-  [data-streamdown="code-block-header"] {
-  display: none;
 }
 
 .agent-markdown
@@ -1988,6 +1988,17 @@ header[data-tauri-drag-region] button {
 
 .agent-markdown .markdown-code-shell [data-streamdown="code-block-header"] {
   padding-left: 34px;
+  padding-right: 70px;
+}
+
+.agent-markdown
+  .markdown-code-shell
+  [data-streamdown="code-block-header"]
+  > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .agent-markdown [data-streamdown="code-block-header"]:has(span:empty) {
@@ -2055,6 +2066,45 @@ header[data-tauri-drag-region] button {
   display: inline-block;
   text-align: right;
   user-select: none;
+}
+
+/* Soft-wrap existing source rows; never insert newlines into the code. */
+.agent-markdown
+  .markdown-code-shell[data-wrap="true"]
+  [data-streamdown="code-block-body"]
+  pre,
+.agent-markdown
+  .markdown-code-shell[data-wrap="true"]
+  [data-streamdown="code-block-body"]
+  code
+  > span {
+  width: auto;
+  min-width: 0;
+  max-width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+/* Every continuation stays in the text column, clear of the source-line number. */
+.agent-markdown
+  .markdown-code-shell[data-wrap="true"]
+  [data-streamdown="code-block-body"]
+  .markdown-code-numbered-line {
+  position: relative;
+  padding-left: 32px;
+}
+
+.agent-markdown
+  .markdown-code-shell[data-wrap="true"]
+  [data-streamdown="code-block-body"]
+  .markdown-code-numbered-line::before {
+  position: absolute;
+  top: 0;
+  left: 0;
+  margin-right: 0;
+  white-space: nowrap;
+  overflow-wrap: normal;
 }
 
 .markdown-code-token {

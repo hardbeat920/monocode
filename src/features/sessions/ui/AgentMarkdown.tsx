@@ -8,7 +8,6 @@ import {
   useContext,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type ComponentProps,
   type CSSProperties,
@@ -27,6 +26,7 @@ import {
   type Components,
 } from "streamdown";
 import type { PluggableList } from "unified";
+import type { Element } from "hast";
 import { ExplorerMenu, type ExplorerMenuItem } from "../../files/ui/ExplorerMenu";
 import { FileActionError } from "../../files/ui/FileActionError";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
@@ -61,6 +61,13 @@ import {
 } from "./wordFade";
 import { isFenceBlock, parseStreamingMarkdown } from "./streamingMarkdown";
 import { HighlightedCodeBlock } from "./HighlightedCodeBlock";
+import {
+  CodeBlockFrame,
+  CodeWrapOverridesContext,
+  rehypeCodeWrapIndices,
+  wrapCodeByDefault,
+  type CodeWrapOverrides,
+} from "./CodeBlockFrame";
 
 const MERMAID_BASE_CONFIG = {
   startOnLoad: false,
@@ -91,6 +98,7 @@ const MARKDOWN_REHYPE_PLUGINS: PluggableList = [
       imageBlockPolicy: "remove" as const,
     },
   ],
+  rehypeCodeWrapIndices,
 ];
 
 const INBOX_MEDIA_REHYPE_PLUGINS: PluggableList = [
@@ -106,6 +114,7 @@ const INBOX_MEDIA_REHYPE_PLUGINS: PluggableList = [
       imageBlockPolicy: "remove" as const,
     },
   ],
+  rehypeCodeWrapIndices,
 ];
 
 // A reply that streams renders its words as spans that fade in as they land.
@@ -301,7 +310,7 @@ function MarkdownLink({
   return link;
 }
 
-type MarkdownCodeProps = ComponentProps<"code"> & { node?: unknown };
+type MarkdownCodeProps = ComponentProps<"code"> & { node?: Element };
 
 function MarkdownCode({
   children,
@@ -361,9 +370,15 @@ function MarkdownCode({
 
   const meta = codeMeta(node);
   const fence = parseCodeFence(className, meta);
+  const wrapIndex = node?.properties.dataWrapIndex;
+  const blockIndex = typeof wrapIndex === "number" ? wrapIndex : undefined;
   if (fence.language.toLowerCase() === "mermaid") {
     return (
-      <MermaidBlock code={textContent(children)} incomplete={incomplete} />
+      <MermaidBlock
+        code={textContent(children)}
+        incomplete={incomplete}
+        blockIndex={blockIndex}
+      />
     );
   }
   const iconName =
@@ -382,7 +397,11 @@ function MarkdownCode({
   );
 
   return (
-    <div className="markdown-code-shell" dir="ltr">
+    <CodeBlockFrame
+      code={code}
+      defaultWrapped={wrapCodeByDefault(fence.language, fence.fileName)}
+      blockIndex={blockIndex}
+    >
       {iconName ? (
         <span className="markdown-code-icon" aria-hidden="true">
           <FileTypeIcon name={iconName} isDir={false} />
@@ -393,7 +412,6 @@ function MarkdownCode({
       ) : isPlaintextFallback ? (
         <span className="markdown-code-fallback-label">{fence.language}</span>
       ) : null}
-      <CodeCopyButton code={code} />
       <HighlightedCodeBlock
         code={code}
         isIncomplete={incomplete}
@@ -401,49 +419,7 @@ function MarkdownCode({
         lineNumbers={lineNumbers}
         startLine={fence.startLine}
       />
-    </div>
-  );
-}
-
-function CodeCopyButton({ code }: { code: string }) {
-  const [copied, setCopied] = useState(false);
-  const timer = useRef<number | null>(null);
-
-  useEffect(() => {
-    setCopied(false);
-    return () => {
-      if (timer.current != null) window.clearTimeout(timer.current);
-    };
-  }, [code]);
-
-  return (
-    <button
-      type="button"
-      title={copied ? "Copied" : "Copy code"}
-      aria-label={copied ? "Copied" : "Copy code"}
-      className={`markdown-code-copy ${copied ? "is-copied" : ""}`}
-      onClick={() => {
-        void copyText(code.replace(/\r?\n$/, "")).then(
-          () => {
-            setCopied(true);
-            if (timer.current != null) window.clearTimeout(timer.current);
-            timer.current = window.setTimeout(() => setCopied(false), 1500);
-          },
-          () => {},
-        );
-      }}
-    >
-      <svg viewBox="0 0 20 20" aria-hidden="true">
-        <g className="markdown-code-copy-pages">
-          <path d="M12 4H6a2 2 0 0 0-2 2v6" />
-          <rect x="7" y="7" width="9" height="9" rx="1.5" />
-        </g>
-        <path
-          className="markdown-code-copy-check"
-          d="M4.5 10.5 8.2 14 15.5 6.5"
-        />
-      </svg>
-    </button>
+    </CodeBlockFrame>
   );
 }
 
@@ -535,6 +511,7 @@ const MARKDOWN_COMPONENTS = {
  */
 function DirectionalBlock({ dir, ...props }: BlockProps) {
   const fading = useContext(MarkdownFadeContext);
+  const [wrapOverrides] = useState<CodeWrapOverrides>(() => new Map());
   // Streamdown retains a parsed prose tree after the fade plugin changes.
   // Remount prose to remove its word spans, but keep literal fences mounted:
   // rebuilding all their highlighted tokens at fade-end causes a long frame.
@@ -542,12 +519,16 @@ function DirectionalBlock({ dir, ...props }: BlockProps) {
   const block = (
     <Block key={fence ? "code" : fading ? "fade" : "plain"} {...props} />
   );
-  return dir ? (
-    <div dir={dir} className="agent-markdown-block">
-      {block}
-    </div>
-  ) : (
-    block
+  return (
+    <CodeWrapOverridesContext.Provider value={wrapOverrides}>
+      {dir ? (
+        <div dir={dir} className="agent-markdown-block">
+          {block}
+        </div>
+      ) : (
+        block
+      )}
+    </CodeWrapOverridesContext.Provider>
   );
 }
 
@@ -797,9 +778,11 @@ export function MarkdownSourceHighlight({ text }: { text: string }) {
 function MermaidBlock({
   code,
   incomplete,
+  blockIndex,
 }: {
   code: string;
   incomplete: boolean;
+  blockIndex?: number;
 }) {
   const [svg, setSvg] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
@@ -835,18 +818,21 @@ function MermaidBlock({
 
   if (incomplete || failed) {
     return (
-      <div className="markdown-code-shell" dir="ltr">
+      <CodeBlockFrame
+        code={code}
+        defaultWrapped={false}
+        blockIndex={blockIndex}
+      >
         <span className="markdown-code-icon" aria-hidden="true">
           <FileTypeIcon name="diagram.mmd" isDir={false} />
         </span>
-        <CodeCopyButton code={code} />
         <CodeBlock
           code={code}
           isIncomplete={incomplete}
           language="mermaid"
           lineNumbers={false}
         />
-      </div>
+      </CodeBlockFrame>
     );
   }
 
