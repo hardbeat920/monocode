@@ -279,8 +279,13 @@ pub fn schedule_state_save(app: &AppHandle) {
         if STATE_SAVE_GENERATION.load(Ordering::SeqCst) != generation {
             return;
         }
-        // VISIBLE is left out so a closed-to-hidden window isn't restored hidden.
-        let _ = app.save_window_state(StateFlags::all() - StateFlags::VISIBLE);
+        // On the main thread, the plugin's move/resize handler can't block on the
+        // cache lock while this save waits for window getters on the event loop.
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            // VISIBLE is left out so a closed-to-hidden window isn't restored hidden.
+            let _ = handle.save_window_state(StateFlags::all() - StateFlags::VISIBLE);
+        });
     });
 }
 
