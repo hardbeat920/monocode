@@ -563,6 +563,7 @@ import {
   browserGrantStatus,
   browserTurnAccess,
   consumeBrowserCommand,
+  inheritsMonoBrowserGrant,
   withBrowserAskNote,
   type BrowserTurnAccess,
 } from "../features/sessions/model/browserCommand";
@@ -871,6 +872,8 @@ type SubmitOptions = ComposerTurnOptions & {
   managed?: boolean;
   orchestrationRetry?: OrchestrationProposal;
   appRequestId?: string;
+  /** A turn a Mono sent: it uses the browser only with a grant, never asks. */
+  browserGrantOnly?: boolean;
   monoSessionCompletion?: Block["monoSessionCompletion"];
   onSettled?: (outcome: ControlOutcome) => void;
   /** Generate a fresh title even when this is not the session's first turn. */
@@ -7011,6 +7014,7 @@ function Workspace({
       const browserEligible = !(
         options?.managed ||
         options?.appRequestId ||
+        options?.browserGrantOnly ||
         intent === "orchestrate" ||
         current.orchestrationLeadId ||
         orchestrator.run(sessionId)
@@ -8739,6 +8743,10 @@ function Workspace({
       placement?: AppSessionPlacement,
       onSettled?: (outcome: ControlOutcome) => void,
       openTab?: boolean,
+      /** A Mono's launch: its turn never asks for the browser, and
+       * `beforeSubmit` (passing the Mono's grant) runs once the session
+       * exists. */
+      monoLaunch?: { beforeSubmit: () => Promise<unknown> },
     ) =>
       acceptQuickLaunch(
         launch,
@@ -8792,19 +8800,27 @@ function Workspace({
             setAutomationsViewOpen(false);
             setSidebarTab("sessions", cwd);
           },
-          submit: (id, text, attachments, options) =>
-            onSettled
-              ? submitWithSettlement({
-                  submit: (settle) =>
-                    submitSession(id, text, attachments, {
-                      ...options,
-                      appRequestId: deliveryId,
-                      onSettled: settle,
-                    }),
-                  onSettled,
-                  rejectionMessage: "The monitored session could not start.",
-                })
-              : submitSession(id, text, attachments, options),
+          submit: (id, text, attachments, options) => {
+            const submit = () =>
+              onSettled
+                ? submitWithSettlement({
+                    submit: (settle) =>
+                      submitSession(id, text, attachments, {
+                        ...options,
+                        appRequestId: deliveryId,
+                        onSettled: settle,
+                      }),
+                    onSettled,
+                    rejectionMessage: "The monitored session could not start.",
+                  })
+                : submitSession(id, text, attachments, {
+                    ...options,
+                    ...(monoLaunch ? { browserGrantOnly: true } : {}),
+                  });
+            return monoLaunch
+              ? monoLaunch.beforeSubmit().then(submit)
+              : submit();
+          },
           saveDraft: (id, prompt, attachments, requestId) =>
             flushSync(() => onSaveDraft(id, prompt, attachments, requestId)),
         },
@@ -10911,6 +10927,27 @@ function Workspace({
             ),
           );
         };
+        // Sessions a Mono starts take its browser grant (when it has one) at
+        // launch and whenever it hands them work; they never ask on their own.
+        const monoBrowserGrant = async (sessionId: string) => {
+          if (!isMonoSession(source.id)) return false;
+          const state = browserStateSnapshot();
+          if (
+            !inheritsMonoBrowserGrant({
+              monoGranted: sessionBrowserGranted(state, source.id),
+              granted: sessionBrowserGranted(state, sessionId),
+              turnedOff: browserAccessTurnedOff(sessionId),
+            })
+          )
+            return false;
+          try {
+            await setSessionBrowserGrant(sessionId, true);
+            return true;
+          } catch (error) {
+            console.warn("Passing a Mono's browser access failed:", error);
+            return false;
+          }
+        };
         const promise = handleAgentApp(
           source,
           payload.requestId,
@@ -10979,6 +11016,9 @@ function Workspace({
                   placement,
                   onSettled,
                   !isMonoSession(source.id) || !!placement,
+                  isMonoSession(source.id)
+                    ? { beforeSubmit: () => monoBrowserGrant(id) }
+                    : undefined,
                 );
                 rememberLaunch();
                 onSettled?.accept();
@@ -11075,6 +11115,9 @@ function Workspace({
                 throw new Error(
                   "Session already has a draft; send or remove it first",
                 );
+              // Work a Mono hands to a session it started carries its grant.
+              if (id.startsWith(`app-${source.id}-`))
+                await monoBrowserGrant(id);
               const onSettled = notifyMonoId
                 ? monitorCompletion(
                     notifyMonoId,

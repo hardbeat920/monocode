@@ -4,6 +4,7 @@ import {
   browserGrantChange,
   browserTurnAccess,
   consumeBrowserCommand,
+  inheritsMonoBrowserGrant,
   withBrowserAskNote,
 } from "./browserCommand";
 import { consumeOperatorCommand } from "./operatorCommand";
@@ -126,5 +127,27 @@ describe("ask note", () => {
     expect(withBrowserAskNote("Use the tools.")).toBe(
       `Use the tools.\n${BROWSER_ASK_NOTE}`,
     );
+  });
+});
+
+describe("inheritsMonoBrowserGrant", () => {
+  const base = { monoGranted: true, granted: false, turnedOff: false };
+
+  it("passes the Mono's grant to a session it started", () => {
+    expect(inheritsMonoBrowserGrant(base)).toBe(true);
+  });
+
+  it("passes nothing while the Mono has no grant", () => {
+    expect(inheritsMonoBrowserGrant({ ...base, monoGranted: false })).toBe(
+      false,
+    );
+  });
+
+  it("leaves a session the user turned off alone", () => {
+    expect(inheritsMonoBrowserGrant({ ...base, turnedOff: true })).toBe(false);
+  });
+
+  it("does not grant a session that already has access", () => {
+    expect(inheritsMonoBrowserGrant({ ...base, granted: true })).toBe(false);
   });
 });

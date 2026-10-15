@@ -29,7 +29,9 @@ A thread you set to **Full access** in the composer's access picker gets the bro
 - `/browser` followed by a prompt turns access on and sends the prompt, for example `/browser check the pricing page on example.com`.
 - The thread's menu in the sidebar has the same **Browser access** switch.
 
-A thread you turn off asks again the next time its agent needs the browser, even with Always on or Full access. Access lasts until you turn it off, revoke it in Settings, switch off browser access for all agents, or restart MonoCode. Another thread or an agent cannot turn it on for a thread. Orchestration runs and their workers, and sessions another agent starts through the app, never get the browser on their own.
+A thread you turn off asks again the next time its agent needs the browser, even with Always on or Full access. Access lasts until you turn it off, revoke it in Settings, switch off browser access for all agents, or restart MonoCode. Another thread or an agent cannot turn it on for a thread, with one exception below. Orchestration runs and their workers, and sessions another agent starts through the app, never get the browser on their own.
+
+The exception is a Mono with browser access. A session the Mono starts gets the Mono's access, and so does a session it started when the Mono hands it more work. Such a session never asks you: if the Mono has no access when it starts the session or hands it work, the session works without the browser. A session you turn off stays off. Turning the Mono off later does not take access from sessions it already passed it to; turn those off one by one or revoke them in Settings.
 
 A thread with access shows a globe next to the context meter: steady while it has access, pulsing while an action runs, and amber when one of its tabs waits on a dialog. Click it to see the thread's tabs.
 

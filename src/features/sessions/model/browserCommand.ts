@@ -83,6 +83,19 @@ export function browserTurnAccess(input: {
   return always && !input.turnedOff ? "grant" : "ask";
 }
 
+/**
+ * Whether a session a Mono started takes the Mono's browser grant when the
+ * Mono starts it or hands it work. Only while the Mono holds a grant (which
+ * needs the main switch on), and never for a session the user turned off.
+ */
+export function inheritsMonoBrowserGrant(input: {
+  monoGranted: boolean;
+  granted: boolean;
+  turnedOff: boolean;
+}): boolean {
+  return input.monoGranted && !input.granted && !input.turnedOff;
+}
+
 /** The line an "ask" turn adds to the `<monocode_browser>` block. */
 export const BROWSER_ASK_NOTE =
   "This thread has no browser access yet. Your first browser action asks the user in MonoCode and waits for the answer. If it returns not_granted, continue without the browser and do not try it again in this turn.";
