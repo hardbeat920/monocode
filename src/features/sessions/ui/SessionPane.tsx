@@ -1194,9 +1194,10 @@ const LocalSessionPane = memo(function LocalSessionPane({
                     }
                     // The plan's usage, as the session footer shows it,
                     // which a Mono in full view covers. Its account moves
-                    // with the usage-limit notice, not here.
+                    // with the usage-limit notice, not here. A narrow chat
+                    // drops it first, then shows the model controls as icons.
                     tools={
-                      <div className="flex shrink-0 items-center gap-0.5 text-[11px] text-content/55">
+                      <div className="flex shrink-0 items-center gap-0.5 text-[11px] text-content/55 @max-md:hidden">
                         <UsageChips
                           providers={monoUsageProviders(session.harness)}
                           session={{
@@ -1222,6 +1223,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                           hideSettings
                           hotkeys={focused && !btw.open}
                           variant="text"
+                          labelClassName="@max-sm:hidden"
                           onChange={(harness, model) =>
                             onModelChange(session.id, harness, model)
                           }
@@ -1234,6 +1236,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                           model={session.model}
                           values={session.modelSettings}
                           variant="text"
+                          labelClassName="@max-sm:hidden"
                           onSettingsChange={(settings) =>
                             onModelSettingsChange(session.id, settings)
                           }

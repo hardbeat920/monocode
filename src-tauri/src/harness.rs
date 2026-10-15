@@ -2894,6 +2894,18 @@ pub(crate) fn gui_search_path() -> String {
     gui_search_path_from(login_shell_path(), dirs_home(), std::env::var("PATH").ok())
 }
 
+/// `gui_search_path` without ever starting the login shell: its PATH is used
+/// only when something already read it. Frequent git calls take this so
+/// filters like git-lfs resolve from a Finder launch without a status refresh
+/// waiting on a slow `.zshrc`.
+pub(crate) fn cached_gui_search_path() -> String {
+    gui_search_path_from(
+        peek_login_shell_path(&LOGIN_SHELL_ENV),
+        dirs_home(),
+        std::env::var("PATH").ok(),
+    )
+}
+
 fn gui_search_path_from(
     login_path: Option<String>,
     home: Option<String>,
@@ -3032,6 +3044,17 @@ const LOGIN_SHELL_KEYS: [&str; 6] = [
 
 fn login_shell_path() -> Option<String> {
     login_shell_env("PATH")
+}
+
+/// `try_lock`, not `lock`: the read holds the lock while the shell runs, so
+/// waiting for it would block just like resolving it.
+fn peek_login_shell_path(cache: &Mutex<Option<HashMap<String, String>>>) -> Option<String> {
+    let cache = cache.try_lock().ok()?;
+    cache
+        .as_ref()?
+        .get("PATH")
+        .cloned()
+        .filter(|value| !value.is_empty())
 }
 
 fn login_shell_env(name: &str) -> Option<String> {
@@ -3721,6 +3744,48 @@ mod tests {
         assert_eq!(parts[0], "/opt/mise/shims");
         assert!(at("/opt/mise/shims") < at("/tmp/home/.local/bin"));
         assert!(at("/tmp/home/.local/bin") < at("/opt/homebrew/bin"));
+    }
+
+    #[test]
+    fn peeking_the_login_path_never_loads_or_waits_for_it() {
+        let cache = Mutex::new(None);
+        assert_eq!(peek_login_shell_path(&cache), None);
+        assert!(cache.lock().unwrap().is_none());
+
+        *cache.lock().unwrap() = Some(HashMap::from([("PATH".into(), "/login/bin".into())]));
+        let held = cache.lock().unwrap();
+        assert_eq!(peek_login_shell_path(&cache), None);
+        drop(held);
+        assert_eq!(peek_login_shell_path(&cache), Some("/login/bin".into()));
+    }
+
+    /// LFS repos run `git-lfs` from `status` and `diff`, and a Finder launch
+    /// inherits only `/usr/bin:/bin:…`, so the cached path has to add the
+    /// fixed dirs, plus the login PATH once it has been read.
+    #[test]
+    fn cached_gui_search_path_finds_homebrew_tools_from_a_finder_launch() {
+        let path = gui_search_path_from(
+            peek_login_shell_path(&Mutex::new(None)),
+            Some("/tmp/home".into()),
+            Some("/usr/bin:/bin:/usr/sbin:/sbin".into()),
+        );
+        let parts: Vec<&str> = path.split(':').collect();
+        assert_eq!(parts[0], "/usr/bin");
+        assert!(parts.contains(&"/usr/sbin"));
+        assert!(parts.contains(&"/opt/homebrew/bin"));
+        assert!(parts.contains(&"/tmp/home/.local/bin"));
+
+        let cache = Mutex::new(Some(HashMap::from([("PATH".into(), "/login/bin".into())])));
+        let path = gui_search_path_from(
+            peek_login_shell_path(&cache),
+            Some("/tmp/home".into()),
+            Some("/inherited/bin".into()),
+        );
+        let parts: Vec<&str> = path.split(':').collect();
+        let at = |dir: &str| parts.iter().position(|part| *part == dir).unwrap();
+        assert_eq!(parts[0], "/login/bin");
+        assert!(at("/login/bin") < at("/inherited/bin"));
+        assert!(at("/inherited/bin") < at("/opt/homebrew/bin"));
     }
 
     #[test]

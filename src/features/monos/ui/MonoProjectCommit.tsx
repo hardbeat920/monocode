@@ -142,6 +142,7 @@ export function MonoProjectCommit({
   index: GitDiffIndex | null;
   reloadIndex: () => void;
   textHarness?: HarnessId;
+  /** The file, opened with its changes over the list. */
   onOpenFile: (path: string) => void;
 }) {
   const { pr, reload: reloadPr } = usePrStatus(root, index?.branch);
@@ -258,18 +259,10 @@ export function MonoProjectCommit({
     }
   };
 
-  const openFile = (relative: string) => {
-    const entry = files.find((item) => item.relative === relative);
-    if (entry) onOpenFile(entry.file.path);
-  };
-
   const changeListProps = {
     view,
     busy,
-    onOpenFile: (path: string) => {
-      const file = changed.find((item) => item.path === path);
-      if (file) openFile(file.relative);
-    },
+    onOpenFile,
     onAction: (
       file: GitChangedFile,
       action: "stage" | "unstage" | "discard",

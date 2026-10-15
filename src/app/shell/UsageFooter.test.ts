@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { act, createElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
+import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UsageFooter, workspaceUsageAccountSelection } from "./UsageFooter";
 import {
@@ -20,13 +20,13 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 let container: HTMLDivElement;
-let root: Root;
+let root: Root | null = null;
 
 async function selectClaudeAccount(
   onSelectAccount?: (provider: ProviderAccountProvider, id: string) => void,
 ) {
   await act(async () =>
-    root.render(
+    root!.render(
       createElement(UsageFooter, {
         providers: ["claude"],
         project: "/mono-project",
@@ -42,6 +42,23 @@ async function selectClaudeAccount(
   await act(async () => button("Switch Claude Code account").click());
   await act(async () => button("Work").click());
 }
+beforeEach(() => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  container = document.createElement("div");
+  document.body.append(container);
+  root = null;
+});
+
+afterEach(() => {
+  if (root) {
+    act(() => root!.unmount());
+    root = null;
+  }
+  container.remove();
+  clearCachedRateLimits();
+  if (typeof localStorage !== "undefined") localStorage.clear();
+  vi.unstubAllGlobals();
+});
 
 describe("UsageFooter terminal control", () => {
   it("replaces the generic terminal button with the live process control", () => {
@@ -59,7 +76,7 @@ describe("UsageFooter terminal control", () => {
         terminalOpen: true,
         onToggleTerminal: vi.fn(),
         onNewTerminal: vi.fn(),
-        onShowTerminal: vi.fn(),
+        onToggleProjectTerminal: vi.fn(),
         projectTerminalActive: true,
       }),
     );
@@ -79,6 +96,100 @@ describe("UsageFooter terminal control", () => {
 
     expect(markup).toContain(">Terminal</span>");
     expect(markup.match(/<button/g)).toHaveLength(1);
+  });
+
+  it("marks the terminal button pressed only while the dock is open", () => {
+    const open = renderToStaticMarkup(
+      createElement(UsageFooter, {
+        providers: [],
+        onNewTerminal: vi.fn(),
+        onToggleProjectTerminal: vi.fn(),
+        projectTerminalActive: true,
+        projectTerminalOpen: true,
+      }),
+    );
+    const collapsed = renderToStaticMarkup(
+      createElement(UsageFooter, {
+        providers: [],
+        onNewTerminal: vi.fn(),
+        onToggleProjectTerminal: vi.fn(),
+        projectTerminalActive: true,
+        projectTerminalOpen: false,
+      }),
+    );
+
+    // Label still reflects "has terminals" in both states.
+    expect(open).toContain('aria-label="Terminal"');
+    expect(collapsed).toContain('aria-label="Terminal"');
+    expect(open).toContain('aria-pressed="true"');
+    expect(collapsed).toContain('aria-pressed="false"');
+  });
+
+  it("toggles the dock instead of only showing it", () => {
+    const onToggleProjectTerminal = vi.fn();
+    const onNewTerminal = vi.fn();
+    root = createRoot(container);
+    act(() =>
+      root!.render(
+        createElement(UsageFooter, {
+          providers: [],
+          onNewTerminal,
+          onToggleProjectTerminal,
+          projectTerminalActive: true,
+          projectTerminalOpen: true,
+        }),
+      ),
+    );
+
+    const button = container.querySelector('button[aria-label="Terminal"]');
+    expect(button).not.toBeNull();
+    act(() => (button as HTMLButtonElement).click());
+    expect(onToggleProjectTerminal).toHaveBeenCalledTimes(1);
+    expect(onNewTerminal).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "handles a toggle-only caller when projectTerminalActive is %s",
+    (projectTerminalActive) => {
+      const onToggleProjectTerminal = vi.fn();
+      root = createRoot(container);
+      act(() =>
+        root!.render(
+          createElement(UsageFooter, {
+            providers: [],
+            onToggleProjectTerminal,
+            projectTerminalActive,
+          }),
+        ),
+      );
+
+      const button = container.querySelector("button");
+      expect(button).not.toBeNull();
+      act(() => button!.click());
+      expect(onToggleProjectTerminal).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("prefers creating a terminal when no project terminal is active", () => {
+    const onNewTerminal = vi.fn();
+    const onToggleProjectTerminal = vi.fn();
+    root = createRoot(container);
+    act(() =>
+      root!.render(
+        createElement(UsageFooter, {
+          providers: [],
+          onNewTerminal,
+          onToggleProjectTerminal,
+          projectTerminalActive: false,
+        }),
+      ),
+    );
+
+    const button = container.querySelector("button");
+    expect(button).not.toBeNull();
+    act(() => button!.click());
+    expect(onNewTerminal).toHaveBeenCalledTimes(1);
+    expect(onToggleProjectTerminal).not.toHaveBeenCalled();
   });
 });
 
@@ -104,17 +215,7 @@ describe("UsageFooter account selection", () => {
       provider: "claude",
       label: "Work",
     });
-    container = document.createElement("div");
-    document.body.append(container);
     root = createRoot(container);
-  });
-
-  afterEach(() => {
-    act(() => root.unmount());
-    container.remove();
-    clearCachedRateLimits();
-    localStorage.clear();
-    vi.unstubAllGlobals();
   });
 
   it("changes Mono project usage without changing the unrelated workspace session", async () => {

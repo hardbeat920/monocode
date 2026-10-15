@@ -14,6 +14,7 @@ import {
   GitBranch,
 } from "../../../shared/ui/icons";
 import {
+  basename,
   gitLocateFiles,
   subscribeGitChanged,
   type GitDiffIndex,
@@ -34,13 +35,21 @@ import {
   resolveTabGroupLogo,
   resolveTabGroupMascot,
 } from "../../workspace/model/tabGroups";
-import { EmptyState } from "./monoPanelParts";
+import { EmptyState, PageHeader } from "./monoPanelParts";
 import { listWorktrees } from "../../source-control/model/worktrees";
 import {
   MonoProjectCommit,
   useProjectIndex,
   type MonoProjectFile,
 } from "./MonoProjectCommit";
+import { lazySurface } from "../../../shared/ui/lazySurface";
+import { isImagePath, isVideoPath } from "../../files/model/filePreview";
+import { BinaryFileView } from "../../files/ui/BinaryFileView";
+
+const FileEditor = lazySurface(async () => {
+  const module = await import("../../files/ui/FileEditor");
+  return { default: module.FileEditor };
+});
 
 /** What the chat asked the view to show; a new object re-applies it. */
 export type MonoChangesRequest = { path?: string };
@@ -86,14 +95,43 @@ export function MonoChangesView({
     setIndexes((previous) => previous.get(root) === index ? previous : new Map(previous).set(root, index));
   }, []);
 
+  // A changed file, open with its changes over its checkout's list until Back.
+  const [diff, setDiff] = useState<{ root: string; path: string } | null>(null);
+
   useEffect(() => {
     setFocusPath(request.path);
+    setDiff(null);
     if (request.path) setSelectedRoot(null);
   }, [request]);
+  useEffect(() => setDiff(null), [sessionId, cwd]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-mono-changes>
-      {project ? (
+      {diff ? (
+        <>
+          <PageHeader
+            title={basename(diff.path)}
+            onBack={() => setDiff(null)}
+          />
+          <div className="relative min-h-0 flex-1">
+            <div className="absolute inset-0">
+              {isImagePath(diff.path) || isVideoPath(diff.path) ? (
+                <BinaryFileView path={diff.path} cwd={diff.root} visible />
+              ) : (
+                <FileEditor
+                  key={diff.path}
+                  path={diff.path}
+                  cwd={diff.root}
+                  showDiff
+                  active
+                  onDirtyChange={() => {}}
+                />
+              )}
+            </div>
+          </div>
+        </>
+      ) : null}
+      {project && !diff ? (
         <ProjectTabs
           projects={projects}
           selected={project}
@@ -102,7 +140,7 @@ export function MonoChangesView({
         />
       ) : null}
       {project ? (
-        <div className="relative min-h-0 flex-1">
+        <div className="relative min-h-0 flex-1" hidden={!!diff}>
           {/* Every checkout stays mounted so its draft survives a switch. */}
           {projects.map((entry) => (
             <div
@@ -119,7 +157,7 @@ export function MonoChangesView({
                 files={entry.files}
                 onIndex={updateIndex}
                 textHarness={textHarness}
-                onOpenFile={setFocusPath}
+                onOpenFile={(path) => setDiff({ root: entry.root, path })}
               />
             </div>
           ))}

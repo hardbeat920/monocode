@@ -4,6 +4,7 @@ import {
   Clock,
   File,
   FileDiff,
+  ListBullet,
   ListFilter,
   MessageMultiple,
   Plus,
@@ -38,9 +39,15 @@ import { MonoSidebar, MonoSidebarHeader } from "./MonoSidebar";
 import type { SessionChangeTotals } from "../../sessions/ui/SessionReview";
 import { MonoChangesView, type MonoChangesRequest } from "./MonoChangesView";
 
-export type MonoOverviewTab = "sessions" | "habits" | "documents" | "changes";
+export type MonoOverviewTab =
+  "activity" | "sessions" | "habits" | "documents" | "changes";
 
-const TABS: { id: MonoOverviewTab; label: string; icon: typeof Clock }[] = [
+// Activity sits apart, beside the panel toggle, since it follows the chat.
+const TABS: {
+  id: Exclude<MonoOverviewTab, "activity">;
+  label: string;
+  icon: typeof Clock;
+}[] = [
   { id: "sessions", label: "Sessions", icon: MessageMultiple },
   { id: "documents", label: "Documents", icon: File },
   { id: "habits", label: "Habits", icon: Clock },
@@ -75,6 +82,8 @@ type Props = {
   /** Documents it has written, oldest first. */
   documents: readonly ArtifactCard[];
   changes?: MonoOverviewChanges;
+  /** The steps of the turn picked from the chat, if one is. */
+  activity?: ReactNode;
   tab: MonoOverviewTab;
   onTabChange: (tab: MonoOverviewTab) => void;
   onOpenSession: (sessionId: string) => void | Promise<void>;
@@ -106,6 +115,7 @@ export function MonoOverview({
   history,
   documents,
   changes,
+  activity,
   tab,
   onTabChange,
   onOpenSession,
@@ -131,6 +141,11 @@ export function MonoOverview({
   // at another tab.
   const [changesVisited, setChangesVisited] = useState(tab === "changes");
   if (tab === "changes" && !changesVisited) setChangesVisited(true);
+  // The activity button toggles back to the tab it was opened from.
+  const lastTab = useRef<MonoOverviewTab>(
+    tab === "activity" ? "sessions" : tab,
+  );
+  if (tab !== "activity") lastTab.current = tab;
   // Another Mono starts at its own front page, with all its sessions.
   useEffect(() => {
     setRoutes([]);
@@ -207,7 +222,7 @@ export function MonoOverview({
     });
 
   const habitsFull = !habits || habits.length >= HABITS_MAX;
-  const counts: Record<MonoOverviewTab, number | undefined> = {
+  const counts: Record<(typeof TABS)[number]["id"], number | undefined> = {
     sessions: launches.length,
     habits: habits?.length,
     documents: documents.length,
@@ -227,27 +242,37 @@ export function MonoOverview({
         <MonoSidebarHeader
           title="Overview"
           heading={
-            <OverviewTabs
-              tab={tab}
-              counts={counts}
-              onChange={onTabChange}
-            />
+            <OverviewTabs tab={tab} counts={counts} onChange={onTabChange} />
           }
           onClose={onClose}
           actions={
-            tab === "habits" ? (
-              <IconButton
-                label={
-                  habits && habits.length >= HABITS_MAX
-                    ? `At most ${HABITS_MAX} habits`
-                    : "New habit"
+            <>
+              {tab === "habits" ? (
+                <IconButton
+                  label={
+                    habits && habits.length >= HABITS_MAX
+                      ? `At most ${HABITS_MAX} habits`
+                      : "New habit"
+                  }
+                  disabled={habitsFull}
+                  onClick={() => push({ kind: "new-habit" })}
+                >
+                  <Plus className="size-3.5" strokeWidth={1.75} />
+                </IconButton>
+              ) : null}
+              <TabButton
+                label="Activity"
+                icon={ListBullet}
+                selected={tab === "activity"}
+                aria-label={
+                  tab === "activity" ? "Hide activity" : "Show activity"
                 }
-                disabled={habitsFull}
-                onClick={() => push({ kind: "new-habit" })}
-              >
-                <Plus className="size-3.5" strokeWidth={1.75} />
-              </IconButton>
-            ) : null
+                aria-pressed={tab === "activity"}
+                onClick={() =>
+                  onTabChange(tab === "activity" ? lastTab.current : "activity")
+                }
+              />
+            </>
           }
         />
         {tab === "sessions" && launches.length ? (
@@ -282,12 +307,23 @@ export function MonoOverview({
         <div
           ref={lock}
           role="tabpanel"
-          aria-label={TABS.find((entry) => entry.id === tab)?.label}
+          aria-label={
+            tab === "activity"
+              ? "Activity"
+              : TABS.find((entry) => entry.id === tab)?.label
+          }
           hidden={tab === "changes"}
           className="min-h-0 flex-1 overflow-y-auto overscroll-none px-2 py-2"
           data-mono-overview={tab === "changes" ? undefined : tab}
         >
-          {tab === "sessions" ? (
+          {tab === "activity" ? (
+            (activity ?? (
+              <EmptyState icon={ListBullet}>
+                Select the activity on one of {agent.name}&apos;s messages to
+                see each step it took.
+              </EmptyState>
+            ))
+          ) : tab === "sessions" ? (
             launches.length ? (
               // Cards carry their own inset; this lines their icons up with
               // the tabs above, as the habit and document rows do.
@@ -423,7 +459,7 @@ function OverviewTabs({
   onChange,
 }: {
   tab: MonoOverviewTab;
-  counts: Record<MonoOverviewTab, number | undefined>;
+  counts: Record<(typeof TABS)[number]["id"], number | undefined>;
   onChange: (tab: MonoOverviewTab) => void;
 }) {
   return (
@@ -432,63 +468,97 @@ function OverviewTabs({
       aria-label="Overview"
       className="-ml-2 flex items-center gap-0.5"
     >
-      {TABS.map(({ id, label, icon: Icon }) => {
+      {TABS.map(({ id, label, icon }) => {
         const selected = id === tab;
-        const count = counts[id];
         return (
-          <button
+          <TabButton
             key={id}
-            type="button"
+            label={label}
+            icon={icon}
+            selected={selected}
+            count={counts[id]}
+            // Folded tabs dot their icon, as the rail does, when they hold
+            // something new.
+            dot={id === "changes" && !selected && !!counts[id]}
             role="tab"
             aria-selected={selected}
             aria-label={label}
-            title={label}
-            data-tauri-drag-region="false"
             onClick={() => onChange(id)}
-            className={`flex h-7 items-center rounded-lg px-2 text-[12px] transition-colors duration-200 ${
-              selected
-                ? "bg-content/8 text-content"
-                : "text-content/45 hover:bg-content/5 hover:text-content/80"
-            }`}
-          >
-            {/* Folded tabs dot their icon, as the rail does, when they hold something new. */}
-            {id === "changes" && !selected && count ? (
-              <span className="relative grid shrink-0" data-changes-dot>
-                <Icon
-                  className="overview-tab-icon-with-dot size-3.5"
-                  strokeWidth={1.75}
-                />
-                <span
-                  aria-hidden
-                  className="absolute -top-0.5 left-2.5 size-1.5 rounded-full bg-accent"
-                />
-              </span>
-            ) : (
-              <Icon className="size-3.5 shrink-0" strokeWidth={1.75} />
-            )}
-            {/* The name and count open out of the icon, and fold back into it. */}
-            <span
-              aria-hidden={!selected}
-              data-tab-label={selected ? "open" : "closed"}
-              className={`grid transition-[grid-template-columns,opacity] duration-200 ease-out motion-reduce:transition-none ${
-                selected
-                  ? "grid-cols-[1fr] opacity-100"
-                  : "grid-cols-[0fr] opacity-0"
-              }`}
-            >
-              <span className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap">
-                <span className="pl-1.5">{label}</span>
-                {count ? (
-                  <span className="min-w-4 rounded bg-accent px-1 text-center text-[10px] font-medium leading-4 tabular-nums text-white">
-                    {count}
-                  </span>
-                ) : null}
-              </span>
-            </span>
-          </button>
+          />
         );
       })}
     </div>
+  );
+}
+
+/**
+ * An icon that, while selected, opens out into its name and count, and folds
+ * back into the icon when it is not.
+ */
+function TabButton({
+  label,
+  icon: Icon,
+  selected,
+  count,
+  dot = false,
+  onClick,
+  ...aria
+}: {
+  label: string;
+  icon: typeof Clock;
+  selected: boolean;
+  count?: number;
+  dot?: boolean;
+  onClick: () => void;
+  role?: "tab";
+  "aria-selected"?: boolean;
+  "aria-pressed"?: boolean;
+  "aria-label": string;
+}) {
+  return (
+    <button
+      type="button"
+      {...aria}
+      title={aria["aria-label"]}
+      data-tauri-drag-region="false"
+      onClick={onClick}
+      className={`flex h-6 items-center rounded-md px-2 text-[12px] transition-colors duration-200 ${
+        selected
+          ? "bg-content/8 text-content"
+          : "text-content/45 hover:bg-content/5 hover:text-content/80"
+      }`}
+    >
+      {dot ? (
+        <span className="relative grid shrink-0" data-changes-dot>
+          <Icon
+            className="overview-tab-icon-with-dot size-3.5"
+            strokeWidth={1.75}
+          />
+          <span
+            aria-hidden
+            className="absolute -top-0.5 left-2.5 size-1.5 rounded-full bg-accent"
+          />
+        </span>
+      ) : (
+        <Icon className="size-3.5 shrink-0" strokeWidth={1.75} />
+      )}
+      <span
+        aria-hidden={!selected}
+        data-tab-label={selected ? "open" : "closed"}
+        className={`grid transition-[grid-template-columns,opacity] duration-200 ease-out motion-reduce:transition-none ${
+          selected ? "grid-cols-[1fr] opacity-100" : "grid-cols-[0fr] opacity-0"
+        }`}
+      >
+        <span className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap">
+          <span className="pl-1.5">{label}</span>
+          {count ? (
+            <span className="min-w-4 rounded bg-accent px-1 text-center text-[10px] font-medium leading-4 tabular-nums text-white">
+              {count}
+            </span>
+          ) : null}
+        </span>
+      </span>
+    </button>
   );
 }
 

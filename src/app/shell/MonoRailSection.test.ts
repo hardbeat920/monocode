@@ -3,6 +3,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createMono } from "../../features/monos/model/mono";
+import { loadMonosEnabled } from "../../features/settings/model/settings";
 import { MonoRailSection } from "./MonoRailSection";
 
 let root: Root;
@@ -47,44 +48,25 @@ const button = (label: string) =>
     (entry) => entry.textContent === label,
   )!;
 
-it("offers a new mono in place of the list, and meets a new user beside it", () => {
-  const onCreate = render({ introAvailable: true });
-  const add = container.querySelector("[data-mono-add]");
-  expect(add?.getAttribute("aria-label")).toBe("New mono");
-  expect(add?.textContent).toBe("");
-  expect(container.querySelectorAll('[aria-label="New mono"]')).toHaveLength(1);
+it("shows the intro card in place of the list while there is no mono", () => {
+  const onCreate = render();
   expect(intro()).not.toBeNull();
+  expect(container.querySelector('[aria-label="New mono"]')).toBeNull();
 
-  act(() => button("Create your mono").click());
+  act(() => button("Create mono").click());
   expect(onCreate).toHaveBeenCalledOnce();
-  expect(intro()).toBeNull();
 });
 
-it("meets the user only once, whichever way they choose", () => {
-  render({ introAvailable: true });
-  act(() => button("Create your mono").click());
-  act(() => root.unmount());
-  root = createRoot(container);
-  render({ introAvailable: true });
-  expect(intro()).toBeNull();
-});
-
-it("stops meeting the user once they pass on it", () => {
-  render({ introAvailable: true });
-  act(() => button("Not now").click());
-  expect(intro()).toBeNull();
-  act(() => root.unmount());
-  root = createRoot(container);
-  render({ introAvailable: true });
-  expect(intro()).toBeNull();
-  expect(container.querySelector("[data-mono-add]")).not.toBeNull();
+it("turns monos off from the intro's switch", () => {
+  render();
+  act(() => container.querySelector<HTMLElement>('[role="switch"]')!.click());
+  expect(loadMonosEnabled()).toBe(false);
 });
 
 it("lists monos once there are some, with the plus in the header", () => {
   createMono();
-  render({ introAvailable: true });
+  render();
   expect(intro()).toBeNull();
-  expect(container.querySelector("[data-mono-add]")).toBeNull();
   expect(container.querySelectorAll('[aria-label="New mono"]')).toHaveLength(1);
 });
 

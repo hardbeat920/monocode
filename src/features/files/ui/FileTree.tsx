@@ -1012,7 +1012,10 @@ export const FileTree = memo(function FileTree({
       >
         <div
           className="flex h-9 shrink-0 items-center gap-px overflow-visible border-b border-stroke px-2"
-          onContextMenu={(e) => e.stopPropagation()}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
         >
           <HeaderIcon label="New File" onClick={() => startCreate(false)}>
             <FilePlus className="size-3.5" strokeWidth={1.75} />
