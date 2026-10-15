@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { newEditorPane, newFileTab } from "../../workspace/model/layout";
 import { FilePane } from "./FilePane";
+import { openFindInActiveFilePreview } from "./FilePreviewSearch";
 
 const invoke = vi.hoisted(() =>
   vi.fn(async (command: string, args?: { path?: string }) => {
@@ -191,6 +192,23 @@ describe("previewable file view mode", () => {
       ...["2", "Pear", "12"],
     ]);
     expect(table.container.textContent).toContain("2 rows × 2 columns");
+
+    // Closing Find hands focus back to the table, as it does for Markdown.
+    await act(async () => {
+      expect(openFindInActiveFilePreview()).toBe(true);
+    });
+    const input = table.container.querySelector<HTMLInputElement>(
+      'input[aria-label="Find"]',
+    )!;
+    await act(async () => {
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(document.activeElement).toBe(
+      table.container.querySelector('[aria-label="CSV preview"]'),
+    );
     await table.choose("Source");
 
     const next = await open("/repo/after-table.md");

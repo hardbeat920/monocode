@@ -40,7 +40,12 @@ export function CsvPreview({
           : "No rows"}
       </div>
       {header ? (
-        <div className="csv-preview min-h-0 flex-1 overflow-auto px-4 pb-4 select-text">
+        <div
+          tabIndex={0}
+          role="region"
+          aria-label="CSV preview"
+          className="csv-preview min-h-0 flex-1 overflow-auto px-4 pb-4 select-text"
+        >
           <div className="w-max min-w-full overflow-clip rounded-[10px] border border-content/10">
             <table className="w-full border-separate border-spacing-0 text-[12.5px] text-content/85">
               <thead>
