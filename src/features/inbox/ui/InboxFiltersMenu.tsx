@@ -34,6 +34,8 @@ type Props = {
   jiraProjects: JiraProject[];
   hiddenJiraProjectIds: string[];
   sonarBranches?: SonarBranch[];
+  /** The one Sonar project the inbox reads. Its branches are the only ones offered. */
+  sonarProject?: string;
   source: InboxSource;
   filters: InboxFilters;
   onChange: (filters: InboxFilters) => void;
@@ -79,6 +81,7 @@ export function InboxFiltersMenu({
   hiddenJiraProjectIds,
   source,
   sonarBranches = [],
+  sonarProject = "",
   filters,
   onChange,
   onLinearTeamsChange,
@@ -94,6 +97,10 @@ export function InboxFiltersMenu({
   const jiraProjectsActive =
     source === "jira" && hiddenJiraProjectIds.length > 0;
   const tracker = isTrackerSource(source);
+  // A just-switched project keeps the previous roster until its refresh lands.
+  const selectedSonarBranches = sonarBranches.filter(
+    (branch) => branch.projectKey === sonarProject,
+  );
 
   const toggleAssigned = () => {
     onChange({ ...filters, assignedToMe: !filters.assignedToMe });
@@ -253,46 +260,30 @@ export function InboxFiltersMenu({
       {source === "sonar" ? (
         <>
           <SectionLabel>Scanned branches</SectionLabel>
-          {sonarBranches.length === 0 ? (
+          {selectedSonarBranches.length === 0 ? (
             <p className="px-2 py-1 text-[12px] text-content/45">
               No scanned branches
             </p>
           ) : null}
-          {[...new Set(sonarBranches.map((branch) => branch.projectKey))].map(
-            (projectKey) => (
-              <div key={projectKey}>
-                <div
-                  title={projectKey}
-                  className="truncate px-2 pb-0.5 pt-2 text-[11px] text-content/45"
-                >
-                  {sonarBranches.find(
-                    (branch) => branch.projectKey === projectKey,
-                  )?.repositoryName || projectKey}
-                </div>
-                {sonarBranches
-                  .filter((branch) => branch.projectKey === projectKey)
-                  .map((branch) => {
-                    const key = sonarBranchKey(branch.projectKey, branch.name);
-                    return (
-                      <FilterItem
-                        key={key}
-                        label={`${branch.name}${branch.isMain ? " (main)" : ""}`}
-                        checked={!filters.hiddenSonarBranches.includes(key)}
-                        onClick={() => {
-                          const hidden = new Set(filters.hiddenSonarBranches);
-                          if (hidden.has(key)) hidden.delete(key);
-                          else hidden.add(key);
-                          onChange({
-                            ...filters,
-                            hiddenSonarBranches: [...hidden],
-                          });
-                        }}
-                      />
-                    );
-                  })}
-              </div>
-            ),
-          )}
+          {selectedSonarBranches.map((branch) => {
+            const key = sonarBranchKey(branch.projectKey, branch.name);
+            return (
+              <FilterItem
+                key={key}
+                label={`${branch.name}${branch.isMain ? " (main)" : ""}`}
+                checked={!filters.hiddenSonarBranches.includes(key)}
+                onClick={() => {
+                  const hidden = new Set(filters.hiddenSonarBranches);
+                  if (hidden.has(key)) hidden.delete(key);
+                  else hidden.add(key);
+                  onChange({
+                    ...filters,
+                    hiddenSonarBranches: [...hidden],
+                  });
+                }}
+              />
+            );
+          })}
         </>
       ) : null}
 

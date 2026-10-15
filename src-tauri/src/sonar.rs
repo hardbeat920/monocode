@@ -6,12 +6,82 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Manager};
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 struct SonarConfig {
     site: String,
-    project_keys: Vec<String>,
     token: String,
+    /// Empty on SonarQube Server, which has no organizations.
+    #[serde(default)]
+    organization: String,
+    #[serde(default)]
+    projects: Vec<SonarProject>,
+    #[serde(default)]
+    selected_project: String,
+}
+
+impl SonarConfig {
+    /// The inbox reads one project at a time. Fall back to the first when the choice was unwatched.
+    fn selected(&self) -> Option<&SonarProject> {
+        self.projects
+            .iter()
+            .find(|project| project.key == self.selected_project)
+            .or_else(|| self.projects.first())
+    }
+
+    fn watches(&self, key: &str) -> bool {
+        self.projects.iter().any(|project| project.key == key)
+    }
+
+    /// Projects belong to one organization, so switching clears them.
+    fn set_organization(&mut self, organization: &str) {
+        let organization = organization.trim();
+        if self.organization != organization {
+            self.organization = organization.into();
+            self.projects.clear();
+            self.selected_project.clear();
+        }
+    }
+
+    fn set_projects(&mut self, projects: Vec<SonarProject>) {
+        self.projects.clear();
+        for project in projects {
+            let key = project.key.trim();
+            if !key.is_empty() && !self.watches(key) {
+                let name = project.name.trim();
+                self.projects.push(SonarProject {
+                    key: key.into(),
+                    name: if name.is_empty() {
+                        key.into()
+                    } else {
+                        name.into()
+                    },
+                });
+            }
+        }
+    }
+
+    fn select(&mut self, key: String) -> Result<(), String> {
+        if !self.watches(&key) {
+            return Err("This Sonar project is not connected".into());
+        }
+        self.selected_project = key;
+        Ok(())
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SonarProject {
+    key: String,
+    name: String,
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SonarOrganization {
+    key: String,
+    name: String,
 }
 
 #[derive(Serialize)]
@@ -19,7 +89,9 @@ struct SonarConfig {
 pub struct SonarStatus {
     connected: bool,
     site: String,
-    project_keys: Vec<String>,
+    organization: String,
+    projects: Vec<SonarProject>,
+    selected_project: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -65,46 +137,93 @@ pub fn sonar_status(app: AppHandle) -> Result<SonarStatus, String> {
 }
 
 #[tauri::command]
-pub async fn sonar_set_config(
+pub async fn sonar_connect(
     app: AppHandle,
     site: String,
-    project_keys: Vec<String>,
     token: String,
 ) -> Result<SonarStatus, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let token = token.trim().to_string();
         if token.is_empty() {
-            delete_config(&app)?;
-            return Ok(status_for(None));
+            return Err("Enter a Sonar personal access token".into());
         }
         if token.starts_with("sqco_") {
             return Err("Use a personal access token with Browse permission. Scoped organization tokens only grant Execute analysis".into());
         }
-        let mut keys = Vec::new();
-        for key in project_keys {
-            let key = key.trim().to_string();
-            if !key.is_empty() && !keys.contains(&key) {
-                keys.push(key);
-            }
-        }
-        if keys.is_empty() {
-            return Err("Enter at least one Sonar project key".into());
-        }
-        let config = SonarConfig { site: normalize_site(&site)?, project_keys: keys, token };
+        let config = SonarConfig { site: normalize_site(&site)?, token, ..Default::default() };
         let validation = sonar_get(&config, "/api/authentication/validate", &[])?;
         if validation.get("valid").and_then(Value::as_bool) != Some(true) {
             return Err("Sonar token is invalid or expired".into());
         }
-        // Prove Browse access before saving, rather than just Execute analysis access.
-        for key in &config.project_keys {
-            sonar_get(&config, "/api/issues/search", &[("componentKeys", key), ("ps", "1")])?;
-            sonar_get(&config, "/api/project_branches/list", &[("project", key)])?;
-        }
-        let path = config_path(&app)?;
-        if let Some(parent) = path.parent() { fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
-        write_secret_file(&path, &serde_json::to_string(&config).map_err(|e| e.to_string())?)?;
+        let _lock = config_lock();
+        write_config(&app, &config)?;
         Ok(status_for(Some(&config)))
     }).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command(async)]
+pub fn sonar_disconnect(app: AppHandle) -> Result<SonarStatus, String> {
+    let _lock = config_lock();
+    delete_config(&app)?;
+    Ok(status_for(None))
+}
+
+/// Empty on SonarQube Server, which has no organizations.
+#[tauri::command]
+pub async fn sonar_list_organizations(app: AppHandle) -> Result<Vec<SonarOrganization>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let config = read_config(&app)?.ok_or("Connect Sonar in Settings")?;
+        let raw = match sonar_text(
+            &config,
+            "/api/organizations/search",
+            &[("member", "true"), ("ps", "500")],
+        ) {
+            Ok(raw) => raw,
+            Err(SonarTextError::NotFound) => return Ok(Vec::new()),
+            Err(e) => return Err(e.to_string()),
+        };
+        let data: Value = serde_json::from_str(&raw).map_err(|_| "Sonar returned invalid JSON")?;
+        Ok(parse_organizations(&data))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Every project the token can browse in the saved organization.
+#[tauri::command]
+pub async fn sonar_list_projects(app: AppHandle) -> Result<Vec<SonarProject>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let config = read_config(&app)?.ok_or("Connect Sonar in Settings")?;
+        fetch_projects(&config.organization, |query| {
+            sonar_get(&config, "/api/components/search_projects", query)
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command(async)]
+pub fn sonar_set_organization(app: AppHandle, organization: String) -> Result<SonarStatus, String> {
+    update_config(&app, |config| {
+        config.set_organization(&organization);
+        Ok(())
+    })
+}
+
+#[tauri::command(async)]
+pub fn sonar_set_projects(
+    app: AppHandle,
+    projects: Vec<SonarProject>,
+) -> Result<SonarStatus, String> {
+    update_config(&app, |config| {
+        config.set_projects(projects);
+        Ok(())
+    })
+}
+
+#[tauri::command(async)]
+pub fn sonar_select_project(app: AppHandle, project_key: String) -> Result<SonarStatus, String> {
+    update_config(&app, |config| config.select(project_key))
 }
 
 #[tauri::command]
@@ -119,9 +238,17 @@ pub async fn sonar_list_issues(
         let Some(config) = read_config(&app)? else {
             return Ok(SonarSnapshot::default());
         };
-        fetch_snapshot(&config, assigned_to_me, &state, deadline, |path, query| {
-            sonar_get(&config, path, query)
-        })
+        let Some(project) = config.selected() else {
+            return Ok(SonarSnapshot::default());
+        };
+        fetch_snapshot(
+            &config,
+            &project.key,
+            assigned_to_me,
+            &state,
+            deadline,
+            |path, query| sonar_get(&config, path, query),
+        )
     })
     .await
     .map_err(|e| e.to_string())?
@@ -131,12 +258,76 @@ fn status_for(config: Option<&SonarConfig>) -> SonarStatus {
     SonarStatus {
         connected: config.is_some(),
         site: config.map(|c| c.site.clone()).unwrap_or_default(),
-        project_keys: config.map(|c| c.project_keys.clone()).unwrap_or_default(),
+        organization: config.map(|c| c.organization.clone()).unwrap_or_default(),
+        projects: config.map(|c| c.projects.clone()).unwrap_or_default(),
+        selected_project: config
+            .and_then(SonarConfig::selected)
+            .map(|project| project.key.clone())
+            .unwrap_or_default(),
     }
+}
+
+fn parse_organizations(data: &Value) -> Vec<SonarOrganization> {
+    data.get("organizations")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|node| {
+            let key = field(node, "key");
+            if key.is_empty() {
+                return None;
+            }
+            let name = field(node, "name");
+            Some(SonarOrganization {
+                name: if name.is_empty() { key.clone() } else { name },
+                key,
+            })
+        })
+        .collect()
+}
+
+fn fetch_projects(
+    organization: &str,
+    mut get: impl FnMut(&[(&str, &str)]) -> Result<Value, String>,
+) -> Result<Vec<SonarProject>, String> {
+    let mut projects = Vec::new();
+    for page in 1..=20 {
+        let p = page.to_string();
+        let mut query = vec![("ps", "500"), ("p", p.as_str())];
+        if !organization.is_empty() {
+            query.push(("organization", organization));
+        }
+        let data = get(&query)?;
+        let nodes = data
+            .get("components")
+            .and_then(Value::as_array)
+            .ok_or("Sonar did not return projects")?;
+        projects.extend(nodes.iter().filter_map(|node| {
+            let key = field(node, "key");
+            if key.is_empty() {
+                return None;
+            }
+            let name = field(node, "name");
+            Some(SonarProject {
+                name: if name.is_empty() { key.clone() } else { name },
+                key,
+            })
+        }));
+        let total = data
+            .pointer("/paging/total")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        if nodes.is_empty() || page * 500 >= total {
+            break;
+        }
+    }
+    projects.sort_by_key(|project| project.name.to_lowercase());
+    Ok(projects)
 }
 
 fn fetch_snapshot(
     config: &SonarConfig,
+    key: &str,
     assigned_to_me: bool,
     state: &str,
     deadline: Instant,
@@ -150,84 +341,76 @@ fn fetch_snapshot(
         get(path, query)
     };
     let mut snapshot = SonarSnapshot::default();
-    for key in &config.project_keys {
+    let mut branches = match bounded_get("/api/project_branches/list", &[("project", key)])
+        .and_then(|data| parse_branches(&data, key))
+    {
+        Ok(branches) => branches,
+        Err(e) => {
+            snapshot.errors.push(format!("{key}: {e}"));
+            return Ok(snapshot);
+        }
+    };
+    let repository_name = bounded_get("/api/project_links/search", &[("projectKey", key)])
+        .ok()
+        .and_then(|data| repository_name_from_links(&data))
+        .or_else(|| {
+            bounded_get("/api/components/show", &[("component", key)])
+                .ok()
+                .and_then(|data| {
+                    data.pointer("/component/name")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|name| !name.is_empty())
+                        .map(str::to_string)
+                })
+        })
+        .unwrap_or_else(|| key.to_string());
+    for branch in &mut branches {
+        branch.repository_name = repository_name.clone();
+    }
+    for batch in branches.chunks(4) {
         if Instant::now() >= deadline {
-            snapshot
-                .errors
-                .push("Sonar refresh time budget reached. Results may be incomplete".into());
+            snapshot.errors.push(format!(
+                "{key}: Sonar refresh time budget reached. Results may be incomplete"
+            ));
             break;
         }
-        let mut branches = match bounded_get("/api/project_branches/list", &[("project", key)])
-            .and_then(|data| parse_branches(&data, key))
-        {
-            Ok(branches) => branches,
-            Err(e) => {
-                snapshot.errors.push(format!("{key}: {e}"));
-                continue;
-            }
-        };
-        let repository_name = bounded_get("/api/project_links/search", &[("projectKey", key)])
-            .ok()
-            .and_then(|data| repository_name_from_links(&data))
-            .or_else(|| {
-                bounded_get("/api/components/show", &[("component", key)])
-                    .ok()
-                    .and_then(|data| {
-                        data.pointer("/component/name")
-                            .and_then(Value::as_str)
-                            .map(str::trim)
-                            .filter(|name| !name.is_empty())
-                            .map(str::to_string)
+        let results = std::thread::scope(|scope| {
+            let handles: Vec<_> = batch
+                .iter()
+                .map(|branch| {
+                    let get = &bounded_get;
+                    scope.spawn(move || {
+                        fetch_branch_issues(
+                            config,
+                            branch,
+                            assigned_to_me,
+                            state,
+                            &mut |path, query| get(path, query),
+                        )
                     })
-            })
-            .unwrap_or_else(|| key.clone());
-        for branch in &mut branches {
-            branch.repository_name = repository_name.clone();
-        }
-        for batch in branches.chunks(4) {
-            if Instant::now() >= deadline {
-                snapshot.errors.push(format!(
-                    "{key}: Sonar refresh time budget reached. Results may be incomplete"
-                ));
-                break;
-            }
-            let results = std::thread::scope(|scope| {
-                let handles: Vec<_> = batch
-                    .iter()
-                    .map(|branch| {
-                        let get = &bounded_get;
-                        scope.spawn(move || {
-                            fetch_branch_issues(
-                                config,
-                                branch,
-                                assigned_to_me,
-                                state,
-                                &mut |path, query| get(path, query),
-                            )
-                        })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| {
+                    handle.join().unwrap_or_else(|_| {
+                        Err("Sonar branch worker panicked. Results may be incomplete".into())
                     })
-                    .collect();
-                handles
-                    .into_iter()
-                    .map(|handle| {
-                        handle.join().unwrap_or_else(|_| {
-                            Err("Sonar branch worker panicked. Results may be incomplete".into())
-                        })
-                    })
-                    .collect::<Vec<_>>()
-            });
-            for (branch, result) in batch.iter().zip(results) {
-                match result {
-                    Ok(issues) => snapshot.issues.extend(issues),
-                    Err(e) => snapshot
-                        .errors
-                        .push(format!("{key} / {}: {e}", branch.name)),
-                }
+                })
+                .collect::<Vec<_>>()
+        });
+        for (branch, result) in batch.iter().zip(results) {
+            match result {
+                Ok(issues) => snapshot.issues.extend(issues),
+                Err(e) => snapshot
+                    .errors
+                    .push(format!("{key} / {}: {e}", branch.name)),
             }
         }
-        // The roster comes from scans, independently of issue counts and inbox filters.
-        snapshot.branches.extend(branches);
     }
+    // The roster comes from scans, independently of issue counts and inbox filters.
+    snapshot.branches = branches;
     Ok(snapshot)
 }
 
@@ -414,7 +597,7 @@ pub async fn sonar_issue_content(
 ) -> Result<SonarIssueContent, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let config = read_config(&app)?.ok_or("Connect Sonar in Settings")?;
-        if !config.project_keys.contains(&project_key) {
+        if !config.watches(&project_key) {
             return Err("This Sonar project is not connected".into());
         }
         fetch_issue_content(
@@ -428,8 +611,7 @@ pub async fn sonar_issue_content(
                 // Documentation is public. Never send the user's token to the documentation host.
                 let public = SonarConfig {
                     site: "https://raw.githubusercontent.com".into(),
-                    project_keys: vec![],
-                    token: String::new(),
+                    ..Default::default()
                 };
                 sonar_text(&public, path, &[]).map_err(|e| e.to_string())
             },
@@ -617,7 +799,7 @@ fn transition_issue_with(
     mut get: impl FnMut(&str, &[(&str, &str)]) -> Result<Value, String>,
     mut post: impl FnMut(&[(&str, &str)]) -> Result<Value, String>,
 ) -> Result<SonarIssue, String> {
-    if !config.project_keys.contains(&request.project_key) {
+    if !config.watches(&request.project_key) {
         return Err("This Sonar project is not connected".into());
     }
     let data = get(
@@ -878,6 +1060,11 @@ fn sonar_text(
     Ok(body)
 }
 
+fn config_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(app
         .path()
@@ -891,11 +1078,35 @@ fn read_config(app: &AppHandle) -> Result<Option<SonarConfig>, String> {
             let mut config: SonarConfig =
                 serde_json::from_str(&raw).map_err(|_| "Sonar settings are invalid")?;
             config.site = normalize_site(&config.site)?;
-            Ok((!config.token.is_empty() && !config.project_keys.is_empty()).then_some(config))
+            Ok((!config.token.is_empty()).then_some(config))
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e.to_string()),
     }
+}
+fn write_config(app: &AppHandle, config: &SonarConfig) -> Result<(), String> {
+    let path = config_path(app)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    // Readers do not take the lock, so replace the file whole rather than truncating it in place.
+    let temp = path.with_extension("json.tmp");
+    write_secret_file(
+        &temp,
+        &serde_json::to_string(config).map_err(|e| e.to_string())?,
+    )?;
+    fs::rename(&temp, &path).map_err(|e| e.to_string())
+}
+fn update_config(
+    app: &AppHandle,
+    change: impl FnOnce(&mut SonarConfig) -> Result<(), String>,
+) -> Result<SonarStatus, String> {
+    // Commands run concurrently. Serialize read-modify-write so one change cannot drop another.
+    let _lock = config_lock();
+    let mut config = read_config(app)?.ok_or("Connect Sonar in Settings")?;
+    change(&mut config)?;
+    write_config(app, &config)?;
+    Ok(status_for(Some(&config)))
 }
 fn delete_config(app: &AppHandle) -> Result<(), String> {
     match fs::remove_file(config_path(app)?) {
@@ -932,8 +1143,13 @@ mod tests {
     fn config() -> SonarConfig {
         SonarConfig {
             site: "https://sonarcloud.io".into(),
-            project_keys: vec!["org_app".into()],
             token: "test-token".into(),
+            organization: "org".into(),
+            projects: vec![SonarProject {
+                key: "org_app".into(),
+                name: "App".into(),
+            }],
+            selected_project: String::new(),
         }
     }
 
@@ -956,6 +1172,7 @@ mod tests {
     fn a_panicked_branch_keeps_other_branch_results_and_the_roster() {
         let result = fetch_snapshot(
             &config(),
+            "org_app",
             false,
             "all",
             Instant::now() + Duration::from_secs(60),
@@ -991,7 +1208,7 @@ mod tests {
     fn deadline_reached_keeps_the_scanned_roster_and_skips_issue_reads() {
         let config = config();
         let deadline = Instant::now() + Duration::from_secs(1);
-        let result = fetch_snapshot(&config, false, "all", deadline, |path, _| {
+        let result = fetch_snapshot(&config, "org_app", false, "all", deadline, |path, _| {
             match path {
                 "/api/project_branches/list" => Ok(json!({"branches":[
                     {"name":"main","analysisDate":"date"},
@@ -1024,7 +1241,7 @@ mod tests {
         let active = AtomicUsize::new(0);
         let peak = AtomicUsize::new(0);
         let reads = AtomicUsize::new(0);
-        let result = fetch_snapshot(&config(), false, "all", Instant::now() + Duration::from_secs(60), |path, _| {
+        let result = fetch_snapshot(&config(), "org_app", false, "all", Instant::now() + Duration::from_secs(60), |path, _| {
             if path.ends_with("/list") {
                 return Ok(json!({"branches": (0..9).map(|i| json!({"name": format!("branch-{i}"), "analysisDate": "date"})).collect::<Vec<_>>()}));
             }
@@ -1049,6 +1266,7 @@ mod tests {
     fn roster_survives_empty_assignee_results_and_failed_issue_reads() {
         let result = fetch_snapshot(
             &config(),
+            "org_app",
             true,
             "open",
             Instant::now() + Duration::from_secs(60),
@@ -1356,5 +1574,152 @@ mod tests {
         assert!(normalize_site("http://example.com").is_err());
         assert!(normalize_site("https://example.com?token=secret").is_err());
         assert!(normalize_site("http://localhost:9000").is_ok());
+    }
+
+    #[test]
+    fn projects_are_paged_scoped_to_the_organization_and_sorted_by_name() {
+        let mut pages = Vec::new();
+        let projects = fetch_projects("org", |query| {
+            assert!(query.contains(&("organization", "org")));
+            let page = query
+                .iter()
+                .find(|(key, _)| *key == "p")
+                .unwrap()
+                .1
+                .to_string();
+            let nodes: Vec<_> = if page == "1" {
+                (0..500)
+                    .map(|i| json!({"key": format!("org_p{i:03}"), "name": format!("P{i:03}")}))
+                    .collect()
+            } else {
+                vec![
+                    json!({"key":"org_alpha","name":"alpha"}),
+                    json!({"key":"org_unnamed"}),
+                    json!({"name":"no key"}),
+                ]
+            };
+            pages.push(page);
+            Ok(json!({"components": nodes, "paging": {"total": 503}}))
+        })
+        .unwrap();
+        assert_eq!(pages, vec!["1", "2"]);
+        assert_eq!(projects.len(), 502);
+        assert_eq!(
+            projects[0],
+            SonarProject {
+                key: "org_alpha".into(),
+                name: "alpha".into()
+            }
+        );
+        assert!(projects.contains(&SonarProject {
+            key: "org_unnamed".into(),
+            name: "org_unnamed".into()
+        }));
+    }
+
+    #[test]
+    fn server_projects_are_listed_without_an_organization() {
+        let projects = fetch_projects("", |query| {
+            assert!(!query.iter().any(|(key, _)| *key == "organization"));
+            Ok(json!({"components": [{"key":"app","name":"App"}], "paging": {"total": 1}}))
+        })
+        .unwrap();
+        assert_eq!(projects.len(), 1);
+    }
+
+    #[test]
+    fn organizations_fall_back_to_their_key_for_a_name() {
+        let organizations = parse_organizations(&json!({"organizations": [
+            {"key":"org","name":"Org"},
+            {"key":"bare"},
+            {"name":"no key"}
+        ]}));
+        assert_eq!(
+            organizations,
+            vec![
+                SonarOrganization {
+                    key: "org".into(),
+                    name: "Org".into()
+                },
+                SonarOrganization {
+                    key: "bare".into(),
+                    name: "bare".into()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unwatched_selection_falls_back_to_the_first_project() {
+        let mut config = config();
+        config.projects.push(SonarProject {
+            key: "org_api".into(),
+            name: "API".into(),
+        });
+        config.selected_project = "org_api".into();
+        assert_eq!(config.selected().unwrap().key, "org_api");
+        config.selected_project = "org_gone".into();
+        assert_eq!(config.selected().unwrap().key, "org_app");
+        assert_eq!(status_for(Some(&config)).selected_project, "org_app");
+        config.projects.clear();
+        assert!(config.selected().is_none());
+    }
+
+    #[test]
+    fn switching_organization_clears_its_projects_but_reselecting_it_keeps_them() {
+        let mut config = config();
+        config.selected_project = "org_app".into();
+        config.set_organization(" org ");
+        assert_eq!(config.projects.len(), 1);
+        assert_eq!(config.selected_project, "org_app");
+        config.set_organization("other");
+        assert_eq!(config.organization, "other");
+        assert!(config.projects.is_empty());
+        assert!(config.selected_project.is_empty());
+    }
+
+    #[test]
+    fn watched_projects_are_trimmed_deduplicated_and_named() {
+        let mut config = config();
+        config.set_projects(vec![
+            SonarProject {
+                key: " org_api ".into(),
+                name: " API ".into(),
+            },
+            SonarProject {
+                key: "org_api".into(),
+                name: "Duplicate".into(),
+            },
+            SonarProject {
+                key: "org_bare".into(),
+                name: " ".into(),
+            },
+            SonarProject {
+                key: " ".into(),
+                name: "No key".into(),
+            },
+        ]);
+        assert_eq!(
+            config.projects,
+            vec![
+                SonarProject {
+                    key: "org_api".into(),
+                    name: "API".into()
+                },
+                SonarProject {
+                    key: "org_bare".into(),
+                    name: "org_bare".into()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn only_a_watched_project_can_be_selected() {
+        let mut config = config();
+        assert!(config.select("org_other".into()).is_err());
+        assert!(config.selected_project.is_empty());
+        config.select("org_app".into()).unwrap();
+        assert_eq!(config.selected_project, "org_app");
     }
 }

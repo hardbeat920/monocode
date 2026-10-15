@@ -4,10 +4,16 @@ import { sonarHtmlToMarkdown } from "./sonarRuleContent";
 import { invoke } from "@tauri-apps/api/core";
 import type { InboxItem, GithubWorkItemDetails } from "./githubTasks";
 
+export type SonarProject = { key: string; name: string };
+export type SonarOrganization = { key: string; name: string };
 export type SonarStatus = {
   connected: boolean;
   site: string;
-  projectKeys: string[];
+  /** Empty on SonarQube Server, which has no organizations. */
+  organization: string;
+  projects: SonarProject[];
+  /** The one project the inbox reads. Empty until a project is watched. */
+  selectedProject: string;
 };
 export type SonarBranch = {
   projectKey: string;
@@ -39,19 +45,34 @@ export type SonarSnapshot = {
   errors: string[];
 };
 export const SONAR_CHANGE_EVENT = "monocode:sonar-change";
-export const sonarConnected = () => invoke<SonarStatus>("sonar_status");
-export async function saveSonarConfig(config: {
-  site: string;
-  projectKeys: string[];
-  token: string;
-}) {
-  const status = await invoke<SonarStatus>("sonar_set_config", config);
+// Remembered so a remounted inbox can draw the project row before the status read returns.
+let lastSonarStatus: SonarStatus | null = null;
+const rememberSonarStatus = (status: SonarStatus) => (lastSonarStatus = status);
+export const peekSonarStatus = () => lastSonarStatus;
+export const sonarConnected = () =>
+  invoke<SonarStatus>("sonar_status").then(rememberSonarStatus);
+async function updateSonar(
+  command: string,
+  args?: Record<string, unknown>,
+): Promise<SonarStatus> {
+  const status = rememberSonarStatus(await invoke<SonarStatus>(command, args));
   clearSonarContent();
   window.dispatchEvent(new Event(SONAR_CHANGE_EVENT));
   return status;
 }
-export const disconnectSonar = () =>
-  saveSonarConfig({ site: "", projectKeys: [], token: "" });
+export const connectSonar = (config: { site: string; token: string }) =>
+  updateSonar("sonar_connect", config);
+export const disconnectSonar = () => updateSonar("sonar_disconnect");
+export const listSonarOrganizations = () =>
+  invoke<SonarOrganization[]>("sonar_list_organizations");
+export const listSonarProjects = () =>
+  invoke<SonarProject[]>("sonar_list_projects");
+export const setSonarOrganization = (organization: string) =>
+  updateSonar("sonar_set_organization", { organization });
+export const setSonarProjects = (projects: SonarProject[]) =>
+  updateSonar("sonar_set_projects", { projects });
+export const selectSonarProject = (projectKey: string) =>
+  updateSonar("sonar_select_project", { projectKey });
 export const listSonarIssues = (query: {
   assignedToMe: boolean;
   state: "open" | "all";

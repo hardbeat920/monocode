@@ -1,9 +1,13 @@
 import {
+  peekSonarStatus,
+  selectSonarProject,
   sonarConnected,
   SONAR_CHANGE_EVENT,
   type SonarBranch,
+  type SonarStatus,
 } from "../model/sonar";
 import { SonarIssueDetail } from "./SonarIssueDetail";
+import { SearchableSelect } from "../../../shared/ui/SearchableSelect";
 import { useGithubPrChecks } from "../hooks/useGithubPrChecks";
 import { summarizePrChecks } from "../model/githubPrChecks";
 import type { CiRepairRequest } from "../model/ciRepair";
@@ -61,6 +65,7 @@ import {
   githubWorkItemComment,
   githubWorkItemDetails,
   githubWorkItemThread,
+  clearInboxCache,
   gitlabAttentionLabel,
   inboxItemKey,
   inboxItemRef,
@@ -457,6 +462,9 @@ export function InboxView({
   const [sonarBranches, setSonarBranches] = useState<SonarBranch[]>(
     () => peekInboxForRail(recents, cwd)?.sonarBranches ?? [],
   );
+  const [sonarStatus, setSonarStatus] = useState<SonarStatus | null>(
+    peekSonarStatus,
+  );
   const [filters, setFilters] = useState(loadInboxFilters);
   const [connections, setConnections] = useState(loadInboxConnections);
   const [source, setSource] = useState(() =>
@@ -590,13 +598,20 @@ export function InboxView({
     let latest = 0;
     const read = () => {
       const generation = ++latest;
+      const sonarStatusRead = sonarConnected();
+      // The project row only needs Sonar, so do not hold it behind slower providers.
+      void sonarStatusRead
+        .then((next) => {
+          if (!cancelled && generation === latest) setSonarStatus(next);
+        })
+        .catch(() => {});
       void Promise.allSettled([
         githubStatus(),
         linearConnected(),
         jiraConnected(),
         gitlabConnected(),
         azureDevOpsConnected(),
-        sonarConnected(),
+        sonarStatusRead,
       ]).then(([github, linear, jira, gitlab, azuredevops, sonar]) => {
         if (cancelled || generation !== latest) return;
         setConnections((prev) => ({
@@ -783,6 +798,12 @@ export function InboxView({
       Date.now(),
       source,
     );
+    // A refresh started before a project switch can still land with the old project's issues.
+    if (source === "sonar" && sonarStatus) {
+      return visible.filter(
+        (item) => item.repo === sonarStatus.selectedProject,
+      );
+    }
     if (!target || source !== "github") return visible;
     const targeted =
       items.find((item) => inboxItemMatchesLinkedWorkItem(item, target)) ??
@@ -795,6 +816,7 @@ export function InboxView({
     activeFilters,
     items,
     searchInput,
+    sonarStatus,
     source,
     sourceAvailable,
     target,
@@ -913,6 +935,27 @@ export function InboxView({
     saveInboxSource(next);
   };
 
+  const chooseSonarProject = (key: string) => {
+    const previous = sonarStatus;
+    if (!previous || key === previous.selectedProject) return;
+    // Switching at once hides the old project's issues and branches, which the list and menu scope to it.
+    setSonarStatus({ ...previous, selectedProject: key });
+    // The list cache is not keyed by Sonar project. Without this the refetch would start from the old list.
+    clearInboxCache();
+    setLoading(true);
+    void selectSonarProject(key)
+      .then(setSonarStatus)
+      .catch((err: unknown) => {
+        // Nothing was saved, so no refetch started. The old project's issues are still loaded.
+        setSonarStatus(previous);
+        setLoading(false);
+        setProviderErrors((prev) => ({
+          ...prev,
+          sonar: err instanceof Error ? err.message : String(err),
+        }));
+      });
+  };
+
   const onFilterButtonClick = (event: ReactMouseEvent<HTMLButtonElement>) => {
     if (filterMenu) {
       setFilterMenu(null);
@@ -1028,6 +1071,30 @@ export function InboxView({
           </button>
         </div>
       )}
+      {source === "sonar" && sonarStatus?.connected ? (
+        <div className="flex h-9 shrink-0 items-center border-b border-stroke px-1">
+          {sonarStatus.projects.length > 0 ? (
+            <SearchableSelect
+              label="Sonar project"
+              variant="bar"
+              value={sonarStatus.selectedProject}
+              options={sonarStatus.projects.map((project) => ({
+                value: project.key,
+                label: project.name,
+                keywords: project.key,
+              }))}
+              onChange={chooseSonarProject}
+              searchable={sonarStatus.projects.length > 8}
+              searchPlaceholder="Search projects…"
+              emptyLabel="No matching projects"
+            />
+          ) : (
+            <p className="px-2 text-[12px] text-content/45">
+              Choose projects to watch in Settings → Sonar
+            </p>
+          )}
+        </div>
+      ) : null}
       {source === "sonar" && sourceError && visibleItems.length > 0 ? (
         <p
           role="alert"
@@ -1051,7 +1118,7 @@ export function InboxView({
           </p>
         ) : sourceError && visibleItems.length === 0 ? (
           <p className="px-3 py-2 text-[12px] text-content/50">{sourceError}</p>
-        ) : loading && items.length === 0 ? (
+        ) : loading && visibleItems.length === 0 ? (
           <div className="flex justify-center py-10 text-content/40">
             <LoaderCircle className="size-4 animate-spin" strokeWidth={1.75} />
           </div>
@@ -1142,6 +1209,7 @@ export function InboxView({
       y={filterMenu.y}
       projects={projectOptions}
       sonarBranches={sonarBranches}
+      sonarProject={sonarStatus?.selectedProject}
       linearProjects={linearProjects}
       linearTeams={linearTeams}
       hiddenLinearTeamIds={linearHiddenTeamIds}

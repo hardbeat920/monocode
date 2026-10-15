@@ -125,7 +125,9 @@ it("keeps scanned zero-issue branches in the cached roster even with assignee fi
       return {
         connected: true,
         site: "https://sonarcloud.io",
-        projectKeys: ["org_app"],
+        organization: "org",
+        projects: [{ key: "org_app", name: "App" }],
+        selectedProject: "org_app",
       };
     if (command === "sonar_list_issues")
       return { issues: [], branches, errors: [] };

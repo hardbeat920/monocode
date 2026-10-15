@@ -21,7 +21,7 @@ afterEach(async () => {
   container.remove();
   vi.unstubAllGlobals();
 });
-it("offers every scanned branch without deriving the options from visible issues", async () => {
+it("offers every scanned branch of the selected project without deriving the options from visible issues", async () => {
   const onChange = vi.fn();
   const branches = [
     {
@@ -59,6 +59,7 @@ it("offers every scanned branch without deriving the options from visible issues
           hiddenJiraProjectIds: [],
           source: "sonar",
           sonarBranches: branches,
+          sonarProject: "app",
           filters,
           onChange,
           onLinearTeamsChange: vi.fn(),
@@ -73,12 +74,7 @@ it("offers every scanned branch without deriving the options from visible issues
       document.querySelectorAll<HTMLButtonElement>('[role="menuitemcheckbox"]'),
     ).find((button) => button.textContent?.includes("zero-issues"))!;
   expect(row().getAttribute("aria-checked")).toBe("true");
-  expect(document.body.textContent).toContain("monocode");
-  expect(document.querySelector('[title="app"]')?.textContent).toContain(
-    "monocode",
-  );
-  expect(document.body.textContent).toContain("other");
-  expect(document.querySelectorAll('[title="main (main)"]')).toHaveLength(2);
+  expect(document.querySelectorAll('[title="main (main)"]')).toHaveLength(1);
   await act(async () => row().click());
   expect(onChange).toHaveBeenLastCalledWith({
     ...DEFAULT_INBOX_FILTERS,
