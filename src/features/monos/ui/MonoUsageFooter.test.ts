@@ -3,16 +3,23 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
+  selectProviderAccount,
   saveProviderAccount,
   selectedProviderAccountId,
 } from "../../providers/model/providerAccounts";
 import { idleRateLimits } from "../../providers/model/rateLimits";
 import { setCachedRateLimits } from "../../providers/model/rateLimitsCache";
+import { getSession } from "../../sessions/data/sessionStore";
 import {
   newSession,
+  type Session,
   type MonoSpawnedSession,
 } from "../../sessions/model/session";
 import { MonoUsageFooter } from "./MonoUsageFooter";
+
+vi.mock("../../sessions/data/sessionStore", () => ({
+  getSession: vi.fn(),
+}));
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async () => null),
@@ -35,6 +42,12 @@ beforeEach(() => {
   });
   saveProviderAccount({ id: "claude-work", provider: "claude", label: "Work" });
   saveProviderAccount({
+    id: "claude-project",
+    provider: "claude",
+    label: "Project account",
+  });
+  vi.mocked(getSession).mockReset();
+  saveProviderAccount({
     id: "codex-work",
     provider: "codex",
     label: "Codex Work",
@@ -51,6 +64,7 @@ afterEach(() => {
   act(() => root.unmount());
   container.remove();
   localStorage.clear();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -78,11 +92,46 @@ it("shows deduplicated usage for Mono-owned providers and excludes unrelated ses
       model: "claude:sonnet",
     },
     {
+      sessionId: "claude-legacy",
+      cwd: "/repo",
+      title: "Legacy Claude",
+      harness: "claude",
+      model: "claude:sonnet",
+    },
+    {
+      sessionId: "claude-new",
+      cwd: "/repo",
+      title: "New Claude",
+      harness: "claude",
+      model: "claude:sonnet",
+    },
+    {
       sessionId: "pi-child",
       cwd: "/repo",
       title: "Pi",
       harness: "pi",
-      model: "pi:auto",
+      model: "pi:anthropic/claude-sonnet-4-6",
+    },
+    {
+      sessionId: "pi-child-duplicate",
+      cwd: "/repo",
+      title: "Pi duplicate",
+      harness: "pi",
+      model: "pi:anthropic/claude-sonnet-4-6",
+    },
+    {
+      sessionId: "pi-codex-child",
+      cwd: "/repo",
+      title: "Pi Codex",
+      harness: "pi",
+      model: "pi:openai-codex/gpt-5.4",
+    },
+    {
+      sessionId: "cursor-child",
+      cwd: "/repo",
+      title: "Cursor",
+      harness: "cursor",
+      model: "cursor:auto",
     },
   ];
   const mono = {
@@ -103,6 +152,16 @@ it("shows deduplicated usage for Mono-owned providers and excludes unrelated ses
     providerAccountId: "claude-work",
   };
   const claudeB = { ...claudeA, id: "claude-b" };
+  const legacyUsedClaude = {
+    ...newSession("claude", "/repo", "claude:sonnet", "auto"),
+    id: "claude-legacy",
+    blocks: [{ id: "old-turn", role: "user" as const, text: "existing turn" }],
+  };
+  const newClaude = {
+    ...newSession("claude", "/repo", "claude:sonnet", "auto"),
+    id: "claude-new",
+  };
+  selectProviderAccount("claude", "/repo", "claude-project");
   const claudeC = {
     ...newSession("claude", "/repo", "claude:sonnet", "auto"),
     id: "claude-c",
@@ -111,6 +170,17 @@ it("shows deduplicated usage for Mono-owned providers and excludes unrelated ses
   const pi = {
     ...newSession("pi", "/repo", "pi:auto", "auto"),
     id: "pi-child",
+    model: "pi:anthropic/claude-sonnet-4-6",
+  };
+  const piDuplicate = { ...pi, id: "pi-child-duplicate" };
+  const piCodex = {
+    ...newSession("pi", "/repo", "pi:auto", "auto"),
+    id: "pi-codex-child",
+    model: "pi:openai-codex/gpt-5.4",
+  };
+  const cursor = {
+    ...newSession("cursor", "/repo", "cursor:auto", "auto"),
+    id: "cursor-child",
   };
   const unrelated = {
     ...newSession("devin", "/repo", "devin:auto", "auto"),
@@ -121,7 +191,19 @@ it("shows deduplicated usage for Mono-owned providers and excludes unrelated ses
     root.render(
       createElement(MonoUsageFooter, {
         session: mono,
-        sessions: [mono, claudeA, claudeB, claudeC, pi, unrelated],
+        sessions: [
+          mono,
+          claudeA,
+          claudeB,
+          claudeC,
+          legacyUsedClaude,
+          newClaude,
+          pi,
+          piDuplicate,
+          piCodex,
+          cursor,
+          unrelated,
+        ],
       }),
     ),
   );
@@ -133,13 +215,24 @@ it("shows deduplicated usage for Mono-owned providers and excludes unrelated ses
     container.querySelectorAll(
       'button[aria-label="Claude Code usage details"]',
     ),
-  ).toHaveLength(2);
+  ).toHaveLength(3);
   expect(
     container.querySelector('button[aria-label="Codex usage details"]'),
   ).not.toBeNull();
   expect(container.textContent).toContain("Work");
   expect(container.textContent).toContain("Default account");
-  expect(container.textContent).toContain("Pi · usage unavailable");
+  expect(container.textContent).toContain("Project account");
+  expect(
+    container.querySelectorAll(
+      'button[aria-label="Pi · Anthropic usage details"]',
+    ),
+  ).toHaveLength(1);
+  expect(
+    container.querySelector(
+      'button[aria-label="Pi · OpenAI Codex usage details"]',
+    ),
+  ).not.toBeNull();
+  expect(container.textContent).toContain("Cursor · usage unavailable");
   expect(container.textContent).not.toContain("Devin");
 
   const workspaceSessions = [
@@ -148,24 +241,24 @@ it("shows deduplicated usage for Mono-owned providers and excludes unrelated ses
   const originalWorkspaceSessions = structuredClone(workspaceSessions);
   await act(async () =>
     container
-      .querySelector<HTMLButtonElement>(
-        'button[aria-label="Codex usage details"]',
-      )!
+      .querySelectorAll<HTMLButtonElement>(
+        'button[aria-label="Claude Code usage details"]',
+      )[2]
       .click(),
   );
   await act(async () =>
     document
       .querySelector<HTMLButtonElement>(
-        'button[aria-label="Switch Codex account"]',
+        'button[aria-label="Switch Claude Code account"]',
       )!
       .click(),
   );
   await act(async () =>
     document
-      .querySelector<HTMLButtonElement>('button[aria-label="Codex Work"]')!
+      .querySelector<HTMLButtonElement>('button[aria-label="Work"]')!
       .click(),
   );
-  expect(selectedProviderAccountId("codex", "/repo")).toBe("codex-work");
+  expect(selectedProviderAccountId("claude", "/repo")).toBe("claude-work");
   expect(workspaceSessions).toEqual(originalWorkspaceSessions);
 
   const changedChild = { ...pi, harness: "cursor" as const };
@@ -173,10 +266,75 @@ it("shows deduplicated usage for Mono-owned providers and excludes unrelated ses
     root.render(
       createElement(MonoUsageFooter, {
         session: mono,
-        sessions: [mono, claudeA, claudeB, claudeC, changedChild, unrelated],
+        sessions: [
+          mono,
+          claudeA,
+          claudeB,
+          claudeC,
+          legacyUsedClaude,
+          newClaude,
+          changedChild,
+          piDuplicate,
+          piCodex,
+          cursor,
+          unrelated,
+        ],
       }),
     ),
   );
   expect(container.textContent).toContain("Cursor · usage unavailable");
   expect(container.textContent).not.toContain("Pi · usage unavailable");
+});
+
+it("keeps floating child lookups single-flight while polling", async () => {
+  vi.useFakeTimers();
+  let resolveFirst!: (session: Session | null) => void;
+  const firstLookup = new Promise<Session | null>((resolve) => {
+    resolveFirst = resolve;
+  });
+  const mono = {
+    ...newSession("opencode", "/repo", "opencode:auto", "auto"),
+    id: "floating-mono",
+    blocks: [
+      {
+        id: "launch",
+        role: "user" as const,
+        text: "start child",
+        monoSpawnedSessions: [
+          {
+            sessionId: "floating-child",
+            cwd: "/repo",
+            title: "Child",
+            harness: "codex" as const,
+            model: "codex:gpt-5",
+          },
+        ],
+      },
+    ],
+  };
+  const child = {
+    ...newSession("codex", "/repo", "codex:gpt-5", "auto"),
+    id: "floating-child",
+  };
+  vi.mocked(getSession)
+    .mockReturnValueOnce(firstLookup)
+    .mockResolvedValue(child);
+
+  await act(async () =>
+    root.render(createElement(MonoUsageFooter, { session: mono })),
+  );
+  expect(getSession).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(30_000);
+  });
+  expect(getSession).toHaveBeenCalledTimes(1);
+
+  await act(async () => resolveFirst(child));
+  expect(
+    container.querySelector('button[aria-label="Codex usage details"]'),
+  ).not.toBeNull();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(30_000);
+  });
+  expect(getSession).toHaveBeenCalledTimes(2);
 });

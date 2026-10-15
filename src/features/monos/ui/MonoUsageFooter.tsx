@@ -4,6 +4,7 @@ import {
   type UsageFooterSession,
 } from "../../../app/shell/UsageFooter";
 import {
+  DEFAULT_PROVIDER_ACCOUNT_ID,
   providerAccountExists,
   providerAccountLabel,
   selectedProviderAccountId,
@@ -11,6 +12,10 @@ import {
   type ProviderAccountProvider,
 } from "../../providers/model/providerAccounts";
 import type { RateLimitProvider } from "../../providers/model/rateLimits";
+import {
+  piBillingProvider,
+  piUsageProvider,
+} from "../../providers/model/piUsage";
 import { useCachedRateLimits } from "../../providers/model/rateLimitsCache";
 import { getSession } from "../../sessions/data/sessionStore";
 import {
@@ -72,7 +77,10 @@ export function MonoUsageFooter({
     let current = true;
     setLoadedChildren([]);
     if (!missingIds.length) return;
+    let loading = false;
     const loadChildren = () => {
+      if (!current || loading) return;
+      loading = true;
       void Promise.all(missingIds.map((id) => getSession(id)))
         .then((children) => {
           if (current)
@@ -82,6 +90,9 @@ export function MonoUsageFooter({
         })
         .catch(() => {
           if (current) setLoadedChildren([]);
+        })
+        .finally(() => {
+          loading = false;
         });
     };
     loadChildren();
@@ -104,7 +115,32 @@ export function MonoUsageFooter({
     source?: Session,
     project = session.cwd,
     child = false,
+    model?: string,
   ) => {
+    const resolvedModel = source?.model ?? model;
+    if (harness === "pi") {
+      const piProvider = piUsageProvider(resolvedModel);
+      if (!piProvider) {
+        entries.set("unavailable:pi", {
+          key: "unavailable:pi",
+          harness,
+        });
+        return;
+      }
+      const key = `pi:${piProvider}`;
+      if (!entries.has(key))
+        entries.set(key, {
+          key,
+          harness,
+          provider: piBillingProvider(piProvider),
+          session: {
+            id: source?.id,
+            harness: "pi",
+            model: resolvedModel,
+          },
+        });
+      return;
+    }
     if (!isRateLimitProvider(harness)) {
       entries.set(`unavailable:${harness}`, {
         key: `unavailable:${harness}`,
@@ -123,9 +159,17 @@ export function MonoUsageFooter({
     }
     const accountProvider =
       harness === "claude" || harness === "codex" || harness === "devin";
+    const legacyUsedSession = Boolean(
+      source?.blocks.some((block) => block.role === "user"),
+    );
     const accountId = accountProvider
       ? (source?.providerAccountId ??
-        selectedProviderAccountId(harness as ProviderAccountProvider, project))
+        (legacyUsedSession
+          ? DEFAULT_PROVIDER_ACCOUNT_ID
+          : selectedProviderAccountId(
+              harness as ProviderAccountProvider,
+              project,
+            )))
       : undefined;
     const key = `${harness}:${accountId ?? "default"}`;
     if (entries.has(key)) return;
@@ -140,18 +184,19 @@ export function MonoUsageFooter({
       provider: harness,
       accountLabel,
       project,
-      session: source?.providerAccountId
-        ? {
-            id: source.id,
-            harness: source.harness,
-            model: source.model,
-            providerAccountId: source.providerAccountId,
-          }
-        : undefined,
+      session:
+        source && (source.providerAccountId || legacyUsedSession)
+          ? {
+              id: source.id,
+              harness: source.harness,
+              model: source.model,
+              providerAccountId: accountId,
+            }
+          : undefined,
     });
   };
 
-  add(session.harness, session, session.cwd);
+  add(session.harness, session, session.cwd, false, session.model);
   for (const launch of launches) {
     const child = children.get(launch.sessionId);
     add(
@@ -159,6 +204,7 @@ export function MonoUsageFooter({
       child,
       child?.cwd ?? launch.cwd,
       true,
+      launch.model,
     );
   }
 
