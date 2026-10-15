@@ -46,6 +46,8 @@ export function useTranscriptSelection(
     }
 
     let pointerSelecting = false;
+    // Where the pointer let go; the menu opens there so it is under the hand.
+    let pointerPoint: { x: number; y: number } | null = null;
 
     const cancelFrame = () => {
       if (frame.current == null) return;
@@ -65,20 +67,34 @@ export function useTranscriptSelection(
         anchorResponseId: responseIdForNode(nativeSelection.anchorNode, root),
         focusResponseId: responseIdForNode(nativeSelection.focusNode, root),
       });
-      const rect = text ? firstRangeRect(nativeSelection.getRangeAt(0)) : null;
-      setSelection(text && rect ? { text, rect } : null);
+      const live = text ? nativeSelection.getRangeAt(0) : null;
+      const rect = live ? firstRangeRect(live) : null;
+      setSelection(
+        text && live && rect
+          ? {
+              text,
+              rect: pointerPoint
+                ? new DOMRect(pointerPoint.x, pointerPoint.y, 1, 1)
+                : rect,
+              range: live.cloneRange(),
+              atPointer: pointerPoint != null,
+            }
+          : null,
+      );
     };
     const scheduleReport = () => {
       cancelFrame();
       frame.current = window.requestAnimationFrame(reportSelection);
     };
     const onPointerDown = (event: PointerEvent) => {
+      pointerPoint = null;
       pointerSelecting = responseIdForNode(event.target as Node, root) != null;
       if (pointerSelecting) cancelFrame();
     };
-    const onPointerUp = () => {
+    const onPointerUp = (event: PointerEvent) => {
       if (!pointerSelecting) return;
       pointerSelecting = false;
+      pointerPoint = { x: event.clientX, y: event.clientY };
       scheduleReport();
     };
     const onPointerCancel = () => {
@@ -92,6 +108,7 @@ export function useTranscriptSelection(
         event.key === "Shift" ||
         (event.shiftKey && event.key.startsWith("Arrow"))
       ) {
+        pointerPoint = null;
         scheduleReport();
       }
     };

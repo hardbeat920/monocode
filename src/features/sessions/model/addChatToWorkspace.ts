@@ -1,4 +1,8 @@
-import { composerSeedForAddToChat, type AddToChatMode } from "./quoteDraft";
+import {
+  composerSeedForAddToChat,
+  type AddToChatMode,
+  type AddToChatReference,
+} from "./quoteDraft";
 import { newDefaultSession, newSessionLike, type Session } from "./session";
 import {
   focusedFileTab,
@@ -46,6 +50,7 @@ export function applyAddToChatRequest({
   defaultRuntimeMode,
   text,
   mode = "quote",
+  reference,
 }: {
   sessions: readonly Session[];
   tabs: readonly WorkspaceTab[];
@@ -56,9 +61,13 @@ export function applyAddToChatRequest({
   defaultRuntimeMode?: Session["runtimeMode"];
   text: string;
   mode?: AddToChatMode;
+  /** A cited passage the new chat shows as an annotation, not as typed text. */
+  reference?: AddToChatReference;
 }): AddChatToWorkspaceResult | null {
-  const composerSeed = composerSeedForAddToChat(text, mode);
-  if (!composerSeed) return null;
+  const composerSeed = reference
+    ? undefined
+    : composerSeedForAddToChat(text, mode);
+  if (!reference && !composerSeed) return null;
 
   let currentSessions = sessions;
   let currentTabs = tabs;
@@ -72,7 +81,7 @@ export function applyAddToChatRequest({
     const donor = sessions[sessions.length - 1];
     createdSession = {
       ...newSessionLike(donor, projectCwd),
-      composerSeed,
+      ...(composerSeed ? { composerSeed } : {}),
     };
     tab = newTab(createdSession.id);
     currentSessions = [...currentSessions, createdSession];
@@ -99,7 +108,7 @@ export function applyAddToChatRequest({
   const session = createdSession ?? {
     ...newDefaultSession(cwd, defaultRuntimeMode),
     ...(file?.projectCwd ? { worktreeCwd: file.cwd } : {}),
-    composerSeed,
+    ...(composerSeed ? { composerSeed } : {}),
   };
 
   let nextTab: WorkspaceTab;

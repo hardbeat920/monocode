@@ -3927,3 +3927,25 @@ html.theme-light .btw-burst {
     var(--color-background-base)
   );
 }
+
+/* The same tint as the composer's annotations pill (bg-content/10). */
+::highlight(monocode-chat-reference) {
+  background-color: color-mix(in srgb, var(--color-content) 10%, transparent);
+  text-decoration: underline dotted;
+  text-decoration-color: color-mix(
+    in srgb,
+    var(--color-content) 40%,
+    transparent
+  );
+}
+
+.cm-chat-reference {
+  background-color: color-mix(in srgb, var(--color-content) 10%, transparent);
+  text-decoration: underline dotted;
+  text-decoration-color: color-mix(
+    in srgb,
+    var(--color-content) 40%,
+    transparent
+  );
+  cursor: pointer;
+}

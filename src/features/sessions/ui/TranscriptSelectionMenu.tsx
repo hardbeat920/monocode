@@ -2,14 +2,17 @@ import { FilePlusCorner, MessageSquarePlus } from "../../../shared/ui/icons";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Popover } from "../../../shared/ui/Popover";
 import { type TranscriptSelection } from "../model/transcriptSelection";
+import { ReferenceNotePopover } from "./ReferenceNotePopover";
 
 type Props = {
   selection: TranscriptSelection | null;
-  onAddToChat?: (text: string) => void;
+  /** `note` is what the user wrote about the selection; it may be empty. */
+  onAddToChat?: (text: string, note: string, range?: Range) => void;
   onAddToNotes?: (text: string) => void | Promise<void>;
   onDismiss: () => void;
 };
 
+/** The toolbar over selected transcript text, and the note box Add to chat opens. */
 export function TranscriptSelectionMenu({
   selection,
   onAddToChat,
@@ -18,6 +21,11 @@ export function TranscriptSelectionMenu({
 }: Props) {
   const onDismissRef = useRef(onDismiss);
   onDismissRef.current = onDismiss;
+  // Focusing the note field collapses the page selection, which drops
+  // `selection`; the text being annotated is kept here instead.
+  const [annotating, setAnnotating] = useState<TranscriptSelection | null>(
+    null,
+  );
 
   // Scrolling or resizing moves the text out from under the menu, so the
   // selection it acts on is gone; drop it rather than chase the range.
@@ -32,13 +40,30 @@ export function TranscriptSelectionMenu({
     };
   }, [selection]);
 
+  if (annotating) {
+    return (
+      <ReferenceNotePopover
+        anchor={annotating.rect}
+        text={annotating.text}
+        submitLabel="Add"
+        onSubmit={(note) => {
+          onAddToChat?.(annotating.text, note, annotating.range);
+          setAnnotating(null);
+        }}
+        onCancel={() => setAnnotating(null)}
+      />
+    );
+  }
+
   if (!selection) return null;
 
   return (
     <Popover
       anchor={selection.rect}
-      side="top"
+      // At the pointer the menu sits below it, clear of the text just selected.
+      side={selection.atPointer ? "bottom" : "top"}
       align="center"
+      gap={selection.atPointer ? 10 : undefined}
       onDismiss={(reason) => {
         if (reason === "escape") window.getSelection()?.removeAllRanges();
         onDismiss();
@@ -51,7 +76,7 @@ export function TranscriptSelectionMenu({
         {onAddToChat ? (
           <SelectionAction
             label="Add to chat"
-            onSelect={() => onAddToChat(selection.text)}
+            onSelect={() => setAnnotating(selection)}
             onDismiss={onDismiss}
           >
             <MessageSquarePlus

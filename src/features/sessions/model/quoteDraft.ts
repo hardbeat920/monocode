@@ -1,10 +1,21 @@
+import type { ChatReferenceSource } from "./chatReferences";
+
 export const ADD_TO_CHAT_EVENT = "monocode:add-to-chat";
 
 export type AddToChatMode = "quote" | "plain";
 
+/** A cited document passage with the user's note, kept as an annotation. */
+export type AddToChatReference = {
+  text: string;
+  note: string;
+  source: ChatReferenceSource;
+};
+
 export type AddToChatRequest = {
   text: string;
   mode: AddToChatMode;
+  /** When set, a session pane keeps it as an annotation; `text` seeds a new chat. */
+  reference?: AddToChatReference;
 };
 
 export type QuoteRequest = {
@@ -13,13 +24,17 @@ export type QuoteRequest = {
   mode?: AddToChatMode;
 };
 
-export function requestAddToChat(text: string, mode: AddToChatMode = "quote") {
+export function requestAddToChat(
+  text: string,
+  mode: AddToChatMode = "quote",
+  reference?: AddToChatReference,
+) {
   if (typeof window === "undefined") return;
   const value = text.replace(/\r\n?/g, "\n").trim();
   if (!value) return;
   window.dispatchEvent(
     new CustomEvent<AddToChatRequest>(ADD_TO_CHAT_EVENT, {
-      detail: { text: value, mode },
+      detail: { text: value, mode, reference },
     }),
   );
 }

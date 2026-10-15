@@ -2,6 +2,7 @@ import {
   lazy,
   Suspense,
   useCallback,
+  useEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -10,6 +11,11 @@ import {
 import { isImeComposition } from "../../../shared/lib/keyboard";
 import { ArrowUp, Plus, SmilePlus } from "../../../shared/ui/icons";
 import { AttachmentChip } from "../../sessions/ui/AttachmentChip";
+import { ChatReferencesPill } from "../../sessions/ui/ChatReferencesPill";
+import {
+  composeWithChatReferences,
+  type ChatReference,
+} from "../../sessions/model/chatReferences";
 import type { Attachment } from "../../sessions/model/session";
 import {
   attachmentsFromFiles,
@@ -29,6 +35,8 @@ import {
   consumeQuoteRequest,
   type QuoteRequest,
 } from "../../sessions/model/quoteDraft";
+
+const NO_REFERENCES: ChatReference[] = [];
 
 // Loaded on first open, with its emoji data, so neither weighs on startup.
 const EmojiPickerPopover = lazy(() =>
@@ -54,6 +62,9 @@ type Props = {
   enabled?: boolean;
   focusToken?: number;
   quoteRequest?: QuoteRequest;
+  /** Passages cited from the transcript; sent with the message, after its text. */
+  references?: ChatReference[];
+  onReferencesChange?: (next: ChatReference[]) => void;
   onQuoteRequestConsumed?: (id: number) => void;
   onDraftChange?: (text: string) => void;
   /** Returns false when the message wasn't taken, so the draft stays. */
@@ -85,6 +96,8 @@ export function MonoComposer({
   enabled = true,
   focusToken,
   quoteRequest,
+  references = NO_REFERENCES,
+  onReferencesChange,
   onQuoteRequestConsumed,
   onDraftChange,
   onSubmit,
@@ -107,16 +120,29 @@ export function MonoComposer({
   const box = useRef<HTMLDivElement>(null);
   const [dropError, setDropError] = useState<string | null>(null);
   const submittingRef = useRef(false);
+  const referencesRef = useRef(references);
+  referencesRef.current = references;
+  // Adding a reference leaves the cursor in the input, ready for the message.
+  const referenceCount = references.length;
+  const previousReferenceCount = useRef(referenceCount);
+  useEffect(() => {
+    const grew = referenceCount > previousReferenceCount.current;
+    previousReferenceCount.current = referenceCount;
+    if (!grew || !enabled) return;
+    const frame = requestAnimationFrame(() => field.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [referenceCount, enabled]);
   const [submitting, setSubmitting] = useState(false);
   const ready =
     enabled &&
     !submitting &&
     pendingReads === 0 &&
-    (text.trim().length > 0 || attachments.length > 0);
+    (text.trim().length > 0 || attachments.length > 0 || references.length > 0);
   const inline = !controls;
   // Attachments sit above the field like a second line of text, so an inline
   // field moves above the buttons for them too.
-  const stacked = inline && (multiline || attachments.length > 0);
+  const stacked =
+    inline && (multiline || attachments.length > 0 || references.length > 0);
 
   useLayoutEffect(() => {
     const el = field.current;
@@ -271,10 +297,12 @@ export function MonoComposer({
     const message = textRef.current.trim();
     const draft = textRef.current;
     const files = attachmentsRef.current;
-    if (!message && !files.length) return;
+    const cited = referencesRef.current;
+    if (!message && !files.length && !cited.length) return;
     const generation = readGeneration.current;
     const clear = (accepted: boolean | void) => {
       if (accepted === false) return;
+      if (cited.length) onReferencesChange?.([]);
       if (generation !== readGeneration.current) {
         if (getComposerDraft(sessionId) === draft)
           setComposerDraft(sessionId, "");
@@ -285,7 +313,7 @@ export function MonoComposer({
       setAttachments([]);
       setDropError(null);
     };
-    const result = onSubmit(message, files);
+    const result = onSubmit(composeWithChatReferences(message, cited), files);
     if (result instanceof Promise) {
       submittingRef.current = true;
       setSubmitting(true);
@@ -388,8 +416,14 @@ export function MonoComposer({
             {dropError}
           </p>
         ) : null}
-        {attachments.length > 0 ? (
+        {attachments.length > 0 || references.length > 0 ? (
           <div className="flex flex-wrap gap-1.5 px-2.5 pt-2">
+            {onReferencesChange ? (
+              <ChatReferencesPill
+                references={references}
+                onChange={onReferencesChange}
+              />
+            ) : null}
             {attachments.map((file) => (
               <AttachmentChip
                 key={file.id}

@@ -87,6 +87,11 @@ import { MONO_PAGE_TURNS } from "../data/sessionStore";
 import { useComposerDockMotion } from "./useComposerDockMotion";
 import { MOD } from "../../../platform/tauri/platform";
 import {
+  newChatReference,
+  type ChatReferenceSource,
+} from "../model/chatReferences";
+import { useSessionChatReferences } from "../model/chatReferenceStore";
+import {
   acknowledgeQuoteRequest,
   ADD_TO_CHAT_EVENT,
   type AddToChatRequest,
@@ -585,6 +590,17 @@ const LocalSessionPane = memo(function LocalSessionPane({
     },
     [],
   );
+  const [chatReferences, setChatReferences] = useSessionChatReferences(
+    session.id,
+  );
+  const addChatReference = useCallback(
+    (text: string, note: string, range?: Range, source?: ChatReferenceSource) =>
+      setChatReferences((current) => [
+        ...current,
+        newChatReference(text, note, range, source),
+      ]),
+    [setChatReferences],
+  );
   const acknowledgeQuote = useCallback((handledId: number) => {
     setQuoteRequest((current) => acknowledgeQuoteRequest(current, handledId));
   }, []);
@@ -625,11 +641,18 @@ const LocalSessionPane = memo(function LocalSessionPane({
     const onAdd = (event: Event) => {
       const detail = (event as CustomEvent<AddToChatRequest>).detail;
       if (!detail?.text) return;
-      addSelectionToChat(detail.text, detail.mode);
+      if (detail.reference) {
+        addChatReference(
+          detail.reference.text,
+          detail.reference.note,
+          undefined,
+          detail.reference.source,
+        );
+      } else addSelectionToChat(detail.text, detail.mode);
     };
     window.addEventListener(ADD_TO_CHAT_EVENT, onAdd);
     return () => window.removeEventListener(ADD_TO_CHAT_EVENT, onAdd);
-  }, [addSelectionToChat, addToChatTarget]);
+  }, [addChatReference, addSelectionToChat, addToChatTarget]);
   const workCwd = sessionWorkCwd(session);
   const reviewHidden =
     remote ||
@@ -673,6 +696,8 @@ const LocalSessionPane = memo(function LocalSessionPane({
       hideTopBar={!!session.inboxAsk}
       context={session.context}
       quoteRequest={quoteRequest}
+      references={chatReferences}
+      onReferencesChange={setChatReferences}
       initialDraft={
         draftRef.current ??
         (session.inboxCard || session.noteCard || session.handoffCard
@@ -999,7 +1024,9 @@ const LocalSessionPane = memo(function LocalSessionPane({
                     pendingQuestion={!!session.pendingQuestion}
                     backgroundTasks={session.backgroundTasks}
                     onApproval={session.worktreeRemoved ? undefined : approve}
-                    onAddToChat={addSelectionToChat}
+                    onAddToChat={addChatReference}
+                    chatReferences={chatReferences}
+                    onChatReferencesChange={setChatReferences}
                     onSaveNote={notesEnabled ? saveNote : undefined}
                     onSendDraft={
                       draftBlock
@@ -1179,6 +1206,8 @@ const LocalSessionPane = memo(function LocalSessionPane({
                     name={agent.name}
                     enabled={visible}
                     quoteRequest={quoteRequest}
+                    references={chatReferences}
+                    onReferencesChange={setChatReferences}
                     onQuoteRequestConsumed={acknowledgeQuote}
                     onDraftChange={(text) => {
                       draftRef.current = text;

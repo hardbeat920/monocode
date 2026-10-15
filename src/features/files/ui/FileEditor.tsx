@@ -94,6 +94,19 @@ import {
 } from "../editor/editorGit";
 import { editorLint } from "../editor/editorLint";
 import { editorSearch } from "../editor/editorSearch";
+import {
+  editorReferences,
+  setEditorReferences,
+} from "../editor/editorReferences";
+import {
+  setChatReferences,
+  useDocumentChatReferences,
+} from "../../sessions/model/chatReferenceStore";
+import {
+  removeChatReference,
+  updateChatReferenceNote,
+} from "../../sessions/model/chatReferences";
+import { ReferenceNotePopover } from "../../sessions/ui/ReferenceNotePopover";
 import { editorScrollbar } from "../editor/editorScrollbar";
 import { FilePreviewSearch } from "./FilePreviewSearch";
 
@@ -608,6 +621,37 @@ export function CodeMirrorEditor({
     useState<DiffCommentComposerTarget | null>(null);
   const [selectionTarget, setSelectionTarget] =
     useState<EditorSelectionTarget | null>(null);
+  // Passages cited from this file into a chat stay marked until sent or removed.
+  const documentReferences = useDocumentChatReferences(commentPath);
+  const documentReferencesRef = useRef(documentReferences);
+  documentReferencesRef.current = documentReferences;
+  const [editingReference, setEditingReference] = useState<{
+    sessionId: string;
+    id: string;
+    anchor: DOMRect;
+  } | null>(null);
+  const syncReferenceMarks = useCallback((view: EditorView) => {
+    view.dispatch({
+      effects: setEditorReferences.of(
+        documentReferencesRef.current.flatMap(({ reference }) =>
+          reference.source
+            ? [
+                {
+                  id: reference.id,
+                  text: reference.text,
+                  from: reference.source.from,
+                  to: reference.source.to,
+                },
+              ]
+            : [],
+        ),
+      ),
+    });
+  }, []);
+  useEffect(() => {
+    const view = viewRef.current;
+    if (view) syncReferenceMarks(view);
+  }, [documentReferences, syncReferenceMarks]);
   const gitOptions = {
     onStage: canStage
       ? (contents: string) => onStageGitRef.current?.(contents)
@@ -798,6 +842,29 @@ export function CodeMirrorEditor({
         editorLint(path, (count) => onErrorCountChangeRef.current(count)),
         editorScrollbar,
         editorSearch,
+        editorReferences((hit) => {
+          const view = viewRef.current;
+          const entry = documentReferencesRef.current.find(
+            ({ reference }) => reference.id === hit.id,
+          );
+          const start = view?.coordsAtPos(hit.from, 1);
+          const end = view?.coordsAtPos(hit.to, -1);
+          if (!entry || !start) return;
+          const sameLine = end != null && end.top === start.top;
+          setEditingReference({
+            sessionId: entry.sessionId,
+            id: hit.id,
+            anchor: new DOMRect(
+              start.left,
+              start.top,
+              Math.max(
+                1,
+                (sameLine ? end.right : start.right + 160) - start.left,
+              ),
+              Math.max(1, start.bottom - start.top),
+            ),
+          });
+        }),
         Prec.high(
           keymap.of([
             ...foldKeymap,
@@ -859,6 +926,7 @@ export function CodeMirrorEditor({
     savedDocumentRef.current = view.state.doc;
     dirtyRef.current = false;
     viewRef.current = view;
+    syncReferenceMarks(view);
     lockOverscroll(view.scrollDOM as HTMLDivElement);
     if (showDiff) {
       if (gitOriginalRef.current) {
@@ -890,9 +958,17 @@ export function CodeMirrorEditor({
       savedDocumentRef.current = null;
       setChunkNav(null);
       setSelectionTarget(null);
+      setEditingReference(null);
       view.destroy();
     };
-  }, [formatOnSave, lockOverscroll, path, showDiff, syncChunkNav]);
+  }, [
+    formatOnSave,
+    lockOverscroll,
+    path,
+    showDiff,
+    syncChunkNav,
+    syncReferenceMarks,
+  ]);
 
   useEffect(() => {
     const view = viewRef.current;
@@ -1025,6 +1101,36 @@ export function CodeMirrorEditor({
         selection={selectionTarget}
         onDismiss={() => setSelectionTarget(null)}
       />
+      {editingReference
+        ? (() => {
+            const entry = documentReferences.find(
+              ({ reference }) => reference.id === editingReference.id,
+            );
+            if (!entry) return null;
+            const { sessionId, reference } = entry;
+            return (
+              <ReferenceNotePopover
+                anchor={editingReference.anchor}
+                text={reference.text}
+                initialNote={reference.note}
+                submitLabel="Save"
+                onSubmit={(note) => {
+                  setChatReferences(sessionId, (current) =>
+                    updateChatReferenceNote(current, reference.id, note),
+                  );
+                  setEditingReference(null);
+                }}
+                onRemove={() => {
+                  setChatReferences(sessionId, (current) =>
+                    removeChatReference(current, reference.id),
+                  );
+                  setEditingReference(null);
+                }}
+                onCancel={() => setEditingReference(null)}
+              />
+            );
+          })()
+        : null}
     </>
   );
 }
@@ -1056,7 +1162,11 @@ function editorSelectionTarget(
   }
 
   const lastSelectedPosition = Math.max(selection.from, selection.to - 1);
+  const leading = text.length - text.trimStart().length;
   return {
+    text: text.trim(),
+    from: selection.from + leading,
+    to: selection.from + leading + text.trim().length,
     path,
     startLine: view.state.doc.lineAt(selection.from).number,
     endLine: view.state.doc.lineAt(lastSelectedPosition).number,

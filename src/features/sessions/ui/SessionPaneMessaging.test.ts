@@ -4,6 +4,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SessionPane, type SessionPaneProps } from "./SessionPane";
 import { clearComposerDraft, setComposerDraft } from "../model/draftCache";
+import { setChatReferences } from "../model/chatReferenceStore";
+import { ADD_TO_CHAT_EVENT } from "../model/quoteDraft";
 
 const probes = vi.hoisted(() => ({
   pick: vi.fn(),
@@ -17,11 +19,13 @@ vi.mock("../model/attachments", async (original) => ({
   pickAttachments: probes.pick,
 }));
 vi.mock("./AgentTranscript", () => ({
-  AgentTranscript: (props: { onAddToChat: (text: string) => void }) => {
+  AgentTranscript: (props: {
+    onAddToChat: (text: string, note: string) => void;
+  }) => {
     probes.transcript(props);
     return createElement(
       "button",
-      { onClick: () => props.onAddToChat("Selected response") },
+      { onClick: () => props.onAddToChat("Selected response", "check this") },
       "Quote response",
     );
   },
@@ -82,6 +86,7 @@ beforeEach(() => {
   root = createRoot(container);
 });
 afterEach(() => {
+  setChatReferences("chat", []);
   act(() => root.unmount());
   container.remove();
   clearComposerDraft("chat");
@@ -194,13 +199,86 @@ it("keeps the same input, current draft and attachments when a question appears 
   ]);
 });
 
-it("routes transcript quotes to the Mono draft", () => {
-  render(props());
+it("collects transcript selections in one pill and sends them with the message", () => {
+  setComposerDraft("chat", "My question");
+  const pane = props();
+  pane.onSubmit = vi.fn();
+  render(pane);
   const quote = [
     ...container.querySelectorAll<HTMLButtonElement>("button"),
   ].find((button) => button.textContent === "Quote response")!;
   act(() => quote.click());
-  expect(field().value).toBe("> Selected response\n\n");
+  expect(container.textContent).toContain("1 annotation");
+  act(() => quote.click());
+  expect(container.textContent).toContain("2 annotations");
+  expect(field().value).toBe("My question");
+
+  act(() =>
+    container.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click(),
+  );
+  const reference = "Reference %d:\n> Selected response\n\nNote: check this";
+  expect(pane.onSubmit).toHaveBeenCalledWith(
+    "chat",
+    `My question\n\n${reference.replace("%d", "1")}\n\n${reference.replace("%d", "2")}`,
+    [],
+  );
+  expect(container.textContent).not.toContain("annotation");
+});
+
+it("keeps a document passage cited from the editor as an annotation", () => {
+  setComposerDraft("chat", "My question");
+  const pane = props();
+  pane.addToChatTarget = true;
+  pane.onSubmit = vi.fn();
+  render(pane);
+  act(() => {
+    window.dispatchEvent(
+      new CustomEvent(ADD_TO_CHAT_EVENT, {
+        detail: {
+          text: "const x = 1;",
+          mode: "plain",
+          reference: {
+            text: "const x = 1;",
+            note: "why?",
+            source: {
+              label: "@src/app.ts (lines 3-3)",
+              path: "src/app.ts",
+              from: 0,
+              to: 12,
+            },
+          },
+        },
+      }),
+    );
+  });
+  expect(container.textContent).toContain("1 annotation");
+  expect(field().value).toBe("My question");
+  act(() =>
+    container.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click(),
+  );
+  expect(pane.onSubmit).toHaveBeenCalledWith(
+    "chat",
+    "My question\n\nReference 1 — @src/app.ts (lines 3-3):\n> const x = 1;\n\nNote: why?",
+    [],
+  );
+});
+
+it("sends cited passages on their own when nothing is typed", () => {
+  const pane = props();
+  pane.onSubmit = vi.fn();
+  render(pane);
+  const quote = [
+    ...container.querySelectorAll<HTMLButtonElement>("button"),
+  ].find((button) => button.textContent === "Quote response")!;
+  act(() => quote.click());
+  act(() =>
+    container.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click(),
+  );
+  expect(pane.onSubmit).toHaveBeenCalledWith(
+    "chat",
+    "Reference 1:\n> Selected response\n\nNote: check this",
+    [],
+  );
 });
 
 it("shows usage recovery above the Mono input and routes the reset option", () => {

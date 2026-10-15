@@ -214,3 +214,17 @@ describe("session persistence concurrency", () => {
     });
   });
 });
+
+it("drops annotations waiting in a deleted session's composer", async () => {
+  mocks.invoke.mockResolvedValue(undefined);
+  const { deleteSession } = await loadStore();
+  const store = await import("../model/chatReferenceStore");
+  const { newChatReference } = await import("../model/chatReferences");
+  store.setChatReferences("gone", [newChatReference("cited", "")]);
+  store.setChatReferences("kept", [newChatReference("other", "")]);
+
+  await deleteSession("gone");
+
+  expect(store.getChatReferences("gone")).toEqual([]);
+  expect(store.getChatReferences("kept")).toHaveLength(1);
+});

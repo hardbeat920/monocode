@@ -64,6 +64,29 @@ describe("applyAddToChatRequest: zero-tab fallback", () => {
     expect(newChat(result!).composerSeed).toMatch(/^>/);
   });
 
+  it("opens a cited document passage as an annotation, not typed text", () => {
+    const result = applyAddToChatRequest({
+      sessions: [],
+      tabs: [],
+      projectCwd: "/current/project",
+      text: "Reference 1 — @src/app.ts (lines 3-3):\n> const x = 1;",
+      mode: "plain",
+      reference: {
+        text: "const x = 1;",
+        note: "",
+        source: {
+          label: "@src/app.ts (lines 3-3)",
+          path: "src/app.ts",
+          from: 0,
+          to: 12,
+        },
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(newChat(result!).composerSeed).toBeUndefined();
+  });
+
   it("keeps the donor session's harness, model and runtime mode", () => {
     const donor = session("s1", "/other/project", {
       harness: "claude",

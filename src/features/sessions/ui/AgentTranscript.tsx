@@ -110,6 +110,17 @@ import { monoWorkStatus } from "../model/monoWorkStatus";
 import { isEmojiOnlyMessage } from "../model/emojiMessage";
 import { attachmentPreviewSrc } from "../model/attachments";
 import { TranscriptSelectionMenu } from "./TranscriptSelectionMenu";
+import { ReferenceNotePopover } from "./ReferenceNotePopover";
+import {
+  removeChatReference,
+  updateChatReferenceNote,
+  type ChatReference,
+} from "../model/chatReferences";
+import {
+  chatReferenceAtPoint,
+  clearChatReferenceHighlights,
+  paintChatReferenceHighlights,
+} from "../model/chatReferenceHighlights";
 import { parseUserMessageLink } from "../model/linkPreview";
 import { UserLinkPreview } from "./UserLinkPreview";
 import {
@@ -228,7 +239,10 @@ type Props = {
   /** Work the agent left running when it yielded; the turn waits on it. */
   backgroundTasks?: string[];
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
-  onAddToChat?: (text: string) => void;
+  onAddToChat?: (text: string, note: string, range?: Range) => void;
+  /** Passages cited into the composer; they stay marked here until sent or removed. */
+  chatReferences?: ChatReference[];
+  onChatReferencesChange?: (next: ChatReference[]) => void;
   onSaveNote?: (text: string) => void | Promise<void>;
   onSendDraft?: (block: Block) => boolean | void;
   onRemoveDraft?: (block: Block) => boolean | void;
@@ -293,6 +307,8 @@ function AgentTranscriptComponent({
   backgroundTasks,
   onApproval,
   onAddToChat,
+  chatReferences,
+  onChatReferencesChange,
   onSaveNote,
   onSendDraft,
   onRemoveDraft,
@@ -402,6 +418,35 @@ function AgentTranscriptComponent({
     scrollerEl,
     onAddToChat !== undefined || onSaveSelectionNote !== undefined,
   );
+  const referenceOwner = useRef<symbol>(null);
+  referenceOwner.current ??= Symbol("chat-references");
+  const [editingReferenceId, setEditingReferenceId] = useState<string | null>(
+    null,
+  );
+  useEffect(() => {
+    const owner = referenceOwner.current!;
+    paintChatReferenceHighlights(owner, chatReferences ?? []);
+    return () => clearChatReferenceHighlights(owner);
+  }, [chatReferences]);
+  // Clicking a marked passage reopens its note where it was cited.
+  useEffect(() => {
+    if (!scrollerEl || !chatReferences?.length) return;
+    const onClick = (event: MouseEvent) => {
+      if (!window.getSelection()?.isCollapsed) return;
+      if ((event.target as Element).closest("a, button")) return;
+      const hit = chatReferenceAtPoint(
+        chatReferences,
+        event.clientX,
+        event.clientY,
+      );
+      if (hit) setEditingReferenceId(hit.id);
+    };
+    scrollerEl.addEventListener("click", onClick);
+    return () => scrollerEl.removeEventListener("click", onClick);
+  }, [scrollerEl, chatReferences]);
+  const editingReference = editingReferenceId
+    ? chatReferences?.find((reference) => reference.id === editingReferenceId)
+    : undefined;
   const transcriptLayout = useTranscriptLayout();
   const promptAnchor = useTranscriptAnchor() && !bottomAligned;
   const lastUserId = lastUserBlockId(blocks, managed);
@@ -1646,6 +1691,31 @@ function AgentTranscriptComponent({
           onAddToChat={onAddToChat}
           onAddToNotes={onSaveSelectionNote}
           onDismiss={dismissSelection}
+        />
+      ) : null}
+      {editingReference?.range && chatReferences && onChatReferencesChange ? (
+        <ReferenceNotePopover
+          anchor={editingReference.range.getBoundingClientRect()}
+          text={editingReference.text}
+          initialNote={editingReference.note}
+          submitLabel="Save"
+          onSubmit={(note) => {
+            onChatReferencesChange(
+              updateChatReferenceNote(
+                chatReferences,
+                editingReference.id,
+                note,
+              ),
+            );
+            setEditingReferenceId(null);
+          }}
+          onRemove={() => {
+            onChatReferencesChange(
+              removeChatReference(chatReferences, editingReference.id),
+            );
+            setEditingReferenceId(null);
+          }}
+          onCancel={() => setEditingReferenceId(null)}
         />
       ) : null}
     </div>

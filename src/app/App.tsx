@@ -428,6 +428,8 @@ import {
   focusedWorkspaceTabCwd,
 } from "../features/workspace/model/workspaceTabGroups";
 import { applyAddToChatRequest } from "../features/sessions/model/addChatToWorkspace";
+import { setChatReferences } from "../features/sessions/model/chatReferenceStore";
+import { newChatReference } from "../features/sessions/model/chatReferences";
 import { newWorkspaceSession } from "./model/newWorkspaceSession";
 import {
   ADD_TO_CHAT_EVENT,
@@ -1869,8 +1871,16 @@ function Workspace({
         defaultRuntimeMode: sessionDefaults?.runtimeMode,
         text: detail.text,
         mode: detail.mode,
+        reference: detail.reference,
       });
       if (!result) return;
+      // The new chat shows a cited passage as an annotation, as an open one would.
+      if (detail.reference) {
+        const { text, note, source } = detail.reference;
+        setChatReferences(result.sessionId, [
+          newChatReference(text, note, undefined, source),
+        ]);
+      }
 
       sessionsRef.current = result.sessions;
       tabsRef.current = result.tabs;

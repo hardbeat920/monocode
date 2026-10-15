@@ -3,6 +3,10 @@ export const SELECTABLE_AGENT_RESPONSE_ATTR = "data-selectable-agent-response";
 export type TranscriptSelection = {
   text: string;
   rect: DOMRect;
+  /** A copy of the selected range, still valid once the page selection clears. */
+  range?: Range;
+  /** `rect` is the pointer position where the selection ended, not the text. */
+  atPointer?: boolean;
 };
 
 export type TranscriptSelectionCandidate = {

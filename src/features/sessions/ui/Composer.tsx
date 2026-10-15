@@ -100,6 +100,11 @@ import { AccessPicker } from "./AccessPicker";
 import { ComposerRunner } from "./ComposerRunner";
 import { ContextMeter } from "./ContextMeter";
 import { AttachmentChip } from "./AttachmentChip";
+import { ChatReferencesPill } from "./ChatReferencesPill";
+import {
+  composeWithChatReferences,
+  type ChatReference,
+} from "../model/chatReferences";
 import { BranchPicker } from "../../source-control/ui/BranchPicker";
 import { WorktreePicker } from "../../source-control/ui/WorktreePicker";
 import {
@@ -228,6 +233,9 @@ type Props = {
   context?: ContextUsage;
   compactSupported?: boolean;
   quoteRequest?: QuoteRequest;
+  /** Passages cited from the transcript; sent with the message, after its text. */
+  references?: ChatReference[];
+  onReferencesChange?: (next: ChatReference[]) => void;
   initialDraft?: string;
   draftResetToken?: number;
   inboxCard?: InboxComposerCard;
@@ -325,6 +333,8 @@ function ToolButton({
   );
 }
 
+const NO_REFERENCES: ChatReference[] = [];
+
 export function Composer({
   enabled = true,
   focused,
@@ -353,6 +363,8 @@ export function Composer({
   context,
   compactSupported = false,
   quoteRequest,
+  references = NO_REFERENCES,
+  onReferencesChange,
   initialDraft,
   draftResetToken,
   inboxCard,
@@ -520,6 +532,18 @@ export function Composer({
   mentionRef.current = mention;
 
   attachmentsRef.current = attachments;
+  const referencesRef = useRef(references);
+  referencesRef.current = references;
+  // Adding a reference leaves the cursor in the input, ready for the message.
+  const referenceCount = references.length;
+  const previousReferenceCount = useRef(referenceCount);
+  useEffect(() => {
+    const grew = referenceCount > previousReferenceCount.current;
+    previousReferenceCount.current = referenceCount;
+    if (!grew) return;
+    const frame = requestAnimationFrame(() => ref.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [referenceCount]);
 
   const mentionOpen =
     !remote && mention !== null && (looksLikeProject(cwd) || notesEnabled);
@@ -1393,7 +1417,26 @@ export function Composer({
         ? `/operator ${text}`
         : text;
     const files = attachmentsRef.current;
-    if (!text && files.length === 0 && !noteCard && !handoffCard) return;
+    // A native command like /compact must stay the whole message, so cited
+    // passages wait in the composer for the next ordinary one.
+    const sentReferences = isNativeCommandPrompt(
+      orchestratorCommand.text,
+      harness,
+    )
+      ? []
+      : referencesRef.current;
+    if (
+      !text &&
+      files.length === 0 &&
+      sentReferences.length === 0 &&
+      !noteCard &&
+      !handoffCard
+    )
+      return;
+    const outgoingText = composeWithChatReferences(
+      submittedText,
+      sentReferences,
+    );
     // Clear the parent draft before onSubmit. The app can synchronously remount
     // the composer when the first message leaves an empty session (EmptySession →
     // docked layout). If draftRef still holds the sent text, the new instance
@@ -1405,10 +1448,7 @@ export function Composer({
     const resendSelectedMcp = selectedMcp;
     onDraftChange?.("");
     const accepted = onSubmit(
-      mcpContextText(
-        taggedMcpServers(submittedText, selectedMcp),
-        submittedText,
-      ),
+      mcpContextText(taggedMcpServers(outgoingText, selectedMcp), outgoingText),
       files,
       {
         intent:
@@ -1423,6 +1463,8 @@ export function Composer({
               onResendRejected: ({ providerRewound }) => {
                 if (draftRevisionRef.current !== resendDraftRevision) return;
                 restoreDraft(text, files, resendBorrowedAttachmentIds);
+                if (sentReferences.length > 0)
+                  onReferencesChange?.(sentReferences);
                 setSelectedMcp(resendSelectedMcp);
                 setResendEdited(!providerRewound);
                 onEditingLastTurnChange?.(!providerRewound);
@@ -1439,6 +1481,7 @@ export function Composer({
       return;
     }
     pasteGenerationRef.current += 1;
+    if (sentReferences.length > 0) onReferencesChange?.([]);
     if (ref.current) {
       ref.current.value = "";
       ref.current.style.height = "auto";
@@ -2004,8 +2047,14 @@ export function Composer({
             </div>
           )}
 
-          {attachments.length > 0 ? (
+          {attachments.length > 0 || references.length > 0 ? (
             <div className="flex flex-wrap gap-1.5 px-3 pt-2">
+              {onReferencesChange ? (
+                <ChatReferencesPill
+                  references={references}
+                  onChange={onReferencesChange}
+                />
+              ) : null}
               {attachments.map((file) => (
                 <AttachmentChip
                   key={file.id}
@@ -2396,7 +2445,9 @@ export function Composer({
               <ComposerAction
                 busy={busy}
                 disabled={disabled}
-                hasValue={hasValue && !worktreeRemoved}
+                hasValue={
+                  (hasValue || references.length > 0) && !worktreeRemoved
+                }
                 allowBusySubmit={allowBusySubmit}
                 label={draftActive ? "Save draft" : "Send"}
                 onSend={() => submit(ref.current?.value ?? "")}
