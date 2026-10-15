@@ -465,6 +465,7 @@ export function InboxView({
   const [sonarStatus, setSonarStatus] = useState<SonarStatus | null>(
     peekSonarStatus,
   );
+  const sonarSelection = useRef(0);
   const [filters, setFilters] = useState(loadInboxFilters);
   const [connections, setConnections] = useState(loadInboxConnections);
   const [source, setSource] = useState(() =>
@@ -943,9 +944,14 @@ export function InboxView({
     // The list cache is not keyed by Sonar project. Without this the refetch would start from the old list.
     clearInboxCache();
     setLoading(true);
+    // Only the latest switch may settle the row, or a late answer would undo a newer choice.
+    const request = ++sonarSelection.current;
     void selectSonarProject(key)
-      .then(setSonarStatus)
+      .then((next) => {
+        if (request === sonarSelection.current) setSonarStatus(next);
+      })
       .catch((err: unknown) => {
+        if (request !== sonarSelection.current) return;
         // Nothing was saved, so no refetch started. The old project's issues are still loaded.
         setSonarStatus(previous);
         setLoading(false);

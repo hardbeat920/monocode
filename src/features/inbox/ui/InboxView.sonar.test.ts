@@ -195,3 +195,33 @@ it("restores the previous project when the switch cannot be saved", async () => 
   expect(container.textContent).toContain("Could not save Sonar settings");
   expect(container.querySelector(".animate-spin")).toBeNull();
 });
+
+it("keeps the newest project when an earlier switch answers late", async () => {
+  status = {
+    ...status,
+    projects: [...PROJECTS, { key: "org_web", name: "Website" }],
+  };
+  await sonarConnected();
+  listInboxItems.mockResolvedValue(listed(issue("org_app", "App finding")));
+  await render();
+  const pending: Record<string, () => void> = {};
+  const base = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command !== "sonar_select_project") return base(command, args);
+    const { projectKey } = args as { projectKey: string };
+    if (projectKey === "org_api") {
+      await new Promise<void>((_, reject) => {
+        pending.api = () => reject(new Error("Stale failure"));
+      });
+    }
+    return base(command, args);
+  });
+  listInboxItems.mockResolvedValue(listed(issue("org_web", "Web finding")));
+  await choose("Payments API");
+  await choose("Website");
+  expect(projectButton()?.title).toBe("Website");
+  await act(async () => pending.api!());
+  expect(projectButton()?.title).toBe("Website");
+  expect(container.textContent).not.toContain("Stale failure");
+  expect(container.textContent).toContain("Web finding");
+});
