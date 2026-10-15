@@ -1,4 +1,4 @@
-import { resolveWorkspaceFileReference } from "../../../shared/lib/paths";
+import { resolveSessionFileReference } from "../../sessions/model/touchedFiles";
 
 type MarkdownNode = {
   type: string;
@@ -7,10 +7,16 @@ type MarkdownNode = {
 };
 
 /** Normalize local file links before URL sanitizing; keep all other URLs intact. */
-export function remarkWorkspaceFileLinks({ cwd }: { cwd?: string }) {
+export function remarkWorkspaceFileLinks({
+  cwd,
+  touchedPaths,
+}: {
+  cwd?: string;
+  touchedPaths?: readonly string[];
+}) {
   function visit(node: MarkdownNode) {
     if ((node.type === "link" || node.type === "definition") && node.url) {
-      const file = resolveWorkspaceFileReference(node.url, cwd);
+      const file = resolveSessionFileReference(node.url, cwd, touchedPaths);
       if (file) {
         const path = file.path.startsWith("/") ? file.path : `/${file.path}`;
         let href = path.split("/").map(encodeURIComponent).join("/");

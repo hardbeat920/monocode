@@ -99,12 +99,15 @@ import {
   innerScrollerTakes,
   useLockOverscroll,
 } from "../../../shared/hooks/useLockOverscroll";
+import { useStableValue } from "../../../shared/hooks/useStableValue";
 import { useTranscriptLayout } from "../hooks/useTranscriptLayout";
 import { useTranscriptAnchor } from "../hooks/useTranscriptAnchor";
 import { useBottomChatMotion } from "../hooks/useBottomChatMotion";
 import { useTranscriptSelection } from "../hooks/useTranscriptSelection";
 import type { TranscriptLayout } from "../../settings/model/appearance";
 import { AgentMarkdown } from "./AgentMarkdown";
+import { TouchedFilesContext } from "./touchedFilesContext";
+import { sessionTouchedPaths } from "../model/touchedFiles";
 import { MonoWorkTicker } from "./MonoWorkTicker";
 import { monoWorkStatus } from "../model/monoWorkStatus";
 import { isEmojiOnlyMessage } from "../model/emojiMessage";
@@ -340,6 +343,10 @@ function AgentTranscriptComponent({
   const editableUserBlockId = useMemo(
     () => lastUserTurnBlock(blocks)?.id,
     [blocks],
+  );
+  // Rebuilt for every streamed block; identity only moves when a file does.
+  const touchedPaths = useStableValue(
+    useMemo(() => sessionTouchedPaths(blocks), [blocks]),
   );
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const scroller = useRef<HTMLDivElement>(null);
@@ -1009,7 +1016,10 @@ function AgentTranscriptComponent({
       ref={setScroller}
       className={`agent-transcript h-full overflow-y-auto overscroll-none [overflow-anchor:none] font-mono text-[13px] leading-5${bottomAligned ? " mono-transcript-fades scrollbar-none" : ""}`}
     >
-      <TranscriptContent bottomAligned={bottomAligned}>
+      <TranscriptContent
+        bottomAligned={bottomAligned}
+        touchedPaths={touchedPaths}
+      >
         {onReturnToLatest ? (
           <div className="flex justify-center px-4 py-2">
             <button
@@ -1654,11 +1664,19 @@ function AgentTranscriptComponent({
 
 function TranscriptContent({
   bottomAligned,
+  touchedPaths,
   children,
 }: {
   bottomAligned: boolean;
+  touchedPaths: readonly string[];
   children: ReactNode;
 }) {
+  // Replies resolve a loosely named file against what the session touched.
+  const content = (
+    <TouchedFilesContext.Provider value={touchedPaths}>
+      {children}
+    </TouchedFilesContext.Provider>
+  );
   // The clip keeps the follow motion's in-flight offset out of scrollHeight.
   if (!bottomAligned) {
     return (
@@ -1667,7 +1685,7 @@ function TranscriptContent({
           data-transcript-content
           className="flex min-w-0 flex-col gap-1 pb-8"
         >
-          {children}
+          {content}
         </div>
       </div>
     );
@@ -1678,7 +1696,7 @@ function TranscriptContent({
         data-transcript-content
         className="flex min-w-0 shrink-0 flex-col gap-1"
       >
-        {children}
+        {content}
       </div>
     </div>
   );

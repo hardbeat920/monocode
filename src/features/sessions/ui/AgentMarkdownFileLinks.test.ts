@@ -3,6 +3,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentMarkdown } from "./AgentMarkdown";
+import { TouchedFilesContext } from "./touchedFilesContext";
 
 describe("markdown file navigation", () => {
   let root: Root;
@@ -180,6 +181,59 @@ describe("markdown file navigation", () => {
     expect(link).not.toBeNull();
     await act(async () => link!.click());
     expect(onOpenFile).toHaveBeenCalledWith("/repo/src/main.ts", { line: 12 });
+  });
+
+  describe("files the session touched", () => {
+    const touched = "/Users/me/notes/NOTES.md";
+
+    async function renderTouched(text: string, paths = [touched]) {
+      await act(async () =>
+        root.render(
+          createElement(
+            TouchedFilesContext.Provider,
+            { value: paths },
+            createElement(AgentMarkdown, { text, cwd: "/repo", onOpenFile }),
+          ),
+        ),
+      );
+    }
+
+    it.each(["`NOTES.md`", "[Notes](NOTES.md)"])(
+      "opens a bare name from the touched file, not a lookup in the open project: %s",
+      async (text) => {
+        await renderTouched(text);
+        const link = container.querySelector<HTMLElement>(
+          'code[role="link"], a',
+        );
+        expect(link).not.toBeNull();
+        await act(async () => link!.click());
+        expect(onOpenFile).toHaveBeenCalledWith(touched, undefined, {
+          exact: true,
+        });
+      },
+    );
+
+    it("keeps the line number of a bare name", async () => {
+      await renderTouched("`NOTES.md:12`");
+      await act(async () =>
+        container.querySelector<HTMLElement>('code[role="link"]')!.click(),
+      );
+      expect(onOpenFile).toHaveBeenCalledWith(
+        touched,
+        { line: 12 },
+        { exact: true },
+      );
+    });
+
+    it("leaves a name that no touched file has to the usual lookup", async () => {
+      await renderTouched("`main.ts`");
+      await act(async () =>
+        container.querySelector<HTMLElement>('code[role="link"]')!.click(),
+      );
+      expect(onOpenFile).toHaveBeenCalledTimes(1);
+      expect(onOpenFile.mock.calls[0][0]).toBe("/repo/main.ts");
+      expect(onOpenFile.mock.calls[0][2]).toBeUndefined();
+    });
   });
 
   it("preserves external web links and keeps executable URL schemes blocked", async () => {

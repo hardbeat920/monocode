@@ -35,11 +35,13 @@ import { createLazyMermaidPlugin } from "../../files/editor/mermaidPlugin";
 import {
   displayPath,
   isExtensionlessFileName,
+  pathKey,
   resolveWorkspaceFileReference,
 } from "../../../shared/lib/paths";
 import type { EditorNavigation, OpenFileFn } from "../../search/model/search";
 import { remarkWorkspaceFileLinks } from "../../files/model/markdownFileLinks";
 import { isAtxHeadingLine } from "../../files/model/markdownSource";
+import { resolveSessionFileReference } from "../model/touchedFiles";
 import { useColorScheme } from "../../../shared/hooks/useColorScheme";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { copyText } from "../../../platform/tauri/clipboard";
@@ -61,6 +63,7 @@ import {
 } from "./wordFade";
 import { isFenceBlock, parseStreamingMarkdown } from "./streamingMarkdown";
 import { HighlightedCodeBlock } from "./HighlightedCodeBlock";
+import { TouchedFilesContext } from "./touchedFilesContext";
 
 const MERMAID_BASE_CONFIG = {
   startOnLoad: false,
@@ -128,6 +131,7 @@ type FileLinkMenu = {
 
 const FileOpenContext = createContext<{
   cwd?: string;
+  touchedPaths?: readonly string[];
   onOpenFile?: OpenFileFn;
   onFileContextMenu?: (
     event: ReactMouseEvent,
@@ -315,9 +319,10 @@ function MarkdownCode({
   if (!block) {
     const text = textContent(children);
     const fileName = inlineFileName(text);
-    const { cwd, onOpenFile, onFileContextMenu } = useContext(FileOpenContext);
+    const { cwd, touchedPaths, onOpenFile, onFileContextMenu } =
+      useContext(FileOpenContext);
     const file = fileName
-      ? resolveWorkspaceFileReference(text, cwd)
+      ? resolveSessionFileReference(text, cwd, touchedPaths)
       : undefined;
     const open =
       file && onOpenFile
@@ -585,16 +590,29 @@ export const AgentMarkdown = memo(function AgentMarkdown({
     },
     [],
   );
+  const touchedPaths = useContext(TouchedFilesContext);
+  // A file the session touched is a concrete path, not a name to look up again
+  // in whichever project happens to be open.
+  const openFile = useMemo<OpenFileFn | undefined>(() => {
+    if (!onOpenFile || touchedPaths.length === 0) return onOpenFile;
+    const touched = new Set(touchedPaths.map(pathKey));
+    return (path, navigation, options) =>
+      onOpenFile(
+        path,
+        navigation,
+        touched.has(pathKey(path)) ? { ...options, exact: true } : options,
+      );
+  }, [onOpenFile, touchedPaths]);
   const fileOpen = useMemo(
-    () => ({ cwd, onOpenFile, onFileContextMenu }),
-    [cwd, onOpenFile, onFileContextMenu],
+    () => ({ cwd, touchedPaths, onOpenFile: openFile, onFileContextMenu }),
+    [cwd, touchedPaths, openFile, onFileContextMenu],
   );
   const remarkPlugins = useMemo<PluggableList>(
     () => [
       ...Object.values(defaultRemarkPlugins),
-      [remarkWorkspaceFileLinks, { cwd }],
+      [remarkWorkspaceFileLinks, { cwd, touchedPaths }],
     ],
-    [cwd],
+    [cwd, touchedPaths],
   );
   const remoteMedia = !!allowRemoteMedia;
   // Read once: switching reveal hooks while mounted would break hook order.
@@ -636,8 +654,8 @@ export const AgentMarkdown = memo(function AgentMarkdown({
     setFileActionError(null);
 
     if (id === "open-monocode") {
-      if (fileMenu.navigation) onOpenFile?.(path, fileMenu.navigation);
-      else onOpenFile?.(path);
+      if (fileMenu.navigation) openFile?.(path, fileMenu.navigation);
+      else openFile?.(path);
       return;
     }
 
@@ -943,8 +961,9 @@ function MarkdownCodePath({
   path: string;
   startLine?: number;
 }) {
-  const { cwd, onOpenFile, onFileContextMenu } = useContext(FileOpenContext);
-  const file = resolveWorkspaceFileReference(path, cwd);
+  const { cwd, touchedPaths, onOpenFile, onFileContextMenu } =
+    useContext(FileOpenContext);
+  const file = resolveSessionFileReference(path, cwd, touchedPaths);
   if (!file || !onOpenFile) {
     return <span className="markdown-code-path">{path}</span>;
   }
