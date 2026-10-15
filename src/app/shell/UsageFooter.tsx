@@ -181,8 +181,8 @@ export function UsageFooter({
  * The provider usage chips and their refresh button, for the session footer
  * and anywhere else a conversation shows how much of its plan is left.
  * `accountPicker` off keeps the chips to usage alone, for a conversation
- * whose account is not switched from here. `variant` `composer` matches
- * the tool buttons under a Mono's composer instead of the footer.
+ * whose account is not switched from here. `compact` fits Mono provider rows;
+ * `composer` matches the tool buttons under a Mono's composer.
  */
 export function UsageChips({
   providers,
@@ -191,6 +191,7 @@ export function UsageChips({
   onSelectAccount,
   onManageAccounts,
   accountPicker = true,
+  accountLabel,
   fallback = null,
   variant = "footer",
 }: {
@@ -203,6 +204,8 @@ export function UsageChips({
   ) => void;
   onManageAccounts?: (provider: ProviderAccountProvider) => void;
   accountPicker?: boolean;
+  /** Identifies the pinned account for a non-switchable compact chip. */
+  accountLabel?: string;
   /** Shown when there is no usage to show. */
   fallback?: ReactNode;
   variant?: UsageChipVariant;
@@ -469,6 +472,7 @@ export function UsageChips({
           limits={claude}
           now={now}
           variant={variant}
+          accountLabel={accountLabel}
           {...claudeAccountProps}
           onReconnect={reconnectClaude}
         />
@@ -479,6 +483,7 @@ export function UsageChips({
           now={now}
           project={project}
           variant={variant}
+          accountLabel={accountLabel}
           {...codexAccountProps}
           onConsumeReset={consumeCodexReset}
           onReconnect={reconnectCodex}
@@ -490,6 +495,7 @@ export function UsageChips({
           now={now}
           project={project}
           variant={variant}
+          accountLabel={accountLabel}
         />
       ) : null}
       {wantDevin ? (
@@ -499,6 +505,7 @@ export function UsageChips({
           now={now}
           project={project}
           variant={variant}
+          accountLabel={accountLabel}
           onReconnect={reconnectDevin}
         />
       ) : null}

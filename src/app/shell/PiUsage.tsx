@@ -27,7 +27,7 @@ export function PiUsage({
   if (!provider) {
     return (
       <span
-        className="inline-flex items-center gap-1.5 whitespace-nowrap"
+        className={`inline-flex items-center ${variant === "compact" ? "gap-1" : "gap-1.5"} whitespace-nowrap`}
         title={
           !model || model === "pi:default"
             ? "Send a message so Pi can report its configured provider."
@@ -35,7 +35,11 @@ export function PiUsage({
         }
       >
         <HarnessIcon harness="pi" className="size-3 shrink-0" />
-        <span>pi · Usage unavailable</span>
+        <span>
+          {variant === "compact"
+            ? "usage unavailable"
+            : "pi · Usage unavailable"}
+        </span>
       </span>
     );
   }
@@ -121,7 +125,7 @@ function PiProviderUsage({
         title="Refresh Pi usage"
         disabled={fetching}
         onClick={() => refreshRef.current(true)}
-        className="grid size-6 shrink-0 place-items-center rounded text-content/40 hover:bg-content/10 hover:text-content disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-accent"
+        className={`${variant === "compact" ? "grid size-4" : "grid size-6"} shrink-0 place-items-center rounded text-content/40 hover:bg-content/10 hover:text-content disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-accent`}
       >
         <RefreshCw
           className={`size-2.5 ${fetching ? "motion-safe:animate-spin" : ""}`}

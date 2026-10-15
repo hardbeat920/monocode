@@ -237,15 +237,19 @@ it("shows deduplicated usage for Mono-owned providers and excludes unrelated ses
   ).not.toBeNull();
   expect(
     container.querySelectorAll(
-      'button[aria-label="Claude Code usage details"]',
+      'button[aria-label^="Claude Code usage details"]',
     ),
   ).toHaveLength(3);
   expect(
-    container.querySelector('button[aria-label="Codex usage details"]'),
+    container.querySelector('button[aria-label^="Codex usage details"]'),
   ).not.toBeNull();
   expect(container.textContent).toContain("Work");
-  expect(container.textContent).toContain("Default account");
-  expect(container.textContent).toContain("Project account");
+  expect(container.textContent).toContain("Default");
+  expect(
+    container.querySelector(
+      'button[aria-label="Claude Code usage details"][aria-description="Project account"]',
+    ),
+  ).not.toBeNull();
   expect(
     container.querySelectorAll(
       'button[aria-label="Pi · Anthropic usage details"]',
@@ -256,6 +260,8 @@ it("shows deduplicated usage for Mono-owned providers and excludes unrelated ses
       'button[aria-label="Pi · OpenAI Codex usage details"]',
     ),
   ).not.toBeNull();
+  expect(container.textContent).toContain("Anthropic");
+  expect(container.textContent).toContain("OpenAI Codex");
   expect(container.textContent).toContain("Cursor · usage unavailable");
   expect(container.textContent).not.toContain("Devin");
 
@@ -266,7 +272,7 @@ it("shows deduplicated usage for Mono-owned providers and excludes unrelated ses
   await act(async () =>
     container
       .querySelectorAll<HTMLButtonElement>(
-        'button[aria-label="Claude Code usage details"]',
+        'button[aria-label^="Claude Code usage details"]',
       )[2]
       .click(),
   );
@@ -355,12 +361,156 @@ it("keeps floating child lookups single-flight while polling", async () => {
 
   await act(async () => resolveFirst(child));
   expect(
-    container.querySelector('button[aria-label="Codex usage details"]'),
+    container.querySelector('button[aria-label^="Codex usage details"]'),
   ).not.toBeNull();
   await act(async () => {
     await vi.advanceTimersByTimeAsync(30_000);
   });
   expect(getSession).toHaveBeenCalledTimes(2);
+});
+
+it("keeps loaded child usage visible during a new lookup and drops removed launches", async () => {
+  const launch = (sessionId: string, harness: "claude" | "codex") => ({
+    sessionId,
+    cwd: "/repo",
+    title: sessionId,
+    harness,
+    model: harness === "claude" ? "claude:sonnet" : "codex:gpt-5",
+  });
+  const mono = (launches: MonoSpawnedSession[]) => ({
+    ...newSession("opencode", "/repo", "opencode:auto", "auto"),
+    id: "child-refresh-mono",
+    blocks: [
+      {
+        id: "launches",
+        role: "user" as const,
+        text: "start children",
+        monoSpawnedSessions: launches,
+      },
+    ],
+  });
+  const claudeChild = {
+    ...newSession("claude", "/repo", "claude:sonnet", "auto"),
+    id: "claude-child",
+    providerAccountId: "claude-work",
+  };
+  const codexChild = {
+    ...newSession("codex", "/repo", "codex:gpt-5", "auto"),
+    id: "codex-child",
+  };
+  let resolveClaudeLookup!: (child: Session | null) => void;
+  let resolveCodexLookup!: (child: Session | null) => void;
+  const pendingClaudeLookup = new Promise<Session | null>((resolve) => {
+    resolveClaudeLookup = resolve;
+  });
+  const pendingCodexLookup = new Promise<Session | null>((resolve) => {
+    resolveCodexLookup = resolve;
+  });
+  vi.mocked(getSession)
+    .mockResolvedValueOnce(claudeChild)
+    .mockImplementation((id) =>
+      id === "claude-child" ? pendingClaudeLookup : pendingCodexLookup,
+    );
+
+  await act(async () =>
+    root.render(
+      createElement(MonoUsageFooter, {
+        session: mono([launch("claude-child", "claude")]),
+      }),
+    ),
+  );
+  expect(getSession).toHaveBeenCalledWith("claude-child");
+  expect(
+    container.querySelector(
+      'button[aria-label="Claude Code usage details"][aria-description="Work"]',
+    ),
+  ).not.toBeNull();
+
+  await act(async () =>
+    root.render(
+      createElement(MonoUsageFooter, {
+        session: mono([
+          launch("claude-child", "claude"),
+          launch("codex-child", "codex"),
+        ]),
+      }),
+    ),
+  );
+  expect(
+    container.querySelector(
+      'button[aria-label="Claude Code usage details"][aria-description="Work"]',
+    ),
+  ).not.toBeNull();
+
+  await act(async () => {
+    resolveClaudeLookup(claudeChild);
+    resolveCodexLookup(codexChild);
+  });
+  expect(
+    container.querySelector('button[aria-label^="Codex usage details"]'),
+  ).not.toBeNull();
+
+  const latestMono = mono([launch("codex-child", "codex")]);
+  await act(async () =>
+    root.render(
+      createElement(MonoUsageFooter, {
+        session: latestMono,
+        sessions: [latestMono, codexChild],
+      }),
+    ),
+  );
+  expect(
+    container.querySelector('button[aria-label^="Claude Code usage details"]'),
+  ).toBeNull();
+  expect(
+    container.querySelector('button[aria-label^="Codex usage details"]'),
+  ).not.toBeNull();
+});
+
+it("prefers fresh supplied child accounts over retained lookup metadata", async () => {
+  const mono = {
+    ...newSession("opencode", "/repo", "opencode:auto", "auto"),
+    id: "fresh-child-mono",
+    blocks: [
+      {
+        id: "launches",
+        role: "user" as const,
+        text: "start Claude",
+        monoSpawnedSessions: [
+          {
+            sessionId: "fresh-account-child",
+            cwd: "/repo",
+            title: "Claude",
+            harness: "claude" as const,
+            model: "claude:sonnet",
+          },
+        ],
+      },
+    ],
+  };
+  const oldChild = {
+    ...newSession("claude", "/repo", "claude:sonnet", "auto"),
+    id: "fresh-account-child",
+    providerAccountId: "claude-work",
+  };
+  const freshChild = { ...oldChild, providerAccountId: "default" };
+  vi.mocked(getSession).mockResolvedValueOnce(oldChild);
+
+  await act(async () =>
+    root.render(createElement(MonoUsageFooter, { session: mono })),
+  );
+  expect(container.textContent).toContain("Work");
+
+  await act(async () =>
+    root.render(
+      createElement(MonoUsageFooter, {
+        session: mono,
+        sessions: [mono, freshChild],
+      }),
+    ),
+  );
+  expect(container.textContent).toContain("Default");
+  expect(container.textContent).not.toContain("Work account");
 });
 
 it.each([

@@ -37,6 +37,7 @@ type UsageEntry = {
   unavailable?: string;
 };
 
+/** Matches harnesses with an existing shared quota reading in the footer. */
 function isRateLimitProvider(harness: HarnessId): harness is RateLimitProvider {
   return RATE_LIMIT_PROVIDERS.includes(harness as RateLimitProvider);
 }
@@ -76,7 +77,6 @@ export function MonoUsageFooter({
 
   useEffect(() => {
     let current = true;
-    setLoadedChildren([]);
     if (!missingIds.length) return;
     let loading = false;
     const loadChildren = () => {
@@ -107,7 +107,7 @@ export function MonoUsageFooter({
   }, [missingIds.join("\0"), pollChildren]);
 
   const children = new Map<string, Session>();
-  for (const child of [...(knownChildren ?? []), ...loadedChildren])
+  for (const child of [...loadedChildren, ...(knownChildren ?? [])])
     if (launchIds.includes(child.id)) children.set(child.id, child);
 
   const entries = new Map<string, UsageEntry>();
@@ -213,13 +213,13 @@ export function MonoUsageFooter({
   return (
     <footer
       aria-label="Mono provider usage"
-      className="flex h-7 shrink-0 items-center gap-2 overflow-x-auto border-t border-stroke px-3 text-[11px] text-content/55"
+      className="flex h-6 shrink-0 items-center gap-1.5 overflow-x-auto border-t border-stroke px-2.5 text-[10px] text-content/55"
     >
       {[...entries.values()].map((entry) =>
         entry.provider ? (
           <span
             key={entry.key}
-            className="inline-flex shrink-0 items-center gap-1.5"
+            className="inline-flex shrink-0 items-center gap-1"
           >
             {entry.provider === "opencode" &&
             opencodeLimits.status === "unavailable" ? (
@@ -230,13 +230,10 @@ export function MonoUsageFooter({
                 session={entry.session}
                 project={entry.project}
                 accountPicker={!entry.session}
+                accountLabel={entry.accountLabel}
+                variant="compact"
               />
             )}
-            {entry.accountLabel ? (
-              <span title={`${HARNESS_TITLE[entry.harness]} account`}>
-                {entry.accountLabel}
-              </span>
-            ) : null}
           </span>
         ) : entry.unavailable ? (
           <span
