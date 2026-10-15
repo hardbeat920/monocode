@@ -158,6 +158,9 @@ describe.each(providers)("$id offline ACP transport", (provider) => {
       provider.id === "antigravity" ? "/fake/" : "/repo",
       undefined,
       provider.id,
+      undefined,
+      undefined,
+      "thread",
     );
     expect(mock.sent.find((m) => m.method === "initialize")?.params).toMatchObject({ protocolVersion: 1 });
     expect(mock.sent.find((m) => m.method === "session/set_config_option")?.params)

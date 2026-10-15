@@ -341,6 +341,10 @@ export async function spawnChild(
   codexStore?: "mono",
   /** `devin acp` only: start with an approval rule for every edit. */
   devinAskEdits?: boolean,
+  /** The thread this child works for, when `sessionId` is a per-process key
+   *  (Antigravity's `thread#n`). Credentials MonoCode hands the child (browser,
+   *  app and control tokens) and dev-server ownership belong to this thread. */
+  owner?: string,
 ): Promise<void> {
   livePid.delete(sessionId);
   pendingExit.delete(sessionId);
@@ -358,6 +362,7 @@ export async function spawnChild(
     binaryPath,
     ...(codexStore ? { codexStore } : {}),
     ...(devinAskEdits ? { devinAskEdits } : {}),
+    ...(owner && owner !== sessionId ? { owner } : {}),
   });
   if (typeof pid !== "number" || pid <= 0) return;
   livePid.set(sessionId, pid);

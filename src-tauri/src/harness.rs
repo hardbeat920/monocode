@@ -929,6 +929,7 @@ pub fn harness_spawn(
     binary_path: Option<String>,
     codex_store: Option<String>,
     devin_ask_edits: Option<bool>,
+    owner: Option<String>,
 ) -> Result<u32, String> {
     let workdir = expand_home(&cwd);
     if !workdir.is_dir() {
@@ -987,12 +988,16 @@ pub fn harness_spawn(
         }
     };
 
-    crate::control::configure_child(&app, &session_id, &mut cmd);
+    // `session_id` keys the process; a provider that restarts its process
+    // under a fresh key (Antigravity's `thread#n`) names the thread it works
+    // for as `owner`, which the session's credentials and dev servers follow.
+    let owner = owner.as_deref().unwrap_or(&session_id);
+    crate::control::configure_child(&app, owner, &mut cmd);
 
     let mut child =
         spawn_managed(&mut cmd).map_err(|e| format!("Failed to start {command}: {e}"))?;
     let pid = child.id();
-    crate::devservers::note_spawn(pid, &workdir, Some(&session_id));
+    crate::devservers::note_spawn(pid, &workdir, Some(owner));
 
     let stdin = child
         .stdin
