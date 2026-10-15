@@ -23,6 +23,12 @@ describe("parseJsonl", () => {
     expect(records[2]).toMatchObject({ value: [1, 2], summary: "[1, 2]" });
   });
 
+  it("keeps an invalid line as written so its error position matches Source", () => {
+    const { records } = parseJsonl('{"id":1}\r\n  {"id":2,\r\n');
+    expect(records[1]).toMatchObject({ line: 2, text: '  {"id":2,' });
+    expect("error" in records[1]).toBe(true);
+  });
+
   it("parses only the first records of a long file and counts the rest", () => {
     const text = Array.from({ length: 25 }, (_, i) => `{"n":${i}}`).join("\n");
     const { records, total } = parseJsonl(text, 10);

@@ -118,6 +118,15 @@ describe("JSON Lines preview", () => {
     });
     expect(container.textContent).toContain("1 of 3");
 
+    // Closing Find hands focus back to the preview, as it does for Markdown.
+    await act(async () => {
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(document.activeElement).toBe(preview());
+
     await act(async () => rows[0].click());
     expect(rows[0].getAttribute("aria-expanded")).toBe("true");
     expect(preview()!.textContent).toContain('"retries": 3');

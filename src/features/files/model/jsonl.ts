@@ -33,9 +33,11 @@ export function parseJsonl(
     const newline = text.indexOf("\n", start);
     const end = newline < 0 ? text.length : newline;
     line += 1;
-    const raw = text.slice(start, end).trim();
+    // Keep the line as written (only a CRLF's \r goes), so a parse error's
+    // position matches what Source shows.
+    const raw = text.slice(start, end).replace(/\r$/, "");
     start = end + 1;
-    if (!raw) continue;
+    if (!raw.trim()) continue;
     total += 1;
     if (records.length >= limit) continue;
     try {
@@ -58,13 +60,14 @@ export function parseJsonl(
  */
 export function summarizeJson(value: unknown): string {
   if (Array.isArray(value)) {
-    return `[${joinWithinBudget(value.map(shallow))}]`;
+    return `[${joinWithinBudget(value, shallow)}]`;
   }
   if (isObject(value)) {
     const entries = Object.entries(value);
     if (entries.length === 0) return "{}";
     return joinWithinBudget(
-      entries.map(([key, item]) => `${key}: ${shallow(item)}`),
+      entries,
+      ([key, item]) => `${key}: ${shallow(item)}`,
     );
   }
   return shallow(value);
@@ -88,9 +91,12 @@ function shallow(value: unknown): string {
   return String(value);
 }
 
-function joinWithinBudget(parts: string[]): string {
+/** Formats items only until the summary is full, so a wide record stays cheap. */
+function joinWithinBudget<T>(items: T[], format: (item: T) => string): string {
   let summary = "";
-  for (const [index, part] of parts.entries()) {
+  for (const [index, item] of items.entries()) {
+    if (index > 0 && summary.length >= SUMMARY_CHARS) return `${summary}, …`;
+    const part = format(item);
     if (index > 0 && summary.length + part.length > SUMMARY_CHARS) {
       return `${summary}, …`;
     }
