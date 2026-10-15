@@ -2,13 +2,17 @@
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { invoke } from "@tauri-apps/api/core";
 import {
   selectProviderAccount,
   saveProviderAccount,
   selectedProviderAccountId,
 } from "../../providers/model/providerAccounts";
 import { idleRateLimits } from "../../providers/model/rateLimits";
-import { setCachedRateLimits } from "../../providers/model/rateLimitsCache";
+import {
+  clearCachedRateLimits,
+  setCachedRateLimits,
+} from "../../providers/model/rateLimitsCache";
 import { getSession } from "../../sessions/data/sessionStore";
 import {
   newSession,
@@ -17,12 +21,25 @@ import {
 } from "../../sessions/model/session";
 import { MonoUsageFooter } from "./MonoUsageFooter";
 
+const providerFetch = vi.hoisted(() => ({
+  claude: vi.fn(),
+  codex: vi.fn(),
+}));
+
 vi.mock("../../sessions/data/sessionStore", () => ({
   getSession: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async () => null),
+}));
+
+vi.mock("../../providers/model/rateLimitsFetch", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../providers/model/rateLimitsFetch")
+  >()),
+  fetchClaudeRateLimits: providerFetch.claude,
+  fetchCodexRateLimits: providerFetch.codex,
 }));
 
 let container: HTMLDivElement;
@@ -47,6 +64,13 @@ beforeEach(() => {
     label: "Project account",
   });
   vi.mocked(getSession).mockReset();
+  vi.mocked(invoke).mockClear();
+  providerFetch.claude
+    .mockReset()
+    .mockImplementation(async () => idleRateLimits("claude"));
+  providerFetch.codex
+    .mockReset()
+    .mockImplementation(async () => idleRateLimits("codex"));
   saveProviderAccount({
     id: "codex-work",
     provider: "codex",
@@ -337,4 +361,75 @@ it("keeps floating child lookups single-flight while polling", async () => {
     await vi.advanceTimersByTimeAsync(30_000);
   });
   expect(getSession).toHaveBeenCalledTimes(2);
+});
+
+it.each([
+  ["pi:anthropic/claude-sonnet-4-6", "anthropic"],
+  ["pi:openai-codex/gpt-5.4", "openai-codex"],
+])(
+  "renders Pi %s usage without fetching ordinary billing-provider limits",
+  async (model, piProvider) => {
+    clearCachedRateLimits();
+    const mono = {
+      ...newSession("pi", "/repo", "pi:auto", "auto"),
+      id: `pi-mono-${piProvider}`,
+      model,
+    };
+
+    await act(async () =>
+      root.render(
+        createElement(MonoUsageFooter, { session: mono, sessions: [mono] }),
+      ),
+    );
+
+    expect(invoke).toHaveBeenCalledWith("fetch_pi_usage", {
+      provider: piProvider,
+    });
+    expect(providerFetch.claude).not.toHaveBeenCalled();
+    expect(providerFetch.codex).not.toHaveBeenCalled();
+  },
+);
+
+it("keeps native provider reads when Pi and a native child are both in the Mono", async () => {
+  clearCachedRateLimits();
+  const mono = {
+    ...newSession("pi", "/repo", "pi:auto", "auto"),
+    id: "mixed-mono",
+    model: "pi:anthropic/claude-sonnet-4-6",
+    blocks: [
+      {
+        id: "launch",
+        role: "user" as const,
+        text: "start codex",
+        monoSpawnedSessions: [
+          {
+            sessionId: "mixed-codex",
+            cwd: "/repo",
+            title: "Codex child",
+            harness: "codex" as const,
+            model: "codex:gpt-5",
+          },
+        ],
+      },
+    ],
+  };
+  const child = {
+    ...newSession("codex", "/repo", "codex:gpt-5", "auto"),
+    id: "mixed-codex",
+  };
+
+  await act(async () =>
+    root.render(
+      createElement(MonoUsageFooter, {
+        session: mono,
+        sessions: [mono, child],
+      }),
+    ),
+  );
+
+  expect(invoke).toHaveBeenCalledWith("fetch_pi_usage", {
+    provider: "anthropic",
+  });
+  expect(providerFetch.claude).not.toHaveBeenCalled();
+  expect(providerFetch.codex).toHaveBeenCalledTimes(1);
 });

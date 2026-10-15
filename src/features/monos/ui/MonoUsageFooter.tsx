@@ -30,6 +30,7 @@ type UsageEntry = {
   key: string;
   harness: HarnessId;
   provider?: RateLimitProvider;
+  usageProviders?: RateLimitProvider[];
   session?: UsageFooterSession;
   accountLabel?: string;
   project?: string;
@@ -133,6 +134,7 @@ export function MonoUsageFooter({
           key,
           harness,
           provider: piBillingProvider(piProvider),
+          usageProviders: [],
           session: {
             id: source?.id,
             harness: "pi",
@@ -224,7 +226,7 @@ export function MonoUsageFooter({
               <span>OpenCode · usage unavailable</span>
             ) : (
               <UsageChips
-                providers={[entry.provider]}
+                providers={entry.usageProviders ?? [entry.provider]}
                 session={entry.session}
                 project={entry.project}
                 accountPicker={!entry.session}
