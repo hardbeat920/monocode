@@ -316,6 +316,122 @@ it("shows deduplicated usage for Mono-owned providers and excludes unrelated ses
   expect(container.textContent).not.toContain("Pi · usage unavailable");
 });
 
+it("uses Mono project selection for unpinned children, preserving pinned and legacy accounts", async () => {
+  const monoCwd = "/mono/project";
+  const childCwd = "/child/project";
+  const launchCwd = "/launch/receipt";
+  const mono = {
+    ...newSession("codex", monoCwd, "codex:gpt-5", "auto"),
+    id: "account-scope-mono",
+    blocks: [
+      {
+        id: "launches",
+        role: "user" as const,
+        text: "start children",
+        monoSpawnedSessions: [
+          {
+            sessionId: "unpinned-child",
+            cwd: launchCwd,
+            title: "Unpinned",
+            harness: "claude" as const,
+            model: "claude:sonnet",
+          },
+          {
+            sessionId: "pinned-child",
+            cwd: "/pinned/launch",
+            title: "Pinned",
+            harness: "claude" as const,
+            model: "claude:sonnet",
+          },
+          {
+            sessionId: "legacy-child",
+            cwd: "/legacy/launch",
+            title: "Legacy",
+            harness: "claude" as const,
+            model: "claude:sonnet",
+          },
+        ],
+      },
+    ],
+  };
+  const unpinned = {
+    ...newSession("claude", childCwd, "claude:sonnet", "auto"),
+    id: "unpinned-child",
+  };
+  const pinned = {
+    ...newSession("claude", "/pinned/child", "claude:sonnet", "auto"),
+    id: "pinned-child",
+    providerAccountId: "claude-project",
+  };
+  const legacy = {
+    ...newSession("claude", "/legacy/child", "claude:sonnet", "auto"),
+    id: "legacy-child",
+    blocks: [{ id: "old-turn", role: "user" as const, text: "legacy" }],
+  };
+  selectProviderAccount("claude", monoCwd, "claude-work");
+  selectProviderAccount("claude", childCwd, "claude-project");
+  selectProviderAccount("claude", launchCwd, "default");
+
+  await act(async () =>
+    root.render(
+      createElement(MonoUsageFooter, {
+        session: mono,
+        sessions: [mono, unpinned, pinned, legacy],
+      }),
+    ),
+  );
+
+  expect(
+    container.querySelector(
+      'button[aria-label="Claude Code usage details"][aria-description="Work"]',
+    ),
+  ).not.toBeNull();
+  expect(
+    container.querySelector(
+      'button[aria-label="Claude Code usage details"][aria-description="Project account"]',
+    ),
+  ).not.toBeNull();
+  expect(
+    container.querySelector(
+      'button[aria-label="Claude Code usage details"][aria-description="Default account"]',
+    ),
+  ).not.toBeNull();
+
+  await act(async () =>
+    container
+      .querySelector<HTMLButtonElement>(
+        'button[aria-label="Claude Code usage details"][aria-description="Work"]',
+      )!
+      .click(),
+  );
+  await act(async () =>
+    document
+      .querySelector<HTMLButtonElement>(
+        'button[aria-label="Switch Claude Code account"]',
+      )!
+      .click(),
+  );
+  await act(async () =>
+    document
+      .querySelector<HTMLButtonElement>('button[aria-label="Default account"]')!
+      .click(),
+  );
+
+  expect(selectedProviderAccountId("claude", monoCwd)).toBe("default");
+  expect(selectedProviderAccountId("claude", childCwd)).toBe("claude-project");
+  expect(selectedProviderAccountId("claude", launchCwd)).toBe("default");
+  expect(
+    container.querySelector(
+      'button[aria-label="Claude Code usage details"][aria-description="Project account"]',
+    ),
+  ).not.toBeNull();
+  expect(
+    container.querySelector(
+      'button[aria-label="Claude Code usage details"][aria-description="Default account"]',
+    ),
+  ).not.toBeNull();
+});
+
 it("keeps floating child lookups single-flight while polling", async () => {
   vi.useFakeTimers();
   let resolveFirst!: (session: Session | null) => void;

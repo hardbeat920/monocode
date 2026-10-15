@@ -204,7 +204,7 @@ export function MonoUsageFooter({
     add(
       child?.harness ?? launch.harness,
       child,
-      child?.cwd ?? launch.cwd,
+      session.cwd,
       true,
       launch.model,
     );
