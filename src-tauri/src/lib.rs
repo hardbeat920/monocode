@@ -670,6 +670,13 @@ pub fn run() {
                 reap_harness_children(handle);
             }
         }
+        tauri::RunEvent::WindowEvent {
+            label,
+            event: tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_),
+            ..
+        } if window::is_workspace_window(&label) => {
+            window::schedule_state_save(handle);
+        }
         tauri::RunEvent::ExitRequested { api, code, .. } => {
             if window::allow_exit() {
                 return;
