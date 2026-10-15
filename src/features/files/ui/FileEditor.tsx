@@ -40,6 +40,7 @@ import {
   useMarkdownMode,
 } from "../../sessions/ui/MarkdownModeToggle";
 import { loadFileViewMode, saveFileViewMode } from "../model/fileViewMode";
+import { tableDelimiterForPath } from "../model/filePreview";
 import { useColorScheme } from "../../../shared/hooks/useColorScheme";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { isLightScheme } from "../../settings/model/appearance";
@@ -96,6 +97,7 @@ import { editorLint } from "../editor/editorLint";
 import { editorSearch } from "../editor/editorSearch";
 import { editorScrollbar } from "../editor/editorScrollbar";
 import { FilePreviewSearch } from "./FilePreviewSearch";
+import { CsvPreview } from "./CsvPreview";
 
 type EditorNavigationRequest = EditorNavigation & { token: number };
 
@@ -147,6 +149,7 @@ export function FileEditor({
   } | null>(null);
   const markdown = isMarkdownPath(path);
   const svg = isSvgPath(path);
+  const tableDelimiter = tableDelimiterForPath(path);
   // Diff tabs open as source: the git gutter only renders in the editor.
   const [mode, setMode] = useMarkdownMode(
     showDiff ? `review:${path}` : path,
@@ -156,13 +159,13 @@ export function FileEditor({
   useEffect(() => {
     if (
       !navigation ||
-      (!markdown && !svg) ||
+      (!markdown && !svg && !tableDelimiter) ||
       sourceNavigationToken.current === navigation.token
     )
       return;
     sourceNavigationToken.current = navigation.token;
     setMode("source");
-  }, [markdown, svg, navigation, setMode]);
+  }, [markdown, svg, tableDelimiter, navigation, setMode]);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const saveGeneration = useRef(0);
   const loadGeneration = useRef(0);
@@ -459,7 +462,7 @@ export function FileEditor({
           changes. Line breaks are normalized in this view.
         </p>
       )}
-      {markdown || svg ? (
+      {markdown || svg || tableDelimiter ? (
         <MarkdownViewShell
           mode={mode}
           onModeChange={(next) => {
@@ -478,6 +481,13 @@ export function FileEditor({
                   cwd={cwd}
                   onOpenFile={onOpenFile}
                 />
+              </FilePreviewSearch>
+            ) : tableDelimiter ? (
+              <FilePreviewSearch
+                active={active && mode === "preview"}
+                contentVersion={draft}
+              >
+                <CsvPreview text={draft} delimiter={tableDelimiter} />
               </FilePreviewSearch>
             ) : (
               <SvgPreview source={draft} />

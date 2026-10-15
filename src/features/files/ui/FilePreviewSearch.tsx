@@ -667,22 +667,32 @@ function revealRange(range: Range, root: HTMLElement | null) {
   const rangeWithRect = range as Range & {
     getBoundingClientRect?: () => DOMRect;
   };
-  const scroller = root.querySelector<HTMLElement>(".markdown-preview") ?? root;
+  const scroller =
+    root.querySelector<HTMLElement>(".markdown-preview, .csv-preview") ?? root;
   const rangeRect = rangeWithRect.getBoundingClientRect?.();
   if (rangeRect) {
     const scrollerRect = scroller.getBoundingClientRect();
-    if (
+    const fitsVertically =
       rangeRect.top >= scrollerRect.top &&
-      rangeRect.bottom <= scrollerRect.bottom
-    ) {
-      return;
-    }
+      rangeRect.bottom <= scrollerRect.bottom;
+    // Wide tables scroll sideways too.
+    const fitsHorizontally =
+      rangeRect.left >= scrollerRect.left &&
+      rangeRect.right <= scrollerRect.right;
+    if (fitsVertically && fitsHorizontally) return;
     scroller.scrollTo({
-      top:
-        scroller.scrollTop +
-        rangeRect.top -
-        scrollerRect.top -
-        scroller.clientHeight / 2,
+      top: fitsVertically
+        ? scroller.scrollTop
+        : scroller.scrollTop +
+          rangeRect.top -
+          scrollerRect.top -
+          scroller.clientHeight / 2,
+      left: fitsHorizontally
+        ? scroller.scrollLeft
+        : scroller.scrollLeft +
+          rangeRect.left -
+          scrollerRect.left -
+          scroller.clientWidth / 2,
     });
     return;
   }

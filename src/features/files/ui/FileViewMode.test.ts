@@ -6,8 +6,11 @@ import { newEditorPane, newFileTab } from "../../workspace/model/layout";
 import { FilePane } from "./FilePane";
 
 const invoke = vi.hoisted(() =>
-  vi.fn(async (command: string) => {
-    if (command === "read_text_file") return "# Title\n\nBody";
+  vi.fn(async (command: string, args?: { path?: string }) => {
+    if (command === "read_text_file")
+      return args?.path?.endsWith(".csv")
+        ? 'fruit,qty\n"Apple, red",3\nPear,12'
+        : "# Title\n\nBody";
     if (command === "git_diff_files") return { files: [] };
     if (command === "git_file_diff")
       return {
@@ -110,6 +113,7 @@ describe("previewable file view mode", () => {
         ),
       ].find((button) => button.textContent === label)!;
     return {
+      container,
       selected: () =>
         container.querySelector(
           '[aria-label="Markdown view"] [role="tab"][aria-selected="true"]',
@@ -172,6 +176,25 @@ describe("previewable file view mode", () => {
     expect(next.selected()).toBe("Source");
     // The in-memory choice lasts for the module; leave it at the default.
     await next.choose("Preview");
+  });
+
+  it("previews a CSV file as a table and shares the remembered view", async () => {
+    const table = await open("/repo/fruit.csv");
+    expect(table.selected()).toBe("Preview");
+    const cells = [...table.container.querySelectorAll("th, td")].map(
+      (cell) => cell.textContent,
+    );
+    // Row numbers, then each row; the header row has a blank corner cell.
+    expect(cells).toEqual([
+      ...["", "fruit", "qty"],
+      ...["1", "Apple, red", "3"],
+      ...["2", "Pear", "12"],
+    ]);
+    expect(table.container.textContent).toContain("2 rows × 2 columns");
+    await table.choose("Source");
+
+    const next = await open("/repo/after-table.md");
+    expect(next.selected()).toBe("Source");
   });
 
   it("does not change the file default when navigation opens the source", async () => {
