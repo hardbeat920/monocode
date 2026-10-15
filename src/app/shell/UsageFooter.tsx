@@ -110,9 +110,7 @@ export function UsageFooter({
     providers.some((provider) => provider !== "opencode") ||
     (providers.includes("opencode") && opencode.status !== "unavailable");
   const showTerminals = terminals.length > 0;
-  const showTerminalButton = Boolean(
-    onNewTerminal || onToggleProjectTerminal,
-  );
+  const showTerminalButton = Boolean(onNewTerminal || onToggleProjectTerminal);
   const terminalLabel = projectTerminalActive
     ? "Terminal"
     : `New Terminal (${MOD}\`)`;
@@ -121,12 +119,12 @@ export function UsageFooter({
     : (onNewTerminal ?? onToggleProjectTerminal);
   const ariaLabel =
     showUsage || session?.harness === "pi"
-    ? "Provider usage"
-    : showTerminals || showTerminalButton
-      ? "Terminals"
-      : session
-        ? "Session"
-        : undefined;
+      ? "Provider usage"
+      : showTerminals || showTerminalButton
+        ? "Terminals"
+        : session
+          ? "Session"
+          : undefined;
 
   return (
     <footer

@@ -120,6 +120,11 @@ async function render() {
   await act(async () =>
     root.render(createElement(FloatingMonoChat, { onShown: () => {} })),
   );
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
 }
 
 it("shows this window's Mono with its status beneath the name", async () => {
@@ -133,10 +138,10 @@ it("shows this window's Mono with its status beneath the name", async () => {
   );
   expect(container.querySelectorAll("[data-mono-status]")).toHaveLength(1);
   expect(
-    container.querySelector('footer[aria-label="Provider usage"]'),
+    container.querySelector('footer[aria-label="Mono provider usage"]'),
   ).not.toBeNull();
   expect(
-    container.querySelector('[aria-label="Claude Code usage details"]'),
+    container.querySelector('[aria-label="Codex usage details"]'),
   ).not.toBeNull();
   expect(
     container.querySelector('[aria-label="Codex usage details"]'),
@@ -174,7 +179,12 @@ it("switches Monos inside the same frame, loading only the conversation", async 
   await render();
   const frame = container.querySelector("[data-floating-mono]");
   const rail = container.querySelector("[data-floating-mono-rail]");
-  act(() => receive({ payload: { ...snapshot(1), session: null } }));
+  await act(async () => {
+    receive({ payload: { ...snapshot(1), session: null } });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
   expect(container.querySelector("[data-floating-mono]")).toBe(frame);
   expect(container.querySelector("[data-floating-mono-rail]")).toBe(rail);
   expect(container.querySelector("header h1")?.textContent).toBe("Scout");
@@ -182,18 +192,23 @@ it("switches Monos inside the same frame, loading only the conversation", async 
     container.querySelector("[data-floating-mono-loader]")?.textContent,
   ).toBe("Loading conversation…");
   expect(
-    container.querySelector('footer[aria-label="Provider usage"]'),
+    container.querySelector('footer[aria-label="Mono provider usage"]'),
   ).toBeNull();
   expect(
     rail?.querySelector('[aria-current="true"]')?.getAttribute("aria-label"),
   ).toBe("Scout");
-  act(() => receive({ payload: snapshot(1) }));
+  await act(async () => {
+    receive({ payload: snapshot(1) });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
   expect(container.textContent).toContain("Scout's conversation");
   expect(
-    container.querySelector('footer[aria-label="Provider usage"]'),
+    container.querySelector('footer[aria-label="Mono provider usage"]'),
   ).not.toBeNull();
   expect(
-    container.querySelector('[aria-label="Claude Code usage details"]'),
+    container.querySelector('[aria-label="Codex usage details"]'),
   ).not.toBeNull();
   expect(
     container.querySelector('[aria-label="Codex usage details"]'),
@@ -235,7 +250,12 @@ it("keeps one loading screen through initial lookup and roster updates until the
     container.querySelector("[data-floating-mono-loader]")?.textContent,
   ).toBe("Loading conversation…");
 
-  act(() => receive({ payload: snapshot(0) }));
+  await act(async () => {
+    receive({ payload: snapshot(0) });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
   expect(container.querySelector("[data-floating-mono-loading]")).toBeNull();
   expect(container.textContent).toContain("Captain's conversation");
   expect(
@@ -253,7 +273,12 @@ it("shows the empty chat only after a new conversation has finished opening", as
   expect(container.textContent).not.toContain("Say hello");
   expect(container.querySelector("[aria-busy=true]")).not.toBeNull();
 
-  act(() => receive({ payload: empty }));
+  await act(async () => {
+    receive({ payload: empty });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
   expect(container.querySelector("[data-floating-mono-loading]")).toBeNull();
   expect(container.textContent).toContain("Say hello to Captain");
   expect(
@@ -315,6 +340,43 @@ it("ignores a stale initial snapshot after a newer update arrives", async () => 
   await act(async () => initial(snapshot(0)));
   expect(container.querySelector("h1")!.textContent).toBe("Scout");
   expect(container.textContent).toContain("Scout's conversation");
+});
+
+it("shows floating Mono usage for a different owned provider and unsupported children", async () => {
+  const view = snapshot(0);
+  view.session!.blocks = [
+    {
+      id: "launches",
+      role: "user",
+      text: "start children",
+      monoSpawnedSessions: [
+        {
+          sessionId: "open-child",
+          cwd: "/tmp",
+          title: "OpenCode child",
+          harness: "opencode",
+          model: "opencode:test",
+        },
+        {
+          sessionId: "pi-child",
+          cwd: "/tmp",
+          title: "Pi child",
+          harness: "pi",
+          model: "pi:auto",
+        },
+      ],
+    },
+  ];
+  native.invoke.mockImplementation(async (command) =>
+    command === "mono_chat_state" ? view : null,
+  );
+
+  await render();
+
+  expect(
+    container.querySelector('button[aria-label="OpenCode usage details"]'),
+  ).not.toBeNull();
+  expect(container.textContent).toContain("Pi · usage unavailable");
 });
 
 it("reads a Mono's document in a sheet over the chat and slides it away", async () => {

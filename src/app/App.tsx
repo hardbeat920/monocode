@@ -144,6 +144,7 @@ import {
   UsageFooter,
   workspaceUsageAccountSelection,
 } from "./shell/UsageFooter";
+import { MonoUsageFooter } from "../features/monos/ui/MonoUsageFooter";
 import { useProjectBranches } from "../features/source-control/hooks/useProjectBranches";
 import { useInboxActivity } from "../features/inbox/hooks/useInboxUnseen";
 import {
@@ -1183,15 +1184,14 @@ function Workspace({
   const onShowMonoActivity = useCallback(
     (sessionId: string, turnId: string, blocks: Block[]) => {
       const shown =
-        monoOverviewOpenRef.current && monoOverviewTabRef.current === "activity";
+        monoOverviewOpenRef.current &&
+        monoOverviewTabRef.current === "activity";
       setMonoShownSession(null);
       setMonoOverviewDocument(null);
       setMonoOverviewTab("activity");
       setMonoOverviewOpen(true);
       setMonoActivity((previous) =>
-        shown &&
-        previous?.sessionId === sessionId &&
-        previous.turnId === turnId
+        shown && previous?.sessionId === sessionId && previous.turnId === turnId
           ? null
           : { sessionId, turnId, blocks },
       );
@@ -12865,9 +12865,7 @@ function Workspace({
           : undefined
       }
       onToggleMonoOverview={
-        monoCovers
-          ? () => setMonoOverviewOpen(!monoOverviewOpen)
-          : undefined
+        monoCovers ? () => setMonoOverviewOpen(!monoOverviewOpen) : undefined
       }
       monoOverviewOpen={monoOverviewOpen}
       onOpenMonoSettings={
@@ -13419,44 +13417,41 @@ function Workspace({
               inboxViewOpen ||
               notesViewOpen ||
               automationsViewOpen ||
-              settingsOpen ? null : (
+              settingsOpen ? null : monoCovers ? (
+                monoViewSession ? (
+                  <MonoUsageFooter
+                    session={monoViewSession}
+                    sessions={sessions}
+                  />
+                ) : null
+              ) : (
                 <UsageFooter
-                  providers={monoCovers ? ["claude", "codex"] : usageProviders}
-                  session={monoCovers ? undefined : usageSession}
-                  project={
-                    monoCovers
-                      ? monoViewSession?.cwd
-                      : (active?.cwd ?? projectCwd)
-                  }
+                  providers={usageProviders}
+                  session={usageSession}
+                  project={active?.cwd ?? projectCwd}
                   onSelectAccount={workspaceUsageAccountSelection(
-                    monoCovers,
+                    false,
                     onSelectProviderAccount,
                   )}
                   onManageAccounts={() =>
                     openSettings("providers", "provider-accounts")
                   }
-                  // A Mono in full view has no terminal of its own.
-                  terminals={monoCovers ? undefined : runningTerminals}
-                  terminalOpen={!monoCovers && runningTerminalOpen}
+                  terminals={runningTerminals}
+                  terminalOpen={runningTerminalOpen}
                   onToggleTerminal={onToggleRunningTerminal}
                   onNewTerminal={
-                    !monoCovers && isLocalProject(projectCwd)
-                      ? onNewTerminal
-                      : undefined
+                    isLocalProject(projectCwd) ? onNewTerminal : undefined
                   }
                   onToggleProjectTerminal={
-                    !monoCovers && isLocalProject(projectCwd)
+                    isLocalProject(projectCwd)
                       ? onToggleProjectTerminal
                       : undefined
                   }
                   projectTerminalActive={
-                    !monoCovers &&
                     !!currentProjectDock &&
                     currentProjectDock.pane.files.length > 0
                   }
-                  projectTerminalOpen={
-                    !monoCovers && !!currentProjectDock?.open
-                  }
+                  projectTerminalOpen={!!currentProjectDock?.open}
                 />
               )}
             </div>

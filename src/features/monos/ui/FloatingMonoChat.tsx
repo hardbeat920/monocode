@@ -31,7 +31,7 @@ import { MonoComposer } from "./MonoComposer";
 import { MonoStatusDot } from "./MonoRailMascot";
 import { MonoStatus } from "./MonoStatus";
 import { MONO_PAGE_TURNS } from "../../sessions/data/sessionStore";
-import { UsageFooter } from "../../../app/shell/UsageFooter";
+import { MonoUsageFooter } from "./MonoUsageFooter";
 
 const EMPTY: FloatingMonoView = {
   monos: [],
@@ -283,12 +283,7 @@ export function FloatingMonoChat({ onShown }: { onShown: () => void }) {
             }}
           />
         ) : null}
-        {view.session ? (
-          <UsageFooter
-            providers={["claude", "codex"]}
-            project={view.session.cwd}
-          />
-        ) : null}
+        {view.session ? <MonoUsageFooter session={view.session} /> : null}
       </div>
     </div>
   );
