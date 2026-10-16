@@ -5,6 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { SettingsView } from "./SettingsView";
+import {
+  initAppearance,
+  REPLY_COLOR_KINDS,
+  saveThemePreference,
+} from "../model/appearance";
 import { rememberNotificationProjects } from "../../notifications/model/notificationProjects";
 import {
   SETTINGS_INDEX,
@@ -117,6 +122,85 @@ afterEach(async () => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+describe("reply colors from another window", () => {
+  let addEventListener: ReturnType<
+    typeof vi.spyOn<typeof window, "addEventListener">
+  >;
+
+  beforeEach(() => {
+    addEventListener = vi.spyOn(window, "addEventListener");
+  });
+
+  afterEach(() => {
+    for (const [type, listener] of addEventListener.mock.calls) {
+      if (type === "storage") window.removeEventListener(type, listener);
+    }
+    document.documentElement.className = "";
+    document.documentElement.removeAttribute("style");
+  });
+
+  it.each(
+    (["dark", "light"] as const).flatMap((scheme) =>
+      REPLY_COLOR_KINDS.map((kind) => ({ scheme, kind })),
+    ),
+  )("syncs setting and resetting $scheme $kind colors", async ({ scheme, kind }) => {
+    saveThemePreference(scheme);
+    initAppearance();
+    await render("appearance");
+
+    const row = container.querySelector(
+      `[data-setting-id="reply-${kind}-color"]`,
+    )!;
+    const custom = row.querySelector<HTMLButtonElement>('[aria-expanded]')!;
+    const useDefault = row.querySelector<HTMLButtonElement>('[aria-pressed]')!;
+    const page = document.documentElement;
+    const key = `monocode.replyColor.${scheme}.${kind}`;
+    await act(async () => custom.click());
+    const hex = document.querySelector<HTMLInputElement>(
+      '[aria-label="Hex color"]',
+    )!;
+    const fallback = scheme === "dark" ? "#e0e0e0" : "#202020";
+    expect(hex.value).toBe(fallback);
+
+    await act(async () => {
+      localStorage.setItem(key, "#aabbcc");
+      window.dispatchEvent(
+        new StorageEvent("storage", { key, newValue: "#aabbcc" }),
+      );
+    });
+
+    expect(page.classList.contains(`reply-${kind}-color`)).toBe(true);
+    expect(page.style.getPropertyValue(`--reply-${kind}-color`)).toBe("#aabbcc");
+    expect(custom.textContent).toBe("#aabbcc");
+    expect(useDefault.getAttribute("aria-pressed")).toBe("false");
+    expect(hex.value).toBe("#aabbcc");
+
+    await act(async () => {
+      const otherKey = `monocode.replyColor.${scheme === "dark" ? "light" : "dark"}.${kind}`;
+      localStorage.setItem(otherKey, "#ddeeff");
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: otherKey, newValue: "#ddeeff" }),
+      );
+    });
+
+    expect(page.style.getPropertyValue(`--reply-${kind}-color`)).toBe("#aabbcc");
+    expect(hex.value).toBe("#aabbcc");
+
+    await act(async () => {
+      localStorage.removeItem(key);
+      window.dispatchEvent(
+        new StorageEvent("storage", { key, oldValue: "#aabbcc" }),
+      );
+    });
+
+    expect(page.classList.contains(`reply-${kind}-color`)).toBe(false);
+    expect(page.style.getPropertyValue(`--reply-${kind}-color`)).toBe("");
+    expect(custom.textContent).toBe("Custom color");
+    expect(useDefault.getAttribute("aria-pressed")).toBe("true");
+    expect(hex.value).toBe(fallback);
+  });
 });
 
 describe("settings pages", () => {

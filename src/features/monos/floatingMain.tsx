@@ -12,12 +12,14 @@ import {
   applyThemeTint,
   loadAccentColor,
   loadBodyGlass,
+  loadReplyColor,
   loadSidebarBlur,
   loadSidebarOpacity,
   loadThemeDarkLightness,
   loadThemeHue,
   loadThemePreference,
   loadThemeSaturation,
+  REPLY_COLOR_KINDS,
   watchSystemColorScheme,
 } from "../settings/model/appearance";
 import { FloatingMonoChat } from "./ui/FloatingMonoChat";
@@ -37,6 +39,10 @@ function applyFloatingAppearance() {
     loadSidebarOpacity(),
     loadSidebarBlur(),
     loadBodyGlass(),
+    ...REPLY_COLOR_KINDS.map((kind) => [
+      loadReplyColor("dark", kind),
+      loadReplyColor("light", kind),
+    ]),
   ]);
   if (nextKey === appearanceKey) return;
   appearanceKey = nextKey;

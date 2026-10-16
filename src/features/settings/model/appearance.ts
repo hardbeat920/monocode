@@ -182,8 +182,9 @@ function normalizeAccentColor(value: unknown): string | null {
 export const REPLY_COLOR_KINDS = ["bold", "italic", "heading", "code"] as const;
 export type ReplyColorKind = (typeof REPLY_COLOR_KINDS)[number];
 
+const REPLY_COLOR_KEY_PREFIX = "monocode.replyColor.";
 const replyColorKey = (scheme: ColorScheme, kind: ReplyColorKind) =>
-  `monocode.replyColor.${scheme}.${kind}`;
+  `${REPLY_COLOR_KEY_PREFIX}${scheme}.${kind}`;
 const REPLY_COLORS_CHANGE_EVENT = "monocode:replycolorschange";
 
 export function subscribeReplyColors(listener: () => void) {
@@ -379,6 +380,10 @@ export function initAppearance() {
   // window that wrote the value.
   window.addEventListener("storage", (event) => {
     if (event.key === null || THEME_KEYS.has(event.key)) applyStoredTheme();
+    if (event.key === null || event.key.startsWith(REPLY_COLOR_KEY_PREFIX)) {
+      applyReplyColors(isLightScheme() ? "light" : "dark");
+      window.dispatchEvent(new Event(REPLY_COLORS_CHANGE_EVENT));
+    }
   });
   applySidebarOpacity(loadSidebarOpacity());
   applySidebarBlur(loadSidebarBlur());

@@ -25,6 +25,26 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+function changeReplyColorsInOtherWindow(scheme: "dark" | "light") {
+  const root = document.documentElement;
+  for (const kind of ["bold", "italic", "heading", "code"]) {
+    const key = `monocode.replyColor.${scheme}.${kind}`;
+    localStorage.setItem(key, "#aabbcc");
+    window.dispatchEvent(
+      new StorageEvent("storage", { key, newValue: "#aabbcc" }),
+    );
+    expect(root.classList.contains(`reply-${kind}-color`)).toBe(true);
+    expect(root.style.getPropertyValue(`--reply-${kind}-color`)).toBe("#aabbcc");
+
+    localStorage.removeItem(key);
+    window.dispatchEvent(
+      new StorageEvent("storage", { key, oldValue: "#aabbcc" }),
+    );
+    expect(root.classList.contains(`reply-${kind}-color`)).toBe(false);
+    expect(root.style.getPropertyValue(`--reply-${kind}-color`)).toBe("");
+  }
+}
+
 it("uses the main app's native glass settings and follows changes from other windows", async () => {
   vi.resetModules();
   document.body.innerHTML = '<div id="root"></div>';
@@ -60,6 +80,8 @@ it("uses the main app's native glass settings and follows changes from other win
   );
   expect(document.documentElement.classList.contains("glass-body")).toBe(true);
 
+  changeReplyColorsInOtherWindow("dark");
+
   localStorage.setItem("monocode.sidebarOpacity", "0.6");
   window.dispatchEvent(
     new StorageEvent("storage", { key: "monocode.sidebarOpacity" }),
@@ -77,6 +99,7 @@ it("uses the main app's native glass settings and follows changes from other win
   expect(
     document.documentElement.classList.contains("has-native-glass-tint"),
   ).toBe(false);
+  changeReplyColorsInOtherWindow("light");
   await vi.waitFor(() =>
     expect(native.invoke).toHaveBeenLastCalledWith("set_window_glass_enabled", {
       enabled: false,
