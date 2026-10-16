@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Choose where new worktrees are created** in Settings > Worktrees. A worktree folder applies to every project, with each project's worktrees in a subfolder named after it, and a project can have its own folder instead. Left unset, worktrees are still created in `<repo>-worktrees` beside the repository.
 - Remote hosts can run on **Linux without systemd**, such as containers and Firecracker microVMs. Setup starts the host as a detached background process there instead of a systemd user service, so it keeps running after SSH disconnects, and the next connect starts it again if it has stopped. Machines with systemd keep the user service and lingering.
 - The workspace tab context menu has **Close All Tabs** after Close Tabs to the Left. It closes every tab in the tab bar and resets the active one to a blank session, with the same unsaved-file and terminal confirmations as File > Close All Tabs, and it is disabled when the only tab is already blank.
 

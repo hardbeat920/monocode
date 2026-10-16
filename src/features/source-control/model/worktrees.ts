@@ -8,6 +8,8 @@ import {
 import { isFilesystemTab, type FilePaneTab } from "../../workspace/model/layout";
 import { isEqualOrInside, parentPath, pathKey } from "../../../shared/lib/paths";
 import { isBlankSession } from "../../projects/model/projectReturn";
+import { isRemoteProjectPath } from "../../projects/model/recents";
+import { resolveWorktreesFolder } from "./worktreeLocation";
 import { newSession, sessionWorkCwd, type Session } from "../../sessions/model/session";
 
 export type Worktree = {
@@ -24,8 +26,15 @@ export type Worktree = {
 };
 export type Worktrees = { worktrees: Worktree[]; defaultRoot: string };
 
-export const listWorktrees = (cwd: string) =>
-  invokeWorkspace<Worktrees>("git_worktrees", { cwd });
+/** `defaultRoot` is where the next worktree goes, including the user's chosen folder. */
+export async function listWorktrees(cwd: string): Promise<Worktrees> {
+  const listed = await invokeWorkspace<Worktrees>("git_worktrees", { cwd });
+  const main = listed.worktrees.find((tree) => tree.isMain);
+  const remote = isRemoteProjectPath(cwd);
+  if (!main || remote) return listed;
+  const defaultRoot = resolveWorktreesFolder(main.path, listed.defaultRoot);
+  return { ...listed, defaultRoot };
+}
 
 export async function createWorktree(
   cwd: string,
@@ -33,11 +42,13 @@ export async function createWorktree(
   base: string,
   existing: boolean,
 ) {
+  const { defaultRoot } = await listWorktrees(cwd);
   const tree = await invoke<Worktree>("git_worktree_create", {
     cwd,
     branch,
     base,
     existing,
+    folder: defaultRoot,
   });
   notifyGitChanged();
   return tree;

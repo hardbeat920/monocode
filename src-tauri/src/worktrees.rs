@@ -156,7 +156,14 @@ pub fn git_worktrees(cwd: String, store: State<'_, SessionStore>) -> Result<Work
     })
 }
 
-fn create(root: &Path, branch: &str, base: &str, existing: bool) -> Result<Worktree, String> {
+/// `folder` replaces the default `<repo>-worktrees` parent when set.
+fn create(
+    root: &Path,
+    folder: Option<&Path>,
+    branch: &str,
+    base: &str,
+    existing: bool,
+) -> Result<Worktree, String> {
     let branch = branch.trim();
     if branch.starts_with('-') || branch.starts_with('@') || branch.is_empty() {
         return Err("Enter a valid branch name".into());
@@ -170,7 +177,14 @@ fn create(root: &Path, branch: &str, base: &str, existing: bool) -> Result<Workt
         return Err("This branch already has a working copy. Select it from the picker.".into());
     }
     let main = trees.first().ok_or("No working copies found")?;
-    let parent = default_root(Path::new(&main.path));
+    let parent = match folder {
+        Some(folder) if folder.is_absolute() => folder.to_path_buf(),
+        Some(_) => return Err("The worktree folder must be an absolute path".into()),
+        None => {
+            let main_path = Path::new(&main.path);
+            default_root(main_path)
+        }
+    };
     let slug: String = branch
         .chars()
         .map(|c| {
@@ -237,9 +251,13 @@ pub async fn git_worktree_create(
     branch: String,
     base: String,
     existing: bool,
+    folder: Option<String>,
 ) -> Result<Worktree, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        create(&expand_home(&cwd), &branch, &base, existing)
+        let root = expand_home(&cwd);
+        let folder = folder.map(|folder| expand_home(&folder));
+        let folder = folder.as_deref();
+        create(&root, folder, &branch, &base, existing)
     })
     .await
     .map_err(|error| error.to_string())?
@@ -376,7 +394,7 @@ fn create_seeded(root: &Path, branch: &str) -> Result<Worktree, String> {
             ));
         }
     }
-    let tree = create(root, branch, "HEAD", branch_exists)?;
+    let tree = create(root, None, branch, "HEAD", branch_exists)?;
     if let Err(error) = copy_checkout_state(root, Path::new(&tree.path)) {
         let _ = remove(root, Path::new(&tree.path), true);
         if !branch_exists {
@@ -818,12 +836,27 @@ mod tests {
     }
 
     #[test]
+    fn creates_worktrees_in_a_chosen_absolute_folder() {
+        let repo = repo();
+        let root = repo.0.join("repo");
+        let folder = repo.0.join("trees");
+        let tree = create(&root, Some(&folder), "feature/x", "HEAD", false).unwrap();
+        let path = Path::new(&tree.path);
+        let expected = folder.join("feature-x");
+        let in_folder = same_path(path, &expected);
+        assert!(in_folder);
+        let relative = Path::new("trees");
+        let rejected = create(&root, Some(relative), "feature/y", "HEAD", false);
+        assert!(rejected.is_err());
+    }
+
+    #[test]
     fn isolates_changes_and_preserves_branch_on_removal() {
         let repo = repo();
         let root = repo.0.join("repo");
         std::fs::write(root.join("main-only"), "main change").unwrap();
         git_checked(&root, &["add", "main-only"]).unwrap();
-        let tree = create(&root, "feature/test", "main", false).unwrap();
+        let tree = create(&root, None, "feature/test", "main", false).unwrap();
         let path = Path::new(&tree.path);
         assert!(!path.join("main-only").exists());
         assert!(git(path, &["diff", "--cached", "--name-only"])
@@ -919,11 +952,11 @@ mod tests {
         let repo = repo();
         let root = repo.0.join("repo");
         git_checked(&root, &["branch", "existing"]).unwrap();
-        let tree = create(&root, "existing", "HEAD", true).unwrap();
-        assert!(create(&root, "existing", "HEAD", true).is_err());
-        assert!(create(&root, "main", "HEAD", true).is_err());
-        assert!(create(&root, "bad name", "HEAD", false).is_err());
-        assert!(create(&root, "valid", "--help", false).is_err());
+        let tree = create(&root, None, "existing", "HEAD", true).unwrap();
+        assert!(create(&root, None, "existing", "HEAD", true).is_err());
+        assert!(create(&root, None, "main", "HEAD", true).is_err());
+        assert!(create(&root, None, "bad name", "HEAD", false).is_err());
+        assert!(create(&root, None, "valid", "--help", false).is_err());
         git_checked(&root, &["worktree", "lock", &tree.path]).unwrap();
         assert!(remove(&root, Path::new(&tree.path), true).is_err());
         assert!(remove(&root, &repo.0, true).is_err());
@@ -933,7 +966,7 @@ mod tests {
     fn renames_only_temporary_worktree_branches() {
         let repo = repo();
         let root = repo.0.join("repo");
-        let tree = create(&root, "mc/12345678", "main", false).unwrap();
+        let tree = create(&root, None, "mc/12345678", "main", false).unwrap();
         let renamed = rename_branch(&root, Path::new(&tree.path), "mc/faster-worktrees").unwrap();
         assert_eq!(renamed.branch.as_deref(), Some("mc/faster-worktrees"));
         assert!(git(
@@ -943,7 +976,7 @@ mod tests {
         .is_ok());
         assert!(rename_branch(&root, &root, "mc/nope").is_err());
 
-        let regular = create(&root, "feature/manual", "main", false).unwrap();
+        let regular = create(&root, None, "feature/manual", "main", false).unwrap();
         assert!(rename_branch(&root, Path::new(&regular.path), "mc/should-not-change").is_err());
     }
 
@@ -951,7 +984,7 @@ mod tests {
     fn removal_preflight_is_read_only_and_rejects_blockers() {
         let repo = repo();
         let root = repo.0.join("repo");
-        let tree = create(&root, "feature", "main", false).unwrap();
+        let tree = create(&root, None, "feature", "main", false).unwrap();
         let path = Path::new(&tree.path);
         std::fs::write(path.join("keep-me"), "local changes").unwrap();
         assert!(check_removal(&root, path, true, true)
@@ -974,7 +1007,7 @@ mod tests {
     fn references_include_archived_sessions_and_directly_opened_worktrees() {
         let repo = repo();
         let root = repo.0.join("repo");
-        let tree = create(&root, "feature", "main", false).unwrap();
+        let tree = create(&root, None, "feature", "main", false).unwrap();
         let store = SessionStore::open_in_memory().unwrap();
         let conn = store.lock_conn().unwrap();
         for (id, cwd, worktree, archived) in [
@@ -1001,7 +1034,7 @@ mod tests {
     fn removal_preserves_shared_archived_and_direct_sessions() {
         let repo = repo();
         let root = repo.0.join("repo").canonicalize().unwrap();
-        let tree = create(&root, "feature", "main", false).unwrap();
+        let tree = create(&root, None, "feature", "main", false).unwrap();
         let path = Path::new(&tree.path);
         let store = SessionStore::open_in_memory().unwrap();
         let conn = store.lock_conn().unwrap();
@@ -1087,7 +1120,7 @@ mod tests {
         for git_removed in [false, true] {
             let repo = repo();
             let root = repo.0.join("repo");
-            let tree = create(&root, "feature", "main", false).unwrap();
+            let tree = create(&root, None, "feature", "main", false).unwrap();
             let main = list(&root).unwrap().remove(0).path;
             let db = repo.0.join("sessions.db");
             {
@@ -1152,7 +1185,7 @@ mod tests {
     fn database_failures_keep_worktree_and_session_state_consistent() {
         let repo = repo();
         let root = repo.0.join("repo");
-        let tree = create(&root, "feature", "main", false).unwrap();
+        let tree = create(&root, None, "feature", "main", false).unwrap();
         let store = SessionStore::open_in_memory().unwrap();
         let conn = store.lock_conn().unwrap();
         conn.execute(
