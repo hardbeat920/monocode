@@ -1,7 +1,5 @@
-import {
-  INBOX_SOURCE_LABELS,
-  type ConnectableInboxSource,
-} from "../model/inboxFilters";
+import type { ConnectableInboxSource } from "../model/inboxFilters";
+import { INBOX_PROVIDER_LABELS } from "../model/inboxProviders";
 import { InboxProviderMark } from "./InboxProviderMark";
 import { Popover, type PopoverAnchor } from "../../../shared/ui/Popover";
 
@@ -49,7 +47,7 @@ export function InboxConnectMenu({
             className="block size-3.5 shrink-0"
           />
           <span className="min-w-0 flex-1 truncate">
-            Connect {INBOX_SOURCE_LABELS[source]}
+            Connect {INBOX_PROVIDER_LABELS[source]}
           </span>
         </button>
       ))}
