@@ -2229,4 +2229,22 @@ describe("claude background jobs", () => {
     expect(settled).toBe(true);
     expect(jobIds(events).at(-1)).toEqual([]);
   });
+
+  it("still holds for the follow-up when the stop never reached Claude", async () => {
+    const { turn } = await startTurn("s1");
+    let settled = false;
+    void turn.then(() => {
+      settled = true;
+    });
+    emitBackgroundBash("b5");
+
+    writeChild.mockRejectedValueOnce(new Error("pipe closed"));
+    await expect(stopClaudeBackgroundJob("s1", "b5")).rejects.toThrow(
+      "pipe closed",
+    );
+    // The task runs on and finishes; Claude will wake for it.
+    emitBashFinished("b5");
+    await new Promise((r) => setTimeout(r, 10));
+    expect(settled).toBe(false);
+  });
 });

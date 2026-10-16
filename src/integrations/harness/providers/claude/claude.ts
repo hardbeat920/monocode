@@ -1783,13 +1783,19 @@ export async function stopClaudeBackgroundJob(
   const task = live?.backgroundTasks.get(jobId);
   if (!live || !task) return;
   task.stopping = true;
-  await writeJson(
-    sessionId,
-    buildControlRequest(nextControlId(live), {
-      subtype: "stop_task",
-      task_id: jobId,
-    }),
-  );
+  try {
+    await writeJson(
+      sessionId,
+      buildControlRequest(nextControlId(live), {
+        subtype: "stop_task",
+        task_id: jobId,
+      }),
+    );
+  } catch (error) {
+    // Not stopped after all: it still wakes Claude when it ends.
+    task.stopping = false;
+    throw error;
+  }
 }
 
 function maybeFinishTurn(live: Live): void {
