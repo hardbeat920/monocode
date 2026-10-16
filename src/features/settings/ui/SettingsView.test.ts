@@ -128,24 +128,24 @@ describe("settings pages", () => {
         `[role="switch"][aria-label="Show sessions started by ${monoLook(findMono(id)!).name} in sidebar"]`,
       )!;
     await render("monos");
-    expect(toggle(mono.id).getAttribute("aria-checked")).toBe("true");
-    expect(toggle(other.id).getAttribute("aria-checked")).toBe("true");
-    await act(async () => toggle(mono.id).click());
+    // Off until turned on: a Mono's sessions stay in its overview.
     expect(toggle(mono.id).getAttribute("aria-checked")).toBe("false");
-    expect(findMono(mono.id)?.showStartedSessionsInSidebar).toBe(false);
-    expect(toggle(other.id).getAttribute("aria-checked")).toBe("true");
+    expect(toggle(other.id).getAttribute("aria-checked")).toBe("false");
+    await act(async () => toggle(mono.id).click());
+    expect(toggle(mono.id).getAttribute("aria-checked")).toBe("true");
+    expect(findMono(mono.id)?.showStartedSessionsInSidebar).toBe(true);
+    expect(toggle(other.id).getAttribute("aria-checked")).toBe("false");
     await render("general");
     await render("monos");
-    expect(toggle(mono.id).getAttribute("aria-checked")).toBe("false");
+    expect(toggle(mono.id).getAttribute("aria-checked")).toBe("true");
     await act(async () => updateMono(mono.id, (entry) => ({
       ...entry,
-      showStartedSessionsInSidebar: true,
+      showStartedSessionsInSidebar: false,
     })));
-    expect(toggle(mono.id).getAttribute("aria-checked")).toBe("true");
+    expect(toggle(mono.id).getAttribute("aria-checked")).toBe("false");
   });
 
-  it("keeps account emails blurred until clicked and hides them when settings reopen", async () => {
-    saveMaskEmails(true);
+  it("blurs account emails by default and hides them when settings reopen", async () => {
     vi.mocked(invoke).mockImplementation(async (command, args) => {
       if (command === "provider_account_identity") {
         const { provider } = args as { provider: string };
@@ -182,6 +182,7 @@ describe("settings pages", () => {
   });
 
   it("shows used usage and plain emails until the options are turned on", async () => {
+    saveMaskEmails(false);
     vi.mocked(invoke).mockImplementation(async (command) =>
       command === "provider_account_identity"
         ? { email: "user@example.com", plan: "Pro" }
@@ -925,6 +926,17 @@ describe("settings search", () => {
     expect(options()).toHaveLength(0);
     expect(input.value).toBe("");
     expect(onSelectSection).not.toHaveBeenCalled();
+  });
+
+  it("lists Escape stopping a session without a recorder", async () => {
+    await render("keybindings");
+    const row = [...container.querySelectorAll("span")].find(
+      (span) => span.textContent === "Session: Stop",
+    )?.parentElement;
+    expect(row?.textContent).toContain("Esc");
+    expect(
+      container.querySelector('[aria-label="Change Session: Stop shortcut"]'),
+    ).toBeNull();
   });
 
   it("records a custom keybinding from the key cell", async () => {

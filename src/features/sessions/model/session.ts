@@ -25,7 +25,8 @@ export type HarnessId =
   | "omp"
   | "fx"
   | "hermes"
-  | "antigravity";
+  | "antigravity"
+  | "devin";
 
 export const HARNESSES: HarnessId[] = [
   "claude",
@@ -38,6 +39,7 @@ export const HARNESSES: HarnessId[] = [
   "fx",
   "hermes",
   "antigravity",
+  "devin",
 ];
 
 export type BlockRole =
@@ -343,6 +345,8 @@ export type Block = {
     status?: string;
     detail?: string;
     preview?: ToolPreview;
+    /** Every file in a multi-file edit, retained for checkpoint recovery. */
+    paths?: string[];
     /** Left running by the agent when it yielded; the turn waits on it. */
     background?: boolean;
   };
@@ -372,6 +376,8 @@ export type Block = {
   /** Independent read-only side conversations anchored to this user turn. */
   btwThreads?: BtwThread[];
   noteCard?: NoteCardMeta;
+  /** Saved artifacts attached to this turn; their bodies live outside chat. */
+  artifactCards?: import("../../artifacts/artifacts").ArtifactCard[];
   /** Exact CI repair instructions and evidence supplied with this user turn. */
   ciContext?: string;
   /** Mid-turn interjection chrome; system blocks only. Body lives in text. */
@@ -386,6 +392,11 @@ export type Block = {
   monoHabit?: { id: string; name: string; at: number };
   /** A card a Mono put in its chat; see `features/monos/model/monoCards`. */
   monoCard?: import("../../monos/model/monoCards").MonoCard;
+  /**
+   * The emoji a Mono answered this user message with. Drawn from its reply
+   * when the chat renders; see `features/monos/model/monoReaction`.
+   */
+  monoReaction?: string;
 };
 
 export type RuntimeMode =
@@ -534,6 +545,7 @@ export const HARNESS_LABEL: Record<HarnessId, string> = {
   fx: "fx",
   hermes: "hermes",
   antigravity: "antigravity",
+  devin: "devin",
 };
 
 export const HARNESS_TITLE: Record<HarnessId, string> = {
@@ -547,6 +559,7 @@ export const HARNESS_TITLE: Record<HarnessId, string> = {
   fx: "fx",
   hermes: "Hermes Agent",
   antigravity: "Antigravity",
+  devin: "Devin",
 };
 
 /** fx ACP rejects attachment prompt blocks. */
@@ -655,6 +668,9 @@ export function retargetSessionToProject(
     ...(harness === session.harness
       ? {}
       : { providerSessionId: undefined, providerAccountId: undefined }),
+    // The account was chosen for the old project. The new project reads its
+    // own stored choice, so a stamp carried over would show the wrong account.
+    ...(cwd === session.cwd ? {} : { providerAccountId: undefined }),
     ...(resolved.id === session.model
       ? {}
       : { context: dropContextWindow(session.context) }),

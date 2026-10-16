@@ -13,6 +13,7 @@ import {
   MonoSessionCompletionBatches,
 } from "../../monos/model/monoSessionCompletion";
 import { canSteerQueuedHead } from "../model/messageQueue";
+import { recordArtifactCard } from "../../artifacts/artifacts";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("../../monos/model/mono", () => ({
@@ -51,6 +52,31 @@ function saved(session: Session) {
 }
 
 describe("Mono database pagination and writes", () => {
+  it("keeps document and visual references on the source turn after saving and reopening", async () => {
+    let session = await load();
+    const card = {
+      id: "artifact-report",
+      kind: "document" as const,
+      title: "PR review",
+      summary: "Merge queue",
+    };
+    const visual = {
+      id: "artifact-chart",
+      kind: "html" as const,
+      title: "Build times",
+    };
+    const before = persistFingerprint(session);
+    session = recordArtifactCard(session, session.blocks[0].id, card);
+    session = recordArtifactCard(session, session.blocks[0].id, visual);
+    expect(persistFingerprint(session)).not.toBe(before);
+    call.mockResolvedValueOnce(saved(session));
+    await upsertSession(session);
+    const payload = (call.mock.calls.at(-1)![1] as { session: Session }).session;
+    expect(payload.blocks[0].artifactCards).toEqual([card, visual]);
+    call.mockResolvedValueOnce(saved(payload));
+    const restored = (await getSession(session.id))!;
+    expect(restored.blocks[0].artifactCards).toEqual([card, visual]);
+  });
   it("preserves all results and the session count in a combined report across queue and transcript saves", async () => {
     const session = await load();
     const batches = new MonoSessionCompletionBatches((_, message) => {

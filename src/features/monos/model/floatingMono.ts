@@ -2,7 +2,7 @@ import type { ApprovalDecision } from "../../../integrations/harness";
 import type { Attachment, Session } from "../../sessions/model/session";
 import type { UserQuestionReply } from "../../sessions/model/userQuestion";
 import { displayAttachments } from "../../sessions/model/attachments";
-import { listMonos, monoLook } from "./mono";
+import { listMonos, monoLook, monoState, type MonoStatus } from "./mono";
 import { pixelLayers } from "../../projects/model/pixelMascots";
 
 export const FLOATING_MONO_CHANGED = "mono_chat_changed";
@@ -13,6 +13,7 @@ export type FloatingMonoEntry = {
   mascot: string;
   color: string;
   sessionId: string | null;
+  status: MonoStatus;
 };
 export type FloatingMonoView = {
   monos: FloatingMonoEntry[];
@@ -24,11 +25,13 @@ export type FloatingMonoAction =
   | { kind: "open" }
   | { kind: "submit"; text: string; attachments: Attachment[] }
   | { kind: "stop" }
+  | { kind: "create" }
   | { kind: "approval"; requestId: number; decision: ApprovalDecision }
   | { kind: "question"; requestId: number; reply: UserQuestionReply }
   | { kind: "questionInteraction"; requestId: number }
   | { kind: "reveal" }
   | { kind: "openFile"; path: string }
+  | { kind: "openArtifact"; id: string }
   | { kind: "resume" };
 export type FloatingMonoRequest = {
   id: number;
@@ -36,13 +39,20 @@ export type FloatingMonoRequest = {
   action: FloatingMonoAction;
 };
 
-export function floatingMonoRoster(enabled: boolean): FloatingMonoEntry[] {
+export function floatingMonoRoster(
+  enabled: boolean,
+  sessions: readonly Session[] = [],
+): FloatingMonoEntry[] {
   return enabled
-    ? listMonos().map((mono) => ({
-        id: mono.id,
-        ...monoLook(mono),
-        sessionId: mono.sessionId ?? null,
-      }))
+    ? listMonos().map((mono) => {
+        const session = sessions.find((s) => s.id === mono.sessionId);
+        return {
+          id: mono.id,
+          ...monoLook(mono),
+          sessionId: mono.sessionId ?? null,
+          status: session ? monoState(session).status : "idle",
+        };
+      })
     : [];
 }
 
@@ -99,7 +109,10 @@ export type FloatingMonoHost = {
   questionInteraction(sessionId: string, requestId: number): void;
   reveal(monoId: string): Promise<void>;
   openFile(path: string): void | Promise<void>;
+  openArtifact?(monoId: string, id: string): void | Promise<void>;
   resume(sessionId: string): void;
+  /** Add a Mono and show it in place of the chat that asked. */
+  create?(fromMonoId: string): Promise<void>;
 };
 
 /** Preparation may await disk; recheck the receipt before mutating a session. */
@@ -139,8 +152,16 @@ export async function deliverFloatingMonoRequest(
     case "openFile":
       await host.openFile(action.path);
       break;
+    case "openArtifact":
+      if (!host.openArtifact) throw new Error("Artifacts are unavailable.");
+      await host.openArtifact(request.monoId, action.id);
+      break;
     case "resume":
       host.resume(session.id);
+      break;
+    case "create":
+      if (!host.create) throw new Error("New Monos are unavailable here.");
+      await host.create(request.monoId);
       break;
     default:
       throw new Error("Unknown chat action.");

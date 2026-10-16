@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  addCodexTurnUsage,
   buildThreadStartParams,
   buildTurnStartParams,
   buildTurnSteerParams,
@@ -979,13 +980,6 @@ describe("mapCodexNotification thread/tokenUsage/updated", () => {
     });
     expect(mapped.events).toEqual([
       { type: "context", used: 42_000, window: 272_000 },
-      {
-        type: "turn.metrics",
-        inputTokens: 40_000,
-        cacheReadTokens: 30_000,
-        outputTokens: 2_000,
-        cacheHitPercent: 75,
-      },
     ]);
   });
 
@@ -1019,6 +1013,55 @@ describe("mapCodexNotification thread/tokenUsage/updated", () => {
         tokenUsage: { last: {}, total: {} },
       }).events,
     ).toEqual([]);
+  });
+});
+
+describe("addCodexTurnUsage", () => {
+  const reading = (
+    last: Record<string, number>,
+    total: Record<string, number>,
+  ) => ({
+    threadId: "t1",
+    turnId: "turn1",
+    tokenUsage: { last, total, modelContextWindow: 272_000 },
+  });
+
+  it("adds up every request in the turn, once each", () => {
+    const spent = { threadTotal: 100_000, turn: {} };
+    const first = {
+      totalTokens: 41_000,
+      inputTokens: 40_000,
+      cachedInputTokens: 30_000,
+      cacheWriteInputTokens: 0,
+      outputTokens: 1_000,
+    };
+    const second = {
+      totalTokens: 52_000,
+      inputTokens: 50_000,
+      cachedInputTokens: 0,
+      cacheWriteInputTokens: 0,
+      outputTokens: 2_000,
+    };
+    expect(
+      addCodexTurnUsage(spent, reading(first, { totalTokens: 141_000 })),
+    ).toEqual({
+      inputTokens: 40_000,
+      outputTokens: 1_000,
+      cacheReadTokens: 30_000,
+      cacheHitPercent: 75,
+    });
+    // Codex re-sends an unchanged reading after compaction or a usage limit.
+    expect(
+      addCodexTurnUsage(spent, reading(first, { totalTokens: 141_000 })),
+    ).toBeNull();
+    expect(
+      addCodexTurnUsage(spent, reading(second, { totalTokens: 193_000 })),
+    ).toEqual({
+      inputTokens: 90_000,
+      outputTokens: 3_000,
+      cacheReadTokens: 30_000,
+      cacheHitPercent: (30_000 / 90_000) * 100,
+    });
   });
 });
 

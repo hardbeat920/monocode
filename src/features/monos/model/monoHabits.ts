@@ -4,7 +4,7 @@ import {
   nextAutomationRunAt,
   type AutomationScheduleKind,
 } from "../../automations/model/automations";
-import type { Block } from "../../sessions/model/session";
+import type { Block, MonoSpawnedSession } from "../../sessions/model/session";
 import type { MonoLook } from "./mono";
 import {
   MonoFileConflict,
@@ -71,8 +71,8 @@ const REPORT_KEPT_CHARS = 4_000;
 export const QUIET_MARKER = "NOTHING_TO_REPORT";
 /** A run that was due longer ago than this is skipped, not caught up. */
 export const MISSED_RUN_GRACE_MS = 2 * 60 * 60 * 1000;
-/** A run that has worked this long is stopped; time waiting on the user is not counted. */
-export const HABIT_RUN_TIMEOUT_MS = 15 * 60 * 1000;
+/** Allow one hour of work per run; time waiting on the user is not counted. */
+export const HABIT_RUN_TIMEOUT_MS = 60 * 60 * 1000;
 /** An approval the user has not answered in this long is turned down. */
 export const HABIT_APPROVAL_WAIT_MS = 12 * 60 * 60 * 1000;
 export const HABITS_MAX = 20;
@@ -454,6 +454,12 @@ export async function updateHabits<T>(
  */
 const runs = new Map<string, string>();
 
+/**
+ * Sessions a habit run started, to go on its report in the Mono's chat. The
+ * run itself is thrown away, and without this they would be listed nowhere.
+ */
+const launches = new Map<string, MonoSpawnedSession[]>();
+
 export function markHabitRun(sessionId: string, monoId: string): void {
   runs.set(sessionId, monoId);
 }
@@ -469,6 +475,21 @@ export function habitRunMono(sessionId: string): string | undefined {
 
 export function clearHabitRun(sessionId: string): void {
   runs.delete(sessionId);
+  launches.delete(sessionId);
+}
+
+export function noteHabitRunLaunch(
+  sessionId: string,
+  launched: MonoSpawnedSession,
+): void {
+  if (!runs.has(sessionId)) return;
+  const known = launches.get(sessionId) ?? [];
+  if (known.some((entry) => entry.sessionId === launched.sessionId)) return;
+  launches.set(sessionId, [...known, launched]);
+}
+
+export function habitRunLaunches(sessionId: string): MonoSpawnedSession[] {
+  return launches.get(sessionId) ?? [];
 }
 
 /**

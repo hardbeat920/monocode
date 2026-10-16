@@ -3,6 +3,7 @@ import type { ControlOutcome } from "../../features/orchestration/model/orchestr
 import {
   newSession,
   type Block,
+  type MonoSpawnedSession,
   type Session,
 } from "../../features/sessions/model/session";
 import {
@@ -12,6 +13,10 @@ import {
 } from "../../features/monos/model/mono";
 import { loadMonoFiles } from "../../features/monos/model/monoFiles";
 import {
+  artifactCards,
+  type ArtifactCard,
+} from "../../features/artifacts/artifacts";
+import {
   afterRun,
   claimHabit,
   clearHabitRun,
@@ -19,6 +24,7 @@ import {
   HABIT_APPROVAL_WAIT_MS,
   HABIT_RUN_TIMEOUT_MS,
   habitReport,
+  habitRunLaunches,
   isRelayed,
   habitRunPrompt,
   loadHabits,
@@ -55,6 +61,8 @@ export type MonoHabitHost = {
     habit: Habit,
     text: string,
     title: string,
+    artifacts?: ArtifactCard[],
+    launches?: MonoSpawnedSession[],
   ): void;
   /** Puts an approval the run is waiting on to the user, in the Mono's chat. */
   askApproval(
@@ -201,6 +209,10 @@ export function useMonoHabits(host: MonoHabitHost, enabled = true) {
       const reply =
         finalReply(host.sessions().find((s) => s.id === run.id)) ||
         outcome.text;
+      const artifacts = artifactCards(
+        host.sessions().find((s) => s.id === run.id)?.blocks ?? [],
+      );
+      const launches = habitRunLaunches(run.id);
       host.endApprovals(run.id);
       await host.remove(run.id).catch(() => undefined);
       clearHabitRun(run.id);
@@ -208,7 +220,20 @@ export function useMonoHabits(host: MonoHabitHost, enabled = true) {
 
       const report =
         outcome.status === "completed" ? habitReport(reply) : undefined;
-      if (report) host.post(monoSessionId, habit, report, look.name);
+      // Sessions it started are listed only through the Mono's chat, so a
+      // run that started one posts even when it has nothing else to say.
+      if (report || launches.length)
+        host.post(
+          monoSessionId,
+          habit,
+          report ??
+            (launches.length === 1
+              ? "Started a session."
+              : `Started ${launches.length} sessions.`),
+          look.name,
+          artifacts,
+          launches,
+        );
       await updateHabits(monoId, (habits) => ({
         habits: habits.map((entry) =>
           entry.id === habit.id

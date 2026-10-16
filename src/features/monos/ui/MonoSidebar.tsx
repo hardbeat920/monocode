@@ -4,7 +4,8 @@ import { useDragResize } from "../../../shared/hooks/useDragResize";
 import { PanelRightToggle } from "../../../shared/ui/icons";
 
 const MIN_WIDTH = 340;
-let rememberedWidth = MIN_WIDTH;
+const DEFAULT_WIDTH = 400;
+let rememberedWidth = DEFAULT_WIDTH;
 
 /** The shared frame for a Mono's details and turn sidebars. */
 export function MonoSidebar({
@@ -16,7 +17,7 @@ export function MonoSidebar({
   children,
 }: {
   open: boolean;
-  kind: "details" | "activity" | "sessions";
+  kind: "details" | "sessions";
   label: string;
   color: string;
   windowControls?: ReactNode;
@@ -24,8 +25,10 @@ export function MonoSidebar({
 }) {
   const resize = useDragResize({
     min: MIN_WIDTH,
-    max: () => Math.min(440, Math.round(window.innerWidth * 0.4)),
-    defaultWidth: MIN_WIDTH,
+    // The overview hosts whole sessions and documents, so it may grow wide;
+    // either way the chat keeps a good share.
+    max: () => Math.min(960, Math.round(window.innerWidth * 0.62)),
+    defaultWidth: DEFAULT_WIDTH,
     initial: rememberedWidth,
     direction: "left",
     onCommit: (width) => {
@@ -39,7 +42,6 @@ export function MonoSidebar({
       aria-hidden={!open || undefined}
       inert={!open || undefined}
       data-mono-details={kind === "details" ? "" : undefined}
-      data-mono-activity={kind === "activity" ? "" : undefined}
       data-mono-sessions={kind === "sessions" ? "" : undefined}
       data-open={open}
       style={
@@ -70,10 +72,15 @@ export function MonoSidebar({
 
 export function MonoSidebarHeader({
   title,
+  heading,
   onClose,
+  actions,
 }: {
   title: string;
+  /** Richer content in place of the plain title text. */
+  heading?: ReactNode;
   onClose: () => void;
+  actions?: ReactNode;
 }) {
   return (
     <header
@@ -82,9 +89,10 @@ export function MonoSidebarHeader({
       data-tauri-drag-region="deep"
     >
       <h3 className="flex min-w-0 flex-1 items-center pl-4 text-[13px] font-medium text-content">
-        {title}
+        {heading ?? title}
       </h3>
       <div className="flex shrink-0 items-center gap-0.5 px-3">
+        {actions}
         <IconButton
           label={`Hide ${title.toLowerCase()}`}
           active

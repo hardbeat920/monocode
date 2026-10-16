@@ -1,6 +1,6 @@
 import { invoke as invokeLocal } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { slash } from "../../shared/lib/paths";
+import { joinPath, slash } from "../../shared/lib/paths";
 import { REMOTE_PATH_PREFIX } from "../../shared/lib/remotePaths";
 import type { InterjectionMeta } from "../../features/sessions/model/session";
 
@@ -155,6 +155,7 @@ export type DiscoveredSkill = {
     | "grok"
     | "hermes"
     | "antigravity"
+    | "devin"
     | "monocode";
 };
 
@@ -312,12 +313,25 @@ export function gitUnstageAll(cwd: string): Promise<void> {
   return invoke<void>("git_unstage_all", { cwd });
 }
 
+export type GitFileLocation = { root: string; relative: string };
+
+/** Each path's repository root and repo-relative path, or null outside git. */
+export function gitLocateFiles(
+  paths: string[],
+): Promise<(GitFileLocation | null)[]> {
+  return invoke<(GitFileLocation | null)[]>("git_locate_files", { paths });
+}
+
+/** Commit the index, or only `paths` (staging them first) when given. */
 export function gitCommit(
   cwd: string,
   message: string,
   amend = false,
+  paths?: string[],
 ): Promise<void> {
-  return invoke<void>("git_commit", { cwd, message, amend });
+  return invoke<void>("git_commit", {
+    cwd, message, amend, ...(paths === undefined ? {} : { paths }),
+  });
 }
 
 export function gitHeadMessage(cwd: string): Promise<string> {
@@ -330,8 +344,10 @@ export type GitStagedContext = {
   patch: string;
 };
 
-export function gitStagedContext(cwd: string): Promise<GitStagedContext> {
-  return invoke<GitStagedContext>("git_staged_context", { cwd });
+export function gitStagedContext(cwd: string, paths?: readonly string[]): Promise<GitStagedContext> {
+  return invoke<GitStagedContext>("git_staged_context", {
+    cwd, ...(paths === undefined ? {} : { paths }),
+  });
 }
 
 export function gitPush(cwd: string): Promise<void> {
@@ -562,7 +578,7 @@ export function readTextFile(path: string): Promise<string> {
   return invoke<string>("read_text_file", { path });
 }
 
-/** Raw bytes for the image viewer. Arrives as an ArrayBuffer, not base64. */
+/** Raw bytes for media previews. Arrives as an ArrayBuffer, not base64. */
 export async function readBinaryFile(path: string): Promise<Uint8Array> {
   const buffer = await invoke<ArrayBuffer | string>("read_binary_file", {
     path,
@@ -571,6 +587,19 @@ export async function readBinaryFile(path: string): Promise<Uint8Array> {
   return typeof buffer === "string"
     ? Uint8Array.from(atob(buffer), (char) => char.charCodeAt(0))
     : new Uint8Array(buffer);
+}
+
+/**
+ * Bytes of an image a project's Markdown document shows. `path` is relative to
+ * `root`, and the file is read only if it resolves inside `root`, symlinks
+ * included. A connected machine already keeps every read inside its projects.
+ */
+export function readProjectImage(root: string, path: string): Promise<Uint8Array> {
+  if (root.startsWith(REMOTE_PATH_PREFIX))
+    return readBinaryFile(joinPath(root, path));
+  return invokeLocal<ArrayBuffer>("read_project_image", { root, path }).then(
+    (buffer) => new Uint8Array(buffer),
+  );
 }
 
 export type GeneratedImageAsset = {

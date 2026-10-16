@@ -207,6 +207,7 @@ import {
   type McpSettingsSnapshot,
 } from "../../settings/model/mcpSettingsCache";
 import type { LastTurnRecall } from "../model/editLastTurn";
+import { useComposerAutocorrect } from "../../settings/model/displayPrefs";
 
 type Props = {
   enabled?: boolean;
@@ -526,6 +527,7 @@ export function Composer({
   const [mentionActive, setMentionActive] = useState(0);
   const [resendEdited, setResendEdited] = useState(false);
   const [runnerEnabled, setRunnerEnabled] = useState(loadComposerRunner);
+  const autocorrect = useComposerAutocorrect();
   const [runnerLive, setRunnerLive] = useState(
     () => busy && loadComposerRunner(),
   );
@@ -2113,7 +2115,8 @@ export function Composer({
               data-composer-empty={navigationEmpty ? "true" : undefined}
               style={{ textIndent: modeIndent }}
               rows={1}
-              spellCheck={false}
+              spellCheck={autocorrect}
+              autoCorrect={autocorrect ? "on" : "off"}
               defaultValue={mountDraft}
               placeholder={
                 worktreeRemoved

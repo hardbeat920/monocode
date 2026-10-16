@@ -59,7 +59,7 @@ vi.mock("../../features/monos/model/monoFiles", async (original) => {
 const { useMonoHabits } = await import("./useMonoHabits");
 const { shouldPersistSession } =
   await import("../../features/sessions/data/sessionStore");
-const { checkHabitsNow, relayApproval } =
+const { checkHabitsNow, noteHabitRunLaunch, relayApproval } =
   await import("../../features/monos/model/monoHabits");
 const { loadMonoFiles } = await import("../../features/monos/model/monoFiles");
 
@@ -255,6 +255,111 @@ it("posts nothing when the run has nothing to say", async () => {
   await vi.waitFor(() => expect(stored[0].lastOutcome).toBe("quiet"));
   expect(host.post).not.toHaveBeenCalled();
   expect(host.remove).toHaveBeenCalled();
+});
+
+it("puts the sessions a run started on its report", async () => {
+  const host = setup("Started #910 in a background session.");
+  const run = host.run.getMockImplementation()!;
+  const launch = {
+    sessionId: "app-910",
+    cwd: "/code/app",
+    title: "Fix #910",
+    harness: "claude" as const,
+    model: "claude:x",
+  };
+  host.run.mockImplementation(async (id: string, prompt: string) => {
+    noteHabitRunLaunch(id, launch);
+    // A retried request must not list it twice.
+    noteHabitRunLaunch(id, launch);
+    return run(id, prompt);
+  });
+  await vi.waitFor(() => expect(host.post).toHaveBeenCalled());
+  expect(host.post.mock.calls[0][2]).toBe(
+    "Started #910 in a background session.",
+  );
+  expect(host.post.mock.calls[0][5]).toEqual([launch]);
+});
+
+it("posts the sessions a quiet run started", async () => {
+  const host = setup("NOTHING_TO_REPORT");
+  const run = host.run.getMockImplementation()!;
+  host.run.mockImplementation(async (id: string, prompt: string) => {
+    noteHabitRunLaunch(id, {
+      sessionId: "app-1",
+      cwd: "/code/app",
+      title: "Look into CI",
+      harness: "claude",
+      model: "claude:x",
+    });
+    return run(id, prompt);
+  });
+  await vi.waitFor(() => expect(host.post).toHaveBeenCalled());
+  expect(host.post.mock.calls[0][2]).toBe("Started a session.");
+  expect(host.post.mock.calls[0][5]).toHaveLength(1);
+});
+
+it("lets a long-running habit finish and post after thirty minutes", async () => {
+  vi.useFakeTimers();
+  const hold = deferred();
+  const host = setup("PR review complete.");
+  const run = host.run.getMockImplementation()!;
+  host.run.mockImplementationOnce(async (id, prompt) => {
+    await hold.promise;
+    return run(id, prompt);
+  });
+  try {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+    });
+    expect(host.run).toHaveBeenCalledTimes(1);
+    expect(host.remove).not.toHaveBeenCalled();
+    expect(stored[0].lastOutcome).toBeUndefined();
+
+    await act(async () => hold.resolve());
+    expect(host.post).toHaveBeenCalledWith(
+      "mono",
+      expect.objectContaining({ id: "h1" }),
+      "PR review complete.",
+      "Skull",
+      [],
+      [],
+    );
+    expect(stored[0].lastOutcome).toBe("posted");
+    expect(host.remove).toHaveBeenCalledTimes(1);
+  } finally {
+    await act(async () => hold.resolve());
+    vi.useRealTimers();
+  }
+});
+
+it("stops and records a habit that is still running after one hour", async () => {
+  vi.useFakeTimers();
+  const hold = deferred();
+  const host = setup("PR review complete.");
+  host.run.mockImplementationOnce(async () => {
+    await hold.promise;
+    return { status: "completed", text: "PR review complete." };
+  });
+  try {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60 * 60 * 1000 - 2_000);
+    });
+    expect(host.run).toHaveBeenCalledTimes(1);
+    expect(host.remove).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(host.remove).toHaveBeenCalledTimes(1);
+    expect(host.post).not.toHaveBeenCalled();
+    expect(stored[0]).toMatchObject({
+      lastOutcome: "failed",
+      lastError: "It took too long and was stopped.",
+    });
+  } finally {
+    await act(async () => hold.resolve());
+    vi.useRealTimers();
+  }
 });
 
 it(

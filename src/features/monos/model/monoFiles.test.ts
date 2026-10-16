@@ -133,6 +133,10 @@ it("says how to keep memory and update the soul only at the user's request", () 
   );
   expect(full).not.toContain("never edit that file yourself");
   expect(full).toContain("app memory.add");
+  expect(full).toContain('app artifacts.write {"kind":"document"');
+  expect(full).toContain("Artifacts are separate from the user's Notes");
+  expect(full).toContain("without repeating its contents");
+  expect(full).not.toContain("app documents.write");
   expect(full).toContain('"notifyOnComplete":true');
   expect(full).toContain(
     "Submitted sessions notify you on completion by default",

@@ -6,9 +6,7 @@ use std::process::{ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
-use std::time::Duration;
-#[cfg(not(windows))]
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -39,6 +37,14 @@ struct HarnessLine {
     line: String,
 }
 
+/// Stdout lines in arrival order; one event carries every line from a window.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct HarnessLines {
+    session_id: String,
+    lines: Vec<String>,
+}
+
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct HarnessExit {
@@ -49,9 +55,59 @@ struct HarnessExit {
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-struct HarnessSse {
+struct HarnessSseBatch {
     session_id: String,
-    data: String,
+    events: Vec<String>,
+}
+
+/// Each `emit` is a JS eval in every window, and a streaming agent prints a
+/// line per token. Coalesce to about one hop per frame, like `pty-data`.
+const OUTPUT_COALESCE: Duration = Duration::from_millis(16);
+/// A huge tool result shouldn't hold back the lines queued behind it.
+const OUTPUT_BATCH_BYTES: usize = 1 << 20;
+/// How long an exit waits for its last output. A grandchild that inherited
+/// stdout can hold the pipe open after the agent itself has gone.
+const OUTPUT_DRAIN_WAIT: Duration = Duration::from_millis(500);
+
+/// Hands `emit` batches of the items sent on the returned channel. After an
+/// idle stretch the first item goes out at once; a burst then waits out the
+/// rest of the window. The receiver fires once everything sent has gone out.
+fn spawn_output_batcher<F>(mut emit: F) -> (mpsc::Sender<String>, mpsc::Receiver<()>)
+where
+    F: FnMut(Vec<String>) + Send + 'static,
+{
+    let (tx, rx) = mpsc::channel::<String>();
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut last_emit: Option<Instant> = None;
+        while let Ok(first) = rx.recv() {
+            let mut bytes = first.len();
+            let mut batch = vec![first];
+            if let Some(deadline) = last_emit.map(|at| at + OUTPUT_COALESCE) {
+                while bytes < OUTPUT_BATCH_BYTES {
+                    let Some(wait) = deadline.checked_duration_since(Instant::now()) else {
+                        break;
+                    };
+                    match rx.recv_timeout(wait) {
+                        Ok(item) => {
+                            bytes += item.len();
+                            batch.push(item);
+                        }
+                        Err(_) => break,
+                    }
+                }
+            }
+            while bytes < OUTPUT_BATCH_BYTES {
+                let Ok(item) = rx.try_recv() else { break };
+                bytes += item.len();
+                batch.push(item);
+            }
+            emit(batch);
+            last_emit = Some(Instant::now());
+        }
+        let _ = done_tx.send(());
+    });
+    (tx, done_rx)
 }
 
 #[derive(Serialize, Clone)]
@@ -794,6 +850,19 @@ pub fn harness_resolve_hermes() -> Result<CursorBinary, String> {
         })
 }
 
+/// Resolve Cognition's Devin CLI (`devin`).
+#[tauri::command(async)]
+pub fn harness_resolve_devin() -> Result<CursorBinary, String> {
+    resolve_devin()
+        .map(|path| CursorBinary {
+            path: path.to_string_lossy().into_owned(),
+        })
+        .ok_or_else(|| {
+            "Devin CLI not found. Install it with `curl -fsSL https://cli.devin.ai/install.sh | bash` (Windows: `irm https://static.devin.ai/cli/setup.ps1 | iex`) and run `devin auth login`, then retry."
+                .into()
+        })
+}
+
 /// Antigravity's ACP server is separate from the interactive agy CLI.
 #[tauri::command(async)]
 pub fn harness_resolve_antigravity() -> Result<AntigravityBinary, String> {
@@ -831,6 +900,8 @@ pub fn harness_spawn(
     account: Option<HarnessAccount>,
     binary_provider: Option<String>,
     binary_path: Option<String>,
+    codex_store: Option<String>,
+    devin_ask_edits: Option<bool>,
 ) -> Result<u32, String> {
     let workdir = expand_home(&cwd);
     if !workdir.is_dir() {
@@ -843,6 +914,15 @@ pub fn harness_spawn(
         return Err("harness_spawn: not a resolved harness CLI".to_string());
     }
 
+    // `--config` is a global option, so it precedes the `acp` subcommand.
+    let devin_config = match devin_ask_edits {
+        None | Some(false) => Vec::new(),
+        Some(true) if binary_provider.as_deref() == Some("devin") && args == ["acp"] => {
+            crate::devin_config::supervised_args(&app)?
+        }
+        Some(true) => return Err("Edit approvals are only supported for `devin acp`".into()),
+    };
+
     let _reservation = crate::worktree_lifecycle::reserve_spawn(&workdir)?;
     let (epoch, kill_all, prev) = host.begin_spawn(&session_id);
     if let Some(prev) = prev {
@@ -850,13 +930,35 @@ pub fn harness_spawn(
     }
 
     let mut cmd = Command::new(&command);
-    cmd.args(&args)
+    cmd.args(&devin_config)
+        .args(&args)
         .current_dir(&workdir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     prepare_child(&mut cmd, &command);
     apply_provider_account(&app, &mut cmd, account.as_ref())?;
+    let codex_store = match codex_store.as_deref() {
+        None => None,
+        Some("mono")
+            if binary_provider.as_deref() == Some("codex")
+                && account.as_ref().is_some_and(|a| a.provider == "codex")
+                && args.first().is_some_and(|a| a == "app-server") =>
+        {
+            let store =
+                crate::codex_mono_store::prepare(&app, account.as_ref().map(|a| a.id.as_str()))?;
+            let private_path = serde_json::to_string(&store.home).map_err(|e| e.to_string())?;
+            // Explicit config takes precedence over CODEX_SQLITE_HOME. Override
+            // both so a user's sqlite_home cannot index Monos in the Codex app.
+            cmd.env("CODEX_HOME", &store.home)
+                .env("CODEX_SQLITE_HOME", &store.home)
+                .args(["-c", &format!("sqlite_home={private_path}")]);
+            Some(Arc::new(store))
+        }
+        Some(_) => {
+            return Err("Private Mono storage is only supported for Codex app-server".into())
+        }
+    };
 
     crate::control::configure_child(&app, &session_id, &mut cmd);
 
@@ -897,16 +999,31 @@ pub fn harness_spawn(
 
     let stdout_app = app.clone();
     let stdout_id = session_id.clone();
+    let (stdout_tx, stdout_drained) = spawn_output_batcher(move |lines| {
+        let _ = stdout_app.emit(
+            STDOUT_EVENT,
+            HarnessLines {
+                session_id: stdout_id.clone(),
+                lines,
+            },
+        );
+    });
+    let wait_store = codex_store.clone();
+    let stdout_store = codex_store;
     thread::spawn(move || {
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else { break };
-            let _ = stdout_app.emit(
-                STDOUT_EVENT,
-                HarnessLine {
-                    session_id: stdout_id.clone(),
-                    line,
-                },
-            );
+            if let Some(store) = &stdout_store {
+                if line.contains("\"turn/completed\"")
+                    || line.contains("\"item/started\"")
+                    || line.contains("\"account/updated\"")
+                {
+                    store.sync_auth();
+                }
+            }
+            if stdout_tx.send(line).is_err() {
+                break;
+            }
         }
     });
 
@@ -930,6 +1047,11 @@ pub fn harness_spawn(
     let wait_pid = pid;
     thread::spawn(move || {
         let code = child.wait().ok().and_then(|status| status.code());
+        // Deliver the final batched lines before the exit that follows them.
+        let _ = stdout_drained.recv_timeout(OUTPUT_DRAIN_WAIT);
+        if let Some(store) = wait_store {
+            store.sync_auth();
+        }
         if let Some(host) = wait_app.try_state::<HarnessHost>() {
             if host.remove_if_pid(&wait_id, wait_pid).is_some() {
                 host.stop_sse(&wait_id);
@@ -1181,7 +1303,22 @@ pub fn harness_sse_open(
         match result {
             Ok(response) => {
                 let reader = BufReader::new(response.into_reader());
-                read_sse(reader, &app, &session_id, &stop);
+                let events_app = app.clone();
+                let events_id = session_id.clone();
+                let (tx, drained) = spawn_output_batcher(move |events| {
+                    let _ = events_app.emit(
+                        SSE_EVENT,
+                        HarnessSseBatch {
+                            session_id: events_id.clone(),
+                            events,
+                        },
+                    );
+                });
+                read_sse(reader, &stop, |data| {
+                    let _ = tx.send(data);
+                });
+                drop(tx);
+                let _ = drained.recv();
                 emit_sse_end(&app, &session_id, None);
             }
             Err(error) => {
@@ -1211,7 +1348,7 @@ fn read_http_response(response: ureq::Response) -> Result<HarnessHttpResponse, S
     Ok(HarnessHttpResponse { status, body })
 }
 
-fn read_sse<R: BufRead>(reader: R, app: &AppHandle, session_id: &str, stop: &AtomicBool) {
+fn read_sse<R: BufRead>(reader: R, stop: &AtomicBool, mut send: impl FnMut(String)) {
     let mut data = String::new();
     for line in reader.lines() {
         if stop.load(Ordering::SeqCst) {
@@ -1225,14 +1362,7 @@ fn read_sse<R: BufRead>(reader: R, app: &AppHandle, session_id: &str, stop: &Ato
             if data.is_empty() {
                 continue;
             }
-            let payload = std::mem::take(&mut data);
-            let _ = app.emit(
-                SSE_EVENT,
-                HarnessSse {
-                    session_id: session_id.to_string(),
-                    data: payload,
-                },
-            );
+            send(std::mem::take(&mut data));
             continue;
         }
         if let Some(rest) = line.strip_prefix("data:") {
@@ -1277,10 +1407,27 @@ const EXEC_ALLOWED_ARGS: &[&[&str]] = &[
     &["agent", "list"],
 ];
 
-fn exec_args_allowed(args: &[String]) -> bool {
-    EXEC_ALLOWED_ARGS
-        .iter()
-        .any(|a| a.len() == args.len() && a.iter().zip(args).all(|(x, y)| x == y))
+// OpenCode 2.x runs as a background service; other providers' CLIs may give
+// these subcommands unrelated meanings, so they stay OpenCode-only.
+const OPENCODE_EXEC_ALLOWED_ARGS: &[&[&str]] = &[
+    &["service", "status"],
+    &["service", "start"],
+    &["service", "get", "password"],
+];
+
+fn exec_args_allowed(binary_provider: Option<&str>, args: &[String]) -> bool {
+    let matches = |a: &&[&str]| a.len() == args.len() && a.iter().zip(args).all(|(x, y)| x == y);
+    EXEC_ALLOWED_ARGS.iter().any(matches)
+        || (binary_provider == Some("opencode") && OPENCODE_EXEC_ALLOWED_ARGS.iter().any(matches))
+        // Devin reads its login location from `auth status`.
+        || (binary_provider == Some("devin") && matches(&&["auth", "status"][..]))
+        || (binary_provider == Some("grok")
+            && args.len() == 4
+            && args[0] == "--no-auto-update"
+            && args[1] == "sessions"
+            && args[2] == "delete"
+            && args[3].len() == 36
+            && uuid::Uuid::parse_str(&args[3]).is_ok())
 }
 
 /// Must be a path a resolver would hand back, not an arbitrary binary
@@ -1301,7 +1448,7 @@ pub(crate) fn is_resolved_harness_binary(
     resolved.is_ok_and(|path| path == Path::new(command))
 }
 
-/// One-shot capture of stdout (used for `cursor-agent --list-models`).
+/// One-shot provider commands: catalog probes and temporary-session cleanup.
 #[tauri::command]
 pub async fn harness_exec(
     command: String,
@@ -1310,7 +1457,7 @@ pub async fn harness_exec(
     binary_provider: Option<String>,
     binary_path: Option<String>,
 ) -> Result<String, String> {
-    if !exec_args_allowed(&args) {
+    if !exec_args_allowed(binary_provider.as_deref(), &args) {
         return Err("harness_exec: unsupported arguments".into());
     }
     tauri::async_runtime::spawn_blocking(move || {
@@ -1676,6 +1823,7 @@ fn is_harness_argv_token(part: &str) -> bool {
             | "omp"
             | "fx"
             | "hermes"
+            | "devin"
             | "agy_acp_server.par"
             | "pi"
             | "worker-server"
@@ -1916,6 +2064,7 @@ fn resolve_harness_binary_default(provider: &str) -> Option<PathBuf> {
         "fx" => resolve_fx(),
         "hermes" => resolve_hermes(),
         "antigravity" => resolve_antigravity(),
+        "devin" => resolve_devin(),
         _ => None,
     }
 }
@@ -1961,6 +2110,7 @@ fn resolve_harness_binary_override(provider: &str, binary_path: &str) -> Result<
         "fx" => &["fx"],
         "hermes" => &["hermes"],
         "antigravity" => &["agy_acp_server.par"],
+        "devin" => &["devin"],
         _ => {
             return Err(format!(
                 "Unsupported configured harness provider: {provider}"
@@ -2033,6 +2183,7 @@ fn validate_harness_binary_version(provider: &str, path: &Path) -> Result<(), St
         "claude" => lower.contains("claude"),
         "codex" => lower.contains("codex"),
         "hermes" => lower.contains("hermes"),
+        "devin" => lower.contains("devin"),
         _ => true,
     };
     if has_version && provider_marker {
@@ -2096,10 +2247,16 @@ fn validate_configured_harness_binary_identity(
     }
 }
 
+/// Prefers whatever `codex` the user's own shell resolves, like
+/// `resolve_claude`. Trying `~/.local/bin/codex` first picks the ChatGPT app's
+/// wrapper, pinned to an older bundled CLI, over a newer Homebrew or npm install.
 fn resolve_codex() -> Option<PathBuf> {
     let home = dirs_home().map(PathBuf::from);
     let mut candidates: Vec<PathBuf> = Vec::new();
 
+    if let Some(from_shell) = which_via_login_shell("codex") {
+        candidates.push(from_shell);
+    }
     if let Some(home) = &home {
         candidates.push(home.join(".local/bin/codex"));
         candidates.push(home.join(".bun/bin/codex"));
@@ -2111,9 +2268,6 @@ fn resolve_codex() -> Option<PathBuf> {
     candidates.push(PathBuf::from("/usr/local/bin/codex"));
     candidates.push(PathBuf::from("/usr/bin/codex"));
     candidates.push(PathBuf::from("/snap/bin/codex"));
-    if let Some(from_shell) = which_via_login_shell("codex") {
-        candidates.push(from_shell);
-    }
 
     // Last resort: the Codex app bundles its own CLI, but never puts it on
     // PATH. It is pinned to the app release (often a prerelease), so a real
@@ -2319,6 +2473,30 @@ fn resolve_hermes() -> Option<PathBuf> {
     candidates.push(PathBuf::from("/usr/bin/hermes"));
     candidates.push(PathBuf::from("/snap/bin/hermes"));
     if let Some(from_shell) = which_via_login_shell("hermes") {
+        candidates.push(from_shell);
+    }
+
+    first_binary(candidates)
+}
+
+fn resolve_devin() -> Option<PathBuf> {
+    let home = dirs_home().map(PathBuf::from);
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Some(home) = &home {
+        // Official installer target on macOS and Linux.
+        candidates.push(home.join(".local/bin/devin"));
+    }
+    #[cfg(windows)]
+    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+        // The Windows installer keeps its launcher beside versioned builds.
+        candidates.push(local_app_data.join("devin/cli/bin/devin"));
+    }
+    #[cfg(target_os = "macos")]
+    candidates.push(PathBuf::from("/opt/homebrew/bin/devin"));
+    candidates.push(PathBuf::from("/usr/local/bin/devin"));
+    candidates.push(PathBuf::from("/usr/bin/devin"));
+    if let Some(from_shell) = which_via_login_shell("devin") {
         candidates.push(from_shell);
     }
 
@@ -2716,6 +2894,18 @@ pub(crate) fn gui_search_path() -> String {
     gui_search_path_from(login_shell_path(), dirs_home(), std::env::var("PATH").ok())
 }
 
+/// `gui_search_path` without ever starting the login shell: its PATH is used
+/// only when something already read it. Frequent git calls take this so
+/// filters like git-lfs resolve from a Finder launch without a status refresh
+/// waiting on a slow `.zshrc`.
+pub(crate) fn cached_gui_search_path() -> String {
+    gui_search_path_from(
+        peek_login_shell_path(&LOGIN_SHELL_ENV),
+        dirs_home(),
+        std::env::var("PATH").ok(),
+    )
+}
+
 fn gui_search_path_from(
     login_path: Option<String>,
     home: Option<String>,
@@ -2854,6 +3044,17 @@ const LOGIN_SHELL_KEYS: [&str; 6] = [
 
 fn login_shell_path() -> Option<String> {
     login_shell_env("PATH")
+}
+
+/// `try_lock`, not `lock`: the read holds the lock while the shell runs, so
+/// waiting for it would block just like resolving it.
+fn peek_login_shell_path(cache: &Mutex<Option<HashMap<String, String>>>) -> Option<String> {
+    let cache = cache.try_lock().ok()?;
+    cache
+        .as_ref()?
+        .get("PATH")
+        .cloned()
+        .filter(|value| !value.is_empty())
 }
 
 fn login_shell_env(name: &str) -> Option<String> {
@@ -3546,6 +3747,48 @@ mod tests {
     }
 
     #[test]
+    fn peeking_the_login_path_never_loads_or_waits_for_it() {
+        let cache = Mutex::new(None);
+        assert_eq!(peek_login_shell_path(&cache), None);
+        assert!(cache.lock().unwrap().is_none());
+
+        *cache.lock().unwrap() = Some(HashMap::from([("PATH".into(), "/login/bin".into())]));
+        let held = cache.lock().unwrap();
+        assert_eq!(peek_login_shell_path(&cache), None);
+        drop(held);
+        assert_eq!(peek_login_shell_path(&cache), Some("/login/bin".into()));
+    }
+
+    /// LFS repos run `git-lfs` from `status` and `diff`, and a Finder launch
+    /// inherits only `/usr/bin:/bin:…`, so the cached path has to add the
+    /// fixed dirs, plus the login PATH once it has been read.
+    #[test]
+    fn cached_gui_search_path_finds_homebrew_tools_from_a_finder_launch() {
+        let path = gui_search_path_from(
+            peek_login_shell_path(&Mutex::new(None)),
+            Some("/tmp/home".into()),
+            Some("/usr/bin:/bin:/usr/sbin:/sbin".into()),
+        );
+        let parts: Vec<&str> = path.split(':').collect();
+        assert_eq!(parts[0], "/usr/bin");
+        assert!(parts.contains(&"/usr/sbin"));
+        assert!(parts.contains(&"/opt/homebrew/bin"));
+        assert!(parts.contains(&"/tmp/home/.local/bin"));
+
+        let cache = Mutex::new(Some(HashMap::from([("PATH".into(), "/login/bin".into())])));
+        let path = gui_search_path_from(
+            peek_login_shell_path(&cache),
+            Some("/tmp/home".into()),
+            Some("/inherited/bin".into()),
+        );
+        let parts: Vec<&str> = path.split(':').collect();
+        let at = |dir: &str| parts.iter().position(|part| *part == dir).unwrap();
+        assert_eq!(parts[0], "/login/bin");
+        assert!(at("/login/bin") < at("/inherited/bin"));
+        assert!(at("/inherited/bin") < at("/opt/homebrew/bin"));
+    }
+
+    #[test]
     fn resolve_gui_binary_finds_a_binary_on_the_gui_path() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -3753,6 +3996,74 @@ mod tests {
 }
 
 #[cfg(test)]
+mod output_batcher_tests {
+    use super::*;
+
+    type Batches = Arc<Mutex<Vec<Vec<String>>>>;
+
+    fn collect() -> (mpsc::Sender<String>, mpsc::Receiver<()>, Batches) {
+        let batches = Arc::new(Mutex::new(Vec::new()));
+        let sink = batches.clone();
+        let (tx, drained) = spawn_output_batcher(move |batch| sink.lock().unwrap().push(batch));
+        (tx, drained, batches)
+    }
+
+    #[test]
+    fn an_idle_stream_sends_its_first_line_at_once() {
+        let (tx, _drained, batches) = collect();
+        tx.send("first".into()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while batches.lock().unwrap().is_empty() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(*batches.lock().unwrap(), vec![vec!["first".to_string()]]);
+    }
+
+    #[test]
+    fn a_burst_shares_one_event_and_drains_before_done() {
+        let (tx, drained, batches) = collect();
+        tx.send("lead".into()).unwrap();
+        while batches.lock().unwrap().is_empty() {
+            thread::sleep(Duration::from_millis(1));
+        }
+        for i in 0..100 {
+            tx.send(format!("line {i}")).unwrap();
+        }
+        drop(tx);
+        drained.recv_timeout(Duration::from_secs(5)).unwrap();
+        let batches = batches.lock().unwrap();
+        assert!(batches.len() <= 3, "{} batches", batches.len());
+        let lines: Vec<String> = batches.iter().flatten().cloned().collect();
+        let expected: Vec<String> = std::iter::once("lead".to_string())
+            .chain((0..100).map(|i| format!("line {i}")))
+            .collect();
+        assert_eq!(lines, expected);
+    }
+
+    #[test]
+    fn a_large_line_closes_its_batch() {
+        let (tx, drained, batches) = collect();
+        tx.send("x".repeat(OUTPUT_BATCH_BYTES)).unwrap();
+        tx.send("after".into()).unwrap();
+        drop(tx);
+        drained.recv_timeout(Duration::from_secs(5)).unwrap();
+        let batches = batches.lock().unwrap();
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[1], vec!["after".to_string()]);
+    }
+
+    #[test]
+    fn sse_events_split_on_blank_lines() {
+        let stream = ": ping\ndata: one\n\ndata: two\ndata: lines\n\n";
+        let mut events = Vec::new();
+        read_sse(stream.as_bytes(), &AtomicBool::new(false), |data| {
+            events.push(data)
+        });
+        assert_eq!(events, vec!["one".to_string(), "two\nlines".to_string()]);
+    }
+}
+
+#[cfg(test)]
 mod exec_allowlist_tests {
     use super::*;
 
@@ -3762,22 +4073,66 @@ mod exec_allowlist_tests {
 
     #[test]
     fn allows_known_catalog_args() {
-        assert!(exec_args_allowed(&args(&["--version"])));
-        assert!(exec_args_allowed(&args(&["--list-models"])));
-        assert!(exec_args_allowed(&args(&["models", "--verbose"])));
-        assert!(exec_args_allowed(&args(&["models", "--json"])));
-        assert!(exec_args_allowed(&args(&["models"])));
-        assert!(exec_args_allowed(&args(&["status", "--json"])));
-        assert!(exec_args_allowed(&args(&["agent", "list"])));
+        for provider in [None, Some("cursor"), Some("opencode")] {
+            assert!(exec_args_allowed(provider, &args(&["--version"])));
+            assert!(exec_args_allowed(provider, &args(&["--list-models"])));
+            assert!(exec_args_allowed(provider, &args(&["models", "--verbose"])));
+            assert!(exec_args_allowed(provider, &args(&["models", "--json"])));
+            assert!(exec_args_allowed(provider, &args(&["models"])));
+            assert!(exec_args_allowed(provider, &args(&["status", "--json"])));
+            assert!(exec_args_allowed(provider, &args(&["agent", "list"])));
+        }
+    }
+
+    #[test]
+    fn allows_service_args_only_for_opencode() {
+        for service in [
+            &["service", "status"][..],
+            &["service", "start"][..],
+            &["service", "get", "password"][..],
+        ] {
+            assert!(exec_args_allowed(Some("opencode"), &args(service)));
+            assert!(!exec_args_allowed(None, &args(service)));
+            assert!(!exec_args_allowed(Some("cursor"), &args(service)));
+        }
+    }
+
+    #[test]
+    fn allows_grok_cleanup_only_for_one_valid_session_id() {
+        let cleanup = args(&[
+            "--no-auto-update",
+            "sessions",
+            "delete",
+            "550e8400-e29b-41d4-a716-446655440000",
+        ]);
+        assert!(exec_args_allowed(Some("grok"), &cleanup));
+        for provider in [None, Some("cursor"), Some("opencode")] {
+            assert!(!exec_args_allowed(provider, &cleanup));
+        }
+        for id in ["", "--all", "../sessions", "invalid"] {
+            let mut rejected = cleanup.clone();
+            rejected[3] = id.to_string();
+            assert!(!exec_args_allowed(Some("grok"), &rejected));
+        }
+        let mut extra = cleanup;
+        extra.push("--all".to_string());
+        assert!(!exec_args_allowed(Some("grok"), &extra));
     }
 
     #[test]
     fn rejects_other_args() {
-        assert!(!exec_args_allowed(&args(&[])));
-        assert!(!exec_args_allowed(&args(&["--help"])));
-        assert!(!exec_args_allowed(&args(&["--version", "--json"])));
-        assert!(!exec_args_allowed(&args(&["-c", "id"])));
-        assert!(!exec_args_allowed(&args(&["agent", "list", "--json"])));
+        for rejected in [
+            &[][..],
+            &["--help"][..],
+            &["--version", "--json"][..],
+            &["-c", "id"][..],
+            &["agent", "list", "--json"][..],
+            &["service", "stop"][..],
+            &["service", "get"][..],
+            &["service", "status", "--json"][..],
+        ] {
+            assert!(!exec_args_allowed(Some("opencode"), &args(rejected)));
+        }
     }
 }
 
@@ -3916,6 +4271,7 @@ mod reap_logic_tests {
         ));
         assert!(looks_like_harness_argv("/Users/n/.local/bin/claude --help"));
         assert!(looks_like_harness_argv("/Users/n/.local/bin/hermes acp"));
+        assert!(looks_like_harness_argv("/Users/n/.local/bin/devin acp"));
         assert!(!looks_like_harness_argv("tmux new -s work"));
         assert!(!looks_like_harness_argv("npm start"));
         assert!(!looks_like_harness_argv(

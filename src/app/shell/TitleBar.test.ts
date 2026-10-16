@@ -4,6 +4,7 @@ import {
   tabStripOverflow,
   titleTabContextCloseIds,
   titleTabClosable,
+  titleTabsCanCloseAll,
   type Tab,
 } from "./TitleBar";
 
@@ -113,6 +114,25 @@ describe("titleTabClosable", () => {
 
   it("allows a blank tab to be removed when another tab remains", () => {
     expect(titleTabClosable(tab({ blank: true }), 2)).toBe(true);
+  });
+});
+
+describe("titleTabsCanCloseAll", () => {
+  it("has nothing to close when the only tab is blank", () => {
+    expect(titleTabsCanCloseAll([tab({ blank: true })])).toBe(false);
+  });
+
+  it("closes a sole tab that has content", () => {
+    expect(titleTabsCanCloseAll([tab({ blank: false })])).toBe(true);
+  });
+
+  it("closes whenever more than one tab is open", () => {
+    expect(
+      titleTabsCanCloseAll([
+        tab({ id: "a", blank: true }),
+        tab({ id: "b", blank: true }),
+      ]),
+    ).toBe(true);
   });
 });
 

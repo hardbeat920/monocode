@@ -597,6 +597,51 @@ describe("usage limits", () => {
   });
 });
 
+describe("punctuation-only prose", () => {
+  it("drops a fragment that holds no words once the next block starts", () => {
+    let session = appendUser(newSession("omp", "/tmp"), "go");
+    session = applyHarnessEvent(session, { type: "message.delta", text: "." });
+    session = applyHarnessEvent(session, {
+      type: "tool.started",
+      callId: "read-1",
+      title: "Read README.md",
+    });
+    session = applyHarnessEvent(session, { type: "message.delta", text: "…" });
+    session = applyHarnessEvent(session, {
+      type: "tool.started",
+      callId: "read-2",
+      title: "Read index.ts",
+    });
+    expect(session.blocks.map((block) => block.role)).toEqual([
+      "user",
+      "tool",
+      "tool",
+    ]);
+  });
+
+  it("drops it when the message completes or the turn stops", () => {
+    let session = appendUser(newSession("omp", "/tmp"), "go");
+    session = applyHarnessEvent(session, { type: "message.delta", text: "." });
+    session = applyHarnessEvent(session, { type: "message.completed" });
+    session = applyHarnessEvent(session, { type: "message.delta", text: " . " });
+    session = stopStreaming(session);
+    expect(session.blocks.map((block) => block.role)).toEqual(["user"]);
+  });
+
+  it("keeps short messages with words, numbers or emoji", () => {
+    let session = appendUser(newSession("omp", "/tmp"), "go");
+    for (const text of ["OK.", "42", "👍"]) {
+      session = applyHarnessEvent(session, { type: "message.delta", text });
+      session = applyHarnessEvent(session, { type: "message.completed" });
+    }
+    expect(
+      session.blocks
+        .filter((block) => block.role === "assistant")
+        .map((block) => block.text),
+    ).toEqual(["OK.", "42", "👍"]);
+  });
+});
+
 describe("status blocks", () => {
   it("keeps one row when the same status repeats", () => {
     let session = appendUser(newSession("claude", "/tmp"), "go");

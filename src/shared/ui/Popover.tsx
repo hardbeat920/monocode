@@ -1,5 +1,6 @@
 import { NativePopupHost } from "./NativePopupHost";
 import {
+  createContext,
   useCallback,
   useContext,
   useEffect,
@@ -60,6 +61,21 @@ type Props = Omit<ComponentPropsWithoutRef<"div">, "style"> & {
   ignore?: string;
   ref?: Ref<HTMLDivElement>;
 };
+
+/**
+ * Set by a modal dialog, so popovers opened from its controls float above it
+ * and Escape closes them rather than the dialog.
+ */
+export const InDialog = createContext(false);
+
+/** Lifts a layer above the dialog it opened from, keeping submenus on top. */
+function dialogLayer(layer: number | undefined, inDialog: boolean): number {
+  if (!inDialog) return layer ?? LAYER.popover;
+  if (layer != null && layer >= LAYER.dialog) return layer;
+  return (
+    LAYER.dialogPopover + Math.max(0, (layer ?? LAYER.popover) - LAYER.popover)
+  );
+}
 
 const FRAME = "isolate overflow-hidden border border-content/10 shadow-xl";
 
@@ -223,7 +239,7 @@ function WebPopover({
   minHeight,
   maxHeight,
   constrainHeight = true,
-  layer = LAYER.popover,
+  layer: requestedLayer,
   bare = false,
   rounded = "rounded-xl",
   className,
@@ -236,6 +252,8 @@ function WebPopover({
   children,
   ...rest
 }: Props) {
+  const inDialog = useContext(InDialog);
+  const layer = dialogLayer(requestedLayer, inDialog);
   const frame = useRef<HTMLDivElement | null>(null);
   const surface = useRef<HTMLDivElement | null>(null);
   const [position, setPosition] = useState<PopoverPosition | null>(null);
@@ -344,6 +362,7 @@ function WebPopover({
     <div
       ref={frame}
       data-popover-side={position?.side ?? side}
+      data-dialog-popover={inDialog || undefined}
       style={{ ...placed, zIndex: layer }}
       className={bare ? undefined : `${FRAME} ${rounded}`}
     >

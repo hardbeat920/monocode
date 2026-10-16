@@ -8,6 +8,7 @@ import {
 import { codexCommandPresentation } from "../../../integrations/harness/providers/codex/codexProtocol";
 import { recoverCursorSubagents } from "../../../integrations/harness/providers/cursor/cursorSubagents";
 import { persistableAttachment } from "../model/attachments";
+import { ARTIFACT_KINDS } from "../../artifacts/artifacts";
 import type { ContextUsage } from "../model/contextUsage";
 import {
   isRemoteProjectPath,
@@ -982,6 +983,30 @@ function sanitizeBlock(
   }
   const noteCard = sanitizeNoteCard(block.noteCard);
   if (noteCard) next.noteCard = noteCard;
+  if (Array.isArray(block.artifactCards)) {
+    const cards = block.artifactCards.flatMap((card) => {
+      if (
+        !card ||
+        !ARTIFACT_KINDS.includes(card.kind) ||
+        typeof card.id !== "string" ||
+        !isPersistableId(card.id) ||
+        typeof card.title !== "string" ||
+        !card.title.trim()
+      )
+        return [];
+      return [
+        {
+          id: card.id,
+          kind: card.kind,
+          title: card.title.slice(0, 200),
+          ...(typeof card.summary === "string" && card.summary.trim()
+            ? { summary: card.summary.slice(0, 280) }
+            : {}),
+        },
+      ];
+    });
+    if (cards.length) next.artifactCards = cards;
+  }
   if (
     block.role === "user" &&
     typeof block.ciContext === "string" &&
