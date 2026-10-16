@@ -125,6 +125,10 @@ type LiveAgentTask = {
 type BackgroundTask = {
   description: string;
   toolUseId?: string;
+  command?: string;
+  startedAt: number;
+  /** Stopped by the user: the turn doesn't hold for a follow-up. */
+  stopping?: boolean;
 };
 
 type Live = {
@@ -151,6 +155,12 @@ type Live = {
   backgroundTasks: Map<string, BackgroundTask>;
   /** Rows shown for tasks still running when Claude yielded, by task id. */
   backgroundRows: Map<string, string>;
+  /** Ids in the CLI's latest list of tasks running in the background. */
+  backgroundListed: Set<string>;
+  /** Last job list sent to the UI, to skip repeats. */
+  jobsKey: string;
+  /** The open turn is one Claude started itself, not one we sent. */
+  woken: boolean;
   /** A task finished after Claude yielded; its follow-up turn is on the way. */
   awaitingResume: ReturnType<typeof setTimeout> | null;
   /** Last background list sent to the UI, to skip repeats. */
@@ -343,6 +353,10 @@ export async function cancelClaudeTurn(sessionId: string): Promise<void> {
       }),
     ).catch(() => undefined);
   }
+  live.backgroundTasks.clear();
+  live.backgroundRows.clear();
+  live.backgroundListed.clear();
+  live.jobsKey = "";
   await writeJson(
     sessionId,
     buildControlRequest(nextControlId(live), { subtype: "interrupt" }),
@@ -493,6 +507,9 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     agentTasks: new Map(),
     backgroundTasks: new Map(),
     backgroundRows: new Map(),
+    backgroundListed: new Set(),
+    jobsKey: "",
+    woken: false,
     awaitingResume: null,
     backgroundKey: "",
     taskNotes: [],
@@ -589,8 +606,12 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   live.toolsByIndex.clear();
   live.toolsById.clear();
   live.agentTasks.clear();
-  live.backgroundTasks.clear();
-  live.backgroundRows.clear();
+  // Background tasks outlive the turn that started them: they still wake
+  // Claude, and Stop still has to reach them.
+  for (const taskId of live.backgroundRows.keys()) {
+    if (!live.backgroundTasks.has(taskId)) live.backgroundRows.delete(taskId);
+  }
+  live.woken = false;
   clearAwaitingResume(live);
   live.backgroundKey = "";
   live.taskNotes = [];
@@ -709,12 +730,12 @@ function handleLine(sessionId: string, live: Live, line: string): void {
     return;
   }
   if (type === "stream_event") {
-    if (!isSubagentMessage(rec)) noteClaudeTurnStarted(live);
+    if (!isSubagentMessage(rec)) noteClaudeOutput(live);
     handleStreamEvent(live, rec);
     return;
   }
   if (type === "assistant") {
-    if (!isSubagentMessage(rec)) noteClaudeTurnStarted(live);
+    if (!isSubagentMessage(rec)) noteClaudeOutput(live);
     handleAssistant(live, rec);
     return;
   }
@@ -1204,9 +1225,15 @@ function handleAgentLifecycle(
   const started = parseTaskStarted(rec);
   if (started) {
     if (started.ambient) return true;
+    const command = started.toolUseId
+      ? live.toolsById.get(started.toolUseId)?.input.command
+      : undefined;
     live.backgroundTasks.set(started.taskId, {
       description: started.description,
       toolUseId: started.toolUseId,
+      ...(typeof command === "string" ? { command } : {}),
+      startedAt:
+        live.backgroundTasks.get(started.taskId)?.startedAt ?? Date.now(),
     });
     syncBackgroundWait(live);
     if (!isAgentTaskType(started.taskType)) return true;
@@ -1292,6 +1319,7 @@ function handleAgentLifecycle(
   const allTasks = parseBackgroundTasks(rec);
   if (!allTasks) return false;
   const next = new Set(allTasks.map((task) => task.taskId));
+  live.backgroundListed = next;
   for (const id of [...live.backgroundTasks.keys()]) {
     if (next.has(id)) continue;
     settleBackgroundRow(live, id, "completed");
@@ -1299,7 +1327,10 @@ function handleAgentLifecycle(
   }
   for (const row of allTasks) {
     if (!live.backgroundTasks.has(row.taskId)) {
-      live.backgroundTasks.set(row.taskId, { description: row.description });
+      live.backgroundTasks.set(row.taskId, {
+        description: row.description,
+        startedAt: Date.now(),
+      });
     }
   }
   const liveTasks = allTasks.filter((task) => isAgentTaskType(task.taskType));
@@ -1565,8 +1596,15 @@ function completeAgentTask(
  * than settling in the gap between the two.
  */
 function finishBackgroundTask(live: Live, taskId: string): void {
-  if (!live.backgroundTasks.delete(taskId)) return;
-  if (live.turnResultSeen && live.activeTurn && !live.awaitingResume) {
+  const task = live.backgroundTasks.get(taskId);
+  if (!task) return;
+  live.backgroundTasks.delete(taskId);
+  if (
+    !task.stopping &&
+    live.turnResultSeen &&
+    live.activeTurn &&
+    !live.awaitingResume
+  ) {
     live.awaitingResume = setTimeout(() => {
       live.awaitingResume = null;
       maybeFinishTurn(live);
@@ -1575,6 +1613,25 @@ function finishBackgroundTask(live: Live, taskId: string): void {
   }
   maybeFinishTurn(live);
   syncBackgroundWait(live);
+}
+
+/**
+ * Claude is writing. With no turn of ours open, something woke it, most often
+ * a task it left running: open a turn for that, so the session reads as busy
+ * and waits on its work like any other, until Claude yields again.
+ */
+function noteClaudeOutput(live: Live): void {
+  if (!live.activeTurn) {
+    live.activeTurn = true;
+    live.woken = true;
+    live.turnResultSeen = false;
+    live.emittedAssistant = "";
+    live.emittedReasoning = "";
+    live.pendingAssistantBoundary = false;
+    live.onEvent({ type: "session.woke" });
+    return;
+  }
+  noteClaudeTurnStarted(live);
 }
 
 /**
@@ -1684,6 +1741,7 @@ function clearAwaitingResume(live: Live): void {
  * still running, and clears it when Claude picks the thread back up.
  */
 function syncBackgroundWait(live: Live): void {
+  syncBackgroundJobs(live);
   const waiting =
     live.activeTurn && live.turnResultSeen && !live.cancelled
       ? [...live.backgroundTasks.values()].map((task) => task.description)
@@ -1693,6 +1751,45 @@ function syncBackgroundWait(live: Live): void {
   live.backgroundKey = key;
   if (live.muteUpdates) return;
   live.onEvent({ type: "background.updated", tasks: waiting });
+}
+
+/**
+ * Tells the UI every task Claude runs in the background, whichever turn
+ * started it. Only what the CLI lists as backgrounded: a foreground task is
+ * still its tool call's row.
+ */
+function syncBackgroundJobs(live: Live): void {
+  const jobs = [...live.backgroundTasks]
+    .filter(([id]) => live.backgroundListed.has(id))
+    .map(([id, task]) => ({
+      id,
+      title: task.description,
+      ...(task.command ? { command: task.command } : {}),
+      startedAt: task.startedAt,
+    }));
+  const key = JSON.stringify(jobs);
+  if (key === live.jobsKey) return;
+  live.jobsKey = key;
+  if (live.muteUpdates) return;
+  live.onEvent({ type: "background.jobs", jobs });
+}
+
+/** Stops one task Claude runs in the background, from whichever turn. */
+export async function stopClaudeBackgroundJob(
+  sessionId: string,
+  jobId: string,
+): Promise<void> {
+  const live = liveByThread.get(sessionId);
+  const task = live?.backgroundTasks.get(jobId);
+  if (!live || !task) return;
+  task.stopping = true;
+  await writeJson(
+    sessionId,
+    buildControlRequest(nextControlId(live), {
+      subtype: "stop_task",
+      task_id: jobId,
+    }),
+  );
 }
 
 function maybeFinishTurn(live: Live): void {
@@ -1711,6 +1808,11 @@ function finishActiveTurn(live: Live, extraEvents: HarnessEvent[] = []): void {
   live.turnEndPending = false;
   live.activeTurn = false;
   for (const event of extraEvents) live.onEvent(event);
+  if (live.woken) {
+    live.woken = false;
+    live.onEvent({ type: "session.idle" });
+    return;
+  }
   const done = live.turnDone;
   const failed = live.turnFailed;
   live.turnDone = null;

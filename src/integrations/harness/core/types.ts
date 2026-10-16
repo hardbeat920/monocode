@@ -1,6 +1,7 @@
 import type {
   AgentStepKind,
   Attachment,
+  BackgroundJob,
   InterjectionMeta,
   RuntimeMode,
   TaskListItem,
@@ -30,6 +31,14 @@ export type HarnessEvent =
    * running and will wake it again. Empty once it is back at work.
    */
   | { type: "background.updated"; tasks: string[] }
+  /** Every job the agent has running in the background, from any turn. */
+  | { type: "background.jobs"; jobs: BackgroundJob[] }
+  /**
+   * The agent started working on its own with no turn of ours open, most
+   * often woken by a task it left running. Busy until `session.idle`.
+   */
+  | { type: "session.woke" }
+  | { type: "session.idle" }
   | ({ type: "interjection"; text: string } & InterjectionMeta)
   | { type: "message.delta"; text: string }
   | { type: "message.completed" }
