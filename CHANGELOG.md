@@ -10,6 +10,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Remote hosts can run on **Linux without systemd**, such as containers and Firecracker microVMs. Setup starts the host as a detached background process there instead of a systemd user service, so it keeps running after SSH disconnects, and the next connect starts it again if it has stopped. Machines with systemd keep the user service and lingering.
+- The workspace tab context menu has **Close All Tabs** after Close Tabs to the Left. It closes every tab in the tab bar and resets the active one to a blank session, with the same unsaved-file and terminal confirmations as File > Close All Tabs, and it is disabled when the only tab is already blank.
+
+### Fixed
+
+- Git LFS repositories no longer fail with "git-lfs: command not found" when MonoCode is opened from Finder. Status, diffs, staging, discards, and worktree checks run Git with Homebrew and other common install directories on its PATH, plus the terminal's PATH once it has been read, so filters resolve without waiting on the login shell.
+
+### Fixed
+
+- Selecting the **whole last paragraph** of a reply, such as by triple-clicking it, shows the Add to chat and Add to notes menu instead of nothing. Such a selection ends at the start of the action row below the reply, which no longer counts as leaving the reply when it picks up none of the row's text.
+
+### Fixed
+
+- Change markers on the diff editor's scrollbar line up with their changes when long lines wrap. Markers follow the rendered line heights, including removed lines, so the scrollbar thumb covers a marker while its change is on screen, and clicking a marker scrolls to its change.
+
+### Fixed
+
+- Right-clicking an empty part of a MonoCode window no longer opens a native menu offering only **Reload**, which read like an action on the clicked item. Reload stays in the View menu (**⌘⇧R / Ctrl+Shift+R**), and text fields, editors, terminals, selected text, links, and media keep their native menus.
+
+### Fixed
+
+- The **Markdown preview** of a file such as a README shows its images, whether written as Markdown or as HTML `<img>`, including centered headers, tables, and `<picture>` elements. Paths resolve from the document's folder, or from the project root when they start with `/`, and keep their width, height, and alignment. Only image files inside the project are read, symlinks included, so a document cannot pull in files from elsewhere on disk. Remote images, and local ones that are missing or not really images, show their alt text instead of nothing.
 
 ## [0.13.0] - 2026-10-12
 

@@ -1,6 +1,6 @@
 import { invoke as invokeLocal } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { slash } from "../../shared/lib/paths";
+import { joinPath, slash } from "../../shared/lib/paths";
 import { REMOTE_PATH_PREFIX } from "../../shared/lib/remotePaths";
 import type { InterjectionMeta } from "../../features/sessions/model/session";
 
@@ -587,6 +587,19 @@ export async function readBinaryFile(path: string): Promise<Uint8Array> {
   return typeof buffer === "string"
     ? Uint8Array.from(atob(buffer), (char) => char.charCodeAt(0))
     : new Uint8Array(buffer);
+}
+
+/**
+ * Bytes of an image a project's Markdown document shows. `path` is relative to
+ * `root`, and the file is read only if it resolves inside `root`, symlinks
+ * included. A connected machine already keeps every read inside its projects.
+ */
+export function readProjectImage(root: string, path: string): Promise<Uint8Array> {
+  if (root.startsWith(REMOTE_PATH_PREFIX))
+    return readBinaryFile(joinPath(root, path));
+  return invokeLocal<ArrayBuffer>("read_project_image", { root, path }).then(
+    (buffer) => new Uint8Array(buffer),
+  );
 }
 
 export type GeneratedImageAsset = {

@@ -452,6 +452,7 @@ pub fn run() {
             fs::inspect_paths,
             fs::read_file_base64,
             fs::read_binary_file,
+            fs::read_project_image,
             fs::allow_video_stream,
             fs::write_attachment,
             fs::save_generated_image,
