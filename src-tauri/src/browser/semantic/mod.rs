@@ -1,6 +1,6 @@
-//! Semantic layer (work package 2 of the browser module, spec 8 and 9):
-//! snapshot, refs, actionability, click/hover/type/press/select/scroll,
-//! upload, dialog, wait, back/forward, screenshot and read.
+//! Semantic layer of the browser module: snapshot, refs, actionability,
+//! click/hover/type/press/select/fill/scroll, upload, dialog, wait,
+//! back/forward, screenshot, read, console and network.
 //!
 //! The core (`browser::mod`) owns admission, the lease, the busy flag, audit
 //! and the `tabs.*` actions. For every other action it calls [`execute`]
@@ -12,8 +12,8 @@
 //!
 //! - [`Exec::handle`] already resolved the tab to its CDP ids
 //!   ([`targets::TabHandle`]); the lease is the caller's and open.
-//! - [`Exec::link`] for commands (`Method` is a closed set; nothing outside
-//!   spec appendix 19.1 can be sent) and [`Link::subscribe`] for events of
+//! - [`Exec::link`] for commands (`Method` is a closed set; nothing else
+//!   can be sent) and [`Link::subscribe`] for events of
 //!   `handle.session`.
 //! - [`Exec::link`]`.policy()` for the lease (`snapshot_version`,
 //!   `frames`, `main_execution_context`, `pending_dialog`, `popups_blocked`),
@@ -26,14 +26,18 @@
 //!
 //! Layout:
 //!
-//! - [`refs`]: the ref table per tab (`e12`, `e12@4`), stable per document.
-//! - [`snapshot`]: the AX snapshot (spec 8) and its text format.
+//! - [`refs`]: the ref table per tab (`e12`, `e12@4`), stable per document;
+//!   a number is never reused within a tab.
+//! - [`snapshot`]: the AX snapshot and its text format, and the snapshot (or
+//!   its changes) attached to an action's result.
 //! - [`element`]: isolated worlds, ref resolution and the shared element
-//!   pipeline of spec 9.2 (actionability, scroll into view, hit point,
-//!   hit test, OOPIF offsets).
+//!   pipeline (actionability, scroll into view, stability, input point, hit
+//!   test, frame offsets).
 //! - [`observe`]: the post-action observation window (navigation, dialog,
 //!   popup, tab closed) and input dispatch that never hangs on a dialog.
 //! - [`input`]: `click`, `hover`, `type`, `press`, `scroll` and the key table.
+//! - [`fill`]: several form fields in one action, through `type`, `select`
+//!   and `click`.
 //! - [`cursor`]: the visible MonoCode cursor that glides to the point of a
 //!   click, hover or type, so the user can follow the agent.
 //! - [`actions`]: `navigate`, `back`, `forward`, `select`, `upload`, `dialog`,
@@ -43,18 +47,21 @@
 //!
 //! Result payloads (`ActionResult::data`), for the CLI/MCP adapters:
 //!
-//! - `snapshot`: `{snapshot, version, url, title, refs, truncated}`; the
-//!   snapshot is the text tree, refs look like `[ref=e12]`.
+//! - `snapshot`: `{snapshot, version, url, title, refs, truncated, picked}`;
+//!   the snapshot is the text tree, refs look like `[ref=e12]`, `picked` is
+//!   the ref of the element the user pointed at (or null).
+//! - Actions that can change the page (`returns_snapshot`) add
+//!   `{snapshot, snapshot_version}`: the page after them, or its changes.
 //! - `screenshot`: `{mime_type, base64, bytes}`.
 //! - `read`: `{text, offset, next_offset?, total}` (offsets in UTF-16 units,
 //!   as the page counts them).
 //! - `select`: `{selected}`; `upload`: `{files}` (base names);
 //!   `scroll`: `{x, y}` (window scroll position); `dialog`: `{type, message,
-//!   action}`; `wait`: `{for}`.
+//!   action}`; `wait`: `{for}`; `fill`: `{filled, failed?, not_filled?}`.
 //! - `console`: `{text, count, errors, next_since, level}`; `network`:
 //!   `{text, count, next_since}`. `text` is the readable listing.
 //!
-//! Outcome classes (spec 11.2): a failure before the first command that can
+//! Outcome classes: a failure before the first command that can
 //! change the page is `failed` (or `blocked`) with its reason; a CDP failure
 //! after such a command is `unknown`. Read-only round trips (resolve,
 //! actionability, quads) never make a later failure `unknown`.
@@ -96,10 +103,6 @@ pub struct Exec<'a> {
     /// Resolved tab; `None` only for actions that need no lease.
     pub handle: Option<&'a TabHandle>,
     pub settings: &'a BrowserSettings,
-    /// `link.commands_sent()` when the action started. The counter is shared
-    /// by all tabs, so this layer tracks its own page-changing writes
-    /// ([`Run::mutated`]) to decide `unknown` (spec 11.2).
-    pub commands_before: u64,
 }
 
 /// Run one semantic action. Returns exactly one result and never panics.
@@ -188,7 +191,7 @@ pub fn wants_snapshot(input: &Value) -> bool {
 }
 
 /// Time a snapshot after an action may take, on top of the action's own.
-const SNAPSHOT_BUDGET: Duration = Duration::from_secs(10);
+pub(crate) const SNAPSHOT_BUDGET: Duration = Duration::from_secs(10);
 
 /// Add the page snapshot after an action to a `done` result: `data.snapshot`
 /// (the text: the whole page, or only the changes since the last snapshot of
@@ -266,9 +269,8 @@ pub fn attach_snapshot_for(
     attach_snapshot(&run, result);
 }
 
-/// Identity of the browser host owning `link` (its policy's address).
 /// Forget a tab's refs: after a transfer the new owner must take its own
-/// snapshot, and refs the old owner saw are `ref_stale` (spec 7).
+/// snapshot, and refs the old owner saw are `ref_stale`.
 pub fn forget_refs(link: &Link, tab: &TabId) {
     refs::clear(&refs::RefKey {
         host: host_id(link),
@@ -297,6 +299,8 @@ pub fn mark_picked(
     )
 }
 
+/// Identity of the browser host owning `link` (its policy's address), which
+/// keeps the ref tables of hosts apart (the app has one, tests many).
 fn host_id(link: &Link) -> usize {
     std::sync::Arc::as_ptr(link.policy()) as usize
 }
@@ -366,7 +370,7 @@ impl Run<'_> {
         &self.handle.session
     }
 
-    /// `timeout` once the action's own deadline passed (spec 9.5).
+    /// `timeout` once the action's own deadline passed.
     pub fn check_time(&self) -> Result<(), Fail> {
         if self.ctx.expired() {
             Err(Fail::detail(
@@ -452,7 +456,7 @@ impl Run<'_> {
         std::thread::sleep(duration.min(remaining));
     }
 
-    /// The result for a failure (spec 11.2): reasons keep their class, except
+    /// The result for a failure: reasons keep their class, except
     /// a timeout after a page-changing write, which is `unknown`; CDP
     /// failures follow [`CdpError::into_result`], and a browser-side
     /// rejection is `failed` (the browser saw the command), or `unknown`

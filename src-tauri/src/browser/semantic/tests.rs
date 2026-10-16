@@ -53,6 +53,9 @@ struct Model {
     status: Option<String>,
     /// State of a checkbox; every click on the page flips it.
     checked: Option<bool>,
+    /// The iframe is a same-process frame (`SUB1`) at (100, 200) instead of
+    /// an OOPIF.
+    same_process: bool,
 }
 
 impl Default for Model {
@@ -71,6 +74,7 @@ impl Default for Model {
             glide_ms: 0,
             status: None,
             checked: None,
+            same_process: false,
         }
     }
 }
@@ -88,7 +92,7 @@ fn respond(
     let session = received.session.clone().unwrap_or_default();
     let params = &received.params;
     match received.method.as_str() {
-        "Accessibility.getFullAXTree" if session == MAIN => {
+        "Accessibility.getFullAXTree" if session == MAIN && params.get("frameId").is_none() => {
             let mut children = vec!["2", "3", "4", "5", "6", "7"];
             if model.status.is_some() {
                 children.push("8");
@@ -113,10 +117,22 @@ fn respond(
             }
             Response::Result(json!({ "nodes": nodes }))
         }
+        // A same-process frame shares the main session's node ids.
+        "Accessibility.getFullAXTree" if model.same_process => Response::Result(json!({ "nodes": [
+            ax("c1", "RootWebArea", "Ad", 51, &["c2"]),
+            ax("c2", "link", "Buy", 55, &[]),
+        ]})),
         "Accessibility.getFullAXTree" => Response::Result(json!({ "nodes": [
             ax("c1", "RootWebArea", "Ad", 1, &["c2"]),
             ax("c2", "link", "Buy", 5, &[]),
         ]})),
+        // A node by reference (the focus target of a text node) is 99.
+        "DOM.describeNode" if params.get("objectId").is_some() => {
+            Response::Result(json!({ "node": { "backendNodeId": 99 } }))
+        }
+        "DOM.describeNode" if model.same_process => {
+            Response::Result(json!({ "node": { "frameId": "SUB1" } }))
+        }
         "DOM.describeNode" => Response::Result(json!({ "node": { "frameId": "OOPIF1" } })),
         "Page.createIsolatedWorld" => Response::Result(json!({ "executionContextId": 70 })),
         "DOM.resolveNode" => {
@@ -204,6 +220,11 @@ fn respond(
                     _ => result(json!({ "ok": true })),
                 };
             }
+            if function.contains("function monocodeFocusTarget(") {
+                return Response::Result(
+                    json!({ "result": { "type": "object", "objectId": format!("{session}:99") } }),
+                );
+            }
             if function.contains("function monocodeChecked(") {
                 return match model.checked {
                     Some(checked) => result(json!({ "kind": "checkbox", "checked": checked })),
@@ -218,6 +239,10 @@ fn respond(
             }
             result(Value::Null)
         }
+        // The link inside the same-process frame, in the tab's viewport.
+        "DOM.getContentQuads" if params["backendNodeId"] == json!(55) => Response::Result(json!({
+            "quads": [[110.0, 210.0, 210.0, 210.0, 210.0, 240.0, 110.0, 240.0]]
+        })),
         "DOM.getContentQuads" => Response::Result(json!({
             "quads": [[10.0, 10.0, 110.0, 10.0, 110.0, 40.0, 10.0, 40.0]]
         })),
@@ -318,6 +343,9 @@ impl Harness {
             main_execution_context: None,
             frames,
             busy: false,
+            busy_action: 0,
+            from_user: false,
+            released: false,
             snapshot_version: 0,
             pending_dialog: None,
             opened_by: None,
@@ -377,7 +405,6 @@ impl Harness {
             input: &input,
             handle: Some(&self.handle),
             settings: &self.settings,
-            commands_before: self.link.commands_sent(),
         })
     }
 
@@ -405,6 +432,18 @@ impl Drop for Harness {
         self.link.close(Vec::new(), Duration::from_millis(200));
         let _ = std::fs::remove_dir_all(&self.cwd);
     }
+}
+
+/// The ref on the snapshot line that starts with `line` (after the indent).
+fn ref_of(snapshot: &str, line: &str) -> String {
+    snapshot
+        .lines()
+        .find_map(|l| {
+            let rest = l.trim_start().strip_prefix("- ")?.strip_prefix(line)?;
+            let at = rest.find("[ref=")? + 5;
+            Some(rest[at..].split(']').next()?.to_string())
+        })
+        .unwrap_or_else(|| panic!("no {line} in {snapshot}"))
 }
 
 fn methods(log: &[Received]) -> Vec<String> {
@@ -567,6 +606,23 @@ fn stale_and_bad_refs_fail_before_any_command() {
     let navigated = h.act(ActionKind::Click, json!({ "ref": "e3" }));
     assert_eq!(navigated.reason, Some(Reason::RefStale));
     assert!(navigated.message.contains("navigated"));
+    assert!(h.since(mark).is_empty());
+}
+
+#[test]
+fn refs_after_a_reset_never_alias_older_ones() {
+    let h = Harness::new();
+    assert!(h.snapshot().contains("button \"Save\" [ref=e2]"));
+    // Dropped refs (a navigation that committed nothing, a transfer) of the
+    // same document: the next snapshot numbers on, the old refs are stale.
+    super::forget_refs(&h.link, h.tab());
+    let again = h.snapshot();
+    assert!(again.contains("button \"Save\" [ref=e11]"), "{again}");
+    assert!(!again.contains("[ref=e2]"), "{again}");
+    let mark = h.mark();
+    let old = h.act(ActionKind::Click, json!({ "ref": "e2" }));
+    assert_eq!(old.reason, Some(Reason::RefStale), "{old:?}");
+    assert!(old.message.contains("earlier page"), "{}", old.message);
     assert!(h.since(mark).is_empty());
 }
 
@@ -872,7 +928,7 @@ fn dialogs_are_reported_never_answered_until_asked() {
     let dialog = click.observed.dialog.clone().expect("dialog reported");
     assert_eq!(dialog.kind, DialogType::Confirm);
     assert_eq!(dialog.message, "Delete 3 items?");
-    assert!(click.message.contains("browser_dialog"));
+    assert!(click.message.contains("dialog action"), "{}", click.message);
     // The page is frozen: no snapshot is taken behind the dialog.
     assert!(click.data.is_none(), "{click:?}");
     assert!(started.elapsed() < Duration::from_secs(5));
@@ -981,10 +1037,12 @@ fn actions_return_the_page_snapshot_or_its_changes() {
     assert!(away.observed.navigated);
     let text = away.data.as_ref().unwrap()["snapshot"].as_str().unwrap();
     assert!(text.contains("url: https://example.com/next"), "{text}");
-    assert!(text.contains("button \"Save\" [ref=e2]"), "{text}");
+    // Numbered on from the last document: e2 of the old page names nothing.
+    let save = ref_of(text, "button \"Save\"");
+    assert_ne!(save, "e2", "{text}");
     // Its refs work right away.
     h.model.lock().unwrap().on_release.clear();
-    let next = h.act(ActionKind::Click, json!({ "ref": "e2", "snapshot": false }));
+    let next = h.act(ActionKind::Click, json!({ "ref": save, "snapshot": false }));
     assert_eq!(next.outcome, Outcome::Done, "{next:?}");
 }
 
@@ -1134,6 +1192,19 @@ fn upload_checks_paths_first_and_uses_the_file_input_or_the_chooser() {
     let canonical = std::fs::canonicalize(&file).unwrap();
     assert_eq!(set.params["files"], json!([canonical.to_str().unwrap()]));
     assert!(mouse(&log).is_empty());
+    // A relative path is relative to the session's working directory.
+    let mark = h.mark();
+    let relative = h.act(
+        ActionKind::Upload,
+        json!({ "ref": "e9", "paths": ["cv.pdf"] }),
+    );
+    assert_eq!(relative.outcome, Outcome::Done, "{relative:?}");
+    let set = h
+        .since(mark)
+        .into_iter()
+        .find(|r| r.method == "DOM.setFileInputFiles")
+        .unwrap();
+    assert_eq!(set.params["files"], json!([canonical.to_str().unwrap()]));
     let two = h.act(
         ActionKind::Upload,
         json!({ "ref": "e9", "paths": [file.to_str().unwrap(), file.to_str().unwrap()] }),
@@ -1248,11 +1319,11 @@ fn navigate_history_wait_screenshot_read_and_scroll() {
     let data = shot.data.unwrap();
     assert_eq!(data["mime_type"], json!("image/png"));
     assert!(data["base64"].as_str().unwrap().starts_with("iVBOR"));
-    h.snapshot();
+    let save = ref_of(&h.snapshot(), "button \"Save\"");
     let mark = h.mark();
     let clipped = h.act(
         ActionKind::Screenshot,
-        json!({ "ref": "e2", "format": "jpeg", "quality": 50 }),
+        json!({ "ref": save, "format": "jpeg", "quality": 50 }),
     );
     assert_eq!(clipped.outcome, Outcome::Done, "{clipped:?}");
     let capture = h
@@ -1273,7 +1344,7 @@ fn navigate_history_wait_screenshot_read_and_scroll() {
     h.model.lock().unwrap().read_text = "z".repeat(60_000);
     let part = h.act(
         ActionKind::Read,
-        json!({ "ref": "e2", "format": "markdown" }),
+        json!({ "ref": save, "format": "markdown" }),
     );
     let data = part.data.unwrap();
     assert_eq!(data["next_offset"], json!(50_000));
@@ -1290,7 +1361,7 @@ fn navigate_history_wait_screenshot_read_and_scroll() {
     );
     assert_eq!(scrolled.outcome, Outcome::Done, "{scrolled:?}");
     assert_eq!(scrolled.data.unwrap()["y"], json!(300.0));
-    let into_view = h.act(ActionKind::Scroll, json!({ "ref": "e2" }));
+    let into_view = h.act(ActionKind::Scroll, json!({ "ref": save }));
     assert_eq!(into_view.outcome, Outcome::Done, "{into_view:?}");
 }
 
@@ -1319,7 +1390,6 @@ fn revocation_mid_action_sends_nothing_further() {
         input: &input,
         handle: Some(&h.handle),
         settings: &h.settings,
-        commands_before: h.link.commands_sent(),
     });
     assert_eq!(result.outcome, Outcome::Blocked, "{result:?}");
     assert_eq!(result.reason, Some(Reason::Revoked));
@@ -1445,4 +1515,87 @@ fn screenshots_of_tabs_without_a_cursor_send_no_cursor_calls() {
     let shot = h.act(ActionKind::Screenshot, json!({}));
     assert_eq!(shot.outcome, Outcome::Done, "{shot:?}");
     assert!(!h.sent().iter().any(|r| cursor_op(r).is_some()));
+}
+
+#[test]
+fn same_process_frames_are_offset_by_their_iframe() {
+    let h = Harness::new();
+    h.model.lock().unwrap().same_process = true;
+    let text = h.snapshot();
+    assert!(text.contains("      - link \"Buy\" [ref=e6]"), "{text}");
+    // Fetched with its frameId in the main session, not in an OOPIF one.
+    assert!(h
+        .sent()
+        .iter()
+        .any(|r| r.method == "Accessibility.getFullAXTree"
+            && r.session.as_deref() == Some(MAIN)
+            && r.params["frameId"] == json!("SUB1")));
+
+    let mark = h.mark();
+    let click = h.act(ActionKind::Click, json!({ "ref": "e6", "snapshot": false }));
+    assert_eq!(click.outcome, Outcome::Done, "{click:?}");
+    let log = h.since(mark);
+    // The <iframe>'s content box (100, 200) is the frame's viewport origin.
+    let owner = log.iter().find(|r| r.method == "DOM.getBoxModel").unwrap();
+    assert_eq!(owner.session.as_deref(), Some(MAIN));
+    assert_eq!(owner.params["backendNodeId"], json!(13));
+    // Quads are already in the tab's viewport; the page-side hit test gets
+    // the point in the frame's own.
+    let hit = log
+        .iter()
+        .find(|r| {
+            r.method == "Runtime.callFunctionOn"
+                && r.params["functionDeclaration"]
+                    .as_str()
+                    .is_some_and(|f| f.contains("function monocodeHitTest("))
+        })
+        .unwrap();
+    assert_eq!(hit.params["arguments"][0]["value"], json!(60.0));
+    assert_eq!(hit.params["arguments"][1]["value"], json!(25.0));
+    let events = mouse(&log);
+    assert_eq!(events[1].params["x"], json!(160.0));
+    assert_eq!(events[1].params["y"], json!(225.0));
+}
+
+#[test]
+fn a_text_ref_focuses_the_element_that_takes_focus_for_it() {
+    let h = Harness::new();
+    h.snapshot();
+    // e3 stands in for a static text node inside an editor.
+    h.model
+        .lock()
+        .unwrap()
+        .facts
+        .insert((MAIN.into(), 12), json!({ "text": true, "editable": true }));
+    for (kind, input) in [
+        (
+            ActionKind::Type,
+            json!({ "ref": "e3", "text": "hi", "snapshot": false }),
+        ),
+        (
+            ActionKind::Press,
+            json!({ "ref": "e3", "key": "End", "snapshot": false }),
+        ),
+    ] {
+        let mark = h.mark();
+        let result = h.act(kind, input);
+        assert_eq!(result.outcome, Outcome::Done, "{result:?}");
+        let log = h.since(mark);
+        let focus = log.iter().find(|r| r.method == "DOM.focus").unwrap();
+        assert_eq!(focus.params["backendNodeId"], json!(99), "{kind:?}");
+    }
+    // An element ref is focused itself, without the extra round trips.
+    h.model.lock().unwrap().facts.insert(
+        (MAIN.into(), 12),
+        json!({ "editable": true, "text_like": true }),
+    );
+    let mark = h.mark();
+    h.act(
+        ActionKind::Type,
+        json!({ "ref": "e3", "text": "hi", "snapshot": false }),
+    );
+    let log = h.since(mark);
+    let focus = log.iter().find(|r| r.method == "DOM.focus").unwrap();
+    assert_eq!(focus.params["backendNodeId"], json!(12));
+    assert!(!log.iter().any(|r| r.method == "DOM.describeNode"));
 }

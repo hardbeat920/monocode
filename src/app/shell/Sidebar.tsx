@@ -1393,7 +1393,7 @@ function SidebarComponent({
       return;
     }
     if (id === "browser-access") {
-      // Same switch as /browser in that thread (spec 13.2).
+      // Same switch as /browser alone in that thread.
       const enable = !sessionBrowserGranted(browserState, sessionId);
       const session = menuSessions[0];
       void setSessionBrowserGrant(sessionId, enable)

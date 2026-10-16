@@ -1,20 +1,24 @@
-//! BrowserLink: the one WebSocket to the browser (spec 5).
+//! BrowserLink: the one WebSocket to the browser.
 //!
-//! A single `browser-link` thread owns the socket. Callers hand it commands
-//! over a channel; the thread re-checks the policy under a read lock and
-//! writes the frame while still holding that lock, so a revocation (which
-//! takes the write lock) can never interleave between the check and the
-//! write. That is the whole OFF guarantee: after OFF or any epoch bump no new
-//! command reaches the socket, while a frame already written may still be
-//! executed by the browser (spec 6, "Garancije").
+//! Callers write their own command frames, one at a time under the writer
+//! lock: each re-checks the policy under a read lock and writes the frame
+//! while still holding that lock, so a revocation (which takes the write
+//! lock) can never interleave between the check and the write. That is the
+//! whole OFF guarantee: after OFF or any epoch bump no new command reaches
+//! the socket, while a frame already written may still be executed by the
+//! browser. Writing on the caller's thread means a
+//! command goes out the moment it is sent, not when the reader next looks.
 //!
-//! Responses are routed back by `id`; events fan out to subscriptions by
-//! `sessionId` and method. The set of methods is closed (`Method`), so the
-//! agent can never reach `Runtime.evaluate`, `Network.*`, `Storage.*` or any
-//! browser-level `Target.setAutoAttach` (decision D7).
+//! A single `browser-link` thread owns the read side: responses are routed
+//! back by `id`, events fan out to subscriptions by `sessionId` and method.
+//! The set of methods is closed (`Method`) and the agent only ever names an
+//! action, never a protocol method: it has no raw protocol access, so it can
+//! never reach `Runtime.evaluate`, `Storage.*` or a browser-level
+//! `Target.setAutoAttach`. The `Network.*` and `Runtime.*`
+//! methods in the set are ones MonoCode itself sends for its diagnostics.
 
 use std::collections::{HashMap, VecDeque};
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Condvar, Mutex, MutexGuard};
@@ -26,23 +30,23 @@ use serde::Deserialize;
 use serde_json::value::RawValue;
 use serde_json::{json, Value};
 use tungstenite::client::IntoClientRequest;
-use tungstenite::protocol::WebSocketConfig;
+use tungstenite::protocol::{Role, WebSocketConfig};
 use tungstenite::{Message, WebSocket};
 
 use super::diagnostics::Diagnostics;
 use super::policy::{GateError, Policy, RequestCtx};
 use super::protocol::{ActionResult, Outcome, Reason};
 
-/// Largest CDP message we accept (screenshots and AX trees), spec 5.
+/// Largest CDP message we accept (screenshots and AX trees)
 pub const MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
-/// Default per-command timeout (spec 5).
+/// Default per-command timeout.
 pub const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
-/// Ping timeout once a command timed out (spec 14.1 row 6).
+/// Ping timeout once a command timed out.
 pub const PING_TIMEOUT: Duration = Duration::from_secs(5);
-/// How long the link thread blocks in one socket read before checking the
-/// command channel again.
+/// How long the link thread blocks in one socket read before it looks for a
+/// close request, a failed write or an expired command.
 const READ_SLICE: Duration = Duration::from_millis(15);
-/// Per-subscription event queue (spec 5: 256, oldest dropped and counted).
+/// Per-subscription event queue (256, oldest dropped and counted).
 pub const EVENT_QUEUE: usize = 256;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -62,10 +66,13 @@ pub enum TargetRef {
     Target(TargetId),
 }
 
-/// Closed set of CDP methods (spec appendix 19.1). Nothing else can be sent.
+/// Closed set of CDP methods. Nothing else can be sent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Method {
     BrowserGetVersion,
+    /// Only for the MonoCode browser, which MonoCode started: a headless
+    /// one does not exit when its last page closes.
+    BrowserClose,
     TargetGetTargets,
     TargetCreateTarget,
     TargetCloseTarget,
@@ -87,7 +94,6 @@ pub enum Method {
     PageBringToFront,
     DomEnable,
     DomDisable,
-    DomGetDocument,
     DomDescribeNode,
     DomResolveNode,
     DomScrollIntoViewIfNeeded,
@@ -96,7 +102,6 @@ pub enum Method {
     DomGetNodeForLocation,
     DomFocus,
     DomSetFileInputFiles,
-    AccessibilityEnable,
     AccessibilityGetFullAXTree,
     AccessibilityGetPartialAXTree,
     RuntimeCallFunctionOn,
@@ -125,6 +130,7 @@ impl Method {
         use Method::*;
         match self {
             BrowserGetVersion => "Browser.getVersion",
+            BrowserClose => "Browser.close",
             TargetGetTargets => "Target.getTargets",
             TargetCreateTarget => "Target.createTarget",
             TargetCloseTarget => "Target.closeTarget",
@@ -145,7 +151,6 @@ impl Method {
             PageBringToFront => "Page.bringToFront",
             DomEnable => "DOM.enable",
             DomDisable => "DOM.disable",
-            DomGetDocument => "DOM.getDocument",
             DomDescribeNode => "DOM.describeNode",
             DomResolveNode => "DOM.resolveNode",
             DomScrollIntoViewIfNeeded => "DOM.scrollIntoViewIfNeeded",
@@ -154,7 +159,6 @@ impl Method {
             DomGetNodeForLocation => "DOM.getNodeForLocation",
             DomFocus => "DOM.focus",
             DomSetFileInputFiles => "DOM.setFileInputFiles",
-            AccessibilityEnable => "Accessibility.enable",
             AccessibilityGetFullAXTree => "Accessibility.getFullAXTree",
             AccessibilityGetPartialAXTree => "Accessibility.getPartialAXTree",
             RuntimeCallFunctionOn => "Runtime.callFunctionOn",
@@ -175,12 +179,13 @@ impl Method {
         }
     }
 
-    /// The only methods that may be sent without a `sessionId` (spec 5).
+    /// The only methods that may be sent without a `sessionId`.
     pub fn browser_level_allowed(self) -> bool {
         use Method::*;
         matches!(
             self,
             BrowserGetVersion
+                | BrowserClose
                 | TargetGetTargets
                 | TargetCreateTarget
                 | TargetAttachToTarget
@@ -189,7 +194,7 @@ impl Method {
         )
     }
 
-    /// Per-command timeout (spec 5).
+    /// Per-command timeout.
     pub fn timeout(self) -> Duration {
         use Method::*;
         match self {
@@ -311,7 +316,7 @@ impl CdpError {
 
     /// The action result for this error. `wrote_before` says whether the
     /// action had already written an earlier command: an interrupted
-    /// multi-step mutation is `unknown`, never `not sent` (spec 6).
+    /// multi-step mutation is `unknown`, never `not sent`.
     pub fn into_result(self, request_id: &str, mutating: bool, wrote_before: bool) -> ActionResult {
         let reason = self.reason();
         let mut result = ActionResult::from_reason(request_id, reason);
@@ -414,11 +419,6 @@ impl Subscription {
             .pop_front()
     }
 
-    /// Events dropped because the queue was full.
-    pub fn dropped(&self) -> u64 {
-        self.inner.dropped.load(Ordering::Relaxed)
-    }
-
     /// True once the link closed; no more events will arrive.
     pub fn is_closed(&self) -> bool {
         self.inner.closed.load(Ordering::Acquire)
@@ -515,7 +515,6 @@ struct FrameError {
 }
 
 enum LinkMsg {
-    Send(Box<SendRequest>),
     Close {
         detach: Vec<CdpSessionId>,
         budget: Duration,
@@ -530,12 +529,176 @@ struct Pending {
     agent: bool,
 }
 
+/// The socket as the writer sees it: write-only.
+struct WriteHalf(TcpStream);
+
+impl Read for WriteHalf {
+    fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+        // The writer's socket never reads; the link thread does.
+        Err(ErrorKind::WouldBlock.into())
+    }
+}
+
+impl Write for WriteHalf {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.flush()
+    }
+}
+
+/// The socket as the link thread sees it. Its own writes (the handshake, the
+/// close frame, the automatic close reply) take the writer lock, so they
+/// never land in the middle of a command frame.
+struct ReadHalf {
+    stream: TcpStream,
+    wire: Arc<Wire>,
+}
+
+impl Read for ReadHalf {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.stream.read(buf)
+    }
+}
+
+impl Write for ReadHalf {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut writer = self.wire.lock_writer();
+        writer.socket.get_mut().0.write_all(buf)?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.wire.lock_writer().socket.get_mut().0.flush()
+    }
+}
+
+struct Writer {
+    /// Frames and masks outgoing messages (client role); never reads.
+    socket: WebSocket<WriteHalf>,
+    next_id: u64,
+    /// False once the link thread shut down or a write failed.
+    open: bool,
+    /// OFF in progress: agent commands are refused, system detaches pass.
+    closing: bool,
+}
+
+/// What callers and the link thread share for one connection.
+struct Wire {
+    writer: Mutex<Writer>,
+    /// Commands written and not answered yet. An entry is made before its
+    /// frame is written, so the answer always finds it.
+    pending: Mutex<HashMap<u64, Pending>>,
+    /// A write failed: the link thread closes the link as `Error`.
+    failed: AtomicBool,
+}
+
+impl Wire {
+    fn lock_writer(&self) -> MutexGuard<'_, Writer> {
+        self.writer.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn lock_pending(&self) -> MutexGuard<'_, HashMap<u64, Pending>> {
+        self.pending.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Gate and write one command on the caller's thread. The answer, or the reason there will be none, goes to
+    /// `request.reply`. Returns the id of the written frame.
+    fn send(&self, inner: &LinkInner, request: SendRequest) -> Option<u64> {
+        let SendRequest {
+            ctx,
+            command,
+            timeout,
+            reply,
+        } = request;
+        let target = command.target_ref();
+        let browser_ok = command.method.browser_level_allowed();
+        let agent = matches!(ctx, SendCtx::Agent(_));
+        let mut writer = self.lock_writer();
+        if !writer.open {
+            let _ = reply.send(Err(CdpError::LinkDown { sent: false }));
+            return None;
+        }
+        if agent && writer.closing {
+            inner.commands_refused.fetch_add(1, Ordering::Relaxed);
+            let _ = reply.send(Err(CdpError::Revoked { sent: false }));
+            return None;
+        }
+        // The read lock is held until the frame is written: OFF takes the
+        // write lock, bumps the epoch and only then closes the socket, so no
+        // send after that point passes.
+        let policy = inner.policy.read();
+        let verdict = match &ctx {
+            SendCtx::Agent(ctx) => policy.gate(ctx, &target, browser_ok).map_err(map_gate),
+            SendCtx::System => {
+                if matches!(target, TargetRef::Browser) && !browser_ok {
+                    Err(CdpError::NotAllowed)
+                } else {
+                    Ok(())
+                }
+            }
+        };
+        if let Err(error) = verdict {
+            drop(policy);
+            inner.commands_refused.fetch_add(1, Ordering::Relaxed);
+            let _ = reply.send(Err(error));
+            return None;
+        }
+        let id = writer.next_id;
+        writer.next_id += 1;
+        let mut frame = json!({
+            "id": id,
+            "method": command.method.name(),
+            "params": command.params,
+        });
+        if let Some(session) = &command.session {
+            frame["sessionId"] = Value::String(session.0.clone());
+        }
+        self.lock_pending().insert(
+            id,
+            Pending {
+                reply,
+                deadline: Instant::now() + timeout,
+                method: command.method,
+                agent,
+            },
+        );
+        let written = writer.socket.send(Message::text(frame.to_string()));
+        #[cfg(test)]
+        inner
+            .write_log
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((id, Instant::now()));
+        drop(policy);
+        match written {
+            Ok(()) => {
+                inner.commands_sent.fetch_add(1, Ordering::Relaxed);
+                Some(id)
+            }
+            Err(error) => {
+                writer.open = false;
+                self.failed.store(true, Ordering::Release);
+                if let Some(pending) = self.lock_pending().remove(&id) {
+                    let _ = pending.reply.send(Err(CdpError::LinkDown { sent: false }));
+                }
+                log::debug!("browser-link write failed: {error}");
+                None
+            }
+        }
+    }
+}
+
 type ClosedHook = Box<dyn Fn(ClosedBy) + Send + Sync>;
 
 struct LinkInner {
     policy: Arc<Policy>,
     status: Mutex<LinkStatus>,
     tx: Mutex<Option<mpsc::Sender<LinkMsg>>>,
+    /// The write side of the open connection; `None` while closed.
+    wire: Mutex<Option<Arc<Wire>>>,
     stream: Mutex<Option<TcpStream>>,
     subs: Mutex<Vec<Arc<SubInner>>>,
     /// Console and network record of each page session, filled by the link
@@ -563,6 +726,7 @@ impl Link {
                 policy,
                 status: Mutex::new(LinkStatus::Closed),
                 tx: Mutex::new(None),
+                wire: Mutex::new(None),
                 stream: Mutex::new(None),
                 subs: Mutex::new(Vec::new()),
                 diagnostics: Mutex::new(Diagnostics::default()),
@@ -612,7 +776,7 @@ impl Link {
     }
 
     /// Blocking: TCP connect, then the WebSocket upgrade, which Chrome 144+
-    /// holds until the user answers the consent dialog (spec 4). On success
+    /// holds until the user answers the consent dialog. On success
     /// the link thread is running and the status is `Open`.
     pub fn open(&self, ws_url: &str, consent_timeout: Duration) -> Result<(), OpenError> {
         {
@@ -640,6 +804,7 @@ impl Link {
                 *self.inner.status.lock().unwrap_or_else(|e| e.into_inner()) = LinkStatus::Closed;
                 *self.inner.stream.lock().unwrap_or_else(|e| e.into_inner()) = None;
                 *self.inner.tx.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                *self.inner.wire.lock().unwrap_or_else(|e| e.into_inner()) = None;
                 if self.inner.aborted.load(Ordering::Acquire) {
                     return Err(OpenError::Aborted);
                 }
@@ -652,7 +817,7 @@ impl Link {
         &self,
         ws_url: &str,
         consent_timeout: Duration,
-    ) -> Result<(WebSocket<TcpStream>, mpsc::Receiver<LinkMsg>), OpenError> {
+    ) -> Result<(WebSocket<ReadHalf>, mpsc::Receiver<LinkMsg>), OpenError> {
         let request = ws_url
             .into_client_request()
             .map_err(|e| OpenError::Refused(format!("invalid endpoint: {e}")))?;
@@ -675,8 +840,29 @@ impl Link {
         let config = WebSocketConfig::default()
             .max_message_size(Some(MAX_MESSAGE_BYTES))
             .max_frame_size(Some(MAX_MESSAGE_BYTES));
+        let write_half = stream
+            .try_clone()
+            .map_err(|e| OpenError::Unreachable(e.to_string()))?;
+        let wire = Arc::new(Wire {
+            writer: Mutex::new(Writer {
+                socket: WebSocket::from_raw_socket(
+                    WriteHalf(write_half),
+                    Role::Client,
+                    Some(config),
+                ),
+                next_id: 1,
+                open: true,
+                closing: false,
+            }),
+            pending: Mutex::new(HashMap::new()),
+            failed: AtomicBool::new(false),
+        });
+        let read_half = ReadHalf {
+            stream,
+            wire: wire.clone(),
+        };
         let (socket, _response) =
-            tungstenite::client::client_with_config(request, stream, Some(config)).map_err(
+            tungstenite::client::client_with_config(request, read_half, Some(config)).map_err(
                 |error| match error {
                     tungstenite::HandshakeError::Failure(tungstenite::Error::Io(e))
                         if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) =>
@@ -692,9 +878,10 @@ impl Link {
                     other => OpenError::Refused(other.to_string()),
                 },
             )?;
-        let _ = socket.get_ref().set_read_timeout(Some(READ_SLICE));
+        let _ = socket.get_ref().stream.set_read_timeout(Some(READ_SLICE));
         let (tx, rx) = mpsc::channel();
         *self.inner.tx.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
+        *self.inner.wire.lock().unwrap_or_else(|e| e.into_inner()) = Some(wire);
         Ok((socket, rx))
     }
 
@@ -738,21 +925,24 @@ impl Link {
     }
 
     fn dispatch(&self, ctx: SendCtx, command: Command, timeout: Duration) -> Reply {
-        let tx = self
+        let wire = self
             .inner
-            .tx
+            .wire
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
             .ok_or(CdpError::NotConnected)?;
         let (reply, rx) = mpsc::channel();
-        tx.send(LinkMsg::Send(Box::new(SendRequest {
-            ctx,
-            command,
-            timeout,
-            reply,
-        })))
-        .map_err(|_| CdpError::NotConnected)?;
+        wire.send(
+            &self.inner,
+            SendRequest {
+                ctx,
+                command,
+                timeout,
+                reply,
+            },
+        );
+        drop(wire);
         match rx.recv_timeout(timeout + Duration::from_secs(2)) {
             Ok(result) => result,
             Err(mpsc::RecvTimeoutError::Timeout) => Err(CdpError::Timeout),
@@ -760,6 +950,10 @@ impl Link {
         }
     }
 
+    /// Events of the open connection that match `filter`. On a link that is
+    /// not open (or closes before this returns) the subscription is closed
+    /// from the start: no connection will ever fill it, and a later one gets
+    /// subscriptions of its own.
     pub fn subscribe(&self, filter: EventFilter) -> Subscription {
         let inner = Arc::new(SubInner {
             filter,
@@ -768,11 +962,16 @@ impl Link {
             closed: AtomicBool::new(false),
             dropped: AtomicU64::new(0),
         });
-        self.inner
-            .subs
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(inner.clone());
+        // Under the list lock: the link thread marks the status closed before
+        // it takes this lock to close every subscription, so either it sees
+        // this one in the list or this sees the link closed.
+        let mut subs = self.inner.subs.lock().unwrap_or_else(|e| e.into_inner());
+        if matches!(self.status(), LinkStatus::Open | LinkStatus::Closing) {
+            subs.push(inner.clone());
+        } else {
+            inner.closed.store(true, Ordering::Release);
+        }
+        drop(subs);
         Subscription { inner }
     }
 
@@ -858,22 +1057,21 @@ struct Closing {
 }
 
 struct Loop {
-    socket: WebSocket<TcpStream>,
+    socket: WebSocket<ReadHalf>,
     inner: Arc<LinkInner>,
-    pending: HashMap<u64, Pending>,
-    next_id: u64,
+    wire: Arc<Wire>,
     closing: Option<Closing>,
     /// Pending id of the post-timeout ping, if one is in flight.
     ping: Option<u64>,
     closed_by: Option<ClosedBy>,
 }
 
-fn run(socket: WebSocket<TcpStream>, rx: mpsc::Receiver<LinkMsg>, inner: Arc<LinkInner>) {
+fn run(socket: WebSocket<ReadHalf>, rx: mpsc::Receiver<LinkMsg>, inner: Arc<LinkInner>) {
+    let wire = socket.get_ref().wire.clone();
     let mut state = Loop {
         socket,
         inner,
-        pending: HashMap::new(),
-        next_id: 1,
+        wire,
         closing: None,
         ping: None,
         closed_by: None,
@@ -883,7 +1081,6 @@ fn run(socket: WebSocket<TcpStream>, rx: mpsc::Receiver<LinkMsg>, inner: Arc<Lin
         if channel_open {
             loop {
                 match rx.try_recv() {
-                    Ok(LinkMsg::Send(request)) => state.handle_send(*request),
                     Ok(LinkMsg::Close {
                         detach,
                         budget,
@@ -901,6 +1098,10 @@ fn run(socket: WebSocket<TcpStream>, rx: mpsc::Receiver<LinkMsg>, inner: Arc<Lin
                 }
             }
         }
+        if state.closed_by.is_none() && state.wire.failed.load(Ordering::Acquire) {
+            state.closed_by = Some(ClosedBy::Error);
+            break;
+        }
         state.read_once();
         state.expire();
         state.finish_close_if_due();
@@ -909,87 +1110,15 @@ fn run(socket: WebSocket<TcpStream>, rx: mpsc::Receiver<LinkMsg>, inner: Arc<Lin
 }
 
 impl Loop {
-    fn handle_send(&mut self, request: SendRequest) {
-        let SendRequest {
-            ctx,
-            command,
-            timeout,
-            reply,
-        } = request;
-        let target = command.target_ref();
-        let browser_ok = command.method.browser_level_allowed();
-        let agent = matches!(ctx, SendCtx::Agent(_));
-        if agent && self.closing.is_some() {
-            self.inner.commands_refused.fetch_add(1, Ordering::Relaxed);
-            let _ = reply.send(Err(CdpError::Revoked { sent: false }));
-            return;
-        }
-        // The read lock is held until the frame is written: OFF takes the
-        // write lock, bumps the epoch and only then closes the socket, so no
-        // send after that point passes (spec 5, `send()` gate).
-        let policy = self.inner.policy.read();
-        let verdict = match &ctx {
-            SendCtx::Agent(ctx) => policy.gate(ctx, &target, browser_ok).map_err(map_gate),
-            SendCtx::System => {
-                if matches!(target, TargetRef::Browser) && !browser_ok {
-                    Err(CdpError::NotAllowed)
-                } else {
-                    Ok(())
-                }
-            }
-        };
-        if let Err(error) = verdict {
-            drop(policy);
-            self.inner.commands_refused.fetch_add(1, Ordering::Relaxed);
-            let _ = reply.send(Err(error));
-            return;
-        }
-        let id = self.next_id;
-        self.next_id += 1;
-        let mut frame = json!({
-            "id": id,
-            "method": command.method.name(),
-            "params": command.params,
-        });
-        if let Some(session) = &command.session {
-            frame["sessionId"] = Value::String(session.0.clone());
-        }
-        let written = self.socket.send(Message::text(frame.to_string()));
-        #[cfg(test)]
-        self.inner
-            .write_log
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push((id, Instant::now()));
-        drop(policy);
-        match written {
-            Ok(()) => {
-                self.inner.commands_sent.fetch_add(1, Ordering::Relaxed);
-                self.pending.insert(
-                    id,
-                    Pending {
-                        reply,
-                        deadline: Instant::now() + timeout,
-                        method: command.method,
-                        agent,
-                    },
-                );
-            }
-            Err(error) => {
-                let _ = reply.send(Err(CdpError::LinkDown { sent: false }));
-                log::debug!("browser-link write failed: {error}");
-                self.closed_by = Some(ClosedBy::Error);
-            }
-        }
-    }
-
     fn begin_close(&mut self, detach: Vec<CdpSessionId>, budget: Duration, done: mpsc::Sender<()>) {
         if self.closing.is_some() {
             return;
         }
         *self.inner.status.lock().unwrap_or_else(|e| e.into_inner()) = LinkStatus::Closing;
+        // From here on only system commands are written.
+        self.wire.lock_writer().closing = true;
         // Agent requests still waiting for an answer were written: `unknown`.
-        for (_, pending) in self.pending.drain() {
+        for (_, pending) in self.wire.lock_pending().drain() {
             let error = if pending.agent {
                 CdpError::Revoked { sent: true }
             } else {
@@ -1000,15 +1129,18 @@ impl Loop {
         self.ping = None;
         for session in detach {
             let (reply, _rx) = mpsc::channel();
-            self.handle_send(SendRequest {
-                ctx: SendCtx::System,
-                command: Command::browser(
-                    Method::TargetDetachFromTarget,
-                    json!({ "sessionId": session.0 }),
-                ),
-                timeout: budget,
-                reply,
-            });
+            self.wire.send(
+                &self.inner,
+                SendRequest {
+                    ctx: SendCtx::System,
+                    command: Command::browser(
+                        Method::TargetDetachFromTarget,
+                        json!({ "sessionId": session.0 }),
+                    ),
+                    timeout: budget,
+                    reply,
+                },
+            );
         }
         self.closing = Some(Closing {
             deadline: Instant::now() + budget,
@@ -1020,7 +1152,7 @@ impl Loop {
         let Some(closing) = &self.closing else {
             return;
         };
-        let detaches_done = self.pending.is_empty();
+        let detaches_done = self.wire.lock_pending().is_empty();
         if !detaches_done && Instant::now() < closing.deadline {
             return;
         }
@@ -1078,7 +1210,8 @@ impl Loop {
             if self.ping == Some(id) {
                 self.ping = None;
             }
-            if let Some(pending) = self.pending.remove(&id) {
+            let pending = self.wire.lock_pending().remove(&id);
+            if let Some(pending) = pending {
                 let result = match frame.error {
                     Some(error) => Err(CdpError::Protocol {
                         code: error.code,
@@ -1130,28 +1263,31 @@ impl Loop {
         }
     }
 
-    /// Command timeouts (spec 5) and the post-timeout ping (spec 14.1 row 6).
+    /// Command timeouts and the post-timeout ping.
     fn expire(&mut self) {
         let now = Instant::now();
-        let expired: Vec<u64> = self
-            .pending
-            .iter()
-            .filter(|(_, p)| now >= p.deadline)
-            .map(|(id, _)| *id)
-            .collect();
+        let expired: Vec<(u64, Pending)> = {
+            let mut pending = self.wire.lock_pending();
+            let ids: Vec<u64> = pending
+                .iter()
+                .filter(|(_, p)| now >= p.deadline)
+                .map(|(id, _)| *id)
+                .collect();
+            ids.into_iter()
+                .filter_map(|id| pending.remove(&id).map(|p| (id, p)))
+                .collect()
+        };
         if expired.is_empty() {
             return;
         }
         let mut ping_failed = false;
-        for id in expired {
-            if let Some(pending) = self.pending.remove(&id) {
-                if self.ping == Some(id) {
-                    ping_failed = true;
-                    self.ping = None;
-                }
-                log::debug!("browser-link: {} timed out", pending.method.name());
-                let _ = pending.reply.send(Err(CdpError::Timeout));
+        for (id, pending) in expired {
+            if self.ping == Some(id) {
+                ping_failed = true;
+                self.ping = None;
             }
+            log::debug!("browser-link: {} timed out", pending.method.name());
+            let _ = pending.reply.send(Err(CdpError::Timeout));
         }
         if ping_failed {
             self.closed_by = Some(ClosedBy::Error);
@@ -1159,23 +1295,28 @@ impl Loop {
         }
         if self.ping.is_none() && self.closing.is_none() {
             let (reply, _rx) = mpsc::channel();
-            let id = self.next_id;
-            self.handle_send(SendRequest {
-                ctx: SendCtx::System,
-                command: Command::browser(Method::BrowserGetVersion, json!({})),
-                timeout: PING_TIMEOUT,
-                reply,
-            });
-            if self.pending.contains_key(&id) {
-                self.ping = Some(id);
-            }
+            self.ping = self.wire.send(
+                &self.inner,
+                SendRequest {
+                    ctx: SendCtx::System,
+                    command: Command::browser(Method::BrowserGetVersion, json!({})),
+                    timeout: PING_TIMEOUT,
+                    reply,
+                },
+            );
         }
     }
 
     fn shutdown(mut self) {
         let closed_by = self.closed_by.unwrap_or(ClosedBy::Error);
-        let _ = self.socket.get_ref().shutdown(std::net::Shutdown::Both);
-        for (_, pending) in self.pending.drain() {
+        let _ = self
+            .socket
+            .get_ref()
+            .stream
+            .shutdown(std::net::Shutdown::Both);
+        // No caller writes or registers a command after this.
+        self.wire.lock_writer().open = false;
+        for (_, pending) in self.wire.lock_pending().drain() {
             let error = match closed_by {
                 ClosedBy::Us if pending.agent => CdpError::Revoked { sent: true },
                 _ => CdpError::LinkDown { sent: true },
@@ -1183,6 +1324,7 @@ impl Loop {
             let _ = pending.reply.send(Err(error));
         }
         *self.inner.tx.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *self.inner.wire.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *self.inner.stream.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *self.inner.status.lock().unwrap_or_else(|e| e.into_inner()) = LinkStatus::Closed;
         {
@@ -1234,6 +1376,9 @@ mod tests {
             main_execution_context: None,
             frames: HashMap::new(),
             busy: false,
+            busy_action: 0,
+            from_user: false,
+            released: false,
             snapshot_version: 0,
             pending_dialog: None,
             opened_by: None,
@@ -1309,6 +1454,54 @@ mod tests {
         assert!(matches!(err, CdpError::Protocol { code: -32000, .. }));
         link.close(Vec::new(), Duration::from_millis(200));
         assert_eq!(link.status(), LinkStatus::Closed);
+    }
+
+    /// A command goes out when it is sent, not when the link thread next
+    /// looks: sequential commands do not each wait out a read slice.
+    #[test]
+    fn sequential_commands_do_not_wait_for_the_read_slice() {
+        let server = FakeCdp::start();
+        let (policy, _) = policy_with_lease();
+        let link = Link::new(policy);
+        link.open(&server.url, Duration::from_secs(5)).unwrap();
+        let rounds = 100u32;
+        let started = Instant::now();
+        for _ in 0..rounds {
+            link.send_system(Command::browser(Method::BrowserGetVersion, json!({})))
+                .unwrap();
+        }
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < READ_SLICE * rounds / 2,
+            "{rounds} commands took {elapsed:?}"
+        );
+        link.close(Vec::new(), Duration::from_millis(200));
+    }
+
+    /// A subscription made when no connection is open is closed from the
+    /// start: its reader (an event pump) ends instead of waiting forever, and
+    /// the next connection does not deliver to it.
+    #[test]
+    fn subscribing_to_a_closed_link_returns_a_closed_subscription() {
+        let server = FakeCdp::start();
+        let (policy, _) = policy_with_lease();
+        let link = Link::new(policy);
+        let early = link.subscribe(EventFilter::all());
+        assert!(early.is_closed());
+        assert!(early.recv_timeout(Duration::from_secs(5)).is_none());
+        link.open(&server.url, Duration::from_secs(5)).unwrap();
+        let live = link.subscribe(EventFilter::all());
+        assert!(!live.is_closed());
+        link.close(Vec::new(), Duration::from_millis(200));
+        assert!(live.is_closed());
+        let late = link.subscribe(EventFilter::all());
+        assert!(late.is_closed());
+        link.open(&server.url, Duration::from_secs(5)).unwrap();
+        let fresh = link.subscribe(EventFilter::all());
+        server.emit("Page.loadEventFired", json!({}), Some("S1"));
+        assert!(fresh.recv_timeout(Duration::from_secs(2)).is_some());
+        assert!(late.try_recv().is_none());
+        link.close(Vec::new(), Duration::from_millis(200));
     }
 
     #[test]

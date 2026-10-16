@@ -82,7 +82,6 @@ struct Shared {
     stop: AtomicBool,
     /// Streams held open in `Silent` mode so the client keeps waiting.
     held: Mutex<Vec<TcpStream>>,
-    next_target: AtomicU64,
 }
 
 /// A fake browser endpoint on a loopback port.
@@ -128,7 +127,6 @@ impl FakeCdp {
             connections: AtomicUsize::new(0),
             stop: AtomicBool::new(false),
             held: Mutex::new(Vec::new()),
-            next_target: AtomicU64::new(1),
         });
         let acceptor = shared.clone();
         thread::Builder::new()
@@ -263,6 +261,9 @@ fn accept_loop(listener: TcpListener, shared: Arc<Shared>) {
 }
 
 fn handle_connection(mut stream: TcpStream, shared: Arc<Shared>) {
+    // On macOS and Windows an accepted socket inherits the listener's
+    // non-blocking mode; the read timeouts below need a blocking one.
+    let _ = stream.set_nonblocking(false);
     let _ = stream.set_nodelay(true);
     match &shared.mode {
         Mode::Silent => {

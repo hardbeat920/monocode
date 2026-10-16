@@ -231,17 +231,17 @@ fn should_request_quit(code: Option<i32>) -> bool {
     code.is_some() || cfg!(any(target_os = "linux", target_os = "windows"))
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-/// `monocode browser ACTION ...`: the agent-facing browser CLI (spec 12.5).
+/// `monocode browser ACTION ...`: the agent-facing browser CLI.
 pub fn browser_cli(args: Vec<String>) -> i32 {
     browser::agent::cli::run(args)
 }
 
-/// `monocode browser-mcp`: the browser tools as an MCP stdio server (spec 12.1).
+/// `monocode browser-mcp`: the browser tools as an MCP stdio server.
 pub fn browser_mcp() -> i32 {
     browser::agent::mcp::run()
 }
 
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(target_os = "macos")]
     macos::register_spellcheck_default();

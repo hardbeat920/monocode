@@ -1,10 +1,11 @@
-//! The agent-facing tool set (spec 12.3): names, descriptions, input schemas
-//! and the mapping from a tool call to a protocol action.
+//! The agent-facing tool set: names, descriptions, input schemas and the
+//! mapping from a tool call to a protocol action.
 //!
 //! Schemas are written by hand from the parameter records in `protocol.rs`;
 //! the tests prove that every schema accepts exactly the fields its record
-//! accepts and requires exactly the ones it requires. Descriptions come from
-//! `docs/browser-instructions.md`, the same text the CLI instructions use.
+//! accepts and requires exactly the ones it requires. Descriptions are the
+//! tool sections of `docs/browser-instructions.md`, whose overview the MCP
+//! server and the CLI instructions share.
 
 use serde_json::{json, Map, Value};
 
@@ -765,7 +766,7 @@ mod tests {
             assert!(definition["inputSchema"]["properties"]["request_id"].is_object());
         }
         assert!(input_schema("browser_evaluate").is_none());
-        // No tool reaches page JavaScript or the raw protocol (decision D7).
+        // No tool reaches page JavaScript or the raw protocol.
         for tool in TOOLS {
             for banned in ["evaluate", "cdp", "script", "javascript"] {
                 assert!(!tool.name.contains(banned));

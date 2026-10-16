@@ -1,7 +1,8 @@
 //! What the operating system says about listening ports and processes.
-//! Every function answers for the current user's processes only and returns
-//! an empty answer rather than an error: a missing dev server is the worst
-//! outcome of a failed read.
+//! On macOS and Linux every function answers for the current user's
+//! processes only; on Windows the tables cover every user. Every function
+//! returns an empty answer rather than an error: a missing dev server is the
+//! worst outcome of a failed read.
 
 use std::collections::{HashMap, HashSet};
 use std::net::{Ipv4Addr, Ipv6Addr};

@@ -17,12 +17,15 @@ use super::{actions, element, input, observe, Fail, Run};
 /// Fields per call.
 const MAX_FIELDS: usize = 50;
 
-/// Checked state of a checkbox, radio button or ARIA switch/checkbox.
+/// Checked state of a checkbox, radio button or ARIA switch/checkbox (for a
+/// text node from a full snapshot, of its element).
 const CHECKED_JS: &str = r#"function monocodeChecked() {
-  if (this instanceof HTMLInputElement && (this.type === 'checkbox' || this.type === 'radio')) {
-    return { kind: this.type, checked: this.checked };
+  const el = this.nodeType === 1 ? this : this.parentElement;
+  if (!el) return { kind: 'none' };
+  if (el instanceof HTMLInputElement && (el.type === 'checkbox' || el.type === 'radio')) {
+    return { kind: el.type, checked: el.checked };
   }
-  const aria = this.getAttribute('aria-checked') ?? this.getAttribute('aria-pressed');
+  const aria = el.getAttribute('aria-checked') ?? el.getAttribute('aria-pressed');
   if (aria !== null) return { kind: 'aria', checked: aria === 'true' };
   return { kind: 'none' };
 }"#;

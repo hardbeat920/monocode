@@ -5,6 +5,7 @@ import {
   answerBrowserRequest,
   BROWSER_CHANNELS,
   browserAccessTurnedOff,
+  browserRequestsToDecline,
   cancelBrowserPick,
   channelKind,
   browserNoticeSnapshot,
@@ -21,6 +22,7 @@ import {
   inspectPages,
   listUserBrowserTabs,
   MANAGED_BROWSER_CHANNELS,
+  managedChoiceChannel,
   openBrowserWindow,
   pickBrowserElement,
   resetBrowserStore,
@@ -51,7 +53,18 @@ const granted = (sessionId = "s1") => ({
   turn_active: false,
   tabs: 0,
   requested: false,
+  turned_off: false,
 });
+
+/** Lets a test push `BrowserState` events through the store's listener. */
+function captureStateEvents(): (state: BrowserState) => void {
+  let handler: ((event: { payload: BrowserState }) => void) | undefined;
+  vi.mocked(listen).mockImplementationOnce(async (_event, next) => {
+    handler = next as (event: { payload: BrowserState }) => void;
+    return () => {};
+  });
+  return (state) => handler?.({ payload: state });
+}
 
 const inMode = (mode: BrowserMode, patch: Partial<BrowserState> = {}) =>
   browserState({ settings: { ...DEFAULT_BROWSER_SETTINGS, mode }, ...patch });
@@ -146,6 +159,34 @@ describe("browser state views", () => {
         managed: false,
       }),
     ).toBe("Microsoft Edge 145.0.1");
+    // Brave reports the Chromium it is built on as "Chrome/…".
+    expect(
+      browserProductLabel({
+        kind: "brave",
+        channel: "brave",
+        product: "Chrome/144.0.7559.60",
+        major: 144,
+        user_data_dir: "",
+        tabs_total: 0,
+        managed: true,
+      }),
+    ).toBe("Brave (Chromium 144.0.7559.60)");
+  });
+
+  it("shows the browser a channel kept from attach mode starts", () => {
+    expect(managedChoiceChannel({ kind: "auto" })).toBe("auto");
+    expect(managedChoiceChannel({ kind: "user_data_dir", path: "/p" })).toBe(
+      "auto",
+    );
+    expect(managedChoiceChannel({ kind: "channel", channel: "brave" })).toBe(
+      "brave",
+    );
+    expect(
+      managedChoiceChannel({ kind: "channel", channel: "chrome-beta" }),
+    ).toBe("chrome");
+    expect(
+      managedChoiceChannel({ kind: "channel", channel: "msedge-canary" }),
+    ).toBe("msedge");
   });
 
   it("points the consent guide at the chosen browser", () => {
@@ -293,30 +334,48 @@ describe("dropped connection toast", () => {
     expect(connectionDropNotice(connected, connected)).toBeNull();
     expect(connectionDropNotice(null, dropped)).toBeNull();
   });
+
+  it("stays quiet when the MonoCode browser closes, and not in attach mode", () => {
+    for (const mode of ["managed", "private"] as const) {
+      const running = inMode(mode, { sessions: [granted()] });
+      expect(
+        connectionDropNotice(running, {
+          ...running,
+          connection: { state: "idle", since_ms: 1 },
+        }),
+      ).toBeNull();
+    }
+    const attached = inMode("attach", { sessions: [granted()] });
+    expect(
+      connectionDropNotice(attached, {
+        ...attached,
+        connection: { state: "disconnected", since_ms: 1 },
+      }),
+    ).not.toBeNull();
+  });
 });
 
 describe("browser store", () => {
   it("keeps the reply of a command and the state the event brings", async () => {
-    resetBrowserStore(browserState({ toggle_on: false }));
-    vi.mocked(invoke).mockResolvedValueOnce(browserState());
+    const emit = captureStateEvents();
+    vi.mocked(invoke).mockResolvedValueOnce(browserState({ toggle_on: false }));
     const listener = vi.fn();
     const stop = subscribeBrowserState(listener);
+    await vi.waitFor(() =>
+      expect(browserStateSnapshot()?.toggle_on).toBe(false),
+    );
+    vi.mocked(invoke).mockResolvedValueOnce(browserState());
     await setBrowserToggle(true);
     expect(invoke).toHaveBeenCalledWith("browser_toggle", { on: true });
     expect(browserStateSnapshot()?.toggle_on).toBe(true);
-    expect(listener).toHaveBeenCalled();
+    emit(browserState({ sessions: [granted()] }));
+    expect(browserStateSnapshot()?.sessions).toHaveLength(1);
+    expect(listener).toHaveBeenCalledTimes(3);
     stop();
   });
 
   it("loads the state once and follows the event", async () => {
-    let emit: (state: BrowserState) => void = () => {};
-    vi.mocked(listen).mockImplementationOnce(async (_event, handler) => {
-      emit = (state) =>
-        (handler as (event: { payload: BrowserState }) => void)({
-          payload: state,
-        });
-      return () => {};
-    });
+    const emit = captureStateEvents();
     vi.mocked(invoke).mockResolvedValueOnce(browserState({ toggle_on: false }));
     const stop = subscribeBrowserState(() => {});
     await vi.waitFor(() =>
@@ -328,15 +387,23 @@ describe("browser store", () => {
   });
 
   it("toasts when the event reports a drop", async () => {
-    resetBrowserStore(browserState({ sessions: [granted()] }));
+    const emit = captureStateEvents();
     vi.mocked(invoke).mockResolvedValueOnce(
-      browserState({
+      inMode("attach", { sessions: [granted()] }),
+    );
+    const stop = subscribeBrowserState(() => {});
+    await vi.waitFor(() =>
+      expect(browserStateSnapshot()?.sessions).toHaveLength(1),
+    );
+    expect(browserNoticeSnapshot()).toBeNull();
+    emit(
+      inMode("attach", {
         sessions: [granted()],
         connection: { state: "disconnected", since_ms: 1 },
       }),
     );
-    await setBrowserToggle(true);
     expect(browserNoticeSnapshot()?.settings).toBe(true);
+    stop();
   });
 
   it("answers a thread's request and opens the MonoCode browser", async () => {
@@ -350,19 +417,46 @@ describe("browser store", () => {
     expect(invoke).toHaveBeenCalledWith("browser_open_window", undefined);
   });
 
-  it("remembers which threads the user turned off in this run", async () => {
-    vi.mocked(invoke).mockResolvedValue(browserState());
-    expect(browserAccessTurnedOff("s1")).toBe(false);
-    await setSessionBrowserGrant("s1", false);
-    expect(browserAccessTurnedOff("s1")).toBe(true);
-    await answerBrowserRequest("s1", false);
-    expect(browserAccessTurnedOff("s1")).toBe(true);
-    await answerBrowserRequest("s1", true);
-    expect(browserAccessTurnedOff("s1")).toBe(false);
+  it("reads which threads the user turned off from the backend", async () => {
+    const off = browserState({
+      sessions: [{ ...granted(), granted: false, turned_off: true }],
+    });
+    expect(browserAccessTurnedOff(browserState(), "s1")).toBe(false);
+    expect(browserAccessTurnedOff(off, "s1")).toBe(true);
+    expect(browserAccessTurnedOff(off, "s2")).toBe(false);
+    expect(browserAccessTurnedOff(null, "s1")).toBe(false);
+    vi.mocked(invoke).mockResolvedValue(off);
     await revokeBrowserSession("s1");
-    expect(browserAccessTurnedOff("s1")).toBe(true);
+    expect(invoke).toHaveBeenCalledWith("browser_revoke", { sessionId: "s1" });
+    expect(browserAccessTurnedOff(browserStateSnapshot(), "s1")).toBe(true);
+    vi.mocked(invoke).mockResolvedValue(
+      browserState({ sessions: [granted()] }),
+    );
     await setSessionBrowserGrant("s1", true);
-    expect(browserAccessTurnedOff("s1")).toBe(false);
+    expect(browserAccessTurnedOff(browserStateSnapshot(), "s1")).toBe(false);
+  });
+
+  it("declines only the requests of sessions this window runs", () => {
+    const asking = (session_id: string, window: string) => ({
+      ...granted(session_id),
+      granted: false,
+      window,
+      requested: true,
+    });
+    const state = browserState({
+      sessions: [
+        asking("mine", "main"),
+        asking("eligible", "main"),
+        asking("theirs", "window-2"),
+        { ...granted("quiet"), window: "main" },
+      ],
+    });
+    const leave = (id: string) => id === "eligible";
+    expect(browserRequestsToDecline(state, "main", leave)).toEqual(["mine"]);
+    expect(browserRequestsToDecline(state, "window-2", leave)).toEqual([
+      "theirs",
+    ]);
+    expect(browserRequestsToDecline(null, "main", leave)).toEqual([]);
   });
 
   it("lists the free tabs and gives one to a thread", async () => {
@@ -376,15 +470,12 @@ describe("browser store", () => {
     vi.mocked(invoke).mockResolvedValue(
       browserState({ sessions: [granted("s2")], tabs: [browserTab()] }),
     );
-    await setSessionBrowserGrant("s2", false);
-    expect(browserAccessTurnedOff("s2")).toBe(true);
     await giveBrowserTab("f_0000000a", "s2");
     expect(invoke).toHaveBeenCalledWith("browser_give_tab", {
       free: "f_0000000a",
       sessionId: "s2",
     });
     expect(browserStateSnapshot()?.tabs).toHaveLength(1);
-    expect(browserAccessTurnedOff("s2")).toBe(false);
   });
 
   it("does not toast after the user disconnects", async () => {
@@ -419,15 +510,36 @@ describe("browser MCP registration", () => {
   });
 
   it("does not ask an unsupported provider again in the same run", async () => {
+    // `browser_mcp_register`'s reply for OpenCode 2 (`register.rs`).
     vi.mocked(invoke).mockResolvedValue({
       provider: "opencode",
       supported: false,
       registered: false,
       current: false,
-      unsupportedReason: "OpenCode 2",
+      configPath: "/home/me/.config/opencode/opencode.json",
+      unsupportedReason:
+        "OpenCode 2 runs MCP servers and shell commands from its shared background service, which does not carry this session's MonoCode credential, so browser tools cannot work there yet. OpenCode 1 is supported.",
     });
     await ensureBrowserMcp("opencode", "/repo");
     await ensureBrowserMcp("opencode", "/repo");
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares one registration between threads starting together", async () => {
+    let finish: (value: unknown) => void = () => {};
+    vi.mocked(invoke).mockImplementationOnce(
+      () => new Promise((resolve) => (finish = resolve)),
+    );
+    const first = ensureBrowserMcp("cursor", "/repo");
+    const second = ensureBrowserMcp("cursor", "/other");
+    finish({
+      provider: "cursor",
+      supported: true,
+      registered: true,
+      current: true,
+    });
+    await Promise.all([first, second]);
+    await ensureBrowserMcp("cursor", "/repo");
     expect(invoke).toHaveBeenCalledTimes(1);
   });
 

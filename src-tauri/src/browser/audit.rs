@@ -1,10 +1,10 @@
-//! Audit (spec 11.5, decision D10): what the agent did and where, never what
+//! Audit: what the agent did and where, never what
 //! it saw. Three tables in the app's SQLite database:
 //!
 //! - `browser_audit`: one row per agent action with redacted parameters.
 //! - `browser_events`: connection and permission events (who caused them).
 //! - `browser_leases`: tabs the module opened, for diagnostics after a crash.
-//!   Tabs from an earlier run are never re-adopted (spec 4 step 7).
+//!   Tabs from an earlier run are never re-adopted.
 //!
 //! Retention is 30 days, pruned at startup; the user can clear everything
 //! from Settings.
@@ -16,9 +16,9 @@ use sha2::{Digest, Sha256};
 use super::policy::{audit_url, now_ms};
 use super::protocol::{ActionKind, AuditEntry, BrowserSettings, Epoch, Outcome, Reason, TabId};
 
-/// 30 days, spec 11.5.
+/// Rows older than 30 days are pruned.
 pub const RETENTION_MS: i64 = 30 * 24 * 3600 * 1000;
-/// Settings shows the last 50 rows per session (spec 13).
+/// Settings shows the last 50 rows per session.
 pub const DEFAULT_LIST_LIMIT: u32 = 50;
 pub const MAX_LIST_LIMIT: u32 = 1000;
 
@@ -215,7 +215,7 @@ pub fn prune(conn: &Connection, now_ms: i64) -> rusqlite::Result<usize> {
     Ok(removed)
 }
 
-/// A connection or permission event (spec 11.5 `browser_events`).
+/// A connection or permission event (`browser_events`).
 pub fn event(
     conn: &Connection,
     kind: &str,
@@ -326,7 +326,7 @@ pub fn lease_transferred(conn: &Connection, tab: &TabId, to: &str) -> rusqlite::
 }
 
 /// Leases of earlier runs still marked open: closed on startup because the
-/// module never re-adopts tabs (spec 4). Returns how many were closed out.
+/// module never re-adopts tabs. Returns how many were closed out.
 pub fn close_stale_leases(conn: &Connection, run_id: u64) -> rusqlite::Result<usize> {
     conn.execute(
         "UPDATE browser_leases SET closed_at = ?2 WHERE closed_at IS NULL AND run_id <> ?1",
@@ -334,6 +334,7 @@ pub fn close_stale_leases(conn: &Connection, run_id: u64) -> rusqlite::Result<us
     )
 }
 
+#[cfg(test)]
 pub fn open_lease_count(conn: &Connection) -> rusqlite::Result<i64> {
     conn.query_row(
         "SELECT COUNT(*) FROM browser_leases WHERE closed_at IS NULL",
@@ -344,9 +345,10 @@ pub fn open_lease_count(conn: &Connection) -> rusqlite::Result<i64> {
     .map(|count| count.unwrap_or(0))
 }
 
-/// Persisted module settings (spec 13.1). The main toggle is deliberately
-/// not persisted: every launch starts OFF and a new connection always means a
-/// new consent dialog.
+/// Persisted module settings, the main switch included (`enabled`): a
+/// remembered ON comes back at launch without connecting or starting
+/// anything until an agent needs the browser, so attaching to the user's
+/// own browser still asks for its consent every time.
 pub fn load_settings(conn: &Connection) -> rusqlite::Result<Option<BrowserSettings>> {
     let text: Option<String> = conn
         .query_row(
@@ -371,7 +373,7 @@ pub fn save_settings(conn: &Connection, settings: &BrowserSettings) -> rusqlite:
 }
 
 /// Monotonic app-run counter so an epoch from an earlier run never equals a
-/// current one (spec 14.2). Returns the id for this run.
+/// current one. Returns the id for this run.
 pub fn next_run_id(conn: &Connection) -> rusqlite::Result<u64> {
     let previous: Option<String> = conn
         .query_row(
@@ -392,7 +394,7 @@ pub fn next_run_id(conn: &Connection) -> rusqlite::Result<u64> {
     Ok(next)
 }
 
-/// Parameters as the audit stores them (spec 11.5): `text` becomes
+/// Parameters as the audit stores them: `text` becomes
 /// `{len, sha256_8}`, `url` loses query and fragment, and the `value` of
 /// `wait {for: text}` is hashed the same way. `ref`, `paths`, `tab` and
 /// everything else stay.

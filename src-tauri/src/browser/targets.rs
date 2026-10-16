@@ -1,4 +1,4 @@
-//! Tab lifecycle (spec 7, 10.4): create and attach, session setup, marker,
+//! Tab lifecycle: create and attach, session setup, marker,
 //! close, focus, popups and OOPIF frames via auto-attach, and the event pump
 //! that keeps the lease table current from CDP events.
 //!
@@ -20,18 +20,16 @@ use super::diagnostics;
 use super::link::{
     CdpError, CdpEvent, CdpSessionId, Command, EventFilter, Link, Method, Subscription, TargetId,
 };
-use super::policy::{check_url, now_ms, FrameSession, Lease, Policy, PolicyState, RequestCtx};
+use super::policy::{
+    check_url, now_ms, FrameSession, GiveBack, Lease, Policy, PolicyState, RequestCtx,
+};
 use super::protocol::{
     strip_marker, ActionResult, DialogInfo, DialogType, LoadState, Observed, Outcome, Reason,
     TabId, TabState, WaitUntil, ISOLATED_WORLD, LOAD_GRACE,
 };
 
-/// The marker script (spec 7, decision D12), embedded at build time.
+/// The marker script, embedded at build time.
 pub const MARKER_JS: &str = include_str!("injected/marker.js");
-
-/// How long the module waits for a page to report `load` when the caller
-/// gave no deadline of its own.
-pub const DEFAULT_LOAD_WAIT: Duration = Duration::from_secs(30);
 
 /// Resolved identifiers of a tab the caller holds a lease on.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -98,7 +96,8 @@ pub enum Sender<'a> {
     System,
 }
 
-fn send(link: &Link, sender: Sender<'_>, command: Command) -> Result<Value, CdpError> {
+/// [`Link::send`] or [`Link::send_system`], as `sender` says.
+pub(super) fn send(link: &Link, sender: Sender<'_>, command: Command) -> Result<Value, CdpError> {
     match sender {
         Sender::Agent(ctx) => link.send(ctx, command),
         Sender::System => link.send_system(command),
@@ -106,7 +105,7 @@ fn send(link: &Link, sender: Sender<'_>, command: Command) -> Result<Value, CdpE
 }
 
 /// Resolve the caller's tab to its CDP identifiers. The lease must be the
-/// caller's and open (spec 7).
+/// caller's and open.
 pub fn handle_for(state: &PolicyState, session: &str, tab: &TabId) -> Result<TabHandle, Reason> {
     let lease = state.lease(tab).ok_or(Reason::NoLease)?;
     if lease.owner != session {
@@ -225,6 +224,9 @@ fn new_lease(
         main_execution_context: None,
         frames: Default::default(),
         busy: false,
+        busy_action: 0,
+        from_user: false,
+        released: false,
         snapshot_version: 0,
         pending_dialog: None,
         opened_by,
@@ -233,6 +235,18 @@ fn new_lease(
         title: title.to_string(),
         created_at_ms: now,
         last_action_at_ms: now,
+    }
+}
+
+/// `Attaching` → `Open` once the session is set up. False when a revocation
+/// ended the lease meanwhile; it stays ended.
+fn promote(policy: &Policy, tab: &TabId) -> bool {
+    match policy.write().lease_mut(tab) {
+        Some(lease) if lease.state == TabState::Attaching => {
+            lease.state = TabState::Open;
+            true
+        }
+        _ => false,
     }
 }
 
@@ -278,7 +292,7 @@ impl Drop for Reservation<'_> {
     }
 }
 
-/// `tabs.open` (spec 7 "Otvaranje"): create a background tab in the user's
+/// `tabs.open`: create a background tab in the user's
 /// window, attach, set the session up, then navigate.
 pub fn open_tab(
     link: &Link,
@@ -295,7 +309,7 @@ pub fn open_tab(
         };
         state.reserve_tab(&ctx.session)?;
         // The MonoCode browser is ours: its window shows what the agent does.
-        // In the user's browser the tab stays in the background (spec 7).
+        // In the user's browser the tab stays in the background.
         let managed = state.settings.mode.launches();
         (
             state.settings.separate_window && !managed,
@@ -327,6 +341,15 @@ pub fn open_tab(
         reservation.release(&mut state);
         state.insert_lease(lease)
     };
+    // A tab that never became usable is closed again, its lease with it.
+    let abandon = |error: TabError| {
+        mark_closed(policy, &tab);
+        let _ = link.send_system(Command::browser(
+            Method::TargetCloseTarget,
+            json!({ "targetId": target.0 }),
+        ));
+        error
+    };
     let attached = match link.send(
         ctx,
         Command::browser(
@@ -336,41 +359,33 @@ pub fn open_tab(
     ) {
         Ok(value) => value,
         Err(error) => {
-            mark_closed(policy, &tab);
-            let _ = link.send_system(Command::browser(
-                Method::TargetCloseTarget,
-                json!({ "targetId": target.0 }),
-            ));
-            return Err(match error {
+            return Err(abandon(match error {
                 // `DeveloperToolsAvailability = 2`: the tab exists but no one
-                // may attach to it (spec 4, "Politike i okruženje").
+                // may attach to it.
                 CdpError::Protocol { message, .. } => TabError::detail(
                     Reason::BrowserPolicyBlocked,
                     format!("Target.attachToTarget: {message}"),
                 ),
                 other => other.into(),
-            });
+            }));
         }
     };
-    let session = CdpSessionId(string_field(&attached, "sessionId").ok_or_else(|| {
-        TabError::detail(
+    let Some(session) = string_field(&attached, "sessionId").map(CdpSessionId) else {
+        return Err(abandon(TabError::detail(
             Reason::BrowserDisconnected,
             "Target.attachToTarget returned no sessionId",
-        )
-    })?);
+        )));
+    };
     if let Some(lease) = policy.write().lease_mut(&tab) {
         lease.cdp_session = Some(session.clone());
     }
     if let Err(error) = setup_session(link, Sender::Agent(ctx), &session, &target_url) {
-        mark_closed(policy, &tab);
-        let _ = link.send_system(Command::browser(
-            Method::TargetCloseTarget,
-            json!({ "targetId": target.0 }),
-        ));
-        return Err(error.into());
+        return Err(abandon(error.into()));
     }
-    if let Some(lease) = policy.write().lease_mut(&tab) {
-        lease.state = TabState::Open;
+    if !promote(policy, &tab) {
+        // Revoked while being set up: the revocation detaches it; the tab
+        // stays, like any other revoked tab.
+        return Err(TabError::reason(Reason::Revoked));
     }
     let handle = TabHandle {
         tab,
@@ -426,22 +441,29 @@ pub fn free_id(target: &TargetId) -> String {
     format!("f_{}", hex.to_ascii_lowercase())
 }
 
-/// Page targets nobody holds a live lease on. System read, so it works for
-/// the UI as well as for an admitted agent action.
+/// Page targets no session holds ([`PolicyState::target_held`]): a tab
+/// revoked from a thread stays out of this list until the user takes it
+/// back. System read, so it works for the UI as well as for an admitted
+/// agent action. Revoked leases of pages that are gone are dropped here.
 pub fn free_tabs(link: &Link) -> Result<Vec<FreeTab>, CdpError> {
     let reply = link.send_system(Command::browser(Method::TargetGetTargets, json!({})))?;
-    let state = link.policy().read();
-    Ok(reply["targetInfos"]
+    let pages: Vec<&Value> = reply["targetInfos"]
         .as_array()
         .into_iter()
         .flatten()
         .filter(|info| info["type"] == "page")
+        .collect();
+    let mut state = link.policy().write();
+    let present: std::collections::HashSet<TargetId> = pages
+        .iter()
+        .filter_map(|info| Some(TargetId(info["targetId"].as_str()?.to_string())))
+        .collect();
+    state.prune_leases(Some(&present));
+    Ok(pages
+        .into_iter()
         .filter_map(|info| {
             let target = TargetId(info["targetId"].as_str()?.to_string());
-            let held = state
-                .lease_for_target(&target)
-                .is_some_and(|lease| lease.is_live());
-            (!held).then(|| FreeTab {
+            (!state.target_held(&target)).then(|| FreeTab {
                 id: free_id(&target),
                 url: info["url"].as_str().unwrap_or("").to_string(),
                 title: info["title"].as_str().unwrap_or("").to_string(),
@@ -454,7 +476,8 @@ pub fn free_tabs(link: &Link) -> Result<Vec<FreeTab>, CdpError> {
 /// Take an existing page into `owner`'s lease: attach, set the session up,
 /// mark it. Used by `tabs.adopt` (agent, MonoCode browser) and by the user
 /// handing one of their tabs to a thread (system sender). The page is not
-/// navigated.
+/// navigated, and it stays the user's: ending the lease gives it back
+/// rather than closing it.
 pub fn adopt_tab(
     link: &Link,
     sender: Sender<'_>,
@@ -464,10 +487,15 @@ pub fn adopt_tab(
     let policy = link.policy();
     let tab = {
         let mut state = policy.write();
-        if state
-            .lease_for_target(&free.target)
-            .is_some_and(|lease| lease.is_live())
-        {
+        // An agent never takes a page revoked from another thread; the user
+        // may hand any page on that no thread holds right now.
+        let held = match sender {
+            Sender::Agent(_) => state.target_held(&free.target),
+            Sender::System => state
+                .lease_for_target(&free.target)
+                .is_some_and(|lease| lease.is_live()),
+        };
+        if held {
             return Err(TabError::detail(
                 Reason::NoLease,
                 "Another thread already holds this tab.",
@@ -484,7 +512,7 @@ pub fn adopt_tab(
             &free.title,
         );
         state.unreserve_tab(owner);
-        state.insert_lease(lease)
+        state.insert_adopted_lease(lease)
     };
     let attached = send(
         link,
@@ -519,8 +547,13 @@ pub fn adopt_tab(
         ));
         return Err(error.into());
     }
+    if !promote(policy, &tab) {
+        return Err(TabError::detail(
+            Reason::NoLease,
+            "Browser access of this thread was taken away while the tab was being handed over.",
+        ));
+    }
     if let Some(lease) = policy.write().lease_mut(&tab) {
-        lease.state = TabState::Open;
         lease.snapshot_version += 1;
     }
     Ok(TabHandle {
@@ -530,8 +563,7 @@ pub fn adopt_tab(
     })
 }
 
-/// `Page.navigate` and wait for the requested load state (spec 9.1
-/// `navigate`, 10.4). Returns what the module observed; a navigation error
+/// `Page.navigate` and wait for the requested load state. Returns what the module observed; a navigation error
 /// (`errorText`, DNS failure, blocked scheme) is `navigation_failed`.
 pub fn navigate_and_wait(
     link: &Link,
@@ -590,7 +622,7 @@ pub fn navigate_and_wait(
 }
 
 /// Wait on a session subscription for `load` (or `DOMContentLoaded`) of the
-/// given loader. A dialog opening ends the wait early (spec 10.1: the module
+/// given loader. A dialog opening ends the wait early (the module
 /// never touches dialogs). Returns the load state reached and the dialog, if any.
 pub fn wait_for_load(
     subscription: &Subscription,
@@ -701,7 +733,7 @@ fn wait_for_load_with(
     }
 }
 
-/// `tabs.close` (spec 7): close our own tab.
+/// `tabs.close`: close our own tab.
 pub fn close_tab(link: &Link, ctx: &RequestCtx, tab: &TabId) -> Result<(), TabError> {
     let target = {
         let state = link.policy().read();
@@ -725,7 +757,7 @@ pub fn close_tab(link: &Link, ctx: &RequestCtx, tab: &TabId) -> Result<(), TabEr
 }
 
 /// `tabs.focus {user_visible: true}`: bring our tab to the front. The only
-/// action that changes what the user sees, hence the explicit flag (spec 9.1).
+/// action that changes what the user sees, hence the explicit flag.
 pub fn focus_tab(link: &Link, ctx: &RequestCtx, tab: &TabId) -> Result<(), TabError> {
     let handle = handle_for(&link.policy().read(), &ctx.session, tab)?;
     link.send(
@@ -747,7 +779,7 @@ pub fn close_targets(link: &Link, targets: &[TargetId]) {
 }
 
 /// Script run in our isolated world to take the marker and the visible
-/// cursor off a page the user takes back (spec 13.1 "Preuzmi tab");
+/// cursor off a page the user takes back;
 /// `marker.js` and `cursor.js` define the hooks.
 const MARKER_RELEASE_FN: &str =
     "function() { if (typeof globalThis.__monocodeCursorRemove === 'function') { globalThis.__monocodeCursorRemove(); } return typeof globalThis.__monocodeMarkerRelease === 'function' ? globalThis.__monocodeMarkerRelease() : false; }";
@@ -757,33 +789,56 @@ const MARKER_RELEASE_FN: &str =
 /// main frame is looked up by name, so this reaches the running marker script.
 /// New documents get no marker once the session is detached, because
 /// `Page.addScriptToEvaluateOnNewDocument` registrations die with the session.
+///
+/// Each step gets at most [`MARKER_RELEASE_BUDGET`]: the session is still
+/// attached meanwhile, and a hung page must not keep it so.
 pub fn release_marker(
     link: &Link,
     session: &CdpSessionId,
     main_frame_id: &str,
 ) -> Result<(), CdpError> {
-    let world = link.send_system(Command::in_session(
-        session,
-        Method::PageCreateIsolatedWorld,
-        json!({ "frameId": main_frame_id, "worldName": ISOLATED_WORLD, "grantUniveralAccess": false }),
-    ))?;
+    let world = link.send_system_within(
+        Command::in_session(
+            session,
+            Method::PageCreateIsolatedWorld,
+            json!({ "frameId": main_frame_id, "worldName": ISOLATED_WORLD, "grantUniveralAccess": false }),
+        ),
+        MARKER_RELEASE_BUDGET,
+    )?;
     let Some(context) = world["executionContextId"].as_i64() else {
         return Ok(());
     };
-    link.send_system(Command::in_session(
-        session,
-        Method::RuntimeCallFunctionOn,
-        json!({
-            "functionDeclaration": MARKER_RELEASE_FN,
-            "executionContextId": context,
-            "returnByValue": true,
-        }),
-    ))?;
+    link.send_system_within(
+        Command::in_session(
+            session,
+            Method::RuntimeCallFunctionOn,
+            json!({
+                "functionDeclaration": MARKER_RELEASE_FN,
+                "executionContextId": context,
+                "returnByValue": true,
+            }),
+        ),
+        MARKER_RELEASE_BUDGET,
+    )?;
     Ok(())
 }
 
+/// Longest wait for one step of [`release_marker`].
+pub const MARKER_RELEASE_BUDGET: Duration = Duration::from_secs(1);
+
+/// Give tabs back to the user whose leases ended (session deleted, "close
+/// all agent tabs"): marker off, then detach. The tabs stay open.
+pub fn give_back(link: &Link, tabs: &[GiveBack]) {
+    for tab in tabs {
+        if let Some(frame) = tab.main_frame_id.as_deref() {
+            let _ = release_marker(link, &tab.session, frame);
+        }
+        detach_sessions(link, std::slice::from_ref(&tab.session));
+    }
+}
+
 /// Detach from sessions whose leases were revoked (revoke, grant off,
-/// window closed). Tabs stay open with the marker (spec 7).
+/// window closed). Tabs stay open with the marker.
 pub fn detach_sessions(link: &Link, sessions: &[CdpSessionId]) {
     for session in sessions {
         let _ = link.send_system(Command::browser(
@@ -822,7 +877,7 @@ pub enum TabEvent {
         opener: TabId,
         owner: String,
     },
-    /// A popup was closed because of the tab limit (spec 10.4).
+    /// A popup was closed because of the tab limit.
     PopupBlocked {
         opener: TabId,
         owner: String,
@@ -844,8 +899,9 @@ fn tab_holding(state: &PolicyState, session: &CdpSessionId) -> Option<TabId> {
         .map(|l| l.tab.clone())
 }
 
-/// Run the pump on the given subscription until the link closes. Returns the
-/// thread handle; the host keeps it only for tests.
+/// Subscribe to every event of the link's current connection and handle them
+/// on a new thread until that connection closes (the pump of a link that is
+/// not open ends at once). Returns the thread handle, which callers may drop.
 pub fn spawn_pump(
     link: Link,
     notify: Arc<dyn Fn(TabEvent) + Send + Sync>,
@@ -866,7 +922,7 @@ fn pump_loop(link: &Link, subscription: &Subscription, notify: &dyn Fn(TabEvent)
     }
 }
 
-/// One event, one lease-table update (spec 5 "Događaji koje link prati").
+/// One event, one lease-table update.
 pub fn handle_event(link: &Link, event: &CdpEvent, notify: &dyn Fn(TabEvent)) {
     let policy = link.policy();
     match event.method.as_str() {
@@ -889,8 +945,9 @@ pub fn handle_event(link: &Link, event: &CdpEvent, notify: &dyn Fn(TabEvent)) {
                 return;
             };
             if lease.cdp_session.as_ref() == Some(&child) {
-                if lease.state == TabState::Revoked {
-                    // Our own detach after a revocation: the lease already says so.
+                if matches!(lease.state, TabState::Revoked | TabState::Crashed) {
+                    // Our own detach after a revocation or a crash: the lease
+                    // already says so.
                     return;
                 }
                 lease.state = TabState::Closed;
@@ -916,6 +973,9 @@ pub fn handle_event(link: &Link, event: &CdpEvent, notify: &dyn Fn(TabEvent)) {
                 lease.state = TabState::Crashed;
                 lease.busy = false;
                 drop(state);
+                // The lease is over; the crashed page (which the user may
+                // reload) keeps no session of ours.
+                detach_sessions(link, std::slice::from_ref(session));
                 notify(TabEvent::Crashed(tab));
             } else {
                 lease.frames.retain(|_, f| &f.cdp_session != session);
@@ -932,7 +992,9 @@ pub fn handle_event(link: &Link, event: &CdpEvent, notify: &dyn Fn(TabEvent)) {
             let Some(lease) = state.lease_mut(&tab) else {
                 return;
             };
-            if lease.cdp_session.as_ref() == Some(session) && lease.state != TabState::Revoked {
+            if lease.cdp_session.as_ref() == Some(session)
+                && !matches!(lease.state, TabState::Revoked | TabState::Crashed)
+            {
                 lease.state = TabState::Closed;
                 lease.busy = false;
                 drop(state);
@@ -1083,9 +1145,19 @@ fn on_attached(link: &Link, parent: &CdpSessionId, params: &Value, notify: &dyn 
             json!({}),
         ));
     };
-    let parent_tab = tab_holding(&policy.read(), parent);
+    let parent_tab = {
+        let state = policy.read();
+        tab_holding(&state, parent).filter(|tab| state.lease(tab).is_some_and(Lease::is_live))
+    };
     let Some(parent_tab) = parent_tab else {
-        // Not ours (or already gone): never keep a session we did not ask for.
+        // Not ours, or a tab whose lease ended (revoked, released, crashed)
+        // and whose session is on its way out: never keep a session we did
+        // not ask for, and never let a popup become a tab of an agent that
+        // no longer holds its opener. Resume first so the page does not stay
+        // paused if the detach is slow or lost.
+        if waiting {
+            resume(&child);
+        }
         detach_sessions(link, std::slice::from_ref(&child));
         return;
     };
@@ -1125,7 +1197,7 @@ fn on_attached(link: &Link, parent: &CdpSessionId, params: &Value, notify: &dyn 
             };
             let allowed = policy.read().can_open_tab(&owner).is_ok();
             if !allowed {
-                // Over the limit: close it before its first script (spec 10.4).
+                // Over the limit: close it before its first script.
                 // Count it first, so whoever observes the `closeTarget` frame
                 // (the action layer, tests) already sees the counter moved.
                 if let Some(lease) = policy.write().lease_mut(&parent_tab) {
@@ -1143,16 +1215,31 @@ fn on_attached(link: &Link, parent: &CdpSessionId, params: &Value, notify: &dyn 
             }
             let tab = {
                 let mut state = policy.write();
-                let lease = new_lease(
-                    &state,
-                    &target,
-                    Some(child.clone()),
-                    &owner,
-                    Some(parent_tab.clone()),
-                    info["url"].as_str().unwrap_or(""),
-                    info["title"].as_str().unwrap_or(""),
-                );
-                state.insert_lease(lease)
+                // The opener may have been revoked since the check above.
+                if !state
+                    .lease(&parent_tab)
+                    .is_some_and(|l| l.is_live() && l.owner == owner)
+                {
+                    None
+                } else {
+                    let lease = new_lease(
+                        &state,
+                        &target,
+                        Some(child.clone()),
+                        &owner,
+                        Some(parent_tab.clone()),
+                        info["url"].as_str().unwrap_or(""),
+                        info["title"].as_str().unwrap_or(""),
+                    );
+                    Some(state.insert_lease(lease))
+                }
+            };
+            let Some(tab) = tab else {
+                if waiting {
+                    resume(&child);
+                }
+                detach_sessions(link, std::slice::from_ref(&child));
+                return;
             };
             let ready = setup_session(
                 link,
@@ -1161,16 +1248,22 @@ fn on_attached(link: &Link, parent: &CdpSessionId, params: &Value, notify: &dyn 
                 info["url"].as_str().unwrap_or(""),
             )
             .is_ok();
-            {
+            let ready = {
                 let mut state = policy.write();
-                if let Some(lease) = state.lease_mut(&tab) {
-                    lease.state = if ready {
-                        TabState::Open
-                    } else {
-                        TabState::Closed
-                    };
+                match state.lease_mut(&tab) {
+                    // A revocation meanwhile already ended the lease (and
+                    // detaches the session); leave it so.
+                    Some(lease) if lease.state == TabState::Attaching => {
+                        lease.state = if ready {
+                            TabState::Open
+                        } else {
+                            TabState::Closed
+                        };
+                        ready
+                    }
+                    _ => false,
                 }
-            }
+            };
             // Report before resuming: once the popup runs, observers (the
             // action layer, the UI) must already see it as a tab of ours.
             if ready {
@@ -1710,7 +1803,153 @@ mod tests {
             thread::sleep(Duration::from_millis(5));
         }
         assert_eq!(policy.read().lease(&tab).unwrap().state, TabState::Crashed);
+        // The crashed page keeps no session of ours, and our own detach does
+        // not turn the crash into a close.
+        assert!(server.wait_for(
+            |log| log
+                .iter()
+                .any(|r| r.method == "Target.detachFromTarget"
+                    && r.params["sessionId"] == json!(main)),
+            Duration::from_secs(2)
+        ));
+        server.emit(
+            "Target.detachedFromTarget",
+            json!({ "sessionId": main, "targetId": "T1" }),
+            None,
+        );
+        thread::sleep(Duration::from_millis(100));
+        assert_eq!(policy.read().lease(&tab).unwrap().state, TabState::Crashed);
         assert!(server.received().len() > sent_before);
+        link.close(Vec::new(), Duration::from_millis(200));
+    }
+
+    /// A tab whose lease ended (revoked, taken back) opens no tabs for the
+    /// agent: its popup is resumed and detached, never leased.
+    #[test]
+    fn popups_of_an_ended_lease_are_detached_not_adopted() {
+        let server = navigating_fake();
+        let policy = policy();
+        let link = Link::new(policy.clone());
+        link.open(&server.url, Duration::from_secs(5)).unwrap();
+        let _pump = spawn_pump(link.clone(), Arc::new(|_| {})).unwrap();
+        let ctx = admit(&policy, ActionKind::TabsOpen, None);
+        let opened = open_tab(&link, &ctx, None, WaitUntil::Load).unwrap();
+        let main = opened.handle.session.0.clone();
+        policy.write().revoke_session("s1");
+        server.emit(
+            "Target.attachedToTarget",
+            json!({ "sessionId": "P9", "targetInfo": { "targetId": "TP9", "type": "page", "url": "https://popup/", "title": "", "attached": true }, "waitingForDebugger": true }),
+            Some(&main),
+        );
+        assert!(server.wait_for(
+            |log| log
+                .iter()
+                .any(|r| r.method == "Target.detachFromTarget"
+                    && r.params["sessionId"] == json!("P9")),
+            Duration::from_secs(2)
+        ));
+        let log = server.received();
+        let resumed = log.iter().position(|r| {
+            r.method == "Runtime.runIfWaitingForDebugger" && r.session.as_deref() == Some("P9")
+        });
+        let detached = log.iter().position(|r| {
+            r.method == "Target.detachFromTarget" && r.params["sessionId"] == json!("P9")
+        });
+        assert!(resumed.is_some() && resumed < detached, "{log:?}");
+        assert!(!log.iter().any(|r| r.session.as_deref() == Some("P9")
+            && r.method == "Page.addScriptToEvaluateOnNewDocument"));
+        let state = policy.read();
+        assert!(state.lease_for_target(&TargetId("TP9".into())).is_none());
+        assert_eq!(state.live_tabs("s1"), 0);
+        drop(state);
+        link.close(Vec::new(), Duration::from_millis(200));
+    }
+
+    #[test]
+    fn an_attach_without_a_session_closes_the_new_tab() {
+        let counter = Arc::new(std::sync::atomic::AtomicU64::new(1));
+        let server = FakeCdp::start_with(move |received| {
+            if received.method == "Target.attachToTarget" {
+                return Response::Result(json!({}));
+            }
+            super::super::testing::default_response(received, &counter)
+        });
+        let policy = policy();
+        let link = Link::new(policy.clone());
+        link.open(&server.url, Duration::from_secs(5)).unwrap();
+        let ctx = admit(&policy, ActionKind::TabsOpen, None);
+        let err = open_tab(&link, &ctx, None, WaitUntil::Load).unwrap_err();
+        assert!(matches!(
+            err,
+            TabError::Reason(Reason::BrowserDisconnected, Some(_))
+        ));
+        assert!(server.wait_for(
+            |log| log.iter().any(|r| r.method == "Target.closeTarget"),
+            Duration::from_secs(2)
+        ));
+        let state = policy.read();
+        assert!(state.leases().all(|l| l.state == TabState::Closed));
+        assert_eq!(state.live_tabs("s1"), 0);
+        drop(state);
+        link.close(Vec::new(), Duration::from_millis(200));
+    }
+
+    /// Free tabs are the pages no thread holds: a tab revoked from a thread
+    /// is not offered to another (or adopted by its agent) until the user
+    /// takes it back.
+    #[test]
+    fn a_revoked_tab_is_free_only_after_the_user_takes_it_back() {
+        let counter = Arc::new(std::sync::atomic::AtomicU64::new(1));
+        let server = FakeCdp::start_with(move |received| {
+            if received.method == "Target.getTargets" {
+                return Response::Result(json!({ "targetInfos": [
+                    { "targetId": "U1", "type": "page", "url": "https://mail.example/", "title": "Mail" },
+                    { "targetId": "W1", "type": "service_worker", "url": "", "title": "" },
+                ]}));
+            }
+            super::super::testing::default_response(received, &counter)
+        });
+        let policy = policy();
+        policy
+            .write()
+            .turn_started("s2", "main", "/repo", Some(true));
+        let link = Link::new(policy.clone());
+        link.open(&server.url, Duration::from_secs(5)).unwrap();
+        let free = free_tabs(&link).unwrap();
+        assert_eq!(free.len(), 1);
+        let ctx = admit(&policy, ActionKind::TabsAdopt, None);
+        let handle = adopt_tab(&link, Sender::Agent(&ctx), "s1", &free[0]).unwrap();
+        assert!(policy.read().lease(&handle.tab).unwrap().from_user);
+        assert!(free_tabs(&link).unwrap().is_empty(), "s1 holds it");
+        policy.write().revoke_session("s1");
+        assert!(
+            free_tabs(&link).unwrap().is_empty(),
+            "revoked, not released"
+        );
+        let ctx2 = policy
+            .read()
+            .admit(
+                "s2",
+                "r2",
+                ActionKind::TabsAdopt,
+                None,
+                Duration::from_secs(5),
+            )
+            .unwrap();
+        assert!(matches!(
+            adopt_tab(&link, Sender::Agent(&ctx2), "s2", &free[0]),
+            Err(TabError::Reason(Reason::NoLease, _))
+        ));
+        policy.write().release_lease(&handle.tab).unwrap();
+        assert_eq!(free_tabs(&link).unwrap(), free);
+        let again = adopt_tab(&link, Sender::Agent(&ctx2), "s2", &free[0]).unwrap();
+        let state = policy.read();
+        assert!(state.lease(&handle.tab).is_none(), "the old lease went");
+        assert_eq!(
+            state.lease_for_target(&free[0].target).unwrap().tab,
+            again.tab
+        );
+        drop(state);
         link.close(Vec::new(), Duration::from_millis(200));
     }
 

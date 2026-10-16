@@ -1,5 +1,5 @@
 //! Transport shared by `monocode browser` and `monocode browser-mcp`: one JSON
-//! line to the loopback control endpoint, one JSON line back (spec 6, 12.1).
+//! line to the loopback control endpoint, one JSON line back.
 //!
 //! Every way a call can end is folded into an [`ActionResult`], so the CLI and
 //! the MCP server report transport trouble in the same envelope as browser
@@ -16,16 +16,18 @@ use serde_json::{json, Value};
 use crate::browser::protocol::{
     ActionKind, ActionResult, CommonInput, Outcome, Reason, ENV_ENDPOINT, ENV_TOKEN, NAMESPACE,
 };
+use crate::browser::HOST_WAIT;
+use crate::control::MAX_REQUEST_LINE;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
-/// Margin over the action's own time limit: queueing behind a busy tab (5 s),
-/// admission and audit happen inside the host before the action clock starts.
-const REPLY_MARGIN: Duration = Duration::from_secs(15);
+/// Margin over the host's longest hold of a request ([`HOST_WAIT`]: the
+/// user's answer to an access request, a cold browser start, a busy tab, the
+/// snapshot after the action) and the action's own limit: admission, audit
+/// and the transport itself.
+const REPLY_MARGIN: Duration = Duration::from_secs(5);
 /// Full-page screenshots arrive as base64 inside the JSON line.
 const MAX_RESPONSE: u64 = 48 * 1024 * 1024;
-/// The control server rejects larger request lines.
-const MAX_REQUEST: usize = 256 * 1024;
 
 /// Endpoint and session token from the provider's environment.
 #[derive(Clone)]
@@ -104,7 +106,7 @@ impl Credentials {
     }
 }
 
-/// A fresh request id. The host deduplicates by id (spec 11.4), so a retry
+/// A fresh request id. The host deduplicates by id, so a retry
 /// after an `unknown` outcome must reuse the id it reported, never a new one.
 pub fn new_request_id() -> String {
     format!("req_{}", uuid::Uuid::new_v4().simple())
@@ -120,7 +122,9 @@ pub fn valid_request_id(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b':'))
 }
 
-/// How long to wait for the host's answer to one action.
+/// How long to wait for the host's answer to one action: never less than
+/// the host may take, so a request still waiting for the user's Allow is not
+/// reported lost (and retried) while it can still run.
 pub fn reply_timeout(action: &str, input: &Value) -> Duration {
     let timeout_ms = serde_json::from_value::<CommonInput>(input.clone())
         .ok()
@@ -128,6 +132,7 @@ pub fn reply_timeout(action: &str, input: &Value) -> Duration {
     ActionKind::parse(action)
         .map(|kind| kind.effective_timeout(timeout_ms))
         .unwrap_or(Duration::from_secs(15))
+        + HOST_WAIT
         + REPLY_MARGIN
 }
 
@@ -156,7 +161,8 @@ pub fn call(creds: &Credentials, action: &str, input: &Value, request_id: &str) 
         "requestId": request_id,
     })
     .to_string();
-    if line.len() > MAX_REQUEST {
+    // The server counts the newline too.
+    if line.len() + 1 > MAX_REQUEST_LINE {
         return not_sent(
             request_id,
             "The request is larger than MonoCode accepts (256 KiB); send less text per call.",
@@ -216,9 +222,18 @@ fn decode(request_id: &str, raw: &str) -> ActionResult {
             ok: false, error, ..
         }) => {
             let detail = error.unwrap_or_else(|| "request refused".into());
-            ActionResult::from_reason(request_id, Reason::Revoked).with_message(format!(
-                "MonoCode refused this session's browser credential ({detail}). Nothing was sent to the browser. The app may have restarted since this session started; ask the user to restart the session from MonoCode."
-            ))
+            match detail.as_str() {
+                crate::control::UNAUTHORIZED => ActionResult::from_reason(request_id, Reason::Revoked).with_message(format!(
+                    "MonoCode refused this session's browser credential ({detail}). Nothing was sent to the browser. The app may have restarted since this session started; ask the user to restart the session from MonoCode."
+                )),
+                crate::control::BUSY => {
+                    ActionResult::from_reason(request_id, Reason::Busy).with_message(detail)
+                }
+                _ => not_sent(
+                    request_id,
+                    format!("MonoCode refused the request ({detail}); nothing was sent to the browser."),
+                ),
+            }
         }
         _ => lost(
             request_id,
@@ -257,8 +272,8 @@ fn lost(request_id: &str, what: &str) -> ActionResult {
     }
 }
 
-/// The result an action gets when this process has no credentials (spec
-/// 12.1: tools stay listed and every call answers `not_granted`).
+/// The result an action gets when this process has no credentials: the
+/// tools stay listed and every call answers `not_granted`.
 pub fn without_credentials(request_id: &str, missing: &MissingCredentials) -> ActionResult {
     ActionResult::from_reason(request_id, Reason::NotGranted).with_message(missing.message())
 }
@@ -433,16 +448,71 @@ pub(crate) mod tests {
     fn reply_waits_cover_each_actions_own_limit() {
         assert_eq!(
             reply_timeout("navigate", &json!({"timeout_ms": 600_000})),
-            Duration::from_secs(120) + REPLY_MARGIN
+            Duration::from_secs(120) + HOST_WAIT + REPLY_MARGIN
         );
         assert_eq!(
             reply_timeout("click", &json!({})),
-            Duration::from_secs(10) + REPLY_MARGIN
+            Duration::from_secs(10) + HOST_WAIT + REPLY_MARGIN
         );
         assert_eq!(
             reply_timeout("nonsense", &json!({"timeout_ms": "x"})),
-            Duration::from_secs(15) + REPLY_MARGIN
+            Duration::from_secs(15) + HOST_WAIT + REPLY_MARGIN
         );
+        // An access request left unanswered, then a cold start: the host
+        // answers before the client gives up.
+        assert!(
+            reply_timeout("click", &json!({}))
+                > crate::browser::ASK_WAIT
+                    + crate::browser::MANAGED_START_WAIT
+                    + Duration::from_secs(10)
+        );
+    }
+
+    #[test]
+    fn only_unknown_tokens_count_as_revoked() {
+        let (creds, _) =
+            fake_control(|_| Some(json!({"ok": false, "error": crate::control::BUSY}).to_string()));
+        let busy = call(&creds, "click", &json!({}), "req_8");
+        assert_eq!(busy.outcome, Outcome::Blocked);
+        assert_eq!(busy.reason, Some(Reason::Busy));
+        let (creds, _) = fake_control(|_| {
+            Some(json!({"ok": false, "error": "Browser module is not available"}).to_string())
+        });
+        let unavailable = call(&creds, "click", &json!({}), "req_9");
+        assert_eq!(unavailable.outcome, Outcome::Blocked);
+        assert_eq!(unavailable.reason, None);
+        assert!(
+            unavailable.message.contains("not available"),
+            "{}",
+            unavailable.message
+        );
+        assert!(
+            !unavailable.message.contains("restart"),
+            "{}",
+            unavailable.message
+        );
+    }
+
+    #[test]
+    fn the_request_limit_counts_the_newline() {
+        let dead = Credentials::new("127.0.0.1:9", "tok").unwrap();
+        let envelope = json!({
+            "token": "tok", "namespace": NAMESPACE, "action": "type",
+            "input": {"text": ""}, "requestId": "req_10",
+        })
+        .to_string()
+        .len();
+        // Exactly the server's limit once the newline is added.
+        let text = "x".repeat(MAX_REQUEST_LINE - 1 - envelope);
+        let result = call(&dead, "type", &json!({"text": text}), "req_10");
+        assert!(
+            result.message.contains("Cannot reach"),
+            "{}",
+            result.message
+        );
+        let text = "x".repeat(MAX_REQUEST_LINE - envelope);
+        let result = call(&dead, "type", &json!({"text": text}), "req_10");
+        assert!(result.message.contains("256 KiB"), "{}", result.message);
     }
 
     #[test]

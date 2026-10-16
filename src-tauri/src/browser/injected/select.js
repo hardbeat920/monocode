@@ -1,4 +1,4 @@
-// `select` (spec 9.4). `this` is a <select> element in the "__monocode"
+// `select`. `this` is a <select> element in the "__monocode"
 // isolated world; `values` are matched by option value first, then by label.
 //
 // Every requested value is checked before anything changes, so a missing
@@ -7,7 +7,7 @@
 // listeners see like a user's choice. Custom dropdowns are not <select>
 // elements; the agent drives those with `click`.
 function monocodeSelect(values) {
-  const el = this;
+  const el = this && this.nodeType !== 1 ? this.parentElement : this;
   if (!el || el.tagName !== "SELECT") {
     return { status: "not_select" };
   }

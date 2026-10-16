@@ -5,7 +5,9 @@
 //! The browser runs with `--remote-debugging-port=0` on its own profile
 //! folder (Chrome 136+ refuses that switch only for the default profile) and
 //! writes `DevToolsActivePort` there; the link then connects exactly as it
-//! does to the user's browser. Logins made in that profile stay on disk.
+//! does to the user's browser. Logins made in the kept profile stay on disk;
+//! the private MonoCode browser (`BrowserMode::Private`) gets a fresh profile
+//! per start, deleted once it has exited.
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -33,7 +35,7 @@ pub fn profile_dir(app_data: &Path) -> PathBuf {
 }
 
 /// A fresh profile folder for one start of the private MonoCode browser,
-/// next to the kept profile profile.
+/// next to the kept profile.
 pub fn private_dir(profile: &Path) -> PathBuf {
     private_root(profile).join(uuid::Uuid::new_v4().simple().to_string())
 }
@@ -42,9 +44,75 @@ fn private_root(profile: &Path) -> PathBuf {
     profile.parent().unwrap_or(profile).join("browser-private")
 }
 
-/// Startup: private profiles a crash left behind.
+/// Written into the profile at start: the process id of the browser MonoCode
+/// started on it, so the next run can stop one that a crash left running.
+const PID_FILE: &str = "monocode-browser.pid";
+
+/// Startup: private profiles a crash left behind, and the browsers still
+/// running on them (a headless one never exits by itself).
 pub fn clear_private(profile: &Path) {
-    let _ = std::fs::remove_dir_all(private_root(profile));
+    let root = private_root(profile);
+    if let Ok(entries) = std::fs::read_dir(&root) {
+        for entry in entries.flatten() {
+            stop_orphan(&entry.path());
+        }
+    }
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Stop the browser an earlier run started on `profile`, when the recorded
+/// process still runs on exactly that profile: a reused process id never
+/// belongs to another program or to the user's own browser.
+#[cfg(unix)]
+fn stop_orphan(profile: &Path) {
+    let Some(pid) = std::fs::read_to_string(profile.join(PID_FILE))
+        .ok()
+        .and_then(|text| text.trim().parse::<libc::pid_t>().ok())
+        .filter(|pid| *pid > 1)
+    else {
+        return;
+    };
+    if !runs_on_profile(pid, profile) {
+        return;
+    }
+    let alive = || unsafe { libc::kill(pid, 0) } == 0;
+    unsafe { libc::kill(pid, libc::SIGTERM) };
+    let deadline = Instant::now() + ORPHAN_WAIT;
+    while alive() && Instant::now() < deadline {
+        std::thread::sleep(POLL);
+    }
+    if alive() {
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+        let deadline = Instant::now() + ORPHAN_WAIT;
+        while alive() && Instant::now() < deadline {
+            std::thread::sleep(POLL);
+        }
+    }
+}
+
+/// Windows needs nothing here: [`start`] puts the browser in the app's
+/// kill-on-close job, so the system ends it when the app's process ends.
+#[cfg(not(unix))]
+fn stop_orphan(_profile: &Path) {}
+
+/// How long a browser from an earlier run gets to exit after each signal.
+#[cfg(unix)]
+const ORPHAN_WAIT: Duration = Duration::from_secs(3);
+
+/// Whether process `pid` was started with `--user-data-dir=<profile>`.
+#[cfg(unix)]
+fn runs_on_profile(pid: libc::pid_t, profile: &Path) -> bool {
+    let Ok(output) = Command::new("ps")
+        .args(["-ww", "-o", "args=", "-p", &pid.to_string()])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+    else {
+        return false;
+    };
+    output.status.success()
+        && String::from_utf8_lossy(&output.stdout)
+            .contains(&format!("--user-data-dir={}", profile.display()))
 }
 
 /// The discovery candidate for the MonoCode profile, so a browser that is
@@ -206,28 +274,55 @@ pub fn start(exe: &Executable, profile: &Path, show_window: bool) -> std::io::Re
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    command.spawn()
+    let child = command.spawn()?;
+    // Windows: the browser ends with the app even after a crash. Best
+    // effort; without the job, OFF and app exit still stop it.
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        let _ = crate::windows::assign_child(child.as_raw_handle());
+    }
+    let _ = std::fs::write(profile.join(PID_FILE), child.id().to_string());
+    Ok(child)
 }
 
+/// The started browser process, as [`wait_for_endpoint`] polls it.
+pub enum Started {
+    Running,
+    Exited(String),
+    /// No longer this start's to wait for (OFF, a mode change).
+    Gone,
+}
+
+/// After the started process exited: how long another process on the same
+/// profile may take to come up. Chrome hands a second start of a running
+/// profile to the first process and exits at once.
+const HANDOVER_GRACE: Duration = Duration::from_secs(2);
+
 /// Wait until the started browser answers on its debugging port, or it
-/// exits, or `timeout` passes.
+/// exits (plus [`HANDOVER_GRACE`]), or is gone, or `timeout` passes.
 pub fn wait_for_endpoint(
-    child: &mut Child,
     profile: &Path,
     timeout: Duration,
+    mut started: impl FnMut() -> Started,
 ) -> Result<ActivePort, String> {
     let deadline = Instant::now() + timeout;
+    let mut exited: Option<(String, Instant)> = None;
     loop {
         if let Some(active) = running(profile) {
             return Ok(active);
         }
-        if let Ok(Some(status)) = child.try_wait() {
-            // Chrome hands a second start of a running profile to the first
-            // process and exits; that one may still come up.
-            if let Some(active) = running(profile) {
-                return Ok(active);
+        if exited.is_none() {
+            match started() {
+                Started::Running => {}
+                Started::Exited(status) => {
+                    exited = Some((status, (Instant::now() + HANDOVER_GRACE).min(deadline)));
+                }
+                Started::Gone => return Err("The browser start was cancelled.".into()),
             }
-            if Instant::now() >= deadline {
+        }
+        if let Some((status, until)) = &exited {
+            if Instant::now() >= *until {
                 return Err(format!("The browser exited ({status})."));
             }
         }
@@ -336,6 +431,62 @@ mod tests {
             }),
             vec![BrowserKind::Edge]
         );
+    }
+
+    #[test]
+    fn a_browser_that_exits_at_once_is_reported_promptly() {
+        let profile = std::env::temp_dir().join(format!("monocode-exit-{}", uuid::Uuid::new_v4()));
+        let started = Instant::now();
+        let error = wait_for_endpoint(&profile, START_TIMEOUT, || {
+            Started::Exited("exit status: 1".into())
+        })
+        .unwrap_err();
+        assert!(error.contains("exited"), "{error}");
+        assert!(started.elapsed() < HANDOVER_GRACE + Duration::from_secs(2));
+        let error = wait_for_endpoint(&profile, START_TIMEOUT, || Started::Gone).unwrap_err();
+        assert!(error.contains("cancelled"), "{error}");
+    }
+
+    /// A private profile a crash left behind: the browser still running on
+    /// it is stopped before the folder goes; a process on another profile
+    /// with a recorded id is left alone.
+    #[cfg(unix)]
+    #[test]
+    fn startup_stops_browsers_left_on_private_profiles() {
+        let app = std::env::temp_dir().join(format!("monocode-orphan-{}", uuid::Uuid::new_v4()));
+        let kept = profile_dir(&app);
+        let orphan_profile = private_dir(&kept);
+        let other_profile = private_dir(&kept);
+        std::fs::create_dir_all(&orphan_profile).unwrap();
+        std::fs::create_dir_all(&other_profile).unwrap();
+        // `sh -c` with a second command keeps its own argv, as Chrome does.
+        let spawn = |profile: &Path| {
+            Command::new("sh")
+                .args([
+                    "-c",
+                    "sleep 30; :",
+                    "browser",
+                    &format!("--user-data-dir={}", profile.display()),
+                ])
+                .spawn()
+                .unwrap()
+        };
+        let mut orphan = spawn(&orphan_profile);
+        std::fs::write(orphan_profile.join(PID_FILE), orphan.id().to_string()).unwrap();
+        let mut stranger = spawn(&app.join("elsewhere"));
+        std::fs::write(other_profile.join(PID_FILE), stranger.id().to_string()).unwrap();
+        // The test process is the parent: reap so the exit becomes visible.
+        let reaper = std::thread::spawn(move || orphan.wait().unwrap());
+        clear_private(&kept);
+        assert!(!reaper.join().unwrap().success());
+        assert!(
+            stranger.try_wait().unwrap().is_none(),
+            "an unrelated process was stopped"
+        );
+        assert!(!private_root(&kept).exists());
+        let _ = stranger.kill();
+        let _ = stranger.wait();
+        let _ = std::fs::remove_dir_all(&app);
     }
 
     #[test]

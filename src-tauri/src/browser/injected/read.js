@@ -1,12 +1,17 @@
-// `read` (spec 8 "read"): the text of an element or of the whole document,
+// `read`: the text of an element or of the whole document,
 // as plain text (innerText) or as simple Markdown, sliced to
 // [offset, offset + limit) so long pages are read in several calls.
 //
-// `this` is the element when a ref was given, otherwise the isolated
-// world's global object and the document body is read. Read-only.
+// `this` is the node when a ref was given (an element, or a text node from
+// a full snapshot, whose element is read), otherwise the isolated world's
+// global object and the document body is read. Read-only.
 function monocodeRead(format, offset, limit) {
-  const root =
-    this && this.nodeType === 1 ? this : document.body || document.documentElement || null;
+  const node = this && typeof this.nodeType === "number" ? this : null;
+  const root = node
+    ? node.nodeType === 1
+      ? node
+      : node.parentElement
+    : document.body || document.documentElement || null;
   if (!root) {
     return { text: "", total: 0 };
   }

@@ -45,6 +45,7 @@ MonoCode is still early. If something breaks, [report a bug](https://github.com/
 - [Provider setup](docs/providers.md)
 - [Linux installation](docs/install.md)
 - [Agent access with /operator](docs/agent-access.md)
+- [Browser access](docs/browser-access.md)
 - [Remote sessions, experimental](docs/remote-access.md)
 
 ## Build from source

@@ -1,11 +1,12 @@
-// Actionability check (spec 9.2 step 3), one call per element.
+// Actionability check, one call per element.
 //
 // Called with Runtime.callFunctionOn on the element's object in the
-// "__monocode" isolated world, `this` being the element. Reads layout and
+// "__monocode" isolated world, `this` being the element (or a text node, which
+// `text` reports). Reads layout and
 // state only; never changes the page. Returns everything the Rust side needs
 // in one structure so a failed check costs a single round trip.
 //
-// mode "rect" returns just the bounding box (stability check, spec 9.2:
+// mode "rect" returns just the bounding box (stability check:
 // the same box in two samples taken a short while apart).
 function monocodeActionability(mode) {
   const node = this;
@@ -15,17 +16,27 @@ function monocodeActionability(mode) {
     const r = e.getBoundingClientRect();
     return { x: r.x, y: r.y, width: r.width, height: r.height };
   };
+  // A text node (a full snapshot's static text) is measured by its own
+  // line boxes; every state check uses its element.
+  const nodeBox = () => {
+    if (node === element) {
+      return box(element);
+    }
+    const range = node.ownerDocument.createRange();
+    range.selectNodeContents(node);
+    return box(range);
+  };
   if (!node || !node.isConnected || !element) {
     return { connected: false };
   }
   if (mode === "rect") {
-    return { connected: true, rect: box(element) };
+    return { connected: true, rect: nodeBox() };
   }
   const style = element.ownerDocument.defaultView.getComputedStyle(element);
-  const rect = box(element);
+  const rect = nodeBox();
   let visible = rect.width > 0 && rect.height > 0 && style.visibility !== "hidden";
   if (visible && typeof element.checkVisibility === "function") {
-    // `opacity: 0` still counts as visible, like Playwright (spec 9.2).
+    // `opacity: 0` still counts as visible, like Playwright.
     visible = element.checkVisibility({ visibilityProperty: true });
   }
   const tag = element.tagName.toLowerCase();
@@ -53,6 +64,7 @@ function monocodeActionability(mode) {
   }
   return {
     connected: true,
+    text: node !== element,
     visible,
     enabled: !disabled,
     editable,

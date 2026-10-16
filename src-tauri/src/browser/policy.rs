@@ -1,18 +1,19 @@
 //! Authority of the browser module: global toggle, epochs, per-session grants
 //! bound to the active turn, per-tab leases, request-id dedup, limits, and the
-//! URL and upload-path policies (spec 6, 7, 11.4, 15).
+//! URL and upload-path policies.
 //!
 //! `PolicyState` is the single source of truth. The `send()` gate in `link.rs`
 //! consults it under a read lock right before every socket write; every
-//! revocation (OFF, connection loss, turn end, session revoke) takes the write
-//! lock and bumps an epoch, so nothing admitted under the old epoch can be
-//! written afterwards (spec 6, "Garancije").
+//! revocation (OFF, connection loss, turn end, session revoke, a tab handed
+//! to another session or taken back by the user) takes the write lock and
+//! bumps an epoch, so nothing admitted under the old epoch can be written
+//! afterwards.
 //!
 //! The lease table maps the agent-facing `TabId` to CDP identifiers that the
 //! agent never sees.
 
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -26,12 +27,12 @@ use super::protocol::{
     TabInfo, TabOverview, TabState,
 };
 
-/// Dedup ring size per session and entry lifetime (spec 11.4).
+/// Dedup ring size per session and entry lifetime.
 pub const DEDUP_RING: usize = 500;
 pub const DEDUP_TTL: Duration = Duration::from_secs(24 * 3600);
-/// Largest file `upload` may hand to the browser (spec 10.2).
+/// Largest file `upload` may hand to the browser.
 pub const UPLOAD_MAX_BYTES: u64 = 100 * 1024 * 1024;
-/// How long a request waits for a busy tab or a free action slot (spec 9.6).
+/// How long a request waits for a busy tab or a free action slot.
 pub const BUSY_WAIT: Duration = Duration::from_secs(5);
 
 pub fn now_ms() -> i64 {
@@ -45,9 +46,7 @@ pub fn now_ms() -> i64 {
 #[derive(Clone, Debug)]
 pub struct RequestCtx {
     pub session: String,
-    pub window: String,
     pub request_id: String,
-    pub action: ActionKind,
     pub global_epoch: Epoch,
     pub session_epoch: Epoch,
     pub tab: Option<TabId>,
@@ -76,9 +75,7 @@ pub enum GateError {
 }
 
 #[derive(Clone, Debug)]
-pub struct Turn {
-    pub window: String,
-}
+pub struct Turn;
 
 #[derive(Clone, Debug)]
 pub struct SessionAuth {
@@ -95,6 +92,10 @@ pub struct SessionAuth {
     /// The user said "Not now" during this turn; no new request until the
     /// next turn.
     pub declined: bool,
+    /// The user turned this session's access off (`/browser`, the indicator,
+    /// Settings). "Always on" and "Full access" do not grant it again; only
+    /// the user's own grant clears it.
+    pub turned_off: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -105,7 +106,7 @@ pub struct FrameSession {
     pub execution_context_id: Option<i64>,
 }
 
-/// One row of the lease table (spec 7).
+/// One row of the lease table.
 #[derive(Clone, Debug)]
 pub struct Lease {
     pub tab: TabId,
@@ -120,10 +121,20 @@ pub struct Lease {
     /// OOPIF frames: CDP `frameId` → child session.
     pub frames: HashMap<String, FrameSession>,
     pub busy: bool,
+    /// The action that set `busy` ([`PolicyState::try_begin_action`]); only
+    /// that action's end clears it.
+    pub busy_action: u64,
+    /// The page was the user's before this lease: handed to the thread, or a
+    /// free tab adopted. Deleting the session or "close all agent tabs" gives
+    /// it back instead of closing it.
+    pub from_user: bool,
+    /// The user took this tab back (Settings "Take the tab back"). A lease
+    /// revoked any other way keeps its page from other sessions until then.
+    pub released: bool,
     pub snapshot_version: u64,
     pub pending_dialog: Option<DialogInfo>,
     pub opened_by: Option<TabId>,
-    /// Popups of this tab closed because a tab limit was hit (spec 10.4);
+    /// Popups of this tab closed because a tab limit was hit;
     /// the action layer compares before/after to set `observed.popup_blocked`.
     pub popups_blocked: u32,
     pub url: String,
@@ -171,14 +182,47 @@ pub enum Dedup {
     Conflict,
 }
 
+/// A running action's hold on the connection's action slots and on its tab
+///. Hand it back to [`PolicyState::end_action`]; an action that
+/// outlived a revocation or a lost connection then frees only what is still
+/// its own.
+#[derive(Debug)]
+pub struct ActionSlot {
+    id: u64,
+    tab: Option<TabId>,
+}
+
+/// A tab the user handed over that a session no longer holds: its marker
+/// comes off and MonoCode detaches, the tab stays open.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GiveBack {
+    pub tab: TabId,
+    pub session: CdpSessionId,
+    pub main_frame_id: Option<String>,
+}
+
+/// What ending a group of leases (session deleted, "close all agent tabs")
+/// leaves the host to do in the browser.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Ended {
+    /// Tabs MonoCode opened for an agent: closed.
+    pub close: Vec<TargetId>,
+    /// Tabs that were the user's and are still attached: given back.
+    pub give_back: Vec<GiveBack>,
+    /// Every tab whose lease ended, for the audit.
+    pub tabs: Vec<TabId>,
+}
+
 /// The authority state. Mutate it only through the methods below so every
-/// transition bumps the epochs the spec requires.
+/// transition bumps the epochs it requires.
 pub struct PolicyState {
     pub toggle_on: bool,
     pub run_id: u64,
     pub global_epoch: Epoch,
     pub settings: BrowserSettings,
-    pub active_actions: u32,
+    /// Running actions of this connection, by [`ActionSlot`] id.
+    active: HashSet<u64>,
+    action_seq: u64,
     sessions: HashMap<String, SessionAuth>,
     leases: HashMap<TabId, Lease>,
     /// `tabs.open` calls between the limit check and their lease insert, per
@@ -201,7 +245,8 @@ impl PolicyState {
                 seq: 0,
             },
             settings,
-            active_actions: 0,
+            active: HashSet::new(),
+            action_seq: 0,
             sessions: HashMap::new(),
             leases: HashMap::new(),
             opening: HashMap::new(),
@@ -213,7 +258,7 @@ impl PolicyState {
     // --- identity -----------------------------------------------------------
 
     /// Create or refresh the session's auth record; the token is stable for
-    /// the life of the session (spec 13.2: every session gets one at spawn).
+    /// the life of the session (every session gets one at spawn).
     pub fn prepare_session(&mut self, session: &str, window: &str, cwd: &str) -> String {
         let entry = self
             .sessions
@@ -231,6 +276,7 @@ impl PolicyState {
                 turn: None,
                 requested: false,
                 declined: false,
+                turned_off: false,
             });
         entry.window = window.to_string();
         entry.cwd = cwd.to_string();
@@ -260,6 +306,7 @@ impl PolicyState {
         self.sessions.get(session).map(|auth| auth.epoch)
     }
 
+    #[cfg(test)]
     pub fn turn_active(&self, session: &str) -> bool {
         self.sessions
             .get(session)
@@ -270,10 +317,10 @@ impl PolicyState {
         self.sessions.get(session).is_some_and(|auth| auth.granted)
     }
 
-    // --- transitions (spec 6, table "Toggle i epoch") --------------------------
+    // --- transitions --------------------------
 
     /// OFF→ON or ON→OFF. Returns the main CDP sessions whose tabs the caller
-    /// must detach (OFF only). Tabs stay open (decision D4).
+    /// must detach (OFF only). Tabs stay open.
     pub fn set_toggle(&mut self, on: bool) -> Vec<CdpSessionId> {
         if self.toggle_on == on {
             return Vec::new();
@@ -284,7 +331,7 @@ impl PolicyState {
         if on {
             return Vec::new();
         }
-        // OFF revokes every permission (spec 6, 13.1): after the next ON each
+        // OFF revokes every permission: after the next ON each
         // session has to be granted `/browser` again.
         for auth in self.sessions.values_mut() {
             auth.granted = false;
@@ -305,27 +352,41 @@ impl PolicyState {
         detach
     }
 
-    /// Settings "Take the tab back" (spec 13.1): the lease ends, the tab stays
+    /// Settings "Take the tab back": the lease ends, the tab stays
     /// with the user. Returns the main CDP session to detach, if attached.
     pub fn release_lease(&mut self, tab: &TabId) -> Result<Option<CdpSessionId>, Reason> {
         let lease = self.leases.get_mut(tab).ok_or(Reason::NoLease)?;
         match lease.state {
             TabState::Closed | TabState::Crashed => return Err(Reason::TargetClosed),
-            TabState::Revoked => return Ok(None),
+            // Revoked earlier and already detached: the page is the user's
+            // again, so any session may now be handed it.
+            TabState::Revoked => {
+                lease.released = true;
+                return Ok(None);
+            }
             TabState::Attaching | TabState::Open => {}
         }
         lease.state = TabState::Revoked;
+        lease.released = true;
         lease.busy = false;
+        let detach = lease.cdp_session.clone();
+        let owner = lease.owner.clone();
+        // Like a transfer: what the owner admitted for this tab must not
+        // reach it any more.
+        if let Some(auth) = self.sessions.get_mut(&owner) {
+            auth.epoch = auth.epoch.next();
+        }
         self.last_revocation = Some(Instant::now());
-        Ok(lease.cdp_session.clone())
+        Ok(detach)
     }
 
-    /// The socket closed while ON: epoch up, leases gone (spec 4, 6).
+    /// The socket closed while ON: epoch up, leases gone. Actions
+    /// still running on the old connection end without touching the new one.
     pub fn connection_lost(&mut self) {
         self.global_epoch = self.global_epoch.next();
         self.last_revocation = Some(Instant::now());
         self.leases.clear();
-        self.active_actions = 0;
+        self.active.clear();
     }
 
     /// Turn start: the session gets (or keeps) its token; `browser_access`
@@ -339,9 +400,7 @@ impl PolicyState {
     ) {
         self.prepare_session(session, window, cwd);
         let auth = self.sessions.get_mut(session).expect("prepared above");
-        auth.turn = Some(Turn {
-            window: window.to_string(),
-        });
+        auth.turn = Some(Turn);
         // A new message from the user: the agent may ask again.
         auth.declined = false;
         let revoke = match browser_access {
@@ -350,7 +409,7 @@ impl PolicyState {
                 auth.granted_since_ms = Some(now_ms());
                 false
             }
-            // Dropping the grant mid-session is a revocation (decision D2).
+            // Dropping the grant mid-session is a revocation.
             Some(false) if auth.granted => true,
             _ => false,
         };
@@ -360,7 +419,7 @@ impl PolicyState {
     }
 
     /// Turn end: in-flight actions of the session become `unknown`
-    /// (`turn_inactive`), leases and tabs stay (spec 6).
+    /// (`turn_inactive`), leases and tabs stay.
     pub fn turn_finished(&mut self, session: &str) {
         if let Some(auth) = self.sessions.get_mut(session) {
             auth.turn = None;
@@ -370,10 +429,10 @@ impl PolicyState {
         }
     }
 
-    /// `/browser` on or off for one session (decision D2).
+    /// `/browser` on or off for one session.
     pub fn set_grant(&mut self, session: &str, window: &str, enabled: bool) -> Vec<CdpSessionId> {
         if !enabled {
-            return self.revoke_session(session);
+            return self.turn_off(session);
         }
         let auth = self
             .sessions
@@ -391,6 +450,7 @@ impl PolicyState {
                 turn: None,
                 requested: false,
                 declined: false,
+                turned_off: false,
             });
         if !auth.granted {
             auth.granted = true;
@@ -398,7 +458,18 @@ impl PolicyState {
         }
         auth.requested = false;
         auth.declined = false;
+        auth.turned_off = false;
         Vec::new()
+    }
+
+    /// The user takes a session's access away: a revocation that also
+    /// remembers the choice for the session's later turns.
+    pub fn turn_off(&mut self, session: &str) -> Vec<CdpSessionId> {
+        let detach = self.revoke_session(session);
+        if let Some(auth) = self.sessions.get_mut(session) {
+            auth.turned_off = true;
+        }
+        detach
     }
 
     /// Ask mode: an action of a session without access asks the user. True
@@ -447,10 +518,6 @@ impl PolicyState {
             .is_some_and(|auth| auth.requested)
     }
 
-    pub fn declined(&self, session: &str) -> bool {
-        self.sessions.get(session).is_some_and(|auth| auth.declined)
-    }
-
     /// "Oduzmi browser pristup": epoch up, grant gone, leases released, tabs
     /// stay open. Returns the CDP sessions to detach.
     pub fn revoke_session(&mut self, session: &str) -> Vec<CdpSessionId> {
@@ -474,20 +541,72 @@ impl PolicyState {
         detach
     }
 
-    /// Session deleted: like revoke, plus its tabs are closed. Returns the
-    /// targets to close.
-    pub fn session_deleted(&mut self, session: &str) -> Vec<TargetId> {
+    /// Session deleted: like revoke, plus the tabs MonoCode opened for it are
+    /// closed and the ones the user handed over are given back. Its lease
+    /// rows go: nobody is left to report them to.
+    pub fn session_deleted(&mut self, session: &str) -> Ended {
+        let mut ended = Ended::default();
+        for lease in self.leases.values() {
+            if lease.owner != session || lease.state == TabState::Closed {
+                continue;
+            }
+            ended.tabs.push(lease.tab.clone());
+            if !lease.from_user {
+                ended.close.push(lease.target_id.clone());
+            } else if let Some(give) = give_back(lease) {
+                ended.give_back.push(give);
+            }
+        }
         self.revoke_session(session);
         self.sessions.remove(session);
         self.dedup.remove(session);
-        let mut close = Vec::new();
+        self.leases.retain(|_, l| l.owner != session);
+        ended
+    }
+
+    /// Settings "Close all agent tabs": every tab MonoCode opened for an
+    /// agent is closed; tabs the user handed over are given back instead.
+    pub fn close_all(&mut self) -> Ended {
+        let mut ended = Ended::default();
+        let mut owners = Vec::new();
         for lease in self.leases.values_mut() {
-            if lease.owner == session && lease.state != TabState::Closed {
+            if lease.state == TabState::Closed {
+                continue;
+            }
+            ended.tabs.push(lease.tab.clone());
+            lease.busy = false;
+            if !lease.from_user {
+                ended.close.push(lease.target_id.clone());
                 lease.state = TabState::Closed;
-                close.push(lease.target_id.clone());
+                continue;
+            }
+            if let Some(give) = give_back(lease) {
+                ended.give_back.push(give);
+                owners.push(lease.owner.clone());
+            }
+            lease.state = TabState::Revoked;
+            lease.released = true;
+        }
+        for owner in owners {
+            if let Some(auth) = self.sessions.get_mut(&owner) {
+                auth.epoch = auth.epoch.next();
             }
         }
-        close
+        self.last_revocation = Some(Instant::now());
+        ended
+    }
+
+    /// Drop lease rows nobody needs any more: closed or crashed tabs of a
+    /// session that no longer exists (nobody is left to tell), and revoked
+    /// tabs whose page is gone from `present` (the browser's page list, when
+    /// the caller has one).
+    pub fn prune_leases(&mut self, present: Option<&HashSet<TargetId>>) {
+        let sessions = &self.sessions;
+        self.leases.retain(|_, l| match l.state {
+            TabState::Attaching | TabState::Open => true,
+            TabState::Closed | TabState::Crashed => sessions.contains_key(&l.owner),
+            TabState::Revoked => present.is_none_or(|p| p.contains(&l.target_id)),
+        });
     }
 
     /// App window closed: its sessions lose grants and leases; tabs stay.
@@ -504,10 +623,11 @@ impl PolicyState {
             self.sessions.remove(&id);
             self.dedup.remove(&id);
         }
+        self.prune_leases(None);
         detach
     }
 
-    /// Hand a tab to another session (spec 7, "Primopredaja").
+    /// Hand a tab to another session.
     pub fn transfer(&mut self, tab: &TabId, from: &str, to: &str) -> Result<(), Reason> {
         if !self.granted(to) {
             return Err(Reason::NotGranted);
@@ -526,7 +646,7 @@ impl PolicyState {
         Ok(())
     }
 
-    // --- admission (spec 6 "Životni ciklus zahteva", 9.2 step 1) --------------
+    // --- admission --------------
 
     /// Admit a request: toggle, grant, turn, lease, dialog. The connection
     /// state and the busy flag are the host's concern.
@@ -545,7 +665,7 @@ impl PolicyState {
         if !auth.granted {
             return Err(Reason::NotGranted);
         }
-        let turn = auth.turn.as_ref().ok_or(Reason::TurnInactive)?;
+        auth.turn.as_ref().ok_or(Reason::TurnInactive)?;
         if action.requires_lease() {
             let tab = tab.ok_or(Reason::InvalidRequest)?;
             let lease = self.leases.get(tab).ok_or(Reason::NoLease)?;
@@ -565,9 +685,7 @@ impl PolicyState {
         let started = Instant::now();
         Ok(RequestCtx {
             session: session.to_string(),
-            window: turn.window.clone(),
             request_id: request_id.to_string(),
-            action,
             global_epoch: self.global_epoch,
             session_epoch: auth.epoch,
             tab: tab.cloned(),
@@ -576,7 +694,7 @@ impl PolicyState {
         })
     }
 
-    /// The `send()` gate (spec 5). Called under the read lock immediately
+    /// The `send()` gate. Called under the read lock immediately
     /// before the socket write; a command that fails here never leaves the
     /// process.
     pub fn gate(
@@ -615,11 +733,10 @@ impl PolicyState {
                 }
             }
             TargetRef::Target(target_id) => {
-                let held = self.leases.values().any(|l| {
-                    l.owner == ctx.session
-                        && l.state != TabState::Closed
-                        && &l.target_id == target_id
-                });
+                let held = self
+                    .leases
+                    .values()
+                    .any(|l| l.owner == ctx.session && l.is_live() && &l.target_id == target_id);
                 if held {
                     Ok(())
                 } else {
@@ -639,20 +756,43 @@ impl PolicyState {
         self.leases.get_mut(tab)
     }
 
-    pub fn lease_for_cdp_session(&self, session: &CdpSessionId) -> Option<&Lease> {
-        self.leases.values().find(|l| l.holds_session(session))
-    }
-
-    pub fn lease_for_cdp_session_mut(&mut self, session: &CdpSessionId) -> Option<&mut Lease> {
-        self.leases.values_mut().find(|l| l.holds_session(session))
-    }
-
+    /// The lease of a page: the live one when there is one (a page can have
+    /// older, ended leases from before it was adopted again).
     pub fn lease_for_target(&self, target: &TargetId) -> Option<&Lease> {
-        self.leases.values().find(|l| &l.target_id == target)
+        let mut found = None;
+        for lease in self.leases.values().filter(|l| &l.target_id == target) {
+            if lease.is_live() {
+                return Some(lease);
+            }
+            found = Some(lease);
+        }
+        found
     }
 
     pub fn lease_for_target_mut(&mut self, target: &TargetId) -> Option<&mut Lease> {
-        self.leases.values_mut().find(|l| &l.target_id == target)
+        let tab = self.lease_for_target(target)?.tab.clone();
+        self.leases.get_mut(&tab)
+    }
+
+    /// Whether a page is out of reach for every session but its holder: a
+    /// live lease, or a lease revoked from its session (revoke, grant off,
+    /// window closed) that the user has not taken back. Only the user hands
+    /// such a page on, by taking it back first.
+    pub fn target_held(&self, target: &TargetId) -> bool {
+        self.leases.values().any(|l| {
+            &l.target_id == target && (l.is_live() || (l.state == TabState::Revoked && !l.released))
+        })
+    }
+
+    /// Register a lease for a page that was the user's (a hand-over or an
+    /// adopted free tab). Ended leases of the same page go: they described
+    /// an earlier holder.
+    pub fn insert_adopted_lease(&mut self, mut lease: Lease) -> TabId {
+        lease.from_user = true;
+        let target = lease.target_id.clone();
+        self.leases
+            .retain(|_, l| l.target_id != target || l.is_live());
+        self.insert_lease(lease)
     }
 
     pub fn leases(&self) -> impl Iterator<Item = &Lease> {
@@ -690,7 +830,7 @@ impl PolicyState {
         }
     }
 
-    /// Limit check before `Target.createTarget` (decision D5).
+    /// Limit check before `Target.createTarget`.
     pub fn can_open_tab(&self, session: &str) -> Result<(), Reason> {
         let limits = self.settings.limits;
         if self.live_tabs(session) >= limits.tabs_per_session
@@ -732,7 +872,7 @@ impl PolicyState {
         });
     }
 
-    /// Tabs this session may act on (spec 7: closed tabs vanish from the list
+    /// Tabs this session may act on (closed tabs vanish from the list
     /// after the response that reported them).
     pub fn tabs_for(&self, session: &str) -> Vec<TabInfo> {
         let mut tabs: Vec<TabInfo> = self
@@ -771,39 +911,58 @@ impl PolicyState {
                 granted_since_ms: auth.granted_since_ms,
                 tabs: self.live_tabs(id),
                 requested: auth.requested,
+                turned_off: auth.turned_off,
             })
             .collect();
         rows.sort_by(|a, b| a.session_id.cmp(&b.session_id));
         rows
     }
 
-    // --- one action at a time per tab, N per connection (spec 9.6) ------------
+    // --- one action at a time per tab, N per connection ------------
 
-    pub fn try_begin_action(&mut self, tab: Option<&TabId>) -> bool {
-        if self.active_actions >= self.settings.limits.concurrent_actions {
-            return false;
+    /// Actions running on this connection.
+    pub fn active_actions(&self) -> u32 {
+        self.active.len() as u32
+    }
+
+    /// Take an action slot and, for a tab action, the tab. `None` while the
+    /// connection is at its limit or the tab is busy.
+    pub fn try_begin_action(&mut self, tab: Option<&TabId>) -> Option<ActionSlot> {
+        if self.active_actions() >= self.settings.limits.concurrent_actions {
+            return None;
         }
+        let id = self.action_seq + 1;
         if let Some(tab) = tab {
             match self.leases.get_mut(tab) {
                 Some(lease) if !lease.busy => {
                     lease.busy = true;
+                    lease.busy_action = id;
                     lease.last_action_at_ms = now_ms();
                 }
-                _ => return false,
+                _ => return None,
             }
         }
-        self.active_actions += 1;
-        true
+        self.action_seq = id;
+        self.active.insert(id);
+        Some(ActionSlot {
+            id,
+            tab: tab.cloned(),
+        })
     }
 
-    pub fn end_action(&mut self, tab: Option<&TabId>) {
-        self.active_actions = self.active_actions.saturating_sub(1);
-        if let Some(lease) = tab.and_then(|t| self.leases.get_mut(t)) {
-            lease.busy = false;
+    /// Give the slot back. A revocation, transfer or lost connection may have
+    /// freed the tab (and a new action taken it) or reset the count while
+    /// this action ran; then only what is still this action's is released.
+    pub fn end_action(&mut self, slot: ActionSlot) {
+        self.active.remove(&slot.id);
+        if let Some(lease) = slot.tab.and_then(|t| self.leases.get_mut(&t)) {
+            if lease.busy && lease.busy_action == slot.id {
+                lease.busy = false;
+            }
         }
     }
 
-    // --- request-id dedup (spec 11.4) ----------------------------------------
+    // --- request-id dedup ----------------------------------------
 
     pub fn dedup_check(&mut self, session: &str, request_id: &str, input: &Value) -> Dedup {
         let hash = input_hash(input);
@@ -865,7 +1024,7 @@ impl Policy {
 }
 
 // ---------------------------------------------------------------------------
-// URL policy (spec 9.1, 15.2)
+// URL policy
 // ---------------------------------------------------------------------------
 
 /// Only `http`, `https` and exactly `about:blank` may be navigated to or
@@ -888,7 +1047,7 @@ pub fn check_url(raw: &str) -> Result<String, Reason> {
     Ok(parsed.to_string())
 }
 
-/// URL as stored in the audit: no query string, no fragment (spec 11.5).
+/// URL as stored in the audit: no query string, no fragment.
 pub fn audit_url(raw: &str) -> String {
     match url::Url::parse(raw) {
         Ok(mut parsed) => {
@@ -901,13 +1060,12 @@ pub fn audit_url(raw: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Upload path policy (spec 10.2, 15.2, decision D8)
+// Upload path policy
 // ---------------------------------------------------------------------------
 
 /// Directories that are denied regardless of the dot-file setting: their
 /// contents are credentials, and a prompt-injected `upload` must never reach
-/// them. The spec lists them with the `.env*` exception; this module keeps
-/// the credential stores denied even when the user allows dot-files.
+/// them, so they stay denied even when the user allows dot-files.
 const ALWAYS_DENIED_DIRS: [&str; 4] = [".ssh", ".aws", ".gnupg", ".kube"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -997,6 +1155,18 @@ fn denied(what: &str, roots: &[PathBuf]) -> PathDenied {
 // helpers
 // ---------------------------------------------------------------------------
 
+/// The give-back of a lease that still has its page attached.
+fn give_back(lease: &Lease) -> Option<GiveBack> {
+    if !lease.is_live() {
+        return None;
+    }
+    Some(GiveBack {
+        tab: lease.tab.clone(),
+        session: lease.cdp_session.clone()?,
+        main_frame_id: lease.main_frame_id.clone(),
+    })
+}
+
 fn new_token() -> String {
     format!(
         "{}{}",
@@ -1070,6 +1240,9 @@ mod tests {
             main_execution_context: None,
             frames: HashMap::new(),
             busy: false,
+            busy_action: 0,
+            from_user: false,
+            released: false,
             snapshot_version: 0,
             pending_dialog: None,
             opened_by: None,
@@ -1150,6 +1323,35 @@ mod tests {
             Duration::from_secs(1),
         );
         assert_eq!(fresh.unwrap_err(), Reason::NoLease);
+    }
+
+    #[test]
+    fn only_the_users_own_choice_sets_and_clears_turned_off() {
+        let mut state = self::state();
+        state.set_toggle(true);
+        state.turn_started("s1", "main", "/repo", None);
+        state.set_grant("s1", "main", true);
+        let turned_off = |state: &PolicyState| state.session_access()[0].turned_off;
+        assert!(!turned_off(&state));
+        // A revocation the user did not ask for remembers nothing.
+        state.revoke_session("s1");
+        state.set_toggle(false);
+        state.set_toggle(true);
+        assert!(!turned_off(&state));
+        // The user's "off" survives turns and the main switch.
+        state.set_grant("s1", "main", true);
+        state.set_grant("s1", "main", false);
+        assert!(turned_off(&state) && !state.granted("s1"));
+        state.turn_finished("s1");
+        state.turn_started("s1", "main", "/repo", None);
+        state.set_toggle(false);
+        state.set_toggle(true);
+        assert!(turned_off(&state));
+        // Allow (or `/browser` on) clears it; Settings "Revoke" sets it.
+        state.set_grant("s1", "main", true);
+        assert!(!turned_off(&state));
+        state.turn_off("s1");
+        assert!(turned_off(&state) && !state.granted("s1"));
     }
 
     #[test]
@@ -1248,14 +1450,17 @@ mod tests {
         assert_eq!(state.leases().count(), 0);
         // Session deletion closes its tabs.
         state.insert_lease(lease("t_00000003", "T3", "S3", "s2"));
-        assert_eq!(state.session_deleted("s2"), vec![TargetId("T3".into())]);
+        assert_eq!(
+            state.session_deleted("s2").close,
+            vec![TargetId("T3".into())]
+        );
         assert!(state.session("s2").is_none());
         // Window close drops its sessions.
         state.turn_started("s4", "w2", "/repo", Some(true));
         state.insert_lease(lease("t_00000004", "T4", "S4", "s4"));
         assert_eq!(state.window_closed("w2"), vec![CdpSessionId("S4".into())]);
         assert!(state.session("s4").is_none());
-        // OFF revokes every grant (spec 6, 13.1): after ON the session must
+        // OFF revokes every grant: after ON the session must
         // ask for /browser again, and its epoch moved so in-flight work dies.
         state.turn_started("s5", "main", "/repo", Some(true));
         state.insert_lease(lease("t_00000005", "T5", "S5", "s5"));
@@ -1298,6 +1503,152 @@ mod tests {
         );
         state.lease_mut(&t6).unwrap().state = TabState::Closed;
         assert_eq!(state.release_lease(&t6), Err(Reason::TargetClosed));
+    }
+
+    #[test]
+    fn a_page_with_an_ended_lease_is_free_only_once_the_user_takes_it_back() {
+        let mut state = self::state();
+        state.set_toggle(true);
+        state.turn_started("s1", "main", "/repo", Some(true));
+        state.turn_started("s2", "main", "/repo", Some(true));
+        let t1 = TabId("t_00000001".into());
+        let page = TargetId("T1".into());
+        state.insert_lease(lease("t_00000001", "T1", "S1", "s1"));
+        assert!(state.target_held(&page));
+        // Revoked from s1 without the user taking it back: nobody else gets it.
+        state.revoke_session("s1");
+        assert!(state.target_held(&page));
+        // The user takes it back: free, and the ended lease is not "the" lease
+        // of the page once someone else holds it.
+        assert_eq!(state.release_lease(&t1), Ok(None));
+        assert!(!state.target_held(&page));
+        let mut adopted = lease("t_00000002", "T1", "S2", "s2");
+        adopted.state = TabState::Attaching;
+        let t2 = state.insert_adopted_lease(adopted);
+        assert!(state.lease(&t1).is_none(), "the old lease of the page went");
+        assert!(state.lease(&t2).unwrap().from_user);
+        assert_eq!(state.lease_for_target(&page).unwrap().tab, t2);
+        assert!(state.target_held(&page));
+        // With an ended lease left over, the live one is still found first.
+        let mut stale = lease("t_00000003", "T1", "S3", "s1");
+        stale.state = TabState::Revoked;
+        stale.released = true;
+        state.insert_lease(stale);
+        for _ in 0..8 {
+            assert_eq!(state.lease_for_target(&page).unwrap().tab, t2);
+            state.lease_for_target_mut(&page).unwrap().title = "x".into();
+        }
+        assert_eq!(state.lease(&t2).unwrap().title, "x");
+        // Revoked leases of pages the browser no longer lists are dropped;
+        // closed tabs of a live session wait until reported.
+        state.lease_mut(&t2).unwrap().state = TabState::Closed;
+        state.prune_leases(Some(&HashSet::new()));
+        assert!(state.lease(&TabId("t_00000003".into())).is_none());
+        assert!(state.lease(&t2).is_some());
+    }
+
+    #[test]
+    fn ended_leases_pass_no_target_command_and_a_release_bumps_the_epoch() {
+        let mut state = self::state();
+        let ctx = ready(&mut state);
+        let t1 = TabId("t_00000001".into());
+        let close = TargetRef::Target(TargetId("T1".into()));
+        assert_eq!(state.gate(&ctx, &close, true), Ok(()));
+        // A revoked lease that somehow kept its epoch still passes no
+        // `Target.closeTarget` / `attachToTarget`.
+        let mut probe = state.clone_for_test();
+        probe.lease_mut(&t1).unwrap().state = TabState::Revoked;
+        assert_eq!(probe.gate(&ctx, &close, true), Err(GateError::NoLease));
+        // Taking the tab back is a revocation for its owner.
+        let epoch = state.session_epoch("s1").unwrap();
+        assert_eq!(
+            state.release_lease(&t1),
+            Ok(Some(CdpSessionId("S1".into())))
+        );
+        assert_eq!(state.session_epoch("s1").unwrap(), epoch.next());
+        assert_eq!(
+            state.gate(&ctx, &TargetRef::Session(CdpSessionId("S1".into())), false),
+            Err(GateError::Revoked)
+        );
+    }
+
+    #[test]
+    fn a_stale_action_end_frees_only_what_is_still_its_own() {
+        let mut state = self::state();
+        state.settings.limits.concurrent_actions = 2;
+        state.set_toggle(true);
+        state.turn_started("s1", "main", "/repo", Some(true));
+        state.turn_started("s2", "main", "/repo", Some(true));
+        let t1 = TabId("t_00000001".into());
+        state.insert_lease(lease("t_00000001", "T1", "S1", "s1"));
+        let old = state.try_begin_action(Some(&t1)).unwrap();
+        // The tab moves to s2 mid-action, and s2 starts on it at once.
+        state.transfer(&t1, "s1", "s2").unwrap();
+        let new = state.try_begin_action(Some(&t1)).unwrap();
+        state.end_action(old);
+        assert!(state.lease(&t1).unwrap().busy, "s2's action still runs");
+        assert_eq!(state.active_actions(), 1);
+        state.end_action(new);
+        assert!(!state.lease(&t1).unwrap().busy);
+        assert_eq!(state.active_actions(), 0);
+        // An action of a lost connection ends after the next one began: the
+        // new connection's count is untouched.
+        let lost = state.try_begin_action(None).unwrap();
+        state.connection_lost();
+        let fresh = state.try_begin_action(None).unwrap();
+        let other = state.try_begin_action(None).unwrap();
+        assert!(state.try_begin_action(None).is_none());
+        state.end_action(lost);
+        assert_eq!(state.active_actions(), 2);
+        assert!(state.try_begin_action(None).is_none());
+        state.end_action(fresh);
+        state.end_action(other);
+        assert_eq!(state.active_actions(), 0);
+    }
+
+    #[test]
+    fn deleting_a_session_or_closing_all_gives_handed_over_tabs_back() {
+        let mut state = self::state();
+        state.set_toggle(true);
+        state.turn_started("s1", "main", "/repo", Some(true));
+        state.turn_started("s2", "main", "/repo", Some(true));
+        state.insert_lease(lease("t_00000001", "T1", "S1", "s1"));
+        state.insert_adopted_lease(lease("t_00000002", "U1", "S2", "s1"));
+        let mut revoked = lease("t_00000003", "U2", "S3", "s1");
+        revoked.from_user = true;
+        revoked.state = TabState::Revoked;
+        state.insert_lease(revoked);
+        let ended = state.session_deleted("s1");
+        assert_eq!(ended.close, vec![TargetId("T1".into())]);
+        assert_eq!(
+            ended.give_back,
+            vec![GiveBack {
+                tab: TabId("t_00000002".into()),
+                session: CdpSessionId("S2".into()),
+                main_frame_id: Some("U1".into()),
+            }]
+        );
+        assert_eq!(ended.tabs.len(), 3);
+        assert_eq!(state.leases().count(), 0, "the session's rows are gone");
+        assert!(!state.target_held(&TargetId("U2".into())));
+
+        // "Close all agent tabs": the same split, across sessions.
+        state.insert_lease(lease("t_00000004", "T4", "S4", "s2"));
+        state.insert_adopted_lease(lease("t_00000005", "U5", "S5", "s2"));
+        let epoch = state.session_epoch("s2").unwrap();
+        let ended = state.close_all();
+        assert_eq!(ended.close, vec![TargetId("T4".into())]);
+        assert_eq!(ended.give_back.len(), 1);
+        assert_eq!(ended.give_back[0].session, CdpSessionId("S5".into()));
+        let t5 = state.lease(&TabId("t_00000005".into())).unwrap();
+        assert_eq!(t5.state, TabState::Revoked);
+        assert!(t5.released);
+        assert!(!state.target_held(&TargetId("U5".into())));
+        assert_eq!(
+            state.lease(&TabId("t_00000004".into())).unwrap().state,
+            TabState::Closed
+        );
+        assert_eq!(state.session_epoch("s2").unwrap(), epoch.next());
     }
 
     #[test]
@@ -1345,11 +1696,11 @@ mod tests {
         assert_eq!(state.can_open_tab("s2"), Err(Reason::TabLimit));
         let t1 = TabId("t_00000001".into());
         let t2 = TabId("t_00000002".into());
-        assert!(state.try_begin_action(Some(&t1)));
-        assert!(!state.try_begin_action(Some(&t1)));
-        assert!(!state.try_begin_action(Some(&t2)));
-        state.end_action(Some(&t1));
-        assert!(state.try_begin_action(Some(&t2)));
+        let slot = state.try_begin_action(Some(&t1)).unwrap();
+        assert!(state.try_begin_action(Some(&t1)).is_none());
+        assert!(state.try_begin_action(Some(&t2)).is_none());
+        state.end_action(slot);
+        assert!(state.try_begin_action(Some(&t2)).is_some());
         assert!(state.new_tab_id().is_well_formed());
         assert!(state.lease_for_target(&TargetId("T2".into())).is_some());
     }
@@ -1496,7 +1847,8 @@ mod tests {
                 run_id: self.run_id,
                 global_epoch: self.global_epoch,
                 settings: self.settings.clone(),
-                active_actions: self.active_actions,
+                active: self.active.clone(),
+                action_seq: self.action_seq,
                 sessions: self.sessions.clone(),
                 leases: self.leases.clone(),
                 opening: self.opening.clone(),

@@ -30,6 +30,7 @@ const granted = {
   granted_since_ms: 1_700_000_000_000,
   tabs: 1,
   requested: false,
+  turned_off: false,
 };
 
 const attach = { ...DEFAULT_BROWSER_SETTINGS, mode: "attach" as const };

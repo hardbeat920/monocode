@@ -1,5 +1,6 @@
-//! Isolated worlds, ref resolution and the shared element pipeline (spec 5
-//! "Izolovani svet", 9.2 steps 2-6).
+//! Isolated worlds, ref resolution and the shared element pipeline
+//! (resolve, actionability, scroll into view, stability, input point, hit
+//! test).
 //!
 //! Every page-side check runs in the `__monocode` isolated world of the
 //! element's own frame, through `Runtime.callFunctionOn` on an object
@@ -12,7 +13,7 @@ use std::time::{Duration, Instant};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use super::super::link::Method;
+use super::super::link::{CdpSessionId, Method};
 use super::super::protocol::{Reason, ISOLATED_WORLD};
 use super::refs::{self, FrameCtx, NodeRef};
 use super::{Fail, Run};
@@ -30,7 +31,7 @@ const STABLE_BUDGET: Duration = Duration::from_secs(2);
 /// Rust, because timers and `requestAnimationFrame` are throttled or paused
 /// in background tabs.
 const STABLE_GAP: Duration = Duration::from_millis(50);
-/// Hit-test attempts and their spacing (spec 9.2 step 6).
+/// Hit-test attempts and their spacing.
 const HIT_ATTEMPTS: usize = 3;
 const HIT_GAP: Duration = Duration::from_millis(100);
 
@@ -63,6 +64,9 @@ impl Rect {
 #[serde(default)]
 pub struct Facts {
     pub connected: bool,
+    /// The ref is a text node (a full snapshot's static text); the state
+    /// below is its element's, the box its own.
+    pub text: bool,
     pub visible: bool,
     pub enabled: bool,
     pub editable: bool,
@@ -110,6 +114,7 @@ pub fn main_frame(run: &Run<'_>) -> Result<FrameCtx, Fail> {
         session: run.main().clone(),
         frame_id: frame_id.or_else(|| Some(run.handle.target.0.clone())),
         owners: Vec::new(),
+        local_owner: None,
     })
 }
 
@@ -218,14 +223,14 @@ pub fn locate(run: &Run<'_>, raw: &str) -> Result<Element, Fail> {
     resolve(run, &node, raw)
 }
 
-/// `DOM.resolveNode` into our world (spec 9.2 step 2). A node that no longer
+/// `DOM.resolveNode` into our world. A node that no longer
 /// exists is `ref_stale`.
 pub fn resolve(run: &Run<'_>, node: &NodeRef, raw: &str) -> Result<Element, Fail> {
     let object = resolve_backend(run, &node.frame, node.backend).map_err(|fail| {
         if fail.protocol_message().is_some() {
             Fail::detail(
                 Reason::RefStale,
-                format!("Element {raw} is no longer in the page; call browser_snapshot and use fresh refs."),
+                format!("Element {raw} is no longer in the page; take a new snapshot and use fresh refs."),
             )
         } else {
             fail
@@ -360,6 +365,50 @@ pub fn facts(run: &Run<'_>, el: &Element) -> Result<Facts, Fail> {
     Ok(serde_json::from_value(value).unwrap_or_default())
 }
 
+/// The element that takes focus for a text node: its editing host, else the
+/// nearest focusable ancestor, else its parent. Returned by reference.
+const FOCUS_JS: &str = r#"function monocodeFocusTarget() {
+  const start = this.nodeType === 1 ? this : this.parentElement;
+  if (!start) return null;
+  if (start.isContentEditable) {
+    let host = start;
+    while (host.parentElement && host.parentElement.isContentEditable) host = host.parentElement;
+    return host;
+  }
+  return start.closest('a[href], button, input, select, textarea, summary, [tabindex], [contenteditable]') || start;
+}"#;
+
+/// The node `DOM.focus` gets for `el`, which only takes elements: the ref's
+/// own node, or for a text node the element that takes focus for it.
+pub fn focus_backend(run: &Run<'_>, el: &Element, facts: &Facts) -> Result<i64, Fail> {
+    if !facts.text {
+        return Ok(el.node.backend);
+    }
+    let mut params = element_call(el, FOCUS_JS, &[]);
+    params["returnByValue"] = json!(false);
+    let result = run
+        .send(
+            &el.node.frame.session,
+            Method::RuntimeCallFunctionOn,
+            params,
+        )
+        .map_err(object_gone)?;
+    call_value(result.clone())?;
+    let Some(object) = result["result"]["objectId"].as_str() else {
+        return Ok(el.node.backend);
+    };
+    let described = run
+        .send(
+            &el.node.frame.session,
+            Method::DomDescribeNode,
+            json!({ "objectId": object }),
+        )
+        .map_err(object_gone)?;
+    Ok(described["node"]["backendNodeId"]
+        .as_i64()
+        .unwrap_or(el.node.backend))
+}
+
 /// The element's border box in its frame now; `detached` when it left.
 pub fn rect(run: &Run<'_>, el: &Element) -> Result<Option<Rect>, Fail> {
     let value = call(run, el, ACTIONABILITY_JS, &[arg(json!("rect"))])?;
@@ -413,7 +462,7 @@ pub fn recheck(run: &Run<'_>, el: &Element, hit: bool) -> Result<Point, Fail> {
     Ok(point)
 }
 
-/// `DOM.scrollIntoViewIfNeeded` (spec 9.2 step 4).
+/// `DOM.scrollIntoViewIfNeeded`.
 pub fn scroll_into_view(run: &Run<'_>, el: &Element) -> Result<(), Fail> {
     match run.send(
         &el.node.frame.session,
@@ -462,27 +511,67 @@ pub fn stable_after(measured: Instant) -> Instant {
     measured + STABLE_GAP
 }
 
-/// Offset of an OOPIF's viewport inside the tab's viewport: the content
-/// box of each `<iframe>` owner on the way down (spec 5, open question O4).
-pub fn frame_offset(run: &Run<'_>, frame: &FrameCtx) -> Result<(f64, f64), Fail> {
-    let mut x = 0.0;
-    let mut y = 0.0;
-    for (session, owner) in &frame.owners {
-        let model = run
-            .send(
-                session,
-                Method::DomGetBoxModel,
-                json!({ "backendNodeId": owner }),
-            )
-            .map_err(|fail| match fail.protocol_message() {
-                Some(_) => Fail::reason(Reason::UnsupportedFrame),
-                None => fail,
-            })?;
-        let content = &model["model"]["content"];
-        x += content[0].as_f64().unwrap_or(0.0);
-        y += content[1].as_f64().unwrap_or(0.0);
+/// Where a frame's viewport sits. `DOM.getContentQuads` and
+/// `DOM.getBoxModel` answer in the viewport of the session's root frame (the
+/// tab's, or an OOPIF's), page scripts (`getBoundingClientRect`,
+/// `elementFromPoint`) in the frame's own.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct FrameOffset {
+    /// The session's root viewport inside the tab's: the content boxes of
+    /// the OOPIF `<iframe>` owners on the way down.
+    pub root: (f64, f64),
+    /// The frame's own viewport inside the session's root viewport: the
+    /// content box of a same-process frame's `<iframe>` (zero for a root).
+    pub local: (f64, f64),
+}
+
+impl FrameOffset {
+    /// From the frame's own viewport to the tab's.
+    pub fn total(&self) -> (f64, f64) {
+        (self.root.0 + self.local.0, self.root.1 + self.local.1)
     }
-    Ok((x, y))
+}
+
+/// Top left of the content box of `<iframe>` `owner` (its viewport's
+/// origin), in the viewport of `session`'s root frame.
+fn content_origin(run: &Run<'_>, session: &CdpSessionId, owner: i64) -> Result<(f64, f64), Fail> {
+    let model = run
+        .send(
+            session,
+            Method::DomGetBoxModel,
+            json!({ "backendNodeId": owner }),
+        )
+        .map_err(|fail| match fail.protocol_message() {
+            Some(_) => Fail::reason(Reason::UnsupportedFrame),
+            None => fail,
+        })?;
+    let content = &model["model"]["content"];
+    Ok((
+        content[0].as_f64().unwrap_or(0.0),
+        content[1].as_f64().unwrap_or(0.0),
+    ))
+}
+
+/// The same-process part of [`frame_offset`].
+fn local_offset(run: &Run<'_>, frame: &FrameCtx) -> Result<(f64, f64), Fail> {
+    match frame.local_owner {
+        Some(owner) => content_origin(run, &frame.session, owner),
+        None => Ok((0.0, 0.0)),
+    }
+}
+
+/// Offsets of `frame`'s viewport (see [`FrameOffset`]).
+pub fn frame_offset(run: &Run<'_>, frame: &FrameCtx) -> Result<FrameOffset, Fail> {
+    let mut root = (0.0, 0.0);
+    for (session, owner) in &frame.owners {
+        let (x, y) = content_origin(run, session, *owner)?;
+        root.0 += x;
+        root.1 += y;
+    }
+    Ok(FrameOffset {
+        root,
+        local: local_offset(run, frame)?,
+    })
 }
 
 /// Layout viewport of the tab: `(page_x, page_y, width, height)`.
@@ -501,8 +590,7 @@ pub fn viewport(run: &Run<'_>) -> Result<(f64, f64, f64, f64), Fail> {
     ))
 }
 
-/// Center of the first content quad that intersects the viewport (spec 9.2
-/// step 5).
+/// Center of the first content quad that intersects the viewport.
 pub fn point(run: &Run<'_>, el: &Element) -> Result<Point, Fail> {
     let quads = run
         .send(
@@ -514,15 +602,18 @@ pub fn point(run: &Run<'_>, el: &Element) -> Result<Point, Fail> {
             Some(_) => Fail::reason(Reason::NotVisible),
             None => fail,
         })?;
-    let (dx, dy) = frame_offset(run, &el.node.frame)?;
+    let offset = frame_offset(run, &el.node.frame)?;
+    let (dx, dy) = offset.root;
     let (_, _, width, height) = viewport(run)?;
     let quads: Vec<Vec<f64>> = serde_json::from_value(quads["quads"].clone()).unwrap_or_default();
+    // Quads are in the session's root viewport: shifted into the tab's for
+    // input, into the frame's own for the page-side hit test.
     center_in_viewport(&quads, dx, dy, width, height)
         .map(|(x, y)| Point {
             x,
             y,
-            local_x: x - dx,
-            local_y: y - dy,
+            local_x: x - dx - offset.local.0,
+            local_y: y - dy - offset.local.1,
         })
         .ok_or_else(|| {
             Fail::detail(
@@ -604,7 +695,7 @@ fn hit_test(run: &Run<'_>, el: &Element, point: Point) -> Result<(), Fail> {
     ))
 }
 
-/// Fallback for closed shadow roots (spec 9.2 step 6): ask the browser which
+/// Fallback for closed shadow roots: ask the browser which
 /// node is at the point and let the page script check composed containment.
 /// Any failure here counts as a good hit rather than blocking the action.
 fn closed_root_hit(run: &Run<'_>, el: &Element, point: Point) -> Hit {
@@ -612,12 +703,16 @@ fn closed_root_hit(run: &Run<'_>, el: &Element, point: Point) -> Hit {
         status: "ok".into(),
         by: String::new(),
     };
+    // The browser hit-tests from the session's root frame, in its viewport.
+    let Ok((lx, ly)) = local_offset(run, &el.node.frame) else {
+        return ok;
+    };
     let Ok(found) = run.send(
         &el.node.frame.session,
         Method::DomGetNodeForLocation,
         json!({
-            "x": point.local_x.round() as i64,
-            "y": point.local_y.round() as i64,
+            "x": (point.local_x + lx).round() as i64,
+            "y": (point.local_y + ly).round() as i64,
             "includeUserAgentShadowDOM": true,
             // `true` would hit-test `pointer-events: none` elements, which a
             // real click passes through (the visible cursor among them).
@@ -687,6 +782,7 @@ mod tests {
             (SELECT_JS, "function monocodeSelect("),
             (PAGE_JS, "function monocodePage("),
             (READ_JS, "function monocodeRead("),
+            (FOCUS_JS, "function monocodeFocusTarget("),
         ] {
             assert!(script.contains(name), "{name}");
             // Never anything that evaluates strings as code.

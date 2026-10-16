@@ -1,15 +1,16 @@
 //! Shared wire contract of the browser module.
 //!
-//! FROZEN. Everything in this file is used by all five browser work packages
-//! (core, semantic layer, CLI/MCP adapters, UI, resilience tests). Add to it
-//! only through a coordinated change; never rename or remove existing items.
+//! The wire contract between the browser core, the semantic layer, the
+//! agent adapters (CLI and MCP server) and the UI. Items are shared across
+//! those boundaries (and serialized to the agent and the frontend), so a
+//! rename or removal is a breaking change for all of them.
 //!
 //! The file holds no behaviour, only the types that cross module boundaries:
 //! action names and their parameters, the four outcome classes, the closed set
-//! of reasons (spec 11.3), the result envelope (spec 11.1), tab and connection
+//! of reasons, the result envelope, tab and connection
 //! state as the UI and the agent see them, and the settings record.
 //!
-//! Naming follows the spec: `tab` is the agent-facing opaque tab id (`t_` +
+//! Naming: `tab` is the agent-facing opaque tab id (`t_` +
 //! 8 hex), `ref` is an element ref from a snapshot (`e12`, optionally
 //! `e12@3` with the snapshot version). CDP `targetId` / `sessionId` never
 //! appear here; the agent must not see them.
@@ -25,18 +26,18 @@ pub const STATE_EVENT: &str = "monocode-browser-state";
 /// Environment variables the provider process (and its MCP/CLI children) inherit.
 pub const ENV_ENDPOINT: &str = "MONOCODE_BROWSER_ENDPOINT";
 pub const ENV_TOKEN: &str = "MONOCODE_BROWSER_TOKEN";
-/// Control transport namespace used by the CLI and the MCP server (spec 6).
+/// Control transport namespace used by the CLI and the MCP server.
 pub const NAMESPACE: &str = "browser";
-/// Title prefix the marker script puts in front of the page title (spec 7).
+/// Title prefix the marker script puts in front of the page title.
 pub const MARKER_PREFIX: &str = "\u{25C6} MonoCode \u{B7} ";
 /// Title used when the page has no title of its own.
 pub const MARKER_BARE: &str = "\u{25C6} MonoCode";
-/// Minimum supported browser major version (Chrome and Edge alike, spec 4).
+/// Minimum supported browser major version (the same for every Chromium browser).
 pub const MIN_BROWSER_MAJOR: u32 = 144;
-/// Name of the isolated world all injected scripts run in (spec 5).
+/// Name of the isolated world all injected scripts run in.
 pub const ISOLATED_WORLD: &str = "__monocode";
 
-/// Strip the user-facing marker from a title so results never carry it (spec 7).
+/// Strip the user-facing marker from a title so results never carry it.
 pub fn strip_marker(title: &str) -> &str {
     if let Some(rest) = title.strip_prefix(MARKER_PREFIX) {
         rest
@@ -53,6 +54,7 @@ pub fn strip_marker(title: &str) -> &str {
 pub struct TabId(pub String);
 
 impl TabId {
+    #[cfg(test)]
     pub fn is_well_formed(&self) -> bool {
         self.0.len() == 10
             && self.0.starts_with("t_")
@@ -67,7 +69,7 @@ impl fmt::Display for TabId {
 }
 
 /// Permission generation. `run` is random per app run, so a value from a
-/// previous run never compares equal to a current one (spec 14.2).
+/// previous run never compares equal to a current one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Epoch {
     pub run: u64,
@@ -90,11 +92,11 @@ impl fmt::Display for Epoch {
 }
 
 // ---------------------------------------------------------------------------
-// Outcomes and reasons (spec 11.2, 11.3)
+// Outcomes and reasons
 // ---------------------------------------------------------------------------
 
 /// The four outcome classes. `done` never means "the page did what the agent
-/// wanted", only that the input reached the browser (spec 9.7).
+/// wanted", only that the input reached the browser.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
@@ -119,9 +121,9 @@ impl Outcome {
     }
 }
 
-/// Closed set of reasons (spec 11.3 plus the connection states of spec 4 and
-/// the snapshot/screenshot reasons of spec 8). A new reason needs a row in the
-/// spec table and a test in `protocol::tests`.
+/// Closed set of reasons: permission and state, connection states, element
+/// and page failures, snapshot and screenshot failures. A new reason needs
+/// its class, message and name below and a test in `protocol::tests`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Reason {
@@ -137,7 +139,7 @@ pub enum Reason {
     TabLimit,
     Busy,
     InvalidRequest,
-    // blocked: connection not usable (spec 4 "Agent dobija")
+    // blocked: connection not usable
     BrowserConnecting,
     BrowserNeedsSetup,
     BrowserUnavailable,
@@ -287,10 +289,10 @@ impl Reason {
             NotGranted => "This thread has no browser access, or the user declined it; continue without the browser and do not retry in this turn. The user can allow it in MonoCode or with /browser.",
             Revoked => "Browser access for this session was revoked; nothing further will be sent.",
             TurnInactive => "No active turn; browser actions are only allowed while responding.",
-            NoLease => "Tab is not owned by this session; use browser_tabs to list or open your own tabs.",
+            NoLease => "Tab is not owned by this session; list your tabs or open one of your own.",
             UrlDenied => "URL scheme not allowed; only http(s) pages and about:blank can be opened.",
             PathDenied => "File path is outside the allowed directories for upload.",
-            DialogPending => "A dialog is waiting on this tab; answer it with browser_dialog first.",
+            DialogPending => "A dialog is waiting on this tab; answer it with the dialog action first.",
             TabLimit => "Tab limit reached; close a tab you no longer need first.",
             Busy => "Another action is running on this tab; retry shortly.",
             InvalidRequest => "The request is invalid.",
@@ -299,10 +301,10 @@ impl Reason {
             BrowserUnavailable => "The browser is not running or left a stale debugging record; the user must start it and retry from MonoCode.",
             BrowserConsentPending => "The browser is asking the user to allow this connection; wait for the user instead of retrying in a loop.",
             BrowserConsentDenied => "The user denied the browser connection; ask them to connect again from MonoCode settings.",
-            BrowserUnsupported => "Chrome or Edge 144 or newer is required.",
+            BrowserUnsupported => "A browser built on Chromium 144 or newer is required.",
             BrowserPolicyBlocked => "An administrator policy blocks remote debugging in this browser.",
             BrowserDisconnected => "The browser is not connected; MonoCode reconnects on the next action (the user's own browser asks them to approve it again).",
-            RefStale => "Element refs are stale; call browser_snapshot and use fresh refs.",
+            RefStale => "Element refs are stale; take a new snapshot and use fresh refs.",
             NotVisible => "Element is not visible.",
             NotEnabled => "Element is disabled.",
             NotEditable => "Element does not accept text input.",
@@ -317,7 +319,7 @@ impl Reason {
             TargetClosed => "Tab was closed.",
             NoDialog => "No dialog is waiting on this tab.",
             SnapshotTimeout => "The snapshot took too long; use scope to narrow it.",
-            ScreenshotUnavailableBackground => "The background tab did not render a screenshot; use browser_snapshot instead.",
+            ScreenshotUnavailableBackground => "The background tab did not render a screenshot; take a snapshot instead.",
             UnsupportedFrame => "This element lives in a frame the module cannot act in.",
             CdpTimeout => "Browser did not answer in time; take a snapshot before retrying, the action may have happened.",
             LinkDown => "Connection to the browser dropped during the action; take a snapshot before retrying.",
@@ -370,7 +372,7 @@ impl Reason {
 }
 
 // ---------------------------------------------------------------------------
-// Actions (spec 9.1, 9.5)
+// Actions
 // ---------------------------------------------------------------------------
 
 /// Every action the agent can request, by wire name. Closed set.
@@ -496,7 +498,7 @@ impl ActionKind {
 
     /// Whether the action can change page or browser state. Mutating actions
     /// interrupted after a write are reported as `unknown`, observations as
-    /// `failed` (spec 6, 11.2).
+    /// `failed`.
     pub fn mutates(self) -> bool {
         use ActionKind::*;
         !matches!(
@@ -505,7 +507,7 @@ impl ActionKind {
         )
     }
 
-    /// Default and maximum action timeouts (spec 9.5).
+    /// Default and maximum action timeouts.
     pub fn default_timeout(self) -> Duration {
         use ActionKind::*;
         match self {
@@ -560,7 +562,7 @@ pub struct ActionRequest {
     pub input: Value,
 }
 
-// Parameter records (spec 9.1, 12.3). `tab` is the agent-facing tab id.
+// Parameter records. `tab` is the agent-facing tab id.
 // All of them reject unknown fields so typos surface as `invalid_request`.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -633,7 +635,7 @@ pub enum Modifier {
 }
 
 impl Modifier {
-    /// CDP modifier bit (spec 9.3).
+    /// CDP modifier bit.
     pub fn bit(self) -> u32 {
         match self {
             Modifier::Alt => 1,
@@ -698,7 +700,7 @@ pub struct TypeParams {
 #[serde(deny_unknown_fields)]
 pub struct PressParams {
     pub tab: TabId,
-    /// `Modifier+...+Key`, e.g. `Enter`, `Control+A` (spec 9.3).
+    /// `Modifier+...+Key`, e.g. `Enter`, `Control+A`.
     pub key: String,
     #[serde(default, rename = "ref")]
     pub element: Option<String>,
@@ -889,7 +891,7 @@ pub struct TabsCloseParams {
 #[serde(deny_unknown_fields)]
 pub struct TabsFocusParams {
     pub tab: TabId,
-    /// Must be `true`: focusing changes what the user sees (spec 9.1).
+    /// Must be `true`: focusing changes what the user sees.
     #[serde(default)]
     pub user_visible: Option<bool>,
 }
@@ -989,15 +991,12 @@ pub struct NetworkParams {
 pub struct CommonInput {
     #[serde(default)]
     pub tab: Option<TabId>,
-    /// `false` turns off the page snapshot an action returns.
-    #[serde(default)]
-    pub snapshot: Option<bool>,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
-// Result envelope (spec 11.1)
+// Result envelope
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1009,7 +1008,7 @@ pub enum DialogType {
     Beforeunload,
 }
 
-/// A JavaScript dialog waiting on a tab (spec 10.1).
+/// A JavaScript dialog waiting on a tab.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DialogInfo {
     #[serde(rename = "type")]
@@ -1021,7 +1020,7 @@ pub struct DialogInfo {
     pub opened_at_ms: i64,
 }
 
-/// A tab the action opened as a side effect (popup), spec 10.4.
+/// A tab the action opened as a side effect (popup).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NewTabInfo {
     pub tab: TabId,
@@ -1036,7 +1035,7 @@ pub enum LoadState {
     Timeout,
 }
 
-/// What the module saw right after the action (spec 9.2 step 9).
+/// What the module saw right after the action.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Observed {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1137,13 +1136,14 @@ impl ActionResult {
         self
     }
 
+    #[cfg(test)]
     pub fn is_done(&self) -> bool {
         self.outcome == Outcome::Done
     }
 }
 
 // ---------------------------------------------------------------------------
-// Tabs as the agent and the UI see them (spec 7)
+// Tabs as the agent and the UI see them
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -1181,7 +1181,7 @@ pub struct TabOverview {
 }
 
 // ---------------------------------------------------------------------------
-// Connection and module state for the UI (spec 4, 13)
+// Connection and module state for the UI
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -1281,7 +1281,7 @@ pub struct ConnectionInfo {
     pub last_error: Option<String>,
 }
 
-/// Which browser discovery looks at (spec 4, 13.1).
+/// Which browser discovery looks at.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum BrowserChoice {
@@ -1315,14 +1315,14 @@ impl Default for Limits {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum BrowserMode {
-    /// MonoCode starts the installed Chrome or Edge with its own profile and
+    /// MonoCode starts an installed Chromium browser with its own profile and
     /// connects to it directly: no remote-debugging setup, no consent dialog.
     #[default]
     Managed,
     /// Like `Managed`, with a fresh profile for every start that is deleted
     /// when the browser closes: no sign-ins, nothing kept.
     Private,
-    /// Attach to the browser the user runs (spec 4): remote debugging on in
+    /// Attach to the browser the user runs: remote debugging on in
     /// `chrome://inspect`, and the browser asks on every connection.
     Attach,
 }
@@ -1351,10 +1351,10 @@ pub enum AccessMode {
 pub struct BrowserSettings {
     /// Attach: the profile discovery looks at. Managed: which browser to start.
     pub browser: BrowserChoice,
-    /// `Target.createTarget { newWindow: true }`; off by default (decision D3).
+    /// `Target.createTarget { newWindow: true }`; off by default.
     pub separate_window: bool,
     pub limits: Limits,
-    /// Extra roots allowed for `upload` besides the session cwd (spec 10.2).
+    /// Extra roots allowed for `upload` besides the session cwd.
     pub upload_roots: Vec<String>,
     pub allow_dotfiles: bool,
     pub protocol_trace: bool,
@@ -1395,6 +1395,10 @@ pub struct SessionAccess {
     /// An agent of this session waits for the user to allow the browser.
     #[serde(default)]
     pub requested: bool,
+    /// The user turned this session's access off; it asks again, even with
+    /// "Always on" or "Full access", until the user grants it.
+    #[serde(default)]
+    pub turned_off: bool,
 }
 
 /// Whole module state, emitted as [`STATE_EVENT`] on every change.
@@ -1408,7 +1412,7 @@ pub struct BrowserState {
     pub global_epoch: Epoch,
 }
 
-/// One `browser_audit` row (spec 11.5), as the Settings panel lists it.
+/// One `browser_audit` row, as the Settings panel lists it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditEntry {
     pub id: i64,
@@ -1422,7 +1426,7 @@ pub struct AuditEntry {
     pub tab: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
-    /// Redacted parameters (spec 11.5).
+    /// Redacted parameters.
     pub params: Value,
     pub outcome: Outcome,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -1,4 +1,4 @@
-//! Resilience tests (work package 5; spec 6, 7, 14 and 16): the whole host
+//! Resilience tests: the whole host
 //! (`BrowserHost::handle_request` → policy → semantic layer → link) against
 //! the fake CDP server, under the situations a real browser and a real user
 //! produce: two sessions at once, the browser dying or going away mid-action,
@@ -439,7 +439,7 @@ impl World {
     /// Nothing is left running or reserved in the policy.
     fn assert_idle(&self) {
         let state = self.host.policy().read();
-        assert_eq!(state.active_actions, 0, "actions still counted");
+        assert_eq!(state.active_actions(), 0, "actions still counted");
         assert!(
             state.leases().all(|l| !l.busy),
             "a lease is still busy: {:?}",
@@ -498,7 +498,7 @@ fn tabs_of(result: &ActionResult) -> Vec<String> {
 }
 
 // ---------------------------------------------------------------------------
-// Two sessions at the same time (spec 7 "Pravila", 9.6)
+// Two sessions at the same time
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -631,7 +631,7 @@ fn one_action_per_tab_and_the_connection_limit_hold_under_load() {
         let sampling = sampling.clone();
         thread::spawn(move || {
             while sampling.load(Ordering::Acquire) {
-                let now = world.host.policy().read().active_actions as u64;
+                let now = world.host.policy().read().active_actions() as u64;
                 peak.fetch_max(now, Ordering::AcqRel);
                 thread::sleep(Duration::from_millis(1));
             }
@@ -739,7 +739,7 @@ fn tab_limits_hold_when_sessions_open_tabs_concurrently() {
 }
 
 // ---------------------------------------------------------------------------
-// Browser crash, restart and reconnection (spec 14.1 rows 1, 2, 6, 9; 14.2)
+// Browser crash, restart and reconnection
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -781,7 +781,7 @@ fn a_browser_crash_mid_action_is_unknown_and_reconnection_adopts_nothing() {
         "lease rows closed with the link"
     );
 
-    // The unknown result is final for its request id (spec 14.3): a retry
+    // The unknown result is final for its request id: a retry
     // with the same id gets it back and touches nothing.
     let retried = world.act_as(
         "s1",
@@ -953,7 +953,7 @@ fn a_hung_browser_times_out_pings_and_closes() {
 }
 
 // ---------------------------------------------------------------------------
-// Tab and lease cleanup (spec 7 "Životni vek", 14.1 rows 3, 5; T15)
+// Tab and lease cleanup
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -1070,7 +1070,7 @@ fn revocation_window_close_and_session_delete_release_exactly_their_tabs() {
     // The revoked tab no longer counts against the limits and has no open row.
     assert_eq!(world.host.policy().read().live_tabs("s1"), 0);
     assert_eq!(world.open_lease_rows(), 3);
-    // Granting again does not hand the old tab back (spec 14.3).
+    // Granting again does not hand the old tab back.
     world.grant("s1");
     let back = world.act("s1", "snapshot", json!({ "tab": s1_tab }));
     assert_eq!(back.reason, Some(Reason::NoLease), "{back:?}");
@@ -1091,14 +1091,8 @@ fn revocation_window_close_and_session_delete_release_exactly_their_tabs() {
     );
     assert_eq!(world.open_lease_rows(), 2);
 
-    // Deleting s2 closes both of its tabs and nothing else.
-    let before = world.sent().len();
-    world.host.session_deleted("s2");
-    let closed: HashSet<String> = world.sent()[before..]
-        .iter()
-        .filter(|r| r.method == "Target.closeTarget")
-        .map(|r| r.params["targetId"].as_str().unwrap().to_string())
-        .collect();
+    // Deleting s2 closes both of its tabs and nothing else, and its lease
+    // rows go with it.
     let expected: HashSet<String> = s2_tabs
         .iter()
         .map(|t| {
@@ -1113,14 +1107,19 @@ fn revocation_window_close_and_session_delete_release_exactly_their_tabs() {
                 .clone()
         })
         .collect();
+    let before = world.sent().len();
+    world.host.session_deleted("s2");
+    let closed: HashSet<String> = world.sent()[before..]
+        .iter()
+        .filter(|r| r.method == "Target.closeTarget")
+        .map(|r| r.params["targetId"].as_str().unwrap().to_string())
+        .collect();
     assert_eq!(closed, expected);
     assert_eq!(world.open_lease_rows(), 0);
-    assert!(world
-        .host
-        .state()
-        .tabs
+    assert!(s2_tabs
         .iter()
-        .all(|t| t.session_id != "s2" || t.tab.state == TabState::Closed));
+        .all(|t| world.host.policy().read().lease(t).is_none()));
+    assert!(world.host.state().tabs.iter().all(|t| t.session_id != "s2"));
 
     // OFF → ON: revoked leases vanish with the link, nothing is adopted, and
     // every session must be granted again.
@@ -1138,9 +1137,70 @@ fn revocation_window_close_and_session_delete_release_exactly_their_tabs() {
     world.assert_idle();
 }
 
+/// A tab the user handed to a thread is the user's: deleting the thread, or
+/// "Close all agent tabs", gives it back (marker off, detach) and closes only
+/// the tabs MonoCode opened for the agent.
+#[test]
+fn ending_a_thread_gives_handed_over_tabs_back_instead_of_closing_them() {
+    let world = World::start(|_| {});
+    world.page.lock().unwrap().list_pages = true;
+    for (session, end) in [("s1", "delete"), ("s2", "close all")] {
+        world.grant(session);
+        let agent_tab = world.open(session);
+        let agent_target = world
+            .host
+            .policy()
+            .read()
+            .lease(&agent_tab)
+            .unwrap()
+            .target_id
+            .0
+            .clone();
+        let mail = world
+            .host
+            .user_tabs()
+            .unwrap()
+            .into_iter()
+            .find(|t| t.url == "https://mail.example/")
+            .expect("the user's page is free");
+        let given = world.host.give_tab(&mail.id, session, "main").unwrap();
+        let given_cdp = world.cdp_session(&given);
+        let mark = world.mark();
+        match end {
+            "delete" => world.host.session_deleted(session),
+            _ => world.host.close_all_tabs(),
+        }
+        let tail: Vec<Received> = world.sent()[mark..].to_vec();
+        let closed: Vec<&str> = tail
+            .iter()
+            .filter(|r| r.method == "Target.closeTarget")
+            .map(|r| r.params["targetId"].as_str().unwrap())
+            .collect();
+        assert_eq!(closed, vec![agent_target.as_str()], "{end}: {tail:?}");
+        let released = tail.iter().position(|r| {
+            r.method == "Runtime.callFunctionOn" && r.session.as_deref() == Some(&given_cdp)
+        });
+        let detached = tail.iter().position(|r| {
+            r.method == "Target.detachFromTarget" && r.params["sessionId"] == json!(given_cdp)
+        });
+        assert!(released.is_some() && released < detached, "{end}: {tail:?}");
+        // The page is free again for the user to hand to another thread.
+        assert!(
+            world
+                .host
+                .user_tabs()
+                .unwrap()
+                .iter()
+                .any(|t| t.id == mail.id),
+            "{end}"
+        );
+        assert_eq!(world.open_lease_rows(), 0, "{end}");
+    }
+    world.assert_idle();
+}
+
 // ---------------------------------------------------------------------------
-// OFF, revocation, turn end and transfer in the middle of an action (spec 6
-// "Garancije", 16.3)
+// OFF, revocation, turn end and transfer in the middle of an action
 // ---------------------------------------------------------------------------
 
 /// Start a click on `tab` whose `mousePressed` answer is delayed, and wait
@@ -1293,14 +1353,16 @@ fn revocation_race_through_the_whole_host() {
         let tab = world.open("s1");
         let cdp = world.cdp_session(&tab);
         let element = world.save_ref("s1", &tab);
-        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let clicker = {
             let world = world.clone();
             let tab = tab.clone();
-            let stop = stop.clone();
             thread::spawn(move || {
+                // Clicks until the first refusal, so the checks below always
+                // see what the session got after the revocation; the bound
+                // only keeps a broken revocation from hanging the test.
+                let bound = Instant::now() + Duration::from_secs(20);
                 let mut results = Vec::new();
-                while !stop.load(Ordering::Acquire) {
+                while Instant::now() < bound {
                     let id = request_id();
                     let result =
                         world.act_as("s1", &id, "click", json!({ "tab": tab, "ref": element }));
@@ -1318,8 +1380,12 @@ fn revocation_race_through_the_whole_host() {
         world.host.revoke("s1");
         let revoked = world.revoked_at();
         let presses_at_revoke = world.presses(&cdp);
-        stop.store(true, Ordering::Release);
         let results = clicker.join().unwrap();
+        assert_eq!(
+            results.last().map(|r| r.outcome),
+            Some(Outcome::Blocked),
+            "iteration {iteration}: the clicker never saw the revocation"
+        );
         let after = world.written_after(revoked);
         assert!(
             after.iter().all(|m| m == "Target.detachFromTarget"),
@@ -1363,7 +1429,7 @@ fn revocation_race_through_the_whole_host() {
 
 // ---------------------------------------------------------------------------
 // End to end: MCP server and CLI → control transport → host → semantic layer
-// → fake CDP (spec 12, 16.1 "MCP")
+// → fake CDP
 // ---------------------------------------------------------------------------
 
 /// A control endpoint for `world.host`, and the session's credentials.
@@ -1977,16 +2043,25 @@ fn a_declined_request_closes_the_private_browser_nobody_may_use() {
     let (declined, _) = waiting.join().unwrap();
     assert_eq!(declined.reason, Some(Reason::NotGranted), "{declined:?}");
     // Within the grace period the browser stays (the user may still allow
-    // another thread).
+    // another thread), and after it too while the user browses in it (U1).
     assert_eq!(world.host.connection().state, ConnectionState::Connected);
-    // Then it closes: its pages, the link, the process and the profile.
+    thread::sleep(Duration::from_millis(1200));
+    assert_eq!(world.host.connection().state, ConnectionState::Connected);
+    assert_eq!(world.event_count("managed_closed_unused"), 0);
+
+    // Without pages of the user's, the next declined request closes it:
+    // the link, the process and the profile.
+    world.page.lock().unwrap().list_pages = false;
+    world.host.turn_started("s1", "main", "/repo", None);
+    let waiting = world.spawn_act("s1", "tabs.list", json!({}));
+    assert!(wait_until(Duration::from_secs(5), || world.requested("s1")));
+    world.host.answer_request("s1", "main", false);
+    let (declined, _) = waiting.join().unwrap();
+    assert_eq!(declined.reason, Some(Reason::NotGranted), "{declined:?}");
     world.wait_state(ConnectionState::Idle);
     assert_eq!(world.event_count("managed_closed_unused"), 1);
     assert_eq!(world.host.link().status(), LinkStatus::Closed);
-    assert!(world
-        .sent()
-        .iter()
-        .any(|r| r.method == "Target.closeTarget" && r.params["targetId"] == "U1"));
+    assert!(world.sent().iter().any(|r| r.method == "Browser.close"));
     assert!(wait_until(Duration::from_secs(10), || !profile.exists()));
     assert!(world.host.policy().read().toggle_on, "the switch stays on");
 }

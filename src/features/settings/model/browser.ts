@@ -26,13 +26,7 @@ export type BrowserConnectionState =
   | "idle";
 
 export type BrowserKind =
-  | "chrome"
-  | "edge"
-  | "chromium"
-  | "brave"
-  | "vivaldi"
-  | "opera"
-  | "arc";
+  "chrome" | "edge" | "chromium" | "brave" | "vivaldi" | "opera" | "arc";
 
 export type BrowserInfo = {
   kind: BrowserKind;
@@ -66,6 +60,7 @@ export type BrowserLimits = {
 
 /**
  * `managed`: MonoCode starts an installed Chromium browser with its own profile.
+ * `private`: like `managed`, with a fresh profile deleted when it closes.
  * `attach`: MonoCode connects to the browser the user runs.
  */
 export type BrowserMode = "managed" | "private" | "attach";
@@ -122,6 +117,11 @@ export type BrowserSessionAccess = {
   tabs: number;
   /** An agent in this session waits for the user to allow the browser. */
   requested: boolean;
+  /**
+   * The user turned this session's access off. "Always on" and "Full
+   * access" do not grant it again; it asks until the user allows it.
+   */
+  turned_off: boolean;
 };
 
 export type BrowserState = {
@@ -173,7 +173,7 @@ export const DEFAULT_BROWSER_SETTINGS: BrowserSettings = {
   show_window: true,
 };
 
-/** Channel ids discovery knows, in its own search order (spec 4). */
+/** Channel ids discovery knows, in its own search order. */
 export const BROWSER_CHANNELS: { channel: string; label: string }[] = [
   { channel: "chrome", label: "Google Chrome" },
   { channel: "msedge", label: "Microsoft Edge" },
@@ -256,7 +256,7 @@ export function resetBrowserStore(state: BrowserState | null = null): void {
   started = state != null;
   disconnecting = false;
   registered.clear();
-  turnedOff.clear();
+  registering.clear();
   notice = null;
   for (const listener of listeners) listener();
   for (const listener of noticeListeners) listener();
@@ -282,39 +282,50 @@ export const disconnectBrowser = () => {
   });
 };
 /**
- * Threads the user took access away from in this app run. "Always on" does
- * not grant them again on their next turn; they ask like in "Ask" mode.
+ * Whether the user turned the thread's access off (Settings "Revoke",
+ * `/browser` or the indicator's "Turn off"). The backend keeps the mark until
+ * the user grants the thread again, so it holds in every window.
  */
-const turnedOff = new Set<string>();
-
-function markTurnedOff(sessionId: string, off: boolean) {
-  if (off) turnedOff.add(sessionId);
-  else turnedOff.delete(sessionId);
+export function browserAccessTurnedOff(
+  state: BrowserState | null,
+  sessionId: string,
+): boolean {
+  return !!sessionBrowserAccess(state, sessionId)?.turned_off;
 }
 
-export function browserAccessTurnedOff(sessionId: string): boolean {
-  return turnedOff.has(sessionId);
-}
-
+/** Settings "Revoke": access off, marked as the user's choice. */
 export const revokeBrowserSession = (sessionId: string) =>
-  command("browser_revoke", { sessionId }).then((state) => {
-    markTurnedOff(sessionId, true);
-    return state;
-  });
+  command("browser_revoke", { sessionId });
+/** On clears the "turned off" mark, off sets it. */
 export const setSessionBrowserGrant = (sessionId: string, enabled: boolean) =>
-  command("browser_set_session_grant", { sessionId, enabled }).then((state) => {
-    markTurnedOff(sessionId, !enabled);
-    return state;
-  });
+  command("browser_set_session_grant", { sessionId, enabled });
 /**
  * The user's answer to a thread's browser request. Allow grants the thread;
  * Not now declines until the user's next message.
  */
 export const answerBrowserRequest = (sessionId: string, allow: boolean) =>
-  command("browser_answer_request", { sessionId, allow }).then((state) => {
-    if (allow) markTurnedOff(sessionId, false);
-    return state;
-  });
+  command("browser_answer_request", { sessionId, allow });
+
+/**
+ * The access requests this window declines without asking: requests of the
+ * sessions whose turns this window runs (`access.window`), except those
+ * `leave` keeps (a turn that may use the browser, a decline in flight).
+ * Another window answers for its own sessions.
+ */
+export function browserRequestsToDecline(
+  state: BrowserState | null,
+  window: string,
+  leave: (sessionId: string) => boolean,
+): string[] {
+  return (state?.sessions ?? [])
+    .filter(
+      (access) =>
+        access.requested &&
+        access.window === window &&
+        !leave(access.session_id),
+    )
+    .map((access) => access.session_id);
+}
 /** Managed mode: starts the MonoCode browser with a window, for signing in. */
 export const openBrowserWindow = () => command("browser_open_window");
 export const transferBrowserTab = (
@@ -342,10 +353,7 @@ export function listUserBrowserTabs(): Promise<FreeBrowserTab[]> {
  * with it, so a thread the user turned off counts as allowed again.
  */
 export const giveBrowserTab = (free: string, sessionId: string) =>
-  command("browser_give_tab", { free, sessionId }).then((state) => {
-    markTurnedOff(sessionId, false);
-    return state;
-  });
+  command("browser_give_tab", { free, sessionId });
 /** A local dev server of a thread's checkout (`devservers::DevServer`). */
 export type BranchApp = {
   port: number;
@@ -368,10 +376,7 @@ export function listBranchApps(cwd: string): Promise<BranchApp[]> {
  * Like handing over a tab, it gives the thread browser access.
  */
 export const openBranchApp = (sessionId: string, url: string) =>
-  command("browser_open_app", { sessionId, url }).then((state) => {
-    markTurnedOff(sessionId, false);
-    return state;
-  });
+  command("browser_open_app", { sessionId, url });
 /** An element the user picked in a thread's tab (`pick::PickedElement`). */
 export type PickedBrowserElement = {
   tab: string;
@@ -423,7 +428,7 @@ export function clearBrowserAudit(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Agent side: MCP registration and the per-turn instructions (spec 12.2, 12.5)
+// Agent side: MCP registration and the per-turn instructions
 // ---------------------------------------------------------------------------
 
 /** Providers whose MCP configuration MonoCode writes the browser server into. */
@@ -452,35 +457,50 @@ export function listBrowserMcpStatus(): Promise<BrowserMcpRegistration[]> {
 export function registerBrowserMcp(
   provider: string,
   cwd: string,
+  accountId?: string,
 ): Promise<BrowserMcpRegistration> {
   return invoke<BrowserMcpRegistration>("browser_mcp_register", {
     provider,
     cwd,
+    ...(accountId ? { accountId } : {}),
   });
 }
 
+/** Provider and account pairs registered in this run. */
 const registered = new Set<string>();
+/** Registrations in flight, so threads starting together share one. */
+const registering = new Map<string, Promise<void>>();
 
 /**
  * Registers the browser server once per app run for a provider that takes
- * MCP, when one of its threads can use the browser. Registration is
- * idempotent; this only saves rewriting the provider's config on every turn.
- * A failure leaves the provider unmarked, so the next turn tries again.
+ * MCP and the account a thread uses, when one of its threads can use the
+ * browser. Registration is idempotent; this only saves rewriting the
+ * provider's config on every turn. A failure leaves the pair unmarked, so
+ * the next turn tries again.
  */
-export async function ensureBrowserMcp(
+export function ensureBrowserMcp(
   provider: string,
   cwd: string,
+  accountId?: string,
 ): Promise<void> {
+  const key = `${provider}\u0000${accountId ?? ""}`;
   if (
-    registered.has(provider) ||
+    registered.has(key) ||
     !(BROWSER_MCP_PROVIDERS as readonly string[]).includes(provider)
   )
-    return;
-  const result = await registerBrowserMcp(provider, cwd);
-  // An unsupported provider (OpenCode 2) stays so for this run; asking again
-  // on every turn would only rerun its version check.
-  if (!result.supported || (result.registered && result.current))
-    registered.add(provider);
+    return Promise.resolve();
+  const pending = registering.get(key);
+  if (pending) return pending;
+  const run = registerBrowserMcp(provider, cwd, accountId)
+    .then((result) => {
+      // An unsupported provider (OpenCode 2) stays so for this run; asking
+      // again on every turn would only rerun its version check.
+      if (!result.supported || (result.registered && result.current))
+        registered.add(key);
+    })
+    .finally(() => registering.delete(key));
+  registering.set(key, run);
+  return run;
 }
 
 /** The `<monocode_browser>` block a turn carries while it has the browser tools. */
@@ -524,7 +544,7 @@ export function sessionBrowserTabs(
   return state.tabs.filter((tab) => tab.session_id === sessionId);
 }
 
-/** The three indicator states of spec 13.2; null hides the indicator. */
+/** The thread indicator's states; null hides the indicator. */
 export type SessionBrowserIndicator = "granted" | "busy" | "dialog";
 
 export function sessionBrowserIndicator(
@@ -538,7 +558,7 @@ export function sessionBrowserIndicator(
   return "granted";
 }
 
-/** A tab's status the way Settings lists it (spec 13.1). */
+/** A tab's status the way Settings lists it. */
 export function browserTabStatus(tab: BrowserTab): string {
   if (tab.state === "attaching") return "Opening";
   if (tab.state === "crashed") return "Crashed";
@@ -599,11 +619,11 @@ export function channelKind(channel: string): BrowserKind {
 export type ConnectionAction = "connect" | "retry" | "disconnect" | null;
 
 export type ConnectionView = {
-  /** One sentence for the state (spec 4 "Poruka u UI-u"). */
+  /** One sentence for the state. */
   message: string;
   tone: "neutral" | "pending" | "good" | "warning" | "error";
   action: ConnectionAction;
-  /** Show the guided consent steps (spec 13.3). Attach mode only. */
+  /** Show the guided consent steps. Attach mode only. */
   guide: boolean;
 };
 
@@ -742,20 +762,50 @@ function attachView(state: BrowserState): ConnectionView {
   }
 }
 
-/** `Chrome/144.0.7559.60` → `Chrome 144.0.7559.60`, Edge spelled out. */
+const BROWSER_KIND_LABELS: Record<BrowserKind, string> = {
+  chrome: "Google Chrome",
+  edge: "Microsoft Edge",
+  chromium: "Chromium",
+  brave: "Brave",
+  vivaldi: "Vivaldi",
+  opera: "Opera",
+  arc: "Arc",
+};
+
+/**
+ * The browser by its kind, with the version its product string reports:
+ * `Google Chrome 144.0.7559.60`. Brave, Vivaldi, Opera and Arc report the
+ * Chromium version they are built on, so it is named as such.
+ */
 export function browserProductLabel(browser: BrowserInfo): string {
-  const [name, version] = browser.product.split("/");
-  const label =
-    browser.kind === "edge"
-      ? "Microsoft Edge"
-      : browser.kind === "chrome"
-        ? "Google Chrome"
-        : name || "Chromium";
-  return version ? `${label} ${version}` : label;
+  const version = browser.product.split("/")[1];
+  const label = BROWSER_KIND_LABELS[browser.kind] ?? "Chromium";
+  if (!version) return label;
+  return browser.kind === "chrome" ||
+    browser.kind === "edge" ||
+    browser.kind === "chromium"
+    ? `${label} ${version}`
+    : `${label} (Chromium ${version})`;
+}
+
+/**
+ * The managed-mode picker's value for `choice`. A channel kept from "Your
+ * own browser" starts that browser's stable build (`launch::wanted` looks
+ * for its kind), so a Beta, Dev or Canary channel shows as that browser.
+ */
+export function managedChoiceChannel(choice: BrowserChoice): string {
+  if (choice.kind !== "channel") return "auto";
+  const kind = channelKind(choice.channel);
+  return (
+    MANAGED_BROWSER_CHANNELS.find(
+      (entry) => channelKind(entry.channel) === kind,
+    )?.channel ?? "auto"
+  );
 }
 
 // ---------------------------------------------------------------------------
-// In-app notices (spec 13.4: no OS notifications, one toast on a dropped link)
+// In-app notices: no OS notifications, a toast for a dropped link or a
+// browser action while the main switch is off
 // ---------------------------------------------------------------------------
 
 export type BrowserNotice = {
@@ -801,8 +851,9 @@ export function useBrowserNotice(): BrowserNotice | null {
 }
 
 /**
- * The one toast of spec 13.4: the link to the browser dropped while it was
- * on and some session had access. Turning it off yourself is not a drop.
+ * The toast for a dropped link: the browser went away while the switch was
+ * on and some session had access. Turning it off yourself is not a drop,
+ * and neither is the MonoCode browser closing, which starts again on demand.
  */
 export function connectionDropNotice(
   previous: BrowserState | null,
@@ -810,6 +861,8 @@ export function connectionDropNotice(
 ): Omit<BrowserNotice, "id"> | null {
   if (!previous || previous.connection.state !== "connected") return null;
   if (!next.toggle_on || next.connection.state === "connected") return null;
+  if (browserLaunches(next.settings.mode) && next.connection.state === "idle")
+    return null;
   if (!previous.sessions.some((session) => session.granted)) return null;
   return {
     message:

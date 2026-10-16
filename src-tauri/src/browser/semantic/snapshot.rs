@@ -1,4 +1,4 @@
-//! Snapshot (spec 8): a compact text tree of the accessibility (AX) tree of
+//! Snapshot: a compact text tree of the accessibility (AX) tree of
 //! the main frame and its iframes, with a ref on every node the agent can
 //! act on.
 //!
@@ -30,7 +30,7 @@ use super::element;
 use super::refs::{self, FrameCtx};
 use super::{Fail, Run};
 
-/// Node budget (spec 8 "Kompaktovanje i limiti").
+/// Node budget.
 pub const MAX_NODES: u32 = 2000;
 /// Output limit in bytes.
 pub const MAX_BYTES: usize = 100 * 1024;
@@ -42,7 +42,7 @@ const MAX_HREF: usize = 200;
 const MAX_FRAMES: usize = 16;
 const MAX_FRAME_DEPTH: usize = 4;
 
-/// Roles that get a ref (spec 8 "Format").
+/// Roles that get a ref.
 const REF_ROLES: [&str; 20] = [
     "link",
     "button",
@@ -459,8 +459,7 @@ impl Renderer<'_> {
     }
 }
 
-/// Render the subtree at `root` (spec 8 "Format", "Kompaktovanje i
-/// limiti"). `assign` gives the ref number of `(frame, backend)`.
+/// Render the subtree at `root` within the node budget. `assign` gives the ref number of `(frame, backend)`.
 pub fn render(
     arena: &[AxNode],
     root: usize,
@@ -580,15 +579,19 @@ fn gather(run: &Run<'_>) -> Result<(Vec<AxNode>, Vec<FrameCtx>, usize), Fail> {
                         session,
                         frame_id: Some(frame_id.clone()),
                         owners,
+                        local_owner: None,
                     },
                     None,
                 )
             }
             None => (
+                // Boxes in a session are in its root frame's viewport, so
+                // the innermost <iframe> alone gives a nested frame's offset.
                 FrameCtx {
                     session: parent.session.clone(),
                     frame_id: Some(frame_id.clone()),
                     owners: parent.owners.clone(),
+                    local_owner: Some(backend),
                 },
                 Some(frame_id.clone()),
             ),
@@ -609,7 +612,7 @@ fn gather(run: &Run<'_>) -> Result<(Vec<AxNode>, Vec<FrameCtx>, usize), Fail> {
     Ok((arena, frames, root))
 }
 
-/// `snapshot` (spec 8).
+/// `snapshot`.
 pub fn snapshot(run: &Run<'_>, p: SnapshotParams) -> Result<ActionResult, Fail> {
     let taken = take(run, &p, false).map_err(timeout_as_snapshot)?;
     let Taken {

@@ -1,4 +1,4 @@
-//! `monocode browser ACTION ...`: the browser tools as a CLI (spec 12.5), for
+//! `monocode browser ACTION ...`: the browser tools as a CLI, for
 //! providers without MCP support and for manual testing. Same request, same
 //! endpoint, same token as the MCP server.
 //!
@@ -16,7 +16,7 @@ use serde_json::{json, Map, Value};
 use super::client::{self, Credentials, MissingCredentials};
 use crate::browser::protocol::{ActionKind, ActionResult, Outcome};
 
-const USAGE: &str = r#"MonoCode browser — use your own tabs in the user's Chrome or Edge.
+const USAGE: &str = r#"MonoCode browser — use your own tabs in the browser MonoCode is connected to.
 
 Usage: {exe} browser ACTION [--FIELD VALUE ...] [--json JSON | --input FILE|-]
                      [--request-id ID] [--envelope] [--out FILE]
@@ -44,7 +44,8 @@ Actions and their fields (* required). Every action except tabs.* also takes
                  {"ref":"e7","checked":true}]'; --then-click e9 clicks
                  Save afterwards.
   scroll         --tab* --ref | --direction up|down|left|right --amount PX
-  upload         --tab* --ref* --paths* (repeatable)
+  upload         --tab* --ref* --paths* (repeatable; relative to the current
+                 directory)
   dialog         --tab* --action* accept|dismiss --text
   wait           --tab* --for* time|text|ref|url|load --value
   back, forward  --tab*
@@ -83,8 +84,9 @@ sessions it starts. They are already in your environment; never print them.
 "#;
 
 /// Flags whose value is text.
-const STRINGS: [&str; 15] = [
+const STRINGS: [&str; 16] = [
     "tab",
+    "free",
     "ref",
     "then_click",
     "url",
@@ -415,6 +417,23 @@ fn parse(args: &[String], stdin: &mut dyn Read) -> Result<Parsed, String> {
             input.insert("value".into(), json!(ms));
         }
     }
+    // Relative upload paths name files from where the CLI runs, which may be
+    // below the session's directory (the host resolves against that).
+    if kind == ActionKind::Upload {
+        if let (Some(Value::Array(paths)), Ok(here)) =
+            (input.get_mut("paths"), std::env::current_dir())
+        {
+            for path in paths.iter_mut() {
+                let relative = path
+                    .as_str()
+                    .filter(|raw| !raw.is_empty() && Path::new(raw).is_relative())
+                    .map(|raw| here.join(raw));
+                if let Some(absolute) = relative {
+                    *path = json!(absolute.to_string_lossy());
+                }
+            }
+        }
+    }
     let request_id = request_id.unwrap_or_else(client::new_request_id);
     if !client::valid_request_id(&request_id) {
         return Err("Request IDs are 1-128 letters, digits or . _ : -".into());
@@ -428,8 +447,8 @@ fn parse(args: &[String], stdin: &mut dyn Read) -> Result<Parsed, String> {
     }))
 }
 
-/// Instructions injected into turns of providers without MCP (spec 12.5):
-/// the shared overview plus the CLI section, with this executable's path.
+/// Instructions injected into turns of providers without MCP: the CLI
+/// section, then the shared overview, with this executable's path.
 pub fn instructions() -> String {
     let exe = exe();
     let overview = super::tools::section("overview").unwrap_or_default();
@@ -543,6 +562,61 @@ mod tests {
         ])
         .unwrap();
         serde_json::from_value::<ScreenshotParams>(shot.input).unwrap();
+    }
+
+    #[test]
+    fn every_flag_the_help_advertises_is_parsed() {
+        let mut flags: Vec<&str> = USAGE
+            .split(|c: char| c.is_whitespace() || matches!(c, '[' | ']' | '(' | ')' | '\''))
+            .filter_map(|word| word.strip_prefix("--"))
+            .map(|flag| flag.trim_end_matches([',', '.', ';', '*']))
+            .filter(|flag| {
+                !flag.is_empty() && flag.bytes().all(|b| b.is_ascii_lowercase() || b == b'-')
+            })
+            .collect();
+        flags.sort_unstable();
+        flags.dedup();
+        assert!(
+            flags.contains(&"free") && flags.contains(&"then-click"),
+            "{flags:?}"
+        );
+        for flag in flags {
+            let name = flag.replace('-', "_");
+            let value = match name.as_str() {
+                n if BOOLEANS.contains(&n) || n == "envelope" => None,
+                n if INTEGERS.contains(&n) => Some("1"),
+                n if JSONS.contains(&n) => Some("[]"),
+                "json" => Some("{}"),
+                "input" => Some("-"),
+                _ => Some("x"),
+            };
+            let mut argv = vec!["tabs.adopt".to_string(), format!("--{flag}")];
+            argv.extend(value.map(str::to_string));
+            let mut stdin = std::io::Cursor::new(b"{}".to_vec());
+            assert!(
+                matches!(parse(&argv, &mut stdin), Ok(Parsed::Call(_))),
+                "--{flag}: {:?}",
+                parse(&argv, &mut std::io::Cursor::new(b"{}".to_vec()))
+            );
+        }
+        let adopt = call(&["tabs.adopt", "--free", "f_0a1b2c3d"]).unwrap();
+        assert_eq!(adopt.input, json!({"free": "f_0a1b2c3d"}));
+    }
+
+    #[test]
+    fn relative_upload_paths_are_resolved_where_the_cli_runs() {
+        let upload = call(&[
+            "upload",
+            "--tab",
+            "t_0a1b2c3d",
+            "--ref",
+            "e2",
+            "--paths",
+            "a.txt",
+        ])
+        .unwrap();
+        let here = std::env::current_dir().unwrap().join("a.txt");
+        assert_eq!(upload.input["paths"], json!([here.to_string_lossy()]));
     }
 
     #[test]

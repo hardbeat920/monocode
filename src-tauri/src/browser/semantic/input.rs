@@ -1,8 +1,8 @@
-//! Mouse and keyboard actions (spec 9.2 step 7, 9.3, 9.4 `scroll`):
+//! Mouse and keyboard actions:
 //! `click`, `hover`, `type`, `press`, `scroll`, and the fixed key table.
 //!
 //! `Input.*` always goes to the tab's main session with coordinates in the
-//! tab's viewport (spec 5); the element pipeline in [`super::element`] has
+//! tab's viewport; the element pipeline in [`super::element`] has
 //! already turned the ref into such a point.
 
 use std::time::{Duration, Instant};
@@ -19,9 +19,9 @@ use super::element::{self, Element, Needs, EDIT_JS, PAGE_JS};
 use super::observe::{self, Watch};
 use super::{describe, Fail, Run};
 
-/// `Input.insertText` chunk size (spec 9.3).
+/// `Input.insertText` chunk size.
 const TYPE_CHUNK: usize = 4000;
-/// Default wheel distance in pixels (spec 9.4).
+/// Default wheel distance in pixels.
 const SCROLL_AMOUNT: u32 = 600;
 /// How long the page gets to react to a wheel event before the fallback.
 const WHEEL_SETTLE: Duration = Duration::from_millis(150);
@@ -44,7 +44,7 @@ fn modifier_bits(modifiers: &[Modifier]) -> u32 {
     modifiers.iter().fold(0, |bits, m| bits | m.bit())
 }
 
-/// `click` (spec 9.2): the full pipeline, then moved, pressed, released.
+/// `click`: the full pipeline, then moved, pressed, released.
 pub fn click(run: &Run<'_>, p: ClickParams) -> Result<ActionResult, Fail> {
     let count = p.count.unwrap_or(1);
     if !(1..=2).contains(&count) {
@@ -64,14 +64,14 @@ pub fn click(run: &Run<'_>, p: ClickParams) -> Result<ActionResult, Fail> {
             ..Needs::default()
         },
     )?;
-    // Stability (spec 9.2 step 5) is measured across the cursor's glide
+    // Stability is measured across the cursor's glide
     // to the element's box, instead of in a pause of its own; the input
     // point and hit test come after both.
     let measured = Instant::now();
     let first = element::rect(run, &el)?;
     let aim = match first {
         Some(rect) => {
-            let (dx, dy) = element::frame_offset(run, &el.node.frame)?;
+            let (dx, dy) = element::frame_offset(run, &el.node.frame)?.total();
             let (x, y) = (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
             let aim = element::Point {
                 x: x + dx,
@@ -136,7 +136,7 @@ pub fn click(run: &Run<'_>, p: ClickParams) -> Result<ActionResult, Fail> {
     ))
 }
 
-/// `hover`: attached, visible, stable, then one `mouseMoved` (spec 9.1).
+/// `hover`: attached, visible, stable, then one `mouseMoved`.
 pub fn hover(run: &Run<'_>, p: HoverParams) -> Result<ActionResult, Fail> {
     let el = element::locate(run, &p.element)?;
     let prepared = element::prepare(
@@ -194,12 +194,12 @@ pub fn chunks(text: &str, size: usize) -> Vec<&str> {
     out
 }
 
-/// `type` (spec 9.3): focus, optionally select everything, insert the text
+/// `type`: focus, optionally select everything, insert the text
 /// in chunks, optionally press Enter. The text itself never appears in the
 /// result (the audit keeps only its length and hash).
 pub fn type_text(run: &Run<'_>, p: TypeParams) -> Result<ActionResult, Fail> {
     let el = element::locate(run, &p.element)?;
-    element::prepare(
+    let prepared = element::prepare(
         run,
         &el,
         Needs {
@@ -210,6 +210,7 @@ pub fn type_text(run: &Run<'_>, p: TypeParams) -> Result<ActionResult, Fail> {
             ..Needs::default()
         },
     )?;
+    let focus = element::focus_backend(run, &el, &prepared.facts)?;
     // Show where the text goes; no hit test, `type` never needed one.
     if let Ok(point) = element::point(run, &el) {
         cursor::glide(run, point);
@@ -223,7 +224,7 @@ pub fn type_text(run: &Run<'_>, p: TypeParams) -> Result<ActionResult, Fail> {
         run,
         &frame_session,
         Method::DomFocus,
-        json!({ "backendNodeId": el.node.backend }),
+        json!({ "backendNodeId": focus }),
     )?;
     if clear && watch.dialog().is_none() {
         let selected = watch.input(
@@ -275,7 +276,7 @@ pub fn type_text(run: &Run<'_>, p: TypeParams) -> Result<ActionResult, Fail> {
     Ok(done(run, what, observed))
 }
 
-/// `press` (spec 9.3): optionally focus a ref, then keyDown/keyUp.
+/// `press`: optionally focus a ref, then keyDown/keyUp.
 pub fn press(run: &Run<'_>, p: PressParams) -> Result<ActionResult, Fail> {
     let chord = parse_chord(&p.key).map_err(invalid)?;
     let target = match p.element.as_deref() {
@@ -285,27 +286,48 @@ pub fn press(run: &Run<'_>, p: PressParams) -> Result<ActionResult, Fail> {
             if !facts.connected {
                 return Err(Fail::reason(Reason::Detached));
             }
-            Some((el, raw))
+            let focus = element::focus_backend(run, &el, &facts)?;
+            Some((el, raw, focus))
         }
         None => None,
     };
     let mut watch = Watch::start(run);
     watch.count_mutations(run);
-    if let Some((el, _)) = &target {
+    if let Some((el, _, focus)) = &target {
         watch.input(
             run,
             &el.node.frame.session.clone(),
             Method::DomFocus,
-            json!({ "backendNodeId": el.node.backend }),
+            json!({ "backendNodeId": focus }),
         )?;
     }
     send_key(run, &mut watch, &chord)?;
     let observed = watch.finish(run, observe::WINDOW)?;
     let what = match &target {
-        Some((el, raw)) => format!("Pressed {} on {}.", p.key.trim(), label(el, raw)),
+        Some((el, raw, _)) => format!("Pressed {} on {}.", p.key.trim(), label(el, raw)),
         None => format!("Pressed {}.", p.key.trim()),
     };
     Ok(done(run, what, observed))
+}
+
+/// Editing commands of `Meta+A`/`C`/`X`/`V`/`Z` and `Meta+Shift+Z`. On
+/// macOS these shortcuts come from the application menu, which a key event
+/// sent through `Input.dispatchKeyEvent` never reaches, so the event must
+/// name the command; elsewhere `Control+A` and the like work as sent.
+fn mac_commands(chord: &Chord) -> &'static [&'static str] {
+    let shift = Modifier::Shift.bit();
+    if chord.modifiers & !shift != Modifier::Meta.bit() {
+        return &[];
+    }
+    match (chord.key.code.as_str(), chord.modifiers & shift != 0) {
+        ("KeyA", false) => &["selectAll"],
+        ("KeyC", false) => &["copy"],
+        ("KeyX", false) => &["cut"],
+        ("KeyV", false) => &["paste"],
+        ("KeyZ", false) => &["undo"],
+        ("KeyZ", true) => &["redo"],
+        _ => &[],
+    }
 }
 
 fn invalid(message: String) -> Fail {
@@ -333,6 +355,10 @@ fn send_key(run: &Run<'_>, watch: &mut Watch, chord: &Chord) -> Result<(), Fail>
         object.insert("text".into(), Value::String(text.to_string()));
         object.insert("unmodifiedText".into(), Value::String(text.to_string()));
     }
+    let commands = mac_commands(chord);
+    if cfg!(target_os = "macos") && !commands.is_empty() {
+        down["commands"] = json!(commands);
+    }
     let up = json!({
         "type": "keyUp",
         "modifiers": chord.modifiers,
@@ -351,7 +377,7 @@ fn send_key(run: &Run<'_>, watch: &mut Watch, chord: &Chord) -> Result<(), Fail>
     Ok(())
 }
 
-/// `scroll` (spec 9.4): with only a ref, bring it into view; with a
+/// `scroll`: with only a ref, bring it into view; with a
 /// direction, a mouse wheel over the ref or the viewport center, falling
 /// back to `window.scrollBy` in the isolated world when the page ignored it.
 pub fn scroll(run: &Run<'_>, p: ScrollParams) -> Result<ActionResult, Fail> {
@@ -468,7 +494,7 @@ pub fn scroll(run: &Run<'_>, p: ScrollParams) -> Result<ActionResult, Fail> {
 }
 
 // ---------------------------------------------------------------------------
-// Key table (spec 9.3)
+// Key table
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -592,7 +618,7 @@ fn modifier(name: &str) -> Option<Modifier> {
     }
 }
 
-/// Parse `Modifier+...+Key` (spec 9.3). Unknown keys are an error, never a
+/// Parse `Modifier+...+Key`. Unknown keys are an error, never a
 /// closest match.
 pub fn parse_chord(raw: &str) -> Result<Chord, String> {
     let raw = raw.trim();
@@ -691,6 +717,26 @@ mod tests {
             "Control+Shift",
         ] {
             assert!(parse_chord(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn macos_editing_shortcuts_name_their_command() {
+        let commands = |raw: &str| mac_commands(&parse_chord(raw).unwrap());
+        assert_eq!(commands("Meta+A"), ["selectAll"]);
+        assert_eq!(commands("Cmd+a"), ["selectAll"]);
+        assert_eq!(commands("Meta+V"), ["paste"]);
+        assert_eq!(commands("Meta+Shift+Z"), ["redo"]);
+        assert_eq!(commands("Meta+Z"), ["undo"]);
+        for plain in [
+            "Control+A",
+            "Meta+Alt+A",
+            "Meta+Shift+A",
+            "A",
+            "Meta+B",
+            "Enter",
+        ] {
+            assert!(commands(plain).is_empty(), "{plain}");
         }
     }
 

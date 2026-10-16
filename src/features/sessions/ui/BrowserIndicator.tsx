@@ -34,8 +34,8 @@ const INDICATOR = {
 } as const;
 
 /**
- * The thread's browser indicator (spec 13.2): shown while the thread has
- * /browser, it lists the thread's tabs with the same actions as Settings,
+ * The thread's browser indicator: shown while the thread has access (any
+ * grant: `/browser`, Allow, Always on, a handed-over tab), it lists the thread's tabs with the same actions as Settings,
  * plus "Point at an element", whose result goes to `onPicked`, and the app
  * the thread's worktree serves (`cwd`), to open in a tab of the thread.
  */
@@ -82,6 +82,16 @@ export function BrowserIndicator({
         );
     },
     [onPicked, picking, sessionId],
+  );
+  // A pick still running when the composer goes away is cancelled, so the
+  // browser stops highlighting for a message nobody can send.
+  const pickingRef = useRef(picking);
+  pickingRef.current = picking;
+  useEffect(
+    () => () => {
+      if (pickingRef.current) void cancelBrowserPick().catch(() => {});
+    },
+    [],
   );
   const apps = useBranchApps(open && !!indicator ? cwd : undefined);
   if (!indicator) return null;

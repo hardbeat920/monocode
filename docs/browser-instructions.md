@@ -3,21 +3,15 @@
 This file is the single source for what an agent reads about the browser
 tools. The `monocode browser-mcp` server builds its `initialize` instructions
 from the overview section and each tool description from the section with the
-tool's name; the text injected into providers without MCP is the overview plus
-the CLI section. Keep the sections short: models read every word on every
-turn. Section names (`## name`) are looked up by code; do not rename them.
-
-Provider support: Claude, Codex, Cursor and OpenCode 1 get the MCP server;
-other providers get the CLI section. OpenCode 2 is not supported: it starts
-MCP servers and runs shell commands from its shared background service,
-which MonoCode starts without a session's environment, so neither the MCP
-server nor the CLI receives the session's MONOCODE_BROWSER_TOKEN. Its
-sessions get a note to tell the user instead of these instructions, and
-MonoCode does not register the MCP server with it.
+tool's name; the text injected into providers without MCP is the CLI
+section followed by the overview. Keep the sections short: models read every
+word on every turn. Section names (`## name`) are looked up by code; do not
+rename them. Which providers get the MCP server, the CLI or neither is
+decided in `src-tauri/src/browser/agent/register.rs`.
 
 ## overview
 
-You can work in your own tabs in Chrome or Edge through MonoCode: either the MonoCode browser, which MonoCode starts with a profile of its own, or the user's own browser, as the user chose in MonoCode settings.
+You can work in your own tabs in a Chromium browser (Chrome, Edge, Brave, Vivaldi, Opera or Arc) through MonoCode: either the MonoCode browser, which MonoCode starts with a profile of its own, or the user's own browser, as the user chose in MonoCode settings.
 
 - The tabs are yours: MonoCode marks them with "◆ MonoCode" in the title. A tab the user opened in the MonoCode browser is free until a thread adopts it; when the user mentions a page they opened, list your tabs and adopt it. In the user's own browser they can also hand you one of their tabs, which then shows up in your list. In the user's own browser they open in the background and carry the user's sign-ins; you cannot see or touch the user's other tabs. Never ask the user to click or type in your tabs. When a site needs a sign-in you do not have, stop and tell the user; they can sign in once through Open browser in MonoCode's browser settings.
 - Start by opening a tab; the result's data holds its id (`t_` + 8 hex). Every other action takes that `tab`. List your tabs when you lose track of them.
@@ -56,7 +50,7 @@ Focus an editable element by ref and insert `text`. `clear: true` replaces the c
 
 ## browser_press
 
-Press a key or combination such as `Enter`, `Escape`, `Tab`, `ArrowDown` or `Control+A` on the focused element, or on `ref` after focusing it.
+Press a key or combination such as `Enter`, `Escape`, `Tab`, `ArrowDown` or `Control+A` (`Meta+A` on macOS) on the focused element, or on `ref` after focusing it.
 
 ## browser_select
 
@@ -72,7 +66,7 @@ Scroll an element into view (`ref`), or scroll the page (or the element at `ref`
 
 ## browser_upload
 
-Set files on a file input by ref. `paths` must be inside the session's working directory or an upload root the user allowed in MonoCode settings.
+Set files on a file input by ref. Relative `paths` are resolved against the session's working directory; every file must be inside the session's working directory or an upload root the user allowed in MonoCode settings.
 
 ## browser_dialog
 
@@ -80,7 +74,7 @@ Answer the JavaScript dialog (alert, confirm, prompt, beforeunload) waiting on a
 
 ## browser_wait
 
-Wait on a tab until a condition holds: `for` "time" (value in ms, at most 10000), "text" (value appears on the page), "ref" (element appears), "url" (prefix or glob) or "load". Prefer waiting for text or a ref over waiting for time.
+Wait on a tab until a condition holds: `for` "time" (value in ms, at most 10000), "text" (value appears on the page), "ref" (an element from a snapshot becomes visible), "url" (prefix or glob) or "load". Prefer waiting for text or a ref over waiting for time.
 
 ## browser_back
 
@@ -110,4 +104,4 @@ Browser access is available in this thread. Use it through the MonoCode CLI, one
     {exe} browser snapshot --tab t_1a2b3c4d
     {exe} browser click --tab t_1a2b3c4d --ref e12
 
-Run `{exe} browser --help` for every action and its fields. Each call prints one JSON result (`outcome`, `reason`, `message`, `retryable`, `observed`, `data`); a snapshot prints its text instead, and an action that changes the page prints the page snapshot (or its changes) as text after the JSON line (`--snapshot false` leaves it out). The exit code is 0 for done, 2 blocked, 3 failed, 4 unknown. After an `unknown` result, take a snapshot and retry only with `--request-id` set to the reported `request_id`. The CLI uses a session credential already in your environment; never print it.
+Run `{exe} browser --help` for every action and its fields. Each call prints one JSON result (`outcome`, `reason`, `message`, `retryable`, `observed`, `data`); a snapshot, console or network call prints its text instead, and an action that changes the page prints the page snapshot (or its changes) as text after the JSON line (`--snapshot false` leaves it out). The exit code is 0 for done, 2 blocked, 3 failed, 4 unknown. After an `unknown` result, take a snapshot and retry only with `--request-id` set to the reported `request_id`. The CLI uses a session credential already in your environment; never print it.

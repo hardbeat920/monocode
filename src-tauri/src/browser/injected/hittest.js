@@ -1,6 +1,6 @@
-// Hit test (spec 9.2 step 6). `this` is the target element in the
-// "__monocode" isolated world; `x`, `y` are viewport coordinates of the
-// target's own frame.
+// Hit test. `this` is the target node in the "__monocode" isolated world
+// (an element, or a text node from a full snapshot, whose element is
+// tested); `x`, `y` are viewport coordinates of the target's own frame.
 //
 // Without `other`: elementFromPoint, descending through open shadow roots.
 // The hit is good when it is the target or inside it. A hit on a shadow host
@@ -11,7 +11,7 @@
 //
 // Read-only: nothing on the page changes.
 function monocodeHitTest(x, y, other) {
-  const target = this;
+  const target = this && this.nodeType !== 1 && this.parentElement ? this.parentElement : this;
   const up = (n) => (n.parentNode ? n.parentNode : n.host ? n.host : null);
   const inside = (hit) => {
     for (let n = hit; n; n = up(n)) {

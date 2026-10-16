@@ -1,5 +1,4 @@
-//! The remaining actions (spec 9.1, 9.4, 10.1, 10.2, 8 `screenshot` and
-//! `read`): `navigate`, `back`/`forward`, `select`, `upload`, `dialog`,
+//! The remaining actions: `navigate`, `back`/`forward`, `select`, `upload`, `dialog`,
 //! `wait`, `screenshot`, `read`.
 
 use std::path::{Path, PathBuf};
@@ -19,13 +18,13 @@ use super::element::{self, Needs, PAGE_JS, READ_JS, SELECT_JS};
 use super::observe::{self, Watch};
 use super::{cursor, describe, refs, Fail, Run};
 
-/// How long `upload` waits for a file chooser after the click (spec 10.2).
+/// How long `upload` waits for a file chooser after the click.
 const CHOOSER_WAIT: Duration = Duration::from_secs(5);
-/// Polling interval of `wait` (spec 9.4).
+/// Polling interval of `wait`.
 const POLL: Duration = Duration::from_millis(100);
-/// `wait {for: "time"}` cap (spec 9.4).
+/// `wait {for: "time"}` cap.
 const MAX_SLEEP: Duration = Duration::from_secs(10);
-/// `read` slice size (spec 8: up to 50 KB per call).
+/// `read` slice size (up to 50 KB per call).
 const READ_LIMIT: u64 = 50_000;
 /// Tallest full-page screenshot, in CSS pixels.
 const MAX_FULL_PAGE_HEIGHT: f64 = 16_384.0;
@@ -46,7 +45,7 @@ fn with_summary(what: String, observed: &Observed) -> String {
     }
 }
 
-/// `navigate` (spec 9.4): URL policy first (no command on `url_denied`),
+/// `navigate`: URL policy first (no command on `url_denied`),
 /// then `Page.navigate` and the wait. A timeout of the wait is still `done`
 /// with `load_state: "timeout"`; the page is often usable without `load`.
 pub fn navigate(run: &Run<'_>, p: NavigateParams) -> Result<ActionResult, Fail> {
@@ -138,7 +137,7 @@ pub fn history(run: &Run<'_>, p: HistoryParams, delta: i64) -> Result<ActionResu
     .with_observed(observed))
 }
 
-/// `select` (spec 9.4): option values first, then labels; all or nothing.
+/// `select`: option values first, then labels; all or nothing.
 pub fn select(run: &Run<'_>, p: SelectParams) -> Result<ActionResult, Fail> {
     if p.values.is_empty() {
         return Err(Fail::detail(
@@ -160,7 +159,7 @@ pub fn select(run: &Run<'_>, p: SelectParams) -> Result<ActionResult, Fail> {
     if !prepared.facts.select {
         return Err(Fail::detail(
             Reason::OptionNotFound,
-            "Element is not a <select>; open custom dropdowns with browser_click and pick the option the same way.",
+            "Element is not a <select>; open a custom dropdown with a click and click its option.",
         ));
     }
     let mut watch = Watch::start(run);
@@ -229,15 +228,31 @@ pub fn select(run: &Run<'_>, p: SelectParams) -> Result<ActionResult, Fail> {
     .with_observed(observed))
 }
 
-/// Allowed upload roots: the session's working directory, then the ones the
-/// user added in Settings (spec 10.2).
-fn upload_roots(run: &Run<'_>) -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    if let Some(auth) = run.link.policy().read().session(&run.ctx.session) {
-        if !auth.cwd.is_empty() {
-            roots.push(PathBuf::from(&auth.cwd));
+/// The session's working directory, when MonoCode knows it.
+fn session_cwd(run: &Run<'_>) -> Option<PathBuf> {
+    run.link
+        .policy()
+        .read()
+        .session(&run.ctx.session)
+        .filter(|auth| !auth.cwd.is_empty())
+        .map(|auth| PathBuf::from(&auth.cwd))
+}
+
+/// An upload path as the agent means it: a relative one is relative to the
+/// session's working directory (the policy check wants absolute paths).
+fn upload_path(raw: &str, cwd: Option<&Path>) -> String {
+    match cwd {
+        Some(cwd) if !raw.is_empty() && Path::new(raw).is_relative() => {
+            cwd.join(raw).to_string_lossy().into_owned()
         }
+        _ => raw.to_string(),
     }
+}
+
+/// Allowed upload roots: the session's working directory, then the ones the
+/// user added in Settings.
+fn upload_roots(run: &Run<'_>, cwd: Option<PathBuf>) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = cwd.into_iter().collect();
     roots.extend(run.settings.upload_roots.iter().map(PathBuf::from));
     roots
 }
@@ -248,7 +263,7 @@ fn base_name(path: &Path) -> String {
         .unwrap_or_default()
 }
 
-/// `upload` (spec 10.2): paths are checked before any command; a file input
+/// `upload`: paths are checked before any command; a file input
 /// gets `DOM.setFileInputFiles` directly, anything else is clicked with the
 /// file chooser intercepted for exactly this action.
 pub fn upload(run: &Run<'_>, p: UploadParams) -> Result<ActionResult, Fail> {
@@ -258,11 +273,13 @@ pub fn upload(run: &Run<'_>, p: UploadParams) -> Result<ActionResult, Fail> {
             "paths must name at least one file.",
         ));
     }
-    let roots = upload_roots(run);
+    let cwd = session_cwd(run);
+    let roots = upload_roots(run, cwd.clone());
     let mut files = Vec::with_capacity(p.paths.len());
     for raw in &p.paths {
+        let path = upload_path(raw, cwd.as_deref());
         let path =
-            check_upload_path(raw, &roots, run.settings.allow_dotfiles).map_err(|denied| {
+            check_upload_path(&path, &roots, run.settings.allow_dotfiles).map_err(|denied| {
                 Fail::detail(Reason::PathDenied, format!("{raw}: {}", denied.message))
             })?;
         files.push(path);
@@ -335,7 +352,7 @@ pub fn upload(run: &Run<'_>, p: UploadParams) -> Result<ActionResult, Fail> {
         json!({ "enabled": true }),
     )?;
     let outcome = upload_via_chooser(run, &chooser, point, &file_list);
-    // Always switch interception off again, whatever happened (spec 10.2).
+    // Always switch interception off again, whatever happened.
     let _ = run.link.send(
         run.ctx,
         super::super::link::Command::in_session(
@@ -414,7 +431,7 @@ fn uploaded(run: &Run<'_>, names: &[String], label: &str, observed: Observed) ->
     .with_observed(observed)
 }
 
-/// `dialog` (spec 10.1): answer the dialog waiting on the tab. Nothing is
+/// `dialog`: answer the dialog waiting on the tab. Nothing is
 /// ever answered without this explicit request.
 pub fn dialog(run: &Run<'_>, p: DialogParams) -> Result<ActionResult, Fail> {
     let pending = run.lease(|l| l.pending_dialog.clone())?;
@@ -521,7 +538,7 @@ fn value_str(p: &WaitParams) -> Result<String, Fail> {
     }
 }
 
-/// `wait` (spec 9.4). A condition not met in time is `failed` / `timeout`.
+/// `wait`. A condition not met in time is `failed` / `timeout`.
 pub fn wait(run: &Run<'_>, p: WaitParams) -> Result<ActionResult, Fail> {
     let started = Instant::now();
     let name = match p.condition {
@@ -672,7 +689,7 @@ pub fn wait(run: &Run<'_>, p: WaitParams) -> Result<ActionResult, Fail> {
         .with_observed(run.observed_now()))
 }
 
-/// `screenshot` (spec 8, 9.4). A background tab that renders nothing within
+/// `screenshot`. A background tab that renders nothing within
 /// the time limit is `screenshot_unavailable_background`; `Page.bringToFront`
 /// is never sent from here.
 pub fn screenshot(run: &Run<'_>, p: ScreenshotParams) -> Result<ActionResult, Fail> {
@@ -711,7 +728,8 @@ pub fn screenshot(run: &Run<'_>, p: ScreenshotParams) -> Result<ActionResult, Fa
         if border.len() < 8 {
             return Err(Fail::reason(Reason::NotVisible));
         }
-        let (dx, dy) = element::frame_offset(run, &el.node.frame)?;
+        // The box model is in the session's root viewport.
+        let (dx, dy) = element::frame_offset(run, &el.node.frame)?.root;
         let (page_x, page_y, _, _) = element::viewport(run)?;
         let xs = [border[0], border[2], border[4], border[6]];
         let ys = [border[1], border[3], border[5], border[7]];
@@ -774,7 +792,7 @@ pub fn screenshot(run: &Run<'_>, p: ScreenshotParams) -> Result<ActionResult, Fa
     .with_observed(run.observed_now()))
 }
 
-/// `read` (spec 8): text of a ref or of the main document, 50 KB per call,
+/// `read`: text of a ref or of the main document, 50 KB per call,
 /// continued with `offset`.
 pub fn read(run: &Run<'_>, p: ReadParams) -> Result<ActionResult, Fail> {
     let format = match p.format.unwrap_or_default() {

@@ -7,7 +7,8 @@ import { dismissBrowserNotice, useBrowserNotice } from "../model/browser";
 
 const NOTICE_MS = 15_000;
 
-/** The browser module's only toast (spec 13.4), with a way to Settings. */
+/** The browser module's toast (a dropped link, the switch off), with a way
+ * to Settings. */
 export function BrowserNotice({
   onOpenSettings,
 }: {

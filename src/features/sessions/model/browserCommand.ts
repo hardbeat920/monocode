@@ -42,11 +42,36 @@ export function browserGrantChange(
   return granted ? null : true;
 }
 
-/** Status line after `/browser` alone switched the grant (spec 13.2). */
+/** Status line after `/browser` alone switched the grant. */
 export function browserGrantStatus(enabled: boolean): string {
   return enabled
     ? "Browser access is on for this thread. The agent opens its own tabs; an agent that is already running may need its next turn or a restart to see the browser tools."
     : "Browser access is off for this thread. Its tabs stay open, and the agent asks you before it uses the browser again.";
+}
+
+/**
+ * Whether a turn may get the browser on its own (Always on, Full access or
+ * Ask) and use `/browser`: only a turn the user sends from a regular
+ * thread. Turns an agent sends through the app (a session it starts, a
+ * follow-up it hands over), orchestration and managed turns never do; they
+ * use the browser only with a grant the thread already holds, such as one
+ * a Mono passes to the sessions it starts.
+ */
+export function browserTurnEligible(turn: {
+  managed?: boolean;
+  /** An agent app request delivered this turn (`sessions.start`/`send`). */
+  appRequestId?: string;
+  /** A turn an agent launched through the app. */
+  browserGrantOnly?: boolean;
+  /** An orchestration lead, worker or run owns the turn. */
+  orchestration: boolean;
+}): boolean {
+  return !(
+    turn.managed ||
+    turn.appRequestId ||
+    turn.browserGrantOnly ||
+    turn.orchestration
+  );
 }
 
 export type BrowserTurnAccess = "granted" | "grant" | "ask" | null;
@@ -60,12 +85,11 @@ export type BrowserTurnAccess = "granted" | "grant" | "ask" | null;
  *   action asks the user in the thread and waits for the answer.
  * - null: no browser tools.
  *
- * `eligible` holds the conditions `/browser` itself is allowed under, so
- * orchestration runs, managed and app-request turns never get the browser
- * on their own. A grant the thread already has still counts, as it always
- * did. A thread the user turned off in this run asks instead of being
- * granted again, with "Full access" too: `/browser` off is the more
- * specific choice.
+ * `eligible` is `browserTurnEligible`: orchestration, managed and
+ * agent-sent turns never get the browser on their own, though a grant the
+ * thread already holds still counts. A thread the user turned off asks
+ * instead of being granted again, with "Full access" too: turning it off is
+ * the more specific choice.
  */
 export function browserTurnAccess(input: {
   toggleOn: boolean;

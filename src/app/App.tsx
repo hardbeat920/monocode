@@ -562,6 +562,7 @@ import {
   browserGrantChange,
   browserGrantStatus,
   browserTurnAccess,
+  browserTurnEligible,
   consumeBrowserCommand,
   inheritsMonoBrowserGrant,
   withBrowserAskNote,
@@ -572,6 +573,7 @@ import {
   BROWSER_OFF_NOTICE,
   browserAccessTurnedOff,
   browserAgentInstructions,
+  browserRequestsToDecline,
   browserStateSnapshot,
   ensureBrowserMcp,
   sessionBrowserGranted,
@@ -872,7 +874,8 @@ type SubmitOptions = ComposerTurnOptions & {
   managed?: boolean;
   orchestrationRetry?: OrchestrationProposal;
   appRequestId?: string;
-  /** A turn a Mono sent: it uses the browser only with a grant, never asks. */
+  /** A turn an agent launched through the app: it uses the browser only
+   * with a grant, never asks. */
   browserGrantOnly?: boolean;
   monoSessionCompletion?: Block["monoSessionCompletion"];
   onSettled?: (outcome: ControlOutcome) => void;
@@ -1609,21 +1612,23 @@ function Workspace({
   });
   const turnGen = useRef(new Map<string, number>());
   // Whether each session's latest turn may use the browser. A browser
-  // request from any other session (orchestration workers, app requests or a
-  // turn this run never sent) is declined at once instead of asking the user.
+  // request from any other session this window runs (orchestration workers,
+  // agent app launches and follow-ups, or a turn this window never sent) is
+  // declined at once instead of asking the user. Every window gets the
+  // state; each answers only for the sessions whose turns it runs.
   const browserEligibleTurns = useRef(new Map<string, boolean>());
   const decliningBrowserRequests = useRef(new Set<string>());
   useEffect(
     () =>
       subscribeBrowserState(() => {
-        for (const access of browserStateSnapshot()?.sessions ?? []) {
-          const id = access.session_id;
-          if (
-            !access.requested ||
-            browserEligibleTurns.current.get(id) ||
-            decliningBrowserRequests.current.has(id)
-          )
-            continue;
+        const declines = browserRequestsToDecline(
+          browserStateSnapshot(),
+          getCurrentWindow().label,
+          (id) =>
+            !!browserEligibleTurns.current.get(id) ||
+            decliningBrowserRequests.current.has(id),
+        );
+        for (const id of declines) {
           decliningBrowserRequests.current.add(id);
           void answerBrowserRequest(id, false)
             .catch((error: unknown) =>
@@ -7000,8 +7005,8 @@ function Workspace({
         return false;
       }
       const typedText = intent === "build" ? "Build approved plan" : text;
-      // /browser switches this session's browser grant (spec 13.2). Alone it
-      // only switches; with a prompt it turns the grant on for that turn.
+      // /browser switches this session's browser grant. Alone it only
+      // switches; with a prompt it turns the grant on for that turn.
       const browserCommand = consumeBrowserCommand(typedText);
       // The one grant change this submission makes; the turn waits for it,
       // so control_authorize_turn never has to grant again (one grant_on).
@@ -7011,14 +7016,15 @@ function Workspace({
         flushHarnessEvents();
       };
       // A turn may use the browser only where /browser itself is allowed.
-      const browserEligible = !(
-        options?.managed ||
-        options?.appRequestId ||
-        options?.browserGrantOnly ||
-        intent === "orchestrate" ||
-        current.orchestrationLeadId ||
-        orchestrator.run(sessionId)
-      );
+      const browserEligible = browserTurnEligible({
+        managed: options?.managed,
+        appRequestId: options?.appRequestId,
+        browserGrantOnly: options?.browserGrantOnly,
+        orchestration:
+          intent === "orchestrate" ||
+          !!current.orchestrationLeadId ||
+          !!orchestrator.run(sessionId),
+      });
       if (browserCommand.matched) {
         if (!browserEligible) {
           browserStatus(
@@ -7047,7 +7053,11 @@ function Workspace({
               ),
           );
         if (enable)
-          void ensureBrowserMcp(current.harness, sessionWorkCwd(current)).catch(
+          void ensureBrowserMcp(
+            current.harness,
+            sessionWorkCwd(current),
+            providerAccountId,
+          ).catch(
             (error: unknown) =>
               console.warn("Browser MCP registration failed:", error),
           );
@@ -7068,7 +7078,7 @@ function Workspace({
             access: browserSnapshot?.settings.access ?? "ask",
             granted: sessionBrowserGranted(browserSnapshot, sessionId),
             eligible: browserEligible,
-            turnedOff: browserAccessTurnedOff(sessionId),
+            turnedOff: browserAccessTurnedOff(browserSnapshot, sessionId),
             fullAccess: current.runtimeMode === "full-access",
           });
       if (browserTurn === "grant")
@@ -7996,7 +8006,6 @@ function Workspace({
                 ephemeral: current.ephemeral === true,
                 codexStore: mono ? "mono" : undefined,
                 controlsAgents:
-                  browserAccess ||
                   operatorAccess ||
                   orchestrator.run(sessionId)?.status === "active",
                 ...(editedProviderTurnId
@@ -8053,10 +8062,9 @@ function Workspace({
               intent: intent === "orchestrate" ? "plan" : intent,
               // A /operator user turn enables app access for this thread;
               // orchestration leads retain their separate control access.
-              // The browser tools reach the app over the same loopback, also
-              // in an "Ask" turn that has no grant yet.
+              // The browser needs no sandbox network: Codex runs its MCP
+              // servers, monocode browser-mcp among them, outside the sandbox.
               controlsAgents:
-                browserAccess ||
                 operatorAccess ||
                 orchestrator.run(sessionId)?.status === "active",
               appAccess: operatorAccess,
@@ -8150,7 +8158,11 @@ function Workspace({
           // without MCP. An "Ask" turn also says that the first action waits
           // for the user's answer.
           if (browserAccess && !rawCommand) {
-            await ensureBrowserMcp(current.harness, workCwd).catch(
+            await ensureBrowserMcp(
+              current.harness,
+              workCwd,
+              providerAccountId,
+            ).catch(
               (error: unknown) =>
                 console.warn("Browser MCP registration failed:", error),
             );
@@ -8743,10 +8755,10 @@ function Workspace({
       placement?: AppSessionPlacement,
       onSettled?: (outcome: ControlOutcome) => void,
       openTab?: boolean,
-      /** A Mono's launch: its turn never asks for the browser, and
-       * `beforeSubmit` (passing the Mono's grant) runs once the session
-       * exists. */
-      monoLaunch?: { beforeSubmit: () => Promise<unknown> },
+      /** An agent's launch through the app: its turn uses the browser only
+       * with a grant, and `beforeSubmit` (passing a Mono's grant) runs once
+       * the session exists. */
+      appLaunch?: { beforeSubmit: () => Promise<unknown> },
     ) =>
       acceptQuickLaunch(
         launch,
@@ -8808,6 +8820,7 @@ function Workspace({
                       submitSession(id, text, attachments, {
                         ...options,
                         appRequestId: deliveryId,
+                        ...(appLaunch ? { browserGrantOnly: true } : {}),
                         onSettled: settle,
                       }),
                     onSettled,
@@ -8815,11 +8828,9 @@ function Workspace({
                   })
                 : submitSession(id, text, attachments, {
                     ...options,
-                    ...(monoLaunch ? { browserGrantOnly: true } : {}),
+                    ...(appLaunch ? { browserGrantOnly: true } : {}),
                   });
-            return monoLaunch
-              ? monoLaunch.beforeSubmit().then(submit)
-              : submit();
+            return appLaunch ? appLaunch.beforeSubmit().then(submit) : submit();
           },
           saveDraft: (id, prompt, attachments, requestId) =>
             flushSync(() => onSaveDraft(id, prompt, attachments, requestId)),
@@ -10936,7 +10947,7 @@ function Workspace({
             !inheritsMonoBrowserGrant({
               monoGranted: sessionBrowserGranted(state, source.id),
               granted: sessionBrowserGranted(state, sessionId),
-              turnedOff: browserAccessTurnedOff(sessionId),
+              turnedOff: browserAccessTurnedOff(state, sessionId),
             })
           )
             return false;
@@ -11016,9 +11027,8 @@ function Workspace({
                   placement,
                   onSettled,
                   !isMonoSession(source.id) || !!placement,
-                  isMonoSession(source.id)
-                    ? { beforeSubmit: () => monoBrowserGrant(id) }
-                    : undefined,
+                  // Any agent's launch: only a Mono passes its grant.
+                  { beforeSubmit: () => monoBrowserGrant(id) },
                 );
                 rememberLaunch();
                 onSettled?.accept();

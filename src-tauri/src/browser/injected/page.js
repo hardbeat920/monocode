@@ -1,5 +1,5 @@
 // Document-level helpers for `wait`, `scroll` and the post-action
-// observation (spec 9.2 step 9, 9.4). Called with Runtime.callFunctionOn
+// observation. Called with Runtime.callFunctionOn
 // against the "__monocode" isolated world's execution context of a frame.
 //
 // kind:

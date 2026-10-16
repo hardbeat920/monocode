@@ -1,4 +1,4 @@
-//! Discovery (spec 4): where `DevToolsActivePort` lives for each browser
+//! Discovery: where `DevToolsActivePort` lives for each browser
 //! channel, reading it, probing the port, version and policy checks.
 //!
 //! Discovery never launches a browser and never passes
@@ -13,14 +13,14 @@ use std::time::Duration;
 
 use super::protocol::{BrowserChoice, BrowserKind, MIN_BROWSER_MAJOR};
 
-/// TCP probe before the WebSocket upgrade (spec 4, step 3).
+/// TCP probe before the WebSocket upgrade.
 pub const PROBE_TIMEOUT: Duration = Duration::from_millis(250);
 /// How long we wait for the user to answer Chrome's consent dialog.
 pub const CONSENT_TIMEOUT: Duration = Duration::from_secs(90);
 /// The file the browser writes next to its profile when remote debugging is on.
 pub const ACTIVE_PORT_FILE: &str = "DevToolsActivePort";
 
-/// Channel ids in discovery order (spec 4, step 1): Chrome and Edge with
+/// Channel ids in discovery order: Chrome and Edge with
 /// their test builds, then the other Chromium browsers.
 pub const CHANNELS: [&str; 12] = [
     "chrome",
@@ -104,7 +104,7 @@ fn path_kind(path: &str) -> BrowserKind {
 }
 
 /// The user-data-dir of a channel under `base` (`%LOCALAPPDATA%` on Windows,
-/// the home directory elsewhere), spec 4 table.
+/// the home directory elsewhere).
 pub fn user_data_dir_in(channel: &str, base: &Path, os: Platform) -> Option<PathBuf> {
     let path = match (os, channel) {
         (Platform::Windows, "chrome") => base.join("Google").join("Chrome").join("User Data"),
@@ -186,12 +186,7 @@ fn base_dir(os: Platform) -> Option<PathBuf> {
     std::env::var_os(var).map(PathBuf::from)
 }
 
-pub fn user_data_dir(channel: &str) -> Option<PathBuf> {
-    let os = Platform::current();
-    user_data_dir_in(channel, &base_dir(os)?, os)
-}
-
-/// Candidates for `choice`, existing directories only (spec 4, step 1).
+/// Candidates for `choice`, existing directories only.
 pub fn candidates(choice: &BrowserChoice) -> Vec<Candidate> {
     let os = Platform::current();
     let base = base_dir(os);
@@ -272,12 +267,12 @@ pub fn read_active_port(user_data_dir: &Path) -> Option<ActivePort> {
 }
 
 /// `ws://127.0.0.1:<port><path>`: loopback literal so the `Host` header is
-/// one the browser accepts (spec 4, step 4).
+/// one the browser accepts.
 pub fn ws_url(active: &ActivePort) -> String {
     format!("ws://127.0.0.1:{}{}", active.port, active.path)
 }
 
-/// Does anything accept TCP on the port (spec 4, step 3)?
+/// Does anything accept TCP on the port?
 pub fn port_accepts(port: u16, timeout: Duration) -> bool {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     match TcpStream::connect_timeout(&addr, timeout) {
@@ -307,7 +302,8 @@ pub enum Located {
     NoBrowser,
 }
 
-/// Spec 4, steps 1-4. Pure file and TCP work; the WebSocket is the link's job.
+/// Candidates, port file, TCP probe. Pure file and TCP work; the WebSocket
+/// is the link's job.
 pub fn locate(choice: &BrowserChoice) -> Located {
     locate_with(candidates(choice), read_active_port, |port| {
         port_accepts(port, PROBE_TIMEOUT)
@@ -381,7 +377,7 @@ pub fn version_supported(major: u32) -> bool {
 
 /// Best-effort check whether an administrator policy turns remote debugging
 /// off (`RemoteDebuggingAllowed = false`). Only used for the message in
-/// `NeedsToggle`; nothing is ever bypassed (spec 4, "Politike i okruženje").
+/// `NeedsToggle`; nothing is ever bypassed.
 pub fn policy_blocks_debugging(kind: BrowserKind) -> Option<String> {
     match Platform::current() {
         Platform::Linux => {
@@ -421,15 +417,15 @@ pub fn policy_blocks_debugging(kind: BrowserKind) -> Option<String> {
                 BrowserKind::Vivaldi | BrowserKind::Opera | BrowserKind::Arc => return None,
             };
             for hive in ["HKLM", "HKCU"] {
-                let output = std::process::Command::new("reg")
-                    .args([
-                        "query",
-                        &format!(r"{hive}\{key}"),
-                        "/v",
-                        "RemoteDebuggingAllowed",
-                    ])
-                    .output()
-                    .ok()?;
+                let mut command = std::process::Command::new("reg");
+                command.args([
+                    "query",
+                    &format!(r"{hive}\{key}"),
+                    "/v",
+                    "RemoteDebuggingAllowed",
+                ]);
+                crate::hide_window_console(&mut command);
+                let output = command.output().ok()?;
                 let text = String::from_utf8_lossy(&output.stdout);
                 if output.status.success() && text.contains("0x0") {
                     return Some(format!(r"{hive}\{key}\RemoteDebuggingAllowed = 0"));

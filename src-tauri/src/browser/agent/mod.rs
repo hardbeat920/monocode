@@ -1,4 +1,4 @@
-//! Work package 3: how agents reach the browser module (spec 12).
+//! How agents reach the browser module.
 //!
 //! Two thin clients in the `monocode` executable, sharing one transport:
 //!

@@ -1,4 +1,4 @@
-// MonoCode tab marker (spec 7, decision D12).
+// MonoCode tab marker.
 //
 // Runs in the isolated world "__monocode" of the main frame of every tab the
 // agent opened, registered once per tab with
@@ -22,7 +22,7 @@
         "</svg>"
     );
   const protocol = String(location.protocol || "");
-  // Marker does not run on internal pages (spec 7); we never navigate there.
+  // Marker does not run on internal pages; we never navigate there.
   if (
     protocol === "chrome:" ||
     protocol === "edge:" ||
@@ -42,7 +42,7 @@
   let applying = false;
   let released = false;
   // Original favicon links, detached while ours is shown and restored when
-  // the user takes the tab back ("Preuzmi tab", spec 13.1).
+  // the user takes the tab back.
   const originalIcons = [];
 
   const budgetOk = () => {

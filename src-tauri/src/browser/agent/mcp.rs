@@ -1,5 +1,4 @@
-//! `monocode browser-mcp`: a hand-written MCP stdio server (spec 12.1,
-//! decision D9). JSON-RPC 2.0, one message per line; `initialize`, `ping`,
+//! `monocode browser-mcp`: a hand-written MCP stdio server. JSON-RPC 2.0, one message per line; `initialize`, `ping`,
 //! `tools/list`, `tools/call` and the `initialized` / `cancelled`
 //! notifications. No resources, no prompts, no state beyond credentials.
 //!
@@ -243,7 +242,7 @@ fn initialize(params: &Value) -> Value {
     })
 }
 
-/// Map one action result onto an MCP `CallToolResult` (spec 12.4).
+/// Map one action result onto an MCP `CallToolResult`.
 ///
 /// - done: the message and the compact envelope; snapshot and read put their
 ///   text first, screenshot adds an image block, and the page snapshot of

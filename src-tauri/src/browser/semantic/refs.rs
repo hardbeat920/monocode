@@ -1,4 +1,4 @@
-//! Element refs (spec 8 "Ref šema i verzionisanje").
+//! Element refs.
 //!
 //! A snapshot gives every node the agent can act on a ref `e<N>`. The agent
 //! only ever sees refs; the `backendNodeId`, the frame and the CDP session
@@ -7,9 +7,11 @@
 //! Refs are stable within one document: the same DOM node keeps its number
 //! across snapshots, so a ref from the previous snapshot still names the same
 //! element while the page has not navigated. A cross-document navigation of
-//! the main frame (new `loaderId`) starts a new table, and every older ref is
-//! `ref_stale` without a command being sent. Whether the node still exists is
-//! decided at action time by `DOM.resolveNode`.
+//! the main frame (new `loaderId`), a transfer of the tab, or an action that
+//! may have navigated starts a new table, and every older ref is `ref_stale`
+//! without a command being sent. Numbers keep counting up across tables of
+//! one tab, so an old ref can never come to name another element. Whether
+//! the node still exists is decided at action time by `DOM.resolveNode`.
 //!
 //! A ref may carry the snapshot version (`e12@4`); only the last two
 //! snapshot versions of the current document are accepted.
@@ -23,9 +25,11 @@ use super::super::protocol::{Reason, TabId};
 use super::Fail;
 
 /// Where a node lives: the CDP session that owns its DOM, the frame (for the
-/// isolated world) and, for out-of-process iframes, the chain of `<iframe>`
-/// owner elements from the main frame down, whose boxes give the offset of
-/// the frame's viewport inside the tab's viewport.
+/// isolated world), the chain of out-of-process `<iframe>` owners from the
+/// main frame down, whose boxes give the offset of the session's viewport
+/// inside the tab's viewport, and for a same-process iframe its innermost
+/// `<iframe>` in that session, whose box gives the offset of the frame's
+/// own viewport inside the session's.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FrameCtx {
     pub session: CdpSessionId,
@@ -34,6 +38,9 @@ pub struct FrameCtx {
     pub frame_id: Option<String>,
     /// `(session holding the <iframe>, its backendNodeId)` per OOPIF level.
     pub owners: Vec<(CdpSessionId, i64)>,
+    /// backendNodeId of the `<iframe>` (in `session`) of a same-process
+    /// frame; `None` for the main frame and an OOPIF's root frame.
+    pub local_owner: Option<i64>,
 }
 
 impl FrameCtx {
@@ -58,6 +65,7 @@ pub struct RefTable {
     loader: Option<String>,
     /// Snapshot versions of this document the agent may cite (latest last).
     versions: Vec<u64>,
+    /// Last number handed out in this tab, kept across tables.
     next: u32,
     refs: HashMap<u32, NodeRef>,
     by_node: HashMap<(String, i64), u32>,
@@ -114,8 +122,13 @@ impl RefTable {
         number
     }
 
-    pub fn ref_for(&self, frame: &FrameCtx, backend: i64) -> Option<u32> {
-        self.by_node.get(&Self::node_key(frame, backend)).copied()
+    /// Start over for another document (`loader`), numbering on from here.
+    fn reset(&mut self, loader: Option<&str>) {
+        *self = RefTable {
+            loader: loader.map(str::to_string),
+            next: self.next,
+            ..RefTable::default()
+        };
     }
 }
 
@@ -140,10 +153,12 @@ pub fn prune(host: usize, state: &PolicyState) {
     store().retain(|key, _| key.host != host || state.lease(&key.tab).is_some_and(Lease::is_live));
 }
 
-/// Forget every ref of a tab (the action layer saw a cross-document
-/// navigation of the main frame).
+/// Forget every ref of a tab (an action navigated or may have, or the tab
+/// changed hands). The numbering goes on where it was.
 pub fn clear(tab: &RefKey) {
-    store().remove(tab);
+    if let Some(table) = store().get_mut(tab) {
+        table.reset(None);
+    }
 }
 
 /// Run `f` on the tab's table for a new snapshot of version `version`. A
@@ -157,9 +172,8 @@ pub fn with_snapshot_table<R>(
     let mut store = store();
     let table = store.entry(tab.clone()).or_default();
     if table.loader.as_deref() != loader {
-        *table = RefTable::default();
+        table.reset(loader);
     }
-    table.loader = loader.map(str::to_string);
     table.versions.push(version);
     if table.versions.len() > 2 {
         table.versions.remove(0);
@@ -179,8 +193,7 @@ pub fn set_picked(
     let mut store = store();
     let table = store.entry(tab.clone()).or_default();
     if table.loader.as_deref() != loader {
-        *table = RefTable::default();
-        table.loader = loader.map(str::to_string);
+        table.reset(loader);
     }
     table.picked = Some((session.clone(), backend));
     table.by_node.get(&(session.0.clone(), backend)).copied()
@@ -223,7 +236,7 @@ pub fn parse(raw: &str) -> Result<(u32, Option<u64>), Fail> {
     let invalid = || {
         Fail::detail(
             Reason::InvalidRequest,
-            format!("`{raw}` is not a ref; use a ref like `e12` from browser_snapshot."),
+            format!("`{raw}` is not a ref; use a ref like `e12` from a snapshot."),
         )
     };
     let trimmed = raw.trim();
@@ -244,15 +257,14 @@ pub fn parse(raw: &str) -> Result<(u32, Option<u64>), Fail> {
     Ok((number, version))
 }
 
-/// Resolve a ref the agent sent against the tab's current table (spec 9.2
-/// step 2). Never guesses: anything not provably the same document and node
+/// Resolve a ref the agent sent against the tab's current table. Never guesses: anything not provably the same document and node
 /// is `ref_stale`, before a single command is sent.
 pub fn lookup(tab: &RefKey, lease: &Lease, raw: &str) -> Result<NodeRef, Fail> {
     let (number, version) = parse(raw)?;
     let stale = |why: &str| {
         Fail::detail(
             Reason::RefStale,
-            format!("Ref {raw} is stale ({why}); call browser_snapshot and use fresh refs."),
+            format!("Ref {raw} is stale ({why}); take a new snapshot and use fresh refs."),
         )
     };
     let store = store();
@@ -267,11 +279,15 @@ pub fn lookup(tab: &RefKey, lease: &Lease, raw: &str) -> Result<NodeRef, Fail> {
             return Err(stale("it comes from an older snapshot"));
         }
     }
-    let node = table
-        .refs
-        .get(&number)
-        .cloned()
-        .ok_or_else(|| stale("this page has no such ref"))?;
+    let node = table.refs.get(&number).cloned().ok_or_else(|| {
+        // Numbers are never reused in a tab: a lower one is from a page
+        // (or an owner) before this one.
+        stale(if number <= table.next {
+            "it names an element of an earlier page"
+        } else {
+            "this page has no such ref"
+        })
+    })?;
     if node.frame.is_oopif() && !lease.holds_session(&node.frame.session) {
         return Err(stale("its frame is gone"));
     }
@@ -279,6 +295,7 @@ pub fn lookup(tab: &RefKey, lease: &Lease, raw: &str) -> Result<NodeRef, Fail> {
 }
 
 /// Latest snapshot version of the tab's current table, if any.
+#[cfg(test)]
 pub fn latest_version(tab: &RefKey) -> Option<u64> {
     store().get(tab).and_then(|t| t.versions.last().copied())
 }
@@ -292,6 +309,7 @@ mod tests {
             session: CdpSessionId(session.into()),
             frame_id: Some("F".into()),
             owners: Vec::new(),
+            local_owner: None,
         }
     }
 
@@ -358,10 +376,31 @@ mod tests {
         });
         assert_eq!(other, 4);
         assert_eq!(latest_version(&tab), Some(3));
-        // New document: numbering restarts.
+        // New document: a new table, numbered on, so no old ref aliases.
         let fresh = with_snapshot_table(&tab, Some("L2"), 4, |t| t.assign(&main, 11, "link", ""));
-        assert_eq!(fresh, 1);
+        assert_eq!(fresh, 5);
         clear(&tab);
         assert_eq!(latest_version(&tab), None);
+    }
+
+    #[test]
+    fn a_cleared_table_never_gives_an_old_number_to_another_node() {
+        let tab = RefKey {
+            host: 0x5ea1,
+            tab: TabId("t_0000bbbb".into()),
+        };
+        let main = frame("S1");
+        let old = with_snapshot_table(&tab, Some("L1"), 1, |t| t.assign(&main, 10, "button", "OK"));
+        // A navigation that did not commit (a 204, a download) still clears;
+        // the loader stays the same and the next snapshot sees other nodes.
+        clear(&tab);
+        assert_eq!(latest_version(&tab), None);
+        let new = with_snapshot_table(&tab, Some("L1"), 2, |t| {
+            let new = t.assign(&main, 20, "link", "x");
+            assert!(!t.refs.contains_key(&old), "the old number names nothing");
+            new
+        });
+        assert!(new > old);
+        clear(&tab);
     }
 }

@@ -28,6 +28,7 @@ import {
   listBrowserMcpStatus,
   listUserBrowserTabs,
   MANAGED_BROWSER_CHANNELS,
+  managedChoiceChannel,
   openBrowserWindow,
   registerBrowserMcp,
   releaseBrowserTab,
@@ -72,7 +73,7 @@ function clockTime(ms: number): string {
   });
 }
 
-/** Settings → Browser (spec 13.1): one page for the toggle, link and audit. */
+/** Settings → Browser: one page for the toggle, link and audit. */
 export function BrowserSettings({
   sessionName,
   cwd,
@@ -307,11 +308,7 @@ function ManagedChoiceRow({
   choice: BrowserChoice;
   onChange: (choice: BrowserChoice) => void;
 }) {
-  const value =
-    choice.kind === "channel" &&
-    MANAGED_BROWSER_CHANNELS.some((entry) => entry.channel === choice.channel)
-      ? choice.channel
-      : "auto";
+  const value = managedChoiceChannel(choice);
   return (
     <Row
       id="browser-choice"
@@ -410,7 +407,6 @@ function ConnectionGroup({
   }
 }
 
-/** Guided consent (spec 13.3): the steps for the browser that was chosen. */
 /** Your own browser: what the user has to do before agents can use it. */
 function AttachSteps({ state }: { state: BrowserState }) {
   const pages = inspectPages(state);
@@ -457,6 +453,7 @@ function AttachSteps({ state }: { state: BrowserState }) {
   );
 }
 
+/** Guided consent: the steps for the browser that was chosen. */
 function ConsentGuide({ state }: { state: BrowserState }) {
   const pages = inspectPages(state);
   const [copied, setCopied] = useState<string | null>(null);
@@ -1177,8 +1174,7 @@ function registrationLabel(entry: BrowserMcpRegistration): string {
 }
 
 /**
- * Where the browser tools are registered (spec 13.1 "status MCP
- * registracije"). MonoCode adds them on a provider's first browser turn;
+ * Where the browser tools are registered. MonoCode adds them on a provider's first browser turn;
  * this row shows the result and repairs an entry a moved app left behind.
  */
 function McpRegistrationRow({ cwd }: { cwd: string }) {

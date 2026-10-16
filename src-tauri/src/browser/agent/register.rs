@@ -1,12 +1,23 @@
 //! Registering `monocode browser-mcp` with the providers that take MCP
-//! servers (spec 12.2), and the text for those that do not (spec 12.5).
+//! servers, and the text for those that do not.
 //!
 //! The entry is user-scoped, named [`SERVER_NAME`], and holds only the
 //! executable and `browser-mcp`: no token, because these files are readable
 //! by other processes. Endpoint and token reach the server by inheritance
 //! (`harness_spawn` -> provider CLI -> MCP child). Codex filters the
 //! environment of MCP children, so its entry also lists the two variables in
-//! `env_vars`, which makes Codex pass them through.
+//! `env_vars`, which makes Codex pass them through, and raises Codex's 60 s
+//! tool-call limit, which a navigation or a wait behind an access prompt
+//! can exceed.
+//!
+//! Sessions of MonoCode's own Claude and Codex accounts run with
+//! `CLAUDE_CONFIG_DIR` / `CODEX_HOME` set to the account's directory and read
+//! their MCP servers from there, so the entry is written to every account
+//! directory as well as to the default configuration. The provider CLI only
+//! edits the default one; account files are written directly.
+//!
+//! A configuration file that is a symlink (dotfiles kept with stow or
+//! chezmoi) is written through to its target, so the link survives.
 //!
 //! The executable named in the entry comes from [`super::server_binary`]: on
 //! Windows a per-build copy in the app data directory, so a session holding
@@ -30,6 +41,11 @@ use crate::browser::protocol::{ENV_ENDPOINT, ENV_TOKEN};
 /// Providers whose MCP configuration MonoCode can write (see `mcp::mcp_add`).
 pub const MCP_PROVIDERS: [&str; 4] = ["claude", "codex", "cursor", "opencode"];
 const SUBCOMMAND: &str = "browser-mcp";
+/// Codex `tool_timeout_sec` (its default is 60): a call may wait up to two
+/// minutes for a load or a condition, plus the user's answer to the access
+/// prompt and a cold browser start. Claude Code's default limit is far
+/// longer; Cursor and OpenCode have no per-server setting for tool calls.
+const CODEX_TOOL_TIMEOUT_SECS: i64 = 300;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -40,8 +56,9 @@ pub struct BrowserMcpRegistration {
     /// An entry named `monocode-browser` exists in the user configuration.
     pub registered: bool,
     /// That entry starts this executable (and, for Codex, passes the
-    /// credentials through). A registered but stale entry is replaced by
-    /// `browser_mcp_register`.
+    /// credentials through and allows long calls), in the default
+    /// configuration and in every MonoCode account of the provider. A
+    /// registered but stale entry is replaced by `browser_mcp_register`.
     pub current: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config_path: Option<String>,
@@ -79,25 +96,48 @@ fn unsupported_reason(provider: &str, opencode_major: Option<u32>) -> Option<&'s
 /// Where each provider keeps its user-scoped MCP servers.
 struct Locations {
     home: PathBuf,
+    /// The directory of Claude's `.claude.json`.
+    claude_dir: PathBuf,
     codex_home: PathBuf,
     opencode_override: Option<PathBuf>,
+    /// A MonoCode account's directory rather than the default configuration:
+    /// written directly, because the provider CLI would edit the default.
+    account: bool,
 }
 
 impl Locations {
     fn from_env() -> Result<Locations, String> {
         let home = PathBuf::from(crate::dirs_home().ok_or("Home directory not found")?);
-        Ok(Locations {
-            codex_home: std::env::var_os("CODEX_HOME")
+        let var = |name: &str| {
+            std::env::var_os(name)
+                .filter(|value| !value.is_empty())
                 .map(PathBuf::from)
-                .unwrap_or_else(|| home.join(".codex")),
-            opencode_override: std::env::var_os("OPENCODE_CONFIG").map(PathBuf::from),
+        };
+        Ok(Locations {
+            // The provider CLIs MonoCode runs inherit these variables too.
+            claude_dir: var("CLAUDE_CONFIG_DIR").unwrap_or_else(|| home.clone()),
+            codex_home: var("CODEX_HOME").unwrap_or_else(|| home.join(".codex")),
+            opencode_override: var("OPENCODE_CONFIG"),
             home,
+            account: false,
         })
+    }
+
+    /// The configuration of one MonoCode account (Claude or Codex), the
+    /// directory its sessions get as `CLAUDE_CONFIG_DIR` / `CODEX_HOME`.
+    fn account(dir: PathBuf) -> Locations {
+        Locations {
+            home: dir.clone(),
+            claude_dir: dir.clone(),
+            codex_home: dir,
+            opencode_override: None,
+            account: true,
+        }
     }
 
     fn config_path(&self, provider: &str) -> Option<PathBuf> {
         Some(match provider {
-            "claude" => self.home.join(".claude.json"),
+            "claude" => self.claude_dir.join(".claude.json"),
             "cursor" => self.home.join(".cursor/mcp.json"),
             "codex" => self.codex_home.join("config.toml"),
             "opencode" => crate::mcp::opencode_config_path(
@@ -137,8 +177,9 @@ fn server_exe(dir: &Path, install: bool) -> Result<String, String> {
     Ok(path.to_string_lossy().into_owned())
 }
 
-/// Command line of the existing entry, and whether it passes the
-/// credentials through (always true except for Codex without `env_vars`).
+/// Command line of the existing entry, and whether its other settings are
+/// current (always true except for Codex: `env_vars` passing the
+/// credentials through, and [`CODEX_TOOL_TIMEOUT_SECS`]).
 fn existing_entry(provider: &str, path: &Path) -> Option<(Vec<String>, bool)> {
     let raw = std::fs::read_to_string(path).ok()?;
     if provider == "codex" {
@@ -161,7 +202,11 @@ fn existing_entry(provider: &str, path: &Path) -> Option<(Vec<String>, bool)> {
                     .iter()
                     .all(|name| vars.iter().any(|v| v.as_str() == Some(name)))
             });
-        return Some((command, passes));
+        let patient = server
+            .get("tool_timeout_sec")
+            .and_then(|t| t.as_float().or_else(|| t.as_integer().map(|i| i as f64)))
+            .is_some_and(|t| t >= CODEX_TOOL_TIMEOUT_SECS as f64);
+        return Some((command, passes && patient));
     }
     let root: Value = serde_json::from_str(&raw)
         .or_else(|_| serde_json::from_str(&crate::mcp::strip_jsonc(&raw)))
@@ -218,7 +263,7 @@ fn status_at(
 fn codex_table(exe: &str) -> String {
     let quote = |value: &str| toml::Value::String(value.to_string()).to_string();
     format!(
-        "[mcp_servers.{SERVER_NAME}]\ncommand = {}\nargs = [{}]\nenv_vars = [{}, {}]\n",
+        "[mcp_servers.{SERVER_NAME}]\ncommand = {}\nargs = [{}]\nenv_vars = [{}, {}]\ntool_timeout_sec = {CODEX_TOOL_TIMEOUT_SECS}\n",
         quote(exe),
         quote(SUBCOMMAND),
         quote(ENV_ENDPOINT),
@@ -226,16 +271,28 @@ fn codex_table(exe: &str) -> String {
     )
 }
 
+fn read_or_empty(path: &Path) -> Result<String, String> {
+    match std::fs::read_to_string(path) {
+        Ok(raw) => Ok(raw),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// Our entry's command in a parsed Codex configuration.
+fn codex_command(parsed: &toml::Table) -> Option<&str> {
+    parsed
+        .get("mcp_servers")
+        .and_then(|servers| servers.get(SERVER_NAME))
+        .and_then(|server| server.get("command"))
+        .and_then(|command| command.as_str())
+}
+
 /// Append our table to a Codex `config.toml` without rewriting the user's
 /// file: the text is only appended, after checking that the result still
 /// parses and holds exactly our entry.
 fn append_codex_table(path: &Path, exe: &str) -> Result<(), String> {
-    let existing = match std::fs::read_to_string(path) {
-        Ok(raw) => raw,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(error) => return Err(error.to_string()),
-    };
-    let mut text = existing.clone();
+    let mut text = read_or_empty(path)?;
     if !text.is_empty() && !text.ends_with('\n') {
         text.push('\n');
     }
@@ -245,21 +302,65 @@ fn append_codex_table(path: &Path, exe: &str) -> Result<(), String> {
     text.push_str(&codex_table(exe));
     let parsed: toml::Table = toml::from_str(&text)
         .map_err(|e| format!("Cannot add the browser server to {}: {e}", path.display()))?;
-    let entry = parsed
-        .get("mcp_servers")
-        .and_then(|servers| servers.get(SERVER_NAME))
-        .and_then(|server| server.get("command"))
-        .and_then(|command| command.as_str());
-    if entry != Some(exe) {
+    if codex_command(&parsed) != Some(exe) {
         return Err(format!(
             "Cannot add the browser server to {}: its mcp_servers layout is not supported",
             path.display()
         ));
     }
-    let parent = path.parent().ok_or("Invalid Codex config path")?;
+    write_replacing(path, &text)
+}
+
+/// Remove our table (and its subtables) from an account's `config.toml`,
+/// where `codex mcp remove` cannot reach: only the layout [`codex_table`]
+/// writes is recognised, everything else is kept verbatim, and a result that
+/// still holds the entry (another layout) is refused unwritten.
+fn remove_codex_table(path: &Path) -> Result<(), String> {
+    let raw = read_or_empty(path)?;
+    let header = format!("[mcp_servers.{SERVER_NAME}]");
+    let nested = format!("[mcp_servers.{SERVER_NAME}.");
+    let mut kept = String::with_capacity(raw.len());
+    let mut ours = false;
+    for line in raw.split_inclusive('\n') {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            ours = trimmed == header || trimmed.starts_with(&nested);
+        }
+        if !ours {
+            kept.push_str(line);
+        }
+    }
+    let mut text = kept.trim_end().to_string();
+    if !text.is_empty() {
+        text.push('\n');
+    }
+    let parsed: toml::Table = toml::from_str(&text).map_err(|e| {
+        format!(
+            "Cannot update the browser server in {}: {e}",
+            path.display()
+        )
+    })?;
+    if codex_command(&parsed).is_some() {
+        return Err(format!(
+            "Cannot update the browser server in {}: its mcp_servers layout is not supported",
+            path.display()
+        ));
+    }
+    write_replacing(path, &text)
+}
+
+/// Write `text` to a temporary file next to `path` and rename it over
+/// `path`, keeping the file's permissions. `path` must already be the
+/// symlink's target ([`write_target`]): a rename onto a link replaces it.
+fn write_replacing(path: &Path, text: &str) -> Result<(), String> {
+    let parent = path.parent().ok_or("Invalid config path")?;
     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    let temporary = parent.join(format!(".config.toml.{}.tmp", uuid::Uuid::new_v4()));
-    let written = std::fs::write(&temporary, &text).and_then(|_| {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("config");
+    let temporary = parent.join(format!(".{name}.{}.tmp", uuid::Uuid::new_v4()));
+    let written = std::fs::write(&temporary, text).and_then(|_| {
         if let Ok(metadata) = std::fs::metadata(path) {
             std::fs::set_permissions(&temporary, metadata.permissions())?;
         }
@@ -271,6 +372,25 @@ fn append_codex_table(path: &Path, exe: &str) -> Result<(), String> {
     written.map_err(|e| e.to_string())
 }
 
+/// The file a configuration path names, following symlinks: dotfile
+/// managers (stow, chezmoi) keep these files as links, and writing a
+/// temporary file and renaming it over the link would replace the link
+/// with a plain copy. A dangling link resolves to its (missing) target.
+fn write_target(path: &Path) -> PathBuf {
+    let mut path = path.to_path_buf();
+    // The bound stops a symlink loop.
+    for _ in 0..32 {
+        let Ok(target) = std::fs::read_link(&path) else {
+            break;
+        };
+        path = match path.parent() {
+            Some(parent) => parent.join(target),
+            None => target,
+        };
+    }
+    path
+}
+
 fn register_at(
     locations: &Locations,
     provider: &str,
@@ -280,8 +400,10 @@ fn register_at(
     opencode_major: Option<u32>,
 ) -> Result<BrowserMcpRegistration, String> {
     let before = status_at(locations, provider, exe, opencode_major);
-    if let Some(reason) = &before.unsupported_reason {
-        return Err(reason.clone());
+    // A provider that cannot use the tools at all is an answer, not an
+    // error: the reply says why, and nothing is written.
+    if before.unsupported_reason.is_some() {
+        return Ok(before);
     }
     if !before.supported {
         return Err(format!(
@@ -291,11 +413,23 @@ fn register_at(
     if before.current {
         return Ok(before);
     }
-    let path = locations
-        .config_path(provider)
-        .ok_or("Unsupported MCP provider")?;
+    let path = write_target(
+        &locations
+            .config_path(provider)
+            .ok_or("Unsupported MCP provider")?,
+    );
     let server = json!({"command": exe, "args": [SUBCOMMAND]});
     match provider {
+        // User-scoped Claude servers are the `mcpServers` of `.claude.json`.
+        "claude" if locations.account => {
+            crate::mcp::put_json_server(&path, SERVER_NAME, server, true)?
+        }
+        "codex" if locations.account => {
+            if before.registered {
+                remove_codex_table(&path)?;
+            }
+            append_codex_table(&path, exe)?;
+        }
         "claude" => {
             if before.registered {
                 crate::harness::remove_mcp_via_cli("claude", cwd, SERVER_NAME, binary_path)?;
@@ -321,8 +455,8 @@ fn register_at(
                 Some(major) => major,
                 None => crate::harness::opencode_major_version(cwd, binary_path)?,
             };
-            if let Some(reason) = unsupported_reason(provider, Some(major)) {
-                return Err(reason.into());
+            if unsupported_reason(provider, Some(major)).is_some() {
+                return Ok(status_at(locations, provider, exe, Some(major)));
             }
             crate::mcp::put_opencode_server(&path, SERVER_NAME, server, major, true)?;
         }
@@ -351,6 +485,10 @@ pub async fn browser_mcp_status(
             .map(|provider| {
                 let mut status = status_at(&locations, provider, &exe, major);
                 status.current &= present;
+                // An account without the entry is fixed by registering.
+                for account in account_locations(&app, provider, None).unwrap_or_default() {
+                    status.current &= status_at(&account, provider, &exe, major).current;
+                }
                 status
             })
             .collect())
@@ -359,16 +497,56 @@ pub async fn browser_mcp_status(
     .map_err(|e| e.to_string())?
 }
 
-/// Make sure `provider` starts `monocode browser-mcp` (spec 12.2). Called by
-/// the UI when a session of that provider is first granted `/browser`;
+/// The MonoCode accounts of `provider` (Claude and Codex have them): every
+/// account directory that exists, plus `account_id`'s, created when needed.
+/// Their sessions run with `CLAUDE_CONFIG_DIR` / `CODEX_HOME` set to that
+/// directory (`harness::apply_provider_account`).
+fn account_locations(
+    app: &AppHandle,
+    provider: &str,
+    account_id: Option<&str>,
+) -> Result<Vec<Locations>, String> {
+    if !matches!(provider, "claude" | "codex") {
+        return Ok(Vec::new());
+    }
+    let mut dirs = Vec::new();
+    // The parent of any account's path is where all of them live.
+    let probe = crate::harness::provider_account_path(app, provider, "probe")?;
+    if let Some(Ok(entries)) = probe.parent().map(std::fs::read_dir) {
+        for entry in entries.flatten() {
+            let Some(id) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            if let Ok(dir) = crate::harness::provider_account_path(app, provider, &id) {
+                if dir.is_dir() {
+                    dirs.push(dir);
+                }
+            }
+        }
+    }
+    if let Some(dir) = crate::harness::provider_account_dir(app, provider, account_id)? {
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
+    dirs.sort();
+    Ok(dirs.into_iter().map(Locations::account).collect())
+}
+
+/// Make sure `provider` starts `monocode browser-mcp`, in its default
+/// configuration and in every MonoCode account of it (`account_id`, the
+/// session's account, is included even when its directory is new). Called
+/// by the UI when a session of that provider is first granted `/browser`;
 /// idempotent, and replaces an entry left by a moved or updated app.
-/// Sessions already running see the tools from their next start.
+/// Sessions already running see the tools from their next start. A provider
+/// that cannot use the tools (OpenCode 2) gets `supported: false` and why.
 #[tauri::command]
 pub async fn browser_mcp_register(
     app: AppHandle,
     host: State<'_, crate::harness::HarnessHost>,
     provider: String,
     cwd: String,
+    account_id: Option<String>,
 ) -> Result<BrowserMcpRegistration, String> {
     let binary_path = host.runtime_binary_path(&provider);
     let dir = copies_dir(&app)?;
@@ -377,9 +555,9 @@ pub async fn browser_mcp_register(
         let major = (provider == "opencode")
             .then(|| opencode_major(binary_path.as_deref()))
             .flatten();
-        // Refuse before copying anything for a provider that cannot use it.
-        if let Some(reason) = unsupported_reason(&provider, major) {
-            return Err(reason.to_string());
+        // Answer before copying anything for a provider that cannot use it.
+        if unsupported_reason(&provider, major).is_some() {
+            return Ok(status_at(&locations, &provider, "", major));
         }
         if !MCP_PROVIDERS.contains(&provider.as_str()) {
             return Err(format!(
@@ -387,14 +565,25 @@ pub async fn browser_mcp_register(
             ));
         }
         let exe = server_exe(&dir, true)?;
-        register_at(
+        let status = register_at(
             &locations,
             &provider,
             &cwd,
             &exe,
             binary_path.as_deref(),
             major,
-        )
+        )?;
+        for account in account_locations(&app, &provider, account_id.as_deref())? {
+            register_at(
+                &account,
+                &provider,
+                &cwd,
+                &exe,
+                binary_path.as_deref(),
+                major,
+            )?;
+        }
+        Ok(status)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -402,7 +591,7 @@ pub async fn browser_mcp_register(
 
 /// Text the UI appends to a turn while the session has browser access.
 /// With MCP the tools describe themselves, so a short pointer is enough; a
-/// provider without MCP gets the CLI instructions (spec 12.5); a provider
+/// provider without MCP gets the CLI instructions; a provider
 /// that can use neither is told so, to pass on to the user.
 #[tauri::command]
 pub async fn browser_agent_instructions(
@@ -415,7 +604,7 @@ pub async fn browser_agent_instructions(
         let major = (provider == "opencode")
             .then(|| opencode_major(binary_path.as_deref()))
             .flatten();
-        // Where the thread's branch serves its app (spec: one browser for
+        // Where the thread's branch serves its app (one browser for
         // every worktree, each thread on its own port).
         let app = match cwd.filter(|cwd| !cwd.trim().is_empty()) {
             Some(cwd) if unsupported_reason(&provider, major).is_none() => {
@@ -437,7 +626,7 @@ fn instructions_for(provider: &str, opencode_major: Option<u32>, app: Option<&st
     let body = if let Some(reason) = unsupported_reason(provider, opencode_major) {
         format!("The user enabled browser access in this thread, but MonoCode's browser tools do not work with this provider: {reason} Do not try the browser tools or the MonoCode browser CLI; tell the user if the task needs a browser.")
     } else if MCP_PROVIDERS.contains(&provider) {
-        "Browser access is enabled in this thread. Use the browser_* tools (MonoCode browser); start with browser_tabs to open your own tab, and take a browser_snapshot before acting on refs. If the tools are missing, the provider has not loaded MonoCode's browser server yet; tell the user it appears after the session restarts.".to_string()
+        "Browser access is enabled in this thread. Use the browser_* tools (MonoCode browser); start with browser_tabs to open your own tab, and act on the refs in the snapshot each result brings. If the tools are missing, the provider has not loaded MonoCode's browser server yet; tell the user it appears after the session restarts.".to_string()
     } else {
         super::cli::instructions()
     };
@@ -457,8 +646,10 @@ mod tests {
         (
             Locations {
                 home: root.clone(),
+                claude_dir: root.clone(),
                 codex_home: root.join(".codex"),
                 opencode_override: None,
+                account: false,
             },
             root,
         )
@@ -552,6 +743,10 @@ mod tests {
         assert_eq!(server["command"].as_str(), Some(exe));
         assert_eq!(server["env_vars"].as_array().unwrap().len(), 2);
         assert_eq!(
+            server["tool_timeout_sec"].as_integer(),
+            Some(CODEX_TOOL_TIMEOUT_SECS)
+        );
+        assert_eq!(
             parsed["mcp_servers"]["docs"]["command"].as_str(),
             Some("npx")
         );
@@ -567,6 +762,15 @@ mod tests {
         .unwrap();
         let stale = status_at(&locations, "codex", "/m", None);
         assert!(stale.registered && !stale.current);
+        // Nor would one keeping Codex's 60 s limit on tool calls.
+        std::fs::write(
+            &path,
+            format!(
+                "[mcp_servers.{SERVER_NAME}]\ncommand = \"/m\"\nargs = [\"browser-mcp\"]\nenv_vars = [\"{ENV_ENDPOINT}\", \"{ENV_TOKEN}\"]\n"
+            ),
+        )
+        .unwrap();
+        assert!(!status_at(&locations, "codex", "/m", None).current);
 
         // A layout appending cannot extend is refused, not corrupted.
         std::fs::write(&path, "mcp_servers = { docs = { command = \"npx\" } }\n").unwrap();
@@ -575,6 +779,85 @@ mod tests {
             std::fs::read_to_string(&path).unwrap(),
             "mcp_servers = { docs = { command = \"npx\" } }\n"
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn accounts_are_written_directly_and_repaired_without_the_provider_cli() {
+        let (_, root) = sandbox();
+        let account = Locations::account(root.join("acct"));
+        // Claude: the account's own `.claude.json`, never the default one.
+        let claude = account.config_path("claude").unwrap();
+        assert_eq!(claude, root.join("acct/.claude.json"));
+        assert!(
+            register_at(&account, "claude", "/", "/m", None, None)
+                .unwrap()
+                .current
+        );
+        let config: Value =
+            serde_json::from_str(&std::fs::read_to_string(&claude).unwrap()).unwrap();
+        assert_eq!(config["mcpServers"][SERVER_NAME]["command"], "/m");
+        assert!(!root.join(".claude.json").exists());
+
+        // Codex: a stale table is replaced in place; the rest is kept.
+        let codex = account.config_path("codex").unwrap();
+        let mine = "model = \"o4\"\n\n[mcp_servers.docs]\ncommand = \"npx\"\n";
+        std::fs::write(
+            &codex,
+            format!("{mine}\n[mcp_servers.{SERVER_NAME}]\ncommand = \"/old\"\nargs = [\"browser-mcp\"]\n\n[mcp_servers.{SERVER_NAME}.tools.browser_click]\napproval_mode = \"auto\"\n"),
+        )
+        .unwrap();
+        assert!(
+            register_at(&account, "codex", "/", "/m", None, None)
+                .unwrap()
+                .current
+        );
+        let text = std::fs::read_to_string(&codex).unwrap();
+        assert!(text.starts_with(mine), "{text}");
+        assert!(
+            !text.contains("/old") && !text.contains("approval_mode"),
+            "{text}"
+        );
+        let parsed: toml::Table = toml::from_str(&text).unwrap();
+        assert_eq!(
+            parsed["mcp_servers"]["docs"]["command"].as_str(),
+            Some("npx")
+        );
+        // Repairing again does not pile up blank lines.
+        std::fs::write(&codex, text.replace("\"/m\"", "\"/old\"")).unwrap();
+        register_at(&account, "codex", "/", "/m", None, None).unwrap();
+        assert_eq!(std::fs::read_to_string(&codex).unwrap(), text);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_configs_are_written_through_to_their_target() {
+        let (locations, root) = sandbox();
+        let dotfiles = root.join("dotfiles");
+        std::fs::create_dir_all(&dotfiles).unwrap();
+        std::fs::create_dir_all(root.join(".cursor")).unwrap();
+        std::fs::create_dir_all(root.join(".codex")).unwrap();
+        std::fs::write(dotfiles.join("mcp.json"), r#"{"mcpServers":{}}"#).unwrap();
+        std::fs::write(dotfiles.join("config.toml"), "model = \"o4\"\n").unwrap();
+        let cursor = locations.config_path("cursor").unwrap();
+        let codex = locations.config_path("codex").unwrap();
+        // One absolute link, one relative.
+        std::os::unix::fs::symlink(dotfiles.join("mcp.json"), &cursor).unwrap();
+        std::os::unix::fs::symlink("../dotfiles/config.toml", &codex).unwrap();
+        register_at(&locations, "cursor", "/", "/m", None, None).unwrap();
+        register_at(&locations, "codex", "/", "/m", None, None).unwrap();
+        for (link, target) in [(&cursor, "mcp.json"), (&codex, "config.toml")] {
+            assert!(std::fs::symlink_metadata(link)
+                .unwrap()
+                .file_type()
+                .is_symlink());
+            assert!(std::fs::read_to_string(dotfiles.join(target))
+                .unwrap()
+                .contains("/m"));
+        }
+        assert!(status_at(&locations, "cursor", "/m", None).current);
+        assert!(status_at(&locations, "codex", "/m", None).current);
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -614,9 +897,11 @@ mod tests {
             v2.unsupported_reason.as_deref(),
             Some(OPENCODE_2_UNSUPPORTED)
         );
+        let reply = register_at(&locations, "opencode", "/", "/m", None, Some(2)).unwrap();
+        assert!(!reply.supported && !reply.registered);
         assert_eq!(
-            register_at(&locations, "opencode", "/", "/m", None, Some(2)).unwrap_err(),
-            OPENCODE_2_UNSUPPORTED
+            reply.unsupported_reason.as_deref(),
+            Some(OPENCODE_2_UNSUPPORTED)
         );
         assert!(!path.exists(), "nothing is written for OpenCode 2");
         let v1 = status_at(&locations, "opencode", "/m", Some(1));

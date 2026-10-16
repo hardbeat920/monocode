@@ -1,10 +1,10 @@
-//! What happened after the input (spec 9.2 steps 8-9, 10.1, 10.4).
+//! What happened after the input.
 //!
 //! A [`Watch`] subscribes to the tab's events *before* the first input
 //! command, sends input through [`Watch::input`] and then gives the page a
 //! short window: a main-frame navigation turns into a wait for `load` within
 //! the action's remaining budget, a JavaScript dialog ends the action as
-//! `done` with `observed.dialog` (never touched, decision D6), a closed tab
+//! `done` with `observed.dialog` (never answered for the agent), a closed tab
 //! is `target_closed`, and a popup of this tab is reported as
 //! `observed.new_tab` (or `popup_blocked` when the tab limit closed it).
 //!
@@ -30,7 +30,7 @@ use super::super::targets;
 use super::element::{self, PAGE_JS};
 use super::{refs, Fail, Run};
 
-/// Observation window after input (spec 9.2 step 8: up to 500 ms).
+/// Observation window after input (up to 500 ms).
 pub const WINDOW: Duration = Duration::from_millis(500);
 /// With DOM mutations counted, the window ends early once the page has been
 /// quiet this long: no mutation, no request of its own in flight and no
@@ -113,7 +113,7 @@ impl Watch {
     }
 
     /// Reset the page's DOM mutation counter so [`Watch::finish`] can tell a
-    /// large DOM change (spec 9.2 step 9, `snapshot_stale`). Best effort.
+    /// large DOM change. Best effort.
     pub fn count_mutations(&mut self, run: &Run<'_>) {
         if let Ok(frame) = element::main_frame(run) {
             self.count_mutations = element::call_frame(
@@ -500,7 +500,7 @@ pub fn summary(observed: &Observed) -> String {
     let mut parts = Vec::new();
     if let Some(dialog) = &observed.dialog {
         parts.push(format!(
-            "A {} dialog opened (\"{}\"); answer it with browser_dialog.",
+            "A {} dialog opened (\"{}\"); answer it with the dialog action.",
             match dialog.kind {
                 DialogType::Alert => "alert",
                 DialogType::Confirm => "confirm",

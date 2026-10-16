@@ -25,7 +25,7 @@ use serde_json::{json, Value};
 use super::link::{CdpError, CdpEvent, CdpSessionId, Command, Link, Method};
 use super::policy::{audit_url, now_ms};
 use super::protocol::{ConsoleLevel, PageSignals, ISOLATED_WORLD};
-use super::targets::Sender;
+use super::targets::{send, Sender};
 
 /// Console entries kept per tab; older ones are dropped and counted.
 const CONSOLE_CAP: usize = 300;
@@ -157,9 +157,6 @@ pub struct ConsoleView {
     /// Entries the ring dropped since the tab was attached.
     pub dropped: u64,
     pub next_since: u64,
-    /// Whether console messages and exceptions are being captured, not only
-    /// the browser's own messages.
-    pub capturing: bool,
 }
 
 /// What [`Diagnostics::network`] returns.
@@ -564,7 +561,6 @@ impl Diagnostics {
             omitted,
             dropped: log.console_dropped,
             next_since,
-            capturing: log.runtime_on,
         }
     }
 
@@ -623,6 +619,7 @@ impl Diagnostics {
     }
 
     /// Whether console capture runs on this session.
+    #[cfg(test)]
     pub fn capturing(&self, session: &CdpSessionId) -> bool {
         self.tabs.get(session).is_some_and(|log| log.runtime_on)
     }
@@ -679,13 +676,6 @@ pub fn is_local_url(raw: &str) -> bool {
         Some(url::Host::Ipv4(ip)) => ip.is_loopback() || ip.is_unspecified(),
         Some(url::Host::Ipv6(ip)) => ip.is_loopback() || ip.is_unspecified(),
         None => false,
-    }
-}
-
-fn send(link: &Link, sender: Sender<'_>, command: Command) -> Result<Value, CdpError> {
-    match sender {
-        Sender::Agent(ctx) => link.send(ctx, command),
-        Sender::System => link.send_system(command),
     }
 }
 

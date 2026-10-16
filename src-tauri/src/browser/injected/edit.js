@@ -1,10 +1,17 @@
-// `type {clear: true}` (spec 9.3): select the whole content of the focused
+// `type {clear: true}`: select the whole content of the focused
 // editable element so the following Input.insertText replaces it. `this` is
-// the element, in the "__monocode" isolated world. Selecting is the only
+// the element (or a text node, from a full snapshot, inside it), in the
+// "__monocode" isolated world. Selecting is the only
 // change; the text itself always arrives through Input.insertText, so the
 // page sees ordinary input events.
 function monocodeSelectAll() {
-  const el = this;
+  let el = this && this.nodeType !== 1 ? this.parentElement : this;
+  if (el && el !== this && el.isContentEditable) {
+    // Text inside an editor: the whole editing host is replaced.
+    while (el.parentElement && el.parentElement.isContentEditable) {
+      el = el.parentElement;
+    }
+  }
   if (!el || !el.isConnected) {
     return { ok: false };
   }

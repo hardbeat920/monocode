@@ -3,6 +3,7 @@ import {
   BROWSER_ASK_NOTE,
   browserGrantChange,
   browserTurnAccess,
+  browserTurnEligible,
   consumeBrowserCommand,
   inheritsMonoBrowserGrant,
   withBrowserAskNote,
@@ -109,6 +110,46 @@ describe("browser access for a turn without /browser", () => {
       browserTurnAccess({ ...base, access: "always", turnedOff: true }),
     ).toBe("ask");
     expect(browserTurnAccess({ ...base, turnedOff: true })).toBe("ask");
+  });
+});
+
+describe("browserTurnEligible", () => {
+  const regular = { orchestration: false };
+
+  it("lets a turn the user sends from a regular thread use the browser", () => {
+    expect(browserTurnEligible(regular)).toBe(true);
+  });
+
+  it("keeps agent-sent, managed and orchestration turns out", () => {
+    // A session an agent starts through the app, monitored or not.
+    expect(browserTurnEligible({ ...regular, browserGrantOnly: true })).toBe(
+      false,
+    );
+    // A follow-up an agent hands a session (`sessions.send`).
+    expect(browserTurnEligible({ ...regular, appRequestId: "r1" })).toBe(false);
+    expect(browserTurnEligible({ ...regular, managed: true })).toBe(false);
+    expect(browserTurnEligible({ orchestration: true })).toBe(false);
+  });
+
+  it("never grants an agent-launched Full access or Always on session", () => {
+    const eligible = browserTurnEligible({
+      ...regular,
+      browserGrantOnly: true,
+    });
+    const turn = {
+      toggleOn: true,
+      granted: false,
+      eligible,
+      turnedOff: false,
+    };
+    expect(
+      browserTurnAccess({ ...turn, access: "ask", fullAccess: true }),
+    ).toBeNull();
+    expect(browserTurnAccess({ ...turn, access: "always" })).toBeNull();
+    // A grant it inherited from the Mono that started it still counts.
+    expect(
+      browserTurnAccess({ ...turn, access: "always", granted: true }),
+    ).toBe("granted");
   });
 });
 
