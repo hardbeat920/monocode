@@ -35,7 +35,7 @@ import {
 } from "../../../shared/ui/icons";
 import { formatInteger } from "../../../shared/lib/numbers";
 import { minimalSetup } from "codemirror";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   MarkdownViewShell,
   useMarkdownMode,
@@ -640,10 +640,15 @@ export function CodeMirrorEditor({
   canAutosaveRef.current = canAutosave;
   onStageGitRef.current = onStageGit;
   onDocChangeRef.current = onDocChange;
-  cwdRef.current = cwd;
-  onOpenFileRef.current = onOpenFile;
   valueRef.current = value;
   gitOriginalRef.current = gitOriginal;
+
+  // Navigation handlers installed in the editor effect must only observe
+  // committed prop values, so sync these after commit rather than in render.
+  useLayoutEffect(() => {
+    cwdRef.current = cwd;
+    onOpenFileRef.current = onOpenFile;
+  }, [cwd, onOpenFile]);
 
   const findSymbol = useCallback(
     async (view: EditorView, mode: "auto" | "definition" | "references") => {
@@ -657,6 +662,7 @@ export function CodeMirrorEditor({
         const result = await searchProject({
           cwd: cwdRef.current,
           query: symbol.name,
+          caseSensitive: true,
           wholeWord: true,
           searchId: crypto.randomUUID(),
         });
@@ -819,6 +825,7 @@ export function CodeMirrorEditor({
       void searchProject({
         cwd: cwdRef.current,
         query: symbol.name,
+        caseSensitive: true,
         wholeWord: true,
         searchId: crypto.randomUUID(),
       })
