@@ -168,6 +168,7 @@ import {
   supportsBtwHarness,
 } from "../model/btw";
 import { COMPACT_COMMAND, isCompactCommand } from "../model/compact";
+import { consumeShellCommand } from "../model/shellCommand";
 import {
   consumeSessionFolderCommand,
   isSessionFolderCommand,
@@ -278,6 +279,8 @@ type Props = {
   onSaveDraft?: (text: string, attachments: Attachment[]) => boolean | void;
   onStop?: () => void;
   onCompactContext?: () => boolean;
+  /** Runs a `!` command in the session's folder; false keeps the draft. */
+  onRunShellCommand?: (command: string) => boolean;
   onPlaceInFolder?: (target: SessionFolderTarget) => void;
   onDeleteQueuedMessage?: (messageId: string) => void;
   onEditQueuedMessage?: (messageId: string, text: string) => void;
@@ -393,6 +396,7 @@ export function Composer({
   onSaveDraft,
   onStop,
   onCompactContext,
+  onRunShellCommand,
   onPlaceInFolder,
   onDeleteQueuedMessage,
   onEditQueuedMessage,
@@ -1373,6 +1377,27 @@ export function Composer({
       setCreatingSkill(false);
       setCreateError(null);
       syncHasValue("", attachmentsRef.current);
+      return;
+    }
+
+    const shellCommand = consumeShellCommand(value);
+    if (
+      shellCommand &&
+      onRunShellCommand &&
+      attachmentsRef.current.length === 0
+    ) {
+      if (!onRunShellCommand(shellCommand) || !ref.current) return;
+      pasteGenerationRef.current += 1;
+      ref.current.value = "";
+      ref.current.style.height = "auto";
+      setDraft("");
+      onDraftChange?.("");
+      setPlusOpen(false);
+      setSlash(null);
+      setMention(null);
+      setCreatingSkill(false);
+      setCreateError(null);
+      syncHasValue("", []);
       return;
     }
 

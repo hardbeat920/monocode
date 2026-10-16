@@ -108,6 +108,7 @@ type Shared = {
   onRemoveDraft: (sessionId: string, draftBlockId: string) => boolean | void;
   onStop: (sessionId: string) => void;
   onCompactContext: (sessionId: string) => boolean;
+  onRunShellCommand: (sessionId: string, command: string) => boolean;
   onPlaceSessionInFolder: (
     sessionId: string,
     target: SessionFolderTarget,
@@ -239,6 +240,7 @@ function PaneTreeComponent({
   onSubmit,
   onStop,
   onCompactContext,
+  onRunShellCommand,
   onPlaceSessionInFolder,
   onDeleteQueuedMessage,
   onEditQueuedMessage,
@@ -530,6 +532,7 @@ function PaneTreeComponent({
                   onSubmit={onSubmit}
                   onStop={onStop}
                   onCompactContext={onCompactContext}
+                  onRunShellCommand={onRunShellCommand}
                   onPlaceSessionInFolder={onPlaceSessionInFolder}
                   onDeleteQueuedMessage={onDeleteQueuedMessage}
                   onEditQueuedMessage={onEditQueuedMessage}
