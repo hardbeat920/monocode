@@ -1170,14 +1170,22 @@ export function contextUsedFromAssistant(
  * of `usage.iterations` is what actually sits in the window. `modelUsage`
  * carries the window itself, which is why we let the CLI tell us rather than
  * keeping a model table in sync.
+ *
+ * Routed (non-Anthropic) providers leave `usage.iterations` empty while the
+ * top-level usage still sums the whole turn. In that case we report only the
+ * window and keep the level from the last main-loop assistant message, which
+ * the caller already emitted via `contextUsedFromAssistant`.
  */
 export function contextFromResult(
   rec: Record<string, unknown>,
 ): { used?: number; window?: number } | undefined {
   const usage = asRecord(rec.usage);
-  const iterations = Array.isArray(usage?.iterations) ? usage.iterations : [];
+  const hasIterations = Array.isArray(usage?.iterations);
+  const iterations = hasIterations ? (usage?.iterations as unknown[]) : [];
   const last = asRecord(iterations[iterations.length - 1]);
-  const used = contextUsedFromUsage(last ?? usage);
+  const used = hasIterations
+    ? contextUsedFromUsage(last)
+    : contextUsedFromUsage(usage);
 
   let window: number | undefined;
   const modelUsage = asRecord(rec.modelUsage);
