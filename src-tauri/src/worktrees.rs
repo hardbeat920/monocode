@@ -370,7 +370,7 @@ fn checkout_state_matches(source: &Path, target: &Path) -> bool {
     })
 }
 
-fn create_seeded(root: &Path, branch: &str) -> Result<Worktree, String> {
+fn create_seeded(root: &Path, folder: Option<&Path>, branch: &str) -> Result<Worktree, String> {
     if let Some(tree) = list(root)?
         .into_iter()
         .find(|tree| tree.branch.as_deref() == Some(branch))
@@ -394,7 +394,7 @@ fn create_seeded(root: &Path, branch: &str) -> Result<Worktree, String> {
             ));
         }
     }
-    let tree = create(root, None, branch, "HEAD", branch_exists)?;
+    let tree = create(root, folder, branch, "HEAD", branch_exists)?;
     if let Err(error) = copy_checkout_state(root, Path::new(&tree.path)) {
         let _ = remove(root, Path::new(&tree.path), true);
         if !branch_exists {
@@ -412,10 +412,17 @@ fn create_seeded(root: &Path, branch: &str) -> Result<Worktree, String> {
 pub async fn git_orchestration_worktree_create(
     cwd: String,
     branch: String,
+    folder: Option<String>,
 ) -> Result<Worktree, String> {
-    tauri::async_runtime::spawn_blocking(move || create_seeded(&expand_home(&cwd), branch.trim()))
-        .await
-        .map_err(|error| error.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = expand_home(&cwd);
+        let folder = folder.map(|folder| expand_home(&folder));
+        let folder = folder.as_deref();
+        let branch = branch.trim();
+        create_seeded(&root, folder, branch)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 fn rename_branch(root: &Path, path: &Path, branch: &str) -> Result<Worktree, String> {
@@ -922,7 +929,7 @@ mod tests {
         std::fs::write(root.join("untracked.txt"), "lead new\n").unwrap();
         std::fs::remove_file(root.join("deleted.txt")).unwrap();
 
-        let tree = create_seeded(&root, "mc/orch-testworker").unwrap();
+        let tree = create_seeded(&root, None, "mc/orch-testworker").unwrap();
         let worker = Path::new(&tree.path);
         assert_eq!(
             std::fs::read_to_string(worker.join("tracked.txt")).unwrap(),
@@ -934,12 +941,14 @@ mod tests {
         );
         assert!(!worker.join("deleted.txt").exists());
         assert_eq!(
-            create_seeded(&root, "mc/orch-testworker").unwrap().path,
+            create_seeded(&root, None, "mc/orch-testworker")
+                .unwrap()
+                .path,
             tree.path
         );
 
         std::fs::write(root.join("tracked.txt"), "later lead edit\n").unwrap();
-        assert!(create_seeded(&root, "mc/orch-testworker").is_err());
+        assert!(create_seeded(&root, None, "mc/orch-testworker").is_err());
         assert_eq!(
             std::fs::read_to_string(worker.join("tracked.txt")).unwrap(),
             "lead dirty\n"

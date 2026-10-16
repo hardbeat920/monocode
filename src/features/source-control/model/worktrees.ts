@@ -58,9 +58,11 @@ export async function createOrchestrationWorktree(
   cwd: string,
   branch: string,
 ) {
+  const { defaultRoot } = await listWorktrees(cwd);
   const tree = await invoke<Worktree>("git_orchestration_worktree_create", {
     cwd,
     branch,
+    folder: defaultRoot,
   });
   notifyGitChanged();
   return tree;
