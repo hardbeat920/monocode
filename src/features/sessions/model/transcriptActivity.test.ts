@@ -1587,6 +1587,40 @@ describe("foldableWork", () => {
       ),
     ).toBeUndefined();
   });
+
+  it("keeps both messages of a turn a Stop hook continued", () => {
+    // A hook asked for one more line after the agent had answered; the
+    // continuation produced reasoning, then the line. With no tools in
+    // between there is nothing to put away, so the answer it interrupted
+    // stays visible in the order it was said.
+    const turn = items([
+      { id: "u", role: "user", text: "Summarize the report." },
+      { id: "a1", role: "assistant", text: "The complete answer." },
+      thought("r1"),
+      { id: "a2", role: "assistant", text: "One more short line." },
+    ]);
+    expect(foldableWork(turn)).toBeUndefined();
+  });
+
+  it("still folds when the continuation ran tools", () => {
+    const turn = items([
+      { id: "u", role: "user", text: "go" },
+      note("n1", "Checking the other half now."),
+      shell("c1"),
+      { id: "a1", role: "assistant", text: "The complete answer." },
+      thought("r1"),
+      shell("c2"),
+      { id: "a2", role: "assistant", text: "One more short line." },
+    ]);
+    const fold = foldableWork(turn)!;
+    expect(foldedBlocks(turn, fold).map((block) => block.id)).toEqual([
+      "n1",
+      "c1",
+      "a1",
+      "r1",
+      "c2",
+    ]);
+  });
 });
 
 describe("lastActivityIndex", () => {

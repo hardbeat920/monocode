@@ -1134,6 +1134,10 @@ export type WorkFold = { start: number; end: number };
  * The message the agent yielded with, while work it left in the background
  * was still running, is its answer to the prompt. Whatever a finished task
  * wakes it up to say afterwards comes below that answer, not in its place.
+ *
+ * A run of reasoning or notes alone cannot carry the fold: a turn the agent
+ * continued after answering — a Stop hook, for example — has no work to put
+ * away, so the message it interrupted stays visible in the order it was said.
  */
 export function foldableWork(items: TurnItem[]): WorkFold | undefined {
   let end = -1;
@@ -1141,7 +1145,7 @@ export function foldableWork(items: TurnItem[]): WorkFold | undefined {
   for (let index = yieldedAt(items) - 1; index >= 0; index -= 1) {
     const item = items[index];
     if (item.type === "activity") {
-      if (answered && isFoldableItem(item)) {
+      if (answered && foldsWork(item)) {
         end = index;
         break;
       }
@@ -1155,6 +1159,15 @@ export function foldableWork(items: TurnItem[]): WorkFold | undefined {
   let start = end;
   while (start > 0 && isFoldableItem(items[start - 1])) start -= 1;
   return { start, end };
+}
+
+/** The run put calls away, not just the agent speaking over itself. */
+function foldsWork(item: TurnItem): boolean {
+  return (
+    item.type === "activity" &&
+    isFoldableItem(item) &&
+    item.blocks.some(isToolBlock)
+  );
 }
 
 /**
