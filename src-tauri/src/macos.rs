@@ -623,6 +623,58 @@ thread_local! {
         const { RefCell::new(None) };
 }
 
+struct QuitEventTargetIvars {
+    app: AppHandle,
+}
+
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[name = "MonoCodeQuitEventTarget"]
+    #[ivars = QuitEventTargetIvars]
+    struct QuitEventTarget;
+
+    impl QuitEventTarget {
+        #[unsafe(method(handleQuitEvent:withReplyEvent:))]
+        fn handle_quit_event(&self, _event: Option<&NSObject>, _reply: Option<&NSObject>) {
+            crate::window::request_quit(&self.ivars().app);
+        }
+    }
+);
+
+thread_local! {
+    static QUIT_EVENT_TARGET: RefCell<Option<Retained<QuitEventTarget>>> =
+        const { RefCell::new(None) };
+}
+
+/// The Quit Apple Event (Dock > Quit, `osascript -e 'quit app "MonoCode"'`,
+/// logout) is handled by AppKit, which calls `terminate:` on the spot: no
+/// busy-turn prompt, and nothing the ⌘Q path saves first. Route it into that
+/// path instead. Must run after launch (`RunEvent::Ready`): AppKit installs
+/// its own handler in `finishLaunching`, which would replace one set earlier.
+pub(crate) fn route_quit_event(app: &AppHandle) {
+    if MainThreadMarker::new().is_none() {
+        return;
+    }
+    let target = QuitEventTarget::alloc().set_ivars(QuitEventTargetIvars { app: app.clone() });
+    let target: Retained<QuitEventTarget> = unsafe { msg_send![super(target), init] };
+    // kCoreEventClass / kAEQuitApplication.
+    let event_class = u32::from_be_bytes(*b"aevt");
+    let event_id = u32::from_be_bytes(*b"quit");
+    unsafe {
+        let manager: Retained<NSObject> =
+            msg_send![objc2::class!(NSAppleEventManager), sharedAppleEventManager];
+        let _: () = msg_send![
+            &*manager,
+            setEventHandler: &*target,
+            andSelector: sel!(handleQuitEvent:withReplyEvent:),
+            forEventClass: event_class,
+            andEventID: event_id
+        ];
+    }
+    // The event manager does not retain its handler.
+    QUIT_EVENT_TARGET.with(|slot| *slot.borrow_mut() = Some(target));
+}
+
 /// Since macOS 12, `NSDockTile` badge updates are ignored unless the app has
 /// requested `UNUserNotificationCenter` authorization with the badge option.
 /// Must run on the main thread after launch (`RunEvent::Ready`), not in setup.

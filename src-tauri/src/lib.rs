@@ -649,6 +649,7 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             {
                 macos::request_badge_authorization();
+                macos::route_quit_event(handle);
                 notifications::install_delegate(handle);
                 #[cfg(debug_assertions)]
                 macos::prefer_bundle_dock_icon();
