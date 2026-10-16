@@ -2813,14 +2813,13 @@ fn git_selected_context_for(root: &Path, paths: &[String]) -> Result<GitStagedCo
     directory.create(&index_dir).map_err(|e| e.to_string())?;
     let index = GitSelectionIndex(index_dir);
     let run = |args: &[&str]| -> Result<String, String> {
-        let output = git_cmd()
+        let output = git_cmd_on(crate::harness::gui_search_path())
             .arg("--literal-pathspecs")
             .arg("-C")
             .arg(root)
             .args(args)
             .env("GIT_INDEX_FILE", index.0.join("index"))
             .env("GIT_TERMINAL_PROMPT", "0")
-            .env("PATH", crate::harness::gui_search_path())
             .output()
             .map_err(|e| e.to_string())?;
         if !output.status.success() {
@@ -4557,24 +4556,25 @@ pub(crate) fn resolve_repo_path(root: &Path, relative: &str) -> Result<String, S
 /// checkouts all run `git-lfs`, which a Finder launch's bare PATH lacks. The
 /// cached search path finds it without waiting on the login shell.
 fn git_cmd() -> Command {
-    let mut cmd = Command::new("git");
-    crate::background_work::configure_child(&mut cmd);
+    git_cmd_on(crate::harness::cached_gui_search_path())
+}
+
+fn git_cmd_on(path: String) -> Command {
+    let mut cmd = crate::harness::background_command_on_path("git", path);
     crate::hide_window_console(&mut cmd);
-    cmd.env("PATH", crate::harness::cached_gui_search_path());
     cmd
 }
 
 fn git_cmd_for_args_with_path(args: &[&str], gui_path: impl FnOnce() -> String) -> Command {
-    let mut cmd = git_cmd();
     let args = args.strip_prefix(&["--literal-pathspecs"]).unwrap_or(args);
     if matches!(
         args.first().copied(),
         Some("commit" | "push" | "pull" | "fetch" | "clone")
     ) {
         // Signers, hooks, and credential helpers may only be on the login-shell PATH.
-        cmd.env("PATH", gui_path());
+        return git_cmd_on(gui_path());
     }
-    cmd
+    git_cmd()
 }
 
 fn git_cmd_for_args(args: &[&str]) -> Command {
@@ -9399,6 +9399,8 @@ mod tests {
     /// git-lfs and other filters live in Homebrew dirs a Finder launch lacks.
     #[test]
     fn read_only_git_cmd_path_adds_fixed_dirs_to_inherited_path() {
+        // A bare `git` with PATH overridden makes std fork the whole app.
+        assert!(Path::new(git_cmd().get_program()).is_absolute());
         let path = git_cmd_path(&git_cmd());
         assert!(path.contains(&PathBuf::from("/opt/homebrew/bin")));
         assert!(path.contains(&PathBuf::from("/usr/local/bin")));
