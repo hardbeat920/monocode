@@ -20,12 +20,17 @@ vi.mock("@tauri-apps/api/window", () => ({
 
 import {
   harnessLoginArgs,
+  isClaudeAuthFailureText,
   isHarnessAuthError,
+  latestTurnHarnessAuthFailure,
   latestTurnNeedsHarnessLogin,
   loginHarness,
   resetHarnessLoginState,
   supportsHarnessLogin,
 } from "./auth";
+
+const CLAUDE_EXPIRED =
+  "Failed to authenticate: OAuth session expired and could not be refreshed";
 
 beforeEach(() => {
   resetHarnessLoginState();
@@ -52,6 +57,72 @@ describe("harness login", () => {
     ).toBe(true);
     expect(isHarnessAuthError("Claude sign-in expired")).toBe(true);
     expect(isHarnessAuthError("Provider request timed out")).toBe(false);
+  });
+
+  it("recognizes Claude Code's own sign-in failures", () => {
+    for (const text of [
+      CLAUDE_EXPIRED,
+      "Invalid API key · Please run /login",
+      "OAuth token revoked · Please run /login",
+      'Failed to authenticate. API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired."}}',
+    ]) {
+      expect(isHarnessAuthError(text), text).toBe(true);
+      expect(isClaudeAuthFailureText(text), text).toBe(true);
+    }
+  });
+
+  it("does not read a reply about authentication as a sign-in failure", () => {
+    for (const text of [
+      "Failed to authenticate errors usually mean the token in .env is stale.",
+      'If you see "Failed to authenticate: OAuth session expired", run /login.',
+      `${CLAUDE_EXPIRED}\n\nHere is how the refresh flow works in this repo.`,
+      "The login handler returns 401 when the session cookie is missing.",
+    ]) {
+      expect(isClaudeAuthFailureText(text), text).toBe(false);
+    }
+  });
+
+  it("treats a Claude sign-in failure as the turn's error only when it is the whole reply", () => {
+    const user = { role: "user" as const, text: "Fix the build" };
+    const reply = { role: "assistant" as const, text: CLAUDE_EXPIRED };
+    expect(latestTurnHarnessAuthFailure([user, reply], "claude")).toBe(reply);
+    expect(latestTurnNeedsHarnessLogin([user, reply], "claude")).toBe(true);
+    // Other providers never fall back to reading reply text.
+    expect(latestTurnNeedsHarnessLogin([user, reply], "codex")).toBe(false);
+    expect(latestTurnNeedsHarnessLogin([user, reply])).toBe(false);
+    // Still streaming, or one reply among other work, is not a failed turn.
+    expect(
+      latestTurnNeedsHarnessLogin(
+        [user, { ...reply, streaming: true }],
+        "claude",
+      ),
+    ).toBe(false);
+    expect(
+      latestTurnNeedsHarnessLogin(
+        [user, { role: "tool", text: "Read package.json" }, reply],
+        "claude",
+      ),
+    ).toBe(false);
+    expect(
+      latestTurnNeedsHarnessLogin(
+        [user, { role: "assistant", text: "Looking at it." }, reply],
+        "claude",
+      ),
+    ).toBe(false);
+    // An earlier turn's failure does not carry over.
+    expect(
+      latestTurnNeedsHarnessLogin(
+        [user, reply, { role: "user", text: "Try again" }],
+        "claude",
+      ),
+    ).toBe(false);
+    // Status rows do not count as output.
+    expect(
+      latestTurnNeedsHarnessLogin(
+        [user, { role: "system", text: "Compacted context" }, reply],
+        "claude",
+      ),
+    ).toBe(true);
   });
 
   it("only carries an authentication failure through its current turn", () => {

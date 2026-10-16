@@ -167,6 +167,31 @@ export function lastTurnRecall(session: Session): LastTurnRecall | null {
   };
 }
 
+export type LastTurnRetry = LastTurnRecall & {
+  intent?: Block["intent"];
+};
+
+/**
+ * The latest message as the user sent it, to send again after its turn
+ * failed. Turns that carried a card or review context are left out: their
+ * text alone would not repeat the request.
+ */
+export function lastTurnRetry(session: Session): LastTurnRetry | null {
+  const block = lastUserTurnBlock(session.blocks);
+  if (
+    !block ||
+    block.secondOpinion ||
+    block.noteCard ||
+    block.ciContext ||
+    block.handoff
+  ) {
+    return null;
+  }
+  const recall = lastTurnRecall(session);
+  if (!recall) return null;
+  return block.intent ? { ...recall, intent: block.intent } : recall;
+}
+
 export function canEditLastTurn(session: Session): boolean {
   if (session.inboxAsk || session.busy || session.pendingQuestion) return false;
   if (session.editingQueuedMessageId) return false;

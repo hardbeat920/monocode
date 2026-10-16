@@ -7,7 +7,9 @@ import { harnessLoginArgs } from "./authSupport";
 
 export {
   harnessLoginArgs,
+  isClaudeAuthFailureText,
   isHarnessAuthError,
+  latestTurnHarnessAuthFailure,
   latestTurnNeedsHarnessLogin,
   supportsHarnessLogin,
 } from "./authSupport";

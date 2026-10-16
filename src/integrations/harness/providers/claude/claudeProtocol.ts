@@ -26,6 +26,7 @@ import {
   isAgentToolName,
   titleFromToolInput,
 } from "../../core/preview";
+import { isHarnessAuthError } from "../../core/authSupport";
 import { streamTextDelta } from "../../core/streamText";
 import type { ApprovalDecision, HarnessEvent } from "../../core/types";
 
@@ -529,6 +530,22 @@ export function isUsageLimitResult(rec: Record<string, unknown>): boolean {
   return [stringField(rec, "result") ?? "", ...errors].some((text) =>
     USAGE_LIMIT_TEXT.test(text),
   );
+}
+
+/**
+ * Claude reports a failed sign-in, such as an expired OAuth session, as a
+ * synthetic assistant message tagged `authentication_failed`. Returns its text
+ * as a provider error the transcript recognizes as a sign-in failure.
+ */
+export function authFailureFromAssistant(
+  rec: Record<string, unknown>,
+): string | null {
+  if (stringField(rec, "error") !== "authentication_failed") return null;
+  const text = assistantTextBlocks(rec).join("").trim();
+  if (isHarnessAuthError(text)) return text;
+  return text
+    ? `Claude Code is not signed in.\n\n${text}`
+    : "Claude Code is not signed in.";
 }
 
 export function streamDeltaFromEvent(

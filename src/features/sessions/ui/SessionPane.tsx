@@ -24,6 +24,7 @@ import { sessionEditPaths } from "../model/checkpointEdits";
 import { PromptOutline } from "./PromptOutline";
 import {
   canCompactHarnessContext,
+  supportsHarnessLogin,
   type ApprovalDecision,
   type UserQuestionReply,
 } from "../../../integrations/harness";
@@ -104,7 +105,13 @@ import { isOpus55Model } from "../model/opusWelcome";
 import { AstraWelcome } from "./AstraWelcome";
 import { OpusWelcome } from "./OpusWelcome";
 import { projectKey } from "../../../shared/lib/paths";
-import { canEditLastTurn, lastTurnRecall } from "../model/editLastTurn";
+import {
+  canEditLastTurn,
+  lastTurnRecall,
+  lastTurnRetry,
+} from "../model/editLastTurn";
+import { signInProvider } from "../../providers/model/providerSignIn";
+import { DEFAULT_PROVIDER_ACCOUNT_ID } from "../../providers/model/providerAccounts";
 import {
   loadProjectChatBackgroundSettings,
   projectChatBackgroundImageRevision,
@@ -397,6 +404,20 @@ const LocalSessionPane = memo(function LocalSessionPane({
   const editLastTurnSupported =
     !remote && !monoForSession(session.id) && canEditLastTurn(session);
   const turnRecall = editLastTurnSupported ? lastTurnRecall(session) : null;
+  // A turn that failed on provider sign-in offers it under the turn. Only for
+  // local conversations: a Mono's chat keeps the sign-in dialog, and a remote
+  // session's provider runs on its host.
+  const providerSignIn =
+    !remote &&
+    !monoForSession(session.id) &&
+    supportsHarnessLogin(session.harness)
+      ? () =>
+          signInProvider(
+            session.harness,
+            session.providerAccountId ?? DEFAULT_PROVIDER_ACCOUNT_ID,
+          )
+      : undefined;
+  const signInRetry = providerSignIn ? lastTurnRetry(session) : null;
   const draftBlock = sessionDraftBlock(session);
   useSyncExternalStore(
     subscribeProjectChatBackground,
@@ -1060,6 +1081,22 @@ const LocalSessionPane = memo(function LocalSessionPane({
                         ? () => {
                             onFocus(session.id);
                             recallLastTurnRef.current?.();
+                          }
+                        : undefined
+                    }
+                    onProviderSignIn={providerSignIn}
+                    onRetryAfterSignIn={
+                      signInRetry
+                        ? () => {
+                            onFocus(session.id);
+                            onSubmit(
+                              session.id,
+                              signInRetry.text,
+                              signInRetry.attachments,
+                              signInRetry.intent
+                                ? { intent: signInRetry.intent }
+                                : undefined,
+                            );
                           }
                         : undefined
                     }

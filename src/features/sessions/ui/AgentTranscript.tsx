@@ -65,8 +65,10 @@ import { monoReactionBlocks } from "../../monos/model/monoReaction";
 import type { ApprovalDecision } from "../../../integrations/harness";
 import {
   isHarnessAuthError,
+  latestTurnHarnessAuthFailure,
   supportsHarnessLogin,
 } from "../../../integrations/harness/core/authSupport";
+import { ProviderSignInNotice } from "./ProviderSignInNotice";
 import {
   isEditTool,
   isReadTool,
@@ -253,6 +255,13 @@ type Props = {
   ) => void;
   /** Session-level output shown after the latest reply and before its action row. */
   latestTurnAccessory?: ReactNode;
+  /**
+   * Signs in to the provider from a notice under a latest turn that failed on
+   * authentication, in place of the provider's error.
+   */
+  onProviderSignIn?: () => Promise<void>;
+  /** Sends the failed turn's message again once that sign-in succeeds. */
+  onRetryAfterSignIn?: () => void;
   /** False while another tab is in front; local transcript state is retained. */
   visible?: boolean;
   /** Kept mounted after its pane closed. Showing it again counts as a new visit. */
@@ -312,6 +321,8 @@ function AgentTranscriptComponent({
   onRevealReady,
   onNavigateReady,
   latestTurnAccessory,
+  onProviderSignIn,
+  onRetryAfterSignIn,
 
   visible = true,
   parked = false,
@@ -319,24 +330,34 @@ function AgentTranscriptComponent({
   managed = false,
 }: Props) {
   const isMonoChat = !!agentMascot;
-  const blocks = useMemo(() => {
+  const signInOffered = !!onProviderSignIn;
+  const { blocks, authFailure } = useMemo(() => {
     // A Mono's reaction sits on the message it answers, not in a bubble.
     const chatBlocks = isMonoChat
       ? monoReactionBlocks(sourceBlocks)
       : sourceBlocks;
-    if (!harness || !supportsHarnessLogin(harness)) return chatBlocks;
+    if (!harness || !supportsHarnessLogin(harness)) {
+      return { blocks: chatBlocks, authFailure: undefined };
+    }
+    // The sign-in notice under the turn shows the failure's text instead.
+    const authFailure = signInOffered
+      ? latestTurnHarnessAuthFailure(chatBlocks, harness)
+      : undefined;
     const visibleBlocks = chatBlocks.filter(
       (block) =>
+        block !== authFailure &&
         !(
           block.role === "system" &&
           block.notice === "error" &&
           isHarnessAuthError(block.text)
         ),
     );
-    return visibleBlocks.length === chatBlocks.length
-      ? chatBlocks
-      : visibleBlocks;
-  }, [harness, isMonoChat, sourceBlocks]);
+    return {
+      blocks:
+        visibleBlocks.length === chatBlocks.length ? chatBlocks : visibleBlocks,
+      authFailure,
+    };
+  }, [harness, isMonoChat, signInOffered, sourceBlocks]);
   const editableUserBlockId = useMemo(
     () => lastUserTurnBlock(blocks)?.id,
     [blocks],
@@ -1582,6 +1603,20 @@ function AgentTranscriptComponent({
                     />
                   ))}
                 </div>
+              ) : null}
+              {isLastTurn &&
+              settled &&
+              authFailure &&
+              harness &&
+              onProviderSignIn &&
+              !parked ? (
+                <ProviderSignInNotice
+                  key={authFailure.id}
+                  harness={harness}
+                  message={authFailure.text}
+                  onSignIn={onProviderSignIn}
+                  onRetry={onRetryAfterSignIn}
+                />
               ) : null}
               {/* The accessory keeps the pane's props, which go stale once parked. */}
               {isLastTurn && latestTurnAccessory && !parked

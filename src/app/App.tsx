@@ -1297,7 +1297,7 @@ function Workspace({
       sessions.flatMap((session) => {
         if (
           !supportsHarnessLogin(session.harness) ||
-          !latestTurnNeedsHarnessLogin(session.blocks)
+          !latestTurnNeedsHarnessLogin(session.blocks, session.harness)
         ) {
           return [];
         }
@@ -2024,7 +2024,7 @@ function Workspace({
       id: active.id,
       harness: active.harness,
       model: active.model,
-      authRequired: latestTurnNeedsHarnessLogin(active.blocks),
+      authRequired: latestTurnNeedsHarnessLogin(active.blocks, active.harness),
       providerAccountId:
         active.providerAccountId ??
         (active.blocks.some((block) => block.role === "user")
@@ -2041,8 +2041,10 @@ function Workspace({
   const activeProviderSignInRequest = useMemo(() => {
     if (
       !active ||
+      // A local conversation offers sign-in under the failed turn instead.
+      (!isMonoSession(active.id) && !remoteProjectFor(active.cwd)) ||
       !supportsHarnessLogin(active.harness) ||
-      !latestTurnNeedsHarnessLogin(active.blocks)
+      !latestTurnNeedsHarnessLogin(active.blocks, active.harness)
     ) {
       return null;
     }

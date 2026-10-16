@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyHarnessEvent } from "../../core/apply";
 import { newSession } from "../../../../features/sessions/model/session";
+import { latestTurnNeedsHarnessLogin } from "../../core/authSupport";
 import {
   foldableWork,
   foldedBlocks,
@@ -860,6 +861,58 @@ describe("claude assistant message boundaries", () => {
       { type: "message.delta", text: progress },
       { type: "message.delta", text: update },
     ]);
+  });
+});
+
+describe("claude sign-in failures", () => {
+  it("reports an authentication_failed reply as a sign-in error", async () => {
+    const { events, turn } = await startTurn("s1");
+    const text =
+      "Failed to authenticate: OAuth session expired and could not be refreshed";
+    emit({
+      type: "assistant",
+      session_id: "sess_1",
+      error: "authentication_failed",
+      message: { model: "<synthetic>", content: [{ type: "text", text }] },
+    });
+    emit({
+      type: "result",
+      subtype: "success",
+      session_id: "sess_1",
+      is_error: true,
+      result: text,
+    });
+    await turn;
+
+    expect(events.some((event) => event.type === "message.delta")).toBe(false);
+    expect(events.filter((event) => event.type === "session.error")).toEqual([
+      { type: "session.error", message: text },
+    ]);
+    const session = events.reduce(
+      applyHarnessEvent,
+      newSession("claude", "/repo"),
+    );
+    expect(latestTurnNeedsHarnessLogin(session.blocks)).toBe(true);
+  });
+
+  it("keeps Claude's wording recognizable when it does not name sign-in", async () => {
+    const { events, turn } = await startTurn("s1");
+    emit({
+      type: "assistant",
+      session_id: "sess_1",
+      error: "authentication_failed",
+      message: {
+        model: "<synthetic>",
+        content: [{ type: "text", text: "API Error: 401" }],
+      },
+    });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+
+    expect(events).toContainEqual({
+      type: "session.error",
+      message: "Claude Code is not signed in.\n\nAPI Error: 401",
+    });
   });
 });
 
