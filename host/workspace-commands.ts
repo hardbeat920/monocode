@@ -97,6 +97,174 @@ const alreadyExists = (name: string) =>
 
 type Located = { root: string; relative: string };
 
+export type AzurePrTarget = {
+  organizationUrl: string;
+  project: string;
+  repo: string;
+};
+
+const percentDecode = (value: string): string => {
+  try {
+    return decodeURIComponent(value).trim().replace(/\.git$/, "");
+  } catch {
+    return value.trim().replace(/\.git$/, "");
+  }
+};
+
+const validRepoParts = (project: string, repo: string): boolean =>
+  [project, repo].every(
+    (part) =>
+      part.length > 0 &&
+      part !== "." &&
+      part !== ".." &&
+      !part.includes("/") &&
+      !part.includes("?") &&
+      !part.includes("#") &&
+      !part.includes("\\") &&
+      ![...part].some((char) => char < " "),
+  );
+
+/** Parses an Azure DevOps git remote into organization, project and repository.
+ * Returns null for non-Azure remotes. Mirrors the Rust backend's
+ * `parse_azure_remote` so local and remote projects resolve the same target. */
+export function parseAzureDevOpsRemote(remote: string): AzurePrTarget | null {
+  const trimmed = remote.trim();
+  if (!trimmed) return null;
+  // SSH without scheme: git@ssh.dev.azure.com:v3/{org}/{project}/{repo}
+  // or on-premises scp-style user@host:{collection/...}/{project}/_git/{repo}.
+  if (!trimmed.includes("://") && trimmed.includes("@")) {
+    const colon = trimmed.indexOf(":");
+    if (colon > 0) {
+      let path = trimmed.slice(colon + 1);
+      path = path.startsWith("v3/") ? path.slice(3) : path;
+      const parts = path.split("/").filter(Boolean);
+      if (parts.length >= 3 && trimmed.includes("dev.azure.com")) {
+        const project = percentDecode(parts[1]!);
+        const repo = percentDecode(parts.slice(2).join("/")).split("/").pop() ?? "";
+        if (project && repo)
+          return {
+            organizationUrl: `https://dev.azure.com/${parts[0]!.toLowerCase()}`,
+            project,
+            repo,
+          };
+      }
+      const hostBase = trimmed.slice(0, colon).split("@").pop()?.trim().toLowerCase() ?? "";
+      if (hostBase) {
+        // A leading numeric segment is the SSH port (host:port/path).
+        let host = hostBase;
+        let scpPath = path;
+        const portSplit = scpPath.indexOf("/");
+        const maybePort = portSplit < 0 ? scpPath : scpPath.slice(0, portSplit);
+        if (/^\d+$/.test(maybePort)) {
+          host = `${host}:${maybePort}`;
+          scpPath = portSplit < 0 ? "" : scpPath.slice(portSplit + 1);
+        }
+        const segments = scpPath.split("/").filter(Boolean).map(percentDecode);
+        const gitIndex = segments.findIndex((segment) => segment.toLowerCase() === "_git");
+        if (gitIndex >= 2 && gitIndex + 1 < segments.length) {
+          const project = segments[gitIndex - 1]!;
+          const repo = segments.slice(gitIndex + 1).join("/");
+          const orgPath = segments.slice(0, gitIndex - 1).join("/");
+          if (orgPath && validRepoParts(project, repo))
+            return {
+              organizationUrl: `https://${host}/${orgPath}`.toLowerCase(),
+              project,
+              repo,
+            };
+        }
+      }
+    }
+  }
+  // HTTPS (credentials stripped first).
+  const schemeSplit = trimmed.split("://");
+  if (schemeSplit.length < 2) return null;
+  const afterAuth = schemeSplit[1]!.split("@").pop() ?? "";
+  const slash = afterAuth.indexOf("/");
+  if (slash < 0) return null;
+  const authority = afterAuth.slice(0, slash).toLowerCase();
+  const segments = afterAuth
+    .slice(slash + 1)
+    .split("/")
+    .filter(Boolean)
+    .map(percentDecode);
+  const lowerAuthority = authority.toLowerCase();
+  if (lowerAuthority === "dev.azure.com") {
+    // {org}/{project}/_git/{repo}
+    if (segments.length >= 4 && segments[2]!.toLowerCase() === "_git") {
+      const project = segments[1]!;
+      const repo = segments.slice(3).join("/");
+      if (validRepoParts(project, repo))
+        return {
+          organizationUrl: `https://dev.azure.com/${segments[0]!.toLowerCase()}`,
+          project,
+          repo,
+        };
+    }
+    return null;
+  }
+  if (lowerAuthority.endsWith(".visualstudio.com")) {
+    // {project}/_git/{repo}
+    const org = lowerAuthority.slice(0, -".visualstudio.com".length);
+    if (segments.length >= 3 && segments[1]!.toLowerCase() === "_git") {
+      const project = segments[0]!;
+      const repo = segments.slice(2).join("/");
+      if (validRepoParts(project, repo))
+        return { organizationUrl: `https://dev.azure.com/${org}`, project, repo };
+    }
+    return null;
+  }
+  // On-premises or custom host: {collection...}/{project}/_git/{repo}
+  const gitIndex = segments.findIndex((segment) => segment.toLowerCase() === "_git");
+  if (gitIndex < 2 || gitIndex + 1 >= segments.length) return null;
+  const project = segments[gitIndex - 1]!;
+  const repo = segments.slice(gitIndex + 1).join("/");
+  const orgPath = segments.slice(0, gitIndex - 1).join("/");
+  if (!validRepoParts(project, repo)) return null;
+  return {
+    organizationUrl: `https://${lowerAuthority}/${orgPath}`.toLowerCase(),
+    project,
+    repo,
+  };
+}
+
+/** Canonical Azure Repos pull-request URL for a numeric PR id. Project and
+ * repository names are encoded so spaces or reserved characters (e.g. a
+ * literal `%2F` inside a name) cannot change the repository path. */
+export function azurePrWebUrl(target: AzurePrTarget, id: number): string {
+  return `${target.organizationUrl.replace(/\/+$/, "")}/${encodeURIComponent(target.project)}/_git/${encodeURIComponent(target.repo)}/pullrequest/${id}`;
+}
+
+/** Remote name in an `@{upstream}` abbrev ref (`origin/main` -> `origin`).
+ * Returns null for local-only upstreams, where `git push` uses push.default. */
+export function pushRemoteFromUpstream(upstream: string): string | null {
+  const slash = upstream.trim().indexOf("/");
+  if (slash <= 0) return null;
+  return upstream.trim().slice(0, slash);
+}
+
+/** Whether CLI subprocesses need a shell. On Windows the Azure CLI ships
+ * as an `az.cmd` wrapper, which `execFile` cannot launch directly without
+ * a shell; `gh` is a real executable and works either way. */
+export function shouldUseShell(platform: string = process.platform): boolean {
+  return platform === "win32";
+}
+
+/** Pure push-remote selection mirroring `git push` (no upstream case):
+ * `branch.<name>.pushRemote`, then `remote.pushDefault`, then origin if
+ * present, else the first remote. Unknown configured names are ignored.
+ * The upstream remote, when present, is handled by the caller. */
+export function selectPushRemote(options: {
+  branchPushRemote: string;
+  pushDefault: string;
+  remotes: string[];
+}): string | null {
+  const { branchPushRemote, pushDefault, remotes } = options;
+  if (branchPushRemote && remotes.includes(branchPushRemote)) return branchPushRemote;
+  if (pushDefault && remotes.includes(pushDefault)) return pushDefault;
+  if (remotes.length === 0) return null;
+  return remotes.includes("origin") ? "origin" : remotes[0]!;
+}
+
 export class WorkspaceCommands {
   private roots = new Map<string, { at: number; roots: string[] }>();
   private rootsGeneration = 0;
@@ -583,14 +751,106 @@ export class WorkspaceCommands {
   }
 
   private async ghCommand(cwd: unknown, args: string[]): Promise<string> {
+    return this.cliCommand(cwd, "gh", args, {
+      GH_PROMPT_DISABLED: "1",
+      GIT_TERMINAL_PROMPT: "0",
+    });
+  }
+
+  private async cliCommand(
+    cwd: unknown,
+    bin: string,
+    args: string[],
+    env: Record<string, string>,
+  ): Promise<string> {
     const root = await this.gitRoot(cwd);
-    return (await exec("gh", args, {
+    return (await exec(bin, args, {
       cwd: root,
       timeout: 30_000,
       maxBuffer: 1024 * 1024,
       encoding: "utf8",
-      env: { ...process.env, GH_PROMPT_DISABLED: "1", GIT_TERMINAL_PROMPT: "0" },
+      shell: shouldUseShell(),
+      env: { ...process.env, ...env, GIT_TERMINAL_PROMPT: "0" },
     })).stdout.trim();
+  }
+
+  /** Remote `git push` would use: the upstream's remote, else
+   * `branch.<name>.pushRemote`, then `remote.pushDefault`, else origin if
+   * present, else the first remote. Mirrors the desktop backend so PR
+   * creation targets the same repository the branch pushes to. */
+  private async gitPushRemote(root: string): Promise<string | null> {
+    const upstream = await this.gitCommand(root, ["rev-parse", "--abbrev-ref", "@{upstream}"])
+      .then((output) => output.trim())
+      .catch(() => "");
+    if (upstream) return pushRemoteFromUpstream(upstream);
+    const [branch, pushDefault, remotes] = await Promise.all([
+      this.gitCommand(root, ["branch", "--show-current"])
+        .then((output) => output.trim())
+        .catch(() => ""),
+      this.gitCommand(root, ["config", "--get", "remote.pushDefault"])
+        .then((output) => output.trim())
+        .catch(() => ""),
+      this.gitCommand(root, ["remote"])
+        .then((output) => output.split("\n").map((name) => name.trim()).filter(Boolean))
+        .catch(() => [] as string[]),
+    ]);
+    if (remotes.length === 0) return null;
+    let branchPushRemote = "";
+    if (branch) {
+      branchPushRemote = await this.gitCommand(root, ["config", "--get", `branch.${branch}.pushRemote`])
+        .then((output) => output.trim())
+        .catch(() => "");
+    }
+    return selectPushRemote({ branchPushRemote, pushDefault, remotes });
+  }
+
+  /** Azure DevOps coordinates of the branch's push destination, or null when
+   * the push remote is not an Azure DevOps remote. Resolves the push URL
+   * (not the fetch URL) so `remote.<name>.pushurl` configurations target
+   * the repository that actually receives the push. */
+  private async azurePrTarget(root: string): Promise<AzurePrTarget | null> {
+    const remote = await this.gitPushRemote(root);
+    if (!remote) return null;
+    const url = await this.gitCommand(root, ["remote", "get-url", "--push", remote])
+      .then((output) => output.trim())
+      .catch(() => "");
+    if (!url) return null;
+    return parseAzureDevOpsRemote(url);
+  }
+
+  /** Creates the PR with the Azure CLI and returns its web URL. Throws when
+   * `az` is unavailable or creation fails, so the caller can fall back to `gh`.
+   * Uses a shell on Windows because the Azure CLI ships as an `az.cmd`
+   * wrapper, which `execFile` cannot launch directly. */
+  private async azurePrCreate(
+    root: string,
+    target: AzurePrTarget,
+    title: string,
+    body: string,
+    base: string,
+    head: string,
+  ): Promise<string> {
+    const output = await exec("az", [
+      "repos", "pr", "create",
+      "--organization", target.organizationUrl,
+      "--project", target.project,
+      "--repository", target.repo,
+      "--source-branch", head,
+      "--target-branch", base,
+      "--title", title,
+      "--description", body,
+      "--output", "json",
+    ], {
+      cwd: root,
+      timeout: 30_000,
+      maxBuffer: 1024 * 1024,
+      encoding: "utf8",
+      shell: shouldUseShell(),
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    }).then((result) => result.stdout.trim());
+    const id = Number((JSON.parse(output) as { pullRequestId?: unknown }).pullRequestId);
+    if (!Number.isInteger(id) || id <= 0) throw new Error("Azure DevOps did not return a pull request");
+    return azurePrWebUrl(target, id);
   }
 
   private async gitPrStatus(cwd: unknown) {
@@ -604,6 +864,22 @@ export class WorkspaceCommands {
   private async gitPrCreate(cwd: unknown, title: unknown, body: unknown, base: unknown, head: unknown) {
     if ([title, body, base, head].some((value) => typeof value !== "string" || value.length > 100_000))
       throw new Error("Invalid pull request");
+    const strings = [title, body, base, head] as string[];
+    if (!strings[0]!.trim() || !strings[2]!.trim() || !strings[3]!.trim())
+      throw new Error("Invalid pull request");
+    // Azure Repos checkouts use the Azure CLI; anything else (or an `az`
+    // failure) falls back to the GitHub CLI path.
+    const root = await this.gitRoot(cwd).catch(() => null);
+    if (root) {
+      const target = await this.azurePrTarget(root).catch(() => null);
+      if (target) {
+        try {
+          return await this.azurePrCreate(root, target, strings[0]!, strings[1]!, strings[2]!, strings[3]!);
+        } catch {
+          // Fall through to `gh`, matching the desktop backend fallback.
+        }
+      }
+    }
     return this.ghCommand(cwd, ["pr", "create", "--title", title as string, "--body", body as string, "--base", base as string, "--head", head as string]);
   }
 
