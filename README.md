@@ -27,6 +27,18 @@ Install and sign in to at least one supported agent first. See [provider setup](
 
 On macOS, open the DMG and drag MonoCode to Applications. On Windows, run the installer. See [Linux setup](docs/install.md) for dependencies and package instructions.
 
+### Nix, NixOS, and nix-darwin
+
+MonoCode includes a source-built Nix flake for x86_64 and ARM Linux and Apple Silicon macOS:
+
+```bash
+nix run github:hardbeat920/monocode
+# Or install in your user profile:
+nix profile add github:hardbeat920/monocode
+```
+
+See [Nix installation](docs/nix.md) for NixOS, nix-darwin, and Home Manager configuration.
+
 ## Get started
 
 Open a project folder, choose an agent, and send a message. Each tab is a session. Split panes to work with sessions side by side.
@@ -44,6 +56,7 @@ MonoCode is still early. If something breaks, [report a bug](https://github.com/
 
 - [Provider setup](docs/providers.md)
 - [Linux installation](docs/install.md)
+- [Nix installation](docs/nix.md)
 - [Agent access with /operator](docs/agent-access.md)
 - [Remote sessions, experimental](docs/remote-access.md)
 
