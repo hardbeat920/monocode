@@ -8,6 +8,13 @@ import {
   loadProjectChatBackgroundSettings,
   saveProjectChatBackgroundSettings,
 } from "../model/projectChatBackground";
+import { NEW_THREAD_BACKGROUND_EFFECT_DEFAULT } from "../../settings/model/appearance";
+
+vi.mock("../model/chatBackground", () => ({
+  pickAndSaveProjectChatBackground: vi.fn(async () => "/backgrounds/mono.png"),
+  clearProjectChatBackground: vi.fn(async () => {}),
+  projectChatBackgroundSrc: (path: string) => path,
+}));
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -50,7 +57,7 @@ afterEach(async () => {
 });
 
 describe("project background dialog", () => {
-  it("offers only the image when locked to a dimmed Haze", async () => {
+  it("lets a Mono change its stored effect and visibility with one control", async () => {
     saveProjectChatBackgroundSettings("mono:a", {
       path: "/backgrounds/mono.png",
       emptyOpacity: 0.24,
@@ -64,7 +71,7 @@ describe("project background dialog", () => {
         createElement(ProjectBackgroundDialog, {
           project: "mono:a",
           name: "MonoCrab",
-          locked: true,
+          mono: true,
           onClose: vi.fn(),
         }),
       ),
@@ -72,10 +79,179 @@ describe("project background dialog", () => {
     const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
     expect(dialog.textContent).toContain("Change image");
     expect(dialog.textContent).toContain("Remove background image");
-    expect(dialog.textContent).not.toContain("Background effect");
-    expect(dialog.querySelector('input[type="range"]')).toBeNull();
+    expect(dialog.textContent).toContain("Background effect");
+    expect(dialog.querySelectorAll('input[type="range"]')).toHaveLength(1);
     expect(dialog.querySelector('[role="radiogroup"]')).toBeNull();
     expect(dialog.querySelector(".gradient-blur-background")).not.toBeNull();
+    const visibility = dialog.querySelector<HTMLInputElement>(
+      'input[type="range"]',
+    )!;
+    expect(visibility.value).toBe("24");
+    expect(loadProjectChatBackgroundSettings("mono:a")?.effect).toBe(
+      "gradient-blur",
+    );
+    await act(async () =>
+      dialog
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Mono background effect: Haze"]',
+        )!
+        .click(),
+    );
+    const none = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+    ).find((option) => option.textContent === "None")!;
+    await act(async () => none.click());
+    expect(loadProjectChatBackgroundSettings("mono:a")?.effect).toBe("none");
+    const props = Object.entries(visibility).find(([key]) =>
+      key.startsWith("__reactProps"),
+    )![1];
+    await act(async () => props.onChange({ target: { value: "50" } }));
+    expect(loadProjectChatBackgroundSettings("mono:a")).toMatchObject({
+      emptyOpacity: 0.5,
+      sessionOpacity: 0.5,
+      scope: "all",
+      effect: "none",
+    });
+    expect(dialog.querySelector("img")?.style.opacity).toBe("0.5");
+  });
+
+  it("defaults a new Mono background to Haze at 24% and never falls back to the global image", async () => {
+    localStorage.setItem(
+      "monocode.chatBackgroundPath",
+      "/backgrounds/global.png",
+    );
+    localStorage.setItem("monocode.newThreadBackgroundEffect", "ascii");
+    localStorage.setItem("monocode.chatBackgroundEmptyOpacity", "0.6");
+    localStorage.setItem("monocode.chatBackgroundSessionOpacity", "0.5");
+    localStorage.setItem("monocode.chatBackgroundScope", "empty");
+    await act(async () =>
+      root.render(
+        createElement(ProjectBackgroundDialog, {
+          project: "mono:a",
+          name: "MonoCrab",
+          mono: true,
+          onClose: vi.fn(),
+        }),
+      ),
+    );
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(dialog.textContent).toContain("No background selected");
+    expect(dialog.querySelector("img")).toBeNull();
+    expect(
+      dialog.querySelector<HTMLInputElement>('input[type="range"]')?.value,
+    ).toBe("24");
+    const choose = Array.from(
+      dialog.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent === "Choose image")!;
+    await act(async () => choose.click());
+    const defaults = {
+      path: "/backgrounds/mono.png",
+      emptyOpacity: 0.24,
+      sessionOpacity: 0.24,
+      effect: "gradient-blur",
+      scope: "all",
+    };
+    expect(loadProjectChatBackgroundSettings("mono:a")).toEqual(defaults);
+    expect(
+      dialog.querySelector<HTMLElement>(".gradient-blur-background")?.style
+        .opacity,
+    ).toBe("0.24");
+    await act(async () =>
+      dialog
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Mono background effect: Haze"]',
+        )!
+        .click(),
+    );
+    const none = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+    ).find((option) => option.textContent === "None")!;
+    await act(async () => none.click());
+    const visibility = dialog.querySelector<HTMLInputElement>(
+      'input[type="range"]',
+    )!;
+    const props = Object.entries(visibility).find(([key]) =>
+      key.startsWith("__reactProps"),
+    )![1];
+    await act(async () => props.onChange({ target: { value: "40" } }));
+    expect(loadProjectChatBackgroundSettings("mono:a")).toMatchObject({
+      effect: "none",
+      sessionOpacity: 0.4,
+    });
+    const remove = Array.from(
+      dialog.querySelectorAll<HTMLButtonElement>("button"),
+    ).find(
+      (button) => button.textContent?.trim() === "Remove background image",
+    )!;
+    await act(async () => remove.click());
+    expect(loadProjectChatBackgroundSettings("mono:a")).toBeNull();
+    expect(dialog.textContent).toContain("No background selected");
+    expect(dialog.querySelector("img")).toBeNull();
+    expect(visibility.value).toBe("24");
+    await act(async () => choose.click());
+    expect(loadProjectChatBackgroundSettings("mono:a")).toEqual(defaults);
+  });
+
+  it("keeps a Mono's saved effect and visibility when changing its image", async () => {
+    const saved = {
+      path: "/backgrounds/old.png",
+      emptyOpacity: 0.35,
+      sessionOpacity: 0.4,
+      scope: "all" as const,
+      effect: "dither" as const,
+    };
+    saveProjectChatBackgroundSettings("mono:a", saved);
+    await act(async () =>
+      root.render(
+        createElement(ProjectBackgroundDialog, {
+          project: "mono:a",
+          name: "MonoCrab",
+          mono: true,
+          onClose: vi.fn(),
+        }),
+      ),
+    );
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(
+      dialog.querySelector('[aria-label="Mono background effect: Dither"]'),
+    ).not.toBeNull();
+    expect(
+      dialog.querySelector<HTMLInputElement>('input[type="range"]')?.value,
+    ).toBe("40");
+    expect(loadProjectChatBackgroundSettings("mono:a")).toEqual(saved);
+    const change = Array.from(
+      dialog.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent === "Change image")!;
+    await act(async () => change.click());
+    expect(loadProjectChatBackgroundSettings("mono:a")).toEqual({
+      ...saved,
+      path: "/backgrounds/mono.png",
+    });
+  });
+
+  it("keeps project background defaults independent of Mono defaults", async () => {
+    localStorage.setItem("monocode.chatBackgroundEmptyOpacity", "0.6");
+    localStorage.setItem("monocode.chatBackgroundSessionOpacity", "0.5");
+    localStorage.setItem("monocode.chatBackgroundScope", "empty");
+    await act(async () =>
+      root.render(
+        createElement(ProjectBackgroundDialog, {
+          project: "/work/alpha",
+          name: "Alpha",
+          onClose: vi.fn(),
+        }),
+      ),
+    );
+    const choose = Array.from(
+      document.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent === "Choose image")!;
+    await act(async () => choose.click());
+    expect(loadProjectChatBackgroundSettings("/work/alpha")).toMatchObject({
+      emptyOpacity: 0.6,
+      sessionOpacity: 0.5,
+      scope: "empty",
+      effect: NEW_THREAD_BACKGROUND_EFFECT_DEFAULT,
+    });
   });
 
   it("changes the effect only for the selected project", async () => {
