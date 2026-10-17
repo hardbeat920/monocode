@@ -73,6 +73,10 @@ function folder(name: string, ignored = false): FsEntry {
   return { name, path: `${cwd}/${name}`, isDir: true, ignored };
 }
 
+function fileIn(dir: string, name: string): FsEntry {
+  return { name, path: `${cwd}/${dir}/${name}`, isDir: false, ignored: false };
+}
+
 function pressPaste(el: HTMLElement) {
   return act(async () => {
     el.dispatchEvent(
@@ -107,6 +111,12 @@ function render(tick = 0, hidden = false) {
 
 function row(name: string): HTMLButtonElement {
   return container.querySelector(`[role="treeitem"][title="${cwd}/${name}"]`)!;
+}
+
+function childRow(folder: string, name: string): HTMLButtonElement {
+  return container.querySelector(
+    `[role="treeitem"][title="${cwd}/${folder}/${name}"]`,
+  )!;
 }
 
 beforeEach(async () => {
@@ -204,6 +214,32 @@ describe("FileTree render isolation", () => {
     });
     expect(row("added.ts")).not.toBeNull();
     expect(row("first.ts")).toBeNull();
+  });
+
+  it("re-lists a folder on demand after a refresh dropped it as collapsed", async () => {
+    directories.set(cwd, [folder("src"), file("first.ts")]);
+    directories.set(`${cwd}/src`, [fileIn("src", "index.ts")]);
+    saveExpanded(cwd, new Set([cwd]));
+    await refreshDir(cwd);
+    await act(async () => render());
+    await act(async () => row("src").click());
+    expect(childRow("src", "index.ts")).not.toBeNull();
+    await act(async () => row("src").click());
+    expect(childRow("src", "index.ts")).toBeNull();
+
+    vi.useFakeTimers();
+    directories.set(`${cwd}/src`, [
+      fileIn("src", "index.ts"),
+      fileIn("src", "added.ts"),
+    ]);
+    await act(async () => {
+      notifyDirsChanged();
+      await vi.advanceTimersByTimeAsync(200);
+    });
+
+    await act(async () => row("src").click());
+    expect(childRow("src", "index.ts")).not.toBeNull();
+    expect(childRow("src", "added.ts")).not.toBeNull();
   });
 });
 
