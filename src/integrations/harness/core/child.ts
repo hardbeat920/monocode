@@ -451,6 +451,22 @@ export function resolveClaudeBinary(
   return resolveHarnessBinary("claude", binaryPath);
 }
 
+/**
+ * Copy a Claude conversation's transcript to the account its next request
+ * uses. Resolves `false` when the source account has no transcript for it.
+ */
+export function transferClaudeTranscript(input: {
+  sessionId: string;
+  fromAccountId?: string;
+  toAccountId?: string;
+}): Promise<boolean> {
+  return invoke<boolean>("claude_transfer_transcript", {
+    sessionId: input.sessionId,
+    fromAccountId: input.fromAccountId,
+    toAccountId: input.toAccountId,
+  });
+}
+
 export function resolvePiBinary(
   binaryPath?: string | null,
 ): Promise<{ path: string }> {

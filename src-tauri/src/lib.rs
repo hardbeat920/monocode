@@ -472,6 +472,7 @@ pub fn run() {
             harness::harness_resolve_configured,
             harness::harness_runtime_binary_paths,
             harness::harness_resolve_claude,
+            harness::claude_transfer_transcript,
             harness::claude_mcp_list,
             mcp::mcp_discover,
             mcp::mcp_add,

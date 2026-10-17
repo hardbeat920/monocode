@@ -1187,6 +1187,163 @@ fn apply_provider_account(
     Ok(())
 }
 
+/// The config directory Claude keeps one account's transcripts in. The default
+/// account resolves the way the CLI does when no profile is set.
+pub(crate) fn claude_config_dir(
+    app: &AppHandle,
+    account_id: Option<&str>,
+) -> Result<PathBuf, String> {
+    match account_id.filter(|id| *id != DEFAULT_PROVIDER_ACCOUNT_ID) {
+        Some(id) => provider_account_path(app, "claude", id),
+        None => match std::env::var_os("CLAUDE_CONFIG_DIR") {
+            Some(path) => Ok(PathBuf::from(path)),
+            None => Ok(
+                PathBuf::from(dirs_home().ok_or("Home directory is unavailable")?).join(".claude"),
+            ),
+        },
+    }
+}
+
+/// Copy one Claude conversation between account config directories, with its
+/// side folder of tool results and subagent logs, so `claude --resume <id>`
+/// under the target account continues it. Returns `false` when the source
+/// holds no transcript for the session.
+fn copy_claude_transcript(
+    from_config: &Path,
+    to_config: &Path,
+    session_id: &str,
+) -> Result<bool, String> {
+    let transcript_name = format!("{session_id}.jsonl");
+    let Some(project) = std::fs::read_dir(from_config.join("projects"))
+        .ok()
+        .and_then(|projects| {
+            projects
+                .flatten()
+                .map(|project| project.path())
+                .find(|project| project.join(&transcript_name).is_file())
+        })
+    else {
+        return Ok(false);
+    };
+    let Some(project_name) = project.file_name() else {
+        return Ok(false);
+    };
+    let target = to_config.join("projects").join(project_name);
+    std::fs::create_dir_all(&target).map_err(|error| {
+        format!(
+            "Could not create the Claude project folder {}: {error}",
+            target.display()
+        )
+    })?;
+    // Config dirs may be symlinks into one another; copying a file onto itself
+    // would truncate it, so the same folder is already the transfer.
+    if same_directory(&project, &target) {
+        return Ok(true);
+    }
+    let side_folder = project.join(session_id);
+    let has_side_folder = side_folder.is_dir();
+    let staged_transcript = target.join(format!("{transcript_name}.partial"));
+    let staged_side_folder = target.join(format!("{session_id}.partial"));
+    // Stage every copy first, so a failure leaves the target's previous
+    // transcript and side folder untouched.
+    if let Err(error) = stage_claude_copies(
+        &project.join(&transcript_name),
+        &staged_transcript,
+        has_side_folder.then_some((&side_folder, &staged_side_folder)),
+    ) {
+        let _ = remove_path(&staged_transcript);
+        let _ = remove_path(&staged_side_folder);
+        return Err(error);
+    }
+    std::fs::rename(&staged_transcript, target.join(&transcript_name))
+        .map_err(|error| format!("Could not place the Claude transcript: {error}"))?;
+    if has_side_folder {
+        let live_side_folder = target.join(session_id);
+        remove_path(&live_side_folder)?;
+        std::fs::rename(&staged_side_folder, &live_side_folder)
+            .map_err(|error| format!("Could not place the Claude side folder: {error}"))?;
+    }
+    Ok(true)
+}
+
+/// Copy the transcript file, and the side folder when there is one, to their
+/// staging paths. Any error is returned for the caller to clean up.
+fn stage_claude_copies(
+    transcript: &Path,
+    staged_transcript: &Path,
+    side_folder: Option<(&Path, &Path)>,
+) -> Result<(), String> {
+    std::fs::copy(transcript, staged_transcript)
+        .map_err(|error| format!("Could not copy the Claude transcript: {error}"))?;
+    if let Some((from, to)) = side_folder {
+        remove_path(to)?;
+        copy_dir_all(from, to)?;
+    }
+    Ok(())
+}
+
+/// Whether both paths name the same existing directory, through any symlinks.
+fn same_directory(left: &Path, right: &Path) -> bool {
+    match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+/// Remove a file or folder if it exists. Symlinks are removed, not followed.
+fn remove_path(path: &Path) -> Result<(), String> {
+    let Ok(metadata) = std::fs::symlink_metadata(path) else {
+        return Ok(());
+    };
+    let removed = if metadata.is_dir() {
+        std::fs::remove_dir_all(path)
+    } else {
+        std::fs::remove_file(path)
+    };
+    removed.map_err(|error| format!("Could not replace {}: {error}", path.display()))
+}
+
+/// Copy a folder tree recursively, creating `to` and its subfolders as needed.
+fn copy_dir_all(from: &Path, to: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(to).map_err(|error| error.to_string())?;
+    for entry in std::fs::read_dir(from).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let source = entry.path();
+        let target = to.join(entry.file_name());
+        if source.is_dir() {
+            copy_dir_all(&source, &target)?;
+        } else {
+            std::fs::copy(&source, &target).map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+/// Hand a Claude conversation to the account its next request will use. The
+/// transcript moves as it is: nothing is compacted or summarized.
+#[tauri::command]
+pub async fn claude_transfer_transcript(
+    app: AppHandle,
+    session_id: String,
+    from_account_id: Option<String>,
+    to_account_id: Option<String>,
+) -> Result<bool, String> {
+    if session_id.is_empty()
+        || !session_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        return Err("Invalid Claude provider session id".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let from = claude_config_dir(&app, from_account_id.as_deref())?;
+        let to = claude_config_dir(&app, to_account_id.as_deref())?;
+        copy_claude_transcript(&from, &to, &session_id)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 /// A child that stops draining stdin can block `write_all` for minutes, so the
 /// write runs on the blocking pool — never on an async worker or the IPC path,
 /// where it would starve `harness_kill` and make the wedged child unrecoverable.
@@ -4297,5 +4454,98 @@ mod reap_logic_tests {
         assert!(!is_legacy_orphaned_cursor_acp(
             "node /usr/local/bin/typescript-language-server --stdio"
         ));
+    }
+}
+
+#[cfg(test)]
+mod claude_transfer_tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn tmp_dir(label: &str) -> PathBuf {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir =
+            std::env::temp_dir().join(format!("monocode-{label}-{}-{stamp}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn copies_transcript_and_side_folder_into_the_target_account() {
+        let from = tmp_dir("transfer-from");
+        let to = tmp_dir("transfer-to");
+        let project = from.join("projects").join("-repo");
+        std::fs::create_dir_all(project.join("sess_1/tool-results")).unwrap();
+        std::fs::write(project.join("sess_1.jsonl"), "{\"type\":\"user\"}\n").unwrap();
+        std::fs::write(project.join("sess_1/tool-results/out.txt"), "output").unwrap();
+
+        assert!(copy_claude_transcript(&from, &to, "sess_1").unwrap());
+
+        let target = to.join("projects").join("-repo");
+        assert_eq!(
+            std::fs::read_to_string(target.join("sess_1.jsonl")).unwrap(),
+            "{\"type\":\"user\"}\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(target.join("sess_1/tool-results/out.txt")).unwrap(),
+            "output"
+        );
+        let _ = std::fs::remove_dir_all(&from);
+        let _ = std::fs::remove_dir_all(&to);
+    }
+
+    #[test]
+    fn reports_no_transfer_when_the_source_has_no_transcript() {
+        let from = tmp_dir("transfer-missing");
+        let to = tmp_dir("transfer-missing-to");
+        assert!(!copy_claude_transcript(&from, &to, "sess_missing").unwrap());
+        let _ = std::fs::remove_dir_all(&from);
+        let _ = std::fs::remove_dir_all(&to);
+    }
+
+    #[test]
+    fn replaces_an_earlier_copy_and_leaves_no_staging_files() {
+        let from = tmp_dir("transfer-replace");
+        let to = tmp_dir("transfer-replace-to");
+        let project = from.join("projects").join("-repo");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("sess_1.jsonl"), "new").unwrap();
+        let earlier = to.join("projects").join("-repo");
+        std::fs::create_dir_all(&earlier).unwrap();
+        std::fs::write(earlier.join("sess_1.jsonl"), "old").unwrap();
+
+        assert!(copy_claude_transcript(&from, &to, "sess_1").unwrap());
+
+        assert_eq!(
+            std::fs::read_to_string(earlier.join("sess_1.jsonl")).unwrap(),
+            "new"
+        );
+        assert!(!earlier.join("sess_1.jsonl.partial").exists());
+        let _ = std::fs::remove_dir_all(&from);
+        let _ = std::fs::remove_dir_all(&to);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_config_dirs_do_not_copy_the_transcript_onto_itself() {
+        let real = tmp_dir("transfer-symlink-real");
+        let link_parent = tmp_dir("transfer-symlink-link");
+        let link = link_parent.join("config");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let project = real.join("projects").join("-repo");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("sess_1.jsonl"), "keep me").unwrap();
+
+        assert!(copy_claude_transcript(&link, &real, "sess_1").unwrap());
+
+        assert_eq!(
+            std::fs::read_to_string(project.join("sess_1.jsonl")).unwrap(),
+            "keep me"
+        );
+        let _ = std::fs::remove_dir_all(&real);
+        let _ = std::fs::remove_dir_all(&link_parent);
     }
 }
