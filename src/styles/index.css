@@ -3379,6 +3379,13 @@ html.theme-light .popover-backdrop {
   background: var(--color-background-base);
 }
 
+/* The model menu is a dense list. Dark glass at 2% lets the chat show
+   through the names, so this panel keeps a solid surface. Other popovers
+   stay glassy. */
+html:not(.theme-light) :has(> [data-model-picker]) > .popover-backdrop {
+  background: color-mix(in srgb, var(--color-background-base) 92%, transparent);
+}
+
 /* Animate content only; its sibling glass stays still. Finish at `none` and
    do not retain the animation's transform/opacity compositing state with a
    forwards fill. Hover repaints should happen in the ordinary resting state. */
