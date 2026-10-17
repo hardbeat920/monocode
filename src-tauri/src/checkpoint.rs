@@ -61,7 +61,7 @@ impl CheckpointStore {
 
         let mut files = BTreeMap::new();
         let mut tracked = BTreeSet::new();
-        for file in git_diff_files_for(&root).files {
+        for file in git_diff_files_for(&root)?.files {
             if files.len() >= MAX_SNAPSHOT_FILES {
                 break;
             }
@@ -202,12 +202,12 @@ impl CheckpointStore {
         };
         let root = project_root(cwd)?;
         let foreign_touched = self.foreign_touched_paths(cwd, session_id);
-        Ok(diff_from_manifest(
+        diff_from_manifest(
             &self.session_dir(session_id),
             &root,
             &manifest,
             &foreign_touched,
-        ))
+        )
     }
 
     fn apply(
@@ -373,7 +373,7 @@ impl CheckpointStore {
             return Ok(out);
         }
         let root = project_root(cwd)?;
-        let index = git_diff_files_for(&root);
+        let index = git_diff_files_for(&root)?;
         for session_id in session_ids {
             let Some(manifest) = self.load_matching(session_id, cwd)? else {
                 out.insert(session_id.clone(), GitDiffStats::default());
@@ -407,7 +407,7 @@ impl CheckpointStore {
         let root = project_root(cwd)?;
         let dir = self.session_dir(session_id);
         let foreign_touched = self.foreign_touched_paths(cwd, session_id);
-        let changed = diff_from_manifest(&dir, &root, &manifest, &foreign_touched);
+        let changed = diff_from_manifest(&dir, &root, &manifest, &foreign_touched)?;
         if let Some(relative) = relative {
             let relative = resolve_repo_path(&root, relative)?;
             let Some(file) = changed.files.iter().find(|file| file.relative == relative) else {
@@ -817,7 +817,7 @@ fn verified_worker_delta(
         ));
     }
 
-    let current_dirty: BTreeSet<String> = git_diff_files_for(root)
+    let current_dirty: BTreeSet<String> = git_diff_files_for(root)?
         .files
         .into_iter()
         .map(|file| file.relative)
@@ -960,14 +960,14 @@ fn diff_from_manifest(
     root: &Path,
     manifest: &Manifest,
     foreign_touched: &HashSet<String>,
-) -> CheckpointStatus {
-    diff_from_manifest_with(
-        &git_diff_files_for(root),
+) -> Result<CheckpointStatus, String> {
+    Ok(diff_from_manifest_with(
+        &git_diff_files_for(root)?,
         dir,
         root,
         manifest,
         foreign_touched,
-    )
+    ))
 }
 
 fn diff_from_manifest_with(

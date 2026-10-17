@@ -246,7 +246,7 @@ pub async fn git_worktree_create(
 }
 
 fn copy_checkout_state(source: &Path, target: &Path) -> Result<(), String> {
-    for file in git_diff_files_for(source).files {
+    for file in git_diff_files_for(source)?.files {
         let relative = resolve_repo_path(source, &file.relative)?;
         let from = source.join(&relative);
         let to = target.join(&relative);
@@ -311,8 +311,13 @@ fn file_mode(_path: &Path) -> Option<u32> {
 }
 
 fn checkout_state_matches(source: &Path, target: &Path) -> bool {
-    let source_files = git_diff_files_for(source).files;
-    let target_files = git_diff_files_for(target).files;
+    let (Ok(source_index), Ok(target_index)) =
+        (git_diff_files_for(source), git_diff_files_for(target))
+    else {
+        return false;
+    };
+    let source_files = source_index.files;
+    let target_files = target_index.files;
     let source_paths: Vec<&str> = source_files
         .iter()
         .map(|file| file.relative.as_str())

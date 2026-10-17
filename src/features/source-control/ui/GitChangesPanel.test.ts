@@ -500,3 +500,54 @@ describe("GitChangesPanel remote pull request", () => {
     expect(openUrl).toHaveBeenCalledWith("https://example.test/pull/42");
   });
 });
+
+describe("GitChangesPanel status errors", () => {
+  it("keeps the last list and shows git's error until a reload succeeds", async () => {
+    const cwd = "/repo-status-error";
+    const app = changedFile("app.ts", { path: `${cwd}/app.ts` });
+    const hero = changedFile("hero.png", { path: `${cwd}/hero.png` });
+    vi.mocked(gitDiffIndex)
+      .mockResolvedValueOnce(index({ files: [app] }))
+      .mockRejectedValueOnce("fatal: hero.png: clean filter 'lfs' failed")
+      .mockResolvedValue(index({ files: [app, hero] }));
+    await renderPanel(cwd);
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      "clean filter 'lfs' failed",
+    );
+    expect(container.querySelector('button[title="app.ts"]')).not.toBeNull();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(container.querySelector('button[title="hero.png"]')).not.toBeNull();
+  });
+
+  it("lists a tracked change with neither flag under Changes", async () => {
+    const cwd = "/repo-flagless";
+    vi.mocked(gitDiffIndex).mockResolvedValue(
+      index({
+        files: [
+          changedFile("lost.ts", {
+            path: `${cwd}/lost.ts`,
+            staged: false,
+            unstaged: false,
+          }),
+        ],
+      }),
+    );
+    await renderPanel(cwd);
+
+    const row = container.querySelector('button[title="lost.ts"]');
+    expect(row).not.toBeNull();
+    expect(
+      row!.parentElement!.querySelector('[aria-label="Stage Changes"]'),
+    ).not.toBeNull();
+    expect(container.textContent).not.toContain("Staged Changes");
+  });
+});

@@ -842,7 +842,7 @@ pub struct GitDiffStats {
 pub async fn git_diff_stats(cwd: String) -> Result<GitDiffStats, String> {
     tauri::async_runtime::spawn_blocking(move || git_diff_stats_for(&expand_home(&cwd)))
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
@@ -879,7 +879,7 @@ pub struct GitDiffIndex {
 pub async fn git_diff_index(cwd: String) -> Result<GitDiffIndex, String> {
     tauri::async_runtime::spawn_blocking(move || git_diff_index_for(&expand_home(&cwd)))
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?
 }
 
 /// Changed files and counts without branch/upstream synchronization metadata.
@@ -887,7 +887,7 @@ pub async fn git_diff_index(cwd: String) -> Result<GitDiffIndex, String> {
 pub async fn git_diff_files(cwd: String) -> Result<GitDiffIndex, String> {
     tauri::async_runtime::spawn_blocking(move || git_diff_files_for(&expand_home(&cwd)))
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
@@ -1780,12 +1780,12 @@ pub async fn git_stash(cwd: String, message: Option<String>) -> Result<(), Strin
     .map_err(|e| e.to_string())?
 }
 
-fn git_diff_stats_for(root: &Path) -> GitDiffStats {
+fn git_diff_stats_for(root: &Path) -> Result<GitDiffStats, String> {
     if !git_is_work_tree(root) {
-        return GitDiffStats::default();
+        return Ok(GitDiffStats::default());
     }
     let mut files: HashMap<String, FileAcc> = HashMap::new();
-    if let Some(text) = git_run(
+    match git_query(
         root,
         &[
             "diff",
@@ -1797,41 +1797,51 @@ fn git_diff_stats_for(root: &Path) -> GitDiffStats {
             ".",
         ],
     ) {
-        add_numstat_map(&text, &mut files);
-    } else {
-        if let Some(text) = git_run(
-            root,
-            &["diff", "-z", "--no-ext-diff", "--numstat", "--", "."],
-        ) {
-            add_numstat_map(&text, &mut files);
-        }
-        if let Some(text) = git_run(
-            root,
-            &[
-                "diff",
-                "-z",
-                "--no-ext-diff",
-                "--cached",
-                "--numstat",
-                "--",
-                ".",
-            ],
-        ) {
-            add_numstat_map(&text, &mut files);
+        Ok(text) => add_numstat_map(&text, &mut files),
+        Err(error) if git_has_head(root) => return Err(error),
+        Err(_) => {
+            add_numstat_map(
+                &git_query(
+                    root,
+                    &["diff", "-z", "--no-ext-diff", "--numstat", "--", "."],
+                )?,
+                &mut files,
+            );
+            add_numstat_map(
+                &git_query(
+                    root,
+                    &[
+                        "diff",
+                        "-z",
+                        "--no-ext-diff",
+                        "--cached",
+                        "--numstat",
+                        "--",
+                        ".",
+                    ],
+                )?,
+                &mut files,
+            );
         }
     }
-    add_untracked_map(root, &mut files);
+    add_untracked_map(root, &mut files)?;
     let mut additions = 0i64;
     let mut deletions = 0i64;
     for acc in files.values() {
         additions += acc.additions;
         deletions += acc.deletions;
     }
-    GitDiffStats {
+    Ok(GitDiffStats {
         files: files.len() as i64,
         additions,
         deletions,
-    }
+    })
+}
+
+/// `git diff HEAD` fails before the first commit, and the Changes queries then
+/// diff the index and worktree on their own. With a HEAD, a failure is real.
+fn git_has_head(root: &Path) -> bool {
+    git_stdout(root, &["rev-parse", "--verify", "HEAD"]).is_some()
 }
 
 #[derive(Clone, Default)]
@@ -1843,20 +1853,24 @@ struct FileAcc {
     unstaged: bool,
 }
 
-pub(crate) fn git_diff_index_for(root: &Path) -> GitDiffIndex {
+pub(crate) fn git_diff_index_for(root: &Path) -> Result<GitDiffIndex, String> {
     git_diff_index_with(root, true)
 }
 
 /// File list + counts only. Skips ahead/behind/remote lookups used by Git chrome.
-pub(crate) fn git_diff_files_for(root: &Path) -> GitDiffIndex {
+pub(crate) fn git_diff_files_for(root: &Path) -> Result<GitDiffIndex, String> {
     git_diff_index_with(root, false)
 }
 
-fn git_diff_index_with(root: &Path, include_sync: bool) -> GitDiffIndex {
+fn git_diff_index_with(root: &Path, include_sync: bool) -> Result<GitDiffIndex, String> {
+    // Outside a repository `git diff` falls back to `--no-index` and exits 1.
+    if !git_is_work_tree(root) {
+        return Ok(GitDiffIndex::default());
+    }
     let mut files: HashMap<String, FileAcc> = HashMap::new();
     let mut statuses: HashMap<String, &'static str> = HashMap::new();
 
-    if let Some(text) = git_run(
+    match git_query(
         root,
         &[
             "diff",
@@ -1869,87 +1883,86 @@ fn git_diff_index_with(root: &Path, include_sync: bool) -> GitDiffIndex {
             ".",
         ],
     ) {
-        add_numstat_map(&text, &mut files);
-        if let Some(names) = git_run(
-            root,
-            &[
-                "diff",
-                "-z",
-                "--relative",
-                "--no-ext-diff",
-                "--name-status",
-                "--no-renames",
-                "HEAD",
-                "--",
-                ".",
-            ],
-        ) {
+        Ok(text) => {
+            add_numstat_map(&text, &mut files);
+            let names = git_query(
+                root,
+                &[
+                    "diff",
+                    "-z",
+                    "--relative",
+                    "--no-ext-diff",
+                    "--name-status",
+                    "--no-renames",
+                    "HEAD",
+                    "--",
+                    ".",
+                ],
+            )?;
             add_name_status(&names, &mut statuses);
         }
-    } else {
-        if let Some(text) = git_run(
-            root,
-            &[
-                "diff",
-                "-z",
-                "--relative",
-                "--no-ext-diff",
-                "--numstat",
-                "--",
-                ".",
-            ],
-        ) {
+        Err(error) if git_has_head(root) => return Err(error),
+        Err(_) => {
+            let text = git_query(
+                root,
+                &[
+                    "diff",
+                    "-z",
+                    "--relative",
+                    "--no-ext-diff",
+                    "--numstat",
+                    "--",
+                    ".",
+                ],
+            )?;
             add_numstat_map(&text, &mut files);
-        }
-        if let Some(text) = git_run(
-            root,
-            &[
-                "diff",
-                "-z",
-                "--relative",
-                "--no-ext-diff",
-                "--cached",
-                "--numstat",
-                "--",
-                ".",
-            ],
-        ) {
+            let text = git_query(
+                root,
+                &[
+                    "diff",
+                    "-z",
+                    "--relative",
+                    "--no-ext-diff",
+                    "--cached",
+                    "--numstat",
+                    "--",
+                    ".",
+                ],
+            )?;
             add_numstat_map(&text, &mut files);
-        }
-        if let Some(names) = git_run(
-            root,
-            &[
-                "diff",
-                "-z",
-                "--relative",
-                "--no-ext-diff",
-                "--name-status",
-                "--no-renames",
-                "--",
-                ".",
-            ],
-        ) {
+            let names = git_query(
+                root,
+                &[
+                    "diff",
+                    "-z",
+                    "--relative",
+                    "--no-ext-diff",
+                    "--name-status",
+                    "--no-renames",
+                    "--",
+                    ".",
+                ],
+            )?;
             add_name_status(&names, &mut statuses);
-        }
-        if let Some(names) = git_run(
-            root,
-            &[
-                "diff",
-                "-z",
-                "--relative",
-                "--no-ext-diff",
-                "--cached",
-                "--name-status",
-                "--no-renames",
-                "--",
-                ".",
-            ],
-        ) {
+            let names = git_query(
+                root,
+                &[
+                    "diff",
+                    "-z",
+                    "--relative",
+                    "--no-ext-diff",
+                    "--cached",
+                    "--name-status",
+                    "--no-renames",
+                    "--",
+                    ".",
+                ],
+            )?;
             add_name_status(&names, &mut statuses);
         }
     }
-    add_untracked_map(root, &mut files);
-    mark_cached_and_unstaged(root, &mut files);
+    add_untracked_map(root, &mut files)?;
+    mark_cached_and_unstaged(root, &mut files)?;
 
     let mut out = Vec::with_capacity(files.len());
     let mut additions = 0i64;
@@ -1974,7 +1987,9 @@ fn git_diff_index_with(root: &Path, include_sync: bool) -> GitDiffIndex {
             additions: acc.additions,
             deletions: acc.deletions,
             staged: acc.staged,
-            unstaged: acc.untracked || acc.unstaged,
+            // A tracked change seen in neither flag query (one raced a commit or
+            // `git add`) still needs a section, or it is counted but never shown.
+            unstaged: acc.untracked || acc.unstaged || !acc.staged,
         });
     }
     out.sort_by(|a, b| a.relative.cmp(&b.relative));
@@ -1983,7 +1998,7 @@ fn git_diff_index_with(root: &Path, include_sync: bool) -> GitDiffIndex {
     } else {
         GitSync::default()
     };
-    GitDiffIndex {
+    Ok(GitDiffIndex {
         branch: git_branch(root),
         head: git_stdout(root, &["rev-parse", "HEAD"]),
         files: out,
@@ -1996,7 +2011,7 @@ fn git_diff_index_with(root: &Path, include_sync: bool) -> GitDiffIndex {
         behind: sync.behind,
         ahead_of_default: sync.ahead_of_default,
         head_pushed: sync.head_pushed,
-    }
+    })
 }
 
 fn add_numstat_map(text: &str, files: &mut HashMap<String, FileAcc>) {
@@ -2081,13 +2096,11 @@ fn normalize_diff_path(path: &str) -> String {
 
 const MAX_UNTRACKED_BYTES: u64 = 1024 * 1024;
 
-fn add_untracked_map(root: &Path, files: &mut HashMap<String, FileAcc>) {
-    let Some(stdout) = git_run(
+fn add_untracked_map(root: &Path, files: &mut HashMap<String, FileAcc>) -> Result<(), String> {
+    let stdout = git_query(
         root,
         &["ls-files", "-o", "--exclude-standard", "-z", "--", "."],
-    ) else {
-        return;
-    };
+    )?;
     for rel in stdout.split('\0') {
         if rel.is_empty() {
             continue;
@@ -2099,6 +2112,7 @@ fn add_untracked_map(root: &Path, files: &mut HashMap<String, FileAcc>) {
             entry.additions = text_line_count(&root.join(rel));
         }
     }
+    Ok(())
 }
 
 fn text_line_count(path: &Path) -> i64 {
@@ -2126,8 +2140,11 @@ fn text_line_count(path: &Path) -> i64 {
     lines
 }
 
-fn mark_cached_and_unstaged(root: &Path, files: &mut HashMap<String, FileAcc>) {
-    if let Some(names) = git_run(
+fn mark_cached_and_unstaged(
+    root: &Path,
+    files: &mut HashMap<String, FileAcc>,
+) -> Result<(), String> {
+    let names = git_query(
         root,
         &[
             "diff",
@@ -2139,15 +2156,14 @@ fn mark_cached_and_unstaged(root: &Path, files: &mut HashMap<String, FileAcc>) {
             "--",
             ".",
         ],
-    ) {
-        for line in names.split('\0') {
-            let relative = literal_diff_path(line);
-            if !relative.is_empty() {
-                files.entry(relative).or_default().staged = true;
-            }
+    )?;
+    for line in names.split('\0') {
+        let relative = literal_diff_path(line);
+        if !relative.is_empty() {
+            files.entry(relative).or_default().staged = true;
         }
     }
-    if let Some(names) = git_run(
+    let names = git_query(
         root,
         &[
             "diff",
@@ -2158,14 +2174,14 @@ fn mark_cached_and_unstaged(root: &Path, files: &mut HashMap<String, FileAcc>) {
             "--",
             ".",
         ],
-    ) {
-        for line in names.split('\0') {
-            let relative = literal_diff_path(line);
-            if !relative.is_empty() {
-                files.entry(relative).or_default().unstaged = true;
-            }
+    )?;
+    for line in names.split('\0') {
+        let relative = literal_diff_path(line);
+        if !relative.is_empty() {
+            files.entry(relative).or_default().unstaged = true;
         }
     }
+    Ok(())
 }
 
 fn git_file_diff_for(root: &Path, relative: &str, staged: bool) -> Result<GitFileDiff, String> {
@@ -2622,7 +2638,7 @@ fn git_discard_file_for(root: &Path, relative: &str) -> Result<(), String> {
 }
 
 fn git_discard_all_for(root: &Path) -> Result<(), String> {
-    let files: Vec<String> = git_diff_index_for(root)
+    let files: Vec<String> = git_diff_index_for(root)?
         .files
         .into_iter()
         .filter(|file| file.unstaged)
@@ -4631,6 +4647,104 @@ fn git_output(root: &Path, args: &[&str]) -> Option<Vec<u8>> {
         return Some(output.stdout);
     }
     None
+}
+
+/// Longest a Changes query may run. A clean filter, hook, or fsmonitor that
+/// hangs would otherwise hold the panel's single in-flight poll forever.
+const GIT_QUERY_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Lines of git's stderr kept in a query error, enough for its `fatal:` line.
+const GIT_QUERY_ERROR_LINES: usize = 4;
+
+/// A git read whose failure must not pass for an empty result: a clean filter
+/// that cannot run would otherwise hide every tracked change. The error is
+/// git's own message, such as `fatal: hero.png: clean filter 'lfs' failed`.
+fn git_query(root: &Path, args: &[&str]) -> Result<String, String> {
+    git_query_within(root, args, GIT_QUERY_TIMEOUT)
+}
+
+fn git_query_within(root: &Path, args: &[&str], timeout: Duration) -> Result<String, String> {
+    let deadline = Instant::now() + timeout;
+    let mut child = git_cmd_for_args(args)
+        .arg("--no-pager")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to run git: {e}"))?;
+    let stdout = read_pipe(child.stdout.take());
+    let stderr = read_pipe(child.stderr.take());
+    // stdout closes when git exits. A filter that git started may still hold
+    // stderr, so that one is only read once git has failed.
+    let status = stdout
+        .recv_timeout(timeout)
+        .ok()
+        .and_then(|stdout| Some((stdout, wait_until(&mut child, deadline)?)));
+    let Some((stdout, status)) = status else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(format!(
+            "git {} timed out after {} seconds",
+            args.first().copied().unwrap_or_default(),
+            timeout.as_secs()
+        ));
+    };
+    if git_status_ok(&status, args) {
+        return Ok(String::from_utf8_lossy(&stdout).into_owned());
+    }
+    let stderr = stderr
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap_or_default();
+    let stderr = String::from_utf8_lossy(&stderr);
+    let message = stderr
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .take(GIT_QUERY_ERROR_LINES)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if message.is_empty() {
+        Err(format!(
+            "git {} failed ({status})",
+            args.first().copied().unwrap_or_default()
+        ))
+    } else {
+        Err(message)
+    }
+}
+
+fn read_pipe(pipe: Option<impl Read + Send + 'static>) -> mpsc::Receiver<Vec<u8>> {
+    let (sender, receiver) = mpsc::channel();
+    let _ = thread::Builder::new()
+        .name("git-query-pipe".to_string())
+        .spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut buf);
+            }
+            let _ = sender.send(buf);
+        });
+    receiver
+}
+
+fn wait_until(
+    child: &mut std::process::Child,
+    deadline: Instant,
+) -> Option<std::process::ExitStatus> {
+    loop {
+        if let Some(status) = child.try_wait().ok()? {
+            return Some(status);
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
 }
 
 /// Queued 8 KiB chunks allowed between the git reader and the consumer.
@@ -7496,7 +7610,7 @@ mod tests {
         let dir = tmp("git-diff-none");
         std::fs::write(dir.0.join("notes.txt"), "hello\n").unwrap();
         assert_eq!(
-            git_diff_stats_for(&dir.0),
+            git_diff_stats_for(&dir.0).unwrap(),
             GitDiffStats {
                 files: 0,
                 additions: 0,
@@ -7516,7 +7630,7 @@ mod tests {
         std::fs::write(dir.0.join("ignored.txt"), "nope\n").unwrap();
         std::fs::write(dir.0.join(".gitignore"), "ignored.txt\n").unwrap();
 
-        let stats = git_diff_stats_for(&dir.0);
+        let stats = git_diff_stats_for(&dir.0).unwrap();
         // a.txt: -beta +delta; new.txt: +2; .gitignore: +1 untracked
         assert_eq!(stats.files, 3);
         assert_eq!(stats.additions, 4);
@@ -7530,7 +7644,7 @@ mod tests {
             return;
         }
         assert_eq!(
-            git_diff_stats_for(&dir.0),
+            git_diff_stats_for(&dir.0).unwrap(),
             GitDiffStats {
                 files: 0,
                 additions: 0,
@@ -7548,7 +7662,7 @@ mod tests {
         std::fs::write(dir.0.join("a.txt"), "alpha\ngamma\ndelta\n").unwrap();
         std::fs::write(dir.0.join("new.txt"), "hello\nworld\n").unwrap();
 
-        let index = git_diff_index_for(&dir.0);
+        let index = git_diff_index_for(&dir.0).unwrap();
         assert_eq!(index.branch.as_deref(), Some("main"));
         assert_eq!(index.files.len(), 2);
 
@@ -7582,7 +7696,7 @@ mod tests {
         std::fs::write(dir.0.join("한글.md"), "before\nafter\n").unwrap();
         std::fs::write(dir.0.join("my file.txt"), "one\ntwo\n").unwrap();
 
-        let index = git_diff_index_for(&dir.0);
+        let index = git_diff_index_for(&dir.0).unwrap();
         let hangul = index
             .files
             .iter()
@@ -7607,6 +7721,84 @@ mod tests {
     }
 
     #[test]
+    fn git_diff_index_reports_a_failing_clean_filter() {
+        let dir = tmp("git-diff-broken-filter");
+        if !init_git_commit(
+            &dir.0,
+            &[
+                ("a.txt", "alpha\n"),
+                ("img.bin", "one\n"),
+                (".gitattributes", "*.bin filter=broken\n"),
+            ],
+        ) {
+            return;
+        }
+        // Like git-lfs missing from PATH: every worktree diff exits 128.
+        assert!(git(&dir.0, &["config", "filter.broken.clean", "false"]));
+        assert!(git(&dir.0, &["config", "filter.broken.required", "true"]));
+        std::fs::write(dir.0.join("img.bin"), "two\n").unwrap();
+        std::fs::write(dir.0.join("a.txt"), "beta\n").unwrap();
+        std::fs::write(dir.0.join("new.txt"), "untracked\n").unwrap();
+
+        let error = git_diff_index_for(&dir.0).unwrap_err();
+        assert!(error.contains("clean filter 'broken' failed"), "{error}");
+        let error = git_diff_stats_for(&dir.0).unwrap_err();
+        assert!(error.contains("clean filter 'broken' failed"), "{error}");
+    }
+
+    #[test]
+    fn git_diff_index_lists_staged_files_before_the_first_commit() {
+        let dir = tmp("git-diff-unborn");
+        if !init_git(&dir.0, "main", None) {
+            return;
+        }
+        std::fs::write(dir.0.join("staged.txt"), "one\ntwo\n").unwrap();
+        std::fs::write(dir.0.join("new.txt"), "hello\n").unwrap();
+        assert!(git(&dir.0, &["add", "staged.txt"]));
+
+        let index = git_diff_index_for(&dir.0).unwrap();
+        let staged = index
+            .files
+            .iter()
+            .find(|file| file.relative == "staged.txt")
+            .unwrap();
+        assert_eq!(staged.status, "added");
+        assert!(staged.staged);
+        assert!(!staged.unstaged);
+        assert!(index.files.iter().any(|file| file.relative == "new.txt"));
+        assert_eq!(git_diff_stats_for(&dir.0).unwrap().files, 2);
+    }
+
+    #[test]
+    fn git_query_times_out_on_a_hanging_clean_filter() {
+        let dir = tmp("git-diff-slow-filter");
+        if !init_git_commit(
+            &dir.0,
+            &[
+                ("img.bin", "one\n"),
+                (".gitattributes", "*.bin filter=slow\n"),
+            ],
+        ) {
+            return;
+        }
+        assert!(git(
+            &dir.0,
+            &["config", "filter.slow.clean", "sleep 5; cat"]
+        ));
+        std::fs::write(dir.0.join("img.bin"), "two\n").unwrap();
+
+        let started = Instant::now();
+        let error = git_query_within(
+            &dir.0,
+            &["diff", "-z", "--numstat", "HEAD", "--", "."],
+            Duration::from_millis(300),
+        )
+        .unwrap_err();
+        assert!(error.contains("timed out"), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
     fn git_diff_files_keep_paths_relative_to_nested_workspace() {
         let dir = tmp("git-diff-nested-workspace");
         let workspace = dir.0.join("sub");
@@ -7621,7 +7813,7 @@ mod tests {
         // Without --relative this collides with the tracked sub/file.txt key.
         std::fs::write(workspace.join("sub/file.txt"), "untracked\n").unwrap();
 
-        let changes = git_diff_files_for(&workspace);
+        let changes = git_diff_files_for(&workspace).unwrap();
         assert_eq!(changes.files.len(), 3);
         for (relative, staged, unstaged) in [
             ("file.txt", true, false),
@@ -7946,6 +8138,7 @@ mod tests {
         std::fs::write(dir.0.join("a.txt"), "beta\n").unwrap();
         git_stage_file_for(&dir.0, "a.txt").unwrap();
         let staged = git_diff_index_for(&dir.0)
+            .unwrap()
             .files
             .into_iter()
             .find(|file| file.relative == "a.txt")
@@ -7955,6 +8148,7 @@ mod tests {
 
         git_unstage_file_for(&dir.0, "a.txt").unwrap();
         let unstaged = git_diff_index_for(&dir.0)
+            .unwrap()
             .files
             .into_iter()
             .find(|file| file.relative == "a.txt")
@@ -7990,7 +8184,7 @@ mod tests {
         git_stage_file_for(&dir.0, "ready.txt").unwrap();
 
         git_stage_file_for(&dir.0, "src").unwrap();
-        let index = git_diff_index_for(&dir.0);
+        let index = git_diff_index_for(&dir.0).unwrap();
         assert_eq!(index.files.len(), 5);
         for file in &index.files {
             let in_folder = file.relative.starts_with("src/");
@@ -7999,7 +8193,7 @@ mod tests {
         }
 
         git_unstage_file_for(&dir.0, "src").unwrap();
-        let index = git_diff_index_for(&dir.0);
+        let index = git_diff_index_for(&dir.0).unwrap();
         assert_eq!(index.files.len(), 5);
         for file in &index.files {
             assert_eq!(file.staged, file.relative == "ready.txt");
@@ -8021,13 +8215,13 @@ mod tests {
         }
         std::fs::remove_dir_all(dir.0.join("deleted")).unwrap();
         git_stage_file_for(&dir.0, "deleted").unwrap();
-        let index = git_diff_index_for(&dir.0);
+        let index = git_diff_index_for(&dir.0).unwrap();
         assert_eq!(index.files.len(), 1);
         assert!(index.files[0].staged);
         assert!(!index.files[0].unstaged);
 
         git_unstage_file_for(&dir.0, "deleted").unwrap();
-        let index = git_diff_index_for(&dir.0);
+        let index = git_diff_index_for(&dir.0).unwrap();
         assert_eq!(index.files.len(), 1);
         assert!(!index.files[0].staged);
         assert!(index.files[0].unstaged);
@@ -8091,6 +8285,7 @@ mod tests {
         git_stage_contents_for(&dir.0, "a.txt", b"alpha\nBETA\ngamma\ndelta\n").unwrap();
 
         let file = git_diff_index_for(&dir.0)
+            .unwrap()
             .files
             .into_iter()
             .find(|file| file.relative == "a.txt")
@@ -8120,7 +8315,7 @@ mod tests {
             "alpha\n"
         );
         assert!(!dir.0.join("new.txt").exists());
-        assert!(git_diff_index_for(&dir.0).files.is_empty());
+        assert!(git_diff_index_for(&dir.0).unwrap().files.is_empty());
     }
 
     #[test]
@@ -8147,6 +8342,7 @@ mod tests {
         );
         assert!(!dir.0.join("new.txt").exists());
         let file = git_diff_index_for(&dir.0)
+            .unwrap()
             .files
             .into_iter()
             .find(|file| file.relative == "b.txt")
@@ -8154,6 +8350,7 @@ mod tests {
         assert!(file.staged);
         assert!(!file.unstaged);
         assert!(git_diff_index_for(&dir.0)
+            .unwrap()
             .files
             .iter()
             .all(|file| !file.unstaged));
@@ -8174,6 +8371,7 @@ mod tests {
             "beta\n"
         );
         let file = git_diff_index_for(&dir.0)
+            .unwrap()
             .files
             .into_iter()
             .find(|file| file.relative == "a.txt")
@@ -8191,7 +8389,7 @@ mod tests {
         std::fs::write(dir.0.join("a.txt"), "beta\n").unwrap();
         git_stage_file_for(&dir.0, "a.txt").unwrap();
         git_commit_for(&dir.0, "update a").unwrap();
-        let index = git_diff_index_for(&dir.0);
+        let index = git_diff_index_for(&dir.0).unwrap();
         assert!(index.files.is_empty());
         assert_eq!(index.head, git_stdout(&dir.0, &["rev-parse", "HEAD"]));
         assert_eq!(
@@ -8215,7 +8413,7 @@ mod tests {
         std::fs::write(dir.0.join("a.txt"), "beta\n").unwrap();
         git_stage_file_for(&dir.0, "a.txt").unwrap();
         git_commit_amend_for(&dir.0, "amended").unwrap();
-        assert!(git_diff_index_for(&dir.0).files.is_empty());
+        assert!(git_diff_index_for(&dir.0).unwrap().files.is_empty());
         assert_eq!(
             git_stdout(&dir.0, &["rev-list", "--count", "HEAD"]).as_deref(),
             Some("1")
@@ -8321,7 +8519,7 @@ mod tests {
         std::fs::write(repo.0.join("a.txt"), "beta\n").unwrap();
         git_stage_file_for(&repo.0, "a.txt").unwrap();
         git_commit_for(&repo.0, "second").unwrap();
-        let index = git_diff_index_for(&repo.0);
+        let index = git_diff_index_for(&repo.0).unwrap();
         assert_eq!(index.remote.as_deref(), Some("origin"));
         assert_eq!(index.upstream.as_deref(), Some("origin/main"));
         assert_eq!(index.default_branch.as_deref(), Some("main"));
@@ -8356,7 +8554,7 @@ mod tests {
         std::fs::write(repo.0.join("a.txt"), "beta\n").unwrap();
         git_stage_file_for(&repo.0, "a.txt").unwrap();
         git_commit_for(&repo.0, "feature work").unwrap();
-        let index = git_diff_index_for(&repo.0);
+        let index = git_diff_index_for(&repo.0).unwrap();
         assert_eq!(index.branch.as_deref(), Some("feature"));
         assert_eq!(index.upstream, None);
         assert_eq!(index.ahead, 1);
@@ -8393,11 +8591,11 @@ mod tests {
         std::fs::write(repo.0.join("a.txt"), "beta\n").unwrap();
         git_stage_file_for(&repo.0, "a.txt").unwrap();
         git_commit_for(&repo.0, "feature work").unwrap();
-        assert!(!git_diff_index_for(&repo.0).head_pushed);
+        assert!(!git_diff_index_for(&repo.0).unwrap().head_pushed);
         if !git(&repo.0, &["push", "origin", "feature"]) {
             return;
         }
-        let index = git_diff_index_for(&repo.0);
+        let index = git_diff_index_for(&repo.0).unwrap();
         assert_eq!(index.upstream, None);
         assert!(index.head_pushed);
     }
@@ -8448,8 +8646,8 @@ mod tests {
             std::fs::read_to_string(b.0.join("a.txt")).unwrap(),
             "beta\n"
         );
-        assert_eq!(git_diff_index_for(&b.0).ahead, 0);
-        assert_eq!(git_diff_index_for(&b.0).behind, 0);
+        assert_eq!(git_diff_index_for(&b.0).unwrap().ahead, 0);
+        assert_eq!(git_diff_index_for(&b.0).unwrap().behind, 0);
 
         std::fs::write(b.0.join("b.txt"), "from-b\n").unwrap();
         git_stage_file_for(&b.0, "b.txt").unwrap();

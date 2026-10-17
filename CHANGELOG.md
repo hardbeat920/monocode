@@ -57,6 +57,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - HTML artifacts render their surface, muted, and border theme colors opaquely. In #1020 by @rxchitrx.
 - macOS development bundles retain correct version metadata. In #983 by @MRKups.
 
+### Fixed
+
+- The Changes panel no longer drops every tracked change and lists only untracked files when Git fails to read the working tree, such as when a Git LFS or other required clean filter cannot run. The panel keeps the last list it read and shows Git's error above it until the next read succeeds, and the sidebar line counts no longer show partial totals for it. A Git status read that hangs is stopped after 30 seconds, and a tracked change that Git reports as neither staged nor unstaged appears under Changes instead of being counted but not shown.
+
 ## [0.13.0] - 2026-10-12
 
 ### Added

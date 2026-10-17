@@ -125,7 +125,7 @@ export function GitChangesPanel({
   onOpenAllChanges,
   onOpenCommit,
 }: Props) {
-  const { index, reload } = useDiffIndex(cwd, enabled);
+  const { index, error: loadError, reload } = useDiffIndex(cwd, enabled);
   const files = index?.files ?? [];
   const paneRef = useRef<HTMLDivElement>(null);
   const branchMenuRef = useRef<HTMLButtonElement>(null);
@@ -265,6 +265,7 @@ export function GitChangesPanel({
         cwd={cwd}
         textHarness={textHarness}
         index={index}
+        loadError={loadError}
         files={files}
         selected={selectedPath}
         selectedKind={selectedKind}
@@ -322,6 +323,7 @@ function ChangedFiles({
   cwd,
   textHarness,
   index,
+  loadError,
   files,
   selected,
   selectedKind,
@@ -336,6 +338,7 @@ function ChangedFiles({
   cwd: string;
   textHarness?: HarnessId;
   index: GitDiffIndex | null;
+  loadError: string | null;
   files: GitChangedFile[];
   selected?: string;
   selectedKind?: GitFileDiffKind;
@@ -360,8 +363,9 @@ function ChangedFiles({
   const [view, setView] = useState<ChangesView>(changesView);
   const { pr, reload: reloadPr } = usePrStatus(cwd, index?.branch);
   const staged = useMemo(() => files.filter((file) => file.staged), [files]);
+  // A tracked change in neither section would count but never show.
   const unstaged = useMemo(
-    () => files.filter((file) => file.unstaged),
+    () => files.filter((file) => file.unstaged || !file.staged),
     [files],
   );
   const hasRemote = Boolean(index?.remote);
@@ -835,14 +839,24 @@ function ChangedFiles({
         ref={lockOverscroll}
         className="min-h-0 flex-1 overflow-y-auto overscroll-none py-1"
       >
-        {files.length === 0 ? (
-          <p className="px-3 py-2 text-[12px] text-content/45">
-            {index
-              ? index.ahead > 0 || index.behind > 0
-                ? syncStatusLabel(index)
-                : "No uncommitted changes"
-              : "Loading changes…"}
+        {loadError ? (
+          <p
+            role="alert"
+            className="px-3 py-2 text-[11px] break-words whitespace-pre-line text-red-400"
+          >
+            Git status failed: {loadError}
           </p>
+        ) : null}
+        {files.length === 0 ? (
+          index || !loadError ? (
+            <p className="px-3 py-2 text-[12px] text-content/45">
+              {index
+                ? index.ahead > 0 || index.behind > 0
+                  ? syncStatusLabel(index)
+                  : "No uncommitted changes"
+                : "Loading changes…"}
+            </p>
+          ) : null
         ) : (
           <>
             {staged.length > 0 ? (
@@ -1599,11 +1613,16 @@ function useDiffIndex(
   enabled: boolean,
 ): {
   index: GitDiffIndex | null;
+  error: string | null;
   reload: () => void;
 } {
   const [index, setIndex] = useState<GitDiffIndex | null>(() =>
     cachedIndex(cwd),
   );
+  const [failure, setFailure] = useState<{
+    cwd: string;
+    message: string;
+  } | null>(null);
   const [nonce, setNonce] = useState(0);
   const reload = useCallback(() => setNonce((value) => value + 1), []);
   const indexRef = useRef(index);
@@ -1632,6 +1651,7 @@ function useDiffIndex(
       try {
         const next = await gitDiffIndex(cwd);
         if (cancelled) return;
+        setFailure(null);
         const prev = indexRef.current;
         if (sameIndex(prev, next)) return;
         indexByCwd.set(cwd, next);
@@ -1647,10 +1667,13 @@ function useDiffIndex(
           invalidateWatchedFiles(paths);
           notifyGitChanged();
         }
-      } catch {
+      } catch (error) {
+        // Keep the last good list: a failed read is not an empty one.
         if (!cancelled) {
-          indexByCwd.delete(cwd);
-          setIndex(null);
+          setFailure({
+            cwd,
+            message: error instanceof Error ? error.message : String(error),
+          });
         }
       } finally {
         inFlight = false;
@@ -1678,7 +1701,11 @@ function useDiffIndex(
     };
   }, [cwd, enabled, nonce]);
 
-  return { index, reload };
+  return {
+    index,
+    error: failure?.cwd === cwd ? failure.message : null,
+    reload,
+  };
 }
 
 /** The last Git status read for a checkout, shared so other views open on it. */
