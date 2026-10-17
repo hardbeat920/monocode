@@ -475,6 +475,7 @@ export function permissionTitle(permission: string, patterns: string[]): string 
   const detail = patterns.length > 0 ? patterns.join("\n") : permission;
   switch (permission) {
     case "bash":
+    case "shell":
       return detail ? `Run ${detail}` : "Run command";
     case "edit":
       return detail ? `Edit ${detail}` : "Edit file";
