@@ -1,4 +1,5 @@
 import { useGithubPrChecks } from "../hooks/useGithubPrChecks";
+import { GithubPrBranchCleanup } from "./GithubPrBranchCleanup";
 import { summarizePrChecks } from "../model/githubPrChecks";
 import type { CiRepairRequest } from "../model/ciRepair";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -1721,11 +1722,15 @@ export function GithubPrActions({
   item,
   baseRef,
   headRef,
+  cwd = item.projectPath,
+  revision = 0,
   onChange,
 }: {
   item: InboxItem;
   baseRef: string;
   headRef: string;
+  cwd?: string;
+  revision?: number;
   onChange?: (item: InboxItem) => void;
 }) {
   const mergeGroup = useRef<HTMLDivElement>(null);
@@ -1795,6 +1800,15 @@ export function GithubPrActions({
 
   return (
     <>
+      {state === "merged" && item.provider === "github" && item.kind === "pr" ? (
+        <GithubPrBranchCleanup
+          key={`${cwd}:${item.repo}:${item.number}`}
+          cwd={cwd}
+          repo={item.repo}
+          number={item.number}
+          revision={revision}
+        />
+      ) : null}
       {state === "open" && !item.draft ? (
         <div
           ref={mergeGroup}
@@ -2839,6 +2853,8 @@ export function InboxDetail({
                     item={item}
                     baseRef={baseRef}
                     headRef={headRef}
+                    cwd={item.projectPath || cwd}
+                    revision={revision}
                     onChange={onItemChange}
                   />
                 ) : null}
