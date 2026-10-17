@@ -218,6 +218,7 @@ import {
   removePane,
   resetTabToSession,
   replaceLeafId,
+  restoreWorkspacePaneFile,
   setSplitRatio,
   siblingLeafId,
   splitPane,
@@ -6558,6 +6559,21 @@ function Workspace({
     },
     [activateTab, insertBesideActive, closeMonoView],
   );
+
+  const onNavigateFile = useCallback((paneId: string, file: FilePaneTab) => {
+    if (
+      !tabsRef.current.some((tab) =>
+        tab.editorPanes.some((pane) => pane.id === paneId),
+      )
+    )
+      return;
+    // Allocate once outside the updater, which React may replay.
+    const restoredId = crypto.randomUUID();
+    setTabs((prev) => restoreWorkspacePaneFile(prev, paneId, file, restoredId));
+    setProjectTerminalFocused(false);
+    setComposerFocused(false);
+    setEditorNavigation(null);
+  }, []);
 
   const onOpenPlan = useCallback(
     (sessionId: string, blockId: string) => {
@@ -13149,6 +13165,7 @@ function Workspace({
                                     }
                                     composerFocusToken={composerFocusToken}
                                     onSelectFile={onSelectFileSurface}
+                                    onNavigateFile={onNavigateFile}
                                     onCloseFile={onCloseFile}
                                     onCloseOtherFiles={onCloseOtherFiles}
                                     onPinFile={onPinFile}

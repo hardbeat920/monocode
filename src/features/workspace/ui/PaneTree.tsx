@@ -26,6 +26,7 @@ import {
   layoutSashes,
   setSplitRatio,
   type EditorPane,
+  type FilePaneTab,
   type LayoutLeaf,
   type LayoutNode,
   type LayoutSash,
@@ -143,6 +144,7 @@ type Shared = {
   ) => void;
   onQuestionInteraction?: (sessionId: string, requestId: number) => void;
   onOpenFile: (path: string) => void;
+  onNavigateFile?: (paneId: string, file: FilePaneTab) => void;
   editorNavigation?: EditorNavigationTarget | null;
   onOpenDiff: (
     path?: string,
@@ -259,6 +261,7 @@ function PaneTreeComponent({
   onQuestionReply,
   onQuestionInteraction,
   onOpenFile,
+  onNavigateFile,
   editorNavigation,
   onOpenDiff,
   onOpenPlan,
@@ -487,6 +490,7 @@ function PaneTreeComponent({
                   onDirtyChange={onFileDirtyChange}
                   onErrorCountChange={onFileErrorCountChange}
                   onOpenFile={onOpenFile}
+                  onNavigateFile={onNavigateFile}
                   onUpdatePlan={onUpdatePlan}
                   onBuildPlan={onBuildPlan}
                   editorNavigation={editorNavigation}

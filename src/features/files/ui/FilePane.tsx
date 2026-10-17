@@ -34,6 +34,7 @@ import { MarkdownPreview } from "../../sessions/ui/AgentMarkdown";
 import { BinaryFileView } from "./BinaryFileView";
 import { ReleaseNotesSurface } from "../../../app/ui/ReleaseNotesSurface";
 import { isRemoteProjectPath } from "../../projects/model/recents";
+import { useFileHistory } from "../hooks/useFileHistory";
 
 const CommitDiff = lazySurface(async () => {
   const module = await import("../../source-control/ui/CommitDiff");
@@ -75,6 +76,7 @@ type Props = {
   onErrorCountChange: (fileId: string, count: number) => void;
   onReorderFiles: (paneId: string, ids: string[]) => void;
   onOpenFile: (path: string) => void;
+  onNavigateFile?: (paneId: string, file: FilePaneTab) => void;
   onUpdatePlan: (sessionId: string, blockId: string, text: string) => void;
   onBuildPlan: (
     sessionId: string,
@@ -103,6 +105,7 @@ function FilePaneComponent({
   onErrorCountChange,
   onReorderFiles,
   onOpenFile,
+  onNavigateFile,
   onUpdatePlan,
   onBuildPlan,
   editorNavigation,
@@ -115,6 +118,11 @@ function FilePaneComponent({
     loadDiffViewer,
   );
   const activeFile = pane.files.find((file) => file.id === pane.activeFileId);
+  const historyRef = useFileHistory(
+    activeFile,
+    visible,
+    onNavigateFile ? (file) => onNavigateFile(pane.id, file) : undefined,
+  );
   const sessionReview =
     activeFile && isSessionChangesTab(activeFile) ? activeFile : undefined;
   const unifiedReview =
@@ -126,6 +134,7 @@ function FilePaneComponent({
 
   return (
     <div
+      ref={historyRef}
       className="flex h-full min-h-0 min-w-0 flex-1 flex-col"
       onMouseDown={() => onFocus(pane.id)}
     >
@@ -264,6 +273,7 @@ export const FilePane = memo(FilePaneComponent, (previous, next) => {
     previous.onErrorCountChange !== next.onErrorCountChange ||
     previous.onReorderFiles !== next.onReorderFiles ||
     previous.onOpenFile !== next.onOpenFile ||
+    previous.onNavigateFile !== next.onNavigateFile ||
     previous.onUpdatePlan !== next.onUpdatePlan ||
     previous.onBuildPlan !== next.onBuildPlan ||
     previous.editorNavigation !== next.editorNavigation ||
