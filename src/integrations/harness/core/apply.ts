@@ -134,14 +134,19 @@ export function applyHarnessEvent(
       return session.pendingQuestion?.requestId === event.requestId
         ? { ...session, pendingQuestion: undefined }
         : session;
-    case "context":
-      return {
-        ...session,
-        context: mergeContextUsage(session.context, {
-          used: event.used,
-          window: event.window,
-        }),
-      };
+    case "context": {
+      const context = mergeContextUsage(session.context, {
+        used: event.used,
+        window: event.window,
+      });
+      if (
+        session.context?.used === context.used &&
+        session.context?.window === context.window
+      ) {
+        return session;
+      }
+      return { ...session, context };
+    }
     case "turn.metrics":
       return mergeTurnMetrics(session, event);
     case "tasks.updated":

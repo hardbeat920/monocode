@@ -1132,6 +1132,13 @@ function numberField(
  * Cached reads still take up window space, so they count the same as fresh
  * input; output counts because it carries into the next request.
  */
+function lastIteration(
+  usage: Record<string, unknown> | null,
+): Record<string, unknown> | null {
+  const iterations = Array.isArray(usage?.iterations) ? usage.iterations : [];
+  return asRecord(iterations[iterations.length - 1]);
+}
+
 function contextUsedFromUsage(usage: Record<string, unknown> | null): number {
   if (!usage) return 0;
   return (
@@ -1177,7 +1184,7 @@ export function contextUsedFromAssistant(
 ): number | undefined {
   const usage = asRecord(asRecord(rec.message)?.usage);
   if (!usage) return undefined;
-  const used = contextUsedFromUsage(usage);
+  const used = contextUsedFromUsage(lastIteration(usage) ?? usage);
   return used > 0 ? used : undefined;
 }
 
@@ -1193,9 +1200,11 @@ export function contextFromResult(
   rec: Record<string, unknown>,
 ): { used?: number; window?: number } | undefined {
   const usage = asRecord(rec.usage);
-  const iterations = Array.isArray(usage?.iterations) ? usage.iterations : [];
-  const last = asRecord(iterations[iterations.length - 1]);
-  const used = contextUsedFromUsage(last ?? usage);
+  const last = lastIteration(usage);
+  // A multi-step turn's top-level usage sums every model call. The last
+  // assistant message already reported the window; keep that reading.
+  const summed = !last && numberField(rec, "num_turns") > 1;
+  const used = summed ? 0 : contextUsedFromUsage(last ?? usage);
 
   let window: number | undefined;
   const modelUsage = asRecord(rec.modelUsage);
@@ -1207,5 +1216,8 @@ export function contextFromResult(
   }
 
   if (!used && !window) return undefined;
-  return { used: used > 0 ? used : undefined, window };
+  return {
+    ...(used > 0 ? { used } : {}),
+    ...(window ? { window } : {}),
+  };
 }
