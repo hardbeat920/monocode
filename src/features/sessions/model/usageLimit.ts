@@ -47,3 +47,13 @@ export function usageLimitResumeDue(session: Session, now: number): boolean {
   }
   return now >= limit.resetsAt + USAGE_LIMIT_RESUME_GRACE_MS;
 }
+
+/** Keep the notice but stop the automatic continue turn. */
+export function disarmUsageLimit(session: Session): Session {
+  return session.usageLimit?.resumeAtReset
+    ? {
+        ...session,
+        usageLimit: { ...session.usageLimit, resumeAtReset: false },
+      }
+    : session;
+}
