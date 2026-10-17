@@ -17,9 +17,10 @@ import {
 import { MarkdownSource } from "../../sessions/ui/AgentMarkdown";
 import { SkillDocumentPreview } from "./SkillDocumentPreview";
 import { copyText } from "../../../platform/tauri/clipboard";
-import { listSkills, readTextFile, type DiscoveredSkill } from "../../../platform/tauri/fs";
+import { readTextFile, type DiscoveredSkill } from "../../../platform/tauri/fs";
 import {
   createBlankSkill,
+  discoverFileSkills,
   invalidateSkills,
   loadDisabledSkillPaths,
   saveDisabledSkillPaths,
@@ -126,7 +127,7 @@ export function SkillsPage({
     let cancelled = false;
     setSkills(null);
     setError(null);
-    listSkills(cwd)
+    discoverFileSkills(cwd)
       .then((next) => {
         if (cancelled) return;
         setSkills(next);

@@ -5,7 +5,12 @@ const mocks = vi.hoisted(() => ({
   discoverOmpCommands: vi.fn(),
   subscribe: vi.fn(),
   listSkills: vi.fn(),
+  discoverCodexPluginSkills: vi.fn(),
   readTextFile: vi.fn(),
+}));
+
+vi.mock("../../../integrations/harness/providers/codex/codexCatalog", () => ({
+  discoverCodexPluginSkills: mocks.discoverCodexPluginSkills,
 }));
 
 vi.mock("../../../integrations/harness/core/registry", () => ({
@@ -46,6 +51,7 @@ import {
   skillCatalogKey,
   subscribeSkills,
   applySkillsToTurn,
+  discoverFileSkills,
 } from "./skills";
 import type { DiscoveredSkill } from "../../../platform/tauri/fs";
 import type { PiSkillCommand } from "../../../integrations/harness/providers/pi/piSkills";
@@ -85,8 +91,73 @@ beforeEach(() => {
   ]);
   mocks.subscribe.mockReset();
   mocks.listSkills.mockReset();
+  mocks.discoverCodexPluginSkills.mockReset();
+  mocks.discoverCodexPluginSkills.mockResolvedValue([]);
   mocks.discoverPiSkills.mockResolvedValue([piSkill("architect")]);
   mocks.listSkills.mockResolvedValue([]);
+});
+
+describe("Codex plugin file skills", () => {
+  const plugin: DiscoveredSkill = {
+    name: "pstack-for-codex:poteto-help",
+    description: "Pstack help",
+    path: "/custom-codex/plugins/cache/pstack/0.4.0/skills/poteto-help/SKILL.md",
+    scope: "user",
+    source: "codex",
+  };
+
+  it("shares enabled plugin entries between Settings and the composer without duplicates", async () => {
+    const standalone = {
+      ...plugin,
+      name: "poteto-help",
+      path: "/repo/.agents/skills/poteto-help/SKILL.md",
+      source: "agents" as const,
+    };
+    mocks.listSkills.mockResolvedValue([standalone]);
+    mocks.discoverCodexPluginSkills.mockResolvedValue([plugin, plugin]);
+    const files = await discoverFileSkills("/repo");
+    expect(files).toEqual([standalone, plugin]);
+    const catalog = await loadSkills({ harness: "codex", cwd: "/repo" });
+    expect(catalog.filter((skill) => skill.name === plugin.name)).toEqual([
+      { ...plugin, kind: "file", invocation: plugin.name },
+    ]);
+  });
+
+  it("filters locally disabled plugin paths and preserves existing same-name precedence", async () => {
+    mocks.discoverCodexPluginSkills.mockResolvedValue([plugin]);
+    expect(await discoverFileSkills("/repo", [plugin.path])).toEqual([]);
+    const existing = {
+      ...plugin,
+      source: "claude" as const,
+      path: "/claude/SKILL.md",
+    };
+    mocks.listSkills.mockResolvedValue([existing]);
+    expect(await discoverFileSkills("/repo")).toEqual([existing]);
+  });
+
+  it("keeps standalone and Claude skills when Codex is absent or unsupported", async () => {
+    const existing = { ...plugin, source: "claude" as const };
+    mocks.listSkills.mockResolvedValue([existing]);
+    mocks.discoverCodexPluginSkills.mockRejectedValue(
+      new Error("Codex unavailable"),
+    );
+    expect(await discoverFileSkills("/repo")).toEqual([existing]);
+  });
+
+  it("reads the selected plugin's pinned body and supplies its reference directory", async () => {
+    mocks.discoverCodexPluginSkills.mockResolvedValue([plugin]);
+    mocks.readTextFile.mockResolvedValue("# Help\nRead references/guide.md.");
+    const prompt = await applySkillsToTurn(`/${plugin.name} help`, {
+      harness: "codex",
+      cwd: "/repo",
+    });
+    expect(mocks.readTextFile).toHaveBeenCalledWith(plugin.path);
+    expect(prompt).toContain(`Skill source: ${plugin.path}`);
+    expect(prompt).toContain(
+      "Resolve relative references from the directory containing this SKILL.md.",
+    );
+    expect(prompt).toContain("Read references/guide.md.");
+  });
 });
 
 describe("provider-aware skill catalog", () => {

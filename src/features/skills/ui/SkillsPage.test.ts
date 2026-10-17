@@ -7,8 +7,12 @@ import { SkillsPage } from "./SkillsPage";
 import { SettingsView } from "../../settings/ui/SettingsView";
 import type { DiscoveredSkill } from "../../../platform/tauri/fs";
 import { loadDisabledSkillPaths, saveDisabledSkillPaths } from "../model/skills";
+import { discoverCodexPluginSkills } from "../../../integrations/harness/providers/codex/codexCatalog";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("../../../integrations/harness/providers/codex/codexCatalog", () => ({
+  discoverCodexPluginSkills: vi.fn(async () => []),
+}));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({
     isMaximized: async () => false,
@@ -86,6 +90,7 @@ function deferred<T>() {
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   localStorage.clear();
+  vi.mocked(discoverCodexPluginSkills).mockResolvedValue([]);
   vi.mocked(invoke).mockReset();
   vi.mocked(invoke).mockImplementation(async (command) => {
     if (command === "list_skills") return skills;
@@ -105,6 +110,24 @@ afterEach(() => {
 });
 
 describe("Settings skill preview", () => {
+  it("previews Codex plugin skills from the exact discovered source path alongside existing skills", async () => {
+    const plugin: DiscoveredSkill = {
+      name: "pstack-for-codex:poteto-help",
+      description: "Pstack help",
+      path: "/custom-codex/plugins/cache/pstack/0.4.0/skills/poteto-help/SKILL.md",
+      scope: "user",
+      source: "codex",
+    };
+    vi.mocked(discoverCodexPluginSkills).mockResolvedValue([plugin]);
+    await render();
+    expect(button("Project guide")).toBeDefined();
+    await click(plugin.name);
+    expect(invoke).toHaveBeenCalledWith("read_text_file", { path: plugin.path });
+    expect(
+      container.querySelector('[aria-label="Skill preview"]')?.textContent,
+    ).toContain("Full instructions");
+  });
+
   it.each(["document", "error"])(
     "never shows the previous %s under a newly selected skill while its read is pending",
     async (previousState) => {
