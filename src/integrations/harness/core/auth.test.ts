@@ -39,6 +39,9 @@ describe("harness login", () => {
     expect(harnessLoginArgs("cursor")).toEqual(["login"]);
     expect(harnessLoginArgs("grok")).toEqual(["login", "--oauth"]);
     expect(harnessLoginArgs("fx")).toEqual(["login", "vercel"]);
+    // ACP advertises its own login methods; `agy` has no account-login subcommand.
+    expect(harnessLoginArgs("antigravity")).toBeNull();
+    expect(supportsHarnessLogin("antigravity")).toBe(false);
     expect(supportsHarnessLogin("opencode")).toBe(false);
     expect(supportsHarnessLogin("pi")).toBe(false);
     expect(supportsHarnessLogin("omp")).toBe(false);

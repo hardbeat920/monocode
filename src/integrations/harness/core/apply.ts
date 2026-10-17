@@ -984,6 +984,8 @@ function upsertTool(
         kind: patch.kind,
         status: patch.status,
         ...(detail ? { detail } : {}),
+        ...(detail && (patch.status === "completed" || patch.status === "success")
+          ? { detailIsOutput: true } : {}),
         ...(preview ? { preview } : {}),
         ...(patch.paths ? { paths: patch.paths } : {}),
         ...(patch.background ? { background: true } : {}),
@@ -1006,6 +1008,9 @@ function upsertTool(
   );
   const kind = patch.kind ?? prev.tool?.kind;
   const status = patch.status ?? prev.tool?.status;
+  const detailIsOutput =
+    (status === "completed" || status === "success") &&
+    !!(capToolDetail(patch.detail) || prev.tool?.detailIsOutput);
   const paths = patch.paths ?? prev.tool?.paths;
   const agentName = prev.agentRun?.steps.length ? prev.agentRun.name : label;
   if (
@@ -1015,6 +1020,7 @@ function upsertTool(
     prev.tool?.kind === kind &&
     prev.tool?.status === status &&
     prev.tool?.detail === detail &&
+    !!prev.tool?.detailIsOutput === detailIsOutput &&
     prev.tool?.paths === paths &&
     (!patch.agentModel || prev.agentRun?.model === patch.agentModel) &&
     (!prev.agentRun || prev.agentRun.name === agentName) &&
@@ -1043,6 +1049,7 @@ function upsertTool(
       kind,
       status,
       ...(detail ? { detail } : {}),
+      ...(detailIsOutput ? { detailIsOutput: true } : {}),
       ...(preview ? { preview } : {}),
       ...(paths ? { paths } : {}),
       ...(prev.tool?.background ? { background: true } : {}),
@@ -1133,6 +1140,8 @@ function recordAgentStep(
     ...(event.toolKind ? { toolKind: event.toolKind } : {}),
     ...(event.status ? { status: event.status } : {}),
     ...(detail ? { detail } : {}),
+    ...(detail && (event.status === "completed" || event.status === "success")
+      ? { detailIsOutput: true } : {}),
     ...(event.preview ? { preview: event.preview } : {}),
   };
 
@@ -1148,6 +1157,10 @@ function recordAgentStep(
       // call announced itself with rather than letting the result rename it.
       text: text || existing.text,
       preview: mergeToolPreview(event.preview, existing.preview),
+      detailIsOutput:
+        (step.status ?? existing.status) === "completed" ||
+        (step.status ?? existing.status) === "success"
+          ? !!(detail || existing.detailIsOutput) : undefined,
     };
   } else {
     steps = [...(run?.steps ?? []), step];
@@ -1190,6 +1203,7 @@ function sameAgentStep(a: AgentStep, b: AgentStep): boolean {
     a.toolKind === b.toolKind &&
     a.status === b.status &&
     a.detail === b.detail &&
+    !!a.detailIsOutput === !!b.detailIsOutput &&
     samePreview(a.preview, b.preview)
   );
 }

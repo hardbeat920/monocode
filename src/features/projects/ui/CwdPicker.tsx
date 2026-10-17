@@ -210,6 +210,7 @@ export function CwdPicker({
         aria-haspopup="menu"
         disabled={!enabled}
         data-tauri-drag-region="false"
+        data-cwd-picker-trigger
         onMouseDown={(e) => e.preventDefault()}
         onClick={() => {
           if (!enabled) return;

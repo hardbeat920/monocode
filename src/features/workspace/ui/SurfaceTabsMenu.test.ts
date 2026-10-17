@@ -94,6 +94,36 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+it("keeps adjacent and trailing actions separate from tab and pane dragging", () => {
+  const create = vi.fn();
+  const move = vi.fn();
+  const pointer = vi.fn();
+  props.onPaneDragStart = vi.fn();
+  props.adjacentAction = createElement("button", { onClick: create }, "Create");
+  props.trailing = createElement("button", { onClick: move }, "Move");
+  document.body.addEventListener("pointerdown", pointer);
+  render();
+  const button = Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Create")!;
+  expect(button.closest('[role="tablist"]')).toBeNull();
+  act(() => {
+    button.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
+    button.click();
+  });
+  document.body.removeEventListener("pointerdown", pointer);
+  expect(create).toHaveBeenCalledExactlyOnceWith(expect.anything());
+  expect(move).not.toHaveBeenCalled();
+  expect(props.onSelectFile).not.toHaveBeenCalled();
+  expect(props.onReorder).not.toHaveBeenCalled();
+  expect(props.onPaneDragStart).not.toHaveBeenCalled();
+  expect(pointer).not.toHaveBeenCalled();
+  props.adjacentAction = undefined;
+  render();
+  expect(container.textContent).not.toContain("Create");
+  expect(container.querySelector('[role="tablist"]')?.getAttribute("aria-label")).toBe("Open files");
+  act(() => Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Move")!.click());
+  expect(move).toHaveBeenCalledOnce();
+});
+
 describe("file tab context menu", () => {
   it("keeps the default cursor on reorderable file tabs", () => {
     const tabs = container.querySelectorAll<HTMLElement>('[role="tab"]');

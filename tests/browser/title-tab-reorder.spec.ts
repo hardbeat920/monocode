@@ -43,6 +43,9 @@ test.beforeEach(async ({ page }) => {
   });
   await page.goto("/tests/browser/title-tab-reorder.html");
   await expect(page.locator("[data-title-tab-id]")).toHaveCount(5);
+  await page.waitForFunction(
+    () => typeof (window as unknown as Fixture).startTicking === "function",
+  );
 });
 
 test("slow drag reorders", async ({ page }) => {

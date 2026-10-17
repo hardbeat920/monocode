@@ -549,11 +549,11 @@ export function groupMonoTurnItems(
   blocks: Block[],
   options?: { live?: boolean; undeliveredMessageIds?: ReadonlySet<string> },
 ): TurnItem[] {
-  // Read the original order before moving user bubbles above the work. Once
-  // the user joins in, hiding subsequent replies makes a delivered message
-  // look ignored. Queued or failed messages have not reached the agent yet.
+  // A delivered steer separates the preceding reply from the next one.
+  // Queued or failed messages have not reached the agent yet.
   const followUpReplies = new Set<string>();
   let interactive = false;
+  let previousProse: Block | undefined;
   for (const block of blocks) {
     if (
       block.role === "user" &&
@@ -562,15 +562,16 @@ export function groupMonoTurnItems(
       !block.internal &&
       !block.draft &&
       !options?.undeliveredMessageIds?.has(block.id)
-    )
+    ) {
+      if (previousProse) followUpReplies.add(previousProse.id);
       interactive = true;
-    if (interactive && isProseBlock(block)) followUpReplies.add(block.id);
+    }
+    if (isProseBlock(block)) {
+      previousProse = block;
+      if (interactive) followUpReplies.add(block.id);
+    }
   }
-  // Keep the user's messages together above the work, without mutating history.
-  const items = groupTurnItems([
-    ...blocks.filter((block) => block.role === "user"),
-    ...blocks.filter((block) => block.role !== "user"),
-  ]);
+  const items = groupTurnItems(blocks);
   const start = items.findIndex(
     (item) => item.type !== "block" || item.block.role !== "user",
   );

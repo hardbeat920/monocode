@@ -5,6 +5,7 @@ import {
   DashboardSquare,
   Inbox,
   PanelLeft,
+  Plus,
   Settings,
   StickyNote,
   Terminal,
@@ -115,6 +116,7 @@ type Props = {
   onToggleSidebar: () => void;
   onToggleSessionSidebar?: () => void;
   onSelect: (id: string) => void;
+  onNewSession?: () => void;
   onNewTerminal?: () => void;
   onOpenSettings?: () => void;
   onOpenInbox?: () => void;
@@ -644,6 +646,7 @@ function TitleBarComponent({
   onToggleSidebar,
   onToggleSessionSidebar,
   onSelect,
+  onNewSession,
   onNewTerminal,
   onOpenSettings,
   onOpenInbox,
@@ -739,6 +742,9 @@ function TitleBarComponent({
   }, []);
   const activeTabRef = useRef<HTMLDivElement | null>(null);
   const canDrag = tabs.length > 1;
+  const activeTabOpening = displayed.some(
+    (entry) => entry.id === activeId && entry.opening,
+  );
 
   useEffect(() => {
     if (sortable.draggingId) return;
@@ -746,7 +752,7 @@ function TitleBarComponent({
       inline: "nearest",
       block: "nearest",
     });
-  }, [activeId, sortable.draggingId]);
+  }, [activeId, activeTabOpening, sortable.draggingId]);
 
   useLayoutEffect(() => {
     const el = tabStripRef.current;
@@ -1044,103 +1050,117 @@ function TitleBarComponent({
         {mono ? (
           <MonoTitle look={mono.look} state={mono.state} />
         ) : (
-          <div
-            className="relative h-full min-w-0 flex-1 overflow-hidden"
-            onWheel={(event) => {
-              const el = tabStripRef.current;
-              if (!el || el.scrollWidth <= el.clientWidth) return;
-              if (event.deltaX === 0 && event.deltaY !== 0) {
-                el.scrollLeft += event.deltaY;
-              }
-            }}
-          >
-            {tabOverflow.left ? (
-              <TabStripChevron side="left" onClick={() => scrollTabsBy(-1)} />
-            ) : null}
-            {tabOverflow.right ? (
-              <TabStripChevron side="right" onClick={() => scrollTabsBy(1)} />
-            ) : null}
+          <div className="flex h-full min-w-0 max-w-full shrink items-stretch">
             <div
-              ref={setTabStripRef}
-              data-title-tab-strip
-              className="scrollbar-none flex h-full min-w-0 cursor-default items-center gap-0.5 overflow-x-auto overflow-y-hidden overscroll-none pl-1.5 pr-2.5"
-            >
-              {displayed.map((entry) => {
-                const tab = entry.item;
-                const shell = (
-                  <div
-                    ref={(el) => {
-                      if (!entry.closing) setTabNode(tab.id, el);
-                    }}
-                    className={
-                      entry.closing || entry.opening
-                        ? "relative flex h-full w-full min-w-0 overflow-hidden items-center"
-                        : "relative flex h-full w-56 min-w-28 shrink cursor-default items-center"
-                    }
-                    data-title-tab-id={entry.closing ? undefined : tab.id}
-                    data-tab-slot-id={entry.closing ? undefined : tab.id}
-                    data-tauri-drag-region="false"
-                  >
-                    {!entry.closing && paneToTabDrop?.targetTabId === tab.id ? (
-                      <span
-                        data-pane-tab-drop-hint
-                        className={`pointer-events-none absolute inset-y-1 z-50 w-0.5 rounded-full bg-accent shadow-[0_0_8px_var(--color-accent)] ${
-                          paneToTabDrop.position === "before"
-                            ? "left-0"
-                            : "right-0"
-                        }`}
-                      />
-                    ) : null}
-                    <TitleTabItem
-                      tab={tab}
-                      active={!entry.closing && tab.id === activeId}
-                      closable={
-                        !entry.closing && titleTabClosable(tab, tabs.length)
-                      }
-                      canDrag={!entry.closing && canDrag}
-                      sortable={sortable}
-                      onSelect={onSelect}
-                      onClose={onClose}
-                      onPinFile={onPinFile}
-                      onContextMenu={(tabId, event) =>
-                        setTabMenu({
-                          tabId,
-                          x: event.clientX,
-                          y: event.clientY,
-                        })
-                      }
-                      itemRef={
-                        !entry.closing && tab.id === activeId
-                          ? (el) => {
-                              activeTabRef.current = el;
-                            }
-                          : undefined
-                      }
-                    />
-                  </div>
-                );
-                if (entry.closing || entry.opening) {
-                  return (
-                    <TabWidthMotion
-                      key={tab.id}
-                      phase={entry.closing ? "closing" : "opening"}
-                      width={entry.width}
-                      onFinish={() => finishMotion(tab.id)}
-                    >
-                      {shell}
-                    </TabWidthMotion>
-                  );
+              className="relative h-full min-w-0 shrink overflow-hidden"
+              onWheel={(event) => {
+                const el = tabStripRef.current;
+                if (!el || el.scrollWidth <= el.clientWidth) return;
+                if (event.deltaX === 0 && event.deltaY !== 0) {
+                  el.scrollLeft += event.deltaY;
                 }
-                return (
-                  <div key={tab.id} className="contents">
-                    {shell}
-                  </div>
-                );
-              })}
+              }}
+            >
+              {tabOverflow.left ? (
+                <TabStripChevron side="left" onClick={() => scrollTabsBy(-1)} />
+              ) : null}
+              {tabOverflow.right ? (
+                <TabStripChevron side="right" onClick={() => scrollTabsBy(1)} />
+              ) : null}
+              <div
+                ref={setTabStripRef}
+                data-title-tab-strip
+                className="scrollbar-none flex h-full min-w-0 cursor-default items-center gap-0.5 overflow-x-auto overflow-y-hidden overscroll-none pl-1.5 pr-2.5"
+              >
+                {displayed.map((entry) => {
+                  const tab = entry.item;
+                  const shell = (
+                    <div
+                      ref={(el) => {
+                        if (!entry.closing) setTabNode(tab.id, el);
+                      }}
+                      className={
+                        entry.closing || entry.opening
+                          ? "relative flex h-full w-full min-w-0 overflow-hidden items-center"
+                          : "relative flex h-full w-56 min-w-28 shrink cursor-default items-center"
+                      }
+                      data-title-tab-id={entry.closing ? undefined : tab.id}
+                      data-tab-slot-id={entry.closing ? undefined : tab.id}
+                      data-tauri-drag-region="false"
+                    >
+                      {!entry.closing && paneToTabDrop?.targetTabId === tab.id ? (
+                        <span
+                          data-pane-tab-drop-hint
+                          className={`pointer-events-none absolute inset-y-1 z-50 w-0.5 rounded-full bg-accent shadow-[0_0_8px_var(--color-accent)] ${
+                            paneToTabDrop.position === "before"
+                              ? "left-0"
+                              : "right-0"
+                          }`}
+                        />
+                      ) : null}
+                      <TitleTabItem
+                        tab={tab}
+                        active={!entry.closing && tab.id === activeId}
+                        closable={
+                          !entry.closing && titleTabClosable(tab, tabs.length)
+                        }
+                        canDrag={!entry.closing && canDrag}
+                        sortable={sortable}
+                        onSelect={onSelect}
+                        onClose={onClose}
+                        onPinFile={onPinFile}
+                        onContextMenu={(tabId, event) =>
+                          setTabMenu({
+                            tabId,
+                            x: event.clientX,
+                            y: event.clientY,
+                          })
+                        }
+                        itemRef={
+                          !entry.closing && tab.id === activeId
+                            ? (el) => {
+                                activeTabRef.current = el;
+                              }
+                            : undefined
+                        }
+                      />
+                    </div>
+                  );
+                  if (entry.closing || entry.opening) {
+                    return (
+                      <TabWidthMotion
+                        key={tab.id}
+                        phase={entry.closing ? "closing" : "opening"}
+                        width={entry.width}
+                        onFinish={() => finishMotion(tab.id)}
+                      >
+                        {shell}
+                      </TabWidthMotion>
+                    );
+                  }
+                  return (
+                    <div key={tab.id} className="contents">
+                      {shell}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
+            {onNewSession ? (
+              <div
+                className="flex shrink-0 items-center pr-1.5"
+                data-tauri-drag-region="false"
+                onPointerDown={(event) => event.stopPropagation()}
+              >
+                <IconButton label="New session" onClick={onNewSession}>
+                  <Plus className="size-3.5" strokeWidth={1.75} />
+                </IconButton>
+              </div>
+            ) : null}
           </div>
         )}
 
+        {!mono && (IS_MAC || IS_WIN) ? <div className="min-w-0 flex-1" /> : null}
         {!IS_MAC && !IS_WIN ? (
           <div className="flex min-w-0 flex-1 items-center justify-center px-4">
             <span className="pointer-events-none truncate text-[11.5px] font-medium text-content/40 select-none">

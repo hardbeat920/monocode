@@ -872,7 +872,11 @@ pub fn harness_resolve_antigravity() -> Result<AntigravityBinary, String> {
             args: antigravity_args(),
         })
         .ok_or_else(|| {
-            "Antigravity ACP server (agy_acp_server.par) not found. Install Antigravity and run `agy` once in Terminal.".into()
+            if cfg!(windows) {
+                "Antigravity ACP server is not auto-detected on Windows. Configure the full path to agy_acp_server.exe in Settings > Providers.".into()
+            } else {
+                "Antigravity ACP server (agy_acp_server.par) not found. Install Antigravity and run `agy` once in Terminal.".into()
+            }
         })
 }
 
@@ -2096,9 +2100,6 @@ fn configured_binary_fingerprint(path: &Path) -> Option<String> {
 }
 
 fn resolve_harness_binary_override(provider: &str, binary_path: &str) -> Result<PathBuf, String> {
-    if provider == "antigravity" && cfg!(windows) {
-        return Err("Antigravity ACP server overrides are not supported on Windows.".into());
-    }
     let names: &[&str] = match provider {
         "claude" => &["claude"],
         "codex" => &["codex"],
@@ -2109,6 +2110,7 @@ fn resolve_harness_binary_override(provider: &str, binary_path: &str) -> Result<
         "omp" => &["omp"],
         "fx" => &["fx"],
         "hermes" => &["hermes"],
+        "antigravity" if cfg!(windows) => &["agy_acp_server"],
         "antigravity" => &["agy_acp_server.par"],
         "devin" => &["devin"],
         _ => {
@@ -2236,6 +2238,16 @@ fn validate_configured_harness_binary_identity(
         "omp" => is_omp_agent(path),
         "fx" => is_fx_agent(path),
         "grok" => is_grok_agent(path),
+        "antigravity" => {
+            #[cfg(windows)]
+            {
+                is_windows_antigravity_server(path)
+            }
+            #[cfg(not(windows))]
+            {
+                true
+            }
+        }
         _ => true,
     };
     if identity_valid {
@@ -2245,6 +2257,34 @@ fn validate_configured_harness_binary_identity(
             "Configured path is not a valid {provider} binary: {binary_path}"
         ))
     }
+}
+
+#[cfg(windows)]
+fn is_windows_antigravity_server(path: &Path) -> bool {
+    use std::io::{Seek, SeekFrom};
+
+    // Require the native ACP server filename and a PE signature. This rejects
+    // .cmd shims and scripts renamed with .exe, but cannot prove ACP identity.
+    if !path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("agy_acp_server.exe"))
+    {
+        return false;
+    }
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut dos_header = [0u8; 64];
+    if file.read_exact(&mut dos_header).is_err() || &dos_header[..2] != b"MZ" {
+        return false;
+    }
+    let pe_offset = u32::from_le_bytes(dos_header[0x3c..0x40].try_into().unwrap());
+    if file.seek(SeekFrom::Start(pe_offset as u64)).is_err() {
+        return false;
+    }
+    let mut signature = [0u8; 4];
+    file.read_exact(&mut signature).is_ok() && signature == *b"PE\0\0"
 }
 
 /// Prefers whatever `codex` the user's own shell resolves, like
@@ -2504,9 +2544,9 @@ fn resolve_devin() -> Option<PathBuf> {
 }
 
 fn resolve_antigravity() -> Option<PathBuf> {
-    // The .par wrapper is a POSIX self-extracting archive — Antigravity ships
-    // no Windows ACP binary, so report the provider unavailable there instead
-    // of probing paths that can never be executable.
+    // The .par wrapper is a POSIX self-extracting archive. Windows uses a
+    // native .exe, but has no known stable installation path; require an
+    // explicit override there rather than guessing another app's tool path.
     if cfg!(windows) {
         return None;
     }
@@ -4139,6 +4179,69 @@ mod exec_allowlist_tests {
 #[cfg(all(windows, test))]
 mod windows_binary_tests {
     use super::*;
+
+    #[test]
+    fn configured_antigravity_accepts_native_exe_and_rejects_decoys() {
+        let dir = std::env::temp_dir().join(format!(
+            "monocode-configured-antigravity-windows-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // A minimal PE header verifies native-executable recognition without
+        // starting a real ACP server or requiring Antigravity credentials.
+        let mut pe = vec![0u8; 68];
+        pe[..2].copy_from_slice(b"MZ");
+        pe[0x3c..0x40].copy_from_slice(&64u32.to_le_bytes());
+        pe[64..68].copy_from_slice(b"PE\0\0");
+
+        let server = dir.join("agy_acp_server.exe");
+        std::fs::write(&server, &pe).unwrap();
+        let server_path = server.to_string_lossy().into_owned();
+        assert_eq!(
+            resolve_harness_binary_override("antigravity", &server_path),
+            Ok(server.clone())
+        );
+        let configured = harness_resolve_configured("antigravity".into(), server_path.clone())
+            .expect("configured Windows ACP executable");
+        assert_eq!(configured.path, server_path);
+        assert_eq!(configured.args, Some(Vec::new()));
+        assert!(is_resolved_harness_binary(
+            &server_path,
+            Some("antigravity"),
+            Some(&server_path)
+        ));
+        let missing = harness_resolve_antigravity()
+            .err()
+            .expect("Windows needs a configured ACP path");
+        assert!(missing.contains("agy_acp_server.exe"));
+        assert!(!missing.contains(".par"));
+        assert!(!is_resolved_harness_binary(
+            &server_path,
+            Some("codex"),
+            Some(&server_path)
+        ));
+
+        let wrong_name = dir.join("agy.exe");
+        std::fs::write(&wrong_name, &pe).unwrap();
+        let wrong_extension = dir.join("agy_acp_server.cmd");
+        std::fs::write(&wrong_extension, b"@echo off\r\n").unwrap();
+        let not_pe = dir.join("other/agy_acp_server.exe");
+        std::fs::create_dir_all(not_pe.parent().unwrap()).unwrap();
+        std::fs::write(&not_pe, b"this is not a native executable").unwrap();
+        let posix_wrapper = dir.join("agy_acp_server.par");
+        std::fs::write(&posix_wrapper, b"#!/bin/sh\n").unwrap();
+        for decoy in [&wrong_name, &wrong_extension, &not_pe, &posix_wrapper] {
+            assert!(
+                resolve_harness_binary_override("antigravity", &decoy.to_string_lossy()).is_err(),
+                "accepted {}",
+                decoy.display()
+            );
+        }
+        assert!(resolve_harness_binary_override("antigravity", "agy_acp_server.exe").is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn configured_binary_path_accepts_windows_shim_extension() {

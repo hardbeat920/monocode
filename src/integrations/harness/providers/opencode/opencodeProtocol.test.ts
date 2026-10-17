@@ -17,6 +17,7 @@ import {
   contextUsedFromMessageInfo,
   turnMetricsFromMessageInfo,
   detailFromToolPart,
+  previewFromToolPart,
   eventSessionId,
   inferDefaultAgent,
   inferDefaultVariant,
@@ -123,6 +124,72 @@ describe("tool failure details", () => {
         },
       }),
     ).toBe("worker disconnected");
+  });
+});
+
+describe("OpenCode tool output provenance", () => {
+  it("keeps observed bash command, workdir, and exit with its returned output for compact rendering", () => {
+    const part = {
+      id: "shell-1", type: "tool", tool: "bash",
+      state: {
+        status: "completed",
+        input: { command: "git status", workdir: "/repo" },
+        metadata: { exit: 0, duration: 32 },
+        output: "clean\n",
+      },
+    };
+    const detail = detailFromToolPart(part);
+    expect(JSON.parse(detail!)).toEqual({
+      commandLine: "git status", workingDir: "/repo", exitCode: 0,
+      combinedOutput: "clean\n",
+    });
+    expect(previewFromToolPart(part)?.output).toBe(detail);
+  });
+
+  it("does not invent shell exit codes or commands when OpenCode has not supplied them", () => {
+    const onlyOutput = { id: "shell-2", type: "tool", tool: "bash", state: {
+      status: "completed", output: "from provider", input: { description: "explain why" },
+    } };
+    expect(JSON.parse(detailFromToolPart(onlyOutput)!)).toEqual({ combinedOutput: "from provider" });
+    const noOutput = { id: "shell-3", type: "tool", tool: "bash", state: {
+      status: "completed", input: { command: "echo private input" }, metadata: { exit: 0 },
+    } };
+    expect(detailFromToolPart(noOutput)).toBeUndefined();
+    expect(previewFromToolPart(noOutput)?.output).toBeUndefined();
+  });
+
+  it("keeps long successful shell results valid JSON without truncating the command metadata", () => {
+    const part = { id: "shell-large", type: "tool", tool: "bash", state: {
+      status: "completed", input: { command: "npm test", workdir: "/repo" },
+      metadata: { exit: 1 }, output: "failed\n".repeat(2_000),
+    } };
+    const result = detailFromToolPart(part)!;
+    expect(result.length).toBeLessThanOrEqual(8_000);
+    expect(JSON.parse(result)).toMatchObject({ commandLine: "npm test",
+      workingDir: "/repo", exitCode: 1 });
+    expect((JSON.parse(result) as { combinedOutput: string }).combinedOutput).toMatch(/^failed\n/);
+    expect((JSON.parse(result) as { combinedOutput: string }).combinedOutput.endsWith("\n…")).toBe(true);
+  });
+
+  it("retains Find and read results as genuine output without fabricated shell metadata", () => {
+    for (const [tool, output] of [
+      ["grep", "Found 5 matches\nsrc/file.ts"],
+      ["read", "export const x = 1;"],
+    ]) {
+      const part = { id: tool, type: "tool", tool, state: {
+        status: "completed", input: { pattern: "SEARCH_INPUT_SENTINEL" }, output,
+      } };
+      expect(detailFromToolPart(part)).toBe(output);
+      expect(previewFromToolPart(part)?.output).toBe(output);
+    }
+  });
+
+  it("does not promote a running title or request input into successful result output", () => {
+    const part = { id: "search-running", type: "tool", tool: "grep", state: {
+      status: "running", title: "Found 5 matches", input: { pattern: "secret_pattern" },
+    } };
+    expect(detailFromToolPart(part)).toBe("Found 5 matches");
+    expect(previewFromToolPart(part)?.output).toBeUndefined();
   });
 });
 

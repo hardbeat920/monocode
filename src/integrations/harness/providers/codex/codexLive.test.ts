@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sent: string[] = [];
+const updateCodexRateLimits = vi.hoisted(() => vi.fn());
+vi.mock("../../../../features/providers/model/rateLimitsCache", () => ({
+  updateCodexRateLimits,
+}));
 let onLine: ((line: string) => void) | undefined;
 const writeChild = vi.fn(async (_id: string, line: string) => {
   sent.push(line);
@@ -66,7 +70,7 @@ import {
   type RuntimeMode,
   type TurnIntent,
 } from "../../../../features/sessions/model/session";
-import { applyHarnessEvent } from "../../core/apply";
+import { appendSteerUser, appendUser, applyHarnessEvent } from "../../core/apply";
 
 function parse() {
   return sent.map((line) => JSON.parse(line) as Record<string, unknown>);
@@ -177,6 +181,7 @@ async function startTurn(
 
 describe("codex live turn sequence", () => {
   beforeEach(() => {
+    updateCodexRateLimits.mockClear();
     sent.length = 0;
     onLine = undefined;
     writeChild.mockClear();
@@ -200,6 +205,21 @@ describe("codex live turn sequence", () => {
 
     await waitFor(() => onAccepted.mock.calls.length === 1, "turn acceptance");
     expect(onAccepted).toHaveBeenCalledOnce();
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+  });
+
+  it.each([undefined, "work-account"])("publishes pushed quotas during a running turn for account %s without a probe", async (providerAccountId) => {
+    const { turn } = await startTurn("codex-live", { providerAccountId });
+    let completed = false;
+    void turn.then(() => { completed = true; });
+    const methods = parse().map((message) => message.method);
+    const rateLimits = { limitId: "codex", primary: { usedPercent: 31, windowDurationMins: 300, resetsAt: 1_800_000_000 } };
+    notify("account/rateLimits/updated", { rateLimits });
+    await waitFor(() => updateCodexRateLimits.mock.calls.length === 1, "quota push");
+    expect(updateCodexRateLimits).toHaveBeenCalledWith(rateLimits, providerAccountId);
+    expect(completed).toBe(false);
+    expect(parse().map((message) => message.method)).toEqual(methods);
     notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
     await turn;
   });
@@ -730,6 +750,26 @@ describe("codex live turn sequence", () => {
         .filter((event) => event.type === "reasoning.delta")
         .map((event) => event.text),
     ).toEqual(["First thought.", "Next thought."]);
+  });
+
+  it("reconciles a reused item snapshot across a steer without replaying earlier text", async () => {
+    const { events, turn } = await startTurn("codex-live");
+    let session = appendUser(newSession("codex", "/repo"), "Plan it");
+    notify("item/agentMessage/delta", { itemId: "same-item", delta: "1. integration" });
+    for (const event of events.splice(0)) session = applyHarnessEvent(session, event);
+    session = appendSteerUser(session, "Continue");
+    notify("item/agentMessage/delta", { itemId: "same-item", delta: "Got it." });
+    notify("item/completed", { item: { id: "same-item", type: "agentMessage", text: "1. integrationGot it." } });
+    notify("turn/completed", { turn: { id: "turn_1", status: "completed" } });
+    await turn;
+    for (const event of events) session = applyHarnessEvent(session, event);
+    expect(session.blocks.filter((block) => block.role === "user" || block.role === "assistant")
+      .map(({ role, text }) => ({ role, text }))).toEqual([
+        { role: "user", text: "Plan it" },
+        { role: "assistant", text: "1. integration" },
+        { role: "user", text: "Continue" },
+        { role: "assistant", text: "Got it." },
+      ]);
   });
 
   it("resets text tracking between turns when an item id is reused", async () => {

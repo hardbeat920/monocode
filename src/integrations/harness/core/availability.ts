@@ -52,7 +52,11 @@ const CLI: Record<HarnessId, { name: string; install?: string }> = {
     install:
       "Install from hermes-agent.nousresearch.com, then run hermes model",
   },
-  antigravity: { name: "Antigravity ACP server (agy_acp_server.par)" },
+  antigravity: {
+    name: IS_WIN
+      ? "Antigravity ACP server (agy_acp_server.exe)"
+      : "Antigravity ACP server (agy_acp_server.par)",
+  },
   devin: {
     name: "Devin CLI",
     install: IS_WIN
@@ -72,6 +76,9 @@ let inflight: Promise<void> | null = null;
 const PROBE_TTL_MS = 30_000;
 
 export function harnessUnavailableHint(id: HarnessId): string {
+  if (id === "antigravity" && IS_WIN) {
+    return "Antigravity ACP server (agy_acp_server.exe) is not auto-detected on Windows. Set its full executable path in Settings > Providers > Antigravity.";
+  }
   const { name, install } = CLI[id];
   const how = install ? ` (\`${install}\`)` : "";
   return `${name} not found${how}. Install it, or restart MonoCode if it is already installed.`;

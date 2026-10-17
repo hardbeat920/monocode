@@ -1387,8 +1387,11 @@ function emitSubagentStep(
       : status === "completed"
         ? "completed"
         : "in_progress",
-    // Only a failure earns detail; a preview's output is never shown here.
-    ...(failed ? { detail: detailFromToolPart(part) } : {}),
+    // A completed tool owns its result; pending input/title is not output.
+    // The reducer marks this detail as output only for completed status.
+    ...(failed || status === "completed"
+      ? { detail: detailFromToolPart(part) }
+      : {}),
     ...(preview ? { preview } : {}),
   });
   if (kind === "agent") trackSubagentRow(live, callId, part);

@@ -12,6 +12,9 @@ import { consumeCodexRateLimitResetCredit } from "../../features/providers/model
 import {
   errorRateLimits,
   unavailableRateLimits,
+  RATE_LIMIT_MIN_REFETCH_MS,
+  RATE_LIMIT_POLL_MS,
+  type ProviderRateLimits,
   type RateLimitProvider,
 } from "../../features/providers/model/rateLimits";
 import {
@@ -264,23 +267,26 @@ export function UsageChips({
     wantDevin,
   ]);
 
-  const refresh = useCallback(() => {
+  const refresh = useCallback((includeCodex = true) => {
     if (inflight.current) return inflight.current;
-    setRefreshing(true);
+    // Background reads must not suppress a manual refresh of Codex.
+    if (includeCodex) setRefreshing(true);
     const jobs: Promise<unknown>[] = [];
     if (wantClaude && claudeAccountAvailable)
       jobs.push(loadRateLimits("claude", claudeAccountId, true));
-    if (wantCodex && codexAccountAvailable)
+    if (includeCodex && wantCodex && codexAccountAvailable)
       jobs.push(loadRateLimits("codex", codexAccountId, true));
     if (wantOpencode) jobs.push(loadRateLimits("opencode", "default", true));
     if (wantDevin) jobs.push(loadRateLimits("devin", "default", true));
     const run = Promise.allSettled(jobs)
       .then(() => undefined)
       .finally(() => {
-        inflight.current = null;
-        setRefreshing(false);
+        if (includeCodex) {
+          inflight.current = null;
+          setRefreshing(false);
+        }
       });
-    inflight.current = run;
+    if (includeCodex) inflight.current = run;
     return run;
   }, [
     claudeAccountAvailable,
@@ -293,10 +299,69 @@ export function UsageChips({
     wantDevin,
   ]);
 
+  const isAnyActiveSnapshotStale = useCallback(
+    (maxAgeMs: number, includeCodex = true) => {
+      const timestamp = Date.now();
+      const isStale = (c: ProviderRateLimits) =>
+        (c.status === "ok" || c.status === "error") && timestamp - c.updatedAt >= maxAgeMs;
+
+      if (wantClaude && claudeAccountAvailable) {
+        if (isStale(getCachedRateLimits("claude", claudeAccountId))) return true;
+      }
+      if (includeCodex && wantCodex && codexAccountAvailable) {
+        if (isStale(getCachedRateLimits("codex", codexAccountId))) return true;
+      }
+      if (wantOpencode) {
+        if (isStale(getCachedRateLimits("opencode"))) return true;
+      }
+      if (wantDevin) {
+        if (isStale(getCachedRateLimits("devin"))) return true;
+      }
+      return false;
+    },
+    [
+      claudeAccountAvailable,
+      claudeAccountId,
+      codexAccountAvailable,
+      codexAccountId,
+      wantClaude,
+      wantCodex,
+      wantOpencode,
+      wantDevin,
+    ],
+  );
+
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), CLOCK_MS);
+    const handleReturn = () => {
+      if (
+        document.visibilityState === "visible" &&
+        isAnyActiveSnapshotStale(RATE_LIMIT_MIN_REFETCH_MS)
+      ) {
+        void refresh();
+      }
+    };
+    handleReturn();
+    window.addEventListener("focus", handleReturn);
+    document.addEventListener("visibilitychange", handleReturn);
+    return () => {
+      window.removeEventListener("focus", handleReturn);
+      document.removeEventListener("visibilitychange", handleReturn);
+    };
+  }, [isAnyActiveSnapshotStale, refresh]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setNow(Date.now());
+      if (
+        document.visibilityState === "visible" &&
+        isAnyActiveSnapshotStale(RATE_LIMIT_POLL_MS, false)
+      ) {
+        // Codex pushes quota changes through its existing app-server connection.
+        void refresh(false);
+      }
+    }, CLOCK_MS);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [isAnyActiveSnapshotStale, refresh]);
 
   const consumeCodexReset = useCallback(
     async (creditId?: string) => {

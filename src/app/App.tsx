@@ -523,6 +523,7 @@ import { useSessionReminders } from "../features/notifications/hooks/useSessionR
 import { ReminderNotices } from "../features/sessions/ui/ReminderNotices";
 import { useUnseenFinishedSessions } from "../features/sessions/hooks/useUnseenFinishedSessions";
 import { useUnseenReplyCounts } from "../features/sessions/hooks/useUnseenReplyCounts";
+import { useTurnRateLimitsRefresh } from "../features/sessions/hooks/useTurnRateLimitsRefresh";
 import {
   loadNotificationsEnabled,
   NOTIFICATION_CLICK_EVENT,
@@ -2146,6 +2147,7 @@ function Workspace({
     busySessionIds,
     activeSessionId,
   );
+  useTurnRateLimitsRefresh(sessions, busySessionIds);
 
   const liveAgentRows = useMemo(
     () =>
@@ -12816,6 +12818,7 @@ function Workspace({
   const compactTitleBar = compactTitleNavigation && !monoCovers;
   const workspaceTitleBar = (
     <TitleBar
+      onNewSession={onNew}
       // A Mono in full view stands apart from the project's tabs.
       tabs={monoCovers ? NO_TITLE_TABS : titleTabs}
       mono={

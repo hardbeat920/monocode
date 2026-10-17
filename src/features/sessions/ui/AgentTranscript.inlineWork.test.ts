@@ -854,7 +854,7 @@ it("marks the compact group for search without expanding its commands or narrati
   expect(container.querySelector("[data-mono-work] button")).toBeNull();
 });
 
-it("keeps interrupted Mono messages together above one working indicator", () => {
+it("keeps interrupted Mono messages chronological with one working indicator", () => {
   const blocks: Block[] = [
     {
       id: "first-message",
@@ -883,13 +883,13 @@ it("keeps interrupted Mono messages together above one working indicator", () =>
       (row) => row.dataset.promptAnchor,
     ),
   ).toEqual(["first-message", "second-message", "third-message"]);
-  expect(turn.querySelectorAll('[data-message-stack="true"]')).toHaveLength(2);
+  expect(turn.querySelectorAll('[data-message-stack="true"]')).toHaveLength(0);
   expect(turn.querySelectorAll("[data-mono-work]")).toHaveLength(1);
-  const rows = [...turn.querySelectorAll("[data-transcript-search-item]")];
-  expect(
-    rows.slice(0, 3).every((row) => row.querySelector("[data-prompt-anchor]")),
-  ).toBe(true);
-  expect(rows[3].hasAttribute("data-mono-work")).toBe(true);
+  const header = turn.querySelector("[data-mono-work]")!;
+  const first = turn.querySelector('[data-prompt-anchor="first-message"]')!;
+  const second = turn.querySelector('[data-prompt-anchor="second-message"]')!;
+  expect(first.compareDocumentPosition(header) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(header.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   render([...blocks, { id: "answer", role: "assistant", text: "Done" }], {
     ...props,
     busy: false,
@@ -956,7 +956,7 @@ it("shows answers to mid-turn follow-ups immediately and retains them during lat
   ];
   render(blocks, props);
   expect(container.textContent).toContain("I am checking browser security.");
-  expect(container.textContent).not.toContain("I will inspect the files.");
+  expect(container.textContent).toContain("I will inspect the files.");
   const continued: Block[] = [
     ...blocks.map((block) =>
       block.id === "status-reply" ? { ...block, streaming: false } : block,
@@ -992,9 +992,10 @@ it.each(["pending", "paused", "failed"] as const)(
       messageDeliveries: new Map([["follow-up", { status: delivery }]]),
     });
     expect(container.textContent).not.toContain("Checking browser security.");
+    expect(container.textContent).not.toContain("I will inspect the files.");
     render(blocks, { busy: true, messageDeliveries: new Map() });
     expect(container.textContent).toContain("Checking browser security.");
-    expect(container.textContent).not.toContain("I will inspect the files.");
+    expect(container.textContent).toContain("I will inspect the files.");
   },
 );
 

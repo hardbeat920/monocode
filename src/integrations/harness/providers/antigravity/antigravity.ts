@@ -1,3 +1,4 @@
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import { AcpSubagents } from "../../core/acpSubagents";
 import type { RuntimeMode } from "../../../../features/sessions/model/session";
@@ -71,6 +72,7 @@ type Resume = {
 
 // Bound startup and control requests; a prompt may legitimately run much longer.
 const INIT_TIMEOUT_MS = 12_000;
+const AUTH_TIMEOUT_MS = 10 * 60_000;
 const SESSION_TIMEOUT_MS = 45_000;
 const CONTROL_TIMEOUT_MS = 15_000;
 const PROMPT_TIMEOUT_MS = 30 * 60_000;
@@ -80,10 +82,61 @@ const PROMPT_TIMEOUT_MS = 30 * 60_000;
 // surface a status note instead of killing the turn.
 const STALL_NOTIFY_MS = 120_000;
 
-const AUTH_HELP = "Run `agy` once in Terminal to sign in.";
+const AUTH_HELP = "Complete Google OAuth sign-in for the Antigravity ACP server in your browser, then retry.";
+
+function requiresAuthentication(error: unknown): boolean {
+  const detail = error instanceof Error ? error.message : String(error);
+  return /auth(?:entication)?[_ ](?:required|failed)|not authenticated|unauthorized|sign.?in required/i.test(detail);
+}
+
+/** ACP v1: only an advertised agent auth method may be passed to authenticate. */
+function agentAuthMethodId(initialization: unknown): string | null {
+  const init = asRecord(initialization);
+  const advertised = Array.isArray(init?.authMethods) ? init.authMethods : [];
+  const methods = advertised.flatMap((item) => {
+    const method = asRecord(item);
+    const id = method?.id;
+    return typeof id === "string" && id.trim() &&
+      (method?.type == null || method.type === "agent")
+      ? [id.trim()] : [];
+  });
+  // Respect a provider-selected method (for example Enterprise); otherwise
+  // default to personal Google OAuth when several methods are advertised.
+  const preferred = asRecord(init?._meta)?.defaultAuthMethodId;
+  if (typeof preferred === "string" && methods.includes(preferred)) return preferred;
+  if (methods.includes("oauth-personal")) return "oauth-personal";
+  return methods.length === 1 ? methods[0] : null;
+}
+
+/** OAuth URLs are bearer-like handoff links: validate before opening, never log. */
+function googleAuthUrl(line: string): string | null {
+  const candidate = line.match(/https:\/\/[^\s<>"']+/i)?.[0];
+  if (!candidate) return null;
+  try {
+    const url = new URL(candidate.replace(/[),.;]+$/, ""));
+    return url.protocol === "https:" && url.hostname === "accounts.google.com"
+      ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+function safeErrorDetail(error: unknown): string {
+  const detail = error instanceof Error ? error.message : String(error);
+  // ACP errors can contain a browser handoff URL or temporary auth parameters.
+  // Keep useful account/eligibility messages but never expose those values.
+  return detail
+    .replace(/https?:\/\/[^\s<>"']+/gi, "[sign-in link hidden]")
+    // ACP failures may embed a JSON error body: quoted keys and values must
+    // be redacted just like the key=value diagnostics from the CLI.
+    .replace(/(["'])(access_token|refresh_token|id_token|client_secret|api_key|token|code|state)\1(\s*[=:]\s*)(["'])(?:\\.|(?!\4)[^\\])*\4/gi, "$1$2$1$3$4[hidden]$4")
+    .replace(/\b(access_token|refresh_token|id_token|client_secret|api_key|token|code|state)\b(\s*[=:]\s*)(["'])(?:\\.|(?!\3)[^\\])*\3/gi, "$1$2$3[hidden]$3")
+    .replace(/\b(access_token|refresh_token|id_token|client_secret|api_key|token|code|state)\b\s*[=:]\s*[^\s,;&"']+/gi, "$1=[hidden]")
+    .replace(/\bBearer\s+\S+/gi, "Bearer [hidden]");
+}
 
 function antigravityError(error: unknown): Error {
-  const detail = error instanceof Error ? error.message : String(error);
+  const detail = safeErrorDetail(error);
   if (detail.includes(AUTH_HELP)) return new Error(detail);
   return new Error(/auth|login|sign.in|credential|api.key/i.test(detail)
     ? `${detail.trim()}\n\n${AUTH_HELP}` : detail);
@@ -397,6 +450,8 @@ async function startLive(input: SendTurnInput, life: number): Promise<Live> {
     }
   };
   const liveRef: { current: Live | null } = { current: null };
+  let authenticating = false;
+  let browserOpened = false;
 
   handlers.onNotification = (method, params) => {
     const live = liveRef.current;
@@ -454,7 +509,20 @@ async function startLive(input: SendTurnInput, life: number): Promise<Live> {
       if (live || !retired()) emit({ type: "session.ended", code });
     },
     (line) => {
-      console.debug("[monocode] antigravity stderr", line);
+      // Google's ACP server prints its OAuth URL to stderr while authenticate
+      // is pending. Open it only for an explicitly sent turn, without ever
+      // putting its temporary authorization parameters in logs or events.
+      if (!authenticating || browserOpened || retired()) return;
+      const url = googleAuthUrl(line);
+      if (!url) return;
+      browserOpened = true;
+      emit({ type: "status", text: "Opening Google sign-in for Antigravity…" });
+      void openUrl(url).catch(() => {
+        if (!retired()) emit({
+          type: "status",
+          text: "MonoCode could not open the Google sign-in page. Check that your desktop can open browser links.",
+        });
+      });
     },
   );
 
@@ -471,8 +539,9 @@ async function startLive(input: SendTurnInput, life: number): Promise<Live> {
       "antigravity",
     );
     if (retired()) throw new Error("Antigravity session stopped during startup");
+    let initialization: unknown;
     try {
-      await acp.request(
+      initialization = await acp.request(
         "initialize",
         {
           protocolVersion: 1,
@@ -485,16 +554,45 @@ async function startLive(input: SendTurnInput, life: number): Promise<Live> {
       throw antigravityError(error);
     }
 
+    // A signed-in server may accept session/new without another login. Only
+    // invoke ACP authenticate when a user-initiated session request actually
+    // reports auth_required; the background catalog probe never opens OAuth.
+    const methodId = agentAuthMethodId(initialization);
+    let authAttempted = false;
+    const requestSession = async <T>(method: string, params: object): Promise<T> => {
+      try {
+        return await acp.request<T>(method, params, SESSION_TIMEOUT_MS);
+      } catch (error) {
+        if (!requiresAuthentication(error)) throw error;
+        if (!methodId || authAttempted) {
+          throw new Error(`Authentication required. ${AUTH_HELP}${!methodId
+            ? " The ACP server did not advertise a compatible sign-in method." : ""}`);
+        }
+        authAttempted = true;
+        authenticating = true;
+        try {
+          await acp.request("authenticate", { methodId }, AUTH_TIMEOUT_MS);
+        } catch (authError) {
+          if (retired()) throw authError;
+          const detail = safeErrorDetail(authError);
+          throw new Error(`Antigravity authentication failed: ${detail}. ${AUTH_HELP}`);
+        } finally {
+          authenticating = false;
+        }
+        if (retired()) throw new Error("Antigravity session stopped during startup");
+        return acp.request<T>(method, params, SESSION_TIMEOUT_MS);
+      }
+    };
+
     let setup: SessionSetupResult | undefined;
     let acpSessionId: string | undefined;
     let didLoad = false;
 
     if (canLoad && resume) {
       try {
-        setup = await acp.request<SessionSetupResult>(
+        setup = await requestSession<SessionSetupResult>(
           "session/resume",
           { sessionId: resume.acpSessionId, cwd: input.cwd, mcpServers: [] },
-          SESSION_TIMEOUT_MS,
         );
         acpSessionId = sessionIdFromResult(setup) ?? resume.acpSessionId;
         didLoad = true;
@@ -505,22 +603,21 @@ async function startLive(input: SendTurnInput, life: number): Promise<Live> {
         // A resume that timed out may still be executing server-side; never
         // stack session/load or a fresh session on top of it — fail the send
         // and let the next turn retry on a recycled transport.
-        if (isTimeout(error)) throw error;
+        if (isTimeout(error) || requiresAuthentication(error)) throw error;
         try {
-          setup = await acp.request<SessionSetupResult>(
+          setup = await requestSession<SessionSetupResult>(
             "session/load",
             {
               sessionId: resume.acpSessionId,
               cwd: input.cwd,
               mcpServers: [],
             },
-            SESSION_TIMEOUT_MS,
           );
           acpSessionId = sessionIdFromResult(setup) ?? resume.acpSessionId;
           didLoad = true;
         } catch (loadError) {
           if (retired()) throw new Error("Antigravity session stopped during startup");
-          if (isTimeout(loadError)) throw loadError;
+          if (isTimeout(loadError) || requiresAuthentication(loadError)) throw loadError;
           setup = undefined;
           acpSessionId = undefined;
           didLoad = false;
@@ -531,10 +628,9 @@ async function startLive(input: SendTurnInput, life: number): Promise<Live> {
     if (!acpSessionId) {
       if (retired()) throw new Error("Antigravity session stopped during startup");
       const droppedBinding = canLoad && resume != null;
-      setup = await acp.request<SessionSetupResult>(
+      setup = await requestSession<SessionSetupResult>(
         "session/new",
         { cwd: input.cwd, mcpServers: [] },
-        SESSION_TIMEOUT_MS,
       );
       acpSessionId = sessionIdFromResult(setup);
       if (acpSessionId && droppedBinding) {

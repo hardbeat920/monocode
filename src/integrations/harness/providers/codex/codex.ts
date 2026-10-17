@@ -5,6 +5,7 @@ import {
   exhaustedWindowResetAt,
   parseCodexRateLimits,
 } from "../../../../features/providers/model/rateLimits";
+import { updateCodexRateLimits } from "../../../../features/providers/model/rateLimitsCache";
 import type { RuntimeMode } from "../../../../features/sessions/model/session";
 import {
   questionPromptTitle,
@@ -1148,6 +1149,7 @@ function noteRateLimits(live: Live, update: Record<string, unknown>): void {
     primary: update.primary ?? current.primary,
     secondary: update.secondary ?? current.secondary,
   });
+  updateCodexRateLimits(update, live.providerAccountId);
 }
 
 function usageLimitResetAt(live: Live): number | null {

@@ -1714,7 +1714,7 @@ export function Composer({
   return (
     <div
       data-composer
-      className={`relative shrink-0 ${shell || compact ? "" : "p-1.5 pt-0"}`}
+      className={`session-composer relative shrink-0 ${shell || compact ? "" : "p-1.5 pt-0"}`}
       onMouseDown={disabled ? undefined : onFocus}
       onKeyDownCapture={disabled ? undefined : onComposerKeyDown}
     >
@@ -1926,7 +1926,7 @@ export function Composer({
             </div>
           ) : null}
           {hideTopBar ? null : (
-            <div className="flex min-w-0 items-center gap-2.5 overflow-hidden px-3 pt-2.5">
+            <div className="session-composer-checkout flex min-w-0 items-center gap-2.5 overflow-hidden px-3 pt-2.5">
               {!remote && !hideProjectPicker ? (
                 <CwdPicker
                   cwd={cwd}
@@ -2042,7 +2042,7 @@ export function Composer({
               ref={highlightRef}
               aria-hidden
               style={{ textIndent: modeIndent }}
-              className={`composer-highlight pointer-events-none absolute inset-0 max-h-40 overflow-hidden whitespace-pre-wrap wrap-break-word px-3 text-sm leading-5.5 text-content font-sans ${
+              className={`composer-highlight pointer-events-none absolute inset-0 max-h-40 overflow-hidden whitespace-pre-wrap wrap-break-word px-3 text-[15px] leading-6 text-content font-sans ${
                 shell ? "py-4" : "py-3"
               }`}
             >
@@ -2078,7 +2078,7 @@ export function Composer({
               }
               aria-label={inputAriaLabel}
               disabled={disabled}
-              className={`composer-field scrollbar-none relative max-h-40 w-full resize-none overflow-x-hidden whitespace-pre-wrap wrap-break-word bg-transparent px-3 text-sm leading-5.5 outline-none placeholder:overflow-hidden placeholder:text-ellipsis placeholder:whitespace-nowrap font-sans ${
+              className={`composer-field scrollbar-none relative max-h-40 w-full resize-none overflow-x-hidden whitespace-pre-wrap wrap-break-word bg-transparent px-3 text-[15px] leading-6 outline-none placeholder:overflow-hidden placeholder:text-ellipsis placeholder:whitespace-nowrap font-sans ${
                 shell ? "py-4" : "py-3"
               }`}
               onFocus={onFocus}
@@ -2115,7 +2115,7 @@ export function Composer({
             />
           </div>
 
-          <div className="flex items-center gap-1 px-2 pb-2">
+          <div className="session-composer-controls flex items-center gap-1 px-2 pb-2">
             <div
               ref={plusRef}
               className={compact ? "hidden" : "relative shrink-0"}
@@ -2342,7 +2342,7 @@ export function Composer({
                 if (e.deltaX === 0 && e.deltaY !== 0) el.scrollLeft += e.deltaY;
               }}
             >
-              <div className="flex shrink-0 items-center gap-1">
+              <div className="flex shrink-0 items-center gap-2">
                 <ModelPicker
                   harness={harness}
                   model={model}
@@ -2386,9 +2386,9 @@ export function Composer({
                 aria-label="Stop editing last message"
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={exitEditMode}
-                className="edit-last-turn-button flex h-6.5 shrink-0 items-center gap-1 rounded-md border border-current/20 px-2 text-[11px] font-medium transition-[background-color,color,border-color] hover:border-current/35 hover:bg-content/15 hover:text-content focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+                className="edit-last-turn-button flex h-7.5 shrink-0 items-center gap-1 rounded-md border border-current/20 px-2 text-xs font-medium transition-[background-color,color,border-color] hover:border-current/35 hover:bg-content/15 hover:text-content focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
               >
-                <X className="size-3" strokeWidth={1.8} />
+                <X className="size-4" strokeWidth={1.8} />
                 <span>Cancel edit</span>
               </button>
             ) : null}

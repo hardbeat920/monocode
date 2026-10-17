@@ -5,9 +5,12 @@ import { modelsFor, resetHarnessModelOverlays } from "../../../../features/sessi
 const mock = vi.hoisted(() => {
   const listeners = new Map<string, (line: string) => void>();
   const exits = new Map<string, (code: number | null) => void>();
+  const stderrs = new Map<string, (line: string) => void>();
   return {
     listeners,
     exits,
+    stderrs,
+    openUrl: vi.fn(async (_url: string) => undefined),
     sent: [] as { thread: string; id?: number; method?: string; params?: Record<string, unknown>; result?: unknown }[],
     spawn: vi.fn(async () => undefined),
     // killChild unwatches in the real bridge; mirror that so a killed
@@ -24,8 +27,13 @@ const mock = vi.hoisted(() => {
     resolveGates: null as Array<() => void> | null,
     setupConfigOptions: null as unknown[] | null,
     setConfigResult: null as unknown,
+    initAuthMethods: [] as unknown[],
+    initAuthMeta: null as Record<string, unknown> | null,
+    authRequired: false,
+    authFailureDetail: null as string | null,
   };
 });
+vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: mock.openUrl }));
 vi.mock("../../../../platform/tauri/fs", () => ({ homeDir: async () => "/home/test" }));
 vi.mock("../../core/child", () => ({
   resolveAntigravityBinary: async () => {
@@ -39,10 +47,13 @@ vi.mock("../../core/child", () => ({
   unwatchChild: (id: string) => {
     mock.listeners.delete(id);
     mock.exits.delete(id);
+    mock.stderrs.delete(id);
   },
-  watchChild: (id: string, line: (line: string) => void, exit?: (code: number | null) => void) => {
+  watchChild: (id: string, line: (line: string) => void, exit?: (code: number | null) => void,
+    stderr?: (line: string) => void) => {
     mock.listeners.set(id, line);
     if (exit) mock.exits.set(id, exit);
+    if (stderr) mock.stderrs.set(id, stderr);
   },
   writeChild: async (thread: string, line: string) => {
     const message = JSON.parse(line);
@@ -55,10 +66,18 @@ vi.mock("../../core/child", () => ({
       const method = message.method;
       if (mock.fail.has(method)) {
         mock.listeners.get(thread)?.(JSON.stringify({ jsonrpc: "2.0", id: message.id,
-          error: { code: -32601, message: method === "session/new" ? "Authentication required" : "unsupported" },
+          error: { code: -32601, message: method === "session/new" ? "Authentication required"
+            : method === "authenticate" && mock.authFailureDetail ? mock.authFailureDetail : "unsupported" },
         }));
         return;
       }
+      if (mock.authRequired && ["session/new", "session/load", "session/resume"].includes(method)) {
+        mock.listeners.get(thread)?.(JSON.stringify({ jsonrpc: "2.0", id: message.id,
+          error: { code: -32000, message: "Authentication required" },
+        }));
+        return;
+      }
+      if (method === "authenticate") mock.authRequired = false;
       if (method === "session/load") {
         mock.listeners.get(thread)?.(JSON.stringify({ jsonrpc: "2.0", method: "session/update",
           params: { update: { sessionUpdate: "agent_message_chunk", content: { text: "OLD HISTORY" } } },
@@ -77,6 +96,8 @@ vi.mock("../../core/child", () => ({
       };
       const result = ["session/new", "session/load", "session/resume"].includes(method)
         ? setup
+        : method === "initialize"
+          ? { protocolVersion: 1, authMethods: mock.initAuthMethods, _meta: mock.initAuthMeta }
         : method === "session/prompt"
           ? { stopReason: mock.promptStop }
           : method === "session/set_config_option" && mock.setConfigResult != null
@@ -94,7 +115,7 @@ const providers = [
   { id: "antigravity", send: agy.sendAntigravityTurn, cancel: agy.cancelAntigravityTurn,
     stop: agy.stopAntigravitySession, forget: agy.forgetAntigravitySession,
     bind: agy.bindAntigravitySession, respond: agy.respondAntigravityApproval,
-    refresh: refreshAntigravityCatalog, path: "/fake/agy_acp_server.par", args: ["--uid="] as string[], plan: "default", auth: "agy` once" },
+    refresh: refreshAntigravityCatalog, path: "/fake/agy_acp_server.par", args: ["--uid="] as string[], plan: "default", auth: "Antigravity ACP server" },
 ] as const;
 
 // Each spawned generation registers under a scoped child key `thread#n`.
@@ -135,6 +156,11 @@ describe.each(providers)("$id offline ACP transport", (provider) => {
     mock.resolveGates = null;
     mock.setupConfigOptions = null;
     mock.setConfigResult = null;
+    mock.initAuthMethods = [];
+    mock.initAuthMeta = null;
+    mock.authRequired = false;
+    mock.authFailureDetail = null;
+    mock.openUrl.mockClear();
     mock.spawn.mockClear();
     mock.kill.mockClear();
     events = [];
@@ -250,7 +276,96 @@ describe.each(providers)("$id offline ACP transport", (provider) => {
   it("adds actionable authentication help and cleans up failed setup", async () => {
     mock.fail.add("session/new");
     await expect(provider.send(input)).rejects.toThrow(provider.auth);
+    expect(mock.sent.some((m) => m.method === "authenticate")).toBe(false);
+    expect(mock.openUrl).not.toHaveBeenCalled();
     expect(mock.kill).toHaveBeenCalledWith(genKey);
+  });
+
+  it("authenticates on demand using advertised Google OAuth before retrying session/new", async () => {
+    mock.initAuthMethods = [
+      { id: "gemini-api-key", name: "API key" },
+      { id: "terminal-login", type: "terminal", name: "Terminal" },
+      { id: "oauth-personal", name: "Log in with Google" },
+      { id: "oauth-business", name: "Enterprise" },
+    ];
+    mock.authRequired = true;
+    mock.autoPrompt = true;
+    mock.silent.add("authenticate");
+    const send = provider.send(input);
+    await vi.waitFor(() => expect(mock.sent.some((m) => m.method === "authenticate")).toBe(true));
+    const auth = mock.sent.find((m) => m.method === "authenticate")!;
+    expect(auth.params).toEqual({ methodId: "oauth-personal" });
+    expect(mock.sent.map((m) => m.method).slice(0, 3))
+      .toEqual(["initialize", "session/new", "authenticate"]);
+    const stderr = mock.stderrs.get(liveKey())!;
+    stderr("Ignored: https://accounts.google.com.evil.example/steal");
+    stderr("Ignored: http://accounts.google.com/unsafe");
+    expect(mock.openUrl).not.toHaveBeenCalled();
+    stderr("Open the following link to authenticate: https://accounts.google.com/o/oauth2/v2/auth?state=test-private");
+    expect(mock.openUrl).toHaveBeenCalledOnce();
+    expect(mock.openUrl).toHaveBeenCalledWith("https://accounts.google.com/o/oauth2/v2/auth?state=test-private");
+    expect(events).toContainEqual({ type: "status", text: "Opening Google sign-in for Antigravity…" });
+    expect(JSON.stringify(events)).not.toContain("test-private");
+    mock.authRequired = false;
+    childListener()(JSON.stringify({ jsonrpc: "2.0", id: auth.id, result: {} }));
+    await send;
+    expect(mock.sent.map((m) => m.method).filter((method) => method === "session/new")).toHaveLength(2);
+    expect(events).toContainEqual({ type: "message.completed" });
+  });
+
+  it("does not open OAuth for an already authenticated session", async () => {
+    mock.initAuthMethods = [{ id: "oauth-personal", name: "Google" }];
+    mock.autoPrompt = true;
+    await provider.send(input);
+    expect(mock.sent.some((m) => m.method === "authenticate")).toBe(false);
+    expect(mock.openUrl).not.toHaveBeenCalled();
+  });
+
+  it("respects the server's preferred enterprise login when advertised", async () => {
+    mock.initAuthMethods = [
+      { id: "oauth-personal", name: "Google" },
+      { id: "oauth-business", name: "Gemini Enterprise" },
+    ];
+    mock.initAuthMeta = { defaultAuthMethodId: "oauth-business" };
+    mock.authRequired = true;
+    mock.autoPrompt = true;
+    await provider.send(input);
+    expect(mock.sent.find((m) => m.method === "authenticate")?.params)
+      .toEqual({ methodId: "oauth-business" });
+  });
+
+  it("refuses unadvertised and terminal auth methods without attempting OAuth", async () => {
+    mock.initAuthMethods = [{ id: "terminal-auth", type: "terminal", name: "Use terminal" }];
+    mock.authRequired = true;
+    await expect(provider.send(input)).rejects.toThrow(/did not advertise a compatible sign-in method/);
+    expect(mock.sent.some((m) => m.method === "authenticate")).toBe(false);
+    expect(mock.openUrl).not.toHaveBeenCalled();
+  });
+
+  it("keeps authentication failures visible instead of falling back from resume", async () => {
+    provider.bind("thread", "saved-session", "/repo");
+    mock.initAuthMethods = [{ id: "oauth-personal", name: "Google" }];
+    mock.authRequired = true;
+    mock.fail.add("authenticate");
+    mock.authFailureDetail = "Account inaccessible at https://accounts.google.com/o/oauth2/v2/auth?state=private-token with code=secret";
+    const failure = await provider.send(input).then(() => null, (error: Error) => error);
+    expect(failure?.message).toMatch(/Antigravity authentication failed/);
+    expect(failure?.message).toContain("Account inaccessible");
+    expect(failure?.message).not.toMatch(/private-token|code=secret|accounts\.google\.com/);
+    expect(mock.sent.filter((m) => m.method === "session/resume")).toHaveLength(1);
+    expect(mock.sent.some((m) => m.method === "session/load" || m.method === "session/new")).toBe(false);
+    expect(mock.kill).toHaveBeenCalledWith(genKey);
+  });
+
+  it("redacts JSON-formatted credentials in authentication errors", async () => {
+    mock.initAuthMethods = [{ id: "oauth-personal", name: "Google" }];
+    mock.authRequired = true;
+    mock.fail.add("authenticate");
+    mock.authFailureDetail = 'Provider rejected credentials: {"access_token":"secret-json-access","refresh_token":"secret-json-refresh","client_secret":"secret-json-client","code":"secret-json-code"}';
+    const failure = await provider.send(input).then(() => null, (error: Error) => error);
+    expect(failure?.message).toContain("Provider rejected credentials");
+    expect(failure?.message).toContain("[hidden]");
+    expect(failure?.message).not.toMatch(/secret-json-(access|refresh|client|code)/);
   });
 
   it("probes catalogs over ACP once, kills the probe, and preserves models on failure", async () => {

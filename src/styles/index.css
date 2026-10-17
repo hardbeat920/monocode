@@ -1664,6 +1664,129 @@ html.has-user-accent .primary-action:disabled {
   );
 }
 
+/* Main session composer only: picker menus and the quick/Mono composers retain
+   their own sizing. Keep the wallpaper visible through the base surface. */
+.session-composer {
+  --session-composer-secondary: 60%;
+}
+
+html.theme-light .session-composer {
+  /* Keep small labels above 4.5:1 over the translucent light surface. */
+  --session-composer-secondary: 70%;
+}
+
+html .session-composer [data-composer-box] {
+  background:
+    linear-gradient(
+      color-mix(in srgb, var(--color-content) 3%, transparent),
+      color-mix(in srgb, var(--color-content) 3%, transparent)
+    ),
+    color-mix(in srgb, var(--color-background-base) 90%, transparent);
+}
+
+/* The pane already supplies the user's glass opacity. A small darkening layer
+   follows that surface instead of making the composer almost opaque again. */
+html.has-native-glass.glass-body:not(.theme-light)
+  .session-composer [data-composer-box] {
+  background: color-mix(in srgb, var(--color-background-base) 20%, transparent);
+}
+
+.session-composer .composer-field::placeholder {
+  color: color-mix(
+    in srgb,
+    var(--color-content) var(--session-composer-secondary),
+    transparent
+  );
+  -webkit-text-fill-color: color-mix(
+    in srgb,
+    var(--color-content) var(--session-composer-secondary),
+    transparent
+  );
+}
+
+.session-composer-controls
+  :is(
+    [data-model-picker-trigger],
+    button[data-model-control],
+    [data-access-picker-trigger]
+  ),
+.session-composer-controls > div > button,
+.session-composer-controls .composer-send {
+  height: 30px;
+  font-size: 12px;
+}
+
+.session-composer-controls
+  :is(
+    [data-model-picker-trigger],
+    button[data-model-control],
+    [data-access-picker-trigger]
+  )
+  > span {
+  font-size: inherit;
+}
+
+.session-composer-controls
+  :is(
+    [data-model-picker-trigger],
+    button[data-model-control],
+    [data-access-picker-trigger]
+  ) {
+  color: color-mix(
+    in srgb,
+    var(--color-content) var(--session-composer-secondary),
+    transparent
+  );
+}
+
+.session-composer-controls [data-model-picker-trigger] > span {
+  color: inherit;
+}
+
+.session-composer-controls
+  :is(
+    [data-model-picker-trigger],
+    button[data-model-control],
+    [data-access-picker-trigger]
+  ):is(:hover, [aria-expanded="true"]),
+.session-composer-checkout button:is(:hover, [aria-expanded="true"]) {
+  color: var(--color-content);
+}
+
+.session-composer-controls > div > button:not([data-model-picker-trigger]),
+.session-composer-controls .composer-send {
+  min-width: 30px;
+}
+
+.session-composer-controls
+  :is(
+    [data-model-picker-trigger],
+    button[data-model-control],
+    [data-access-picker-trigger]
+  )
+  > svg.size-3\.5,
+.session-composer-controls > div > button > svg.size-3\.5,
+.session-composer-checkout button > .size-3\.5,
+.session-composer-checkout [aria-label^="Workspace "] > svg.size-3\.5 {
+  width: 16px;
+  height: 16px;
+}
+
+.session-composer-checkout button,
+.session-composer-checkout [aria-label^="Workspace "] {
+  height: 30px;
+  font-size: 13px;
+  color: color-mix(
+    in srgb,
+    var(--color-content) var(--session-composer-secondary),
+    transparent
+  );
+}
+
+.session-composer-checkout [data-cwd-picker-trigger] > span {
+  font-size: inherit;
+}
+
 .markdown-source-heading {
   color: var(--color-markdown-heading);
 }
@@ -1745,6 +1868,31 @@ header[data-tauri-drag-region] button {
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
+}
+
+/* Tool result disclosures already provide a frame, so don't nest a second
+   full code panel and JSON label inside them. Keep the actual highlighted code. */
+.agent-markdown[data-tool-result] [data-streamdown="code-block"] {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.agent-markdown[data-tool-result] [data-streamdown="code-block-header"] {
+  display: none;
+}
+
+.agent-markdown[data-tool-result] [data-streamdown="code-block-body"] {
+  padding: 0;
+  border: 0;
+}
+
+.agent-markdown[data-tool-result] [data-streamdown="code-block-body"] pre,
+.agent-markdown[data-tool-result] [data-streamdown="code-block-body"] code > span {
+  width: auto;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .agent-markdown [data-streamdown="table-wrapper"] {

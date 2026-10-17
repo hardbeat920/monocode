@@ -20,6 +20,11 @@ import {
   setCachedRateLimits,
 } from "../../providers/model/rateLimitsCache";
 import {
+  errorRateLimits,
+  idleRateLimits,
+  unavailableRateLimits,
+} from "../../providers/model/rateLimits";
+import {
   HARNESSES,
   HARNESS_TITLE,
 } from "../../sessions/model/session";
@@ -43,8 +48,10 @@ vi.mock("@tauri-apps/api/window", () => ({
 }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn(async () => true) }));
+const installedHarnesses = vi.hoisted(() => new Set(["claude", "cursor"]));
+
 vi.mock("../../../integrations/harness/core/availability", () => ({
-  isHarnessAvailable: (id: string) => id === "claude" || id === "cursor",
+  isHarnessAvailable: (id: string) => installedHarnesses.has(id),
   hasProbedHarnessAvailability: () => true,
   getHarnessAvailabilitySnapshot: () => 0,
   subscribeHarnessAvailability: () => () => {},
@@ -101,6 +108,9 @@ function renderedSettingIds(): string[] {
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  installedHarnesses.clear();
+  installedHarnesses.add("claude");
+  installedHarnesses.add("cursor");
   mockLocalStorage();
   container = document.createElement("div");
   document.body.append(container);
@@ -120,6 +130,113 @@ afterEach(async () => {
 });
 
 describe("settings pages", () => {
+  function providerPanel(index: number): HTMLElement {
+    const group = container.querySelector(
+      '[data-setting-id="provider-accounts"]',
+    )!;
+    return group.children[1]!.children[index] as HTMLElement;
+  }
+
+  it("keeps default CLI profiles configurable without counting missing CLIs as accounts", async () => {
+    installedHarnesses.delete("claude");
+    await render("providers");
+
+    for (const index of [0, 1, 2]) {
+      expect(providerPanel(index).textContent).toContain(
+        "0 connected · CLI not installed",
+      );
+      expect(providerPanel(index).textContent).toContain("Default account");
+    }
+    expect(
+      providerPanel(0).querySelector('[aria-label="Rename Default account"]'),
+    ).not.toBeNull();
+    expect(providerAccounts("claude")).toHaveLength(1);
+    expect(providerAccounts("devin")).toHaveLength(1);
+  });
+
+  it("shows unconfigured Claude and Devin defaults when sign-out is confirmed", async () => {
+    installedHarnesses.add("devin");
+    setCachedRateLimits(
+      "claude",
+      "default",
+      unavailableRateLimits("claude", "Claude not signed in"),
+    );
+    setCachedRateLimits(
+      "devin",
+      "default",
+      unavailableRateLimits("devin", "Devin not signed in"),
+    );
+    await render("providers");
+
+    for (const index of [0, 2]) {
+      expect(providerPanel(index).textContent).toContain(
+        "0 connected · Not signed in",
+      );
+      expect(providerPanel(index).textContent).toContain("Default account");
+    }
+  });
+
+  it("counts confirmed sign-ins, not the number of stored CLI profiles", async () => {
+    installedHarnesses.add("codex");
+    installedHarnesses.add("devin");
+    saveProviderAccount({
+      id: "account-work",
+      provider: "codex",
+      label: "Work",
+    });
+    setCachedRateLimits("devin", "default", {
+      ...idleRateLimits("devin"),
+      status: "ok",
+    });
+    setCachedRateLimits(
+      "codex",
+      "default",
+      unavailableRateLimits("codex", "Codex not signed in"),
+    );
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "provider_account_identity") {
+        const { provider, accountId } = args as {
+          provider: string;
+          accountId: string;
+        };
+        return provider === "claude" ||
+          (provider === "codex" && accountId === "account-work")
+          ? { email: "user@example.com" }
+          : null;
+      }
+      return undefined;
+    });
+    await render("providers");
+
+    expect(providerPanel(0).textContent).toContain("1 connected");
+    expect(providerPanel(1).textContent).toContain("1 connected");
+    expect(providerPanel(1).textContent).toContain("Not signed in");
+    expect(providerPanel(1).textContent).toContain("Work");
+    expect(providerPanel(2).textContent).toContain("1 connected");
+  });
+
+  it("keeps uncertain account states unverified and reacts when usage confirms sign-in", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) =>
+      command === "provider_account_identity" ? null : undefined,
+    );
+    setCachedRateLimits(
+      "claude",
+      "default",
+      errorRateLimits("claude", "Network unavailable"),
+    );
+    await render("providers");
+    expect(providerPanel(0).textContent).toContain("Connection unverified");
+    expect(providerPanel(0).textContent).not.toContain("Not signed in");
+
+    await act(async () => {
+      setCachedRateLimits("claude", "default", {
+        ...idleRateLimits("claude"),
+        status: "ok",
+      });
+    });
+    expect(providerPanel(0).textContent).toContain("1 connected");
+  });
+
   it("saves each Mono's session visibility and restores it when settings reopen", async () => {
     const mono = createMono();
     const other = createMono();

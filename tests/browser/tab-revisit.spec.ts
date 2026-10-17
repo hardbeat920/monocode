@@ -27,6 +27,9 @@ const setReply = (page: Page, reply: Reply) =>
   );
 
 async function streamWords(page: Page, from: number, to: number) {
+  await page.waitForFunction(
+    () => typeof (window as unknown as Fixture).setReply === "function",
+  );
   const words = await page.evaluate(() =>
     (window as unknown as Fixture).REPLY.split(" "),
   );

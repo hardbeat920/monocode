@@ -60,6 +60,30 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+it("creates one session without bubbling a drag or creating a terminal", () => {
+  const onNewSession = vi.fn();
+  const onNewTerminal = vi.fn();
+  const onReorder = vi.fn();
+  const pointer = vi.fn();
+  document.body.addEventListener("pointerdown", pointer);
+  act(() => root.render(createElement(TitleBar, {
+    tabs: [tab("active"), tab("other")], activeId: "active", cwd: "/project",
+    onToggleSidebar: vi.fn(), onSelect: vi.fn(), onClose: vi.fn(), onCloseMany: vi.fn(),
+    onNewSession, onNewTerminal, onReorder,
+  })));
+  const button = container.querySelector<HTMLButtonElement>('button[aria-label="New session"]')!;
+  act(() => {
+    button.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
+    button.click();
+  });
+  document.body.removeEventListener("pointerdown", pointer);
+  expect(button.dataset.tauriDragRegion).toBe("false");
+  expect(onNewSession).toHaveBeenCalledExactlyOnceWith();
+  expect(onNewTerminal).not.toHaveBeenCalled();
+  expect(onReorder).not.toHaveBeenCalled();
+  expect(pointer).not.toHaveBeenCalled();
+});
+
 describe("title tab context menu", () => {
   it("archives and deletes the right-clicked conversation tab", () => {
     const onArchiveTab = vi.fn();

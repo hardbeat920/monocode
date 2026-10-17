@@ -22,6 +22,7 @@ import {
   startTransition,
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -40,6 +41,8 @@ import { settleWordFades } from "./wordFade";
 import { FilePreview } from "../../files/ui/FilePreview";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
 import { ToolDiffPreview } from "./ToolDiffPreview";
+import { ToolResultBody } from "./ToolResultBody";
+import { successfulToolOutput } from "../model/toolResult";
 import { PlanPreview } from "./PlanPreview";
 import { OrchestrationPreview } from "../../orchestration/ui/OrchestrationPreview";
 import { TaskListPreview } from "./TaskListPreview";
@@ -4044,6 +4047,7 @@ function agentStepBlock(step: AgentStep): Block {
       ...(step.toolKind ? { kind: step.toolKind } : {}),
       ...(step.status ? { status: step.status } : {}),
       ...(step.detail ? { detail: step.detail } : {}),
+      ...(step.detailIsOutput ? { detailIsOutput: true } : {}),
       ...(step.preview ? { preview: step.preview } : {}),
     },
   };
@@ -4409,6 +4413,7 @@ function ActivityToolRow({
   onOpenDiff?: (path: string) => void;
 }) {
   const [errorOpen, setErrorOpen] = useState(false);
+  const disclosureId = useId();
   const appCall = monoCodeToolCall(block);
   if (appCall) {
     return (
@@ -4420,6 +4425,13 @@ function ActivityToolRow({
   const pending = needsApproval(block);
   const errorDetail =
     !pending && state === "rejected" ? block.tool?.detail?.trim() : undefined;
+  const result = successfulToolOutput(block);
+  const resultKind = isSearchTool(block.tool?.kind, label, block.tool?.preview)
+    ? "search"
+    : isReadTool(block.tool?.kind, label, block.tool?.preview)
+      ? "read"
+      : undefined;
+  const disclosure = errorDetail ? "error details" : "result";
   const summary = (
     <ToolCallSummary
       label={label}
@@ -4435,9 +4447,9 @@ function ActivityToolRow({
 
   return (
     <div className="flex min-w-0 flex-col">
-      {errorDetail ? (
+      {errorDetail || result ? (
         <div
-          aria-label={`Failed tool call: ${label}`}
+          aria-label={`${errorDetail ? "Failed tool call" : "Tool call"}: ${label}`}
           className="group flex min-w-0 items-center gap-1.5 py-1"
         >
           {bare ? null : <ActivityToolIcon state={state} live={live} />}
@@ -4451,12 +4463,13 @@ function ActivityToolRow({
           <button
             type="button"
             aria-expanded={errorOpen}
-            aria-label={`${errorOpen ? "Hide" : "Show"} error details for ${label}`}
+            aria-controls={errorOpen ? disclosureId : undefined}
+            aria-label={`${errorOpen ? "Hide" : "Show"} ${disclosure} for ${label}`}
             onClick={() => setErrorOpen((value) => !value)}
             className="-m-1 shrink-0 rounded p-1"
           >
             <ChevronRight
-              className={`size-3.5 text-red-400/60 transition-transform ${errorOpen ? "rotate-90" : ""}`}
+              className={`size-3.5 ${errorDetail ? "text-red-400/60" : "text-content/35"} transition-transform ${errorOpen ? "rotate-90" : ""}`}
               strokeWidth={1.75}
             />
           </button>
@@ -4476,10 +4489,14 @@ function ActivityToolRow({
       ) : null}
       {errorOpen && errorDetail ? (
         <pre
+          id={disclosureId}
           className={`min-w-0 whitespace-pre-wrap break-words py-1 font-mono text-[12px] leading-5 text-red-400/80 ${bare ? "" : "pl-5"}`}
         >
           {errorDetail}
         </pre>
+      ) : null}
+      {errorOpen && result ? (
+        <div className={bare ? "" : "pl-5"}><ToolResultBody id={disclosureId} output={result} title={label} kind={resultKind} /></div>
       ) : null}
     </div>
   );
@@ -4489,7 +4506,7 @@ function MonoCodeMark({ className = "size-4" }: { className?: string }) {
   return <img src="/monocode.png" alt="" className={`shrink-0 ${className}`} />;
 }
 
-/** MonoCode commands read like the other activity rows; failures expose their output. */
+/** MonoCode commands retain their compact label while exposing available output. */
 function MonoCodeCallRow({
   block,
   call,
@@ -4503,7 +4520,10 @@ function MonoCodeCallRow({
   const output =
     block.tool?.detail?.trim() || block.tool?.preview?.output?.trim();
   const [errorOpen, setErrorOpen] = useState(false);
+  const disclosureId = useId();
   const hasError = state === "rejected" && !!output;
+  const result = successfulToolOutput(block);
+  const expandable = hasError || !!result;
   const pendingApproval = needsApproval(block);
   const command = `monocode app ${call.action}`;
   const verb = pendingApproval
@@ -4526,9 +4546,9 @@ function MonoCodeCallRow({
         <span className="min-w-0 truncate">{command}</span>
       </span>
       <ToolCallStatusIcon state={state} />
-      {hasError ? (
+      {expandable ? (
         <ChevronRight
-          className={`size-3.5 shrink-0 text-red-400/60 transition-transform ${errorOpen ? "rotate-90" : ""}`}
+          className={`size-3.5 shrink-0 ${hasError ? "text-red-400/60" : "text-content/35"} transition-transform ${errorOpen ? "rotate-90" : ""}`}
           strokeWidth={1.75}
         />
       ) : null}
@@ -4536,11 +4556,12 @@ function MonoCodeCallRow({
   );
   return (
     <div data-monocode-tool-call={call.action} className="min-w-0">
-      {hasError ? (
+      {expandable ? (
         <button
           type="button"
           aria-expanded={errorOpen}
-          aria-label={`${errorOpen ? "Hide" : "Show"} error details for MonoCode: ${call.label}`}
+          aria-controls={errorOpen ? disclosureId : undefined}
+          aria-label={`${errorOpen ? "Hide" : "Show"} ${hasError ? "error details" : "result"} for MonoCode: ${call.label}`}
           onClick={() => setErrorOpen((value) => !value)}
           className="flex w-full min-w-0 items-center gap-1.5 py-1 text-left"
         >
@@ -4550,10 +4571,11 @@ function MonoCodeCallRow({
         <div className="flex min-w-0 items-center gap-1.5 py-1">{summary}</div>
       )}
       {errorOpen && hasError ? (
-        <pre className="min-w-0 whitespace-pre-wrap break-words py-1 pl-5 font-mono text-[12px] leading-5 text-red-400/80">
+        <pre id={disclosureId} className="min-w-0 whitespace-pre-wrap break-words py-1 pl-5 font-mono text-[12px] leading-5 text-red-400/80">
           {output}
         </pre>
       ) : null}
+      {errorOpen && result ? <ToolResultBody id={disclosureId} output={result} /> : null}
       {pendingApproval ? (
         <pre className="max-h-32 min-w-0 overflow-auto whitespace-pre-wrap break-all py-1 pl-5 font-mono text-[12px] leading-5 text-content/70">
           {call.command}
@@ -4658,7 +4680,7 @@ function formatElapsed(elapsedMs: number | null): string | null {
   return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
 }
 
-function ToolCall({
+export function ToolCall({
   block,
   cwd,
   onApproval,
@@ -4674,9 +4696,16 @@ function ToolCall({
   embedded?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const disclosureId = useId();
   const preview = block.tool?.preview;
   const label = toolCallLabel(block, cwd);
   const detail = block.tool?.detail?.trim();
+  const result = successfulToolOutput(block);
+  const resultKind = isSearchTool(block.tool?.kind, label, preview)
+    ? "search"
+    : isReadTool(block.tool?.kind, label, preview)
+      ? "read"
+      : undefined;
   const expanded = detail && detail !== label ? detail : label;
   const state = toolCallState(block);
   const stateLabel =
@@ -4693,7 +4722,7 @@ function ToolCall({
   const compact =
     isReadTool(block.tool?.kind, label, preview) ||
     isSearchTool(block.tool?.kind, label, preview);
-  const expandable = !compact && !!detail && detail !== label;
+  const expandable = !!result || (state !== "accepted" && !compact && !!detail && detail !== label);
 
   const frame = embedded ? "py-0.5" : "px-4 py-1";
 
@@ -4728,8 +4757,17 @@ function ToolCall({
               onOpenFile={onOpenFile}
               onOpenDiff={onOpenDiff}
             />
+            {result ? (
+              <button type="button" aria-expanded={open}
+                aria-controls={open ? disclosureId : undefined}
+                aria-label={`${open ? "Hide" : "Show"} result for ${label}`}
+                onClick={() => setOpen((value) => !value)} className="-m-1 shrink-0 rounded p-1">
+                <ChevronRight className={`size-3.5 text-content/35 transition-transform ${open ? "rotate-90" : ""}`} strokeWidth={1.75} />
+              </button>
+            ) : null}
           </div>
         )}
+        {open && result ? <ToolResultBody id={disclosureId} output={result} title={label} kind={resultKind} /> : null}
         <ApprovalControls block={block} onApproval={onApproval} />
       </div>
     );
@@ -4740,26 +4778,29 @@ function ToolCall({
   return (
     <div className={frame}>
       {expandable ? (
-        <button
-          type="button"
-          aria-expanded={open}
-          aria-label={`${stateLabel} tool call: ${label}`}
-          onClick={() => setOpen((value) => !value)}
-          className="flex w-full min-w-0 items-center gap-2 rounded-lg py-1.5 text-left"
+        <div
+          className="flex w-full min-w-0 items-center gap-2 rounded-lg py-1.5"
         >
           <ToolCallIcon state={state} />
-          <ToolCallSummary
-            label={label}
-            preview={preview}
-            cwd={cwd}
-            failed={state === "rejected"}
-            onOpenFile={onOpenFile}
-          />
-          <ChevronRight
-            className={`size-3.5 shrink-0 text-content/35 transition-transform ${open ? "rotate-90" : ""}`}
-            strokeWidth={1.75}
-          />
-        </button>
+          <div className="flex min-w-0 flex-1 cursor-pointer" onClick={() => setOpen((value) => !value)}>
+            <ToolCallSummary
+              label={label}
+              preview={preview}
+              cwd={cwd}
+              failed={state === "rejected"}
+              onOpenFile={onOpenFile}
+            />
+          </div>
+          <button type="button" aria-expanded={open}
+            aria-controls={open ? disclosureId : undefined}
+            aria-label={result ? `${open ? "Hide" : "Show"} result for ${label}` : `${stateLabel} tool call: ${label}`}
+            onClick={() => setOpen((value) => !value)} className="-m-1 shrink-0 rounded p-1">
+            <ChevronRight
+              className={`size-3.5 shrink-0 text-content/35 transition-transform ${open ? "rotate-90" : ""}`}
+              strokeWidth={1.75}
+            />
+          </button>
+        </div>
       ) : (
         <div
           aria-label={`${stateLabel} tool call: ${label}`}
@@ -4775,8 +4816,8 @@ function ToolCall({
           />
         </div>
       )}
-      {open && expandable ? (
-        <pre className="mt-1.5 min-w-0 whitespace-pre-wrap break-words px-2.5 font-mono text-[12px] leading-5 text-content/55">
+      {open && result ? <ToolResultBody id={disclosureId} output={result} title={label} kind={resultKind} /> : open && expandable ? (
+        <pre id={disclosureId} className="mt-1.5 min-w-0 whitespace-pre-wrap break-words px-2.5 font-mono text-[12px] leading-5 text-content/55">
           {expanded}
         </pre>
       ) : null}

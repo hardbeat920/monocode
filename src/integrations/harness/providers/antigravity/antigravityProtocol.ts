@@ -32,6 +32,12 @@ export type SessionConfigOption = {
   choices?: string[];
 };
 
+// ACP tool updates are patches: results may precede a final status-only update
+// and streamed content chunks append rather than replace. Retain only bounded
+// output, kind and title by provider-session/call ID, clearing settled entries.
+const toolOutputs = new Map<string, { kind?: string; output?: string; title?: string }>();
+const MAX_TRACKED_TOOL_OUTPUTS = 256;
+
 export function antigravityPromptBlocks(
   text: string,
   attachments: Attachment[] = [],
@@ -182,13 +188,35 @@ export function eventsFromAcpUpdate(params: unknown): HarnessEvent[] {
         "",
     );
     if (!callId) return [];
+    const stateKey = JSON.stringify([
+      stringField(rec ?? {}, "sessionId") ?? "", callId,
+    ]);
+    const previous = toolOutputs.get(stateKey);
     const status = stringField(update, "status") ?? stringField(tool, "status");
-    const toolKind = stringField(update, "kind") ?? stringField(tool, "kind");
+    const toolKind = stringField(update, "kind") ?? stringField(tool, "kind") ?? previous?.kind;
     const preview = extractToolPreview(update, tool);
+    const result = toolDetail(update, tool, toolKind);
+    const detail = result && kind === "tool_call_content_chunk" && previous?.output
+      ? cap(`${previous.output}\n${result}`)
+      : result ?? (status === "completed" || status === "failed" || status === "cancelled"
+        ? previous?.output : undefined);
+    // The transcript marks successful output explicitly. Keep it in the
+    // preview as well as detail: ACP often sends content while in_progress,
+    // then a status-only completed update. That last update must not make the
+    // earlier result look like request input.
+    const outputPreview = detail
+      ? preview
+        ? { ...preview, output: detail }
+        : toolKind === "execute" || toolKind === "shell"
+          ? { kind: "shell" as const, output: detail }
+          : toolKind === "read"
+            ? { kind: "read" as const, output: detail }
+            : undefined
+      : preview;
     const title =
       composeToolTitle({
         kind: toolKind,
-        title: toolLabel(update) ?? toolLabel(tool),
+        title: toolLabel(update) ?? toolLabel(tool) ?? previous?.title,
         command: extractShellCommand(
           update.rawInput,
           tool.rawInput,
@@ -222,6 +250,15 @@ export function eventsFromAcpUpdate(params: unknown): HarnessEvent[] {
       }) ||
       toolLabel(update) ||
       toolLabel(tool);
+    if (status === "completed" || status === "failed" || status === "cancelled") {
+      toolOutputs.delete(stateKey);
+    } else if (toolKind || detail || title) {
+      toolOutputs.delete(stateKey);
+      toolOutputs.set(stateKey, { kind: toolKind, output: detail ?? previous?.output, title });
+      if (toolOutputs.size > MAX_TRACKED_TOOL_OUTPUTS) {
+        toolOutputs.delete(toolOutputs.keys().next().value!);
+      }
+    }
     return [
       {
         type: "tool.updated",
@@ -229,8 +266,8 @@ export function eventsFromAcpUpdate(params: unknown): HarnessEvent[] {
         title,
         kind: toolKind,
         status,
-        detail: toolDetail(update, tool),
-        preview,
+        detail,
+        preview: outputPreview,
         ...acpAgentInfo(update, tool, toolKind, title),
       },
     ];
@@ -488,15 +525,187 @@ function toolLabel(rec: Record<string, unknown>): string | undefined {
 function toolDetail(
   update: Record<string, unknown>,
   tool: Record<string, unknown>,
+  kind?: string,
 ): string | undefined {
-  const content =
-    textFromContent(update.content, "\n") ||
-    textFromContent(tool.content, "\n");
-  if (content.trim()) return cap(content);
-  const output = update.rawOutput ?? tool.rawOutput;
-  if (typeof output === "string" && output.trim()) return cap(output);
-  const outputText = textFromContent(output);
-  return outputText.trim() ? cap(outputText) : undefined;
+  // ACP rawInput and input are invocation arguments, never a tool result.
+  // rawOutput may contain arbitrary JSON (including arrays of command results),
+  // while content is a collection of user-visible ACP output blocks.
+  for (const value of [
+    update.rawOutput, tool.rawOutput,
+    update.raw_output, tool.raw_output,
+    update.output, tool.output,
+    update.result, tool.result,
+  ]) {
+    const text = toolOutputText(value, isCommandKind(kind));
+    if (text) return cap(text);
+  }
+  const content = toolContentText(update.content) || toolContentText(tool.content);
+  if (!content) return undefined;
+  return cap(isCommandKind(kind) ? commandEnvelopeJson(content) ?? content : content);
+}
+
+function isCommandKind(kind?: string): boolean {
+  return kind === "execute" || kind === "shell" || kind === "bash";
+}
+
+function toolOutputText(output: unknown, command: boolean): string | undefined {
+  if (output == null) return undefined;
+  if (command) {
+    const envelope = commandEnvelopeJson(output);
+    if (envelope) return envelope;
+  }
+  if (typeof output === "string") return output.trim() || undefined;
+  if (typeof output === "number" || typeof output === "boolean") return String(output);
+  const rec = asRecord(output);
+  if (rec) {
+    // MCP-shaped results and ACP content wrappers carry readable text inside
+    // `content`; prefer that to serializing their entire transport envelope.
+    const content = toolContentText(rec.content);
+    if (content) return command ? commandEnvelopeJson(content) ?? content : content;
+    for (const key of ["output", "result"]) {
+      if (rec[key] != null) {
+        const nested = toolOutputText(rec[key], command);
+        if (nested) return nested;
+      }
+    }
+  }
+  // Structured command output (stdout/stderr/exit code), read results, and
+  // other provider-specific objects must remain inspectable as formatted JSON.
+  try {
+    return JSON.stringify(output, null, 2) || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Normalize only explicit ACP *result* envelopes into complete JSON that the
+ * transcript can show as command/cwd/exit/output with an optional raw view.
+ * Unrecognized JSON and read-file text remain unchanged. */
+function commandEnvelopeJson(output: unknown): string | undefined {
+  const envelope = commandEnvelope(output);
+  if (!envelope) return undefined;
+  return boundedCommandJson(envelope);
+}
+
+function commandEnvelope(value: unknown, depth = 0): unknown {
+  if (depth > 4) return undefined;
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (!text.startsWith("{") && !text.startsWith("[")) return undefined;
+    try {
+      return commandEnvelope(JSON.parse(text) as unknown, depth + 1);
+    } catch {
+      return undefined;
+    }
+  }
+  if (Array.isArray(value)) {
+    return value.length && value.every(isCommandResult) ? { results: value } : undefined;
+  }
+  const rec = asRecord(value);
+  if (!rec) return undefined;
+  if (isCommandResult(value)) return value;
+  const results = rec.results;
+  if (Array.isArray(results) && results.length && results.every(isCommandResult)) {
+    return value;
+  }
+  if (results != null) {
+    const nested = commandEnvelope(results, depth + 1);
+    if (nested) {
+      const items = asRecord(nested)?.results;
+      return { ...rec, results: items ?? [nested] };
+    }
+  }
+  for (const key of ["output", "result"]) {
+    if (rec[key] == null) continue;
+    const nested = commandEnvelope(rec[key], depth + 1);
+    if (nested) return nested;
+  }
+  return undefined;
+}
+
+function isCommandResult(value: unknown): boolean {
+  const rec = asRecord(value);
+  return !!rec && ["formatted_output", "formattedOutput", "combinedOutput",
+    "combined_output", "stdout", "stderr", "stdOut", "stdErr", "exitCode",
+    "exit_code"].some((field) => rec[field] != null);
+}
+
+/** Cap the output fields *inside* known command JSON. Capping the serialized
+ * result with cap() slices quoted JSON mid-string, preventing the UI from
+ * recognising command metadata and displaying raw JSON. */
+function boundedCommandJson(value: unknown): string | undefined {
+  let json: string;
+  try {
+    json = JSON.stringify(value);
+  } catch {
+    return undefined;
+  }
+  if (json.length <= 8_000) return json;
+  const data = JSON.parse(json) as unknown;
+  const fields: Array<{ record: Record<string, unknown>; key: string; original: string }> = [];
+  const outputKeys = ["stdout", "stdOut", "stderr", "stdErr", "combinedOutput",
+    "combined_output", "formattedOutput", "formatted_output"];
+  const visit = (item: unknown) => {
+    const rec = asRecord(item);
+    if (!rec) return;
+    if (Array.isArray(rec.results)) for (const entry of rec.results) visit(entry);
+    for (const key of outputKeys) {
+      if (typeof rec[key] === "string") {
+        fields.push({ record: rec, key, original: rec[key] as string });
+      }
+    }
+  };
+  visit(data);
+  // Preserve command/cwd/exit metadata and as much canonical combined output
+  // as possible. Trim the longest fields first so an enormous later result
+  // does not erase the small, complete earlier commands. On ties prefer
+  // source stdout/stderr over the combined/formatted output shown by the UI.
+  fields.sort((a, b) => b.original.length - a.original.length ||
+    outputKeys.indexOf(a.key) - outputKeys.indexOf(b.key));
+  for (const field of fields) {
+    if (json.length <= 8_000) break;
+    if (!field.original.length) continue;
+    field.record[field.key] = "…";
+    json = JSON.stringify(data);
+    if (json.length > 8_000) continue;
+    // Restore the largest prefix fitting into one valid JSON string value.
+    let low = 0;
+    let high = field.original.length;
+    while (low < high) {
+      const mid = Math.ceil((low + high) / 2);
+      field.record[field.key] = `${field.original.slice(0, mid)}\n…`;
+      if (JSON.stringify(data).length <= 8_000) low = mid;
+      else high = mid - 1;
+    }
+    field.record[field.key] = `${field.original.slice(0, low)}\n…`;
+    json = JSON.stringify(data);
+    if (json.length > 8_000) {
+      field.record[field.key] = "…";
+      json = JSON.stringify(data);
+    }
+  }
+  return json.length <= 8_000 ? json : undefined;
+}
+
+function toolContentText(content: unknown): string | undefined {
+  if (typeof content === "string") return content.trim() || undefined;
+  if (Array.isArray(content)) {
+    const parts = content.map(toolContentText).filter((part): part is string => !!part);
+    return parts.length ? parts.join("\n") : undefined;
+  }
+  const rec = asRecord(content);
+  if (!rec) return undefined;
+  // `diff` and `terminal` are metadata, not readable tool output. In ACP v1
+  // content is {type:"content",content:{type:"text",text:"..."}}.
+  if (rec.type === "content") return toolContentText(rec.content);
+  if (rec.type === "text") return stringField(rec, "text");
+  if (rec.type === "resource") return toolContentText(rec.resource);
+  if (rec.type === "resource_link") return undefined;
+  if (rec.type == null) {
+    if (typeof rec.text === "string") return rec.text.trim() || undefined;
+    if (rec.content != null) return toolContentText(rec.content);
+  }
+  return undefined;
 }
 
 function cap(value: string, max = 8_000): string {

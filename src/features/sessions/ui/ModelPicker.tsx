@@ -735,6 +735,7 @@ export function ModelPicker({
       <button
         ref={button}
         type="button"
+        data-model-picker-trigger
         title={
           triggerLabel
             ? `${triggerLabel} · ${triggerTitle}`

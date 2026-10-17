@@ -231,6 +231,10 @@ import {
 } from "../../providers/model/providerAccounts";
 import { removeProviderAccountCredentials } from "../../providers/model/providerAccountCredentials";
 import {
+  providerAccountConnection,
+  providerAccountConnectionLabel,
+} from "../../providers/model/providerAccountConnection";
+import {
   identityKey,
   identityOrganizationTag,
   useProviderAccountIdentities,
@@ -3187,6 +3191,7 @@ function ProvidersPage({
   const [hiddenGlobally, setHiddenGlobally] = useState(
     loadHiddenPickerProviders,
   );
+  const [availabilityChecked, setAvailabilityChecked] = useState(false);
 
   const scopeOptions = useMemo(() => {
     const options: { value: string; label: string; icon?: ReactNode }[] = [
@@ -3228,7 +3233,13 @@ function ProvidersPage({
     : (choice?.harness ?? null);
 
   useEffect(() => {
-    void probeHarnessAvailability();
+    let active = true;
+    void probeHarnessAvailability().then(() => {
+      if (active) setAvailabilityChecked(true);
+    });
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -3288,7 +3299,7 @@ function ProvidersPage({
 
   return (
     <>
-      <ProviderAccountsSettings />
+      <ProviderAccountsSettings availabilityChecked={availabilityChecked} />
 
       <UsageDisplaySettings />
 
@@ -3419,7 +3430,11 @@ type AccountEditor = {
   label: string;
 };
 
-function ProviderAccountsSettings() {
+function ProviderAccountsSettings({
+  availabilityChecked,
+}: {
+  availabilityChecked: boolean;
+}) {
   const [version, setVersion] = useState(0);
   const [editor, setEditor] = useState<AccountEditor | null>(null);
   const [working, setWorking] = useState<string | null>(null);
@@ -3523,6 +3538,26 @@ function ProviderAccountsSettings() {
     >
       {PROVIDER_ACCOUNT_PROVIDERS.map((provider) => {
         const accounts = providerAccounts(provider);
+        const installed = availabilityChecked
+          ? isHarnessAvailable(provider)
+          : null;
+        const connectionFor = (account: ProviderAccount) =>
+          providerAccountConnection(
+            installed,
+            identities[identityKey(account)],
+            usage.usage[accountUsageKey(account)],
+          );
+        const connections = accounts.map(connectionFor);
+        const connected = connections.filter(
+          (state) => state === "connected",
+        ).length;
+        const connectionSummary = connected
+          ? `${connected} connected`
+          : connections.some((state) => state === "checking")
+            ? "Checking connection…"
+            : connections.some((state) => state === "unverified")
+              ? "Connection unverified"
+              : `0 connected · ${providerAccountConnectionLabel(connections[0]!)}`;
         const adding = editor?.provider === provider && !editor.accountId;
         return (
           <div
@@ -3539,8 +3574,7 @@ function ProviderAccountsSettings() {
                     {HARNESS_TITLE[provider]}
                   </div>
                   <div className="mt-0.5 text-[11px] text-content/40">
-                    {accounts.length}{" "}
-                    {accounts.length === 1 ? "account" : "accounts"}
+                    {connectionSummary}
                   </div>
                 </div>
               </div>
@@ -3563,6 +3597,7 @@ function ProviderAccountsSettings() {
                   editor.accountId === account.id;
                 const removing = working === `remove:${provider}:${account.id}`;
                 const identity = identities[identityKey(account)];
+                const connection = connectionFor(account);
                 const orgTag = identityOrganizationTag(identity);
                 const limits = usage.usage[accountUsageKey(account)];
                 return editing ? (
@@ -3596,7 +3631,19 @@ function ProviderAccountsSettings() {
                       </div>
                       <div className="mt-0.5 flex min-w-0 items-center gap-2.5 text-[10px]">
                         <AccountStatusLabel
-                          status={accountStatus(limits, usage.now)}
+                          status={
+                            connection === "connected"
+                              ? accountStatus(limits, usage.now)
+                              : {
+                                  tone:
+                                    connection === "checking"
+                                      ? "checking"
+                                      : "unknown",
+                                  label:
+                                    providerAccountConnectionLabel(connection),
+                                  detail: null,
+                                }
+                          }
                           className="shrink-0"
                         />
                         <ProviderAccountSubtitle

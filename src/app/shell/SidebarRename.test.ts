@@ -823,6 +823,21 @@ describe("sidebar project picker", () => {
   });
 });
 
+it("retains folder creation without redundant global new-session actions", () => {
+  saveSessionFolders(props.cwd, [{ id: "work", name: "Work", sessionIds: ["session-1"], collapsed: false }]);
+  props.onNew = vi.fn(() => "created-in-folder");
+  props.onSelectProject = vi.fn();
+  act(() => render());
+  expect(container.querySelector('button[aria-label^="New tab ("]')).toBeNull();
+  const sessionButtons = container.querySelectorAll<HTMLButtonElement>('button[aria-label="New session"]');
+  expect(sessionButtons).toHaveLength(1);
+  const create = sessionButtons[0];
+  expect(create.closest("[data-session-folder]")).not.toBeNull();
+  act(() => create.click());
+  expect(props.onNew).toHaveBeenCalledExactlyOnceWith();
+  expect(loadSessionFolders(props.cwd)[0].sessionIds).toContain("created-in-folder");
+});
+
 describe("sidebar reorder affordances", () => {
   it("keeps the default cursor on reorderable tabs and folders", () => {
     props.sessions = [

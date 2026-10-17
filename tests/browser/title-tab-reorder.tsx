@@ -56,6 +56,11 @@ function Fixture() {
       cwd="/tmp/agent-terminal"
       onToggleSidebar={() => {}}
       onSelect={setActiveId}
+      onNewSession={() => {
+        const id = `new-${ids.length}`;
+        setIds((list) => [...list, id]);
+        setActiveId(id);
+      }}
       onClose={(id) => setIds((list) => list.filter((x) => x !== id))}
       onCloseMany={() => {}}
       onReorder={(next) => setIds(next)}

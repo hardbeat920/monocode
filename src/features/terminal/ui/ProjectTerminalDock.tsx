@@ -216,14 +216,16 @@ export function ProjectTerminalDock({
         onCloseFile={onCloseTerminal}
         onCloseOtherFiles={onCloseOtherTerminals}
         onReorder={onReorderTerminals}
+        adjacentAction={
+          <IconButton
+            label={`New Terminal (${MOD}\`)`}
+            onClick={onAddTerminal}
+          >
+            <Plus className="size-3.5" strokeWidth={1.75} />
+          </IconButton>
+        }
         trailing={
           <div className="flex shrink-0 items-center gap-0.5 pr-1.5">
-            <IconButton
-              label={`New Terminal (${MOD}\`)`}
-              onClick={onAddTerminal}
-            >
-              <Plus className="size-3.5" strokeWidth={1.75} />
-            </IconButton>
             <div ref={sideButton}>
             <IconButton
               label="Move Terminal"

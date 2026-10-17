@@ -183,6 +183,24 @@ describe("groupMonoChatTurns", () => {
 });
 
 describe("groupMonoTurnItems", () => {
+  it.each([true, false])("preserves steering chronology and the preceding reply (live=%s)", (live) => {
+    const blocks: Block[] = [
+      { id: "user", role: "user", text: "Plan it", startedAt: 1 },
+      note("before", "1. integration"),
+      { id: "steer", role: "user", text: "Continue", sentAt: 10 },
+      note("after", "Got it."),
+      shell("work", "in_progress"),
+      { id: "steer-again", role: "user", text: "Use tests", sentAt: 20 },
+      note("last", "Testing now."),
+    ];
+    const items = groupMonoTurnItems(blocks, { live });
+    expect(items.flatMap((item) => item.type === "block" ? [item.block.id] : item.blocks.map((block) => block.id)))
+      .toEqual(blocks.map((block) => block.id));
+    expect(items.filter((item) => item.type === "block" && item.block.role === "assistant")
+      .map((item) => item.type === "block" && item.block.text))
+      .toEqual(["1. integration", "Got it.", "Testing now."]);
+  });
+
   it("keeps a queued message promoted to a new turn separate and hides its process", () => {
     const blocks: Block[] = [
       { id: "first", role: "user", text: "First request", startedAt: 1 },
@@ -229,6 +247,7 @@ describe("groupMonoTurnItems", () => {
             : [],
         ),
       ).toEqual([
+        "I will inspect the files.",
         "I am checking browser security.",
         "Stopping the background review now.",
       ]);

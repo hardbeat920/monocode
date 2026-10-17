@@ -435,7 +435,7 @@ export function previewFromToolPart(part: OpenCodePart): ToolPreview | undefined
   const tool = part.tool ?? "tool";
   const state = part.state ?? {};
   const kind = toolKindFromName(tool);
-  return extractToolPreview(
+  const preview = extractToolPreview(
     {
       title: typeof state.title === "string" ? state.title : tool,
       name: tool,
@@ -451,12 +451,26 @@ export function previewFromToolPart(part: OpenCodePart): ToolPreview | undefined
       rawInput: state.input,
     },
   );
+  // OpenCode reports the result in state.output, separately from input args.
+  // Make completed output explicit for the shared transcript (including child
+  // agent steps), never using a pending/running title as a result.
+  const output = state.status === "completed" ? detailFromToolPart(part) : undefined;
+  if (!output) return preview;
+  if (preview) return { ...preview, output };
+  if (kind === "shell" || kind === "search" || kind === "read") {
+    return { kind, output };
+  }
+  return undefined;
 }
 
 export function detailFromToolPart(part: OpenCodePart): string | undefined {
   const state = part.state ?? {};
   const status = typeof state.status === "string" ? state.status : "";
-  if (status === "completed" && typeof state.output === "string") return state.output;
+  if (status === "completed" && typeof state.output === "string") {
+    return toolKindFromName(part.tool ?? "tool") === "shell"
+      ? completedShellOutput(state)
+      : state.output;
+  }
   if (status === "error") {
     if (typeof state.error === "string") return state.error;
     const error = asRecord(state.error);
@@ -469,6 +483,43 @@ export function detailFromToolPart(part: OpenCodePart): string | undefined {
   }
   if (status === "running" && typeof state.title === "string") return state.title;
   return undefined;
+}
+
+/** A shell's invocation fields are metadata, not result bytes. Only serialize
+ * them alongside an actual completed OpenCode output, and never infer a
+ * successful exit code when the provider has not reported one. */
+function completedShellOutput(state: Record<string, unknown>): string {
+  const input = asRecord(state.input);
+  const metadata = asRecord(state.metadata);
+  const command = stringField(input, "command");
+  const cwd =
+    stringField(input, "workdir") ?? stringField(input, "cwd") ??
+    stringField(metadata, "workdir") ?? stringField(metadata, "cwd");
+  const rawExit = metadata?.exit ?? metadata?.exitCode ?? metadata?.exit_code;
+  const exitCode = typeof rawExit === "number" && Number.isFinite(rawExit)
+    ? rawExit : undefined;
+  const envelope = {
+    ...(command ? { commandLine: command } : {}),
+    ...(cwd ? { workingDir: cwd } : {}),
+    ...(exitCode !== undefined ? { exitCode } : {}),
+    combinedOutput: state.output as string,
+  };
+  const json = JSON.stringify(envelope);
+  if (json.length <= 8_000) return json;
+  // Cap inside the output field, not mid-JSON, so the same compact renderer
+  // can still read real command/cwd/exit data for large shell responses.
+  const original = state.output as string;
+  let low = 0;
+  let high = original.length;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    const candidate = JSON.stringify({ ...envelope,
+      combinedOutput: `${original.slice(0, mid)}\n…` });
+    if (candidate.length <= 8_000) low = mid;
+    else high = mid - 1;
+  }
+  return JSON.stringify({ ...envelope,
+    combinedOutput: `${original.slice(0, low)}\n…` });
 }
 
 export function permissionTitle(permission: string, patterns: string[]): string {

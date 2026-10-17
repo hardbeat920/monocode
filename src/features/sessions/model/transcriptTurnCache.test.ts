@@ -147,8 +147,12 @@ describe("transcript turn cache", () => {
       undeliveredMessageIds: new Set(["follow-up"]),
     });
     expect(pending).not.toContainEqual({ type: "block", block: turn[3] });
+    expect(pending).not.toContainEqual({ type: "block", block: turn[1] });
     const delivered = cache.turnItems(turn, false, { inlineWork: true });
     expect(delivered).toContainEqual({ type: "block", block: turn[3] });
+    expect(delivered).toContainEqual({ type: "block", block: turn[1] });
+    expect(delivered.flatMap((item) => item.type === "block" ? [item.block.id] : item.blocks.map((block) => block.id)))
+      .toEqual(turn.map((block) => block.id));
     expect(cache.turnItems(turn, false, { inlineWork: true })).toBe(delivered);
     expect(delivered).not.toBe(pending);
   });

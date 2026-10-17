@@ -340,11 +340,51 @@ it("renders a v2 turn streamed as session step, text, reasoning, and tool events
       type: "tool.updated",
       callId: "call_1",
       status: "completed",
-      detail: "MONOCODE_TOOL_TEST\n",
+      detail: JSON.stringify({
+        commandLine: "echo MONOCODE_TOOL_TEST",
+        exitCode: 0,
+        combinedOutput: "MONOCODE_TOOL_TEST\n",
+      }),
     }),
   );
   expect(events).toContainEqual(expect.objectContaining({ type: "context" }));
   expect(events).toContainEqual({ type: "message.completed" });
+});
+
+it("preserves v1 bash metadata but leaves OpenCode Find result text unmodified", async () => {
+  const events: HarnessEvent[] = [];
+  const { done } = await startTurn(events);
+  const emit = (id: string, tool: string, state: Record<string, unknown>) =>
+    onSseEvent?.({ type: "message.part.updated", properties: { part: {
+      sessionID: "session_1", id, type: "tool", callID: id, tool, state,
+    } } });
+  emit("bash-one", "bash", { status: "running", input: {
+    command: "git status", workdir: "/repo",
+  } });
+  emit("bash-one", "bash", { status: "completed", input: {
+    command: "git status", workdir: "/repo",
+  }, metadata: { exit: 0 }, output: "clean\n" });
+  emit("find-one", "grep", { status: "completed",
+    input: { pattern: "Hello", path: "src" },
+    output: "Found 2 matches\nsrc/main.ts:1:Hello\n" });
+  idle();
+  await done;
+  expect(events).toContainEqual(expect.objectContaining({
+    type: "tool.updated", callId: "bash-one", status: "completed",
+    detail: JSON.stringify({ commandLine: "git status", workingDir: "/repo",
+      exitCode: 0, combinedOutput: "clean\n" }),
+  }));
+  expect(events).toContainEqual(expect.objectContaining({
+    type: "tool.updated", callId: "find-one", kind: "search",
+    status: "completed", detail: "Found 2 matches\nsrc/main.ts:1:Hello\n",
+  }));
+  const session = events.reduce(applyHarnessEvent, newSession("opencode", "/repo"));
+  const bash = session.blocks.find((block) => block.tool?.callId === "bash-one");
+  const find = session.blocks.find((block) => block.tool?.callId === "find-one");
+  expect(bash?.tool?.detailIsOutput).toBe(true);
+  expect(JSON.parse(bash?.tool?.detail ?? "")).toMatchObject({ workingDir: "/repo", exitCode: 0 });
+  expect(find?.tool?.detailIsOutput).toBe(true);
+  expect(find?.tool?.preview?.output).toBe("Found 2 matches\nsrc/main.ts:1:Hello\n");
 });
 
 it("surfaces a failed v2 execution as a session error", async () => {
@@ -838,6 +878,9 @@ describe("OpenCode subagent trails", () => {
       state: { status: "running", input: { filePath: "auth.ts" } } });
     part("child", { id: "read", type: "tool", tool: "read", callID: "read", messageID: "assistant_msg",
       state: { status: "error", input: { filePath: "auth.ts" }, error: "File missing" } });
+    part("child", { id: "find", type: "tool", tool: "grep", callID: "find", messageID: "assistant_msg",
+      state: { status: "completed", input: { pattern: "auth", path: "src" },
+        output: "Found 2 matches\nsrc/auth.ts:7:auth" } });
     sessionCreated("grandchild", "child");
     message("grandchild", "nested_msg");
     part("grandchild", { id: "nested_text", type: "text", messageID: "nested_msg", text: "Nested answer" });
@@ -851,11 +894,16 @@ describe("OpenCode subagent trails", () => {
     await done;
     const session = events.reduce(applyHarnessEvent, newSession("opencode", "/repo"));
     const steps = session.blocks.find((block) => block.tool?.callId === "a")?.agentRun?.steps;
-    expect(steps?.map((step) => step.text)).toEqual(["Trace imports", "Read auth.ts", "Subagent", "Nested answer"]);
+    expect(steps?.map((step) => step.text)).toEqual(["Trace imports", "Read auth.ts", "Find auth", "Subagent", "Nested answer"]);
     expect(steps?.find((step) => step.toolKind === "read")?.status).toBe("failed");
     expect(steps?.find((step) => step.toolKind === "read")?.detail).toBe(
       "File missing",
     );
+    expect(steps?.find((step) => step.toolKind === "search")).toMatchObject({
+      status: "completed", detail: "Found 2 matches\nsrc/auth.ts:7:auth",
+      detailIsOutput: true,
+      preview: { kind: "search", output: "Found 2 matches\nsrc/auth.ts:7:auth" },
+    });
     expect(session.blocks.filter((block) => block.role === "assistant")).toEqual([]);
   });
 });

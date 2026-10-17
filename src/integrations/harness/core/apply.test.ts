@@ -525,6 +525,25 @@ describe("streamed markdown", () => {
 });
 
 describe("appendSteerUser", () => {
+  it("keeps deltas around repeated steers in distinct persisted Markdown blocks", () => {
+    let session = appendUser(newSession("codex", "/tmp"), "Plan it");
+    session = applyHarnessEvent(session, { type: "message.delta", text: "1. integration" });
+    session = appendSteerUser(session, "Continue");
+    session = applyHarnessEvent(session, { type: "message.delta", text: "Got it." });
+    session = appendSteerUser(session, "Use tests");
+    session = applyHarnessEvent(session, { type: "message.delta", text: "Testing now." });
+    session = stopStreaming(session);
+    const saved = sanitizeSessionForPersist(session);
+    expect(saved.blocks.map(({ role, text }) => ({ role, text }))).toEqual([
+      { role: "user", text: "Plan it" },
+      { role: "assistant", text: "1. integration" },
+      { role: "user", text: "Continue" },
+      { role: "assistant", text: "Got it." },
+      { role: "user", text: "Use tests" },
+      { role: "assistant", text: "Testing now." },
+    ]);
+  });
+
   it("times a mid-turn message and keeps timing the turn from its start", () => {
     vi.useFakeTimers();
     try {
@@ -580,6 +599,61 @@ describe("appendSteerUser", () => {
       text: "hi",
       noteCard: { id: "n1", slug: "overview", title: "Overview" },
     });
+  });
+});
+
+describe("successful tool result provenance", () => {
+  it("distinguishes pending arguments from an empty completion and persists fresh results", () => {
+    let session = applyHarnessEvent(newSession("claude", "/repo"), { type: "tool.started", callId: "read", title: "Read file", kind: "read" });
+    session = applyHarnessEvent(session, { type: "tool.updated", callId: "read", status: "in_progress", detail: '{"path":"file"}' });
+    session = applyHarnessEvent(session, { type: "tool.updated", callId: "read", status: "completed" });
+    expect(session.blocks[0].tool?.detail).toBe('{"path":"file"}');
+    expect(session.blocks[0].tool?.detailIsOutput).not.toBe(true);
+    session = applyHarnessEvent(session, { type: "tool.updated", callId: "read", status: "completed", detail: "actual returned contents" });
+    session = applyHarnessEvent(session, { type: "tool.updated", callId: "read", status: "completed" });
+    const saved = sanitizeSessionForPersist(session);
+    expect(saved.blocks[0].tool).toMatchObject({ detail: "actual returned contents", detailIsOutput: true });
+  });
+
+  it("retains provenance and preview-only output for nested successful tools", () => {
+    let session = applyHarnessEvent(newSession("claude", "/repo"), { type: "tool.started", callId: "parent", title: "Review", kind: "agent" });
+    session = applyHarnessEvent(session, { type: "agent.step", callId: "parent", stepId: "child", kind: "tool", text: "Run tests", status: "in_progress", detail: "input" });
+    session = applyHarnessEvent(session, { type: "agent.step", callId: "parent", stepId: "child", kind: "tool", text: "Run tests", status: "completed" });
+    expect(session.blocks[0].agentRun?.steps[0].detailIsOutput).not.toBe(true);
+    session = applyHarnessEvent(session, { type: "agent.step", callId: "parent", stepId: "child", kind: "tool", text: "Run tests", status: "completed", detail: "tests passed" });
+    session = applyHarnessEvent(session, { type: "agent.step", callId: "parent", stepId: "preview", kind: "tool", text: "Run lint", status: "completed", preview: { kind: "shell", output: "lint passed" } });
+    const steps = sanitizeSessionForPersist(session).blocks[0].agentRun?.steps;
+    expect(steps?.[0]).toMatchObject({ detail: "tests passed", detailIsOutput: true });
+    expect(steps?.[1].preview?.output).toBe("lint passed");
+  });
+
+  it("updates nested output provenance when completed detail text is unchanged", () => {
+    let session = applyHarnessEvent(newSession("claude", "/repo"), {
+      type: "tool.started", callId: "parent", title: "Review", kind: "agent",
+    });
+    session = applyHarnessEvent(session, {
+      type: "agent.step", callId: "parent", stepId: "child", kind: "tool",
+      text: "Read config", status: "in_progress", detail: "same detail",
+    });
+    session = applyHarnessEvent(session, {
+      type: "agent.step", callId: "parent", stepId: "child", kind: "tool",
+      text: "Read config", status: "completed",
+    });
+    expect(session.blocks[0].agentRun?.steps[0]).toMatchObject({
+      detail: "same detail", status: "completed",
+    });
+    expect(session.blocks[0].agentRun?.steps[0].detailIsOutput).not.toBe(true);
+
+    const before = session;
+    session = applyHarnessEvent(session, {
+      type: "agent.step", callId: "parent", stepId: "child", kind: "tool",
+      text: "Read config", status: "completed", detail: "same detail",
+    });
+    expect(session).not.toBe(before);
+    expect(session.blocks[0].agentRun?.steps[0]).toMatchObject({
+      detail: "same detail", status: "completed", detailIsOutput: true,
+    });
+    expect(sanitizeSessionForPersist(session).blocks[0].agentRun?.steps[0].detailIsOutput).toBe(true);
   });
 });
 

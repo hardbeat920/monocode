@@ -27,6 +27,7 @@ export function GitPickerTrigger({
   return (
     <button
       type="button"
+      data-git-picker-trigger
       {...props}
       className={`-ml-1.5 flex h-6 min-w-0 max-w-64 items-center gap-1.5 rounded-md px-1.5 text-[12px] text-content/55 hover:bg-content/8 hover:text-content aria-expanded:bg-content/8 aria-expanded:text-content disabled:hover:bg-transparent disabled:hover:text-content/55 active:scale-[0.97] ${dimWhenDisabled ? "disabled:opacity-40" : ""}`}
     >
