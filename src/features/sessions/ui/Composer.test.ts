@@ -11,7 +11,9 @@ vi.mock("@tauri-apps/api/core", async (importOriginal) => {
   return {
     ...original,
     invoke: (command: string, args?: unknown) =>
-      command === "mcp_discover" || command === "claude_mcp_list"
+      command === "mcp_discover" ||
+      command === "claude_mcp_list" ||
+      command === "inspect_paths"
         ? mcpInvoke(command, args)
         : original.invoke(command, args),
   };
@@ -42,6 +44,7 @@ import {
 import type { ComposerTurnOptions, Attachment } from "../model/session";
 import {
   clearComposerDraft,
+  hasUnsavedComposerDraft,
   getComposerDraft,
   setComposerDraft,
 } from "../model/draftCache";
@@ -150,37 +153,124 @@ describe("Composer question focus", () => {
     onSubmit: (text: string, attachments: Attachment[]) => void = () => {},
     sessionId?: string,
     harness: "claude" | "codex" = "claude",
+    dropTarget = false,
   ) {
+    const composer = createElement(Composer, {
+      key: sessionId,
+      focused: true,
+      focusToken,
+      harness,
+      model: "claude-sonnet",
+      runtimeMode: "supervised",
+      executionCwd: "/repo",
+      initialDraft,
+      sessionId,
+      onDraftChange: sessionId
+        ? (text) => setComposerDraft(sessionId, text)
+        : undefined,
+      hideProjectPicker: true,
+      hideBranchPicker: true,
+      onFocus: () => {},
+      onCwdChange: () => {},
+      onModelChange: () => {},
+      onRuntimeModeChange: () => {},
+      onSubmit,
+      onBtwCommand,
+      question: currentQuestion,
+      onQuestionReply,
+      busy,
+    });
     await act(async () =>
       root.render(
-        createElement(Composer, {
-          key: sessionId,
-          focused: true,
-          focusToken,
-          harness,
-          model: "claude-sonnet",
-          runtimeMode: "supervised",
-          executionCwd: "/repo",
-          initialDraft,
-          sessionId,
-          onDraftChange: sessionId
-            ? (text) => setComposerDraft(sessionId, text)
-            : undefined,
-          hideProjectPicker: true,
-          hideBranchPicker: true,
-          onFocus: () => {},
-          onCwdChange: () => {},
-          onModelChange: () => {},
-          onRuntimeModeChange: () => {},
-          onSubmit,
-          onBtwCommand,
-          question: currentQuestion,
-          onQuestionReply,
-          busy,
-        }),
+        dropTarget
+          ? createElement("div", { "data-session-drop": true }, composer)
+          : composer,
       ),
     );
   }
+
+  it("blocks session close for live text, pending paste, and attachment-only drafts", async () => {
+    const id = "close-guard";
+    await renderComposer(undefined, vi.fn(), false, 0, undefined, undefined, vi.fn(), id);
+    const textarea = container.querySelector("textarea")!;
+    expect(hasUnsavedComposerDraft(id)).toBe(false);
+    // The guard reads the live element, before React/cache updates.
+    textarea.value = "Do not discard";
+    expect(hasUnsavedComposerDraft(id)).toBe(true);
+    textarea.value = "";
+    const file = new File(["data"], "unsent.png", { type: "image/png" });
+    const paste = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(paste, "clipboardData", {
+      value: {
+        getData: () => "",
+        files: [file],
+        items: [{ kind: "file", type: file.type, getAsFile: () => file }],
+      },
+    });
+    await act(async () => {
+      textarea.dispatchEvent(paste);
+      expect(hasUnsavedComposerDraft(id)).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(textarea.value).toBe("");
+    expect(hasUnsavedComposerDraft(id)).toBe(true);
+    await act(async () => container.querySelector<HTMLButtonElement>(
+      '[aria-label="Remove unsent.png"]',
+    )!.click());
+    expect(hasUnsavedComposerDraft(id)).toBe(false);
+    clearComposerDraft(id);
+  });
+
+  it("blocks session close while a dropped attachment is being converted", async () => {
+    const id = "pending-drop-close-guard";
+    let finish!: (
+      paths: { path: string; name: string; size: number; isDir: boolean }[],
+    ) => void;
+    mcpInvoke.mockImplementation((command: string) =>
+      command === "inspect_paths"
+        ? new Promise((resolve) => {
+            finish = resolve;
+          })
+        : undefined,
+    );
+    await renderComposer(
+      undefined,
+      vi.fn(),
+      false,
+      0,
+      undefined,
+      undefined,
+      vi.fn(),
+      id,
+      "claude",
+      true,
+    );
+    const file = new File(["pending"], "pending.txt", { type: "text/plain" });
+    Object.defineProperty(file, "path", { value: "/tmp/pending.txt" });
+    const drop = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, "dataTransfer", {
+      value: { types: ["Files"], files: [file] },
+    });
+    await act(async () => {
+      container.querySelector("[data-session-drop]")!.dispatchEvent(drop);
+    });
+    expect(hasUnsavedComposerDraft(id)).toBe(true);
+
+    await act(async () => {
+      finish([
+        {
+          path: "/tmp/pending.txt",
+          name: "pending.txt",
+          size: 7,
+          isDir: false,
+        },
+      ]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(hasUnsavedComposerDraft(id)).toBe(true);
+    expect(container.textContent).toContain("pending.txt");
+    clearComposerDraft(id);
+  });
 
   it.each([
     ["/btw", ""],

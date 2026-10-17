@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   clearComposerDraft,
+  hasUnsavedComposerDraft,
+  registerComposerCloseGuard,
   getComposerDraft,
   getComposerMcpTags,
   setComposerDraft,
@@ -65,4 +67,18 @@ describe("draftCache", () => {
     setComposerDraft("mcp-one", "");
     expect(getComposerMcpTags("mcp-one")).toEqual([]);
   });
+});
+
+
+it("checks every mounted composer and removes only the unmounted guard", () => {
+  let attachments = true;
+  const first = registerComposerCloseGuard("shared", () => false);
+  const second = registerComposerCloseGuard("shared", () => attachments);
+  expect(hasUnsavedComposerDraft("shared")).toBe(true);
+  first();
+  expect(hasUnsavedComposerDraft("shared")).toBe(true);
+  attachments = false;
+  expect(hasUnsavedComposerDraft("shared")).toBe(false);
+  second();
+  expect(hasUnsavedComposerDraft("shared")).toBe(false);
 });

@@ -188,7 +188,11 @@ import {
   taggedMcpServers,
   type McpTag,
 } from "../model/mcpPicker";
-import { getComposerMcpTags, setComposerMcpTags } from "../model/draftCache";
+import {
+  getComposerMcpTags,
+  registerComposerCloseGuard,
+  setComposerMcpTags,
+} from "../model/draftCache";
 import { type McpConnection } from "../../settings/model/mcp";
 import {
   getCachedMcpSettings,
@@ -427,6 +431,16 @@ export function Composer({
   const slashRef = useRef<SlashToken | null>(null);
   const mentionRef = useRef<MentionToken | null>(null);
   const [draft, setDraft] = useState(initialDraft ?? "");
+  /** Live unsaved work vetoes automated session closing. */
+  const hasUnsavedComposerWork = () =>
+    !!ref.current?.value ||
+    attachmentsRef.current.length > 0 ||
+    !!pasteFlightRef.current ||
+    submitLockRef.current;
+  useEffect(() => {
+    if (!sessionId) return;
+    return registerComposerCloseGuard(sessionId, hasUnsavedComposerWork);
+  }, [sessionId]);
   // React rewrites a textarea's text node whenever defaultValue changes, and
   // WebKit then resets the field, committing any IME composition. Parents
   // re-render with the latest draft (remote sessions on every poll), so keep
@@ -718,6 +732,7 @@ export function Composer({
   });
   fileDropStateRef.current = { attachmentsSupported, remote, addAttachments };
 
+  /** Keep pending attachment reads visible to Send and automated-close guards. */
   const rememberAttachmentRead = useCallback((work: Promise<void>) => {
     const flight = work.then(
       () => undefined,
@@ -731,6 +746,7 @@ export function Composer({
     });
   }, []);
 
+  /** Attach dropped files only if their read still belongs to this draft. */
   const readDroppedAttachments = useCallback(
     (read: () => Promise<Attachment[]>) => {
       const generation = pasteGenerationRef.current;
@@ -1705,10 +1721,12 @@ export function Composer({
 
   const attachFromPicker = () => {
     if (!attachmentsSupported) return;
-    void pickAttachments().then((files) => {
-      addAttachments(files);
-      ref.current?.focus();
-    });
+    rememberAttachmentRead(
+      pickAttachments().then((files) => {
+        addAttachments(files);
+        ref.current?.focus();
+      }),
+    );
   };
 
   return (

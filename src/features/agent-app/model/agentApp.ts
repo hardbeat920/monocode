@@ -112,6 +112,8 @@ export type AgentAppHost = {
     prompt: string,
     requestId: string,
   ): Promise<{ alreadySaved: boolean; draft: boolean }>;
+  /** Save and close an authorized target's views, rejecting unsafe live state. */
+  close(id: string, cwd: string): Promise<{ closed: boolean }>;
   stop(id: string): Promise<void>;
   remove(id: string, mode: "archive" | "delete"): Promise<void>;
   worktrees(cwd: string): Promise<Worktrees>;
@@ -174,6 +176,7 @@ const FIELDS = new Map<string, readonly string[]>([
   ["sessions.read", ["sessionId", "before", "limit", "maxChars", "project"]],
   ["sessions.send", ["sessionId", "prompt", "project", "notifyOnComplete"]],
   ["sessions.draft", ["sessionId", "prompt", "project"]],
+  ["sessions.close", ["sessionId", "project"]],
   ["sessions.stop", ["sessionId", "project"]],
   ["sessions.archive", ["sessionId", "project"]],
   ["sessions.delete", ["sessionId", "project"]],
@@ -1039,6 +1042,19 @@ export async function handleAgentApp(
         `app-${source.id}-${requestId}`,
       );
       return { sessionId: id, saved: true, ...result };
+    }
+    case "sessions.close": {
+      const id = requiredString(input.sessionId, "sessionId", 256);
+      if (id === source.id)
+        throw new Error("Cannot close the calling session");
+      const target = await projectSession(source, id, input, host);
+      if (
+        target.orchestrationLeadId ||
+        host.isMono(id) ||
+        host.isHabitRun?.(id)
+      )
+        throw new Error("Only regular project sessions can be closed here");
+      return { sessionId: id, ...(await host.close(id, target.cwd)) };
     }
     case "sessions.stop":
     case "sessions.archive":
