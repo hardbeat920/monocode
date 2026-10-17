@@ -679,6 +679,9 @@ async function runTurn(
       agent: openCodeAgentForTurn(input),
       variant: input.modelSettings?.variant,
       parts,
+      onPreSubmissionFailure: () => {
+        unsubmittedTurns.set(input.sessionId, Symbol());
+      },
     });
     input.onAccepted?.();
     if (v2) {

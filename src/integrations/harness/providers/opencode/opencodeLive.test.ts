@@ -1187,6 +1187,73 @@ describe("OpenCode edit recovery", () => {
         expect(reverted()).toBe(false);
       });
 
+      it.runIf(version.startsWith("2."))(
+        "does not rewind an earlier user when model setup fails before the prompt is sent",
+        async () => {
+          sessionMessages = [savedUser("message_earlier")];
+          bindOpenCodeSession(input.sessionId, "session_1", input.cwd);
+          const normal = harnessHttp.getMockImplementation()!;
+          harnessHttp.mockImplementation(async (request) =>
+            request.method === "POST" &&
+            new URL(request.url).pathname.endsWith("/session_1/model")
+              ? {
+                  status: 500,
+                  body: JSON.stringify({ message: "Model update failed" }),
+                }
+              : normal(request),
+          );
+          try {
+            await expect(
+              sendOpenCodeTurn({ ...input, text: "Run pwd" }),
+            ).rejects.toThrow("Model update failed");
+          } finally {
+            harnessHttp.mockImplementation(normal);
+          }
+          expect(
+            harnessHttp.mock.calls.some(([request]) =>
+              new URL(request.url).pathname.endsWith("/session_1/prompt"),
+            ),
+          ).toBe(false);
+          await stopOpenCodeSession(input.sessionId);
+          await expect(rewindOpenCodeLastTurn(input)).resolves.toEqual({
+            submitted: false,
+          });
+          expect(reverted()).toBe(false);
+        },
+      );
+
+      it("still rewinds when the prompt request itself fails", async () => {
+        sessionMessages = [savedUser("message_maybe_accepted")];
+        bindOpenCodeSession(input.sessionId, "session_1", input.cwd);
+        const normal = harnessHttp.getMockImplementation()!;
+        harnessHttp.mockImplementation(async (request) =>
+          request.method === "POST" &&
+          /\/session_1\/(?:prompt|prompt_async)$/.test(
+            new URL(request.url).pathname,
+          )
+            ? {
+                status: 500,
+                body: JSON.stringify({ message: "Prompt request failed" }),
+              }
+            : normal(request),
+        );
+        try {
+          await expect(
+            sendOpenCodeTurn({ ...input, text: "Run pwd" }),
+          ).rejects.toThrow("Prompt request failed");
+        } finally {
+          harnessHttp.mockImplementation(normal);
+        }
+        await stopOpenCodeSession(input.sessionId);
+        await rewindOpenCodeLastTurn(input);
+        const revert = harnessHttp.mock.calls.find(([request]) =>
+          request.url.includes("/revert"),
+        )?.[0];
+        expect(revert?.body).toBe(
+          JSON.stringify({ messageID: "message_maybe_accepted" }),
+        );
+      });
+
       it("clears unsent-prompt tracking when the provider session is forgotten", async () => {
         await expect(rejectFallback()).rejects.toThrow("provider/model ids");
         await forgetOpenCodeSession(input.sessionId);
