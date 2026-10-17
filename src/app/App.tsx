@@ -12057,7 +12057,13 @@ function Workspace({
     const onKey = (e: KeyboardEvent) => {
       // The Quick Composer recorder owns the next key combination, including
       // bindings that the workspace would normally handle in capture phase.
-      if (document.querySelector('[data-shortcut-recorder-active="true"]'))
+      // It records only while focused, so check the focused element: a
+      // document-wide query walked the whole DOM on every keystroke.
+      if (
+        document.activeElement?.getAttribute(
+          "data-shortcut-recorder-active",
+        ) === "true"
+      )
         return;
       // Never act on a chord while an IME is composing: tabCommand and the
       // editor guards already do, and the app shortcut resolver does too, so
