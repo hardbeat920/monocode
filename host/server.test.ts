@@ -305,6 +305,14 @@ describe("remote host API", () => {
       supportedProviders: ["codex", "cursor"],
     })).value.result.providers).toEqual(["codex", "cursor"]);
   });
+  it("reports the running package version independently of protocol compatibility", async () => {
+    const { version } = await import("../package.json");
+    const s = await setup();
+    expect((await s.call("environment.describe")).value.result).toMatchObject({
+      protocolVersion: 1,
+      hostVersion: version,
+    });
+  });
   it("re-probes models after the provider CLI is updated", async () => {
     const s = await setup();
     cleanups.push(async () => {

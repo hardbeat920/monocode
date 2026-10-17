@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { useEffect, useRef, useState } from "react";
 import { Internet, Loader, Plus, Trash2 } from "../../../shared/ui/icons";
 import {
@@ -11,9 +12,12 @@ import {
 import {
   REMOTE_PROVIDERS,
   type HostDescriptor,
+  type HostProject,
+  type HostSessionSummary,
   type RemoteMachine,
   type SshSetup,
 } from "../model/protocol";
+import { hostNeedsCapabilities, hostUpdateAvailable } from "../model/hostUpdates";
 
 const input =
   "w-full rounded-lg border border-content/15 bg-content/3 px-3 py-2 text-[13px] outline-none focus:border-content/35";
@@ -134,12 +138,12 @@ export function ConnectionsSettings() {
                 throw new Error("Host identity changed");
               if (!host.providers.length)
                 label = "Connected · install a supported provider on the host";
-              const update =
-                !host.capabilities?.includes("workspace.run") ||
-                !host.capabilities?.includes("git.worktreeCreate");
-              if (update)
+              const update = hostUpdateAvailable(host);
+              if (hostNeedsCapabilities(host))
                 label =
                   "Connected · host update needed for Explorer and Changes";
+              else if (update)
+                label = `Connected · Host update available (${host.hostVersion})`;
               if (!disposed)
                 setNeedsUpdate((current) => ({
                   ...current,
@@ -169,6 +173,50 @@ export function ConnectionsSettings() {
     setJob(undefined);
     setUpdatingMachine(upgrade ? machine?.id : undefined);
     try {
+      if (upgrade && machine) {
+        // The host owns these turns, including projects/tabs not open here and
+        // turns started from another desktop. Local in-flight counts miss them.
+        let running: number;
+        try {
+          const projects = await remoteRequest<HostProject[]>(
+            machine.id,
+            "projects.list",
+          );
+          const sessions = await Promise.all(
+            projects.map((project) =>
+              remoteRequest<HostSessionSummary[]>(machine.id, "sessions.list", {
+                projectId: project.id,
+              }),
+            ),
+          );
+          running = sessions
+            .flat()
+            .filter((session) => session.status === "running").length;
+        } catch {
+          throw new Error(
+            `Could not check running sessions on ${machine.name}. Reconnect and try updating again.`,
+          );
+        }
+        if (!alive.current) return;
+        if (
+          running &&
+          !(await ask(
+            `${running} ${running === 1 ? "session is" : "sessions are"} still running on ${machine.name}, including any waiting for input. Updating restarts this host and interrupts its active turns. Sessions and history are kept. Update now?`,
+            {
+              title: "Update MonoCode Host",
+              kind: "warning",
+              okLabel: "Update Host",
+              cancelLabel: "Later",
+            },
+          ))
+        ) {
+          submitting.current = false;
+          setBusy(false);
+          setUpdatingMachine(undefined);
+          return;
+        }
+        if (!alive.current) return;
+      }
       const id = machine
         ? await invoke<string>("remote_ssh_reconnect", {
             machineId: machine.id,

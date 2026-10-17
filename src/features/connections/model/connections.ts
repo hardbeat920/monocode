@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 import {
   applySessionSync,
+  type HostDescriptor,
   type HostCommand,
   type HostSession,
   type HostSessionSummary,
@@ -12,6 +13,7 @@ import {
 } from "./protocol";
 import { remoteProjectFor } from "./remoteProjects";
 import { withRemoteAttachmentPreviews } from "./remoteAttachmentPreviews";
+import { recordHostUpdate } from "./hostUpdates";
 
 const CHANGE = "monocode:remote-machines";
 export const REMOTE_HISTORY_CHANGE = "monocode:remote-history";
@@ -150,12 +152,15 @@ export const clearPendingRemoteCommand = (
 ) =>
   localStorage.removeItem(`${pendingPrefix(project, environment)}${commandId}`);
 
-export function remoteRequest<T>(
+export async function remoteRequest<T>(
   machineId: string,
   method: string,
   params: unknown = {},
 ): Promise<T> {
-  return invoke<T>("remote_request", { machineId, method, params });
+  const result = await invoke<T>("remote_request", { machineId, method, params });
+  if (method === "environment.describe")
+    recordHostUpdate(machineId, result as HostDescriptor);
+  return result;
 }
 
 /** Reads one sync, assembling it from bounded pieces when the host chunks it. */

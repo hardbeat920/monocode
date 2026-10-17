@@ -2,6 +2,7 @@ import {
   BellOff,
   ChevronDown,
   ChevronRight,
+  ArrowDownCircle,
   FolderPlus,
   Internet,
   Inbox,
@@ -82,9 +83,11 @@ import { GithubStarPrompt } from "./GithubStarPrompt";
 import { Popover } from "../../shared/ui/Popover";
 import { OPEN_REMOTE_PROJECT_EVENT } from "../../features/connections/model/connections";
 import {
+  OPEN_CONNECTIONS_EVENT,
   useRemoteMachineOnline,
   useRemoteMachines,
 } from "../../features/connections/model/connections";
+import { useHostUpdateAvailable } from "../../features/connections/model/hostUpdates";
 import { remoteProjectFor } from "../../features/connections/model/remoteProjects";
 import { useProjectMenu } from "./useProjectMenu";
 import { MonoRailSection, type MonoRailProps } from "./MonoRailSection";
@@ -910,6 +913,7 @@ function ProjectCard({
     ? machines.find((entry) => entry.environmentId === remote.environmentId)
     : undefined;
   const online = useRemoteMachineOnline(machine?.id);
+  const hostUpdate = useHostUpdateAvailable(machine?.id);
   const connection = !remote
     ? ""
     : !machine
@@ -1047,6 +1051,18 @@ function ProjectCard({
           </span>
         ) : null}
       </button>
+      {machine?.ssh && hostUpdate ? (
+        <button
+          type="button"
+          data-no-drag
+          title={`Host update available on ${machine.name} · Open Connections`}
+          aria-label={`Host update available on ${machine.name}`}
+          className="grid w-5 shrink-0 place-items-center text-amber-400 hover:text-content group-hover:mr-6 group-has-[:focus-visible]:mr-6"
+          onClick={() => window.dispatchEvent(new Event(OPEN_CONNECTIONS_EVENT))}
+        >
+          <ArrowDownCircle className="size-3" aria-hidden="true" />
+        </button>
+      ) : null}
       <button
         type="button"
         data-no-drag
