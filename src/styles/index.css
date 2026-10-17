@@ -2143,6 +2143,24 @@ html:not(.theme-light) .markdown-code-token {
   opacity: 1;
 }
 
+/* Custom reply colors from Settings; each applies only once the user sets it. */
+:root.reply-bold-color .agent-markdown strong,
+:root.reply-bold-color .agent-markdown [data-streamdown="strong"] {
+  color: var(--reply-bold-color) !important;
+}
+
+:root.reply-italic-color .agent-markdown em {
+  color: var(--reply-italic-color) !important;
+}
+
+:root.reply-heading-color .agent-markdown [data-streamdown^="heading-"] {
+  color: var(--reply-heading-color);
+}
+
+:root.reply-code-color .agent-markdown :not(pre) > code {
+  color: var(--reply-code-color);
+}
+
 .agent-reasoning.agent-markdown p,
 .agent-reasoning.agent-markdown li {
   color: color-mix(in srgb, var(--color-content) 48%, transparent);
