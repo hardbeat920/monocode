@@ -14,6 +14,7 @@ import { request } from "node:http";
 import { HostEngine } from "./engine";
 import { HostStore } from "./store";
 import { createHostServer } from "./server";
+import { WorkspaceCommands } from "./workspace-commands";
 import { HostChildBackend } from "./child-backend";
 import { configureChildBackend } from "../src/integrations/harness/core/child";
 import type { SendTurnInput } from "../src/integrations/harness/core/types";
@@ -116,6 +117,114 @@ async function setup(providers: RemoteProvider[] = ["codex"]) {
 }
 
 describe("remote host API", () => {
+  it("streams files above the preview limit through the authenticated download route", async () => {
+    const s = await setup();
+    const path = join(s.project.cwd, "large.bin");
+    const bytes = Buffer.alloc(11 * 1024 * 1024, 0xa5);
+    writeFileSync(path, bytes);
+    expect(
+      (
+        await s.call("workspace.run", {
+          command: "read_binary_file",
+          args: { path },
+        })
+      ).status,
+    ).toBe(400);
+    const response = await fetch(s.url.replace(/\/rpc$/, "/download"), {
+      method: "POST",
+      headers: { Authorization: `Bearer ${s.first.token}` },
+      body: JSON.stringify({
+        version: 1,
+        environmentId: s.store.environmentId,
+        params: { path },
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe(
+      "application/octet-stream",
+    );
+    expect(Buffer.from(await response.arrayBuffer()).equals(bytes)).toBe(true);
+  });
+
+  it("keeps download authentication, environment identity and project boundaries enforced", async () => {
+    const s = await setup();
+    const file = join(s.project.cwd, "file.bin");
+    writeFileSync(file, "contents");
+    const outside = mkdtempSync(join(tmpdir(), "monocode-download-outside-"));
+    cleanups.push(async () =>
+      rmSync(outside, { recursive: true, force: true }),
+    );
+    const privateFile = join(outside, "private.bin");
+    writeFileSync(privateFile, "outside the project");
+    const send = async (
+      path: string,
+      token = s.first.token,
+      environmentId = s.store.environmentId,
+      origin?: string,
+    ) => {
+      const response = await fetch(s.url.replace(/\/rpc$/, "/download"), {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(origin ? { Origin: origin } : {}),
+        },
+        // A caller cannot bypass the download's identity check using the describe method.
+        body: JSON.stringify({
+          version: 1,
+          environmentId,
+          method: "environment.describe",
+          params: { path },
+        }),
+      });
+      await response.arrayBuffer();
+      return response.status;
+    };
+    expect(await send(file, "invalid")).toBe(401);
+    expect(await send(file, s.first.token, "wrong-host")).toBe(400);
+    expect(
+      await send(
+        file,
+        s.first.token,
+        s.store.environmentId,
+        "https://example.com",
+      ),
+    ).toBe(403);
+    expect(await send(privateFile)).toBe(400);
+    expect(await send(s.project.cwd)).toBe(400);
+    // Opening the file yields, so a revocation can land before streaming starts.
+    vi.spyOn(s.store, "authenticated")
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(false);
+    expect(await send(file)).toBe(401);
+    s.store.revokeDevice(s.first.id);
+    expect(await send(file)).toBe(401);
+  });
+
+  it("closes the file when a client abandons a download", async () => {
+    const s = await setup();
+    const path = join(s.project.cwd, "large.bin");
+    writeFileSync(path, Buffer.alloc(32 * 1024 * 1024));
+    const download = vi.spyOn(WorkspaceCommands.prototype, "download");
+    const abort = new AbortController();
+    const response = await fetch(s.url.replace(/\/rpc$/, "/download"), {
+      method: "POST",
+      headers: { Authorization: `Bearer ${s.first.token}` },
+      body: JSON.stringify({
+        version: 1,
+        environmentId: s.store.environmentId,
+        params: { path },
+      }),
+      signal: abort.signal,
+    });
+    await response.body!.getReader().read();
+    abort.abort();
+    const stream = await download.mock.results[0].value;
+    await vi.waitFor(() => expect(stream.closed).toBe(true));
+    download.mockRestore();
+    expect((await s.call("environment.describe")).status).toBe(200);
+  });
+
   it("rejects a credential revoked while its request body is arriving", async () => {
     const s = await setup();
     const authenticated = vi.spyOn(s.store, "authenticated");

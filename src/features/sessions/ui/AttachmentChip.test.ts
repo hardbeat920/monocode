@@ -5,9 +5,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Attachment, GeneratedImageMeta } from "../model/session";
 import * as fs from "../../../platform/tauri/fs";
 import { GeneratedImage } from "./GeneratedImage";
+import { downloadFile } from "../../../platform/tauri/download";
+
+vi.mock("../../../platform/tauri/download", () => ({
+  downloadFile: vi.fn().mockResolvedValue(undefined),
+}));
 
 vi.mock("../../../platform/tauri/fs", () => ({
   readBinaryFile: vi.fn(),
+  basename: (path: string) => path.split("/").pop(),
 }));
 vi.mock("../../../platform/tauri/trackpadZoom", () => ({
   claimTrackpadMagnify: () => () => {},
@@ -32,6 +38,7 @@ beforeEach(() => {
   document.body.append(container);
   root = createRoot(container);
   vi.mocked(fs.readBinaryFile).mockReset();
+  vi.mocked(downloadFile).mockReset().mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -101,6 +108,17 @@ describe("AttachmentChip image preview", () => {
     const preview = container.querySelector<HTMLImageElement>("img");
     expect(preview?.getAttribute("src")).toBe("blob:generated-image");
     expect(preview?.getAttribute("alt")).toBe("A clean product photo");
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Download generated-image.png"]',
+        )!
+        .click();
+    });
+    expect(downloadFile).toHaveBeenCalledWith("generated-image.png", {
+      path: image.path,
+    });
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
 
     const trigger = container.querySelector<HTMLButtonElement>(
       '[aria-label="Open generated-image full screen"]',
@@ -123,5 +141,52 @@ describe("AttachmentChip image preview", () => {
 
     expect(onRemove).toHaveBeenCalledOnce();
     expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(
+      container.querySelector('[aria-label="Download diagram.png"]'),
+    ).toBeNull();
+  });
+
+  it("downloads sent files of other types", async () => {
+    await act(async () =>
+      root.render(
+        createElement(AttachmentChip, {
+          attachment: {
+            ...attachment,
+            name: "report.pdf",
+            kind: "file",
+            mimeType: "application/pdf",
+            path: "/workspace/report.pdf",
+            previewUrl: undefined,
+          },
+        }),
+      ),
+    );
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Download report.pdf"]')!
+        .click(),
+    );
+    expect(downloadFile).toHaveBeenCalledWith("report.pdf", {
+      path: "/workspace/report.pdf",
+    });
+  });
+
+  it("keeps folders out of the file download flow", () => {
+    act(() =>
+      root.render(
+        createElement(AttachmentChip, {
+          attachment: {
+            ...attachment,
+            kind: "file",
+            mimeType: "inode/directory",
+            name: "docs",
+            path: "/repo/docs",
+            previewUrl: undefined,
+          },
+        }),
+      ),
+    );
+    expect(container.textContent).toContain("docs");
+    expect(container.querySelector('[aria-label^="Download "]')).toBeNull();
   });
 });

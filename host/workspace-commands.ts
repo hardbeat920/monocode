@@ -3,6 +3,7 @@ import {
   lstat,
   mkdir,
   mkdtemp,
+  open,
   readFile,
   realpath,
   rename,
@@ -299,6 +300,20 @@ export class WorkspaceCommands {
         `File is too large to ${tooLarge} (maximum ${limit / 1024 / 1024} MB).`,
       );
     return readFile(path);
+  }
+
+  /** Open an authorized project file without the preview size limit. */
+  async download(input: unknown) {
+    const { path } = await this.existing(input);
+    if (!(await stat(path)).isFile()) throw new Error("Not a file");
+    const file = await open(path, "r");
+    try {
+      if (!(await file.stat()).isFile()) throw new Error("Not a file");
+      return file.createReadStream();
+    } catch (error) {
+      await file.close();
+      throw error;
+    }
   }
 
   private async readText(input: unknown): Promise<string> {

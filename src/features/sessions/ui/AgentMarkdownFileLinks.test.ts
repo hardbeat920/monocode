@@ -3,6 +3,9 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentMarkdown } from "./AgentMarkdown";
+import { downloadFile } from "../../../platform/tauri/download";
+
+vi.mock("../../../platform/tauri/download", () => ({ downloadFile: vi.fn() }));
 
 describe("markdown file navigation", () => {
   let root: Root;
@@ -12,6 +15,7 @@ describe("markdown file navigation", () => {
   beforeEach(() => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     onOpenFile.mockClear();
+    vi.mocked(downloadFile).mockReset().mockResolvedValue(undefined);
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
@@ -23,17 +27,39 @@ describe("markdown file navigation", () => {
     vi.unstubAllGlobals();
   });
 
-  async function render(text: string) {
+  async function render(text: string, localMedia = false) {
     await act(async () =>
       root.render(
         createElement(AgentMarkdown, {
           text,
           cwd: "/repo",
           onOpenFile,
+          localMedia,
         }),
       ),
     );
   }
+
+  it("keeps local download buttons outside the styled inline link", async () => {
+    await render("Before [Report](report.pdf) after", true);
+    const link = container.querySelector<HTMLAnchorElement>("a")!;
+    const button = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Download report.pdf"]',
+    )!;
+    expect(button.closest("a")).toBeNull();
+    await act(async () => button.click());
+    expect(downloadFile).toHaveBeenCalledWith("report.pdf", {
+      path: "/repo/report.pdf",
+    });
+    expect(onOpenFile).not.toHaveBeenCalled();
+    await act(async () => link.click());
+    expect(onOpenFile).toHaveBeenCalledWith("/repo/report.pdf", undefined);
+  });
+
+  it("does not add download controls when local media is disabled", async () => {
+    await render("[Report](report.pdf) and [Website](https://example.com)");
+    expect(container.querySelector('[aria-label^="Download "]')).toBeNull();
+  });
 
   it("keeps protocol methods and ordinary identifiers as code, not file chips", async () => {
     await render("`currentTime/read` and `experimentalApi` and `true`");
