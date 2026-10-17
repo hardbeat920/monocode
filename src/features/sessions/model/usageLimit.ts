@@ -1,3 +1,4 @@
+import { sameProviderAccountId } from "../../providers/model/providerAccounts";
 import { formatResetDuration } from "../../providers/model/rateLimits";
 import type { Session, UsageLimit } from "./session";
 
@@ -21,6 +22,37 @@ export function resumeUsageLimitedSession(session: Session): Session {
       ...message,
       error: undefined,
     })),
+  };
+}
+
+/**
+ * Move a limited conversation onto another account. Provider threads are
+ * account-owned, so the next turn opens a fresh one with a transcript handoff.
+ */
+export function switchUsageLimitAccount(
+  session: Session,
+  accountId: string,
+): Session {
+  if (
+    !session.usageLimit ||
+    session.busy ||
+    sameProviderAccountId(session.providerAccountId, accountId)
+  )
+    return session;
+  return {
+    ...session,
+    providerAccountId: accountId,
+    providerSessionId: undefined,
+    pendingSwitch: {
+      ...(session.pendingSwitch ?? {
+        from: session.harness,
+        fromModel: session.model,
+        fromSettings: session.modelSettings,
+        fromProviderSessionId: session.providerSessionId,
+        fromProviderAccountId: session.providerAccountId,
+      }),
+      skipOutgoingRecap: true,
+    },
   };
 }
 

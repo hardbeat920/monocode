@@ -287,6 +287,7 @@ type Props = {
   onUsageLimitResume?: () => void;
   onUsageLimitResumeAtReset?: (enabled: boolean) => void;
   onUsageLimitDismiss?: () => void;
+  usageLimitAccountPicker?: ReactNode;
   onOpenFile?: (path: string) => void;
   onDraftChange?: (text: string) => void;
   onRecallLastTurnReady?: (recall: () => void) => void;
@@ -402,6 +403,7 @@ export function Composer({
   onUsageLimitResume,
   onUsageLimitResumeAtReset,
   onUsageLimitDismiss,
+  usageLimitAccountPicker,
   onOpenFile,
   onDraftChange,
   onRecallLastTurnReady,
@@ -1732,6 +1734,7 @@ export function Composer({
           onResume={onUsageLimitResume}
           onResumeAtReset={onUsageLimitResumeAtReset}
           onDismiss={onUsageLimitDismiss}
+          modelPicker={usageLimitAccountPicker}
         />
       ) : null}
       <MessageQueue
