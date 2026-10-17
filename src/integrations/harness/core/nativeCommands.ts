@@ -12,7 +12,12 @@ export type NativeCommand = {
   subcommands?: Array<{ name: string; description?: string; usage?: string }>;
 };
 
-export type CommandContext = { cwd: string; sessionId?: string };
+export type CommandContext = {
+  cwd: string;
+  sessionId?: string;
+  /** Provider account whose config the session runs under. */
+  accountId?: string;
+};
 
 export type NativeCommandProvider = {
   discover(context: CommandContext): Promise<NativeCommand[]>;
@@ -22,9 +27,30 @@ export type NativeCommandProvider = {
   ): () => void;
   /** Full command runtimes own slash arguments, including @file-like text. */
   rawSlashCommands?: boolean;
+  /**
+   * The harness reads the same skill files MonoCode discovers, so MonoCode's
+   * skill settings apply: disabled skills stay hidden and `/create-skill` is
+   * offered.
+   */
+  monocodeSkills?: boolean;
+  /**
+   * Runs while a new turn's prompt is prepared, before it reaches the harness,
+   * so a stop meanwhile still wins. Steers skip it: a wait there could outlast
+   * the turn they target.
+   */
+  beforeSend?(text: string, context: CommandContext & { effort?: string }): Promise<void>;
 };
 
-const RESERVED_COMMANDS = new Set(["plan", "compact", "add-to-folder"]);
+/** MonoCode's own command names; a native command using one is namespaced. */
+const RESERVED_COMMANDS = new Set([
+  "add-to-folder",
+  "btw",
+  "compact",
+  "draft",
+  "mcp",
+  "orchestrator",
+  "plan",
+]);
 
 export function nativeCommandInvocation(
   harness: HarnessId,
