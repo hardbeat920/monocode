@@ -168,6 +168,7 @@ import { useRailTooltip } from "./RailTooltip";
 import { useProjectMenu } from "./useProjectMenu";
 import { SessionFiltersMenu } from "../../features/sessions/ui/SessionFiltersMenu";
 import { LinkSessionWorkItemDialog } from "../../features/sessions/ui/LinkSessionWorkItemDialog";
+import { InboxProviderMark } from "../../features/inbox/ui/InboxProviderMark";
 import { sessionReminderPresets } from "../../features/sessions/ui/sessionReminderPresets";
 import {
   formatReminderTime,
@@ -1226,8 +1227,8 @@ function SidebarComponent({
             kind: "item" as const,
             id: "link-work-item",
             label: menuSessions[0]?.linkedWorkItem
-              ? "Edit GitHub issue or PR link…"
-              : "Link GitHub issue or PR…",
+              ? "Edit linked issue or PR…"
+              : "Link issue or PR…",
           },
         ]
       : []),
@@ -3465,6 +3466,12 @@ export const SessionCard = memo(function SessionCard({
   );
 
   const linkedWorkItem = session.linkedWorkItem;
+  const linkedLabel = !linkedWorkItem
+    ? ""
+    : linkedWorkItem.kind === "linear"
+      ? linkedWorkItem.identifier
+      : `${linkedWorkItem.kind === "pr" ? "PR" : "issue"} #${linkedWorkItem.number}`;
+  const linkedSite = linkedWorkItem?.kind === "linear" ? "Linear" : "GitHub";
   const linkedUpdateDot = linkedUpdate ? (
     <span
       title={`Linked ${linkedWorkItem?.kind === "pr" ? "PR" : "issue"} updated since this session`}
@@ -3477,8 +3484,8 @@ export const SessionCard = memo(function SessionCard({
       type="button"
       data-no-drag
       data-tauri-drag-region="false"
-      title={`Open ${linkedWorkItem.kind === "pr" ? "PR" : "issue"} #${linkedWorkItem.number} beside this session (${MOD}-click for GitHub)`}
-      aria-label={`Open ${linkedWorkItem.kind === "pr" ? "PR" : "issue"} #${linkedWorkItem.number}`}
+      title={`Open ${linkedLabel} beside this session (${MOD}-click for ${linkedSite})`}
+      aria-label={`Open ${linkedLabel}`}
       onPointerDown={(event) => event.stopPropagation()}
       onClick={(event) => {
         event.preventDefault();
@@ -3500,10 +3507,16 @@ export const SessionCard = memo(function SessionCard({
     >
       {linkedWorkItem.kind === "pr" ? (
         <GitPullRequest className="size-3" strokeWidth={1.75} />
+      ) : linkedWorkItem.kind === "linear" ? (
+        <InboxProviderMark provider="linear" className="size-2.5" />
       ) : (
         <CircleDot className="size-3" strokeWidth={1.75} />
       )}
-      <span>#{linkedWorkItem.number}</span>
+      <span>
+        {linkedWorkItem.kind === "linear"
+          ? linkedWorkItem.identifier
+          : `#${linkedWorkItem.number}`}
+      </span>
     </button>
   ) : null;
 

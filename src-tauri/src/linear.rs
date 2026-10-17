@@ -126,8 +126,17 @@ pub async fn linear_set_token(app: AppHandle, token: String) -> Result<LinearSta
 pub async fn linear_list_teams(app: AppHandle) -> Result<Vec<LinearTeam>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let token = require_token(&app)?;
-        let data = graphql_with_token(&token, TEAMS_QUERY, json!({}))?;
-        parse_linear_teams(&data)
+        let mut teams = Vec::new();
+        let mut after: Option<String> = None;
+        for _ in 0..TEAM_PAGE_LIMIT {
+            let data = graphql_with_token(&token, TEAMS_QUERY, json!({ "after": after }))?;
+            teams.extend(parse_linear_teams(&data)?);
+            after = next_team_cursor(&data);
+            if after.is_none() {
+                break;
+            }
+        }
+        Ok(teams)
     })
     .await
     .map_err(|error| error.to_string())?
@@ -153,6 +162,21 @@ pub async fn linear_list_issues(
             json!({ "first": limit, "filter": filter }),
         )?;
         parse_linear_issues(&data)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn linear_issue_lookup(app: AppHandle, key: String) -> Result<LinearIssue, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let token = require_token(&app)?;
+        let key = key.trim();
+        if !valid_linear_id(key) {
+            return Err("Missing Linear issue".into());
+        }
+        let data = graphql_with_token(&token, ISSUE_LOOKUP_QUERY, json!({ "id": key }))?;
+        parse_linear_issue_lookup(&data)
     })
     .await
     .map_err(|error| error.to_string())?
@@ -230,9 +254,12 @@ pub async fn linear_issue_comment(
 }
 
 const VIEWER_QUERY: &str = "query { viewer { id } }";
+/// Pages of 50 teams; a workspace with more than 50 teams needs several requests.
+const TEAM_PAGE_LIMIT: usize = 20;
 const TEAMS_QUERY: &str = r#"
-query {
-  teams(first: 50) {
+query InboxTeams($after: String) {
+  teams(first: 50, after: $after) {
+    pageInfo { hasNextPage endCursor }
     nodes { id key name }
   }
 }
@@ -261,6 +288,23 @@ query InboxIssue($id: String!) {
   issue(id: $id) {
     description
     creator { name displayName avatarUrl }
+    assignee { name displayName avatarUrl }
+  }
+}
+"#;
+const ISSUE_LOOKUP_QUERY: &str = r#"
+query LinkedIssue($id: String!) {
+  issue(id: $id) {
+    id
+    identifier
+    number
+    title
+    url
+    updatedAt
+    state { name type }
+    team { id key name }
+    project { id name }
+    labels { nodes { name color } }
     assignee { name displayName avatarUrl }
   }
 }
@@ -394,6 +438,14 @@ fn graphql_error_message_from_value(parsed: &Value) -> Option<String> {
         .filter(|message| !message.is_empty())
 }
 
+fn next_team_cursor(data: &Value) -> Option<String> {
+    let page = data.pointer("/teams/pageInfo")?;
+    if page.get("hasNextPage").and_then(Value::as_bool) != Some(true) {
+        return None;
+    }
+    string_field(page, "endCursor").filter(|cursor| !cursor.is_empty())
+}
+
 fn parse_linear_teams(data: &Value) -> Result<Vec<LinearTeam>, String> {
     let nodes = data
         .pointer("/teams/nodes")
@@ -419,6 +471,14 @@ fn parse_linear_issues(data: &Value) -> Result<Vec<LinearIssue>, String> {
         .and_then(Value::as_array)
         .ok_or_else(|| "Linear did not return issues".to_string())?;
     Ok(nodes.iter().filter_map(parse_linear_issue).collect())
+}
+
+/// Linear resolves `issue(id:)` from either the UUID or the `TEAM-123` identifier.
+fn parse_linear_issue_lookup(data: &Value) -> Result<LinearIssue, String> {
+    data.get("issue")
+        .filter(|issue| !issue.is_null())
+        .and_then(parse_linear_issue)
+        .ok_or_else(|| "Linear did not return that issue".to_string())
 }
 
 fn parse_linear_issue(node: &Value) -> Option<LinearIssue> {
@@ -766,6 +826,15 @@ mod tests {
     }
 
     #[test]
+    fn next_team_cursor_follows_has_next_page() {
+        let more = json!({ "teams": { "pageInfo": { "hasNextPage": true, "endCursor": "abc" } } });
+        assert_eq!(next_team_cursor(&more), Some("abc".into()));
+        let done = json!({ "teams": { "pageInfo": { "hasNextPage": false, "endCursor": "abc" } } });
+        assert_eq!(next_team_cursor(&done), None);
+        assert_eq!(next_team_cursor(&json!({ "teams": {} })), None);
+    }
+
+    #[test]
     fn parse_linear_teams_reads_nodes() {
         let data = json!({
             "teams": {
@@ -784,6 +853,29 @@ mod tests {
                 name: "Engineering".into(),
             }]
         );
+    }
+
+    #[test]
+    fn parse_linear_issue_lookup_accepts_one_issue() {
+        let data = json!({
+            "issue": {
+                "id": "issue-1",
+                "identifier": "ENG-9",
+                "number": 9,
+                "title": "Fix auth",
+                "url": "https://linear.app/acme/issue/ENG-9",
+                "updatedAt": "2026-08-27T10:00:00.000Z",
+                "state": { "name": "Todo", "type": "unstarted" },
+                "team": { "id": "team-1", "key": "ENG", "name": "Engineering" }
+            }
+        });
+        let issue = parse_linear_issue_lookup(&data).expect("issue");
+        assert_eq!(issue.identifier, "ENG-9");
+        assert_eq!(issue.repo, "ENG");
+        assert_eq!(issue.number, 9);
+
+        let missing = json!({ "issue": null });
+        assert!(parse_linear_issue_lookup(&missing).is_err());
     }
 
     #[test]

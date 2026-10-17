@@ -15,7 +15,7 @@ import {
 import { HostEngine } from "./engine";
 import { writeAttachmentChunk, readAttachmentChunk } from "./attachments";
 import type { LinkedWorkItem } from "../src/features/sessions/model/session";
-import { parseGithubWorkItemUrl } from "../src/features/sessions/model/sessionWorkItem";
+import { linkedWorkItemsEqual, normalizeLinkedWorkItem } from "../src/features/sessions/model/sessionWorkItem";
 import { SyncTransfers } from "./sync-transfer";
 import { browseHostDirectories } from "./browse";
 import {
@@ -347,16 +347,9 @@ export function createHostServer(
             }
             if (params.linkedWorkItem !== undefined) {
               const item = params.linkedWorkItem;
-              const parsed = item && typeof item === "object" && !Array.isArray(item)
-                ? parseGithubWorkItemUrl(String((item as LinkedWorkItem).url ?? ""))
-                : null;
+              const parsed = normalizeLinkedWorkItem(item);
               if (item !== null && (
-                typeof item !== "object" || Array.isArray(item) ||
-                !parsed ||
-                parsed.kind !== (item as LinkedWorkItem).kind ||
-                parsed.repo !== (item as LinkedWorkItem).repo ||
-                parsed.number !== (item as LinkedWorkItem).number ||
-                parsed.url !== (item as LinkedWorkItem).url
+                !parsed || !linkedWorkItemsEqual(parsed, item as LinkedWorkItem)
               )) throw new Error("Invalid linked work item");
               patch.linkedWorkItem = item as LinkedWorkItem | null;
             }
