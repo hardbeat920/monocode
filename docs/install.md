@@ -79,12 +79,40 @@ For beta release feeds and testing AppImage updates, see [release and updater de
 
 ## Troubleshooting on Fedora / Wayland
 
-The AppImage uses the host WebKitGTK 4.1 stack and native Wayland, like the `.deb` and `.rpm`. Set `GDK_BACKEND=x11` to keep the previous X11-forced behavior (for example NVIDIA plus Wayland):
+The AppImage uses the host WebKitGTK 4.1 stack and native Wayland, like the `.deb` and `.rpm`. Set `GDK_BACKEND=x11` to keep the previous X11-forced behavior:
 
 ```bash
 GDK_BACKEND=x11 ./MonoCode_*.AppImage
 ```
 
 Older AppImages that bundled Ubuntu-built libraries aborted with `Could not create default EGL display: EGL_BAD_PARAMETER`; current builds do not.
+
+## Troubleshooting on NVIDIA / Wayland
+
+On an NVIDIA GPU under a Wayland session, MonoCode can fail in one of two ways:
+
+- No window appears, and the terminal prints `Gdk-Message: Error 71 (Protocol error) dispatching to Wayland display.`
+- A window appears but stays almost entirely white, with only a strip of the UI drawn.
+
+Both appear to come from WebKitGTK's DMA-BUF renderer allocating its buffers through NVIDIA's GBM backend, which rejects them. Keep the renderer but make it use shared-memory buffers instead:
+
+```bash
+WEBKIT_DMABUF_RENDERER_FORCE_SHM=1 ./MonoCode_*.AppImage
+```
+
+The `.deb` and `.rpm` use the same host WebKitGTK, so the same variable should apply to them.
+
+Two commonly suggested workarounds do not fix this. `WEBKIT_DISABLE_DMABUF_RENDERER=1` gets past the crash but produces the mostly white window. `GDK_BACKEND=x11` gives a fully white window and logs `Failed to create GBM buffer of size ...: Invalid argument`.
+
+To make the fix permanent for every WebKitGTK app, add it to your session environment and log back in:
+
+```bash
+mkdir -p ~/.config/environment.d
+echo 'WEBKIT_DMABUF_RENDERER_FORCE_SHM=1' > ~/.config/environment.d/webkit.conf
+```
+
+Or prepend `env WEBKIT_DMABUF_RENDERER_FORCE_SHM=1` to the `Exec=` line of the MonoCode `.desktop` entry. Tools like AppImageLauncher regenerate that entry when the AppImage updates itself, so the session-wide setting is more durable.
+
+Verified on Arch Linux with KDE Plasma 6.7 on Wayland, NVIDIA driver 615.78, WebKitGTK 2.54, and a GeForce RTX 4070 SUPER, running MonoCode 0.13.0.
 
 Return to the [README](../README.md) for macOS and Windows downloads.
