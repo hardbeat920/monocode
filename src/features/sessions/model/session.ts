@@ -324,6 +324,12 @@ export type Block = {
   durationMs?: number;
   /** Epoch ms when this message joined a turn that was already running. */
   sentAt?: number;
+  /**
+   * The agent handed this message back as its answer while work it left in
+   * the background was still running. What it says once that work finishes
+   * comes after it, so the fold never takes it.
+   */
+  yielded?: boolean;
   /** Stable model label for this turn. Present on newly created user blocks. */
   turnModel?: TurnModel;
   /** Provider turn boundary used to replace this user message, when known. */
