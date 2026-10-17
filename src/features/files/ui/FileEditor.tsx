@@ -84,6 +84,15 @@ import {
   type EditorSelectionTarget,
 } from "./EditorSelectionMenu";
 import {
+  ReviewCommentComposer,
+  type ReviewCommentTarget,
+} from "../../review-comments/ui/ReviewCommentComposer";
+import { ReviewCommentBubbles } from "../../review-comments/ui/ReviewCommentBubbles";
+import {
+  markReviewCommentsStale,
+  remapReviewCommentLines,
+} from "../../review-comments/model/reviewComments";
+import {
   diffActiveChunkIndex,
   diffLineStatsForView,
   diffNavigablePositions,
@@ -489,6 +498,7 @@ export function FileEditor({
               <CodeMirrorEditor
                 key={`${path}:${reloadKey}`}
                 path={path}
+                workspace={cwd}
                 commentPath={relativePath}
                 value={loadState.content}
                 showDiff={showDiff}
@@ -512,8 +522,9 @@ export function FileEditor({
       ) : (
         <CodeMirrorEditor
           key={`${path}:${reloadKey}`}
-          path={path}
-          commentPath={relativePath}
+                path={path}
+                workspace={cwd}
+                commentPath={relativePath}
           value={loadState.content}
           showDiff={showDiff}
           gitOriginal={gitOriginal}
@@ -551,6 +562,7 @@ export function FileEditor({
 
 export function CodeMirrorEditor({
   path,
+  workspace,
   commentPath,
   value,
   showDiff,
@@ -566,6 +578,7 @@ export function CodeMirrorEditor({
   formatOnSave = true,
 }: {
   path: string;
+  workspace: string;
   commentPath: string;
   value: string;
   showDiff: boolean;
@@ -592,6 +605,8 @@ export function CodeMirrorEditor({
   const onStageGitRef = useRef(onStageGit);
   const canStage = onStageGit !== undefined;
   const onDocChangeRef = useRef(onDocChange);
+  const workspaceRef = useRef(workspace);
+  const commentPathRef = useRef(commentPath);
   const valueRef = useRef(value);
   const navigationTokenRef = useRef<number | undefined>(undefined);
   const pendingNavigationRef = useRef<EditorNavigationRequest | null>(null);
@@ -609,6 +624,10 @@ export function CodeMirrorEditor({
     useState<DiffCommentComposerTarget | null>(null);
   const [selectionTarget, setSelectionTarget] =
     useState<EditorSelectionTarget | null>(null);
+  const [reviewTarget, setReviewTarget] =
+    useState<ReviewCommentTarget | null>(null);
+  const [editorView, setEditorView] = useState<EditorView | null>(null);
+  const [documentRevision, setDocumentRevision] = useState(0);
   const gitOptions = {
     onStage: canStage
       ? (contents: string) => onStageGitRef.current?.(contents)
@@ -624,6 +643,12 @@ export function CodeMirrorEditor({
   onDocChangeRef.current = onDocChange;
   valueRef.current = value;
   gitOriginalRef.current = gitOriginal;
+
+  useEffect(() => {
+    workspaceRef.current = workspace;
+    commentPathRef.current = commentPath;
+    setSelectionTarget(null);
+  }, [workspace, commentPath]);
 
   const syncChunkNav = useCallback((view: EditorView, fromScroll = true) => {
     const positions = diffNavigablePositions(view);
@@ -831,15 +856,34 @@ export function CodeMirrorEditor({
             pendingNavigationRef.current = null;
           }
           if (update.selectionSet) {
-            setSelectionTarget(editorSelectionTarget(update.view, commentPath));
+            setSelectionTarget(
+              editorSelectionTarget(update.view, commentPathRef.current),
+            );
           } else if (update.docChanged) {
             setSelectionTarget(null);
           }
           if (!update.docChanged) return;
           onDocChangeRef.current?.(update.state.doc.toString());
           if (update.transactions.some((tr) => tr.annotation(diskReload))) {
+            markReviewCommentsStale(
+              workspaceRef.current,
+              commentPathRef.current,
+            );
+            setDocumentRevision((current) => current + 1);
             return;
           }
+          remapReviewCommentLines(
+            workspaceRef.current,
+            commentPathRef.current,
+            (line) => {
+            const previous = update.startState.doc.line(
+              Math.min(line, update.startState.doc.lines),
+            );
+            const position = update.changes.mapPos(previous.from, 1);
+            return update.state.doc.lineAt(position).number;
+            },
+          );
+          setDocumentRevision((current) => current + 1);
           markDirty();
           scheduleAutosave();
         }),
@@ -860,6 +904,7 @@ export function CodeMirrorEditor({
     savedDocumentRef.current = view.state.doc;
     dirtyRef.current = false;
     viewRef.current = view;
+    setEditorView(view);
     lockOverscroll(view.scrollDOM as HTMLDivElement);
     if (showDiff) {
       if (gitOriginalRef.current) {
@@ -888,6 +933,7 @@ export function CodeMirrorEditor({
       onErrorCountChangeRef.current(0);
       lockOverscroll(null);
       viewRef.current = null;
+      setEditorView(null);
       savedDocumentRef.current = null;
       setChunkNav(null);
       setSelectionTarget(null);
@@ -1013,19 +1059,50 @@ export function CodeMirrorEditor({
             onNext={() => stepChunkNav(1)}
           />
         ) : null}
-        <div ref={hostRef} className="min-h-0 flex-1" />
+        <div className="relative min-h-0 flex-1">
+          <div ref={hostRef} className="size-full" />
+          <ReviewCommentBubbles
+            path={commentPath}
+            workspace={workspace}
+            host={hostRef.current}
+            view={editorView}
+            revision={documentRevision}
+          />
+        </div>
       </div>
       {commentTarget ? (
         <DiffCommentComposer
           path={commentPath}
           target={commentTarget}
+          workspace={workspace}
           onDismiss={() => setCommentTarget(null)}
         />
       ) : null}
       <EditorSelectionMenu
         selection={selectionTarget}
         onDismiss={() => setSelectionTarget(null)}
+        onAddReviewComment={(selection) => {
+          const view = viewRef.current;
+          if (!view) return;
+          const range = view.state.selection.main;
+          setReviewTarget({
+            workspace,
+            path: selection.path,
+            startLine: selection.wholeFile ? 0 : selection.startLine,
+            endLine: selection.wholeFile ? 0 : selection.endLine,
+            snippet: selection.wholeFile
+              ? ""
+              : view.state.sliceDoc(range.from, range.to),
+            anchor: selection.anchor,
+          });
+        }}
       />
+      {reviewTarget ? (
+        <ReviewCommentComposer
+          target={reviewTarget}
+          onDismiss={() => setReviewTarget(null)}
+        />
+      ) : null}
     </>
   );
 }
@@ -1061,6 +1138,7 @@ function editorSelectionTarget(
     path,
     startLine: view.state.doc.lineAt(selection.from).number,
     endLine: view.state.doc.lineAt(lastSelectedPosition).number,
+    wholeFile: selection.from === 0 && selection.to === view.state.doc.length,
     anchor: new DOMRect(
       coordinates.left,
       coordinates.top,

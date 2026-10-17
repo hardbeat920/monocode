@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { MessageSquarePlus } from "../../../shared/ui/icons";
+import { MessageSquarePlus, PenLine } from "../../../shared/ui/icons";
 import { Popover } from "../../../shared/ui/Popover";
 import {
   formatEditorSelectionReference,
@@ -9,14 +9,17 @@ import { requestAddToChat } from "../../sessions/model/quoteDraft";
 
 export type EditorSelectionTarget = EditorCodeSelection & {
   anchor: DOMRect;
+  wholeFile: boolean;
 };
 
 export function EditorSelectionMenu({
   selection,
   onDismiss,
+  onAddReviewComment,
 }: {
   selection: EditorSelectionTarget | null;
   onDismiss: () => void;
+  onAddReviewComment: (selection: EditorSelectionTarget) => void;
 }) {
   const onDismissRef = useRef(onDismiss);
   onDismissRef.current = onDismiss;
@@ -54,7 +57,7 @@ export function EditorSelectionMenu({
           requestAddToChat(formatEditorSelectionReference(selection), "plain");
           onDismiss();
         }}
-        className="flex h-7 items-center gap-1.5 rounded-lg px-2 font-sans text-[13px] leading-none text-content outline-none ring-accent/40 hover:bg-content/5 focus-visible:ring-2"
+        className="flex h-7 items-center gap-1.5 whitespace-nowrap rounded-lg px-2 font-sans text-[13px] leading-none text-content outline-none ring-accent/40 hover:bg-content/5 focus-visible:ring-2"
       >
         <MessageSquarePlus
           aria-hidden="true"
@@ -62,6 +65,22 @@ export function EditorSelectionMenu({
           strokeWidth={1.75}
         />
         Add to chat
+      </button>
+      <button
+        type="button"
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={() => {
+          onAddReviewComment(selection);
+          onDismiss();
+        }}
+        className="flex h-7 items-center gap-1.5 whitespace-nowrap rounded-lg px-2 font-sans text-[13px] leading-none text-content outline-none ring-accent/40 hover:bg-content/5 focus-visible:ring-2"
+      >
+        <PenLine
+          aria-hidden="true"
+          className="size-3.5"
+          strokeWidth={1.75}
+        />
+        Add comment
       </button>
     </Popover>
   );

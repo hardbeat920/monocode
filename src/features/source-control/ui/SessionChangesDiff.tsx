@@ -205,6 +205,7 @@ export function SessionChangesDiff({
   return (
     <UnifiedDiffView
       files={models}
+      workspace={cwd}
       focusPath={focusPath}
       totals={totals}
       initialExpansion={initialExpansion}
