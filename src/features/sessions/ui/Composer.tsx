@@ -1958,6 +1958,7 @@ export function Composer({
                       cwd={executionCwd}
                       branch={branch}
                       enabled={enabled && !busy}
+                      hotkeys={hotkeys}
                       onChange={onBranchChange}
                       onClose={() => ref.current?.focus()}
                     />
@@ -1968,6 +1969,7 @@ export function Composer({
                   cwd={cwd}
                   executionCwd={executionCwd}
                   enabled={enabled && !busy}
+                  hotkeys={hotkeys}
                   onSelect={onWorktreeChange}
                   worktreeRemoved={worktreeRemoved}
                   onBranchChange={onBranchChange}
@@ -1985,6 +1987,7 @@ export function Composer({
                     cwd={executionCwd}
                     branch={branch}
                     enabled={enabled && !busy}
+                    hotkeys={hotkeys}
                     onChange={onBranchChange}
                     onClose={() => ref.current?.focus()}
                   />
