@@ -35,6 +35,19 @@ it("keeps paths and environment content from injecting service configuration", (
   expect(unit).toContain("KillMode=control-group");
 });
 
+it("runs the LaunchAgent without launchd's background resource limits", () => {
+  const plist = launchAgent(
+    {
+      directory: "/Users/a/.monocode-host",
+      port: 3774,
+      executable: "/runtime/node",
+      entry: "/runtime/host.mjs",
+    },
+    "/bin",
+  );
+  expect(plist).toContain("<key>ProcessType</key><string>Interactive</string>");
+});
+
 it.skipIf(process.platform === "win32").each(["darwin", "linux"] as const)(
   "removes the %s service registration but keeps host data",
   async (platform) => {

@@ -73,6 +73,7 @@ export function launchAgent(options: ServiceOptions, path: string): string {
 <key>Label</key><string>${LABEL}</string>
 <key>ProgramArguments</key><array>${args.map((arg) => `<string>${xml(arg)}</string>`).join("")}</array>
 <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+<key>ProcessType</key><string>Interactive</string>
 <key>ThrottleInterval</key><integer>10</integer>
 <key>EnvironmentVariables</key><dict><key>PATH</key><string>${xml(path)}</string></dict>
 <key>StandardOutPath</key><string>${xml(join(options.directory, "host.log"))}</string>

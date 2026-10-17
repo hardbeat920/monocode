@@ -57,6 +57,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - HTML artifacts render their surface, muted, and border theme colors opaquely. In #1020 by @rxchitrx.
 - macOS development bundles retain correct version metadata. In #983 by @MRKups.
 
+### Changed
+
+- Provider processes on **macOS hosts** run without the CPU and I/O throttling launchd applies to background services, so the builds, tests, and Git commands agents start there run as they would from Terminal. This takes effect on new installs, or after `service uninstall` and reconnecting.
+
 ## [0.13.0] - 2026-10-12
 
 ### Added
