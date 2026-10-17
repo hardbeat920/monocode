@@ -122,6 +122,41 @@ it.each([true, false])(
       'button[aria-label^="Toggle Session Sidebar"]',
     );
     expect(toggle).not.toBeNull();
+    expect(toggle?.getAttribute("aria-pressed")).toBeNull();
+    act(() => toggle?.click());
+    expect(onToggleSessionSidebar).toHaveBeenCalledOnce();
+    expect(onToggleSidebar).not.toHaveBeenCalled();
+  },
+);
+
+it.each([true, false])(
+  "keeps the session sidebar toggle available when the session sidebar is already open (rail=%s)",
+  (projectRailOpen) => {
+    const onToggleSidebar = vi.fn();
+    const onToggleSessionSidebar = vi.fn();
+    act(() =>
+      root.render(
+        createElement(TitleBar, {
+          tabs: [tab("active")],
+          activeId: "active",
+          cwd: "/project",
+          projectRailOpen,
+          sessionSidebarOpen: true,
+          onToggleSidebar,
+          onToggleSessionSidebar,
+          onSelect: vi.fn(),
+          onClose: vi.fn(),
+          onCloseMany: vi.fn(),
+          onReorder: vi.fn(),
+        }),
+      ),
+    );
+
+    const toggle = container.querySelector<HTMLButtonElement>(
+      'button[aria-label^="Toggle Session Sidebar"]',
+    );
+    expect(toggle).not.toBeNull();
+    expect(toggle?.getAttribute("aria-pressed")).toBe("true");
     act(() => toggle?.click());
     expect(onToggleSessionSidebar).toHaveBeenCalledOnce();
     expect(onToggleSidebar).not.toHaveBeenCalled();
