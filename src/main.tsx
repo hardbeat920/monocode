@@ -8,6 +8,7 @@ import {
   activateWindowAppearance,
   initAppearance,
 } from "./features/settings/model/appearance";
+import { initExternalTheme } from "./features/settings/model/externalTheme";
 import { initSounds } from "./features/settings/model/sounds";
 import {
   abortQuit,
@@ -30,6 +31,7 @@ performance.mark("monocode:bootstrap");
 const appLoaded = import("./app/App");
 
 initAppearance();
+void initExternalTheme();
 initSounds();
 installNativeContextMenuGuard();
 // Prime the real home directory before the first render so every `~/` file
