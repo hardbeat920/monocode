@@ -1161,6 +1161,32 @@ describe("OpenCode edit recovery", () => {
         );
       });
 
+      it("does not rewind an earlier user when the session fails to connect", async () => {
+        sessionMessages = [savedUser("message_earlier")];
+        bindOpenCodeSession(input.sessionId, "session_1", input.cwd);
+        const normal = harnessHttp.getMockImplementation()!;
+        harnessHttp.mockImplementation(async (request) =>
+          request.method === "GET" &&
+          /\/session\/session_1$/.test(new URL(request.url).pathname)
+            ? {
+                status: 503,
+                body: JSON.stringify({ message: "Server unavailable" }),
+              }
+            : normal(request),
+        );
+        try {
+          await expect(
+            sendOpenCodeTurn({ ...input, text: "Run pwd" }),
+          ).rejects.toThrow("Server unavailable");
+        } finally {
+          harnessHttp.mockImplementation(normal);
+        }
+        await expect(rewindOpenCodeLastTurn(input)).resolves.toEqual({
+          submitted: false,
+        });
+        expect(reverted()).toBe(false);
+      });
+
       it("clears unsent-prompt tracking when the provider session is forgotten", async () => {
         await expect(rejectFallback()).rejects.toThrow("provider/model ids");
         await forgetOpenCodeSession(input.sessionId);

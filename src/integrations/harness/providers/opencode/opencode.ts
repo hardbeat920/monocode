@@ -172,7 +172,9 @@ export async function sendOpenCodeTurn(input: SendTurnInput): Promise<void> {
   try {
     live = await ensureLive(input);
   } catch (error) {
-    cancelledThreads.delete(input.sessionId);
+    if (!cancelledThreads.delete(input.sessionId)) {
+      unsubmittedTurns.set(input.sessionId, Symbol());
+    }
     throw error;
   }
   if (cancelledThreads.delete(input.sessionId)) return;
