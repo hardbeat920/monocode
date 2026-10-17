@@ -850,6 +850,27 @@ describe("contextFromResult", () => {
   it("has nothing to report for a turn that never called the API", () => {
     expect(contextFromResult({ type: "result", usage: {} })).toBeUndefined();
   });
+
+  it("ignores summed turn usage when iterations is present but empty", () => {
+    // Routed providers leave `iterations: []` while top-level usage sums the
+    // whole turn. Only the window should be reported; the level stays at the
+    // last assistant message via `contextUsedFromAssistant`.
+    const rec = {
+      type: "result",
+      usage: {
+        input_tokens: 6_058_017,
+        output_tokens: 24_770,
+        iterations: [],
+      },
+      modelUsage: {
+        "deepseek-v4.1-flash": { contextWindow: 1_048_576 },
+      },
+    };
+    expect(contextFromResult(rec)).toEqual({
+      used: undefined,
+      window: 1_048_576,
+    });
+  });
 });
 
 describe("turnMetricsFromResult", () => {
