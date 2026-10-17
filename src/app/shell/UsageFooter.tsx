@@ -12,6 +12,9 @@ import { consumeCodexRateLimitResetCredit } from "../../features/providers/model
 import {
   errorRateLimits,
   unavailableRateLimits,
+  RATE_LIMIT_MIN_REFETCH_MS,
+  RATE_LIMIT_POLL_MS,
+  type ProviderRateLimits,
   type RateLimitProvider,
 } from "../../features/providers/model/rateLimits";
 import {
@@ -293,10 +296,65 @@ export function UsageChips({
     wantDevin,
   ]);
 
+  const isAnyActiveSnapshotStale = useCallback(
+    (maxAgeMs: number) => {
+      const timestamp = Date.now();
+      const isStale = (c: ProviderRateLimits) =>
+        (c.status === "ok" || c.status === "error") && timestamp - c.updatedAt >= maxAgeMs;
+
+      if (wantClaude && claudeAccountAvailable) {
+        if (isStale(getCachedRateLimits("claude", claudeAccountId))) return true;
+      }
+      if (wantCodex && codexAccountAvailable) {
+        if (isStale(getCachedRateLimits("codex", codexAccountId))) return true;
+      }
+      if (wantOpencode) {
+        if (isStale(getCachedRateLimits("opencode"))) return true;
+      }
+      if (wantDevin) {
+        if (isStale(getCachedRateLimits("devin"))) return true;
+      }
+      return false;
+    },
+    [
+      claudeAccountAvailable,
+      claudeAccountId,
+      codexAccountAvailable,
+      codexAccountId,
+      wantClaude,
+      wantCodex,
+      wantOpencode,
+      wantDevin,
+    ],
+  );
+
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), CLOCK_MS);
+    const handleReturn = () => {
+      if (
+        document.visibilityState === "visible" &&
+        isAnyActiveSnapshotStale(RATE_LIMIT_MIN_REFETCH_MS)
+      ) {
+        void refresh();
+      }
+    };
+    handleReturn();
+    window.addEventListener("focus", handleReturn);
+    document.addEventListener("visibilitychange", handleReturn);
+    return () => {
+      window.removeEventListener("focus", handleReturn);
+      document.removeEventListener("visibilitychange", handleReturn);
+    };
+  }, [isAnyActiveSnapshotStale, refresh]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setNow(Date.now());
+      if (isAnyActiveSnapshotStale(RATE_LIMIT_POLL_MS)) {
+        void refresh();
+      }
+    }, CLOCK_MS);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [isAnyActiveSnapshotStale, refresh]);
 
   const consumeCodexReset = useCallback(
     async (creditId?: string) => {
