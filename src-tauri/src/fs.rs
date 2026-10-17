@@ -4498,8 +4498,19 @@ fn parse_github_rate_limit_backoff(json: &str) -> Result<Option<SystemTime>, Str
 }
 
 fn gh_run_raw(root: &Path, args: &[&str], allow_empty: bool) -> Result<String, String> {
-    let program = crate::harness::resolve_gui_binary("gh")
-        .ok_or_else(|| "GitHub CLI (`gh`) is not installed.".to_string())?;
+    gh_run_with_program(root, args, allow_empty, || {
+        crate::harness::resolve_gui_binary("gh")
+    })
+}
+
+fn gh_run_with_program(
+    root: &Path,
+    args: &[&str],
+    allow_empty: bool,
+    resolve: impl FnOnce() -> Option<PathBuf>,
+) -> Result<String, String> {
+    validate_gh_cwd(root)?;
+    let program = resolve().ok_or_else(|| "GitHub CLI (`gh`) is not installed.".to_string())?;
     let mut cmd = Command::new(&program);
     cmd.current_dir(root)
         .args(args)
@@ -4510,11 +4521,11 @@ fn gh_run_raw(root: &Path, args: &[&str], allow_empty: bool) -> Result<String, S
     crate::harness::apply_gui_env(&mut cmd);
     crate::hide_window_console(&mut cmd);
     let output = cmd.output().map_err(|error| {
-        if error.kind() == ErrorKind::NotFound {
-            "GitHub CLI (`gh`) is not installed.".to_string()
-        } else {
-            error.to_string()
-        }
+        format!(
+            "Could not launch GitHub CLI (`{}`) in `{}`: {error}",
+            program.display(),
+            root.display()
+        )
     })?;
     if output.status.success() {
         let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -4536,6 +4547,27 @@ fn gh_run_raw(root: &Path, args: &[&str], allow_empty: bool) -> Result<String, S
         format!("gh {} failed", args.join(" "))
     };
     Err(detail)
+}
+
+fn validate_gh_cwd(root: &Path) -> Result<(), String> {
+    if root.to_string_lossy().starts_with("remote://") {
+        return Err(
+            "Remote GitHub Inbox requests must run on the project’s connected machine.".into(),
+        );
+    }
+    let metadata = std::fs::metadata(root).map_err(|error| {
+        format!(
+            "Cannot access GitHub working directory `{}`: {error}",
+            root.display()
+        )
+    })?;
+    if !metadata.is_dir() {
+        return Err(format!(
+            "GitHub working directory `{}` is not a directory.",
+            root.display()
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn resolve_repo_path(root: &Path, relative: &str) -> Result<String, String> {
@@ -8608,6 +8640,50 @@ mod tests {
         assert_eq!(item.kind, "pr");
         assert_eq!(item.repo, "acme/web");
         assert!(item.draft);
+    }
+
+    #[test]
+    fn github_launcher_reports_cwd_failures_before_resolving_or_launching_gh() {
+        let dir = tmp("gh-cwd");
+        let file = dir.0.join("file");
+        std::fs::write(&file, "file").unwrap();
+        for (path, expected) in [
+            (
+                PathBuf::from("remote://host/home/me/repo"),
+                "connected machine",
+            ),
+            (
+                dir.0.join("missing"),
+                "Cannot access GitHub working directory",
+            ),
+            (file, "is not a directory"),
+        ] {
+            let error = gh_run_with_program(&path, &["--version"], false, || {
+                panic!("Invalid cwd must not resolve or launch gh")
+            })
+            .unwrap_err();
+            assert!(error.contains(expected), "{error}");
+            assert!(!error.contains("not installed"), "{error}");
+        }
+    }
+
+    #[test]
+    fn github_launcher_distinguishes_missing_binary_from_spawn_failure_and_success() {
+        let dir = tmp("gh-launch");
+        assert_eq!(
+            gh_run_with_program(&dir.0, &[], false, || None).unwrap_err(),
+            "GitHub CLI (`gh`) is not installed."
+        );
+        let error =
+            gh_run_with_program(&dir.0, &[], false, || Some(dir.0.join("missing-gh"))).unwrap_err();
+        assert!(error.contains("Could not launch GitHub CLI"), "{error}");
+        assert!(error.contains("missing-gh"), "{error}");
+        assert!(!error.contains("not installed"), "{error}");
+        let output = gh_run_with_program(&dir.0, &["--help"], false, || {
+            Some(std::env::current_exe().unwrap())
+        })
+        .unwrap();
+        assert!(!output.is_empty());
     }
 
     #[test]

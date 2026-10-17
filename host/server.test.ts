@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -32,8 +34,10 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup();
 });
 
-async function setup(providers: RemoteProvider[] = ["codex"]) {
-  const directory = mkdtempSync(join(tmpdir(), "monocode-server-test-"));
+async function setup(
+  providers: RemoteProvider[] = ["codex"],
+  directory = mkdtempSync(join(tmpdir(), "monocode-server-test-")),
+) {
   const store = new HostStore(join(directory, "host.db"));
   let turn: SendTurnInput | undefined;
   let finish = () => {};
@@ -495,6 +499,27 @@ describe("remote host API", () => {
       (await s.call("files.read", { projectId: s.project.id, path: ".." }))
         .value.error,
     ).toContain("outside");
+  });
+
+  it.skipIf(process.platform === "win32")("answers Inbox calls through authenticated workspace RPC using the host checkout and account", async () => {
+    const directory = mkdtempSync(join(process.cwd(), "node_modules/monocode-inbox-rpc-"));
+    const s = await setup(["codex"], directory);
+    const bin = join(s.directory, "bin");
+    mkdirSync(bin);
+    const trace = join(s.directory, "gh-trace.jsonl");
+    writeFileSync(join(bin, "gh"), `#!${process.execPath}\nconst fs = require('node:fs');\nfs.appendFileSync(${JSON.stringify(trace)}, JSON.stringify({ cwd:process.cwd(), config:process.env.GH_CONFIG_DIR, args:process.argv.slice(2) })+'\\n');\nconsole.log(JSON.stringify({nameWithOwner:'remote-account/web'}));\n`);
+    chmodSync(join(bin, "gh"), 0o755);
+    vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
+    vi.stubEnv("GH_CONFIG_DIR", join(s.directory, "remote-account"));
+    try {
+      const params = { command: "git_github_repositories", args: { cwd: s.project.cwd } };
+      expect((await s.call("workspace.run", params, "invalid-token")).status).toBe(401);
+      expect((await s.call("workspace.run", params)).value).toEqual({ result: ["remote-account/web"] });
+      expect(JSON.parse(readFileSync(trace, "utf8"))).toEqual({ cwd: s.project.cwd,
+        config: join(s.directory, "remote-account"), args: ["repo", "view", "--json", "nameWithOwner,parent"] });
+      expect((await s.call("workspace.run", { command: "gh", args: { cwd: s.project.cwd, argv: ["--version"] } })).value.error).toContain("Unsupported workspace command");
+      expect(readFileSync(trace, "utf8").trim().split("\n")).toHaveLength(1);
+    } finally { vi.unstubAllEnvs(); }
   });
 
   it("answers this app's file commands inside host projects only", async () => {
