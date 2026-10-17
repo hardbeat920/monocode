@@ -681,6 +681,11 @@ import {
 import { remoteSessionState } from "../features/connections/model/remoteSessionState";
 import { findRemoteSessionTab } from "../features/connections/model/remoteSessionTabs";
 import {
+  readRemoteShell,
+  remoteShellListings,
+} from "../features/connections/model/remoteShells";
+import { pruneRemoteTurnWatches } from "../features/connections/model/remoteTurnWatch";
+import {
   remotePath,
   remoteProjectFor,
   remoteSessionGitCwd,
@@ -6818,6 +6823,7 @@ function Workspace({
           text,
           attachments,
           options,
+          options?.onSettled,
         );
       if (editedResends.isActive(sessionId)) return false;
       // Output already received belongs before the submitted user message.
@@ -10663,6 +10669,9 @@ function Workspace({
 
   useEffect(() => {
     orchestrator.sync();
+    pruneRemoteTurnWatches((shellId) =>
+      sessions.some((session) => session.id === shellId),
+    );
   }, [sessions]);
 
   const stopSessionRef = useRef(onStop);
@@ -10873,6 +10882,7 @@ function Workspace({
                   archived: !!session.archived,
                 });
               }
+              const remoteShells: Session[] = [];
               for (const session of sessionsRef.current) {
                 if (
                   session.orchestrationLeadId ||
@@ -10880,6 +10890,10 @@ function Workspace({
                   !sameProjectPath(session.cwd, cwd)
                 )
                   continue;
+                if (remoteProjectFor(session.cwd)) {
+                  remoteShells.push(session);
+                  continue;
+                }
                 byId.set(session.id, {
                   id: session.id,
                   title: session.title,
@@ -10890,6 +10904,14 @@ function Workspace({
                   archived: byId.get(session.id)?.archived ?? false,
                 });
               }
+              for (const listing of await remoteShellListings(
+                cwd,
+                remoteShells,
+              ))
+                byId.set(listing.id, {
+                  ...listing,
+                  archived: byId.get(listing.id)?.archived ?? false,
+                });
               return [...byId.values()];
             },
             session: async (id) => {
@@ -10905,7 +10927,12 @@ function Workspace({
             readConversation: async (target, options) =>
               isMonoSession(target.id)
                 ? readMonoConversation(target, options)
-                : sessionConversationPage(target, options),
+                : sessionConversationPage(
+                    remoteProjectFor(target.cwd)
+                      ? await readRemoteShell(target)
+                      : target,
+                    options,
+                  ),
             send: async (id, prompt, requestId, notifyMonoId) => {
               const target = await ensureOpenSessionRef.current(id);
               if (
