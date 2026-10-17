@@ -79,6 +79,8 @@ export type FilePaneTab = {
   foreground?: string;
   /** Temporary tab: the next preview open in its pane replaces it. */
   preview?: boolean;
+  /** Save changes immediately without changing the global editor preference. */
+  autosave?: boolean;
 };
 
 export type EditorPane = {
