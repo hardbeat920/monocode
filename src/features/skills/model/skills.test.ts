@@ -235,7 +235,27 @@ describe("injectSkillPrompt", () => {
     });
     expect(out).toContain("## /review-pr");
     expect(out).toContain("Be strict.");
+    expect(out).toContain("Skill file: /tmp/.agents/skills/review-pr/SKILL.md");
+    expect(out).toContain("Resource directory: /tmp/.agents/skills/review-pr");
     expect(out.endsWith("/review-pr look at auth")).toBe(true);
+  });
+
+  it("keeps the resource directory for a Windows skill bundle", () => {
+    const out = injectSkillPrompt("/review-pr", [{
+      ...review,
+      kind: "file",
+      path: "C:\\Users\\demo\\.agents\\skills\\review-pr\\SKILL.md",
+    }], { "review-pr": "Run scripts/review.ps1." });
+    expect(out).toContain("Resource directory: C:/Users/demo/.agents/skills/review-pr");
+    expect(out).toContain("Keep the project's working directory unchanged.");
+    expect(out).toContain("Run scripts/review.ps1.");
+  });
+
+  it("does not assign a resource directory to the built-in skill", () => {
+    const out = injectSkillPrompt("/create-skill", [BUILTIN_CREATE_SKILL], {
+      "create-skill": "Create a skill.",
+    });
+    expect(out).not.toContain("Resource directory:");
   });
 
   it("returns the original text when nothing matches", () => {

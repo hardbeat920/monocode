@@ -16,6 +16,7 @@ import {
 } from "../../sessions/ui/MarkdownModeToggle";
 import { MarkdownSource } from "../../sessions/ui/AgentMarkdown";
 import { SkillDocumentPreview } from "./SkillDocumentPreview";
+import { SharedSkillsPanel } from "./SharedSkillsPanel";
 import { copyText } from "../../../platform/tauri/clipboard";
 import { listSkills, readTextFile, type DiscoveredSkill } from "../../../platform/tauri/fs";
 import {
@@ -26,7 +27,7 @@ import {
   SKILLS_CHANGE_EVENT,
 } from "../model/skills";
 
-/** Inspect and manage file skills without modifying provider-owned catalogs. */
+/** Manage shared skills and inspect the existing file-skill catalog. */
 export function SkillsPage({
   cwd,
   header,
@@ -142,7 +143,10 @@ export function SkillsPage({
   }, [cwd, reload]);
 
   useEffect(() => {
-    const onChange = (): void => setDisabledPaths(loadDisabledSkillPaths());
+    const onChange = (): void => {
+      setDisabledPaths(loadDisabledSkillPaths());
+      setReload((value) => value + 1);
+    };
     window.addEventListener(SKILLS_CHANGE_EVENT, onChange);
     return () => window.removeEventListener(SKILLS_CHANGE_EVENT, onChange);
   }, []);
@@ -216,6 +220,10 @@ export function SkillsPage({
             className={`mx-auto w-full max-w-5xl py-8 ${previewOpen ? "px-4" : "px-8"}`}
           >
             {header}
+            <SharedSkillsPanel />
+            <h2 className="mb-3 text-[13px] font-semibold text-content">
+              Existing skills
+            </h2>
             <div className="flex flex-wrap items-center justify-between gap-3 pb-3">
               <div className="flex min-w-0 flex-1 items-center gap-3">
                 <span className="shrink-0 text-[12px] text-content/40 tabular-nums">
