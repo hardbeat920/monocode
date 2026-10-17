@@ -393,11 +393,14 @@ import {
   type NotificationPermission,
 } from "../../notifications/model/notifications";
 import {
+  getPendingRestartVersion,
   installPendingUpdate,
   packageManagedInstall,
   packageManagerHint,
   readAppVersion,
+  restartToApplyUpdate,
   runUpdateFlow,
+  subscribePendingRestart,
   type UpdaterSnapshot,
 } from "../../../app/model/updater";
 
@@ -1761,7 +1764,7 @@ function LinearSettings() {
   );
 }
 
-function UpdateRow({
+export function UpdateRow({
   onOpenWhatsNew,
 }: {
   onOpenWhatsNew: (version: string) => void;
@@ -1776,6 +1779,16 @@ function UpdateRow({
     void Promise.all([readAppVersion(), packageManagedInstall()]).then(
       ([currentVersion, packageManaged]) => {
         if (cancelled) return;
+        const deferred = getPendingRestartVersion();
+        if (deferred) {
+          setSnapshot({
+            phase: "restart-required",
+            currentVersion,
+            availableVersion: deferred,
+            packageManaged: packageManaged ?? undefined,
+          });
+          return;
+        }
         setSnapshot((current) => ({
           ...current,
           currentVersion,
@@ -1788,33 +1801,78 @@ function UpdateRow({
     };
   }, []);
 
+  // Syncs a restart staged elsewhere while open.
+  useEffect(() => {
+    let cancelled = false;
+    const unsubscribe = subscribePendingRestart(() => {
+      void Promise.all([readAppVersion(), packageManagedInstall()]).then(
+        ([currentVersion, packageManaged]) => {
+          if (cancelled) return;
+          const deferred = getPendingRestartVersion();
+          if (!deferred) return;
+          setSnapshot((prev) => {
+            if (
+              prev.phase === "restart-required" &&
+              prev.availableVersion === deferred
+            ) {
+              return prev;
+            }
+            return {
+              phase: "restart-required",
+              currentVersion,
+              availableVersion: deferred,
+              packageManaged: packageManaged ?? prev.packageManaged,
+            };
+          });
+        },
+      );
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, []);
+
   const busy =
     snapshot.phase === "checking" || snapshot.phase === "downloading";
   const hasUpdate = snapshot.phase === "available";
+  const needsRestart = snapshot.phase === "restart-required";
 
   const onClick = async () => {
     if (busy) return;
-    if (hasUpdate) {
-      await installPendingUpdate(setSnapshot);
-      return;
+    try {
+      if (needsRestart) {
+        // The helper stays in restart-required if relaunch no-ops.
+        setSnapshot(await restartToApplyUpdate(setSnapshot));
+        return;
+      }
+      if (hasUpdate) {
+        setSnapshot(await installPendingUpdate(setSnapshot));
+        return;
+      }
+      setSnapshot(await runUpdateFlow(true, setSnapshot));
+    } catch {
+      // Updater helpers surface errors via dialogs/snapshots; swallow so the
+      // fire-and-forget `void onClick()` never yields unhandled rejections.
     }
-    await runUpdateFlow(true, setSnapshot);
   };
 
   const status =
     snapshot.phase === "available"
       ? `Version ${snapshot.availableVersion} is available.`
-      : snapshot.phase === "downloading"
-        ? `Downloading${snapshot.progress != null ? ` ${snapshot.progress}%` : "…"}`
-        : snapshot.phase === "checking"
-          ? "Checking for updates…"
-          : snapshot.phase === "current"
-            ? "You're on the latest version."
-            : snapshot.phase === "error"
-              ? (snapshot.error ?? "Update check failed.")
-              : snapshot.packageManaged
-                ? packageManagerHint(snapshot.packageManaged)
-                : "MonoCode updates itself from the release feed.";
+      : snapshot.phase === "restart-required"
+        ? `Version ${snapshot.availableVersion} is installed. Restart to apply it.`
+        : snapshot.phase === "downloading"
+          ? `Downloading${snapshot.progress != null ? ` ${snapshot.progress}%` : "…"}`
+          : snapshot.phase === "checking"
+            ? "Checking for updates…"
+            : snapshot.phase === "current"
+              ? "You're on the latest version."
+              : snapshot.phase === "error"
+                ? (snapshot.error ?? "Update check failed.")
+                : snapshot.packageManaged
+                  ? packageManagerHint(snapshot.packageManaged)
+                  : "MonoCode updates itself from the release feed.";
 
   return (
     <Row
@@ -1839,12 +1897,16 @@ function UpdateRow({
         <SecondaryButton onClick={() => void onClick()} disabled={busy}>
           {busy ? (
             <Loader className="size-3.5 animate-spin" aria-hidden />
-          ) : hasUpdate ? (
+          ) : hasUpdate || needsRestart ? (
             <ArrowDownCircle className="size-3.5 text-accent" aria-hidden />
           ) : (
             <RefreshCw className="size-3.5" strokeWidth={1.75} aria-hidden />
           )}
-          {hasUpdate ? "Download" : "Check for updates"}
+          {hasUpdate
+            ? "Download"
+            : needsRestart
+              ? "Restart now"
+              : "Check for updates"}
         </SecondaryButton>
       </div>
     </Row>
