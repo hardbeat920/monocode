@@ -414,6 +414,13 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
       "codex opencode cursor grok pi omp fx hermes antigravity devin binary path",
   },
   {
+    id: "harness-updates",
+    section: "providers",
+    label: "CLI updates",
+    keywords:
+      "update upgrade version outdated latest release claude codex cursor grok opencode pi omp fx",
+  },
+  {
     id: "provider-accounts",
     section: "providers",
     label: "Provider accounts",
