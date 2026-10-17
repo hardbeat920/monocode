@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   formatFileSize,
   isImagePath,
+  isMermaidPath,
   isVideoPath,
+  mermaidPreviewMarkdown,
   sniffDocumentImageMime,
   sniffImageMime,
   videoMimeForPath,
@@ -25,6 +27,24 @@ describe("isImagePath", () => {
     expect(isImagePath("/w/spec.pdf")).toBe(false);
     expect(isImagePath("/w/LICENSE")).toBe(false);
     expect(isImagePath("/w/.png/notes.txt")).toBe(false);
+  });
+});
+
+describe("Mermaid files", () => {
+  it("previews .mmd and .mermaid sources", () => {
+    expect(isMermaidPath("/w/flow.mmd")).toBe(true);
+    expect(isMermaidPath("/w/Flow.MERMAID")).toBe(true);
+    expect(isMermaidPath("/w/notes.md")).toBe(false);
+    expect(isMermaidPath("/w/mmd")).toBe(false);
+  });
+
+  it("fences the source so no backtick line can close it early", () => {
+    expect(mermaidPreviewMarkdown("graph TD\n  A --> B")).toBe(
+      "```mermaid\ngraph TD\n  A --> B\n```\n",
+    );
+    expect(mermaidPreviewMarkdown("graph TD\n```\n  A --> B")).toBe(
+      "````mermaid\ngraph TD\n```\n  A --> B\n````\n",
+    );
   });
 });
 
