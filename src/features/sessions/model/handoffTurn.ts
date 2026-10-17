@@ -20,6 +20,8 @@ export async function requestOutgoingHandoff(input: {
   userRequest: string;
 }): Promise<string> {
   let brief = "";
+  // A failed turn still streams its error as assistant text; never pass that on as the recap.
+  let failed = false;
   const timer = setTimeout(() => {
     void cancelHarnessTurn(input.harness, input.sessionId);
   }, HANDOFF_TIMEOUT_MS);
@@ -34,6 +36,9 @@ export async function requestOutgoingHandoff(input: {
       runtimeMode: "supervised",
       text: buildOutgoingHandoffPrompt(input.userRequest),
       onEvent: (event) => {
+        if (event.type === "session.error" || event.type === "usage.limited") {
+          failed = true;
+        }
         if (event.type === "message.delta") {
           brief = mergeStream(brief, event.text);
         }
@@ -56,9 +61,10 @@ export async function requestOutgoingHandoff(input: {
       },
     });
   } catch {
-    // Caller falls back to the deterministic packet.
+    failed = true;
   } finally {
     clearTimeout(timer);
   }
-  return brief.trim();
+  // Caller falls back to the deterministic packet.
+  return failed ? "" : brief.trim();
 }
