@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { githubHost } from "./githubHost";
 
 export type GithubPrCheckState =
   "pass" | "fail" | "pending" | "skipping" | "cancel" | "unknown";
@@ -31,11 +32,12 @@ export type GithubCheckDetails = {
 export function githubActionsJobId(
   url: string | null,
   repo: string,
+  host: string = githubHost(),
 ): string | null {
   if (!url) return null;
   try {
     const parsed = new URL(url);
-    if (parsed.origin !== "https://github.com") return null;
+    if (parsed.origin !== `https://${host}`) return null;
     const prefix = `/${repo}/`;
     if (!parsed.pathname.toLowerCase().startsWith(prefix.toLowerCase()))
       return null;
@@ -54,8 +56,9 @@ export function fetchGithubCheckDetails(
   cwd: string,
   repo: string,
   jobId: string,
+  host: string = githubHost(),
 ): Promise<GithubCheckDetails> {
-  return invoke("git_github_check_details", { cwd, repo, jobId });
+  return invoke("git_github_check_details", { cwd, repo, host, jobId });
 }
 
 /** Backend owns the GitHub run/conclusion → state mapping; this only transports it. */
@@ -63,8 +66,14 @@ export function fetchGithubPrChecks(
   cwd: string,
   repo: string,
   number: number,
+  host: string = githubHost(),
 ): Promise<GithubPrChecks> {
-  return invoke<GithubPrChecks>("git_github_pr_checks", { cwd, repo, number });
+  return invoke<GithubPrChecks>("git_github_pr_checks", {
+    cwd,
+    repo,
+    host,
+    number,
+  });
 }
 
 export const CHECK_STATES: readonly GithubPrCheckState[] = [

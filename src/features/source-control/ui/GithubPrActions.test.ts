@@ -121,6 +121,7 @@ describe("GitHub pull request actions", () => {
       "acme/web",
       42,
       "squash",
+      { host: "github.com" },
     );
     expect(onChange).toHaveBeenCalledWith({
       ...item,

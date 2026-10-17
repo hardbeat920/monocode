@@ -21,6 +21,7 @@ import { setHomeDir } from "./shared/lib/paths";
 import { installNativeContextMenuGuard } from "./shared/lib/nativeContextMenu";
 import { consumeInstalledUpdate } from "./app/model/updateNotice";
 import { initializeProviderBinaryPaths } from "./features/providers/model/providerBinaryPaths";
+import { loadGithubHost } from "./features/inbox/model/githubHost";
 // Lets file commands reach a connected machine for `remote://` paths.
 import "./features/connections/model/remoteCommands";
 import "./styles/index.css";
@@ -41,6 +42,8 @@ const homeDirPrimed = homeDir()
 const providerBinaryPathsPrimed = initializeProviderBinaryPaths().catch(
   () => undefined,
 );
+// GitHub Enterprise links are built synchronously from the configured host.
+const githubHostPrimed = loadGithubHost().catch(() => undefined);
 
 function dismissBootSplash() {
   const splash = document.getElementById("boot-splash");
@@ -94,10 +97,12 @@ void listen("quit_aborted", () => {
 void Promise.all([
   homeDirPrimed,
   providerBinaryPathsPrimed,
+  githubHostPrimed,
   loadBootWorkspace(),
   appLoaded,
 ]).then(
   ([
+    ,
     ,
     ,
     { windowTransfer, resumed, history, historyCwd },

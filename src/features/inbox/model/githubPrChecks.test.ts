@@ -44,6 +44,7 @@ describe("fetchGithubPrChecks", () => {
     expect(invokeMock).toHaveBeenCalledWith("git_github_pr_checks", {
       cwd: "/tmp/web",
       repo: "acme/web",
+      host: "github.com",
       number: 7,
     });
   });

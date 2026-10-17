@@ -1,4 +1,5 @@
 import { sessionConversationPage } from "../features/agent-app/model/sessionConversation";
+import { githubHostOf } from "../features/inbox/model/githubHost";
 import { readMonoConversation } from "../features/monos/model/monoConversation";
 import {
   resumeMonoUsageLimit,
@@ -4542,7 +4543,7 @@ function Workspace({
         session.linkedWorkItem.repo,
         session.linkedWorkItem.kind,
         session.linkedWorkItem.number,
-        { force: true },
+        { force: true, host: githubHostOf(session.linkedWorkItem.url) },
       ).then(
         (thread) => {
           if (

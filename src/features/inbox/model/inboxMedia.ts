@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { isGithubHost } from "./githubHost";
 import { sniffImageMime } from "../../files/model/filePreview";
 
 /**
@@ -51,7 +52,8 @@ export function isInboxMediaUrl(value: string): boolean {
   ) {
     return true;
   }
-  if (host !== "github.com" && host !== "www.github.com") return false;
+  if (!isGithubHost(host) && host !== "github.com" && host !== "www.github.com")
+    return false;
   const path = url.pathname.toLowerCase();
   if (path.startsWith("/user-attachments/")) return true;
   const parts = path.split("/").filter(Boolean);

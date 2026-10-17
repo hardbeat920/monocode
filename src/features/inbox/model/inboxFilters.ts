@@ -177,11 +177,93 @@ export function saveInboxConnections(connections: InboxSourceConnections) {
   }
 }
 
-export function loadInboxFilters(): InboxFilters {
+export type InboxFiltersBySource = Record<InboxSource, InboxFilters>;
+
+export const INBOX_SOURCES: readonly InboxSource[] = [
+  "github",
+  "linear",
+  "jira",
+  "gitlab",
+  "azuredevops",
+];
+
+function inboxFiltersForAll(filters: InboxFilters): InboxFiltersBySource {
+  return {
+    github: filters,
+    linear: filters,
+    jira: filters,
+    gitlab: filters,
+    azuredevops: filters,
+  };
+}
+
+export const DEFAULT_INBOX_FILTERS_BY_SOURCE: InboxFiltersBySource =
+  inboxFiltersForAll(DEFAULT_INBOX_FILTERS);
+
+/**
+ * Each source keeps its own filters, so "Assigned to me" on Jira leaves GitHub
+ * alone. A pre-per-source value seeds every source it has no entry for.
+ */
+export function loadInboxFiltersBySource(): InboxFiltersBySource {
   try {
     const raw = localStorage.getItem(FILTERS_KEY);
-    if (!raw) return DEFAULT_INBOX_FILTERS;
-    const parsed = JSON.parse(raw) as Partial<InboxFilters>;
+    if (!raw) return DEFAULT_INBOX_FILTERS_BY_SOURCE;
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") {
+      return DEFAULT_INBOX_FILTERS_BY_SOURCE;
+    }
+    const bySource = (parsed as { bySource?: unknown }).bySource;
+    if (!bySource || typeof bySource !== "object") {
+      return inboxFiltersForAll(parseInboxFilters(parsed));
+    }
+    const record = bySource as Record<string, unknown>;
+    const result = { ...DEFAULT_INBOX_FILTERS_BY_SOURCE };
+    for (const source of INBOX_SOURCES) {
+      const value = record[source];
+      if (value && typeof value === "object") {
+        result[source] = parseInboxFilters(value);
+      }
+    }
+    return result;
+  } catch {
+    return DEFAULT_INBOX_FILTERS_BY_SOURCE;
+  }
+}
+
+export function saveInboxFiltersBySource(filters: InboxFiltersBySource) {
+  try {
+    localStorage.setItem(FILTERS_KEY, JSON.stringify({ bySource: filters }));
+  } catch {
+    // private mode / quota
+  }
+}
+
+export function loadInboxFilters(
+  source: InboxSource = "github",
+): InboxFilters {
+  return loadInboxFiltersBySource()[source];
+}
+
+/** Server-side narrowing each source fetches with. */
+export function inboxSourceQueries(
+  filters: InboxFiltersBySource,
+): Record<InboxSource, { assignedToMe: boolean; state: "open" | "all" }> {
+  const queries = {} as Record<
+    InboxSource,
+    { assignedToMe: boolean; state: "open" | "all" }
+  >;
+  for (const source of INBOX_SOURCES) {
+    queries[source] = {
+      assignedToMe: filters[source].assignedToMe,
+      state: inboxFetchState(filters[source]),
+    };
+  }
+  return queries;
+}
+
+function parseInboxFilters(value: unknown): InboxFilters {
+  try {
+    const parsed = value as Partial<InboxFilters>;
     return {
       assignedToMe: parsed.assignedToMe === true,
       hiddenProjects: Array.isArray(parsed.hiddenProjects)
@@ -211,13 +293,6 @@ export function loadInboxFilters(): InboxFilters {
   }
 }
 
-export function saveInboxFilters(filters: InboxFilters) {
-  try {
-    localStorage.setItem(FILTERS_KEY, JSON.stringify(filters));
-  } catch {
-    // private mode / quota
-  }
-}
 
 export function pruneInboxFilters(
   filters: InboxFilters,
@@ -397,6 +472,34 @@ export function applyInboxFilters(
     ),
     query,
   );
+}
+
+/** Applies each source's own filters to its items, for views that span every source. */
+export function applyInboxFiltersBySource(
+  items: readonly InboxItem[],
+  filters: InboxFiltersBySource,
+  query: string,
+  now = Date.now(),
+): InboxItem[] {
+  const allowed = new Set(
+    INBOX_SOURCES.flatMap((source) =>
+      applyInboxFilters(items, filters[source], query, now, source),
+    ),
+  );
+  return items.filter((item) => allowed.has(item));
+}
+
+export function pruneInboxFiltersBySource(
+  filters: InboxFiltersBySource,
+  projectPaths: readonly string[],
+): InboxFiltersBySource {
+  let changed = false;
+  const next = { ...filters };
+  for (const source of INBOX_SOURCES) {
+    next[source] = pruneInboxFilters(filters[source], projectPaths);
+    changed ||= next[source] !== filters[source];
+  }
+  return changed ? next : filters;
 }
 
 export function statusFilterForSource(

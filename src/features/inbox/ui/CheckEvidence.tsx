@@ -1,4 +1,5 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { githubHost } from "../model/githubHost";
 import { useEffect, useMemo, useState } from "react";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
 import { AlertCircle, CircleX, ExternalLink } from "../../../shared/ui/icons";
@@ -14,11 +15,14 @@ export function CheckEvidence({
   cwd,
   repo,
   headOid,
+  host = githubHost(),
 }: {
   annotations: Annotation[];
   cwd: string;
   repo: string;
   headOid: string;
+  /** Server of the pull request, for blob links. */
+  host?: string;
 }) {
   const [showAll, setShowAll] = useState(false);
   const sources = useMemo<SourceCache>(() => new Map(), [cwd, headOid]);
@@ -31,6 +35,7 @@ export function CheckEvidence({
             annotation={annotation}
             cwd={cwd}
             repo={repo}
+            host={host}
             headOid={headOid}
             sources={sources}
           />
@@ -53,12 +58,14 @@ function CheckAnnotation({
   annotation,
   cwd,
   repo,
+  host,
   headOid,
   sources,
 }: {
   annotation: Annotation;
   cwd: string;
   repo: string;
+  host: string;
   headOid: string;
   sources: SourceCache;
 }) {
@@ -112,7 +119,7 @@ function CheckAnnotation({
     repo.split("/").every((part) => part !== "." && part !== "..");
   const fileUrl =
     validRepo && validPath && validCommit
-      ? `https://github.com/${repo}/blob/${headOid}/${relative.split("/").map(encodeURIComponent).join("/")}${validLine ? `#L${annotation.line}` : ""}`
+      ? `https://${host}/${repo}/blob/${headOid}/${relative.split("/").map(encodeURIComponent).join("/")}${validLine ? `#L${annotation.line}` : ""}`
       : null;
   const location = `${annotation.path}${validLine ? `:${annotation.line}` : ""}`;
   const [messageTitle, ...messageLines] = annotation.message.split(/\r?\n/);

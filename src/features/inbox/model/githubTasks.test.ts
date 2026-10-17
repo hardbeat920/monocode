@@ -193,6 +193,21 @@ describe("inboxListCacheKey", () => {
       inboxListCacheKey(projects, { ...base, linearHiddenTeamIds: ["t2"] }),
     );
   });
+
+  it("separates queries that differ only in one source's filters", () => {
+    const projects = [{ path: "/tmp/web" }];
+    const base = {
+      assignedToMe: false,
+      state: "open" as const,
+      search: "",
+    };
+    expect(inboxListCacheKey(projects, base)).not.toBe(
+      inboxListCacheKey(projects, {
+        ...base,
+        sources: { jira: { assignedToMe: true, state: "open" } },
+      }),
+    );
+  });
 });
 
 describe("collectInboxResults", () => {

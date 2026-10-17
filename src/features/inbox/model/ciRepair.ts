@@ -1,4 +1,5 @@
 import type { GithubPrCheck, GithubCheckDetails } from "./githubPrChecks";
+import { githubOrigin } from "./githubHost";
 
 export type CiRepairRequest = {
   text: string;
@@ -92,7 +93,7 @@ export function buildCiRepairRequest({
   }));
   const prefix = [
     `Fix the selected failed CI checks for ${repo} PR #${number}.`,
-    `PR: https://github.com/${repo}/pull/${number}`,
+    `PR: ${githubOrigin()}/${repo}/pull/${number}`,
     `Checked commit: ${headOid}`,
     "Verify the local checkout belongs to this PR and inspect its current head before editing. Preserve unrelated local changes. If the checkout differs, explain what is needed before switching branches or overwriting work.",
     "Find the cause of each selected failure, implement the fixes, and run the relevant tests. Inspect job logs if the evidence below is insufficient. Report what was fixed, validation results, and any remaining failures. Do not commit or push unless asked.",

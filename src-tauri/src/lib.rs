@@ -14,6 +14,7 @@ mod devin_config;
 mod devin_usage;
 mod external_editor;
 mod fs;
+mod github_host;
 mod gitlab;
 mod harness;
 mod harness_updates;
@@ -276,6 +277,7 @@ pub fn run() {
         .setup(|app| {
             harness::reap_orphaned_harness_processes();
             session_store::init(app.handle())?;
+            github_host::init(app.handle());
             control::init(app.handle())?;
             reminders::init(app.handle());
             checkpoint::init(app.handle())?;
@@ -377,6 +379,8 @@ pub fn run() {
             fs::git_pr_status,
             fs::git_pr_create,
             fs::git_github_status,
+            github_host::github_host_get,
+            github_host::github_host_set,
             fs::github_monocode_star_status,
             fs::github_star_monocode,
             fs::git_github_repo,
