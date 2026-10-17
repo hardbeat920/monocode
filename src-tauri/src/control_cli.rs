@@ -82,12 +82,14 @@ const ACTIONS: [&str; 12] = [
     "list", "delegate", "get", "steer", "message", "retry", "cancel", "wait", "review", "finish",
     "respond", "answer",
 ];
-const APP_ACTIONS: [&str; 32] = [
+const APP_ACTIONS: [&str; 34] = [
     "models.list",
     "sessions.list",
     "sessions.read",
     "sessions.send",
     "sessions.draft",
+    "sessions.btw",
+    "btw.get",
     "sessions.start",
     "sessions.stop",
     "sessions.archive",
@@ -121,8 +123,8 @@ const APP_USAGE: &str = r#"MonoCode app access — use in a thread enabled by /o
 Usage: {exe} app ACTION [--json JSON | --input FILE|-] [--request-id ID]
 
 A Mono works on several projects: add "project":"<path or name>" to the
-sessions.*, worktrees.* and folders.* actions to choose which one. It may be
-left out when the Mono has a single project.
+sessions.*, btw.get, worktrees.* and folders.* actions to choose which one. It
+may be left out when the Mono has a single project or is already in that project.
 
 Actions:
   models.list    {}  Available providers, models, settings and permission modes.
@@ -141,6 +143,13 @@ Actions:
                   Save an unsent draft in an idle project session. Existing
                   drafts are preserved; send or remove one in MonoCode first.
                   Reuse --request-id on retries.
+  sessions.btw   {"sessionId":"...","question":"..."}
+                  Ask a read-only side question about the latest completed
+                  supported turn, including while its main session is busy.
+                  Returns a threadId immediately; reuse --request-id on retries.
+  btw.get        {"sessionId":"...","threadId":"..."}
+                  Read side-question status and messages: running, completed,
+                  failed (with error), or closed if the UI deleted the thread.
   sessions.start {"prompt":"...","harness":"codex","model":"codex:...",
                   "effort":"high","reveal":false,
                   "workspaceMode":"current","worktreeCwd":"<path>","draft":false,
@@ -635,6 +644,8 @@ mod tests {
             "sessions.read",
             "sessions.send",
             "sessions.draft",
+            "sessions.btw",
+            "btw.get",
             "sessions.stop",
             "sessions.archive",
             "sessions.delete",
