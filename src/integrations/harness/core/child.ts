@@ -422,6 +422,7 @@ async function resolveHarnessBinary(
     fx: "harness_resolve_fx",
     hermes: "harness_resolve_hermes",
     antigravity: "harness_resolve_antigravity",
+    copilot: "harness_resolve_copilot",
     devin: "harness_resolve_devin",
   };
   return invoke(command[provider]);
@@ -473,6 +474,12 @@ export function resolveGrokBinary(
   binaryPath?: string | null,
 ): Promise<{ path: string }> {
   return resolveHarnessBinary("grok", binaryPath);
+}
+
+export function resolveCopilotBinary(
+  binaryPath?: string | null,
+): Promise<{ path: string }> {
+  return resolveHarnessBinary("copilot", binaryPath);
 }
 
 export function resolveHermesBinary(

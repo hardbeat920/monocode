@@ -130,6 +130,7 @@ describe("existing providers over headless process I/O", () => {
       grok: binary,
       fx: binary,
       hermes: binary,
+      copilot: binary,
       antigravity: binary,
       devin: binary,
     });
@@ -235,7 +236,15 @@ describe("existing providers over headless process I/O", () => {
     },
   );
 
-  it.each(["cursor", "grok", "fx", "hermes", "antigravity", "devin"] as const)(
+  it.each([
+    "cursor",
+    "grok",
+    "fx",
+    "hermes",
+    "antigravity",
+    "copilot",
+    "devin",
+  ] as const)(
     "completes a %s turn over the headless ACP transport",
     async (harness) => {
       const project = await engine.openProject(directory);
