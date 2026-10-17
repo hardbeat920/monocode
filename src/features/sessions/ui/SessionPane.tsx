@@ -1232,6 +1232,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                           }
                         />
                         <ModelControlPills
+                          project={workCwd}
                           harness={session.harness}
                           model={session.model}
                           values={session.modelSettings}

@@ -59,6 +59,8 @@ type Props = {
   values: Record<string, string>;
   /** Project whose disabled providers are hidden from the picker. */
   project?: string;
+  /** Selects the model catalog; project still selects hidden providers. */
+  catalogCwd?: string;
   /** Hide option rows from the menu when they render as pills beside the picker. */
   hideSettings?: boolean;
   /** Limit provider tabs for surfaces that only support one harness. */
@@ -313,6 +315,7 @@ export function ModelPicker({
   model,
   values,
   project,
+  catalogCwd,
   hideSettings = false,
   allowedHarnesses,
   hotkeys = false,
@@ -324,7 +327,7 @@ export function ModelPicker({
   onSettingsChange,
   onClose,
 }: Props) {
-  const source = useModelSource();
+  const source = useModelSource(catalogCwd ?? project);
   const catalogVersion = useSyncExternalStore(
     subscribeModels,
     getModelSnapshot,
@@ -1086,6 +1089,7 @@ export function ModelPicker({
 }
 
 export function ModelControlPills({
+  project,
   harness,
   model,
   values,
@@ -1095,6 +1099,7 @@ export function ModelControlPills({
   onClose,
 }: Pick<
   Props,
+  | "project"
   | "harness"
   | "model"
   | "values"
@@ -1109,7 +1114,7 @@ export function ModelControlPills({
     getModelSnapshot,
   );
   void catalogVersion;
-  const current = useModelSource().resolve(harness, model);
+  const current = useModelSource(project).resolve(harness, model);
   const pills = pillSettings(current);
   const effort = pills.find(
     (setting) => setting.kind === "select" && isEffortSetting(setting),
@@ -1181,13 +1186,17 @@ function controlClass(variant: Variant, open = false): string {
  * details panel. `row` lays out one label and its control.
  */
 export function ModelSettingRows({
+  project,
   harness,
   model,
   values,
   side = "top",
   onSettingsChange,
   row,
-}: Pick<Props, "harness" | "model" | "values" | "side" | "onSettingsChange"> & {
+}: Pick<
+  Props,
+  "project" | "harness" | "model" | "values" | "side" | "onSettingsChange"
+> & {
   row: (setting: {
     id: string;
     label: string;
@@ -1200,7 +1209,7 @@ export function ModelSettingRows({
     getModelSnapshot,
   );
   void catalogVersion;
-  const current = useModelSource().resolve(harness, model);
+  const current = useModelSource(project).resolve(harness, model);
   return (
     <>
       {pillSettings(current).map((setting) => (

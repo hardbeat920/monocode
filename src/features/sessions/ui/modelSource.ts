@@ -1,4 +1,4 @@
-import { createContext, useContext } from "react";
+import { createContext, useContext, useMemo } from "react";
 import {
   findModel,
   modelsFor,
@@ -12,6 +12,10 @@ import {
   probeHarnessAvailability,
 } from "../../../integrations/harness/core/availability";
 import { refreshHarnessCatalogs } from "../../../integrations/harness/core/registry";
+import {
+  projectOpenCodeModels,
+  refreshProjectOpenCodeCatalog,
+} from "../../../integrations/harness/providers/opencode/opencodeCatalog";
 
 /** Where the model picker gets its models and provider availability. The
  * default is this computer's catalog; a remote session supplies its host's. */
@@ -42,4 +46,37 @@ export const LOCAL_MODEL_SOURCE: ModelSource = {
 export const ModelSourceContext =
   createContext<ModelSource>(LOCAL_MODEL_SOURCE);
 
-export const useModelSource = () => useContext(ModelSourceContext);
+export function localProjectModelSource(project: string): ModelSource {
+  return {
+    ...LOCAL_MODEL_SOURCE,
+    modelsFor: (harness) =>
+      harness === "opencode"
+        ? (projectOpenCodeModels(project) ?? modelsFor(harness))
+        : modelsFor(harness),
+    find: (id) =>
+      id.startsWith("opencode:")
+        ? (projectOpenCodeModels(project) ?? modelsFor("opencode")).find(
+            (model) => model.id === id,
+          )
+        : findModel(id),
+    resolve: (harness, id) => resolveModel(harness, id, project),
+    refresh: (harnesses) => {
+      LOCAL_MODEL_SOURCE.refresh(
+        harnesses.filter((harness) => harness !== "opencode"),
+      );
+      if (harnesses.includes("opencode"))
+        void refreshProjectOpenCodeCatalog(project);
+    },
+  };
+}
+
+export function useModelSource(project?: string): ModelSource {
+  const source = useContext(ModelSourceContext);
+  return useMemo(
+    () =>
+      project && source === LOCAL_MODEL_SOURCE
+        ? localProjectModelSource(project)
+        : source,
+    [project, source],
+  );
+}
