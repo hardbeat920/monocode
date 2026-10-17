@@ -5,6 +5,7 @@ import {
   claimInboxAutomationRuns,
   inboxAppearedEvent,
   matchInboxAutomations,
+  SUPPORTED_INBOX_TRIGGER_EVENTS,
 } from "./automationEvents";
 import {
   createAutomationTrigger,
@@ -246,6 +247,38 @@ describe("inbox automation events", () => {
     );
     expect(match?.eventKey).toBe("azuredevops:pr:acme/web:12");
     expect(match?.prompt).toContain("Work on this ADO pull request:");
+  });
+
+  it("fires Bitbucket pull requests into the matching automation", () => {
+    const review = automation({
+      triggers: [createAutomationTrigger("bitbucket", "pull_request_opened")],
+    });
+    const prItem = item({
+      provider: "bitbucket",
+      url: "https://bitbucket.org/acme/web/pull-requests/12",
+    });
+    expect(inboxAppearedEvent(prItem)).toEqual({
+      kind: "bitbucket",
+      event: "pull_request_opened",
+    });
+    const [match] = matchInboxAutomations([review], [prItem]);
+    expect(match?.eventKey).toBe("bitbucket:pr:acme/web:12");
+    expect(match?.prompt).toContain("Work on this Bitbucket pull request:");
+  });
+
+  it("has no Bitbucket issue trigger since the issue tracker was retired", () => {
+    expect(
+      inboxAppearedEvent(
+        item({
+          provider: "bitbucket",
+          kind: "issue",
+          url: "https://bitbucket.org/acme/web/issues/12",
+        }),
+      ),
+    ).toBeNull();
+    expect(SUPPORTED_INBOX_TRIGGER_EVENTS.bitbucket).toEqual([
+      "pull_request_opened",
+    ]);
   });
 
   it("fires Azure DevOps work items separately from pull requests", () => {
