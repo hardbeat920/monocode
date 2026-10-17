@@ -140,7 +140,11 @@ import {
   worktreeSessionIds,
   type Worktree,
 } from "../features/source-control/model/worktrees";
-import { UsageFooter } from "./shell/UsageFooter";
+import {
+  UsageFooter,
+  workspaceUsageAccountSelection,
+} from "./shell/UsageFooter";
+import { MonoUsageFooter } from "../features/monos/ui/MonoUsageFooter";
 import { useProjectBranches } from "../features/source-control/hooks/useProjectBranches";
 import { useInboxActivity } from "../features/inbox/hooks/useInboxUnseen";
 import {
@@ -434,6 +438,18 @@ import {
   type AddToChatRequest,
 } from "../features/sessions/model/quoteDraft";
 import { createSessionRemover } from "../features/sessions/model/sessionRemoval";
+import {
+  closeMonoViewAfterSessionRemoval,
+  shouldCloseMonoViewAfterSessionRemoval,
+} from "./model/monoViewSessionRemoval";
+import {
+  beginMonoViewRequest,
+  cancelMonoViewRequest,
+  finishMonoViewRequest,
+  isMonoViewRequestCurrent,
+  resetMonoViewAfterSessionReset,
+  type MonoViewRequestState,
+} from "./model/monoViewRequest";
 import { shouldGenerateSessionTitle } from "../features/sessions/model/sessionTitle";
 import {
   DEFAULT_PROVIDER_ACCOUNT_ID,
@@ -1168,15 +1184,14 @@ function Workspace({
   const onShowMonoActivity = useCallback(
     (sessionId: string, turnId: string, blocks: Block[]) => {
       const shown =
-        monoOverviewOpenRef.current && monoOverviewTabRef.current === "activity";
+        monoOverviewOpenRef.current &&
+        monoOverviewTabRef.current === "activity";
       setMonoShownSession(null);
       setMonoOverviewDocument(null);
       setMonoOverviewTab("activity");
       setMonoOverviewOpen(true);
       setMonoActivity((previous) =>
-        shown &&
-        previous?.sessionId === sessionId &&
-        previous.turnId === turnId
+        shown && previous?.sessionId === sessionId && previous.turnId === turnId
           ? null
           : { sessionId, turnId, blocks },
       );
@@ -1185,9 +1200,9 @@ function Workspace({
   );
   const monoViewIdRef = useRef(monoViewId);
   monoViewIdRef.current = monoViewId;
-  const monoViewRequest = useRef(0);
-  const closeMonoView = useCallback(() => {
-    monoViewRequest.current += 1;
+  const monoViewRequest = useRef<MonoViewRequestState>({ current: 0 });
+  const closeMonoView = useCallback((removedMonoId?: string) => {
+    cancelMonoViewRequest(monoViewRequest.current, removedMonoId);
     monoViewIdRef.current = null;
     saveOpenMono(undefined);
     setMonoViewId(null);
@@ -4718,35 +4733,43 @@ function Workspace({
     async (monoId: string) => {
       setMonoActivity(null);
       workspaceNavigation.cancel();
-      const request = ++monoViewRequest.current;
+      const request = beginMonoViewRequest(monoViewRequest.current, monoId);
       setSearchViewOpen(false);
       setInboxViewOpen(false);
       setNotesViewOpen(false);
       setAutomationsViewOpen(false);
       lastMonoIdRef.current = monoId;
-      const session = await ensureMonoSession(monoId, {
-        home: homeDir,
-        load: ensureOpenSession,
-        create: (path) => newDefaultSession(path),
-        add: (created) => {
-          sessionsRef.current = [...sessionsRef.current, created];
-          setSessions(sessionsRef.current);
-        },
-      });
-      if (!session || request !== monoViewRequest.current) return;
-      // What the last Mono had open over its overview is its own; another
-      // Mono opens on its list.
-      if (monoViewIdRef.current !== session.id) {
-        setMonoShownSession(null);
-        setMonoShownSessionFocused(false);
-        setMonoOverviewDocument(null);
+      try {
+        const session = await ensureMonoSession(monoId, {
+          home: homeDir,
+          load: ensureOpenSession,
+          create: (path) => newDefaultSession(path),
+          add: (created) => {
+            sessionsRef.current = [...sessionsRef.current, created];
+            setSessions(sessionsRef.current);
+          },
+        });
+        if (
+          !session ||
+          !isMonoViewRequestCurrent(monoViewRequest.current, request)
+        )
+          return;
+        // What the last Mono had open over its overview is its own; another
+        // Mono opens on its list.
+        if (monoViewIdRef.current !== session.id) {
+          setMonoShownSession(null);
+          setMonoShownSessionFocused(false);
+          setMonoOverviewDocument(null);
+        }
+        monoViewIdRef.current = session.id;
+        saveOpenMono(monoId);
+        setMonoViewId(session.id);
+        setProjectTerminalFocused(false);
+        setComposerFocused(true);
+        setComposerFocusToken((token) => token + 1);
+      } finally {
+        finishMonoViewRequest(monoViewRequest.current, request);
       }
-      monoViewIdRef.current = session.id;
-      saveOpenMono(monoId);
-      setMonoViewId(session.id);
-      setProjectTerminalFocused(false);
-      setComposerFocused(true);
-      setComposerFocusToken((token) => token + 1);
     },
     [ensureOpenSession, workspaceNavigation.cancel],
   );
@@ -4789,7 +4812,8 @@ function Workspace({
       const current = sessionsRef.current.find(
         (session) => session.id === sessionId,
       );
-      if (!current || !isMonoSession(sessionId))
+      const monoId = monoForSession(sessionId)?.id;
+      if (!current || !monoId)
         throw new Error("This Mono's conversation is no longer available.");
       if (removingSessionIds.current.has(sessionId))
         throw new Error("This conversation is already being reset.");
@@ -4841,13 +4865,18 @@ function Workspace({
             setStoredLinkedSessions((history) =>
               history.filter((entry) => entry.id !== sessionId),
             );
-            if (monoViewIdRef.current === sessionId) {
-              monoViewRequest.current += 1;
-              monoViewIdRef.current = fresh.id;
-              setMonoViewId(fresh.id);
-              setComposerFocused(true);
-              setComposerFocusToken((token) => token + 1);
-            }
+            resetMonoViewAfterSessionReset(
+              monoViewRequest.current,
+              monoViewIdRef.current,
+              sessionId,
+              monoId,
+              () => {
+                monoViewIdRef.current = fresh.id;
+                setMonoViewId(fresh.id);
+                setComposerFocused(true);
+                setComposerFocusToken((token) => token + 1);
+              },
+            );
           },
         });
       } finally {
@@ -5414,6 +5443,12 @@ function Workspace({
               }
 
               const { removal } = change;
+              closeMonoViewAfterSessionRemoval(
+                monoViewIdRef.current,
+                sessionId,
+                monoForSession,
+                closeMonoView,
+              );
               lastPersisted.current.delete(sessionId);
               pendingPersist.current.delete(sessionId);
               const closingFiles = filesInWorkspaceTabs(removal.closedTabs);
@@ -5511,6 +5546,7 @@ function Workspace({
     },
     [
       activateTab,
+      closeMonoView,
       history,
       invalidateLoadedSession,
       refreshHistory,
@@ -5722,19 +5758,24 @@ function Workspace({
       );
       if (!confirmed) return;
       if (mono.sessionId) {
-        if (monoViewIdRef.current === mono.sessionId) closeMonoView();
-        if (
+        const hasSession =
           sessionsRef.current.some(
             (session) => session.id === mono.sessionId,
-          ) ||
-          history.some((entry) => entry.id === mono.sessionId)
-        ) {
+          ) || history.some((entry) => entry.id === mono.sessionId);
+        if (hasSession) {
           const removed = await onRemoveHistorySession(
             mono.sessionId,
             "delete",
             true,
           );
           if (!removed) return;
+        } else if (
+          shouldCloseMonoViewAfterSessionRemoval(
+            monoViewIdRef.current,
+            mono.sessionId,
+          )
+        ) {
+          closeMonoView(monoId);
         }
       }
       removeMono(monoId);
@@ -12824,9 +12865,7 @@ function Workspace({
           : undefined
       }
       onToggleMonoOverview={
-        monoCovers
-          ? () => setMonoOverviewOpen(!monoOverviewOpen)
-          : undefined
+        monoCovers ? () => setMonoOverviewOpen(!monoOverviewOpen) : undefined
       }
       monoOverviewOpen={monoOverviewOpen}
       onOpenMonoSettings={
@@ -13378,38 +13417,41 @@ function Workspace({
               inboxViewOpen ||
               notesViewOpen ||
               automationsViewOpen ||
-              settingsOpen ||
-              monoCovers ? null : (
+              settingsOpen ? null : monoCovers ? (
+                monoViewSession ? (
+                  <MonoUsageFooter
+                    session={monoViewSession}
+                    sessions={sessions}
+                  />
+                ) : null
+              ) : (
                 <UsageFooter
                   providers={usageProviders}
                   session={usageSession}
                   project={active?.cwd ?? projectCwd}
-                  onSelectAccount={onSelectProviderAccount}
+                  onSelectAccount={workspaceUsageAccountSelection(
+                    false,
+                    onSelectProviderAccount,
+                  )}
                   onManageAccounts={() =>
                     openSettings("providers", "provider-accounts")
                   }
-                  // A Mono in full view has no terminal of its own.
-                  terminals={monoCovers ? undefined : runningTerminals}
-                  terminalOpen={!monoCovers && runningTerminalOpen}
+                  terminals={runningTerminals}
+                  terminalOpen={runningTerminalOpen}
                   onToggleTerminal={onToggleRunningTerminal}
                   onNewTerminal={
-                    !monoCovers && isLocalProject(projectCwd)
-                      ? onNewTerminal
-                      : undefined
+                    isLocalProject(projectCwd) ? onNewTerminal : undefined
                   }
                   onToggleProjectTerminal={
-                    !monoCovers && isLocalProject(projectCwd)
+                    isLocalProject(projectCwd)
                       ? onToggleProjectTerminal
                       : undefined
                   }
                   projectTerminalActive={
-                    !monoCovers &&
                     !!currentProjectDock &&
                     currentProjectDock.pane.files.length > 0
                   }
-                  projectTerminalOpen={
-                    !monoCovers && !!currentProjectDock?.open
-                  }
+                  projectTerminalOpen={!!currentProjectDock?.open}
                 />
               )}
             </div>

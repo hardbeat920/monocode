@@ -14,9 +14,15 @@ import {
   type RateLimitWindow,
 } from "../../features/providers/model/rateLimits";
 import type { CodexRateLimitResetOutcome } from "../../features/providers/model/rateLimitsFetch";
-import { mascotPath, projectMascot } from "../../features/projects/model/projectMascots";
+import {
+  mascotPath,
+  projectMascot,
+} from "../../features/projects/model/projectMascots";
 import { projectKey, projectName } from "../../shared/lib/paths";
-import { HARNESS_TITLE, type HarnessId } from "../../features/sessions/model/session";
+import {
+  HARNESS_TITLE,
+  type HarnessId,
+} from "../../features/sessions/model/session";
 import {
   loadTabGroupColors,
   loadTabGroupCustomColors,
@@ -25,7 +31,13 @@ import {
   resolveTabGroupMascot,
 } from "../../features/workspace/model/tabGroups";
 import { HarnessIcon } from "../../features/sessions/ui/HarnessIcon";
-import { ArrowLeft, Check, ChevronRight, Plus, RefreshCw } from "../../shared/ui/icons";
+import {
+  ArrowLeft,
+  Check,
+  ChevronRight,
+  Plus,
+  RefreshCw,
+} from "../../shared/ui/icons";
 import { Popover, type PopoverDismissReason } from "../../shared/ui/Popover";
 import {
   ProviderSignInPanel,
@@ -61,13 +73,15 @@ type UsageWindowEntry = {
   window: RateLimitWindow;
 };
 
-export type UsageChipVariant = "footer" | "composer";
+export type UsageChipVariant = "footer" | "composer" | "compact";
 
 const USAGE_CHIP_CLASSES: Record<UsageChipVariant, string> = {
   footer:
     "-mx-1 inline-flex h-5 min-w-0 shrink-0 items-center gap-1.5 whitespace-nowrap rounded px-1 text-content/55 transition-[background-color,color,transform] duration-150 ease-out hover:bg-content/10 hover:text-content focus-visible:outline-2 focus-visible:outline-accent active:scale-[0.97]",
   composer:
     "inline-flex h-6.5 min-w-0 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-1.5 text-content/55 transition-colors hover:bg-content/8 hover:text-content focus-visible:outline-2 focus-visible:outline-accent",
+  compact:
+    "inline-flex h-5 min-w-0 shrink-0 items-center gap-1 whitespace-nowrap rounded px-1 text-content/55 transition-colors hover:bg-content/8 hover:text-content focus-visible:outline-2 focus-visible:outline-accent",
 };
 
 /** The refresh button beside the usage chips, per variant. */
@@ -76,6 +90,8 @@ export const USAGE_REFRESH_CLASSES: Record<UsageChipVariant, string> = {
     "grid size-4.5 shrink-0 place-items-center rounded text-content/40 hover:bg-content/10 hover:text-content disabled:opacity-50",
   composer:
     "grid size-6.5 shrink-0 place-items-center rounded-md text-content/40 transition-colors hover:bg-content/8 hover:text-content disabled:opacity-50",
+  compact:
+    "grid size-4 shrink-0 place-items-center rounded text-content/40 hover:bg-content/8 hover:text-content disabled:opacity-50",
 };
 
 type ResetActionState =
@@ -87,6 +103,7 @@ export function UsageProviderChip({
   project,
   accounts = [],
   accountId,
+  accountLabel,
   onSelectAccount,
   onAddAccount,
   onManageAccounts,
@@ -101,6 +118,7 @@ export function UsageProviderChip({
   project?: string;
   accounts?: ProviderAccount[];
   accountId?: string;
+  accountLabel?: string;
   onSelectAccount?: (accountId: string) => void;
   onAddAccount?: (label: string) => Promise<ProviderAccount>;
   onManageAccounts?: () => void;
@@ -140,12 +158,18 @@ export function UsageProviderChip({
     }
     return best;
   }, null);
+  const compactEntry = windows.find((entry) => entry.window === tightest);
   const tooltip = windows
     .map((entry) => rateLimitWindowTooltip(entry.window, now, showRemaining))
     .join(" · ");
   const providerLabel = presentation?.label ?? HARNESS_TITLE[limits.provider];
   const iconHarness = presentation?.harness ?? limits.provider;
   const activeAccount = accounts.find((account) => account.id === accountId);
+  const visibleAccountLabel =
+    accountLabel ?? (accounts.length > 1 ? activeAccount?.label : undefined);
+  const compactAccountName = visibleAccountLabel
+    ? compactAccountLabel(visibleAccountLabel)
+    : undefined;
   const canManageAccounts = Boolean(onSelectAccount && onAddAccount);
   const activeAccountLabel = activeAccount?.label ?? "Removed account";
   const identities = useProviderAccountIdentities(
@@ -246,6 +270,13 @@ export function UsageProviderChip({
         type="button"
         className={USAGE_CHIP_CLASSES[variant]}
         aria-label={`${providerLabel} usage details`}
+        aria-description={
+          variant === "compact"
+            ? visibleAccountLabel
+            : accounts.length > 1
+              ? activeAccount?.label
+              : undefined
+        }
         aria-expanded={open}
         aria-haspopup="dialog"
         title={
@@ -260,6 +291,19 @@ export function UsageProviderChip({
         onClick={() => setOpen((value) => !value)}
       >
         <HarnessIcon harness={iconHarness} className="size-3 shrink-0" />
+        {variant === "compact" && presentation ? (
+          <span className="text-content/40">
+            {presentation.label.replace(/^Pi · /, "")}
+          </span>
+        ) : null}
+        {variant === "compact" && visibleAccountLabel ? (
+          <span
+            className="max-w-14 truncate text-content/40"
+            title={visibleAccountLabel}
+          >
+            {compactAccountName}
+          </span>
+        ) : null}
         {loading ? (
           <span className="animate-pulse text-content/35">···</span>
         ) : disconnected ? (
@@ -268,14 +312,21 @@ export function UsageProviderChip({
           <span className="text-content/35">{emptyUsageLabel(limits)}</span>
         ) : (
           <>
-            {accounts.length > 1 && activeAccount ? (
+            {variant !== "compact" && accounts.length > 1 && activeAccount ? (
               <span className="max-w-24 truncate text-content/45">
                 {activeAccount.label}
               </span>
             ) : null}
-            {tightest ? <MiniBar usedPct={tightest.usedPercent} /> : null}
+            {tightest ? (
+              <MiniBar usedPct={tightest.usedPercent} variant={variant} />
+            ) : null}
             <span className="flex min-w-0 items-center gap-1 tabular-nums">
-              {windows.map((entry, index) => (
+              {(variant === "compact"
+                ? compactEntry
+                  ? [compactEntry]
+                  : []
+                : windows
+              ).map((entry, index) => (
                 <span
                   key={entry.key}
                   className="inline-flex items-center gap-1"
@@ -376,9 +427,7 @@ export function UsageProviderChip({
                     </p>
                   ) : null}
                   {canManageAccounts ? (
-                    <div
-                      className="pointer-events-none relative mt-1 -ml-1 inline-flex max-w-full items-center gap-1 rounded px-1 py-0.5 text-[10px] text-content/55"
-                    >
+                    <div className="pointer-events-none relative mt-1 -ml-1 inline-flex max-w-full items-center gap-1 rounded px-1 py-0.5 text-[10px] text-content/55">
                       {/* Keep account switching separate from email revelation. */}
                       <button
                         type="button"
@@ -806,12 +855,12 @@ function UsageWindowCard({
     kind === "session" && window.windowMinutes === DAILY_WINDOW_MINUTES
       ? "Daily limit"
       : kind === "session"
-      ? "5-hour limit"
-      : kind === "weekly"
-        ? "Weekly limit"
-        : kind === "monthly"
-          ? "Monthly limit"
-          : `${formatWindowLabel(window.windowMinutes)} limit`;
+        ? "5-hour limit"
+        : kind === "weekly"
+          ? "Weekly limit"
+          : kind === "monthly"
+            ? "Monthly limit"
+            : `${formatWindowLabel(window.windowMinutes)} limit`;
   return (
     <section className="rounded-lg bg-content/[0.045] px-3 py-2.5 ring-1 ring-inset ring-content/[0.06]">
       <div className="flex items-baseline justify-between gap-3">
@@ -1191,12 +1240,24 @@ function emptyUsageLabel(limits: ProviderRateLimits): string {
   return "—";
 }
 
-function MiniBar({ usedPct }: { usedPct: number }) {
+/** Drops the repeated “account” suffix while the full name stays accessible. */
+function compactAccountLabel(label: string): string {
+  return label.replace(/\s+account$/i, "");
+}
+
+/** Renders the thin used-capacity bar, or its inverse for remaining mode. */
+function MiniBar({
+  usedPct,
+  variant = "footer",
+}: {
+  usedPct: number;
+  variant?: UsageChipVariant;
+}) {
   const showRemaining = useShowRemainingUsage();
   const pct = clampUsedPercent(usedPct);
   return (
     <span
-      className="h-1 w-8 shrink-0 overflow-hidden rounded-full bg-content/10"
+      className={`h-1 ${variant === "compact" ? "w-5" : "w-8"} shrink-0 overflow-hidden rounded-full bg-content/10`}
       aria-hidden
     >
       <span
