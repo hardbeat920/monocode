@@ -78,4 +78,26 @@ describe("prose folded into the work trail", () => {
     expect(answer).not.toBeUndefined();
     expect(answer?.closest(".zen-fold-prose")).toBeNull();
   });
+
+  it("shows both messages of a turn a Stop hook continued", () => {
+    const blocks: Block[] = [
+      { id: "user", role: "user", text: "Summarize the report." },
+      { id: "answer", role: "assistant", text: "The complete answer." },
+      {
+        id: "think",
+        role: "reasoning",
+        text: "The hook asked for one more line.",
+      },
+      { id: "extra", role: "assistant", text: "One more short line." },
+    ];
+    act(() => root.render(createElement(AgentTranscript, { blocks })));
+
+    // No tools ran between the two messages, so nothing folds and the
+    // answer the continuation interrupted keeps its own row.
+    expect(container.textContent).toContain("The complete answer.");
+    expect(container.textContent).toContain("One more short line.");
+    expect(
+      container.querySelector('button[aria-label="Show the work"]'),
+    ).toBeNull();
+  });
 });
