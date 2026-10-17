@@ -667,6 +667,7 @@ import {
   OPEN_CONNECTIONS_EVENT,
   OPEN_REMOTE_PROJECT_EVENT,
   REMOTE_HISTORY_UPDATED,
+  cachedRemoteProjectSessions,
   cachedRemoteSessionSummary,
   rememberRemotePendingWorktree,
   rememberRemoteSession,
@@ -10872,6 +10873,19 @@ function Workspace({
                   hasDraft: !!session.draft,
                   archived: !!session.archived,
                 });
+              }
+              if (isRemoteProjectPath(cwd)) {
+                for (const session of cachedRemoteProjectSessions(cwd)) {
+                  byId.set(session.id, {
+                    id: session.id,
+                    title: session.title,
+                    harness: session.harness,
+                    model: session.model ?? "",
+                    busy: session.status === "running",
+                    hasDraft: !!session.draft,
+                    archived: !!session.archived,
+                  });
+                }
               }
               for (const session of sessionsRef.current) {
                 if (
