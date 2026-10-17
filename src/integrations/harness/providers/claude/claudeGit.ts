@@ -12,6 +12,7 @@ import {
   parsePrContent,
   type PrContent,
 } from "../../../../features/source-control/model/gitText";
+import { CLAUDE_HELPER_TOOLS } from "./claudeProtocol";
 import { runClaudeTextPrompt } from "./claudeText";
 
 const GIT_TIMEOUT_MS = 90_000;
@@ -26,6 +27,7 @@ export async function generateClaudeCommitMessage(
   signal?.throwIfAborted();
   const output = await runClaudeTextPrompt({
     cwd,
+    tools: CLAUDE_HELPER_TOOLS,
     prompt: buildCommitMessagePrompt({
       branch: context.branch,
       stagedSummary: context.summary,
@@ -52,6 +54,7 @@ export async function generateClaudePrContent(
   try {
     const output = await runClaudeTextPrompt({
       cwd,
+      tools: CLAUDE_HELPER_TOOLS,
       prompt: buildPrContentPrompt({
         baseBranch: range.base,
         headBranch: range.head,
@@ -84,6 +87,7 @@ export async function generateClaudeBranchName(
   try {
     const output = await runClaudeTextPrompt({
       cwd,
+      tools: CLAUDE_HELPER_TOOLS,
       prompt: buildBranchNamePrompt(message),
       timeoutMs: GIT_TIMEOUT_MS,
     });
