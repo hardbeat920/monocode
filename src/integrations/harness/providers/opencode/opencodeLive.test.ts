@@ -55,7 +55,7 @@ const harnessHttp = vi.fn(
       return v2Session("session_fork", v2ForkDirectory ?? "");
     }
     if (input.method === "GET" && /^\/api\/session\/[^/]+\/message$/.test(url.pathname)) {
-      return { status: 200, body: JSON.stringify({ data: [] }) };
+      return { status: 200, body: JSON.stringify({ data: sessionMessages }) };
     }
     if (
       (input.method === "POST" && url.pathname === "/session") ||
@@ -125,6 +125,7 @@ const {
   bindOpenCodeSession,
   cancelOpenCodeTurn,
   compactOpenCodeContext,
+  forgetOpenCodeSession,
   respondOpenCodeApproval,
   respondOpenCodeQuestion,
   rewindOpenCodeLastTurn,
@@ -1025,6 +1026,235 @@ describe("OpenCode event stream recovery", () => {
 });
 
 describe("OpenCode edit recovery", () => {
+  describe.each(["1.14.19", "2.0.19"])(
+    "rejected prompts on OpenCode %s",
+    (version) => {
+      const input = {
+        sessionId: "opencode-live",
+        cwd: "/repo",
+        model: "opencode:openrouter/anthropic/claude-sonnet-4.6",
+        runtimeMode: "supervised" as const,
+        onEvent: () => undefined,
+      };
+      const rejectFallback = () =>
+        sendOpenCodeTurn({
+          ...input,
+          model: "opencode:glm-5",
+          text: "Run pwd",
+        });
+      const reverted = () =>
+        harnessHttp.mock.calls.some(([request]) =>
+          request.url.includes("/revert"),
+        );
+      const complete = () => {
+        if (version.startsWith("2.")) {
+          onSseEvent?.({
+            type: "session.execution.succeeded",
+            data: { sessionID: "session_1" },
+          });
+        } else idle();
+      };
+      const savedUser = (id: string) => ({
+        info: { id, role: "user", time: { created: 1 } },
+      });
+
+      beforeEach(() => {
+        openCodeVersion = `opencode v${version}`;
+      });
+
+      it("rejects fallback IDs before creating a server session", async () => {
+        await expect(rejectFallback()).rejects.toThrow("provider/model ids");
+        expect(spawnChild).not.toHaveBeenCalled();
+        expect(harnessHttp).not.toHaveBeenCalled();
+      });
+
+      it("honors cancellation before model preflight", async () => {
+        await cancelOpenCodeTurn(input.sessionId);
+        await expect(rejectFallback()).resolves.toBeUndefined();
+        expect(spawnChild).not.toHaveBeenCalled();
+        expect(harnessHttp).not.toHaveBeenCalled();
+      });
+
+      it("resends the rejected first prompt with the selected valid model", async () => {
+        await expect(rejectFallback()).rejects.toThrow("provider/model ids");
+        await stopOpenCodeSession(input.sessionId);
+        await expect(rewindOpenCodeLastTurn(input)).resolves.toEqual({
+          submitted: false,
+        });
+        expect(reverted()).toBe(false);
+        const accepted = vi.fn();
+        const done = sendOpenCodeTurn({
+          ...input,
+          text: "Run pwd, please",
+          onAccepted: accepted,
+        });
+        await waitFor(
+          () => accepted.mock.calls.length === 1,
+          "edited prompt acceptance",
+        );
+        if (version.startsWith("2.")) {
+          expect(
+            harnessHttp.mock.calls.some(
+              ([request]) =>
+                request.url.includes("/model") &&
+                request.body ===
+                  JSON.stringify({
+                    model: {
+                      providerID: "openrouter",
+                      id: "anthropic/claude-sonnet-4.6",
+                    },
+                  }),
+            ),
+          ).toBe(true);
+        } else {
+          const request = harnessHttp.mock.calls.find(([request]) =>
+            request.url.includes("/prompt_async"),
+          )?.[0];
+          expect(JSON.parse(request?.body ?? "{}").model).toEqual({
+            providerID: "openrouter",
+            modelID: "anthropic/claude-sonnet-4.6",
+          });
+        }
+        complete();
+        await done;
+      });
+
+      it("treats a resumed empty session as nothing to rewind", async () => {
+        bindOpenCodeSession(input.sessionId, "session_1", input.cwd);
+        await expect(rewindOpenCodeLastTurn(input)).resolves.toEqual({
+          submitted: false,
+        });
+        expect(reverted()).toBe(false);
+      });
+
+      it("does not rewind an earlier user for an unsent prompt, and resets after acceptance", async () => {
+        sessionMessages = [savedUser("message_earlier")];
+        bindOpenCodeSession(input.sessionId, "session_1", input.cwd);
+        await expect(rejectFallback()).rejects.toThrow("provider/model ids");
+        await stopOpenCodeSession(input.sessionId);
+        await expect(rewindOpenCodeLastTurn(input)).resolves.toEqual({
+          submitted: false,
+        });
+        await expect(rewindOpenCodeLastTurn(input)).resolves.toEqual({
+          submitted: false,
+        });
+        expect(reverted()).toBe(false);
+        const accepted = vi.fn();
+        const done = sendOpenCodeTurn({
+          ...input,
+          text: "Corrected prompt",
+          onAccepted: accepted,
+        });
+        await waitFor(
+          () => accepted.mock.calls.length === 1,
+          "replacement accepted",
+        );
+        complete();
+        await done;
+        sessionMessages = [savedUser("message_accepted")];
+        await rewindOpenCodeLastTurn(input);
+        const revert = harnessHttp.mock.calls.find(([request]) =>
+          request.url.includes("/revert"),
+        )?.[0];
+        expect(revert?.body).toBe(
+          JSON.stringify({ messageID: "message_accepted" }),
+        );
+      });
+
+      it("clears unsent-prompt tracking when the provider session is forgotten", async () => {
+        await expect(rejectFallback()).rejects.toThrow("provider/model ids");
+        await forgetOpenCodeSession(input.sessionId);
+        sessionMessages = [savedUser("message_bound")];
+        bindOpenCodeSession(input.sessionId, "session_1", input.cwd);
+        await rewindOpenCodeLastTurn(input);
+        expect(reverted()).toBe(true);
+      });
+
+      it.each([false, true])(
+        "keeps a newer rejection when an older send is accepted (already rejected: %s)",
+        async (alreadyRejected) => {
+          sessionMessages = [savedUser("message_earlier")];
+          bindOpenCodeSession(input.sessionId, "session_1", input.cwd);
+          if (alreadyRejected)
+            await expect(rejectFallback()).rejects.toThrow(
+              "provider/model ids",
+            );
+          const normal = harnessHttp.getMockImplementation()!;
+          let release: (() => void) | undefined;
+          harnessHttp.mockImplementation(async (request) => {
+            if (
+              /\/(?:prompt|prompt_async)$/.test(new URL(request.url).pathname)
+            ) {
+              await new Promise<void>((resolve) => {
+                release = resolve;
+              });
+            }
+            return normal(request);
+          });
+          try {
+            const accepted = vi.fn();
+            const done = sendOpenCodeTurn({
+              ...input,
+              text: "Earlier send",
+              onAccepted: accepted,
+            });
+            await waitFor(() => release !== undefined, "pending admission");
+            await expect(rejectFallback()).rejects.toThrow(
+              "provider/model ids",
+            );
+            release!();
+            await waitFor(
+              () => accepted.mock.calls.length === 1,
+              "earlier admission",
+            );
+            complete();
+            await done;
+            await stopOpenCodeSession(input.sessionId);
+            await expect(rewindOpenCodeLastTurn(input)).resolves.toEqual({
+              submitted: false,
+            });
+            expect(reverted()).toBe(false);
+          } finally {
+            release?.();
+            harnessHttp.mockImplementation(normal);
+          }
+        },
+      );
+
+      it("preserves errors for nonempty history without an identifiable user", async () => {
+        sessionMessages = [
+          { info: { id: "message_assistant", role: "assistant" } },
+        ];
+        bindOpenCodeSession(input.sessionId, "session_1", input.cwd);
+        await expect(rewindOpenCodeLastTurn(input)).rejects.toThrow(
+          "did not expose the last user message",
+        );
+        expect(reverted()).toBe(false);
+      });
+
+      it("propagates history fetch failures instead of treating them as empty history", async () => {
+        const normal = harnessHttp.getMockImplementation()!;
+        harnessHttp.mockImplementation(async (request) =>
+          new URL(request.url).pathname.endsWith("/message")
+            ? {
+                status: 503,
+                body: JSON.stringify({ message: "History unavailable" }),
+              }
+            : normal(request),
+        );
+        try {
+          bindOpenCodeSession(input.sessionId, "session_1", input.cwd);
+          await expect(rewindOpenCodeLastTurn(input)).rejects.toThrow(
+            "History unavailable",
+          );
+          expect(reverted()).toBe(false);
+        } finally {
+          harnessHttp.mockImplementation(normal);
+        }
+      });
+    },
+  );
+
   it("reverts the latest user message before resending an edited prompt", async () => {
     sessionMessages = [
       {
