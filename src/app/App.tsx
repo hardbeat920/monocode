@@ -659,6 +659,9 @@ import { PaneTree } from "../features/workspace/ui/PaneTree";
 import { SessionPane } from "../features/sessions/ui/SessionPane";
 import { SessionSurface } from "../features/sessions/ui/SessionSurface";
 import { ProjectTerminalDock } from "../features/terminal/ui/ProjectTerminalDock";
+import { BrowserDockLayout } from "../features/browser/ui/SessionBrowserDock";
+import { handleBrowserRequest } from "../features/browser/model/browserAgent";
+
 import { lazySurface } from "../shared/ui/lazySurface";
 import { preloadNavigationWhenIdle } from "./model/preloadNavigation";
 import { requestTranscriptJump } from "../features/sessions/model/transcriptJump";
@@ -1831,6 +1834,7 @@ function Workspace({
     ? sessions.find((session) => session.id === monoViewId)
     : undefined;
   const monoCovers = !!monoViewId;
+
   const activeTabSessionIds = activeTab ? leafIds(activeTab.layout) : [];
   const activeLinkedWorkItemPanel = activeTab
     ? (linkedWorkItemPanels.get(activeTab.focusedId) ??
@@ -10688,6 +10692,19 @@ function Workspace({
             payload.input,
           );
         }
+        if (payload.namespace === "browser") {
+          if (
+            !sessionsRef.current.some(
+              (session) => session.id === payload.sessionId,
+            )
+          )
+            throw new Error("This session is not open in MonoCode");
+          return handleBrowserRequest(
+            payload.sessionId,
+            payload.action,
+            payload.input,
+          );
+        }
         if (payload.namespace !== "app")
           throw new Error("Unknown CLI namespace");
         const source = sessionsRef.current.find(
@@ -13055,6 +13072,16 @@ function Workspace({
                     {compactTitleBar ? null : workspaceTitleBar}
 
                     <main className="relative flex min-h-0 min-w-0 flex-1">
+                      <BrowserDockLayout
+                        sessionId={monoViewSession?.id ?? active?.id ?? ""}
+                        hidden={
+                          searchViewOpen ||
+                          settingsOpen ||
+                          inboxViewOpen ||
+                          notesViewOpen ||
+                          automationsViewOpen
+                        }
+                      >
                       <div
                         ref={dockGridRef}
                         className="grid h-full min-h-0 min-w-0 flex-1"
@@ -13225,6 +13252,7 @@ function Workspace({
                           </div>
                         </div>
                       </div>
+                      </BrowserDockLayout>
                       {[...linkedWorkItemPanels.values()].map((panel) => (
                         <LinkedWorkItemPanel
                           repairSessions={repairSessions}
@@ -13392,14 +13420,14 @@ function Workspace({
                   terminals={monoCovers ? undefined : runningTerminals}
                   terminalOpen={!monoCovers && runningTerminalOpen}
                   onToggleTerminal={onToggleRunningTerminal}
-                  onNewTerminal={
-                    !monoCovers && isLocalProject(projectCwd)
-                      ? onNewTerminal
-                      : undefined
-                  }
                   onToggleProjectTerminal={
                     !monoCovers && isLocalProject(projectCwd)
                       ? onToggleProjectTerminal
+                      : undefined
+                  }
+                  onNewTerminal={
+                    !monoCovers && isLocalProject(projectCwd)
+                      ? onNewTerminal
                       : undefined
                   }
                   projectTerminalActive={
@@ -13407,9 +13435,8 @@ function Workspace({
                     !!currentProjectDock &&
                     currentProjectDock.pane.files.length > 0
                   }
-                  projectTerminalOpen={
-                    !monoCovers && !!currentProjectDock?.open
-                  }
+                  projectTerminalOpen={!monoCovers && dockVisible}
+                  showBrowser
                 />
               )}
             </div>

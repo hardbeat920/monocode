@@ -1,4 +1,5 @@
 import { nativeModelId } from "../../../../features/sessions/model/models";
+import { acpBrowserMcpServersFor } from "../../../../features/browser/model/browserMcp";
 import { AcpSubagents } from "../../core/acpSubagents";
 import type { RuntimeMode } from "../../../../features/sessions/model/session";
 import { AcpClient, type AcpHandlers } from "../../core/acp";
@@ -334,12 +335,13 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     let setup: unknown;
     let acpSessionId: string | undefined;
     let didLoad = false;
+    const mcpServers = await acpBrowserMcpServersFor(input.sessionId);
 
     if (canLoad && resume) {
       try {
         setup = await acp.request(
           "session/resume",
-          { sessionId: resume.acpSessionId },
+          { sessionId: resume.acpSessionId, cwd: input.cwd, mcpServers },
           SESSION_TIMEOUT_MS,
         );
         acpSessionId = sessionIdFromResult(setup) ?? resume.acpSessionId;
@@ -352,7 +354,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
             {
               sessionId: resume.acpSessionId,
               cwd: input.cwd,
-              mcpServers: [],
+              mcpServers,
             },
             SESSION_TIMEOUT_MS,
           );
@@ -372,7 +374,11 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       try {
         setup = await acp.request(
           "session/new",
-          grokSessionNewParams(input.cwd, input.runtimeMode),
+          grokSessionNewParams(
+            input.cwd,
+            input.runtimeMode,
+            mcpServers,
+          ),
           SESSION_TIMEOUT_MS,
         );
       } catch (error) {

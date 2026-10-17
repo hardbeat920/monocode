@@ -1,4 +1,4 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openLink } from "../../browser/model/openLink";
 import {
   useCallback,
   useEffect,
@@ -87,7 +87,7 @@ function GenericLinkPreview({ link }: { link: UserLink }) {
       title={link.url}
       aria-label={`Open ${title}`}
       className="user-link-preview group mx-0.5 text-sky-400/90 hover:text-sky-300 hover:underline"
-      onClick={(event) => openExternalLink(event, link.url)}
+      onClick={(event) => openWebLink(event, link.url)}
     >
       <span className="mr-1 inline-flex size-4 items-center justify-center overflow-hidden rounded bg-background-base/50 align-[-0.125em] text-[9px] font-semibold uppercase text-content/55">
         {favicon ? (
@@ -255,7 +255,7 @@ function GithubWorkItemPreview({
         onBlur={hideNow}
         onClick={(event) => {
           hideNow();
-          openExternalLink(event, link.url);
+          openWebLink(event, link.url);
         }}
       >
         <span
@@ -574,10 +574,10 @@ function labelColor(value: string): string {
     : "currentColor";
 }
 
-function openExternalLink(event: MouseEvent<HTMLAnchorElement>, url: string) {
+function openWebLink(event: MouseEvent<HTMLAnchorElement>, url: string) {
   event.preventDefault();
   event.stopPropagation();
-  void openUrl(url).catch((error) => {
+  void openLink(url, event).catch((error) => {
     console.error("Failed to open web link:", error);
   });
 }

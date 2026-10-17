@@ -1,6 +1,5 @@
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useRef } from "react";
 import {
   getPtyStatus,
@@ -28,6 +27,9 @@ import {
   type TerminalFitMode,
 } from "../model/terminalLayout";
 import { IS_MAC } from "../../../platform/tauri/platform";
+import { ask } from "@tauri-apps/plugin-dialog";
+import { openLink } from "../../browser/model/openLink";
+import { oscLinkLabel, oscLinkNeedsConfirm } from "../model/terminalLinks";
 import "@xterm/xterm/css/xterm.css";
 
 type Props = {
@@ -148,12 +150,12 @@ function oscColors() {
 }
 
 /**
- * Open an HTTP(S) terminal link in the default browser, ignoring other schemes
- * and opener failures.
+ * Open an HTTP(S) terminal link using the app's browser preference and the
+ * click's modifiers, ignoring other schemes and opener failures.
  */
-function openTerminalLink(uri: string) {
+function openTerminalLink(uri: string, event: MouseEvent) {
   if (!/^https?:\/\//i.test(uri)) return;
-  void openUrl(uri).catch(() => undefined);
+  return openLink(uri, event).catch(() => undefined);
 }
 
 export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
@@ -183,9 +185,29 @@ export function TerminalView({ id, cwd, active, onMetaChange }: Props) {
       smoothScrollDuration: 0,
       theme: terminalTheme(isLightScheme()),
       macOptionIsMeta: IS_MAC,
-      linkHandler: { activate: (_event, uri) => openTerminalLink(uri) },
+      linkHandler: {
+        // Replaces xterm's own prompt, which uses window.confirm: the webview
+        // has no confirm panel, so that never opens anything.
+        activate: (event, uri, range) => {
+          if (!/^https?:\/\//i.test(uri)) return;
+          void (async () => {
+            if (
+              oscLinkNeedsConfirm(oscLinkLabel(term, range), uri) &&
+              !(await ask(`Open this terminal link?\n\n${uri}`, {
+                title: "MonoCode",
+                kind: "warning",
+              }))
+            ) {
+              return;
+            }
+            await openTerminalLink(uri, event);
+          })().catch((error) => {
+            console.error("Failed to open web link:", error);
+          });
+        },
+      },
     });
-    term.loadAddon(new WebLinksAddon((_event, uri) => openTerminalLink(uri)));
+    term.loadAddon(new WebLinksAddon((event, uri) => { void openTerminalLink(uri, event); }));
     term.open(host);
     termRef.current = term;
     let closed = false;

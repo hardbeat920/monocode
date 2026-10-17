@@ -1,3 +1,4 @@
+import { BrowserStatusButton } from "../../features/browser/ui/BrowserStatusButton";
 import { RefreshCw, Terminal } from "../../shared/ui/icons";
 import {
   useCallback,
@@ -72,6 +73,7 @@ export function UsageFooter({
   terminals = [],
   terminalOpen = false,
   onToggleTerminal,
+  showBrowser = false,
   onNewTerminal,
   onToggleProjectTerminal,
   projectTerminalActive = false,
@@ -85,6 +87,7 @@ export function UsageFooter({
   terminals?: RunningTerminal[];
   terminalOpen?: boolean;
   onToggleTerminal?: (fileId: string) => void;
+  showBrowser?: boolean;
   onNewTerminal?: () => void;
   onToggleProjectTerminal?: () => void;
   projectTerminalActive?: boolean;
@@ -103,9 +106,11 @@ export function UsageFooter({
   const showTerminalButton = Boolean(
     onNewTerminal || onToggleProjectTerminal,
   );
-  const terminalLabel = projectTerminalActive
-    ? "Terminal"
-    : `New Terminal (${MOD}\`)`;
+  const terminalLabel = !onNewTerminal
+    ? `${projectTerminalOpen ? "Hide" : "Show"} Terminal (${MOD}J)`
+    : projectTerminalActive
+      ? "Terminal"
+      : `New Terminal (${MOD}\`)`;
   const onTerminalClick = projectTerminalActive
     ? (onToggleProjectTerminal ?? onNewTerminal)
     : (onNewTerminal ?? onToggleProjectTerminal);
@@ -137,8 +142,9 @@ export function UsageFooter({
           ) : null
         }
       />
-      {showTerminals || showTerminalButton ? (
+      {showTerminals || showTerminalButton || showBrowser ? (
         <div className="ml-auto flex shrink-0 items-center gap-2">
+          {showBrowser ? <BrowserStatusButton /> : null}
           {showTerminals ? (
             <RunningTerminalChip
               terminals={terminals}
