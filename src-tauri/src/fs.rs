@@ -890,6 +890,95 @@ pub async fn git_diff_files(cwd: String) -> Result<GitDiffIndex, String> {
         .map_err(|e| e.to_string())
 }
 
+/// A cheap fingerprint of the working tree, for change detection.
+///
+/// The UI polls for changes every couple of seconds. Rebuilding the full diff
+/// index for that costs eight or more `git` forks, most of which answer the
+/// same question: has anything moved? This runs a single `git status` and
+/// returns a digest of it, so a quiet repository costs one process instead of
+/// ten, and the expensive index is only rebuilt when the digest changes.
+#[tauri::command]
+pub async fn git_change_token(cwd: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || git_change_token_for(&expand_home(&cwd)))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+fn git_change_token_for(root: &Path) -> Result<String, String> {
+    // Not via `git_stdout`: that helper treats empty output as failure, and a
+    // clean tree is empty. Skipping it keeps the idle case cheap instead of
+    // erroring into a full index rebuild every poll.
+    let status = git_cmd()
+        .arg("-C")
+        .arg(root)
+        .args([
+            "status",
+            "--porcelain=v1",
+            // Untracked files are listed individually so adding a file changes
+            // the digest; `-uno` would lump them into one entry and hide them.
+            "--untracked-files=all",
+            "-z",
+        ])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !status.status.success() {
+        return Err("Not a git repository".to_string());
+    }
+    // The status digest alone is not enough: a tracked edit that changes its
+    // line counts leaves `git status` byte-identical, and an untracked file's
+    // counted lines can change with its content. Hashing the same inputs the
+    // index displays — numstat for tracked files, plus each untracked file's
+    // line count — keeps the probe honest without paying for a full rebuild.
+    let tracked = git_run(
+        root,
+        &["diff", "--no-ext-diff", "--numstat", "HEAD", "--", "."],
+    )
+    .unwrap_or_else(|| {
+        // Same fallback as the index build: no HEAD yet, so staged and
+        // unstaged are reported separately.
+        format!(
+            "{}\u{0}{}",
+            git_run(root, &["diff", "--no-ext-diff", "--numstat", "--", "."]).unwrap_or_default(),
+            git_run(
+                root,
+                &["diff", "--no-ext-diff", "--cached", "--numstat", "--", "."],
+            )
+            .unwrap_or_default()
+        )
+    });
+    let mut displayed = tracked;
+    if let Some(untracked) = git_run(
+        root,
+        &["ls-files", "-o", "--exclude-standard", "-z", "--", "."],
+    ) {
+        for relative in untracked.split('\0').filter(|path| !path.is_empty()) {
+            displayed.push('\0');
+            displayed.push_str(relative);
+            displayed.push('\0');
+            displayed.push_str(&text_line_count(&root.join(relative)).to_string());
+        }
+    }
+    // A new branch or commit also has to invalidate the cached index.
+    let head = git_stdout(root, &["rev-parse", "HEAD"]).unwrap_or_default();
+    Ok(format!(
+        "{head}\u{0}{}\u{0}{}",
+        digest(&status.stdout),
+        digest(displayed.as_bytes())
+    ))
+}
+
+/// A small FNV-1a digest. The UI only compares tokens, so any stable hash of
+/// the status output works and this avoids a dependency. Takes bytes because
+/// `git status -z` output is a byte string, not necessarily valid UTF-8.
+fn digest(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GitFileDiff {

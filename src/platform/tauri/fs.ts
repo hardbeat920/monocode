@@ -217,6 +217,17 @@ export function gitDiffFiles(cwd: string): Promise<GitDiffIndex> {
   return invoke<GitDiffIndex>("git_diff_files", { cwd });
 }
 
+/**
+ * A cheap fingerprint of the working tree, for change detection.
+ *
+ * One `git status` fork instead of the ten a full index rebuild costs, so a
+ * quiet repository costs one process per poll. The value is opaque: compare it
+ * for equality only.
+ */
+export function gitChangeToken(cwd: string): Promise<string> {
+  return invoke<string>("git_change_token", { cwd });
+}
+
 export type GitFileDiff = {
   path: string;
   relative: string;
