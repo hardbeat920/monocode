@@ -13,6 +13,7 @@ import {
   relayApproval,
   takeRelayedApproval,
   dueHabits,
+  editedHabit,
   habitPostsContext,
   habitReport,
   habitSchedule,
@@ -269,4 +270,40 @@ it("starts a new habit enabled and due at its next scheduled time", () => {
     nextRunAt: at(7, 9),
   });
   expect(created.id).toBeTruthy();
+});
+
+it("edits a habit, keeping its runs and moving it only for a new schedule", () => {
+  const runs = [{ at: at(2, 9), durationMs: 1_000, outcome: "quiet" as const }];
+  const original = habit({ runs, lastRunAt: at(2, 9) });
+  const now = at(3, 12);
+
+  const renamed = editedHabit(
+    original,
+    {
+      name: "CI check",
+      instructions: "Check CI on main and release branches.",
+      schedule: original.schedule,
+    },
+    now,
+  );
+  expect(renamed).toEqual({
+    ...original,
+    name: "CI check",
+    instructions: "Check CI on main and release branches.",
+  });
+
+  const rescheduled = editedHabit(
+    original,
+    {
+      name: original.name,
+      instructions: original.instructions,
+      schedule: { ...original.schedule, time: "14:30" },
+    },
+    now,
+  );
+  // Saturday the 3rd: the next weekday is Monday the 5th.
+  expect(rescheduled.nextRunAt).toBe(at(5, 14, 30));
+  expect(rescheduled.runs).toBe(runs);
+  expect(rescheduled.id).toBe(original.id);
+  expect(rescheduled.enabled).toBe(true);
 });
