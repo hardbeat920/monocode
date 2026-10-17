@@ -84,11 +84,13 @@ afterEach(() => {
   resetHarnessModelOverlays();
 });
 
+/** Provide a project caller and idle target for dispatch tests. */
 function fixture() {
   const source = newSession("codex", "/tmp/project", "codex:test");
   source.id = "lead";
   const host: AgentAppHost = {
     start: vi.fn(async () => {}),
+    /** List the fixture's idle target in the caller's project. */
     sessions: vi.fn(async () => [
       {
         id: "other",
@@ -103,10 +105,11 @@ function fixture() {
     session: vi.fn(async (id) =>
       id === "other" ? { ...newSession("codex", source.cwd), id } : null,
     ),
+    unarchive: vi.fn(async () => ({ changed: false })),
     send: vi.fn(async () => ({ alreadySubmitted: false })),
     draft: vi.fn(async () => ({ alreadySaved: false, draft: true })),
     stop: vi.fn(async () => {}),
-    remove: vi.fn(async () => {}),
+    remove: vi.fn(async () => ({ changed: true })),
     worktrees: vi.fn(async () => ({
       worktrees: [
         { ...featureWorktree },
@@ -207,7 +210,6 @@ describe("agent app commands", () => {
 
   describe.each([
     ["sessions.stop", "stopped"],
-    ["sessions.archive", "archived"],
     ["sessions.delete", "deleted"],
   ] as const)("%s", (action, resultField) => {
     it("manages a running session in the caller's project", async () => {
@@ -230,10 +232,7 @@ describe("agent app commands", () => {
         expect(host.stop).toHaveBeenCalledExactlyOnceWith("other");
         expect(host.remove).not.toHaveBeenCalled();
       } else {
-        expect(host.remove).toHaveBeenCalledExactlyOnceWith(
-          "other",
-          action === "sessions.archive" ? "archive" : "delete",
-        );
+        expect(host.remove).toHaveBeenCalledExactlyOnceWith("other", "delete");
         expect(host.stop).not.toHaveBeenCalled();
       }
     });
@@ -657,6 +656,168 @@ describe("agent app commands", () => {
     expect(host.send).toHaveBeenCalledTimes(1);
   });
 
+  /** Keep native archive results and restore through storage. */
+  it("reports archive changes, including repeats, and unarchives another session", async () => {
+    const { source, host } = fixture();
+    expect(
+      await handleAgentApp(
+        source,
+        "archive-1",
+        "sessions.archive",
+        { sessionId: "other" },
+        host,
+      ),
+    ).toEqual({ sessionId: "other", archived: true, changed: true });
+    expect(host.remove).toHaveBeenCalledExactlyOnceWith("other", "archive");
+    vi.mocked(host.remove).mockResolvedValueOnce({ changed: false });
+    expect(
+      await handleAgentApp(
+        source,
+        "archive-repeat",
+        "sessions.archive",
+        { sessionId: "other" },
+        host,
+      ),
+    ).toEqual({ sessionId: "other", archived: true, changed: false });
+    expect(
+      await handleAgentApp(
+        source,
+        "restore-1",
+        "sessions.unarchive",
+        { sessionId: "other" },
+        host,
+      ),
+    ).toEqual({ sessionId: "other", archived: false, changed: false });
+    expect(host.unarchive).toHaveBeenCalledWith("other", source.cwd);
+    await expect(
+      handleAgentApp(
+        source,
+        "self",
+        "sessions.archive",
+        { sessionId: source.id },
+        host,
+      ),
+    ).rejects.toThrow("current session");
+    await expect(
+      handleAgentApp(
+        source,
+        "unarchive-self",
+        "sessions.unarchive",
+        { sessionId: source.id },
+        host,
+      ),
+    ).rejects.toThrow("calling session");
+    vi.mocked(host.remove).mockRejectedValueOnce(new Error("busy"));
+    await expect(
+      handleAgentApp(
+        source,
+        "busy",
+        "sessions.archive",
+        { sessionId: "other" },
+        {
+          ...host,
+          session: vi.fn(async () => ({
+            ...newSession("codex", source.cwd),
+            id: "other",
+            busy: true,
+          })),
+        },
+      ),
+    ).rejects.toThrow("busy");
+    expect(host.remove).toHaveBeenCalledTimes(3);
+  });
+
+  /** Require the requested ID to belong to the caller's project. */
+  it("does not archive missing or cross-project sessions", async () => {
+    const { source, host } = fixture();
+    await expect(
+      handleAgentApp(
+        source,
+        "missing",
+        "sessions.archive",
+        { sessionId: "missing" },
+        host,
+      ),
+    ).rejects.toThrow("not found in this project");
+    host.session = vi.fn(async (id) =>
+      id === "other"
+        ? { ...newSession("codex", "/tmp/another-project"), id }
+        : null,
+    );
+    await expect(
+      handleAgentApp(
+        source,
+        "cross-project",
+        "sessions.archive",
+        { sessionId: "other" },
+        host,
+      ),
+    ).rejects.toThrow("not found in this project");
+    expect(host.remove).not.toHaveBeenCalled();
+    expect(host.unarchive).not.toHaveBeenCalled();
+  });
+
+  /** Keep native archive and restore scoped to a Mono's selected project. */
+  it("archives and restores only in the selected assigned project", async () => {
+    const { source, host } = fixture();
+    source.cwd = "/home/user";
+    host.isMono = (id) => id === source.id;
+    host.monoOf = () => ({ id: "mono", projects: ["/code/site"] });
+    vi.mocked(host.session).mockResolvedValue({
+      ...newSession("codex", "/code/site"),
+      id: "other",
+    });
+    await handleAgentApp(
+      source,
+      "archive-site",
+      "sessions.archive",
+      { sessionId: "other", project: "site" },
+      host,
+    );
+    expect(host.sessions).toHaveBeenCalledWith("/code/site");
+    expect(host.remove).toHaveBeenCalledExactlyOnceWith("other", "archive");
+    await handleAgentApp(
+      source,
+      "unarchive-site",
+      "sessions.unarchive",
+      { sessionId: "other", project: "site" },
+      host,
+    );
+    expect(host.unarchive).toHaveBeenCalledWith("other", "/code/site");
+    await expect(
+      handleAgentApp(
+        source,
+        "archive-outside",
+        "sessions.archive",
+        { sessionId: "other", project: "/code/private" },
+        host,
+      ),
+    ).rejects.toThrow("Not one of your projects");
+    expect(host.remove).toHaveBeenCalledTimes(1);
+    expect(host.unarchive).toHaveBeenCalledTimes(1);
+  });
+
+  /** Keep archived sessions discoverable with draft state intact. */
+  it("lists archived state without hiding archived sessions", async () => {
+    const { source, host } = fixture();
+    host.sessions = vi.fn(async () => [
+      {
+        id: "other",
+        title: "Other",
+        harness: "codex",
+        model: "codex:test",
+        busy: false,
+        hasDraft: true,
+        archived: true,
+      },
+    ]);
+    expect(
+      await handleAgentApp(source, "list", "sessions.list", {}, host),
+    ).toMatchObject({
+      sessions: [{ id: "other", archived: true, hasDraft: true }],
+    });
+  });
+
   it("saves an unsent draft in another listed project session", async () => {
     const { source, host } = fixture();
     expect(
@@ -1036,6 +1197,7 @@ describe("agent app commands", () => {
         model: "codex:test",
         busy: false,
         hasDraft: true,
+        archived: false,
       },
     ]);
     const moved = await handleAgentApp(

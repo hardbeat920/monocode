@@ -113,7 +113,11 @@ export type AgentAppHost = {
     requestId: string,
   ): Promise<{ alreadySaved: boolean; draft: boolean }>;
   stop(id: string): Promise<void>;
-  remove(id: string, mode: "archive" | "delete"): Promise<void>;
+  unarchive(id: string, expectedCwd: string): Promise<{ changed: boolean }>;
+  remove(
+    id: string,
+    mode: "archive" | "delete",
+  ): Promise<{ changed: boolean }>;
   worktrees(cwd: string): Promise<Worktrees>;
   createWorktree(
     cwd: string,
@@ -176,6 +180,7 @@ const FIELDS = new Map<string, readonly string[]>([
   ["sessions.draft", ["sessionId", "prompt", "project"]],
   ["sessions.stop", ["sessionId", "project"]],
   ["sessions.archive", ["sessionId", "project"]],
+  ["sessions.unarchive", ["sessionId", "project"]],
   ["sessions.delete", ["sessionId", "project"]],
   [
     "sessions.start",
@@ -1040,12 +1045,47 @@ export async function handleAgentApp(
       );
       return { sessionId: id, saved: true, ...result };
     }
+    case "sessions.archive": {
+      const id = requiredString(input.sessionId, "sessionId", 256);
+      if (id === source.id)
+        throw new Error(
+          "The current session cannot be archived by the app CLI",
+        );
+      if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId))
+        throw new Error("Invalid request ID");
+      const target = await projectSession(source, id, input, host);
+      if (
+        target.orchestrationLeadId ||
+        host.isMono(id) ||
+        host.isHabitRun?.(id)
+      )
+        throw new Error("Only regular project sessions can be managed here");
+      const result = await host.remove(id, "archive");
+      return { sessionId: id, archived: true, changed: result.changed };
+    }
+    case "sessions.unarchive": {
+      const id = requiredString(input.sessionId, "sessionId", 256);
+      if (id === source.id)
+        throw new Error(
+          "The calling session cannot be unarchived by the app CLI",
+        );
+      if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId))
+        throw new Error("Invalid request ID");
+      const target = await projectSession(source, id, input, host);
+      if (
+        target.orchestrationLeadId ||
+        host.isMono(id) ||
+        host.isHabitRun?.(id)
+      )
+        throw new Error("Only regular project sessions can be managed here");
+      const result = await host.unarchive(id, target.cwd);
+      return { sessionId: id, archived: false, changed: result.changed };
+    }
     case "sessions.stop":
-    case "sessions.archive":
     case "sessions.delete": {
       const id = requiredString(input.sessionId, "sessionId", 256);
       if (id === source.id)
-        throw new Error("Cannot stop, archive or delete the calling session");
+        throw new Error("Cannot stop or delete the calling session");
       if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId))
         throw new Error("Invalid request ID");
       const target = await projectSession(source, id, input, host);
@@ -1059,12 +1099,8 @@ export async function handleAgentApp(
         await host.stop(id);
         return { sessionId: id, stopped: true };
       }
-      const mode = action === "sessions.archive" ? "archive" : "delete";
-      await host.remove(id, mode);
-      return {
-        sessionId: id,
-        [mode === "archive" ? "archived" : "deleted"]: true,
-      };
+      await host.remove(id, "delete");
+      return { sessionId: id, deleted: true };
     }
     case "sessions.start": {
       if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId))

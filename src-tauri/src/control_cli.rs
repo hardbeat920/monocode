@@ -82,7 +82,7 @@ const ACTIONS: [&str; 12] = [
     "list", "delegate", "get", "steer", "message", "retry", "cancel", "wait", "review", "finish",
     "respond", "answer",
 ];
-const APP_ACTIONS: [&str; 32] = [
+const APP_ACTIONS: [&str; 33] = [
     "models.list",
     "sessions.list",
     "sessions.read",
@@ -91,6 +91,7 @@ const APP_ACTIONS: [&str; 32] = [
     "sessions.start",
     "sessions.stop",
     "sessions.archive",
+    "sessions.unarchive",
     "sessions.delete",
     "worktrees.list",
     "worktrees.create",
@@ -180,10 +181,14 @@ Actions:
                   The conversation and checkout are kept. Idle sessions are
                   unchanged. Reuse --request-id on retries.
   sessions.archive {"sessionId":"..."}
-                  Stop the session if running, save its conversation, and
-                  archive it. It can be restored from MonoCode's archive.
+                  Archive an idle session and save its conversation for later.
+                  Returns archived and changed; an already archived session
+                  returns changed:false. Active sessions are left untouched.
                   Open files, terminals and worktrees are kept.
                   Reuse --request-id on retries.
+  sessions.unarchive {"sessionId":"..."}
+                  Restore an archived session in history without opening it.
+                  Returns archived and changed. Reuse --request-id on retries.
   sessions.delete {"sessionId":"..."}
                   Stop the session if running and permanently delete its
                   saved conversation. Open files, terminals and worktrees
@@ -637,6 +642,7 @@ mod tests {
             "sessions.draft",
             "sessions.stop",
             "sessions.archive",
+            "sessions.unarchive",
             "sessions.delete",
         ] {
             assert!(matches!(
