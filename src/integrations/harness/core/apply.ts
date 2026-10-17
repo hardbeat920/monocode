@@ -821,13 +821,7 @@ function patchStreaming(
     (typeof input === "string" ? !input : input.every((text) => !text))
   )
     return session;
-  let index = session.blocks.length - 1;
-  while (
-    index >= 0 &&
-    session.blocks[index].role === "system" &&
-    !session.blocks[index].interjection
-  )
-    index--;
+  const index = lastStreamIndex(session.blocks);
   const last = session.blocks[index];
   // A completion closes one provider message. The next delta is a new message
   // even when no tool or status row landed between them; joining the two can
@@ -1220,14 +1214,24 @@ function findToolIndex(
   });
 }
 
-function sealLastStream(blocks: Block[]): Block[] {
+// Status rows and messages sent into the running turn land below the reply in
+// flight. Its next delta still continues it instead of starting a reply under
+// the message, which would cut the first reply in two around it.
+function lastStreamIndex(blocks: readonly Block[]): number {
   let index = blocks.length - 1;
-  while (
-    index >= 0 &&
-    blocks[index].role === "system" &&
-    !blocks[index].interjection
-  )
+  while (index >= 0) {
+    const block = blocks[index];
+    const status = block.role === "system" && !block.interjection;
+    const midTurn =
+      block.role === "user" && block.sentAt != null && block.startedAt == null;
+    if (!status && !midTurn) break;
     index--;
+  }
+  return index;
+}
+
+function sealLastStream(blocks: Block[]): Block[] {
+  const index = lastStreamIndex(blocks);
   const last = blocks[index];
   if (
     !last?.streaming ||
