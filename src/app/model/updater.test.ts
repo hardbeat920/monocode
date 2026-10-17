@@ -76,3 +76,85 @@ describe("installPendingUpdate", () => {
     expect(mocks.relaunch).not.toHaveBeenCalled();
   });
 });
+
+describe("update feed requests", () => {
+  const userAgent = (kind: "fg" | "bg") => ({
+    headers: {
+      "User-Agent":
+        kind === "fg" ? "MonoCode-Updater/0.1.22" : "MonoCode-Background-Updater/0.1.22",
+    },
+  });
+
+  it("names the updater behind background, focused and manual checks", async () => {
+    mocks.check.mockResolvedValue(null);
+    const updater = await import("./updater");
+
+    await updater.probeForUpdateThrottled("bg", 0);
+    await updater.probeForUpdateThrottled("fg", 0);
+    await updater.runUpdateFlow(true);
+    await updater.runUpdateFlow(false);
+
+    expect(mocks.check.mock.calls).toEqual([
+      [userAgent("bg")],
+      [userAgent("fg")],
+      [userAgent("fg")],
+      [userAgent("bg")],
+    ]);
+  });
+});
+
+describe("probeForUpdateThrottled", () => {
+  it.each(["fg", "bg"] as const)("checks %s at most once per its interval", async (kind) => {
+    mocks.check.mockResolvedValue(null);
+    const updater = await import("./updater");
+    const interval = updater.PROBE_INTERVAL_MS[kind];
+    const start = 1_000_000;
+
+    await expect(updater.probeForUpdateThrottled(kind, start)).resolves.toBeNull();
+    await expect(
+      updater.probeForUpdateThrottled(kind, start + interval - 1),
+    ).resolves.toBeUndefined();
+    expect(mocks.check).toHaveBeenCalledOnce();
+
+    await updater.probeForUpdateThrottled(kind, start + interval);
+    expect(mocks.check).toHaveBeenCalledTimes(2);
+  });
+
+  it("throttles focused and background checks independently", async () => {
+    mocks.check.mockResolvedValue(null);
+    const updater = await import("./updater");
+
+    await updater.probeForUpdateThrottled("fg", 0);
+    await updater.probeForUpdateThrottled("bg", 1);
+
+    expect(mocks.check).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips any check while another is still running, then lets it retry", async () => {
+    let finish: (value: null) => void = () => {};
+    mocks.check.mockReturnValueOnce(new Promise((resolve) => (finish = resolve)));
+    mocks.check.mockResolvedValue(null);
+    const updater = await import("./updater");
+
+    const first = updater.probeForUpdateThrottled("fg", 0);
+    await expect(
+      updater.probeForUpdateThrottled("fg", updater.PROBE_INTERVAL_MS.fg * 2),
+    ).resolves.toBeUndefined();
+    await expect(updater.probeForUpdateThrottled("bg", 1)).resolves.toBeUndefined();
+    finish(null);
+    await first;
+    expect(mocks.check).toHaveBeenCalledOnce();
+
+    await expect(updater.probeForUpdateThrottled("bg", 2)).resolves.toBeNull();
+    expect(mocks.check).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry a failed check on the next focus", async () => {
+    mocks.check.mockRejectedValue(new Error("network failed"));
+    const updater = await import("./updater");
+
+    await expect(updater.probeForUpdateThrottled("fg", 0)).rejects.toThrow("network failed");
+    await expect(updater.probeForUpdateThrottled("fg", 1)).resolves.toBeUndefined();
+    expect(mocks.check).toHaveBeenCalledOnce();
+  });
+});
