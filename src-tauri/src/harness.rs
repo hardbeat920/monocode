@@ -2783,6 +2783,23 @@ fn which_in_path(path: &str, name: &str) -> Option<PathBuf> {
     })
 }
 
+/// `Command::new(name)` with `PATH` set to `path`, started by its full path.
+/// Once `PATH` is overridden, std only uses posix_spawn when the program is a
+/// path; a bare name falls back to fork, which copies the whole address space
+/// while every other thread's malloc waits on it, the UI main thread included.
+/// A git refresh after each agent tool call then froze typing for up to a second.
+pub(crate) fn command_on_path(name: &str, path: String) -> Command {
+    // Windows has no fork to avoid, and its lookup there would also pick up
+    // `.cmd` shims that a bare `git` never ran.
+    #[cfg(unix)]
+    let program = which_in_path(&path, name).unwrap_or_else(|| name.into());
+    #[cfg(not(unix))]
+    let program = PathBuf::from(name);
+    let mut cmd = Command::new(program);
+    cmd.env("PATH", path);
+    cmd
+}
+
 fn first_binary(candidates: Vec<PathBuf>) -> Option<PathBuf> {
     candidates.into_iter().find_map(existing_binary)
 }
@@ -3705,8 +3722,17 @@ mod tests {
             unreadable.display(),
             real.display()
         );
-        assert_eq!(which_in_path(&path, "claude"), Some(target));
+        assert_eq!(which_in_path(&path, "claude"), Some(target.clone()));
         assert_eq!(which_in_path(&path, "codex"), None);
+        // A full path keeps std on posix_spawn instead of fork.
+        assert_eq!(
+            command_on_path("claude", path.clone()).get_program(),
+            target.as_os_str()
+        );
+        assert_eq!(
+            command_on_path("codex", path.clone()).get_program(),
+            "codex"
+        );
         assert_eq!(which_in_path("", "claude"), None);
 
         let _ = std::fs::remove_dir_all(&dir);
