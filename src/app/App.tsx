@@ -4439,7 +4439,10 @@ function Workspace({
   const ensureOpenSession = useCallback(
     async (sessionId: string): Promise<Session | null> => {
       const open = sessionsRef.current.find(
-        (session) => session.id === sessionId,
+        (session) =>
+          session.id === sessionId ||
+          (isRemoteProjectPath(session.cwd) &&
+            remoteSessionFor(session.id) === sessionId),
       );
       if (open) return open;
 
@@ -10894,22 +10897,31 @@ function Workspace({
                   !sameProjectPath(session.cwd, cwd)
                 )
                   continue;
-                byId.set(session.id, {
-                  id: session.id,
-                  title: session.title,
-                  harness: session.harness,
-                  model: session.model,
+                const id =
+                  isRemoteProjectPath(session.cwd) && remoteSessionFor(session.id)
+                    ? remoteSessionFor(session.id)!
+                    : session.id;
+                const existing = byId.get(id);
+                byId.set(id, {
+                  id,
+                  title: existing?.title ?? session.title,
+                  harness: existing?.harness ?? session.harness,
+                  model: session.model || (existing?.model ?? ""),
                   busy: !!session.busy,
                   hasDraft: !!sessionDraftBlock(session),
-                  archived: byId.get(session.id)?.archived ?? false,
+                  archived: existing?.archived ?? false,
                 });
               }
               return [...byId.values()];
             },
             session: async (id) => {
               const target =
-                sessionsRef.current.find((session) => session.id === id) ??
-                (await getSession(id));
+                sessionsRef.current.find(
+                  (session) =>
+                    session.id === id ||
+                    (isRemoteProjectPath(session.cwd) &&
+                      remoteSessionFor(session.id) === id),
+                ) ?? (await getSession(id));
               return target &&
                 !target.orchestrationLeadId &&
                 canAccessProject(target.cwd)
