@@ -39,6 +39,10 @@ export function getArtifact(id: string): Promise<Artifact | null> {
   return invoke("artifacts_get", { id });
 }
 
+export function listArtifacts(): Promise<Artifact[]> {
+  return invoke("artifacts_list");
+}
+
 export async function saveArtifact(
   artifact: ArtifactUpsert,
 ): Promise<Artifact> {

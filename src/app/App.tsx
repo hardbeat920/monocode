@@ -679,10 +679,13 @@ import {
 import {
   getArtifact,
   saveArtifact,
+  listArtifacts,
   artifactCards,
   recordArtifactCard,
   removeArtifactCard,
+  ARTIFACTS_CHANGED_EVENT,
   ARTIFACT_DELETED_EVENT,
+  type ArtifactCard,
 } from "../features/artifacts/artifacts";
 import type { MonoChangesRequest } from "../features/monos/ui/MonoChangesView";
 import {
@@ -13410,10 +13413,41 @@ function Workspace({
     () => (monoViewBlocks ? monoSpawnedSessions(monoViewBlocks) : []),
     [monoViewBlocks],
   );
-  const monoDocuments = useMemo(
-    () => (monoViewBlocks ? artifactCards(monoViewBlocks) : []),
-    [monoViewBlocks],
-  );
+  const [persistedArtifacts, setPersistedArtifacts] = useState<
+    readonly ArtifactCard[]
+  >([]);
+  useEffect(() => {
+    let active = true;
+    const refresh = () => {
+      void listArtifacts()
+        .then((items) => {
+          if (!active) return;
+          setPersistedArtifacts(
+            items.map(({ id, kind, title }) => ({ id, kind, title })),
+          );
+        })
+        .catch(() => {});
+    };
+    refresh();
+    window.addEventListener(ARTIFACTS_CHANGED_EVENT, refresh);
+    const listening = listen<string>(ARTIFACT_DELETED_EVENT, ({ payload: id }) => {
+      if (!active) return;
+      setPersistedArtifacts((current) => current.filter((c) => c.id !== id));
+    });
+    return () => {
+      active = false;
+      window.removeEventListener(ARTIFACTS_CHANGED_EVENT, refresh);
+      void listening.then((unlisten) => unlisten());
+    };
+  }, []);
+  const monoDocuments = useMemo(() => {
+    const cards = new Map<string, ArtifactCard>();
+    for (const card of persistedArtifacts) cards.set(card.id, card);
+    if (monoViewBlocks) {
+      for (const card of artifactCards(monoViewBlocks)) cards.set(card.id, card);
+    }
+    return [...cards.values()];
+  }, [persistedArtifacts, monoViewBlocks]);
   const monoActivityView =
     monoViewSession && selectedMonoActivity ? (
       <MonoActivityView
