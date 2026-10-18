@@ -6133,7 +6133,12 @@ function Workspace({
     (dir: FocusDir) => {
       if (!activeTab) return;
       const next = neighborLeafId(activeTab.layout, activeTab.focusedId, dir);
-      if (next) onFocusPane(next);
+      if (!next) return;
+      // A visible composer keeps focus when another pane becomes active, so
+      // release it here or the destination composer never takes focus.
+      if (document.activeElement instanceof HTMLElement)
+        document.activeElement.blur();
+      onFocusPane(next);
     },
     [activeTab, onFocusPane],
   );
