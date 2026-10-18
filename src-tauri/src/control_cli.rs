@@ -401,13 +401,18 @@ fn send(action: &str, input: &Value, request_id: &str, app_mode: bool) -> Result
     };
     let endpoint = std::env::var(endpoint_key).map_err(|_| {
         unsent(if app_mode {
-            "No MonoCode app connection. Start this agent turn in MonoCode."
+            "MonoCode app connection is unavailable: this environment has no app connection variables. Run this command from a MonoCode-spawned agent turn; external harnesses must be launched by MonoCode to receive app access."
         } else {
             "No MonoCode connection. Confirm the Orchestrator proposal in MonoCode first."
         })
     })?;
-    let token = std::env::var(token_key)
-        .map_err(|_| unsent("No MonoCode session credential. Start the agent from MonoCode."))?;
+    let token = std::env::var(token_key).map_err(|_| {
+        unsent(if app_mode {
+            "MonoCode app connection is unavailable: no app token was injected into this environment. Run this command from a MonoCode-spawned agent turn."
+        } else {
+            "No MonoCode session credential. Start the agent from MonoCode."
+        })
+    })?;
     let address: SocketAddr = endpoint
         .parse()
         .map_err(|_| unsent("Invalid MonoCode endpoint"))?;
