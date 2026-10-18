@@ -42,4 +42,5 @@ ${SUDO[@]+"${SUDO[@]}"} env DEBIAN_FRONTEND=noninteractive apt-get "${APT_NETWOR
   libxdo-dev \
   librsvg2-dev \
   patchelf \
-  wget
+  wget \
+  xdg-utils

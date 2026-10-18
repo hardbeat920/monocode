@@ -23,6 +23,7 @@ Install and sign in to at least one supported agent first. See [provider setup](
 | macOS, Apple Silicon | [MonoCode.dmg](https://dl.usemono.dev/MonoCode.dmg) |
 | macOS, Intel | [MonoCode_x64.dmg](https://dl.usemono.dev/MonoCode_x64.dmg) |
 | Linux, x86_64 | [.deb, .rpm, or AppImage](https://github.com/hardbeat920/monocode/releases/latest) |
+| Linux, aarch64 | [.deb or AppImage](https://github.com/hardbeat920/monocode/releases/latest) |
 | Windows, x86_64 | [Installer](https://github.com/hardbeat920/monocode/releases/latest) |
 
 On macOS, open the DMG and drag MonoCode to Applications. On Windows, run the installer. See [Linux setup](docs/install.md) for dependencies and package instructions.
