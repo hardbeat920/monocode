@@ -86,12 +86,14 @@ describe("LinkedWorkItemPanel tab persistence", () => {
     expect(invoke).toHaveBeenCalledWith("git_github_work_item_details", {
       cwd: "/tmp/web",
       repo: "acme/web",
+      host: "github.com",
       kind: "issue",
       number: 157,
     });
     expect(invoke).toHaveBeenCalledWith("git_github_work_item_thread", {
       cwd: "/tmp/web",
       repo: "acme/web",
+      host: "github.com",
       kind: "issue",
       number: 157,
     });

@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { Modal } from "../../../shared/ui/Modal";
 import type { LinkedWorkItem } from "../model/session";
 import { parseGithubWorkItemUrl } from "../model/sessionWorkItem";
+import { githubHost, githubOrigin } from "../../inbox/model/githubHost";
 
 export function LinkSessionWorkItemDialog({
   initial,
@@ -46,7 +47,7 @@ export function LinkSessionWorkItemDialog({
             aria-label="GitHub issue or pull request URL"
             aria-invalid={error ? true : undefined}
             aria-describedby={error ? "linked-work-item-error" : undefined}
-            placeholder="https://github.com/owner/repo/pull/123"
+            placeholder={`${githubOrigin()}/owner/repo/pull/123`}
             onChange={(event) => {
               setUrl(event.target.value);
               if (error) setError("");
@@ -65,8 +66,8 @@ export function LinkSessionWorkItemDialog({
             </span>
           ) : (
             <span className="text-[11px] text-content/45">
-              Paste the full github.com URL. The linked item will appear on the
-              session card.
+              Paste the full {githubHost()} URL. The linked item will appear on
+              the session card.
             </span>
           )}
         </label>

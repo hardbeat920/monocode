@@ -40,6 +40,7 @@ import {
   type RecentProject,
 } from "../../projects/model/recents";
 import { recordInboxSelfActivity } from "./inboxSelfActivity";
+import { githubHost, githubHostOf, githubHostScope } from "./githubHost";
 
 export type GithubTaskKind = "issue" | "pr";
 export type GithubPrAction =
@@ -154,10 +155,19 @@ export type GithubWorkItemQuery = {
   search: string;
 };
 
+export type InboxSourceQuery = Pick<GithubWorkItemQuery, "assignedToMe" | "state">;
+
 export type InboxQuery = Omit<GithubWorkItemQuery, "kind"> & {
   linearHiddenTeamIds?: string[];
   jiraHiddenProjectIds?: string[];
+  /** Per-source overrides of `assignedToMe` and `state`. */
+  sources?: Partial<Record<InboxProvider, InboxSourceQuery>>;
 };
+
+function providerQuery(query: InboxQuery, provider: InboxProvider): InboxQuery {
+  const override = query.sources?.[provider];
+  return override ? { ...query, ...override } : query;
+}
 
 export type InboxProviderErrors = Partial<Record<InboxProvider, string>>;
 
@@ -165,6 +175,8 @@ export type GithubStatus = {
   connected: boolean;
   installed: boolean;
   authenticated: boolean;
+  /** `github.com` or the GitHub Enterprise Server host `gh` is pointed at. */
+  host?: string;
 };
 
 export type GithubStarStatus = "starred" | "notStarred" | "unavailable";
@@ -240,7 +252,15 @@ export function inboxListCacheKey(
     .join("|");
   const teams = [...(query.linearHiddenTeamIds ?? [])].sort().join(",");
   const jiraProjects = [...(query.jiraHiddenProjectIds ?? [])].sort().join(",");
-  return `${query.assignedToMe ? 1 : 0}:${query.state}:${paths}:${teams}:${jiraProjects}`;
+  const sources = (
+    ["github", "linear", "jira", "gitlab", "azuredevops"] as const
+  )
+    .map((provider) => {
+      const { assignedToMe, state } = providerQuery(query, provider);
+      return `${provider}=${assignedToMe ? 1 : 0}${state}`;
+    })
+    .join(",");
+  return `${sources}:${paths}:${teams}:${jiraProjects}`;
 }
 
 export function peekInboxList(
@@ -319,6 +339,7 @@ export function listGithubWorkItems(
   return invoke<GithubWorkItem[]>("git_github_work_items", {
     cwd,
     repo,
+    host: githubHost(),
     kind: query.kind,
     assignedToMe: query.assignedToMe,
     state: query.state,
@@ -331,16 +352,18 @@ function workItemLookupKey(
   repo: string,
   kind: GithubTaskKind,
   number: number,
+  host = githubHost(),
 ): string {
-  return `${repo.trim().toLowerCase()}:${kind}:${number}`;
+  return `${githubHostScope(host)}${repo.trim().toLowerCase()}:${kind}:${number}`;
 }
 
 export function peekGithubWorkItem(
   repo: string,
   kind: GithubTaskKind,
   number: number,
+  host = githubHost(),
 ): GithubWorkItem | null {
-  return workItemByKey.get(workItemLookupKey(repo, kind, number)) ?? null;
+  return workItemByKey.get(workItemLookupKey(repo, kind, number, host)) ?? null;
 }
 
 /** Fetch one exact item after targeted Inbox navigation misses its list cache. */
@@ -349,9 +372,10 @@ export function githubWorkItem(
   repo: string,
   kind: GithubTaskKind,
   number: number,
-  options?: { force?: boolean },
+  options?: { force?: boolean; host?: string },
 ): Promise<GithubWorkItem> {
-  const key = workItemLookupKey(repo, kind, number);
+  const host = options?.host ?? githubHost();
+  const key = workItemLookupKey(repo, kind, number, host);
   const cached = workItemByKey.get(key);
   if (cached && !options?.force) return Promise.resolve(cached);
   const pending = workItemInflight.get(key);
@@ -359,6 +383,7 @@ export function githubWorkItem(
   const promise = invoke<GithubWorkItem>("git_github_work_item", {
     cwd,
     repo,
+    host,
     kind,
     number,
   })
@@ -441,16 +466,18 @@ export function detailsCacheKey(
   repo: string,
   kind: GithubTaskKind,
   number: number,
+  host = githubHost(),
 ): string {
-  return workItemLookupKey(repo, kind, number);
+  return workItemLookupKey(repo, kind, number, host);
 }
 
 export function peekGithubWorkItemDetails(
   repo: string,
   kind: GithubTaskKind,
   number: number,
+  host = githubHost(),
 ): GithubWorkItemDetails | null {
-  return detailsByKey.get(detailsCacheKey(repo, kind, number)) ?? null;
+  return detailsByKey.get(detailsCacheKey(repo, kind, number, host)) ?? null;
 }
 
 export async function githubWorkItemDetails(
@@ -458,9 +485,10 @@ export async function githubWorkItemDetails(
   repo: string,
   kind: GithubTaskKind,
   number: number,
-  options?: { maxAgeMs?: number },
+  options?: { maxAgeMs?: number; host?: string },
 ): Promise<GithubWorkItemDetails> {
-  const key = detailsCacheKey(repo, kind, number);
+  const host = options?.host ?? githubHost();
+  const key = detailsCacheKey(repo, kind, number, host);
   const cached = detailsByKey.get(key);
   if (cached && freshEnough(`details:${key}`, options?.maxAgeMs)) {
     return cached;
@@ -469,7 +497,7 @@ export async function githubWorkItemDetails(
   if (pending) return pending;
   const promise = invoke<GithubWorkItemDetails>(
     "git_github_work_item_details",
-    { cwd, repo, kind, number },
+    { cwd, repo, host, kind, number },
   )
     .then((details) => {
       detailsByKey.set(key, details);
@@ -487,8 +515,9 @@ export function peekGithubWorkItemThread(
   repo: string,
   kind: GithubTaskKind,
   number: number,
+  host = githubHost(),
 ): GithubWorkItemThread | null {
-  return threadByKey.get(detailsCacheKey(repo, kind, number)) ?? null;
+  return threadByKey.get(detailsCacheKey(repo, kind, number, host)) ?? null;
 }
 
 export async function githubWorkItemThread(
@@ -496,9 +525,10 @@ export async function githubWorkItemThread(
   repo: string,
   kind: GithubTaskKind,
   number: number,
-  options?: { force?: boolean; maxAgeMs?: number },
+  options?: { force?: boolean; maxAgeMs?: number; host?: string },
 ): Promise<GithubWorkItemThread> {
-  const key = detailsCacheKey(repo, kind, number);
+  const host = options?.host ?? githubHost();
+  const key = detailsCacheKey(repo, kind, number, host);
   if (options?.force) {
     threadByKey.delete(key);
     threadInflight.delete(key);
@@ -512,6 +542,7 @@ export async function githubWorkItemThread(
   const promise = invoke<GithubWorkItemThread>("git_github_work_item_thread", {
     cwd,
     repo,
+    host,
     kind,
     number,
   })
@@ -533,17 +564,19 @@ export async function githubWorkItemComment(
   kind: GithubTaskKind,
   number: number,
   body: string,
-  options?: { inReplyTo?: string },
+  options?: { inReplyTo?: string; host?: string },
 ): Promise<string> {
+  const host = options?.host ?? githubHost();
   const url = await invoke<string>("git_github_work_item_comment", {
     cwd,
     repo,
+    host,
     kind,
     number,
     body: body.trim(),
     inReplyTo: options?.inReplyTo?.trim() ?? "",
   });
-  const key = detailsCacheKey(repo, kind, number);
+  const key = detailsCacheKey(repo, kind, number, host);
   threadByKey.delete(key);
   threadInflight.delete(key);
   recordInboxSelfActivity({ provider: "github", kind, number, repo });
@@ -556,14 +589,17 @@ export async function githubPrAction(
   repo: string,
   number: number,
   action: GithubPrAction,
+  options?: { host?: string },
 ): Promise<GithubWorkItem> {
+  const host = options?.host ?? githubHost();
   const item = await invoke<GithubWorkItem>("git_github_pr_action", {
     cwd,
     repo,
+    host,
     number,
     action,
   });
-  const key = workItemLookupKey(repo, "pr", number);
+  const key = workItemLookupKey(repo, "pr", number, host);
   workItemByKey.set(key, item);
   if (inboxListCache) {
     inboxListCache = {
@@ -572,7 +608,8 @@ export async function githubPrAction(
         cached.provider === "github" &&
         cached.kind === "pr" &&
         cached.repo.toLowerCase() === repo.trim().toLowerCase() &&
-        cached.number === number
+        cached.number === number &&
+        githubHostOf(cached.url) === host
           ? { ...cached, ...item }
           : cached,
       ),
@@ -649,26 +686,31 @@ export function prDiffCacheKey(
   repo: string,
   number: number,
   fullContext = false,
+  host = githubHost(),
 ): string {
-  return `${repo.trim().toLowerCase()}:pr:${number}${fullContext ? ":full" : ""}`;
+  return `${githubHostScope(host)}${repo.trim().toLowerCase()}:pr:${number}${fullContext ? ":full" : ""}`;
 }
 
 export function peekGithubPrDiff(
   repo: string,
   number: number,
   fullContext = false,
+  host = githubHost(),
 ): GithubPrDiff | null {
-  return prDiffByKey.get(prDiffCacheKey(repo, number, fullContext)) ?? null;
+  return (
+    prDiffByKey.get(prDiffCacheKey(repo, number, fullContext, host)) ?? null
+  );
 }
 
 export async function githubPrDiff(
   cwd: string,
   repo: string,
   number: number,
-  options?: { fullContext?: boolean; maxAgeMs?: number },
+  options?: { fullContext?: boolean; maxAgeMs?: number; host?: string },
 ): Promise<GithubPrDiff> {
   const fullContext = options?.fullContext === true;
-  const key = prDiffCacheKey(repo, number, fullContext);
+  const host = options?.host ?? githubHost();
+  const key = prDiffCacheKey(repo, number, fullContext, host);
   const cached = prDiffByKey.get(key);
   if (cached && freshEnough(`diff:${key}`, options?.maxAgeMs)) return cached;
   const pending = prDiffInflight.get(key);
@@ -676,6 +718,7 @@ export async function githubPrDiff(
   const promise = invoke<GithubPrDiff>("git_github_pr_diff", {
     cwd,
     repo,
+    host,
     number,
     fullContext,
   })
@@ -751,7 +794,7 @@ async function fetchInboxItems(
   const githubJobs = grouped.flatMap((project) =>
     (["issue", "pr"] as const).map(async (kind) => {
       const items = await listGithubWorkItems(project.path, project.repo, {
-        ...query,
+        ...providerQuery(query, "github"),
         kind,
       });
       return items.map((item) => ({
@@ -775,7 +818,7 @@ async function fetchInboxItems(
   let linearItems: InboxItem[] = [];
   if ((await linearConnected()).connected) {
     try {
-      linearItems = await fetchLinearInboxItems(query);
+      linearItems = await fetchLinearInboxItems(providerQuery(query, "linear"));
     } catch (error) {
       errors.linear = inboxErrorMessage(error);
     }
@@ -784,7 +827,7 @@ async function fetchInboxItems(
   let jiraItems: InboxItem[] = [];
   try {
     if ((await jiraConnected()).connected) {
-      jiraItems = await fetchJiraInboxItems(query);
+      jiraItems = await fetchJiraInboxItems(providerQuery(query, "jira"));
     }
   } catch (error) {
     errors.jira = inboxErrorMessage(error);
@@ -795,7 +838,7 @@ async function fetchInboxItems(
     const gitlab = await fetchRepositoryInboxItems(
       "gitlab",
       unique,
-      query,
+      providerQuery(query, "gitlab"),
       preferredPaths,
     );
     gitlabItems = gitlab.items;
@@ -807,7 +850,7 @@ async function fetchInboxItems(
     const azuredevops = await fetchRepositoryInboxItems(
       "azuredevops",
       unique,
-      query,
+      providerQuery(query, "azuredevops"),
       preferredPaths,
     );
     azureDevOpsItems = azuredevops.items;
@@ -1094,7 +1137,12 @@ export function inboxIdentityKey(item: {
     return `jira:${item.number}`;
   }
   const repo = item.repo.trim().toLowerCase();
-  if (repo) return `${repo}:${item.kind}:${item.number}`;
+  if (repo) {
+    // Same GitHub repo slug on another server is another item.
+    const github = !item.provider || item.provider === "github";
+    const scope = github ? githubHostScope(githubHostOf(item.url)) : "";
+    return `${scope}${repo}:${item.kind}:${item.number}`;
+  }
   const url = item.url.trim().toLowerCase();
   if (url) return url;
   return `${item.kind}:${item.number}`;

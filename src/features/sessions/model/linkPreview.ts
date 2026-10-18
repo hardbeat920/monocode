@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { isGithubHost } from "../../inbox/model/githubHost";
 
 export type UserLink = {
   url: string;
@@ -83,7 +84,7 @@ function githubWorkItem(
   url: URL,
   displayHost: string,
 ): GithubWorkItemLink | null {
-  if (displayHost !== "github.com") return null;
+  if (!isGithubHost(displayHost)) return null;
   const parts = url.pathname.split("/").filter(Boolean);
   if (parts.length < 4) return null;
   const resource = parts[2]?.toLowerCase();

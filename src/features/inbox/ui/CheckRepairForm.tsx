@@ -37,6 +37,7 @@ export function CheckRepairForm({
   headOid,
   cwd,
   repo,
+  host,
   repair,
   blocked = false,
   onClose,
@@ -46,6 +47,7 @@ export function CheckRepairForm({
   headOid: string;
   cwd: string;
   repo: string;
+  host: string;
   repair: CheckRepair;
   blocked?: boolean;
   onClose: () => void;
@@ -109,11 +111,11 @@ export function CheckRepairForm({
         while (mounted.current && nextIndex < checks.length) {
           const index = nextIndex++;
           const check = checks[index];
-          const jobId = githubActionsJobId(check.url, repo);
+          const jobId = githubActionsJobId(check.url, repo, host);
           let details;
           try {
             details = jobId
-              ? await fetchGithubCheckDetails(cwd, repo, jobId)
+              ? await fetchGithubCheckDetails(cwd, repo, jobId, host)
               : undefined;
           } catch {
             details = {

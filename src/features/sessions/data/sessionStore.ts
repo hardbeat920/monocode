@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { githubOrigin } from "../../inbox/model/githubHost";
 import { isMonoSession } from "../../monos/model/mono";
 import { sanitizeMonoSpawnedSessions } from "../../monos/model/monoSpawnedSessions";
 import {
@@ -320,12 +321,29 @@ export function sanitizeLinkedWorkItem(
   ) {
     return undefined;
   }
+  const path = `/${repo}/${kind === "pr" ? "pull" : "issues"}/${number}`;
   return {
     kind,
     repo,
     number,
-    url: `https://github.com/${repo}/${kind === "pr" ? "pull" : "issues"}/${number}`,
+    url: `${persistedGithubOrigin(item.url, path) ?? githubOrigin()}${path}`,
   };
+}
+
+/** Keeps the server a link was made on, so changing the GitHub host never retargets it. */
+function persistedGithubOrigin(url: unknown, path: string): string | null {
+  if (typeof url !== "string") return null;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password) {
+      return null;
+    }
+    return parsed.pathname.toLowerCase() === path.toLowerCase()
+      ? parsed.origin
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 export function sanitizeSessionForPersist(

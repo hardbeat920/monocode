@@ -93,7 +93,12 @@ it("loads once on mount for open PRs whatever the revision is", async () => {
   await render(base);
   await flush();
   expect(fetchGithubPrChecks).toHaveBeenCalledTimes(1);
-  expect(fetchGithubPrChecks).toHaveBeenCalledWith("/tmp/web", "acme/web", 7);
+  expect(fetchGithubPrChecks).toHaveBeenCalledWith(
+    "/tmp/web",
+    "acme/web",
+    7,
+    "github.com",
+  );
   expect(view?.loading).toBe(false);
   expect(view?.checks?.headOid).toBe("a");
   expect(view?.stale).toBe(false);
@@ -206,6 +211,7 @@ it("drops a late answer after the PR changed and replaces with the new headOid",
     "/tmp/web",
     "acme/web",
     8,
+    "github.com",
   );
   await act(async () => {
     first.resolve(checks("old", ["fail"]));
