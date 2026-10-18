@@ -11324,7 +11324,10 @@ function Workspace({
                   prompt,
                   outcome,
                   session: sessionsRef.current.find(
-                    (session) => session.id === sessionId,
+                    (session) =>
+                      session.id === sessionId ||
+                      (isRemoteProjectPath(session.cwd) &&
+                        remoteSessionFor(session.id) === sessionId),
                   ),
                 }),
               ),
@@ -11498,12 +11501,12 @@ function Workspace({
                 !target ||
                 target.orchestrationLeadId ||
                 !canAccessProject(target.cwd) ||
-                orchestrator.run(id)
+                orchestrator.run(target.id)
               )
                 throw new Error("Session is unavailable in this project");
               const rememberFollowUp = () => {
                 const current =
-                  sessionsRef.current.find((session) => session.id === id) ??
+                  sessionsRef.current.find((session) => session.id === target.id) ??
                   target;
                 rememberSession({
                   sessionId: id,
@@ -11544,7 +11547,7 @@ function Workspace({
               const accepted = onSettled
                 ? await submitWithSettlement({
                     submit: (onSettled) =>
-                      submitSessionRef.current(id, prompt, [], {
+                      submitSessionRef.current(target.id, prompt, [], {
                         appRequestId: requestId,
                         onSettled,
                       }),
@@ -11552,7 +11555,7 @@ function Workspace({
                     rejectionMessage:
                       "The monitored follow-up could not start.",
                   })
-                : await submitSessionRef.current(id, prompt, [], {
+                : await submitSessionRef.current(target.id, prompt, [], {
                     appRequestId: requestId,
                   });
               if (!accepted) {
@@ -11569,7 +11572,7 @@ function Workspace({
                 !target ||
                 target.orchestrationLeadId ||
                 !canAccessProject(target.cwd) ||
-                orchestrator.run(id)
+                orchestrator.run(target.id)
               )
                 throw new Error("Session is unavailable in this project");
               const previous = target.blocks.find(
@@ -11589,34 +11592,37 @@ function Workspace({
                   "Session already has a draft; send or remove it first",
                 );
               const saved = flushSync(() =>
-                saveDraftRef.current(id, prompt, [], requestId),
+                saveDraftRef.current(target.id, prompt, [], requestId),
               );
               if (!saved) throw new Error("Session could not accept a draft");
               return { alreadySaved: false, draft: true };
             },
             stop: async (id) => {
-              if (
-                removingSessionIds.current.has(id) ||
-                switchingWorktrees.current.has(id)
-              )
-                throw new Error(
-                  "Session is being removed or changing worktrees",
-                );
               const target = sessionsRef.current.find(
-                (session) => session.id === id,
+                (session) =>
+                  session.id === id ||
+                  (isRemoteProjectPath(session.cwd) &&
+                    remoteSessionFor(session.id) === id),
               );
               if (!target) {
                 dismissCompletion(id);
                 return;
               }
               if (
+                removingSessionIds.current.has(target.id) ||
+                switchingWorktrees.current.has(target.id)
+              )
+                throw new Error(
+                  "Session is being removed or changing worktrees",
+                );
+              if (
                 target.orchestrationLeadId ||
                 !canAccessProject(target.cwd) ||
-                isMonoSession(id) ||
-                isHabitRun(id)
+                isMonoSession(target.id) ||
+                isHabitRun(target.id)
               )
                 throw new Error("Session is unavailable in this project");
-              await flushSync(() => stopSessionRef.current(id));
+              await flushSync(() => stopSessionRef.current(target.id));
               flushHarnessEvents();
               dismissCompletion(id);
             },
@@ -11626,12 +11632,12 @@ function Workspace({
                 !target ||
                 target.orchestrationLeadId ||
                 !canAccessProject(target.cwd) ||
-                isMonoSession(id) ||
-                isHabitRun(id)
+                isMonoSession(target.id) ||
+                isHabitRun(target.id)
               )
                 throw new Error("Session is unavailable in this project");
               const removed = await removeSessionRef.current(
-                id,
+                target.id,
                 mode,
                 true,
                 "cli",
