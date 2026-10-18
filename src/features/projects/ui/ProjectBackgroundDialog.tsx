@@ -36,47 +36,37 @@ import { GradientBlurBackground } from "../../settings/ui/GradientBlurBackground
 type Props = {
   project: string;
   name: string;
-  /**
-   * Only the image can change: it shows as a dimmed Haze on every chat, and
-   * nothing falls back to the global background. A Mono's chat is like this.
-   */
-  locked?: boolean;
+  /** A Mono has one conversation and never follows the global background. */
+  mono?: boolean;
   onClose: () => void;
 };
-
-/** What a locked background always looks like. */
-const LOCKED_LOOK = {
-  emptyOpacity: CHAT_BACKGROUND_OPACITY_DEFAULT,
-  sessionOpacity: CHAT_BACKGROUND_OPACITY_DEFAULT,
-  scope: "all",
-  effect: "gradient-blur",
-} as const;
 
 export function ProjectBackgroundDialog({
   project,
   name,
-  locked = false,
+  mono = false,
   onClose,
 }: Props) {
   const initial = loadProjectChatBackgroundSettings(project);
   const [path, setPath] = useState(initial?.path ?? null);
   const [emptyOpacity, setEmptyOpacity] = useState(
-    locked
-      ? LOCKED_LOOK.emptyOpacity
-      : (initial?.emptyOpacity ?? loadChatBackgroundEmptyOpacity()),
+    initial?.emptyOpacity ??
+      (mono
+        ? CHAT_BACKGROUND_OPACITY_DEFAULT
+        : loadChatBackgroundEmptyOpacity()),
   );
   const [sessionOpacity, setSessionOpacity] = useState(
-    locked
-      ? LOCKED_LOOK.sessionOpacity
-      : (initial?.sessionOpacity ?? loadChatBackgroundSessionOpacity()),
+    initial?.sessionOpacity ??
+      (mono
+        ? CHAT_BACKGROUND_OPACITY_DEFAULT
+        : loadChatBackgroundSessionOpacity()),
   );
   const [scope, setScope] = useState<ChatBackgroundScope>(
-    locked ? LOCKED_LOOK.scope : (initial?.scope ?? loadChatBackgroundScope()),
+    mono ? "all" : (initial?.scope ?? loadChatBackgroundScope()),
   );
   const [effect, setEffect] = useState<NewThreadBackgroundEffect>(
-    locked
-      ? LOCKED_LOOK.effect
-      : (initial?.effect ?? NEW_THREAD_BACKGROUND_EFFECT_DEFAULT),
+    initial?.effect ??
+      (mono ? "gradient-blur" : NEW_THREAD_BACKGROUND_EFFECT_DEFAULT),
   );
   const [revision, setRevision] = useState(projectChatBackgroundImageRevision);
   const [busy, setBusy] = useState(false);
@@ -85,11 +75,11 @@ export function ProjectBackgroundDialog({
   const effectPreviewSrc = useProjectBackgroundEffect(path, effect, revision);
   const previewSrc = path
     ? (effectPreviewSrc ?? projectChatBackgroundSrc(path, revision))
-    : locked
+    : mono
       ? null
       : chatBackgroundSrc(globalPath);
-  const previewEffect =
-    path || locked ? effect : loadNewThreadBackgroundEffect();
+  const previewEffect = path || mono ? effect : loadNewThreadBackgroundEffect();
+  const previewOpacity = mono ? sessionOpacity : emptyOpacity;
 
   const save = (
     nextPath: string,
@@ -135,12 +125,18 @@ export function ProjectBackgroundDialog({
       await clearProjectChatBackground(project);
       clearProjectChatBackgroundSetting(project);
       setPath(null);
-      if (!locked) {
-        setEmptyOpacity(loadChatBackgroundEmptyOpacity());
-        setSessionOpacity(loadChatBackgroundSessionOpacity());
-        setScope(loadChatBackgroundScope());
-        setEffect(NEW_THREAD_BACKGROUND_EFFECT_DEFAULT);
-      }
+      setEmptyOpacity(
+        mono
+          ? CHAT_BACKGROUND_OPACITY_DEFAULT
+          : loadChatBackgroundEmptyOpacity(),
+      );
+      setSessionOpacity(
+        mono
+          ? CHAT_BACKGROUND_OPACITY_DEFAULT
+          : loadChatBackgroundSessionOpacity(),
+      );
+      setScope(mono ? "all" : loadChatBackgroundScope());
+      setEffect(mono ? "gradient-blur" : NEW_THREAD_BACKGROUND_EFFECT_DEFAULT);
       setRevision(projectChatBackgroundImageRevision());
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -154,10 +150,11 @@ export function ProjectBackgroundDialog({
       CHAT_BACKGROUND_OPACITY_MAX,
       Math.max(CHAT_BACKGROUND_OPACITY_MIN, percent / 100),
     );
-    const nextEmptyOpacity = kind === "empty" ? next : emptyOpacity;
-    const nextSessionOpacity = kind === "session" ? next : sessionOpacity;
-    if (kind === "empty") setEmptyOpacity(next);
-    else setSessionOpacity(next);
+    const nextEmptyOpacity = mono || kind === "empty" ? next : emptyOpacity;
+    const nextSessionOpacity =
+      mono || kind === "session" ? next : sessionOpacity;
+    setEmptyOpacity(nextEmptyOpacity);
+    setSessionOpacity(nextSessionOpacity);
     if (path) save(path, nextEmptyOpacity, nextSessionOpacity, scope, effect);
   };
 
@@ -192,7 +189,7 @@ export function ProjectBackgroundDialog({
                     style={
                       {
                         "--chat-background-image": `url(${JSON.stringify(previewSrc)})`,
-                        opacity: emptyOpacity,
+                        opacity: previewOpacity,
                       } as CSSProperties
                     }
                   />
@@ -203,7 +200,7 @@ export function ProjectBackgroundDialog({
                   alt=""
                   draggable={false}
                   className="h-40 w-full object-cover"
-                  style={{ opacity: emptyOpacity }}
+                  style={{ opacity: previewOpacity }}
                 />
               )
             ) : (
@@ -224,8 +221,8 @@ export function ProjectBackgroundDialog({
             {path ? "Change image" : "Choose image"}
           </button>
           <p className="mt-1.5 text-[11px] leading-relaxed text-content/45">
-            {locked
-              ? `Shown behind ${name}'s chat, dimmed with the Haze effect.`
+            {mono
+              ? `Shown behind ${name}'s chat.`
               : path
                 ? "This image overrides the global background for this project."
                 : "This project currently follows the global Appearance setting."}
@@ -235,7 +232,7 @@ export function ProjectBackgroundDialog({
           ) : null}
         </div>
 
-        {path && !locked ? (
+        {path ? (
           <div className="border-t border-stroke pt-4">
             <div className="flex items-center justify-between gap-4">
               <div className="min-w-0 flex-1">
@@ -248,7 +245,11 @@ export function ProjectBackgroundDialog({
               </div>
               <div className="w-36 shrink-0">
                 <SearchableSelect
-                  label="Project background effect"
+                  label={
+                    mono
+                      ? "Mono background effect"
+                      : "Project background effect"
+                  }
                   variant="transparent"
                   value={effect}
                   options={NEW_THREAD_BACKGROUND_EFFECTS.map((option) => ({
@@ -266,7 +267,7 @@ export function ProjectBackgroundDialog({
           </div>
         ) : null}
 
-        {locked ? null : (
+        {mono ? null : (
           <>
             <ProjectBackgroundRow label="Show on">
               <div
@@ -314,28 +315,33 @@ export function ProjectBackgroundDialog({
                 </span>
               </div>
             </ProjectBackgroundRow>
-
-            <ProjectBackgroundRow label="Session visibility">
-              <div className="flex w-56 items-center gap-3">
-                <input
-                  type="range"
-                  min={Math.round(CHAT_BACKGROUND_OPACITY_MIN * 100)}
-                  max={Math.round(CHAT_BACKGROUND_OPACITY_MAX * 100)}
-                  value={Math.round(sessionOpacity * 100)}
-                  aria-label="Project background visibility in sessions"
-                  className="sidebar-opacity-slider min-w-0 flex-1"
-                  onChange={(event) =>
-                    updateOpacity("session", Number(event.target.value))
-                  }
-                />
-                <span className="w-10 shrink-0 text-right text-[12px] tabular-nums text-content">
-                  {Math.round(sessionOpacity * 100)}%
-                </span>
-              </div>
-            </ProjectBackgroundRow>
           </>
         )}
 
+        <ProjectBackgroundRow
+          label={mono ? "Background visibility" : "Session visibility"}
+        >
+          <div className="flex w-56 items-center gap-3">
+            <input
+              type="range"
+              min={Math.round(CHAT_BACKGROUND_OPACITY_MIN * 100)}
+              max={Math.round(CHAT_BACKGROUND_OPACITY_MAX * 100)}
+              value={Math.round(sessionOpacity * 100)}
+              aria-label={
+                mono
+                  ? "Mono background visibility"
+                  : "Project background visibility in sessions"
+              }
+              className="sidebar-opacity-slider min-w-0 flex-1"
+              onChange={(event) =>
+                updateOpacity("session", Number(event.target.value))
+              }
+            />
+            <span className="w-10 shrink-0 text-right text-[12px] tabular-nums text-content">
+              {Math.round(sessionOpacity * 100)}%
+            </span>
+          </div>
+        </ProjectBackgroundRow>
         {path ? (
           <button
             type="button"

@@ -238,7 +238,7 @@ export function MonoRailSection({
         <ProjectBackgroundDialog
           project={monoBackgroundKey(backgroundMono.id)}
           name={monoLook(backgroundMono).name}
-          locked
+          mono
           onClose={() => setBackground(undefined)}
         />
       ) : null}
