@@ -60,11 +60,21 @@ fn capitalize(value: &str) -> String {
 }
 
 fn claude_identity(dir: Option<PathBuf>) -> Option<ProviderAccountIdentity> {
+    let is_default = dir.is_none();
     let path = match dir {
         Some(dir) => dir.join(".claude.json"),
         None => home()?.join(".claude.json"),
     };
-    parse_claude_identity(&read_json(&path)?)
+    read_json(&path)
+        .as_ref()
+        .and_then(parse_claude_identity)
+        .or_else(|| {
+            (is_default
+                && std::env::var("CLAUDE_CODE_OAUTH_TOKEN")
+                    .ok()
+                    .is_some_and(|token| !token.trim().is_empty()))
+            .then(ProviderAccountIdentity::default)
+        })
 }
 
 /// Parse the `oauthAccount` block Claude Code writes to `.claude.json`.
