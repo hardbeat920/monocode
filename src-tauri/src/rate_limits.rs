@@ -441,6 +441,14 @@ fn usage_error(status: u16) -> ClaudeUsageFetch {
 }
 
 fn read_claude_credentials(config_dir: Option<&std::path::Path>) -> Option<ClaudeCredentials> {
+    if config_dir.is_none() {
+        if let Some(access_token) = env_var("CLAUDE_CODE_OAUTH_TOKEN") {
+            return Some(ClaudeCredentials {
+                access_token,
+                expires_at_ms: None,
+            });
+        }
+    }
     #[cfg(target_os = "macos")]
     {
         // A Keychain item that is present but blank (the CLI clears it when a
