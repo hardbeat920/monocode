@@ -9400,6 +9400,7 @@ mod tests {
     #[test]
     fn read_only_git_cmd_path_adds_fixed_dirs_to_inherited_path() {
         // A bare `git` with PATH overridden makes std fork the whole app.
+        #[cfg(unix)]
         assert!(Path::new(git_cmd().get_program()).is_absolute());
         let path = git_cmd_path(&git_cmd());
         assert!(path.contains(&PathBuf::from("/opt/homebrew/bin")));
