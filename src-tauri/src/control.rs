@@ -463,26 +463,59 @@ pub fn window_closed(app: &AppHandle, label: &str) {
     };
 }
 
-pub fn configure_child(app: &AppHandle, session_id: &str, cmd: &mut Command) {
+fn base_session_id(session_id: &str) -> &str {
+    session_id
+        .split_once('#')
+        .map(|(base, _)| base)
+        .unwrap_or(session_id)
+}
+
+fn configure_child_from_state(
+    endpoint: &str,
+    inner: &Inner,
+    session_id: &str,
+    cmd: &mut Command,
+) {
     cmd.env_remove("MONOCODE_CONTROL_ENDPOINT")
         .env_remove("MONOCODE_CONTROL_TOKEN")
         .env_remove("MONOCODE_APP_ENDPOINT")
         .env_remove("MONOCODE_APP_TOKEN");
+    let base_id = base_session_id(session_id);
+    if let Some(grant) = inner
+        .grants
+        .get(session_id)
+        .or_else(|| inner.grants.get(base_id))
+    {
+        cmd.env("MONOCODE_CONTROL_ENDPOINT", endpoint)
+            .env("MONOCODE_CONTROL_TOKEN", &grant.token);
+    }
+    if let Some(grant) = inner
+        .app_grants
+        .get(session_id)
+        .or_else(|| inner.app_grants.get(base_id))
+    {
+        cmd.env("MONOCODE_APP_ENDPOINT", endpoint)
+            .env("MONOCODE_APP_TOKEN", &grant.token);
+    }
+    if let Some(scratch) = inner
+        .scratch
+        .get(session_id)
+        .or_else(|| inner.scratch.get(base_id))
+    {
+        configure_worker_scratch(cmd, scratch);
+    }
+}
+
+pub fn configure_child(app: &AppHandle, session_id: &str, cmd: &mut Command) {
     let Some(host) = app.try_state::<ControlHost>() else {
+        cmd.env_remove("MONOCODE_CONTROL_ENDPOINT")
+            .env_remove("MONOCODE_CONTROL_TOKEN")
+            .env_remove("MONOCODE_APP_ENDPOINT")
+            .env_remove("MONOCODE_APP_TOKEN");
         return;
     };
     if let Ok(inner) = host.inner.lock() {
-        if let Some(grant) = inner.grants.get(session_id) {
-            cmd.env("MONOCODE_CONTROL_ENDPOINT", &host.endpoint)
-                .env("MONOCODE_CONTROL_TOKEN", &grant.token);
-        }
-        if let Some(grant) = inner.app_grants.get(session_id) {
-            cmd.env("MONOCODE_APP_ENDPOINT", &host.endpoint)
-                .env("MONOCODE_APP_TOKEN", &grant.token);
-        }
-        if let Some(scratch) = inner.scratch.get(session_id) {
-            configure_worker_scratch(cmd, scratch);
-        }
+        configure_child_from_state(&host.endpoint, &inner, session_id, cmd);
     };
 }
 
@@ -842,5 +875,45 @@ mod tests {
         assert!(paths_overlap("/repo", "/repo/src"));
         assert!(paths_overlap("/repo/src", "/repo"));
         assert!(!paths_overlap("/repo", "/repo2"));
+    }
+
+    #[test]
+    fn configure_child_resolves_base_session_for_scoped_generation_keys() {
+        let mut inner = Inner::default();
+        inner.app_grants.insert(
+            "sess-123".into(),
+            Grant {
+                window: "main".into(),
+                session: "sess-123".into(),
+                cwd: "/repo".into(),
+                token: "app-tok-123".into(),
+            },
+        );
+        inner.grants.insert(
+            "lead-456".into(),
+            Grant {
+                window: "main".into(),
+                session: "lead-456".into(),
+                cwd: "/repo".into(),
+                token: "lead-tok-456".into(),
+            },
+        );
+        let mut cmd = Command::new("dummy");
+        configure_child_from_state("127.0.0.1:44000", &inner, "sess-123#0", &mut cmd);
+        assert!(cmd
+            .get_envs()
+            .any(|(k, v)| k == "MONOCODE_APP_ENDPOINT" && v == Some(std::ffi::OsStr::new("127.0.0.1:44000"))));
+        assert!(cmd
+            .get_envs()
+            .any(|(k, v)| k == "MONOCODE_APP_TOKEN" && v == Some(std::ffi::OsStr::new("app-tok-123"))));
+
+        let mut lead_cmd = Command::new("dummy");
+        configure_child_from_state("127.0.0.1:44000", &inner, "lead-456#2", &mut lead_cmd);
+        assert!(lead_cmd
+            .get_envs()
+            .any(|(k, v)| k == "MONOCODE_CONTROL_ENDPOINT" && v == Some(std::ffi::OsStr::new("127.0.0.1:44000"))));
+        assert!(lead_cmd
+            .get_envs()
+            .any(|(k, v)| k == "MONOCODE_CONTROL_TOKEN" && v == Some(std::ffi::OsStr::new("lead-tok-456"))));
     }
 }

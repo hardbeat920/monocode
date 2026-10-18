@@ -220,7 +220,11 @@ impl HarnessHost {
             .children
             .iter()
             .map(|(id, child)| crate::resources::ProcessRoot {
-                session_id: id.clone(),
+                session_id: id
+                    .split_once('#')
+                    .map(|(base, _)| base)
+                    .unwrap_or(id)
+                    .to_string(),
                 pid: child.pid,
                 identity: child.identity.clone(),
                 cwd: child.cwd.to_string_lossy().into_owned(),
@@ -270,7 +274,25 @@ impl HarnessHost {
     fn kill_session(&self, session_id: &str) -> Option<Arc<LiveChild>> {
         let mut inner = self.lock_inner();
         *inner.epochs.entry(session_id.to_string()).or_insert(0) += 1;
-        inner.children.remove(session_id)
+        let mut target = inner.children.remove(session_id);
+        if target.is_none() {
+            let matching_keys: Vec<String> = inner
+                .children
+                .keys()
+                .filter(|key| key.split_once('#').map(|(base, _)| base) == Some(session_id))
+                .cloned()
+                .collect();
+            for key in matching_keys {
+                if let Some(child) = inner.children.remove(&key) {
+                    if target.is_none() {
+                        target = Some(child);
+                    } else {
+                        terminate(child.pid);
+                    }
+                }
+            }
+        }
+        target
     }
 
     fn remove_if_pid(&self, session_id: &str, pid: u32) -> Option<Arc<LiveChild>> {
@@ -3995,6 +4017,28 @@ mod tests {
         } else {
             assert!(antigravity_args().is_empty());
         }
+    }
+
+    #[test]
+    fn process_roots_and_kill_session_handle_generation_scoped_keys() {
+        let host = HarnessHost::new();
+        let (epoch, kill_all, _) = host.begin_spawn("scoped-session#0");
+        let (live, mut child) = live_child();
+        let pid = live.pid;
+        assert!(host
+            .install_spawn("scoped-session#0".into(), epoch, kill_all, live)
+            .is_none());
+
+        let roots = host.process_roots();
+        let root = roots.iter().find(|r| r.pid == pid).expect("process root found");
+        assert_eq!(root.session_id, "scoped-session");
+
+        let killed = host.kill_session("scoped-session");
+        assert!(killed.is_some());
+        assert_eq!(killed.unwrap().pid, pid);
+        assert!(host.lock_inner().children.is_empty());
+        let _ = child.kill();
+        let _ = child.wait();
     }
 
     #[test]
