@@ -1,4 +1,5 @@
 import { sessionConversationPage } from "../features/agent-app/model/sessionConversation";
+import { closeAgentSession } from "../features/agent-app/model/closeSession";
 import { readMonoConversation } from "../features/monos/model/monoConversation";
 import {
   resumeMonoUsageLimit,
@@ -11065,6 +11066,32 @@ function Workspace({
               if (!saved) throw new Error("Session could not accept a draft");
               return { alreadySaved: false, draft: true };
             },
+            close: (id, expectedCwd) =>
+              closeAgentSession(source, id, expectedCwd, {
+                snapshot: () => ({
+                  sessions: sessionsRef.current,
+                  tabs: tabsRef.current,
+                  activeTabId: activeTabIdRef.current,
+                }),
+                unavailable: (targetId) =>
+                  removingSessionIds.current.has(targetId) ||
+                  switchingWorktrees.current.has(targetId) ||
+                  !!orchestrator.run(targetId),
+                worktreeOf: tabWorktreeOf,
+                apply(next) {
+                  const activeTabId = activeTabIdRef.current;
+                  flushSync(() => {
+                    sessionsRef.current = next.sessions;
+                    tabsRef.current = next.tabs;
+                    activeTabIdRef.current = next.activeTabId;
+                    setSessions(next.sessions);
+                    setTabs(next.tabs);
+                    if (next.activeTabId !== activeTabId)
+                      activateTab(next.activeTabId);
+                  });
+                  void refreshHistory(sidebarCwdRef.current);
+                },
+              }),
             stop: async (id) => {
               if (
                 removingSessionIds.current.has(id) ||

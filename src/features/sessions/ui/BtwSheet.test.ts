@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { hasUnsavedComposerDraft, registerComposerCloseGuard } from "../model/draftCache";
 import { act, createElement, type FormEvent } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -90,6 +91,19 @@ describe("BTW conversation", () => {
     btw = useBtwConversation(options);
     return createElement(BtwSheet, { btw });
   }
+
+  it("refuses closing a session with an unsaved side-question draft", async () => {
+    await render({ sessionId: "side-draft-owner" });
+    expect(hasUnsavedComposerDraft("side-draft-owner")).toBe(false);
+    await act(async () => void btw.openWith("Keep this question", { draft: true }));
+    expect(hasUnsavedComposerDraft("side-draft-owner")).toBe(true);
+    await act(async () => btw.changeDraft(""));
+    expect(hasUnsavedComposerDraft("side-draft-owner")).toBe(false);
+    const unregister = registerComposerCloseGuard(btw.activeTabId!, () => true);
+    expect(hasUnsavedComposerDraft("side-draft-owner")).toBe(true);
+    unregister();
+    expect(hasUnsavedComposerDraft("side-draft-owner")).toBe(false);
+  });
 
   async function render(overrides: Partial<Options> = {}) {
     await act(async () =>
