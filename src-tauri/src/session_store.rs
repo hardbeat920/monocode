@@ -214,11 +214,7 @@ pub struct SessionRecord {
     pub updated_at: i64,
 }
 
-#[tauri::command(async)]
-pub fn session_upsert(
-    store: State<'_, SessionStore>,
-    session: SessionUpsert,
-) -> Result<SessionSummary, String> {
+fn validate_upsert(session: &SessionUpsert) -> Result<(), String> {
     validate_id(&session.id, "session")?;
     if session.cwd.trim().is_empty() {
         return Err("cwd is required".into());
@@ -244,10 +240,44 @@ pub fn session_upsert(
     if !session.blocks.is_array() {
         return Err("blocks must be an array".into());
     }
+    Ok(())
+}
 
+#[tauri::command(async)]
+pub fn session_upsert(
+    store: State<'_, SessionStore>,
+    session: SessionUpsert,
+) -> Result<SessionSummary, String> {
+    validate_upsert(&session)?;
     let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
     let summary = upsert_session(&conn, &session).map_err(|e| e.to_string())?;
     Ok(summary)
+}
+
+/// Regular-session counterpart of `mono_session_upsert`: `blocks` is only the
+/// changed suffix, anchored to the stored tail by `after_block_id` /
+/// `from_block_id`. Anchor misses fail closed; the client retries as a full
+/// `session_upsert`.
+#[tauri::command(async)]
+pub fn session_upsert_tail(
+    store: State<'_, SessionStore>,
+    session: SessionUpsert,
+    after_block_id: Option<String>,
+    from_block_id: Option<String>,
+    blocks_changed: bool,
+    append_only: bool,
+) -> Result<SessionSummary, String> {
+    validate_upsert(&session)?;
+    let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
+    upsert_session_tail(
+        &conn,
+        &session,
+        after_block_id.as_deref(),
+        from_block_id.as_deref(),
+        blocks_changed,
+        append_only,
+    )
+    .map_err(|e| e.to_string())
 }
 
 fn generated_image_paths(blocks: &Value) -> Vec<String> {
@@ -1132,13 +1162,149 @@ fn orchestration_summary(conn: &Connection, id: &str) -> rusqlite::Result<Option
     ))
 }
 
+/// Everything an upsert writes besides the transcript itself, derived once so
+/// full and tail-only saves write identical metadata.
+struct SessionWrite {
+    model_settings: String,
+    queued_messages_json: String,
+    linked_work_item_json: Option<String>,
+    automation_id: Option<String>,
+    provider_session_id: Option<String>,
+    provider_account_id: Option<String>,
+    branch: Option<String>,
+    worktree_cwd: Option<String>,
+    repo: Option<String>,
+}
+
+fn session_write(session: &SessionUpsert) -> rusqlite::Result<SessionWrite> {
+    let model_settings = serde_json::to_string(&session.model_settings)
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    let queued_messages_json = serde_json::to_string(&session.queued_messages)
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    let linked_work_item_json = session
+        .linked_work_item
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    let automation_id = session
+        .automation_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    let provider_session_id = session
+        .provider_session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    let provider_account_id = session
+        .provider_account_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    let git = crate::fs::git_info_for(&crate::fs::expand_home(
+        session
+            .worktree_cwd
+            .as_deref()
+            .filter(|cwd| !cwd.is_empty())
+            .unwrap_or(&session.cwd),
+    ));
+    let branch = if session.worktree_removed {
+        None
+    } else {
+        git.branch
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                session
+                    .branch
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+            })
+            .map(str::to_owned)
+    };
+    let worktree_cwd = session
+        .worktree_cwd
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    Ok(SessionWrite {
+        model_settings,
+        queued_messages_json,
+        linked_work_item_json,
+        automation_id,
+        provider_session_id,
+        provider_account_id,
+        branch,
+        worktree_cwd,
+        repo: git.repo,
+    })
+}
+
+/// The row state a save has to report back without re-reading it.
+struct StoredRow {
+    created_at: i64,
+    updated_at: i64,
+    archived: bool,
+    pinned: bool,
+    draft: bool,
+}
+
+fn session_summary(
+    conn: &Connection,
+    session: &SessionUpsert,
+    write: &SessionWrite,
+    row: StoredRow,
+) -> rusqlite::Result<SessionSummary> {
+    let StoredRow {
+        created_at,
+        updated_at,
+        archived,
+        pinned,
+        draft,
+    } = row;
+    Ok(SessionSummary {
+        sidebar_hidden: session.sidebar_hidden,
+        id: session.id.clone(),
+        orchestration_lead_id: worker_parent(conn, &session.id)?,
+        orchestration: orchestration_summary(conn, &session.id)?,
+        cwd: session.cwd.clone(),
+        harness: session.harness.clone(),
+        model: session.model.clone(),
+        runtime_mode: session.runtime_mode.clone(),
+        title: session.title.clone(),
+        provider_session_id: write.provider_session_id.clone(),
+        branch: write.branch.clone(),
+        worktree_cwd: write.worktree_cwd.clone(),
+        worktree_removed: session.worktree_removed,
+        repo: write.repo.clone(),
+        additions: 0,
+        deletions: 0,
+        created_at,
+        updated_at,
+        archived,
+        pinned,
+        draft,
+        linked_work_item: session.linked_work_item.clone(),
+        automation_id: write.automation_id.clone(),
+    })
+}
+
+fn transcript_anchor_gone() -> rusqlite::Error {
+    rusqlite::Error::ToSqlConversionFailure("Transcript anchor is gone".into())
+}
+
 pub(crate) fn upsert_session(
     conn: &Connection,
     session: &SessionUpsert,
 ) -> rusqlite::Result<SessionSummary> {
     let now = now_millis();
-    let model_settings = serde_json::to_string(&session.model_settings)
-        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    let write = session_write(session)?;
     let existing: Option<(i64, i64, String, i64, i64, String)> = conn
         .query_row(
             "SELECT created_at, updated_at, blocks_json, archived, pinned, queued_messages_json FROM sessions WHERE id = ?1",
@@ -1160,55 +1326,6 @@ pub(crate) fn upsert_session(
     };
     let blocks_json = serde_json::to_string(blocks.as_ref())
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-    let queued_messages_json = serde_json::to_string(&session.queued_messages)
-        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-    let linked_work_item_json = session
-        .linked_work_item
-        .as_ref()
-        .map(serde_json::to_string)
-        .transpose()
-        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-    let automation_id = session
-        .automation_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let provider_session_id = session
-        .provider_session_id
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty());
-    let provider_account_id = session
-        .provider_account_id
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty());
-    let git = crate::fs::git_info_for(&crate::fs::expand_home(
-        session
-            .worktree_cwd
-            .as_deref()
-            .filter(|cwd| !cwd.is_empty())
-            .unwrap_or(&session.cwd),
-    ));
-    let branch = if session.worktree_removed {
-        None
-    } else {
-        git.branch
-            .as_deref()
-            .filter(|value| !value.is_empty())
-            .or_else(|| {
-                session
-                    .branch
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-            })
-    };
-    let worktree_cwd = session
-        .worktree_cwd
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
 
     let has_user_message = has_user_block(&session.blocks);
     let is_draft = has_draft_block(&session.blocks);
@@ -1220,7 +1337,7 @@ pub(crate) fn upsert_session(
     let updated_at = match &existing {
         Some((_, prev_updated, _, _, _, prev_queue))
             if previous_blocks.as_ref() == Some(blocks.as_ref())
-                && prev_queue == &queued_messages_json =>
+                && prev_queue == &write.queued_messages_json =>
         {
             *prev_updated
         }
@@ -1271,55 +1388,295 @@ pub(crate) fn upsert_session(
             session.cwd,
             session.harness,
             session.model,
-            model_settings,
+            write.model_settings,
             session.runtime_mode,
             session.title,
-            provider_session_id,
+            write.provider_session_id,
             blocks_json,
             created_at,
             updated_at,
-            branch,
+            write.branch,
             session.context_used,
             session.context_window,
-            worktree_cwd,
+            write.worktree_cwd,
             i64::from(has_user_message),
-            linked_work_item_json,
-            provider_account_id,
+            write.linked_work_item_json,
+            write.provider_account_id,
             i64::from(session.worktree_removed),
             i64::from(is_draft),
-            automation_id,
-            queued_messages_json,
+            write.automation_id,
+            write.queued_messages_json,
             session.queue_status,
             i64::from(session.sidebar_hidden),
         ],
     )?;
 
     remember_worker_from_blocks(conn, &session.id, &session.blocks)?;
-    Ok(SessionSummary {
-        sidebar_hidden: session.sidebar_hidden,
-        id: session.id.clone(),
-        orchestration_lead_id: worker_parent(conn, &session.id)?,
-        orchestration: orchestration_summary(conn, &session.id)?,
-        cwd: session.cwd.clone(),
-        harness: session.harness.clone(),
-        model: session.model.clone(),
-        runtime_mode: session.runtime_mode.clone(),
-        title: session.title.clone(),
-        provider_session_id: provider_session_id.map(str::to_owned),
-        branch: branch.map(str::to_owned),
-        worktree_cwd: worktree_cwd.map(str::to_owned),
-        worktree_removed: session.worktree_removed,
-        repo: git.repo,
-        additions: 0,
-        deletions: 0,
-        created_at,
-        updated_at,
-        archived,
-        pinned,
-        draft: is_draft,
-        linked_work_item: session.linked_work_item.clone(),
-        automation_id: automation_id.map(str::to_owned),
-    })
+    session_summary(
+        conn,
+        session,
+        &write,
+        StoredRow {
+            created_at,
+            updated_at,
+            archived,
+            pinned,
+            draft: is_draft,
+        },
+    )
+}
+
+/// Replace only the transcript's changed tail. `blocks` carries the suffix the
+/// client wrote after `after_block_id`; `from_block_id` names the first stored
+/// block to replace when nothing survives. Missing anchors fail closed so a
+/// stale or deleted transcript is never silently clobbered — the caller then
+/// retries as a full `session_upsert`.
+pub(crate) fn upsert_session_tail(
+    conn: &Connection,
+    session: &SessionUpsert,
+    after_block_id: Option<&str>,
+    from_block_id: Option<&str>,
+    blocks_changed: bool,
+    append_only: bool,
+) -> rusqlite::Result<SessionSummary> {
+    let now = now_millis();
+    let write = session_write(session)?;
+    if !blocks_changed {
+        return header_update(conn, session, &write);
+    }
+    let suffix: Vec<Value> = session.blocks.as_array().cloned().unwrap_or_default();
+    if let Some(summary) = append_tail(
+        conn,
+        session,
+        &write,
+        &suffix,
+        after_block_id,
+        append_only,
+        now,
+    )? {
+        return Ok(summary);
+    }
+    let stored_raw: Option<String> = conn
+        .query_row(
+            "SELECT blocks_json FROM sessions WHERE id = ?1",
+            [&session.id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(stored_raw) = stored_raw else {
+        // Anchors point at rows this store no longer has.
+        if after_block_id.is_some() || from_block_id.is_some() {
+            return Err(transcript_anchor_gone());
+        }
+        return upsert_session(conn, session);
+    };
+    let stored: Vec<Value> = serde_json::from_str(&stored_raw)
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    let anchor = if append_only {
+        // The client believes the transcript is empty; anything already here is
+        // not theirs, so the suffix becomes the whole transcript — matching the
+        // full-write behavior this replaces.
+        0
+    } else if let Some(after) = after_block_id {
+        stored
+            .iter()
+            .position(|block| block["id"].as_str() == Some(after))
+            .map(|index| index + 1)
+            .ok_or_else(transcript_anchor_gone)?
+    } else if let Some(from) = from_block_id {
+        stored
+            .iter()
+            .position(|block| block["id"].as_str() == Some(from))
+            .ok_or_else(transcript_anchor_gone)?
+    } else {
+        0
+    };
+    let mut blocks = stored[..anchor].to_vec();
+    blocks.extend(suffix);
+    let mut merged = session.clone();
+    merged.blocks = Value::Array(blocks);
+    upsert_session(conn, &merged)
+}
+
+/// Saves where the transcript did not move touch every column except
+/// `blocks_json`, so a long chat never crosses the SQL boundary. `updated_at`
+/// keeps its old value when the queue is also unchanged, matching the full
+/// upsert's own rule.
+fn header_update(
+    conn: &Connection,
+    session: &SessionUpsert,
+    write: &SessionWrite,
+) -> rusqlite::Result<SessionSummary> {
+    let row = conn
+        .query_row(
+            "UPDATE sessions SET
+               cwd = ?2, harness = ?3, model = ?4, model_settings = ?5,
+               runtime_mode = ?6, title = ?7, provider_session_id = ?8,
+               updated_at = CASE WHEN queued_messages_json = ?9
+                                 THEN updated_at ELSE ?10 END,
+               branch = ?11, context_used = ?12, context_window = ?13,
+               worktree_cwd = ?14, linked_work_item_json = ?15,
+               provider_account_id = ?16, worktree_removed = ?17,
+               automation_id = ?18, queued_messages_json = ?9,
+               queue_status = ?19, sidebar_hidden = ?20
+             WHERE id = ?1
+             RETURNING created_at, updated_at, archived, pinned, is_draft",
+            params![
+                session.id,
+                session.cwd,
+                session.harness,
+                session.model,
+                write.model_settings,
+                session.runtime_mode,
+                session.title,
+                write.provider_session_id,
+                write.queued_messages_json,
+                now_millis(),
+                write.branch,
+                session.context_used,
+                session.context_window,
+                write.worktree_cwd,
+                write.linked_work_item_json,
+                write.provider_account_id,
+                i64::from(session.worktree_removed),
+                write.automation_id,
+                session.queue_status,
+                i64::from(session.sidebar_hidden),
+            ],
+            |row| {
+                Ok(StoredRow {
+                    created_at: row.get(0)?,
+                    updated_at: row.get(1)?,
+                    archived: row.get::<_, i64>(2)? != 0,
+                    pinned: row.get::<_, i64>(3)? != 0,
+                    draft: row.get::<_, i64>(4)? != 0,
+                })
+            },
+        )
+        .optional()?;
+    let Some(row) = row else {
+        return Err(transcript_anchor_gone());
+    };
+    session_summary(conn, session, write, row)
+}
+
+/// The hot path: a save that only adds blocks after the stored tail. The
+/// suffix is appended by `json_insert` inside SQLite, so the stored transcript
+/// is never read into Rust, parsed, or reserialized — the blob rewrite SQLite
+/// must do anyway is all that remains. The anchor rides in the `WHERE` clause,
+/// so a tail that moved under us falls through to the splice path instead of
+/// attaching to the wrong spot.
+fn append_tail(
+    conn: &Connection,
+    session: &SessionUpsert,
+    write: &SessionWrite,
+    suffix: &[Value],
+    after_block_id: Option<&str>,
+    append_only: bool,
+    now: i64,
+) -> rusqlite::Result<Option<SessionSummary>> {
+    if suffix.is_empty() {
+        return Ok(None);
+    }
+    let (guard, anchored): (&str, bool) = if append_only {
+        ("json_array_length(blocks_json) = 0", false)
+    } else if after_block_id.is_some() {
+        ("json_extract(blocks_json, '$[#-1].id') = ?", true)
+    } else {
+        return Ok(None);
+    };
+    let suffix_value = json!(suffix);
+    let cleaned = crate::artifacts::retain_existing_cards(conn, &suffix_value)?;
+    let blocks = cleaned
+        .as_array()
+        .ok_or_else(|| rusqlite::Error::ToSqlConversionFailure("blocks must be an array".into()))?;
+    let inserts = blocks
+        .iter()
+        .map(|_| "'$[#]', json(?)")
+        .collect::<Vec<_>>()
+        .join(", ");
+    // Every placeholder is positional, so `args` must follow SQL text order.
+    let sql = format!(
+        "UPDATE sessions SET
+           cwd = ?, harness = ?, model = ?, model_settings = ?,
+           runtime_mode = ?, title = ?, provider_session_id = ?,
+           blocks_json = json_insert(blocks_json, {inserts}),
+           updated_at = ?,
+           branch = ?, context_used = ?, context_window = ?,
+           worktree_cwd = ?,
+           has_user_message = MAX(has_user_message, ?),
+           linked_work_item_json = ?, provider_account_id = ?,
+           worktree_removed = ?,
+           is_draft = MAX(is_draft, ?),
+           automation_id = ?, queued_messages_json = ?,
+           queue_status = ?, sidebar_hidden = ?
+         WHERE id = ? AND {guard}
+         RETURNING created_at, updated_at, archived, pinned, is_draft"
+    );
+    let mut args: Vec<rusqlite::types::Value> = vec![
+        session.cwd.clone().into(),
+        session.harness.clone().into(),
+        session.model.clone().into(),
+        write.model_settings.clone().into(),
+        session.runtime_mode.clone().into(),
+        session.title.clone().into(),
+        opt_text(&write.provider_session_id),
+    ];
+    for block in blocks {
+        args.push(
+            serde_json::to_string(block)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+                .into(),
+        );
+    }
+    args.extend([
+        now.into(),
+        opt_text(&write.branch),
+        opt_int(session.context_used),
+        opt_int(session.context_window),
+        opt_text(&write.worktree_cwd),
+        i64::from(has_user_block(cleaned.as_ref())).into(),
+        opt_text(&write.linked_work_item_json),
+        opt_text(&write.provider_account_id),
+        i64::from(session.worktree_removed).into(),
+        i64::from(has_draft_block(cleaned.as_ref())).into(),
+        opt_text(&write.automation_id),
+        write.queued_messages_json.clone().into(),
+        opt_text(&session.queue_status),
+        i64::from(session.sidebar_hidden).into(),
+        session.id.clone().into(),
+    ]);
+    if anchored {
+        args.push(after_block_id.unwrap().to_owned().into());
+    }
+    let row = conn
+        .query_row(&sql, rusqlite::params_from_iter(args), |row| {
+            Ok(StoredRow {
+                created_at: row.get(0)?,
+                updated_at: row.get(1)?,
+                archived: row.get::<_, i64>(2)? != 0,
+                pinned: row.get::<_, i64>(3)? != 0,
+                draft: row.get::<_, i64>(4)? != 0,
+            })
+        })
+        .optional()?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    remember_worker_from_blocks(conn, &session.id, cleaned.as_ref())?;
+    session_summary(conn, session, write, row).map(Some)
+}
+
+fn opt_text(value: &Option<String>) -> rusqlite::types::Value {
+    value
+        .as_deref()
+        .map_or(rusqlite::types::Value::Null, |value| {
+            value.to_owned().into()
+        })
+}
+
+fn opt_int(value: Option<i64>) -> rusqlite::types::Value {
+    value.map_or(rusqlite::types::Value::Null, |value| value.into())
 }
 
 struct SearchProgressGuard<'a>(&'a Connection);
@@ -3773,5 +4130,204 @@ mod tests {
         .unwrap();
         assert!(result.hits.is_empty());
         assert!(!result.truncated);
+    }
+
+    fn stored_blocks(conn: &Connection, id: &str) -> Vec<Value> {
+        let raw: String = conn
+            .query_row(
+                "SELECT blocks_json FROM sessions WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        serde_json::from_str(&raw).unwrap()
+    }
+
+    fn tail(
+        conn: &Connection,
+        session: &SessionUpsert,
+        after: Option<&str>,
+        from: Option<&str>,
+        changed: bool,
+        append_only: bool,
+    ) -> rusqlite::Result<SessionSummary> {
+        upsert_session_tail(conn, session, after, from, changed, append_only)
+    }
+
+    #[test]
+    fn tail_append_after_the_last_block_extends_the_transcript() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.lock_conn().unwrap();
+        let mut session = sample("s1", "/tmp/a", "Chat");
+        session.blocks = json!([
+            { "id": "u", "role": "user", "text": "Question" },
+            { "id": "a", "role": "assistant", "text": "Answer" }
+        ]);
+        upsert_session(&conn, &session).unwrap();
+
+        session.blocks = json!([{ "id": "n", "role": "user", "text": "Next" }]);
+        let summary = tail(&conn, &session, Some("a"), None, true, false).unwrap();
+        assert_eq!(summary.id, "s1");
+        let blocks = stored_blocks(&conn, "s1");
+        assert_eq!(blocks.len(), 3);
+        assert_eq!(blocks[2]["id"], "n");
+        // The prefix written by the older full write is untouched.
+        assert_eq!(blocks[0]["text"], "Question");
+        assert_eq!(blocks[1]["text"], "Answer");
+    }
+
+    #[test]
+    fn tail_splice_replaces_everything_after_the_anchor() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.lock_conn().unwrap();
+        let mut session = sample("s1", "/tmp/a", "Chat");
+        session.blocks = json!([
+            { "id": "u", "role": "user", "text": "Question" },
+            { "id": "a", "role": "assistant", "text": "Answer" }
+        ]);
+        upsert_session(&conn, &session).unwrap();
+
+        session.blocks = json!([
+            { "id": "a", "role": "assistant", "text": "Rewritten" },
+            { "id": "n", "role": "user", "text": "Follow up" }
+        ]);
+        tail(&conn, &session, Some("u"), None, true, false).unwrap();
+        let blocks = stored_blocks(&conn, "s1");
+        assert_eq!(
+            blocks.iter().map(|b| b["id"].as_str()).collect::<Vec<_>>(),
+            vec![Some("u"), Some("a"), Some("n")]
+        );
+        assert_eq!(blocks[1]["text"], "Rewritten");
+    }
+
+    #[test]
+    fn tail_from_anchor_rewrites_the_whole_transcript() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.lock_conn().unwrap();
+        let mut session = sample("s1", "/tmp/a", "Chat");
+        session.blocks = json!([
+            { "id": "u", "role": "user", "text": "Old" },
+            { "id": "a", "role": "assistant", "text": "Done" }
+        ]);
+        upsert_session(&conn, &session).unwrap();
+
+        session.blocks = json!([
+            { "id": "u", "role": "user", "text": "Edited" },
+            { "id": "a", "role": "assistant", "text": "Redone" }
+        ]);
+        tail(&conn, &session, None, Some("u"), true, false).unwrap();
+        let blocks = stored_blocks(&conn, "s1");
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0]["text"], "Edited");
+        assert_eq!(blocks[1]["text"], "Redone");
+    }
+
+    #[test]
+    fn append_only_writes_the_initial_transcript() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.lock_conn().unwrap();
+        let mut session = sample("s1", "/tmp/a", "Chat");
+        session.blocks = json!([]);
+        upsert_session(&conn, &session).unwrap();
+
+        session.blocks = json!([{ "id": "u", "role": "user", "text": "First" }]);
+        tail(&conn, &session, None, None, true, true).unwrap();
+        let blocks = stored_blocks(&conn, "s1");
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0]["id"], "u");
+        let has_user: i64 = conn
+            .query_row(
+                "SELECT has_user_message FROM sessions WHERE id = 's1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(has_user, 1);
+    }
+
+    #[test]
+    fn header_only_update_keeps_the_stored_transcript() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.lock_conn().unwrap();
+        let mut session = sample("s1", "/tmp/a", "Chat");
+        session.blocks = json!([
+            { "id": "u", "role": "user", "text": "Question" },
+            { "id": "a", "role": "assistant", "text": "Answer" }
+        ]);
+        let before = upsert_session(&conn, &session).unwrap();
+
+        session.blocks = json!([]);
+        session.title = "Renamed".into();
+        let summary = tail(&conn, &session, None, None, false, false).unwrap();
+        assert_eq!(summary.title, "Renamed");
+        // Queue and transcript unchanged, so the timestamp is kept.
+        assert_eq!(summary.updated_at, before.updated_at);
+        let blocks = stored_blocks(&conn, "s1");
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[1]["text"], "Answer");
+    }
+
+    #[test]
+    fn stale_anchor_fails_closed_without_touching_the_transcript() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.lock_conn().unwrap();
+        let mut session = sample("s1", "/tmp/a", "Chat");
+        session.blocks = json!([{ "id": "u", "role": "user", "text": "Only" }]);
+        upsert_session(&conn, &session).unwrap();
+
+        session.blocks = json!([{ "id": "n", "role": "user", "text": "Next" }]);
+        assert!(tail(&conn, &session, Some("gone"), None, true, false).is_err());
+        assert!(tail(&conn, &session, None, Some("gone"), true, false).is_err());
+        let blocks = stored_blocks(&conn, "s1");
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0]["id"], "u");
+    }
+
+    #[test]
+    fn anchored_tail_on_a_missing_row_fails_for_the_full_write_retry() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.lock_conn().unwrap();
+        let session = sample("ghost", "/tmp/a", "Chat");
+        assert!(
+            tail(&conn, &session, Some("u"), None, true, false).is_err(),
+            "an anchor into nothing must fail closed"
+        );
+        // No anchors means the caller simply has no shared history yet: the
+        // write lands as the full upsert this command replaces.
+        let summary = tail(&conn, &session, None, None, true, false).unwrap();
+        assert_eq!(summary.id, "ghost");
+        assert_eq!(stored_blocks(&conn, "ghost").len(), 1);
+    }
+
+    #[test]
+    fn tail_splice_restores_tool_details_the_client_omitted() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.lock_conn().unwrap();
+        let mut session = sample("s1", "/tmp/a", "Chat");
+        let detail = "x".repeat(6_000);
+        session.blocks = json!([
+            { "id": "u", "role": "user", "text": "Run" },
+            {
+                "id": "t",
+                "role": "tool",
+                "text": "Ran ls",
+                "tool": { "kind": "shell", "title": "ls", "status": "completed", "detail": detail }
+            }
+        ]);
+        upsert_session(&conn, &session).unwrap();
+
+        // The loaded transcript omits the detail; a rewrite of the tail must
+        // not erase it from the stored row.
+        session.blocks = json!([
+            {
+                "id": "t",
+                "role": "tool",
+                "text": "Ran ls",
+                "tool": { "kind": "shell", "title": "ls", "status": "completed", "detailOmitted": true }
+            }
+        ]);
+        tail(&conn, &session, Some("u"), None, true, false).unwrap();
+        let blocks = stored_blocks(&conn, "s1");
+        assert_eq!(blocks[1]["tool"]["detail"], detail);
     }
 }
