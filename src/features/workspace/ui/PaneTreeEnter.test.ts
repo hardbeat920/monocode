@@ -8,11 +8,24 @@ import { PaneTree } from "./PaneTree";
 vi.mock("../../files/ui/FilePane", async () => {
   const { createElement } = await import("react");
   return {
-    FilePane: ({ pane, visible }: { pane: EditorPane; visible: boolean }) =>
-      createElement("div", {
-        "data-file-pane": pane.id,
-        "data-pane-visible": visible,
-      }),
+    FilePane: ({
+      pane,
+      visible,
+      deferBody,
+    }: {
+      pane: EditorPane;
+      visible: boolean;
+      deferBody?: boolean;
+    }) =>
+      createElement(
+        "div",
+        {
+          "data-file-pane": pane.id,
+          "data-pane-visible": visible,
+          "data-defer-body": deferBody,
+        },
+        createElement("div", { "data-pane-body": "" }),
+      ),
   };
 });
 
@@ -26,6 +39,7 @@ beforeEach(() => {
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
+  fakeAnimations();
 });
 
 afterEach(() => {
@@ -97,11 +111,41 @@ function render(layout: LayoutNode, ids: string[]) {
   return props;
 }
 
+type FakeAnimation = {
+  target: HTMLElement;
+  keyframes: Keyframe[];
+  finish: () => void;
+};
+
+/** Records each slide and lets a test end it. */
+function fakeAnimations(): FakeAnimation[] {
+  const animations: FakeAnimation[] = [];
+  vi.spyOn(HTMLElement.prototype, "animate").mockImplementation(function (
+    this: HTMLElement,
+    keyframes,
+  ) {
+    const animation = {
+      onfinish: null as (() => void) | null,
+      cancel: vi.fn(),
+      pause: vi.fn(),
+      play: vi.fn(),
+    };
+    animations.push({
+      target: this,
+      keyframes: keyframes as Keyframe[],
+      finish: () => animation.onfinish?.(),
+    });
+    return animation as unknown as Animation;
+  });
+  return animations;
+}
+
 function enterFrom(id: string) {
-  return container
-    .querySelector(`[data-file-pane="${id}"]`)
-    ?.closest("[data-pane-enter]")
-    ?.getAttribute("data-pane-enter");
+  return (
+    container
+      .querySelector(`[data-pane-id="${id}"] > [data-pane-content]`)
+      ?.getAttribute("data-pane-enter") ?? undefined
+  );
 }
 
 describe("pane enter animation", () => {
@@ -125,25 +169,54 @@ describe("pane enter animation", () => {
   });
 
   it("clears the animation once it finishes", () => {
+    const animations = fakeAnimations();
     render(leaf("a"), ["a"]);
     render(split("right", leaf("b"), leaf("a")), ["a", "b"]);
-    const pane = container
-      .querySelector('[data-file-pane="b"]')!
-      .closest("[data-pane-enter]")!;
-    expect(pane.getAttribute("data-pane-enter")).toBe("left");
+    expect(enterFrom("b")).toBe("left");
+    // The new pane grows from the left edge and pushes its neighbour over.
+    const boxes = animations.filter((entry) => entry.target.dataset.paneId);
+    expect(boxes.map((entry) => entry.target.dataset.paneId)).toEqual([
+      "b",
+      "a",
+    ]);
+    expect(boxes[0].keyframes[0]).toMatchObject({ width: "0%" });
 
-    const event = new Event("animationend", { bubbles: true });
-    Object.assign(event, { animationName: "pane-enter" });
-    act(() => pane.dispatchEvent(event));
+    act(() => animations[0].finish());
     expect(container.querySelector("[data-pane-enter]")).toBeNull();
+  });
+
+  it("shows a file's tabs at once but mounts its body after the slide", () => {
+    const animations = fakeAnimations();
+    render(leaf("a"), ["a"]);
+    render(split("right", leaf("a"), leaf("b")), ["a", "b"]);
+    const pane = () => container.querySelector('[data-file-pane="b"]')!;
+    expect(pane().getAttribute("data-defer-body")).toBe("true");
+
+    act(() => animations[0].finish());
+    expect(pane().getAttribute("data-defer-body")).toBe("false");
+    const reveal = animations.at(-1)!;
+    expect(reveal.target.hasAttribute("data-pane-body")).toBe(true);
+    expect(reveal.keyframes[0]).toMatchObject({ opacity: 0 });
+  });
+
+  it("slides a closed file pane out before removing it", () => {
+    const animations = fakeAnimations();
+    render(split("right", leaf("a"), leaf("b")), ["a", "b"]);
+    render(leaf("a"), ["a"]);
+    const leaving = container.querySelector<HTMLElement>('[data-pane-id="b"]')!;
+    expect(leaving.hasAttribute("data-pane-leaving")).toBe(true);
+    expect(leaving.querySelector('[data-file-pane="b"]')).not.toBeNull();
+    const out = animations.find((entry) => entry.target === leaving)!;
+    expect(out.keyframes[1]).toMatchObject({ left: "100%", width: "0%" });
+
+    act(() => out.finish());
+    expect(container.querySelector('[data-pane-id="b"]')).toBeNull();
   });
 
   it("undoes focus scrolling while the pane slides in", () => {
     render(leaf("a"), ["a"]);
     render(split("right", leaf("a"), leaf("b")), ["a", "b"]);
-    const box = container
-      .querySelector('[data-file-pane="b"]')!
-      .closest<HTMLElement>("[data-pane-id]")!;
+    const box = container.querySelector<HTMLElement>('[data-pane-id="b"]')!;
     box.scrollLeft = 300;
     act(() => box.dispatchEvent(new Event("scroll")));
     expect(box.scrollLeft).toBe(0);

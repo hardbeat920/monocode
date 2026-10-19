@@ -67,7 +67,7 @@ export function SessionReview({
       <div className="px-4 pt-1 pb-2 font-sans" data-session-review-shell>
         <div
           role="status"
-          className="rounded-xl border border-content/12 bg-content/3 px-3 py-2.5"
+          className="rounded-xl border border-content/6 bg-content/3 px-3 py-2.5"
         >
           <p className="text-[12px] font-medium text-content/80">
             Couldn’t record changes
@@ -107,7 +107,7 @@ export function SessionReview({
   return (
     <div className="px-4 pt-1 pb-2 font-sans" data-session-review-shell>
       <div
-        className="overflow-hidden rounded-xl border border-content/12 bg-content/3"
+        className="overflow-hidden rounded-xl border border-content/6 bg-content/3"
         data-session-review
       >
         <div className="flex min-w-0 items-center gap-2.5 px-3 py-2.5">
@@ -168,14 +168,14 @@ export function SessionReview({
               type="button"
               title="Review changes"
               onClick={() => onOpenDiff(undefined, { sessionId, cwd })}
-              className="h-7 rounded-md border border-content/12 bg-content/8 px-2.5 text-[11px] font-medium text-content/75 hover:bg-content/12 hover:text-content"
+              className="h-7 rounded-md bg-content/8 px-2.5 text-[11px] font-medium text-content/75 hover:bg-content/12 hover:text-content"
             >
               Review
             </button>
           </div>
         </div>
         <ul
-          className={`scrollbar-none border-t border-stroke py-1 ${
+          className={`scrollbar-none border-t border-content/5 py-1 ${
             expanded ? "max-h-64 overflow-y-auto" : ""
           }`}
         >
@@ -195,7 +195,7 @@ export function SessionReview({
             type="button"
             aria-expanded={expanded}
             onClick={() => setExpanded((open) => !open)}
-            className="flex h-8 w-full items-center gap-1.5 border-t border-stroke px-3 text-left text-[11px] text-content/45 hover:bg-content/5 hover:text-content/70"
+            className="flex h-8 w-full items-center gap-1.5 border-t border-content/5 px-3 text-left text-[11px] text-content/45 hover:bg-content/5 hover:text-content/70"
           >
             {expanded ? (
               <ChevronDown className="size-3.5" strokeWidth={1.75} />

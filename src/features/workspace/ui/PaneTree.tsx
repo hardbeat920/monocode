@@ -2,6 +2,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useReducer,
   useRef,
   useState,
@@ -9,6 +10,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { setGrabbing, suppressTextSelection } from "../../../shared/lib/drag";
+import { beginLayoutTransition } from "../../../shared/lib/layoutTransition";
 import {
   paneDropFromPoint,
   setExternalTitleTabDrop,
@@ -28,6 +30,7 @@ import {
   type EditorPane,
   type LayoutLeaf,
   type LayoutNode,
+  type LayoutRect,
   type LayoutSash,
   type PaneEdge,
 } from "../model/layout";
@@ -313,22 +316,290 @@ function PaneTreeComponent({
   const tree = draft ?? layout;
   const leaves = layoutLeaves(tree);
   const sashes = layoutSashes(tree);
-  const inSplit = leaves.length > 1;
 
-  // A pane split into an existing layout slides in from the edge it was added
-  // on, like the linked work item panel. The neighbours reflow once up front;
-  // only the new pane's content moves, so nothing rewraps mid-animation.
-  // Panes present when the tree mounts, or swapped in place, just appear.
-  const knownLeafIds = useRef<ReadonlySet<string> | null>(null);
+  // A pane split into an existing layout pushes in from the edge it was
+  // added on, and a closed file pane slides back out the same way. Its
+  // neighbours follow the moving edge; the sliding pane keeps its full size
+  // and rides it. Panes present when the tree mounts, or swapped in place,
+  // just appear.
+  const knownLeaves = useRef<ReadonlyMap<string, LayoutLeaf> | null>(null);
+  const shownEditorPanes = useRef(new Map<string, EditorPane>());
   const enteringPanes = useRef(new Map<string, PaneEnterFrom>());
+  const leavingPanes = useRef(new Map<string, LeavingPane>());
+  // A file pane slides in with its tabs but no files, and mounts its editor
+  // once it has arrived, so loading the file never holds up the slide. The
+  // file fades in then.
+  const revealPanes = useRef(new Set<string>());
+  const slideFrom = useRef<ReadonlyMap<string, LayoutLeaf> | null>(null);
+  const slide = useRef<{ stop: () => void } | null>(null);
   const [, rerender] = useReducer((tick: number) => tick + 1, 0);
-  if (knownLeafIds.current && leaves.length > knownLeafIds.current.size) {
-    for (const leaf of leaves) {
-      if (knownLeafIds.current.has(leaf.id)) continue;
-      enteringPanes.current.set(leaf.id, paneEnterFrom(leaf));
+  const previousLeaves = knownLeaves.current;
+  if (previousLeaves && visible && !draft) {
+    const current = new Set(leaves.map((leaf) => leaf.id));
+    const removed = [...previousLeaves.values()].filter(
+      (leaf) => !current.has(leaf.id),
+    );
+    if (leaves.length > previousLeaves.size) {
+      for (const leaf of leaves) {
+        if (previousLeaves.has(leaf.id)) continue;
+        enteringPanes.current.set(leaf.id, paneEnterFrom(leaf));
+      }
+      slideFrom.current = previousLeaves;
+    } else if (
+      leaves.length < previousLeaves.size &&
+      removed.every((leaf) => shownEditorPanes.current.has(leaf.id))
+    ) {
+      // Only a file pane can outlive its layout for the slide; a session's
+      // pooled transcript has already moved on.
+      const order = [...previousLeaves.keys()];
+      for (const leaf of removed) {
+        leavingPanes.current.set(leaf.id, {
+          leaf,
+          pane: shownEditorPanes.current.get(leaf.id)!,
+          to: paneEnterFrom(leaf),
+          index: order.indexOf(leaf.id),
+        });
+      }
+      slideFrom.current = previousLeaves;
     }
   }
-  knownLeafIds.current = new Set(leaves.map((leaf) => leaf.id));
+  knownLeaves.current = new Map(leaves.map((leaf) => [leaf.id, leaf]));
+  for (const leaf of leaves) leavingPanes.current.delete(leaf.id);
+  for (const id of shownEditorPanes.current.keys()) {
+    if (!knownLeaves.current.has(id) && !leavingPanes.current.has(id))
+      shownEditorPanes.current.delete(id);
+  }
+  for (const pane of editorPanes) {
+    if (knownLeaves.current.has(pane.id))
+      shownEditorPanes.current.set(pane.id, pane);
+  }
+  const rendered: { leaf: LayoutLeaf; leaving?: LeavingPane }[] = leaves.map(
+    (leaf) => ({ leaf }),
+  );
+  // Leaving panes keep their place, so React moves no live pane's DOM.
+  for (const leaving of leavingPanes.current.values()) {
+    rendered.splice(Math.min(leaving.index, rendered.length), 0, {
+      leaf: leaving.leaf,
+      leaving,
+    });
+  }
+  // A closing pane still counts until it has slid out.
+  const inSplit = rendered.length > 1;
+
+  useLayoutEffect(() => {
+    const from = slideFrom.current;
+    if (!from) return;
+    slideFrom.current = null;
+    const entering = new Map(enteringPanes.current);
+    const leaving = new Map(leavingPanes.current);
+    // A slide still running jumps to its end; this one starts from the
+    // committed layout.
+    slide.current?.stop();
+    for (const [id, edge] of entering) enteringPanes.current.set(id, edge);
+    for (const [id, pane] of leaving) leavingPanes.current.set(id, pane);
+    const tree = treeRef.current;
+    const reduceMotion = window.matchMedia?.(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
+    const finish = (reveal = false) => {
+      for (const id of entering.keys()) {
+        enteringPanes.current.delete(id);
+        if (reveal && shownEditorPanes.current.has(id))
+          revealPanes.current.add(id);
+      }
+      for (const id of leaving.keys()) leavingPanes.current.delete(id);
+      rerender();
+    };
+    if (!tree || reduceMotion || typeof tree.animate !== "function") {
+      finish();
+      return;
+    }
+    const box = tree.getBoundingClientRect();
+    const opening = entering.size > 0;
+    // A wide pane covers more ground than the terminal dock; it takes a
+    // little longer so it moves at a similar pace.
+    const travel = Math.max(
+      0,
+      ...[
+        ...[...entering.keys()].map((id) => knownLeaves.current?.get(id)),
+        ...[...leaving.values()].map((pane) => pane.leaf),
+      ].map((leaf) =>
+        !leaf
+          ? 0
+          : leaf.axis === "y"
+            ? leaf.rect.h * box.height
+            : leaf.rect.w * box.width,
+      ),
+    );
+    const pace = Math.min(1.5, Math.max(1, Math.sqrt(travel / 360)));
+    const timing: KeyframeAnimationOptions = {
+      duration: Math.round((opening ? 240 : 200) * pace),
+      easing: "cubic-bezier(0.32, 0.72, 0, 1)",
+      fill: "forwards",
+    };
+    const animations: Animation[] = [];
+    const leavingAnimations: Animation[] = [];
+    const pinned: HTMLElement[] = [];
+    const paneElement = (id: string) =>
+      [...tree.children].find(
+        (child): child is HTMLElement =>
+          child instanceof HTMLElement && child.dataset.paneId === id,
+      );
+    // The sliding pane holds its full size against the edge it rides.
+    const pin = (
+      element: HTMLElement,
+      rect: LayoutRect,
+      edge: PaneEnterFrom,
+    ) => {
+      const content = element.querySelector<HTMLElement>(
+        ":scope > [data-pane-content]",
+      );
+      if (!content) return;
+      content.style.flex = "none";
+      content.style.width = `${rect.w * box.width}px`;
+      content.style.height = `${rect.h * box.height}px`;
+      element.style.alignItems =
+        edge === "left" ? "flex-end" : edge === "fade" ? "center" : "";
+      element.style.justifyContent =
+        edge === "top" ? "flex-end" : edge === "fade" ? "center" : "";
+      // The dividers wait for the final layout; this edge stands in for
+      // the one the pane rides.
+      element.style.zIndex = "1";
+      element.style.boxShadow = edgeShadow(edge);
+      pinned.push(element);
+    };
+    // The sliding file's contents fade with it.
+    const fade = (element: HTMLElement, show: boolean) =>
+      paneBody(element)?.animate(
+        [{ opacity: show ? 0 : 1 }, { opacity: show ? 1 : 0 }],
+        timing,
+      );
+    for (const leaf of leaves) {
+      const element = paneElement(leaf.id);
+      if (!element) continue;
+      const edge = entering.get(leaf.id);
+      const start = edge ? collapsedRect(leaf, edge) : from.get(leaf.id)?.rect;
+      if (!start || sameRect(start, leaf.rect)) continue;
+      if (edge) {
+        pin(element, leaf.rect, edge);
+        const shown = shownEditorPanes.current.has(leaf.id)
+          ? undefined
+          : fade(element, true);
+        if (shown) animations.push(shown);
+      }
+      animations.push(
+        element.animate([rectStyle(start), rectStyle(leaf.rect)], timing),
+      );
+    }
+    for (const pane of leaving.values()) {
+      const element = paneElement(pane.leaf.id);
+      if (!element) continue;
+      pin(element, pane.leaf.rect, pane.to);
+      const hidden = fade(element, false);
+      if (hidden) leavingAnimations.push(hidden);
+      // Left filled at the end: the pane is gone by the next render.
+      leavingAnimations.push(
+        element.animate(
+          [
+            rectStyle(pane.leaf.rect),
+            rectStyle(collapsedRect(pane.leaf, pane.to)),
+          ],
+          timing,
+        ),
+      );
+    }
+    // A chat's split header comes and goes with the split; it grows or
+    // shrinks with the slide instead of shifting the chat at once.
+    const headers: HTMLElement[] = [];
+    const splitChanges = opening ? from.size === 1 : leaves.length === 1;
+    for (const leaf of splitChanges ? leaves : []) {
+      if (entering.has(leaf.id)) continue;
+      const header = paneElement(leaf.id)?.querySelector<HTMLElement>(
+        "[data-split-header]",
+      );
+      if (!header) continue;
+      const height = header.offsetHeight;
+      header.style.overflow = "hidden";
+      headers.push(header);
+      const frames = [
+        { height: "0px", opacity: 0 },
+        { height: `${height}px`, opacity: 1 },
+      ];
+      const animation = header.animate(
+        opening ? frames : frames.reverse(),
+        timing,
+      );
+      // A closing split's header stays shut until it unmounts.
+      (opening ? animations : leavingAnimations).push(animation);
+    }
+    tree.dataset.paneSliding = "";
+    const endTransition = beginLayoutTransition();
+    const all = [...animations, ...leavingAnimations];
+    // Mounting the new pane can hold up the next frame; the slide starts
+    // once that frame is out, not partway through.
+    for (const animation of all) animation.pause();
+    const start = requestAnimationFrame(() => {
+      for (const animation of all) animation.play();
+    });
+    let stopped = false;
+    const stop = () => {
+      if (stopped) return;
+      stopped = true;
+      cancelAnimationFrame(start);
+      for (const animation of animations) animation.cancel();
+      delete tree.dataset.paneSliding;
+      for (const element of pinned) {
+        element.style.alignItems = "";
+        element.style.justifyContent = "";
+        element.style.zIndex = "";
+        element.style.boxShadow = "";
+        const content = element.querySelector<HTMLElement>(
+          ":scope > [data-pane-content]",
+        );
+        content?.style.removeProperty("flex");
+        content?.style.removeProperty("width");
+        content?.style.removeProperty("height");
+      }
+      for (const header of headers) header.style.overflow = "";
+      endTransition();
+      if (slide.current?.stop === stop) slide.current = null;
+      finish(true);
+    };
+    slide.current = { stop };
+    // They share one timing; whichever ends first ends the slide.
+    for (const animation of all) animation.onfinish = stop;
+    if (!all.length) stop();
+  });
+  useEffect(() => () => slide.current?.stop(), []);
+  useLayoutEffect(() => {
+    if (!revealPanes.current.size) return;
+    const tree = treeRef.current;
+    const ids = [...revealPanes.current];
+    revealPanes.current.clear();
+    if (!tree) return;
+    const fades: Animation[] = [];
+    for (const child of tree.children) {
+      if (
+        !(child instanceof HTMLElement) ||
+        !ids.includes(child.dataset.paneId!)
+      )
+        continue;
+      const animation = paneBody(child)?.animate?.(
+        [{ opacity: 0 }, { opacity: 1 }],
+        {
+          duration: 180,
+          easing: "ease-out",
+          fill: "backwards",
+        },
+      );
+      if (animation) fades.push(animation);
+    }
+    // Held on its first frame until the editor's mount is out of the way.
+    for (const animation of fades) animation.pause();
+    requestAnimationFrame(() => {
+      for (const animation of fades) animation.play();
+    });
+  });
 
   const startPaneDrag = useCallback(
     (fromId: string, event: ReactPointerEvent<HTMLElement>) => {
@@ -424,11 +695,16 @@ function PaneTreeComponent({
 
   return (
     <div ref={treeRef} className="relative h-full min-h-0 min-w-0">
-      {leaves.map((leaf) => {
-        const editorPane = editorPanes.find((pane) => pane.id === leaf.id);
-        const session = sessions.find((entry) => entry.id === leaf.id);
+      {rendered.map(({ leaf, leaving }) => {
+        const editorPane = leaving
+          ? leaving.pane
+          : editorPanes.find((pane) => pane.id === leaf.id);
+        const session = leaving
+          ? undefined
+          : sessions.find((entry) => entry.id === leaf.id);
         const dragging = drop?.fromId === leaf.id;
-        const onPaneDragStart = inSplit ? paneDragStartFor(leaf.id) : undefined;
+        const onPaneDragStart =
+          inSplit && !leaving ? paneDragStartFor(leaf.id) : undefined;
         const backgroundStyle = {
           "--chat-background-left": `${(-leaf.rect.x / leaf.rect.w) * 100}%`,
           "--chat-background-top": `${(-leaf.rect.y / leaf.rect.h) * 100}%`,
@@ -439,7 +715,10 @@ function PaneTreeComponent({
           <div
             key={leaf.id}
             data-pane-id={leaf.id}
-            className={`absolute flex min-h-0 min-w-0 flex-col overflow-hidden ${dragging ? "opacity-40" : ""}`}
+            data-pane-leaving={leaving ? "" : undefined}
+            aria-hidden={leaving ? true : undefined}
+            inert={leaving ? true : undefined}
+            className={`absolute flex min-h-0 min-w-0 flex-col overflow-hidden ${dragging ? "opacity-40" : ""}${leaving ? " pointer-events-none" : ""}`}
             // The new pane focuses its composer or editor while it is still
             // offscreen, and focus scrolls this clip box to reveal it, which
             // fights the slide. Scroll events land before paint, so undoing
@@ -461,19 +740,18 @@ function PaneTreeComponent({
               <PaneDropHint edge={drop.edge} />
             ) : null}
             <div
-              data-pane-enter={enteringPanes.current.get(leaf.id)}
-              onAnimationEnd={(event) => {
-                if (event.animationName !== "pane-enter") return;
-                enteringPanes.current.delete(leaf.id);
-                rerender();
-              }}
+              data-pane-content=""
+              data-pane-enter={
+                leaving ? undefined : enteringPanes.current.get(leaf.id)
+              }
               className="flex min-h-0 min-w-0 flex-1 flex-col"
             >
               {editorPane ? (
                 <FilePane
                   pane={editorPane}
+                  deferBody={!leaving && enteringPanes.current.has(leaf.id)}
                   visible={visible}
-                  focused={focusedId === editorPane.id}
+                  focused={!leaving && focusedId === editorPane.id}
                   showTabs={inSplit || editorPane.files.length > 1}
                   dirtyFileIds={dirtyFileIds}
                   fileErrorCounts={fileErrorCounts}
@@ -627,6 +905,62 @@ export const PaneTree = memo(PaneTreeComponent, samePaneTreeProps);
 
 type PaneEnterFrom = "left" | "right" | "top" | "bottom" | "fade";
 
+type LeavingPane = {
+  leaf: LayoutLeaf;
+  pane: EditorPane;
+  to: PaneEnterFrom;
+  /** Its place among the leaves before it closed. */
+  index: number;
+};
+
+/** What fades as a pane comes and goes: a file's body below its tabs. */
+function paneBody(element: HTMLElement): HTMLElement | null {
+  return (
+    element.querySelector<HTMLElement>(
+      ":scope > [data-pane-content] [data-pane-body]",
+    ) ?? element.querySelector<HTMLElement>(":scope > [data-pane-content]")
+  );
+}
+
+/** Where a pane sliding in starts, or one sliding out ends. */
+function collapsedRect(
+  { rect, axis }: LayoutLeaf,
+  edge: PaneEnterFrom,
+): LayoutRect {
+  if (edge === "right") return { ...rect, x: rect.x + rect.w, w: 0 };
+  if (edge === "left") return { ...rect, w: 0 };
+  if (edge === "bottom") return { ...rect, y: rect.y + rect.h, h: 0 };
+  if (edge === "top") return { ...rect, h: 0 };
+  return axis === "y"
+    ? { ...rect, y: rect.y + rect.h / 2, h: 0 }
+    : { ...rect, x: rect.x + rect.w / 2, w: 0 };
+}
+
+function edgeShadow(edge: PaneEnterFrom): string {
+  const line = "var(--color-stroke)";
+  if (edge === "right") return `-1px 0 0 0 ${line}`;
+  if (edge === "left") return `1px 0 0 0 ${line}`;
+  if (edge === "bottom") return `0 -1px 0 0 ${line}`;
+  if (edge === "top") return `0 1px 0 0 ${line}`;
+  return `-1px 0 0 0 ${line}, 1px 0 0 0 ${line}`;
+}
+
+function rectStyle(rect: LayoutRect): Keyframe {
+  return {
+    left: `${rect.x * 100}%`,
+    top: `${rect.y * 100}%`,
+    width: `${rect.w * 100}%`,
+    height: `${rect.h * 100}%`,
+  };
+}
+
+function sameRect(a: LayoutRect, b: LayoutRect): boolean {
+  const close = (x: number, y: number) => Math.abs(x - y) < 1e-6;
+  return (
+    close(a.x, b.x) && close(a.y, b.y) && close(a.w, b.w) && close(a.h, b.h)
+  );
+}
+
 function paneEnterFrom({ rect, axis }: LayoutLeaf): PaneEnterFrom {
   const edge = 0.001;
   if (axis === "x") {
@@ -686,6 +1020,7 @@ function Sash({
   return (
     <div
       role="separator"
+      data-pane-sash=""
       aria-orientation={row ? "vertical" : "horizontal"}
       aria-valuemin={0}
       aria-valuemax={100}

@@ -1,5 +1,6 @@
 import {
   memo,
+  useContext,
   useEffect,
   useMemo,
   useState,
@@ -9,7 +10,11 @@ import {
 import type { BundledLanguage } from "shiki";
 import type { HighlightResult } from "@streamdown/code";
 import { CodeBlockContainer, CodeBlockHeader } from "streamdown";
-import { boundedCode } from "../../files/editor/codeHighlightPlugin";
+import {
+  boundedCode,
+  requestCodeHighlight,
+} from "../../files/editor/codeHighlightPlugin";
+import { TranscriptVisibility } from "./transcriptVisibility";
 
 type Tokens = HighlightResult["tokens"][number];
 
@@ -111,30 +116,95 @@ export function HighlightedCodeBlock({
   startLine?: number;
 }) {
   const source = code.replace(/\n+$/, "");
+  const visible = useContext(TranscriptVisibility);
   const [highlighted, setHighlighted] = useState<{
     language: string;
+    source: string;
     result: HighlightResult;
   }>();
   useEffect(() => {
-    let current = true;
-    const apply = (result: HighlightResult) => {
-      if (current) setHighlighted({ language, result });
-    };
-    const cached = boundedCode.highlight(
+    if (
+      !visible ||
+      (highlighted?.language === language && highlighted.source === source)
+    )
+      return;
+    return requestCodeHighlight(
       {
         code: source,
         language: language as BundledLanguage,
         themes: boundedCode.getThemes(),
       },
-      apply,
+      (result) =>
+        setHighlighted((previous) => {
+          // Structured cloning makes fresh arrays. Reuse complete, unchanged
+          // lines so streaming does not rebuild thousands of token elements.
+          if (
+            previous?.language === language &&
+            source.startsWith(previous.source)
+          ) {
+            const completeLines =
+              previous.source
+                .slice(0, previous.source.lastIndexOf("\n") + 1)
+                .split("\n").length - 1;
+            result = {
+              ...result,
+              tokens: [
+                ...previous.result.tokens.slice(0, completeLines),
+                ...result.tokens.slice(completeLines),
+              ],
+            };
+          }
+          return { language, source, result };
+        }),
+      isIncomplete ? 0 : 1,
     );
-    if (cached) apply(cached);
-    return () => {
-      current = false;
+  }, [source, language, visible, isIncomplete]);
+  // New code is visible immediately, independently of tokenizer latency.
+  const result = useMemo(() => {
+    if (highlighted?.language !== language) return undefined;
+    if (highlighted.source === source) return highlighted.result;
+    if (!source.startsWith(highlighted.source)) return undefined;
+    const boundary = highlighted.source.lastIndexOf("\n") + 1;
+    const completeLines =
+      highlighted.source.slice(0, boundary).split("\n").length - 1;
+    return {
+      ...highlighted.result,
+      tokens: [
+        ...highlighted.result.tokens.slice(0, completeLines),
+        ...source
+          .slice(boundary)
+          .split("\n")
+          .map((content) => [{ content, offset: 0 }]),
+      ],
     };
-  }, [source, language]);
-  const result =
-    highlighted?.language === language ? highlighted.result : undefined;
+  }, [highlighted, language, source]);
+  return (
+    <CodePresentation
+      result={result}
+      source={source}
+      language={language}
+      isIncomplete={isIncomplete}
+      lineNumbers={lineNumbers}
+      startLine={startLine}
+    />
+  );
+}
+
+const CodePresentation = memo(function CodePresentation({
+  result,
+  source,
+  language,
+  isIncomplete,
+  lineNumbers,
+  startLine,
+}: {
+  result?: HighlightResult;
+  source: string;
+  language: string;
+  isIncomplete: boolean;
+  lineNumbers: boolean;
+  startLine?: number;
+}) {
   return (
     <CodeBlockContainer language={language} isIncomplete={isIncomplete}>
       <CodeBlockHeader language={language} />
@@ -170,4 +240,4 @@ export function HighlightedCodeBlock({
       </div>
     </CodeBlockContainer>
   );
-}
+});

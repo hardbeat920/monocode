@@ -18,6 +18,7 @@ export const SOUNDS_CHANGE_EVENT = "monocode:sounds-change";
 
 export type SoundCue =
   | "turnFinished"
+  | "inputRequested"
   | "inboxUnseen"
   | "linkedActivity"
   | "updateAvailable"
@@ -26,6 +27,7 @@ export type SoundCue =
 
 const CUES: Record<SoundCue, SoundName> = {
   turnFinished: "success",
+  inputRequested: "arrival",
   inboxUnseen: "bloom",
   linkedActivity: "chime",
   updateAvailable: "arrival",
@@ -68,7 +70,11 @@ export function initSounds() {
   applySoundEngine();
 }
 
-type ProjectSoundCue = "turnFinished" | "inboxUnseen" | "linkedActivity";
+type ProjectSoundCue =
+  | "turnFinished"
+  | "inputRequested"
+  | "inboxUnseen"
+  | "linkedActivity";
 
 /** Project cues require their subject so new sources cannot bypass project policy. */
 export function playCue(cue: Exclude<SoundCue, ProjectSoundCue>): boolean;
@@ -88,8 +94,49 @@ export function playCue(cue: SoundCue, subject?: NotificationSubject): boolean {
     }
   }
   applySoundEngine();
-  play(CUES[cue]);
+  if (audioContext) play(CUES[cue]);
+  else captureAudioContext(() => play(CUES[cue]));
+  scheduleSuspend();
   return true;
+}
+
+/** Past the longest cue's tail (arrival, ~1.75 s), with room to spare. */
+export const SOUNDS_SUSPEND_MS = 4_000;
+
+let audioContext: AudioContext | undefined;
+let suspendTimer: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * cuelume creates its shared AudioContext inside the first `play` and never
+ * suspends it, so a running context holds a CoreAudio stream open for the
+ * life of the app (a steady ~6% in coreaudiod). Swap the constructor for that
+ * one call to keep a handle; cuelume resumes a suspended context on its own.
+ */
+function captureAudioContext(run: () => void) {
+  const Native =
+    typeof window === "undefined" ? undefined : window.AudioContext;
+  if (!Native) return run();
+  window.AudioContext = class extends Native {
+    constructor(options?: AudioContextOptions) {
+      super(options);
+      audioContext = this;
+    }
+  };
+  try {
+    run();
+  } finally {
+    window.AudioContext = Native;
+  }
+}
+
+function scheduleSuspend() {
+  if (!audioContext) return;
+  clearTimeout(suspendTimer);
+  suspendTimer = setTimeout(() => {
+    if (audioContext?.state === "running") {
+      void audioContext.suspend().catch(() => undefined);
+    }
+  }, SOUNDS_SUSPEND_MS);
 }
 
 let announcedUpdate: string | undefined;
@@ -128,8 +175,10 @@ export function announceUpdateAvailable(version: string | null) {
   playCue("updateAvailable");
 }
 
-/** Test helper: forget which notification cues already fired. */
+/** Test helper: forget which notification cues already fired and the audio context. */
 export function resetSoundCues() {
   announcedUpdate = undefined;
   announcedLinkedActivities.clear();
+  clearTimeout(suspendTimer);
+  audioContext = undefined;
 }

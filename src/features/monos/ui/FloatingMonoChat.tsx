@@ -614,7 +614,7 @@ function ArtifactSheet({
             <X className="size-4" />
           </button>
         </header>
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 pt-2 pb-8">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pt-1 pb-5">
           {!loaded ? (
             <p role="status" className="text-[13px] text-content/50">
               Loading document…

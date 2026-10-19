@@ -11,6 +11,7 @@ import {
   stateWithGitDoc,
   stateWithGitOriginal,
   stateWithGitOriginalUpdated,
+  type OverviewLayout,
 } from "./editorGit";
 
 describe("stageChunkText", () => {
@@ -127,6 +128,51 @@ describe("overviewTicks", () => {
       null,
     );
     expect(modTicks[0]?.kind).toBe("mod");
+  });
+
+  it("places ticks where wrapped lines render, not by line number", () => {
+    // 180 lines whose first 100 wrap onto three rows. Line 165 is replaced
+    // by two lines, so its removed-line widget draws above them.
+    const before = Array.from({ length: 180 }, (_, i) => `line ${i + 1}`);
+    const after = [
+      ...before.slice(0, 164),
+      "changed",
+      "added",
+      ...before.slice(165),
+    ];
+    const original = Text.of([...before, ""]);
+    const doc = Text.of([...after, ""]);
+    const row = 20;
+    const rows = (line: number) => (line <= 100 ? 3 : 1);
+    const widget = (line: number) => (line === 165 ? row : 0);
+    const tops = [0];
+    for (let line = 1; line <= doc.lines; line++) {
+      tops.push(tops[line - 1] + widget(line) + rows(line) * row);
+    }
+    const layout: OverviewLayout = {
+      height: tops[doc.lines],
+      lineBlockAt(pos) {
+        const line = doc.lineAt(pos).number;
+        return {
+          top: tops[line - 1],
+          bottom: tops[line],
+          textTop: tops[line - 1] + widget(line),
+        };
+      },
+    };
+
+    const ticks = overviewTicks(
+      doc,
+      Chunk.build(original, doc),
+      original,
+      layout,
+    );
+    expect(ticks).toHaveLength(1);
+    expect(ticks[0]?.kind).toBe("mod");
+    // 100 wrapped lines of 60px and 64 single rows of 20px sit above it.
+    expect(ticks[0]?.top).toBeCloseTo((100 * 60 + 64 * row) / layout.height);
+    // The removed line's widget and both inserted lines.
+    expect(ticks[0]?.size).toBeCloseTo((3 * row) / layout.height);
   });
 });
 

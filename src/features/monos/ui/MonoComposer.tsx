@@ -446,8 +446,9 @@ export function MonoComposer({
       </div>
       {inline ? null : (
         // The right inset matches the box's border and padding, so the last
-        // control lines up under send.
-        <div className="flex min-w-0 items-center gap-0.5 pt-1 pl-1 pr-1.5">
+        // control lines up under send. A container, so the tools and controls
+        // passed in can compact themselves when the chat is narrow.
+        <div className="@container flex min-w-0 items-center gap-0.5 pt-1 pl-1 pr-1.5">
           {attachButton(TOOL_BUTTON, true)}
           <button
             ref={emojiButton}

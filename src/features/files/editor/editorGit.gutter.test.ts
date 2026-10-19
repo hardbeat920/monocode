@@ -1,8 +1,12 @@
 // @vitest-environment happy-dom
 import { foldGutter } from "@codemirror/language";
-import { EditorState } from "@codemirror/state";
+import {
+  EditorState,
+  type StateEffect,
+  type TransactionSpec,
+} from "@codemirror/state";
 import { EditorView, lineNumbers } from "@codemirror/view";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { editorGit, setGitOriginal, stateWithGitOriginal } from "./editorGit";
 
 let view: EditorView | null = null;
@@ -86,5 +90,39 @@ describe("git decorations", () => {
     expect(
       dom.querySelectorAll(".cm-gitGutter .cm-gitDelRow .cm-gitDel"),
     ).toHaveLength(2);
+  });
+});
+
+describe("change overview", () => {
+  it("scrolls to a clicked tick's change, not the line under the pointer", async () => {
+    const dom = mount(
+      "alpha\nbeta\nGAMMA\ndelta\n",
+      "alpha\nbeta\ngamma\ndelta\n",
+    );
+    const editor = view!;
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    const tick = dom.querySelector<HTMLElement>(".cm-gitOverviewTick");
+    expect(tick).not.toBeNull();
+
+    // Ticks are at least 3px tall, so a click near a tick's bottom edge can
+    // sit over a later line on the rail's scale.
+    const rail = dom.querySelector<HTMLElement>(".cm-gitOverview")!;
+    rail.getBoundingClientRect = () => new DOMRect(0, 0, 18, 100);
+    const dispatch = vi.spyOn(editor, "dispatch");
+    tick!.dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true, button: 0, clientY: 99 }),
+    );
+    // Dragging on from the tick follows the pointer down the rail.
+    window.dispatchEvent(new MouseEvent("mousemove", { clientY: 99 }));
+    window.dispatchEvent(new MouseEvent("mouseup"));
+
+    const targets = dispatch.mock.calls.map(([spec]) => {
+      const effect = (spec as TransactionSpec).effects as StateEffect<{
+        range: { head: number };
+      }>;
+      return effect.value.range.head;
+    });
+    const { doc } = editor.state;
+    expect(targets).toEqual([doc.line(3).from, doc.line(doc.lines).from]);
   });
 });

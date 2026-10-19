@@ -148,6 +148,16 @@ describe("agent app commands", () => {
     },
   );
 
+  it("keeps sessions a regular /operator thread starts in the sidebar", async () => {
+    const { source, host } = fixture();
+    await handleAgentApp(source, "operator-launch", "sessions.start", {
+      prompt: "Write an article",
+      notifyOnComplete: false,
+    }, host);
+    const launch = vi.mocked(host.start).mock.calls.at(-1)![0];
+    expect(launch.sidebarHidden).toBeUndefined();
+  });
+
   it("uses the owning Mono's preference when a habit starts a session", async () => {
     const { source, host } = fixture();
     host.isHabitRun = () => true;
