@@ -369,6 +369,23 @@ function groupTranscriptTurns(
   return turns;
 }
 
+/**
+ * A message sent mid-turn opens a turn of its own in `groupTurns`, but it
+ * joined the turn already running: when that turn started.
+ */
+export function joinedTurnStart(
+  turns: Block[][],
+  index: number,
+): number | undefined {
+  for (let i = index; i >= 0; i--) {
+    const first = turns[i]?.[0];
+    if (first?.role !== "user") return undefined;
+    if (first.startedAt != null) return first.startedAt;
+    if (first.sentAt == null) return undefined;
+  }
+  return undefined;
+}
+
 /** The hidden turn the app writes when a session a Mono launched finishes. */
 export function isMonoCompletionPrompt(block: Block): boolean {
   // Older completion deliveries lost their marker but kept the receipt ID.
@@ -760,9 +777,12 @@ export function subagentModelName(block: Block): string | undefined {
  * provider puts both in the tool result, so a finished run always has the one
  * thing worth reading at the end of its trail.
  */
-export function subagentReport(block: Block): string | undefined {
+export function subagentReport(
+  block: Block,
+  detail = block.tool?.detail,
+): string | undefined {
   if (toolCallState(block) === "pending") return undefined;
-  return block.tool?.detail?.trim() || undefined;
+  return detail?.trim() || undefined;
 }
 
 /** A failed delegated call must stay visible even when the work trail folds. */

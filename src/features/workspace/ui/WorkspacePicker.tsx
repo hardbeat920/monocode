@@ -139,7 +139,7 @@ export function WorkspaceIdentity({ worktree }: { worktree: boolean }) {
     <div
       title={`Workspace: ${label}`}
       aria-label={`Workspace ${label}`}
-      className="-ml-1.5 flex h-6 min-w-0 shrink-0 items-center gap-1.5 px-1.5 text-[12px] text-content/45"
+      className="-ml-1.5 flex h-6 min-w-0 shrink-0 items-center gap-1.5 px-1.5 text-[12px] text-content/55 opacity-40"
     >
       <Icon className="size-3.5 shrink-0" />
       <span className="truncate">{label}</span>

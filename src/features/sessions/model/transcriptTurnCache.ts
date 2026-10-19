@@ -14,6 +14,7 @@ export class TranscriptTurnCache {
   private managed = false;
   private inlineWork = false;
   private turns: Block[][] = [];
+  private tailStart = 0;
   private items = new WeakMap<Block[], Map<string, TurnItem[]>>();
 
   group(blocks: Block[], managed = false, inlineWork = false): Block[][] {
@@ -23,18 +24,36 @@ export class TranscriptTurnCache {
       this.inlineWork === inlineWork
     )
       return this.turns;
-    const previous = new Map(this.turns.map((turn) => [turn[0].id, turn]));
+    // Providers replace the live tail immutably. Check the prefix for edits,
+    // but don't allocate and regroup every historical turn on every token.
+    const reusePrefix =
+      this.blocks !== undefined &&
+      this.managed === managed &&
+      this.inlineWork === inlineWork &&
+      blocks.length >= this.tailStart &&
+      blocks[this.tailStart] === this.blocks[this.tailStart] &&
+      samePrefix(blocks, this.blocks, this.tailStart);
+    const prefix = reusePrefix ? this.turns.slice(0, -1) : [];
+    const source = reusePrefix ? blocks.slice(this.tailStart) : blocks;
+    const previous = new Map(
+      (reusePrefix ? this.turns.slice(-1) : this.turns).map((turn) => [
+        turn[0].id,
+        turn,
+      ]),
+    );
     const grouped = inlineWork
-      ? groupMonoChatTurns(blocks, managed)
-      : groupTurns(blocks, managed);
-    const next = grouped.map((turn) => {
-      const before = previous.get(turn[0].id);
-      return before &&
-        before.length === turn.length &&
-        turn.every((block, index) => block === before[index])
-        ? before
-        : turn;
-    });
+      ? groupMonoChatTurns(source, managed)
+      : groupTurns(source, managed);
+    const next = prefix.concat(
+      grouped.map((turn) => {
+        const before = previous.get(turn[0].id);
+        return before &&
+          before.length === turn.length &&
+          turn.every((block, index) => block === before[index])
+          ? before
+          : turn;
+      }),
+    );
     this.blocks = blocks;
     this.managed = managed;
     this.inlineWork = inlineWork;
@@ -43,6 +62,8 @@ export class TranscriptTurnCache {
       next.some((turn, index) => turn !== this.turns[index])
     )
       this.turns = next;
+    const last = this.turns[this.turns.length - 1];
+    this.tailStart = last ? blocks.indexOf(last[0]) : 0;
     return this.turns;
   }
 
@@ -90,4 +111,9 @@ export class TranscriptTurnCache {
     variants.set(key, items);
     return items;
   }
+}
+
+function samePrefix(next: Block[], previous: Block[], end: number): boolean {
+  for (let i = 0; i < end; i++) if (next[i] !== previous[i]) return false;
+  return true;
 }

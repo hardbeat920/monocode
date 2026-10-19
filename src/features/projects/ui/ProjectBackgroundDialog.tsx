@@ -202,7 +202,7 @@ export function ProjectBackgroundDialog({
                   src={previewSrc}
                   alt=""
                   draggable={false}
-                  className="h-40 w-full object-cover"
+                  className="chat-background-fade h-40 w-full object-cover"
                   style={{ opacity: emptyOpacity }}
                 />
               )

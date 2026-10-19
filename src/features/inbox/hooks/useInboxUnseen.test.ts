@@ -67,14 +67,20 @@ let activity: InboxActivity;
 const recents = [];
 const sessions = [session];
 
-function Harness({ rows = sessions }: { rows?: SessionSummary[] }) {
-  activity = useInboxActivity(recents, "/tmp/app", rows);
+function Harness({
+  rows = sessions,
+  scopeProject,
+}: {
+  rows?: SessionSummary[];
+  scopeProject?: string;
+}) {
+  activity = useInboxActivity(recents, "/tmp/app", rows, { scopeProject });
   return null;
 }
 
-async function mount(rows = sessions) {
+async function mount(rows = sessions, scopeProject?: string) {
   await act(async () => {
-    root.render(createElement(Harness, { rows }));
+    root.render(createElement(Harness, { rows, scopeProject }));
   });
 }
 
@@ -197,6 +203,37 @@ describe("Inbox activity polling", () => {
     expect(isInboxEntryUnseen(mutedEntry)).toBe(true);
     expect(activity.linkedSessionUpdateIds.has(session.id)).toBe(false);
     expect(activity.linkedSessionUpdates.has(session.id)).toBe(true);
+  });
+
+  it("badges only the scoped project's items and ones tied to no project", async () => {
+    const team: InboxItem = {
+      ...remote,
+      provider: "linear",
+      kind: "linear",
+      repo: "",
+      number: 7,
+      url: "https://linear.app/acme/issue/APP-7",
+      projectPath: "",
+    };
+    const appEntry = { key: inboxItemKey(remote), updatedAt: remote.updatedAt };
+    const teamEntry = { key: inboxItemKey(team), updatedAt: team.updatedAt };
+    seedInboxSeenIfNeeded([
+      { ...appEntry, updatedAt: "2026-09-12T12:00:00Z" },
+      { ...teamEntry, updatedAt: "2026-09-12T12:00:00Z" },
+    ]);
+    listInboxItems.mockResolvedValue({ items: [remote, team], errors: {} });
+    await mount(sessions, "/tmp/other");
+    // The team-level issue belongs to every project.
+    expect(activity.unseen).toBe(true);
+    act(() => markInboxItemSeen(teamEntry));
+    // The app's item doesn't light another project's dot...
+    expect(activity.unseen).toBe(false);
+    expect(isInboxEntryUnseen(appEntry)).toBe(true);
+    // ...but does its own, and the unscoped (classic) one.
+    await mount(sessions, "/tmp/app");
+    expect(activity.unseen).toBe(true);
+    await mount(sessions, undefined);
+    expect(activity.unseen).toBe(true);
   });
 
   it("reuses the Inbox list for linked-session updates", async () => {
