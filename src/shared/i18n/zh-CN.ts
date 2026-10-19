@@ -1,0 +1,346 @@
+/** English source string → Simplified Chinese. Add a locale file beside this one to support another language. */
+export const zhCN: Record<string, string> = {
+  "{count} sessions": "{count} 个会话",
+  "{name} settings": "{name} 设置",
+  "{name} menu": "{name} 菜单",
+  About: "关于",
+  "Accent color": "强调色",
+  Accounts: "账户",
+  "Add a message, or send…": "添加消息，或直接发送…",
+  "Add a note, or send to start…": "添加备注，或发送以开始…",
+  "Add context, or send to continue…": "补充上下文，或发送以继续…",
+  Advanced: "高级",
+  "Agent CLIs": "智能体命令行",
+  Agents: "智能体",
+  Alerts: "提醒",
+  "All sessions": "所有会话",
+  "Anchor prompts to top": "将提示固定到顶部",
+  "An image behind your chat panes. It stays on this device.":
+    "显示在聊天窗格后面的图片。它只保存在这台设备上。",
+  "Animate tabs as they open and close. Turn this off for instant tab changes.":
+    "标签页打开和关闭时播放动画。关闭后标签页会立即切换。",
+  "API key": "API 密钥",
+  App: "应用",
+  Appearance: "外观",
+  "Applies to the project rail and the other glass panes.":
+    "作用于项目栏和其他玻璃窗格。",
+  Archive: "归档",
+  "Archive a project from the rail to keep its chats without listing it in the sidebar.":
+    "从项目栏归档项目后，对话仍会保留，但不再显示在侧边栏中。",
+  "Archived projects": "已归档项目",
+  "Ask a side question…": "问一个旁支问题…",
+  "Ask, build, / for commands, @ for references...":
+    "提问、构建，/ 打开命令，@ 引用内容...",
+  Autosave: "自动保存",
+  Autocorrect: "自动更正",
+  "Auto-detected path": "自动检测的路径",
+  Automations: "自动化",
+  "Azure DevOps organization URL": "Azure DevOps 组织 URL",
+  "Azure DevOps personal access token": "Azure DevOps 个人访问令牌",
+  Back: "返回",
+  "Background blur behind the window.": "窗口后方的背景模糊。",
+  "Background effect": "背景效果",
+  "Background strength before a chat has messages.": "对话还没有消息时的背景强度。",
+  "Background strength once the conversation has messages.":
+    "对话已有消息后的背景强度。",
+  "Base hue for accents and tinted surfaces.": "强调色和着色表面的基础色相。",
+  Beside: "侧边",
+  "Beside chat": "聊天旁边",
+  "Blur account emails in Settings and the usage popover until you click one, so they stay out of screenshots.":
+    "在设置和用量弹层中模糊账户邮箱，点击后才显示，避免出现在截图里。",
+  "Blur radius": "模糊半径",
+  Blue: "蓝色",
+  "Chat background": "聊天背景",
+  "Chat with a Mono or open the quick composer from the macOS menu bar. Turn this off to hide the icon.":
+    "从 macOS 菜单栏与 Mono 聊天，或打开快速输入框。关闭后隐藏该图标。",
+  "Check for Updates…": "检查更新…",
+  "Choose or name a session folder…": "选择或命名会话文件夹…",
+  "Choose the language MonoCode uses for its own interface. Conversations stay in the language you write.":
+    "选择 MonoCode 界面使用的语言。对话内容仍使用你书写的语言。",
+  "Choose whether new sessions started by each Mono appear in the sidebar. Hidden sessions remain saved and can be opened from the Mono's chat. Add a Mono with the plus on the rail and choose its projects from its details.":
+    "选择每个 Mono 新建的会话是否出现在侧边栏。隐藏的会话仍会保存，并可从该 Mono 的聊天中打开。用项目栏上的加号添加 Mono，并在详情中选择它的项目。",
+  "Claude Code hooks": "Claude Code 钩子",
+  "Click a shortcut to record new keys. Press Delete while recording to disable it.":
+    "点击快捷键以录制新按键。录制时按 Delete 可禁用它。",
+  "Close All Tabs": "关闭所有标签页",
+  "Close Other Tabs": "关闭其他标签页",
+  "Close Pane": "关闭窗格",
+  "Close to tray": "关闭到托盘",
+  "Closing a window hides it to the system tray instead of quitting, so running agents keep going. Reopen from the tray icon, and quit for real from its menu. Turn this off to have close end the window.":
+    "关闭窗口时把它隐藏到系统托盘而不是退出，正在运行的智能体会继续工作。从托盘图标重新打开，并从它的菜单真正退出。关闭此项后，关闭窗口就会结束窗口。",
+  "Code review": "代码审查",
+  "Collapsed project rail": "折叠项目栏",
+  Color: "颜色",
+  Colorblind: "色盲友好",
+  "Colors for added and removed lines. Colorblind and High contrast use blue and orange instead of green and red; High contrast adds stronger tints and text.":
+    "新增和删除行的颜色。色盲友好和高对比度用蓝色和橙色代替绿色和红色；高对比度还会加强底色和文字。",
+  "Colors for the inset workspace's shell, card, text and accent. Each theme has a dark and a light palette.":
+    "内嵌工作区的外壳、卡片、文字和强调色。每个主题都有深色和浅色配色。",
+  "Composer mascot": "输入框吉祥物",
+  Connection: "连接",
+  Connections: "连接",
+  "Connect GitLab.com or a self-managed GitLab instance. Use a personal access token with API access; the token is stored locally and Disconnect deletes it.":
+    "连接 GitLab.com 或自建 GitLab。使用具有 API 权限的个人访问令牌；令牌保存在本地，断开连接时会删除。",
+  "Connect your ADO organization with a personal access token (Boards + Repos read & write for comments). The token is stored locally and Disconnect deletes it.":
+    "使用个人访问令牌连接 ADO 组织（Boards 与 Repos 的读写权限，用于评论）。令牌保存在本地，断开连接时会删除。",
+  "Connect your machines and run agents remotely through SSH.":
+    "连接你的机器，并通过 SSH 远程运行智能体。",
+  "Create a personal API key in Linear → Settings → Security & Access. Disconnect deletes it.":
+    "在 Linear → Settings → Security & Access 中创建个人 API 密钥。断开连接时会删除它。",
+  "Create isolated sign-ins for providers that support account profiles. Account switching stays available from the usage control in the footer.":
+    "为支持账户配置的提供方创建彼此隔离的登录。仍可从底部的用量控件切换账户。",
+  Dark: "深色",
+  "Dark-mode lightness": "深色模式亮度",
+  Default: "默认",
+  "Development build": "开发版本",
+  "Diff colors": "差异颜色",
+  "Diff view": "差异视图",
+  "Discover and manage file skills from project, personal, and harness folders.":
+    "发现并管理来自项目、个人和智能体目录的文件技能。",
+  Editor: "编辑器",
+  "Editor keeps working-tree changes in the file. Unified stacks every changed file in one review, with sticky headers and collapsed unchanged lines.":
+    "编辑器把工作区改动留在文件里。合并视图把所有改动文件放在同一次审查中，带有粘性标题，并折叠未改动的行。",
+  "Empty chat background visibility": "空聊天的背景可见性",
+  "Empty chat visibility": "空聊天可见性",
+  "Empty only": "仅空会话",
+  "Empty session games": "空会话小游戏",
+  "Empty sessions only, or every conversation.": "只在空会话中显示，或在每个对话中显示。",
+  "English stays the default until you choose another language. You can switch back here.":
+    "在你选择其他语言之前，界面保持英语。可以随时在这里切换回来。",
+  Explorer: "资源管理器",
+  Extras: "其他",
+  "Extend the translucent treatment to the main pane behind sessions and editors.":
+    "把半透明效果延伸到会话和编辑器后面的主窗格。",
+  "Every shortcut the workspace handles, from the app menu and the key handler.":
+    "工作区处理的全部快捷键，包括应用菜单和按键处理。",
+  "Fill usage meters with what is left in each limit instead of what has been used.":
+    "用量条显示各项限额的剩余量，而不是已使用量。",
+  "Filter keybindings": "筛选快捷键",
+  "Find in conversation": "在对话中查找",
+  "Find in Files…": "在文件中查找…",
+  "Find MCP servers across providers and manage their connections.":
+    "跨提供方查找 MCP 服务器并管理它们的连接。",
+  Folders: "文件夹",
+  "Follow-up behavior": "后续消息行为",
+  "Format on save": "保存时格式化",
+  "Full width": "全宽",
+  "Full width keeps user prompts as a spanning card. Chat aligns them to the right with a max width, like a messaging app.":
+    "全宽把用户提示显示成横跨的卡片。聊天模式把它们靠右对齐并限制最大宽度，类似即时通讯应用。",
+  General: "通用",
+  "GitLab access token": "GitLab 访问令牌",
+  "GitLab URL": "GitLab URL",
+  "Go to File": "转到文件",
+  "Go to File…": "转到文件…",
+  Green: "绿色",
+  "Hide overview": "隐藏概览",
+  Hidden: "隐藏",
+  "High contrast": "高对比度",
+  History: "历史",
+  "How a conversation reads as it grows.": "对话变长后的阅读方式。",
+  "How MonoCode reaches you while you are looking somewhere else.":
+    "当你正在看别处时，MonoCode 如何提醒你。",
+  "How project navigation and workspace tabs behave.": "项目导航和工作区标签页的行为。",
+  "How strongly the hue tints the interface. Zero keeps it neutral.":
+    "色相给界面着色的强度。零表示保持中性。",
+  "How transcripts read, what the composer does with a follow-up, how files save, and how diffs open.":
+    "对话记录的阅读方式、输入框如何处理后续消息、文件如何保存，以及差异如何打开。",
+  "Hue and saturation tint every surface. Lightness only moves the dark theme.":
+    "色相和饱和度会给所有表面着色。亮度只影响深色主题。",
+  "Icon rail": "图标栏",
+  "Idle animation, and nothing else. Turn both off for a still workspace.":
+    "只有空闲动画。两项都关闭后，工作区保持静止。",
+  "Inbox, new items": "收件箱，有新内容",
+  "Interface scale": "界面缩放",
+  "Issues assigned to you, from the teams you pick.": "你所选团队中分配给你的议题。",
+  "Jira Cloud issues from the projects you pick.": "你所选项目中的 Jira Cloud 议题。",
+  "Keep archived conversations listed alongside the active ones.":
+    "把已归档对话和进行中的对话列在一起。",
+  "Keep idle agents ready": "保持空闲智能体就绪",
+  "Keep project navigation available as a compact icon rail, or hide the rail completely.":
+    "以紧凑图标栏保留项目导航，或完全隐藏项目栏。",
+  Keybindings: "快捷键",
+  Language: "语言",
+  Layout: "布局",
+  Light: "浅色",
+  "Linear API key": "Linear API 密钥",
+  "Main pane glass": "主窗格玻璃效果",
+  "Manage additional worktrees for each project.": "管理每个项目的额外工作树。",
+  "Manage Inbox services and notification preferences for each project.":
+    "管理收件箱服务，以及每个项目的通知偏好。",
+  "Mask account emails": "遮盖账户邮箱",
+  "MCP servers": "MCP 服务器",
+  "Menu bar icon": "菜单栏图标",
+  "Merge requests from GitLab.com or a self-managed instance.":
+    "来自 GitLab.com 或自建实例的合并请求。",
+  "Model controls": "模型控件",
+  "New layout": "新布局",
+  "New session": "新会话",
+  "New Tab": "新建标签页",
+  "New Terminal": "新建终端",
+  "New Window": "新建窗口",
+  "No matching settings": "没有匹配的设置",
+  "Not available on this platform": "当前平台不可用",
+  Notes: "笔记",
+  Notifications: "通知",
+  "Notify when a reminder is due, or when an agent finishes or needs input in another session or while MonoCode is in the background. Click the notification to open that session.":
+    "提醒到期时通知你；智能体在其他会话中完成或需要输入时，以及 MonoCode 位于后台时也会通知。点击通知可打开该会话。",
+  "Open files beside the active chat, or give each file a normal tab in the top bar. Top-bar files can still be combined into split panes.":
+    "在当前聊天旁边打开文件，或让每个文件成为顶栏中的普通标签页。顶栏中的文件仍可组成分屏。",
+  "Open Project…": "打开项目…",
+  "Open System Settings": "打开系统设置",
+  Orange: "橙色",
+  Overview: "概览",
+  "Pac-man and snake idle on the empty-session grid. Hover the band to take control of whichever is on screen. Turn this off to keep the pane still.":
+    "空会话网格上会闲置运行吃豆人和贪吃蛇。悬停该区域即可控制当前画面上的游戏。关闭后窗格保持静止。",
+  Page: "页面",
+  "Permission needed": "需要权限",
+  "Pin monos to the icon rail": "把 Mono 固定到图标栏",
+  Pink: "粉色",
+  "Project notifications": "项目通知",
+  "Project worktrees": "项目工作树",
+  "Projects and conversations you have archived.": "你已归档的项目和对话。",
+  "Provider accounts": "提供方账户",
+  "Provider accounts, agent CLIs MonoCode can drive, and the model new sessions start with.":
+    "提供方账户、MonoCode 可以驱动的智能体命令行，以及新会话使用的模型。",
+  "Provider defaults scope": "提供方默认范围",
+  Providers: "提供方",
+  "Pull requests and Boards work items from your ADO organization.":
+    "来自你的 ADO 组织的拉取请求和 Boards 工作项。",
+  "Pull requests, reviews, and issues, read through the GitHub CLI.":
+    "通过 GitHub CLI 读取拉取请求、审查和议题。",
+  "Queue follow-ups until the active turn finishes, or steer the active turn immediately.":
+    "把后续消息排队到当前回合结束，或立即引导当前回合。",
+  "Quick composer": "快速输入框",
+  Red: "红色",
+  "Remove account": "移除账户",
+  "Rename account": "重命名账户",
+  "Reset Mono": "重置 Mono",
+  "Reset to defaults": "恢复默认",
+  "Reset Zoom": "重置缩放",
+  "Response complete": "回复完成",
+  "Restore defaults": "恢复默认",
+  Forward: "前进",
+  "Reveal incoming bursts gradually. Turn this off to show received text immediately. This changes presentation timing, not processing speed.":
+    "逐步展示涌入的文本。关闭后立即显示收到的文本。这只改变呈现时机，不改变处理速度。",
+  "Run Prettier on supported files before writing. Off keeps the text you typed, including quote style.":
+    "写入前对支持的文件运行 Prettier。关闭后保留你输入的文本，包括引号风格。",
+  "Run the hooks configured in your settings.json files — PreToolUse command rewrites, blocks, notifications, and the rest — just as the Claude Code CLI would. Turn this off if a hook is misbehaving and you need the session back. Takes effect on the next turn.":
+    "运行 settings.json 中配置的钩子，包括 PreToolUse 命令改写、拦截、通知等，行为与 Claude Code CLI 一致。如果某个钩子异常、需要恢复会话，请关闭此项。下一回合生效。",
+  Saturation: "饱和度",
+  "Search conversations": "搜索会话",
+  "Search conversations...": "搜索会话...",
+  "Search MCP servers…": "搜索 MCP 服务器…",
+  "Search models": "搜索模型",
+  "Search settings": "搜索设置",
+  "Select a branch or worktree to continue…": "选择分支或工作树以继续…",
+  "Session background visibility": "会话背景可见性",
+  "Session visibility": "会话可见性",
+  Sessions: "会话",
+  Settings: "设置",
+  "Settings search results": "设置搜索结果",
+  "Short cues for project activity, finished turns, and available updates. Choose project notification categories in Inbox settings. Switches and Copy on a finished turn also play.":
+    "为项目活动、完成的回合和可用更新播放短提示音。在收件箱设置中选择项目通知类别。开关和复制已完成回合时也会播放。",
+  "Show archived in the sidebar": "在侧边栏显示已归档项",
+  "Show background on": "背景显示范围",
+  "Show excluded files": "显示已排除的文件",
+  "Show files and folders Git excludes, such as build output and dependencies, in the explorer.":
+    "在资源管理器中显示 Git 排除的文件和文件夹，例如构建产物和依赖。",
+  "Show model options beside the picker instead of inside the model menu.":
+    "把模型选项显示在选择器旁边，而不是放进模型菜单。",
+  "Show monos": "显示 Mono",
+  "Show on": "显示于",
+  "Show overview": "显示概览",
+  "Show remaining usage": "显示剩余用量",
+  Shortcuts: "快捷键",
+  "Sidebar opacity": "侧边栏不透明度",
+  Skills: "技能",
+  "Smooth text reveal": "平滑显示文本",
+  Sounds: "声音",
+  "Spell check and autocorrect prompts in session and mono composers. Turn this off to keep the text exactly as typed.":
+    "在会话和 Mono 输入框中进行拼写检查和自动更正。关闭后完全保留你输入的文本。",
+  Steer: "引导",
+  "Switch Model…": "切换模型…",
+  System: "跟随系统",
+  "System follows the OS appearance.": "跟随操作系统的外观。",
+  "Tab animations": "标签页动画",
+  Terminal: "终端",
+  "The build you are running, how MonoCode reaches you, and the panels it shows.":
+    "当前运行的版本、MonoCode 如何提醒你，以及它显示的面板。",
+  "The interface language. English remains available here.": "界面语言。英语仍可在这里选择。",
+  "The resident agent beside your tabs, and which projects have one.":
+    "标签页旁边的常驻智能体，以及哪些项目拥有它。",
+  Theme: "主题",
+  "Theme, tint, translucency, workspace layout, and conversation backgrounds.":
+    "主题、色调、半透明、工作区布局和对话背景。",
+  "Toggle Changes": "切换更改",
+  "Toggle Projects": "切换项目",
+  "Toggle Session Sidebar": "切换会话侧边栏",
+  "Toggle Sidebar": "切换侧边栏",
+  "Toggle Terminal": "切换终端",
+  Today: "今天",
+  Yesterday: "昨天",
+  "Last 7 days": "过去 7 天",
+  Older: "更早",
+  Project: "项目",
+  Transcript: "对话记录",
+  "Transcript layout": "对话记录布局",
+  Translucency: "半透明",
+  "Transparent window": "透明窗口",
+  "Type your answer": "输入你的回答",
+  Unified: "合并视图",
+  "Unsaved changes": "未保存的更改",
+  "Usage and privacy": "用量与隐私",
+  "Used for the composer send button and your message bubbles.":
+    "用于输入框的发送按钮和你的消息气泡。",
+  Version: "版本",
+  Violet: "紫色",
+  "What happens when you save a file in the workspace editor.":
+    "在工作区编辑器中保存文件时的行为。",
+  "What the composer does with what you type.": "输入框如何处理你输入的内容。",
+  "When a turn is running, the project mascot runs along the composer, bonks the scroll-to-latest button the first time, then jumps it, and sometimes grabs a coin.":
+    "回合进行时，项目吉祥物会沿着输入框跑动，第一次撞上“滚到最新”按钮，然后跳过它，有时还会捡起一枚硬币。",
+  "When the project rail is collapsed to icons, show each Mono at the top of the rail, above a divider, instead of inside the project picker.":
+    "项目栏折叠为图标时，把每个 Mono 显示在栏的顶部、分隔线之上，而不是放在项目选择器里。",
+  "When two or more chats are in flight, a card on the project rail lists them so you can jump across projects. Finished turns stay until you open that session.":
+    "当两个或更多聊天正在进行时，项目栏上的卡片会列出它们，方便你跨项目跳转。已完成的回合会保留到你打开该会话。",
+  "When you send, the new prompt sits at the top of the transcript and the reply grows into the space below. Turn this off to keep the classic layout, with the latest message resting on the composer.":
+    "发送后，新提示位于对话记录顶部，回复在下方展开。关闭后保持经典布局，最新消息停在输入框上方。",
+  "Where a turn's changes open when you go to read them.":
+    "查看某一回合的改动时，在哪里打开它们。",
+  "Work or Personal": "工作或个人",
+  "Working agents": "进行中的智能体",
+  Workspace: "工作区",
+  "Workspace theme": "工作区主题",
+  Worktrees: "工作树",
+  "Your machines": "你的机器",
+  "Your monos": "你的 Mono",
+  "Zoom In": "放大",
+  "Zoom Out": "缩小",
+  "Zoom the whole interface. You can also use Ctrl+=, Ctrl+-, and Ctrl+0 (Cmd on macOS).":
+    "缩放整个界面。也可以使用 Ctrl+=、Ctrl+- 和 Ctrl+0（macOS 上为 Cmd）。",
+  "A finished conversation keeps its agent CLI running for a few minutes, so a follow-up starts instantly. Each one can hold a few hundred MB of memory. Past this many, the one idle longest stops early; it resumes on your next message after a short restart. Choose None on a machine short on memory.":
+    "已完成的对话会让智能体命令行再保持运行几分钟，以便后续消息立即开始。每个进程可能占用几百 MB 内存。超过这个数量后，空闲最久的那个会提前停止；你的下一条消息会在短暂重启后恢复它。内存紧张的机器可以选择“无”。",
+  "A global markdown notebook on the project rail. Save a finished turn from the transcript, then mention it later with @note or add it to chat.":
+    "项目栏上的全局 Markdown 笔记本。从对话记录保存已完成的回合，之后用 @note 提及它，或把它加入聊天。",
+  "Agents of your own on the project rail. Each works on the projects you give it, remembers what matters and picks up habits it runs on its own. Turn this off to hide them.":
+    "项目栏上属于你的智能体。每个 Mono 处理你交给它的项目，记住重要的事，并养成它自行执行的习惯。关闭后隐藏它们。",
+  "Clear settings search": "清除设置搜索",
+  "File tabs": "文件标签页",
+  Changes: "更改",
+  Chat: "聊天",
+  Composer: "输入框",
+  File: "文件",
+  Filter: "筛选",
+  Global: "全局",
+  Hue: "色相",
+  Inbox: "收件箱",
+  Menu: "菜单",
+  Monos: "Mono",
+  Queue: "排队",
+  Search: "搜索",
+  "Search…": "搜索…",
+  View: "视图",
+  Views: "视图",
+  "Use the redesigned sidebar, project switcher, workspace tabs and right panel. Turn off to return to the classic layout.":
+    "使用重新设计的侧边栏、项目切换器、工作区标签页和右侧面板。关闭后回到经典布局。",
+};

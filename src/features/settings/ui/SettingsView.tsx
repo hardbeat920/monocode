@@ -21,6 +21,13 @@ import {
   X,
 } from "../../../shared/ui/icons";
 import {
+  isAppLocale,
+  LOCALE_OPTIONS,
+  saveLocale,
+  useLocale,
+  useTranslate,
+} from "../../../shared/i18n/locale";
+import {
   createContext,
   useCallback,
   useContext,
@@ -506,6 +513,7 @@ export function SettingsView({
   collapsedProjectRailMode,
   onCollapsedProjectRailModeChange,
 }: Props) {
+  const t = useTranslate();
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const [revealed, setRevealed] = useState<string | null>(anchor);
   const onCloseRef = useRef(onClose);
@@ -563,12 +571,12 @@ export function SettingsView({
           inTitleBar ? "pr-3 pl-1" : "px-3"
         }`}
       >
-        <span className="shrink-0 text-content/45">Settings</span>
+        <span className="shrink-0 text-content/45">{t("Settings")}</span>
         <span aria-hidden className="shrink-0 text-content/25">
           /
         </span>
         <span className="min-w-0 truncate text-content">
-          {settingsSectionLabel(section)}
+          {t(settingsSectionLabel(section))}
         </span>
       </div>
       <div
@@ -584,7 +592,7 @@ export function SettingsView({
             className="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-[12px] text-content/50 hover:bg-content/10 hover:text-content"
           >
             <RotateCcw className="size-3.5" strokeWidth={1.75} />
-            Restore defaults
+            {t("Restore defaults")}
           </button>
         ) : null}
         <SettingsSearch onReveal={onReveal} />
@@ -595,7 +603,7 @@ export function SettingsView({
   return (
     <div
       role="region"
-      aria-label="Settings"
+      aria-label={t("Settings")}
       data-app-settings
       className="flex min-h-0 min-w-0 flex-1 flex-col text-content"
     >
@@ -709,6 +717,8 @@ function SettingsSearch({
     loadInsetLayout,
     () => INSET_LAYOUT_DEFAULT,
   );
+  const t = useTranslate();
+  const locale = useLocale();
   const results = useMemo(
     () =>
       searchSettings(
@@ -717,8 +727,9 @@ function SettingsSearch({
         insetLayout
           ? INSET_LAYOUT_HIDDEN_SETTINGS
           : CLASSIC_LAYOUT_HIDDEN_SETTINGS,
+        locale,
       ),
-    [query, insetLayout],
+    [query, insetLayout, locale],
   );
   const open = query.trim().length > 0;
 
@@ -758,8 +769,8 @@ function SettingsSearch({
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="Search settings"
-          aria-label="Search settings"
+          placeholder={t("Search settings")}
+          aria-label={t("Search settings")}
           aria-expanded={open}
           aria-controls={listId}
           spellCheck={false}
@@ -769,7 +780,7 @@ function SettingsSearch({
         {query ? (
           <button
             type="button"
-            aria-label="Clear settings search"
+            aria-label={t("Clear settings search")}
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => {
               setQuery("");
@@ -794,12 +805,12 @@ function SettingsSearch({
           }}
           id={listId}
           role="listbox"
-          aria-label="Settings search results"
+          aria-label={t("Settings search results")}
           className="overflow-y-auto overscroll-contain p-1"
         >
           {results.length === 0 ? (
             <p className="px-2 py-1.5 text-[12px] text-content/45">
-              No matching settings
+              {t("No matching settings")}
             </p>
           ) : (
             results.map((result, index) => (
@@ -817,9 +828,9 @@ function SettingsSearch({
                     : "text-content hover:bg-content/5"
                 }`}
               >
-                <span className="min-w-0 flex-1 truncate">{result.label}</span>
+                <span className="min-w-0 flex-1 truncate">{t(result.label)}</span>
                 <span className="shrink-0 text-[11px] text-content/40">
-                  {result.settingId ? result.sectionLabel : "Page"}
+                  {result.settingId ? t(result.sectionLabel) : t("Page")}
                 </span>
               </button>
             ))
@@ -917,8 +928,33 @@ function GeneralPage({
     setCloseToTray(next);
   };
 
+  const t = useTranslate();
+  const locale = useLocale();
   return (
     <>
+      <Group
+        title="Language"
+        description="Choose the language MonoCode uses for its own interface. Conversations stay in the language you write."
+      >
+        <Row
+          id="language"
+          label="Language"
+          description="English stays the default until you choose another language. You can switch back here."
+        >
+          <Select
+            label="Language"
+            value={locale}
+            options={LOCALE_OPTIONS.map((item) => ({
+              value: item.id,
+              label: item.nativeLabel,
+            }))}
+            onChange={(value) => {
+              if (isAppLocale(value)) saveLocale(value);
+            }}
+          />
+        </Row>
+      </Group>
+
       <Group
         title="Alerts"
         description="How MonoCode reaches you while you are looking somewhere else."
@@ -944,7 +980,7 @@ function GeneralPage({
           ) : null}
           {notificationsEnabled && notificationPermission === "unsupported" ? (
             <span className="text-[12px] text-content/45">
-              Not available on this platform
+              {t("Not available on this platform")}
             </span>
           ) : null}
           <Toggle
@@ -2923,6 +2959,7 @@ function KeybindingShortcutEditor({
 }
 
 function KeybindingsPage() {
+  const t = useTranslate();
   const [query, setQuery] = useState("");
   const [overrides, setOverrides] = useState(loadKeybindingOverrides);
   useEffect(
@@ -2953,7 +2990,7 @@ function KeybindingsPage() {
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Filter"
+              placeholder={t("Filter")}
               aria-label="Filter keybindings"
               spellCheck={false}
               autoComplete="off"
@@ -3041,6 +3078,7 @@ function ProviderBinaryControl({
 }: {
   provider: ConfigurableBinaryProvider;
 }) {
+  const t = useTranslate();
   const root = useRef<HTMLSpanElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const editInput = useRef<HTMLInputElement>(null);
@@ -3229,7 +3267,7 @@ function ProviderBinaryControl({
                 ref={editInput}
                 type="text"
                 value={draft}
-                placeholder={inspection?.path ?? "Auto-detected path"}
+                placeholder={inspection?.path ?? t("Auto-detected path")}
                 disabled={working}
                 autoFocus
                 onChange={(event) => setDraft(event.target.value)}
@@ -3882,6 +3920,7 @@ function ProviderAccountEditor({
   onCancel: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
+  const t = useTranslate();
   const adding = !editor.accountId;
   return (
     <form
@@ -3900,7 +3939,7 @@ function ProviderAccountEditor({
             maxLength={48}
             value={editor.label}
             disabled={working}
-            placeholder="Work or Personal"
+            placeholder={t("Work or Personal")}
             aria-label={`${adding ? "New" : "Rename"} ${HARNESS_TITLE[editor.provider]} account`}
             onChange={(event) => onLabel(event.target.value)}
             className="h-full w-full bg-transparent px-2.5 text-[12px] text-content outline-none placeholder:text-content/25 disabled:opacity-50"
@@ -4365,14 +4404,17 @@ function PageHeader({
   title: string;
   description: string;
 }) {
+  const t = useTranslate();
+  const heading = t(title);
+  const summary = t(description);
   return (
     <header className="pb-4">
       <h1 className="text-[20px] font-semibold leading-tight text-content">
-        {title}
+        {heading}
       </h1>
-      {description ? (
+      {summary ? (
         <p className="mt-1.5 max-w-xl text-[13px] leading-relaxed text-content/45">
-          {description}
+          {summary}
         </p>
       ) : null}
     </header>
@@ -4397,6 +4439,9 @@ function Group({
   action?: ReactNode;
   children: ReactNode;
 }) {
+  const t = useTranslate();
+  const heading = typeof title === "string" ? t(title) : title;
+  const summary = description ? t(description) : "";
   const revealed = useContext(RevealedSetting);
   const flash = id != null && revealed === id;
 
@@ -4408,10 +4453,10 @@ function Group({
     >
       <div className="flex items-end gap-4 pb-2.5">
         <div className="min-w-0 flex-1">
-          <h2 className="text-[13px] font-semibold text-content">{title}</h2>
-          {description ? (
+          <h2 className="text-[13px] font-semibold text-content">{heading}</h2>
+          {summary ? (
             <p className="mt-1 text-[12px] leading-relaxed text-content/45">
-              {description}
+              {summary}
             </p>
           ) : null}
         </div>
@@ -4440,6 +4485,9 @@ function Row({
   description?: string;
   children?: ReactNode;
 }) {
+  const t = useTranslate();
+  const heading = typeof label === "string" ? t(label) : label;
+  const summary = description ? t(description) : "";
   const revealed = useContext(RevealedSetting);
   const flash = id != null && revealed === id;
 
@@ -4452,10 +4500,10 @@ function Row({
       }`}
     >
       <div className="min-w-0 flex-1">
-        <div className="text-[13px] font-medium text-content">{label}</div>
-        {description ? (
+        <div className="text-[13px] font-medium text-content">{heading}</div>
+        {summary ? (
           <p className="mt-1 text-[12px] leading-relaxed text-content/45">
-            {description}
+            {summary}
           </p>
         ) : null}
       </div>
@@ -4479,10 +4527,11 @@ function Segmented<T extends string>({
   onChange: (value: T) => void;
   optionIdPrefix?: string;
 }) {
+  const t = useTranslate();
   return (
     <div
       role="radiogroup"
-      aria-label={label}
+      aria-label={t(label)}
       className="inline-grid max-w-full shrink-0 gap-0.5 rounded-md border border-content/10 p-0.5 text-[12px]"
       style={{
         gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))`,
@@ -4506,7 +4555,7 @@ function Segmented<T extends string>({
               : "text-content/50 hover:text-content"
           }`}
         >
-          {option.label}
+          {t(option.label)}
         </button>
       ))}
     </div>
@@ -4532,6 +4581,7 @@ function Slider({
   onChange: (value: number) => void;
   disabled?: boolean;
 }) {
+  const t = useTranslate();
   return (
     <div
       className={`flex w-56 max-w-full items-center gap-3 ${disabled ? "opacity-40" : ""}`}
@@ -4545,7 +4595,7 @@ function Slider({
         aria-valuemin={min}
         aria-valuemax={max}
         aria-valuenow={value}
-        aria-label={label}
+        aria-label={t(label)}
         disabled={disabled}
         className="sidebar-opacity-slider min-w-0 flex-1 disabled:cursor-not-allowed"
         onChange={(event) => onChange(Number(event.target.value))}
@@ -4593,6 +4643,7 @@ function AccentColorPicker({
   value: string | null;
   onChange: (value: string | null) => void;
 }) {
+  const t = useTranslate();
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const colorIndex = value
@@ -4606,7 +4657,15 @@ function AccentColorPicker({
     <div ref={root} className="w-48">
       <ColorSwatchRow
         colors={["var(--color-content)", ...ACCENT_COLOR_PRESETS]}
-        labels={["Default", "Blue", "Violet", "Pink", "Red", "Orange", "Green"]}
+        labels={[
+          t("Default"),
+          t("Blue"),
+          t("Violet"),
+          t("Pink"),
+          t("Red"),
+          t("Orange"),
+          t("Green"),
+        ]}
         colorIndex={presetIndex >= 0 ? presetIndex : undefined}
         customColor={presetIndex < 0 ? (value ?? undefined) : undefined}
         customPickerOpen={open}
@@ -4641,9 +4700,10 @@ function AccentColorPicker({
 
 /** macOS keeps the decision after the first prompt; only System Settings can flip it. Windows toasts are governed by Settings > Notifications. */
 function NotificationsBlocked() {
+  const t = useTranslate();
   return (
     <span className="flex items-center gap-2 text-[12px] text-content/45">
-      Permission needed
+      {t("Permission needed")}
       {IS_MAC || IS_WIN ? (
         <button
           type="button"
@@ -4652,7 +4712,7 @@ function NotificationsBlocked() {
           }}
           className="rounded-md border border-content/10 px-2 py-1 text-content/70 hover:bg-content/10 hover:text-content"
         >
-          Open System Settings
+          {t("Open System Settings")}
         </button>
       ) : null}
     </span>
@@ -4670,11 +4730,12 @@ function Toggle({
   onChange: (on: boolean) => void;
   disabled?: boolean;
 }) {
+  const t = useTranslate();
   return (
     <button
       type="button"
       role="switch"
-      aria-label={label}
+      aria-label={t(label)}
       aria-checked={on}
       disabled={disabled}
       onClick={() => {
@@ -4708,6 +4769,7 @@ function Select({
   onChange: (value: string) => void;
   onOpen?: () => void;
 }) {
+  const t = useTranslate();
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(() =>
     Math.max(
@@ -4789,7 +4851,7 @@ function Select({
       <button
         type="button"
         ref={trigger}
-        aria-label={`${label}: ${selected?.label ?? value}`}
+        aria-label={`${t(label)}: ${selected ? t(selected.label) : value}`}
         aria-expanded={open}
         aria-haspopup="listbox"
         onClick={() => setOpen((prev) => !prev)}
@@ -4802,7 +4864,7 @@ function Select({
             </span>
           ) : null}
           <span className="min-w-0 truncate">
-            {selected ? selected.label : value}
+            {selected ? t(selected.label) : value}
           </span>
         </span>
         <ChevronDown
@@ -4823,7 +4885,7 @@ function Select({
             if (reason === "escape") trigger.current?.focus();
           }}
           role="listbox"
-          aria-label={label}
+          aria-label={t(label)}
           aria-activedescendant={activeId}
           tabIndex={-1}
           onKeyDown={onMenuKey}
@@ -4855,7 +4917,7 @@ function Select({
                     {option.icon}
                   </span>
                 ) : null}
-                <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                <span className="min-w-0 flex-1 truncate">{t(option.label)}</span>
                 {isSelected ? (
                   <Check className="size-3.5 shrink-0" strokeWidth={2.25} />
                 ) : null}

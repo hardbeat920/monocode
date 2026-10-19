@@ -78,6 +78,7 @@ import { ProjectMascot } from "../../features/projects/ui/ProjectMascot";
 import { RailAction, RailSearch } from "./RailAction";
 import { DevModeSlot, TabVisitNav } from "./TitleBar";
 import { SidebarUpdateFooter } from "./SidebarUpdate";
+import { useTranslate } from "../../shared/i18n/locale";
 import type { InstalledUpdate } from "../model/updateNotice";
 import { SettingsNav } from "./SettingsRail";
 import { Shimmer } from "../../shared/ui/Shimmer";
@@ -187,6 +188,7 @@ export function ProjectRail({
   onDismissUpdate,
   monos,
 }: Props) {
+  const t = useTranslate();
   const trafficLightsVisible = useTrafficLightsVisible();
   const resize = useDragResize({
     min: sharedWidth?.min ?? PROJECT_RAIL_WIDTH_MIN,
@@ -571,11 +573,11 @@ export function ProjectRail({
           <div className="flex shrink-0 flex-col gap-px p-2">
             <GithubStarPrompt />
             <RailAction
-              label="Settings"
+              label={t("Settings")}
               icon={Settings}
               onClick={onOpenSettings}
               shortcut={`${MOD},`}
-              ariaLabel={`Settings (${MOD},)`}
+              ariaLabel={`${t("Settings")} (${MOD},)`}
             />
           </div>
         </>

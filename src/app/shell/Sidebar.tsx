@@ -210,6 +210,7 @@ import {
 } from "../../features/sessions/model/sessionReminders";
 import { SessionsEmpty } from "../../features/sessions/ui/SessionsEmpty";
 import { SidebarUpdateFooter } from "./SidebarUpdate";
+import { translate, useTranslate } from "../../shared/i18n/locale";
 import { SourceControl } from "../../features/source-control/ui/SourceControl";
 import { GitHistoryGraph } from "../../features/source-control/ui/GitHistoryGraph";
 import { GithubStarPrompt } from "./GithubStarPrompt";
@@ -511,6 +512,7 @@ function SidebarComponent({
   monos,
   monoViewActive = false,
 }: Props) {
+  const t = useTranslate();
   const trafficLightsVisible = useTrafficLightsVisible();
   const remoteProject = isRemoteProjectPath(cwd);
   const tab: SidebarTabId = requestedTab;
@@ -2025,8 +2027,8 @@ function SidebarComponent({
       ref={searchInputRef}
       type="text"
       value={searchQuery}
-      placeholder="Search conversations..."
-      aria-label="Search conversations"
+      placeholder={t("Search conversations...")}
+      aria-label={t("Search conversations")}
       spellCheck={false}
       autoComplete="off"
       autoCorrect="off"
@@ -2103,7 +2105,7 @@ function SidebarComponent({
             <DiffStat additions={changeAdditions} deletions={changeDeletions} />
           ) : (
             <span className="block truncate leading-label">
-              {TAB_LABELS[itemId]}
+              {t(TAB_LABELS[itemId])}
             </span>
           )}
         </button>
@@ -2429,7 +2431,7 @@ function SidebarComponent({
   // Stands in for the date labels when no loose session is listed, so the
   // filter stays reachable.
   const sessionsLabel = inset ? (
-    <SidebarSectionLabel label="Sessions">
+    <SidebarSectionLabel label={t("Sessions")}>
       {sessionsFilterButton}
     </SidebarSectionLabel>
   ) : null;
@@ -2836,7 +2838,7 @@ function SidebarComponent({
                       return inset && index === firstGroupIndex ? (
                         <Fragment key={`${entry.kind}-sessions`}>
                           <li className="list-none">
-                            <SidebarSectionLabel label="Folders" />
+                            <SidebarSectionLabel label={t("Folders")} />
                           </li>
                           {groupItem}
                         </Fragment>
@@ -2999,8 +3001,8 @@ function SidebarComponent({
                                       type="button"
                                       data-no-drag
                                       data-tauri-drag-region="false"
-                                      title="New session"
-                                      aria-label="New session"
+                                      title={t("New session")}
+                                      aria-label={t("New session")}
                                       onClick={() =>
                                         onNewInFolder(entry.folder.id)
                                       }
@@ -3011,7 +3013,7 @@ function SidebarComponent({
                                         strokeWidth={1.75}
                                       />
                                       <span className="text-[13px] font-semibold leading-snug">
-                                        New session
+                                        {t("New session")}
                                       </span>
                                     </button>
                                   </div>
@@ -3025,7 +3027,7 @@ function SidebarComponent({
                       return inset && index === firstGroupIndex ? (
                         <Fragment key={entry.folder.id}>
                           <li className="list-none">
-                            <SidebarSectionLabel label="Folders" />
+                            <SidebarSectionLabel label={t("Folders")} />
                           </li>
                           {folderItem}
                         </Fragment>
@@ -3097,11 +3099,11 @@ function SidebarComponent({
               {/* Without a project, the inset header has no Settings menu. */}
               {(inset ? !inProject : !compactProjectRail) ? (
                 <RailAction
-                  label="Settings"
+                  label={t("Settings")}
                   icon={Settings}
                   onClick={onOpenSettings}
                   shortcut={`${MOD},`}
-                  ariaLabel={`Settings (${MOD},)`}
+                  ariaLabel={`${t("Settings")} (${MOD},)`}
                 />
               ) : null}
             </div>
@@ -3435,6 +3437,7 @@ function SidebarProjectPicker({
   automationsActive?: boolean;
   inboxUnseen?: boolean;
 }) {
+  const t = useTranslate();
   const [inboxMenu, setInboxMenu] = useState<{ x: number; y: number } | null>(
     null,
   );
@@ -3462,7 +3465,7 @@ function SidebarProjectPicker({
         ) : null}
         {onSearch ? (
           <IconButton
-            label={`Search (${MOD}K)`}
+            label={`${t("Search")} (${MOD}K)`}
             active={searchActive}
             onClick={onSearch}
           >
@@ -3471,7 +3474,7 @@ function SidebarProjectPicker({
         ) : null}
         {onOpenInbox ? (
           <IconButton
-            label={inboxUnseen ? "Inbox, new items" : "Inbox"}
+            label={inboxUnseen ? t("Inbox, new items") : t("Inbox")}
             active={inboxActive}
             onClick={onOpenInbox}
             onOpenContextMenu={(x, y) => {
@@ -3494,13 +3497,13 @@ function SidebarProjectPicker({
           </IconButton>
         ) : null}
         {onOpenNotes ? (
-          <IconButton label="Notes" active={notesActive} onClick={onOpenNotes}>
+          <IconButton label={t("Notes")} active={notesActive} onClick={onOpenNotes}>
             <StickyNote className="size-3.5" strokeWidth={1.75} />
           </IconButton>
         ) : null}
         {onOpenAutomations ? (
           <IconButton
-            label="Automations"
+            label={t("Automations")}
             active={automationsActive}
             onClick={onOpenAutomations}
           >
@@ -3591,6 +3594,7 @@ function CompactProjectRail({
   /** A Mono fills the main area: no workspace tab is the current one. */
   monoViewActive?: boolean;
 }) {
+  const t = useTranslate();
   const monosSnap = useSyncExternalStore(subscribeMonos, monosSnapshot);
   const monosPinned = useRailMonosPinned();
   const monoItems = useMemo(() => {
@@ -3723,7 +3727,7 @@ function CompactProjectRail({
                     ? "Sessions, new replies"
                     : TAB_LABELS[itemId]
               }
-              tipLabel={TAB_LABELS[itemId]}
+              tipLabel={t(TAB_LABELS[itemId])}
               diff={
                 itemId === "changes"
                   ? { additions: changeAdditions, deletions: changeDeletions }
@@ -3747,7 +3751,7 @@ function CompactProjectRail({
           onClick={action(searchActive, onSearch)}
         />
         <CompactRailAction
-          label={inboxUnseen ? "Inbox, new items" : "Inbox"}
+          label={inboxUnseen ? t("Inbox, new items") : t("Inbox")}
           icon={Inbox}
           active={inboxActive}
           dot={inboxUnseen}
@@ -3762,14 +3766,14 @@ function CompactProjectRail({
         />
         {onOpenNotes ? (
           <CompactRailAction
-            label="Notes"
+            label={t("Notes")}
             icon={StickyNote}
             active={notesActive}
             onClick={action(notesActive, onOpenNotes)}
           />
         ) : null}
         <CompactRailAction
-          label="Automations"
+          label={t("Automations")}
           icon={Zap}
           active={automationsActive}
           onClick={action(automationsActive, onOpenAutomations)}
@@ -3778,7 +3782,7 @@ function CompactProjectRail({
       <div className="min-h-2 flex-1" />
       <div className="flex w-full flex-col items-center gap-1 py-1.5">
         <CompactRailAction
-          label="Settings"
+          label={t("Settings")}
           shortcut={`${MOD},`}
           tooltip={false}
           icon={Settings}
@@ -4159,12 +4163,13 @@ function RightPanel({
   onTabChange: (tab: RightPanelTab) => void;
   children: ReactNode;
 }) {
+  const t = useTranslate();
   const sortable = useAnimatedReorder(tabs, onReorder);
   return (
     <div className="flex h-full min-h-0 w-full flex-col">
       <div
         role="tablist"
-        aria-label="Project"
+        aria-label={t("Project")}
         className="flex h-9 shrink-0 items-center gap-px border-b border-stroke px-2"
       >
         {tabs.map((itemId) => {
@@ -4200,7 +4205,7 @@ function RightPanel({
                   />
                 ) : (
                   <span className="block truncate leading-label">
-                    {TAB_LABELS[itemId]}
+                    {t(TAB_LABELS[itemId])}
                   </span>
                 )}
               </button>
@@ -4220,10 +4225,10 @@ function sessionAgeLabel(updatedAt: number, now: number): string {
   const today = new Date(now);
   today.setHours(0, 0, 0, 0);
   const startOfToday = today.getTime();
-  if (updatedAt >= startOfToday) return "Today";
-  if (updatedAt >= startOfToday - DAY_MS) return "Yesterday";
-  if (updatedAt >= startOfToday - 6 * DAY_MS) return "Last 7 days";
-  return "Older";
+  if (updatedAt >= startOfToday) return translate("Today");
+  if (updatedAt >= startOfToday - DAY_MS) return translate("Yesterday");
+  if (updatedAt >= startOfToday - 6 * DAY_MS) return translate("Last 7 days");
+  return translate("Older");
 }
 
 /** The session among `ids` that started `id` through the app CLI, if any. */
@@ -4313,11 +4318,12 @@ function SidebarNavList({
   search?: { active: boolean; onClick: () => void };
   items: readonly (SidebarNavItem | false | undefined)[];
 }) {
+  const t = useTranslate();
   const shown = items.filter((item): item is SidebarNavItem => !!item);
   if (!search && !shown.length) return null;
   return (
     <nav
-      aria-label="Views"
+      aria-label={t("Views")}
       className="flex shrink-0 flex-col gap-px px-2 pb-3 pt-1"
     >
       {/* The project rail's search and rows, so the two layouts read the
@@ -4330,7 +4336,7 @@ function SidebarNavList({
             onClick={search.onClick}
             active={search.active}
             shortcut={`${MOD}K`}
-            ariaLabel={`Search (${MOD}K)`}
+            ariaLabel={`${t("Search")} (${MOD}K)`}
           />
           <div className="mt-0.5" />
         </>
@@ -4361,6 +4367,7 @@ function WorkspaceTitleActions({
   onSearch?: () => void;
   onNew?: () => void;
 }) {
+  const t = useTranslate();
   if (!onSearch && !onNew) return null;
   return (
     <div
@@ -4368,12 +4375,12 @@ function WorkspaceTitleActions({
       data-tauri-drag-region="false"
     >
       {onSearch ? (
-        <IconButton label={`Go to File (${MOD}P)`} onClick={onSearch}>
+        <IconButton label={`${t("Go to File")} (${MOD}P)`} onClick={onSearch}>
           <Search className="size-3.5" strokeWidth={1.75} />
         </IconButton>
       ) : null}
       {onNew ? (
-        <IconButton label={`New session (${MOD}T)`} onClick={onNew}>
+        <IconButton label={`${t("New session")} (${MOD}T)`} onClick={onNew}>
           <Plus className="size-3.5" strokeWidth={1.75} />
         </IconButton>
       ) : null}
