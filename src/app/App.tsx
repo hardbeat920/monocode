@@ -14014,7 +14014,11 @@ function Workspace({
   const usageFooter =
     chromeSurfaceOpen && !(insetLayout && activeAppView) ? null : monoCovers ? (
       monoViewSession ? (
-        <MonoUsageFooter session={monoViewSession} sessions={sessions} />
+        <MonoUsageFooter
+          session={monoViewSession}
+          sessions={sessions}
+          inset={insetLayout}
+        />
       ) : null
     ) : (
       <UsageFooter

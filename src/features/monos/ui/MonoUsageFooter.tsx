@@ -46,9 +46,11 @@ function isRateLimitProvider(harness: HarnessId): harness is RateLimitProvider {
 export function MonoUsageFooter({
   session,
   sessions,
+  inset = false,
 }: {
   session: Session;
   sessions?: readonly Session[];
+  inset?: boolean;
 }) {
   const opencodeLimits = useCachedRateLimits("opencode");
   const [, setAccountsVersion] = useState(0);
@@ -213,7 +215,11 @@ export function MonoUsageFooter({
   return (
     <footer
       aria-label="Mono provider usage"
-      className="flex h-6 shrink-0 items-center gap-1.5 overflow-x-auto border-t border-stroke px-2.5 text-[10px] text-content/55"
+      className={`flex shrink-0 items-center gap-1.5 overflow-x-auto ${
+        inset
+          ? "inset-footer mr-1.5 h-[30px] pb-0.5 text-[11px] text-content/55"
+          : "h-6 border-t border-stroke px-2.5 text-[10px] text-content/55"
+      }`}
     >
       {[...entries.values()].map((entry) =>
         entry.provider ? (

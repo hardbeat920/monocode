@@ -316,6 +316,34 @@ it("shows deduplicated usage for Mono-owned providers and excludes unrelated ses
   expect(container.textContent).not.toContain("Pi · usage unavailable");
 });
 
+it("uses inset footer geometry only when the Mono is inset", async () => {
+  const mono = newSession("codex", "/repo", "codex:gpt-5", "auto");
+
+  await act(async () =>
+    root.render(createElement(MonoUsageFooter, { session: mono, inset: true })),
+  );
+
+  const insetFooter = container.querySelector("footer");
+  expect(insetFooter?.classList).toContain("inset-footer");
+  expect(insetFooter?.classList).toContain("mr-1.5");
+  expect(insetFooter?.classList).toContain("h-[30px]");
+  expect(insetFooter?.classList).toContain("pb-0.5");
+  expect(insetFooter?.classList).not.toContain("border-t");
+  expect(
+    container.querySelector('button[aria-label^="Codex usage details"]'),
+  ).not.toBeNull();
+
+  await act(async () =>
+    root.render(createElement(MonoUsageFooter, { session: mono })),
+  );
+
+  const classicFooter = container.querySelector("footer");
+  expect(classicFooter?.classList).toContain("h-6");
+  expect(classicFooter?.classList).toContain("border-t");
+  expect(classicFooter?.classList).toContain("px-2.5");
+  expect(classicFooter?.classList).not.toContain("inset-footer");
+});
+
 it("uses Mono project selection for unpinned children, preserving pinned and legacy accounts", async () => {
   const monoCwd = "/mono/project";
   const childCwd = "/child/project";
