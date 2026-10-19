@@ -14,6 +14,11 @@ import {
   shortcutTokens,
 } from "../../quick-composer/model/quickComposerShortcut";
 import { readFlag, writeFlag } from "./storageFlags";
+import {
+  loadLocale,
+  translate,
+  type AppLocale,
+} from "../../../shared/i18n/locale";
 
 const SECTION_KEY = "monocode.settingsSection";
 
@@ -56,7 +61,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     label: "General",
     description:
       "The build you are running, how MonoCode reaches you, and the panels it shows.",
-    keywords: "version update sounds notifications notes rail",
+    keywords: "version update sounds notifications notes rail language locale chinese 中文",
   },
   {
     id: "connections",
@@ -215,6 +220,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     section: "general",
     label: "Version",
     keywords: "update upgrade release what's new build changelog",
+  },
+  {
+    id: "language",
+    section: "general",
+    label: "Language",
+    keywords: "locale chinese 中文 语言 interface translation",
   },
   {
     id: "sounds",
@@ -535,6 +546,28 @@ function matchScore(
   return null;
 }
 
+/** English matching stays as it is. Another locale can also match its translation. */
+function matchLocalized(
+  needle: string,
+  locale: AppLocale,
+  label: string,
+  keywords?: string,
+  description?: string,
+): number | null {
+  const scores = [matchScore(needle, label, keywords)];
+  if (locale !== "en") {
+    scores.push(matchScore(needle, translate(label, undefined, locale)));
+    if (description) {
+      scores.push(
+        matchScore(needle, translate(description, undefined, locale)),
+      );
+    }
+  }
+  const found = scores.filter((score): score is number => score != null);
+  if (found.length === 0) return null;
+  return Math.min(...found);
+}
+
 const NO_HIDDEN_SETTINGS: ReadonlySet<string> = new Set();
 
 /** Appearance rows that only one layout shows: the inset workspace drops the
@@ -558,6 +591,7 @@ export function searchSettings(
   query: string,
   limit = 8,
   hidden: ReadonlySet<string> = NO_HIDDEN_SETTINGS,
+  locale: AppLocale = loadLocale(),
 ): SettingsSearchResult[] {
   const needle = query.trim().toLowerCase();
   if (!needle) return [];
@@ -565,7 +599,12 @@ export function searchSettings(
 
   for (const entry of SETTINGS_INDEX) {
     if (hidden.has(entry.id)) continue;
-    const score = matchScore(needle, entry.label, entry.keywords);
+    const score = matchLocalized(
+      needle,
+      locale,
+      entry.label,
+      entry.keywords,
+    );
     if (score == null) continue;
     scored.push({
       score,
@@ -579,10 +618,12 @@ export function searchSettings(
   }
 
   for (const section of SETTINGS_SECTIONS) {
-    const score = matchScore(
+    const score = matchLocalized(
       needle,
+      locale,
       section.label,
       `${section.description} ${section.keywords ?? ""}`,
+      section.description,
     );
     if (score == null) continue;
     scored.push({

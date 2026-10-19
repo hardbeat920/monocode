@@ -37,6 +37,7 @@ import {
   nativeClipboardAttachments,
 } from "../../../platform/tauri/clipboard";
 import { useFileDrop } from "../hooks/useFileDrop";
+import { useTranslate } from "../../../shared/i18n/locale";
 import type { ContextUsage } from "../model/contextUsage";
 import {
   loadProjectFiles,
@@ -419,6 +420,7 @@ export function Composer({
   onEditingLastTurnChange,
   children,
 }: Props) {
+  const t = useTranslate();
   const ref = useRef<HTMLTextAreaElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const plusRef = useRef<HTMLDivElement>(null);
@@ -2114,17 +2116,17 @@ export function Composer({
               defaultValue={mountDraft}
               placeholder={
                 worktreeRemoved
-                  ? "Select a branch or worktree to continue…"
+                  ? t("Select a branch or worktree to continue…")
                   : inboxCard
-                    ? "Add a note, or send to start…"
+                    ? t("Add a note, or send to start…")
                     : noteCard
-                      ? "Add a message, or send…"
+                      ? t("Add a message, or send…")
                       : handoffCard
-                        ? "Add context, or send to continue…"
+                        ? t("Add context, or send to continue…")
                         : (placeholder ??
-                          (shell
-                            ? "Ask, build, / for commands, @ for references... "
-                            : "Ask, build, / for commands, @ for references... "))
+                          t(
+                            "Ask, build, / for commands, @ for references...",
+                          ))
               }
               aria-label={inputAriaLabel}
               disabled={disabled}

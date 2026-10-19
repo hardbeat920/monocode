@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A **简体中文** interface. Settings → General → Language switches the shell, settings, menus, title bar and placeholders to Simplified Chinese and remembers the choice on this machine. Conversations, file names and replies keep their original text.
+
 ## [0.15.0] - 2026-10-18
 
 ### Added

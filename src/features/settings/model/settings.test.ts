@@ -706,4 +706,21 @@ describe("settings search", () => {
   it("caps the result list", () => {
     expect(searchSettings("e", 4)).toHaveLength(4);
   });
+
+  it("matches a simplified Chinese label and keeps the English result", () => {
+    expect(searchSettings("外观", 8, undefined, "zh-CN")).toContainEqual(
+      expect.objectContaining({
+        section: "appearance",
+        settingId: null,
+        label: "Appearance",
+      }),
+    );
+    expect(searchSettings("语言", 8, undefined, "zh-CN")).toContainEqual(
+      expect.objectContaining({
+        section: "general",
+        settingId: "language",
+        label: "Language",
+      }),
+    );
+  });
 });

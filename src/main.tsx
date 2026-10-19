@@ -21,6 +21,7 @@ import { setHomeDir } from "./shared/lib/paths";
 import { installNativeContextMenuGuard } from "./shared/lib/nativeContextMenu";
 import { consumeInstalledUpdate } from "./app/model/updateNotice";
 import { initializeProviderBinaryPaths } from "./features/providers/model/providerBinaryPaths";
+import { applyDocumentLocale } from "./shared/i18n/locale";
 // Lets file commands reach a connected machine for `remote://` paths.
 import "./features/connections/model/remoteCommands";
 import "./styles/index.css";
@@ -30,6 +31,7 @@ performance.mark("monocode:bootstrap");
 const appLoaded = import("./app/App");
 
 initAppearance();
+applyDocumentLocale();
 initSounds();
 installNativeContextMenuGuard();
 // Prime the real home directory before the first render so every `~/` file
