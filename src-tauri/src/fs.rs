@@ -637,7 +637,7 @@ pub struct ProjectFile {
 /// index-backed); otherwise a bounded walk that never descends into vendor dirs.
 #[tauri::command]
 pub async fn list_project_files(cwd: String) -> Result<Vec<ProjectFile>, String> {
-    tauri::async_runtime::spawn_blocking(move || list_project_files_sync(&cwd))
+    crate::background_work::read(move || list_project_files_sync(&cwd))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -840,7 +840,7 @@ pub struct GitDiffStats {
 /// plus untracked (gitignore-aware) files counted as additions.
 #[tauri::command]
 pub async fn git_diff_stats(cwd: String) -> Result<GitDiffStats, String> {
-    tauri::async_runtime::spawn_blocking(move || git_diff_stats_for(&expand_home(&cwd)))
+    crate::background_work::read(move || git_diff_stats_for(&expand_home(&cwd)))
         .await
         .map_err(|e| e.to_string())
 }
@@ -877,7 +877,7 @@ pub struct GitDiffIndex {
 /// Changed files in the opened folder, with per-file line counts and status.
 #[tauri::command]
 pub async fn git_diff_index(cwd: String) -> Result<GitDiffIndex, String> {
-    tauri::async_runtime::spawn_blocking(move || git_diff_index_for(&expand_home(&cwd)))
+    crate::background_work::read(move || git_diff_index_for(&expand_home(&cwd)))
         .await
         .map_err(|e| e.to_string())
 }
@@ -885,7 +885,7 @@ pub async fn git_diff_index(cwd: String) -> Result<GitDiffIndex, String> {
 /// Changed files and counts without branch/upstream synchronization metadata.
 #[tauri::command]
 pub async fn git_diff_files(cwd: String) -> Result<GitDiffIndex, String> {
-    tauri::async_runtime::spawn_blocking(move || git_diff_files_for(&expand_home(&cwd)))
+    crate::background_work::read(move || git_diff_files_for(&expand_home(&cwd)))
         .await
         .map_err(|e| e.to_string())
 }
@@ -910,11 +910,9 @@ pub async fn git_file_diff(
     relative: String,
     staged: bool,
 ) -> Result<GitFileDiff, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        git_file_diff_for(&expand_home(&cwd), &relative, staged)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    crate::background_work::read(move || git_file_diff_for(&expand_home(&cwd), &relative, staged))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 const GIT_HISTORY_DEFAULT: u32 = 200;
@@ -951,7 +949,7 @@ pub struct GitHistory {
 /// branch. Newest first, with parent SHAs for the graph.
 #[tauri::command]
 pub async fn git_history(cwd: String, limit: Option<u32>) -> Result<GitHistory, String> {
-    tauri::async_runtime::spawn_blocking(move || git_history_for(&expand_home(&cwd), limit))
+    crate::background_work::read(move || git_history_for(&expand_home(&cwd), limit))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -959,7 +957,7 @@ pub async fn git_history(cwd: String, limit: Option<u32>) -> Result<GitHistory, 
 /// Files changed in one commit (first parent / root).
 #[tauri::command]
 pub async fn git_commit_files(cwd: String, sha: String) -> Result<Vec<GitChangedFile>, String> {
-    tauri::async_runtime::spawn_blocking(move || git_commit_files_for(&expand_home(&cwd), &sha))
+    crate::background_work::read(move || git_commit_files_for(&expand_home(&cwd), &sha))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -971,7 +969,7 @@ pub async fn git_commit_file_diff(
     sha: String,
     relative: String,
 ) -> Result<GitFileDiff, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::background_work::read(move || {
         git_commit_file_diff_for(&expand_home(&cwd), &sha, &relative)
     })
     .await
@@ -4560,6 +4558,7 @@ pub(crate) fn resolve_repo_path(root: &Path, relative: &str) -> Result<String, S
 /// cached search path finds it without waiting on the login shell.
 fn git_cmd() -> Command {
     let mut cmd = Command::new("git");
+    crate::background_work::configure_child(&mut cmd);
     crate::hide_window_console(&mut cmd);
     cmd.env("PATH", crate::harness::cached_gui_search_path());
     cmd
@@ -5956,6 +5955,43 @@ fn read_text_file_sync(path: &str) -> Result<String, String> {
     String::from_utf8(bytes).map_err(|_| "File is not valid UTF-8.".into())
 }
 
+/// A path a paired phone named under a project's working copy, refused when it
+/// resolves outside it, through `..` or a symlink alike.
+fn inside_root(root: &str, relative: &str) -> Result<PathBuf, String> {
+    let root = expand_home(root)
+        .canonicalize()
+        .map_err(|_| "Project folder is unavailable".to_string())?;
+    let path = root
+        .join(relative)
+        .canonicalize()
+        .map_err(|_| "No such file or folder".to_string())?;
+    if !path.starts_with(&root) {
+        return Err("That is outside the project".into());
+    }
+    Ok(path)
+}
+
+/// A folder in a project's working copy, for the phone's file browser. Hides
+/// the repository's own `.git`.
+#[tauri::command(async)]
+pub fn mobile_list_dir(root: String, relative: String) -> Result<Vec<DirEntry>, String> {
+    let dir = inside_root(&root, &relative)?;
+    Ok(list_dir_sync(&dir)?
+        .into_iter()
+        .filter(|entry| entry.name != ".git")
+        .collect())
+}
+
+/// A text file in a project's working copy, for the phone's file browser.
+#[tauri::command]
+pub async fn mobile_read_text_file(root: String, relative: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        read_text_file_sync(&path_to_js(&inside_root(&root, &relative)?))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Atomically replace a text file from a temporary file in the same directory.
 #[tauri::command]
 pub async fn write_text_file(path: String, content: String) -> Result<(), String> {
@@ -7017,6 +7053,25 @@ mod tests {
         ignored_names(&list_dir_sync(dir).unwrap())
             .iter()
             .any(|n| n == name)
+    }
+
+    #[test]
+    fn inside_root_refuses_paths_that_leave_the_project() {
+        let dir = tmp("mobile-inside-root");
+        let project = dir.0.join("project");
+        std::fs::create_dir_all(project.join("src")).unwrap();
+        std::fs::write(project.join("src/main.rs"), "fn main() {}").unwrap();
+        std::fs::write(dir.0.join("secret"), "").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(dir.0.join("secret"), project.join("link")).unwrap();
+        let root = project.to_string_lossy();
+
+        assert!(inside_root(&root, "src/main.rs").is_ok());
+        assert!(inside_root(&root, "").is_ok());
+        assert!(inside_root(&root, "../secret").is_err());
+        assert!(inside_root(&root, &dir.0.join("secret").to_string_lossy()).is_err());
+        #[cfg(unix)]
+        assert!(inside_root(&root, "link").is_err());
     }
 
     #[test]

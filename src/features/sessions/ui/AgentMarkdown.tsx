@@ -7,6 +7,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -27,7 +28,10 @@ import {
   type Components,
 } from "streamdown";
 import type { Pluggable, PluggableList } from "unified";
-import { ExplorerMenu, type ExplorerMenuItem } from "../../files/ui/ExplorerMenu";
+import {
+  ExplorerMenu,
+  type ExplorerMenuItem,
+} from "../../files/ui/ExplorerMenu";
 import { FileActionError } from "../../files/ui/FileActionError";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
 import { boundedCode } from "../../files/editor/codeHighlightPlugin";
@@ -45,7 +49,10 @@ import { useColorScheme } from "../../../shared/hooks/useColorScheme";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { copyText } from "../../../platform/tauri/clipboard";
 import { openPathWithDefaultApp, revealPath } from "../../../platform/tauri/fs";
-import { INBOX_MEDIA_PREFIXES, isInboxMediaUrl } from "../../inbox/model/inboxMedia";
+import {
+  INBOX_MEDIA_PREFIXES,
+  isInboxMediaUrl,
+} from "../../inbox/model/inboxMedia";
 import { isNoteImagePath } from "../../notes";
 import { IS_MAC, IS_WIN } from "../../../platform/tauri/platform";
 import { InboxMedia } from "../../inbox/ui/InboxMedia";
@@ -65,8 +72,14 @@ import {
   useWordFading,
   WORD_FADE_MS,
 } from "./wordFade";
-import { isFenceBlock, parseStreamingMarkdown } from "./streamingMarkdown";
+import { parseStreamingMarkdown } from "./streamingMarkdown";
 import { HighlightedCodeBlock } from "./HighlightedCodeBlock";
+import { TranscriptPacing, TranscriptVisibility } from "./transcriptVisibility";
+import { usePacedReveal } from "../../settings/model/displayPrefs";
+import {
+  useStreamPresentation,
+  type StreamMeasurement,
+} from "../model/streamingPerformance";
 
 const MERMAID_BASE_CONFIG = {
   startOnLoad: false,
@@ -167,7 +180,6 @@ const FileOpenContext = createContext<{
 const RemoteMediaContext = createContext(false);
 /** Show local images and videos a reply links to, rather than the links. */
 const LocalMediaContext = createContext(false);
-const MarkdownFadeContext = createContext(false);
 
 const REVEAL_LABEL = IS_MAC
   ? "Reveal in Finder"
@@ -262,7 +274,9 @@ const LANGUAGE_FILE_NAMES: Record<string, string> = {
 const PLAINTEXT_FENCE_LANGUAGES = new Set(["text", "plaintext", "txt", ""]);
 
 function highlightLanguageFor(language: string): string {
-  return PLAINTEXT_FENCE_LANGUAGES.has(language.toLowerCase()) ? "js" : language;
+  return PLAINTEXT_FENCE_LANGUAGES.has(language.toLowerCase())
+    ? "js"
+    : language;
 }
 
 type MarkdownLinkProps = ComponentProps<"a"> & { node?: unknown };
@@ -595,15 +609,20 @@ const MARKDOWN_COMPONENTS = {
  * but put it on a real block box; index.css zeroes its margins so spacing still
  * comes from the block inside it.
  */
+const MarkdownCommit = createContext<
+  ((index: number, content: string) => void) | null
+>(null);
+
 function DirectionalBlock({ dir, ...props }: BlockProps) {
-  const fading = useContext(MarkdownFadeContext);
-  // Streamdown retains a parsed prose tree after the fade plugin changes.
-  // Remount prose to remove its word spans, but keep literal fences mounted:
-  // rebuilding all their highlighted tokens at fade-end causes a long frame.
-  const fence = isFenceBlock(props.content);
-  const block = (
-    <Block key={fence ? "code" : fading ? "fade" : "plain"} {...props} />
-  );
+  const committed = useContext(MarkdownCommit);
+  useLayoutEffect(() => {
+    committed?.(props.index, props.content);
+  }, [committed, props.index, props.content]);
+  // The word-fade plugin marks changed ancestors for Streamdown's memoized
+  // elements, so removing its spans can reconcile the existing block.
+  // A fade-end key change also tears down nested code/media in lists and can
+  // briefly collapse the reply, clamping the transcript's scroll position.
+  const block = <Block {...props} />;
   return dir ? (
     <div dir={dir} className="agent-markdown-block">
       {block}
@@ -615,6 +634,7 @@ function DirectionalBlock({ dir, ...props }: BlockProps) {
 
 export const AgentMarkdown = memo(function AgentMarkdown({
   text,
+  measurement,
   streaming,
   revealOnMount,
   className,
@@ -626,6 +646,7 @@ export const AgentMarkdown = memo(function AgentMarkdown({
   documentPath,
 }: {
   text: string;
+  measurement?: StreamMeasurement;
   streaming?: boolean;
   /** Pace newly arrived output even if it finished before its first paint. */
   revealOnMount?: boolean;
@@ -671,10 +692,45 @@ export const AgentMarkdown = memo(function AgentMarkdown({
     [cwd],
   );
   const remoteMedia = !!allowRemoteMedia;
-  // Read once: switching reveal hooks while mounted would break hook order.
-  const [pacedReveal] = useState(pacedRevealPreferred);
-  const useReveal = pacedReveal ? usePacedText : useStreamedText;
-  const paced = useReveal(text, !!streaming, revealOnMount);
+  const visible = useContext(TranscriptVisibility);
+  const pace = useContext(TranscriptPacing);
+  const pacingEnabled = usePacedReveal();
+  const pacedReveal = pace && pacingEnabled && pacedRevealPreferred();
+  // Both hooks keep their identity when the preference changes during a reply.
+  const smooth = usePacedText(
+    text,
+    !!streaming,
+    revealOnMount,
+    visible && pacedReveal,
+  );
+  const immediate = useStreamedText(
+    text,
+    !!streaming,
+    revealOnMount,
+    visible && !pacedReveal,
+  );
+  const paced = pacedReveal ? smooth : immediate;
+  const presented = useStreamPresentation(measurement, text.length, visible);
+  // Only instrumentation needs the expected block list outside Streamdown.
+  // Feed that same list to its parser so measuring never doubles the parsing.
+  const measuredBlocks = useMemo(
+    () => (measurement ? parseStreamingMarkdown(paced.text) : undefined),
+    [measurement, paced.text],
+  );
+  const parseBlocks = useCallback(
+    (source: string) => measuredBlocks ?? parseStreamingMarkdown(source),
+    [measuredBlocks],
+  );
+  const blockCommitted = useMemo(() => {
+    if (!measuredBlocks) return null;
+    const committed = new Set<number>();
+    return (index: number, content: string) => {
+      if (measuredBlocks[index] !== content) return;
+      committed.add(index);
+      if (committed.size === measuredBlocks.length)
+        presented(paced.text.length);
+    };
+  }, [measuredBlocks, paced.text.length, presented]);
   const cadence = useCadenceFade(paced.text);
   const fadeMs = pacedReveal ? WORD_FADE_MS : cadence.durationMs;
   const fading = useWordFading(!!streaming || paced.revealing, fadeMs);
@@ -750,9 +806,9 @@ export const AgentMarkdown = memo(function AgentMarkdown({
       <LocalMediaContext.Provider value={!!localMedia}>
         <FileOpenContext.Provider value={fileOpen}>
           <>
-            <MarkdownFadeContext.Provider value={fading}>
-              {/* Streamdown takes no style; a contents box passes the fade timing down. */}
-              <div className="contents" style={fadeStyle}>
+            {/* Streamdown takes no style; a contents box passes the fade timing down. */}
+            <div className="contents" style={fadeStyle}>
+              <MarkdownCommit.Provider value={blockCommitted}>
                 <Streamdown
                   BlockComponent={DirectionalBlock}
                   className={`agent-markdown min-w-0 font-sans text-sm leading-6 ${fading ? "word-fading" : ""} ${className ?? ""}`}
@@ -761,15 +817,15 @@ export const AgentMarkdown = memo(function AgentMarkdown({
                   dir="auto"
                   isAnimating={!!streaming || paced.revealing}
                   parseIncompleteMarkdown={false}
-                  parseMarkdownIntoBlocksFn={parseStreamingMarkdown}
+                  parseMarkdownIntoBlocksFn={parseBlocks}
                   plugins={MARKDOWN_PLUGINS}
                   remarkPlugins={remarkPlugins}
                   rehypePlugins={rehypePlugins}
                 >
                   {paced.text}
                 </Streamdown>
-              </div>
-            </MarkdownFadeContext.Provider>
+              </MarkdownCommit.Provider>
+            </div>
             {fileMenu ? (
               <ExplorerMenu
                 x={fileMenu.x}

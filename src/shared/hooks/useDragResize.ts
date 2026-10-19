@@ -6,6 +6,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { suppressTextSelection } from "../lib/drag";
+import { beginLayoutTransition } from "../lib/layoutTransition";
 
 type Options = {
   min: number;
@@ -80,6 +81,7 @@ export function useDragResize({
     const previousCursor = document.body.style.cursor;
     document.body.style.cursor = "col-resize";
     document.documentElement.classList.add("is-resizing");
+    const endTransition = beginLayoutTransition();
 
     // Write once per frame: each width change lays out the panes beside it.
     let frame = 0;
@@ -91,9 +93,7 @@ export function useDragResize({
       frame = requestAnimationFrame(() => {
         frame = 0;
         apply(
-          clamp(
-            startW + (pendingX - startX) * (direction === "left" ? -1 : 1),
-          ),
+          clamp(startW + (pendingX - startX) * (direction === "left" ? -1 : 1)),
         );
       });
     };
@@ -114,9 +114,8 @@ export function useDragResize({
       } catch {
         /* already released */
       }
-      commit(
-        startW + (pendingX - startX) * (direction === "left" ? -1 : 1),
-      );
+      commit(startW + (pendingX - startX) * (direction === "left" ? -1 : 1));
+      endTransition();
     };
 
     const onUp = (ev: PointerEvent) => {
@@ -136,10 +135,21 @@ export function useDragResize({
     commit(defaultRef.current);
   };
 
+  /** Takes a width set elsewhere, without reporting it back as a commit. */
+  const setPaneWidth = useCallback(
+    (next: number) => {
+      const value = clamp(next);
+      apply(value);
+      setWidth(value);
+    },
+    [clamp],
+  );
+
   return {
     width,
     dragging,
     setPaneRef,
+    setPaneWidth,
     onPointerDown,
     onDoubleClick,
   };

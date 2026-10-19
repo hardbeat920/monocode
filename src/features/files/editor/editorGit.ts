@@ -26,6 +26,7 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import type { UnifiedLine } from "../../source-control/model/unifiedDiff";
+import { EDITOR_LINE_HEIGHT_PX } from "./editorMetrics";
 
 const DIFF_CONFIG = { scanLimit: 5_000, timeout: 100 };
 
@@ -56,7 +57,6 @@ const gitCommentFacet = Facet.define<
 });
 
 const insertedLine = Decoration.line({ class: "cm-gitInsertedLine" });
-const LINE_HEIGHT = Math.round(13 * 1.6);
 
 class GitMarker extends GutterMarker {
   constructor(
@@ -205,7 +205,7 @@ class DeletedLineWidget extends WidgetType {
   }
 
   get estimatedHeight() {
-    return LINE_HEIGHT;
+    return EDITOR_LINE_HEIGHT_PX;
   }
 
   ignoreEvent() {
@@ -1266,7 +1266,7 @@ const gitTheme = EditorView.theme({
     fontFamily: "var(--font-mono)",
     fontSize: "11px",
     fontWeight: "600",
-    lineHeight: `${LINE_HEIGHT}px`,
+    lineHeight: `${EDITOR_LINE_HEIGHT_PX}px`,
     textAlign: "center",
   },
   ".cm-gitAdd": {

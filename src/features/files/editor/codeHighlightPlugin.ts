@@ -1,212 +1,176 @@
 import type {
   CodeHighlighterPlugin,
+  HighlightOptions,
   HighlightResult,
   ThemeInput,
 } from "@streamdown/code";
-import {
-  bundledLanguages,
-  bundledLanguagesInfo,
-  createHighlighter,
-  type BundledLanguage,
-  type GrammarState,
-} from "shiki";
-import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
+import { bundledLanguagesInfo } from "shiki/langs";
+import type { BundledLanguage } from "shiki";
+export {
+  createBoundedCodePlugin,
+  type BoundedCodePlugin,
+} from "./codeHighlightEngine";
 
-/**
- * `@streamdown/code` keeps every token result in a module-level Map that is
- * never evicted. Streamdown highlights a fence again on every streamed update,
- * so each partial version of every code block an agent wrote stayed in memory
- * for the life of the window. Its key (length plus the first and last 100
- * characters) also let different blocks share a result. This keeps the same
- * `CodeHighlighterPlugin` shape with a bounded LRU and an exact key, and loads
- * languages into one highlighter per theme pair instead of one per language.
- *
- * Mounted blocks hold their tokens in component state, so eviction only means
- * a remounted block briefly shows plain text while it is highlighted again.
- */
-const DEFAULT_THEMES: [ThemeInput, ThemeInput] = ["github-light", "github-dark"];
-const MAX_ENTRIES = 100;
-const MAX_CACHED_CHARS = 500_000;
-
-type Highlighter = Awaited<ReturnType<typeof createHighlighter>>;
-type HighlightCallback = (result: HighlightResult) => void;
-
-export type BoundedCodePlugin = CodeHighlighterPlugin & {
-  /** Number of token results currently cached. */
-  cachedResults(): number;
+type Callback = (result: HighlightResult) => void;
+type Job = {
+  id: number;
+  key: string;
+  options: HighlightOptions;
+  callbacks: Set<Callback>;
+  priority: number;
 };
-
-const engine = createJavaScriptRegexEngine({ forgiving: true });
-const aliases: Record<string, string> = Object.fromEntries(
-  bundledLanguagesInfo.flatMap((info) =>
-    (info.aliases ?? []).map((alias) => [alias, info.id]),
+const languages = new Set(bundledLanguagesInfo.map((language) => language.id));
+const aliases = new Map(
+  bundledLanguagesInfo.flatMap((language) =>
+    (language.aliases ?? []).map((alias) => [alias, language.id] as const),
   ),
 );
-const supported = new Set(Object.keys(bundledLanguages));
+const normalize = (language: string) =>
+  aliases.get(language.trim().toLowerCase()) ?? language.trim().toLowerCase();
+const MAX_CHARS = 500_000;
+const MAX_RESULTS = 100;
+const THEMES: [ThemeInput, ThemeInput] = ["light-plus", "dark-plus"];
+const results = new Map<string, HighlightResult>();
+const jobs = new Map<string, Job>();
+let chars = 0;
+let sequence = 0;
+let active: Job | undefined;
+let worker: Worker | undefined;
+let cancellationScheduled = false;
 
-function normalizeLanguage(language: string): string {
-  const lower = language.trim().toLowerCase();
-  return aliases[lower] ?? lower;
+function remember(key: string, result: HighlightResult) {
+  if (key.length > MAX_CHARS) return;
+  if (results.delete(key)) chars -= key.length;
+  results.set(key, result);
+  chars += key.length;
+  while (results.size > MAX_RESULTS || chars > MAX_CHARS) {
+    const oldest = results.keys().next().value!;
+    chars -= oldest.length;
+    results.delete(oldest);
+  }
 }
 
-function themeName(theme: ThemeInput): string {
-  return typeof theme === "string" ? theme : (theme.name ?? "custom");
-}
-
-export function createBoundedCodePlugin(
-  options: {
-    themes?: [ThemeInput, ThemeInput];
-    maxEntries?: number;
-    maxChars?: number;
-  } = {},
-): BoundedCodePlugin {
-  const themes = options.themes ?? DEFAULT_THEMES;
-  const maxEntries = options.maxEntries ?? MAX_ENTRIES;
-  const maxChars = options.maxChars ?? MAX_CACHED_CHARS;
-  const highlighters = new Map<string, Promise<Highlighter>>();
-  const results = new Map<string, HighlightResult>();
-  const pending = new Map<string, Set<HighlightCallback>>();
-  let cachedChars = 0;
-  // Only the most recently highlighted fence needs a streaming checkpoint.
-  // Keep complete lines and their grammar state; the unfinished line must be
-  // tokenized again because its syntax can change as characters arrive.
-  let checkpoint:
-    | {
-        config: string;
-        source: string;
-        tokens: HighlightResult["tokens"];
-        state: GrammarState | undefined;
-      }
-    | undefined;
-
-  const highlighterFor = (pair: [ThemeInput, ThemeInput]) => {
-    const key = `${themeName(pair[0])}\u0000${themeName(pair[1])}`;
-    let highlighter = highlighters.get(key);
-    if (!highlighter) {
-      highlighter = createHighlighter({ themes: pair, langs: [], engine });
-      highlighters.set(key, highlighter);
-      highlighter.catch(() => highlighters.delete(key));
+function pump() {
+  if (active || !jobs.size || typeof Worker === "undefined") return;
+  const next = [...jobs.values()]
+    .filter((job) => job.callbacks.size)
+    .sort((a, b) => a.priority - b.priority || a.id - b.id)[0];
+  if (!next) return;
+  try {
+    if (!worker) {
+      worker = new Worker(
+        new URL("./codeHighlight.worker.ts", import.meta.url),
+        { type: "module" },
+      );
+      worker.onmessage = ({
+        data,
+      }: MessageEvent<{
+        id: number;
+        result?: HighlightResult;
+        error?: string;
+      }>) => {
+        const job = active;
+        if (!job || data.id !== job.id) return;
+        active = undefined;
+        jobs.delete(job.key);
+        if (data.result && job.callbacks.size) {
+          remember(job.key, data.result);
+          for (const callback of job.callbacks) callback(data.result);
+        }
+        pump();
+      };
+      const currentWorker = worker;
+      worker.onerror = () => {
+        if (worker !== currentWorker) return;
+        worker?.terminate();
+        worker = undefined;
+        active = undefined;
+        jobs.clear();
+      };
     }
-    return highlighter;
-  };
+    active = next;
+    worker.postMessage({ id: next.id, options: next.options });
+  } catch {
+    worker?.terminate();
+    worker = undefined;
+    active = undefined;
+    jobs.clear();
+  }
+}
 
-  const remember = (key: string, result: HighlightResult) => {
-    if (results.delete(key)) cachedChars -= key.length;
-    // A block larger than the whole budget is delivered but never cached.
-    if (key.length > maxChars) return;
-    results.set(key, result);
-    cachedChars += key.length;
-    while (results.size > maxEntries || cachedChars > maxChars) {
-      const oldest = results.keys().next().value;
-      if (oldest === undefined) break;
-      results.delete(oldest);
-      cachedChars -= oldest.length;
-    }
-  };
+function keyFor(options: HighlightOptions) {
+  return `${normalize(options.language)}\0${JSON.stringify(options.themes)}\0${options.code}`;
+}
 
-  return {
-    name: "shiki",
-    type: "code-highlighter",
-    supportsLanguage: (language) => supported.has(normalizeLanguage(language)),
-    getSupportedLanguages: () => Array.from(supported) as BundledLanguage[],
-    getThemes: () => themes,
-    cachedResults: () => results.size,
-    highlight({ code, language, themes: pair }, callback) {
-      const lang = normalizeLanguage(language);
-      const names = [themeName(pair[0]), themeName(pair[1])] as const;
-      const key = `${lang}\u0000${names[0]}\u0000${names[1]}\u0000${code}`;
-      const cached = results.get(key);
-      if (cached) {
-        // Refresh recency so blocks still on screen are evicted last.
-        results.delete(key);
-        results.set(key, cached);
-        return cached;
-      }
-      const waiting = pending.get(key);
-      if (waiting) {
-        if (callback) waiting.add(callback);
-        return null;
-      }
-      pending.set(key, new Set(callback ? [callback] : []));
-      void highlighterFor(pair)
-        .then(async (highlighter) => {
-          if (supported.has(lang) && !highlighter.getLoadedLanguages().includes(lang)) {
-            await highlighter.loadLanguage(lang as BundledLanguage);
-          }
-          const usable = highlighter.getLoadedLanguages().includes(lang)
-            ? lang
-            : "text";
-          const config = `${usable}\u0000${names[0]}\u0000${names[1]}`;
-          const previous =
-            checkpoint?.config === config && code.startsWith(checkpoint.source)
-              ? checkpoint
-              : undefined;
-          const offset = previous?.source.length ?? 0;
-          const boundary = code.lastIndexOf("\n") + 1;
-          const settings = {
-            lang: usable as BundledLanguage,
-            themes: { light: names[0], dark: names[1] },
-          };
-          let prefix = previous?.tokens ?? [];
-          let state = previous?.state;
-          if (boundary > offset) {
-            const lineEnd =
-              code[boundary - 2] === "\r" ? boundary - 2 : boundary - 1;
-            const complete = highlighter.codeToTokens(
-              code.slice(offset, lineEnd),
-              {
-                ...settings,
-                grammarState: state,
-              },
-            );
-            prefix = [
-              ...prefix,
-              ...complete.tokens.map((line) =>
-                line.map((token) => ({
-                  ...token,
-                  offset: token.offset + offset,
-                })),
-              ),
-            ];
-            state = complete.grammarState;
-          }
-          const tail = highlighter.codeToTokens(code.slice(boundary), {
-            ...settings,
-            grammarState: state,
-          });
-          const result = {
-            ...tail,
-            tokens: [
-              ...prefix,
-              ...tail.tokens.map((line) =>
-                line.map((token) => ({
-                  ...token,
-                  offset: token.offset + boundary,
-                })),
-              ),
-            ],
-          };
-          checkpoint =
-            boundary > 0 && boundary <= maxChars
-              ? {
-                  config,
-                  source: code.slice(0, boundary),
-                  tokens: prefix,
-                  state,
-                }
-              : undefined;
-          remember(key, result);
-          const callbacks = pending.get(key);
-          pending.delete(key);
-          callbacks?.forEach((notify) => notify(result));
-        })
-        .catch((error: unknown) => {
-          pending.delete(key);
-          console.error("[Code highlight] Failed to highlight code:", error);
-        });
-      return null;
-    },
+function cancelAbandonedWork() {
+  if (cancellationScheduled || !active || active.callbacks.size) return;
+  cancellationScheduled = true;
+  // React removes the old subscription before subscribing to a growing fence.
+  // Let that replacement arrive before deciding whether to discard the worker's
+  // grammar checkpoint; otherwise every streamed chunk restarts the tokenizer.
+  queueMicrotask(() => {
+    cancellationScheduled = false;
+    const abandoned = active;
+    if (!abandoned || abandoned.callbacks.size) return;
+    const continued = [...jobs.values()].some(
+      (job) =>
+        job !== abandoned &&
+        job.callbacks.size > 0 &&
+        normalize(job.options.language) ===
+          normalize(abandoned.options.language) &&
+        JSON.stringify(job.options.themes) ===
+          JSON.stringify(abandoned.options.themes) &&
+        job.options.code.startsWith(abandoned.options.code),
+    );
+    if (continued) return;
+    worker?.terminate();
+    worker = undefined;
+    active = undefined;
+    jobs.delete(abandoned.key);
+    pump();
+  });
+}
+
+/** Cancel obsolete fences; at most one tokenizer runs, off the UI thread. */
+export function requestCodeHighlight(
+  options: HighlightOptions,
+  callback: Callback,
+  priority = 0,
+): () => void {
+  const key = keyFor(options);
+  const cached = results.get(key);
+  if (cached) {
+    results.delete(key);
+    results.set(key, cached);
+    callback(cached);
+    return () => {};
+  }
+  if (typeof Worker === "undefined") return () => {};
+  let job = jobs.get(key);
+  if (!job) {
+    job = { id: ++sequence, key, options, callbacks: new Set(), priority };
+    jobs.set(key, job);
+  }
+  job.priority = Math.min(job.priority, priority);
+  job.callbacks.add(callback);
+  pump();
+  return () => {
+    job.callbacks.delete(callback);
+    if (!job.callbacks.size && active !== job) jobs.delete(key);
+    cancelAbandonedWork();
   };
 }
 
-export const boundedCode = createBoundedCodePlugin();
+export const boundedCode: CodeHighlighterPlugin = {
+  name: "shiki",
+  type: "code-highlighter",
+  supportsLanguage: (language) => languages.has(normalize(language)),
+  getSupportedLanguages: () => [...languages] as BundledLanguage[],
+  getThemes: () => THEMES,
+  highlight(options, callback) {
+    const cached = results.get(keyFor(options));
+    if (cached) return cached;
+    if (callback) requestCodeHighlight(options, callback);
+    return null;
+  },
+};

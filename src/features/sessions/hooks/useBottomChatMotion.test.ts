@@ -21,6 +21,10 @@ let reduced: boolean;
 let scrollHeight: number;
 let top: number;
 let scrollWrites: number[];
+let scrollAdjustments: number[];
+const recordAdjustment = (scroller: HTMLDivElement) => {
+  scrollAdjustments.push(scroller.scrollTop);
+};
 let entrances: Array<{
   message: HTMLElement;
   cancel: ReturnType<typeof vi.fn>;
@@ -52,6 +56,7 @@ function Harness({
     true,
     undefined,
     smoothReveals,
+    recordAdjustment,
   );
   return createElement(
     "div",
@@ -155,6 +160,7 @@ beforeEach(() => {
   scrollHeight = 400;
   top = 0;
   scrollWrites = [];
+  scrollAdjustments = [];
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
     frames.set(++nextFrame, callback);
@@ -328,6 +334,7 @@ describe("bottom chat motion", () => {
     );
     const scrollerRect = vi.spyOn(view.scroller, "getBoundingClientRect");
     scrollWrites = [];
+    scrollAdjustments = [];
 
     for (const deltaY of [-4, -6, -12]) {
       act(() => {
@@ -340,6 +347,7 @@ describe("bottom chat motion", () => {
     expect(top).toBe(578);
     expect(following.current).toBe(false);
     expect(scrollWrites).toEqual([]);
+    expect(scrollAdjustments).toEqual([]);
     expect(anchorRect).not.toHaveBeenCalled();
     expect(scrollerRect).not.toHaveBeenCalled();
     expect(frames.size).toBe(0);
@@ -360,6 +368,7 @@ describe("bottom chat motion", () => {
       "getBoundingClientRect",
     );
     scrollWrites = [];
+    scrollAdjustments = [];
 
     for (const deltaY of [-4, -6]) {
       act(() => {
@@ -370,6 +379,7 @@ describe("bottom chat motion", () => {
     }
     expect(top).toBeCloseTo(visibleTop - 10);
     expect(scrollWrites).toEqual([visibleTop]);
+    expect(scrollAdjustments).toEqual([visibleTop]);
     expect(anchorRect).not.toHaveBeenCalled();
     expect(view.content.style.transform).toBe("");
     advance(85);

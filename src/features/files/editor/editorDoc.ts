@@ -89,7 +89,19 @@ export function preserveEditorViewport(view: EditorView, mutate: () => void) {
   restore();
   view.requestMeasure({
     key: preserveEditorViewport,
-    read: () => true,
-    write: restore,
+    read: () => {
+      if (!view.dom.isConnected || offsetY == null) return null;
+      const after = view.coordsAtPos(view.state.selection.main.head);
+      return after
+        ? after.top - scroller.getBoundingClientRect().top - offsetY
+        : null;
+    },
+    write: (shift) => {
+      if (!view.dom.isConnected) return;
+      if (offsetY == null) {
+        scroller.scrollTop = scrollTop;
+        scroller.scrollLeft = scrollLeft;
+      } else if (shift != null) scroller.scrollTop += shift;
+    },
   });
 }

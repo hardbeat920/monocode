@@ -5,11 +5,31 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentMarkdown } from "./AgentMarkdown";
 import {
   cadenceFadeMs,
+  pacedRevealPreferred,
+  usePacedText,
   nextCadence,
   PACED_REVEAL_KEY,
   revealEnd,
   WORD_FADE_MS,
 } from "./wordFade";
+
+describe("reveal preference", () => {
+  afterEach(() => {
+    localStorage.removeItem(PACED_REVEAL_KEY);
+    vi.restoreAllMocks();
+  });
+  it("smooths bursts by default and retains an explicit opt-out", () => {
+    expect(pacedRevealPreferred()).toBe(true);
+    localStorage.setItem(PACED_REVEAL_KEY, "0");
+    expect(pacedRevealPreferred()).toBe(false);
+  });
+  it("respects reduced motion", () => {
+    vi.spyOn(window, "matchMedia").mockReturnValue({
+      matches: true,
+    } as MediaQueryList);
+    expect(pacedRevealPreferred()).toBe(false);
+  });
+});
 
 describe("revealEnd", () => {
   it("stops at the end of the word the reveal has reached", () => {
@@ -108,6 +128,43 @@ describe("paced streaming", () => {
     expect(shown()).toBe(reply);
   });
 
+  it("catches up by elapsed time after the main thread stalls", () => {
+    const callbacks: FrameRequestCallback[] = [];
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callbacks.push(callback);
+      return callbacks.length;
+    });
+    const longReply = "A long provider burst with many words. ".repeat(200);
+    const started = performance.now();
+    render(longReply, true);
+    act(() => callbacks.shift()!(started + 1000));
+    expect(shown().length).toBeGreaterThan(longReply.length * 0.95);
+    vi.restoreAllMocks();
+  });
+
+  it("stops hidden reveal work and shows unseen text immediately on return", () => {
+    const frame = vi.spyOn(window, "requestAnimationFrame");
+    function Probe({ text, active }: { text: string; active: boolean }) {
+      return createElement(
+        "p",
+        null,
+        usePacedText(text, true, true, active).text,
+      );
+    }
+    const paint = (text: string, active: boolean) =>
+      act(() => root.render(createElement(Probe, { text, active })));
+    paint(reply, true);
+    act(() => vi.advanceTimersByTime(100));
+    expect(shown().length).toBeLessThan(reply.length);
+    paint(reply, false);
+    frame.mockClear();
+    act(() => vi.advanceTimersByTime(1000));
+    expect(frame).not.toHaveBeenCalled();
+    paint(reply + " New unseen output.", true);
+    expect(shown()).toBe(reply + " New unseen output.");
+    vi.restoreAllMocks();
+  });
+
   it("paces the first chunk even when the reply mounts with text", () => {
     render(reply, true);
     expect(shown()).toBe("");
@@ -172,6 +229,36 @@ describe("paced streaming", () => {
     expect(shown()).toBe("Hello wor");
   });
 
+  it("removes fade spans without remounting formatted reply elements", () => {
+    const text =
+      "Opening paragraph.\n\n- **Keep this list stable.** It is already visible.\n- Keep the reader's position.\n\n> A settled quotation.\n\nFinal paragraph.";
+    render("", true);
+    render(text, true);
+    act(() => vi.advanceTimersByTime(2_000));
+    const selectors = [
+      "p",
+      "ul",
+      "li",
+      '[data-streamdown="strong"]',
+      "blockquote",
+    ];
+    const elements = selectors.map((selector) =>
+      container.querySelector(selector),
+    );
+    expect(elements.every(Boolean)).toBe(true);
+    expect(container.querySelector("[data-word-fade]")).not.toBeNull();
+
+    render(text, false);
+    act(() => vi.advanceTimersByTime(WORD_FADE_MS));
+
+    expect(fading()).toBe(false);
+    expect(container.querySelector("[data-word-fade]")).toBeNull();
+    expect(container.querySelector(".word-fade-content")).toBeNull();
+    selectors.forEach((selector, index) => {
+      expect(container.querySelector(selector)).toBe(elements[index]);
+    });
+  });
+
   it("finishes a stream that ends ahead of the reveal at pace, then stops fading", () => {
     render("", true);
     render(reply, true);
@@ -210,6 +297,7 @@ describe("streamed reveal", () => {
   let root: Root;
 
   beforeEach(() => {
+    localStorage.setItem(PACED_REVEAL_KEY, "0");
     vi.useFakeTimers({
       toFake: [
         "setTimeout",
@@ -226,6 +314,7 @@ describe("streamed reveal", () => {
   });
 
   afterEach(() => {
+    localStorage.removeItem(PACED_REVEAL_KEY);
     act(() => root.unmount());
     container.remove();
     vi.unstubAllGlobals();
@@ -241,16 +330,20 @@ describe("streamed reveal", () => {
   }
 
   function fadeMs() {
-    const box = container.querySelector<HTMLElement>(".agent-markdown")
-      ?.parentElement;
-    return Number.parseFloat(box?.style.getPropertyValue("--word-fade-ms") ?? "");
+    const box =
+      container.querySelector<HTMLElement>(".agent-markdown")?.parentElement;
+    return Number.parseFloat(
+      box?.style.getPropertyValue("--word-fade-ms") ?? "",
+    );
   }
 
   it("shows a burst as soon as it arrives, fading its words in", () => {
     render("", true);
     render("I will review the diff ", true);
     expect(shown()).toBe("I will review the diff");
-    expect(container.querySelector(".agent-markdown.word-fading")).not.toBeNull();
+    expect(
+      container.querySelector(".agent-markdown.word-fading"),
+    ).not.toBeNull();
     expect(container.querySelectorAll("[data-word-fade]")).toHaveLength(5);
   });
 

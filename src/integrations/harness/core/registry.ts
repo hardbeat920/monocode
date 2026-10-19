@@ -5,6 +5,7 @@ import type {
   TurnIntent,
 } from "../../../features/sessions/model/session";
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { transferProviderSession } from "./child";
 import type { GeneratedSessionTitle } from "../../../features/sessions/model/sessionTitle";
 import type { PrContent } from "../../../features/source-control/model/gitText";
 import { hasLiveCatalog } from "../../../features/sessions/model/models";
@@ -442,6 +443,38 @@ export function bindHarnessSession(
     block.role === "tasks" && block.taskList ? [block.taskList] : [],
   );
   if (lists.length > 0) adapter.restoreTaskLists(threadId, lists);
+}
+
+/**
+ * Continue a provider conversation under another account of the same provider.
+ * The old process stops first so its transcript is complete, then the native
+ * transcript is copied to the new account and the thread resumes from it.
+ * Throws when the transcript cannot be carried, leaving the thread unbound.
+ */
+export async function transferHarnessSessionAccount(input: {
+  harness: "claude" | "codex";
+  threadId: string;
+  providerSessionId: string;
+  cwd: string;
+  fromAccountId?: string;
+  toAccountId: string;
+  blocks?: Block[];
+}): Promise<void> {
+  await forgetHarnessSession(input.harness, input.threadId);
+  await transferProviderSession(
+    input.harness,
+    input.fromAccountId,
+    input.toAccountId,
+    input.providerSessionId,
+  );
+  bindHarnessSession(
+    input.harness,
+    input.threadId,
+    input.providerSessionId,
+    input.cwd,
+    input.toAccountId,
+    input.blocks,
+  );
 }
 
 /**

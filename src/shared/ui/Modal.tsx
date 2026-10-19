@@ -28,6 +28,8 @@ type Props = {
   size?: ModalSize;
   /** Keeps the accessible title while letting focused content own the visual hierarchy. */
   minimalHeader?: boolean;
+  /** Drops the close button; Escape and clicking outside still close. */
+  hideClose?: boolean;
   /** Extra classes on the panel (fixed height, etc). */
   className?: string;
   /** Keep taller dialogs inside the viewport, scrolling their content. */
@@ -41,6 +43,7 @@ export function ModalPanel({
   description,
   size = "md",
   minimalHeader = false,
+  hideClose = false,
   className,
   fitViewport = false,
   children,
@@ -91,7 +94,7 @@ export function ModalPanel({
         onMouseDown={(event) => event.stopPropagation()}
         className={`relative isolate flex flex-col overflow-hidden rounded-2xl border border-content/7 shadow-2xl ${fitViewport ? "max-h-[calc(100dvh-32px)]" : ""} ${className ?? ""}`}
       >
-        <GlassBackdrop className="bg-background-base dark:bg-background-base/55" />
+        <GlassBackdrop className="modal-surface bg-background-base dark:bg-background-base/55" />
         <div className="modal-panel relative z-[1] flex min-h-0 flex-1 flex-col">
           <header
             className={
@@ -118,15 +121,17 @@ export function ModalPanel({
                 </p>
               ) : null}
             </div>
-            <button
-              ref={closeRef}
-              type="button"
-              aria-label="Close"
-              onClick={onClose}
-              className="grid size-7 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/8 hover:text-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-            >
-              <X className="size-3.5" strokeWidth={1.75} />
-            </button>
+            {hideClose ? null : (
+              <button
+                ref={closeRef}
+                type="button"
+                aria-label="Close"
+                onClick={onClose}
+                className="grid size-7 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/8 hover:text-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              >
+                <X className="size-3.5" strokeWidth={1.75} />
+              </button>
+            )}
           </header>
           <div
             ref={lockOverscroll}
@@ -146,7 +151,7 @@ export function Modal(props: Props) {
   return createPortal(
     <div className="fixed inset-0" style={{ zIndex: LAYER.dialog }}>
       <div
-        className="modal-backdrop absolute inset-0 z-0 bg-black/40"
+        className="modal-backdrop dialog-scrim absolute inset-0 z-0 bg-black/40"
         onMouseDown={props.onClose}
       />
       <ModalPanel {...props} />

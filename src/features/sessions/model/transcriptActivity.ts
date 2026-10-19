@@ -777,9 +777,12 @@ export function subagentModelName(block: Block): string | undefined {
  * provider puts both in the tool result, so a finished run always has the one
  * thing worth reading at the end of its trail.
  */
-export function subagentReport(block: Block): string | undefined {
+export function subagentReport(
+  block: Block,
+  detail = block.tool?.detail,
+): string | undefined {
   if (toolCallState(block) === "pending") return undefined;
-  return block.tool?.detail?.trim() || undefined;
+  return detail?.trim() || undefined;
 }
 
 /** A failed delegated call must stay visible even when the work trail folds. */

@@ -10,6 +10,28 @@ type Resizable = {
   } | null;
 };
 
+const measured = new WeakMap<HTMLTextAreaElement, string>();
+
+function measurementKey(el: HTMLTextAreaElement): string {
+  const style = getComputedStyle(el);
+  return [
+    el.value,
+    el.clientWidth,
+    style.font,
+    style.lineHeight,
+    style.letterSpacing,
+    style.textIndent,
+    style.padding,
+    el.style.height,
+  ].join("\0");
+}
+
+/** A warm tab already has the right height; don't collapse and reflow it twice. */
+export function restoreComposerSize(el: HTMLTextAreaElement) {
+  if (measured.get(el) === measurementKey(el)) return;
+  resizeComposer(el);
+}
+
 /** A hidden tab stays mounted with no layout box, so it reports 0 here. */
 export function resizeComposer(el: Resizable, maxHeight = COMPOSER_MAX_HEIGHT) {
   if (el.scrollHeight === 0) return;
@@ -24,5 +46,11 @@ export function resizeComposer(el: Resizable, maxHeight = COMPOSER_MAX_HEIGHT) {
     el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`;
   } finally {
     if (wrapper) wrapper.style.minHeight = minHeight;
+  }
+  if (
+    typeof HTMLTextAreaElement !== "undefined" &&
+    el instanceof HTMLTextAreaElement
+  ) {
+    measured.set(el, measurementKey(el));
   }
 }

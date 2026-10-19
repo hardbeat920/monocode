@@ -23,6 +23,18 @@ function tab(overrides: Partial<Tab> = {}): Tab {
 }
 
 describe("tabCopy", () => {
+  it.each(["inbox", "search", "notes", "automations"] as const)(
+    "uses a standalone label for the %s app tab",
+    (appView) => {
+      const label = appView[0].toUpperCase() + appView.slice(1);
+      expect(tabCopy(tab({ appView, title: "", sessionCount: 0 }))).toEqual({
+        headline: label,
+        meta: "",
+        tooltip: label,
+      });
+    },
+  );
+
   it("layers conversation and file when split across panes", () => {
     const focusedSession = tabCopy(
       tab({

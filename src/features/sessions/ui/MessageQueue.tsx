@@ -68,7 +68,7 @@ export function MessageQueue({
   return (
     <div className="px-2 text-content/55" data-message-queue>
       <div
-        className="relative z-0 rounded-t-[10px] border border-b-0 border-content/10 bg-content/3 px-2 py-1"
+        className="relative z-0 rounded-t-[10px] border border-b-0 border-content/10 bg-content/3 px-2.5 py-0.5"
         data-message-queue-card
       >
         {paused ? (
@@ -111,11 +111,11 @@ export function MessageQueue({
           return (
             <div
               key={message.id}
-              className={`flex min-h-7 items-center gap-2 text-[12px] ${
-                index > 0 ? "border-t border-stroke" : ""
+              className={`flex min-h-8 items-center gap-2.5 text-[12px] ${
+                index > 0 ? "border-t border-content/5" : ""
               }`}
             >
-              <ListEnd className="size-3.5 shrink-0" />
+              <ListEnd className="size-3.5 shrink-0 text-content/35" />
               {editing ? (
                 <>
                   <textarea
@@ -161,7 +161,7 @@ export function MessageQueue({
               ) : (
                 <>
                   <div className="min-w-0 flex-1 py-1">
-                    <div className="truncate text-content/80" title={label}>
+                    <div className="truncate text-content/75" title={label}>
                       {label}
                     </div>
                     {message.error ? (
@@ -175,7 +175,7 @@ export function MessageQueue({
                       type="button"
                       disabled={sending}
                       onClick={() => onSteer?.(message.id)}
-                      className="flex h-6 shrink-0 items-center gap-1.5 rounded-md px-1.5 hover:bg-content/10 hover:text-content"
+                      className="flex h-6 shrink-0 items-center gap-1.5 rounded-md px-2 text-content/50 transition-colors hover:bg-content/8 hover:text-content/90 disabled:opacity-40"
                     >
                       <CornerDownRight className="size-3.5" />
                       Steer
@@ -187,7 +187,7 @@ export function MessageQueue({
                     aria-label="Edit queued message"
                     disabled={sending || !!message.monoSessionCompletion}
                     onClick={() => startEdit(message)}
-                    className="grid size-6 shrink-0 place-items-center rounded-md hover:bg-content/10 hover:text-content"
+                    className="grid size-6 shrink-0 place-items-center rounded-md text-content/40 transition-colors hover:bg-content/8 hover:text-content/90 disabled:opacity-40"
                   >
                     <Pencil className="size-3.5" />
                   </button>
@@ -197,7 +197,7 @@ export function MessageQueue({
                     aria-label="Remove queued message"
                     disabled={sending}
                     onClick={() => onDelete?.(message.id)}
-                    className="grid size-6 shrink-0 place-items-center rounded-md hover:bg-content/10 hover:text-content"
+                    className="grid size-6 shrink-0 place-items-center rounded-md text-content/40 transition-colors hover:bg-content/8 hover:text-content/90 disabled:opacity-40"
                   >
                     <Trash2 className="size-3.5" />
                   </button>

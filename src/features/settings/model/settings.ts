@@ -62,8 +62,10 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     id: "connections",
     group: "app",
     label: "Connections",
-    description: "Connect your machines and run agents remotely through SSH.",
-    keywords: "ssh remote host machine server environment always on",
+    description:
+      "Run agents on your other machines, and pair your phone with this desktop.",
+    keywords:
+      "ssh remote host machine server environment always on mobile phone iphone qr pair router",
   },
   {
     id: "appearance",
@@ -174,6 +176,12 @@ export type SettingsEntry = {
 
 export const SETTINGS_INDEX: SettingsEntry[] = [
   {
+    id: "mobile-access",
+    section: "connections",
+    label: "Your phones",
+    keywords: "mobile phone iphone qr pair code router device",
+  },
+  {
     id: "remote-machines",
     section: "connections",
     label: "Your machines",
@@ -279,6 +287,13 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "dark light system appearance mode",
   },
   {
+    id: "workspace-theme",
+    section: "appearance",
+    label: "Workspace theme",
+    keywords:
+      "color colour palette scheme preset inset harbor moss ember orchid",
+  },
+  {
     id: "accent-color",
     section: "appearance",
     label: "Accent color",
@@ -310,6 +325,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "black brightness contrast background",
   },
   {
+    id: "inset-glass",
+    section: "appearance",
+    label: "Transparent window",
+    keywords: "glass inset translucent transparency opaque desktop blur layout",
+  },
+  {
     id: "sidebar-opacity",
     section: "appearance",
     label: "Sidebar opacity",
@@ -326,6 +347,13 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     section: "appearance",
     label: "Main pane glass",
     keywords: "translucent transparency body window",
+  },
+  {
+    id: "inset-layout",
+    section: "appearance",
+    label: "New layout",
+    keywords:
+      "classic preview sidebar navigation tabs inset workspace card rounded floating linear frame",
   },
   {
     id: "interface-scale",
@@ -362,6 +390,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     section: "chat",
     label: "Anchor prompts to top",
     keywords: "scroll position sticky message",
+  },
+  {
+    id: "paced-reveal",
+    section: "chat",
+    label: "Smooth text reveal",
+    keywords: "streaming pacing immediate latency performance animation",
   },
   {
     id: "follow-up",
@@ -509,16 +543,36 @@ function matchScore(
   return null;
 }
 
+const NO_HIDDEN_SETTINGS: ReadonlySet<string> = new Set();
+
+/** Appearance rows that only one layout shows: the inset workspace drops the
+ * tint and translucency controls, and only it has workspace themes and its
+ * own glass switch. */
+export const INSET_LAYOUT_HIDDEN_SETTINGS: ReadonlySet<string> = new Set([
+  "hue",
+  "saturation",
+  "dark-lightness",
+  "sidebar-opacity",
+  "blur",
+  "main-pane-glass",
+]);
+export const CLASSIC_LAYOUT_HIDDEN_SETTINGS: ReadonlySet<string> = new Set([
+  "workspace-theme",
+  "inset-glass",
+]);
+
 /** Individual settings first, then whole sections, so a row wins its own name. */
 export function searchSettings(
   query: string,
   limit = 8,
+  hidden: ReadonlySet<string> = NO_HIDDEN_SETTINGS,
 ): SettingsSearchResult[] {
   const needle = query.trim().toLowerCase();
   if (!needle) return [];
   const scored: { score: number; result: SettingsSearchResult }[] = [];
 
   for (const entry of SETTINGS_INDEX) {
+    if (hidden.has(entry.id)) continue;
     const score = matchScore(needle, entry.label, entry.keywords);
     if (score == null) continue;
     scored.push({
