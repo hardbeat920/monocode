@@ -40,43 +40,102 @@ afterEach(() => {
   container.remove();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 describe("Mono transcript pages", () => {
-  const messages = (start: number, count: number): Block[] => Array.from({ length: count }, (_, i) => ({ id: `user-${start + i}`, role: "user", text: `Message ${start + i}` }));
+  const messages = (start: number, count: number): Block[] =>
+    Array.from({ length: count }, (_, i) => ({
+      id: `user-${start + i}`,
+      role: "user",
+      text: `Message ${start + i}`,
+    }));
 
-  it("renders ten Mono turns while ordinary sessions retain twenty", () => {
+  it("renders ten Mono turns while ordinary sessions progressively retain twenty", async () => {
+    vi.useFakeTimers();
     const blocks = messages(0, 30);
-    act(() => root.render(createElement(AgentTranscript, { key: "normal", blocks })));
+    act(() =>
+      root.render(createElement(AgentTranscript, { key: "normal", blocks })),
+    );
+    expect(container.querySelectorAll(".transcript-turn")).toHaveLength(3);
+    for (let index = 0; index < 20; index++)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50);
+      });
     expect(container.querySelectorAll(".transcript-turn")).toHaveLength(20);
     expect(container.textContent).toContain("Load earlier messages");
-    act(() => root.render(createElement(AgentTranscript, { key: "mono", blocks, initialTurns: 10, pageSize: 10, loadEarlierOnScroll: true, bottomAligned: true })));
+    act(() =>
+      root.render(
+        createElement(AgentTranscript, {
+          key: "mono",
+          blocks,
+          initialTurns: 10,
+          pageSize: 10,
+          loadEarlierOnScroll: true,
+          bottomAligned: true,
+        }),
+      ),
+    );
     expect(container.querySelectorAll(".transcript-turn")).toHaveLength(10);
     expect(container.textContent).not.toContain("Message 19");
     expect(container.textContent).not.toContain("Load earlier messages");
-    const scroller = container.querySelector<HTMLDivElement>(".agent-transcript")!;
-    act(() => scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 })));
+    const scroller =
+      container.querySelector<HTMLDivElement>(".agent-transcript")!;
+    act(() =>
+      scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 })),
+    );
     expect(container.querySelectorAll(".transcript-turn")).toHaveLength(20);
   });
 
   it("awaits an older database page, prevents duplicate loads, and preserves scroll position", async () => {
     let blocks = messages(10, 10);
     let finish!: () => void;
-    const pending = new Promise<void>((resolve) => { finish = resolve; });
-    const render = () => root.render(createElement(AgentTranscript, { blocks, initialTurns: 10, pageSize: 10, hasEarlier: true, loadEarlierOnScroll: true, bottomAligned: true, onLoadEarlier: load }));
-    const load = vi.fn(async (beforePrepend: () => void) => { await pending; beforePrepend(); blocks = [...messages(0, 10), ...blocks]; render(); });
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const render = () =>
+      root.render(
+        createElement(AgentTranscript, {
+          blocks,
+          initialTurns: 10,
+          pageSize: 10,
+          hasEarlier: true,
+          loadEarlierOnScroll: true,
+          bottomAligned: true,
+          onLoadEarlier: load,
+        }),
+      );
+    const load = vi.fn(async (beforePrepend: () => void) => {
+      await pending;
+      beforePrepend();
+      blocks = [...messages(0, 10), ...blocks];
+      render();
+    });
     act(render);
-    const scroller = container.querySelector<HTMLDivElement>(".agent-transcript")!;
+    const scroller =
+      container.querySelector<HTMLDivElement>(".agent-transcript")!;
     let top = 600;
     let streamedHeight = 0;
     Object.defineProperties(scroller, {
       scrollHeight: { get: () => blocks.length * 100 + streamedHeight },
       clientHeight: { get: () => 400 },
-      scrollTop: { get: () => top, set: (value: number) => { top = value; } },
+      scrollTop: {
+        get: () => top,
+        set: (value: number) => {
+          top = value;
+        },
+      },
     });
-    for (const turn of scroller.querySelectorAll<HTMLElement>(".transcript-turn")) {
+    for (const turn of scroller.querySelectorAll<HTMLElement>(
+      ".transcript-turn",
+    )) {
       turn.getBoundingClientRect = () => {
-        const y = blocks.findIndex((block) => block.id === turn.dataset.transcriptTurn) * 100 - top;
+        const y =
+          blocks.findIndex(
+            (block) => block.id === turn.dataset.transcriptTurn,
+          ) *
+            100 -
+          top;
         return { top: y, bottom: y + 100 } as DOMRect;
       };
     }
@@ -89,12 +148,17 @@ describe("Mono transcript pages", () => {
       scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
     });
     expect(load).toHaveBeenCalledOnce();
-    expect(container.querySelector('[role="status"]')?.textContent).toContain("Loading earlier");
+    expect(container.querySelector('[role="status"]')?.textContent).toContain(
+      "Loading earlier",
+    );
     // While the database request is pending, the reader keeps scrolling and
     // the live reply grows below them. Neither belongs to the prepend shift.
     top = 40;
     streamedHeight = 100;
-    await act(async () => { finish(); await pending; });
+    await act(async () => {
+      finish();
+      await pending;
+    });
     expect(container.querySelectorAll(".transcript-turn")).toHaveLength(20);
     expect(top).toBe(1040);
     act(() => scroller.dispatchEvent(new Event("scroll")));
@@ -102,12 +166,34 @@ describe("Mono transcript pages", () => {
   });
 
   it("keeps the page available to retry after a failed load", async () => {
-    const load = vi.fn().mockRejectedValueOnce(new Error("Disk busy")).mockResolvedValueOnce(undefined);
-    act(() => root.render(createElement(AgentTranscript, { blocks: messages(0, 10), initialTurns: 10, pageSize: 10, hasEarlier: true, loadEarlierOnScroll: true, bottomAligned: true, onLoadEarlier: load })));
-    const scroller = container.querySelector<HTMLDivElement>(".agent-transcript")!;
-    await act(async () => scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 })));
-    expect(container.querySelector('[role="status"]')?.textContent).toContain("Scroll up to retry");
-    await act(async () => scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 })));
+    const load = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Disk busy"))
+      .mockResolvedValueOnce(undefined);
+    act(() =>
+      root.render(
+        createElement(AgentTranscript, {
+          blocks: messages(0, 10),
+          initialTurns: 10,
+          pageSize: 10,
+          hasEarlier: true,
+          loadEarlierOnScroll: true,
+          bottomAligned: true,
+          onLoadEarlier: load,
+        }),
+      ),
+    );
+    const scroller =
+      container.querySelector<HTMLDivElement>(".agent-transcript")!;
+    await act(async () =>
+      scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 })),
+    );
+    expect(container.querySelector('[role="status"]')?.textContent).toContain(
+      "Scroll up to retry",
+    );
+    await act(async () =>
+      scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 })),
+    );
     expect(load).toHaveBeenCalledTimes(2);
     expect(container.querySelector('[role="status"]')).toBeNull();
   });
@@ -431,25 +517,40 @@ describe("transcript scrolling", () => {
 
   it("keeps an opening Mono pinned through scroll events queued before layout settles", () => {
     const showJump = vi.fn();
-    act(() => root.render(createElement(AgentTranscript, {
-      blocks: Array.from({ length: 10 }, (_, i): Block => ({ id: `u${i}`, role: "user", text: `Question ${i}` })),
-      initialTurns: 10,
-      bottomAligned: true,
-      onJumpToBottomChange: showJump,
-    })));
-    const scroller = container.querySelector<HTMLDivElement>(".agent-transcript")!;
+    act(() =>
+      root.render(
+        createElement(AgentTranscript, {
+          blocks: Array.from({ length: 10 }, (_, i): Block => ({
+            id: `u${i}`,
+            role: "user",
+            text: `Question ${i}`,
+          })),
+          initialTurns: 10,
+          bottomAligned: true,
+          onJumpToBottomChange: showJump,
+        }),
+      ),
+    );
+    const scroller =
+      container.querySelector<HTMLDivElement>(".agent-transcript")!;
     let height = 1000;
     let top = 0;
     Object.defineProperties(scroller, {
       scrollHeight: { get: () => height },
       clientHeight: { get: () => 400 },
-      scrollTop: { get: () => top, set: (value: number) => { top = Math.max(0, Math.min(value, height - 400)); } },
+      scrollTop: {
+        get: () => top,
+        set: (value: number) => {
+          top = Math.max(0, Math.min(value, height - 400));
+        },
+      },
     });
-    const resize = () => act(() => {
-      for (const observer of observers) {
-        if (observer.targets.includes(scroller)) observer.resize();
-      }
-    });
+    const resize = () =>
+      act(() => {
+        for (const observer of observers) {
+          if (observer.targets.includes(scroller)) observer.resize();
+        }
+      });
     resize();
     expect(top).toBe(600);
     height = 1040;
@@ -457,7 +558,10 @@ describe("transcript scrolling", () => {
     resize();
     expect(top).toBe(640);
     expect(showJump).toHaveBeenLastCalledWith(false);
-    expect(scroller.querySelector<HTMLElement>("[data-transcript-content]")!.style.transform).toBe("");
+    expect(
+      scroller.querySelector<HTMLElement>("[data-transcript-content]")!.style
+        .transform,
+    ).toBe("");
   });
 
   it.each([false, true])(
@@ -468,7 +572,10 @@ describe("transcript scrolling", () => {
         { id: "reply", role: "assistant", text: "Answer" },
       ];
       const showJump = vi.fn();
-      vi.stubGlobal("requestAnimationFrame", vi.fn(() => 1));
+      vi.stubGlobal(
+        "requestAnimationFrame",
+        vi.fn(() => 1),
+      );
       vi.stubGlobal("cancelAnimationFrame", vi.fn());
       vi.spyOn(HTMLElement.prototype, "animate").mockImplementation(
         () => ({ cancel: vi.fn() }) as unknown as Animation,
@@ -553,7 +660,7 @@ describe("transcript scrolling", () => {
     },
   );
 
-    it("lets a wheel up inside the bottom margin leave a streaming reply", () => {
+  it("lets a wheel up inside the bottom margin leave a streaming reply", () => {
     const blocks = (text: string): Block[] => [
       { id: "user", role: "user", text: "Explain auth" },
       { id: "reply", role: "assistant", text },

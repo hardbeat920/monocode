@@ -49,7 +49,7 @@ beforeEach(() => {
   resultStyles = document.createElement("style");
   resultStyles.textContent = [
     ...readFileSync("src/styles/index.css", "utf8").matchAll(
-      /\.transcript-turn(?::has\(\[data-artifact-results\]\)| > :has\(\.word-fading\) ~ \[data-launched-sessions\])[^{]*\{[^}]+\}/g,
+      /\.transcript-turn(?::has\(\[data-artifact-results\]\)|\s*>\s*\[data-history-content\]\s*>\s*:has\(\.word-fading\)\s*~\s*\[data-launched-sessions\])[^{]*\{[^}]+\}/g,
     ),
   ]
     .map((rule) => rule[0])

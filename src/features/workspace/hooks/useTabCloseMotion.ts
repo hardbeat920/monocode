@@ -44,6 +44,9 @@ export function useTabCloseMotion<T extends { id: string }>(
 ) {
   const measureRef = useRef(new Map<string, number>());
   const observersRef = useRef(new Map<string, ResizeObserver>());
+  const callbacksRef = useRef(
+    new Map<string, (node: HTMLElement | null) => void>(),
+  );
   const idsKey = items.map((item) => item.id).join("\0");
   const [trackedKey, setTrackedKey] = useState(idsKey);
   const [entries, setEntries] = useState(() => items.map(idleEntry));
@@ -113,16 +116,41 @@ export function useTabCloseMotion<T extends { id: string }>(
     observersRef.current.get(id)?.disconnect();
     observersRef.current.delete(id);
     if (!node) return;
-    const record = () => {
-      const width = node.getBoundingClientRect().width;
-      if (width > 1) measureRef.current.set(id, width);
-    };
-    record();
     if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(record);
+    // Ref callbacks run in React's mutation phase. Reading a rect here forced
+    // WebKit to lay out the newly selected conversation before its portal had
+    // updated, then lay it out again. The observer already supplies the size.
+    const observer = new ResizeObserver(([entry]) => {
+      if (!entry) return;
+      const width =
+        entry.borderBoxSize?.[0]?.inlineSize ?? entry.contentRect.width;
+      if (width > 1) measureRef.current.set(id, width);
+    });
     observer.observe(node);
     observersRef.current.set(id, observer);
   }, []);
+
+  const tabNodeRef = useCallback(
+    (id: string) => {
+      let callback = callbacksRef.current.get(id);
+      if (!callback) {
+        callback = (node) => setTabNode(id, node);
+        callbacksRef.current.set(id, callback);
+      }
+      return callback;
+    },
+    [setTabNode],
+  );
+
+  useLayoutEffect(() => {
+    const retained = new Set(entries.map((entry) => entry.id));
+    for (const id of callbacksRef.current.keys()) {
+      if (!retained.has(id)) {
+        callbacksRef.current.delete(id);
+        measureRef.current.delete(id);
+      }
+    }
+  }, [entries]);
 
   useLayoutEffect(
     () => () => {
@@ -137,6 +165,7 @@ export function useTabCloseMotion<T extends { id: string }>(
       const entry = current.find((candidate) => candidate.id === id);
       if (entry?.closing) {
         measureRef.current.delete(id);
+        callbacksRef.current.delete(id);
         return current.filter((candidate) => candidate.id !== id);
       }
       return current.map((candidate) =>
@@ -154,6 +183,7 @@ export function useTabCloseMotion<T extends { id: string }>(
   return {
     displayed,
     setTabNode,
+    tabNodeRef,
     finishMotion,
   };
 }

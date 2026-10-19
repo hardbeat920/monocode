@@ -227,6 +227,19 @@ describe("loadProjectFiles", () => {
     stop();
   });
 
+  it("keeps the same array and stays quiet when a rescan finds nothing new", async () => {
+    const first = await loadProjectFiles(cwd);
+    const onChange = vi.fn();
+    const stop = subscribeProjectFiles(onChange);
+    list.mockResolvedValue(files.map((file) => ({ ...file })));
+    invalidateProjectFiles(cwd);
+    onChange.mockClear();
+    expect(await loadProjectFiles(cwd, true)).toBe(first);
+    expect(peekProjectFiles(cwd)).toBe(first);
+    expect(onChange).not.toHaveBeenCalled();
+    stop();
+  });
+
   it("reloads after a directory change", async () => {
     vi.useFakeTimers();
     await loadProjectFiles(cwd);

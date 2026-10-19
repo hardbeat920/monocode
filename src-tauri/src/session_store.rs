@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -311,7 +312,25 @@ pub fn session_get(
 ) -> Result<Option<SessionRecord>, String> {
     validate_id(&session_id, "session")?;
     let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
-    get_session(&conn, &session_id).map_err(|e| e.to_string())
+    let mut record = get_session(&conn, &session_id).map_err(|e| e.to_string())?;
+    if let Some(record) = record.as_mut() {
+        crate::tool_detail::omit_large_details(&mut record.blocks);
+    }
+    Ok(record)
+}
+
+/// Output the transcript omitted on load, fetched when its row is expanded.
+#[tauri::command(async)]
+pub fn session_tool_detail(
+    store: State<'_, SessionStore>,
+    session_id: String,
+    block_id: String,
+    step_id: Option<String>,
+) -> Result<Option<String>, String> {
+    validate_id(&session_id, "session")?;
+    let conn = store.conn.lock().map_err(|_| "Session store is locked")?;
+    crate::tool_detail::stored_detail(&conn, &session_id, &block_id, step_id.as_deref())
+        .map_err(|e| e.to_string())
 }
 
 const MAX_SEARCH_SCAN: usize = 400;
@@ -1120,7 +1139,25 @@ pub(crate) fn upsert_session(
     let now = now_millis();
     let model_settings = serde_json::to_string(&session.model_settings)
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    let existing: Option<(i64, i64, String, i64, i64, String)> = conn
+        .query_row(
+            "SELECT created_at, updated_at, blocks_json, archived, pinned, queued_messages_json FROM sessions WHERE id = ?1",
+            params![session.id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+        )
+        .optional()?;
+    let previous_blocks: Option<Value> = existing
+        .as_ref()
+        .and_then(|(_, _, raw, _, _, _)| serde_json::from_str(raw).ok());
     let blocks = crate::artifacts::retain_existing_cards(conn, &session.blocks)?;
+    // Loaded transcripts omit large tool output; never let a save erase it.
+    let blocks = match &previous_blocks {
+        Some(previous) => match crate::tool_detail::restore_details(previous, &blocks) {
+            Cow::Owned(restored) => Cow::Owned(restored),
+            Cow::Borrowed(_) => blocks,
+        },
+        None => blocks,
+    };
     let blocks_json = serde_json::to_string(blocks.as_ref())
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
     let queued_messages_json = serde_json::to_string(&session.queued_messages)
@@ -1176,20 +1213,14 @@ pub(crate) fn upsert_session(
     let has_user_message = has_user_block(&session.blocks);
     let is_draft = has_draft_block(&session.blocks);
 
-    let existing: Option<(i64, i64, String, i64, i64, String)> = conn
-        .query_row(
-            "SELECT created_at, updated_at, blocks_json, archived, pinned, queued_messages_json FROM sessions WHERE id = ?1",
-            params![session.id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
-        )
-        .optional()?;
     let created_at = existing
         .as_ref()
         .map(|(value, _, _, _, _, _)| *value)
         .unwrap_or(now);
     let updated_at = match &existing {
-        Some((_, prev_updated, prev_blocks, _, _, prev_queue))
-            if json_eq(prev_blocks, blocks.as_ref()) && prev_queue == &queued_messages_json =>
+        Some((_, prev_updated, _, _, _, prev_queue))
+            if previous_blocks.as_ref() == Some(blocks.as_ref())
+                && prev_queue == &queued_messages_json =>
         {
             *prev_updated
         }
@@ -1748,13 +1779,6 @@ fn has_draft_block(blocks: &Value) -> bool {
 
 fn nonempty(value: Option<String>) -> Option<String> {
     value.filter(|value| !value.is_empty())
-}
-
-fn json_eq(raw: &str, incoming: &Value) -> bool {
-    match serde_json::from_str::<Value>(raw) {
-        Ok(previous) => previous == *incoming,
-        Err(_) => false,
-    }
 }
 
 fn optional_json(raw: Option<String>) -> Option<Value> {
@@ -2441,6 +2465,40 @@ mod tests {
         assert!(second.updated_at > first.updated_at);
         assert_eq!(second.title, "Updated");
         assert_eq!(second.provider_session_id.as_deref(), Some("acp-session-2"));
+    }
+
+    #[test]
+    fn saving_a_loaded_transcript_keeps_its_omitted_tool_output() {
+        let store = SessionStore::open_in_memory().unwrap();
+        let conn = store.conn.lock().unwrap();
+        let output = "line\n".repeat(1_000);
+        let mut row = sample("s1", "/tmp/a", "First");
+        row.blocks = json!([
+            { "id": "u", "role": "user", "text": "run" },
+            { "id": "t", "role": "tool", "text": "npm test",
+              "tool": { "kind": "execute", "status": "completed", "detail": output } }
+        ]);
+        upsert_session(&conn, &row).unwrap();
+
+        // What `session_get` hands the transcript.
+        let mut loaded = get_session(&conn, "s1").unwrap().unwrap().blocks;
+        crate::tool_detail::omit_large_details(&mut loaded);
+        assert!(loaded[1]["tool"].get("detail").is_none());
+        loaded
+            .as_array_mut()
+            .unwrap()
+            .push(json!({ "id": "a", "role": "assistant", "text": "done" }));
+        row.blocks = loaded;
+        upsert_session(&conn, &row).unwrap();
+
+        let stored = get_session(&conn, "s1").unwrap().unwrap().blocks;
+        assert_eq!(stored[1]["tool"]["detail"], output);
+        assert!(stored[1]["tool"].get("detailOmitted").is_none());
+        assert_eq!(stored[2]["text"], "done");
+        assert_eq!(
+            crate::tool_detail::stored_detail(&conn, "s1", "t", None).unwrap(),
+            Some(output)
+        );
     }
 
     #[test]

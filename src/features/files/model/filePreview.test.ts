@@ -3,6 +3,7 @@ import {
   formatFileSize,
   isImagePath,
   isVideoPath,
+  sniffDocumentImageMime,
   sniffImageMime,
   videoMimeForPath,
 } from "./filePreview";
@@ -92,6 +93,34 @@ describe("sniffImageMime", () => {
         bytes(0, 0, 0, 0x20, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d),
       ),
     ).toBeNull();
+  });
+});
+
+describe("sniffDocumentImageMime", () => {
+  const text = (value: string) => new TextEncoder().encode(value);
+
+  it("sniffs raster images whatever their name", () => {
+    const png = bytes(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a);
+    expect(sniffDocumentImageMime("hero.png", png)).toBe("image/png");
+    expect(sniffDocumentImageMime("hero.svg", png)).toBe("image/png");
+  });
+
+  it("accepts SVG text only under an .svg name", () => {
+    const svg = text('<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg"/>');
+    expect(sniffDocumentImageMime("logo.svg", svg)).toBe("image/svg+xml");
+    expect(sniffDocumentImageMime("logo.SVG", text("<svg>"))).toBe("image/svg+xml");
+    expect(sniffDocumentImageMime("logo.png", svg)).toBeNull();
+    expect(sniffDocumentImageMime("logo.svg", text("<html><body/>"))).toBeNull();
+    expect(sniffDocumentImageMime("logo.svg", text("<svgfoo>"))).toBeNull();
+    expect(sniffDocumentImageMime("logo.svg", bytes(0x3c, 0x73, 0x76, 0x67, 0x3e, 0))).toBeNull();
+  });
+
+  it("refuses a Git LFS pointer left in place of the image", () => {
+    const pointer = text(
+      "version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 1234\n",
+    );
+    expect(sniffDocumentImageMime("hero.png", pointer)).toBeNull();
+    expect(sniffDocumentImageMime("logo.svg", pointer)).toBeNull();
   });
 });
 

@@ -4,6 +4,7 @@ mod account_identity;
 mod artifacts;
 mod automations;
 mod azure_devops;
+mod background_work;
 mod chat_background;
 mod checkpoint;
 mod codex_mono_store;
@@ -37,6 +38,7 @@ mod notifications;
 mod pasteboard;
 mod pi_usage;
 mod project_logo;
+mod provider_session_transfer;
 mod pty;
 #[cfg(target_os = "macos")]
 mod quick_composer;
@@ -44,10 +46,12 @@ mod rate_limits;
 mod reminders;
 mod remote;
 mod remote_ssh;
+mod resources;
 mod search;
 mod session_store;
 mod skills;
 pub mod ssh_askpass;
+mod tool_detail;
 #[cfg(target_os = "macos")]
 mod trackpad_zoom;
 #[cfg(target_os = "windows")]
@@ -451,6 +455,7 @@ pub fn run() {
             fs::inspect_paths,
             fs::read_file_base64,
             fs::read_binary_file,
+            fs::read_project_image,
             fs::allow_video_stream,
             fs::write_attachment,
             fs::save_generated_image,
@@ -489,6 +494,7 @@ pub fn run() {
             codex_mono_store::codex_mono_store_prepare,
             codex_mono_store::codex_mono_store_copy,
             codex_mono_store::codex_mono_store_restore_agent_state,
+            provider_session_transfer::provider_session_transfer,
             harness::harness_write,
             harness::harness_kill,
             harness::harness_kill_all,
@@ -518,6 +524,7 @@ pub fn run() {
             session_store::session_search,
             session_store::cancel_session_search,
             session_store::session_get,
+            session_store::session_tool_detail,
             mono_transcript::mono_session_get,
             mono_transcript::mono_session_page,
             mono_transcript::mono_session_upsert,
@@ -622,6 +629,9 @@ pub fn run() {
             window_transfer::stage_window_transfer,
             window_transfer::take_window_transfer,
             chat_background::save_chat_background,
+            resources::resource_usage,
+            resources::resource_processes,
+            resources::resource_stop_tool,
             chat_background::remove_chat_background,
             chat_background::save_project_chat_background,
             chat_background::remove_project_chat_background,

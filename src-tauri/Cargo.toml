@@ -22,6 +22,7 @@ open = "5.4.1"
 serde.workspace = true
 serde_json.workspace = true
 toml = "0.9.12"
+tokio = { version = "1", features = ["sync"] }
 sha2 = "0.10"
 zstd = "0.13"
 unicode-normalization = "0.1"

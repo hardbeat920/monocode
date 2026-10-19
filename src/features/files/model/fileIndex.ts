@@ -18,6 +18,10 @@ type Listener = () => void;
 // Tabs in separate worktrees should not evict each other's file index.
 const cache = new Map<string, ProjectFile[]>();
 const inflight = new Map<string, Promise<ProjectFile[]>>();
+// Last listing per checkout, kept through invalidation: agents' shell and edit
+// tools rescan after every call, and an unchanged rescan must keep its array so
+// every composer's mention index is not rebuilt.
+const listings = new Map<string, ProjectFile[]>();
 let lastCwd: string | null = null;
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 let refreshing = false;
@@ -52,6 +56,7 @@ export function invalidateProjectFiles(cwd?: string) {
   } else {
     cache.clear();
     inflight.clear();
+    listings.clear();
     lastCwd = null;
     if (refreshTimer != null) {
       clearTimeout(refreshTimer);
@@ -128,13 +133,20 @@ export function loadProjectFiles(
   if (!refresh && pending) return pending;
 
   const promise = listProjectFiles(cwd)
-    .then((files) => {
+    .then((scanned) => {
       // A refresh or invalidation supersedes only this checkout's scan.
-      if (inflight.get(cwd) !== promise) return files;
+      if (inflight.get(cwd) !== promise) return scanned;
+      const previous = listings.get(cwd);
+      const files =
+        previous && sameListing(previous, scanned) ? previous : scanned;
+      listings.delete(cwd);
+      listings.set(cwd, files);
+      if (listings.size > CACHE_LIMIT * 2)
+        listings.delete(listings.keys().next().value!);
       cache.delete(cwd);
       cache.set(cwd, files);
       if (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value!);
-      notifyProjectFilesChanged();
+      if (files !== previous) notifyProjectFilesChanged();
       return files;
     })
     .finally(() => {
@@ -142,6 +154,15 @@ export function loadProjectFiles(
     });
   inflight.set(cwd, promise);
   return promise;
+}
+
+function sameListing(a: ProjectFile[], b: ProjectFile[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index++) {
+    if (a[index].path !== b[index].path || a[index].isDir !== b[index].isDir)
+      return false;
+  }
+  return true;
 }
 
 export type RankedFile = ProjectFile & FuzzyHit;

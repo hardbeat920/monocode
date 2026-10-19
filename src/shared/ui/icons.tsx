@@ -94,6 +94,7 @@ import Settings01Icon from "@hugeicons/core-free-icons/Settings01Icon";
 import Share02Icon from "@hugeicons/core-free-icons/Share02Icon";
 import ShieldAlertIcon from "@hugeicons/core-free-icons/ShieldAlertIcon";
 import SidebarRight01Icon from "@hugeicons/core-free-icons/SidebarRight01Icon";
+import SourceCodeIcon from "@hugeicons/core-free-icons/SourceCodeIcon";
 import SparklesIcon from "@hugeicons/core-free-icons/SparklesIcon";
 import SquareIcon from "@hugeicons/core-free-icons/SquareIcon";
 import SquareLock02Icon from "@hugeicons/core-free-icons/SquareLock02Icon";
@@ -185,6 +186,7 @@ export const CircleHelp = wrap(HelpCircleIcon, "CircleHelp");
 export const CircleX = wrap(CancelCircleIcon, "CircleX");
 export const CloudUpload = wrap(CloudUploadIcon, "CloudUpload");
 export const Clock = wrap(Clock01Icon, "Clock");
+export const Code = wrap(SourceCodeIcon, "Code");
 export const Copy = wrap(Copy01Icon, "Copy");
 export const CursorMagicSelection = wrap(
   CursorMagicSelection04Icon,

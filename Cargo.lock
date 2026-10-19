@@ -2493,7 +2493,7 @@ dependencies = [
 
 [[package]]
 name = "monocode"
-version = "0.13.0"
+version = "0.15.0"
 dependencies = [
  "arboard",
  "base64 0.22.1",
@@ -2526,6 +2526,7 @@ dependencies = [
  "tauri-plugin-window-state",
  "tauri-winrt-notification 0.8.1",
  "time",
+ "tokio",
  "toml 0.9.12+spec-1.1.0",
  "unicode-normalization",
  "ureq",

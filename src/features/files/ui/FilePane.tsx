@@ -33,6 +33,7 @@ import { AgentTabView } from "../../sessions/ui/AgentTabView";
 import { MarkdownPreview } from "../../sessions/ui/AgentMarkdown";
 import { BinaryFileView } from "./BinaryFileView";
 import { ReleaseNotesSurface } from "../../../app/ui/ReleaseNotesSurface";
+import { WorkingTreeDiffSurface as WorkingTreeDiff } from "../../source-control/ui/workingTreeDiffSurface";
 import { isRemoteProjectPath } from "../../projects/model/recents";
 
 const CommitDiff = lazySurface(async () => {
@@ -51,10 +52,6 @@ const TerminalView = lazySurface(async () => {
   const module = await import("../../terminal/ui/TerminalView");
   return { default: module.TerminalView };
 });
-const WorkingTreeDiff = lazySurface(async () => {
-  const module = await import("../../source-control/ui/WorkingTreeDiff");
-  return { default: module.WorkingTreeDiff };
-});
 
 type Props = {
   pane: EditorPane;
@@ -63,6 +60,8 @@ type Props = {
   visible?: boolean;
   /** The title bar already names a standalone file, so avoid repeating it. */
   showTabs?: boolean;
+  /** Shows the tabs but holds off mounting the files, as a pane slides in. */
+  deferBody?: boolean;
   dirtyFileIds: Set<string>;
   fileErrorCounts: Map<string, number>;
   sessions: Session[];
@@ -91,6 +90,7 @@ function FilePaneComponent({
   focused,
   visible = true,
   showTabs = true,
+  deferBody = false,
   dirtyFileIds,
   fileErrorCounts,
   sessions,
@@ -114,16 +114,6 @@ function FilePaneComponent({
     loadDiffViewer,
     loadDiffViewer,
   );
-  const activeFile = pane.files.find((file) => file.id === pane.activeFileId);
-  const sessionReview =
-    activeFile && isSessionChangesTab(activeFile) ? activeFile : undefined;
-  const unifiedReview =
-    !!activeFile &&
-    !sessionReview &&
-    (isChangesTab(activeFile) ||
-      (diffViewer === "unified" && isReviewTab(activeFile)));
-  const commitReview = !!activeFile && isCommitTab(activeFile);
-
   return (
     <div
       className="flex h-full min-h-0 min-w-0 flex-1 flex-col"
@@ -143,36 +133,14 @@ function FilePaneComponent({
           onPaneDragStart={onPaneDragStart}
         />
       ) : null}
-      <div className="relative min-h-0 flex-1">
-        {sessionReview ? (
-          <div className="absolute inset-0 h-full">
-            <SessionChangesDiff
-              cwd={sessionReview.cwd}
-              sessionId={sessionReview.sessionChanges.sessionId}
-              focusPath={sessionReview.path}
-            />
-          </div>
-        ) : commitReview && activeFile?.commit ? (
-          <div className="absolute inset-0 h-full">
-            <CommitDiff cwd={activeFile.cwd} sha={activeFile.commit.sha} />
-          </div>
-        ) : unifiedReview && activeFile ? (
-          <div className="absolute inset-0 h-full">
-            <WorkingTreeDiff
-              cwd={activeFile.cwd}
-              focusPath={activeFile.path}
-              focusKind={activeFile.changeKind}
-            />
-          </div>
-        ) : null}
-        {pane.files.map((file) => {
-          if (
-            isCommitTab(file) ||
+      <div data-pane-body="" className="relative min-h-0 flex-1">
+        {(deferBody ? [] : pane.files).map((file) => {
+          // Keep review state alive just like an editor; visibility suspends
+          // its rendering and background work until the tab is active again.
+          const active = visible && file.id === pane.activeFileId;
+          const unifiedReview =
             isChangesTab(file) ||
-            isSessionChangesTab(file) ||
-            (unifiedReview && isReviewTab(file))
-          )
-            return null;
+            (diffViewer === "unified" && isReviewTab(file));
           return (
             <div
               key={file.id}
@@ -183,13 +151,33 @@ function FilePaneComponent({
                   : "hidden"
               }
             >
-              {isAgentTab(file) ? (
+              {isSessionChangesTab(file) ? (
+                <SessionChangesDiff
+                  visible={active}
+                  cwd={file.cwd}
+                  sessionId={file.sessionChanges.sessionId}
+                  focusPath={file.path}
+                />
+              ) : isCommitTab(file) ? (
+                <CommitDiff
+                  cwd={file.cwd}
+                  sha={file.commit.sha}
+                  visible={active}
+                />
+              ) : unifiedReview ? (
+                <WorkingTreeDiff
+                  visible={active}
+                  cwd={file.cwd}
+                  focusPath={file.path}
+                  focusKind={file.changeKind}
+                />
+              ) : isAgentTab(file) ? (
                 <AgentTabView
                   title={file.path}
                   session={sessions.find(
                     (entry) => entry.id === file.agent.sessionId,
                   )}
-                  visible={file.id === pane.activeFileId}
+                  visible={visible && file.id === pane.activeFileId}
                   focused={focused && file.id === pane.activeFileId}
                   onOpenFile={onOpenFile}
                 />
@@ -253,6 +241,7 @@ export const FilePane = memo(FilePaneComponent, (previous, next) => {
     previous.focused !== next.focused ||
     previous.visible !== next.visible ||
     previous.showTabs !== next.showTabs ||
+    previous.deferBody !== next.deferBody ||
     previous.dirtyFileIds !== next.dirtyFileIds ||
     previous.fileErrorCounts !== next.fileErrorCounts ||
     previous.onFocus !== next.onFocus ||
