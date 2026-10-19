@@ -47,11 +47,21 @@ it("marks added and removed lines with a glyph, not only color", async () => {
 
   // The code span holds only the line text, so copying it skips the marker
   // column and its screen-reader cue.
-  const rows = [...container.querySelectorAll("span.w-7")].map((marker) => ({
-    glyph: marker.querySelector('[aria-hidden="true"]')?.textContent,
-    cue: marker.querySelector(".sr-only")?.textContent ?? null,
-    code: marker.nextElementSibling?.textContent,
-  }));
+  const gutters = new Map(
+    [...container.querySelectorAll("[data-diff-gutter-row]")].map((row) => [
+      row.getAttribute("data-diff-gutter-row"),
+      row,
+    ]),
+  );
+  const rows = [...container.querySelectorAll("[data-diff-line]")].map(
+    (row) => ({
+      glyph: gutters
+        .get(row.getAttribute("data-diff-row"))
+        ?.querySelector('[data-diff-marker][aria-hidden="true"]')?.textContent,
+      cue: row.querySelector(".sr-only")?.textContent ?? null,
+      code: row.querySelector("[data-diff-code]")?.textContent,
+    }),
+  );
   expect(rows).toEqual([
     { glyph: "", cue: null, code: "alpha" },
     { glyph: "−", cue: "Removed: ", code: "beta" },

@@ -119,3 +119,27 @@ test("words that arrive after the tab returns still fade in", async ({
     .count();
   expect(settled).toBeGreaterThanOrEqual(25);
 });
+
+test("a reply still streaming does not replay what arrived while its tab was hidden", async ({
+  page,
+}) => {
+  await page.goto("/tests/browser/tab-revisit.html");
+  const { words } = await streamWords(page, 1, 30);
+  await page.evaluate(() => (window as unknown as Fixture).hideTab());
+  await streamWords(page, 30, 60);
+  await page.evaluate(() => (window as unknown as Fixture).showTab());
+  await frames(page, 3);
+
+  // The catch-up lands after the tab shows; none of it fades in, and the
+  // working line does not open again above the reply.
+  await expect(
+    page.locator('[data-chat-message="reply-1"] .agent-markdown'),
+  ).toContainText(words.slice(50, 59).join(" "));
+  const replayed = await page.evaluate(() =>
+    document
+      .getAnimations()
+      .map((animation) => (animation as CSSAnimation).animationName)
+      .filter((name) => name === "word-fade-in" || name === "zen-fold-open"),
+  );
+  expect(replayed).toEqual([]);
+});

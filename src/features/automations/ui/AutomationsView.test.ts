@@ -96,3 +96,40 @@ it("invalidates the cached list when an automation changes", async () => {
   notifyAutomationsChanged();
   expect(peekAutomations()).toBeNull();
 });
+
+it("lists only automations for the scoped project, plus project-less ones", async () => {
+  const automation = (id: string, name: string, cwd: string): Automation => ({
+    ...newAutomationDraft(cwd, "codex", "model"),
+    id,
+    name,
+    nextRunAt: 0,
+    createdAt: 1,
+    updatedAt: 1,
+  });
+  invoke.mockImplementation(async (command: string) =>
+    command.includes("run")
+      ? []
+      : [
+          automation("here", "Here review", "/work/project"),
+          automation("there", "There review", "/work/other"),
+          automation("home", "Home review", "~"),
+        ],
+  );
+  await act(async () =>
+    root.render(
+      createElement(AutomationsView, {
+        cwd: "/work/project",
+        scopeProject: "/work/project",
+        recents: [],
+        onClose: vi.fn(),
+        onLaunch: vi.fn(),
+        onOpenSession: vi.fn(),
+      }),
+    ),
+  );
+  const shown = (name: string) =>
+    container.querySelector(`[aria-label="Open ${name}"]`) != null;
+  expect(shown("Here review")).toBe(true);
+  expect(shown("Home review")).toBe(true);
+  expect(shown("There review")).toBe(false);
+});

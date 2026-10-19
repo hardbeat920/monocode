@@ -20,7 +20,11 @@ function highlight(
 ): Promise<HighlightResult> {
   return new Promise((resolve) => {
     const cached = plugin.highlight(
-      { code, language: language as BundledLanguage, themes: plugin.getThemes() },
+      {
+        code,
+        language: language as BundledLanguage,
+        themes: plugin.getThemes(),
+      },
       resolve,
     );
     if (cached) resolve(cached);
@@ -46,7 +50,10 @@ describe("bounded code highlight plugin", () => {
       expect(result.tokens).toEqual(
         highlighter.codeToTokens("a\r\n\r\nb", {
           lang: "text",
-          themes: { light: "github-light", dark: "github-dark" },
+          themes: {
+            light: "light-plus",
+            dark: "dark-plus",
+          },
         }).tokens,
       );
     } finally {
@@ -117,7 +124,10 @@ describe("bounded code highlight plugin", () => {
           const code = source.slice(0, end);
           const expected = highlighter.codeToTokens(code, {
             lang: language as BundledLanguage,
-            themes: { light: "github-light", dark: "github-dark" },
+            themes: {
+              light: "light-plus",
+              dark: "dark-plus",
+            },
           });
           expect((await highlight(plugin, code, language)).tokens).toEqual(
             expected.tokens,
@@ -132,7 +142,10 @@ describe("bounded code highlight plugin", () => {
           expect((await highlight(plugin, code, language)).tokens).toEqual(
             highlighter.codeToTokens(code, {
               lang: language as BundledLanguage,
-              themes: { light: "github-light", dark: "github-dark" },
+              themes: {
+                light: "light-plus",
+                dark: "dark-plus",
+              },
             }).tokens,
           );
         }
@@ -171,17 +184,18 @@ describe("bounded code highlight plugin", () => {
 
     try {
       const callbacks = [vi.fn(), vi.fn(), vi.fn()];
-      const requests = callbacks.map((callback) =>
-        new Promise<HighlightResult>((resolve) => {
-          const cached = plugin.highlight(
-            { code: source, language: "ts", themes: plugin.getThemes() },
-            (result) => {
-              callback(result);
-              resolve(result);
-            },
-          );
-          expect(cached).toBeNull();
-        }),
+      const requests = callbacks.map(
+        (callback) =>
+          new Promise<HighlightResult>((resolve) => {
+            const cached = plugin.highlight(
+              { code: source, language: "ts", themes: plugin.getThemes() },
+              (result) => {
+                callback(result);
+                resolve(result);
+              },
+            );
+            expect(cached).toBeNull();
+          }),
       );
       const results = await Promise.all(requests);
 
@@ -273,7 +287,11 @@ describe("bounded code highlight plugin", () => {
     expect(text(await highlight(plugin, first))).toBe(first);
     expect(text(await highlight(plugin, second))).toBe(second);
     const again = plugin.highlight(
-      { code: first, language: "ts" as BundledLanguage, themes: plugin.getThemes() },
+      {
+        code: first,
+        language: "ts" as BundledLanguage,
+        themes: plugin.getThemes(),
+      },
       () => undefined,
     );
     expect(again && text(again)).toBe(first);
@@ -283,7 +301,9 @@ describe("bounded code highlight plugin", () => {
     const plugin = createBoundedCodePlugin();
     const colored = await highlight(plugin, "const x = 1;", "typescript");
     const colors = new Set(
-      colored.tokens.flat().map((token) => token.htmlStyle?.color ?? token.color),
+      colored.tokens
+        .flat()
+        .map((token) => token.htmlStyle?.color ?? token.color),
     );
     expect(colors.size).toBeGreaterThan(1);
     const plain = await highlight(plugin, "anything", "not-a-language");

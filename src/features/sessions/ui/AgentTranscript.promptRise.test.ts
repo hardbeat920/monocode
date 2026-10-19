@@ -20,24 +20,28 @@ let container: HTMLDivElement;
 let root: Root;
 let animate: ReturnType<typeof vi.fn>;
 
-const first: Block[] = [{ id: "u1", role: "user", text: "Hello" }];
-const second: Block[] = [
-  ...first,
-  { id: "a1", role: "assistant", text: "Hi" },
-  { id: "u2", role: "user", text: "Next" },
-];
+let first: Block[];
+let second: Block[];
 
-function render(blocks: Block[], busy = true) {
-  act(() =>
-    root.render(
-      createElement(AgentTranscript, { blocks, busy, visible: true }),
-    ),
-  );
+function sendFirst(startedAt = Date.now()) {
+  first = [{ id: "u1", role: "user", text: "Hello", startedAt }];
+  second = [
+    ...first,
+    { id: "a1", role: "assistant", text: "Hi" },
+    { id: "u2", role: "user", text: "Next" },
+  ];
+}
+
+async function render(blocks: Block[], busy = true, visible = true) {
+  await act(async () => {
+    root.render(createElement(AgentTranscript, { blocks, busy, visible }));
+  });
 }
 
 beforeEach(() => {
   appearance.layout = "chat";
   appearance.anchor = true;
+  sendFirst();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal(
     "ResizeObserver",
@@ -81,8 +85,8 @@ function risenPrompts() {
 }
 
 describe("prompt rise in the chat layout", () => {
-  it("rises the first prompt of a fresh session from the upper screen", () => {
-    render(first);
+  it("rises the first prompt of a fresh session from the upper screen", async () => {
+    await render(first);
 
     expect(risenPrompts()).toEqual(["u1"]);
     const [rise] = animate.mock.calls[0];
@@ -91,9 +95,9 @@ describe("prompt rise in the chat layout", () => {
     expect(fade).toEqual([{ opacity: 0 }, { opacity: 1 }]);
   });
 
-  it("holds the rest of the turn until the prompt settles", () => {
+  it("holds the rest of the turn until the prompt settles", async () => {
     vi.useFakeTimers();
-    render(first);
+    await render(first);
     const turn = container.querySelector<HTMLElement>(".transcript-turn")!;
     expect(turn.dataset.promptRise).toBe("rising");
 
@@ -106,31 +110,47 @@ describe("prompt rise in the chat layout", () => {
     vi.useRealTimers();
   });
 
-  it("rises each newly sent prompt", () => {
-    render(first, false);
-    render(second);
+  it("rises each newly sent prompt", async () => {
+    await render(first, false);
+    await render(second);
 
     expect(risenPrompts()).toEqual(["u2"]);
   });
 
-  it("does not replay an existing conversation on mount", () => {
-    render(second);
+  it("does not replay an existing conversation on mount", async () => {
+    await render(second);
 
     expect(animate).not.toHaveBeenCalled();
   });
 
-  it("stays still in the full-width layout", () => {
+  it("does not replay a first prompt sent a while ago when remounted mid-reply", async () => {
+    sendFirst(Date.now() - 60_000);
+    await render(first);
+
+    expect(animate).not.toHaveBeenCalled();
+  });
+
+  it("does not rise a prompt sent while the tab was hidden when it returns", async () => {
+    await render(first, false);
+    await render(first, false, false);
+    await render(second, true, false);
+    await render(second);
+
+    expect(animate).not.toHaveBeenCalled();
+  });
+
+  it("stays still in the full-width layout", async () => {
     appearance.layout = "full";
-    render(first);
-    render(second);
+    await render(first);
+    await render(second);
 
     expect(animate).not.toHaveBeenCalled();
   });
 
-  it("stays still when prompts are not anchored to the top", () => {
+  it("stays still when prompts are not anchored to the top", async () => {
     appearance.anchor = false;
-    render(first);
-    render(second);
+    await render(first);
+    await render(second);
 
     expect(animate).not.toHaveBeenCalled();
   });
