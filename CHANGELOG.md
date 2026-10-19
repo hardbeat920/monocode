@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Moving between split panes with **⌘⌥ arrow keys** (Ctrl+Alt on Windows and Linux) puts the cursor in the newly focused pane's composer, so switching panes no longer needs the mouse before typing.
+
 ## [0.15.0] - 2026-10-18
 
 ### Added
