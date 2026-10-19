@@ -11,6 +11,7 @@ import { resolveTabGroupLabel } from "../../features/workspace/model/tabGroups";
 import { projectKey, projectName } from "../../shared/lib/paths";
 import { Plus, Settings } from "../../shared/ui/icons";
 import { IconButton } from "./TitleBar";
+import { useTranslate } from "../../shared/i18n/locale";
 
 /** How far a switched-in project slides, and for how long. */
 const SLIDE_DISTANCE = 28;
@@ -89,6 +90,7 @@ export function ProjectSpacesBar({
 }) {
   const { groupLabels } = useProjectAppearance();
   const busy = useMemo(() => [...(busyPaths ?? [])], [busyPaths]);
+  const t = useTranslate();
   return (
     <div
       className="grid h-10 shrink-0 grid-cols-[auto_1fr_auto] items-center gap-1 px-2"
@@ -96,13 +98,13 @@ export function ProjectSpacesBar({
     >
       <div className="flex w-7 justify-start">
         {onOpenSettings ? (
-          <IconButton label={`Settings (${MOD},)`} onClick={onOpenSettings}>
+          <IconButton label={`${t("Settings")} (${MOD},)`} onClick={onOpenSettings}>
             <Settings className="size-3.5" strokeWidth={1.75} />
           </IconButton>
         ) : null}
       </div>
       <nav
-        aria-label="Projects"
+        aria-label={t("Projects")}
         className="flex min-w-0 items-center justify-center gap-0.5 overflow-hidden"
       >
         {spaces.map((path) => {
@@ -120,7 +122,7 @@ export function ProjectSpacesBar({
               key={path}
               type="button"
               title={label}
-              aria-label={working ? `${label}, working` : label}
+              aria-label={working ? t("{label}, working", { label }) : label}
               aria-current={current ? "true" : undefined}
               data-tauri-drag-region="false"
               onClick={() => {
@@ -143,7 +145,7 @@ export function ProjectSpacesBar({
       </nav>
       <div className="flex w-7 justify-end">
         {onOpenProject ? (
-          <IconButton label={`Open project (${MOD}O)`} onClick={onOpenProject}>
+          <IconButton label={`${t("Open project")} (${MOD}O)`} onClick={onOpenProject}>
             <Plus className="size-3.5" strokeWidth={1.75} />
           </IconButton>
         ) : null}

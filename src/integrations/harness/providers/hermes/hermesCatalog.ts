@@ -12,6 +12,7 @@ import {
   watchChild,
 } from "../../core/child";
 import { modelsFromHermesSession } from "./hermesProtocol";
+import { translate } from "../../../../shared/i18n/locale";
 
 const PROBE_ID = "monocode-hermes-probe";
 const DISCOVERY_TIMEOUT_MS = 30_000;
@@ -104,7 +105,7 @@ function withTimeout<T>(
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
       onTimeout();
-      reject(new Error("Hermes model discovery timed out"));
+      reject(new Error(translate("Hermes model discovery timed out")));
     }, ms);
     void run().then(
       (value) => {

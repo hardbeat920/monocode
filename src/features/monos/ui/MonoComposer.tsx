@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { isImeComposition } from "../../../shared/lib/keyboard";
+import { useTranslate } from "../../../shared/i18n/locale";
 import { ArrowUp, Plus, SmilePlus } from "../../../shared/ui/icons";
 import { AttachmentChip } from "../../sessions/ui/AttachmentChip";
 import type { Attachment } from "../../sessions/model/session";
@@ -92,6 +93,7 @@ export function MonoComposer({
   controls,
   tools,
 }: Props) {
+  const t = useTranslate();
   const [text, setText] = useState(() => getComposerDraft(sessionId) ?? "");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const autocorrect = useComposerAutocorrect();
@@ -232,7 +234,9 @@ export function MonoComposer({
           if (incoming.length === 0) {
             if (dropped)
               setDropError(
-                "Nothing to attach from that drop — the file may have been moved, renamed, or deleted.",
+                t(
+                  "Nothing to attach from that drop — the file may have been moved, renamed, or deleted.",
+                ),
               );
             return;
           }
@@ -310,8 +314,8 @@ export function MonoComposer({
   const attachButton = (className: string, tool = false) => (
     <button
       type="button"
-      title="Attach files"
-      aria-label="Attach files"
+      title={t("Attach files")}
+      aria-label={t("Attach files")}
       disabled={!enabled || submitting}
       onClick={() => readAttachments(pickAttachments)}
       className={className}
@@ -326,8 +330,8 @@ export function MonoComposer({
     <textarea
       ref={field}
       rows={1}
-      aria-label={`Message ${name}`}
-      placeholder={`Message ${name}`}
+      aria-label={t("Message {name}", { name })}
+      placeholder={t("Message {name}", { name })}
       spellCheck={autocorrect}
       autoCorrect={autocorrect ? "on" : "off"}
       disabled={!enabled || submitting}
@@ -357,8 +361,8 @@ export function MonoComposer({
   const sendButton = (className: string) => (
     <button
       type="submit"
-      aria-label="Send"
-      title={pendingReads ? "Reading attachments…" : "Send"}
+      aria-label={t("Send")}
+      title={pendingReads ? t("Reading attachments…") : t("Send")}
       disabled={!ready}
       className={`primary-action grid size-6.5 place-items-center rounded-md transition-[background-color,color,transform] duration-150 active:scale-90 disabled:cursor-default ${className}`}
     >
@@ -380,7 +384,7 @@ export function MonoComposer({
       >
         {fileDrag ? (
           <div className="pointer-events-none absolute inset-0 z-20 grid place-items-center rounded-lg bg-accent/8 text-[12px] text-content/70">
-            Drop files to attach
+            {t("Drop files to attach")}
           </div>
         ) : null}
         {dropError ? (
@@ -453,8 +457,8 @@ export function MonoComposer({
           <button
             ref={emojiButton}
             type="button"
-            title="Emoji"
-            aria-label="Add emoji"
+            title={t("Emoji")}
+            aria-label={t("Add emoji")}
             aria-expanded={emojiOpen}
             disabled={!enabled || submitting}
             onClick={toggleEmoji}

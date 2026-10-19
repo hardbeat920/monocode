@@ -6,6 +6,7 @@ import {
   type KeyboardEvent,
 } from "react";
 import { ChevronLeft, ChevronRight, Clock } from "./icons";
+import { useTranslate } from "../i18n/locale";
 
 export function toLocalDateTime(date: Date): string {
   const pad = (part: number) => String(part).padStart(2, "0");
@@ -51,6 +52,7 @@ export function DateTimePicker({
   minDate,
   autoFocus = false,
 }: Props) {
+  const t = useTranslate();
   const today = new Date(Date.now());
   const selected = parseLocalDateTime(`${value.slice(0, 10)}T12:00`) ?? today;
   const minimum = minDate ? parseLocalDateTime(`${minDate}T12:00`) : null;
@@ -162,7 +164,7 @@ export function DateTimePicker({
         <div className="flex gap-0.5">
           <button
             type="button"
-            aria-label="Previous month"
+            aria-label={t("Previous month")}
             disabled={previousDisabled}
             onClick={() => navigate(shiftMonth(focusedDate, -1), false)}
             className="grid size-7 place-items-center rounded text-content/55 hover:bg-content/5 hover:text-content focus-visible:outline-2 focus-visible:outline-accent disabled:pointer-events-none disabled:opacity-30"
@@ -171,7 +173,7 @@ export function DateTimePicker({
           </button>
           <button
             type="button"
-            aria-label="Next month"
+            aria-label={t("Next month")}
             onClick={() => navigate(shiftMonth(focusedDate, 1), false)}
             className="grid size-7 place-items-center rounded text-content/55 hover:bg-content/5 hover:text-content focus-visible:outline-2 focus-visible:outline-accent"
           >
@@ -187,7 +189,7 @@ export function DateTimePicker({
               role="columnheader"
               className="pb-1.5 text-center text-[10px] font-normal text-content/40"
             >
-              {label}
+              {t(label)}
             </span>
           ))}
         </div>
@@ -240,10 +242,10 @@ export function DateTimePicker({
               className="size-3 shrink-0 text-content/40"
               aria-hidden="true"
             />
-            Time
+            {t("Time")}
           </label>
           <p id={timeHintId} className="mt-0.5 text-[10px] text-content/40">
-            Local time, 24-hour
+            {t("Local time, 24-hour")}
           </p>
         </div>
         <div className="w-20 rounded border border-content/10 bg-content/5 focus-within:border-content/40 focus-within:outline-2 focus-within:outline-accent">

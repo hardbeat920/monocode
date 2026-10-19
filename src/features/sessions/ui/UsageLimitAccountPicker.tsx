@@ -16,7 +16,7 @@ import {
   supportsProviderAccounts,
   type ProviderAccount,
 } from "../../providers/model/providerAccounts";
-
+import { useTranslate } from "../../../shared/i18n/locale";
 /** The provider's other accounts, offered when the current one is limited. */
 export function UsageLimitAccountPicker({
   harness,
@@ -29,6 +29,7 @@ export function UsageLimitAccountPicker({
   onSelect: (accountId: string) => void;
   variant?: "composer" | "mono";
 }) {
+  const t = useTranslate();
   const snapshot = useSyncExternalStore(
     subscribeProviderAccounts,
     () =>
@@ -80,7 +81,7 @@ export function UsageLimitAccountPicker({
       <button
         ref={button}
         type="button"
-        aria-label="Choose another account"
+        aria-label={t("Choose another account")}
         aria-haspopup="menu"
         aria-expanded={open}
         data-mono-account-picker
@@ -99,7 +100,7 @@ export function UsageLimitAccountPicker({
         }
       >
         <span>
-          {variant === "mono" ? "Choose another account" : "Switch account"}
+          {variant === "mono" ? t("Choose another account") : t("Switch account")}
         </span>
         <ChevronDown
           className={`size-3 shrink-0 text-content/50 ${open ? "rotate-180" : ""}`}
@@ -116,7 +117,7 @@ export function UsageLimitAccountPicker({
           onDismiss={(reason) => dismiss(reason === "escape")}
           ignore="[data-mono-account-picker]"
           role="menu"
-          aria-label="Choose another account"
+          aria-label={t("Choose another account")}
           aria-activedescendant={`${menuId}-${active}`}
           tabIndex={-1}
           onKeyDown={onKeyDown}

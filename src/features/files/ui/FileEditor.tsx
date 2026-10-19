@@ -96,6 +96,7 @@ import { editorLint } from "../editor/editorLint";
 import { editorSearch } from "../editor/editorSearch";
 import { editorScrollbar } from "../editor/editorScrollbar";
 import { FilePreviewSearch } from "./FilePreviewSearch";
+import { useTranslate } from "../../../shared/i18n/locale";
 
 type EditorNavigationRequest = EditorNavigation & { token: number };
 
@@ -134,6 +135,7 @@ export function FileEditor({
   onErrorCountChange,
   onOpenFile,
 }: Props) {
+  const t = useTranslate();
   const [loadState, setLoadState] = useState<LoadState>({ status: "loading" });
   const [saveState, setSaveState] = useState<SaveState>({ status: "idle" });
   const [reloadKey, setReloadKey] = useState(0);
@@ -419,7 +421,7 @@ export function FileEditor({
   if (loadState.status === "loading") {
     return (
       <div className="grid h-full place-items-center text-[12px] text-content/45">
-        Opening {basename(path)}…
+        {t("Opening {name}…", { name: basename(path) })}
       </div>
     );
   }
@@ -430,7 +432,7 @@ export function FileEditor({
         <div className="max-w-md text-center">
           <AlertCircle className="mx-auto mb-3 size-5 text-red-400" />
           <p className="text-[13px] text-content">
-            Couldn’t open {basename(path)}
+            {t("Couldn’t open {name}", { name: basename(path) })}
           </p>
           <p className="mt-1 text-[12px] leading-5 text-content/50">
             {loadState.message}
@@ -441,7 +443,7 @@ export function FileEditor({
             className="mx-auto mt-4 flex h-7 items-center gap-1.5 rounded-md bg-content/10 px-2.5 text-[12px] text-content hover:bg-content/15"
           >
             <RotateCcw className="size-3" strokeWidth={1.75} />
-            Retry
+            {t("Retry")}
           </button>
         </div>
       </div>
@@ -455,8 +457,10 @@ export function FileEditor({
           role="status"
           className="shrink-0 border-b border-stroke px-3 py-1 text-[12px] text-content/60"
         >
-          {gitDiff.kind === "staged" ? "Staged" : "Unstaged"} line-ending
-          changes. Line breaks are normalized in this view.
+          {t(
+            "{kind} line-ending changes. Line breaks are normalized in this view.",
+            { kind: gitDiff.kind === "staged" ? t("Staged") : t("Unstaged") },
+          )}
         </p>
       )}
       {markdown || svg ? (
@@ -474,7 +478,7 @@ export function FileEditor({
               >
                 <MarkdownDocumentPreview
                   text={draft}
-                  metadataLabel="Properties"
+                  metadataLabel={t("Properties")}
                   cwd={cwd}
                   onOpenFile={onOpenFile}
                   documentPath={path}
@@ -533,15 +537,15 @@ export function FileEditor({
           {relativePath}
         </span>
         {saveState.status === "saving" ? (
-          <span>Saving…</span>
+          <span>{t("Saving…")}</span>
         ) : saveState.status === "saved" ? (
-          <span>Saved</span>
+          <span>{t("Saved")}</span>
         ) : saveState.status === "error" ? (
           <span
             className="max-w-64 truncate text-red-400"
             title={saveState.message}
           >
-            Save failed: {saveState.message}
+            {t("Save failed: {message}", { message: saveState.message })}
           </span>
         ) : null}
       </footer>
@@ -1085,18 +1089,19 @@ function DiffChunkNav({
   onPrev: () => void;
   onNext: () => void;
 }) {
+  const t = useTranslate();
   return (
     <header
       className="flex h-8 shrink-0 items-center justify-between gap-3 border-b border-stroke px-3 pr-1"
       role="toolbar"
-      aria-label="Jump between changes"
+      aria-label={t("Jump between changes")}
     >
       <DiffChunkStat additions={additions} deletions={deletions} />
       <div className="flex items-center gap-0.5">
         <button
           type="button"
-          title="Previous change"
-          aria-label="Previous change"
+          title={t("Previous change")}
+          aria-label={t("Previous change")}
           disabled={total === 0 || index <= 0}
           onMouseDown={(event) => event.preventDefault()}
           onClick={onPrev}
@@ -1109,8 +1114,8 @@ function DiffChunkNav({
         </span>
         <button
           type="button"
-          title="Next change"
-          aria-label="Next change"
+          title={t("Next change")}
+          aria-label={t("Next change")}
           disabled={total === 0 || index >= total - 1}
           onMouseDown={(event) => event.preventDefault()}
           onClick={onNext}

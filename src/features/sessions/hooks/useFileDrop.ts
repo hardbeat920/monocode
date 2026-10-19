@@ -11,6 +11,7 @@ import {
   attachmentsFromPaths,
   filesFromClipboard,
 } from "../model/attachments";
+import { translate } from "../../../shared/i18n/locale";
 
 type FileDropState = { attachmentsSupported: boolean; remote: boolean };
 
@@ -131,7 +132,9 @@ export function useFileDrop({
         if (!over || !supported) return;
         if (event.payload.paths.length === 0) {
           onError(
-            "This drag did not provide a file. Save the image, then drag the saved file here.",
+            translate(
+              "This drag did not provide a file. Save the image, then drag the saved file here.",
+            ),
           );
           return;
         }

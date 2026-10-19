@@ -14,6 +14,7 @@ import {
   subscribeAutosave,
   subscribeKeybindings,
 } from "../../features/settings/model/settings";
+import { useTranslate } from "../../shared/i18n/locale";
 
 type MenuKey = "file" | "view" | "terminal";
 
@@ -58,6 +59,7 @@ export function MenuBar({
   onZoomOut,
   onZoomReset,
 }: Props) {
+  const t = useTranslate();
   const [open, setOpen] = useState(false);
   const [activeMenu, setActiveMenu] = useState<MenuKey | null>(null);
   const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number } | null>(
@@ -393,6 +395,12 @@ export function MenuBar({
     { key: "view", label: "View" },
     { key: "terminal", label: "Terminal" },
   ];
+  const menuTitle = (key: MenuKey) =>
+    t(key === "file" ? "File" : key === "view" ? "View" : "Terminal");
+  const localize = (items: ExplorerMenuItem[]): ExplorerMenuItem[] =>
+    items.map((item) =>
+      item.kind === "item" ? { ...item, label: t(item.label) } : item,
+    );
 
   return (
     <div
@@ -425,7 +433,7 @@ export function MenuBar({
                 : "text-content/70 hover:bg-content/10 hover:text-content"
             }`}
           >
-            {label}
+            {t(label)}
           </button>
         );
       })}
@@ -434,8 +442,8 @@ export function MenuBar({
         <ExplorerMenu
           x={menuAnchor.x}
           y={menuAnchor.y}
-          items={getMenuItems(activeMenu)}
-          ariaLabel={`${activeMenu} menu`}
+          items={localize(getMenuItems(activeMenu))}
+          ariaLabel={t("{name} menu", { name: menuTitle(activeMenu) })}
           onPick={handlePick}
           onClose={closeMenu}
         />

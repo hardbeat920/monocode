@@ -20,6 +20,7 @@ import type {
   SendTurnInput,
   SteerTurnInput,
 } from "./types";
+import { translate } from "../../../shared/i18n/locale";
 
 export type TitleInput = {
   sessionId: string;
@@ -589,7 +590,7 @@ function finishTextPrompt(
 }
 
 function cancelledTextPrompt(): Error {
-  return new Error("By-the-way request cancelled");
+  return new Error(translate("By-the-way request cancelled"));
 }
 
 export async function runHarnessTextPrompt(

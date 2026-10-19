@@ -28,6 +28,7 @@ import { ProjectLogoIcon } from "../../projects/ui/ProjectLogoIcon";
 import { ProjectMascot } from "../../projects/ui/ProjectMascot";
 import { MOD } from "../../../platform/tauri/platform";
 import { ExplorerMenu, type ExplorerMenuItem } from "../../files/ui/ExplorerMenu";
+import { useTranslate } from "../../../shared/i18n/locale";
 
 export type TabGroupMenuAction =
   | "new-tab"
@@ -147,6 +148,7 @@ export function TabGroupMenu({
   onExtraPick,
   footer,
 }: Props) {
+  const t = useTranslate();
   const menuId = useId();
   const [submenu, setSubmenu] = useState<{
     item: TabGroupMenuExtraItem;
@@ -209,7 +211,7 @@ export function TabGroupMenu({
         data-menu-owner={menuId}
         role="menu"
         tabIndex={-1}
-        aria-label={ariaLabel}
+        aria-label={t(ariaLabel)}
         onKeyDown={onMenuKey}
         onContextMenu={(e) => e.preventDefault()}
         onMouseEnter={cancelSubmenuClose}
@@ -231,7 +233,7 @@ export function TabGroupMenu({
           value={name}
           onChange={(e) => setName(e.target.value)}
           onBlur={commitName}
-          aria-label="Group name"
+          aria-label={t("Group name")}
           className="mb-2 w-full rounded-lg border border-content/10 bg-content/5 px-2.5 py-1.5 text-[13px] text-content outline-none ring-accent/40 focus:ring-1"
         />
 
@@ -239,8 +241,12 @@ export function TabGroupMenu({
           <div className="mb-2 flex items-center gap-2 px-0.5">
             <button
               type="button"
-              title={logoPath ? "Change project logo" : "Add project logo"}
-              aria-label={logoPath ? "Change project logo" : "Add project logo"}
+              title={
+                logoPath ? t("Change project logo") : t("Add project logo")
+              }
+              aria-label={
+                logoPath ? t("Change project logo") : t("Add project logo")
+              }
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
                 void (async () => {
@@ -265,16 +271,20 @@ export function TabGroupMenu({
               />
             </button>
             <div className="min-w-0 flex-1">
-              <p className="text-[11px] text-content/50">Project logo</p>
+              <p className="text-[11px] text-content/50">
+                {t("Project logo")}
+              </p>
               <p className="truncate text-[12px] text-content/70">
-                {logoPath ? "Shown in tabs and composer" : "Optional — replaces folder icon"}
+                {logoPath
+                  ? t("Shown in tabs and composer")
+                  : t("Optional — replaces folder icon")}
               </p>
             </div>
             {logoPath ? (
               <button
                 type="button"
-                title="Remove project logo"
-                aria-label="Remove project logo"
+                title={t("Remove project logo")}
+                aria-label={t("Remove project logo")}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => {
                   void clearProjectLogo(projectKey(logoProject)).then(onLogoChange);
@@ -309,7 +319,7 @@ export function TabGroupMenu({
         ) : null}
 
         <div className="mb-2 px-0.5">
-          <p className="mb-1 text-[11px] text-content/50">Mascot</p>
+          <p className="mb-1 text-[11px] text-content/50">{t("Mascot")}</p>
           <div className="flex items-center justify-between gap-1">
             {PROJECT_MASCOTS.map((mascot) => (
               <MascotSwatch
@@ -418,11 +428,12 @@ function MascotSwatch({
   onPick: () => void;
   children: ReactNode;
 }) {
+  const t = useTranslate();
   return (
     <button
       type="button"
       title={title}
-      aria-label={`Mascot ${title}`}
+      aria-label={`${t("Mascot")} ${title}`}
       aria-pressed={selected}
       onMouseDown={(e) => e.preventDefault()}
       onClick={onPick}
@@ -448,6 +459,7 @@ function MenuRow({
   onHover?: (anchor: HTMLButtonElement) => void;
   expanded?: boolean;
 }) {
+  const t = useTranslate();
   const Icon = item.icon;
   return (
     <button
@@ -456,7 +468,7 @@ function MenuRow({
       disabled={item.disabled}
       aria-haspopup={item.submenu ? "menu" : undefined}
       aria-expanded={item.submenu ? expanded : undefined}
-      aria-label={item.description ? item.label : undefined}
+      aria-label={item.description ? t(item.label) : undefined}
       aria-description={item.description}
       onMouseDown={(e) => e.preventDefault()}
       onMouseEnter={(e) => onHover?.(e.currentTarget)}
@@ -477,7 +489,7 @@ function MenuRow({
     >
       <Icon className="size-3.5 shrink-0 text-content/55" strokeWidth={1.75} />
       <span className={`min-w-0 flex-1 leading-label ${item.description ? "py-2" : "truncate"}`}>
-        {item.label}
+        {t(item.label)}
         {item.description ? (
           <span className="mt-1 block text-[11px] leading-snug text-content/60">
             {item.description}

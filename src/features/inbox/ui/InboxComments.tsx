@@ -22,6 +22,7 @@ import {
 } from "../model/githubTasks";
 import { MOD } from "../../../platform/tauri/platform";
 import { AgentMarkdown } from "../../sessions/ui/AgentMarkdown";
+import { useTranslate } from "../../../shared/i18n/locale";
 
 export type InboxReplyTarget = {
   id: string;
@@ -125,6 +126,7 @@ export function InboxComments({
   replyMode,
   onReply,
 }: Props) {
+  const t = useTranslate();
   const commitCount = thread?.commits?.length ?? 0;
   if (
     thread &&
@@ -150,8 +152,11 @@ export function InboxComments({
         : total + 1 + comment.replies.length,
     0,
   );
-  const label = count === 1 ? "1 comment" : `${count} comments`;
-  const commitLabel = commitCount === 1 ? "1 commit" : `${commitCount} commits`;
+  const label = count === 1 ? t("1 comment") : t("{count} comments", { count });
+  const commitLabel =
+    commitCount === 1
+      ? t("1 commit")
+      : t("{count} commits", { count: commitCount });
   const moreOn =
     provider === "linear"
       ? "Linear"
@@ -168,7 +173,7 @@ export function InboxComments({
       <div className="flex items-center gap-2 text-[12px] text-content/50">
         {thread.commits ? (
           <>
-            <h2 className="text-content/70">Activity</h2>
+            <h2 className="text-content/70">{t("Activity")}</h2>
             <span>
               {label}
               {commitCount > 0 ? ` · ${commitLabel}` : ""}
@@ -178,7 +183,9 @@ export function InboxComments({
           <h2 className="text-content/70">{label}</h2>
         )}
         {thread.truncated ? (
-          <span>Latest comments · more on {moreOn}</span>
+          <span>
+            {t("Latest comments · more on {provider}", { provider: moreOn })}
+          </span>
         ) : null}
         {loading ? (
           <LoaderCircle
@@ -246,6 +253,7 @@ export function InboxCommentForm({
   onCancelReply: () => void;
   onSubmit: (body: string) => Promise<void>;
 }) {
+  const t = useTranslate();
   const [draft, setDraft] = useState("");
   const field = useRef<HTMLTextAreaElement>(null);
   const canPost = draft.trim().length > 0 && !posting;
@@ -292,12 +300,14 @@ export function InboxCommentForm({
       {replyTo ? (
         <div className="flex items-center gap-2 text-[12px] text-content/50">
           <span className="min-w-0 truncate">
-            Replying to {replyTo.author || "comment"}
+            {t("Replying to {author}", {
+              author: replyTo.author || t("comment"),
+            })}
           </span>
           <button
             type="button"
-            title="Cancel reply"
-            aria-label="Cancel reply"
+            title={t("Cancel reply")}
+            aria-label={t("Cancel reply")}
             onClick={onCancelReply}
             className="grid size-5 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content"
           >
@@ -312,7 +322,9 @@ export function InboxCommentForm({
           value={draft}
           disabled={posting}
           placeholder={
-            replyTo ? `Write a reply (${MOD}↩)` : `Leave a comment (${MOD}↩)`
+            replyTo
+              ? t("Write a reply ({shortcut})", { shortcut: `${MOD}↩` })
+              : t("Leave a comment ({shortcut})", { shortcut: `${MOD}↩` })
           }
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={onKeyDown}
@@ -324,7 +336,7 @@ export function InboxCommentForm({
             disabled={!canPost}
             className="inline-flex h-7 items-center rounded-md bg-content px-3 text-[12px] text-background-base hover:bg-content/80 disabled:cursor-default disabled:opacity-40"
           >
-            {posting ? "Posting..." : replyTo ? "Reply" : "Comment"}
+            {posting ? t("Posting...") : replyTo ? t("Reply") : t("Comment")}
           </button>
         </div>
       </div>
@@ -334,10 +346,11 @@ export function InboxCommentForm({
 }
 
 function CommentsPending() {
+  const t = useTranslate();
   return (
     <div className="flex items-center gap-2 border-t border-stroke pt-5 text-[12px] text-content/45">
       <LoaderCircle className="size-3.5 animate-spin" strokeWidth={1.75} />
-      Loading comments
+      {t("Loading comments")}
     </div>
   );
 }
@@ -360,6 +373,7 @@ function InboxComment({
   replyMode?: "thread" | "parent";
   onReply?: (target: InboxReplyTarget) => void;
 }) {
+  const t = useTranslate();
   const time = formatRelativeTime(comment.createdAt);
   const review = githubReviewStateLabel(comment.state);
   const location = commentLocation(comment);
@@ -403,14 +417,14 @@ function InboxComment({
                 type="button"
                 title={
                   provider === "linear"
-                    ? "Open in Linear"
+                    ? t("Open in Linear")
                     : provider === "jira"
-                      ? "Open in Jira"
+                      ? t("Open in Jira")
                       : provider === "gitlab"
-                        ? "Open on GitLab"
+                        ? t("Open on GitLab")
                         : provider === "azuredevops"
-                          ? "Open on ADO"
-                          : "Open on GitHub"
+                          ? t("Open on ADO")
+                          : t("Open on GitHub")
                 }
                 onClick={() => void openUrl(comment.url)}
                 className="hover:text-content"
@@ -429,7 +443,7 @@ function InboxComment({
                         : "min-w-0 truncate"
                 }
               >
-                {part}
+                {t(part)}
               </span>
             )}
           </span>
@@ -448,7 +462,7 @@ function InboxComment({
               }
               className="hover:text-content"
             >
-              Reply
+              {t("Reply")}
             </button>
           </span>
         ) : null}
@@ -511,6 +525,7 @@ function CollapsibleBody({ children }: { children: ReactNode }) {
   const inner = useRef<HTMLDivElement>(null);
   const [overflows, setOverflows] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const t = useTranslate();
 
   useEffect(() => {
     const el = inner.current;
@@ -544,7 +559,7 @@ function CollapsibleBody({ children }: { children: ReactNode }) {
           onClick={() => setExpanded((current) => !current)}
           className="mt-1.5 text-[12px] text-content/50 hover:text-content"
         >
-          {expanded ? "Show less" : "Show more"}
+          {expanded ? t("Show less") : t("Show more")}
         </button>
       ) : null}
     </>
@@ -635,18 +650,19 @@ function InboxTimelineComment({
   first: boolean;
   last: boolean;
 }) {
+  const t = useTranslate();
   const author = comment.author || "ghost";
   const state = comment.state.trim().toUpperCase();
   if (isReviewEvent(comment)) {
     const time = formatRelativeTime(comment.createdAt);
     const verb =
       state === "APPROVED"
-        ? "approved"
+        ? t("approved")
         : state === "CHANGES_REQUESTED"
-          ? "requested changes"
+          ? t("requested changes")
           : state === "DISMISSED"
-            ? "had a review dismissed"
-            : "reviewed";
+            ? t("had a review dismissed")
+            : t("reviewed");
     const Icon =
       state === "APPROVED"
         ? CheckCircle
@@ -716,6 +732,7 @@ function InboxCommitRun({
   first: boolean;
   last: boolean;
 }) {
+  const t = useTranslate();
   const name = author || "ghost";
   const time = formatRelativeTime(commits[commits.length - 1].committedDate);
   return (
@@ -732,9 +749,11 @@ function InboxCommitRun({
       >
         <TimelineEventLine
           name={name}
-          action={`added ${
-            commits.length === 1 ? "a commit" : `${commits.length} commits`
-          }`}
+          action={
+            commits.length === 1
+              ? t("added a commit")
+              : t("added {count} commits", { count: commits.length })
+          }
           time={time}
         />
       </TimelineStop>
@@ -780,6 +799,7 @@ function InboxCommitStop({
   commit: InboxCommit;
   last: boolean;
 }) {
+  const t = useTranslate();
   return (
     <li className="flex gap-3">
       {/* The rail runs through commit dots, so a push reads as one stretch. */}
@@ -791,7 +811,7 @@ function InboxCommitStop({
       <div className={`min-w-0 flex-1 ${last ? "" : TIMELINE_GAP}`}>
         <button
           type="button"
-          title={commit.url ? "Open commit" : commit.messageHeadline}
+          title={commit.url ? t("Open commit") : commit.messageHeadline}
           disabled={!commit.url}
           onClick={() => void openUrl(commit.url)}
           className="group flex h-5 w-full min-w-0 items-center gap-3 text-left text-[12px]"

@@ -4,6 +4,7 @@ import { resolveZoomKeybinding } from "../../features/settings/model/zoomKeybind
 import { claimTrackpadMagnify } from "../../platform/tauri/trackpadZoom";
 import { LAYER } from "../lib/layers";
 import { X } from "./icons";
+import { useTranslate } from "../i18n/locale";
 
 type Props = {
   src: string;
@@ -20,6 +21,7 @@ const KEY_ZOOM_STEP = 1.25;
 const IDENTITY: View = { scale: 1, x: 0, y: 0 };
 
 export function ImageLightbox({ src, alt, onClose }: Props) {
+  const t = useTranslate();
   const closeRef = useRef<HTMLButtonElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
@@ -221,8 +223,8 @@ export function ImageLightbox({ src, alt, onClose }: Props) {
       <button
         ref={closeRef}
         type="button"
-        aria-label="Close image preview"
-        title="Close"
+        aria-label={t("Close image preview")}
+        title={t("Close")}
         onClick={onClose}
         className="absolute right-4 top-4 grid size-9 place-items-center rounded-full border border-white/15 bg-black/45 text-white/80 shadow-lg backdrop-blur-md hover:bg-black/65 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80"
       >

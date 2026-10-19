@@ -1,5 +1,6 @@
 import { X } from "../../shared/ui/icons";
 import type { InstalledUpdate } from "../model/updateNotice";
+import { useTranslate } from "../../shared/i18n/locale";
 
 type Props = {
   update: InstalledUpdate | null;
@@ -8,6 +9,7 @@ type Props = {
 };
 
 export function UpdateRailCard({ update, onOpen, onDismiss }: Props) {
+  const t = useTranslate();
   if (!update) return null;
 
   return (
@@ -30,16 +32,16 @@ export function UpdateRailCard({ update, onOpen, onDismiss }: Props) {
         </span>
         <span className="min-w-0 flex-1">
           <span className="block truncate text-[12px] font-medium leading-tight text-content">
-            Updated to {update.version}
+            {t("Updated to {version}", { version: update.version })}
           </span>
           <span className="mt-0.5 block truncate text-[11px] leading-tight text-content/50">
-            What's new
+            {t("What's new")}
           </span>
         </span>
       </button>
       <button
         type="button"
-        aria-label="Dismiss update notification"
+        aria-label={t("Dismiss update notification")}
         onClick={onDismiss}
         className="absolute right-1 top-1 grid size-6 place-items-center rounded-md text-content/45 hover:bg-content/8 hover:text-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       >

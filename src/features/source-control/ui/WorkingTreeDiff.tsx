@@ -24,6 +24,7 @@ import { stageChunkText } from "../../files/editor/editorGit";
 import { LINE_DIFF_CONFIG } from "../model/lineDiff";
 import { UnifiedDiffView, type UnifiedDiffFileModel } from "./UnifiedDiffView";
 import { pruneMap } from "../model/stableDiff";
+import { useTranslate } from "../../../shared/i18n/locale";
 
 type Props = {
   cwd: string;
@@ -52,6 +53,7 @@ export function WorkingTreeDiff({
   const [files, setFiles] = useState<GitChangedFile[] | null>(null);
   const [diffs, setDiffs] = useState<Map<string, LoadedDiff>>(new Map());
   const [error, setError] = useState<string | null>(null);
+  const t = useTranslate();
   const [busyId, setBusyId] = useState<string | null>(null);
   const diffsRef = useRef(diffs);
   diffsRef.current = diffs;
@@ -213,13 +215,13 @@ export function WorkingTreeDiff({
         tooLarge: loaded?.tooLarge,
         emptyMessage:
           loaded == null
-            ? "Loading…"
+            ? t("Loading…")
             : loaded.error
-              ? `Couldn’t load diff: ${loaded.error}`
+              ? t("Couldn’t load diff: {error}", { error: loaded.error })
               : unchanged
                 ? kind === "staged"
-                  ? "No staged changes"
-                  : "No unstaged changes"
+                  ? t("No staged changes")
+                  : t("No unstaged changes")
                 : undefined,
         additions:
           unified?.additions ?? (canUseIndexCounts ? file.additions : 0),
@@ -310,7 +312,7 @@ export function WorkingTreeDiff({
   if (!cwd || cwd === "~") {
     return (
       <p className="grid h-full place-items-center text-[13px] text-content/45">
-        No project folder
+        {t("No project folder")}
       </p>
     );
   }
@@ -318,7 +320,7 @@ export function WorkingTreeDiff({
     return (
       <div className="grid h-full place-items-center p-6 text-center">
         <AlertCircle className="mx-auto mb-3 size-5 text-red-400" />
-        <p className="text-[13px] text-content">Couldn’t load changes</p>
+        <p className="text-[13px] text-content">{t("Couldn’t load changes")}</p>
         <p className="mt-1 text-[12px] text-content/50">{error}</p>
       </div>
     );

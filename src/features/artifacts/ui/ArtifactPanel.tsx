@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslate } from "../../../shared/i18n/locale";
 import { Copy, PanelRightToggle, Trash2 } from "../../../shared/ui/icons";
 import { copyMessage } from "../../../platform/tauri/clipboard";
 import { IconButton } from "../../../app/shell/TitleBar";
@@ -23,6 +24,7 @@ export function ArtifactReader({
   onOpenFile?: (path: string) => void;
 }) {
   const leave = onBack ?? onClose;
+  const t = useTranslate();
   const { artifact, loaded, error, setError } = useArtifact(id);
   const [copied, setCopied] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -45,10 +47,14 @@ export function ArtifactReader({
     return () => window.removeEventListener("keydown", escape);
   }, [leave]);
 
-  const label = artifact ? artifactLabel(artifact.kind) : "Document";
+  const label = t(artifact ? artifactLabel(artifact.kind) : "Document");
   const noun = label.toLowerCase();
   const onDelete = async () => {
-    if (!artifact || deleting || !window.confirm(`Delete “${artifact.title}”?`))
+    if (
+      !artifact ||
+      deleting ||
+      !window.confirm(t("Delete “{title}”?", { title: artifact.title }))
+    )
       return;
     setDeleting(true);
     setError(null);
@@ -56,7 +62,7 @@ export function ArtifactReader({
       await deleteArtifact(artifact.id);
       if (mounted.current) leave();
     } catch {
-      setError(`Could not delete this ${noun}.`);
+      setError(t("Could not delete this {noun}.", { noun }));
     } finally {
       setDeleting(false);
     }
@@ -64,18 +70,18 @@ export function ArtifactReader({
   const actions = artifact ? (
     <>
       <IconButton
-        label={`Delete ${noun}`}
+        label={t("Delete {noun}", { noun })}
         disabled={deleting}
         onClick={() => void onDelete()}
       >
         <Trash2 className="size-3.5" />
       </IconButton>
       <IconButton
-        label={copied ? "Copied" : `Copy ${noun}`}
+        label={copied ? t("Copied") : t("Copy {noun}", { noun })}
         onClick={() =>
           void copyMessage(artifact.body).then(
             () => setCopied(true),
-            () => setError(`Could not copy this ${noun}.`),
+            () => setError(t("Could not copy this {noun}.", { noun })),
           )
         }
       >
@@ -88,7 +94,7 @@ export function ArtifactReader({
       {onBack ? (
         <PageHeader title={artifact?.title ?? label} onBack={onBack}>
           {actions}
-          <IconButton label="Hide overview" active onClick={onClose}>
+          <IconButton label={t("Hide overview")} active onClick={onClose}>
             <PanelRightToggle className="size-3.5" strokeWidth={1.75} />
           </IconButton>
         </PageHeader>
@@ -98,7 +104,7 @@ export function ArtifactReader({
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-none px-4 py-3">
         {!loaded ? (
           <p role="status" className="text-[13px] text-content/50">
-            Loading document…
+            {t("Loading document…")}
           </p>
         ) : error && !artifact ? (
           <p role="alert" className="text-[13px] text-content/65">
@@ -106,7 +112,7 @@ export function ArtifactReader({
           </p>
         ) : !artifact ? (
           <p role="status" className="text-[13px] text-content/50">
-            This document is no longer available.
+            {t("This document is no longer available.")}
           </p>
         ) : (
           <article data-artifact-reader={artifact.id}>
@@ -117,7 +123,7 @@ export function ArtifactReader({
               </p>
             ) : null}
             <span role="status" className="sr-only">
-              {copied ? `${label} copied` : ""}
+              {copied ? t("{label} copied", { label }) : ""}
             </span>
           </article>
         )}

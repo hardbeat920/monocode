@@ -51,6 +51,7 @@ import { HarnessIcon } from "./HarnessIcon";
 import { Popover } from "../../../shared/ui/Popover";
 import { MOD } from "../../../platform/tauri/platform";
 import { keybindingPressed } from "../../settings/model/settings";
+import { translate, useTranslate } from "../../../shared/i18n/locale";
 import "./ModelPicker.css";
 
 type Props = {
@@ -221,7 +222,7 @@ function pillSettings(model: AgentModel): ModelSetting[] {
 
 function settingLabel(setting: ModelSetting): string {
   return setting.id === "effort" || setting.id === "reasoning"
-    ? "Effort"
+    ? translate("Effort")
     : setting.label;
 }
 
@@ -324,6 +325,7 @@ export function ModelPicker({
   onSettingsChange,
   onClose,
 }: Props) {
+  const t = useTranslate();
   const source = useModelSource();
   const catalogVersion = useSyncExternalStore(
     subscribeModels,
@@ -738,14 +740,16 @@ export function ModelPicker({
         title={
           triggerLabel
             ? `${triggerLabel} · ${triggerTitle}`
-            : `${triggerTitle} · Recent models: right-click or ${MOD}.`
+            : `${triggerTitle} · ${t("Recent models: right-click or {keys}.", {
+                keys: MOD,
+              })}`
         }
         aria-label={
           triggerLabel ??
           `${HARNESS_TITLE[current.harness]}${
             current.provider ? `, ${current.provider.name},` : ""
           } ${current.name}${
-            triggerEffortLabel ? `, effort ${triggerEffortLabel}` : ""
+            triggerEffortLabel ? `, ${t("effort {label}", { label: triggerEffortLabel })}` : ""
           }`
         }
         aria-keyshortcuts={`${MOD}.`}
@@ -829,7 +833,7 @@ export function ModelPicker({
             ignore={SELF}
             onDismiss={() => dismiss(false)}
             role="menu"
-            aria-label="Model and settings"
+            aria-label={t("Model and settings")}
             tabIndex={-1}
             onKeyDown={onMenuKey}
             data-model-picker
@@ -859,7 +863,7 @@ export function ModelPicker({
                         : "text-content hover:bg-content/5"
                     }`}
                   >
-                    <span className="min-w-0 flex-1">Model</span>
+                    <span className="min-w-0 flex-1">{t("Model")}</span>
                     <span className="flex min-w-0 max-w-36 items-center gap-1 text-content/55">
                       <HarnessIcon
                         harness={current.harness}
@@ -1024,7 +1028,7 @@ export function ModelPicker({
           autoFocus
           onDismiss={() => setRecentMenu(null)}
           role="menu"
-          aria-label="Recently used models"
+          aria-label={t("Recently used models")}
           aria-activedescendant={`${recentMenuId}-${recentActive}`}
           tabIndex={-1}
           onContextMenu={(event) => event.preventDefault()}
@@ -1243,6 +1247,7 @@ function TogglePill({
   variant?: Variant;
   onSettingsChange: (settings: Record<string, string>) => void;
 }) {
+  const t = useTranslate();
   const on = settingValue(setting, values) === "true";
   const toggle = () =>
     onSettingsChange({ ...values, [setting.id]: on ? "false" : "true" });
@@ -1254,7 +1259,7 @@ function TogglePill({
         role="switch"
         aria-label={setting.label}
         aria-checked={on}
-        title={`${setting.label}: ${on ? "On" : "Off"}`}
+        title={t("{label}: {value}", { label: setting.label, value: on ? t("On") : t("Off") })}
         data-model-control
         onMouseDown={(event) => event.preventDefault()}
         onClick={toggle}
@@ -1273,8 +1278,8 @@ function TogglePill({
   return (
     <button
       type="button"
-      title={`${setting.label}: ${on ? "On" : "Off"}`}
-      aria-label={`${setting.label}: ${on ? "On" : "Off"}`}
+      title={t("{label}: {value}", { label: setting.label, value: on ? t("On") : t("Off") })}
+      aria-label={t("{label}: {value}", { label: setting.label, value: on ? t("On") : t("Off") })}
       aria-pressed={on}
       data-model-control
       onMouseDown={(event) => event.preventDefault()}
@@ -1506,6 +1511,7 @@ function ModelFlyout({
   onPick: (model: AgentModel) => void;
   onToggleFavorite: (id: string) => void;
 }) {
+  const t = useTranslate();
   const source = useModelSource();
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const activeRef = useRef<HTMLButtonElement>(null);
@@ -1562,7 +1568,7 @@ function ModelFlyout({
       maxHeight={MODEL_MENU_FRAME_HEIGHT}
       layer={LAYER.submenu}
       role="dialog"
-      aria-label="Models"
+      aria-label={t("Models")}
       onDismiss={onDismiss}
       onKeyDown={(event) => {
         // Keyboard nav once focus leaves the search field (which stops its
@@ -1602,12 +1608,12 @@ function ModelFlyout({
     >
       <nav
         role="tablist"
-        aria-label="Providers"
+        aria-label={t("Providers")}
         aria-orientation="vertical"
         className="flex w-11 shrink-0 flex-col items-center gap-1 overflow-y-auto overscroll-none border-r border-stroke p-1.5"
       >
         <ProviderTabButton
-          title="Favorites"
+          title={t("Favorites")}
           selected={tab === "favorites"}
           onSelect={() => onSelectTab("favorites")}
         >
@@ -1636,8 +1642,8 @@ function ModelFlyout({
             ref={searchRef}
             type="text"
             value={query}
-            placeholder="Search models"
-            aria-label="Search models"
+            placeholder={t("Search models")}
+            aria-label={t("Search models")}
             className="min-w-0 flex-1 bg-transparent text-[13px] text-content outline-none placeholder:text-content/40"
             onChange={(event) => onQuery(event.target.value)}
             onKeyDown={onSearchKey}
@@ -1647,18 +1653,18 @@ function ModelFlyout({
         <div
           ref={lockOverscroll}
           role="listbox"
-          aria-label="Models"
+          aria-label={t("Models")}
           className="min-h-0 flex-1 overflow-y-auto overscroll-none p-1"
         >
           {models.length === 0 ? (
             <div className="px-2 py-3 text-[12px] text-content/50">
               {tab === "favorites" && !query.trim()
-                ? "No favorite models"
+                ? t("No favorite models")
                 : tab !== "favorites" && !source.available(tab)
                   ? harnessUnavailableHint(tab)
                   : tab === "codex" && !query.trim()
-                    ? "Loading Codex models…"
-                    : "No matching models"}
+                    ? t("Loading Codex models…")
+                    : t("No matching models")}
             </div>
           ) : (
             groups.map((group) => (
@@ -1722,13 +1728,13 @@ function ModelFlyout({
                         type="button"
                         title={
                           favorited
-                            ? "Remove from favorites"
-                            : "Add to favorites"
+                            ? t("Remove from favorites")
+                            : t("Add to favorites")
                         }
                         aria-label={
                           favorited
-                            ? "Remove from favorites"
-                            : "Add to favorites"
+                            ? t("Remove from favorites")
+                            : t("Add to favorites")
                         }
                         onMouseDown={(event) => event.preventDefault()}
                         onClick={(event) => {

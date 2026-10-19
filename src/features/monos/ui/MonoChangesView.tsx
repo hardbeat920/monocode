@@ -6,6 +6,7 @@ import {
   type ComponentProps,
 } from "react";
 import { Popover } from "../../../shared/ui/Popover";
+import { useTranslate } from "../../../shared/i18n/locale";
 import {
   Check,
   ChevronDown,
@@ -80,6 +81,7 @@ export function MonoChangesView({
     cwd,
     attachedProjects,
   );
+  const t = useTranslate();
   const [focusPath, setFocusPath] = useState(request.path);
   const [selectedRoot, setSelectedRoot] = useState<string | null>(null);
   const project =
@@ -146,7 +148,9 @@ export function MonoChangesView({
             <div
               key={`${sessionId}:${cwd}:${entry.root}`}
               role="tabpanel"
-              aria-label={`Commit ${projectName(entry.root)}`}
+              aria-label={t("Commit {project}", {
+                project: projectName(entry.root),
+              })}
               hidden={entry.root !== project.root}
               className="absolute inset-0 flex h-full flex-col"
             >
@@ -168,15 +172,20 @@ export function MonoChangesView({
           {loaded && !error ? (
             <EmptyState icon={FileDiff}>
               {outside.length > 0
-                ? "These files aren’t in a Git repository, so there’s nothing to commit."
-                : `Give ${agentName} a project to work on, and its changes show up here to commit.`}
+                ? t(
+                    "These files aren’t in a Git repository, so there’s nothing to commit.",
+                  )
+                : t(
+                    "Give {name} a project to work on, and its changes show up here to commit.",
+                    { name: agentName },
+                  )}
             </EmptyState>
           ) : null}
         </div>
       )}
       {error ? (
         <p role="alert" className="shrink-0 border-t border-stroke px-4 py-2 text-[12px] text-red-400">
-          Couldn’t load repositories: {error}
+          {t("Couldn’t load repositories: {error}", { error })}
         </p>
       ) : null}
     </div>
@@ -213,6 +222,7 @@ function ProjectTabs({
 }) {
   const { groupLabels, groupColors, groupCustomColors, groupMascots } =
     useProjectAppearance();
+  const t = useTranslate();
   const groupLogos = useTabGroupLogos();
   // The checkout last opened in each project, so its tab returns there.
   const [lastRoots, setLastRoots] = useState<ReadonlyMap<string, string>>(
@@ -232,7 +242,7 @@ function ProjectTabs({
   return (
     <div
       role="tablist"
-      aria-label="Projects"
+      aria-label={t("Projects")}
       // Sideways only, with the native bounce at either end.
       className="flex h-9 shrink-0 items-center gap-px overflow-x-auto overflow-y-hidden overscroll-x-contain border-b border-stroke px-2"
     >
@@ -324,6 +334,7 @@ function CheckoutPicker({
   indexes: ReadonlyMap<string, GitDiffIndex | null>;
   onSelect: (root: string) => void;
 }) {
+  const t = useTranslate();
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLButtonElement>(null);
   return (
@@ -331,7 +342,7 @@ function CheckoutPicker({
       <button
         ref={anchor}
         type="button"
-        aria-label={`Switch ${project} working copy`}
+        aria-label={t("Switch {project} working copy", { project })}
         aria-haspopup="listbox"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
@@ -348,7 +359,7 @@ function CheckoutPicker({
           maxHeight={320}
           onDismiss={() => setOpen(false)}
           role="listbox"
-          aria-label={`${project} working copies`}
+          aria-label={t("{project} working copies", { project })}
           className="overflow-y-auto overscroll-none p-1.5"
         >
           {checkouts.map(({ root, main, files }) => {
@@ -376,7 +387,7 @@ function CheckoutPicker({
                     {branch ?? projectName(root)}
                   </span>
                   <span className="block truncate text-[10px] text-content/40">
-                    {root === main ? "Project folder" : prettyCwd(root)}
+                    {root === main ? t("Project folder") : prettyCwd(root)}
                   </span>
                 </span>
                 {files.length > 0 ? (

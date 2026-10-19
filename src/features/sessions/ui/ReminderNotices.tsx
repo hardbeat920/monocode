@@ -15,7 +15,7 @@ import {
 import { ExplorerMenu } from "../../files/ui/ExplorerMenu";
 import { Clock } from "../../../shared/ui/icons";
 import { sessionReminderPresets } from "./sessionReminderPresets";
-
+import { useTranslate } from "../../../shared/i18n/locale";
 function subscribeNotifications(callback: () => void) {
   window.addEventListener(NOTIFICATIONS_CHANGE_EVENT, callback);
   window.addEventListener("storage", callback);
@@ -44,6 +44,7 @@ export function ReminderNotices({
   onOpenSettings: () => void;
   onHeightChange?: (height: number) => void;
 }) {
+  const t = useTranslate();
   const panelRef = useRef<HTMLElement>(null);
   const [snooze, setSnooze] = useState<{
     reminder: SessionReminder;
@@ -73,14 +74,14 @@ export function ReminderNotices({
     <>
       <section
         ref={panelRef}
-        aria-label="Due reminders"
+        aria-label={t("Due reminders")}
         style={{ zIndex: LAYER.popover - 1 }}
         className="fixed top-3 right-3 w-[min(320px,calc(100vw-24px))] overflow-hidden rounded-xl border border-content/15 bg-background-base/95 text-content shadow-xl backdrop-blur-xl"
       >
         <div className="flex items-center gap-2 border-b border-stroke px-3 py-2.5">
           <Clock className="size-3.5 text-amber-400" strokeWidth={1.75} />
           <span className="flex-1 text-[12px] font-semibold">
-            Due reminders
+            {t("Due reminders")}
           </span>
           <span role="status" className="text-[11px] text-content/50">
             {reminders.length || ""}
@@ -88,9 +89,9 @@ export function ReminderNotices({
         </div>
         {error ? (
           <div role="alert" className="px-3 py-2 text-[12px] text-content/70">
-            Couldn’t load reminders.{" "}
+            {t("Couldn’t load reminders.")}{" "}
             <button className="underline" onClick={onRetry}>
-              Retry
+              {t("Retry")}
             </button>
           </div>
         ) : null}
@@ -117,7 +118,7 @@ export function ReminderNotices({
                   className="rounded-md bg-content/10 px-2 py-1 hover:bg-content/15"
                   onClick={() => onOpen(reminder)}
                 >
-                  Open session
+                  {t("Open session")}
                 </button>
                 <button
                   aria-haspopup="menu"
@@ -130,7 +131,7 @@ export function ReminderNotices({
                     setSnooze({ reminder, x: rect.left, y: rect.bottom + 4 });
                   }}
                 >
-                  Snooze
+                  {t("Snooze")}
                 </button>
                 <button
                   className="ml-auto rounded-md px-2 py-1 text-content/50 hover:bg-content/10"
@@ -138,7 +139,7 @@ export function ReminderNotices({
                     onDismiss([reminder.sessionId], reminder.dueAt)
                   }
                 >
-                  Dismiss
+                  {t("Dismiss")}
                 </button>
               </div>
             </article>
@@ -149,7 +150,7 @@ export function ReminderNotices({
             className="w-full border-t border-stroke px-3 py-2 text-left text-[11px] text-content/50 hover:text-content"
             onClick={onOpenSettings}
           >
-            Desktop alerts are off. Enable in Settings.
+            {t("Desktop alerts are off. Enable in Settings.")}
           </button>
         ) : null}
       </section>
@@ -163,7 +164,7 @@ export function ReminderNotices({
           x={snooze.x}
           y={snooze.y}
           items={sessionReminderPresets()}
-          ariaLabel="Snooze reminder"
+          ariaLabel={t("Snooze reminder")}
           onClose={() => setSnooze(null)}
           onPick={(id) => {
             const dueAt = reminderTime(id);

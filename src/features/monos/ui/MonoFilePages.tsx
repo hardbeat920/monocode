@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { isImeComposition } from "../../../shared/lib/keyboard";
+import { translate, useTranslate } from "../../../shared/i18n/locale";
 import { IconButton } from "../../../app/shell/TitleBar";
 import { Pencil, Plus, StickyNote, Trash2 } from "../../../shared/ui/icons";
 import type { MonoLook, MonoState } from "../model/mono";
@@ -47,7 +48,9 @@ function factIndex(memory: string, original: string): number {
     .flatMap((line, index) => (line === original ? [index] : []));
   if (indices.length !== 1)
     throw new Error(
-      "This memory changed or is ambiguous. Check it before trying again.",
+      translate(
+        "This memory changed or is ambiguous. Check it before trying again.",
+      ),
     );
   return indices[0];
 }
@@ -64,9 +67,10 @@ export function SoulPage({
   files: MonoFiles | undefined;
   onBack?: () => void;
 }) {
+  const t = useTranslate();
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-mono-soul>
-      <PageHeader title="Soul" onBack={onBack} />
+      <PageHeader title={t("Soul")} onBack={onBack} />
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-none">
         {files ? (
           <FileField
@@ -75,12 +79,12 @@ export function SoulPage({
             file="soul"
             value={files.soul}
             hash={files.soulHash}
-            label={`${agent.name} soul`}
+            label={t("{name} soul", { name: agent.name })}
             author={agent.name}
-            placeholder="Who it is, and what it should always keep in mind"
+            placeholder={t("Who it is, and what it should always keep in mind")}
           />
         ) : (
-          <Empty>Loading…</Empty>
+          <Empty>{t("Loading…")}</Empty>
         )}
       </div>
     </div>
@@ -97,6 +101,7 @@ export function MemoryPage({
   files: MonoFiles | undefined;
   onBack?: () => void;
 }) {
+  const t = useTranslate();
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<MemoryFact>();
   const [saveError, setSaveError] = useState<string>();
@@ -121,7 +126,9 @@ export function MemoryPage({
     } catch (error) {
       setSaveError(
         error instanceof MonoFileConflict
-          ? "Memory kept changing while saving. Your edit was not saved; try again."
+          ? t(
+              "Memory kept changing while saving. Your edit was not saved; try again.",
+            )
           : error instanceof Error
             ? error.message
             : String(error),
@@ -133,10 +140,10 @@ export function MemoryPage({
     save((memory) => withoutLine(memory, factIndex(memory, line)));
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-mono-memory>
-      <PageHeader title="Memory" onBack={onBack}>
+      <PageHeader title={t("Memory")} onBack={onBack}>
         {files ? (
           <IconButton
-            label="Add memory"
+            label={t("Add memory")}
             disabled={adding}
             onClick={() => {
               setEditing(undefined);
@@ -154,17 +161,17 @@ export function MemoryPage({
       ) : null}
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-none px-2 py-2">
         {!files ? (
-          <Empty>Loading…</Empty>
+          <Empty>{t("Loading…")}</Empty>
         ) : facts.length === 0 && !adding ? (
-          <Empty>Nothing remembered yet</Empty>
+          <Empty>{t("Nothing remembered yet")}</Empty>
         ) : (
           <ul className="flex flex-col gap-px">
             {adding ? (
               <li>
                 <FactEditor
-                  label="New memory"
+                  label={t("New memory")}
                   initial=""
-                  placeholder="Something it should remember"
+                  placeholder={t("Something it should remember")}
                   // Enter saves and leaves the field open for the next one.
                   keepOpen
                   onSave={(fact) =>
@@ -183,7 +190,7 @@ export function MemoryPage({
               return edit ? (
                 <li key={`editing:${edit.line}`} data-memory-line={fact.index}>
                   <FactEditor
-                    label="Edit memory"
+                    label={t("Edit memory")}
                     initial={edit.text}
                     onSave={(text) =>
                       text === edit.text
@@ -262,6 +269,7 @@ function FactRow({
   onEdit: () => void;
   onForget: () => void;
 }) {
+  const t = useTranslate();
   const body = (
     <>
       <FactIcon dim={struck} />
@@ -301,11 +309,11 @@ function FactRow({
       )}
       <span className="flex shrink-0 items-center pr-2 opacity-0 transition-opacity group-hover/fact:opacity-100 focus-within:opacity-100">
         {struck ? null : (
-          <HabitButton label="Edit" onClick={onEdit}>
+          <HabitButton label={t("Edit")} onClick={onEdit}>
             <Pencil className="size-3.5" strokeWidth={1.75} />
           </HabitButton>
         )}
-        <HabitButton label={`Forget: ${text}`} onClick={onForget}>
+        <HabitButton label={t("Forget: {text}", { text })} onClick={onForget}>
           <Trash2 className="size-3.5" strokeWidth={1.75} />
         </HabitButton>
       </span>

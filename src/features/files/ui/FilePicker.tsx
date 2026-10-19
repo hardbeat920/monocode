@@ -26,6 +26,7 @@ import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { MatchText } from "../../../shared/ui/MatchText";
 import { MOD, SHIFT } from "../../../platform/tauri/platform";
+import { translate, useTranslate } from "../../../shared/i18n/locale";
 type Action = {
   id: string;
   label: string;
@@ -60,6 +61,7 @@ export function FilePicker({
   onRunAction,
   onClose,
 }: Props) {
+  const t = useTranslate();
   const peekFiles = () => peekProjectFiles(cwd);
   const search = useRef<HTMLInputElement>(null);
   const onCloseRef = useRef(onClose);
@@ -89,18 +91,22 @@ export function FilePicker({
   );
   const actionResults = useMemo((): RankedAction[] => {
     if (!paletteMode) return [];
+    const actions = ACTIONS.map((action) => ({
+      ...action,
+      label: t(action.label),
+    }));
     if (!actionQuery) {
-      return ACTIONS.map((action) => ({
+      return actions.map((action) => ({
         ...action,
         score: 0,
         positions: [],
       }));
     }
-    return ACTIONS.flatMap((action) => {
+    return actions.flatMap((action) => {
       const hit = fuzzyMatch(actionQuery, action.label);
       return hit ? [{ ...action, ...hit }] : [];
     }).sort((a, b) => b.score - a.score);
-  }, [actionQuery, paletteMode]);
+  }, [actionQuery, paletteMode, t]);
   const optionCount = paletteMode ? actionResults.length : results.length;
 
   useEffect(() => {
@@ -216,7 +222,7 @@ export function FilePicker({
       <div className="absolute inset-0" onMouseDown={onClose} />
       <div
         role="dialog"
-        aria-label={paletteMode ? "Command Palette" : "Go to File"}
+        aria-label={paletteMode ? t("Command Palette") : t("Go to File")}
         data-file-picker
         onMouseDown={(e) => e.stopPropagation()}
         className="absolute left-1/2 top-[12%] flex w-[min(560px,calc(100vw-24px))] -translate-x-1/2 flex-col overflow-hidden rounded-lg border border-content/10 bg-content/5 backdrop-blur-xl"
@@ -228,8 +234,8 @@ export function FilePicker({
               ref={search}
               type="text"
               value={query}
-              placeholder="Go to File (type > for commands)"
-              aria-label={paletteMode ? "Command Palette" : "Go to File"}
+              placeholder={t("Go to File (type > for commands)")}
+              aria-label={paletteMode ? t("Command Palette") : t("Go to File")}
               spellCheck={false}
               autoComplete="off"
               autoCorrect="off"
@@ -287,13 +293,16 @@ function emptyLabel({
   paletteMode: boolean;
   actionCount: number;
 }): string | null {
-  if (paletteMode) return actionCount === 0 ? "No matching commands" : null;
+  if (paletteMode)
+    return actionCount === 0 ? translate("No matching commands") : null;
   if (error && fileCount === 0) return error;
-  if (!looksLikeProject(cwd)) return "Open a project to search files";
-  if (loading && fileCount === 0) return "Indexing files…";
-  if (fileCount === 0) return "No files found";
+  if (!looksLikeProject(cwd)) return translate("Open a project to search files");
+  if (loading && fileCount === 0) return translate("Indexing files…");
+  if (fileCount === 0) return translate("No files found");
   if (matchCount === 0) {
-    return query.trim() ? "No matching files" : "Type a file name to search";
+    return query.trim()
+      ? translate("No matching files")
+      : translate("Type a file name to search");
   }
   return null;
 }
@@ -311,6 +320,7 @@ function ActionList({
   onActive: (index: number) => void;
   onRun: (action: RankedAction) => void;
 }) {
+  const t = useTranslate();
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const activeRef = useRef<HTMLButtonElement>(null);
 
@@ -322,7 +332,7 @@ function ActionList({
     <div
       ref={lockOverscroll}
       role="listbox"
-      aria-label="Commands"
+      aria-label={t("Commands")}
       className="max-h-[min(380px,50vh)] overflow-y-auto overscroll-none px-1.5 pb-1.5"
     >
       {actions.map((action, index) => {
@@ -376,6 +386,7 @@ function FileList({
   onActive: (index: number) => void;
   onPick: (file: RankedFile) => void;
 }) {
+  const t = useTranslate();
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const activeRef = useRef<HTMLButtonElement>(null);
   const pointer = useRef({ x: Number.NaN, y: Number.NaN, allow: false });
@@ -411,7 +422,7 @@ function FileList({
     <div
       ref={lockOverscroll}
       role="listbox"
-      aria-label="Files"
+      aria-label={t("Files")}
       onMouseMove={onListMouseMove}
       className="max-h-[min(380px,50vh)] overflow-y-auto overscroll-none px-1.5 pb-1.5"
     >

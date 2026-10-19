@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Clock, Pause, Play, Trash2, Zap } from "../../../shared/ui/icons";
+import { translate, useTranslate } from "../../../shared/i18n/locale";
 import { mascotPath } from "../../projects/model/projectMascots";
 import type { MonoState } from "../model/mono";
 import { subscribeMonoFiles } from "../model/monoFiles";
@@ -103,6 +104,7 @@ export function HabitRow({
   actions: HabitActions;
   onOpen: () => void;
 }) {
+  const t = useTranslate();
   const runningSince = useHabitRunning(habit.id);
   const running = runningSince != null;
   const starting = !running && habitStarting(habit);
@@ -140,14 +142,16 @@ export function HabitRow({
           <span className="truncate text-[11px] leading-4 text-content/40">
             {running ? (
               <>
-                Running now · <RunningFor since={runningSince} />
+                {t("Running now")} · <RunningFor since={runningSince} />
               </>
             ) : starting ? (
-              "Starting…"
+              t("Starting…")
             ) : habit.enabled ? (
               habitScheduleLabel(habit.schedule)
             ) : (
-              `Paused · ${habitScheduleLabel(habit.schedule)}`
+              t("Paused · {schedule}", {
+                schedule: habitScheduleLabel(habit.schedule),
+              })
             )}
           </span>
         </span>
@@ -155,7 +159,11 @@ export function HabitRow({
       <span className="flex shrink-0 items-center pr-2 opacity-0 transition-opacity group-hover/habit:opacity-100 focus-within:opacity-100">
         <HabitButton
           label={
-            running ? "Already running" : starting ? "Starting" : "Run now"
+            running
+              ? t("Already running")
+              : starting
+                ? t("Starting")
+                : t("Run now")
           }
           disabled={running || starting}
           onClick={() => actions.runNow(habit.id)}
@@ -163,7 +171,7 @@ export function HabitRow({
           <Zap className="size-3.5" strokeWidth={1.75} />
         </HabitButton>
         <HabitButton
-          label={habit.enabled ? "Pause" : "Resume"}
+          label={habit.enabled ? t("Pause") : t("Resume")}
           onClick={() => actions.toggle(habit.id)}
         >
           {habit.enabled ? (
@@ -172,7 +180,10 @@ export function HabitRow({
             <Play className="size-3.5" strokeWidth={1.75} />
           )}
         </HabitButton>
-        <HabitButton label="Remove" onClick={() => actions.remove(habit.id)}>
+        <HabitButton
+          label={t("Remove")}
+          onClick={() => actions.remove(habit.id)}
+        >
           <Trash2 className="size-3.5" strokeWidth={1.75} />
         </HabitButton>
       </span>
@@ -209,7 +220,7 @@ export function HabitsList({
   habits,
   actions,
   onOpen,
-  empty = <Empty>No habits yet</Empty>,
+  empty = <Empty>{translate("No habits yet")}</Empty>,
 }: {
   habits: Habit[] | undefined;
   actions: HabitActions;
@@ -217,6 +228,7 @@ export function HabitsList({
   /** Shown once loaded with none. */
   empty?: ReactNode;
 }) {
+  const t = useTranslate();
   const now = useTodayTick();
   // Blank for the moment it loads, rather than a line the list replaces.
   if (!habits) return null;
@@ -235,9 +247,9 @@ export function HabitsList({
     );
   const group = (title: string, items: Habit[]) =>
     items.length ? (
-      <section aria-label={title} className="flex flex-col gap-1.5">
+      <section aria-label={t(title)} className="flex flex-col gap-1.5">
         <h4 className="px-2 text-[11px] font-medium uppercase tracking-wide text-content/40">
-          {title}
+          {t(title)}
           <span className="ml-1.5 tabular-nums text-content/30">
             {items.length}
           </span>
@@ -297,6 +309,7 @@ export function TodayHabits({
   actions: HabitActions;
   onOpen: (id: string) => void;
 }) {
+  const t = useTranslate();
   const now = useTodayTick();
   if (!habits) return null;
   if (habits.length === 0) return <HabitsEmpty />;
@@ -319,9 +332,9 @@ export function TodayHabits({
   return (
     <>
       {upcoming.length ? (
-        <Section title="Upcoming">{cards(upcoming)}</Section>
+        <Section title={t("Upcoming")}>{cards(upcoming)}</Section>
       ) : null}
-      {done.length ? <Section title="Done">{cards(done)}</Section> : null}
+      {done.length ? <Section title={t("Done")}>{cards(done)}</Section> : null}
     </>
   );
 }
@@ -365,6 +378,7 @@ const CLOCK_GLOW_PATH = mascotPath(CLOCK_GLOW);
 
 /** Empty state for a Mono with no habits yet. */
 export function HabitsEmpty() {
+  const t = useTranslate();
   return (
     <div className="flex flex-col items-center justify-center gap-4 border-t border-stroke px-6 py-10 text-center">
       <svg
@@ -377,7 +391,7 @@ export function HabitsEmpty() {
         <path d={CLOCK_GLOW_PATH} opacity={0.4} />
         <path d={CLOCK_PATH} />
       </svg>
-      <p className="text-[12px] text-content/45">No habits yet</p>
+      <p className="text-[12px] text-content/45">{t("No habits yet")}</p>
     </div>
   );
 }

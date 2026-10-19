@@ -47,6 +47,7 @@ import {
 import { reuseUnchangedById } from "../model/stableDiff";
 import { useDiffViewport } from "../hooks/useDiffViewport";
 import "./unifiedDiff.css";
+import { useTranslate } from "../../../shared/i18n/locale";
 
 export type { UnifiedDiffFileModel } from "../model/unifiedDiffDocument";
 type InitialExpansion = "all" | "first" | "none";
@@ -92,6 +93,7 @@ export function UnifiedDiffView({
   onDiscardFile,
   onStageHunk,
 }: Props) {
+  const t = useTranslate();
   const previousFiles = useRef<UnifiedDiffFileModel[]>([]);
   const stableFiles = useMemo(() => {
     const stable = reuseUnchangedById(previousFiles.current, files);
@@ -290,7 +292,7 @@ export function UnifiedDiffView({
           ),
         );
         const fileId = document.rows[target]?.fileId;
-        if (fileId && byId.get(fileId)?.emptyMessage !== "Loading…")
+        if (fileId && byId.get(fileId)?.emptyMessage !== t("Loading…"))
           setPending(null);
       }
       return;
@@ -391,7 +393,9 @@ export function UnifiedDiffView({
   };
   if (stableFiles.length === 0)
     return (
-      <p className="px-4 py-6 text-[13px] text-content/45">No file changes</p>
+      <p className="px-4 py-6 text-[13px] text-content/45">
+        {t("No file changes")}
+      </p>
     );
 
   return (
@@ -431,15 +435,15 @@ export function UnifiedDiffView({
         }
       }}
     >
-      <PaneHeader compact role="toolbar" aria-label="Diff tools">
+      <PaneHeader compact role="toolbar" aria-label={t("Diff tools")}>
         <span className="shrink-0 text-content/65">
-          {count === 1 ? "1 file" : `${count} files`}
+          {count === 1 ? t("1 file") : t("{count} files", { count })}
         </span>
         <DiffCounts additions={additions} deletions={deletions} />
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
           <IconButton
-            title="Previous hunk"
-            hint="Previous hunk (Alt+↑)"
+            title={t("Previous hunk")}
+            hint={t("Previous hunk (Alt+↑)")}
             disabled={document.hunks.length === 0 || currentHunk <= 0}
             onClick={() => navigate(-1)}
           >
@@ -447,15 +451,15 @@ export function UnifiedDiffView({
           </IconButton>
           <span
             className="min-w-9 select-none text-center text-[10px] font-normal tabular-nums text-content/40"
-            aria-label="Hunk position"
+            aria-label={t("Hunk position")}
           >
             {document.hunks.length
               ? `${currentHunk + 1}/${document.hunks.length}`
               : "0/0"}
           </span>
           <IconButton
-            title="Next hunk"
-            hint="Next hunk (Alt+↓)"
+            title={t("Next hunk")}
+            hint={t("Next hunk (Alt+↓)")}
             disabled={
               document.hunks.length === 0 ||
               currentHunk >= document.hunks.length - 1
@@ -466,13 +470,13 @@ export function UnifiedDiffView({
           </IconButton>
           <span className="mx-1 h-3 w-px bg-stroke" />
           <IconButton
-            title="Expand all files"
+            title={t("Expand all files")}
             onClick={() => setOpen(new Set(stableFiles.map((file) => file.id)))}
           >
             <UnfoldVertical className="size-3.5" />
           </IconButton>
           <IconButton
-            title="Collapse all files"
+            title={t("Collapse all files")}
             disabled={open.size === 0}
             onClick={() => setOpen(EMPTY_OPEN)}
           >
@@ -482,14 +486,14 @@ export function UnifiedDiffView({
       </PaneHeader>
       {truncated ? (
         <p className="border-b border-stroke px-3 py-2 text-[12px] text-content/45">
-          Diff is too large to display in full. Some patches are unavailable.
+          {t("Diff is too large to display in full. Some patches are unavailable.")}
         </p>
       ) : null}
       <div className={fill ? "relative min-h-0 flex-1" : "relative"}>
         <div
           ref={bindScroller}
           role="region"
-          aria-label="Unified diff"
+          aria-label={t("Unified diff")}
           tabIndex={0}
           className={`unified-diff diff-review-scroll outline-none ${fill ? "h-full min-h-0 overflow-y-auto overflow-x-hidden overscroll-none" : "overflow-x-clip"}`}
         >
@@ -588,7 +592,7 @@ export function UnifiedDiffView({
         ref={bindHorizontalBar}
         className="diff-review-horizontal-scroll font-mono"
         role="region"
-        aria-label="Scroll diff horizontally"
+        aria-label={t("Scroll diff horizontally")}
         tabIndex={0}
         onScroll={(event) => syncHorizontal(event.currentTarget)}
       >
@@ -639,6 +643,7 @@ const ReviewRowView = memo(function ReviewRowView({
   tokens?: SyntaxToken[];
 }) {
   const style = { height: row.height };
+  const t = useTranslate();
   if (row.type === "gap")
     return <div className="diff-review-card-gap" style={style} />;
   if (row.type === "file")
@@ -690,8 +695,8 @@ const ReviewRowView = memo(function ReviewRowView({
       >
         {lane === "gutter" ? (
           <span className="diff-review-hunk-columns select-none" aria-hidden>
-            <span>Old</span>
-            <span>New</span>
+            <span>{t("Old")}</span>
+            <span>{t("New")}</span>
           </span>
         ) : (
           <span className="min-w-0 truncate px-3 font-mono text-[11px] text-content/50">
@@ -725,6 +730,7 @@ const FileHeader = memo(function FileHeader({
     ? file.label.slice(0, -name.length).replace(/\/$/, "")
     : "";
   const Chevron = expanded ? ChevronDown : ChevronRight;
+  const t = useTranslate();
   return (
     <div
       data-sticky-file={sticky ? file.id : undefined}
@@ -733,7 +739,10 @@ const FileHeader = memo(function FileHeader({
     >
       <button
         type="button"
-        aria-label={`${expanded ? "Collapse" : "Expand"} ${file.label}`}
+        aria-label={t("{action} {file}", {
+          action: expanded ? t("Collapse") : t("Expand"),
+          file: file.label,
+        })}
         aria-expanded={expanded}
         onClick={() => actions.toggle(file.id)}
         className="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
@@ -753,7 +762,7 @@ const FileHeader = memo(function FileHeader({
       <DiffCounts additions={file.additions} deletions={file.deletions} />
       {file.canDiscard && discardable ? (
         <IconButton
-          title="Discard file"
+          title={t("Discard file")}
           disabled={busy}
           onClick={() => actions.discard(file.id)}
         >
@@ -762,7 +771,7 @@ const FileHeader = memo(function FileHeader({
       ) : null}
       {file.canStage && stageable ? (
         <IconButton
-          title="Stage file"
+          title={t("Stage file")}
           disabled={busy}
           onClick={() => actions.stage(file.id)}
         >
@@ -791,6 +800,7 @@ const CodeLine = memo(function CodeLine({
   cards: boolean;
 }) {
   const { line } = row;
+  const t = useTranslate();
   const added = line.kind === "add";
   const removed = line.kind === "del";
   const number = removed ? line.oldNumber : line.newNumber;
@@ -824,8 +834,8 @@ const CodeLine = memo(function CodeLine({
           <div className="diff-review-line-actions">
             <button
               type="button"
-              title={`Comment on line ${number ?? ""}`}
-              aria-label={`Comment on line ${number ?? ""}`}
+              title={t("Comment on line {line}", { line: number ?? "" })}
+              aria-label={t("Comment on line {line}", { line: number ?? "" })}
               onClick={(event) =>
                 actions.comment(
                   file.path,
@@ -840,8 +850,8 @@ const CodeLine = memo(function CodeLine({
             {row.stagePos != null ? (
               <button
                 type="button"
-                aria-label="Stage hunk"
-                title="Stage hunk"
+                aria-label={t("Stage hunk")}
+                title={t("Stage hunk")}
                 disabled={busy}
                 onClick={() => actions.stageHunk(file.id, row.stagePos!)}
                 className="diff-review-line-action"
@@ -855,7 +865,7 @@ const CodeLine = memo(function CodeLine({
         <>
           {added || removed ? (
             <span className="sr-only select-none">
-              {added ? "Added: " : "Removed: "}
+              {added ? t("Added: ") : t("Removed: ")}
             </span>
           ) : null}
           <span data-diff-code className="diff-review-code">

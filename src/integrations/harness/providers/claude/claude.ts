@@ -87,6 +87,7 @@ import type {
   SendTurnInput,
   SteerTurnInput,
 } from "../../core/types";
+import { translate } from "../../../../shared/i18n/locale";
 
 /**
  * A PermissionRequest hook can decide before the user touches the prompt; Claude
@@ -284,7 +285,8 @@ export async function compactClaudeContext(
 
 export async function steerClaudeTurn(input: SteerTurnInput): Promise<void> {
   const live = liveByThread.get(input.sessionId);
-  if (!live?.activeTurn) throw new TurnNotReadyError("No active turn to steer");
+  if (!live?.activeTurn)
+    throw new TurnNotReadyError(translate("No active turn to steer"));
 
   const message = buildClaudeUserMessage({
     text: input.text,
@@ -1553,7 +1555,7 @@ function completeAgentTask(
       task.toolUseId,
       task.description,
       status,
-      detail ?? (status === "failed" ? "Subagent failed." : undefined),
+      detail ?? (status === "failed" ? translate("Subagent failed.") : undefined),
     );
   }
   maybeFinishTurn(live);
@@ -1670,7 +1672,7 @@ function noteTaskNotification(
   const agent =
     (tool && isAgentToolName(tool.name)) || live.agentTasks.has(notice.taskId);
   if (!agent || !live.turnResultSeen) return;
-  live.taskNotes.push(notice.summary || "Subagent finished.");
+  live.taskNotes.push(notice.summary || translate("Subagent finished."));
 }
 
 function clearAwaitingResume(live: Live): void {

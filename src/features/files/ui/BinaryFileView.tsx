@@ -35,6 +35,7 @@ import { displayPath } from "../../../shared/lib/paths";
 import { IS_MAC } from "../../../platform/tauri/platform";
 import { claimTrackpadMagnify } from "../../../platform/tauri/trackpadZoom";
 import { resolveZoomKeybinding } from "../../settings/model/zoomKeybinding";
+import { useTranslate } from "../../../shared/i18n/locale";
 
 const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 16;
@@ -63,6 +64,7 @@ type LoadState =
 export function BinaryFileView({ path, cwd, visible = true }: Props) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [reloadKey, setReloadKey] = useState(0);
+  const t = useTranslate();
 
   useEffect(() => {
     let cancelled = false;
@@ -119,7 +121,7 @@ export function BinaryFileView({ path, cwd, visible = true }: Props) {
   if (state.status === "loading") {
     return (
       <div className="grid h-full place-items-center text-[12px] text-content/45">
-        Opening {basename(path)}…
+        {t("Opening {name}…", { name: basename(path) })}
       </div>
     );
   }
@@ -129,7 +131,7 @@ export function BinaryFileView({ path, cwd, visible = true }: Props) {
       <FileCard
         path={path}
         cwd={cwd}
-        title={`Couldn’t open ${basename(path)}`}
+        title={t("Couldn’t open {name}", { name: basename(path) })}
         detail={state.message}
         icon={<AlertCircle className="mx-auto mb-3 size-5 text-red-400" />}
         onRetry={reload}
@@ -144,7 +146,9 @@ export function BinaryFileView({ path, cwd, visible = true }: Props) {
         path={path}
         cwd={cwd}
         title={basename(path)}
-        detail={`${formatFileSize(state.size)} · not a readable image`}
+        detail={t("{size} · not a readable image", {
+          size: formatFileSize(state.size),
+        })}
         icon={
           <div className="mx-auto mb-3 flex justify-center">
             <FileTypeIcon name={basename(path)} isDir={false} size={28} />
@@ -194,6 +198,7 @@ function VideoView({
   onRetry: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const t = useTranslate();
   const [metadata, setMetadata] = useState<{
     width: number;
     height: number;
@@ -239,8 +244,10 @@ function VideoView({
       <FileCard
         path={path}
         cwd={cwd}
-        title={`Couldn’t play ${basename(path)}`}
-        detail="This video’s format or codec is unsupported, or the file is damaged."
+        title={t("Couldn’t play {name}", { name: basename(path) })}
+        detail={t(
+          "This video’s format or codec is unsupported, or the file is damaged.",
+        )}
         icon={<AlertCircle className="mx-auto mb-3 size-5 text-red-400" />}
         onRetry={onRetry}
         offerOpen
@@ -257,7 +264,7 @@ function VideoView({
           controls
           playsInline
           preload="metadata"
-          aria-label={`Video preview: ${basename(path)}`}
+          aria-label={t("Video preview: {name}", { name: basename(path) })}
           className="h-full w-full object-contain"
           onLoadedMetadata={(event) => {
             const video = event.currentTarget;
@@ -304,6 +311,7 @@ function ImageView({
   mime: string;
 }) {
   const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
+  const t = useTranslate();
   const [zoom, setZoomState] = useState<Zoom>("fit");
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [copied, setCopied] = useState(false);
@@ -515,7 +523,7 @@ function ImageView({
         <span className="flex-1" />
         {IS_MAC ? (
           <ZoomButton
-            label={copied ? "Copied" : "Copy original file"}
+            label={copied ? t("Copied") : t("Copy original file")}
             onClick={copyOriginal}
           >
             {copied ? (
@@ -526,21 +534,21 @@ function ImageView({
           </ZoomButton>
         ) : null}
         <ZoomButton
-          label="Zoom out"
+          label={t("Zoom out")}
           onClick={() => zoomAtCenter(currentScale() / ZOOM_STEP)}
         >
           <Minus className="size-3" strokeWidth={1.75} />
         </ZoomButton>
         <button
           type="button"
-          title="Fit to window"
+          title={t("Fit to window")}
           onClick={() => setZoom("fit")}
           className="w-11 rounded text-center tabular-nums hover:text-content"
         >
-          {zoom === "fit" ? "Fit" : `${Math.round(zoom * 100)}%`}
+          {zoom === "fit" ? t("Fit") : `${Math.round(zoom * 100)}%`}
         </button>
         <ZoomButton
-          label="Zoom in"
+          label={t("Zoom in")}
           onClick={() => zoomAtCenter(currentScale() * ZOOM_STEP)}
         >
           <Plus className="size-3" strokeWidth={1.75} />
@@ -554,10 +562,10 @@ function ImageView({
             {
               kind: "item",
               id: "copy-original",
-              label: "Copy Original File",
+              label: t("Copy Original File"),
             },
           ]}
-          ariaLabel="Image actions"
+          ariaLabel={t("Image actions")}
           onPick={(id) => {
             if (id === "copy-original") copyOriginal();
           }}
@@ -607,6 +615,7 @@ function FileCard({
   onRetry?: () => void;
   offerOpen?: boolean;
 }) {
+  const t = useTranslate();
   return (
     <div className="grid h-full place-items-center p-6">
       <div className="max-w-md text-center">
@@ -620,22 +629,22 @@ function FileCard({
           {onRetry ? (
             <CardButton onClick={onRetry}>
               <RotateCcw className="size-3" strokeWidth={1.75} />
-              Retry
+              {t("Retry")}
             </CardButton>
           ) : null}
           {offerOpen && !path.startsWith(REMOTE_PATH_PREFIX) ? (
             <CardButton
               onClick={() => void openPathWithDefaultApp(path).catch(() => {})}
             >
-              Open externally
+              {t("Open externally")}
             </CardButton>
           ) : null}
           <CardButton onClick={() => void revealPath(path).catch(() => {})}>
             <Folder className="size-3" strokeWidth={1.75} />
-            Reveal
+            {t("Reveal")}
           </CardButton>
           <CardButton onClick={() => void copyText(path).catch(() => {})}>
-            Copy path
+            {t("Copy path")}
           </CardButton>
         </div>
       </div>

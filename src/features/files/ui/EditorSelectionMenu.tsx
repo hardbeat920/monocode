@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { useTranslate } from "../../../shared/i18n/locale";
 import { MessageSquarePlus } from "../../../shared/ui/icons";
 import { Popover } from "../../../shared/ui/Popover";
 import {
@@ -18,6 +19,7 @@ export function EditorSelectionMenu({
   selection: EditorSelectionTarget | null;
   onDismiss: () => void;
 }) {
+  const t = useTranslate();
   const onDismissRef = useRef(onDismiss);
   onDismissRef.current = onDismiss;
 
@@ -44,7 +46,7 @@ export function EditorSelectionMenu({
       gap={6}
       onDismiss={onDismiss}
       role="toolbar"
-      aria-label="Selected code actions"
+      aria-label={t("Selected code actions")}
       className="p-1"
     >
       <button
@@ -61,7 +63,7 @@ export function EditorSelectionMenu({
           className="size-3.5"
           strokeWidth={1.75}
         />
-        Add to chat
+        {t("Add to chat")}
       </button>
     </Popover>
   );

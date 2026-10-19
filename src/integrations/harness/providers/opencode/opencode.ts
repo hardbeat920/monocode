@@ -79,6 +79,7 @@ import {
   type UserQuestion,
   type UserQuestionReply,
 } from "../../../../features/sessions/model/userQuestion";
+import { translate } from "../../../../shared/i18n/locale";
 
 type PendingApproval = {
   id: string;
@@ -232,7 +233,9 @@ export async function rewindOpenCodeLastTurn(
   live.onEvent = input.onEvent;
   await live.turns;
   if (live.activeTurn) {
-    throw new Error("Stop the current turn before editing the last message");
+    throw new Error(
+      translate("Stop the current turn before editing the last message"),
+    );
   }
 
   const messageID = await latestOpenCodeUserMessageId(live);
@@ -276,7 +279,8 @@ async function latestOpenCodeUserMessageId(live: Live): Promise<string> {
 
 export async function steerOpenCodeTurn(input: SteerTurnInput): Promise<void> {
   const live = liveByThread.get(input.sessionId);
-  if (!live?.activeTurn) throw new TurnNotReadyError("No active turn to steer");
+  if (!live?.activeTurn)
+    throw new TurnNotReadyError(translate("No active turn to steer"));
 
   const parsed = parseOpenCodeModelSlug(nativeModelId(input.model));
   if (!parsed) {
@@ -1187,8 +1191,8 @@ function emitTool(live: Live, part: OpenCodePart): void {
       detail ??
       (status === "error"
         ? kind === "agent"
-          ? "Subagent failed."
-          : "Tool failed."
+          ? translate("Subagent failed.")
+          : translate("Tool failed.")
         : undefined),
     preview,
   });
@@ -1605,7 +1609,7 @@ function waitForServerUrl(
         return;
       }
       if (Date.now() - started >= timeoutMs) {
-        reject(new Error("Timed out waiting for OpenCode server"));
+        reject(new Error(translate("Timed out waiting for OpenCode server")));
         return;
       }
       setTimeout(tick, 50);

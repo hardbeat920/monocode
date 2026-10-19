@@ -76,12 +76,13 @@ import { useProjectNotificationPreferences } from "../../features/notifications/
 import { useNotificationProjects } from "../../features/notifications/hooks/useNotificationProjects";
 import { updateNotificationPreferences } from "../../features/notifications/model/notificationPreferences";
 import type { ExplorerMenuItem } from "../../features/files/ui/ExplorerMenu";
+import { translate, useTranslate } from "../../shared/i18n/locale";
 
-const REVEAL_LABEL = IS_MAC
-  ? "Reveal in Finder"
-  : IS_WIN
-    ? "Reveal in File Explorer"
-    : "Open Containing Folder";
+function revealLabel(): string {
+  if (IS_MAC) return translate("Reveal in Finder");
+  if (IS_WIN) return translate("Reveal in File Explorer");
+  return translate("Open Containing Folder");
+}
 
 function projectMenuExtraItems(
   pinned: boolean,
@@ -94,7 +95,7 @@ function projectMenuExtraItems(
   railOptions: boolean,
 ): TabGroupMenuExtraItem[] {
   const groupSubmenu: ExplorerMenuItem[] = [
-    { kind: "item", id: "project-group:new", label: "New group…" },
+    { kind: "item", id: "project-group:new", label: translate("New group…") },
     ...(projectGroups.length > 0 ? [{ kind: "sep" } as const] : []),
     ...projectGroups.map((group) => ({
       kind: "item" as const,
@@ -106,33 +107,33 @@ function projectMenuExtraItems(
     {
       kind: "item",
       id: "project-group:none",
-      label: "Ungrouped",
+      label: translate("Ungrouped"),
       checked: currentProjectGroupId == null,
     },
   ];
   const items: TabGroupMenuExtraItem[] = [
     {
       id: "background",
-      label: "Background image",
+      label: translate("Background image"),
       icon: ImagePlus,
     },
     ...(railOptions
       ? [
           {
             id: "project-group",
-            label: "Move to group",
+            label: translate("Move to group"),
             icon: FolderTree,
             submenu: groupSubmenu,
           },
           pinned
-            ? { id: "unpin", label: "Unpin project", icon: PinOff }
-            : { id: "pin", label: "Pin project", icon: Pin },
+            ? { id: "unpin", label: translate("Unpin project"), icon: PinOff }
+            : { id: "pin", label: translate("Pin project"), icon: Pin },
         ]
       : []),
-    { id: "reveal", label: REVEAL_LABEL, icon: FolderOpen },
+    { id: "reveal", label: revealLabel(), icon: FolderOpen },
     {
       id: "external-editor",
-      label: "Open in editor",
+      label: translate("Open in editor"),
       icon: AppWindow,
       disabled: externalEditors === null,
       submenu:
@@ -141,7 +142,7 @@ function projectMenuExtraItems(
               {
                 kind: "item",
                 id: "external-editor:loading",
-                label: "Looking for editors…",
+                label: translate("Looking for editors…"),
                 disabled: true,
               },
             ]
@@ -155,14 +156,14 @@ function projectMenuExtraItems(
                 {
                   kind: "item",
                   id: "external-editor:none",
-                  label: "No supported editors found",
+                  label: translate("No supported editors found"),
                   disabled: true,
                 },
               ],
     },
     {
       id: "notifications-mute",
-      label: "Mute notifications",
+      label: translate("Mute notifications"),
       icon: BellOff,
       sepBefore: true,
       disabled: !notificationReady,
@@ -172,14 +173,14 @@ function projectMenuExtraItems(
   if (canConfigureNotifications) {
     items.push({
       id: "notifications-settings",
-      label: "Notification settings…",
+      label: translate("Notification settings…"),
       icon: Settings,
     });
   }
   if (canRemove) {
     items.push(
-      { id: "archive", label: "Archive", icon: Archive, sepBefore: true },
-      { id: "delete", label: "Delete", icon: Trash2, danger: true },
+      { id: "archive", label: translate("Archive"), icon: Archive, sepBefore: true },
+      { id: "delete", label: translate("Delete"), icon: Trash2, danger: true },
     );
   }
   return items;
@@ -209,6 +210,7 @@ export function useProjectMenu({
   onOpen,
   railOptions = true,
 }: Options) {
+  const t = useTranslate();
   const [projectMenu, setProjectMenu] = useState<
     (Point & { path: string; projectKey: string }) | null
   >(null);
@@ -360,7 +362,7 @@ export function useProjectMenu({
         });
       } catch {
         setMenuError(
-          "Could not save notification preferences. Please try again.",
+          t("Could not save notification preferences. Please try again."),
         );
         return false;
       }
@@ -439,7 +441,7 @@ export function useProjectMenu({
           menuMuteStatus
             ? {
                 id: "notifications-resume",
-                label: "Resume notifications",
+                label: t("Resume notifications"),
                 description: menuMuteStatus,
                 icon: BellOff,
               }
@@ -521,12 +523,12 @@ export function useProjectMenu({
           restoreFocus();
         }}
         showActions={false}
-        ariaLabel="Project group actions"
+        ariaLabel={t("Project group actions")}
         extraItems={[
           {
             id: "delete-project-group",
-            label: "Delete group",
-            description: "Projects will become ungrouped",
+            label: t("Delete group"),
+            description: t("Projects will become ungrouped"),
             icon: Trash2,
             danger: true,
           },
@@ -551,7 +553,7 @@ export function useProjectMenu({
           gap={0}
           width={280}
           role="dialog"
-          aria-label="Mute project notifications"
+          aria-label={t("Mute project notifications")}
           onDismiss={closeNotificationMenu}
           className="space-y-1 overflow-y-auto p-3"
         >

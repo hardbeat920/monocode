@@ -18,6 +18,7 @@ import {
   notificationMuteActions,
   notificationMuteDeadline,
 } from "../../notifications/ui/notificationMuteActions";
+import { useTranslate } from "../../../shared/i18n/locale";
 
 type Props = {
   x: number;
@@ -33,6 +34,7 @@ export function InboxNotificationMenu({
   onOpenSettings,
   onClose,
 }: Props) {
+  const t = useTranslate();
   const notificationProjects = useNotificationProjects(projectPaths);
   const [saveError, setError] = useState<string | null>(null);
   const [customOpen, setCustomOpen] = useState(false);
@@ -54,27 +56,27 @@ export function InboxNotificationMenu({
     {
       kind: "item",
       id: "read-all",
-      label: "Mark all as read",
+      label: t("Mark all as read"),
       disabled: !hasUnread,
     },
     { kind: "sep" },
     {
       kind: "item",
       id: "mute",
-      label: "Mute all projects",
+      label: t("Mute all projects"),
       disabled: !allIds.length,
       submenu: notificationMuteActions(),
     },
     {
       kind: "item",
       id: "resume",
-      label: "Resume muted projects",
+      label: t("Resume muted projects"),
       disabled: !mutedIds.length,
     },
   ];
   if (onOpenSettings)
     items.push(
-      { kind: "item", id: "settings", label: "Notification settings…" },
+      { kind: "item", id: "settings", label: t("Notification settings…") },
     );
 
   if (customOpen)
@@ -84,12 +86,14 @@ export function InboxNotificationMenu({
         gap={0}
         width={280}
         role="dialog"
-        aria-label="Mute project notifications"
+        aria-label={t("Mute project notifications")}
         onDismiss={onClose}
         className="space-y-1 overflow-y-auto p-3"
       >
         <div className="space-y-1">
-          <p className="px-1 text-xs font-medium text-content/85">Mute all projects</p>
+          <p className="px-1 text-xs font-medium text-content/85">
+            {t("Mute all projects")}
+          </p>
         </div>
         <NotificationMuteDatePicker
           projectIds={allIds}
@@ -103,17 +107,23 @@ export function InboxNotificationMenu({
     <ExplorerMenu
       x={x}
       y={y}
-      ariaLabel="Inbox actions"
+      ariaLabel={t("Inbox actions")}
       width={272}
       items={items}
       onClose={onClose}
       header={
         <div className="space-y-1 px-2 py-1.5">
           <p className="text-xs font-medium text-content">
-            Inbox
+            {t("Inbox")}
           </p>
           <p role="status" className="text-xs text-content/50">
-            {`${allIds.length} ${allIds.length === 1 ? "project" : "projects"} · ${mutedIds.length} muted`}
+            {t("{projects} · {muted} muted", {
+              projects:
+                allIds.length === 1
+                  ? t("{count} project", { count: allIds.length })
+                  : t("{count} projects", { count: allIds.length }),
+              muted: mutedIds.length,
+            })}
           </p>
           {saveError ? (
             <p role="alert" className="text-xs text-red-400">
@@ -126,7 +136,7 @@ export function InboxNotificationMenu({
         if (id === "read-all") {
           if (!hasUnread) return;
           if (!markInboxItemsSeen(entries)) {
-            setError("Could not save read status. Please try again.");
+            setError(t("Could not save read status. Please try again."));
             return;
           }
           onClose();
@@ -152,7 +162,7 @@ export function InboxNotificationMenu({
           onClose();
         } catch {
           setError(
-            "Could not save notification preferences. Please try again.",
+            t("Could not save notification preferences. Please try again."),
           );
         }
       }}

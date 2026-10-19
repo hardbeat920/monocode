@@ -3,6 +3,7 @@ import { PROJECT_MASCOTS } from "../../projects/model/projectMascots";
 import { PixelMascot } from "../../projects/ui/PixelMascot";
 import { TAB_GROUP_COLORS } from "../../workspace/model/tabGroups";
 import { playCue } from "../../settings/model/sounds";
+import { useTranslate } from "../../../shared/i18n/locale";
 type Look = { mascot: string; color: string };
 
 type Props = {
@@ -32,25 +33,28 @@ export function monoIntroCrowd(look: Look) {
  * make their first. The switch hides Monos altogether.
  */
 export function MonoIntroCard({ look, onCreate, onHide }: Props) {
+  const t = useTranslate();
   const crowd = monoIntroCrowd(look);
   const middle = (crowd.length - 1) / 2;
 
   return (
     <section
-      aria-label="Meet Monos"
+      aria-label={t("Meet Monos")}
       data-mono-intro
       className="mx-2 overflow-hidden rounded-lg bg-content/[0.03]"
     >
       <div className="flex items-center gap-2 pl-2.5 pr-2 pt-2">
         <h3 className="min-w-0 flex-1 truncate text-[13px] font-medium text-content">
-          Meet Monos
+          {t("Meet Monos")}
         </h3>
         <button
           type="button"
           role="switch"
           aria-checked
-          aria-label="Show monos"
-          title="Hide monos from the rail. Turn them back on in Settings › Monos."
+          aria-label={t("Show monos")}
+          title={t(
+            "Hide monos from the rail. Turn them back on in Settings › Monos.",
+          )}
           onClick={() => {
             onHide();
             playCue("switch");
@@ -107,8 +111,9 @@ export function MonoIntroCard({ look, onCreate, onHide }: Props) {
       </div>
 
       <p className="px-2.5 pt-1.5 text-[11px] leading-snug text-content/55">
-        Agents of your own that work across your projects and run habits on
-        their own.
+        {t(
+          "Agents of your own that work across your projects and run habits on their own.",
+        )}
       </p>
 
       <div className="p-2">
@@ -117,7 +122,7 @@ export function MonoIntroCard({ look, onCreate, onHide }: Props) {
           onClick={onCreate}
           className="h-7 w-full cursor-default rounded-md bg-content text-[12px] font-medium text-background-base hover:bg-content/85 active:scale-[0.98]"
         >
-          Create mono
+          {t("Create mono")}
         </button>
       </div>
     </section>

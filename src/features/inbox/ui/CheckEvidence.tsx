@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
 import { AlertCircle, CircleX, ExternalLink } from "../../../shared/ui/icons";
 import { gitCommitFileDiff } from "../../../platform/tauri/fs";
+import { useTranslate } from "../../../shared/i18n/locale";
 import type { GithubCheckDetails } from "../model/githubPrChecks";
 
 type Annotation = GithubCheckDetails["annotations"][number];
@@ -20,6 +21,7 @@ export function CheckEvidence({
   repo: string;
   headOid: string;
 }) {
+  const t = useTranslate();
   const [showAll, setShowAll] = useState(false);
   const sources = useMemo<SourceCache>(() => new Map(), [cwd, headOid]);
   return (
@@ -42,7 +44,7 @@ export function CheckEvidence({
           onClick={() => setShowAll(true)}
           className="rounded px-2 py-1 text-[11px] text-content/55 hover:bg-content/5 hover:text-content"
         >
-          Show {annotations.length - 5} more annotations
+          {t("Show {count} more annotations", { count: annotations.length - 5 })}
         </button>
       ) : null}
     </div>
@@ -62,6 +64,7 @@ function CheckAnnotation({
   headOid: string;
   sources: SourceCache;
 }) {
+  const t = useTranslate();
   const relative = annotation.path.replace(/^\.\//, "");
   const validPath =
     Boolean(relative) &&
@@ -128,8 +131,8 @@ function CheckAnnotation({
           {fileUrl ? (
             <button
               type="button"
-              title="View source at the checked commit"
-              aria-label={`View ${location} on GitHub`}
+              title={t("View source at the checked commit")}
+              aria-label={t("View {location} on GitHub", { location })}
               onClick={() => void openUrl(fileUrl)}
               className="-my-1 -mr-1 grid size-6 shrink-0 place-items-center rounded text-content/40 hover:bg-content/5 hover:text-content"
             >
@@ -141,7 +144,7 @@ function CheckAnnotation({
       {excerpt.length ? (
         <div
           className="overflow-x-auto py-2 font-mono text-[11px] leading-5"
-          aria-label={`Source at ${headOid}`}
+          aria-label={t("Source at {commit}", { commit: headOid })}
         >
           {excerpt.map((line, index) => (
             <div
@@ -174,7 +177,7 @@ function CheckAnnotation({
           ) : null}
           {canRead && source?.key === sourceKey && !excerpt.length ? (
             <p className="mt-2 text-[10px] text-content/40">
-              Source preview unavailable for this commit.
+              {t("Source preview unavailable for this commit.")}
             </p>
           ) : null}
         </div>

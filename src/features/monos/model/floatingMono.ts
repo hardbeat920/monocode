@@ -4,6 +4,7 @@ import type { UserQuestionReply } from "../../sessions/model/userQuestion";
 import { displayAttachments } from "../../sessions/model/attachments";
 import { listMonos, monoLook, monoState, type MonoStatus } from "./mono";
 import { pixelLayers } from "../../projects/model/pixelMascots";
+import { translate } from "../../../shared/i18n/locale";
 
 export const FLOATING_MONO_CHANGED = "mono_chat_changed";
 export const FLOATING_MONO_REQUEST = "mono_chat_request";
@@ -122,7 +123,7 @@ export async function deliverFloatingMonoRequest(
   accept: () => Promise<boolean>,
 ): Promise<Session | undefined> {
   const session = await host.open(request.monoId);
-  if (!session) throw new Error("That Mono is no longer available.");
+  if (!session) throw new Error(translate("That Mono is no longer available."));
   if (!(await accept())) return undefined;
   const action = request.action;
   switch (action.kind) {
@@ -131,7 +132,7 @@ export async function deliverFloatingMonoRequest(
     case "submit":
       if (host.submit(session.id, action.text, action.attachments) === false)
         throw new Error(
-          "The message could not be sent. Try again in a moment.",
+          translate("The message could not be sent. Try again in a moment."),
         );
       break;
     case "stop":
@@ -153,14 +154,16 @@ export async function deliverFloatingMonoRequest(
       await host.openFile(action.path);
       break;
     case "openArtifact":
-      if (!host.openArtifact) throw new Error("Artifacts are unavailable.");
+      if (!host.openArtifact)
+        throw new Error(translate("Artifacts are unavailable."));
       await host.openArtifact(request.monoId, action.id);
       break;
     case "resume":
       host.resume(session.id);
       break;
     case "create":
-      if (!host.create) throw new Error("New Monos are unavailable here.");
+      if (!host.create)
+        throw new Error(translate("New Monos are unavailable here."));
       await host.create(request.monoId);
       break;
     default:

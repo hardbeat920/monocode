@@ -17,6 +17,7 @@ import {
   Wrench,
   X,
 } from "../../../shared/ui/icons";
+import { translate, useTranslate } from "../../../shared/i18n/locale";
 import {
   memo,
   startTransition,
@@ -344,6 +345,7 @@ function AgentTranscriptComponent({
   onScrollerChange,
   managed = false,
 }: Props) {
+  const t = useTranslate();
   const isMonoChat = !!agentMascot;
   const blocks = useMemo(() => {
     // A Mono's reaction sits on the message it answers, not in a bubble.
@@ -1144,7 +1146,7 @@ function AgentTranscriptComponent({
                 onReturnToLatest();
               }}
             >
-              Back to latest messages
+              {t("Back to latest messages")}
             </button>
           </div>
         ) : null}
@@ -1155,8 +1157,8 @@ function AgentTranscriptComponent({
           >
             <span className="inline-block rounded-md bg-background-base px-2.5 py-1.5">
               {loadingEarlier
-                ? "Loading earlier messages…"
-                : "Couldn't load earlier messages. Scroll up to retry."}
+                ? t("Loading earlier messages…")
+                : t("Couldn't load earlier messages. Scroll up to retry.")}
             </span>
           </div>
         ) : null}
@@ -1169,10 +1171,10 @@ function AgentTranscriptComponent({
               disabled={loadingEarlier}
             >
               {loadingEarlier
-                ? "Loading earlier messages…"
+                ? t("Loading earlier messages…")
                 : loadEarlierError
-                  ? "Couldn't load messages. Try again"
-                  : "Load earlier messages"}
+                  ? t("Couldn't load messages. Try again")
+                  : t("Load earlier messages")}
             </button>
           </div>
         ) : null}
@@ -1909,11 +1911,12 @@ function LiveFoldTitle({
   background?: string[];
   modelName?: string;
 }) {
+  const t = useTranslate();
   const elapsedMs = useElapsedFrom(startedAt, paused);
   // Yielding with a command still going is not the end of the turn. The clock
   // keeps running and the line says what it is waiting on.
   const text = paused
-    ? (waitingLabel ?? "Waiting for approval")
+    ? (waitingLabel ?? t("Waiting for approval"))
     : background?.length
       ? `${formatWorkingDuration(elapsedMs, modelName)} · ${backgroundLabel(background)}`
       : formatWorkingDuration(elapsedMs, modelName);
@@ -1933,8 +1936,10 @@ function LiveFoldTitle({
 
 function backgroundLabel(tasks: string[]): string {
   return tasks.length === 1
-    ? "running in background"
-    : `${tasks.length} tasks running in background`;
+    ? translate("running in background")
+    : translate("{count} tasks running in background", {
+        count: tasks.length,
+      });
 }
 
 /**
@@ -1980,6 +1985,7 @@ function TurnDuration({
   /** Sit in the gap under the turn and show on hover, as a sent message's do. */
   revealOnHover?: boolean;
 }) {
+  const t = useTranslate();
   const label =
     completionLabel ?? formatWorkingDuration(elapsedMs, modelName, true);
   const dot = (
@@ -2008,8 +2014,8 @@ function TurnDuration({
         {onShowWork ? (
           <button
             type="button"
-            title={workExpanded ? "Hide activity" : "Show activity"}
-            aria-label={workExpanded ? "Hide activity" : "Show activity"}
+            title={workExpanded ? t("Hide activity") : t("Show activity")}
+            aria-label={workExpanded ? t("Hide activity") : t("Show activity")}
             aria-expanded={!!workExpanded}
             onClick={onShowWork}
             className={`rounded-md p-1 outline-none hover:bg-content/8 hover:text-content/70 focus-visible:ring-1 focus-visible:ring-accent ${workExpanded ? "bg-content/8 text-content/70" : "text-content/40"}`}
@@ -2063,6 +2069,7 @@ function TurnMetricsBadge({
   metrics?: TurnMetrics;
   elapsedMs: number | null;
 }) {
+  const t = useTranslate();
   const root = useRef<HTMLDivElement>(null);
   const [hovered, setHovered] = useState(false);
   if (!metrics || !hasTurnMetrics(metrics)) return null;
@@ -2074,23 +2081,25 @@ function TurnMetricsBadge({
   const headline =
     [
       metrics.cacheHitPercent != null
-        ? `Cache hit ${Math.round(metrics.cacheHitPercent)}%`
+        ? t("Cache hit {percent}%", {
+            percent: Math.round(metrics.cacheHitPercent),
+          })
         : null,
       outputRate != null
-        ? `Output ${formatMetricCount(outputRate)} tok/s`
+        ? t("Output {rate} tok/s", { rate: formatMetricCount(outputRate) })
         : null,
     ]
       .filter(Boolean)
-      .join(" · ") || "Turn tokens";
+      .join(" · ") || t("Turn tokens");
   const detail = [
     metrics.inputTokens != null
-      ? `${formatMetricCount(metrics.inputTokens)} input`
+      ? t("{count} input", { count: formatMetricCount(metrics.inputTokens) })
       : null,
     metrics.outputTokens != null
-      ? `${formatMetricCount(metrics.outputTokens)} output`
+      ? t("{count} output", { count: formatMetricCount(metrics.outputTokens) })
       : null,
     metrics.cacheReadTokens != null
-      ? `${formatMetricCount(metrics.cacheReadTokens)} cached`
+      ? t("{count} cached", { count: formatMetricCount(metrics.cacheReadTokens) })
       : null,
   ]
     .filter(Boolean)
@@ -2109,8 +2118,8 @@ function TurnMetricsBadge({
       <span
         role="img"
         tabIndex={0}
-        aria-label={`Turn metrics: ${label}`}
-        title="Turn metrics"
+        aria-label={t("Turn metrics: {label}", { label })}
+        title={t("Turn metrics")}
         className="grid rounded-md p-1 text-content/40 outline-none hover:bg-content/8 hover:text-content/70 focus-visible:ring-1 focus-visible:ring-accent"
       >
         <ChartBreakoutSquare className="size-3.5" strokeWidth={1.75} />
@@ -2168,6 +2177,7 @@ function CopyTurnButton({
   attachments?: Attachment[];
   label?: string;
 }) {
+  const t = useTranslate();
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -2186,8 +2196,8 @@ function CopyTurnButton({
       <button
         type="button"
         disabled={pending}
-        title={copied ? "Copied" : label}
-        aria-label={copied ? "Copied" : label}
+        title={copied ? t("Copied") : t(label)}
+        aria-label={copied ? t("Copied") : t(label)}
         className="-ml-1 rounded-md p-1 text-content/40 hover:bg-content/8 hover:text-content/70"
         onClick={(event) => {
           event.stopPropagation();
@@ -2231,6 +2241,7 @@ function SaveNoteButton({
   text: string;
   onSave: (text: string) => void | Promise<void>;
 }) {
+  const t = useTranslate();
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -2249,8 +2260,8 @@ function SaveNoteButton({
       <button
         type="button"
         disabled={pending}
-        title={saved ? "Saved to Notes" : "Save as note"}
-        aria-label={saved ? "Saved to Notes" : "Save as note"}
+        title={saved ? t("Saved to Notes") : t("Save as note")}
+        aria-label={saved ? t("Saved to Notes") : t("Save as note")}
         className="rounded-md p-1 text-content/40 hover:bg-content/8 hover:text-content/70"
         onClick={async () => {
           setError(null);
@@ -2277,7 +2288,7 @@ function SaveNoteButton({
       </button>
       {error && (
         <span role="alert" className="max-w-xs text-xs text-content/70">
-          Could not save note. {error}
+          {t("Could not save note.")} {error}
         </span>
       )}
     </>
@@ -2291,7 +2302,8 @@ function EditLastTurnButton({
   onEdit: () => void;
   editing?: boolean;
 }) {
-  const label = editing ? "Cancel edit" : "Edit and resend";
+  const t = useTranslate();
+  const label = editing ? t("Cancel edit") : t("Edit and resend");
   return (
     <button
       type="button"
@@ -2562,6 +2574,7 @@ function UserMessageBlock({
   onSendDraft?: (block: Block) => boolean | void;
   onRemoveDraft?: (block: Block) => boolean | void;
 }) {
+  const t = useTranslate();
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(false);
   const [singleLine, setSingleLine] = useState(false);
@@ -2683,7 +2696,9 @@ function UserMessageBlock({
     delivery && delivery.status !== "pending" ? (
       <div className="flex max-w-full items-center gap-2 px-3 pt-1 font-sans text-xs text-content/50">
         <span role={delivery.error ? "alert" : "status"}>
-          {delivery.error ? `Not sent · ${delivery.error}` : "Not sent"}
+          {delivery.error
+            ? t("Not sent · {error}", { error: delivery.error })
+            : t("Not sent")}
         </span>
         {onRetryMessage ? (
           <button
@@ -2691,7 +2706,7 @@ function UserMessageBlock({
             onClick={() => onRetryMessage(block.id)}
             className="shrink-0 rounded px-1 py-0.5 text-content/70 hover:bg-content/8"
           >
-            {delivery.status === "failed" ? "Retry" : "Resume"}
+            {delivery.status === "failed" ? t("Retry") : t("Resume")}
           </button>
         ) : null}
       </div>
@@ -2829,7 +2844,7 @@ function UserMessageBlock({
                   className="mt-1 rounded px-1 py-0.5 text-xs text-content/60 hover:bg-content/8 hover:text-content"
                   onClick={toggle}
                 >
-                  {expanded ? "Show less" : "Show more"}
+                  {expanded ? t("Show less") : t("Show more")}
                 </button>
               ) : null}
               {block.ciContext ? (
@@ -2839,11 +2854,12 @@ function UserMessageBlock({
                 >
                   <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded text-xs text-content/50 transition-colors hover:text-content/80 focus-visible:outline focus-visible:outline-1 focus-visible:outline-content/40 [&::-webkit-details-marker]:hidden">
                     <ChevronRight className="size-3 shrink-0 transition-transform group-open/ci:rotate-90" />
-                    <span>CI context</span>
+                    <span>{t("CI context")}</span>
                   </summary>
                   <p className="mt-2 text-xs text-content/50">
-                    CI instructions and failure details included with this
-                    request.
+                    {t(
+                      "CI instructions and failure details included with this request.",
+                    )}
                   </p>
                   <pre className="mt-2 max-h-72 min-w-0 overflow-auto overscroll-contain rounded-md bg-content/5 p-2.5 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words text-content/70">
                     {block.ciContext}
@@ -2854,27 +2870,27 @@ function UserMessageBlock({
                 <div className="mt-2 flex items-center justify-between gap-4 border-t border-dashed border-content/20 pt-2">
                   <span className="flex items-center gap-1.5 text-xs text-content/50">
                     <CircleDashed className="size-3.5" strokeWidth={1.75} />
-                    Draft
+                    {t("Draft")}
                   </span>
                   <span className="flex items-center gap-1">
                     <button
                       type="button"
-                      title="Remove draft"
-                      aria-label="Remove draft"
+                      title={t("Remove draft")}
+                      aria-label={t("Remove draft")}
                       onClick={() => onRemoveDraft?.(block)}
                       className="flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-content/55 hover:bg-content/10 hover:text-content"
                     >
                       <Trash2 className="size-3.5" strokeWidth={1.75} />
-                      Remove
+                      {t("Remove")}
                     </button>
                     <button
                       type="button"
-                      title="Send draft"
-                      aria-label="Send draft"
+                      title={t("Send draft")}
+                      aria-label={t("Send draft")}
                       onClick={() => onSendDraft?.(block)}
                       className="primary-action flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-transform duration-150 active:scale-[0.97]"
                     >
-                      Send
+                      {t("Send")}
                       <ArrowUp className="size-3.5" strokeWidth={2.25} />
                     </button>
                   </span>
@@ -2913,7 +2929,7 @@ function UserMessageBlock({
               <CopyTurnButton
                 text={text}
                 attachments={block.attachments}
-                label="Copy message"
+                label={t("Copy message")}
               />
             ) : null}
             {onEdit ? (
@@ -3078,6 +3094,7 @@ function WorkFoldLine({
   open: boolean;
   onToggle: () => void;
 }) {
+  const t = useTranslate();
   const icon = (
     <span className="relative flex size-3.5 shrink-0 items-center justify-center">
       {open ? (
@@ -3158,7 +3175,7 @@ function WorkFoldLine({
     <button
       type="button"
       aria-expanded={open}
-      aria-label={open ? "Hide the work" : "Show the work"}
+      aria-label={open ? t("Hide the work") : t("Show the work")}
       aria-live={live ? "polite" : undefined}
       onClick={onToggle}
       className={`group ${row}`}
@@ -3416,6 +3433,7 @@ function MonoTurnHeader({
   workExpanded?: boolean;
   searchCurrent: boolean;
 }) {
+  const t = useTranslate();
   const activity = useMemo(
     () => blocks.filter((block) => !block.internal && !block.draft),
     [blocks],
@@ -3494,8 +3512,8 @@ function MonoTurnHeader({
           {onShowWork ? (
             <button
               type="button"
-              title={workExpanded ? "Hide activity" : "Show activity"}
-              aria-label={workExpanded ? "Hide activity" : "Show activity"}
+              title={workExpanded ? t("Hide activity") : t("Show activity")}
+              aria-label={workExpanded ? t("Hide activity") : t("Show activity")}
               aria-expanded={!!workExpanded}
               onClick={onShowWork}
               className="min-w-0 flex-1 cursor-pointer text-left outline-none transition-opacity duration-150 hover:opacity-70 focus-visible:opacity-70"
@@ -3560,6 +3578,7 @@ export function MonoActivityTrail({
   onOpenFile,
   onOpenDiff,
 }: Omit<ActivityPhasesProps, "done" | "padded"> & { live?: boolean }) {
+  const t = useTranslate();
   const steps = blocks.filter(
     (block) =>
       !block.internal &&
@@ -3582,7 +3601,7 @@ export function MonoActivityTrail({
   }
   return (
     <ol
-      aria-label="Activity in chronological order"
+      aria-label={t("Activity in chronological order")}
       className="flex min-w-0 flex-col gap-3"
     >
       {segments.map((segment) => {
@@ -5120,6 +5139,7 @@ function ApprovalControls({
   block: Block;
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
 }) {
+  const t = useTranslate();
   const approval = block.approval;
   if (!approval || approval.decided || !onApproval) return null;
   return (
@@ -5129,14 +5149,14 @@ function ApprovalControls({
         className="rounded-md bg-content px-2.5 py-0.5 text-[11px] hover:bg-content/80     text-background-base"
         onClick={() => onApproval(approval.requestId, "allow")}
       >
-        Allow
+        {t("Allow")}
       </button>
       <button
         type="button"
         className="rounded-md bg-content/10 px-2.5 py-0.5 text-[11px] text-content/70 hover:bg-content/20"
         onClick={() => onApproval(approval.requestId, "deny")}
       >
-        Deny
+        {t("Deny")}
       </button>
     </div>
   );

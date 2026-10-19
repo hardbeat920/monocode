@@ -8,6 +8,7 @@ import {
 } from "react";
 import { isImeComposition } from "../../../shared/lib/keyboard";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
+import { useTranslate } from "../../../shared/i18n/locale";
 import { Modal } from "../../../shared/ui/Modal";
 import { Popover } from "../../../shared/ui/Popover";
 import { Settings, Sparkles, StickyNote } from "../../../shared/ui/icons";
@@ -74,11 +75,12 @@ export function MonoSettingsDialog({
   onClose,
   ...general
 }: Props) {
+  const t = useTranslate();
   const [section, setSection] = useState(initialSection);
   const files = useMonoFiles(monoId, status);
   return (
     <Modal
-      title={`${agent.name} settings`}
+      title={t("{name} settings", { name: agent.name })}
       size="lg"
       minimalHeader
       fitViewport
@@ -93,11 +95,11 @@ export function MonoSettingsDialog({
         data-mono-settings
       >
         <nav
-          aria-label="Settings sections"
+          aria-label={t("Settings sections")}
           className="flex w-48 shrink-0 flex-col gap-px border-r border-stroke p-2"
         >
           <p className="px-2.5 pb-2 pt-1.5 text-[11px] text-content/45">
-            Settings
+            {t("Settings")}
           </p>
           {SECTIONS.map(({ id, label, icon: Icon }) => (
             <button
@@ -112,7 +114,7 @@ export function MonoSettingsDialog({
               }`}
             >
               <Icon className="size-3.5 shrink-0" strokeWidth={1.75} />
-              {label}
+              {t(label)}
             </button>
           ))}
         </nav>
@@ -144,6 +146,7 @@ function GeneralSection({
   onRuntimeModeChange,
   onReset,
 }: Omit<Props, "status" | "initialSection" | "onClose">) {
+  const t = useTranslate();
   const lock = useLockOverscroll<HTMLDivElement>();
   const shown = useSyncExternalStore(
     subscribeMonos,
@@ -158,18 +161,18 @@ function GeneralSection({
       ref={lock}
       className="min-h-0 flex-1 overflow-y-auto overscroll-none px-8 pb-8 pt-6"
     >
-      <h3 className="text-[14px] font-medium text-content">General</h3>
+      <h3 className="text-[14px] font-medium text-content">{t("General")}</h3>
 
       <div className="flex flex-col items-center pb-6 pt-4">
         <LookButton monoId={monoId} agent={agent} />
         <NameField key={monoId} monoId={monoId} fallback={agent.mascot} />
       </div>
 
-      <GroupHeading title="Model" />
+      <GroupHeading title={t("Model")} />
       <SettingGroup>
         <SettingRow
-          label="Model"
-          description="What it thinks and replies with."
+          label={t("Model")}
+          description={t("What it thinks and replies with.")}
         >
           <ModelPicker
             harness={harness}
@@ -194,8 +197,8 @@ function GeneralSection({
           )}
         />
         <SettingRow
-          label="Permissions"
-          description="What it may do without asking."
+          label={t("Permissions")}
+          description={t("What it may do without asking.")}
         >
           <AccessPicker
             value={runtimeMode}
@@ -208,18 +211,20 @@ function GeneralSection({
       </SettingGroup>
 
       <GroupHeading
-        title="Projects"
-        description="It can see every session, note and folder in these."
+        title={t("Projects")}
+        description={t("It can see every session, note and folder in these.")}
       />
       <SettingGroup>
         <MonoProjects monoId={monoId} projects={agent.projects} />
       </SettingGroup>
 
-      <GroupHeading title="Sessions it starts" />
+      <GroupHeading title={t("Sessions it starts")} />
       <SettingGroup>
         <SwitchRow
-          label="Show sessions in sidebar"
-          description="Sessions it starts appear in your project sidebar. Hidden ones stay saved and open from its overview."
+          label={t("Show sessions in sidebar")}
+          description={t(
+            "Sessions it starts appear in your project sidebar. Hidden ones stay saved and open from its overview.",
+          )}
           on={shown}
           onChange={(on) =>
             updateMono(monoId, (mono) => ({
@@ -230,8 +235,11 @@ function GeneralSection({
         />
         {/* Hidden sessions have no sidebar folder to go in. */}
         <SwitchRow
-          label="Group in a folder"
-          description={`Sessions it starts go in a “${agent.name}” folder in your project sidebar.`}
+          label={t("Group in a folder")}
+          description={t(
+            "Sessions it starts go in a “{name}” folder in your project sidebar.",
+            { name: agent.name },
+          )}
           on={shown && folders}
           disabled={!shown}
           onChange={(on) =>
@@ -244,20 +252,24 @@ function GeneralSection({
 
       {onReset ? (
         <>
-          <GroupHeading title="Conversation" />
+          <GroupHeading title={t("Conversation")} />
           <ConfirmReset
-            label="Reset conversation"
-            title={`Reset ${agent.name}'s conversation?`}
-            body="All messages in this Mono's conversation will be deleted and any active reply will be stopped. This can't be undone."
-            kept="Its soul, memory and habits will be kept."
-            failure="Could not reset the conversation."
+            label={t("Reset conversation")}
+            title={t("Reset {name}'s conversation?", { name: agent.name })}
+            body={t(
+              "All messages in this Mono's conversation will be deleted and any active reply will be stopped. This can't be undone.",
+            )}
+            kept={t("Its soul, memory and habits will be kept.")}
+            failure={t("Could not reset the conversation.")}
             onConfirm={onReset}
           >
             {(open, ref) => (
               <SettingGroup>
                 <SettingRow
-                  label="Reset conversation"
-                  description="Clear all messages and start fresh. Its soul, memory and habits stay."
+                  label={t("Reset conversation")}
+                  description={t(
+                    "Clear all messages and start fresh. Its soul, memory and habits stay.",
+                  )}
                 >
                   <button
                     ref={ref}
@@ -265,7 +277,7 @@ function GeneralSection({
                     onClick={open}
                     className="rounded-md border border-stroke px-3 py-1.5 text-[12px] text-red-400 hover:bg-red-500/10"
                   >
-                    Reset
+                    {t("Reset")}
                   </button>
                 </SettingRow>
               </SettingGroup>
@@ -336,6 +348,7 @@ function SettingRow({
 
 /** The Mono's face, which opens its mascots and colors in a popover. */
 function LookButton({ monoId, agent }: { monoId: string; agent: MonoLook }) {
+  const t = useTranslate();
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLButtonElement>(null);
   return (
@@ -343,10 +356,10 @@ function LookButton({ monoId, agent }: { monoId: string; agent: MonoLook }) {
       <button
         ref={anchor}
         type="button"
-        aria-label="Change mascot and color"
+        aria-label={t("Change mascot and color")}
         aria-haspopup="dialog"
         aria-expanded={open}
-        title="Change mascot and color"
+        title={t("Change mascot and color")}
         onClick={() => setOpen((value) => !value)}
         className={`grid size-20 shrink-0 place-items-center rounded-2xl border border-stroke hover:bg-content/8 ${
           open ? "bg-content/8" : "bg-content/4"
@@ -367,7 +380,7 @@ function LookButton({ monoId, agent }: { monoId: string; agent: MonoLook }) {
           constrainHeight={false}
           onDismiss={() => setOpen(false)}
           role="dialog"
-          aria-label="Mascot and color"
+          aria-label={t("Mascot and color")}
           className="flex flex-col gap-3 p-3"
         >
           <MascotPicker
@@ -393,6 +406,7 @@ function LookButton({ monoId, agent }: { monoId: string; agent: MonoLook }) {
 
 /** The Mono's name, edited in place; empty goes back to its mascot's name. */
 function NameField({ monoId, fallback }: { monoId: string; fallback: string }) {
+  const t = useTranslate();
   const saved = () => findMono(monoId)?.name ?? "";
   const [draft, setDraft] = useState(saved);
   const editing = useRef(false);
@@ -412,7 +426,7 @@ function NameField({ monoId, fallback }: { monoId: string; fallback: string }) {
   };
   return (
     <input
-      aria-label="Name"
+      aria-label={t("Name")}
       value={draft}
       placeholder={placeholder}
       maxLength={40}

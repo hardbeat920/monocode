@@ -91,6 +91,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { useStableValue } from "../shared/hooks/useStableValue";
+import { useTranslate } from "../shared/i18n/locale";
 import { useDragResize } from "../shared/hooks/useDragResize";
 import { beginLayoutTransition } from "../shared/lib/layoutTransition";
 import { noteProjectStep, Sidebar } from "./shell/Sidebar";
@@ -1109,6 +1110,7 @@ function Workspace({
   history: bootHistory = [],
   historyCwd: bootHistoryCwd = null,
 }: AppProps) {
+  const t = useTranslate();
   const [projectCwd, setProjectCwd] = useState(
     () =>
       windowTransfer?.projectCwd ??
@@ -14521,13 +14523,13 @@ function Workspace({
                   >
                     <div
                       ref={setRightPanelHost}
-                      aria-label="Project tools"
+                      aria-label={t("Project tools")}
                       className="flex min-h-0 flex-1 flex-col"
                     />
                     <div
                       role="separator"
                       aria-orientation="vertical"
-                      aria-label="Resize right sidebar"
+                      aria-label={t("Resize right sidebar")}
                       aria-valuenow={rightPanelResize.width}
                       aria-valuemin={RIGHT_PANEL_WIDTH_MIN}
                       aria-valuemax={RIGHT_PANEL_WIDTH_MAX}

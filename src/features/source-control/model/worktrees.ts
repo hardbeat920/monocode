@@ -9,6 +9,7 @@ import { isFilesystemTab, type FilePaneTab } from "../../workspace/model/layout"
 import { isEqualOrInside, parentPath, pathKey } from "../../../shared/lib/paths";
 import { isBlankSession } from "../../projects/model/projectReturn";
 import { newSession, sessionWorkCwd, type Session } from "../../sessions/model/session";
+import { translate } from "../../../shared/i18n/locale";
 
 export type Worktree = {
   path: string;
@@ -151,7 +152,7 @@ export function assertWorktreeFilesClosed(
     )
   ) {
     throw new Error(
-      "Close the files and terminals open in this worktree first.",
+      translate("Close the files and terminals open in this worktree first."),
     );
   }
 }
@@ -176,7 +177,7 @@ export function worktreeSessionIds(
   return [...ids];
 }
 
-export const NO_BRANCH_LABEL = "No branch selected";
+export const NO_BRANCH_LABEL = translate("No branch selected");
 
 /** Keep the transcript and project identity while requiring a new working copy. */
 export function detachSessionWorktree<T extends { cwd: string; worktreeCwd?: string }>(

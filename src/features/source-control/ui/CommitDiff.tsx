@@ -9,6 +9,7 @@ import { forEachConcurrent } from "../../../shared/lib/concurrent";
 import type { UnifiedFileDiff } from "../model/unifiedDiff";
 import { prepareUnifiedDiff } from "../model/diffWorker";
 import { UnifiedDiffView, type UnifiedDiffFileModel } from "./UnifiedDiffView";
+import { useTranslate } from "../../../shared/i18n/locale";
 
 type Props = {
   cwd: string;
@@ -29,6 +30,7 @@ export function CommitDiff({ cwd, sha, visible = true }: Props) {
   const [files, setFiles] = useState<GitChangedFile[] | null>(null);
   const [diffs, setDiffs] = useState<Map<string, LoadedDiff>>(new Map());
   const [error, setError] = useState<string | null>(null);
+  const t = useTranslate();
   const loadedScope = useRef("");
   // Commit hashes are immutable. Tab visibility must not refetch or reparse
   // an already-complete review; interrupted loads can resume cached files.
@@ -144,14 +146,14 @@ export function CommitDiff({ cwd, sha, visible = true }: Props) {
         tooLarge: loaded?.tooLarge,
         emptyMessage:
           loaded == null
-            ? "Loading…"
+            ? t("Loading…")
             : loaded.error
-              ? `Couldn’t load diff: ${loaded.error}`
+              ? t("Couldn’t load diff: {error}", { error: loaded.error })
               : unified != null &&
                   unified.additions === 0 &&
                   unified.deletions === 0 &&
                   !loaded.binary
-                ? "No textual diff"
+                ? t("No textual diff")
                 : undefined,
         additions: unified?.additions ?? file.additions,
         deletions: unified?.deletions ?? file.deletions,
@@ -173,7 +175,7 @@ export function CommitDiff({ cwd, sha, visible = true }: Props) {
   if (!cwd || cwd === "~") {
     return (
       <p className="grid h-full place-items-center text-[13px] text-content/45">
-        No project folder
+        {t("No project folder")}
       </p>
     );
   }
@@ -181,7 +183,7 @@ export function CommitDiff({ cwd, sha, visible = true }: Props) {
     return (
       <div className="grid h-full place-items-center p-6 text-center">
         <AlertCircle className="mx-auto mb-3 size-5 text-red-400" />
-        <p className="text-[13px] text-content">Couldn’t load commit</p>
+        <p className="text-[13px] text-content">{t("Couldn’t load commit")}</p>
         <p className="mt-1 text-[12px] text-content/50">{error}</p>
       </div>
     );

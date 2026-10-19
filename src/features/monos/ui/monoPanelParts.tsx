@@ -6,6 +6,7 @@ import {
   type TextareaHTMLAttributes,
 } from "react";
 import { ChevronLeft, type IconComponent } from "../../../shared/ui/icons";
+import { useTranslate } from "../../../shared/i18n/locale";
 import { IconButton } from "../../../app/shell/TitleBar";
 import { PROJECT_MASCOTS } from "../../projects/model/projectMascots";
 import { MONO_COLORS } from "../model/mono";
@@ -40,6 +41,7 @@ export function PageHeader({
   onBack?: () => void;
   children?: ReactNode;
 }) {
+  const t = useTranslate();
   return (
     // Same height as the panel's own header, so a page does not jump.
     <header
@@ -52,7 +54,7 @@ export function PageHeader({
       data-tauri-drag-region="deep"
     >
       {onBack ? (
-        <IconButton label="Back" onClick={onBack}>
+        <IconButton label={t("Back")} onClick={onBack}>
           <ChevronLeft className="size-3.5" strokeWidth={1.75} />
         </IconButton>
       ) : null}
@@ -225,11 +227,12 @@ export function MascotPicker({
   /** Five lays them out as larger tiles, for a popover of their own. */
   columns?: 5 | 10;
 }) {
+  const t = useTranslate();
   const large = columns === 5;
   return (
     <div
       role="radiogroup"
-      aria-label="Mascot"
+      aria-label={t("Mascot")}
       className={`grid gap-0.5 px-1 ${large ? "grid-cols-5 gap-1" : "grid-cols-10"}`}
     >
       {PROJECT_MASCOTS.map(({ name }) => {
@@ -280,9 +283,10 @@ export function ColorPicker({
 }) {
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLDivElement>(null);
+  const t = useTranslate();
   const presetIndex = MONO_COLORS.findIndex((color) => color === current);
   return (
-    <div ref={anchor} role="group" aria-label="Color">
+    <div ref={anchor} role="group" aria-label={t("Color")}>
       <ColorSwatchRow
         className={`grid place-items-center px-1 ${
           columns === 5 ? "grid-cols-5 gap-y-2" : "grid-cols-10 gap-0.5"
@@ -290,15 +294,15 @@ export function ColorPicker({
         size={columns === 5 ? "lg" : "sm"}
         colors={MONO_COLORS}
         labels={[
-          "Blue",
-          "Coral",
-          "Yellow",
-          "Green",
-          "Pink",
-          "Purple",
-          "Teal",
-          "Orange",
-          "Indigo",
+          t("Blue"),
+          t("Coral"),
+          t("Yellow"),
+          t("Green"),
+          t("Pink"),
+          t("Purple"),
+          t("Teal"),
+          t("Orange"),
+          t("Indigo"),
         ]}
         colorIndex={presetIndex >= 0 ? presetIndex : undefined}
         customColor={presetIndex < 0 ? current : undefined}
@@ -357,6 +361,7 @@ export function FileField({
   const [draft, setDraft] = useState(value);
   const [conflict, setConflict] = useState(false);
   // The version the draft started from; a newer one replaces a clean draft.
+  const t = useTranslate();
   const base = useRef({ value, hash });
   if (base.current.hash !== hash && draft === base.current.value) {
     base.current = { value, hash };
@@ -395,7 +400,7 @@ export function FileField({
       {conflict ? (
         <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 px-2 text-[11px] leading-4 text-content/60">
           <span className="min-w-0 flex-1">
-            {author} changed this while you were editing.
+            {t("{author} changed this while you were editing.", { author })}
           </span>
           <button
             type="button"
@@ -406,14 +411,14 @@ export function FileField({
             }}
             className="rounded px-1.5 py-0.5 text-content/70 hover:bg-content/8 hover:text-content"
           >
-            Use theirs
+            {t("Use theirs")}
           </button>
           <button
             type="button"
             onClick={() => void save(true)}
             className="rounded px-1.5 py-0.5 text-content/70 hover:bg-content/8 hover:text-content"
           >
-            Keep mine
+            {t("Keep mine")}
           </button>
         </div>
       ) : null}
@@ -423,6 +428,7 @@ export function FileField({
 
 /** How much of MEMORY.md loads, against the budget each turn has for it. */
 export function MemoryGauge({ memory }: { memory: string }) {
+  const t = useTranslate();
   const budget = memoryWithinBudget(memory);
   const share = Math.max(
     budget.lines / MEMORY_MAX_LINES,
@@ -443,8 +449,11 @@ export function MemoryGauge({ memory }: { memory: string }) {
       </span>
       <span className="shrink-0 tabular-nums">
         {budget.droppedLines
-          ? `${budget.droppedLines} lines not loading`
-          : `${budget.lines} / ${MEMORY_MAX_LINES} lines`}
+          ? t("{count} lines not loading", { count: budget.droppedLines })
+          : t("{lines} / {max} lines", {
+              lines: budget.lines,
+              max: MEMORY_MAX_LINES,
+            })}
       </span>
     </div>
   );

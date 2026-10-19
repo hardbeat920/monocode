@@ -4,6 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { Copy, ExternalLink, Plus, Square, X } from "../../../shared/ui/icons";
 import { copyMessage } from "../../../platform/tauri/clipboard";
+import { useTranslate } from "../../../shared/i18n/locale";
 import {
   ArtifactContent,
   useArtifact,
@@ -51,6 +52,7 @@ const CARD =
   "body-glass relative my-1.5 mr-1.5 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[10px] shadow-[0_0_0_100vmax_rgb(0_0_0/0.28)] [html.theme-light_&]:shadow-[0_0_0_100vmax_rgb(0_0_0/0.05)]";
 
 export function FloatingMonoChat({ onShown }: { onShown: () => void }) {
+  const t = useTranslate();
   const [view, setView] = useState(EMPTY);
   const [error, setError] = useState<string | null>(null);
   const [focus, setFocus] = useState(0);
@@ -200,8 +202,8 @@ export function FloatingMonoChat({ onShown }: { onShown: () => void }) {
           {view.session?.busy ? (
             <button
               type="button"
-              aria-label="Stop reply"
-              title="Stop reply (Escape)"
+              aria-label={t("Stop reply")}
+              title={t("Stop reply (Escape)")}
               className={BUTTON}
               onClick={() => void action({ kind: "stop" })}
             >
@@ -210,8 +212,8 @@ export function FloatingMonoChat({ onShown }: { onShown: () => void }) {
           ) : null}
           <button
             type="button"
-            aria-label="Open in MonoCode"
-            title="Open in MonoCode"
+            aria-label={t("Open in MonoCode")}
+            title={t("Open in MonoCode")}
             disabled={loading}
             className={BUTTON}
             onClick={() => void action({ kind: "reveal" })}
@@ -220,8 +222,8 @@ export function FloatingMonoChat({ onShown }: { onShown: () => void }) {
           </button>
           <button
             type="button"
-            aria-label="Hide chat"
-            title="Hide chat"
+            aria-label={t("Hide chat")}
+            title={t("Hide chat")}
             className={BUTTON}
             onClick={() => void getCurrentWindow().hide()}
           >
@@ -248,7 +250,7 @@ export function FloatingMonoChat({ onShown }: { onShown: () => void }) {
               />
             )}
             <p className="text-[13px] text-content/50">
-              {failure ?? "Loading conversation…"}
+              {failure ?? t("Loading conversation…")}
             </p>
           </div>
         ) : (
@@ -302,10 +304,11 @@ function MonoRail({
   onSwitch: (monoId: string) => void;
   onCreate: () => Promise<boolean>;
 }) {
+  const t = useTranslate();
   const [creating, setCreating] = useState(false);
   return (
     <nav
-      aria-label="Monos"
+      aria-label={t("Monos")}
       data-floating-mono-rail
       data-tauri-drag-region
       // 17px puts the first mascot's center level with the header's: the
@@ -354,8 +357,8 @@ function MonoRail({
       })}
       <button
         type="button"
-        title="New mono"
-        aria-label="New mono"
+        title={t("New mono")}
+        aria-label={t("New mono")}
         disabled={creating || !currentId}
         onClick={() => {
           setCreating(true);
@@ -382,6 +385,7 @@ function FloatingConversation({
   action: (action: FloatingMonoAction) => Promise<boolean>;
   onOpenArtifact: (id: string) => void;
 }) {
+  const t = useTranslate();
   const transcript = useMonoTranscript(session, true);
   return (
     <div
@@ -406,7 +410,10 @@ function FloatingConversation({
               className="size-12"
             />
             <p className="text-[13px] leading-6 text-content/45">
-              Say hello to {mono.name}, ask a question, or hand over some work.
+              {t(
+                "Say hello to {name}, ask a question, or hand over some work.",
+                { name: mono.name },
+              )}
             </p>
           </div>
         ) : null}
@@ -465,13 +472,13 @@ function FloatingConversation({
       ) : null}
       {session.usageLimit ? (
         <div className="shrink-0 px-3 pb-2 text-[12px] text-content/60">
-          <p>The provider’s usage limit was reached.</p>
+          <p>{t("The provider’s usage limit was reached.")}</p>
           <button
             type="button"
             className="mt-1 text-accent hover:underline"
             onClick={() => void action({ kind: "resume" })}
           >
-            Try again
+            {t("Try again")}
           </button>
           <span className="mx-2 text-content/25">·</span>
           <button
@@ -479,7 +486,7 @@ function FloatingConversation({
             className="text-accent hover:underline"
             onClick={() => void action({ kind: "reveal" })}
           >
-            Change model in MonoCode
+            {t("Change model in MonoCode")}
           </button>
         </div>
       ) : null}
@@ -522,6 +529,7 @@ function ArtifactSheet({
   action: (action: FloatingMonoAction) => Promise<boolean>;
   onClose: () => void;
 }) {
+  const t = useTranslate();
   const { artifact, loaded, error, setError } = useArtifact(id);
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -551,7 +559,8 @@ function ArtifactSheet({
     return () => window.removeEventListener("keydown", escape, true);
   }, [close]);
 
-  const label = artifact ? artifactLabel(artifact.kind) : "Document";
+  const label = t(artifact ? artifactLabel(artifact.kind) : "Document");
+  const noun = label.toLowerCase();
   return (
     <div
       data-artifact-sheet={id}
@@ -582,13 +591,13 @@ function ArtifactSheet({
           {artifact ? (
             <button
               type="button"
-              aria-label={copied ? "Copied" : `Copy ${label.toLowerCase()}`}
-              title={copied ? "Copied" : `Copy ${label.toLowerCase()}`}
+              aria-label={copied ? t("Copied") : t("Copy {noun}", { noun })}
+              title={copied ? t("Copied") : t("Copy {noun}", { noun })}
               className={BUTTON}
               onClick={() =>
                 void copyMessage(artifact.body).then(
                   () => setCopied(true),
-                  () => setError("Could not copy this document."),
+                  () => setError(t("Could not copy this document.")),
                 )
               }
             >
@@ -597,8 +606,8 @@ function ArtifactSheet({
           ) : null}
           <button
             type="button"
-            aria-label="Open in MonoCode"
-            title="Open in MonoCode"
+            aria-label={t("Open in MonoCode")}
+            title={t("Open in MonoCode")}
             className={BUTTON}
             onClick={() => void action({ kind: "openArtifact", id })}
           >
@@ -606,8 +615,8 @@ function ArtifactSheet({
           </button>
           <button
             type="button"
-            aria-label="Close document"
-            title="Close (Escape)"
+            aria-label={t("Close document")}
+            title={t("Close (Escape)")}
             className={BUTTON}
             onClick={close}
           >
@@ -617,11 +626,11 @@ function ArtifactSheet({
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pt-1 pb-5">
           {!loaded ? (
             <p role="status" className="text-[13px] text-content/50">
-              Loading document…
+              {t("Loading document…")}
             </p>
           ) : !artifact ? (
             <p role="alert" className="text-[13px] text-content/60">
-              {error ?? "This document is no longer available."}
+              {error ?? t("This document is no longer available.")}
             </p>
           ) : (
             <article data-artifact-reader={artifact.id}>

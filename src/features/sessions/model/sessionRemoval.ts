@@ -8,6 +8,7 @@ import {
 } from "./handoff";
 import { flushSessionCheckpoint } from "./checkpoint";
 import { isFilesystemTab, type WorkspaceTab } from "../../workspace/model/layout";
+import { translate } from "../../../shared/i18n/locale";
 import { orchestrator } from "../../orchestration/model/orchestration";
 import {
   newSession,
@@ -165,7 +166,7 @@ async function removeSession(
   } else {
     if (stopped && shouldPersistSession(stopped)) {
       const saved = await upsertSession(stopped);
-      if (!saved) throw new Error("The conversation could not be saved.");
+      if (!saved) throw new Error(translate("The conversation could not be saved."));
       savedSummary = saved;
     }
     await setSessionArchived(sessionId, true);

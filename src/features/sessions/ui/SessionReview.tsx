@@ -20,7 +20,7 @@ import { invalidateWatchedFiles } from "../../files/model/fileWatch";
 import { basename, notifyGitChanged } from "../../../platform/tauri/fs";
 import { formatInteger } from "../../../shared/lib/numbers";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
-
+import { useTranslate } from "../../../shared/i18n/locale";
 type Props = {
   sessionId: string;
   cwd: string;
@@ -52,6 +52,7 @@ export function SessionReview({
     busy,
     editedPaths,
   );
+  const t = useTranslate();
   const [expanded, setExpanded] = useState(false);
   const [acting, setActing] = useState<"keep" | "undo" | null>(null);
 
@@ -70,7 +71,7 @@ export function SessionReview({
           className="rounded-xl border border-content/6 bg-content/3 px-3 py-2.5"
         >
           <p className="text-[12px] font-medium text-content/80">
-            Couldn’t record changes
+            {t("Couldn’t record changes")}
           </p>
           <p className="mt-1 text-[11px] text-content/50">{error}</p>
         </div>
@@ -116,8 +117,10 @@ export function SessionReview({
           </span>
           <div className="min-w-0 flex-1">
             <div className="truncate text-[12px] font-medium text-content/80">
-              <span title="Workspace changes recorded during the latest turn">
-                Changed {files.length} {files.length === 1 ? "file" : "files"}
+              <span title={t("Workspace changes recorded during the latest turn")}>
+                {files.length === 1
+                  ? t("Changed {count} file", { count: files.length })
+                  : t("Changed {count} files", { count: files.length })}
               </span>
             </div>
             <div className="flex items-center gap-1.5 font-sans text-[11px] font-semibold tabular-nums -mt-0.5">
@@ -134,43 +137,47 @@ export function SessionReview({
               type="button"
               title={
                 canUndoAll
-                  ? "Undo the recorded changes"
+                  ? t("Undo the recorded changes")
                   : undoLocked
-                    ? "Undo is unavailable while another session is running in this project"
-                    : "Undo is unavailable because the workspace was shared, the branch moved, or a recorded file changed afterward"
+                    ? t(
+                        "Undo is unavailable while another session is running in this project",
+                      )
+                    : t(
+                        "Undo is unavailable because the workspace was shared, the branch moved, or a recorded file changed afterward",
+                      )
               }
               disabled={disabled || !canUndoAll}
               onClick={() => run("undo")}
               className="h-7 rounded-md px-2.5 text-[11px] text-content/50 hover:bg-content/8 hover:text-content disabled:opacity-35"
             >
-              Undo
+              {t("Undo")}
             </button>
             <button
               type="button"
-              title="Keep the recorded changes and dismiss this card"
+              title={t("Keep the recorded changes and dismiss this card")}
               disabled={disabled}
               onClick={() => run("keep")}
               className="h-7 rounded-md px-2.5 text-[11px] text-content/50 hover:bg-content/8 hover:text-content disabled:opacity-35"
             >
-              Keep
+              {t("Keep")}
             </button>
             {onCommit ? (
               <button
                 type="button"
-                title="Commit these changes"
+                title={t("Commit these changes")}
                 onClick={() => onCommit({ sessionId, cwd })}
                 className="h-7 rounded-md px-2.5 text-[11px] text-content/50 hover:bg-content/8 hover:text-content"
               >
-                Commit
+                {t("Commit")}
               </button>
             ) : null}
             <button
               type="button"
-              title="Review changes"
+              title={t("Review changes")}
               onClick={() => onOpenDiff(undefined, { sessionId, cwd })}
               className="h-7 rounded-md bg-content/8 px-2.5 text-[11px] font-medium text-content/75 hover:bg-content/12 hover:text-content"
             >
-              Review
+              {t("Review")}
             </button>
           </div>
         </div>
@@ -204,8 +211,10 @@ export function SessionReview({
             )}
             <span>
               {expanded
-                ? "Show fewer files"
-                : `Show ${hiddenFileCount} more ${hiddenFileCount === 1 ? "file" : "files"}`}
+                ? t("Show fewer files")
+                : hiddenFileCount === 1
+                  ? t("Show {count} more file", { count: hiddenFileCount })
+                  : t("Show {count} more files", { count: hiddenFileCount })}
             </span>
           </button>
         ) : null}
@@ -350,13 +359,14 @@ function FileRow({
 }
 
 function DiffCounts({ file }: { file: CheckpointFile }) {
+  const t = useTranslate();
   if (!file.exact) {
     return (
       <span
-        title="This older checkpoint has no exact before/after diff"
+        title={t("This older checkpoint has no exact before/after diff")}
         className="shrink-0 text-[11px] font-medium text-content/45"
       >
-        Diff unavailable
+        {t("Diff unavailable")}
       </span>
     );
   }

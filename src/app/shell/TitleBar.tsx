@@ -15,6 +15,7 @@ import {
   X,
   Zap,
 } from "../../shared/ui/icons";
+import { translate, useTranslate } from "../../shared/i18n/locale";
 import {
   memo,
   useCallback,
@@ -175,7 +176,9 @@ type Props = {
 
 function sessionMeta(tab: Tab): string {
   if (tab.more.length === 1) return tab.more[0];
-  if (tab.sessionCount > 1) return `${tab.sessionCount} sessions`;
+  if (tab.sessionCount > 1) {
+    return translate("{count} sessions", { count: tab.sessionCount });
+  }
   return "";
 }
 
@@ -185,7 +188,7 @@ export function tabCopy(tab: Tab): {
   tooltip: string;
 } {
   if (tab.appView) {
-    const headline = APP_VIEW_LABELS[tab.appView];
+    const headline = translate(APP_VIEW_LABELS[tab.appView]);
     return { headline, meta: "", tooltip: headline };
   }
   if (tab.mono) return { headline: tab.title, meta: "", tooltip: tab.title };
@@ -193,7 +196,7 @@ export function tabCopy(tab: Tab): {
   const conversation = tab.title.trim();
   const file = tab.files[0] ?? "";
   const sessions = sessionMeta(tab);
-  const untitled = "New session";
+  const untitled = translate("New session");
 
   let headline: string;
   const metaParts: string[] = [];
@@ -225,7 +228,7 @@ export function tabCopy(tab: Tab): {
   if (conversation) tooltipParts.push(conversation);
   tooltipParts.push(...tab.more);
   if (tab.files.length > 0) tooltipParts.push(tab.files.join(", "));
-  if (tab.dirty) tooltipParts.push("Unsaved changes");
+  if (tab.dirty) tooltipParts.push(translate("Unsaved changes"));
 
   return { headline, meta, tooltip: tooltipParts.join(" · ") };
 }
@@ -354,12 +357,13 @@ function TitleTabItem({
   onContextMenu: (id: string, event: ReactMouseEvent<HTMLDivElement>) => void;
   itemRef?: (el: HTMLDivElement | null) => void;
 }) {
+  const t = useTranslate();
   const { headline, meta, tooltip } = tabCopy(tab);
   const fileIcon = tab.files[0];
   const AppViewIcon = tab.appView ? APP_VIEW_ICONS[tab.appView] : null;
   const accessibleTooltip =
     (tab.doneHarnesses?.length ?? 0) > 0
-      ? `${tooltip} · Response complete`
+      ? `${tooltip} · ${t("Response complete")}`
       : tooltip;
 
   return (
@@ -457,8 +461,8 @@ function TitleTabItem({
             {tab.dirty ? (
               <span
                 className="size-1.5 shrink-0 rounded-full bg-content/70"
-                title="Unsaved changes"
-                aria-label="Unsaved changes"
+                title={t("Unsaved changes")}
+                aria-label={t("Unsaved changes")}
               />
             ) : null}
           </span>
@@ -472,8 +476,8 @@ function TitleTabItem({
       {closable ? (
         <button
           type="button"
-          title="Close Tab"
-          aria-label={`Close ${headline}`}
+          title={t("Close Tab")}
+          aria-label={t("Close {name}", { name: headline })}
           data-no-drag
           data-tauri-drag-region="false"
           onPointerDown={(event) => event.stopPropagation()}
@@ -592,10 +596,10 @@ export function DevModeLabel() {
   if (!import.meta.env.DEV) return null;
   return (
     <span
-      title="Development build"
+      title={translate("Development build")}
       className="mr-1 min-w-0 truncate rounded-md bg-skill/15 px-1.5 py-0.5 text-[10px] font-medium tracking-wide text-skill"
     >
-      Development
+      {translate("Development")}
     </span>
   );
 }
@@ -605,8 +609,8 @@ export function DevModeIcon() {
   if (!import.meta.env.DEV) return null;
   return (
     <span
-      title="Development build"
-      aria-label="Development build"
+      title={translate("Development build")}
+      aria-label={translate("Development build")}
       role="img"
       className="grid size-6 shrink-0 place-items-center text-skill"
     >
@@ -641,17 +645,18 @@ export function TabVisitNav({
   panelActive?: boolean;
   panelLabel?: string;
 }) {
+  const t = useTranslate();
   return (
     <div className="flex shrink-0 items-center">
       <IconButton
-        label={`Back (${MOD}[)`}
+        label={`${t("Back")} (${MOD}[)`}
         disabled={!canGoBack}
         onClick={onGoBack}
       >
         <ChevronLeft className="size-3.5" strokeWidth={1.75} />
       </IconButton>
       <IconButton
-        label={`Forward (${MOD}])`}
+        label={`${t("Forward")} (${MOD}])`}
         disabled={!canGoForward}
         onClick={onGoForward}
       >
@@ -659,7 +664,7 @@ export function TabVisitNav({
       </IconButton>
       {onTogglePanel ? (
         <IconButton
-          label={panelLabel}
+          label={t(panelLabel)}
           active={panelActive}
           onClick={onTogglePanel}
         >
@@ -684,13 +689,14 @@ export function MonoViewActions({
   onOpenSettings?: () => void;
   className?: string;
 }) {
+  const t = useTranslate();
   return (
     <div className={`flex items-center gap-1 ${className}`}>
       {onToggleOverview ? (
         <button
           type="button"
           aria-pressed={overviewOpen}
-          title={overviewOpen ? "Hide overview" : "Show overview"}
+          title={overviewOpen ? t("Hide overview") : t("Show overview")}
           data-tauri-drag-region="false"
           onClick={onToggleOverview}
           className={`flex h-6 items-center gap-1.5 rounded-md px-2 text-[12px] ${
@@ -700,11 +706,11 @@ export function MonoViewActions({
           }`}
         >
           <DashboardSquare className="size-3.5" strokeWidth={1.75} />
-          Overview
+          {t("Overview")}
         </button>
       ) : null}
       {onOpenSettings ? (
-        <IconButton label={`${name} settings`} onClick={onOpenSettings}>
+        <IconButton label={t("{name} settings", { name })} onClick={onOpenSettings}>
           <Settings className="size-3.5" strokeWidth={1.75} />
         </IconButton>
       ) : null}
@@ -720,17 +726,18 @@ export function OverlayNav({
   onBack?: () => void;
   onToggleSidebar?: () => void;
 }) {
+  const t = useTranslate();
   if (!onBack && !onToggleSidebar) return null;
   return (
     <div className="flex shrink-0 items-center px-1.5">
       {onBack ? (
-        <IconButton label={`Back (${MOD}[)`} onClick={onBack}>
+        <IconButton label={`${t("Back")} (${MOD}[)`} onClick={onBack}>
           <ChevronLeft className="size-3.5" strokeWidth={1.75} />
         </IconButton>
       ) : null}
       {onToggleSidebar ? (
         <IconButton
-          label={`Toggle Sidebar (${MOD}B)`}
+          label={`${t("Toggle Sidebar")} (${MOD}B)`}
           onClick={onToggleSidebar}
         >
           <PanelLeft className="size-3.5" strokeWidth={1.75} />
@@ -781,6 +788,7 @@ function TitleBarComponent({
   recents = [],
   onSelectProject,
 }: Props) {
+  const t = useTranslate();
   const trafficLightsVisible = useTrafficLightsVisible();
   const tabIds = tabs.map((tab) => tab.id);
   const { displayed, tabNodeRef, finishMotion } = useTabCloseMotion(tabs);
@@ -900,7 +908,7 @@ function TitleBarComponent({
   const systemTitle = useMemo(() => {
     const activeName = activeTab
       ? activeTab.appView
-        ? APP_VIEW_LABELS[activeTab.appView]
+        ? t(APP_VIEW_LABELS[activeTab.appView])
         : activeTab.mono
           ? activeTab.title
           : activeTab.files[0]
@@ -915,7 +923,7 @@ function TitleBarComponent({
       return `${project} — MonoCode`;
     }
     return "MonoCode";
-  }, [activeTab, cwd]);
+  }, [activeTab, cwd, t]);
 
   useEffect(() => {
     document.title = systemTitle;
@@ -1099,12 +1107,12 @@ function TitleBarComponent({
         {showTrailingActions ? (
           <div className="flex items-center gap-0.5 px-2">
             {projectless && railClosed && onOpenInbox ? (
-              <IconButton label="Inbox" onClick={onOpenInbox}>
+              <IconButton label={t("Inbox")} onClick={onOpenInbox}>
                 <Inbox className="size-3.5" strokeWidth={1.75} />
               </IconButton>
             ) : null}
             {projectless && railClosed && onOpenNotes ? (
-              <IconButton label="Notes" onClick={onOpenNotes}>
+              <IconButton label={t("Notes")} onClick={onOpenNotes}>
                 <StickyNote className="size-3.5" strokeWidth={1.75} />
               </IconButton>
             ) : null}
@@ -1146,7 +1154,7 @@ function TitleBarComponent({
             // Hovering the toggle peeks a collapsed sidebar out.
             <span data-sidebar-peek-trigger className="flex">
               <IconButton
-                label={`Toggle Sidebar (${MOD}B)`}
+                label={`${t("Toggle Sidebar")} (${MOD}B)`}
                 onClick={onToggleSessionSidebar}
               >
                 <PanelLeft className="size-3.5" strokeWidth={1.75} />
@@ -1187,7 +1195,7 @@ function TitleBarComponent({
           {trafficLightsVisible ? <div className="w-[78px] shrink-0" /> : null}
           <div className="flex shrink-0 items-center px-1.5">
             <IconButton
-              label={`Toggle Sidebar (${MOD}B)`}
+              label={`${t("Toggle Sidebar")} (${MOD}B)`}
               onClick={onToggleSidebar}
             >
               <PanelLeft className="size-3.5" strokeWidth={1.75} />
@@ -1220,7 +1228,9 @@ function TitleBarComponent({
           onNewTerminal={onNewTerminal}
           buttonClassName="flex h-full min-w-0 max-w-64 shrink items-center gap-2 px-6 text-left text-sm font-medium leading-tight"
         >
-          <span className="min-w-0 truncate text-content/50">No project</span>
+          <span className="min-w-0 truncate text-content/50">
+            {t("No project")}
+          </span>
         </CwdPicker>
       ) : null}
 
@@ -1329,8 +1339,8 @@ function TitleBarComponent({
                 // Sized and plated like an inactive tab beside it.
                 <button
                   type="button"
-                  title={`New session (${MOD}T)`}
-                  aria-label={`New session (${MOD}T)`}
+                  title={`${t("New session")} (${MOD}T)`}
+                  aria-label={`${t("New session")} (${MOD}T)`}
                   data-tauri-drag-region="false"
                   onClick={onNewSession}
                   className="ml-0.5 grid size-7.5 shrink-0 cursor-default place-items-center rounded-md bg-content/4 text-content/50 opacity-65 hover:bg-content/7 hover:text-content hover:opacity-100 focus-visible:opacity-100"

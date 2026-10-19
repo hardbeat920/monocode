@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { LIST_PAGE_SIZE, listWindowSize } from "../../../shared/lib/listWindow";
 import { projectName } from "../../../shared/lib/paths";
 import { IconButton } from "../../../app/shell/TitleBar";
+import { useTranslate } from "../../../shared/i18n/locale";
 import {
   ExternalLink,
   PanelRightToggle,
@@ -93,6 +94,7 @@ export function MonoSessionList({
     loaded: new Set(),
     failed: new Set(),
   }));
+  const t = useTranslate();
   const [opening, setOpening] = useState<string>();
   const [error, setError] = useState<string>();
   useEffect(() => {
@@ -145,7 +147,9 @@ export function MonoSessionList({
       await onOpenSession(id);
     } catch (cause) {
       setError(
-        cause instanceof Error ? cause.message : "Could not open this session.",
+        cause instanceof Error
+          ? cause.message
+          : t("Could not open this session."),
       );
     } finally {
       setOpening(undefined);
@@ -270,11 +274,13 @@ export function MonoSessionList({
     return (
       <EmptyState icon={Search}>
         {needle
-          ? "No sessions match this search."
+          ? t("No sessions match this search.")
           : hasActiveSessionFilters(filters)
-            ? "No sessions match these filters."
+            ? t("No sessions match these filters.")
             : // Every one it started is gone; the filter still lists them.
-              `The sessions ${agent.name} started have since been deleted.`}
+              t("The sessions {name} started have since been deleted.", {
+                name: agent.name,
+              })}
       </EmptyState>
     );
 
@@ -356,11 +362,11 @@ export function MonoSessionList({
                 modelInFooter
                 statusLabel={
                   unavailable
-                    ? "Unavailable"
+                    ? t("Unavailable")
                     : opening === launch.sessionId
-                      ? "Opening…"
+                      ? t("Opening…")
                       : failed
-                        ? "Status unavailable"
+                        ? t("Status unavailable")
                         : ""
                 }
                 isActive={false}
@@ -412,26 +418,27 @@ export function LaunchedSessionPage({
   onClose: () => void;
   children: ReactNode;
 }) {
+  const t = useTranslate();
   const [error, setError] = useState<string>();
   return (
     <>
       <PageHeader title={title} onBack={onBack}>
         <IconButton
-          label="Open in workspace"
+          label={t("Open in workspace")}
           onClick={() => {
             setError(undefined);
             void Promise.resolve(onOpenInWorkspace()).catch((cause) =>
               setError(
                 cause instanceof Error
                   ? cause.message
-                  : "Could not open this session.",
+                  : t("Could not open this session."),
               ),
             );
           }}
         >
           <ExternalLink className="size-3.5" strokeWidth={1.75} />
         </IconButton>
-        <IconButton label="Hide overview" active onClick={onClose}>
+        <IconButton label={t("Hide overview")} active onClick={onClose}>
           <PanelRightToggle className="size-3.5" strokeWidth={1.75} />
         </IconButton>
       </PageHeader>

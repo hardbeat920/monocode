@@ -35,6 +35,7 @@ import { BinaryFileView } from "./BinaryFileView";
 import { ReleaseNotesSurface } from "../../../app/ui/ReleaseNotesSurface";
 import { WorkingTreeDiffSurface as WorkingTreeDiff } from "../../source-control/ui/workingTreeDiffSurface";
 import { isRemoteProjectPath } from "../../projects/model/recents";
+import { useTranslate } from "../../../shared/i18n/locale";
 
 const CommitDiff = lazySurface(async () => {
   const module = await import("../../source-control/ui/CommitDiff");
@@ -292,6 +293,7 @@ function PlanSurface({
     target?: PlanBuildTarget,
   ) => void;
 }) {
+  const t = useTranslate();
   const plan = file.plan;
   const [mode, setMode] = useMarkdownMode(file.path);
   const session = plan
@@ -306,7 +308,7 @@ function PlanSurface({
     return (
       <div className="grid h-full place-items-center p-6 text-center">
         <p className="text-[13px] text-content/70">
-          This plan is no longer in the session.
+          {t("This plan is no longer in the session.")}
         </p>
       </div>
     );
@@ -320,10 +322,10 @@ function PlanSurface({
     block.plan?.status === "built";
   const buildLabel =
     block.plan?.status === "building"
-      ? "Building…"
+      ? t("Building…")
       : block.plan?.status === "built"
-        ? "Built"
-        : "Build";
+        ? t("Built")
+        : t("Build");
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col">
@@ -366,7 +368,7 @@ function PlanSurface({
         }
         source={
           <textarea
-            aria-label="Plan markdown"
+            aria-label={t("Plan markdown")}
             spellCheck={false}
             value={block.text}
             disabled={

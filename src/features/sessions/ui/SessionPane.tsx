@@ -1,5 +1,6 @@
 import { GripVertical, X } from "../../../shared/ui/icons";
 import { useSessionSnapshot } from "../model/sessionStateStore";
+import { useTranslate } from "../../../shared/i18n/locale";
 import {
   memo,
   useCallback,
@@ -377,6 +378,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
   onPaneDragStart,
   transcriptPool,
 }: Props) {
+  const t = useTranslate();
   const orchestrationRuns = useSyncExternalStore(
     orchestrator.subscribe,
     orchestrator.snapshot,
@@ -857,8 +859,8 @@ const LocalSessionPane = memo(function LocalSessionPane({
           </span>
           <button
             type="button"
-            title={`Close Pane (${MOD}W)`}
-            aria-label="Close pane"
+            title={`${t("Close Pane")} (${MOD}W)`}
+            aria-label={t("Close pane")}
             data-no-drag
             className="grid size-5 shrink-0 place-items-center rounded text-content/50 hover:bg-content/10 hover:text-content"
             onPointerDown={(e) => e.stopPropagation()}

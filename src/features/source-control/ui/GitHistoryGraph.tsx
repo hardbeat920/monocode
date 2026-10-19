@@ -30,6 +30,7 @@ import {
   type GraphRef,
   type HistoryItemViewModel,
 } from "../model/gitGraph";
+import { useTranslate } from "../../../shared/i18n/locale";
 
 type Props = {
   cwd: string;
@@ -61,6 +62,7 @@ export function GitHistoryGraph({
   onOpenCommit,
 }: Props) {
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
+  const t = useTranslate();
   const standalone = !onToggleExpanded;
   const { commits, loading, error, refresh } = useGitHistory(
     cwd,
@@ -102,13 +104,13 @@ export function GitHistoryGraph({
           type="button"
           onClick={onToggleExpanded}
           aria-expanded={expanded}
-          aria-label={expanded ? "Collapse graph" : "Expand graph"}
+          aria-label={expanded ? t("Collapse graph") : t("Expand graph")}
           className={`flex w-full shrink-0 items-center gap-1 px-3 text-left leading-none hover:bg-content/5 ${
             expanded ? "h-7" : "h-full"
           }`}
         >
           <span className="text-[10px] font-semibold tracking-[0.04em] text-content/55 uppercase">
-            Graph
+            {t("Graph")}
           </span>
           {expanded ? (
             <ChevronDown
@@ -141,7 +143,7 @@ export function GitHistoryGraph({
         >
           {!cwd || cwd === "~" ? (
             <p className="px-3 py-2 text-[12px] text-content/45">
-              No project folder
+              {t("No project folder")}
             </p>
           ) : error && commits.length === 0 ? (
             standalone ? null : (
@@ -149,11 +151,11 @@ export function GitHistoryGraph({
             )
           ) : commits.length === 0 ? (
             <p className="px-3 py-2 text-[12px] text-content/45">
-              {loading ? "Loading history…" : "No commits yet"}
+              {loading ? t("Loading history…") : t("No commits yet")}
             </p>
           ) : items.length === 0 ? (
             <p className="px-3 py-4 text-center text-[12px] text-content/45">
-              No matching commits
+              {t("No matching commits")}
             </p>
           ) : (
             <ul className="min-w-0 max-w-full">
@@ -197,6 +199,7 @@ function HistoryToolbar({
   const searchInput = useRef<HTMLInputElement>(null);
   const searchButton = useRef<HTMLButtonElement>(null);
   const wasSearching = useRef(false);
+  const t = useTranslate();
   useEffect(() => {
     if (searchOpen) searchInput.current?.focus();
     else if (wasSearching.current) searchButton.current?.focus();
@@ -212,15 +215,15 @@ function HistoryToolbar({
     "flex size-6 shrink-0 items-center justify-center rounded-md text-content/50 hover:bg-content/5 hover:text-content disabled:pointer-events-none disabled:opacity-40";
   return (
     <div className="shrink-0">
-      <PaneHeader compact role="toolbar" aria-label="History">
+      <PaneHeader compact role="toolbar" aria-label={t("History")}>
         {searchOpen ? (
           <>
             <Search aria-hidden className="size-3.5 shrink-0 text-content/45" />
             <input
               ref={searchInput}
               type="text"
-              aria-label="Search commits"
-              placeholder="Search history…"
+              aria-label={t("Search commits")}
+              placeholder={t("Search history…")}
               value={query}
               onChange={(event) => onQueryChange(event.target.value)}
               onKeyDown={(event) => {
@@ -234,8 +237,8 @@ function HistoryToolbar({
             />
             <button
               type="button"
-              aria-label="Close history search"
-              title="Close search"
+              aria-label={t("Close history search")}
+              title={t("Close search")}
               className={actionClass}
               onClick={closeSearch}
             >
@@ -248,17 +251,17 @@ function HistoryToolbar({
               <GitBranch className="size-3.5 shrink-0 text-content/45" />
               <span
                 className="truncate"
-                title={branch ?? (head ? "Detached HEAD" : "History")}
+                title={branch ?? (head ? t("Detached HEAD") : t("History"))}
               >
-                {branch ?? (head ? head.shortSha : "History")}
+                {branch ?? (head ? head.shortSha : t("History"))}
               </span>
             </div>
             <div className="flex shrink-0 items-center gap-0.5">
               <button
                 ref={searchButton}
                 type="button"
-                aria-label="Search history"
-                title="Search history"
+                aria-label={t("Search history")}
+                title={t("Search history")}
                 className={actionClass}
                 onClick={() => setSearchOpen(true)}
               >
@@ -266,8 +269,8 @@ function HistoryToolbar({
               </button>
               <button
                 type="button"
-                aria-label="Refresh history"
-                title="Refresh history"
+                aria-label={t("Refresh history")}
+                title={t("Refresh history")}
                 disabled={!cwd || cwd === "~" || loading}
                 className={actionClass}
                 onClick={() => void onRefresh()}
@@ -562,6 +565,7 @@ export function GraphResizeSash({
   const maxRef = useRef(maxHeight);
   maxRef.current = maxHeight;
 
+  const t = useTranslate();
   const clamp = (value: number) =>
     Math.min(maxRef.current(), Math.max(GRAPH_PANEL_MIN, Math.round(value)));
 
@@ -617,7 +621,7 @@ export function GraphResizeSash({
     <div
       role="separator"
       aria-orientation="horizontal"
-      aria-label="Resize graph"
+      aria-label={t("Resize graph")}
       aria-valuenow={height}
       className={`z-10 h-1.5 shrink-0 cursor-row-resize touch-none ${
         dragging ? "bg-content/15" : "hover:bg-content/10"

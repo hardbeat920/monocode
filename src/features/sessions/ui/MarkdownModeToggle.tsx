@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-
+import { useTranslate } from "../../../shared/i18n/locale";
 export type MarkdownViewMode = "preview" | "source";
 
 const remembered = new Map<string, MarkdownViewMode>();
@@ -35,19 +35,20 @@ type ToggleProps = {
 };
 
 export function MarkdownModeToggle({ mode, onChange }: ToggleProps) {
+  const t = useTranslate();
   return (
     <div
       role="tablist"
-      aria-label="Markdown view"
+      aria-label={t("Markdown view")}
       className="flex rounded-md border border-content/10 bg-content/10 p-0.5 backdrop-blur-md"
     >
       <ModeTab
-        label="Preview"
+        label={t("Preview")}
         selected={mode === "preview"}
         onSelect={() => onChange("preview")}
       />
       <ModeTab
-        label="Source"
+        label={t("Source")}
         selected={mode === "source"}
         onSelect={() => onChange("source")}
       />

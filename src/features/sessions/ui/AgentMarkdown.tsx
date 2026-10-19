@@ -57,6 +57,7 @@ import { isNoteImagePath } from "../../notes";
 import { IS_MAC, IS_WIN } from "../../../platform/tauri/platform";
 import { InboxMedia } from "../../inbox/ui/InboxMedia";
 import { DocumentImage, ImageAltText } from "./DocumentImage";
+import { translate, useTranslate } from "../../../shared/i18n/locale";
 import { isLocalMediaPath, LocalMedia } from "./LocalMedia";
 import {
   rehypeHoldImageSources,
@@ -182,10 +183,10 @@ const RemoteMediaContext = createContext(false);
 const LocalMediaContext = createContext(false);
 
 const REVEAL_LABEL = IS_MAC
-  ? "Reveal in Finder"
+  ? translate("Reveal in Finder")
   : IS_WIN
-    ? "Reveal in File Explorer"
-    : "Open Containing Folder";
+    ? translate("Reveal in File Explorer")
+    : translate("Open Containing Folder");
 
 function fileLinkMenuItems(
   canOpenInMonoCode: boolean,
@@ -195,19 +196,19 @@ function fileLinkMenuItems(
     {
       kind: "item",
       id: "open-monocode",
-      label: "Open in MonoCode",
+      label: translate("Open in MonoCode"),
       disabled: !canOpenInMonoCode,
     },
-    { kind: "item", id: "open-default", label: "Open in Default App" },
+    { kind: "item", id: "open-default", label: translate("Open in Default App") },
     { kind: "item", id: "reveal", label: REVEAL_LABEL },
     { kind: "sep" },
-    { kind: "item", id: "copy-path", label: "Copy Path" },
+    { kind: "item", id: "copy-path", label: translate("Copy Path") },
     ...(canCopyRelativePath
       ? [
           {
             kind: "item" as const,
             id: "copy-relative-path",
-            label: "Copy Relative Path",
+            label: translate("Copy Relative Path"),
           },
         ]
       : []),
@@ -448,6 +449,7 @@ function MarkdownCode({
 }
 
 function CodeCopyButton({ code }: { code: string }) {
+  const t = useTranslate();
   const [copied, setCopied] = useState(false);
   const timer = useRef<number | null>(null);
 
@@ -461,8 +463,8 @@ function CodeCopyButton({ code }: { code: string }) {
   return (
     <button
       type="button"
-      title={copied ? "Copied" : "Copy code"}
-      aria-label={copied ? "Copied" : "Copy code"}
+      title={copied ? t("Copied") : t("Copy code")}
+      aria-label={copied ? t("Copied") : t("Copy code")}
       className={`markdown-code-copy ${copied ? "is-copied" : ""}`}
       onClick={() => {
         void copyText(code.replace(/\r?\n$/, "")).then(
@@ -664,6 +666,7 @@ export const AgentMarkdown = memo(function AgentMarkdown({
    */
   documentPath?: string;
 }) {
+  const t = useTranslate();
   const [fileMenu, setFileMenu] = useState<FileLinkMenu | null>(null);
   const [fileActionError, setFileActionError] = useState<string | null>(null);
   const onFileContextMenu = useCallback(
@@ -831,7 +834,7 @@ export const AgentMarkdown = memo(function AgentMarkdown({
                 x={fileMenu.x}
                 y={fileMenu.y}
                 items={fileLinkMenuItems(!!onOpenFile, !!cwd)}
-                ariaLabel="File link actions"
+                ariaLabel={t("File link actions")}
                 onPick={onFileMenuPick}
                 onClose={() => setFileMenu(null)}
               />
@@ -867,14 +870,15 @@ export const MarkdownPreview = memo(function MarkdownPreview({
   /** The Markdown file shown, whose images load from the project, `cwd`. */
   documentPath?: string;
 }) {
+  const t = useTranslate();
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
-
   return (
     <div
       ref={lockOverscroll}
       tabIndex={0}
       role="region"
-      aria-label="Markdown preview"
+      aria-label={t("Markdown preview")}
+      data-markdown-preview=""
       className="markdown-preview h-full overflow-y-auto overscroll-none [overflow-anchor:none]"
     >
       <div className="px-6 py-8">
@@ -897,14 +901,14 @@ export const MarkdownSource = memo(function MarkdownSource({
 }: {
   text: string;
 }) {
+  const t = useTranslate();
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
-
   return (
     <div
       ref={lockOverscroll}
       tabIndex={0}
       role="region"
-      aria-label="Markdown source"
+      aria-label={t("Markdown source")}
       className="markdown-preview h-full overflow-y-auto overscroll-none [overflow-anchor:none]"
     >
       <pre className="min-h-full min-w-0 whitespace-pre-wrap wrap-break-word px-4 py-3 font-mono text-[13px] leading-5 text-content/85">

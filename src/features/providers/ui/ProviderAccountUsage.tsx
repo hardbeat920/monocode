@@ -15,6 +15,7 @@ import type {
 } from "../model/accountUsage";
 import { RefreshCw } from "../../../shared/ui/icons";
 import { useShowRemainingUsage } from "../../settings/model/displayPrefs";
+import { useTranslate } from "../../../shared/i18n/locale";
 
 const STATUS_DOT: Record<AccountStatusTone, string> = {
   ready: "bg-emerald-400",
@@ -64,13 +65,14 @@ export function AccountStatusLabel({
 }
 
 export function AccountUsageRefresh({ usage }: { usage: AccountUsage }) {
+  const t = useTranslate();
   return (
     <button
       type="button"
       disabled={usage.refreshing}
       onClick={usage.refresh}
-      aria-label="Refresh usage limits"
-      title="Refresh usage limits"
+      aria-label={t("Refresh usage limits")}
+      title={t("Refresh usage limits")}
       className="grid size-7 place-items-center rounded-md text-content/40 transition-transform duration-150 hover:bg-content/10 hover:text-content active:scale-[0.96] disabled:opacity-40"
     >
       <RefreshCw
@@ -107,6 +109,7 @@ export function AccountUsageMeters({
   now: number;
 }) {
   const windows = meterWindows(limits);
+  const t = useTranslate();
 
   if (windows.length === 0) {
     const loading =
@@ -137,8 +140,8 @@ export function AccountUsageMeters({
         />
       ))}
       {limits?.extraUsageBalance != null ? (
-        <div className="w-16 text-[10px] leading-3" title="Extra usage balance">
-          <div className="truncate text-content/40">Extra</div>
+        <div className="w-16 text-[10px] leading-3" title={t("Extra usage balance")}>
+          <div className="truncate text-content/40">{t("Extra")}</div>
           <div className="mt-1 font-medium tabular-nums text-content/70">
             {formatExtraUsageBalance(limits.extraUsageBalance)}
           </div>
@@ -160,6 +163,7 @@ export function UsageMeter({
   className?: string;
 }) {
   const showRemaining = useShowRemainingUsage();
+  const t = useTranslate();
   const pct = clampUsedPercent(window.usedPercent);
   const remaining = 100 - pct;
   const shown = showRemaining ? remaining : pct;
@@ -168,7 +172,7 @@ export function UsageMeter({
     window.resetsAt == null
       ? formatWindowLabel(window.windowMinutes)
       : window.resetsAt <= now
-        ? "reset due"
+        ? t("reset due")
         : formatResetDuration(window.resetsAt - now);
   return (
     <div
@@ -176,7 +180,9 @@ export function UsageMeter({
       title={
         window.resetsAt == null
           ? undefined
-          : `Resets ${new Date(window.resetsAt).toLocaleString()}`
+          : t("Resets {date}", {
+              date: new Date(window.resetsAt).toLocaleString(),
+            })
       }
     >
       <div className="flex items-baseline justify-between gap-2 text-[10px] leading-3">
@@ -187,16 +193,16 @@ export function UsageMeter({
           className={`shrink-0 tabular-nums ${full ? "font-medium text-red-400" : "text-content/60"}`}
         >
           {showRemaining
-            ? `${formatUsagePercent(remaining)} left`
+            ? t("{percent} left", { percent: formatUsagePercent(remaining) })
             : full
-              ? "Full"
+              ? t("Full")
               : formatUsagePercent(pct)}
         </span>
       </div>
       <div
         className="mt-1.5 h-1 overflow-hidden rounded-full bg-content/10"
         role="progressbar"
-        aria-label={`${title} limit ${showRemaining ? "remaining" : "used"}`}
+        aria-label={`${title} ${t("limit")} ${showRemaining ? t("remaining") : t("used")}`}
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={Math.round(shown)}

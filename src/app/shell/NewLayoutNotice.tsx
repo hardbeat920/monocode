@@ -12,7 +12,7 @@ import {
 } from "../../features/settings/model/displayPrefs";
 import { LAYER } from "../../shared/lib/layers";
 import { GlassBackdrop } from "./GlassBackdrop";
-
+import { useTranslate } from "../../shared/i18n/locale";
 export function NewLayoutNotice({
   topOffset = 12,
   onHeightChange,
@@ -28,6 +28,7 @@ export function NewLayoutNotice({
     () => INSET_LAYOUT_DEFAULT,
   );
   const visible = !dismissed && !enabled;
+  const t = useTranslate();
 
   useLayoutEffect(() => {
     const panel = panelRef.current;
@@ -47,17 +48,18 @@ export function NewLayoutNotice({
   return createPortal(
     <section
       ref={panelRef}
-      aria-label="Try the new layout"
+      aria-label={t("Try the new layout")}
       role="status"
       style={{ zIndex: LAYER.toast, top: topOffset }}
       className="fixed right-3 isolate w-[min(340px,calc(100vw-24px))] overflow-hidden rounded-xl border border-content/10 text-content shadow-xl"
     >
       <GlassBackdrop />
       <div className="relative z-[1] px-3 py-3">
-        <p className="text-[13px] font-semibold">Try the new layout</p>
+        <p className="text-[13px] font-semibold">{t("Try the new layout")}</p>
         <p className="mt-1 text-[12px] leading-relaxed text-content/60">
-          A redesigned sidebar, project switcher and workspace tabs. Switch back
-          anytime in Settings → Appearance → Layout.
+          {t(
+            "A redesigned sidebar, project switcher and workspace tabs. Switch back anytime in Settings → Appearance → Layout.",
+          )}
         </p>
         <div className="mt-3 flex justify-end gap-2">
           <button
@@ -65,7 +67,7 @@ export function NewLayoutNotice({
             className="rounded-md px-2.5 py-1.5 text-[12px] text-content/60 hover:bg-content/10 hover:text-content"
             onClick={() => saveNewLayoutPromptDismissed(true)}
           >
-            Not now
+            {t("Not now")}
           </button>
           <button
             type="button"
@@ -75,7 +77,7 @@ export function NewLayoutNotice({
               saveInsetLayout(true);
             }}
           >
-            Try it
+            {t("Try it")}
           </button>
         </div>
       </div>

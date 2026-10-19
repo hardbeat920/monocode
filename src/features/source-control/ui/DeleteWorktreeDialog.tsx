@@ -16,6 +16,7 @@ import {
   Loader,
   MessageSquare,
 } from "../../../shared/ui/icons";
+import { useTranslate } from "../../../shared/i18n/locale";
 
 const TONE = {
   danger: "text-red-400",
@@ -63,6 +64,7 @@ export function DeleteWorktreeDialog({
   const [busy, setBusy] = useState(false);
   const [deleteSessions, setDeleteSessions] = useState(false);
   const [error, setError] = useState<string>();
+  const t = useTranslate();
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (busy) return;
@@ -81,7 +83,7 @@ export function DeleteWorktreeDialog({
   };
   return (
     <Modal
-      title="Delete worktree?"
+      title={t("Delete worktree?")}
       size="sm"
       onClose={() => {
         if (!busy) onClose();
@@ -92,7 +94,9 @@ export function DeleteWorktreeDialog({
         onSubmit={(e) => void submit(e)}
       >
         <p className="text-content/75">
-          This permanently deletes the working copy and everything inside it.
+          {t(
+            "This permanently deletes the working copy and everything inside it.",
+          )}
         </p>
         <div className="rounded-lg border border-content/10 bg-content/5 p-3">
           <p className="flex items-start gap-2.5 text-[12px] text-content/55">
@@ -107,41 +111,55 @@ export function DeleteWorktreeDialog({
                 icon={MessageSquare}
                 tone={deleteSessions ? "danger" : "muted"}
               >
-                {sessionCount} session{sessionCount === 1 ? "" : "s"} using this
-                worktree {sessionCount === 1 ? "is" : "are"}{" "}
-                {deleteSessions
-                  ? "permanently deleted."
-                  : "kept. Select a branch or worktree to continue them."}
+                {sessionCount === 1
+                  ? deleteSessions
+                    ? t("1 session using this worktree is permanently deleted.")
+                    : t(
+                        "1 session using this worktree is kept. Select a branch or worktree to continue them.",
+                      )
+                  : deleteSessions
+                    ? t(
+                        "{count} sessions using this worktree are permanently deleted.",
+                        { count: sessionCount },
+                      )
+                    : t(
+                        "{count} sessions using this worktree are kept. Select a branch or worktree to continue them.",
+                        { count: sessionCount },
+                      )}
               </Consequence>
             )}
             {tree.dirty && (
               <Consequence icon={FileDiff} tone="warn">
-                All uncommitted and untracked changes here are discarded.
+                {t(
+                  "All uncommitted and untracked changes here are discarded.",
+                )}
               </Consequence>
             )}
             {tree.dirty == null && (
               <Consequence icon={CircleAlert} tone="warn">
-                Changes could not be checked. Anything uncommitted here is
-                discarded.
+                {t(
+                  "Changes could not be checked. Anything uncommitted here is discarded.",
+                )}
               </Consequence>
             )}
             <Consequence icon={GitBranch}>
               {tree.branch ? (
                 <>
-                  The{" "}
+                  {t("branch")}{" "}
                   <span className="font-medium text-content">
                     {tree.branch}
                   </span>{" "}
-                  branch and its commits are kept.
+                  {t("and its commits are kept.")}
                 </>
               ) : (
-                "The branch is kept."
+                t("The branch is kept.")
               )}
             </Consequence>
             {!!tree.unpushed && (
               <Consequence icon={CloudUpload}>
-                {tree.unpushed} commit{tree.unpushed === 1 ? " is" : "s are"}{" "}
-                not on a remote. They stay on the branch.
+                {t("{count} commits are not on a remote. They stay on the branch.", {
+                  count: tree.unpushed,
+                })}
               </Consequence>
             )}
           </ul>
@@ -152,7 +170,7 @@ export function DeleteWorktreeDialog({
               id="delete-worktree-sessions-label"
               className="text-[12.5px] text-content/75"
             >
-              Also delete associated sessions
+              {t("Also delete associated sessions")}
             </span>
             <button
               type="button"
@@ -181,7 +199,7 @@ export function DeleteWorktreeDialog({
             onClick={onClose}
             className="rounded-md px-3 py-1.5 hover:bg-content/8 active:scale-[0.97]"
           >
-            Cancel
+            {t("Cancel")}
           </button>
           <button
             type="submit"
@@ -190,8 +208,10 @@ export function DeleteWorktreeDialog({
           >
             {busy && <Loader className="size-3.5 animate-spin" />}
             {sessionCount && deleteSessions
-              ? `Delete worktree and session${sessionCount === 1 ? "" : "s"}`
-              : "Delete worktree"}
+              ? sessionCount === 1
+                ? t("Delete worktree and session")
+                : t("Delete worktree and sessions")
+              : t("Delete worktree")}
           </button>
         </div>
       </form>

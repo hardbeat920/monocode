@@ -14,6 +14,7 @@ import {
   unwatchChild,
   watchChild,
 } from "../../core/child";
+import { translate } from "../../../../shared/i18n/locale";
 
 const PROBE_ID = "monocode-cursor-probe";
 const DISCOVERY_TIMEOUT_MS = 15_000;
@@ -478,7 +479,7 @@ async function withTimeout<T>(
       new Promise<T>((_, reject) => {
         timer = setTimeout(() => {
           onTimeout();
-          reject(new Error("Cursor model discovery timed out"));
+          reject(new Error(translate("Cursor model discovery timed out")));
         }, ms);
       }),
     ]);

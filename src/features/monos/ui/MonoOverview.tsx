@@ -11,6 +11,7 @@ import {
   Search,
 } from "../../../shared/ui/icons";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
+import { useTranslate } from "../../../shared/i18n/locale";
 import { artifactLabel, type ArtifactCard } from "../../artifacts/artifacts";
 import type { SessionSummary } from "../../sessions/data/sessionStore";
 import type { MonoSpawnedSession, Session } from "../../sessions/model/session";
@@ -129,6 +130,7 @@ export function MonoOverview({
   onClose,
   windowControls,
 }: Props) {
+  const t = useTranslate();
   const lock = useLockOverscroll<HTMLDivElement>();
   const habits = useHabits(monoId, state.status);
   const actions = habitActions(monoId);
@@ -233,14 +235,14 @@ export function MonoOverview({
     <MonoSidebar
       open={open}
       kind="details"
-      label={`${agent.name} overview`}
+      label={t("{name} overview", { name: agent.name })}
       color={agent.color}
       windowControls={windowControls}
     >
       <PanelStack pages={pages}>
         {/* Pages replace this header too, keeping their back button at the top. */}
         <MonoSidebarHeader
-          title="Overview"
+          title={t("Overview")}
           heading={
             <OverviewTabs tab={tab} counts={counts} onChange={onTabChange} />
           }
@@ -251,8 +253,8 @@ export function MonoOverview({
                 <IconButton
                   label={
                     habits && habits.length >= HABITS_MAX
-                      ? `At most ${HABITS_MAX} habits`
-                      : "New habit"
+                      ? t("At most {count} habits", { count: HABITS_MAX })
+                      : t("New habit")
                   }
                   disabled={habitsFull}
                   onClick={() => push({ kind: "new-habit" })}
@@ -261,11 +263,11 @@ export function MonoOverview({
                 </IconButton>
               ) : null}
               <TabButton
-                label="Activity"
+                label={t("Activity")}
                 icon={ListBullet}
                 selected={tab === "activity"}
                 aria-label={
-                  tab === "activity" ? "Hide activity" : "Show activity"
+                  tab === "activity" ? t("Hide activity") : t("Show activity")
                 }
                 aria-pressed={tab === "activity"}
                 onClick={() =>
@@ -289,7 +291,7 @@ export function MonoOverview({
         {changes && changesVisited ? (
           <div
             role="tabpanel"
-            aria-label="Changes"
+            aria-label={t("Changes")}
             hidden={tab !== "changes"}
             className="flex min-h-0 flex-1 flex-col"
             data-mono-overview={tab === "changes" ? "changes" : undefined}
@@ -309,8 +311,8 @@ export function MonoOverview({
           role="tabpanel"
           aria-label={
             tab === "activity"
-              ? "Activity"
-              : TABS.find((entry) => entry.id === tab)?.label
+              ? t("Activity")
+              : t(TABS.find((entry) => entry.id === tab)?.label ?? "")
           }
           hidden={tab === "changes"}
           className="min-h-0 flex-1 overflow-y-auto overscroll-none px-2 py-2"
@@ -319,8 +321,10 @@ export function MonoOverview({
           {tab === "activity" ? (
             (activity ?? (
               <EmptyState icon={ListBullet}>
-                Select the activity on one of {agent.name}&apos;s messages to
-                see each step it took.
+                {t(
+                  "Select the activity on one of {name}'s messages to see each step it took.",
+                  { name: agent.name },
+                )}
               </EmptyState>
             ))
           ) : tab === "sessions" ? (
@@ -340,8 +344,10 @@ export function MonoOverview({
               </div>
             ) : (
               <EmptyState icon={MessageMultiple}>
-                Ask {agent.name} to start a session on one of your projects,
-                like a bug fix or a review, and it shows up here.
+                {t(
+                  "Ask {name} to start a session on one of your projects, like a bug fix or a review, and it shows up here.",
+                  { name: agent.name },
+                )}
               </EmptyState>
             )
           ) : tab === "habits" ? (
@@ -351,8 +357,10 @@ export function MonoOverview({
               onOpen={(id) => push({ kind: "habit", id })}
               empty={
                 <EmptyState icon={Clock}>
-                  Ask {agent.name} to put recurring work on a schedule, like a
-                  morning digest or a weekly report.
+                  {t(
+                    "Ask {name} to put recurring work on a schedule, like a morning digest or a weekly report.",
+                    { name: agent.name },
+                  )}
                 </EmptyState>
               }
             />
@@ -366,8 +374,10 @@ export function MonoOverview({
             </ul>
           ) : (
             <EmptyState icon={File}>
-              Ask {agent.name} to write something up, like a plan or a summary,
-              and it shows up here.
+              {t(
+                "Ask {name} to write something up, like a plan or a summary, and it shows up here.",
+                { name: agent.name },
+              )}
             </EmptyState>
           )}
         </div>
@@ -392,6 +402,7 @@ function SessionSearchBar({
 }) {
   const filterButton = useRef<HTMLButtonElement>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const t = useTranslate();
   const active = hasActiveSessionFilters(filters);
   return (
     <div className="flex h-9 shrink-0 items-center gap-1 border-b border-stroke px-2">
@@ -400,8 +411,8 @@ function SessionSearchBar({
         <input
           type="text"
           value={query}
-          placeholder="Search sessions..."
-          aria-label="Search sessions"
+          placeholder={t("Search sessions...")}
+          aria-label={t("Search sessions")}
           spellCheck={false}
           autoComplete="off"
           autoCorrect="off"
@@ -419,8 +430,8 @@ function SessionSearchBar({
       <button
         ref={filterButton}
         type="button"
-        title="Filter sessions"
-        aria-label="Filter sessions"
+        title={t("Filter sessions")}
+        aria-label={t("Filter sessions")}
         aria-expanded={!!menu}
         aria-haspopup="menu"
         onClick={() => {
@@ -462,10 +473,11 @@ function OverviewTabs({
   counts: Record<(typeof TABS)[number]["id"], number | undefined>;
   onChange: (tab: MonoOverviewTab) => void;
 }) {
+  const t = useTranslate();
   return (
     <div
       role="tablist"
-      aria-label="Overview"
+      aria-label={t("Overview")}
       className="-ml-2 flex items-center gap-0.5"
     >
       {TABS.map(({ id, label, icon }) => {
@@ -473,7 +485,7 @@ function OverviewTabs({
         return (
           <TabButton
             key={id}
-            label={label}
+            label={t(label)}
             icon={icon}
             selected={selected}
             count={counts[id]}
@@ -482,7 +494,7 @@ function OverviewTabs({
             dot={id === "changes" && !selected && !!counts[id]}
             role="tab"
             aria-selected={selected}
-            aria-label={label}
+            aria-label={t(label)}
             onClick={() => onChange(id)}
           />
         );
@@ -570,12 +582,16 @@ function DocumentRow({
   card: ArtifactCard;
   onOpen: (id: string) => void;
 }) {
-  const label = artifactLabel(card.kind);
+  const t = useTranslate();
+  const label = t(artifactLabel(card.kind));
   return (
     <button
       type="button"
       data-mono-document={card.id}
-      aria-label={`Open ${label.toLowerCase()} ${card.title}`}
+      aria-label={t("Open {label} {title}", {
+        label: label.toLowerCase(),
+        title: card.title,
+      })}
       onClick={() => onOpen(card.id)}
       className="flex w-full min-w-0 items-center gap-2.5 rounded-md px-2 py-2 text-left hover:bg-content/5"
     >

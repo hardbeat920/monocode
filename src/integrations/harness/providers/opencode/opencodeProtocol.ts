@@ -14,6 +14,7 @@ import { isTaskListToolName } from "../../../../features/sessions/model/taskList
 import { extractToolPreview } from "../../core/preview";
 import { titleCaseSlug } from "../../core/providerNames";
 import type { HarnessEvent } from "../../core/types";
+import { translate } from "../../../../shared/i18n/locale";
 
 export const MINIMUM_OPENCODE_VERSION = "1.14.19";
 export const MINIMUM_OPENCODE_V2_VERSION = "2.0.15";
@@ -475,11 +476,11 @@ export function permissionTitle(permission: string, patterns: string[]): string 
   const detail = patterns.length > 0 ? patterns.join("\n") : permission;
   switch (permission) {
     case "bash":
-      return detail ? `Run ${detail}` : "Run command";
+      return detail ? translate("Run {detail}", { detail }) : translate("Run command");
     case "edit":
-      return detail ? `Edit ${detail}` : "Edit file";
+      return detail ? translate("Edit {detail}", { detail }) : translate("Edit file");
     case "read":
-      return detail ? `Read ${detail}` : "Read file";
+      return detail ? translate("Read {detail}", { detail }) : translate("Read file");
     default:
       return detail || permission;
   }

@@ -49,6 +49,7 @@ import {
   searchSessions,
   type SessionSummary,
 } from "../../sessions/data/sessionStore";
+import { useTranslate } from "../../../shared/i18n/locale";
 
 const SCOPES: { id: SearchScope; label: string }[] = [
   { id: "all", label: "All" },
@@ -90,6 +91,7 @@ export function SearchView({
   onOpenSession,
   onOpenProject,
 }: Props) {
+  const t = useTranslate();
   const inputRef = useRef<HTMLInputElement>(null);
   const activeProjectSearchId = useRef<string | null>(null);
   const activeSessionOwner = useRef<string | null>(null);
@@ -375,14 +377,14 @@ export function SearchView({
   const noResults = !empty && hits.length === 0 && !loading;
   const limitNotice = truncated ? (
     <p className="px-2.5 py-1 text-[11px] text-content/45">
-      Results limited to the first matches
+      {t("Results limited to the first matches")}
     </p>
   ) : null;
 
   return (
     <div
       role="search"
-      aria-label="Search"
+      aria-label={t("Search")}
       data-app-search
       className="flex min-h-0 min-w-0 flex-1 flex-col text-content"
     >
@@ -402,8 +404,8 @@ export function SearchView({
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={onQueryKeyDown}
-            placeholder="Search everything..."
-            aria-label="Search"
+            placeholder={t("Search everything...")}
+            aria-label={t("Search")}
             spellCheck={false}
             autoComplete="off"
             autoCorrect="off"
@@ -436,7 +438,7 @@ export function SearchView({
                   : "text-content/50 hover:bg-content/5 hover:text-content"
               }`}
             >
-              {item.label}
+              {t(item.label)}
             </button>
           );
         })}
@@ -456,7 +458,7 @@ export function SearchView({
           <p className="px-2 py-1.5 text-[12px] text-red-400">{error}</p>
         ) : noResults ? (
           <>
-            <p className="px-2 py-1.5 text-[12px] text-content/50">No results</p>
+            <p className="px-2 py-1.5 text-[12px] text-content/50">{t("No results")}</p>
             {limitNotice}
           </>
         ) : (
@@ -480,6 +482,7 @@ const EMPTY_DOT_COLS = 27;
 const EMPTY_DOT_ROWS = 19;
 
 function EmptyState() {
+  const t = useTranslate();
   return (
     <div className="flex flex-col items-center justify-center px-6 pb-24">
       <div className="relative mb-2 grid h-48 w-72 place-items-center">
@@ -505,7 +508,7 @@ function EmptyState() {
       </div>
 
       <p className="max-w-xs text-center text-[13px] text-content/45">
-        Find files, conversations, messages, and projects.
+        {t("Find files, conversations, messages, and projects.")}
       </p>
     </div>
   );
@@ -524,6 +527,7 @@ function ResultList({
   onActive: (index: number) => void;
   onOpen: (hit: AppSearchHit) => void;
 }) {
+  const t = useTranslate();
   const activeRef = useRef<HTMLButtonElement>(null);
   const pointer = useRef({ x: Number.NaN, y: Number.NaN, allow: false });
   const fromPointer = useRef(false);
@@ -560,7 +564,7 @@ function ResultList({
   return (
     <div
       role="listbox"
-      aria-label="Search results"
+      aria-label={t("Search results")}
       onMouseMove={onListMouseMove}
     >
       {hits.map((hit, index) => {

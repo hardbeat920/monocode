@@ -5,6 +5,7 @@ import {
 } from "../model/releaseNotes";
 import { AgentMarkdown } from "../../features/sessions/ui/AgentMarkdown";
 import { Modal } from "../../shared/ui/Modal";
+import { useTranslate } from "../../shared/i18n/locale";
 
 type Props = {
   version: string;
@@ -13,6 +14,7 @@ type Props = {
 
 export function WhatsNewBody({ version }: { version: string }) {
   const notes = presentReleaseNotes(version);
+  const t = useTranslate();
   const title = releaseNotesTitle(version);
 
   return (
@@ -25,7 +27,7 @@ export function WhatsNewBody({ version }: { version: string }) {
         />
       ) : (
         <p className="text-[13px] text-content/60">
-          Release notes for this version are not available in this build.
+          {t("Release notes for this version are not available in this build.")}
         </p>
       )}
     </article>
@@ -35,11 +37,12 @@ export function WhatsNewBody({ version }: { version: string }) {
 export function WhatsNewDialog({ version, onClose }: Props) {
   const notes = presentReleaseNotes(version);
   const date = notes?.date ? formatReleaseDate(notes.date) : null;
+  const t = useTranslate();
 
   return (
     <Modal
       onClose={onClose}
-      title="What's new"
+      title={t("What's new")}
       description={`MonoCode ${version}${date ? ` · ${date}` : ""}`}
       size="md"
       className="h-[min(72vh,640px)]"

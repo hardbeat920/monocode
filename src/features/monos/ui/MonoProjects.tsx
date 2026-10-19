@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { Plus, X } from "../../../shared/ui/icons";
+import { useTranslate } from "../../../shared/i18n/locale";
 import { prettyCwd, projectKey, projectName } from "../../../shared/lib/paths";
 import { loadRecents, projectRailItems } from "../../projects/model/recents";
 import {
@@ -47,6 +48,7 @@ export function MonoProjects({
   monoId: string;
   projects: readonly MonoProject[];
 }) {
+  const t = useTranslate();
   const anchor = useRef<HTMLButtonElement>(null);
   const [adding, setAdding] = useState(false);
   const taken = new Set(projects.map((project) => projectKey(project.path)));
@@ -81,8 +83,8 @@ export function MonoProjects({
           </span>
           <button
             type="button"
-            aria-label={`Remove ${project.name}`}
-            title={`Remove ${project.name}`}
+            aria-label={t("Remove {project}", { project: project.name })}
+            title={t("Remove {project}", { project: project.name })}
             onClick={() => removeMonoProject(monoId, project.path)}
             className="grid size-6 shrink-0 place-items-center rounded-md text-content/45 opacity-0 hover:bg-content/8 hover:text-content focus-visible:opacity-100 group-hover:opacity-100"
           >
@@ -101,7 +103,7 @@ export function MonoProjects({
         <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-dashed border-content/15">
           <Plus className="size-3.5 shrink-0" strokeWidth={1.75} />
         </span>
-        Add project
+        {t("Add project")}
       </button>
       {adding ? (
         <ProjectPickerPopover
@@ -109,10 +111,10 @@ export function MonoProjects({
           projects={choices}
           onDismiss={() => setAdding(false)}
           onSelectProject={(path) => addMonoProject(monoId, path)}
-          label="Add a project"
+          label={t("Add a project")}
           emptyMessage={
             choices.length === 0
-              ? "It already works on every project."
+              ? t("It already works on every project.")
               : undefined
           }
         />

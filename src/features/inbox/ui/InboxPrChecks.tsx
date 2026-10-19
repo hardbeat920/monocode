@@ -40,6 +40,7 @@ import {
   type GithubCheckDetails,
 } from "../model/githubPrChecks";
 
+import { useTranslate } from "../../../shared/i18n/locale";
 const TAB =
   "relative flex h-9 items-center gap-1.5 text-[12px] leading-none select-none";
 
@@ -96,8 +97,9 @@ export function PrChecksTab({
   selected: boolean;
   onSelect: () => void;
 }) {
+  const t = useTranslate();
   const mark = overallMark(overall);
-  const label = `Checks: ${overall.description}`;
+  const label = t("Checks: {description}", { description: overall.description });
   const failClass =
     mark.className.split(" ").find((entry) => entry.startsWith("text-")) ?? "";
   return (
@@ -110,7 +112,7 @@ export function PrChecksTab({
       onClick={onSelect}
       className={`${TAB} ${selected ? "text-content" : "text-content/50 hover:text-content"}`}
     >
-      <span className="leading-none">Checks</span>
+      <span className="leading-none">{t("Checks")}</span>
       <mark.Icon
         className={`size-3.5 shrink-0 ${mark.className}`}
         strokeWidth={1.75}
@@ -178,6 +180,7 @@ function PrCheckRow({
   wideStatus: boolean;
   revealToken?: number;
 }) {
+  const t = useTranslate();
   const rowRef = useRef<HTMLLIElement>(null);
   const fixRef = useRef<HTMLButtonElement>(null);
   const fixOpen = Boolean(fixAnchor && fixAnchor === fixRef.current);
@@ -259,7 +262,7 @@ function PrCheckRow({
     ?.message.split(/\r?\n/)
     .find((line) => line.trim());
   const subtitle =
-    failureMessage || (failedStep ? `Failed at ${failedStep}` : status);
+    failureMessage || (failedStep ? t("Failed at {step}", { step: failedStep }) : t(status));
   const title = `${check.name} · ${status}${duration ? `, took ${duration}` : ""}${workflow ? `, ${workflow}` : ""}`;
   const url = check.url;
   const linked = isHttpUrl(url);
@@ -293,7 +296,9 @@ function PrCheckRow({
         ) : null}
         <span className="sr-only">
           {meta}
-          {failureMessage && failedStep ? `; Failed at ${failedStep}` : ""}
+          {failureMessage && failedStep
+            ? t("Failed at {step}", { step: failedStep })
+            : ""}
         </span>
       </span>
     </>
@@ -310,7 +315,7 @@ function PrCheckRow({
         {expandable ? (
           <button
             type="button"
-            aria-label={`${check.name} details`}
+            aria-label={t("{name} details", { name: check.name })}
             aria-expanded={expanded}
             aria-controls={detailsId}
             onClick={() => setExpanded(!expanded)}
@@ -342,7 +347,7 @@ function PrCheckRow({
             <span
               className={`text-[11px] ${mark.className.replace("animate-spin", "")}`}
             >
-              {status}
+              {t(status)}
             </span>
           )}
         </span>
@@ -357,8 +362,8 @@ function PrCheckRow({
             disabled={fixDisabled}
             aria-haspopup="dialog"
             aria-expanded={fixOpen}
-            aria-label={`Fix ${check.name} with AI`}
-            title="Fix with AI"
+            aria-label={t("Fix {name} with AI", { name: check.name })}
+            title={t("Fix with AI")}
             className="grid size-7 shrink-0 place-items-center rounded-lg bg-content/[0.03] text-content/65 hover:bg-selection hover:text-content focus-visible:outline focus-visible:outline-1 focus-visible:outline-content/50"
           >
             <Sparkles className="size-3.5" strokeWidth={1.75} />
@@ -369,7 +374,10 @@ function PrCheckRow({
         {expandable ? (
           <button
             type="button"
-            aria-label={`${expanded ? "Collapse" : "Expand"} ${check.name} details`}
+            aria-label={t("{action} {name} details", {
+              action: expanded ? t("Collapse") : t("Expand"),
+              name: check.name,
+            })}
             aria-expanded={expanded}
             aria-controls={detailsId}
             onClick={() => setExpanded(!expanded)}
@@ -386,8 +394,8 @@ function PrCheckRow({
         {linked ? (
           <button
             type="button"
-            title="View full log on GitHub"
-            aria-label={`View ${check.name} on GitHub`}
+            title={t("View full log on GitHub")}
+            aria-label={t("View {name} on GitHub", { name: check.name })}
             onClick={() => void openUrl(url)}
             className={`${REFRESH_BUTTON} opacity-60 group-hover/check:opacity-100 focus-visible:opacity-100`}
           >
@@ -411,19 +419,19 @@ function PrCheckRow({
                 className="size-4 shrink-0 animate-spin"
                 strokeWidth={1.75}
               />
-              Loading steps…
+              {t("Loading steps…")}
             </p>
           ) : null}
           {error ? (
             <div role="alert" className="space-y-2 text-content/60">
-              <p>Could not load job details.</p>
+              <p>{t("Could not load job details.")}</p>
               <p className="break-words text-[11px]">{error}</p>
               <button
                 type="button"
                 onClick={() => setRetry((value) => value + 1)}
                 className="rounded px-2 py-1 hover:bg-content/5"
               >
-                Retry details
+                {t("Retry details")}
               </button>
             </div>
           ) : null}
@@ -441,12 +449,15 @@ function PrCheckRow({
                 <details className="group/steps">
                   <summary className="flex cursor-pointer list-none items-center gap-1 text-[11px] text-content/50 hover:text-content [&::-webkit-details-marker]:hidden">
                     <ChevronRight className="size-3 transition-transform group-open/steps:rotate-90 motion-reduce:transition-none" />
-                    View run steps
+                    {t("View run steps")}
                     <span className="ml-auto pl-2 text-right text-[10px] text-content/35 @max-[420px]/checks:hidden">
                       {describeCheckCounts(countChecks(details.steps))}
                     </span>
                   </summary>
-                  <ol className="space-y-1" aria-label={`${check.name} steps`}>
+                  <ol
+                    className="space-y-1"
+                    aria-label={t("{name} steps", { name: check.name })}
+                  >
                     {details.steps.map((step, index) => {
                       const stepMark = checkMark(step.state);
                       return (
@@ -461,7 +472,7 @@ function PrCheckRow({
                           <span className="min-w-0 flex-1 break-words text-content/80">
                             {step.name}
                             <span className="sr-only">
-                              : {checkStateLabel(step.state)}
+                              : {t(checkStateLabel(step.state))}
                             </span>
                           </span>
                           <span className="shrink-0 tabular-nums text-content/45">
@@ -474,14 +485,14 @@ function PrCheckRow({
                 </details>
               ) : (
                 <p className="text-content/50">
-                  No steps reported for this job.
+                  {t("No steps reported for this job.")}
                 </p>
               )}
               {check.state === "fail" &&
               !details.annotations.length &&
               !details.notice ? (
                 <p className="mt-3 text-content/50">
-                  No error annotations reported. View the full log on GitHub.
+                  {t("No error annotations reported. View the full log on GitHub.")}
                 </p>
               ) : null}
               {details.notice ? (
@@ -515,6 +526,7 @@ export function InboxPrChecks({
   repo?: string;
   repair?: CheckRepair;
 }) {
+  const t = useTranslate();
   const { checks, loading, refreshing, error, stale } = view;
   const repairGroups = useCheckRepairs(cwd, repo, repair?.number, view);
   const revealScope = JSON.stringify([
@@ -561,13 +573,13 @@ export function InboxPrChecks({
         </p>
         <button
           type="button"
-          title="Retry loading checks"
-          aria-label="Retry loading checks"
+          title={t("Retry loading checks")}
+          aria-label={t("Retry loading checks")}
           onClick={onRefresh}
           className="inline-flex h-7 items-center gap-1.5 rounded-md border border-content/15 px-3 text-[12px] text-content/80 hover:bg-content/5"
         >
           <RefreshCw className="size-3.5" strokeWidth={1.75} />
-          Retry
+          {t("Retry")}
         </button>
       </div>
     );
@@ -586,19 +598,19 @@ export function InboxPrChecks({
       (state === "pass" || state === "skipping"),
   }));
   const headline = counts.fail
-    ? `${counts.fail} ${counts.fail === 1 ? "check needs" : "checks need"} a fix`
+    ? t("{count} checks need a fix", { count: counts.fail })
     : counts.pending
-      ? `${counts.pending} ${counts.pending === 1 ? "check is" : "checks are"} running`
+      ? t("{count} checks are running", { count: counts.pending })
       : attention
-        ? `${attention} ${attention === 1 ? "check needs" : "checks need"} attention`
+        ? t("{count} checks need attention", { count: attention })
         : counts.pass
-          ? "Checks passed"
-          : "No checks ran";
+          ? t("Checks passed")
+          : t("No checks ran");
   const summary = describeCheckCounts({ ...counts, fail: 0 });
   return (
     <section
       data-inbox-pr-checks
-      aria-label="Pull request checks"
+      aria-label={t("Pull request checks")}
       className="@container/checks flex min-w-0 flex-col gap-2"
     >
       <div className="mb-3 flex min-w-0 flex-wrap items-start justify-between gap-3 px-2">
@@ -631,14 +643,14 @@ export function InboxPrChecks({
                 })
               }
               aria-haspopup="dialog"
-              aria-label="Fix all failed"
+              aria-label={t("Fix all failed")}
               aria-expanded={Boolean(
                 selection && selection.anchor === allFixRef.current,
               )}
               className="primary-action inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-[12px] font-medium focus-visible:outline focus-visible:outline-1 focus-visible:outline-content/50"
             >
               <Sparkles className="size-3.5" strokeWidth={1.75} />
-              Fix all failed
+              {t("Fix all failed")}
               <span
                 aria-hidden="true"
                 className="ml-1 border-l border-current/20 pl-2 text-[10px] opacity-55"
@@ -649,8 +661,8 @@ export function InboxPrChecks({
           ) : null}
           <button
             type="button"
-            title="Refresh checks"
-            aria-label="Refresh checks"
+            title={t("Refresh checks")}
+            aria-label={t("Refresh checks")}
             disabled={refreshing}
             onClick={onRefresh}
             className={REFRESH_BUTTON}
@@ -686,7 +698,7 @@ export function InboxPrChecks({
       ) : null}
       {stale && error ? (
         <p role="status" className="px-2 text-[12px] text-content/55">
-          Saved results may be out of date.
+          {t("Saved results may be out of date.")}
         </p>
       ) : null}
       {selection && selectionValid && repair ? (
@@ -706,7 +718,7 @@ export function InboxPrChecks({
         <div className="flex items-center justify-between gap-3 py-2">
           <div
             className="inline-flex gap-0.5 rounded-lg border border-stroke bg-content/[0.02] p-0.5"
-            aria-label="Filter checks"
+            aria-label={t("Filter checks")}
           >
             {(
               [
@@ -717,7 +729,7 @@ export function InboxPrChecks({
               <button
                 key={value}
                 type="button"
-                aria-label={`${label}: ${count}`}
+                aria-label={t("{label}: {count}", { label: t(label), count })}
                 aria-pressed={activeFilter === value}
                 disabled={value === "attention" && !attention}
                 onClick={() => {
@@ -727,18 +739,18 @@ export function InboxPrChecks({
                 }}
                 className={`inline-flex items-center gap-2 rounded-md px-2.5 py-1 text-[12px] disabled:opacity-40 ${activeFilter === value ? "bg-selection text-content shadow-sm" : "text-content/50 hover:text-content"}`}
               >
-                {label}
+                {t(label)}
                 <span className="tabular-nums text-content/40">{count}</span>
               </button>
             ))}
           </div>
           <span className="text-[10px] text-content/40 @max-[420px]/checks:hidden">
-            {counts.fail ? "Failures first" : ""}
+            {counts.fail ? t("Failures first") : ""}
           </span>
         </div>
       ) : null}
       {rows.length === 0 ? (
-        <p className="text-[13px] text-content/45">No checks reported</p>
+        <p className="text-[13px] text-content/45">{t("No checks reported")}</p>
       ) : (
         <>
           {groups.map((group) =>

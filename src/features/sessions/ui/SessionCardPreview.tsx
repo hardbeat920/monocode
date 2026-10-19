@@ -7,7 +7,7 @@ import type { SessionSummary } from "../data/sessionStore";
 import { resolveModel } from "../model/models";
 import { sessionDisplayTitle } from "../model/session";
 import { HarnessIcon } from "./HarnessIcon";
-
+import { useTranslate } from "../../../shared/i18n/locale";
 export function SessionCardPreview({
   anchor,
   id,
@@ -25,6 +25,7 @@ export function SessionCardPreview({
   onPointerEnter: () => void;
   onPointerLeave: () => void;
 }) {
+  const t = useTranslate();
   useEffect(() => {
     const onScroll = (event: Event) => {
       // Transcript prefetching can scroll a different pane while hovering.
@@ -89,20 +90,20 @@ export function SessionCardPreview({
       </p>
       <dl className="mt-2 grid grid-cols-[4.5rem_minmax(0,1fr)] gap-x-2 gap-y-1.5 border-t border-stroke pt-2">
         {session.branch || session.worktreeRemoved ? (
-          <Detail label="Branch">
+          <Detail label={t("Branch")}>
             {session.worktreeRemoved ? NO_BRANCH_LABEL : session.branch}
           </Detail>
         ) : null}
         <Detail
           label={
             session.worktreeCwd || session.worktreeRemoved
-              ? "Worktree"
-              : "Directory"
+              ? t("Worktree")
+              : t("Directory")
           }
         >
           {session.worktreeRemoved ? (
             <>
-              <span className="text-content/50">Removed</span>
+              <span className="text-content/50">{t("Removed")}</span>
               {session.worktreeCwd ? (
                 <span className="mt-0.5 block text-content/40">
                   {prettyCwd(session.worktreeCwd)}
@@ -114,7 +115,7 @@ export function SessionCardPreview({
           )}
         </Detail>
         {additions > 0 || deletions > 0 ? (
-          <Detail label="Changes">
+          <Detail label={t("Changes")}>
             <span className="flex gap-2 font-medium tabular-nums">
               {additions > 0 ? (
                 <span className="text-diff-add-fg">
@@ -132,7 +133,9 @@ export function SessionCardPreview({
         {session.linkedWorkItem ? (
           <Detail
             label={
-              session.linkedWorkItem.kind === "pr" ? "Pull request" : "Issue"
+              session.linkedWorkItem.kind === "pr"
+                ? t("Pull request")
+                : t("Issue")
             }
           >
             {session.linkedWorkItem.repo} #{session.linkedWorkItem.number}

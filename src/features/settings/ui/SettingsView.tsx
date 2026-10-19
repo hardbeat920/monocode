@@ -21,6 +21,14 @@ import {
   X,
 } from "../../../shared/ui/icons";
 import {
+  isAppLocale,
+  LOCALE_OPTIONS,
+  saveLocale,
+  translate,
+  useLocale,
+  useTranslate,
+} from "../../../shared/i18n/locale";
+import {
   createContext,
   useCallback,
   useContext,
@@ -506,6 +514,7 @@ export function SettingsView({
   collapsedProjectRailMode,
   onCollapsedProjectRailModeChange,
 }: Props) {
+  const t = useTranslate();
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const [revealed, setRevealed] = useState<string | null>(anchor);
   const onCloseRef = useRef(onClose);
@@ -563,12 +572,12 @@ export function SettingsView({
           inTitleBar ? "pr-3 pl-1" : "px-3"
         }`}
       >
-        <span className="shrink-0 text-content/45">Settings</span>
+        <span className="shrink-0 text-content/45">{t("Settings")}</span>
         <span aria-hidden className="shrink-0 text-content/25">
           /
         </span>
         <span className="min-w-0 truncate text-content">
-          {settingsSectionLabel(section)}
+          {t(settingsSectionLabel(section))}
         </span>
       </div>
       <div
@@ -584,7 +593,7 @@ export function SettingsView({
             className="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-[12px] text-content/50 hover:bg-content/10 hover:text-content"
           >
             <RotateCcw className="size-3.5" strokeWidth={1.75} />
-            Restore defaults
+            {t("Restore defaults")}
           </button>
         ) : null}
         <SettingsSearch onReveal={onReveal} />
@@ -595,7 +604,7 @@ export function SettingsView({
   return (
     <div
       role="region"
-      aria-label="Settings"
+      aria-label={t("Settings")}
       data-app-settings
       className="flex min-h-0 min-w-0 flex-1 flex-col text-content"
     >
@@ -709,6 +718,8 @@ function SettingsSearch({
     loadInsetLayout,
     () => INSET_LAYOUT_DEFAULT,
   );
+  const t = useTranslate();
+  const locale = useLocale();
   const results = useMemo(
     () =>
       searchSettings(
@@ -717,8 +728,9 @@ function SettingsSearch({
         insetLayout
           ? INSET_LAYOUT_HIDDEN_SETTINGS
           : CLASSIC_LAYOUT_HIDDEN_SETTINGS,
+        locale,
       ),
-    [query, insetLayout],
+    [query, insetLayout, locale],
   );
   const open = query.trim().length > 0;
 
@@ -758,8 +770,8 @@ function SettingsSearch({
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="Search settings"
-          aria-label="Search settings"
+          placeholder={t("Search settings")}
+          aria-label={t("Search settings")}
           aria-expanded={open}
           aria-controls={listId}
           spellCheck={false}
@@ -769,7 +781,7 @@ function SettingsSearch({
         {query ? (
           <button
             type="button"
-            aria-label="Clear settings search"
+            aria-label={t("Clear settings search")}
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => {
               setQuery("");
@@ -794,12 +806,12 @@ function SettingsSearch({
           }}
           id={listId}
           role="listbox"
-          aria-label="Settings search results"
+          aria-label={t("Settings search results")}
           className="overflow-y-auto overscroll-contain p-1"
         >
           {results.length === 0 ? (
             <p className="px-2 py-1.5 text-[12px] text-content/45">
-              No matching settings
+              {t("No matching settings")}
             </p>
           ) : (
             results.map((result, index) => (
@@ -817,9 +829,9 @@ function SettingsSearch({
                     : "text-content hover:bg-content/5"
                 }`}
               >
-                <span className="min-w-0 flex-1 truncate">{result.label}</span>
+                <span className="min-w-0 flex-1 truncate">{t(result.label)}</span>
                 <span className="shrink-0 text-[11px] text-content/40">
-                  {result.settingId ? result.sectionLabel : "Page"}
+                  {result.settingId ? t(result.sectionLabel) : t("Page")}
                 </span>
               </button>
             ))
@@ -917,8 +929,33 @@ function GeneralPage({
     setCloseToTray(next);
   };
 
+  const t = useTranslate();
+  const locale = useLocale();
   return (
     <>
+      <Group
+        title="Language"
+        description="Choose the language MonoCode uses for its own interface. Conversations stay in the language you write."
+      >
+        <Row
+          id="language"
+          label="Language"
+          description="English stays the default until you choose another language. You can switch back here."
+        >
+          <Select
+            label="Language"
+            value={locale}
+            options={LOCALE_OPTIONS.map((item) => ({
+              value: item.id,
+              label: item.nativeLabel,
+            }))}
+            onChange={(value) => {
+              if (isAppLocale(value)) saveLocale(value);
+            }}
+          />
+        </Row>
+      </Group>
+
       <Group
         title="Alerts"
         description="How MonoCode reaches you while you are looking somewhere else."
@@ -944,7 +981,7 @@ function GeneralPage({
           ) : null}
           {notificationsEnabled && notificationPermission === "unsupported" ? (
             <span className="text-[12px] text-content/45">
-              Not available on this platform
+              {t("Not available on this platform")}
             </span>
           ) : null}
           <Toggle
@@ -1370,6 +1407,7 @@ function InboxPage({
 }
 
 function GithubSettings() {
+  const t = useTranslate();
   const [status, setStatus] = useState<GithubStatus | null>(null);
   const [checking, setChecking] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1404,12 +1442,12 @@ function GithubSettings() {
       ? "Run gh auth login in a terminal, complete the sign-in flow, then check again."
       : "Install GitHub CLI from cli.github.com, run gh auth login in a terminal, then check again.";
   const label = checking
-    ? "Checking"
+    ? t("Checking")
     : status?.connected
-      ? "Connected"
+      ? t("Connected")
       : status?.installed
-        ? "Sign in required"
-        : "Not installed";
+        ? t("Sign in required")
+        : t("Not installed");
 
   return (
     <>
@@ -1421,11 +1459,11 @@ function GithubSettings() {
               void openUrl("https://cli.github.com/").catch(() => {});
             }}
           >
-            Installation guide
+            {t("Installation guide")}
           </SecondaryButton>
         ) : null}
         <SecondaryButton onClick={() => void checkStatus()} disabled={checking}>
-          {checking ? "Checking" : "Check again"}
+          {checking ? t("Checking") : t("Check again")}
         </SecondaryButton>
       </Row>
       {error ? (
@@ -1438,6 +1476,7 @@ function GithubSettings() {
 }
 
 function GitlabSettings() {
+  const t = useTranslate();
   const [url, setUrl] = useState("https://gitlab.com");
   const [token, setToken] = useState("");
   const [connected, setConnected] = useState(false);
@@ -1510,7 +1549,7 @@ function GitlabSettings() {
               onClick={() => void onDisconnect()}
               disabled={busy}
             >
-              Disconnect
+              {t("Disconnect")}
             </SecondaryButton>
           </div>
         ) : (
@@ -1521,7 +1560,7 @@ function GitlabSettings() {
                 value={url}
                 onChange={(event) => setUrl(event.target.value)}
                 placeholder="https://gitlab.com"
-                aria-label="GitLab URL"
+                aria-label={t("GitLab URL")}
                 autoComplete="url"
                 spellCheck={false}
                 className="min-w-0 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content/35"
@@ -1536,7 +1575,7 @@ function GitlabSettings() {
                   if (event.key === "Enter") void onSave();
                 }}
                 placeholder="glpat-…"
-                aria-label="GitLab access token"
+                aria-label={t("GitLab access token")}
                 autoComplete="off"
                 spellCheck={false}
                 className="min-w-0 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content/35"
@@ -1546,7 +1585,7 @@ function GitlabSettings() {
               onClick={() => void onSave()}
               disabled={busy || !token.trim()}
             >
-              {busy ? "Saving" : "Connect"}
+              {busy ? t("Saving") : t("Connect")}
             </SecondaryButton>
           </div>
         )}
@@ -1561,6 +1600,7 @@ function GitlabSettings() {
 }
 
 function AzureDevOpsSettings() {
+  const t = useTranslate();
   const [url, setUrl] = useState("https://dev.azure.com/myorg");
   const [token, setToken] = useState("");
   const [connected, setConnected] = useState(false);
@@ -1633,7 +1673,7 @@ function AzureDevOpsSettings() {
               onClick={() => void onDisconnect()}
               disabled={busy}
             >
-              Disconnect
+              {t("Disconnect")}
             </SecondaryButton>
           </div>
         ) : (
@@ -1644,7 +1684,7 @@ function AzureDevOpsSettings() {
                 value={url}
                 onChange={(event) => setUrl(event.target.value)}
                 placeholder="https://dev.azure.com/myorg"
-                aria-label="Azure DevOps organization URL"
+                aria-label={t("Azure DevOps organization URL")}
                 autoComplete="url"
                 spellCheck={false}
                 className="min-w-0 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content/35"
@@ -1659,7 +1699,7 @@ function AzureDevOpsSettings() {
                   if (event.key === "Enter") void onSave();
                 }}
                 placeholder="PAT…"
-                aria-label="Azure DevOps personal access token"
+                aria-label={t("Azure DevOps personal access token")}
                 autoComplete="off"
                 spellCheck={false}
                 className="min-w-0 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content/35"
@@ -1669,7 +1709,7 @@ function AzureDevOpsSettings() {
               onClick={() => void onSave()}
               disabled={busy || !token.trim()}
             >
-              {busy ? "Saving" : "Connect"}
+              {busy ? t("Saving") : t("Connect")}
             </SecondaryButton>
           </div>
         )}
@@ -1684,6 +1724,7 @@ function AzureDevOpsSettings() {
 }
 
 function LinearSettings() {
+  const t = useTranslate();
   const [token, setToken] = useState("");
   const [connected, setConnected] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -1777,7 +1818,7 @@ function LinearSettings() {
       >
         {connected ? (
           <SecondaryButton onClick={() => void onDisconnect()} disabled={busy}>
-            Disconnect
+            {t("Disconnect")}
           </SecondaryButton>
         ) : (
           <div className="flex max-w-full flex-wrap items-center gap-2">
@@ -1790,7 +1831,7 @@ function LinearSettings() {
                   if (event.key === "Enter") void onSave();
                 }}
                 placeholder="lin_api_…"
-                aria-label="Linear API key"
+                aria-label={t("Linear API key")}
                 autoComplete="off"
                 spellCheck={false}
                 className="min-w-0 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content/35"
@@ -1800,7 +1841,7 @@ function LinearSettings() {
               onClick={() => void onSave()}
               disabled={busy || !token.trim()}
             >
-              {busy ? "Saving" : "Connect"}
+              {busy ? t("Saving") : t("Connect")}
             </SecondaryButton>
           </div>
         )}
@@ -1812,9 +1853,9 @@ function LinearSettings() {
       ) : null}
       {connected && teams.length > 0 ? (
         <div className="border-b border-content/5 px-4 py-3.5 last:border-b-0">
-          <div className="text-[13px] font-medium text-content">Teams</div>
+          <div className="text-[13px] font-medium text-content">{t("Teams")}</div>
           <p className="mt-1 text-[12px] leading-relaxed text-content/45">
-            Unchecked teams stay out of the inbox.
+            {t("Unchecked teams stay out of the inbox.")}
           </p>
           <div className="-mx-2 mt-2 flex flex-col gap-0.5">
             {teams.map((team) => {
@@ -1850,6 +1891,7 @@ function UpdateRow({
 }: {
   onOpenWhatsNew: (version: string) => void;
 }) {
+  const t = useTranslate();
   const [snapshot, setSnapshot] = useState<UpdaterSnapshot>({
     phase: "idle",
     currentVersion: "…",
@@ -1887,25 +1929,29 @@ function UpdateRow({
 
   const status =
     snapshot.phase === "available"
-      ? `Version ${snapshot.availableVersion} is available.`
+      ? t("Version {version} is available.", {
+          version: snapshot.availableVersion ?? "",
+        })
       : snapshot.phase === "downloading"
-        ? `Downloading${snapshot.progress != null ? ` ${snapshot.progress}%` : "…"}`
+        ? snapshot.progress != null
+          ? t("Downloading {percent}%", { percent: snapshot.progress })
+          : t("Downloading…")
         : snapshot.phase === "checking"
-          ? "Checking for updates…"
+          ? t("Checking for updates…")
           : snapshot.phase === "current"
-            ? "You're on the latest version."
+            ? t("You're on the latest version.")
             : snapshot.phase === "error"
-              ? (snapshot.error ?? "Update check failed.")
+              ? (snapshot.error ?? t("Update check failed."))
               : snapshot.packageManaged
                 ? packageManagerHint(snapshot.packageManaged)
-                : "MonoCode updates itself from the release feed.";
+                : t("MonoCode updates itself from the release feed.");
 
   return (
     <Row
       id="update"
       label={
         <span className="flex items-baseline gap-2">
-          Version
+          {t("Version")}
           <span className="font-mono text-[12px] text-content/45">
             {snapshot.currentVersion}
           </span>
@@ -1918,7 +1964,7 @@ function UpdateRow({
           onClick={() => onOpenWhatsNew(snapshot.currentVersion)}
           disabled={snapshot.currentVersion === "…"}
         >
-          What's new
+          {t("What's new")}
         </SecondaryButton>
         <SecondaryButton onClick={() => void onClick()} disabled={busy}>
           {busy ? (
@@ -1928,7 +1974,7 @@ function UpdateRow({
           ) : (
             <RefreshCw className="size-3.5" strokeWidth={1.75} aria-hidden />
           )}
-          {hasUpdate ? "Download" : "Check for updates"}
+          {hasUpdate ? t("Download") : t("Check for updates")}
         </SecondaryButton>
       </div>
     </Row>
@@ -2520,6 +2566,7 @@ function ChatBackgroundCard({
 }: {
   appearance: AppearanceSettings;
 }) {
+  const t = useTranslate();
   const src = chatBackgroundSrc(appearance.chatBackgroundPath);
   const hasImage = Boolean(appearance.chatBackgroundPath && src);
   const emptyVisibility = Math.round(
@@ -2558,7 +2605,9 @@ function ChatBackgroundCard({
                 />
               )}
               <span className="pointer-events-none absolute bottom-2 left-2 text-[11px] text-content/40">
-                Empty chat preview at {emptyVisibility}%
+                {t("Empty chat preview at {percent}%", {
+                  percent: emptyVisibility,
+                })}
               </span>
             </div>
           ) : (
@@ -2573,7 +2622,7 @@ function ChatBackgroundCard({
               ) : (
                 <ImagePlus className="size-5" aria-hidden />
               )}
-              <span className="text-[12px]">Choose an image</span>
+              <span className="text-[12px]">{t("Choose an image")}</span>
             </button>
           )}
         </div>
@@ -2586,14 +2635,14 @@ function ChatBackgroundCard({
               {busy ? (
                 <Loader className="size-3.5 animate-spin" aria-hidden />
               ) : null}
-              Change
+              {t("Change")}
             </SecondaryButton>
             <SecondaryButton
               onClick={() => void appearance.onClearChatBackground()}
               disabled={busy}
               danger
             >
-              Remove
+              {t("Remove")}
             </SecondaryButton>
           </div>
         ) : null}
@@ -2697,6 +2746,7 @@ function ShortcutEditor({
   onDisable: () => void | Promise<void>;
   onReset: () => void | Promise<void>;
 }) {
+  const t = useTranslate();
   const [recording, setRecording] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -2803,11 +2853,13 @@ function ShortcutEditor({
         <input
           type="text"
           readOnly
-          aria-label={`Change ${name} shortcut`}
+          aria-label={t("Change {name} shortcut", { name })}
           data-shortcut-recorder-active={recording ? "true" : undefined}
           aria-busy={busy || undefined}
           value={
-            recording || busy ? preview || "Record…" : (display ?? "Disabled")
+            recording || busy
+              ? preview || t("Record…")
+              : (display ?? t("Disabled"))
           }
           onFocus={beginRecording}
           onClick={beginRecording}
@@ -2823,7 +2875,7 @@ function ShortcutEditor({
         {resetVisible ? (
           <button
             type="button"
-            aria-label={`Reset ${name} shortcut`}
+            aria-label={t("Reset {name} shortcut", { name })}
             disabled={busy}
             onClick={() => void run(onReset)}
             className="rounded-md px-1 py-1 text-content/35 hover:bg-content/10 hover:text-content disabled:opacity-50"
@@ -2837,7 +2889,7 @@ function ShortcutEditor({
           className="pointer-events-none absolute top-1/2 right-full z-40 mr-3 -translate-y-1/2 text-[10px] whitespace-nowrap text-content/50"
           aria-live="polite"
         >
-          Del disables · Esc cancels
+          {t("Del disables · Esc cancels")}
         </p>
       ) : null}
       {error ? (
@@ -2853,11 +2905,12 @@ function ShortcutEditor({
 }
 
 function QuickComposerShortcutEditor() {
+  const t = useTranslate();
   const [shortcut, setShortcut] = useState(loadQuickComposerShortcut);
   const [enabled, setEnabled] = useState(loadQuickComposerEnabled);
   const apply = async (next: string) => {
     if (!isGlobalShortcut(next))
-      throw new Error("Quick Composer needs ⌘ or Ctrl as a global hotkey");
+      throw new Error(t("Quick Composer needs ⌘ or Ctrl as a global hotkey"));
     // Validate before the native call: a rejected chord must not leave the OS
     // holding a registered global hotkey that settings does not know about.
     validateKeybindingShortcut("App: Quick Composer", next);
@@ -2880,7 +2933,7 @@ function QuickComposerShortcutEditor() {
   };
   return (
     <ShortcutEditor
-      name="quick composer"
+      name={t("quick composer")}
       display={enabled ? quickComposerShortcutLabel(shortcut) : null}
       resetVisible={
         enabled !== true || shortcut !== QUICK_COMPOSER_DEFAULT_SHORTCUT
@@ -2923,6 +2976,7 @@ function KeybindingShortcutEditor({
 }
 
 function KeybindingsPage() {
+  const t = useTranslate();
   const [query, setQuery] = useState("");
   const [overrides, setOverrides] = useState(loadKeybindingOverrides);
   useEffect(
@@ -2946,15 +3000,15 @@ function KeybindingsPage() {
       action={
         <div className="flex items-center gap-3">
           <span className="shrink-0 text-[12px] text-content/40 tabular-nums">
-            {rows.length} {rows.length === 1 ? "binding" : "bindings"}
+            {rows.length} {rows.length === 1 ? t("binding") : t("bindings")}
           </span>
           <label className="flex h-7 w-44 shrink-0 items-center gap-2 rounded-md border border-content/10 px-2 text-content/45 focus-within:border-content/20">
             <Search className="size-3.5 shrink-0" strokeWidth={1.75} />
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Filter"
-              aria-label="Filter keybindings"
+              placeholder={t("Filter")}
+              aria-label={t("Filter keybindings")}
               spellCheck={false}
               autoComplete="off"
               className="min-w-0 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content/35"
@@ -2964,13 +3018,13 @@ function KeybindingsPage() {
       }
     >
       <div className="flex items-center border-b border-stroke bg-content/5 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-content/40">
-        <span className="min-w-0 flex-1">Command</span>
-        <span className="w-40 shrink-0">Keybinding</span>
-        <span className="w-28 shrink-0">When</span>
+        <span className="min-w-0 flex-1">{t("Command")}</span>
+        <span className="w-40 shrink-0">{t("Keybinding")}</span>
+        <span className="w-28 shrink-0">{t("When")}</span>
       </div>
       {rows.length === 0 ? (
         <p className="px-4 py-3 text-[12px] text-content/45">
-          No matching bindings
+          {t("No matching bindings")}
         </p>
       ) : (
         rows.map((row) => {
@@ -2984,7 +3038,7 @@ function KeybindingsPage() {
               <span
                 className={`min-w-0 flex-1 truncate ${disabled ? "text-content/45" : ""}`}
               >
-                {row.command}
+                {t(row.command)}
               </span>
               {row.fixed ? (
                 <span className="w-40 shrink-0">
@@ -3003,7 +3057,7 @@ function KeybindingsPage() {
                 />
               )}
               <span className="w-28 shrink-0 font-mono text-[11px] text-content/40">
-                {row.when}
+                {t(row.when)}
               </span>
             </div>
           );
@@ -3024,13 +3078,16 @@ function binaryInspectionError(
     provider === "codex" &&
     !/^codex-cli\s+\d+\.\d+\.\d+/.test(inspection.version ?? "")
   ) {
-    return "Codex CLI returned an invalid version.";
+    return translate("Codex CLI returned an invalid version.");
   }
   if (provider === "opencode") {
     const version = parseOpenCodeVersion(inspection.version ?? "");
-    if (!version) return "OpenCode CLI returned an invalid version.";
+    if (!version) return translate("OpenCode CLI returned an invalid version.");
     if (compareSemver(version, MINIMUM_OPENCODE_VERSION) < 0) {
-      return `OpenCode v${version} is too old. Upgrade to v${MINIMUM_OPENCODE_VERSION} or newer.`;
+      return translate(
+        "OpenCode v{version} is too old. Upgrade to v{minimum} or newer.",
+        { version, minimum: MINIMUM_OPENCODE_VERSION },
+      );
     }
   }
   return null;
@@ -3041,6 +3098,7 @@ function ProviderBinaryControl({
 }: {
   provider: ConfigurableBinaryProvider;
 }) {
+  const t = useTranslate();
   const root = useRef<HTMLSpanElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const editInput = useRef<HTMLInputElement>(null);
@@ -3111,7 +3169,7 @@ function ProviderBinaryControl({
     }
     if (!saveProviderBinaryPath(provider, value)) {
       setInspection(undefined);
-      setError("Could not save the binary path.");
+      setError(t("Could not save the binary path."));
       return;
     }
     setOverridden(true);
@@ -3124,7 +3182,7 @@ function ProviderBinaryControl({
     if (!next || binaryInspectionError(provider, next)) return;
     if (!saveProviderBinaryPath(provider, null)) {
       setInspection(undefined);
-      setError("Could not save the binary path.");
+      setError(t("Could not save the binary path."));
       return;
     }
     setDraft("");
@@ -3142,13 +3200,17 @@ function ProviderBinaryControl({
         type="button"
         aria-label={
           restartRequired
-            ? `Show ${title} CLI details, restart required`
-            : `Show ${title} CLI details`
+            ? t("Show {name} CLI details, restart required", { name: title })
+            : t("Show {name} CLI details", { name: title })
         }
         aria-expanded={open}
         aria-controls={`${provider}-binary-popover`}
         aria-haspopup="dialog"
-        title={`${title} CLI path${restartRequired ? " — restart required" : ""}`}
+        title={
+          restartRequired
+            ? t("{name} CLI path — restart required", { name: title })
+            : t("{name} CLI path", { name: title })
+        }
         onClick={() => {
           if (!open && !inspection && !working && !error) {
             void inspect(loadProviderBinaryPath(provider));
@@ -3168,7 +3230,7 @@ function ProviderBinaryControl({
         <Popover
           id={`${provider}-binary-popover`}
           role="dialog"
-          aria-label={`${title} CLI details`}
+          aria-label={t("{name} CLI details", { name: title })}
           aria-busy={working}
           tabIndex={-1}
           anchor={root}
@@ -3203,16 +3265,16 @@ function ProviderBinaryControl({
             </span>
             <div className="flex items-center gap-1.5">
               <span className="rounded-full bg-content/10 px-1.5 py-0.5 text-[10px] text-content/50">
-                Global path
+                {t("Global path")}
               </span>
               <span className="rounded-full bg-content/10 px-1.5 py-0.5 text-[10px] text-content/50">
                 {error
-                  ? "Needs attention"
+                  ? t("Needs attention")
                   : restartRequired
-                    ? "Restart required"
+                    ? t("Restart required")
                     : overridden
-                      ? "Configured"
-                      : "Auto-detected"}
+                      ? t("Configured")
+                      : t("Auto-detected")}
               </span>
             </div>
           </div>
@@ -3222,22 +3284,23 @@ function ProviderBinaryControl({
                 htmlFor={`${provider}-binary-path`}
                 className="text-[11px] text-content/50"
               >
-                CLI path
+                {t("CLI path")}
               </label>
               <input
                 id={`${provider}-binary-path`}
                 ref={editInput}
                 type="text"
                 value={draft}
-                placeholder={inspection?.path ?? "Auto-detected path"}
+                placeholder={inspection?.path ?? t("Auto-detected path")}
                 disabled={working}
                 autoFocus
                 onChange={(event) => setDraft(event.target.value)}
                 className="mt-1.5 h-8 w-full rounded-md border border-content/10 bg-content/[0.04] px-2 font-mono text-[11px] text-content outline-none placeholder:font-sans placeholder:text-content/35 focus:border-accent/45 disabled:opacity-50"
               />
               <p className="mt-1.5 text-[10px] text-content/40">
-                Enter the absolute path to the CLI executable. Changes apply
-                after restarting MonoCode.
+                {t(
+                  "Enter the absolute path to the CLI executable. Changes apply after restarting MonoCode.",
+                )}
               </p>
               {error ? (
                 <span
@@ -3256,18 +3319,18 @@ function ProviderBinaryControl({
                     queueMicrotask(() => trigger.current?.focus());
                   }}
                 >
-                  Cancel
+                  {t("Cancel")}
                 </SecondaryButton>
                 {overridden ? (
                   <SecondaryButton
                     disabled={working}
                     onClick={() => void useAuto()}
                   >
-                    Use auto-detected path
+                    {t("Use auto-detected path")}
                   </SecondaryButton>
                 ) : null}
                 <SecondaryButton type="submit" disabled={working}>
-                  Save path
+                  {t("Save path")}
                 </SecondaryButton>
               </div>
             </form>
@@ -3277,12 +3340,12 @@ function ProviderBinaryControl({
                 <span className="block max-h-12 overflow-y-auto whitespace-pre-wrap break-all font-mono text-[10px] text-content/65">
                   {inspection?.path ??
                     (error
-                      ? "CLI could not be resolved"
-                      : "Checking the selected CLI…")}
+                      ? t("CLI could not be resolved")
+                      : t("Checking the selected CLI…"))}
                 </span>
                 <span className="mt-1 block max-h-10 overflow-y-auto whitespace-pre-wrap break-words text-[10px] text-content/40">
                   {inspection?.version ??
-                    (error ? "Retry to check this CLI" : "Checking version…")}
+                    (error ? t("Retry to check this CLI") : t("Checking version…"))}
                 </span>
               </div>
               {error ? (
@@ -3299,26 +3362,32 @@ function ProviderBinaryControl({
                   role="alert"
                   className="mt-1.5 block max-h-20 overflow-y-auto whitespace-pre-wrap break-words text-[10px] leading-4 text-red-400"
                 >
-                  Could not open the CLI location: {revealError}
+                  {t("Could not open the CLI location: {error}", {
+                    error: revealError,
+                  })}
                 </span>
               ) : null}
               <div className="mt-3 flex justify-end gap-2">
                 {error ? (
                   <SecondaryButton
                     disabled={working}
-                    aria-label={`Retry ${title} ${
-                      overridden ? "configured path" : "auto-detect"
-                    }`}
+                    aria-label={
+                      overridden
+                        ? t("Retry {name} configured path", { name: title })
+                        : t("Retry {name} auto-detect", { name: title })
+                    }
                     onClick={() =>
                       void inspect(overridden ? draft.trim() || null : null)
                     }
                   >
                     <RefreshCw className="size-3.5" strokeWidth={1.75} />
-                    {overridden ? "Retry configured path" : "Retry auto-detect"}
+                    {overridden
+                      ? t("Retry configured path")
+                      : t("Retry auto-detect")}
                   </SecondaryButton>
                 ) : null}
                 <SecondaryButton
-                  aria-label={`Open ${title} CLI location`}
+                  aria-label={t("Open {name} CLI location", { name: title })}
                   disabled={!inspection}
                   onClick={() => {
                     if (inspection) {
@@ -3333,15 +3402,15 @@ function ProviderBinaryControl({
                   }}
                 >
                   <ExternalLink className="size-3.5" strokeWidth={1.75} />
-                  Open location
+                  {t("Open location")}
                 </SecondaryButton>
                 <SecondaryButton
-                  aria-label={`Edit ${title} CLI path`}
+                  aria-label={t("Edit {name} CLI path", { name: title })}
                   disabled={working}
                   onClick={() => setEditing(true)}
                 >
                   <Pencil className="size-3.5" strokeWidth={1.75} />
-                  Edit path
+                  {t("Edit path")}
                 </SecondaryButton>
               </div>
             </>
@@ -3382,7 +3451,12 @@ function ProvidersPage({
   );
 
   const scopeOptions = useMemo(() => {
-    const options: { value: string; label: string; icon?: ReactNode }[] = [
+    const options: {
+      value: string;
+      label: string;
+      icon?: ReactNode;
+      raw?: boolean;
+    }[] = [
       {
         value: GLOBAL_PROVIDER_SCOPE,
         label: "Global",
@@ -3404,6 +3478,8 @@ function ProvidersPage({
         value: path,
         label: projectName(path),
         icon: <ProjectScopeIcon path={path} />,
+        // A project name is user data: render it, never translate it.
+        raw: true,
       });
     }
     return options;
@@ -3613,6 +3689,7 @@ type AccountEditor = {
 };
 
 function ProviderAccountsSettings() {
+  const t = useTranslate();
   const [version, setVersion] = useState(0);
   const [editor, setEditor] = useState<AccountEditor | null>(null);
   const [working, setWorking] = useState<string | null>(null);
@@ -3658,7 +3735,7 @@ function ProviderAccountsSettings() {
       setError(
         caught instanceof Error
           ? caught.message
-          : "Could not save this account",
+          : t("Could not save this account"),
       );
     } finally {
       setWorking(null);
@@ -3668,12 +3745,17 @@ function ProviderAccountsSettings() {
   const removeAccount = async (account: ProviderAccount) => {
     if (account.isDefault || working) return;
     const confirmed = await ask(
-      `Remove “${account.label}”? Its stored credentials will be deleted and any running turns for this account will stop. Existing conversations stay in history, but cannot continue until you switch accounts.`,
+      t(
+        "Remove “{name}”? Its stored credentials will be deleted and any running turns for this account will stop. Existing conversations stay in history, but cannot continue until you switch accounts.",
+        { name: account.label },
+      ),
       {
-        title: `Remove ${HARNESS_TITLE[account.provider]} account`,
+        title: t("Remove {provider} account", {
+          provider: HARNESS_TITLE[account.provider],
+        }),
         kind: "warning",
-        okLabel: "Remove account",
-        cancelLabel: "Cancel",
+        okLabel: t("Remove account"),
+        cancelLabel: t("Cancel"),
       },
     );
     if (!confirmed) return;
@@ -3694,7 +3776,7 @@ function ProviderAccountsSettings() {
       setError(
         caught instanceof Error
           ? caught.message
-          : "Could not remove this account",
+          : t("Could not remove this account"),
       );
     } finally {
       setWorking(null);
@@ -3733,7 +3815,7 @@ function ProviderAccountsSettings() {
                   </div>
                   <div className="mt-0.5 text-[11px] text-content/40">
                     {accounts.length}{" "}
-                    {accounts.length === 1 ? "account" : "accounts"}
+                    {accounts.length === 1 ? t("account") : t("accounts")}
                   </div>
                 </div>
               </div>
@@ -3745,7 +3827,7 @@ function ProviderAccountsSettings() {
                   className="flex shrink-0 items-center gap-1.5 rounded-md border border-content/10 px-2.5 py-1 text-[12px] text-content/70 transition-transform duration-150 hover:bg-content/10 hover:text-content active:scale-[0.97] disabled:cursor-default disabled:opacity-40"
                 >
                   <Plus className="size-3.5" strokeWidth={1.75} aria-hidden />
-                  Add account
+                  {t("Add account")}
                 </button>
               ) : null}
             </div>
@@ -3796,8 +3878,8 @@ function ProviderAccountsSettings() {
                           identity={identity}
                           fallback={
                             account.isDefault
-                              ? "Provider CLI profile"
-                              : "Isolated profile"
+                              ? t("Provider CLI profile")
+                              : t("Isolated profile")
                           }
                           className="truncate text-content/30"
                         />
@@ -3807,14 +3889,14 @@ function ProviderAccountsSettings() {
                     <div className="flex w-24 shrink-0 items-center justify-end gap-1">
                       {account.isDefault ? (
                         <span className="mr-1 text-[10px] font-medium uppercase tracking-wide text-content/30">
-                          Default
+                          {t("Default")}
                         </span>
                       ) : null}
                       <button
                         type="button"
                         disabled={Boolean(working)}
-                        aria-label={`Rename ${account.label}`}
-                        title="Rename account"
+                        aria-label={t("Rename {name}", { name: account.label })}
+                        title={t("Rename account")}
                         onClick={() => startRename(account)}
                         className="grid size-7 place-items-center rounded-md text-content/40 transition-transform duration-150 hover:bg-content/10 hover:text-content active:scale-[0.96] disabled:opacity-35"
                       >
@@ -3824,8 +3906,8 @@ function ProviderAccountsSettings() {
                         <button
                           type="button"
                           disabled={Boolean(working)}
-                          aria-label={`Remove ${account.label}`}
-                          title="Remove account"
+                          aria-label={t("Remove {name}", { name: account.label })}
+                          title={t("Remove account")}
                           onClick={() => void removeAccount(account)}
                           className="grid size-7 place-items-center rounded-md text-content/35 transition-transform duration-150 hover:bg-red-400/10 hover:text-red-400 active:scale-[0.96] disabled:opacity-35"
                         >
@@ -3882,6 +3964,7 @@ function ProviderAccountEditor({
   onCancel: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
+  const t = useTranslate();
   const adding = !editor.accountId;
   return (
     <form
@@ -3893,15 +3976,23 @@ function ProviderAccountEditor({
         className="flex items-center pr-1 h-8 min-w-0 flex-1 overflow-hidden rounded-md border border-content/10 bg-content/[0.04] focus-within:border-accent/45"
       >
         <label className="h-full min-w-0 flex-1">
-          <span className="sr-only">Account name</span>
+          <span className="sr-only">{t("Account name")}</span>
           <input
             autoFocus
             type="text"
             maxLength={48}
             value={editor.label}
             disabled={working}
-            placeholder="Work or Personal"
-            aria-label={`${adding ? "New" : "Rename"} ${HARNESS_TITLE[editor.provider]} account`}
+            placeholder={t("Work or Personal")}
+            aria-label={
+              adding
+                ? t("New {provider} account", {
+                    provider: HARNESS_TITLE[editor.provider],
+                  })
+                : t("Rename {provider} account", {
+                    provider: HARNESS_TITLE[editor.provider],
+                  })
+            }
             onChange={(event) => onLabel(event.target.value)}
             className="h-full w-full bg-transparent px-2.5 text-[12px] text-content outline-none placeholder:text-content/25 disabled:opacity-50"
           />
@@ -3912,7 +4003,7 @@ function ProviderAccountEditor({
           onClick={onCancel}
           className="flex h-6 shrink-0 items-center rounded-[4.5px] bg-content/[0.05] px-2.5 text-[11px] text-content/45 transition-transform duration-150 hover:bg-content/10 hover:text-content active:scale-[0.97] disabled:opacity-40"
         >
-          Cancel
+          {t("Cancel")}
         </button>
         <button
           type="submit"
@@ -3922,9 +4013,9 @@ function ProviderAccountEditor({
           {working ? <Loader className="size-3 animate-spin" /> : null}
           {adding
             ? working
-              ? "Waiting for browser…"
-              : "Sign in and add"
-            : "Save"}
+              ? t("Waiting for browser…")
+              : t("Sign in and add")
+            : t("Save")}
         </button>
       </div>
     </form>
@@ -3979,6 +4070,7 @@ function ProviderRow({
   onModelChange: (harness: HarnessId, model: string) => void;
   onPickerVisible: (visible: boolean) => void;
 }) {
+  const t = useTranslate();
   const models = modelsFor(harness);
   const available = isHarnessAvailable(harness);
   const current =
@@ -3998,20 +4090,22 @@ function ProviderRow({
           <ProviderBinaryControl provider={harness} />
           {isDefault ? (
             <span className="rounded-full bg-content/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-content/60">
-              Default
+              {t("Default")}
             </span>
           ) : null}
         </span>
       }
       description={
         available
-          ? `${models.length} ${models.length === 1 ? "model" : "models"} available.`
+          ? models.length === 1
+            ? t("1 model available.")
+            : t("{count} models available.", { count: models.length })
           : harnessUnavailableHint(harness)
       }
     >
       {current ? (
         <Select
-          label={`${HARNESS_TITLE[harness]} model`}
+          label={t("{name} model", { name: HARNESS_TITLE[harness] })}
           value={current.id}
           onChange={(next) => onModelChange(harness, next)}
           onOpen={() => {
@@ -4025,6 +4119,7 @@ function ProviderRow({
           options={models.map((item) => ({
             value: item.id,
             label: item.name,
+            raw: true,
           }))}
         />
       ) : null}
@@ -4032,15 +4127,17 @@ function ProviderRow({
         onClick={() => current && onDefault(harness, current.id)}
         disabled={isDefault || !current}
       >
-        {isDefault ? "Default" : "Use by default"}
+        {isDefault ? t("Default") : t("Use by default")}
       </SecondaryButton>
       {available ? (
         <div className="flex items-center gap-2">
           <span className="text-[12px] text-content/50">
-            {pickerLocked ? "Hidden globally" : "Show in picker"}
+            {pickerLocked ? t("Hidden globally") : t("Show in picker")}
           </span>
           <Toggle
-            label={`Show ${HARNESS_TITLE[harness]} in the model picker`}
+            label={t("Show {name} in the model picker", {
+              name: HARNESS_TITLE[harness],
+            })}
             on={inPicker}
             onChange={onPickerVisible}
             disabled={pickerLocked}
@@ -4085,6 +4182,7 @@ function ArchivePage({
   onRestoreProject?: (path: string) => void;
   onDeleteProject?: (path: string) => void;
 }) {
+  const t = useTranslate();
   const [filters, setFilters] = useState(loadSessionSidebarFilters);
   const [deleting, setDeleting] = useState<ArchivedProject | null>(null);
   const archivedProjects = useArchivedProjects();
@@ -4110,7 +4208,7 @@ function ArchivePage({
       >
         {archivedProjects.length === 0 ? (
           <p className="px-4 py-3.5 text-[12px] text-content/45">
-            No archived projects.
+            {t("No archived projects.")}
           </p>
         ) : (
           archivedProjects.map((project) => (
@@ -4128,12 +4226,12 @@ function ArchivePage({
               </div>
               {onRestoreProject ? (
                 <SecondaryButton onClick={() => onRestoreProject(project.path)}>
-                  Restore
+                  {t("Restore")}
                 </SecondaryButton>
               ) : null}
               {onDeleteProject ? (
                 <SecondaryButton danger onClick={() => setDeleting(project)}>
-                  Delete
+                  {t("Delete")}
                 </SecondaryButton>
               ) : null}
             </div>
@@ -4144,8 +4242,8 @@ function ArchivePage({
       <Group
         title={
           looksLikeProject(cwd)
-            ? `Archived in ${projectName(cwd)}`
-            : "Archived conversations"
+            ? t("Archived in {project}", { project: projectName(cwd) })
+            : t("Archived conversations")
         }
       >
         <Row
@@ -4161,11 +4259,11 @@ function ArchivePage({
         </Row>
         {!looksLikeProject(cwd) ? (
           <p className="px-4 py-3.5 text-[12px] text-content/45">
-            Open a project to see its archived conversations.
+            {t("Open a project to see its archived conversations.")}
           </p>
         ) : archived.length === 0 ? (
           <p className="px-4 py-3.5 text-[12px] text-content/45">
-            No archived conversations in this project.
+            {t("No archived conversations in this project.")}
           </p>
         ) : (
           archived.map((session) => (
@@ -4190,13 +4288,13 @@ function ArchivePage({
               <SecondaryButton
                 onClick={() => onArchiveSession(session.id, false)}
               >
-                Unarchive
+                {t("Unarchive")}
               </SecondaryButton>
               <SecondaryButton
                 danger
                 onClick={() => onDeleteSession(session.id)}
               >
-                Delete
+                {t("Delete")}
               </SecondaryButton>
             </div>
           ))
@@ -4232,6 +4330,7 @@ function formatDate(value: number): string {
 
 /** Monos on or off, and each Mono the user has. */
 function MonosPage() {
+  const t = useTranslate();
   const enabled = useSyncExternalStore(
     subscribeMonosEnabled,
     loadMonosEnabled,
@@ -4291,7 +4390,7 @@ function MonosPage() {
           monos.map((mono) => <MonoRow key={mono.id} mono={mono} />)
         ) : (
           <p className="px-4 py-3.5 text-[12px] text-content/45">
-            No monos yet.
+            {t("No monos yet.")}
           </p>
         )}
       </Group>
@@ -4300,6 +4399,7 @@ function MonosPage() {
 }
 
 function MonoRow({ mono }: { mono: Mono }) {
+  const t = useTranslate();
   const look = monoLook(mono);
   return (
     <Row
@@ -4316,15 +4416,19 @@ function MonoRow({ mono }: { mono: Mono }) {
       }
       description={
         look.projects.length
-          ? `Works on ${monoProjectsPhrase(look.projects)}`
-          : "No projects yet"
+          ? t("Works on {projects}", {
+              projects: monoProjectsPhrase(look.projects),
+            })
+          : t("No projects yet")
       }
     >
       <span className="text-[12px] leading-5 text-content/50">
-        Show Mono spawned session on the sidebar
+        {t("Show Mono spawned session on the sidebar")}
       </span>
       <Toggle
-        label={`Show sessions started by ${look.name} in sidebar`}
+        label={t("Show sessions started by {name} in sidebar", {
+          name: look.name,
+        })}
         on={mono.showStartedSessionsInSidebar === true}
         onChange={(on) =>
           updateMono(mono.id, (entry) => ({
@@ -4334,19 +4438,22 @@ function MonoRow({ mono }: { mono: Mono }) {
         }
       />
       <ConfirmReset
-        label="Reset Mono"
-        title={`Reset ${look.name} to its defaults?`}
-        body={`Its soul goes back to the default and its name to ${defaultMonoName(look.mascot)}. Changes to its soul can't be recovered.`}
-        kept="Its conversation, projects, memory and habits will be kept."
-        failure="Could not reset the Mono."
+        label={t("Reset Mono")}
+        title={t("Reset {name} to its defaults?", { name: look.name })}
+        body={t(
+          "Its soul goes back to the default and its name to {name}. Changes to its soul can't be recovered.",
+          { name: defaultMonoName(look.mascot) },
+        )}
+        kept={t("Its conversation, projects, memory and habits will be kept.")}
+        failure={t("Could not reset the Mono.")}
         onConfirm={() => resetMonoDefaults(mono.id)}
       >
         {(open, ref) => (
           <button
             ref={ref}
             type="button"
-            title="Reset to defaults"
-            aria-label={`Reset ${look.name} to defaults`}
+            title={t("Reset to defaults")}
+            aria-label={t("Reset {name} to defaults", { name: look.name })}
             onClick={open}
             className="grid size-7 place-items-center rounded-md text-content/40 transition-transform duration-150 hover:bg-content/10 hover:text-content active:scale-[0.96]"
           >
@@ -4365,14 +4472,17 @@ function PageHeader({
   title: string;
   description: string;
 }) {
+  const t = useTranslate();
+  const heading = t(title);
+  const summary = t(description);
   return (
     <header className="pb-4">
       <h1 className="text-[20px] font-semibold leading-tight text-content">
-        {title}
+        {heading}
       </h1>
-      {description ? (
+      {summary ? (
         <p className="mt-1.5 max-w-xl text-[13px] leading-relaxed text-content/45">
-          {description}
+          {summary}
         </p>
       ) : null}
     </header>
@@ -4397,6 +4507,9 @@ function Group({
   action?: ReactNode;
   children: ReactNode;
 }) {
+  const t = useTranslate();
+  const heading = typeof title === "string" ? t(title) : title;
+  const summary = description ? t(description) : "";
   const revealed = useContext(RevealedSetting);
   const flash = id != null && revealed === id;
 
@@ -4408,10 +4521,10 @@ function Group({
     >
       <div className="flex items-end gap-4 pb-2.5">
         <div className="min-w-0 flex-1">
-          <h2 className="text-[13px] font-semibold text-content">{title}</h2>
-          {description ? (
+          <h2 className="text-[13px] font-semibold text-content">{heading}</h2>
+          {summary ? (
             <p className="mt-1 text-[12px] leading-relaxed text-content/45">
-              {description}
+              {summary}
             </p>
           ) : null}
         </div>
@@ -4440,6 +4553,9 @@ function Row({
   description?: string;
   children?: ReactNode;
 }) {
+  const t = useTranslate();
+  const heading = typeof label === "string" ? t(label) : label;
+  const summary = description ? t(description) : "";
   const revealed = useContext(RevealedSetting);
   const flash = id != null && revealed === id;
 
@@ -4452,10 +4568,10 @@ function Row({
       }`}
     >
       <div className="min-w-0 flex-1">
-        <div className="text-[13px] font-medium text-content">{label}</div>
-        {description ? (
+        <div className="text-[13px] font-medium text-content">{heading}</div>
+        {summary ? (
           <p className="mt-1 text-[12px] leading-relaxed text-content/45">
-            {description}
+            {summary}
           </p>
         ) : null}
       </div>
@@ -4479,10 +4595,11 @@ function Segmented<T extends string>({
   onChange: (value: T) => void;
   optionIdPrefix?: string;
 }) {
+  const t = useTranslate();
   return (
     <div
       role="radiogroup"
-      aria-label={label}
+      aria-label={t(label)}
       className="inline-grid max-w-full shrink-0 gap-0.5 rounded-md border border-content/10 p-0.5 text-[12px]"
       style={{
         gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))`,
@@ -4506,7 +4623,7 @@ function Segmented<T extends string>({
               : "text-content/50 hover:text-content"
           }`}
         >
-          {option.label}
+          {t(option.label)}
         </button>
       ))}
     </div>
@@ -4532,6 +4649,7 @@ function Slider({
   onChange: (value: number) => void;
   disabled?: boolean;
 }) {
+  const t = useTranslate();
   return (
     <div
       className={`flex w-56 max-w-full items-center gap-3 ${disabled ? "opacity-40" : ""}`}
@@ -4545,7 +4663,7 @@ function Slider({
         aria-valuemin={min}
         aria-valuemax={max}
         aria-valuenow={value}
-        aria-label={label}
+        aria-label={t(label)}
         disabled={disabled}
         className="sidebar-opacity-slider min-w-0 flex-1 disabled:cursor-not-allowed"
         onChange={(event) => onChange(Number(event.target.value))}
@@ -4593,6 +4711,7 @@ function AccentColorPicker({
   value: string | null;
   onChange: (value: string | null) => void;
 }) {
+  const t = useTranslate();
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const colorIndex = value
@@ -4606,7 +4725,15 @@ function AccentColorPicker({
     <div ref={root} className="w-48">
       <ColorSwatchRow
         colors={["var(--color-content)", ...ACCENT_COLOR_PRESETS]}
-        labels={["Default", "Blue", "Violet", "Pink", "Red", "Orange", "Green"]}
+        labels={[
+          t("Default"),
+          t("Blue"),
+          t("Violet"),
+          t("Pink"),
+          t("Red"),
+          t("Orange"),
+          t("Green"),
+        ]}
         colorIndex={presetIndex >= 0 ? presetIndex : undefined}
         customColor={presetIndex < 0 ? (value ?? undefined) : undefined}
         customPickerOpen={open}
@@ -4641,9 +4768,10 @@ function AccentColorPicker({
 
 /** macOS keeps the decision after the first prompt; only System Settings can flip it. Windows toasts are governed by Settings > Notifications. */
 function NotificationsBlocked() {
+  const t = useTranslate();
   return (
     <span className="flex items-center gap-2 text-[12px] text-content/45">
-      Permission needed
+      {t("Permission needed")}
       {IS_MAC || IS_WIN ? (
         <button
           type="button"
@@ -4652,7 +4780,7 @@ function NotificationsBlocked() {
           }}
           className="rounded-md border border-content/10 px-2 py-1 text-content/70 hover:bg-content/10 hover:text-content"
         >
-          Open System Settings
+          {t("Open System Settings")}
         </button>
       ) : null}
     </span>
@@ -4670,11 +4798,12 @@ function Toggle({
   onChange: (on: boolean) => void;
   disabled?: boolean;
 }) {
+  const t = useTranslate();
   return (
     <button
       type="button"
       role="switch"
-      aria-label={label}
+      aria-label={t(label)}
       aria-checked={on}
       disabled={disabled}
       onClick={() => {
@@ -4704,10 +4833,20 @@ function Select({
 }: {
   label: string;
   value: string;
-  options: { value: string; label: string; icon?: ReactNode }[];
+  options: {
+    value: string;
+    label: string;
+    icon?: ReactNode;
+    /** Set for user or provider data, which must render exactly as supplied. */
+    raw?: boolean;
+  }[];
   onChange: (value: string) => void;
   onOpen?: () => void;
 }) {
+  const t = useTranslate();
+
+  const optionLabel = (option?: { label: string; raw?: boolean }) =>
+    option ? (option.raw ? option.label : t(option.label)) : value;
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(() =>
     Math.max(
@@ -4789,7 +4928,7 @@ function Select({
       <button
         type="button"
         ref={trigger}
-        aria-label={`${label}: ${selected?.label ?? value}`}
+        aria-label={`${t(label)}: ${optionLabel(selected)}`}
         aria-expanded={open}
         aria-haspopup="listbox"
         onClick={() => setOpen((prev) => !prev)}
@@ -4802,7 +4941,7 @@ function Select({
             </span>
           ) : null}
           <span className="min-w-0 truncate">
-            {selected ? selected.label : value}
+            {optionLabel(selected)}
           </span>
         </span>
         <ChevronDown
@@ -4823,7 +4962,7 @@ function Select({
             if (reason === "escape") trigger.current?.focus();
           }}
           role="listbox"
-          aria-label={label}
+          aria-label={t(label)}
           aria-activedescendant={activeId}
           tabIndex={-1}
           onKeyDown={onMenuKey}
@@ -4855,7 +4994,9 @@ function Select({
                     {option.icon}
                   </span>
                 ) : null}
-                <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                <span className="min-w-0 flex-1 truncate">
+                  {option.raw ? option.label : t(option.label)}
+                </span>
                 {isSelected ? (
                   <Check className="size-3.5 shrink-0" strokeWidth={2.25} />
                 ) : null}

@@ -53,6 +53,7 @@ import {
   type DevinModelFamily,
   type DevinToolInfo,
 } from "./devinProtocol";
+import { translate } from "../../../../shared/i18n/locale";
 
 type Live = {
   threadId: string;
@@ -169,7 +170,9 @@ async function runTurn(
 }
 
 export async function steerDevinTurn(_input: SteerTurnInput): Promise<void> {
-  throw new Error("Devin does not support steering an in-flight turn");
+  throw new Error(
+    translate("Devin does not support steering an in-flight turn"),
+  );
 }
 
 export function respondDevinApproval(
@@ -455,7 +458,9 @@ async function startLive(input: HarnessSessionInput, startup: Startup): Promise<
       if (acpSessionId && canLoad) {
         emit({
           type: "status",
-          text: "Devin could not restore the previous conversation — starting a new session.",
+          text: translate(
+            "Devin could not restore the previous conversation — starting a new session.",
+          ),
         });
       }
     }

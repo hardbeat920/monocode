@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { loadLocale } from "../../../shared/i18n/locale";
 import { clearKnownInboxItems } from "./inboxSeen";
 import {
   linearConnected,
@@ -428,10 +429,9 @@ export function formatRelativeTime(
     amount = Math.abs(value);
   }
   try {
-    return new Intl.RelativeTimeFormat(locale, { numeric: "auto" }).format(
-      value,
-      unit,
-    );
+    return new Intl.RelativeTimeFormat(locale ?? loadLocale(), {
+      numeric: "auto",
+    }).format(value, unit);
   } catch {
     return "";
   }

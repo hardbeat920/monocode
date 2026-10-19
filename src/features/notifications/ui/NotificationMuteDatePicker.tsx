@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslate } from "../../../shared/i18n/locale";
 import {
   loadNotificationPreferences,
   updateNotificationPreferences,
@@ -32,6 +33,7 @@ export function NotificationMuteDatePicker({
         : Date.now() + 3_600_000;
     return toLocalDateTime(new Date(Math.ceil(initial / 60_000) * 60_000));
   });
+  const t = useTranslate();
   const [error, setError] = useState<string | null>(null);
   return (
     <form
@@ -42,11 +44,11 @@ export function NotificationMuteDatePicker({
         if (!projectIds.length) return;
         const date = parseLocalDateTime(value);
         if (!date) {
-          setError("Choose a valid date and time.");
+          setError(t("Choose a valid date and time."));
           return;
         }
         if (date.getTime() <= Date.now()) {
-          setError("Choose a date and time in the future.");
+          setError(t("Choose a date and time in the future."));
           return;
         }
         try {
@@ -57,13 +59,13 @@ export function NotificationMuteDatePicker({
           onChanged?.();
         } catch {
           setError(
-            "Could not save notification preferences. Please try again.",
+            t("Could not save notification preferences. Please try again."),
           );
         }
       }}
     >
       <p className="mb-3 px-1 text-[11px] text-content/45">
-        Mute all notifications until
+        {t("Mute all notifications until")}
       </p>
       <DateTimePicker
         value={value}
@@ -85,14 +87,14 @@ export function NotificationMuteDatePicker({
           onClick={onCancel}
           className="rounded px-2 py-1.5 text-xs text-content/50 hover:bg-content/5 hover:text-content focus-visible:outline-2 focus-visible:outline-accent"
         >
-          Cancel
+          {t("Cancel")}
         </button>
         <button
           type="submit"
           disabled={!projectIds.length}
           className="primary-action flex shrink-0 items-center rounded-md border border-transparent px-2.5 py-1 text-[12px] focus-visible:outline-2 focus-visible:outline-accent disabled:cursor-default"
         >
-          Mute until then
+          {t("Mute until then")}
         </button>
       </div>
     </form>

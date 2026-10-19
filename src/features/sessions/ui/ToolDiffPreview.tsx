@@ -3,7 +3,7 @@ import type { ToolPreview } from "../model/session";
 import { FilePreview } from "../../files/ui/FilePreview";
 import { Popover } from "../../../shared/ui/Popover";
 import { X } from "../../../shared/ui/icons";
-
+import { useTranslate } from "../../../shared/i18n/locale";
 type Props = {
   preview: ToolPreview;
   label: string;
@@ -26,6 +26,7 @@ export function ToolDiffPreview({
   className,
   children,
 }: Props) {
+  const t = useTranslate();
   const id = useId();
   const trigger = useRef<HTMLButtonElement>(null);
   const surface = useRef<HTMLDivElement>(null);
@@ -69,12 +70,12 @@ export function ToolDiffPreview({
 
   const description =
     status === "pending"
-      ? "Proposed changes"
+      ? t("Proposed changes")
       : status === "rejected"
-        ? "Attempted changes · tool did not complete"
+        ? t("Attempted changes · tool did not complete")
         : preview.contentOnly
-          ? "Written content · previous contents unavailable"
-          : "Change preview";
+          ? t("Written content · previous contents unavailable")
+          : t("Change preview");
 
   return (
     <>
@@ -84,8 +85,13 @@ export function ToolDiffPreview({
         className={`${className ?? ""} focus-visible:outline-2 focus-visible:outline-sky-400/60`}
         aria-label={
           onOpen
-            ? `Open ${label}`
-            : `Preview ${preview.contentOnly ? "written content" : "changes"}: ${label}`
+            ? t("Open {name}", { name: label })
+            : t("Preview {kind}: {name}", {
+                kind: preview.contentOnly
+                  ? t("written content")
+                  : t("changes"),
+                name: label,
+              })
         }
         aria-haspopup="dialog"
         aria-expanded={open}
@@ -127,7 +133,7 @@ export function ToolDiffPreview({
           anchor={trigger}
           id={id}
           role="dialog"
-          aria-label={`${description}: ${label}`}
+          aria-label={t("{description}: {name}", { description, name: label })}
           tabIndex={-1}
           width={460}
           maxHeight={280}
@@ -158,7 +164,7 @@ export function ToolDiffPreview({
             <span className="min-w-0 flex-1">{description}</span>
             <button
               type="button"
-              aria-label="Close preview"
+              aria-label={t("Close preview")}
               className="shrink-0 rounded p-0.5 hover:bg-content/8 hover:text-content"
               onClick={() => dismiss(true)}
             >

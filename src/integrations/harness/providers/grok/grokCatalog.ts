@@ -17,6 +17,7 @@ import {
   modelsFromInitialize,
   modelsFromSessionNew,
 } from "./grokProtocol";
+import { translate } from "../../../../shared/i18n/locale";
 
 const PROBE_ID = "monocode-grok-probe";
 const DISCOVERY_TIMEOUT_MS = 15_000;
@@ -141,7 +142,7 @@ function withTimeout<T>(
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
       onTimeout();
-      reject(new Error("Grok Build catalog probe timed out"));
+      reject(new Error(translate("Grok Build catalog probe timed out")));
     }, ms);
     run()
       .then(resolve, reject)

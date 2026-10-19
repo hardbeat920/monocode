@@ -14,6 +14,7 @@ import type { JiraProject } from "../model/jira";
 import type { LinearTeam } from "../model/linear";
 import { Popover } from "../../../shared/ui/Popover";
 import { ProjectLogoIcon } from "../../projects/ui/ProjectLogoIcon";
+import { useTranslate } from "../../../shared/i18n/locale";
 
 export const INBOX_FILTER_MENU_WIDTH = 228;
 
@@ -82,6 +83,7 @@ export function InboxFiltersMenu({
   onJiraProjectsChange,
   onClose,
 }: Props) {
+  const t = useTranslate();
   const hiddenProjects = new Set(filters.hiddenProjects);
   const hiddenLinearProjects = new Set(filters.hiddenLinearProjects);
   const hiddenTeams = new Set(hiddenLinearTeamIds);
@@ -150,7 +152,7 @@ export function InboxFiltersMenu({
       maxHeight={480}
       onDismiss={onClose}
       role="menu"
-      aria-label="Filter inbox"
+      aria-label={t("Filter inbox")}
       onContextMenu={(event) => event.preventDefault()}
       className="overflow-y-auto overscroll-none p-1"
     >
@@ -308,7 +310,7 @@ export function InboxFiltersMenu({
             }}
             className="flex h-7 w-full items-center rounded-lg px-2 text-left text-[13px] leading-none text-content/70 hover:bg-content/5 hover:text-content"
           >
-            Clear filters
+            {t("Clear filters")}
           </button>
         </>
       ) : null}
@@ -317,9 +319,10 @@ export function InboxFiltersMenu({
 }
 
 function SectionLabel({ children }: { children: string }) {
+  const t = useTranslate();
   return (
     <div className="px-2 pb-0.5 pt-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-content/40">
-      {children}
+      {t(children)}
     </div>
   );
 }
@@ -335,6 +338,7 @@ function FilterItem({
   icon?: ReactNode;
   onClick: () => void;
 }) {
+  const t = useTranslate();
   return (
     <button
       type="button"
@@ -345,7 +349,7 @@ function FilterItem({
       className="flex h-7 w-full items-center gap-2 rounded-lg px-2 text-left text-[13px] leading-none text-content hover:bg-content/5"
     >
       {icon}
-      <span className="min-w-0 flex-1 truncate">{label}</span>
+      <span className="min-w-0 flex-1 truncate">{t(label)}</span>
       {checked ? (
         <Check className="size-3.5 shrink-0" strokeWidth={2.25} />
       ) : null}

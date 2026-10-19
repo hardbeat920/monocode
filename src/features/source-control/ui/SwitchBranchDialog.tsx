@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { generateCommitMessage } from "../../../integrations/harness";
 import { LAYER } from "../../../shared/lib/layers";
 import { MOD } from "../../../platform/tauri/platform";
+import { useTranslate } from "../../../shared/i18n/locale";
 
 type Busy = "stash" | "commit" | null;
 
@@ -36,6 +37,7 @@ export function SwitchBranchDialog({
   const messageRef = useRef<HTMLTextAreaElement>(null);
   const trimmed = message.trim();
   const canCommit = trimmed.length > 0 && !busy && !generating;
+  const t = useTranslate();
 
   useEffect(() => {
     messageRef.current?.focus();
@@ -117,18 +119,28 @@ export function SwitchBranchDialog({
         role="dialog"
         aria-modal="true"
         aria-busy={Boolean(busy) || generating}
-        aria-label={creating ? `Create ${branch}` : `Switch to ${branch}`}
+        aria-label={
+          creating
+            ? t("Create {branch}", { branch })
+            : t("Switch to {branch}", { branch })
+        }
         onMouseDown={(event) => event.stopPropagation()}
         className={`modal-surface ${host ? "relative w-full" : "absolute left-1/2 top-[22%] w-[min(420px,calc(100vw-24px))] -translate-x-1/2"} z-[1] flex flex-col gap-3 rounded-lg border border-content/10 bg-background-base dark:bg-content/5 p-4 shadow-xl backdrop-blur-xl`}
       >
         <div className="flex flex-col gap-1">
           <h2 className="text-[13px] font-medium leading-tight text-content">
-            Uncommitted changes
+            {t("Uncommitted changes")}
           </h2>
           <p className="text-[12px] leading-snug text-content/55">
             {creating
-              ? `Creating “${branch}” would overwrite your local changes. Stash them for later, or commit them on this branch first.`
-              : `Switching to “${branch}” would overwrite your local changes. Stash them for later, or commit them on this branch first.`}
+              ? t(
+                  "Creating “{branch}” would overwrite your local changes. Stash them for later, or commit them on this branch first.",
+                  { branch },
+                )
+              : t(
+                  "Switching to “{branch}” would overwrite your local changes. Stash them for later, or commit them on this branch first.",
+                  { branch },
+                )}
           </p>
         </div>
 
@@ -137,9 +149,11 @@ export function SwitchBranchDialog({
             ref={messageRef}
             rows={1}
             value={message}
-            placeholder={`Message (${MOD}↩ to commit)`}
+            placeholder={t("Message ({shortcut} to commit)", {
+              shortcut: `${MOD}↩`,
+            })}
             disabled={Boolean(busy) || generating}
-            aria-label="Commit message"
+            aria-label={t("Commit message")}
             className="max-h-40 w-full resize-none overflow-y-auto rounded-md bg-content/10 py-1 pr-8 pl-2 text-[13px] leading-5 text-content outline-none placeholder:text-content/35 disabled:opacity-40"
             onChange={(event) => setMessage(event.target.value)}
             onKeyDown={(event) => {
@@ -157,13 +171,13 @@ export function SwitchBranchDialog({
             type="button"
             title={
               generating
-                ? "Cancel commit message generation"
-                : "Generate commit message"
+                ? t("Cancel commit message generation")
+                : t("Generate commit message")
             }
             aria-label={
               generating
-                ? "Cancel commit message generation"
-                : "Generate commit message"
+                ? t("Cancel commit message generation")
+                : t("Generate commit message")
             }
             disabled={Boolean(busy)}
             onClick={() => (generating ? cancelGenerate() : void generate())}
@@ -199,7 +213,7 @@ export function SwitchBranchDialog({
             onClick={onCancel}
             className="rounded-md px-3 py-1.5 text-[12px] text-content/70 hover:bg-content/8 hover:text-content disabled:opacity-40"
           >
-            Cancel
+            {t("Cancel")}
           </button>
           <button
             type="button"
@@ -210,7 +224,7 @@ export function SwitchBranchDialog({
             {busy === "commit" ? (
               <Loader className="size-3.5 animate-spin" strokeWidth={1.75} />
             ) : null}
-            Commit & switch
+            {t("Commit & switch")}
           </button>
           <button
             type="button"
@@ -221,7 +235,7 @@ export function SwitchBranchDialog({
             {busy === "stash" ? (
               <Loader className="size-3.5 animate-spin" strokeWidth={1.75} />
             ) : null}
-            Stash & switch
+            {t("Stash & switch")}
           </button>
         </div>
       </div>

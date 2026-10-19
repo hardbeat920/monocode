@@ -78,6 +78,7 @@ import { ProjectMascot } from "../../features/projects/ui/ProjectMascot";
 import { RailAction, RailSearch } from "./RailAction";
 import { DevModeSlot, TabVisitNav } from "./TitleBar";
 import { SidebarUpdateFooter } from "./SidebarUpdate";
+import { useTranslate } from "../../shared/i18n/locale";
 import type { InstalledUpdate } from "../model/updateNotice";
 import { SettingsNav } from "./SettingsRail";
 import { Shimmer } from "../../shared/ui/Shimmer";
@@ -187,6 +188,7 @@ export function ProjectRail({
   onDismissUpdate,
   monos,
 }: Props) {
+  const t = useTranslate();
   const trafficLightsVisible = useTrafficLightsVisible();
   const resize = useDragResize({
     min: sharedWidth?.min ?? PROJECT_RAIL_WIDTH_MIN,
@@ -379,7 +381,7 @@ export function ProjectRail({
   return (
     <nav
       ref={resize.setPaneRef}
-      aria-label="Projects"
+      aria-label={t("Projects")}
       className={`sidebar-glass relative shrink-0 flex-col border-r border-stroke ${visible ? "flex" : "hidden"}`}
     >
       {headerless ? null : (
@@ -410,16 +412,16 @@ export function ProjectRail({
         <>
           <div className="flex shrink-0 flex-col gap-px px-2 pb-2 pt-0.5">
             <RailSearch
-              label="Search"
+              label={t("Search")}
               icon={Search}
               onClick={onSearch}
               active={searchActive}
               shortcut={`${MOD}K`}
-              ariaLabel={`Search (${MOD}K)`}
+              ariaLabel={`${t("Search")} (${MOD}K)`}
             />
             <div className="mt-0.5" />
             <RailAction
-              label="Inbox"
+              label={t("Inbox")}
               icon={Inbox}
               onClick={onOpenInbox}
               onOpenContextMenu={(x, y) => {
@@ -432,23 +434,23 @@ export function ProjectRail({
               }}
               active={inboxActive}
               dot={inboxUnseen}
-              ariaLabel={inboxUnseen ? "Inbox, new items" : "Inbox"}
+              ariaLabel={inboxUnseen ? t("Inbox, new items") : t("Inbox")}
             />
             {notesEnabled ? (
               <RailAction
-                label="Notes"
+                label={t("Notes")}
                 icon={File}
                 onClick={onOpenNotes}
                 active={notesActive}
-                ariaLabel="Notes"
+                ariaLabel={t("Notes")}
               />
             ) : null}
             <RailAction
-              label="Automations"
+              label={t("Automations")}
               icon={Zap}
               onClick={onOpenAutomations}
               active={automationsActive}
-              ariaLabel="Automations"
+              ariaLabel={t("Automations")}
             />
           </div>
 
@@ -463,7 +465,7 @@ export function ProjectRail({
 
             {sections.pinned.length > 0 ? (
               <ProjectSection
-                label="Pinned"
+                label={t("Pinned")}
                 items={sections.pinned}
                 muteStatuses={muteStatuses}
                 cwd={cwd}
@@ -487,7 +489,7 @@ export function ProjectRail({
             {projectGroups.length > 0 ? (
               <div className="mb-2 shrink-0">
                 <ProjectSectionHeader
-                  label="Groups"
+                  label={t("Groups")}
                   onAddGroup={(x, y) => projectMenu.createGroup(x, y)}
                 />
                 <div className="flex flex-col gap-px px-2">
@@ -528,12 +530,12 @@ export function ProjectRail({
             ) : null}
 
             <ProjectSection
-              label="Projects"
+              label={t("Projects")}
               items={groupedProjectSections.ungrouped}
               muteStatuses={muteStatuses}
               emptyLabel={
                 sections.projects.length === 0 && projectGroups.length === 0
-                  ? "No projects yet"
+                  ? t("No projects yet")
                   : undefined
               }
               onAdd={onOpenProject}
@@ -571,11 +573,11 @@ export function ProjectRail({
           <div className="flex shrink-0 flex-col gap-px p-2">
             <GithubStarPrompt />
             <RailAction
-              label="Settings"
+              label={t("Settings")}
               icon={Settings}
               onClick={onOpenSettings}
               shortcut={`${MOD},`}
-              ariaLabel={`Settings (${MOD},)`}
+              ariaLabel={`${t("Settings")} (${MOD},)`}
             />
           </div>
         </>
@@ -595,7 +597,7 @@ export function ProjectRail({
       <div
         role="separator"
         aria-orientation="vertical"
-        aria-label="Resize project sidebar"
+        aria-label={t("Resize project sidebar")}
         aria-valuenow={resize.width}
         aria-valuemin={PROJECT_RAIL_WIDTH_MIN}
         aria-valuemax={PROJECT_RAIL_WIDTH_MAX}
@@ -702,6 +704,7 @@ function ProjectSectionHeader({
   onAdd?: () => void;
   onAddGroup?: (x: number, y: number) => void;
 }) {
+  const t = useTranslate();
   return (
     <div className="flex items-center gap-1 px-3 pb-1.5 pt-1">
       {/* As tall as the header buttons, so every section header matches. */}
@@ -711,8 +714,8 @@ function ProjectSectionHeader({
       {onAddGroup ? (
         <button
           type="button"
-          title="New project group"
-          aria-label="New project group"
+          title={t("New project group")}
+          aria-label={t("New project group")}
           onClick={(event) => {
             const rect = event.currentTarget.getBoundingClientRect();
             onAddGroup(rect.left, rect.bottom);
@@ -771,6 +774,7 @@ function ProjectGroupSection({
   groupLogos: ReturnType<typeof useTabGroupLogos>;
   groupMascots: Record<string, string>;
 }) {
+  const t = useTranslate();
   const sortable = useAnimatedReorder(
     items.map((item) => item.path),
     onReorder,
@@ -850,8 +854,8 @@ function ProjectGroupSection({
         <button
           type="button"
           data-no-drag
-          title="Group options"
-          aria-label={`${group.name} group options`}
+          title={t("Group options")}
+          aria-label={t("{name} group options", { name: group.name })}
           aria-haspopup="menu"
           onPointerDown={(event) => event.stopPropagation()}
           onClick={(event) => {
@@ -930,6 +934,7 @@ function ProjectCard({
   groupLogos: ReturnType<typeof useTabGroupLogos>;
   groupMascots: Record<string, string>;
 }) {
+  const t = useTranslate();
   const fallbackName = basename(item.path);
   const key = projectKey(item.path);
   const seed = projectName(item.path);
@@ -1088,8 +1093,8 @@ function ProjectCard({
       <button
         type="button"
         data-no-drag
-        title="Project options"
-        aria-label="Project options"
+        title={t("Project options")}
+        aria-label={t("Project options")}
         aria-haspopup="menu"
         onPointerDown={(event) => event.stopPropagation()}
         onClick={(event) => {
@@ -1108,8 +1113,8 @@ function ProjectCard({
       <button
         type="button"
         data-no-drag
-        title={pinned ? "Unpin project" : "Pin project"}
-        aria-label={pinned ? "Unpin project" : "Pin project"}
+        title={pinned ? t("Unpin project") : t("Pin project")}
+        aria-label={pinned ? t("Unpin project") : t("Pin project")}
         onPointerDown={(event) => event.stopPropagation()}
         onClick={(event) => {
           event.stopPropagation();
@@ -1210,6 +1215,7 @@ function projectCardAriaLabel(
 
 /** Adds a folder on this computer, or one on a connected machine. */
 function AddProjectButton({ onOpenFolder }: { onOpenFolder: () => void }) {
+  const t = useTranslate();
   const anchor = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const item =
@@ -1219,8 +1225,8 @@ function AddProjectButton({ onOpenFolder }: { onOpenFolder: () => void }) {
       <button
         ref={anchor}
         type="button"
-        title="Open project"
-        aria-label="Open project"
+        title={t("Open project")}
+        aria-label={t("Open project")}
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
@@ -1235,7 +1241,7 @@ function AddProjectButton({ onOpenFolder }: { onOpenFolder: () => void }) {
           width={230}
           onDismiss={() => setOpen(false)}
           role="menu"
-          aria-label="Open project"
+          aria-label={t("Open project")}
           className="p-1"
         >
           <button
@@ -1248,7 +1254,7 @@ function AddProjectButton({ onOpenFolder }: { onOpenFolder: () => void }) {
             }}
           >
             <FolderPlus className="size-3.5 shrink-0" strokeWidth={1.75} />
-            Open folder…
+            {t("Open folder…")}
           </button>
           <button
             type="button"
@@ -1260,7 +1266,7 @@ function AddProjectButton({ onOpenFolder }: { onOpenFolder: () => void }) {
             }}
           >
             <Internet className="size-3.5 shrink-0" strokeWidth={1.75} />
-            Open folder on a machine…
+            {t("Open folder on a machine…")}
           </button>
         </Popover>
       ) : null}

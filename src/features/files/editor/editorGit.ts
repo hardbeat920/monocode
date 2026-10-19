@@ -26,6 +26,7 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import type { UnifiedLine } from "../../source-control/model/unifiedDiff";
+import { translate } from "../../../shared/i18n/locale";
 import { EDITOR_LINE_HEIGHT_PX } from "./editorMetrics";
 
 const DIFF_CONFIG = { scanLimit: 5_000, timeout: 100 };
@@ -886,7 +887,7 @@ const gitOverview = ViewPlugin.fromClass(
     constructor(readonly view: EditorView) {
       this.dom = document.createElement("div");
       this.dom.className = "cm-gitOverview";
-      this.dom.title = "Changes";
+      this.dom.title = translate("Changes");
       this.dom.addEventListener("mousedown", (event) => {
         this.onMouseDown(event);
       });
@@ -1007,9 +1008,9 @@ const gitHunkActions = ViewPlugin.fromClass(
       this.bar = document.createElement("div");
       this.bar.className = "cm-gitHunkBar";
       this.bar.hidden = true;
-      this.commentButton = hunkButton("Comment on line", COMMENT_SVG);
-      this.revertButton = hunkButton("Revert change", UNDO_SVG);
-      this.stageButton = hunkButton("Stage change", PLUS_SVG);
+      this.commentButton = hunkButton(translate("Comment on line"), COMMENT_SVG);
+      this.revertButton = hunkButton(translate("Revert change"), UNDO_SVG);
+      this.stageButton = hunkButton(translate("Stage change"), PLUS_SVG);
       this.bar.append(this.commentButton, this.revertButton, this.stageButton);
       this.commentButton.addEventListener("mousedown", (event) => {
         this.onAction(event, "comment");

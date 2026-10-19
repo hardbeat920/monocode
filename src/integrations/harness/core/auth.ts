@@ -4,6 +4,7 @@ import { supportsAccountProfiles } from "../../../features/providers/model/provi
 import { HARNESS_TITLE, type HarnessId } from "../../../features/sessions/model/session";
 import * as child from "./child";
 import { harnessLoginArgs } from "./authSupport";
+import { translate } from "../../../shared/i18n/locale";
 
 export {
   harnessLoginArgs,
@@ -73,7 +74,9 @@ async function runHarnessLogin(
   const resolve = LOGIN_RESOLVERS[harness];
   if (!args || !resolve) {
     throw new Error(
-      `${HARNESS_TITLE[harness]} does not offer a single browser sign-in flow.`,
+      translate("{name} does not offer a single browser sign-in flow.", {
+        name: HARNESS_TITLE[harness],
+      }),
     );
   }
 
@@ -107,7 +110,14 @@ async function runHarnessLogin(
         finish(
           new Error(
             detail ||
-              `${HARNESS_TITLE[harness]} sign-in exited${code == null ? " unexpectedly" : ` with code ${code}`}.`,
+              (code == null
+                ? translate("{name} sign-in exited unexpectedly.", {
+                    name: HARNESS_TITLE[harness],
+                  })
+                : translate("{name} sign-in exited with code {code}.", {
+                    name: HARNESS_TITLE[harness],
+                    code,
+                  })),
           ),
         );
       },
@@ -126,7 +136,9 @@ async function runHarnessLogin(
         .finally(() => {
           finish(
             new Error(
-              `${HARNESS_TITLE[harness]} sign-in timed out. Please try again.`,
+              translate("{name} sign-in timed out. Please try again.", {
+                name: HARNESS_TITLE[harness],
+              }),
             ),
           );
         });
@@ -143,7 +155,10 @@ async function runHarnessLogin(
       const message = error instanceof Error ? error.message : String(error);
       finish(
         new Error(
-          `Could not start ${HARNESS_TITLE[harness]} sign-in: ${message}`,
+          translate("Could not start {name} sign-in: {message}", {
+            name: HARNESS_TITLE[harness],
+            message,
+          }),
         ),
       );
     });
@@ -152,7 +167,7 @@ async function runHarnessLogin(
 
 function safeLoginDetail(value: string): string {
   const text = value
-    .replace(/https?:\/\/\S+/gi, "sign-in link")
+    .replace(/https?:\/\/\S+/gi, translate("sign-in link"))
     .replace(/\s+/g, " ")
     .trim();
   return text.length > 240 ? `${text.slice(0, 237)}…` : text;

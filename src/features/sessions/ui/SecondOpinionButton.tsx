@@ -44,6 +44,7 @@ import {
 } from "../model/session";
 import { HarnessIcon } from "./HarnessIcon";
 import { Popover } from "../../../shared/ui/Popover";
+import { useTranslate } from "../../../shared/i18n/locale";
 
 type Props = {
   from: HarnessId;
@@ -139,6 +140,7 @@ export function SecondOpinionButton({
   disabled: disabledByCaller = false,
   triggerClassName,
 }: Props) {
+  const t = useTranslate();
   const availabilityVersion = useSyncExternalStore(
     subscribeHarnessAvailability,
     getHarnessAvailabilitySnapshot,
@@ -383,8 +385,8 @@ export function SecondOpinionButton({
       <button
         ref={button}
         type="button"
-        title={label}
-        aria-label={label}
+        title={t(label)}
+        aria-label={t(label)}
         aria-haspopup="menu"
         aria-expanded={open}
         disabled={disabled}
@@ -415,20 +417,20 @@ export function SecondOpinionButton({
             onDismiss={(reason) => dismiss(reason === "escape")}
             role="menu"
             tabIndex={-1}
-            aria-label={menuLabel}
+            aria-label={t(menuLabel)}
             onKeyDown={onMenuKey}
             data-provider-target
             className="p-1 font-sans"
           >
             <div className="px-1.5 pb-2 pt-1.5">
               <p className="text-[11px] leading-3 text-content/50 text-balance">
-                {description}
+                {t(description)}
               </p>
             </div>
             <div className="mx-1 mb-1 h-px bg-content/10" />
             {targets.length === 0 ? (
               <div className="px-2.5 py-2 text-[12px] leading-4 text-content/50">
-                {disabledTitle}
+                {t(disabledTitle)}
               </div>
             ) : (
               targets.map((harness, index) => {
@@ -491,7 +493,7 @@ export function SecondOpinionButton({
               maxHeight={SUBMENU_MAX_HEIGHT}
               layer={LAYER.submenu}
               role="menu"
-              aria-label={`${HARNESS_TITLE[activeHarness]} models`}
+              aria-label={t("{name} models", { name: HARNESS_TITLE[activeHarness] })}
               ignore={SELF}
               onMouseEnter={() =>
                 setMenuLevel((level) =>
@@ -564,7 +566,7 @@ export function SecondOpinionButton({
               width={EFFORT_MENU_WIDTH}
               layer={LAYER.submenu + 1}
               role="menu"
-              aria-label={`${activeModel.name} effort`}
+              aria-label={t("{name} effort", { name: activeModel.name })}
               ignore={SELF}
               onMouseEnter={() => setMenuLevel("effort")}
               data-provider-target

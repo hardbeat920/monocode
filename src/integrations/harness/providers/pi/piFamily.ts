@@ -68,6 +68,7 @@ import type {
   SendTurnInput,
   SteerTurnInput,
 } from "../../core/types";
+import { translate } from "../../../../shared/i18n/locale";
 
 type PendingApproval = {
   request: PiExtensionUiRequest;
@@ -299,17 +300,19 @@ export async function rewindLastTurn(
     await applyModel(flavor, live, input);
   }
   if (live.activeTurn) {
-    throw new Error("Stop the current turn before editing the last message");
+    throw new Error(
+      translate("Stop the current turn before editing the last message"),
+    );
   }
 
   const forkMessages = await live.rpc.request({ type: "get_fork_messages" });
   const messages = forkMessagesFromRpcData(forkMessages.data);
   const last = messages[messages.length - 1];
-  if (!last) throw new Error("No user message to edit");
+  if (!last) throw new Error(translate("No user message to edit"));
 
   const fork = await live.rpc.request({ type: "fork", entryId: last.entryId });
   if (asRecord(fork.data)?.cancelled === true) {
-    throw new Error("Edit cancelled");
+    throw new Error(translate("Edit cancelled"));
   }
   const forkState = await live.rpc.request({ type: "get_state" });
   const providerSessionId = providerSessionIdFromState(forkState.data);
@@ -772,7 +775,10 @@ function handleFrame(
       }
     }
     if (type === "advisor_yielded") {
-      live.onEvent({ type: "status", text: "Advisor reviewed this turn" });
+      live.onEvent({
+        type: "status",
+        text: translate("Advisor reviewed this turn"),
+      });
       return;
     }
     if (type === "session_info_update") {
@@ -1189,7 +1195,7 @@ async function applyModel(
           text:
             error instanceof Error
               ? error.message
-              : "Fast mode is unavailable for the current model.",
+              : translate("Fast mode is unavailable for the current model."),
         });
       }
     }

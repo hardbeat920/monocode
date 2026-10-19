@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Clock, Gauge, Play, X } from "../../../shared/ui/icons";
 import type { UsageLimit } from "../model/session";
 import { formatUsageLimitReset } from "../model/usageLimit";
-
+import { useTranslate } from "../../../shared/i18n/locale";
 const BUTTON =
   "flex h-6 shrink-0 items-center gap-1.5 rounded-md px-1.5 hover:bg-content/10 hover:text-content";
 
@@ -23,6 +23,7 @@ export function UsageLimitNotice({
   providerName?: string;
   modelPicker?: ReactNode;
 }) {
+  const t = useTranslate();
   const [now, setNow] = useState(Date.now);
   const waiting = limit.resetsAt != null && limit.resetsAt > now;
   // Tick the countdown, and flip to "Resume" once the window resets.
@@ -52,16 +53,18 @@ export function UsageLimitNotice({
         <Gauge className="size-3.5 shrink-0 text-amber-400" />
         <span className="shrink-0 text-content/85">
           {providerName
-            ? `${providerName} usage limit reached`
-            : "Usage limit reached"}
+            ? t("{name} usage limit reached", { name: providerName })
+            : t("Usage limit reached")}
         </span>
         {variant === "mono" ? null : (
           <span className="min-w-0 flex-1 truncate">
             {limit.resetsAt == null
               ? ""
               : waiting
-                ? `Resets ${formatUsageLimitReset(limit.resetsAt, now)}`
-                : "Limit has reset"}
+                ? t("Resets {time}", {
+                    time: formatUsageLimitReset(limit.resetsAt, now),
+                  })
+                : t("Limit has reset")}
           </span>
         )}
         {variant === "mono" ? null : modelPicker}
@@ -76,8 +79,8 @@ export function UsageLimitNotice({
         {onDismiss ? (
           <button
             type="button"
-            title="Dismiss"
-            aria-label="Dismiss usage limit notice"
+            title={t("Dismiss")}
+            aria-label={t("Dismiss usage limit notice")}
             onClick={onDismiss}
             className="ml-auto grid size-6 shrink-0 place-items-center rounded-md hover:bg-content/10 hover:text-content"
           >
@@ -88,14 +91,17 @@ export function UsageLimitNotice({
       {variant === "mono" ? (
         <div className="pl-5.5">
           <p className="mt-1 leading-relaxed">
-            Your conversation is saved. Choose another model or account to keep
-            going.
+            {t(
+              "Your conversation is saved. Choose another model or account to keep going.",
+            )}
           </p>
           {limit.resetsAt != null ? (
             <p className="mt-1 text-content/45">
               {waiting
-                ? `Resets ${formatUsageLimitReset(limit.resetsAt, now)}`
-                : "Limit has reset"}
+                ? t("Resets {time}", {
+                    time: formatUsageLimitReset(limit.resetsAt, now),
+                  })
+                : t("Limit has reset")}
             </p>
           ) : null}
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
@@ -124,32 +130,33 @@ function ResumeControls({
   onResume?: () => void;
   onResumeAtReset?: (enabled: boolean) => void;
 }) {
+  const t = useTranslate();
   return (
     <>
       {!waiting ? (
         <button type="button" onClick={onResume} className={BUTTON}>
           <Play className="size-3.5" />
-          Resume
+          {t("Resume")}
         </button>
       ) : limit.resumeAtReset ? (
         <button
           type="button"
-          title="Cancel the automatic resume"
+          title={t("Cancel the automatic resume")}
           onClick={() => onResumeAtReset?.(false)}
           className={`${BUTTON} text-amber-400`}
         >
           <Clock className="size-3.5" />
-          Resuming at reset
+          {t("Resuming at reset")}
         </button>
       ) : (
         <button
           type="button"
-          title="Continue this session once the limit resets"
+          title={t("Continue this session once the limit resets")}
           onClick={() => onResumeAtReset?.(true)}
           className={BUTTON}
         >
           <Clock className="size-3.5" />
-          Resume at reset
+          {t("Resume at reset")}
         </button>
       )}
     </>

@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { isMonoSession } from "../../monos/model/mono";
 import { sanitizeMonoSpawnedSessions } from "../../monos/model/monoSpawnedSessions";
+import { translate } from "../../../shared/i18n/locale";
 import {
   isWeakToolTitle,
   titleFromToolInput,
@@ -1214,7 +1215,9 @@ function sanitizeBtwThreads(
           ? {
               error:
                 error ||
-                "This by-the-way request was interrupted before reload.",
+                translate(
+                  "This by-the-way request was interrupted before reload.",
+                ),
             }
           : error
             ? { error }
@@ -1398,7 +1401,7 @@ function sanitizeAgentRun(value: unknown): AgentRunMeta | null {
   const name = typeof record.name === "string" ? record.name.trim() : "";
   if (!name && steps.length === 0) return null;
   return {
-    name: name || "Subagent",
+    name: name || translate("Subagent"),
     ...(typeof record.model === "string" && record.model.trim()
       ? { model: record.model.trim() }
       : {}),

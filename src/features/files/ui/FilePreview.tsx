@@ -4,6 +4,7 @@ import { formatInteger } from "../../../shared/lib/numbers";
 import { displayPath, resolveWorkspacePath } from "../../../shared/lib/paths";
 import type { ToolPreview, ToolPreviewLine } from "../../sessions/model/session";
 import { FileTypeIcon } from "./FileTypeIcon";
+import { useTranslate } from "../../../shared/i18n/locale";
 
 type Status = "pending" | "accepted" | "rejected";
 
@@ -70,6 +71,7 @@ export function FilePreview({
   onOpenFile,
   variant = "card",
 }: Props) {
+  const t = useTranslate();
   const path = preview.path;
   const filePath = path ? (resolveWorkspacePath(path, cwd) ?? path) : undefined;
   const fileName = preview.fileName || fileNameOf(path);
@@ -86,7 +88,7 @@ export function FilePreview({
   const deleted = preview.deletions ?? 0;
   const label = path
     ? displayPath(path, cwd)
-    : fileName || preview.title || "File";
+    : fileName || preview.title || t("File");
 
   return (
     <div
@@ -139,11 +141,11 @@ export function FilePreview({
                 : undefined
             }
             tabIndex={variant === "popover" ? 0 : undefined}
-            aria-label={variant === "popover" ? "Preview lines" : undefined}
+            aria-label={variant === "popover" ? t("Preview lines") : undefined}
           >
             {preview.contentOnly && !lines.length ? (
               <p className="px-3 py-2 font-mono text-xs text-content/50">
-                Empty file
+                {t("Empty file")}
               </p>
             ) : null}
             {lines.map((line, index) => (

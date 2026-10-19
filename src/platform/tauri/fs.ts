@@ -3,6 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { joinPath, slash } from "../../shared/lib/paths";
 import { REMOTE_PATH_PREFIX } from "../../shared/lib/remotePaths";
 import type { InterjectionMeta } from "../../features/sessions/model/session";
+import { translate } from "../../shared/i18n/locale";
 
 export { REMOTE_PATH_PREFIX } from "../../shared/lib/remotePaths";
 
@@ -536,7 +537,7 @@ export function homeDir(): Promise<string> {
  * projects can be opened in one pass; the dialog still returns a bare string
  * when only one was taken.
  */
-export async function pickFolders(title = "Open projects"): Promise<string[]> {
+export async function pickFolders(title = translate("Open projects")): Promise<string[]> {
   const selected = await open({
     directory: true,
     multiple: true,
@@ -548,7 +549,7 @@ export async function pickFolders(title = "Open projects"): Promise<string[]> {
   return typeof selected === "string" && selected ? [slash(selected)] : [];
 }
 
-export async function pickFiles(title = "Attach files"): Promise<string[] | null> {
+export async function pickFiles(title = translate("Attach files")): Promise<string[] | null> {
   const selected = await open({
     multiple: true,
     directory: false,

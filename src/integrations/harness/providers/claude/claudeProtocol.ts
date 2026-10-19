@@ -28,6 +28,7 @@ import {
 } from "../../core/preview";
 import { streamTextDelta } from "../../core/streamText";
 import type { ApprovalDecision, HarnessEvent } from "../../core/types";
+import { translate } from "../../../../shared/i18n/locale";
 
 /** Claude Code versions that first ship Opus 5.5 / Opus 5 / Sonnet 5 / Fable 5 / Opus 4.8 / 4.7. */
 export const MINIMUM_CLAUDE_OPUS_5_5_VERSION = "2.1.280";
@@ -474,7 +475,7 @@ export function statusTextFromSystem(
     text && !LIFECYCLE_STATUSES.has(text.toLowerCase().replace(/[\s.…]+$/, ""));
   if (notable) return text;
   // Compaction is worth one row even when the CLI sends no prose with it.
-  return compact ? "Compacted context" : undefined;
+  return compact ? translate("Compacted context") : undefined;
 }
 
 export function turnStatusFromResult(rec: Record<string, unknown>): {
@@ -497,7 +498,10 @@ export function turnStatusFromResult(rec: Record<string, unknown>): {
   }
   if (joined.includes("cancel")) return { status: "cancelled" };
   const error = errors.find((item) => !item.startsWith("[ede_diagnostic]"));
-  return { status: "failed", error: error ?? "Claude turn failed." };
+  return {
+    status: "failed",
+    error: error ?? translate("Claude turn failed."),
+  };
 }
 
 /**
@@ -915,7 +919,9 @@ export function extractExitPlanModePlan(value: unknown): string | undefined {
 export function extractAskUserQuestionTitle(
   input: Record<string, unknown>,
 ): string {
-  return questionPromptTitle(questionsFromUnknown(input)) || "Claude question";
+  return (
+    questionPromptTitle(questionsFromUnknown(input)) || translate("Claude question")
+  );
 }
 
 export function askUserQuestionAllowInput(

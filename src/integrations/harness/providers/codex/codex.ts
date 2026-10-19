@@ -59,6 +59,7 @@ import type {
   SendTurnInput,
   SteerTurnInput,
 } from "../../core/types";
+import { translate } from "../../../../shared/i18n/locale";
 
 type ApprovalOutcome = ApprovalDecision | "cancelled";
 
@@ -191,7 +192,7 @@ export async function compactCodexContext(
   input: CompactContextInput,
 ): Promise<void> {
   if (input.ephemeral && !hasLiveCodexSession(input.sessionId, true)) {
-    throw new Error("Send a message before compacting this chat");
+    throw new Error(translate("Send a message before compacting this chat"));
   }
   let live: Live;
   try {
@@ -237,7 +238,9 @@ export async function rewindCodexLastTurn(
   live.onEvent = input.onEvent;
   await live.turns;
   if (live.activeTurnId) {
-    throw new Error("Stop the current turn before editing the last message");
+    throw new Error(
+      translate("Stop the current turn before editing the last message"),
+    );
   }
 
   const beforeTurnId = await lastUserTurnId(live, input.providerTurnId);
@@ -717,7 +720,9 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
       } catch (error) {
         if (store?.hasThread)
           throw new Error(
-            "The saved Mono Codex context could not be resumed. Retry to keep its saved context.",
+            translate(
+              "The saved Mono Codex context could not be resumed. Retry to keep its saved context.",
+            ),
           );
         if (!isRecoverableThreadResumeError(error)) throw error;
         threadId = undefined;

@@ -5,6 +5,7 @@ import {
   type SkinTone,
 } from "frimousse";
 import { Search } from "./icons";
+import { useTranslate } from "../i18n/locale";
 import { Popover, type PopoverAnchor } from "./Popover";
 import {
   EMOJI_FONT,
@@ -63,6 +64,7 @@ export function EmojiPickerPopover({
   onPick: (emoji: string) => void;
   onDismiss: () => void;
 }) {
+  const t = useTranslate();
   const [search, setSearch] = useState("");
   const [recent] = useState(loadRecentEmoji);
   const [initialTone] = useState(loadEmojiSkinTone);
@@ -110,8 +112,8 @@ export function EmojiPickerPopover({
             <Search className="size-3.5 shrink-0 text-content/45" />
             <Picker.Search
               ref={searchField}
-              aria-label="Search emoji"
-              placeholder="Search emoji"
+              aria-label={t("Search emoji")}
+              placeholder={t("Search emoji")}
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               className="min-w-0 flex-1 bg-transparent text-[13px] text-content outline-none placeholder:text-content/35 [&::-webkit-search-cancel-button]:hidden"
@@ -121,7 +123,7 @@ export function EmojiPickerPopover({
         {recent.length > 0 && !search ? (
           <div className="px-2">
             <p className="px-1 pt-1 pb-1 text-[11px] font-medium text-content/45">
-              Recent
+              {t("Recent")}
             </p>
             <div className="flex flex-wrap">
               {recent.slice(0, COLUMNS).map((emoji) => (
@@ -144,10 +146,10 @@ export function EmojiPickerPopover({
           className="relative min-h-0 flex-1 px-2 outline-none"
         >
           <Picker.Loading className="absolute inset-0 grid place-items-center text-[12px] text-content/45">
-            Loading…
+            {t("Loading…")}
           </Picker.Loading>
           <Picker.Empty className="absolute inset-0 grid place-items-center text-[12px] text-content/45">
-            No emoji found
+            {t("No emoji found")}
           </Picker.Empty>
           <Picker.List
             className="select-none pb-1"
@@ -159,7 +161,7 @@ export function EmojiPickerPopover({
             <Picker.ActiveEmoji>
               {({ emoji }) => (
                 <p className="min-w-0 flex-1 truncate px-1 text-[12px] text-content/55">
-                  {emoji ? emoji.label : "Pick an emoji"}
+                  {emoji ? emoji.label : t("Pick an emoji")}
                 </p>
               )}
             </Picker.ActiveEmoji>
@@ -169,7 +171,9 @@ export function EmojiPickerPopover({
                 <button
                   key={icon}
                   type="button"
-                  aria-label={`Jump to category ${index + 1}`}
+                  aria-label={t("Jump to category {number}", {
+                    number: index + 1,
+                  })}
                   onClick={() => jumpTo(index)}
                   style={{ fontFamily: EMOJI_FONT }}
                   className="grid h-7 min-w-0 flex-1 place-items-center rounded-md text-[15px] leading-none opacity-70 grayscale hover:bg-content/10 hover:opacity-100 hover:grayscale-0"
@@ -190,8 +194,8 @@ export function EmojiPickerPopover({
               return (
                 <button
                   type="button"
-                  title="Skin tone"
-                  aria-label="Change skin tone"
+                  title={t("Skin tone")}
+                  aria-label={t("Change skin tone")}
                   onClick={() => {
                     setSkinTone(next);
                     saveEmojiSkinTone(next);

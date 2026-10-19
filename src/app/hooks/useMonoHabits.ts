@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { translate } from "../../shared/i18n/locale";
 import type { ControlOutcome } from "../../features/orchestration/model/orchestration";
 import {
   newSession,
@@ -133,8 +134,8 @@ async function watchRun(
         text: "",
         error:
           waiting >= HABIT_APPROVAL_WAIT_MS
-            ? "Nobody answered its approval request."
-            : "It took too long and was stopped.",
+            ? translate("Nobody answered its approval request.")
+            : translate("It took too long and was stopped."),
       };
   }
   return settled;
@@ -228,8 +229,10 @@ export function useMonoHabits(host: MonoHabitHost, enabled = true) {
           habit,
           report ??
             (launches.length === 1
-              ? "Started a session."
-              : `Started ${launches.length} sessions.`),
+              ? translate("Started a session.")
+              : translate("Started {count} sessions.", {
+                  count: launches.length,
+                })),
           look.name,
           artifacts,
           launches,
@@ -245,7 +248,7 @@ export function useMonoHabits(host: MonoHabitHost, enabled = true) {
                       ? "posted"
                       : "quiet",
                 ...(outcome.status !== "completed"
-                  ? { error: outcome.error ?? "The run did not finish." }
+                  ? { error: outcome.error ?? translate("The run did not finish.") }
                   : {}),
                 ...(report ? { report } : {}),
                 startedAt: now,

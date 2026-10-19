@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { isImeComposition } from "../../../shared/lib/keyboard";
+import { useTranslate } from "../../../shared/i18n/locale";
 import { SearchableSelect } from "../../../shared/ui/SearchableSelect";
 import { AUTOMATION_WEEKDAYS } from "../../automations/model/automations";
 import {
@@ -50,6 +51,7 @@ export function NewHabitPage({
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
+  const t = useTranslate();
   const nameRef = useRef<HTMLInputElement>(null);
   // The page mounts offscreen to slide in; autoFocus would scroll the panel
   // over to it first, so the slide would jump.
@@ -69,14 +71,16 @@ export function NewHabitPage({
       .catch((reason: unknown) => {
         setSaving(false);
         setError(
-          reason instanceof Error ? reason.message : "Could not add the habit.",
+          reason instanceof Error
+            ? reason.message
+            : t("Could not add the habit."),
         );
       });
   };
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-new-habit>
-      <PageHeader title="New habit" onBack={onBack}>
+      <PageHeader title={t("New habit")} onBack={onBack}>
         <button
           type="button"
           disabled={!ready}
@@ -84,7 +88,7 @@ export function NewHabitPage({
           data-tauri-drag-region="false"
           className="h-6 rounded-md bg-content/10 px-2 text-[12px] text-content enabled:hover:bg-content/[0.14] disabled:opacity-40"
         >
-          Create
+          {t("Create")}
         </button>
       </PageHeader>
 
@@ -92,10 +96,10 @@ export function NewHabitPage({
         <div className="px-2 pt-3">
           <input
             ref={nameRef}
-            aria-label="Name"
+            aria-label={t("Name")}
             value={name}
             maxLength={80}
-            placeholder="Name"
+            placeholder={t("Name")}
             onChange={(event) => setName(event.target.value)}
             onKeyDown={(event) => {
               if (
@@ -110,15 +114,15 @@ export function NewHabitPage({
         </div>
 
         <dl className="flex flex-col gap-0.5 px-4 py-3">
-          <Property label="Runs">
+          <Property label={t("Runs")}>
             <ScheduleFields schedule={schedule} onChange={setSchedule} />
           </Property>
-          <Property label="Next">
+          <Property label={t("Next")}>
             {when(nextHabitRunAt(schedule, Date.now()))}
           </Property>
         </dl>
 
-        <Section title="What it does">
+        <Section title={t("What it does")}>
           <Instructions
             value={instructions}
             onChange={setInstructions}
@@ -140,13 +144,14 @@ function ScheduleFields({
   schedule: HabitSchedule;
   onChange: (schedule: HabitSchedule) => void;
 }) {
+  const t = useTranslate();
   const kind = schedule.scheduleKind;
   return (
     <span className="flex flex-wrap items-center gap-1.5 py-0.5">
       <SearchableSelect
-        label="Repeats"
+        label={t("Repeats")}
         value={kind}
-        options={KINDS}
+        options={KINDS.map((entry) => ({ ...entry, label: t(entry.label) }))}
         variant="pill"
         searchable={false}
         onChange={(value) =>
@@ -158,9 +163,9 @@ function ScheduleFields({
       />
       {kind === "weekly" ? (
         <>
-          <span className="text-content/45">on</span>
+          <span className="text-content/45">{t("on")}</span>
           <SearchableSelect
-            label="Day"
+            label={t("Day")}
             value={String(schedule.dayOfWeek)}
             options={DAYS}
             variant="pill"
@@ -171,10 +176,10 @@ function ScheduleFields({
           />
         </>
       ) : null}
-      <span className="text-content/45">at</span>
+      <span className="text-content/45">{t("at")}</span>
       {kind === "hourly" ? (
         <SearchableSelect
-          label="Minute"
+          label={t("Minute")}
           value={String(schedule.minute)}
           options={MINUTES}
           variant="pill"
@@ -184,7 +189,7 @@ function ScheduleFields({
       ) : (
         <input
           type="time"
-          aria-label="Time"
+          aria-label={t("Time")}
           value={schedule.time}
           required
           onChange={(event) => {
@@ -208,13 +213,16 @@ function Instructions({
   onChange: (value: string) => void;
   onSubmit: () => void;
 }) {
+  const t = useTranslate();
   return (
     <AutoTextarea
-      aria-label="What it does"
+      aria-label={t("What it does")}
       value={value}
       rows={3}
       maxLength={4_000}
-      placeholder="What it should do on each run, and when it's worth telling you about."
+      placeholder={t(
+        "What it should do on each run, and when it's worth telling you about.",
+      )}
       onChange={(event) => onChange(event.target.value)}
       onKeyDown={(event) => {
         if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
