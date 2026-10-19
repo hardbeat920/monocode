@@ -2673,7 +2673,7 @@ function SidebarComponent({
           {navList}
           {/* The project's Monos, above its folders. */}
           {inset && railMonos && inProject ? (
-            <MonoRailSection {...railMonos} project={cwd} />
+            <MonoRailSection {...railMonos} project={cwd} showAll />
           ) : null}
           {!cwd || cwd === "~" ? (
             <p className="px-3 py-2 text-[12px] text-content/50">
