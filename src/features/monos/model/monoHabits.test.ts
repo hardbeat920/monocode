@@ -323,5 +323,21 @@ it("retains habit-run mappings that are referenced by artifacts during trimming"
   expect(habitRunMono("run-204")).toBe("mono-204");
 });
 
+it("does not leak unreferenced mappings when referenced items reach the limit", () => {
+  // Create 200 referenced items
+  const referenced = new Set<string>();
+  for (let i = 0; i < 200; i++) {
+    referenced.add(`ref-${i}`);
+    persistRunMono(`ref-${i}`, `mono-${i}`, referenced);
+  }
+  // Add an unreferenced item past the limit
+  persistRunMono("unref-1", "mono-unref", referenced);
+  // allowedUnreferenced is 0, unref-1 must NOT be retained via slice(-0)
+  expect(habitRunMono("unref-1")).toBeUndefined();
+  expect(habitRunMono("ref-0")).toBe("mono-0");
+  expect(habitRunMono("ref-199")).toBe("mono-199");
+});
+
+
 
 

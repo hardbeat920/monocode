@@ -491,6 +491,8 @@ export function persistRunMono(
     const entries = Object.entries(map);
     if (entries.length > MAX_PERSISTED_HABIT_RUNS) {
       if (referencedSessionIds === undefined) {
+        // Persist immediately so in-flight mapping is durable before async resolution
+        localStorage.setItem(HABIT_RUN_MONOS_KEY, JSON.stringify(map));
         // Query persisted artifacts to protect sessions still referenced by artifacts
         void listArtifacts()
           .then((artifacts) => {
@@ -523,10 +525,9 @@ export function persistRunMono(
         0,
         MAX_PERSISTED_HABIT_RUNS - referenced.length,
       );
-      const kept = [
-        ...referenced,
-        ...unreferenced.slice(-allowedUnreferenced),
-      ];
+      const keptUnreferenced =
+        allowedUnreferenced > 0 ? unreferenced.slice(-allowedUnreferenced) : [];
+      const kept = [...referenced, ...keptUnreferenced];
       localStorage.setItem(
         HABIT_RUN_MONOS_KEY,
         JSON.stringify(Object.fromEntries(kept)),
