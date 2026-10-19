@@ -727,7 +727,11 @@ import {
   buildRemotePlan,
   remoteSessionActions,
 } from "../features/connections/model/remoteSessionActions";
-import { remoteSessionState } from "../features/connections/model/remoteSessionState";
+import {
+  remoteSessionState,
+  withRemoteChoice,
+  type RemoteChoice,
+} from "../features/connections/model/remoteSessionState";
 import { findRemoteSessionTab } from "../features/connections/model/remoteSessionTabs";
 import {
   remotePath,
@@ -1983,13 +1987,22 @@ function Workspace({
     void probeHarnessAvailability();
     // Only the harnesses already in this window. Probing every installed CLI
     // at boot left unused agents (especially Pi) running in the background.
+    // A remote tab's provider and model belong to its host's catalog.
     const harnesses = [
-      ...new Set(sessionsRef.current.map((session) => session.harness)),
+      ...new Set(
+        sessionsRef.current
+          .filter((session) => !isRemoteProjectPath(session.cwd))
+          .map((session) => session.harness),
+      ),
     ];
     void refreshHarnessCatalogs(harnesses).then(() => {
       setSessions((prev) =>
         prev.map((session) => {
-          if (!isLiveHarness(session.harness)) return session;
+          if (
+            !isLiveHarness(session.harness) ||
+            isRemoteProjectPath(session.cwd)
+          )
+            return session;
           const resolved = resolveModel(session.harness, session.model);
           const modelSettings = mergeModelSettings(
             resolved,
@@ -2083,8 +2096,12 @@ function Workspace({
       window.removeEventListener(ADD_TO_CHAT_EVENT, openSessionForAddToChat);
   }, [sessionDefaults?.cwd, sessionDefaults?.runtimeMode]);
 
-  const activeSkillContext = active
-    ? nativeSkillContextForSession(active)
+  // A remote tab's provider runs on its host, so this computer's skills and
+  // model catalogs are not warmed for it.
+  const activeLocal =
+    active && !isRemoteProjectPath(active.cwd) ? active : undefined;
+  const activeSkillContext = activeLocal
+    ? nativeSkillContextForSession(activeLocal)
     : null;
   const activeSkillCwd = activeSkillContext?.cwd;
 
@@ -2211,7 +2228,7 @@ function Workspace({
    * fresh session would otherwise show only the built-in fallback model
    * until the picker happened to be opened. Idempotent: refreshHarnessCatalogs
    * dedupes via hasLiveCatalog and its inflight map. */
-  const activeHarness = active?.harness;
+  const activeHarness = activeLocal?.harness;
   useEffect(() => {
     if (!activeHarness || !isLiveHarness(activeHarness)) return;
     void refreshHarnessCatalogs([activeHarness]);
@@ -3006,7 +3023,17 @@ function Workspace({
       }
       // Reserve a dedicated tab immediately. An apparently blank remote tab
       // may hold composer text or a create/upload that the host has not accepted.
-      const session = newDefaultSession(project, sessionDefaults?.runtimeMode);
+      // Until its snapshot loads, the tab shows the host's provider, not this
+      // computer's default.
+      const summary = cachedRemoteSessionSummary(project, remoteSessionId);
+      const base = newDefaultSession(project, sessionDefaults?.runtimeMode);
+      const session = summary
+        ? {
+            ...base,
+            harness: summary.harness,
+            model: summary.model ?? base.model,
+          }
+        : base;
       const tab = newTab(session.id);
       rememberRemoteSession(session.id, remoteSessionId);
       setSessions((prev) => [...prev, session]);
@@ -13285,6 +13312,11 @@ function Workspace({
     },
     [],
   );
+  const onRemoteChoice = useCallback(
+    (shellId: string, choice: RemoteChoice) =>
+      setSessions((current) => withRemoteChoice(current, shellId, choice)),
+    [],
+  );
 
   const onManageWorktrees = useCallback(
     () => openSettings("worktrees"),
@@ -13330,6 +13362,7 @@ function Workspace({
     onBranchChange,
     onWorktreeChange: onComposerWorktreeChange,
     onRemoteSnapshot,
+    onRemoteChoice,
     onWorkspaceModeChange,
     onWorktreeBaseChange,
     onManageWorktrees,
