@@ -12,9 +12,17 @@ import {
   RATE_LIMIT_MIN_REFETCH_MS,
   RATE_LIMIT_POLL_MS,
 } from "../../features/providers/model/rateLimits";
-import { UsageProviderChip } from "./UsageProviderChip";
+import { UsageProviderChip, type UsageChipVariant } from "./UsageProviderChip";
 
-export function PiUsage({ model, now }: { model?: string; now: number }) {
+export function PiUsage({
+  model,
+  now,
+  variant = "footer",
+}: {
+  model?: string;
+  now: number;
+  variant?: UsageChipVariant;
+}) {
   const provider = piUsageProvider(model);
   if (!provider) {
     return (
@@ -31,15 +39,24 @@ export function PiUsage({ model, now }: { model?: string; now: number }) {
       </span>
     );
   }
-  return <PiProviderUsage key={provider} provider={provider} now={now} />;
+  return (
+    <PiProviderUsage
+      key={provider}
+      provider={provider}
+      now={now}
+      variant={variant}
+    />
+  );
 }
 
 function PiProviderUsage({
   provider,
   now,
+  variant,
 }: {
   provider: PiUsageProvider;
   now: number;
+  variant: UsageChipVariant;
 }) {
   const [limits, setLimits] = useState(() =>
     idleRateLimits(piBillingProvider(provider)),
@@ -90,6 +107,7 @@ function PiProviderUsage({
       <UsageProviderChip
         limits={limits}
         now={now}
+        variant={variant}
         presentation={{
           sourceLabel: "Pi's saved OAuth account",
           harness: "pi",
@@ -103,7 +121,7 @@ function PiProviderUsage({
         title="Refresh Pi usage"
         disabled={fetching}
         onClick={() => refreshRef.current(true)}
-        className="grid size-6 shrink-0 place-items-center rounded text-content/40 hover:bg-content/10 hover:text-content disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-accent"
+        className={`grid size-6 shrink-0 place-items-center ${variant === "inset" ? "rounded-full" : "rounded-md"} text-content/40 hover:bg-content/10 hover:text-content disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-accent`}
       >
         <RefreshCw
           className={`size-2.5 ${fetching ? "motion-safe:animate-spin" : ""}`}

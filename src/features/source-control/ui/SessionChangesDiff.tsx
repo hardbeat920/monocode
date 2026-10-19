@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+} from "react";
 import { AlertCircle, Loader } from "../../../shared/ui/icons";
 import {
   sessionCheckpointFileDiff,
@@ -7,20 +13,27 @@ import {
   type CheckpointFile,
 } from "../../sessions/model/checkpoint";
 import { forEachConcurrent } from "../../../shared/lib/concurrent";
-import { buildUnifiedFile, type UnifiedFileDiff } from "../model/unifiedDiff";
+import type { UnifiedFileDiff } from "../model/unifiedDiff";
+import { prepareUnifiedDiff } from "../model/diffWorker";
 import { UnifiedDiffView, type UnifiedDiffFileModel } from "./UnifiedDiffView";
+import { pruneMap } from "../model/stableDiff";
 
 type Props = {
   cwd: string;
   sessionId: string;
+  visible?: boolean;
   focusPath?: string;
   /** Limit the review to these session file paths. */
   paths?: readonly string[];
+  /** Which files start open; the focused one always does. */
+  initialExpansion?: ComponentProps<typeof UnifiedDiffView>["initialExpansion"];
 };
 
 type LoadedDiff = {
   binary: boolean;
   tooLarge: boolean;
+  original: string;
+  current: string;
   unified: UnifiedFileDiff | null;
   error?: string;
 };
@@ -33,6 +46,8 @@ export function SessionChangesDiff({
   sessionId,
   focusPath,
   paths,
+  initialExpansion,
+  visible = true,
 }: Props) {
   const scope = paths == null ? undefined : JSON.stringify(paths);
   // Only the load order uses the focus; moving it must not restart the load.
@@ -41,8 +56,12 @@ export function SessionChangesDiff({
   const [files, setFiles] = useState<CheckpointFile[] | null>(null);
   const [diffs, setDiffs] = useState<Map<string, LoadedDiff>>(new Map());
   const [error, setError] = useState<string | null>(null);
+  const diffsRef = useRef(diffs);
+  diffsRef.current = diffs;
+  const loadedScope = useRef("");
 
   useEffect(() => {
+    if (!visible) return;
     if (!cwd || cwd === "~" || !sessionId) {
       setFiles([]);
       setDiffs(new Map());
@@ -51,18 +70,30 @@ export function SessionChangesDiff({
 
     let disposed = false;
     let generation = 0;
-    const run = () => {
-      const current = ++generation;
+    let controller = new AbortController();
+    const key = `${cwd}\0${sessionId}\0${scope ?? ""}`;
+    const sameScope = loadedScope.current === key;
+    if (!sameScope) {
+      loadedScope.current = key;
       setFiles(null);
       setDiffs(new Map());
+    }
+    const run = () => {
+      controller.abort();
+      controller = new AbortController();
+      const { signal } = controller;
+      const current = ++generation;
       void sessionCheckpointStatus(sessionId, cwd)
         .then(async (status) => {
           if (disposed || current !== generation) return;
-          const allowed = scope == null ? null : new Set<string>(JSON.parse(scope));
+          const allowed =
+            scope == null ? null : new Set<string>(JSON.parse(scope));
           const scoped = allowed
             ? status.files.filter((file) => allowed.has(file.path))
             : status.files;
           setFiles(scoped);
+          const retained = new Set(scoped.map((file) => file.relative));
+          setDiffs((existing) => pruneMap(existing, retained));
           setError(null);
           await forEachConcurrent(
             prioritizeFile(scoped, focusRef.current),
@@ -75,18 +106,38 @@ export function SessionChangesDiff({
                   cwd,
                   file.relative,
                 );
-                loaded = {
-                  binary: diff.binary,
-                  tooLarge: diff.tooLarge,
-                  unified:
-                    !diff.binary && !diff.tooLarge
-                      ? buildUnifiedFile(diff.original, diff.current)
-                      : null,
-                };
+                const previous = diffsRef.current.get(file.relative);
+                if (
+                  previous &&
+                  !previous.error &&
+                  previous.original === diff.original &&
+                  previous.current === diff.current &&
+                  previous.binary === diff.binary &&
+                  previous.tooLarge === diff.tooLarge
+                ) {
+                  loaded = previous;
+                } else
+                  loaded = {
+                    binary: diff.binary,
+                    tooLarge: diff.tooLarge,
+                    original: diff.original,
+                    current: diff.current,
+                    unified:
+                      !diff.binary && !diff.tooLarge
+                        ? await prepareUnifiedDiff(
+                            diff.original,
+                            diff.current,
+                            signal,
+                            file.path === focusRef.current ? 0 : 1,
+                          )
+                        : null,
+                  };
               } catch (caught: unknown) {
                 loaded = {
                   binary: false,
                   tooLarge: false,
+                  original: "",
+                  current: "",
                   unified: null,
                   error:
                     caught instanceof Error ? caught.message : String(caught),
@@ -94,6 +145,7 @@ export function SessionChangesDiff({
               }
               if (disposed || current !== generation) return;
               setDiffs((existing) => {
+                if (existing.get(file.relative) === loaded) return existing;
                 const next = new Map(existing);
                 next.set(file.relative, loaded);
                 return next;
@@ -115,9 +167,10 @@ export function SessionChangesDiff({
     });
     return () => {
       disposed = true;
+      controller.abort();
       unsubscribe();
     };
-  }, [cwd, sessionId, scope]);
+  }, [cwd, sessionId, scope, visible]);
 
   const models = useMemo<UnifiedDiffFileModel[]>(() => {
     if (!files) return [];
@@ -194,7 +247,13 @@ export function SessionChangesDiff({
   }
 
   return (
-    <UnifiedDiffView files={models} focusPath={focusPath} totals={totals} />
+    <UnifiedDiffView
+      files={models}
+      visible={visible}
+      focusPath={focusPath}
+      totals={totals}
+      initialExpansion={initialExpansion}
+    />
   );
 }
 

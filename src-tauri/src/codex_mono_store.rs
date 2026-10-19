@@ -392,7 +392,7 @@ fn newer_same_account(private: &Option<String>, source: &Option<String>) -> bool
         .is_some_and(|(private, source)| private > source)
 }
 
-fn validate_thread_id(id: &str) -> Result<(), String> {
+pub(crate) fn validate_thread_id(id: &str) -> Result<(), String> {
     if id.is_empty()
         || id.len() > 128
         || !id
@@ -492,35 +492,7 @@ fn copy_rollouts_with_edges(
         if !allowed_roots.iter().any(|root| path.starts_with(root)) {
             return Err("The saved thread is outside the selected Codex account".into());
         }
-        let name = path
-            .file_name()
-            .ok_or("Missing Codex rollout filename")?
-            .to_string_lossy();
-        if !path.is_file()
-            || !name.starts_with("rollout-")
-            || !(name.ends_with(".jsonl") || name.ends_with(".jsonl.zst"))
-        {
-            return Err("Not a saved Codex rollout file".into());
-        }
-        let date = name
-            .get(8..18)
-            .filter(|date| {
-                date.bytes().enumerate().all(|(i, b)| {
-                    if i == 4 || i == 7 {
-                        b == b'-'
-                    } else {
-                        b.is_ascii_digit()
-                    }
-                })
-            })
-            .ok_or("Missing Codex rollout date")?;
-        let dir = home
-            .join("sessions")
-            .join(&date[..4])
-            .join(&date[5..7])
-            .join(&date[8..10]);
-        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let dest = dir.join(path.file_name().unwrap());
+        let dest = rollout_dest(home, &path)?;
         // Retrying a partial migration can replace already copied descendants.
         // The provider checks for the root before invoking this operation.
         staged.push((path, dest));
@@ -538,16 +510,8 @@ fn copy_rollouts_with_edges(
     // Copy descendants first and the root last, so a partial migration is not
     // mistaken for a successfully migrated root on the next connection.
     for (path, dest) in staged.iter().rev() {
-        let temp = dest.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
-        std::fs::copy(path, &temp)
+        copy_durable(path, dest)
             .map_err(|e| format!("Could not retain the full Codex thread: {e}"))?;
-        // Windows requires write access when flushing a file to disk.
-        std::fs::File::options()
-            .write(true)
-            .open(&temp)
-            .and_then(|f| f.sync_all())
-            .map_err(|e| e.to_string())?;
-        std::fs::rename(&temp, dest).map_err(|e| e.to_string())?;
     }
     let edge_snapshot = edge_snapshot_path(home, thread_id);
     if !edges.is_empty() {
@@ -568,11 +532,64 @@ fn copy_rollouts_with_edges(
     Ok(())
 }
 
+/// Where a rollout lives in another home: `sessions/YYYY/MM/DD/<same name>`.
+pub(crate) fn rollout_dest(home: &Path, path: &Path) -> Result<PathBuf, String> {
+    let name = path
+        .file_name()
+        .ok_or("Missing Codex rollout filename")?
+        .to_string_lossy();
+    if !path.is_file()
+        || !name.starts_with("rollout-")
+        || !(name.ends_with(".jsonl") || name.ends_with(".jsonl.zst"))
+    {
+        return Err("Not a saved Codex rollout file".into());
+    }
+    let date = name
+        .get(8..18)
+        .filter(|date| {
+            date.bytes().enumerate().all(|(i, b)| {
+                if i == 4 || i == 7 {
+                    b == b'-'
+                } else {
+                    b.is_ascii_digit()
+                }
+            })
+        })
+        .ok_or("Missing Codex rollout date")?;
+    let dir = home
+        .join("sessions")
+        .join(&date[..4])
+        .join(&date[5..7])
+        .join(&date[8..10]);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.join(path.file_name().unwrap()))
+}
+
+/// Copy through a flushed temporary file, so a reader never sees a partial copy.
+pub(crate) fn copy_durable(path: &Path, dest: &Path) -> std::io::Result<()> {
+    let mut temp = dest.as_os_str().to_os_string();
+    temp.push(format!(".{}.tmp", uuid::Uuid::new_v4()));
+    let temp = PathBuf::from(temp);
+    let result = std::fs::copy(path, &temp)
+        .and_then(|_| {
+            // Windows requires write access when flushing a file to disk.
+            std::fs::File::options()
+                .write(true)
+                .open(&temp)
+                .and_then(|f| f.sync_all())
+        })
+        .and_then(|()| std::fs::rename(&temp, dest));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    result
+}
+
 // Rollouts reconstruct the graph, but explicit agent closure lives only in
 // SQLite. Apply that small snapshot after private app-server initialization
 // and before it restores agent identities while resuming the root.
 #[derive(Serialize, Deserialize)]
-struct AgentEdge {
+pub(crate) struct AgentEdge {
     parent: String,
     child: String,
     status: String,
@@ -583,7 +600,7 @@ fn edge_snapshot_path(home: &Path, thread_id: &str) -> PathBuf {
         .join(format!("{thread_id}.json"))
 }
 
-fn state_db(home: &Path) -> Result<Option<PathBuf>, String> {
+pub(crate) fn state_db(home: &Path) -> Result<Option<PathBuf>, String> {
     let entries = match std::fs::read_dir(home) {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -609,7 +626,7 @@ fn state_db(home: &Path) -> Result<Option<PathBuf>, String> {
         .map(|(_, path)| path))
 }
 
-fn closed_agent_edges(home: &Path, thread_id: &str) -> Result<Vec<AgentEdge>, String> {
+pub(crate) fn closed_agent_edges(home: &Path, thread_id: &str) -> Result<Vec<AgentEdge>, String> {
     validate_thread_id(thread_id)?;
     let Some(path) = state_db(home)? else {
         return Ok(Vec::new());
@@ -646,6 +663,12 @@ fn restore_agent_edges(home: &Path, thread_id: &str) -> Result<(), String> {
     };
     let edges: Vec<AgentEdge> = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     let path = state_db(home)?.ok_or("Codex has not initialized the private Mono index")?;
+    apply_agent_edges(&path, edges)?;
+    std::fs::remove_file(snapshot).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub(crate) fn apply_agent_edges(path: &Path, edges: Vec<AgentEdge>) -> Result<(), String> {
     let mut db =
         rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
             .map_err(|e| e.to_string())?;
@@ -657,19 +680,17 @@ fn restore_agent_edges(home: &Path, thread_id: &str) -> Result<(), String> {
         validate_thread_id(&edge.child)?;
         tx.execute("INSERT INTO thread_spawn_edges(parent_thread_id, child_thread_id, status) VALUES (?1, ?2, ?3) ON CONFLICT(child_thread_id) DO UPDATE SET status=excluded.status WHERE parent_thread_id=excluded.parent_thread_id", rusqlite::params![edge.parent, edge.child, edge.status]).map_err(|e| e.to_string())?;
     }
-    tx.commit().map_err(|e| e.to_string())?;
-    std::fs::remove_file(snapshot).map_err(|e| e.to_string())?;
-    Ok(())
+    tx.commit().map_err(|e| e.to_string())
 }
 
-fn rollout_matches(path: &Path, id: &str) -> bool {
+pub(crate) fn rollout_matches(path: &Path, id: &str) -> bool {
     path.file_name().is_some_and(|name| {
         let name = name.to_string_lossy();
         name.ends_with(&format!("-{id}.jsonl")) || name.ends_with(&format!("-{id}.jsonl.zst"))
     })
 }
 
-fn find_thread(dir: &Path, id: &str) -> Result<Option<PathBuf>, String> {
+pub(crate) fn find_thread(dir: &Path, id: &str) -> Result<Option<PathBuf>, String> {
     for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let kind = entry.file_type().map_err(|e| e.to_string())?;
@@ -685,7 +706,7 @@ fn find_thread(dir: &Path, id: &str) -> Result<Option<PathBuf>, String> {
     Ok(None)
 }
 
-fn history_base(path: &Path) -> Result<Option<String>, String> {
+pub(crate) fn history_base(path: &Path) -> Result<Option<String>, String> {
     use std::io::BufRead;
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let reader: Box<dyn std::io::Read> = if path.extension().is_some_and(|ext| ext == "zst") {

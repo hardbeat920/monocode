@@ -3,7 +3,33 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentMarkdown } from "./AgentMarkdown";
-import { revealEnd, WORD_FADE_MS } from "./wordFade";
+import {
+  cadenceFadeMs,
+  pacedRevealPreferred,
+  usePacedText,
+  nextCadence,
+  PACED_REVEAL_KEY,
+  revealEnd,
+  WORD_FADE_MS,
+} from "./wordFade";
+
+describe("reveal preference", () => {
+  afterEach(() => {
+    localStorage.removeItem(PACED_REVEAL_KEY);
+    vi.restoreAllMocks();
+  });
+  it("smooths bursts by default and retains an explicit opt-out", () => {
+    expect(pacedRevealPreferred()).toBe(true);
+    localStorage.setItem(PACED_REVEAL_KEY, "0");
+    expect(pacedRevealPreferred()).toBe(false);
+  });
+  it("respects reduced motion", () => {
+    vi.spyOn(window, "matchMedia").mockReturnValue({
+      matches: true,
+    } as MediaQueryList);
+    expect(pacedRevealPreferred()).toBe(false);
+  });
+});
 
 describe("revealEnd", () => {
   it("stops at the end of the word the reveal has reached", () => {
@@ -22,11 +48,25 @@ describe("revealEnd", () => {
   });
 });
 
+describe("cadence fade", () => {
+  it("fades over three gaps of the stream, within bounds", () => {
+    expect(cadenceFadeMs(100)).toBe(300);
+    expect(cadenceFadeMs(10)).toBe(120);
+    expect(cadenceFadeMs(1000)).toBe(400);
+  });
+
+  it("follows the gaps between bursts without one stall taking over", () => {
+    expect(nextCadence(160, 60)).toBeCloseTo(130);
+    expect(nextCadence(160, 60_000)).toBeCloseTo(412);
+  });
+});
+
 describe("paced streaming", () => {
   let container: HTMLDivElement;
   let root: Root;
 
   beforeEach(() => {
+    localStorage.setItem(PACED_REVEAL_KEY, "1");
     vi.useFakeTimers({
       toFake: [
         "setTimeout",
@@ -43,6 +83,7 @@ describe("paced streaming", () => {
   });
 
   afterEach(() => {
+    localStorage.removeItem(PACED_REVEAL_KEY);
     act(() => root.unmount());
     container.remove();
     vi.unstubAllGlobals();
@@ -85,6 +126,43 @@ describe("paced streaming", () => {
 
     act(() => vi.advanceTimersByTime(2_000));
     expect(shown()).toBe(reply);
+  });
+
+  it("catches up by elapsed time after the main thread stalls", () => {
+    const callbacks: FrameRequestCallback[] = [];
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callbacks.push(callback);
+      return callbacks.length;
+    });
+    const longReply = "A long provider burst with many words. ".repeat(200);
+    const started = performance.now();
+    render(longReply, true);
+    act(() => callbacks.shift()!(started + 1000));
+    expect(shown().length).toBeGreaterThan(longReply.length * 0.95);
+    vi.restoreAllMocks();
+  });
+
+  it("stops hidden reveal work and shows unseen text immediately on return", () => {
+    const frame = vi.spyOn(window, "requestAnimationFrame");
+    function Probe({ text, active }: { text: string; active: boolean }) {
+      return createElement(
+        "p",
+        null,
+        usePacedText(text, true, true, active).text,
+      );
+    }
+    const paint = (text: string, active: boolean) =>
+      act(() => root.render(createElement(Probe, { text, active })));
+    paint(reply, true);
+    act(() => vi.advanceTimersByTime(100));
+    expect(shown().length).toBeLessThan(reply.length);
+    paint(reply, false);
+    frame.mockClear();
+    act(() => vi.advanceTimersByTime(1000));
+    expect(frame).not.toHaveBeenCalled();
+    paint(reply + " New unseen output.", true);
+    expect(shown()).toBe(reply + " New unseen output.");
+    vi.restoreAllMocks();
   });
 
   it("paces the first chunk even when the reply mounts with text", () => {
@@ -151,6 +229,36 @@ describe("paced streaming", () => {
     expect(shown()).toBe("Hello wor");
   });
 
+  it("removes fade spans without remounting formatted reply elements", () => {
+    const text =
+      "Opening paragraph.\n\n- **Keep this list stable.** It is already visible.\n- Keep the reader's position.\n\n> A settled quotation.\n\nFinal paragraph.";
+    render("", true);
+    render(text, true);
+    act(() => vi.advanceTimersByTime(2_000));
+    const selectors = [
+      "p",
+      "ul",
+      "li",
+      '[data-streamdown="strong"]',
+      "blockquote",
+    ];
+    const elements = selectors.map((selector) =>
+      container.querySelector(selector),
+    );
+    expect(elements.every(Boolean)).toBe(true);
+    expect(container.querySelector("[data-word-fade]")).not.toBeNull();
+
+    render(text, false);
+    act(() => vi.advanceTimersByTime(WORD_FADE_MS));
+
+    expect(fading()).toBe(false);
+    expect(container.querySelector("[data-word-fade]")).toBeNull();
+    expect(container.querySelector(".word-fade-content")).toBeNull();
+    selectors.forEach((selector, index) => {
+      expect(container.querySelector(selector)).toBe(elements[index]);
+    });
+  });
+
   it("finishes a stream that ends ahead of the reveal at pace, then stops fading", () => {
     render("", true);
     render(reply, true);
@@ -181,5 +289,112 @@ describe("paced streaming", () => {
     expect(container.querySelector("code [data-word-fade]")).toBeNull();
     expect(container.querySelector("a [data-word-fade]")).toBeNull();
     expect(word("now")).toBeDefined();
+  });
+});
+
+describe("streamed reveal", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    localStorage.setItem(PACED_REVEAL_KEY, "0");
+    vi.useFakeTimers({
+      toFake: [
+        "setTimeout",
+        "clearTimeout",
+        "requestAnimationFrame",
+        "cancelAnimationFrame",
+        "performance",
+      ],
+    });
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    localStorage.removeItem(PACED_REVEAL_KEY);
+    act(() => root.unmount());
+    container.remove();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  function render(text: string, streaming: boolean) {
+    act(() => root.render(createElement(AgentMarkdown, { text, streaming })));
+  }
+
+  function shown() {
+    return container.textContent ?? "";
+  }
+
+  function fadeMs() {
+    const box =
+      container.querySelector<HTMLElement>(".agent-markdown")?.parentElement;
+    return Number.parseFloat(
+      box?.style.getPropertyValue("--word-fade-ms") ?? "",
+    );
+  }
+
+  it("shows a burst as soon as it arrives, fading its words in", () => {
+    render("", true);
+    render("I will review the diff ", true);
+    expect(shown()).toBe("I will review the diff");
+    expect(
+      container.querySelector(".agent-markdown.word-fading"),
+    ).not.toBeNull();
+    expect(container.querySelectorAll("[data-word-fade]")).toHaveLength(5);
+  });
+
+  it("holds back a word still being written until the stream pauses on it", () => {
+    render("", true);
+    render("Hello wor", true);
+    expect(shown()).toBe("Hello");
+    act(() => vi.advanceTimersByTime(200));
+    expect(shown()).toBe("Hello wor");
+    render("Hello world and mo", true);
+    expect(shown()).toBe("Hello world and");
+  });
+
+  it("shortens the fade for a fast stream and lengthens it for a slow one", () => {
+    render("", true);
+    let text = "";
+    for (let index = 0; index < 20; index++) {
+      text += `word${index} `;
+      render(text, true);
+      act(() => vi.advanceTimersByTime(16));
+    }
+    expect(fadeMs()).toBe(120);
+
+    for (let index = 0; index < 20; index++) {
+      text += `slow${index} `;
+      render(text, true);
+      act(() => vi.advanceTimersByTime(300));
+    }
+    expect(fadeMs()).toBe(400);
+  });
+
+  it("stops fading once the last burst has faded in", () => {
+    render("", true);
+    render("Done reviewing.", true);
+    render("Done reviewing.", false);
+    expect(shown()).toBe("Done reviewing.");
+    act(() => vi.advanceTimersByTime(400));
+    expect(container.querySelector(".word-fading")).toBeNull();
+    expect(container.querySelector("[data-word-fade]")).toBeNull();
+  });
+
+  it("shows output already streaming when it opens whole and still", () => {
+    act(() =>
+      root.render(
+        createElement(AgentMarkdown, {
+          text: "Half way through a wor",
+          streaming: true,
+          revealOnMount: false,
+        }),
+      ),
+    );
+    expect(shown()).toBe("Half way through a wor");
   });
 });

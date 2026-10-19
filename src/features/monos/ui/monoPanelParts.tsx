@@ -5,7 +5,7 @@ import {
   type ReactNode,
   type TextareaHTMLAttributes,
 } from "react";
-import { ChevronLeft } from "../../../shared/ui/icons";
+import { ChevronLeft, type IconComponent } from "../../../shared/ui/icons";
 import { IconButton } from "../../../app/shell/TitleBar";
 import { PROJECT_MASCOTS } from "../../projects/model/projectMascots";
 import { MONO_COLORS } from "../model/mono";
@@ -27,28 +27,35 @@ import {
   type MonoFile,
 } from "../model/monoFiles";
 
-/** The top of a page in the Mono's panel: back, a title, and its actions. */
+/**
+ * The top of a page in the Mono's panel: back, a title, and its actions.
+ * Without `onBack` it heads a section of the settings dialog instead.
+ */
 export function PageHeader({
   title,
   onBack,
   children,
 }: {
   title: ReactNode;
-  onBack: () => void;
+  onBack?: () => void;
   children?: ReactNode;
 }) {
   return (
     // Same height as the panel's own header, so a page does not jump.
     <header
-      className="flex h-10 shrink-0 items-center gap-1 border-b border-stroke pl-2"
+      className={`flex h-10 shrink-0 items-center gap-1 border-b border-stroke ${
+        onBack ? "pl-2" : "pl-4"
+      }`}
       style={{
         paddingRight: "calc(0.75rem + var(--mono-window-controls-width, 0px))",
       }}
       data-tauri-drag-region="deep"
     >
-      <IconButton label="Back" onClick={onBack}>
-        <ChevronLeft className="size-3.5" strokeWidth={1.75} />
-      </IconButton>
+      {onBack ? (
+        <IconButton label="Back" onClick={onBack}>
+          <ChevronLeft className="size-3.5" strokeWidth={1.75} />
+        </IconButton>
+      ) : null}
       <h3 className="min-w-0 flex-1 truncate text-[13px] font-medium text-content">
         {title}
       </h3>
@@ -181,20 +188,49 @@ export function Empty({ children }: { children: ReactNode }) {
   );
 }
 
+/**
+ * An empty tab: its icon over a line on how it fills, centered in the space
+ * the list would take.
+ */
+export function EmptyState({
+  icon: Icon,
+  children,
+}: {
+  icon: IconComponent;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex min-h-full flex-col items-center justify-center gap-3 px-6 py-10 text-center">
+      <Icon
+        className="size-4.5 text-content/55"
+        strokeWidth={1.75}
+        aria-hidden
+      />
+      <p className="max-w-72 text-[12px] leading-4.5 text-content/55 text-balance">
+        {children}
+      </p>
+    </div>
+  );
+}
+
 export function MascotPicker({
   current,
   color,
   onPick,
+  columns = 10,
 }: {
   current: string;
   color: string;
   onPick: (mascot: string) => void;
+  /** Five lays them out as larger tiles, for a popover of their own. */
+  columns?: 5 | 10;
 }) {
+  const large = columns === 5;
   return (
     <div
       role="radiogroup"
       aria-label="Mascot"
-      className="grid grid-cols-10 gap-0.5 px-1"
+      className={`grid gap-0.5 px-1 ${large ? "grid-cols-5 gap-1" : "grid-cols-10"}`}
     >
       {PROJECT_MASCOTS.map(({ name }) => {
         const selected = name === current;
@@ -207,7 +243,9 @@ export function MascotPicker({
             aria-label={name}
             title={name.charAt(0).toUpperCase() + name.slice(1)}
             onClick={() => onPick(name)}
-            className={`grid h-8 min-w-0 place-items-center rounded-md ${
+            className={`grid min-w-0 place-items-center ${
+              large ? "h-12 rounded-lg" : "h-8 rounded-md"
+            } ${
               selected
                 ? "bg-selection ring-1 ring-content/20"
                 : "hover:bg-content/6"
@@ -217,7 +255,7 @@ export function MascotPicker({
               name={name}
               color={color}
               still={!selected}
-              className="size-5"
+              className={large ? "size-8" : "size-5"}
             />
           </button>
         );
@@ -231,11 +269,14 @@ export function ColorPicker({
   current,
   onPick,
   inline = false,
+  columns = 10,
 }: {
   current: string;
   onPick: (color: string) => void;
   /** Opens the custom picker in place, for use inside another popover. */
   inline?: boolean;
+  /** Five lays them out as larger swatches, under the larger mascots. */
+  columns?: 5 | 10;
 }) {
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLDivElement>(null);
@@ -243,7 +284,10 @@ export function ColorPicker({
   return (
     <div ref={anchor} role="group" aria-label="Color">
       <ColorSwatchRow
-        className="grid grid-cols-10 place-items-center gap-0.5 px-1"
+        className={`grid place-items-center px-1 ${
+          columns === 5 ? "grid-cols-5 gap-y-2" : "grid-cols-10 gap-0.5"
+        }`}
+        size={columns === 5 ? "lg" : "sm"}
         colors={MONO_COLORS}
         labels={[
           "Blue",

@@ -76,6 +76,32 @@ export function replaceMentionToken(
   return `${text.slice(0, token.start)}@${label}${spacer}${rest}`;
 }
 
+const sharedIndexes = new WeakMap<ProjectFile[], Map<string, MentionIndex>>();
+
+/**
+ * Every composer of a checkout holds the same cached listing, and a large one
+ * takes tens of milliseconds to index. Build it once per listing and extras
+ * (notes) instead of once per composer, hidden tabs included.
+ */
+export function sharedMentionIndex(
+  files: ProjectFile[],
+  extras: ProjectFile[],
+): MentionIndex {
+  const key = extras
+    .map((file) => `${file.path}\n${file.relative}\n${file.name}`)
+    .join("\n\n");
+  let byExtras = sharedIndexes.get(files);
+  if (!byExtras) sharedIndexes.set(files, (byExtras = new Map()));
+  let index = byExtras.get(key);
+  if (!index) {
+    index = buildMentionIndex(extras.length ? [...files, ...extras] : files);
+    byExtras.set(key, index);
+    // Older note sets are not asked for again; drop them with the listing kept.
+    if (byExtras.size > 4) byExtras.delete(byExtras.keys().next().value!);
+  }
+  return index;
+}
+
 export function buildMentionIndex(files: ProjectFile[]): MentionIndex {
   const entries = withMentionDirectories(files).filter((file) =>
     isMentionableRelative(file.relative),

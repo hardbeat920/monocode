@@ -1,8 +1,9 @@
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type { Block, Session } from "../sessions/model/session";
 
 /** Extend this union when a renderer and storage support for a new kind exist. */
-export type ArtifactKind = "document";
+export type ArtifactKind = "document" | "html";
+export const ARTIFACT_KINDS: readonly ArtifactKind[] = ["document", "html"];
 export type Artifact = {
   id: string;
   kind: ArtifactKind;
@@ -24,7 +25,14 @@ export function artifactLabel(kind: ArtifactKind): string {
   switch (kind) {
     case "document":
       return "Document";
+    case "html":
+      return "Visual";
   }
+}
+
+/** Where the app's own scheme serves an `html` artifact to its sandboxed frame. */
+export function htmlArtifactUrl(id: string): string {
+  return convertFileSrc(id, "monoartifact");
 }
 
 export function getArtifact(id: string): Promise<Artifact | null> {

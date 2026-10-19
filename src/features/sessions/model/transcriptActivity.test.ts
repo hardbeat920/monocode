@@ -15,6 +15,7 @@ import {
   groupTurnItems,
   groupTurns,
   hasRunningSubagent,
+  joinedTurnStart,
   initialThinkingIndex,
   lastActivityIndex,
   monoTurnRuns,
@@ -714,6 +715,35 @@ describe("groupTurns", () => {
   });
 });
 
+describe("joinedTurnStart", () => {
+  it("times messages sent mid-turn from the turn they joined", () => {
+    const turns = groupTurns([
+      { id: "u1", role: "user", text: "go", startedAt: 1_000 },
+      { id: "a1", role: "assistant", text: "working" },
+      { id: "s1", role: "user", text: "also this", sentAt: 5_000 },
+      { id: "s2", role: "user", text: "and this", sentAt: 6_000 },
+      { id: "a2", role: "assistant", text: "on it" },
+    ]);
+    expect(
+      turns.map((turn) => joinedTurnStart(turns, turns.indexOf(turn))),
+    ).toEqual([1_000, 1_000, 1_000]);
+  });
+
+  it("does not reach across a handoff or into a turn without a start", () => {
+    const handoff = groupTurns([
+      { id: "u1", role: "user", text: "go", startedAt: 1_000 },
+      { id: "h1", role: "handoff", text: "Goal: go" },
+      { id: "s1", role: "user", text: "also", sentAt: 5_000 },
+    ]);
+    expect(joinedTurnStart(handoff, 2)).toBeUndefined();
+    const plain = groupTurns([
+      { id: "u1", role: "user", text: "old turn" },
+      { id: "s1", role: "user", text: "also", sentAt: 5_000 },
+    ]);
+    expect(joinedTurnStart(plain, 1)).toBeUndefined();
+  });
+});
+
 describe("buildActivityPhases", () => {
   it("does not repeatedly inspect earlier calls as a long tool run grows", () => {
     const toolReads = (count: number) => {
@@ -905,6 +935,11 @@ describe("activityPhaseTitle", () => {
         read("r1"),
       ]),
     ).toBe("Found it — the tokens live in globals.css.");
+  });
+
+  it("titles a group by its calls when the agent's line is only punctuation", () => {
+    expect(title([note("n1", "."), read("r1", "a.ts")])).toBe("Read a.ts");
+    expect(title([note("n1", " … "), read("r1", "a.ts")])).toBe("Read a.ts");
   });
 
   it("says what the calls add up to, in the tense of the moment", () => {

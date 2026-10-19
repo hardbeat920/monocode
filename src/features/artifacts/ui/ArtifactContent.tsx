@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { AgentMarkdown } from "../../sessions/ui/AgentMarkdown";
+import { HtmlArtifactFrame } from "./HtmlArtifactFrame";
 import {
   ARTIFACTS_CHANGED_EVENT,
   getArtifact,
@@ -61,6 +62,14 @@ export function ArtifactContent({
           cwd={artifact.sourceCwd}
           onOpenFile={onOpenFile}
           hardBreaks
+        />
+      );
+    case "html":
+      return (
+        <HtmlArtifactFrame
+          id={artifact.id}
+          title={artifact.title}
+          version={artifact.updatedAt}
         />
       );
   }

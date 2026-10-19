@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { copyMessage } from "../../../platform/tauri/clipboard";
 import { ARTIFACTS_CHANGED_EVENT, type Artifact } from "../artifacts";
-import { ArtifactPanel } from "./ArtifactPanel";
+import { ArtifactReader } from "./ArtifactPanel";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("../../sessions/ui/AgentMarkdown", () => ({
@@ -46,12 +46,11 @@ it("loads document artifacts through their own command and closes with Escape", 
   const onClose = vi.fn();
   await act(async () =>
     root.render(
-      createElement(ArtifactPanel, { id: report.id, color: "#aaa", onClose }),
+      createElement(ArtifactReader, { id: report.id, onClose }),
     ),
   );
   expect(invoke).toHaveBeenCalledWith("artifacts_get", { id: report.id });
   expect(container.textContent).toContain(report.body);
-  expect(container.querySelector("[data-mono-artifact]")).not.toBeNull();
   const copy = container.querySelector<HTMLButtonElement>(
     'header [aria-label="Copy document"]',
   )!;
@@ -79,9 +78,8 @@ it("keeps a revised document when an older read finishes after refresh", async (
   );
   act(() =>
     root.render(
-      createElement(ArtifactPanel, {
+      createElement(ArtifactReader, {
         id: report.id,
-        color: "#aaa",
         onClose: vi.fn(),
       }),
     ),
@@ -99,9 +97,8 @@ it("shows missing documents without falling back to Notes", async () => {
   vi.mocked(invoke).mockResolvedValue(null);
   await act(async () =>
     root.render(
-      createElement(ArtifactPanel, {
+      createElement(ArtifactReader, {
         id: report.id,
-        color: "#aaa",
         onClose: vi.fn(),
       }),
     ),
@@ -119,9 +116,8 @@ it("can cancel deletion, keeps the reader on failure, and closes after a success
   });
   await act(async () =>
     root.render(
-      createElement(ArtifactPanel, {
+      createElement(ArtifactReader, {
         id: report.id,
-        color: "#aaa",
         onClose,
       }),
     ),

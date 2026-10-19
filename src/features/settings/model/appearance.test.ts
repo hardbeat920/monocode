@@ -1,5 +1,10 @@
 // @vitest-environment happy-dom
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@tauri-apps/api/core", () => ({
+  convertFileSrc: (path: string) => path,
+  invoke: vi.fn().mockResolvedValue(undefined),
+}));
 import {
   ACCENT_COLOR_DEFAULT,
   CHAT_BACKGROUND_OPACITY_DEFAULT,
@@ -35,6 +40,13 @@ import {
   applyDiffPalette,
   loadDiffPalette,
   saveDiffPalette,
+  initAppearance,
+  isLightScheme,
+  loadRightPanelTab,
+  saveRightPanelTab,
+  loadRightPanelTabOrder,
+  saveRightPanelTabOrder,
+  loadSidebarTabOrder,
 } from "./appearance";
 
 const KEY = "monocode.transcriptLayout";
@@ -72,6 +84,43 @@ function mockLocalStorage() {
     configurable: true,
   });
 }
+
+describe("right panel tabs", () => {
+  beforeEach(mockLocalStorage);
+
+  it("remembers Graph as the selected tab and falls back for unknown tabs", () => {
+    expect(loadRightPanelTab()).toBe("files");
+    saveRightPanelTab("graph");
+    expect(loadRightPanelTab()).toBe("graph");
+    localStorage.setItem("monocode.rightPanelTab", "unknown");
+    expect(loadRightPanelTab()).toBe("files");
+  });
+
+  it("adds Graph after the existing Explorer/Changes order", () => {
+    localStorage.setItem(
+      "monocode.sidebarTabOrder",
+      JSON.stringify(["sessions", "changes", "inbox", "files"]),
+    );
+    expect(loadRightPanelTabOrder()).toEqual(["changes", "files", "graph"]);
+  });
+
+  it("persists an independent order without changing the classic sidebar", () => {
+    const classic = loadSidebarTabOrder();
+    saveRightPanelTabOrder(["graph", "files", "changes"]);
+    expect(loadRightPanelTabOrder()).toEqual(["graph", "files", "changes"]);
+    expect(loadSidebarTabOrder()).toEqual(classic);
+  });
+
+  it("repairs partial, duplicate and invalid saved orders", () => {
+    localStorage.setItem(
+      "monocode.rightPanelTabOrder",
+      JSON.stringify(["graph", "unknown", "graph"]),
+    );
+    expect(loadRightPanelTabOrder()).toEqual(["graph", "files", "changes"]);
+    localStorage.setItem("monocode.rightPanelTabOrder", "invalid JSON");
+    expect(loadRightPanelTabOrder()).toEqual(["files", "changes", "graph"]);
+  });
+});
 
 describe("accent color setting", () => {
   beforeEach(mockLocalStorage);
@@ -269,6 +318,40 @@ describe("chat background setting", () => {
     expect(loadNewThreadBackgroundEffect()).toBe(
       NEW_THREAD_BACKGROUND_EFFECT_DEFAULT,
     );
+  });
+});
+
+describe("theme changes from another window", () => {
+  beforeEach(mockLocalStorage);
+  afterEach(() => {
+    localStorage.clear();
+    document.documentElement.className = "";
+    document.documentElement.removeAttribute("style");
+  });
+
+  function changeInOtherWindow(key: string, value: string) {
+    localStorage.setItem(key, value);
+    window.dispatchEvent(new StorageEvent("storage", { key, newValue: value }));
+  }
+
+  it("applies a scheme change saved by another window", () => {
+    saveThemePreference("light");
+    initAppearance();
+    expect(isLightScheme()).toBe(true);
+
+    changeInOtherWindow(SCHEME_KEY, "dark");
+
+    expect(isLightScheme()).toBe(false);
+  });
+
+  it("applies an accent change saved by another window", () => {
+    initAppearance();
+
+    changeInOtherWindow(ACCENT_COLOR_KEY, "#ff0000");
+
+    expect(
+      document.documentElement.style.getPropertyValue("--user-accent-color"),
+    ).toBe("#ff0000");
   });
 });
 

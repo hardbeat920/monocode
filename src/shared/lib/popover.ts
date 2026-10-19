@@ -117,18 +117,32 @@ export function placePopover(
       padding,
       viewport.width - width - padding,
     );
-    const available = Math.max(
-      roomOn(side, anchor, viewport, gap, padding),
-      options.minHeight ?? 0,
+    // A minimum height can outgrow the room beside the anchor, but never the
+    // viewport: past that the overflow would land off-screen and be
+    // unreachable. Zooming the UI shrinks the viewport, so this happens.
+    const available = Math.min(
+      Math.max(
+        roomOn(side, anchor, viewport, gap, padding),
+        options.minHeight ?? 0,
+      ),
+      Math.max(0, viewport.height - padding * 2),
     );
     const maxHeight = Math.min(options.maxHeight ?? Infinity, available);
     if (side === "bottom") {
-      return { side, left, top: anchor.bottom + gap, width, maxHeight };
+      const top = Math.min(
+        anchor.bottom + gap,
+        viewport.height - padding - maxHeight,
+      );
+      return { side, left, top: Math.max(padding, top), width, maxHeight };
     }
+    const bottom = Math.min(
+      viewport.height - anchor.top + gap,
+      viewport.height - padding - maxHeight,
+    );
     return {
       side,
       left,
-      bottom: viewport.height - anchor.top + gap,
+      bottom: Math.max(padding, bottom),
       width,
       maxHeight,
     };

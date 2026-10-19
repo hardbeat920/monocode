@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
+import { createPortal } from "react-dom";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ConnectionsSettings } from "../../connections/ui/ConnectionsSettings";
+import { MobileSettings } from "../../mobile/ui/MobileSettings";
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
   ArrowDownCircle,
@@ -49,6 +51,13 @@ import { WindowControls } from "../../../app/shell/WindowControls";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { useColorScheme } from "../../../shared/hooks/useColorScheme";
 import {
+  WORKSPACE_THEMES,
+  WORKSPACE_THEME_DEFAULT,
+  isWorkspaceThemeId,
+  type WorkspacePalette,
+  type WorkspaceThemeId,
+} from "../model/workspaceThemes";
+import {
   applyChatBackground,
   applyChatBackgroundEmptyOpacity,
   applyChatBackgroundSessionOpacity,
@@ -61,7 +70,10 @@ import {
   applyThemeDarkLightness,
   applyThemePreference,
   applyThemeTint,
+  applyWorkspaceTheme,
   BODY_GLASS_DEFAULT,
+  INSET_LAYOUT_DEFAULT,
+  INSET_GLASS_DEFAULT,
   ACCENT_COLOR_DEFAULT,
   CHAT_BACKGROUND_EMPTY_OPACITY_DEFAULT,
   CHAT_BACKGROUND_OPACITY_MAX,
@@ -71,6 +83,8 @@ import {
   THEME_PREFERENCE_DEFAULT,
   chatBackgroundSrc,
   loadBodyGlass,
+  loadInsetLayout,
+  loadInsetGlass,
   loadAccentColor,
   loadChatBackgroundEmptyOpacity,
   loadChatBackgroundPath,
@@ -84,9 +98,13 @@ import {
   loadSidebarOpacity,
   loadThemeHue,
   loadThemeSaturation,
+  loadWorkspaceTheme,
   loadTranscriptLayout,
   loadTranscriptAnchor,
   saveBodyGlass,
+  saveInsetLayout,
+  saveInsetGlass,
+  subscribeInsetLayout,
   saveAccentColor,
   saveChatBackgroundEmptyOpacity,
   saveChatBackgroundPath,
@@ -100,6 +118,7 @@ import {
   saveSidebarOpacity,
   saveThemeHue,
   saveThemeSaturation,
+  saveWorkspaceTheme,
   isLightScheme,
   saveTranscriptLayout,
   saveTranscriptAnchor,
@@ -168,7 +187,10 @@ import {
   MINIMUM_OPENCODE_VERSION,
   parseOpenCodeVersion,
 } from "../../../integrations/harness/providers/opencode/opencodeProtocol";
-import { refreshHarnessCatalogs } from "../../../integrations/harness/core/registry";
+import {
+  enforceHarnessIdleLimit,
+  refreshHarnessCatalogs,
+} from "../../../integrations/harness/core/registry";
 import { loginHarness } from "../../../integrations/harness/core/auth";
 import {
   defaultModelId,
@@ -235,7 +257,10 @@ import {
 import { ProviderAccountSubtitle } from "../../providers/ui/ProviderAccountSubtitle";
 import {
   saveComposerAutocorrect,
+  savePacedReveal,
+  usePacedReveal,
   saveMaskEmails,
+  saveNewLayoutPromptDismissed,
   saveRailMonosPinned,
   saveShowRemainingUsage,
   useComposerAutocorrect,
@@ -320,6 +345,7 @@ import {
   filterKeybindings,
   currentKeybindings,
   loadClaudeHooks,
+  loadIdleAgentLimit,
   loadCloseToTray,
   loadCollapsedProjectRailMode,
   loadComposerRunner,
@@ -340,6 +366,9 @@ import {
   loadQuickComposerShortcut,
   loadTabAnimationsEnabled,
   saveClaudeHooks,
+  saveIdleAgentLimit,
+  IDLE_AGENT_LIMITS,
+  type IdleAgentLimit,
   saveCloseToTray,
   saveCollapsedProjectRailMode,
   saveComposerRunner,
@@ -361,6 +390,8 @@ import {
   type KeybindingOverride,
   saveTabAnimationsEnabled,
   searchSettings,
+  CLASSIC_LAYOUT_HIDDEN_SETTINGS,
+  INSET_LAYOUT_HIDDEN_SETTINGS,
   settingsSectionDescription,
   settingsSectionLabel,
   COLLAPSED_PROJECT_RAIL_MODE_DEFAULT,
@@ -437,6 +468,12 @@ type Props = {
     sessionIds: readonly string[],
   ) => Promise<boolean>;
   besideRail?: boolean;
+  /**
+   * The inset layout's title bar slot. When given, the breadcrumb and actions
+   * render there in place of the tabs and the page drops its own header row;
+   * `null` means the slot hasn't mounted yet, so neither shows for a frame.
+   */
+  headerHost?: HTMLElement | null;
   onClose: () => void;
   /** Lets search jump to a setting that lives on another page. */
   onSelectSection?: (section: SettingsSectionId) => void;
@@ -463,6 +500,7 @@ export function SettingsView({
   onCheckWorktreeRemoval,
   onDeleteWorktreeSessions,
   besideRail = false,
+  headerHost,
   onClose,
   onSelectSection,
   onOpenSession,
@@ -519,6 +557,47 @@ export function SettingsView({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // The breadcrumb and page actions, in the page's own header row or the
+  // inset title bar. There the bar already sits 6px past the rail, and the
+  // card ends 6px short of the window, so the padding keeps both ends 10px
+  // inside the card's edges.
+  const inTitleBar = headerHost !== undefined;
+  const settingsHeader = (
+    <>
+      <div
+        className={`flex min-w-0 flex-1 items-center gap-2 text-[13px] ${
+          inTitleBar ? "pr-3 pl-1" : "px-3"
+        }`}
+      >
+        <span className="shrink-0 text-content/45">Settings</span>
+        <span aria-hidden className="shrink-0 text-content/25">
+          /
+        </span>
+        <span className="min-w-0 truncate text-content">
+          {settingsSectionLabel(section)}
+        </span>
+      </div>
+      <div
+        className={`flex shrink-0 items-center gap-1.5 ${
+          inTitleBar ? "pr-4" : "pr-2"
+        }`}
+        data-tauri-drag-region="false"
+      >
+        {section === "appearance" ? (
+          <button
+            type="button"
+            onClick={appearance.restoreDefaults}
+            className="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-[12px] text-content/50 hover:bg-content/10 hover:text-content"
+          >
+            <RotateCcw className="size-3.5" strokeWidth={1.75} />
+            Restore defaults
+          </button>
+        ) : null}
+        <SettingsSearch onReveal={onReveal} />
+      </div>
+    </>
+  );
+
   return (
     <div
       role="region"
@@ -526,38 +605,24 @@ export function SettingsView({
       data-app-settings
       className="flex min-h-0 min-w-0 flex-1 flex-col text-content"
     >
-      <div
-        className="flex h-10 shrink-0 select-none items-center border-b border-stroke"
-        data-tauri-drag-region="deep"
-      >
-        {IS_MAC && !besideRail ? <div className="w-[78px] shrink-0" /> : null}
-        <div className="flex min-w-0 flex-1 items-center gap-2 px-3 text-[13px]">
-          <span className="shrink-0 text-content/45">Settings</span>
-          <span aria-hidden className="shrink-0 text-content/25">
-            /
-          </span>
-          <span className="min-w-0 truncate text-content">
-            {settingsSectionLabel(section)}
-          </span>
-        </div>
+      {headerHost !== undefined ? (
+        headerHost &&
+        createPortal(
+          <div className="flex h-full min-w-0 flex-1 items-center">
+            {settingsHeader}
+          </div>,
+          headerHost,
+        )
+      ) : (
         <div
-          className="flex shrink-0 items-center gap-1.5 pr-2"
-          data-tauri-drag-region="false"
+          className="flex h-10 shrink-0 select-none items-center border-b border-stroke"
+          data-tauri-drag-region="deep"
         >
-          {section === "appearance" ? (
-            <button
-              type="button"
-              onClick={appearance.restoreDefaults}
-              className="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-[12px] text-content/50 hover:bg-content/10 hover:text-content"
-            >
-              <RotateCcw className="size-3.5" strokeWidth={1.75} />
-              Restore defaults
-            </button>
-          ) : null}
-          <SettingsSearch onReveal={onReveal} />
+          {IS_MAC && !besideRail ? <div className="w-[78px] shrink-0" /> : null}
+          {settingsHeader}
+          {IS_MAC ? null : <WindowControls />}
         </div>
-        {IS_MAC ? null : <WindowControls />}
-      </div>
+      )}
 
       {section === "skills" ? (
         <SkillsPage
@@ -584,7 +649,12 @@ export function SettingsView({
               {section === "general" ? (
                 <GeneralPage onOpenWhatsNew={onOpenWhatsNew} />
               ) : null}
-              {section === "connections" ? <ConnectionsSettings /> : null}
+              {section === "connections" ? (
+                <div className="flex flex-col gap-10">
+                  <ConnectionsSettings />
+                  <MobileSettings />
+                </div>
+              ) : null}
               {section === "appearance" ? (
                 <AppearancePage appearance={appearance} />
               ) : null}
@@ -645,7 +715,22 @@ function SettingsSearch({
   const root = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const listId = useId();
-  const results = useMemo(() => searchSettings(query), [query]);
+  const insetLayout = useSyncExternalStore(
+    subscribeInsetLayout,
+    loadInsetLayout,
+    () => INSET_LAYOUT_DEFAULT,
+  );
+  const results = useMemo(
+    () =>
+      searchSettings(
+        query,
+        undefined,
+        insetLayout
+          ? INSET_LAYOUT_HIDDEN_SETTINGS
+          : CLASSIC_LAYOUT_HIDDEN_SETTINGS,
+      ),
+    [query, insetLayout],
+  );
   const open = query.trim().length > 0;
 
   useEffect(() => setActive(0), [query]);
@@ -970,6 +1055,7 @@ function GeneralPage({
 }
 
 function ChatPage() {
+  const pacedReveal = usePacedReveal();
   const [transcriptLayout, setTranscriptLayout] =
     useState<TranscriptLayout>(loadTranscriptLayout);
   const [transcriptAnchor, setTranscriptAnchor] =
@@ -1066,6 +1152,17 @@ function ChatPage() {
             label="Anchor prompts to top"
             on={transcriptAnchor}
             onChange={onTranscriptAnchor}
+          />
+        </Row>
+        <Row
+          id="paced-reveal"
+          label="Smooth text reveal"
+          description="Reveal incoming bursts gradually. Turn this off to show received text immediately. This changes presentation timing, not processing speed."
+        >
+          <Toggle
+            label="Smooth text reveal"
+            on={pacedReveal}
+            onChange={savePacedReveal}
           />
         </Row>
       </Group>
@@ -2011,6 +2108,8 @@ function useAppearanceSettings(
   const [themePreference, setThemePreference] =
     useState<ThemePreference>(loadThemePreference);
   const [accentColor, setAccentColor] = useState(loadAccentColor);
+  const [workspaceTheme, setWorkspaceTheme] =
+    useState<WorkspaceThemeId>(loadWorkspaceTheme);
   const [opacity, setOpacity] = useState(loadSidebarOpacity);
   const [blur, setBlur] = useState(loadSidebarBlur);
   const [themeHue, setThemeHue] = useState(loadThemeHue);
@@ -2019,6 +2118,12 @@ function useAppearanceSettings(
     loadThemeDarkLightness,
   );
   const [bodyGlass, setBodyGlass] = useState(loadBodyGlass);
+  const [insetGlass, setInsetGlass] = useState(loadInsetGlass);
+  const insetLayout = useSyncExternalStore(
+    subscribeInsetLayout,
+    loadInsetLayout,
+    () => INSET_LAYOUT_DEFAULT,
+  );
   const [showExcludedFiles, setShowExcludedFiles] = useState(
     loadShowExcludedFiles,
   );
@@ -2059,6 +2164,12 @@ function useAppearanceSettings(
     setAccentColor(next);
   }, []);
 
+  const onWorkspaceTheme = useCallback((value: WorkspaceThemeId) => {
+    const next = applyWorkspaceTheme(value);
+    saveWorkspaceTheme(next);
+    setWorkspaceTheme(next);
+  }, []);
+
   const onOpacity = useCallback((percent: number) => {
     const next = applySidebarOpacity(percent / 100);
     saveSidebarOpacity(next);
@@ -2090,6 +2201,17 @@ function useAppearanceSettings(
     saveBodyGlass(next);
     setBodyGlass(next);
     if (IS_LINUX) syncNativeGlass(isLightScheme() ? "light" : "dark");
+  }, []);
+
+  const onInsetLayout = useCallback((next: boolean) => {
+    saveNewLayoutPromptDismissed(true);
+    saveInsetLayout(next);
+  }, []);
+
+  const onInsetGlass = useCallback((next: boolean) => {
+    saveInsetGlass(next);
+    setInsetGlass(next);
+    syncNativeGlass(isLightScheme() ? "light" : "dark");
   }, []);
 
   const onShowExcludedFiles = useCallback((next: boolean) => {
@@ -2182,11 +2304,14 @@ function useAppearanceSettings(
   const restoreDefaults = useCallback(() => {
     onThemePreference(THEME_PREFERENCE_DEFAULT);
     onAccentColor(ACCENT_COLOR_DEFAULT);
+    onWorkspaceTheme(WORKSPACE_THEME_DEFAULT);
     onOpacity(Math.round(SIDEBAR_OPACITY_DEFAULT * 100));
     onBlur(SIDEBAR_BLUR_DEFAULT);
     onTint(THEME_HUE_DEFAULT, THEME_SATURATION_DEFAULT);
     onDarkLightness(THEME_DARK_LIGHTNESS_DEFAULT);
     onBodyGlass(BODY_GLASS_DEFAULT);
+    onInsetLayout(INSET_LAYOUT_DEFAULT);
+    onInsetGlass(INSET_GLASS_DEFAULT);
     onShowExcludedFiles(SHOW_EXCLUDED_FILES_DEFAULT);
     onChatBackgroundEmptyOpacity(
       Math.round(CHAT_BACKGROUND_EMPTY_OPACITY_DEFAULT * 100),
@@ -2204,6 +2329,8 @@ function useAppearanceSettings(
     chatBackgroundPath,
     onBlur,
     onBodyGlass,
+    onInsetLayout,
+    onInsetGlass,
     onChatBackgroundEmptyOpacity,
     onChatBackgroundSessionOpacity,
     onChatBackgroundScope,
@@ -2211,6 +2338,7 @@ function useAppearanceSettings(
     onNewThreadBackgroundEffect,
     onClearChatBackground,
     onAccentColor,
+    onWorkspaceTheme,
     onShowExcludedFiles,
     onThemePreference,
     onOpacity,
@@ -2223,12 +2351,15 @@ function useAppearanceSettings(
   return {
     themePreference,
     accentColor,
+    workspaceTheme,
     opacity,
     blur,
     themeHue,
     themeSaturation,
     themeDarkLightness,
     bodyGlass,
+    insetGlass,
+    insetLayout,
     showExcludedFiles,
     chatBackgroundPath,
     chatBackgroundEmptyOpacity,
@@ -2242,11 +2373,14 @@ function useAppearanceSettings(
     collapsedProjectRailMode,
     onThemePreference,
     onAccentColor,
+    onWorkspaceTheme,
     onOpacity,
     onBlur,
     onTint,
     onDarkLightness,
     onBodyGlass,
+    onInsetLayout,
+    onInsetGlass,
     onShowExcludedFiles,
     onChooseChatBackground,
     onClearChatBackground,
@@ -2264,12 +2398,20 @@ function useAppearanceSettings(
 function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
   const percent = Math.round(appearance.opacity * 100);
   const glassDisabled = useColorScheme() === "light";
+  // The inset workspace takes its colours from the workspace theme and has a
+  // fixed tint and blur, so the tint and translucency groups only belong to
+  // the classic layout. Its one glass switch lives with the theme instead.
+  const inset = appearance.insetLayout;
 
   return (
     <>
       <Group
         title="Theme"
-        description="Dark and light share the same tint, so the color settings below apply to both."
+        description={
+          inset
+            ? "Each workspace theme has its own dark and light palette."
+            : "Dark and light share the same tint, so the color settings below apply to both."
+        }
       >
         <Row
           id="theme"
@@ -2287,6 +2429,53 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
             onChange={appearance.onThemePreference}
           />
         </Row>
+        {inset ? (
+          <Row
+            id="workspace-theme"
+            label="Workspace theme"
+            description="Colors for the inset workspace's shell, card, text and accent. Each theme has a dark and a light palette."
+          >
+            <div className="w-48">
+              <Select
+                label="Workspace theme"
+                value={appearance.workspaceTheme}
+                options={WORKSPACE_THEMES.map((theme) => ({
+                  value: theme.id,
+                  label: theme.label,
+                  icon: (
+                    <WorkspaceThemeSwatch
+                      palette={glassDisabled ? theme.light : theme.dark}
+                    />
+                  ),
+                }))}
+                onChange={(value) => {
+                  if (isWorkspaceThemeId(value))
+                    appearance.onWorkspaceTheme(value);
+                }}
+              />
+            </div>
+          </Row>
+        ) : null}
+        {inset ? (
+          <Row
+            id="inset-glass"
+            label="Transparent window"
+            description={
+              IS_LINUX
+                ? "The window stays opaque on Linux."
+                : glassDisabled
+                  ? "Light mode keeps the window opaque. Your dark-mode choice is remembered."
+                  : "Show the desktop through the window. Turn off to keep the window opaque."
+            }
+          >
+            <Toggle
+              label="Transparent window"
+              on={appearance.insetGlass}
+              onChange={appearance.onInsetGlass}
+              disabled={glassDisabled || IS_LINUX}
+            />
+          </Row>
+        ) : null}
         <Row
           id="accent-color"
           label="Accent color"
@@ -2315,116 +2504,133 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
         </Row>
       </Group>
 
-      <Group
-        title="Color"
-        description="Hue and saturation tint every surface. Lightness only moves the dark theme."
-      >
-        <Row
-          id="hue"
-          label="Hue"
-          description="Base hue for accents and tinted surfaces."
-        >
-          <Slider
-            label="Hue"
-            value={appearance.themeHue}
-            display={`${appearance.themeHue}°`}
-            min={THEME_HUE_MIN}
-            max={THEME_HUE_MAX}
-            onChange={(value) =>
-              appearance.onTint(value, appearance.themeSaturation)
-            }
-          />
-        </Row>
-        <Row
-          id="saturation"
-          label="Saturation"
-          description="How strongly the hue tints the interface. Zero keeps it neutral."
-        >
-          <Slider
-            label="Saturation"
-            value={appearance.themeSaturation}
-            display={`${appearance.themeSaturation}%`}
-            min={THEME_SATURATION_MIN}
-            max={THEME_SATURATION_MAX}
-            onChange={(value) => appearance.onTint(appearance.themeHue, value)}
-          />
-        </Row>
-        <Row
-          id="dark-lightness"
-          label="Dark-mode lightness"
-          description={
-            glassDisabled
-              ? "This only affects dark mode. Your dark-mode value is preserved."
-              : "Base brightness of the dark theme. Lower values are darker; zero is true black."
-          }
-        >
-          <Slider
-            label="Dark-mode lightness"
-            value={appearance.themeDarkLightness}
-            display={`${appearance.themeDarkLightness}%`}
-            min={THEME_DARK_LIGHTNESS_MIN}
-            max={THEME_DARK_LIGHTNESS_MAX}
-            onChange={appearance.onDarkLightness}
-            disabled={glassDisabled}
-          />
-        </Row>
-      </Group>
+      {inset ? null : (
+        <>
+          <Group
+            title="Color"
+            description="Hue and saturation tint every surface. Lightness only moves the dark theme."
+          >
+            <Row
+              id="hue"
+              label="Hue"
+              description="Base hue for accents and tinted surfaces."
+            >
+              <Slider
+                label="Hue"
+                value={appearance.themeHue}
+                display={`${appearance.themeHue}°`}
+                min={THEME_HUE_MIN}
+                max={THEME_HUE_MAX}
+                onChange={(value) =>
+                  appearance.onTint(value, appearance.themeSaturation)
+                }
+              />
+            </Row>
+            <Row
+              id="saturation"
+              label="Saturation"
+              description="How strongly the hue tints the interface. Zero keeps it neutral."
+            >
+              <Slider
+                label="Saturation"
+                value={appearance.themeSaturation}
+                display={`${appearance.themeSaturation}%`}
+                min={THEME_SATURATION_MIN}
+                max={THEME_SATURATION_MAX}
+                onChange={(value) =>
+                  appearance.onTint(appearance.themeHue, value)
+                }
+              />
+            </Row>
+            <Row
+              id="dark-lightness"
+              label="Dark-mode lightness"
+              description={
+                glassDisabled
+                  ? "This only affects dark mode. Your dark-mode value is preserved."
+                  : "Base brightness of the dark theme. Lower values are darker; zero is true black."
+              }
+            >
+              <Slider
+                label="Dark-mode lightness"
+                value={appearance.themeDarkLightness}
+                display={`${appearance.themeDarkLightness}%`}
+                min={THEME_DARK_LIGHTNESS_MIN}
+                max={THEME_DARK_LIGHTNESS_MAX}
+                onChange={appearance.onDarkLightness}
+                disabled={glassDisabled}
+              />
+            </Row>
+          </Group>
 
-      <Group
-        title="Translucency"
-        description={
-          glassDisabled
-            ? "Light mode always uses an opaque window, so these are off. Your dark-mode values are preserved."
-            : "How much of the desktop shows through MonoCode. Blur costs more to composite the higher it goes."
-        }
-      >
-        <Row
-          id="sidebar-opacity"
-          label="Sidebar opacity"
-          description="Applies to the project rail and the other glass panes."
-        >
-          <Slider
-            label="Sidebar opacity"
-            value={percent}
-            display={`${percent}%`}
-            min={Math.round(SIDEBAR_OPACITY_MIN * 100)}
-            max={Math.round(SIDEBAR_OPACITY_MAX * 100)}
-            onChange={appearance.onOpacity}
-            disabled={glassDisabled}
-          />
-        </Row>
-        <Row
-          id="blur"
-          label="Blur radius"
-          description="Background blur behind the window."
-        >
-          <Slider
-            label="Blur radius"
-            value={appearance.blur}
-            display={String(appearance.blur)}
-            min={SIDEBAR_BLUR_MIN}
-            max={SIDEBAR_BLUR_MAX}
-            onChange={appearance.onBlur}
-            disabled={glassDisabled}
-          />
-        </Row>
-        <Row
-          id="main-pane-glass"
-          label="Main pane glass"
-          description="Extend the translucent treatment to the main pane behind sessions and editors."
-        >
-          <Toggle
-            label="Main pane glass"
-            on={appearance.bodyGlass}
-            onChange={appearance.onBodyGlass}
-            disabled={glassDisabled}
-          />
-        </Row>
-      </Group>
+          <Group
+            title="Translucency"
+            description={
+              glassDisabled
+                ? "Light mode always uses an opaque window, so these are off. Your dark-mode values are preserved."
+                : "How much of the desktop shows through MonoCode. Blur costs more to composite the higher it goes."
+            }
+          >
+            <Row
+              id="sidebar-opacity"
+              label="Sidebar opacity"
+              description="Applies to the project rail and the other glass panes."
+            >
+              <Slider
+                label="Sidebar opacity"
+                value={percent}
+                display={`${percent}%`}
+                min={Math.round(SIDEBAR_OPACITY_MIN * 100)}
+                max={Math.round(SIDEBAR_OPACITY_MAX * 100)}
+                onChange={appearance.onOpacity}
+                disabled={glassDisabled}
+              />
+            </Row>
+            <Row
+              id="blur"
+              label="Blur radius"
+              description="Background blur behind the window."
+            >
+              <Slider
+                label="Blur radius"
+                value={appearance.blur}
+                display={String(appearance.blur)}
+                min={SIDEBAR_BLUR_MIN}
+                max={SIDEBAR_BLUR_MAX}
+                onChange={appearance.onBlur}
+                disabled={glassDisabled}
+              />
+            </Row>
+            <Row
+              id="main-pane-glass"
+              label="Main pane glass"
+              description="Extend the translucent treatment to the main pane behind sessions and editors."
+            >
+              <Toggle
+                label="Main pane glass"
+                on={appearance.bodyGlass}
+                onChange={appearance.onBodyGlass}
+                disabled={glassDisabled}
+              />
+            </Row>
+          </Group>
+        </>
+      )}
 
       <ChatBackgroundCard appearance={appearance} />
 
       <Group title="Layout">
+        <Row
+          id="inset-layout"
+          label="New layout"
+          description="Use the redesigned sidebar, project switcher, workspace tabs and right panel. Turn off to return to the classic layout."
+        >
+          <Toggle
+            label="New layout"
+            on={appearance.insetLayout}
+            onChange={appearance.onInsetLayout}
+          />
+        </Row>
         <Row
           id="collapsed-project-rail"
           label="Collapsed project rail"
@@ -2506,7 +2712,7 @@ function ChatBackgroundCard({
               ) : (
                 <div
                   aria-hidden
-                  className="size-full bg-cover bg-center bg-no-repeat"
+                  className="chat-background-fade size-full bg-cover bg-center bg-no-repeat"
                   style={{
                     backgroundImage: "var(--chat-background-image)",
                     opacity: appearance.chatBackgroundEmptyOpacity,
@@ -2942,7 +3148,13 @@ function KeybindingsPage() {
               >
                 {row.command}
               </span>
-              {row.command === "App: Quick Composer" ? (
+              {row.fixed ? (
+                <span className="w-40 shrink-0">
+                  <span className="inline-block h-6 w-28 truncate rounded-md border border-content/10 px-1.5 font-mono text-[11px] leading-6 text-content/60">
+                    {row.keys}
+                  </span>
+                </span>
+              ) : row.command === "App: Quick Composer" ? (
                 <QuickComposerShortcutEditor />
               ) : (
                 <KeybindingShortcutEditor
@@ -3324,6 +3536,8 @@ function ProvidersPage({
   const [choice, setChoice] = useState(loadLastModelChoice);
   const [defaultModels, setDefaultModels] = useState(loadDefaultModels);
   const [claudeHooks, setClaudeHooks] = useState(loadClaudeHooks);
+  const [idleAgentLimit, setIdleAgentLimit] =
+    useState<IdleAgentLimit>(loadIdleAgentLimit);
   const [scope, setScope] = useState<string>(GLOBAL_PROVIDER_SCOPE);
   const [hiddenGlobally, setHiddenGlobally] = useState(
     loadHiddenPickerProviders,
@@ -3381,6 +3595,14 @@ function ProvidersPage({
   const onClaudeHooks = (next: boolean) => {
     saveClaudeHooks(next);
     setClaudeHooks(next);
+  };
+
+  const onIdleAgentLimit = (next: string) => {
+    const limit = Number(next) as IdleAgentLimit;
+    saveIdleAgentLimit(limit);
+    setIdleAgentLimit(limit);
+    // A lower limit takes effect now, not at the next finished turn.
+    enforceHarnessIdleLimit();
   };
 
   const onModelChange = (harness: HarnessId, model: string) => {
@@ -3484,6 +3706,21 @@ function ProvidersPage({
       </Group>
 
       <Group title="Advanced">
+        <Row
+          id="idle-agents"
+          label="Keep idle agents ready"
+          description="A finished conversation keeps its agent CLI running for a few minutes, so a follow-up starts instantly. Each one can hold a few hundred MB of memory. Past this many, the one idle longest stops early; it resumes on your next message after a short restart. Choose None on a machine short on memory."
+        >
+          <Segmented
+            label="Keep idle agents ready"
+            value={String(idleAgentLimit)}
+            options={IDLE_AGENT_LIMITS.map((limit) => ({
+              value: String(limit),
+              label: limit === 0 ? "None" : String(limit),
+            }))}
+            onChange={onIdleAgentLimit}
+          />
+        </Row>
         <Row
           id="claude-hooks"
           label="Claude Code hooks"
@@ -4250,7 +4487,7 @@ function MonoRow({ mono }: { mono: Mono }) {
       </span>
       <Toggle
         label={`Show sessions started by ${look.name} in sidebar`}
-        on={mono.showStartedSessionsInSidebar !== false}
+        on={mono.showStartedSessionsInSidebar === true}
         onChange={(on) =>
           updateMono(mono.id, (entry) => ({
             ...entry,
@@ -4479,6 +4716,26 @@ function Slider({
         {display}
       </span>
     </div>
+  );
+}
+
+/** The shell, the card inside it and the accent, at the size of a menu icon. */
+function WorkspaceThemeSwatch({ palette }: { palette: WorkspacePalette }) {
+  return (
+    <span
+      aria-hidden
+      className="relative block size-4 overflow-hidden rounded-[4px] border border-content/15"
+      style={{ background: palette.surface }}
+    >
+      <span
+        className="absolute inset-y-[3px] right-0 left-[5px] rounded-l-[2px]"
+        style={{ background: palette.panelSolid }}
+      />
+      <span
+        className="absolute top-[6px] left-[8px] size-[5px] rounded-full"
+        style={{ background: palette.accent }}
+      />
+    </span>
   );
 }
 

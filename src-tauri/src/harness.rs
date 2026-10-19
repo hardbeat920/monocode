@@ -6,9 +6,7 @@ use std::process::{ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
-use std::time::Duration;
-#[cfg(not(windows))]
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -39,6 +37,14 @@ struct HarnessLine {
     line: String,
 }
 
+/// Stdout lines in arrival order; one event carries every line from a window.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct HarnessLines {
+    session_id: String,
+    lines: Vec<String>,
+}
+
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct HarnessExit {
@@ -49,9 +55,59 @@ struct HarnessExit {
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-struct HarnessSse {
+struct HarnessSseBatch {
     session_id: String,
-    data: String,
+    events: Vec<String>,
+}
+
+/// Each `emit` is a JS eval in every window, and a streaming agent prints a
+/// line per token. Coalesce to about one hop per frame, like `pty-data`.
+const OUTPUT_COALESCE: Duration = Duration::from_millis(16);
+/// A huge tool result shouldn't hold back the lines queued behind it.
+const OUTPUT_BATCH_BYTES: usize = 1 << 20;
+/// How long an exit waits for its last output. A grandchild that inherited
+/// stdout can hold the pipe open after the agent itself has gone.
+const OUTPUT_DRAIN_WAIT: Duration = Duration::from_millis(500);
+
+/// Hands `emit` batches of the items sent on the returned channel. After an
+/// idle stretch the first item goes out at once; a burst then waits out the
+/// rest of the window. The receiver fires once everything sent has gone out.
+fn spawn_output_batcher<F>(mut emit: F) -> (mpsc::Sender<String>, mpsc::Receiver<()>)
+where
+    F: FnMut(Vec<String>) + Send + 'static,
+{
+    let (tx, rx) = mpsc::channel::<String>();
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut last_emit: Option<Instant> = None;
+        while let Ok(first) = rx.recv() {
+            let mut bytes = first.len();
+            let mut batch = vec![first];
+            if let Some(deadline) = last_emit.map(|at| at + OUTPUT_COALESCE) {
+                while bytes < OUTPUT_BATCH_BYTES {
+                    let Some(wait) = deadline.checked_duration_since(Instant::now()) else {
+                        break;
+                    };
+                    match rx.recv_timeout(wait) {
+                        Ok(item) => {
+                            bytes += item.len();
+                            batch.push(item);
+                        }
+                        Err(_) => break,
+                    }
+                }
+            }
+            while bytes < OUTPUT_BATCH_BYTES {
+                let Ok(item) = rx.try_recv() else { break };
+                bytes += item.len();
+                batch.push(item);
+            }
+            emit(batch);
+            last_emit = Some(Instant::now());
+        }
+        let _ = done_tx.send(());
+    });
+    (tx, done_rx)
 }
 
 #[derive(Serialize, Clone)]
@@ -100,6 +156,7 @@ struct LiveChild {
     cwd: PathBuf,
     stdin: Mutex<ChildStdin>,
     pid: u32,
+    identity: Option<String>,
     account: Option<HarnessAccount>,
 }
 
@@ -156,6 +213,19 @@ impl HarnessHost {
 
     fn get(&self, session_id: &str) -> Option<Arc<LiveChild>> {
         self.lock_inner().children.get(session_id).cloned()
+    }
+
+    pub(crate) fn process_roots(&self) -> Vec<crate::resources::ProcessRoot> {
+        self.lock_inner()
+            .children
+            .iter()
+            .map(|(id, child)| crate::resources::ProcessRoot {
+                session_id: id.clone(),
+                pid: child.pid,
+                identity: child.identity.clone(),
+                cwd: child.cwd.to_string_lossy().into_owned(),
+            })
+            .collect()
     }
 
     /// Stamp this spawn and drop any child already registered under the id.
@@ -927,6 +997,7 @@ pub fn harness_spawn(
         cwd: workdir.clone(),
         stdin: Mutex::new(stdin),
         pid,
+        identity: crate::resources::identity(pid),
         account,
     });
     if let Some(rejected) = host.install_spawn(session_id.clone(), epoch, kill_all, live) {
@@ -943,6 +1014,15 @@ pub fn harness_spawn(
 
     let stdout_app = app.clone();
     let stdout_id = session_id.clone();
+    let (stdout_tx, stdout_drained) = spawn_output_batcher(move |lines| {
+        let _ = stdout_app.emit(
+            STDOUT_EVENT,
+            HarnessLines {
+                session_id: stdout_id.clone(),
+                lines,
+            },
+        );
+    });
     let wait_store = codex_store.clone();
     let stdout_store = codex_store;
     thread::spawn(move || {
@@ -956,13 +1036,9 @@ pub fn harness_spawn(
                     store.sync_auth();
                 }
             }
-            let _ = stdout_app.emit(
-                STDOUT_EVENT,
-                HarnessLine {
-                    session_id: stdout_id.clone(),
-                    line,
-                },
-            );
+            if stdout_tx.send(line).is_err() {
+                break;
+            }
         }
     });
 
@@ -986,6 +1062,8 @@ pub fn harness_spawn(
     let wait_pid = pid;
     thread::spawn(move || {
         let code = child.wait().ok().and_then(|status| status.code());
+        // Deliver the final batched lines before the exit that follows them.
+        let _ = stdout_drained.recv_timeout(OUTPUT_DRAIN_WAIT);
         if let Some(store) = wait_store {
             store.sync_auth();
         }
@@ -1240,7 +1318,22 @@ pub fn harness_sse_open(
         match result {
             Ok(response) => {
                 let reader = BufReader::new(response.into_reader());
-                read_sse(reader, &app, &session_id, &stop);
+                let events_app = app.clone();
+                let events_id = session_id.clone();
+                let (tx, drained) = spawn_output_batcher(move |events| {
+                    let _ = events_app.emit(
+                        SSE_EVENT,
+                        HarnessSseBatch {
+                            session_id: events_id.clone(),
+                            events,
+                        },
+                    );
+                });
+                read_sse(reader, &stop, |data| {
+                    let _ = tx.send(data);
+                });
+                drop(tx);
+                let _ = drained.recv();
                 emit_sse_end(&app, &session_id, None);
             }
             Err(error) => {
@@ -1270,7 +1363,7 @@ fn read_http_response(response: ureq::Response) -> Result<HarnessHttpResponse, S
     Ok(HarnessHttpResponse { status, body })
 }
 
-fn read_sse<R: BufRead>(reader: R, app: &AppHandle, session_id: &str, stop: &AtomicBool) {
+fn read_sse<R: BufRead>(reader: R, stop: &AtomicBool, mut send: impl FnMut(String)) {
     let mut data = String::new();
     for line in reader.lines() {
         if stop.load(Ordering::SeqCst) {
@@ -1284,14 +1377,7 @@ fn read_sse<R: BufRead>(reader: R, app: &AppHandle, session_id: &str, stop: &Ato
             if data.is_empty() {
                 continue;
             }
-            let payload = std::mem::take(&mut data);
-            let _ = app.emit(
-                SSE_EVENT,
-                HarnessSse {
-                    session_id: session_id.to_string(),
-                    data: payload,
-                },
-            );
+            send(std::mem::take(&mut data));
             continue;
         }
         if let Some(rest) = line.strip_prefix("data:") {
@@ -1471,6 +1557,7 @@ const SPAWN_CANCELLED: &str = "Harness start was cancelled";
 /// harness spawn goes through here, probes included: a `--help` probe that
 /// hangs is a `node` process too, and an unmarked one is unreapable.
 fn isolate_child(cmd: &mut Command) {
+    crate::background_work::configure_child(cmd);
     cmd.env(HARNESS_PARENT_ENV, std::process::id().to_string());
     #[cfg(unix)]
     {
@@ -2823,6 +2910,18 @@ pub(crate) fn gui_search_path() -> String {
     gui_search_path_from(login_shell_path(), dirs_home(), std::env::var("PATH").ok())
 }
 
+/// `gui_search_path` without ever starting the login shell: its PATH is used
+/// only when something already read it. Frequent git calls take this so
+/// filters like git-lfs resolve from a Finder launch without a status refresh
+/// waiting on a slow `.zshrc`.
+pub(crate) fn cached_gui_search_path() -> String {
+    gui_search_path_from(
+        peek_login_shell_path(&LOGIN_SHELL_ENV),
+        dirs_home(),
+        std::env::var("PATH").ok(),
+    )
+}
+
 fn gui_search_path_from(
     login_path: Option<String>,
     home: Option<String>,
@@ -2963,6 +3062,17 @@ fn login_shell_path() -> Option<String> {
     login_shell_env("PATH")
 }
 
+/// `try_lock`, not `lock`: the read holds the lock while the shell runs, so
+/// waiting for it would block just like resolving it.
+fn peek_login_shell_path(cache: &Mutex<Option<HashMap<String, String>>>) -> Option<String> {
+    let cache = cache.try_lock().ok()?;
+    cache
+        .as_ref()?
+        .get("PATH")
+        .cloned()
+        .filter(|value| !value.is_empty())
+}
+
 fn login_shell_env(name: &str) -> Option<String> {
     let mut cache = LOGIN_SHELL_ENV.lock().ok()?;
     if cache.is_none() {
@@ -3091,6 +3201,7 @@ mod tests {
                 cwd: PathBuf::from("/test"),
                 stdin: Mutex::new(stdin),
                 pid,
+                identity: crate::resources::identity(pid),
                 account: None,
             }),
             child,
@@ -3252,6 +3363,7 @@ mod tests {
                 cwd: PathBuf::from("/test"),
                 stdin: Mutex::new(stdin),
                 pid,
+                identity: crate::resources::identity(pid),
                 account: None,
             }),
             child,
@@ -3653,6 +3765,48 @@ mod tests {
     }
 
     #[test]
+    fn peeking_the_login_path_never_loads_or_waits_for_it() {
+        let cache = Mutex::new(None);
+        assert_eq!(peek_login_shell_path(&cache), None);
+        assert!(cache.lock().unwrap().is_none());
+
+        *cache.lock().unwrap() = Some(HashMap::from([("PATH".into(), "/login/bin".into())]));
+        let held = cache.lock().unwrap();
+        assert_eq!(peek_login_shell_path(&cache), None);
+        drop(held);
+        assert_eq!(peek_login_shell_path(&cache), Some("/login/bin".into()));
+    }
+
+    /// LFS repos run `git-lfs` from `status` and `diff`, and a Finder launch
+    /// inherits only `/usr/bin:/bin:…`, so the cached path has to add the
+    /// fixed dirs, plus the login PATH once it has been read.
+    #[test]
+    fn cached_gui_search_path_finds_homebrew_tools_from_a_finder_launch() {
+        let path = gui_search_path_from(
+            peek_login_shell_path(&Mutex::new(None)),
+            Some("/tmp/home".into()),
+            Some("/usr/bin:/bin:/usr/sbin:/sbin".into()),
+        );
+        let parts: Vec<&str> = path.split(':').collect();
+        assert_eq!(parts[0], "/usr/bin");
+        assert!(parts.contains(&"/usr/sbin"));
+        assert!(parts.contains(&"/opt/homebrew/bin"));
+        assert!(parts.contains(&"/tmp/home/.local/bin"));
+
+        let cache = Mutex::new(Some(HashMap::from([("PATH".into(), "/login/bin".into())])));
+        let path = gui_search_path_from(
+            peek_login_shell_path(&cache),
+            Some("/tmp/home".into()),
+            Some("/inherited/bin".into()),
+        );
+        let parts: Vec<&str> = path.split(':').collect();
+        let at = |dir: &str| parts.iter().position(|part| *part == dir).unwrap();
+        assert_eq!(parts[0], "/login/bin");
+        assert!(at("/login/bin") < at("/inherited/bin"));
+        assert!(at("/inherited/bin") < at("/opt/homebrew/bin"));
+    }
+
+    #[test]
     fn resolve_gui_binary_finds_a_binary_on_the_gui_path() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -3856,6 +4010,74 @@ mod tests {
         let id = passwd_identity().expect("passwd");
         assert!(!id.user.is_empty());
         assert!(PathBuf::from(&id.home).is_dir());
+    }
+}
+
+#[cfg(test)]
+mod output_batcher_tests {
+    use super::*;
+
+    type Batches = Arc<Mutex<Vec<Vec<String>>>>;
+
+    fn collect() -> (mpsc::Sender<String>, mpsc::Receiver<()>, Batches) {
+        let batches = Arc::new(Mutex::new(Vec::new()));
+        let sink = batches.clone();
+        let (tx, drained) = spawn_output_batcher(move |batch| sink.lock().unwrap().push(batch));
+        (tx, drained, batches)
+    }
+
+    #[test]
+    fn an_idle_stream_sends_its_first_line_at_once() {
+        let (tx, _drained, batches) = collect();
+        tx.send("first".into()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while batches.lock().unwrap().is_empty() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(*batches.lock().unwrap(), vec![vec!["first".to_string()]]);
+    }
+
+    #[test]
+    fn a_burst_shares_one_event_and_drains_before_done() {
+        let (tx, drained, batches) = collect();
+        tx.send("lead".into()).unwrap();
+        while batches.lock().unwrap().is_empty() {
+            thread::sleep(Duration::from_millis(1));
+        }
+        for i in 0..100 {
+            tx.send(format!("line {i}")).unwrap();
+        }
+        drop(tx);
+        drained.recv_timeout(Duration::from_secs(5)).unwrap();
+        let batches = batches.lock().unwrap();
+        assert!(batches.len() <= 3, "{} batches", batches.len());
+        let lines: Vec<String> = batches.iter().flatten().cloned().collect();
+        let expected: Vec<String> = std::iter::once("lead".to_string())
+            .chain((0..100).map(|i| format!("line {i}")))
+            .collect();
+        assert_eq!(lines, expected);
+    }
+
+    #[test]
+    fn a_large_line_closes_its_batch() {
+        let (tx, drained, batches) = collect();
+        tx.send("x".repeat(OUTPUT_BATCH_BYTES)).unwrap();
+        tx.send("after".into()).unwrap();
+        drop(tx);
+        drained.recv_timeout(Duration::from_secs(5)).unwrap();
+        let batches = batches.lock().unwrap();
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[1], vec!["after".to_string()]);
+    }
+
+    #[test]
+    fn sse_events_split_on_blank_lines() {
+        let stream = ": ping\ndata: one\n\ndata: two\ndata: lines\n\n";
+        let mut events = Vec::new();
+        read_sse(stream.as_bytes(), &AtomicBool::new(false), |data| {
+            events.push(data)
+        });
+        assert_eq!(events, vec!["one".to_string(), "two\nlines".to_string()]);
     }
 }
 

@@ -66,14 +66,25 @@ type Props = {
   hotkeys?: boolean;
   /** Which way the menus open; the composer sits low, so they open up. */
   side?: "top" | "bottom";
-  /** `plain` drops the pill for rows like a details panel's property list. */
-  variant?: "pill" | "plain";
+  /**
+   * `plain` drops the pill for rows like a details panel's property list;
+   * `text` is just the provider and name, for a quiet row beneath a chat
+   * input.
+   */
+  variant?: Variant;
   /** Action label for recovery surfaces that open the same model chooser. */
   triggerLabel?: string;
+  /**
+   * Classes for the trigger's text, so a narrow surface can hide it and keep
+   * just the icon; the button's label still names the choice.
+   */
+  labelClassName?: string;
   onChange: (harness: HarnessId, model: string) => void;
   onSettingsChange: (settings: Record<string, string>) => void;
   onClose?: () => void;
 };
+
+type Variant = "pill" | "plain" | "text";
 
 type MenuEntry = { kind: "setting"; setting: ModelSetting } | { kind: "model" };
 
@@ -243,8 +254,38 @@ function recentMenuModels(
   return models.slice(0, 6);
 }
 
+/** Harness tabs whose catalog names upstream providers list models under them. */
+function groupsByProvider(tab: ModelPickerTab, models: AgentModel[]): boolean {
+  return tab !== "favorites" && models.some((item) => item.provider);
+}
+
+/** Use the upstream provider when present, otherwise the model's harness. */
+function modelProvider(item: AgentModel): { id: string; name: string } {
+  return item.provider ?? { id: item.harness, name: HARNESS_TITLE[item.harness] };
+}
+
+/**
+ * Keeps each provider's models contiguous (in first-seen provider order) so
+ * keyboard navigation, which walks this list, matches the grouped headings.
+ */
+function inProviderOrder(
+  tab: ModelPickerTab,
+  models: AgentModel[],
+): AgentModel[] {
+  if (!groupsByProvider(tab, models)) return models;
+  const groups = new Map<string, AgentModel[]>();
+  for (const item of models) {
+    const id = modelProvider(item).id;
+    const group = groups.get(id);
+    if (group) group.push(item);
+    else groups.set(id, [item]);
+  }
+  return [...groups.values()].flat();
+}
+
+/** Build provider headings while retaining each model's keyboard navigation index. */
 function modelGroups(tab: ModelPickerTab, models: AgentModel[]): ModelGroup[] {
-  if (tab !== "opencode") {
+  if (!groupsByProvider(tab, models)) {
     return [
       {
         id: "models",
@@ -255,7 +296,7 @@ function modelGroups(tab: ModelPickerTab, models: AgentModel[]): ModelGroup[] {
 
   const groups = new Map<string, ModelGroup>();
   models.forEach((item, index) => {
-    const provider = item.provider ?? { id: "opencode", name: "OpenCode" };
+    const provider = modelProvider(item);
     let group = groups.get(provider.id);
     if (!group) {
       group = { id: provider.id, name: provider.name, models: [] };
@@ -266,6 +307,7 @@ function modelGroups(tab: ModelPickerTab, models: AgentModel[]): ModelGroup[] {
   return [...groups.values()];
 }
 
+/** Model selection and settings control shared by the composer and session toolbar. */
 export function ModelPicker({
   harness,
   model,
@@ -277,6 +319,7 @@ export function ModelPicker({
   side = "top",
   variant = "pill",
   triggerLabel,
+  labelClassName = "",
   onChange,
   onSettingsChange,
   onClose,
@@ -350,6 +393,10 @@ export function ModelPicker({
   const triggerEffortLabel = triggerEffortSetting
     ? settingValueLabel(triggerEffortSetting, values)
     : undefined;
+  const triggerModelName =
+    current.harness === "claude"
+      ? current.name.replace(/^Claude /, "")
+      : current.name;
   const triggerTitle = [
     HARNESS_TITLE[current.harness],
     current.provider?.name,
@@ -393,12 +440,14 @@ export function ModelPicker({
                 item != null && pickerHarnesses.includes(item.harness),
             )
         : source.modelsFor(visibleTab);
-    if (!needle) return pool;
-    return pool.filter((item) =>
-      `${item.name} ${HARNESS_TITLE[item.harness]} ${item.provider?.name ?? ""} ${item.provider?.id ?? ""}`
-        .toLowerCase()
-        .includes(needle),
-    );
+    const matches = needle
+      ? pool.filter((item) =>
+          `${item.name} ${HARNESS_TITLE[item.harness]} ${item.provider?.name ?? ""} ${item.provider?.id ?? ""}`
+            .toLowerCase()
+            .includes(needle),
+        )
+      : pool;
+    return inProviderOrder(visibleTab, matches);
   }, [source, catalogVersion, favorites, providerKey, query, visibleTab]);
 
   const dismiss = (restore: boolean) => {
@@ -691,11 +740,14 @@ export function ModelPicker({
             ? `${triggerLabel} · ${triggerTitle}`
             : `${triggerTitle} · Recent models: right-click or ${MOD}.`
         }
-        aria-label={triggerLabel ?? `${HARNESS_TITLE[current.harness]}${
-          current.provider ? `, ${current.provider.name},` : ""
-        } ${current.name}${
-          triggerEffortLabel ? `, effort ${triggerEffortLabel}` : ""
-        }`}
+        aria-label={
+          triggerLabel ??
+          `${HARNESS_TITLE[current.harness]}${
+            current.provider ? `, ${current.provider.name},` : ""
+          } ${current.name}${
+            triggerEffortLabel ? `, effort ${triggerEffortLabel}` : ""
+          }`
+        }
         aria-keyshortcuts={`${MOD}.`}
         aria-expanded={open || recentMenu != null}
         aria-haspopup={hideSettings ? "dialog" : "menu"}
@@ -707,37 +759,41 @@ export function ModelPicker({
         }}
         onClick={() => togglePicker()}
         className={
-          variant === "plain"
-            ? `-mx-1.5 flex h-7 shrink-0 items-center gap-2 rounded-md px-1.5 text-[12px] text-content/85 ${
-                open ? "bg-content/8" : "hover:bg-content/6"
-              }`
-            : `flex h-6.5 shrink-0 items-center gap-1 rounded-md px-1.5 ${
-                open
-                  ? "bg-selection text-content"
-                  : "bg-selection text-content hover:bg-selection-hover"
-              }`
+          variant === "text"
+            ? textControlClass(open, "shrink-0 gap-1.5")
+            : variant === "plain"
+              ? `-mx-1.5 flex h-7 shrink-0 items-center gap-2 rounded-md px-1.5 text-[12px] text-content/85 ${
+                  open ? "bg-content/8" : "hover:bg-content/6"
+                }`
+              : `flex h-6.5 shrink-0 items-center gap-1 rounded-md px-1.5 ${
+                  open
+                    ? "bg-selection text-content"
+                    : "bg-selection text-content hover:bg-selection-hover"
+                }`
         }
       >
         <HarnessIcon
           harness={current.harness}
-          className={`${variant === "plain" ? "size-3.5" : "size-4"} shrink-0`}
+          className={`${variant === "pill" ? "size-4" : "size-3.5"} shrink-0`}
         />
         <span
-          className={`whitespace-nowrap ${variant === "plain" ? "" : "text-[11px]"}`}
+          className={`whitespace-nowrap ${variant === "pill" ? "text-[11px]" : ""} ${labelClassName}`}
         >
-          {triggerLabel ?? current.name}
+          {triggerLabel ?? triggerModelName}
         </span>
         {!triggerLabel && triggerEffortLabel ? (
           <span
-            className={`shrink-0 text-content/50 ${variant === "plain" ? "" : "text-[11px]"}`}
+            className={`shrink-0 text-content/50 ${variant === "pill" ? "text-[11px]" : ""} ${labelClassName}`}
           >
             {triggerEffortLabel}
           </span>
         ) : null}
-        <ChevronDown
-          className={`size-3 shrink-0 text-content/50 ${open ? "rotate-180" : ""}`}
-          strokeWidth={1.75}
-        />
+        {variant === "text" ? null : (
+          <ChevronDown
+            className={`size-3 shrink-0 text-content/50 ${open ? "rotate-180" : ""}`}
+            strokeWidth={1.75}
+          />
+        )}
       </button>
 
       {open && hideSettings ? (
@@ -1033,11 +1089,19 @@ export function ModelControlPills({
   harness,
   model,
   values,
+  variant = "pill",
+  labelClassName,
   onSettingsChange,
   onClose,
 }: Pick<
   Props,
-  "harness" | "model" | "values" | "onSettingsChange" | "onClose"
+  | "harness"
+  | "model"
+  | "values"
+  | "variant"
+  | "labelClassName"
+  | "onSettingsChange"
+  | "onClose"
 >) {
   const catalogVersion = useSyncExternalStore(
     subscribeModels,
@@ -1067,6 +1131,7 @@ export function ModelControlPills({
             key={setting.id}
             setting={setting}
             values={values}
+            variant={variant}
             onSettingsChange={onSettingsChange}
           />
         ) : (
@@ -1074,6 +1139,8 @@ export function ModelControlPills({
             key={setting.id}
             setting={setting}
             values={values}
+            variant={variant}
+            labelClassName={labelClassName}
             onSettingsChange={onSettingsChange}
             onClose={onClose}
             additionalSettings={
@@ -1086,8 +1153,18 @@ export function ModelControlPills({
   );
 }
 
-/** Trigger classes for a setting control in the pill or plain look. */
-function controlClass(variant: "pill" | "plain", open = false): string {
+/** Trigger classes for a text-only control: a label that brightens on hover. */
+function textControlClass(open: boolean, extra = ""): string {
+  return `flex h-6.5 min-w-0 items-center rounded-md px-1.5 text-[12px] transition-colors ${extra} ${
+    open
+      ? "bg-content/8 text-content"
+      : "text-content/55 hover:bg-content/8 hover:text-content"
+  }`;
+}
+
+/** Trigger classes for a setting control in each look. */
+function controlClass(variant: Variant, open = false): string {
+  if (variant === "text") return textControlClass(open, "max-w-28 gap-1.5");
   return variant === "plain"
     ? `-mx-1.5 flex h-7 min-w-0 max-w-full items-center gap-2 rounded-md px-1.5 text-[12px] text-content/85 ${
         open ? "bg-content/8" : "hover:bg-content/6"
@@ -1163,7 +1240,7 @@ function TogglePill({
 }: {
   setting: ModelSetting;
   values: Record<string, string>;
-  variant?: "pill" | "plain";
+  variant?: Variant;
   onSettingsChange: (settings: Record<string, string>) => void;
 }) {
   const on = settingValue(setting, values) === "true";
@@ -1205,7 +1282,9 @@ function TogglePill({
       className={controlClass(variant)}
     >
       <span
-        className={`min-w-0 truncate text-[11px] ${on ? "" : "text-content/50"}`}
+        className={`min-w-0 truncate ${variant === "pill" ? "text-[11px]" : ""} ${
+          on ? "" : variant === "text" ? "opacity-50" : "text-content/50"
+        }`}
       >
         {setting.label}
       </span>
@@ -1218,14 +1297,17 @@ function SelectPill({
   values,
   variant = "pill",
   side = "top",
+  labelClassName = "",
   onSettingsChange,
   onClose,
   additionalSettings,
 }: {
   setting: ModelSetting;
   values: Record<string, string>;
-  variant?: "pill" | "plain";
+  variant?: Variant;
   side?: "top" | "bottom";
+  /** Applies only beside an icon, so a hidden label never leaves a blank. */
+  labelClassName?: string;
   onSettingsChange: (settings: Record<string, string>) => void;
   onClose?: () => void;
   additionalSettings?: ModelSetting[];
@@ -1238,6 +1320,7 @@ function SelectPill({
   const value = settingValue(setting, values);
   const valueLabel = settingValueLabel(setting, values);
   const label = settingLabel(setting);
+  const iconic = isEffortSetting(setting) || setting.id === "serviceTier";
   const menuSettings = [setting, ...(additionalSettings ?? [])];
   const grouped = menuSettings.length > 1;
   const menuOptions = menuSettings.flatMap((menuSetting) =>
@@ -1284,14 +1367,16 @@ function SelectPill({
           <Zap className="size-3.5 shrink-0" strokeWidth={1.75} />
         ) : null}
         <span
-          className={`min-w-0 truncate ${variant === "plain" ? "" : "text-[11px]"}`}
+          className={`min-w-0 truncate ${variant === "pill" ? "text-[11px]" : ""} ${iconic ? labelClassName : ""}`}
         >
           {valueLabel}
         </span>
-        <ChevronDown
-          className={`size-3 shrink-0 text-content/50 ${open ? "rotate-180" : ""}`}
-          strokeWidth={1.75}
-        />
+        {variant === "text" ? null : (
+          <ChevronDown
+            className={`size-3 shrink-0 text-content/50 ${open ? "rotate-180" : ""}`}
+            strokeWidth={1.75}
+          />
+        )}
       </button>
 
       {open ? (
@@ -1510,18 +1595,16 @@ function ModelFlyout({
         if (item) onPick(item);
       }}
       data-model-picker
-      style={{
-        height: MODEL_MENU_HEIGHT,
-        minHeight: MODEL_MENU_HEIGHT,
-        maxHeight: MODEL_MENU_HEIGHT,
-      }}
+      // Popover caps the height to the viewport; a fixed max here would
+      // clip the bottom rows (and tabs) out of reach on short or zoomed windows.
+      style={{ height: MODEL_MENU_HEIGHT }}
       className="flex min-h-0 overflow-hidden font-sans"
     >
       <nav
         role="tablist"
         aria-label="Providers"
         aria-orientation="vertical"
-        className="flex w-11 shrink-0 flex-col items-center gap-1 border-r border-stroke p-1.5"
+        className="flex w-11 shrink-0 flex-col items-center gap-1 overflow-y-auto overscroll-none border-r border-stroke p-1.5"
       >
         <ProviderTabButton
           title="Favorites"

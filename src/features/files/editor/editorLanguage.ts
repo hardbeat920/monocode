@@ -5,8 +5,12 @@ import {
   type StreamParser,
 } from "@codemirror/language";
 import type { Extension } from "@codemirror/state";
-import { tagHighlighter, tags, type Highlighter } from "@lezer/highlight";
-import type { ColorScheme } from "../../settings/model/appearance";
+import {
+  tagHighlighter,
+  tags,
+  type Highlighter,
+  type Tag,
+} from "@lezer/highlight";
 import { basename } from "../../../platform/tauri/fs";
 
 const HIGHLIGHT_TAGS = {
@@ -42,9 +46,9 @@ const HIGHLIGHT_TAGS = {
     tags.typeName,
     tags.className,
     tags.namespace,
-    tags.tagName,
     tags.standard(tags.typeName),
   ],
+  tag: [tags.tagName],
   number: [tags.number, tags.integer, tags.float],
   comment: [tags.comment, tags.lineComment, tags.blockComment, tags.docComment],
   property: [tags.propertyName, tags.attributeName],
@@ -60,84 +64,49 @@ const HIGHLIGHT_TAGS = {
   ],
 };
 
-type HighlightPalette = {
-  keyword: string;
-  heading: string;
-  callable: string;
-  string: string;
-  type: string;
-  number: string;
-  comment: string;
-  property: string;
-  meta: string;
-  invalid: string;
+type HighlightPalette = Record<keyof typeof HIGHLIGHT_TAGS | "invalid", string>;
+
+// Every colour is a `--syntax-*` variable (index.css), so a scheme flip or a
+// workspace theme recolours code without highlighting it again.
+const HIGHLIGHT_PALETTE: HighlightPalette = {
+  keyword: "var(--syntax-keyword)",
+  heading: "var(--color-markdown-heading)",
+  callable: "var(--syntax-callable)",
+  string: "var(--syntax-string)",
+  type: "var(--syntax-type)",
+  tag: "var(--syntax-tag)",
+  number: "var(--syntax-number)",
+  comment: "var(--syntax-comment)",
+  property: "var(--syntax-property)",
+  meta: "var(--syntax-meta)",
+  invalid: "var(--syntax-invalid)",
 };
 
-const HIGHLIGHT_PALETTE: Record<ColorScheme, HighlightPalette> = {
-  dark: {
-    keyword: "#ff8ffd",
-    heading: "var(--color-markdown-heading)",
-    callable: "#a5d5fe",
-    string: "#b4fa72",
-    type: "#ff8272",
-    number: "#b4fa72",
-    comment: "#fefdc2",
-    property: "#d0d1fe",
-    meta: "#8e8e8e",
-    invalid: "#ffc4bd",
+const HIGHLIGHT_GROUPS = Object.entries(HIGHLIGHT_TAGS) as [
+  keyof typeof HIGHLIGHT_TAGS,
+  Tag[],
+][];
+
+export const editorHighlightStyle = HighlightStyle.define([
+  ...HIGHLIGHT_GROUPS.map(([group, tag]) => ({
+    tag,
+    color: HIGHLIGHT_PALETTE[group],
+  })),
+  {
+    tag: tags.invalid,
+    color: HIGHLIGHT_PALETTE.invalid,
+    textDecoration: "underline",
   },
-  light: {
-    keyword: "#a626a4",
-    heading: "var(--color-markdown-heading)",
-    callable: "#4078f2",
-    string: "#50a14f",
-    type: "#c18401",
-    number: "#986801",
-    comment: "#8a9199",
-    property: "#e45649",
-    meta: "#5c6370",
-    invalid: "#cf222e",
-  },
-};
-
-function highlightStyleFrom(palette: HighlightPalette) {
-  return HighlightStyle.define([
-    { tag: HIGHLIGHT_TAGS.keyword, color: palette.keyword },
-    { tag: HIGHLIGHT_TAGS.heading, color: palette.heading },
-    { tag: HIGHLIGHT_TAGS.callable, color: palette.callable },
-    { tag: HIGHLIGHT_TAGS.string, color: palette.string },
-    { tag: HIGHLIGHT_TAGS.type, color: palette.type },
-    { tag: HIGHLIGHT_TAGS.number, color: palette.number },
-    { tag: HIGHLIGHT_TAGS.comment, color: palette.comment },
-    { tag: HIGHLIGHT_TAGS.property, color: palette.property },
-    { tag: HIGHLIGHT_TAGS.meta, color: palette.meta },
-    { tag: tags.invalid, color: palette.invalid, textDecoration: "underline" },
-  ]);
-}
-
-const HIGHLIGHT_DARK = highlightStyleFrom(HIGHLIGHT_PALETTE.dark);
-const HIGHLIGHT_LIGHT = highlightStyleFrom(HIGHLIGHT_PALETTE.light);
-
-export function editorHighlightStyleFor(scheme: ColorScheme) {
-  return scheme === "light" ? HIGHLIGHT_LIGHT : HIGHLIGHT_DARK;
-}
+]);
 
 /** Same tag → color map as the editor, for highlighting outside CodeMirror. */
-export function syntaxTagHighlighter(scheme: ColorScheme): Highlighter {
-  const palette = HIGHLIGHT_PALETTE[scheme];
-  return tagHighlighter([
-    { tag: HIGHLIGHT_TAGS.keyword, class: palette.keyword },
-    { tag: HIGHLIGHT_TAGS.heading, class: palette.heading },
-    { tag: HIGHLIGHT_TAGS.callable, class: palette.callable },
-    { tag: HIGHLIGHT_TAGS.string, class: palette.string },
-    { tag: HIGHLIGHT_TAGS.type, class: palette.type },
-    { tag: HIGHLIGHT_TAGS.number, class: palette.number },
-    { tag: HIGHLIGHT_TAGS.comment, class: palette.comment },
-    { tag: HIGHLIGHT_TAGS.property, class: palette.property },
-    { tag: HIGHLIGHT_TAGS.meta, class: palette.meta },
-    { tag: tags.invalid, class: palette.invalid },
-  ]);
-}
+export const syntaxTagHighlighter: Highlighter = tagHighlighter([
+  ...HIGHLIGHT_GROUPS.map(([group, tag]) => ({
+    tag,
+    class: HIGHLIGHT_PALETTE[group],
+  })),
+  { tag: tags.invalid, class: HIGHLIGHT_PALETTE.invalid },
+]);
 
 function legacyLanguage(parser: StreamParser<unknown>): Extension {
   return StreamLanguage.define(parser);
@@ -167,9 +136,25 @@ export async function languageForPath(path: string): Promise<Extension | null> {
     const { css } = await import("@codemirror/lang-css");
     return css();
   }
+  if ([".scss", ".sass"].includes(extension)) {
+    const { sass } = await import("@codemirror/lang-sass");
+    return sass({ indented: extension === ".sass" });
+  }
+  if (extension === ".less") {
+    const { less } = await import("@codemirror/lang-less");
+    return less();
+  }
   if ([".html", ".htm"].includes(extension)) {
     const { html } = await import("@codemirror/lang-html");
     return html();
+  }
+  if (extension === ".vue") {
+    const { vue } = await import("@codemirror/lang-vue");
+    return vue();
+  }
+  if (extension === ".svelte") {
+    const { svelte } = await import("@replit/codemirror-lang-svelte");
+    return svelte();
   }
   if ([".md", ".mdx", ".markdown"].includes(extension)) {
     const { markdown } = await import("@codemirror/lang-markdown");
@@ -253,6 +238,20 @@ export async function languageForPath(path: string): Promise<Extension | null> {
   ) {
     const { shell } = await import("@codemirror/legacy-modes/mode/shell");
     return legacyLanguage(shell);
+  }
+  if (name === ".env" || name.startsWith(".env.")) {
+    const { properties } =
+      await import("@codemirror/legacy-modes/mode/properties");
+    // Keys come out as "def", which the palette leaves uncolored and the
+    // built-in token table won't let us remap; rename them. Values stay plain.
+    return legacyLanguage({
+      ...properties,
+      token: (stream, state) => {
+        const style = properties.token(stream, state);
+        return style === "def" ? "envKey" : style;
+      },
+      tokenTable: { envKey: tags.labelName },
+    });
   }
   if (extension === ".toml") {
     const { toml } = await import("@codemirror/legacy-modes/mode/toml");
