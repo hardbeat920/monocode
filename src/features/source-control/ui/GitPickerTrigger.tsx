@@ -31,7 +31,7 @@ export function GitPickerTrigger({
     <button
       type="button"
       {...props}
-      className={`-ml-1.5 flex min-w-0 max-w-64 items-center rounded-md px-1.5 hover:bg-content/8 hover:text-content aria-expanded:bg-content/8 aria-expanded:text-content active:scale-[0.97] ${compact ? "h-5 gap-1 text-[11px] text-content/50 disabled:hover:text-content/50" : "h-6 gap-1.5 text-[12px] text-content/55 disabled:hover:text-content/55"} disabled:hover:bg-transparent ${dimWhenDisabled ? "disabled:opacity-40" : ""}`}
+      className={`-ml-1.5 flex h-6 min-w-0 max-w-64 items-center rounded-md px-1.5 hover:bg-content/8 hover:text-content aria-expanded:bg-content/8 aria-expanded:text-content active:scale-[0.97] ${compact ? "gap-1 text-[11px] text-content/50 disabled:hover:text-content/50" : "gap-1.5 text-[12px] text-content/55 disabled:hover:text-content/55"} disabled:hover:bg-transparent ${dimWhenDisabled ? "disabled:opacity-40" : ""}`}
     >
       <Icon
         className={`${compact ? "size-3" : "size-3.5"} shrink-0`}
