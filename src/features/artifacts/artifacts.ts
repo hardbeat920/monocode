@@ -39,6 +39,7 @@ export function getArtifact(id: string): Promise<Artifact | null> {
   return invoke("artifacts_get", { id });
 }
 
+/** Retrieves all persisted artifacts from storage. */
 export function listArtifacts(): Promise<Artifact[]> {
   return invoke("artifacts_list");
 }
