@@ -13,6 +13,7 @@ import {
   writeAgentFile,
   type MonoFiles,
 } from "./monoFiles";
+import { listArtifacts } from "../../artifacts/artifacts";
 
 /**
  * What a Mono does on its own, on a schedule. Each run happens in a hidden
@@ -466,22 +467,73 @@ const MAX_PERSISTED_HABIT_RUNS = 200;
 function readPersistedRunMonos(): Record<string, string> {
   try {
     const raw = localStorage.getItem(HABIT_RUN_MONOS_KEY);
-    return raw ? (JSON.parse(raw) as Record<string, string>) : {};
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const result: Record<string, string> = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      if (typeof v === "string") result[k] = v;
+    }
+    return result;
   } catch {
     return {};
   }
 }
 
-function persistRunMono(sessionId: string, monoId: string): void {
+export function persistRunMono(
+  sessionId: string,
+  monoId: string,
+  referencedSessionIds?: ReadonlySet<string>,
+): void {
   try {
     const map = readPersistedRunMonos();
     map[sessionId] = monoId;
     const entries = Object.entries(map);
-    const trimmed =
-      entries.length > MAX_PERSISTED_HABIT_RUNS
-        ? Object.fromEntries(entries.slice(-MAX_PERSISTED_HABIT_RUNS))
-        : map;
-    localStorage.setItem(HABIT_RUN_MONOS_KEY, JSON.stringify(trimmed));
+    if (entries.length > MAX_PERSISTED_HABIT_RUNS) {
+      if (referencedSessionIds === undefined) {
+        // Query persisted artifacts to protect sessions still referenced by artifacts
+        void listArtifacts()
+          .then((artifacts) => {
+            const activeRefs = new Set(
+              artifacts
+                .map((a) => a.sourceSessionId)
+                .filter((id): id is string => Boolean(id)),
+            );
+            persistRunMono(sessionId, monoId, activeRefs);
+          })
+          .catch(() => {
+            // Fallback to trimming oldest without artifact reference information
+            persistRunMono(sessionId, monoId, new Set());
+          });
+        return;
+      }
+
+      // Prioritize keeping sessions that are currently referenced by persisted artifacts.
+      // Older unreferenced entries are evicted first.
+      const referenced: [string, string][] = [];
+      const unreferenced: [string, string][] = [];
+      for (const entry of entries) {
+        if (referencedSessionIds.has(entry[0])) {
+          referenced.push(entry);
+        } else {
+          unreferenced.push(entry);
+        }
+      }
+      const allowedUnreferenced = Math.max(
+        0,
+        MAX_PERSISTED_HABIT_RUNS - referenced.length,
+      );
+      const kept = [
+        ...referenced,
+        ...unreferenced.slice(-allowedUnreferenced),
+      ];
+      localStorage.setItem(
+        HABIT_RUN_MONOS_KEY,
+        JSON.stringify(Object.fromEntries(kept)),
+      );
+    } else {
+      localStorage.setItem(HABIT_RUN_MONOS_KEY, JSON.stringify(map));
+    }
   } catch {
     // Ignore localStorage persistence failures
   }

@@ -25,6 +25,7 @@ import {
   markHabitRun,
   habitRunMono,
   clearHabitRun,
+  persistRunMono,
   type Habit,
 } from "./monoHabits";
 import { beforeEach, afterEach, vi } from "vitest";
@@ -293,4 +294,34 @@ it("preserves habitRunMono mapping across clearHabitRun via persistent storage",
   // In-flight map is cleared, but persistent storage still resolves the owning Mono ID
   expect(habitRunMono("run-session-123")).toBe("mono-abc");
 });
+
+it("safely handles malformed and non-object storage values in habitRunMono", () => {
+  localStorage.setItem("monocode:mono-habit-run-monos", "null");
+  expect(habitRunMono("missing")).toBeUndefined();
+
+  localStorage.setItem("monocode:mono-habit-run-monos", "[1, 2, 3]");
+  expect(habitRunMono("missing")).toBeUndefined();
+
+  localStorage.setItem(
+    "monocode:mono-habit-run-monos",
+    JSON.stringify({ valid: "mono-1", nonString: 123 }),
+  );
+  expect(habitRunMono("valid")).toBe("mono-1");
+  expect(habitRunMono("nonString")).toBeUndefined();
+});
+
+it("retains habit-run mappings that are referenced by artifacts during trimming", () => {
+  const referenced = new Set(["run-0"]);
+  // Fill storage beyond 200 items while run-0 is referenced
+  for (let i = 0; i < 205; i++) {
+    persistRunMono(`run-${i}`, `mono-${i}`, referenced);
+  }
+  // run-1 was unreferenced and is the oldest, so it was evicted
+  expect(habitRunMono("run-1")).toBeUndefined();
+  // run-0 was referenced, so it was kept
+  expect(habitRunMono("run-0")).toBe("mono-0");
+  expect(habitRunMono("run-204")).toBe("mono-204");
+});
+
+
 
