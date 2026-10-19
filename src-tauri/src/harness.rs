@@ -211,10 +211,12 @@ impl HarnessHost {
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Retrieves the live child registered for the specified session ID if present.
     fn get(&self, session_id: &str) -> Option<Arc<LiveChild>> {
         self.lock_inner().children.get(session_id).cloned()
     }
 
+    /// Lists active process roots across all children, normalizing any generation-scoped session IDs to their base ID.
     pub(crate) fn process_roots(&self) -> Vec<crate::resources::ProcessRoot> {
         self.lock_inner()
             .children
@@ -299,6 +301,7 @@ impl HarnessHost {
             .collect();
         for key in matching_keys {
             if let Some(child) = inner.children.remove(&key) {
+                self.stop_sse(&key);
                 if target.is_none() {
                     target = Some(child);
                 } else {
@@ -4057,6 +4060,13 @@ mod tests {
         assert!(host
             .install_spawn("scoped-session#0".into(), epoch0, kill_all0, live0)
             .is_none());
+        let sse_stop = Arc::new(AtomicBool::new(false));
+        host.insert_sse(
+            "scoped-session#0".into(),
+            Arc::new(LiveSse {
+                stop: Arc::clone(&sse_stop),
+            }),
+        );
 
         let (epoch_base, kill_all_base, _) = host.begin_spawn("scoped-session");
         let (live_base, mut child_base) = live_child();
@@ -4073,6 +4083,7 @@ mod tests {
 
         let killed = host.kill_session("scoped-session");
         assert!(killed.is_some());
+        assert!(sse_stop.load(Ordering::SeqCst), "scoped session SSE stream must be stopped on kill_session");
         // Both exact and scoped children must have been removed from inner.children.
         assert!(host.lock_inner().children.is_empty());
         let _ = child0.kill();

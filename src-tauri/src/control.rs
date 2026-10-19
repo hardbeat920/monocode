@@ -509,6 +509,8 @@ fn configure_child_from_state(
     }
 }
 
+/// Configures process environment variables and scratch directories for child commands launched under the given session ID,
+/// resolving grants by exact session ID or by base session ID if generation-scoped keys are passed.
 pub fn configure_child(app: &AppHandle, session_id: &str, cmd: &mut Command) {
     let Some(host) = app.try_state::<ControlHost>() else {
         cmd.env_remove("MONOCODE_CONTROL_ENDPOINT")
