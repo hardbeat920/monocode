@@ -49,6 +49,7 @@ import Folder01Icon from "@hugeicons/core-free-icons/Folder01Icon";
 import FolderAddIcon from "@hugeicons/core-free-icons/FolderAddIcon";
 import FolderOpenIcon from "@hugeicons/core-free-icons/FolderOpenIcon";
 import FolderTreeIcon from "@hugeicons/core-free-icons/FolderTreeIcon";
+import Flowchart01Icon from "@hugeicons/core-free-icons/Flowchart01Icon";
 import GaugeIcon from "@hugeicons/core-free-icons/GaugeIcon";
 import GitBranchIcon from "@hugeicons/core-free-icons/GitBranchIcon";
 import GitCompareIcon from "@hugeicons/core-free-icons/GitCompareIcon";
@@ -103,6 +104,8 @@ import UnfoldMoreIcon from "@hugeicons/core-free-icons/UnfoldMoreIcon";
 import Tick02Icon from "@hugeicons/core-free-icons/Tick02Icon";
 import TickDouble02Icon from "@hugeicons/core-free-icons/TickDouble02Icon";
 import UndoIcon from "@hugeicons/core-free-icons/UndoIcon";
+import Redo03Icon from "@hugeicons/core-free-icons/Redo03Icon";
+import Undo03Icon from "@hugeicons/core-free-icons/Undo03Icon";
 import UngroupItemsIcon from "@hugeicons/core-free-icons/UngroupItemsIcon";
 import ViewIcon from "@hugeicons/core-free-icons/ViewIcon";
 import WholeWordIcon from "@hugeicons/core-free-icons/WholeWordIcon";
@@ -205,6 +208,7 @@ export const FolderOpen = wrap(FolderOpenIcon, "FolderOpen");
 export const Eye = wrap(ViewIcon, "Eye");
 export const FolderPlus = wrap(FolderAddIcon, "FolderPlus");
 export const FolderTree = wrap(FolderTreeIcon, "FolderTree");
+export const Flowchart = wrap(Flowchart01Icon, "Flowchart");
 export const Gauge = wrap(GaugeIcon, "Gauge");
 export const ChartBreakoutSquare = wrap(
   ChartBreakoutSquareIcon,
@@ -277,6 +281,9 @@ export const StickyNote = wrap(Note01Icon, "StickyNote");
 export const Terminal = wrap(ComputerTerminal01Icon, "Terminal");
 export const Trash2 = wrap(Delete02Icon, "Trash2");
 export const Undo2 = wrap(UndoIcon, "Undo2");
+/** Short hooked arrows, for compact undo/redo controls. */
+export const UndoArrow = wrap(Undo03Icon, "UndoArrow");
+export const RedoArrow = wrap(Redo03Icon, "RedoArrow");
 export const UnfoldVertical = wrap(UnfoldVerticalIcon, "UnfoldVertical");
 export const Ungroup = wrap(UngroupItemsIcon, "Ungroup");
 export const WandSparkles = wrap(MagicWand01Icon, "WandSparkles");

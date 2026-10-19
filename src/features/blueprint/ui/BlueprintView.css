@@ -1,0 +1,62 @@
+/* Connection dot: a larger hit area than the visible dot, so grabbing it is
+   easy. */
+.react-flow__handle.blueprint-dot {
+  width: 14px;
+  height: 14px;
+  border: 2px solid #fff;
+}
+.react-flow__handle.blueprint-dot::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  border-radius: 9999px;
+}
+/* Arrows still need a target to land on; it stays on the left, unseen. */
+.react-flow__handle.blueprint-target {
+  opacity: 0;
+}
+/* The inset card is promoted to its own GPU layer (index.css). WebKit then
+   rasterizes the zoomed canvas once and scales the bitmap, so box text goes
+   blurry. Drop the promotion while the blueprint is on screen. */
+html.is-mac.has-native-glass:not(.theme-light) .inset-card:has(.react-flow) {
+  transform: none;
+}
+/* Once a box has arrows, each arrow carries its own dot; the creation dot
+   only shows on hover, to start another arrow. */
+.react-flow__handle.blueprint-dot-linked {
+  opacity: 0;
+}
+.react-flow__node:hover .react-flow__handle.blueprint-dot-linked,
+.react-flow__handle.blueprint-dot-linked.connecting {
+  opacity: 1;
+}
+/* Select mode toggle in the canvas controls, highlighted while on. */
+.react-flow__controls-button.blueprint-control-on {
+  background: #1a4d9c;
+  color: #fff;
+}
+/* React Flow fills control icons (its own are solid shapes); the app's
+   icons are outlines, so filling them turns them into blobs. */
+.react-flow__controls-button svg.blueprint-icon {
+  fill: none;
+}
+/* Arrow labels: centered both ways, 12px (2px up from React Flow's 10px). */
+.blueprint-edge-label {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #0b1220;
+  color: #fff;
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+}
+/* Arrows are lifted above the boxes (edge zIndex 1) so their start dots
+   show; labels must sit above the arrows too, or the line crosses them. */
+.react-flow__edgelabel-renderer {
+  z-index: 1000;
+}

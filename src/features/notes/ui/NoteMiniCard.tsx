@@ -3,10 +3,7 @@ import { useState } from "react";
 import { ProjectLogoIcon } from "../../projects/ui/ProjectLogoIcon";
 import { ProjectMascot } from "../../projects/ui/ProjectMascot";
 import { useTabGroupLogos } from "../../projects/hooks/useTabGroupLogos";
-import {
-  noteSourceProject,
-  type NoteCardMeta,
-} from "../notes";
+import { noteSourceProject, type NoteCardMeta } from "../notes";
 import { projectKey } from "../../../shared/lib/paths";
 import {
   loadTabGroupColors,
@@ -23,6 +20,10 @@ type Props = {
   embedded?: boolean;
 };
 
+/**
+ * Compact note card for the composer and sent messages. A card carrying a
+ * `brief` (text that is not a saved note) expands to show what was sent.
+ */
 export function NoteMiniCard({ card, onDismiss, embedded = false }: Props) {
   const logos = useTabGroupLogos();
   const [mascots] = useState(loadTabGroupMascots);
@@ -37,20 +38,45 @@ export function NoteMiniCard({ card, onDismiss, embedded = false }: Props) {
       ? resolveTabGroupColor(key, colors, customColors, project)
       : undefined;
 
+  // A brief (e.g. from the blueprint) has no saved note to open, so the card
+  // itself expands to show what was sent.
+  const [showBrief, setShowBrief] = useState(false);
+  const brief = card.brief;
+
   const inner = (
     <div
       className={`relative rounded-md border border-content/10 bg-content/6 px-2.5 py-2 ${
         onDismiss ? "pr-8" : ""
       }`}
     >
-      <div className="flex w-full flex-col text-left">
+      <div
+        className={`flex w-full flex-col text-left ${brief ? "cursor-pointer" : ""}`}
+        role={brief ? "button" : undefined}
+        tabIndex={brief ? 0 : undefined}
+        aria-expanded={brief ? showBrief : undefined}
+        onClick={brief ? () => setShowBrief((open) => !open) : undefined}
+        onKeyDown={
+          brief
+            ? (e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setShowBrief((open) => !open);
+                }
+              }
+            : undefined
+        }
+      >
         <span className="flex min-w-0 items-center gap-1.5">
           <File
             className="size-3.5 shrink-0 text-content/45"
             strokeWidth={1.75}
           />
           <span className="min-w-0 truncate text-[11px] text-content/50">
-            Note{!embedded && card.slug ? ` · ${card.slug}` : ""}
+            {brief
+              ? showBrief
+                ? "Brief · hide"
+                : "Brief · show what was sent"
+              : `Note${!embedded && card.slug ? ` · ${card.slug}` : ""}`}
           </span>
         </span>
         <span className="mt-1 line-clamp-1 text-[13px] font-semibold leading-snug text-content">
@@ -76,6 +102,11 @@ export function NoteMiniCard({ card, onDismiss, embedded = false }: Props) {
           </span>
         ) : null}
       </div>
+      {brief && showBrief ? (
+        <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words border-t border-content/10 pt-2 font-sans text-[12px] leading-relaxed text-content/80 select-text">
+          {brief}
+        </pre>
+      ) : null}
       {onDismiss ? (
         <button
           type="button"

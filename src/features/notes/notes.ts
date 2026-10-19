@@ -40,6 +40,11 @@ export type NoteCardMeta = {
   slug: string;
   title: string;
   sourceCwd?: string;
+  /**
+   * Text that is not a saved note (e.g. a blueprint brief). Kept on the turn
+   * so the chat can show exactly what was sent; saved notes reopen instead.
+   */
+  brief?: string;
 };
 
 /** Composer chip: display fields plus the body injected into the harness prompt. */
@@ -53,6 +58,7 @@ export function noteCardMeta(card: NoteComposerCard): NoteCardMeta {
     slug: card.slug,
     title: card.title,
     ...(card.sourceCwd ? { sourceCwd: card.sourceCwd } : {}),
+    ...(card.brief ? { brief: card.brief } : {}),
   };
 }
 

@@ -105,6 +105,7 @@ import {
   TitleBar,
   type Tab as TitleTab,
 } from "./shell/TitleBar";
+import { BlueprintView } from "../features/blueprint/ui/BlueprintView";
 import {
   APP_VIEW_LABELS,
   appViewForTab,
@@ -1375,6 +1376,9 @@ function Workspace({
     setRightPanelClosing(false);
     saveRightPanelOpen(true);
   }, []);
+  const [workspaceMode, setWorkspaceMode] = useState<
+    "Blueprint" | "Development"
+  >("Development");
   const onToggleRightPanel = useCallback(() => {
     const next = !rightPanelOpenRef.current;
     rightPanelOpenRef.current = next;
@@ -2021,6 +2025,11 @@ function Workspace({
     ? sessions.find((session) => session.id === monoViewId)
     : undefined;
   const monoCovers = !!monoViewId;
+  // Blueprint needs a project, and a Mono in view takes over the workspace:
+  // in either case show the workspace, or nothing could switch back (the
+  // title bar hides the mode toggle for Monos and projectless windows).
+  const blueprintShown =
+    workspaceMode === "Blueprint" && !monoCovers && looksLikeProject(projectCwd);
   // The open Mono's title tab, in the inset layout.
   const monoViewTabId = useMemo(() => {
     const monoId = monoViewId ? monoForSession(monoViewId)?.id : undefined;
@@ -6821,6 +6830,8 @@ function Workspace({
   const onOpenFile = useCallback<OpenFileFn>(
     (path, navigation, options) => {
       closeMonoView();
+      // Files open in the workspace, which Blueprint mode hides.
+      setWorkspaceMode("Development");
       void (async () => {
         const fileCwd = gitCwdRef.current;
         const fileProjectCwd = sidebarCwdRef.current;
@@ -13814,6 +13825,8 @@ function Workspace({
       onToggleRightPanel={
         showRightPanelToggle ? onToggleRightPanel : undefined
       }
+      workspaceMode={workspaceMode}
+      onWorkspaceModeChange={setWorkspaceMode}
       rightPanelDot={(rightPanelChanges?.files ?? 0) > 0}
       rightPanelUnavailable={!!activeAppView}
       canGoBack={!!monoViewId || tabVisitNav.canBack}
@@ -14120,9 +14133,25 @@ function Workspace({
                         {titleBarInBody ? workspaceTitleBar : null}
 
                         <main className="relative flex min-h-0 min-w-0 flex-1">
+                          {blueprintShown ? (
+                            <BlueprintView
+                              cwd={projectCwd}
+                              onImplement={(card) => {
+                                setWorkspaceMode("Development");
+                                onAddNoteToChat(card);
+                              }}
+                            />
+                          ) : null}
+                          {/* Hidden, not unmounted, so sessions keep running.
+                              Hiding (instead of covering) also keeps WebKit
+                              from bitmap-scaling the zoomed blueprint. */}
                           <div
                             ref={dockGridRef}
-                            className="grid h-full min-h-0 min-w-0 flex-1"
+                            className={
+                              blueprintShown
+                                ? "hidden"
+                                : "grid h-full min-h-0 min-w-0 flex-1"
+                            }
                           >
                             {projectTerminals.map((dock) => {
                               const show =

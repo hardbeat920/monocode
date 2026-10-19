@@ -51,6 +51,7 @@ import {
   type MonoState,
 } from "../../features/monos/model/mono";
 import { IS_MAC, IS_WIN, MOD, SHIFT } from "../../platform/tauri/platform";
+import { radioArrowStep } from "../../shared/lib/radioKeys";
 import { useTrafficLightsVisible } from "../../platform/tauri/useTrafficLightsVisible";
 import type { RecentProject } from "../../features/projects/model/recents";
 import {
@@ -142,6 +143,9 @@ type Props = {
   /** Inset layout: the right sidebar holding the project tools. */
   rightPanelOpen?: boolean;
   onToggleRightPanel?: () => void;
+  /** Blueprint swaps the workspace for a drawing grid. */
+  workspaceMode?: "Blueprint" | "Development";
+  onWorkspaceModeChange?: (mode: "Blueprint" | "Development") => void;
   /** The working tree has changes; dots the right panel toggle. */
   rightPanelDot?: boolean;
   /** An app view (Search, Inbox, Notes, Automations) is shown, which has no
@@ -756,6 +760,8 @@ function TitleBarComponent({
   inset = false,
   rightPanelOpen = false,
   onToggleRightPanel,
+  workspaceMode = "Development",
+  onWorkspaceModeChange,
   rightPanelDot = false,
   rightPanelUnavailable = false,
   canGoBack = false,
@@ -1052,16 +1058,62 @@ function TitleBarComponent({
   // A Mono's own overview holds its changes; app views have none beside them.
   const rightPanelOff = !!mono || rightPanelUnavailable;
   const changesDot = rightPanelDot && !rightPanelOff;
+  // Blueprint / Development: in the inset layout it sits beside the right
+  // sidebar toggle; the classic layout has no such toggle, so it stands alone.
+  const WORKSPACE_MODES = ["Blueprint", "Development"] as const;
+  const showModeToggle =
+    !mono && showCurrentProject && Boolean(onWorkspaceModeChange);
+  const modeToggle = showModeToggle ? (
+    <div
+      role="radiogroup"
+      aria-label="Workspace mode"
+      data-tauri-drag-region="false"
+      className="flex gap-0.5 rounded-md border border-content/10 p-0.5 text-[11px]"
+    >
+      {WORKSPACE_MODES.map((m) => (
+        <button
+          key={m}
+          type="button"
+          role="radio"
+          aria-checked={workspaceMode === m}
+          // Radio group: one tab stop, arrow keys move between the options.
+          tabIndex={workspaceMode === m ? 0 : -1}
+          onClick={() => onWorkspaceModeChange?.(m)}
+          onKeyDown={(e) => {
+            const next = radioArrowStep(e.key, WORKSPACE_MODES, m);
+            if (!next) return;
+            e.preventDefault();
+            onWorkspaceModeChange?.(next);
+            (
+              e.currentTarget.parentElement?.querySelector(
+                `[data-mode="${next}"]`,
+              ) as HTMLElement | null
+            )?.focus();
+          }}
+          data-mode={m}
+          className={`rounded-[4px] px-2 py-0.5 ${
+            workspaceMode === m
+              ? "bg-selection text-content"
+              : "text-content/50 hover:text-content"
+          }`}
+        >
+          {m}
+        </button>
+      ))}
+    </div>
+  ) : null;
   const trailingControls =
     showTrailingActions ||
     showRightPanelToggle ||
+    showModeToggle ||
     (mono && (onToggleMonoOverview || onOpenMonoSettings)) ||
     (!IS_MAC && !hideWindowControls) ? (
       <div className="flex h-full shrink-0 items-stretch">
         {showRightPanelToggle ? (
           // Clear of the window's right edge, like the traffic lights' inset
           // on the left.
-          <div className="flex items-center pl-1.5 pr-3">
+          <div className="flex items-center gap-2 pl-1.5 pr-3">
+            {modeToggle}
             <IconButton
               label={
                 changesDot
@@ -1086,6 +1138,9 @@ function TitleBarComponent({
               </span>
             </IconButton>
           </div>
+        ) : null}
+        {!showRightPanelToggle && showModeToggle ? (
+          <div className="flex items-center pl-1.5 pr-3">{modeToggle}</div>
         ) : null}
         {mono && (onToggleMonoOverview || onOpenMonoSettings) ? (
           <MonoViewActions

@@ -58,7 +58,9 @@ export default defineConfig(async ({ mode }) => {
             }
           : undefined,
       watch: {
-        ignored: stable ? ["**/*"] : ["**/src-tauri/**"],
+        // .monocode/ holds the blueprint, saved on every drag; watching it
+        // reloads the page.
+        ignored: stable ? ["**/*"] : ["**/src-tauri/**", "**/.monocode/**"],
       },
     },
   };
