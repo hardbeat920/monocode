@@ -463,6 +463,7 @@ pub fn window_closed(app: &AppHandle, label: &str) {
     };
 }
 
+/// Extracts the base session ID by stripping any generation suffix (e.g. `session-id#0` -> `session-id`).
 fn base_session_id(session_id: &str) -> &str {
     session_id
         .split_once('#')
@@ -470,6 +471,8 @@ fn base_session_id(session_id: &str) -> &str {
         .unwrap_or(session_id)
 }
 
+/// Populates control and app endpoint / token environment variables on the child command.
+/// Supports both exact session IDs and generation-scoped keys (e.g. `session-id#0`).
 fn configure_child_from_state(
     endpoint: &str,
     inner: &Inner,

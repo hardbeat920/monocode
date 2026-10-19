@@ -271,24 +271,38 @@ impl HarnessHost {
         None
     }
 
+    /// Terminates the process associated with the given session ID, or any processes
+    /// associated with generation-scoped session keys sharing this base session ID (e.g. `session#0`).
+    /// Also increments epochs for all matching session keys to invalidate in-flight spawns.
     fn kill_session(&self, session_id: &str) -> Option<Arc<LiveChild>> {
         let mut inner = self.lock_inner();
         *inner.epochs.entry(session_id.to_string()).or_insert(0) += 1;
+
+        // Invalidate epochs for any matching generation-scoped session keys so that
+        // in-flight spawns are rejected by install_spawn.
+        let matching_epoch_keys: Vec<String> = inner
+            .epochs
+            .keys()
+            .filter(|key| key.split_once('#').map(|(base, _)| base) == Some(session_id))
+            .cloned()
+            .collect();
+        for key in matching_epoch_keys {
+            *inner.epochs.entry(key).or_insert(0) += 1;
+        }
+
         let mut target = inner.children.remove(session_id);
-        if target.is_none() {
-            let matching_keys: Vec<String> = inner
-                .children
-                .keys()
-                .filter(|key| key.split_once('#').map(|(base, _)| base) == Some(session_id))
-                .cloned()
-                .collect();
-            for key in matching_keys {
-                if let Some(child) = inner.children.remove(&key) {
-                    if target.is_none() {
-                        target = Some(child);
-                    } else {
-                        terminate(child.pid);
-                    }
+        let matching_keys: Vec<String> = inner
+            .children
+            .keys()
+            .filter(|key| key.split_once('#').map(|(base, _)| base) == Some(session_id))
+            .cloned()
+            .collect();
+        for key in matching_keys {
+            if let Some(child) = inner.children.remove(&key) {
+                if target.is_none() {
+                    target = Some(child);
+                } else {
+                    terminate(child.pid);
                 }
             }
         }
@@ -4022,23 +4036,49 @@ mod tests {
     #[test]
     fn process_roots_and_kill_session_handle_generation_scoped_keys() {
         let host = HarnessHost::new();
-        let (epoch, kill_all, _) = host.begin_spawn("scoped-session#0");
-        let (live, mut child) = live_child();
-        let pid = live.pid;
+
+        // 1. In-flight spawn is rejected when base session is killed.
+        let (in_flight_epoch, in_flight_kill_all, _) = host.begin_spawn("in-flight-session#0");
+        assert!(host.kill_session("in-flight-session").is_none());
+        let (in_flight_live, mut in_flight_child) = live_child();
+        let rejected = host.install_spawn(
+            "in-flight-session#0".into(),
+            in_flight_epoch,
+            in_flight_kill_all,
+            in_flight_live,
+        );
+        assert!(rejected.is_some(), "in-flight spawn must be rejected after kill_session");
+        let _ = in_flight_child.kill();
+        let _ = in_flight_child.wait();
+
+        // 2. Exact child plus scoped child are both terminated on kill_session(base).
+        let (epoch0, kill_all0, _) = host.begin_spawn("scoped-session#0");
+        let (live0, mut child0) = live_child();
         assert!(host
-            .install_spawn("scoped-session#0".into(), epoch, kill_all, live)
+            .install_spawn("scoped-session#0".into(), epoch0, kill_all0, live0)
+            .is_none());
+
+        let (epoch_base, kill_all_base, _) = host.begin_spawn("scoped-session");
+        let (live_base, mut child_base) = live_child();
+        assert!(host
+            .install_spawn("scoped-session".into(), epoch_base, kill_all_base, live_base)
             .is_none());
 
         let roots = host.process_roots();
-        let root = roots.iter().find(|r| r.pid == pid).expect("process root found");
-        assert_eq!(root.session_id, "scoped-session");
+        let roots_for_session: Vec<_> = roots
+            .iter()
+            .filter(|r| r.session_id == "scoped-session")
+            .collect();
+        assert_eq!(roots_for_session.len(), 2);
 
         let killed = host.kill_session("scoped-session");
         assert!(killed.is_some());
-        assert_eq!(killed.unwrap().pid, pid);
+        // Both exact and scoped children must have been removed from inner.children.
         assert!(host.lock_inner().children.is_empty());
-        let _ = child.kill();
-        let _ = child.wait();
+        let _ = child0.kill();
+        let _ = child0.wait();
+        let _ = child_base.kill();
+        let _ = child_base.wait();
     }
 
     #[test]
