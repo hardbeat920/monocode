@@ -217,6 +217,8 @@ export type AgentStep = {
   toolKind?: string;
   status?: string;
   detail?: string;
+  /** Large output left in storage on load; see `loadToolDetail`. */
+  detailOmitted?: boolean;
   preview?: ToolPreview;
 };
 
@@ -344,6 +346,8 @@ export type Block = {
     kind?: string;
     status?: string;
     detail?: string;
+    /** Large output left in storage on load; see `loadToolDetail`. */
+    detailOmitted?: boolean;
     preview?: ToolPreview;
     /** Every file in a multi-file edit, retained for checkpoint recovery. */
     paths?: string[];
@@ -668,6 +672,9 @@ export function retargetSessionToProject(
     ...(harness === session.harness
       ? {}
       : { providerSessionId: undefined, providerAccountId: undefined }),
+    // The account was chosen for the old project. The new project reads its
+    // own stored choice, so a stamp carried over would show the wrong account.
+    ...(cwd === session.cwd ? {} : { providerAccountId: undefined }),
     ...(resolved.id === session.model
       ? {}
       : { context: dropContextWindow(session.context) }),

@@ -171,3 +171,44 @@ describe("AgentMarkdown note images", () => {
     expect(markup).toContain('alt="Diagram"');
   });
 });
+
+describe("AgentMarkdown local media", () => {
+  const text = [
+    "![Demo](</Users/me/My Clips/demo.mp4>)",
+    "",
+    "[Open the screenshot](/Users/me/shot.png) and [the notes](/Users/me/notes.md)",
+  ].join("\n");
+
+  it("shows local images and videos in place of their links when enabled", () => {
+    const markup = renderToStaticMarkup(
+      createElement(AgentMarkdown, { text, localMedia: true }),
+    );
+
+    expect(markup).toContain('data-local-media="/Users/me/My Clips/demo.mp4"');
+    expect(markup).toContain('data-local-media="/Users/me/shot.png"');
+    expect(markup).not.toContain('data-local-media="/Users/me/notes.md"');
+    expect(markup).toContain(">the notes</a>");
+  });
+
+  it("keeps links and drops local images elsewhere", () => {
+    const markup = renderToStaticMarkup(createElement(AgentMarkdown, { text }));
+
+    expect(markup).not.toContain("data-local-media");
+    expect(markup).toContain(">Open the screenshot</a>");
+  });
+});
+
+describe("AgentMarkdown document images", () => {
+  it("drops relative images in chat, Markdown or HTML", () => {
+    const markup = renderToStaticMarkup(
+      createElement(AgentMarkdown, {
+        text: '![Shot](shot.png)\n\n<p align="center"><img src=".github/readme/hero.png" alt="Hero"></p>',
+        cwd: "/repo",
+      }),
+    );
+
+    expect(markup).not.toContain("data-document-image");
+    expect(markup).not.toContain("<img");
+    expect(markup).not.toContain("data-image-alt");
+  });
+});

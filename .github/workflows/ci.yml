@@ -24,6 +24,31 @@ jobs:
           node-version: 20
       - run: node --test scripts/release-channel.test.cjs
 
+  mobile:
+    name: Mobile checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            mobile/package-lock.json
+      - run: npm ci
+      - run: npm ci
+        working-directory: mobile
+      - run: npm run lint
+        working-directory: mobile
+      - run: npx tsc --noEmit
+        working-directory: mobile
+      - run: npx vitest run --config mobile/vitest.config.ts
+
   browser:
     runs-on: ubuntu-latest
     permissions:

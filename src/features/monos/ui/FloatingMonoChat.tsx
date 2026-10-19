@@ -614,7 +614,7 @@ function ArtifactSheet({
             <X className="size-4" />
           </button>
         </header>
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 pt-2 pb-8">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pt-1 pb-5">
           {!loaded ? (
             <p role="status" className="text-[13px] text-content/50">
               Loading document…
@@ -625,12 +625,6 @@ function ArtifactSheet({
             </p>
           ) : (
             <article data-artifact-reader={artifact.id}>
-              <h1 className="mb-1 text-[20px] leading-snug font-medium text-content">
-                {artifact.title}
-              </h1>
-              <p className="mb-5 text-[11px] text-content/45">
-                Updated {new Date(artifact.updatedAt).toLocaleString()}
-              </p>
               <ArtifactContent
                 artifact={artifact}
                 onOpenFile={(path) => void action({ kind: "openFile", path })}

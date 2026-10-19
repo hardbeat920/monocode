@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Workspace performance</title>
+  </head>
+  <body>
+    <div id="root" style="height: 100vh"></div>
+    <script>
+      if (new URLSearchParams(location.search).has("profile")) {
+        window.workspaceProfiles = [];
+        window.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
+          supportsFiber: true,
+          inject: () => 1,
+          onCommitFiberUnmount() {},
+          onCommitFiberRoot(_id, root) {
+            const entries = [];
+            function visit(fiber) {
+              let children = 0;
+              for (let child = fiber.child; child; child = child.sibling) {
+                children += child.actualDuration || 0;
+                visit(child);
+              }
+              const self = (fiber.actualDuration || 0) - children;
+              if (self > 0.5)
+                entries.push({
+                  name:
+                    fiber.type?.displayName || fiber.type?.name || fiber.type,
+                  self,
+                  total: fiber.actualDuration,
+                });
+            }
+            visit(root.current);
+            window.workspaceProfiles.push(
+              entries.sort((a, b) => b.self - a.self).slice(0, 15),
+            );
+          },
+        };
+      }
+    </script>
+    <script type="module" src="./workspace-performance.tsx"></script>
+  </body>
+</html>

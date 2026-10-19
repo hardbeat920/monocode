@@ -83,6 +83,24 @@ export function sniffImageMime(bytes: Uint8Array): string | null {
   return null;
 }
 
+/**
+ * MIME type for an image a Markdown document shows, or null when the bytes
+ * are not one. Raster images are sniffed as in the viewer. SVG has no magic
+ * number, so a `.svg` file must be text that contains an `<svg` element; it is
+ * then shown through an `<img>`, where its scripts and external references
+ * never run. A Git LFS pointer in place of the image matches neither.
+ */
+export function sniffDocumentImageMime(
+  path: string,
+  bytes: Uint8Array,
+): string | null {
+  const raster = sniffImageMime(bytes);
+  if (raster) return raster;
+  if (extensionOf(path) !== ".svg" || bytes.includes(0)) return null;
+  const text = new TextDecoder().decode(bytes.subarray(0, 64 * 1024));
+  return /<svg[\s>]/i.test(text) ? "image/svg+xml" : null;
+}
+
 /** Byte count for the viewer footer, in the units a file manager would show. */
 export function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;

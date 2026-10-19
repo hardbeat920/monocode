@@ -5,6 +5,8 @@ import { GitChangesPanel } from "./GitChangesPanel";
 type Props = {
   cwd: string;
   enabled: boolean;
+  showGraph?: boolean;
+  compactHeader?: boolean;
   textHarness?: HarnessId;
   selectedPath?: string;
   selectedKind?: GitFileDiffKind;
@@ -17,6 +19,8 @@ type Props = {
 export function SourceControl({
   cwd,
   enabled,
+  showGraph,
+  compactHeader,
   textHarness,
   selectedPath,
   selectedKind,
@@ -31,6 +35,8 @@ export function SourceControl({
         key={cwd}
         cwd={cwd}
         enabled={enabled}
+        showGraph={showGraph}
+        compactHeader={compactHeader}
         textHarness={textHarness}
         selectedPath={selectedPath}
         selectedKind={selectedKind}
