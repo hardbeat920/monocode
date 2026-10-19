@@ -13420,12 +13420,15 @@ function Workspace({
   useEffect(() => {
     let active = true;
     let sequence = 0;
+    const deletedIds = new Set<string>();
     const refresh = () => {
       const requestSeq = ++sequence;
       void listArtifacts()
         .then((items) => {
           if (!active || requestSeq !== sequence) return;
-          setPersistedArtifacts(items);
+          setPersistedArtifacts(
+            items.filter((item) => !deletedIds.has(item.id)),
+          );
         })
         .catch(() => {});
     };
@@ -13433,7 +13436,7 @@ function Workspace({
     window.addEventListener(ARTIFACTS_CHANGED_EVENT, refresh);
     const listening = listen<string>(ARTIFACT_DELETED_EVENT, ({ payload: id }) => {
       if (!active) return;
-      sequence++;
+      deletedIds.add(id);
       setPersistedArtifacts((current) => current.filter((c) => c.id !== id));
     });
     return () => {
