@@ -36,6 +36,7 @@ import {
 } from "../../features/terminal/model/terminalTab";
 import { MOD } from "../../platform/tauri/platform";
 import {
+  USAGE_CHIP_CLASSES,
   USAGE_REFRESH_CLASSES,
   UsageProviderChip,
   type UsageChipVariant,
@@ -80,6 +81,8 @@ export function UsageFooter({
   projectTerminalOpen = false,
   onSelectAccount,
   onManageAccounts,
+  inset = false,
+  pressureSlot,
 }: {
   providers: RateLimitProvider[];
   session?: UsageFooterSession;
@@ -97,6 +100,10 @@ export function UsageFooter({
     accountId: string,
   ) => void;
   onManageAccounts?: (provider: ProviderAccountProvider) => void;
+  /** Sits on the inset layout's outer glass, below the card. */
+  inset?: boolean;
+  /** Receives the slot beside the terminal button for the pressure chip. */
+  pressureSlot?: (element: HTMLSpanElement | null) => void;
 }) {
   const opencode = useCachedRateLimits("opencode");
   const showUsage =
@@ -125,7 +132,14 @@ export function UsageFooter({
   return (
     <footer
       aria-label={ariaLabel}
-      className="flex h-7 shrink-0 items-center gap-1.5 overflow-x-auto border-t border-stroke px-3 text-[11px] text-content/55"
+      // Inset: the card's edge above reads as part of the gap, so a little
+      // room below keeps the chips optically centred. The pills line up with
+      // the card's edges, which carry their own padding.
+      className={`flex shrink-0 items-center gap-1.5 overflow-x-auto text-[11px] text-content/55${
+        inset
+          ? " inset-footer mr-1.5 h-[30px] pb-0.5"
+          : " h-7 border-t border-stroke px-3"
+      }`}
     >
       <UsageChips
         providers={providers}
@@ -133,28 +147,39 @@ export function UsageFooter({
         project={project}
         onSelectAccount={onSelectAccount}
         onManageAccounts={onManageAccounts}
+        variant={inset ? "inset" : "footer"}
         fallback={
           session ? (
             <SessionChip
               key={session.id ?? session.harness}
               session={session}
+              inset={inset}
             />
           ) : null
         }
       />
-      {showTerminals || showTerminalButton || showBrowser ? (
+      {showTerminals || showTerminalButton || showBrowser || pressureSlot ? (
         <div className="ml-auto flex shrink-0 items-center gap-2">
+          {pressureSlot ? (
+            <span
+              ref={pressureSlot}
+              className="flex items-center empty:hidden"
+            />
+          ) : null}
           {showBrowser ? <BrowserStatusButton /> : null}
           {showTerminals ? (
             <RunningTerminalChip
               terminals={terminals}
               open={terminalOpen}
               onToggle={onToggleTerminal}
+              inset={inset}
             />
           ) : showTerminalButton ? (
             <button
               type="button"
-              className={`inline-flex h-5 shrink-0 items-center gap-1.5 whitespace-nowrap rounded px-1.5 hover:bg-content/10 ${
+              className={`inline-flex h-5 shrink-0 items-center gap-1.5 whitespace-nowrap hover:bg-content/10 ${
+                inset ? "rounded-full px-2" : "rounded-md px-1.5"
+              } ${
                 projectTerminalOpen
                   ? "text-accent"
                   : "text-content/40 hover:text-content"
@@ -527,7 +552,13 @@ function TerminalLiveMark() {
   );
 }
 
-function SessionChip({ session }: { session: UsageFooterSession }) {
+function SessionChip({
+  session,
+  inset,
+}: {
+  session: UsageFooterSession;
+  inset: boolean;
+}) {
   const trigger = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const [loginState, setLoginState] = useState<ProviderSignInState>("idle");
@@ -582,7 +613,7 @@ function SessionChip({ session }: { session: UsageFooterSession }) {
       <button
         ref={trigger}
         type="button"
-        className="-mx-1 inline-flex h-5 min-w-0 shrink-0 items-center gap-1.5 whitespace-nowrap rounded px-1 text-content/55 transition-[background-color,color,transform] duration-150 ease-out hover:bg-content/10 hover:text-content focus-visible:outline-2 focus-visible:outline-accent active:scale-[0.97]"
+        className={USAGE_CHIP_CLASSES[inset ? "inset" : "footer"]}
         aria-label={`${HARNESS_TITLE[session.harness]} sign-in required`}
         aria-expanded={open}
         aria-haspopup="dialog"
@@ -627,10 +658,12 @@ function RunningTerminalChip({
   terminals,
   open: panelOpen,
   onToggle,
+  inset,
 }: {
   terminals: RunningTerminal[];
   open: boolean;
   onToggle?: (fileId: string) => void;
+  inset: boolean;
 }) {
   const root = useRef<HTMLButtonElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -658,7 +691,9 @@ function RunningTerminalChip({
       <button
         ref={root}
         type="button"
-        className="inline-flex min-w-0 max-w-[16rem] items-center gap-1.5 whitespace-nowrap rounded px-1 -mx-1 hover:bg-content/10 hover:text-content"
+        className={`inline-flex min-w-0 max-w-[16rem] items-center gap-1.5 whitespace-nowrap hover:bg-content/10 hover:text-content ${
+          inset ? "h-5 rounded-full px-2" : "-mx-1 rounded-md px-1"
+        }`}
         aria-label={ariaLabel}
         aria-pressed={panelOpen}
         aria-expanded={many && !panelOpen ? menuOpen : undefined}
