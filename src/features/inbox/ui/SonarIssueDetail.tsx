@@ -13,7 +13,6 @@ import {
   highlightSource,
   type SyntaxToken,
 } from "../../files/editor/syntaxTokens";
-import { useColorScheme } from "../../../shared/hooks/useColorScheme";
 import { useEffect, useMemo, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { InboxItem } from "../model/githubTasks";
@@ -417,7 +416,6 @@ function SonarSourceSnippet({
   path: string;
   line?: number | null;
 }) {
-  const scheme = useColorScheme();
   const [tokens, setTokens] = useState<SyntaxToken[][]>([]);
   useEffect(() => {
     let cancelled = false;
@@ -428,7 +426,6 @@ function SonarSourceSnippet({
             highlightSource(
               content.source.map((row) => row.code).join("\n"),
               language,
-              scheme,
             ),
           );
       })
@@ -438,7 +435,7 @@ function SonarSourceSnippet({
     return () => {
       cancelled = true;
     };
-  }, [content.source, path, scheme]);
+  }, [content.source, path]);
   const start =
     content.issue.textRange?.startLine ?? content.issue.line ?? line;
   const end = content.issue.textRange?.endLine ?? start;
