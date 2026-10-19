@@ -460,8 +460,36 @@ const runs = new Map<string, string>();
  */
 const launches = new Map<string, MonoSpawnedSession[]>();
 
+const HABIT_RUN_MONOS_KEY = "monocode:mono-habit-run-monos";
+const MAX_PERSISTED_HABIT_RUNS = 200;
+
+function readPersistedRunMonos(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(HABIT_RUN_MONOS_KEY);
+    return raw ? (JSON.parse(raw) as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function persistRunMono(sessionId: string, monoId: string): void {
+  try {
+    const map = readPersistedRunMonos();
+    map[sessionId] = monoId;
+    const entries = Object.entries(map);
+    const trimmed =
+      entries.length > MAX_PERSISTED_HABIT_RUNS
+        ? Object.fromEntries(entries.slice(-MAX_PERSISTED_HABIT_RUNS))
+        : map;
+    localStorage.setItem(HABIT_RUN_MONOS_KEY, JSON.stringify(trimmed));
+  } catch {
+    // Ignore localStorage persistence failures
+  }
+}
+
 export function markHabitRun(sessionId: string, monoId: string): void {
   runs.set(sessionId, monoId);
+  persistRunMono(sessionId, monoId);
 }
 
 export function isHabitRun(sessionId: string): boolean {
@@ -470,7 +498,7 @@ export function isHabitRun(sessionId: string): boolean {
 
 /** The Mono a habit run works for. */
 export function habitRunMono(sessionId: string): string | undefined {
-  return runs.get(sessionId);
+  return runs.get(sessionId) ?? readPersistedRunMonos()[sessionId];
 }
 
 export function clearHabitRun(sessionId: string): void {

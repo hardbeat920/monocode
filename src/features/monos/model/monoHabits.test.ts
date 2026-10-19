@@ -22,8 +22,22 @@ import {
   QUIET_MARKER,
   serializeHabits,
   unseenHabitPosts,
+  markHabitRun,
+  habitRunMono,
+  clearHabitRun,
   type Habit,
 } from "./monoHabits";
+import { beforeEach, afterEach, vi } from "vitest";
+
+beforeEach(() => {
+  const stored = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => stored.get(key) ?? null,
+    setItem: (key: string, value: string) => stored.set(key, value),
+    removeItem: (key: string) => stored.delete(key),
+  });
+});
+afterEach(() => vi.unstubAllGlobals());
 
 const at = (day: number, hour: number, minute = 0) =>
   new Date(2026, 9, day, hour, minute).getTime();
@@ -270,3 +284,13 @@ it("starts a new habit enabled and due at its next scheduled time", () => {
   });
   expect(created.id).toBeTruthy();
 });
+
+it("preserves habitRunMono mapping across clearHabitRun via persistent storage", () => {
+  markHabitRun("run-session-123", "mono-abc");
+  expect(habitRunMono("run-session-123")).toBe("mono-abc");
+
+  clearHabitRun("run-session-123");
+  // In-flight map is cleared, but persistent storage still resolves the owning Mono ID
+  expect(habitRunMono("run-session-123")).toBe("mono-abc");
+});
+
