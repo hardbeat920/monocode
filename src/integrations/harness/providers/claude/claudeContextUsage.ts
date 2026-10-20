@@ -50,10 +50,10 @@ export class ClaudeContextUsage {
       )
     ) {
       this.unsupported = true;
+      this.publish(null);
+    } else if (response.ok) {
+      this.publish(compactionWindowFromContextUsage(response.payload));
     }
-    this.publish(
-      response.ok ? compactionWindowFromContextUsage(response.payload) : null,
-    );
     return true;
   }
 
@@ -71,6 +71,5 @@ export class ClaudeContextUsage {
   private fail(id: string): void {
     if (this.disposed || this.pending !== id) return;
     this.clearPending();
-    this.publish(null);
   }
 }

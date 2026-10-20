@@ -110,30 +110,49 @@ describe("ClaudeContextUsage", () => {
     expect(published).toEqual([400_000]);
   });
 
-  it("publishes null on timeout and accepts a later request", async () => {
+  it("keeps quiet on timeout and accepts a later request", async () => {
     const { meter, requests, published } = setup();
     meter.refresh();
-    await vi.advanceTimersByTimeAsync(4_999);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(published).toEqual([]);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(published).toEqual([null]);
     meter.refresh();
     await vi.advanceTimersByTimeAsync(0);
     meter.handleResponse(reply(idOf(requests[1]), nativePayload));
-    expect(published).toEqual([null, 400_000]);
+    expect(published).toEqual([400_000]);
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(published).toEqual([null, 400_000]);
+    expect(published).toEqual([400_000]);
   });
 
-  it("clears quietly when the send is rejected", async () => {
+  it("stays quiet when the send is rejected", async () => {
     const { meter, published } = setup(async () => {
       throw new Error("closed");
     });
     meter.refresh();
     await vi.advanceTimersByTimeAsync(0);
-    expect(published).toEqual([null]);
+    expect(published).toEqual([]);
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(published).toEqual([null]);
+    expect(published).toEqual([]);
+  });
+
+  it("keeps the last window after a timeout", async () => {
+    const { meter, requests, published } = setup();
+    meter.refresh();
+    await vi.advanceTimersByTimeAsync(0);
+    meter.handleResponse(reply(idOf(requests[0]), nativePayload));
+    meter.refresh();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(published).toEqual([400_000]);
+  });
+
+  it("keeps the last window after a transient error", async () => {
+    const { meter, requests, published } = setup();
+    meter.refresh();
+    await vi.advanceTimersByTimeAsync(0);
+    meter.handleResponse(reply(idOf(requests[0]), nativePayload));
+    meter.refresh();
+    await vi.advanceTimersByTimeAsync(0);
+    meter.handleResponse(failure(idOf(requests[1]), "temporarily busy"));
+    expect(published).toEqual([400_000]);
   });
 
   it.each([
@@ -158,7 +177,7 @@ describe("ClaudeContextUsage", () => {
       meter.refresh();
       await vi.advanceTimersByTimeAsync(0);
       meter.handleResponse(failure(idOf(requests[0]), error));
-      expect(published).toEqual([null]);
+      expect(published).toEqual([]);
       meter.refresh();
       await vi.advanceTimersByTimeAsync(0);
       expect(requests).toHaveLength(2);
