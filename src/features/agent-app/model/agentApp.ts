@@ -464,6 +464,7 @@ function startLaunch(
   const worktreeCwd = optionalString(input.worktreeCwd, "worktreeCwd");
   if (worktreeCwd && workspaceMode !== "current")
     throw new Error("worktreeCwd requires workspaceMode current");
+  const startingMono = host.monoOf?.(source.id);
   const currentWorktree =
     worktreeCwd ||
     (!source.cowId && pathKey(cwd) === pathKey(source.cwd)
@@ -472,7 +473,9 @@ function startLaunch(
   return {
     cwd,
     prompt,
-    ...(host.monoOf?.(source.id)?.showStartedSessionsInSidebar !== true
+    // Only a Mono's own preference hides what it starts. A regular session
+    // with /operator has no Mono, and its launches belong in the sidebar.
+    ...(startingMono && startingMono.showStartedSessionsInSidebar !== true
       ? { sidebarHidden: true }
       : {}),
     ...(draft ? { draft: true } : {}),

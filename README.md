@@ -51,6 +51,8 @@ MonoCode is still early. If something breaks, [report a bug](https://github.com/
 
 You’ll need Node.js 20+ and a stable Rust toolchain. See [build setup](docs/building.md) for platform dependencies and packaging.
 
+The mobile app is a separate Expo project in [`mobile/`](mobile/README.md). Run it with `cd mobile && npm install && npm start`.
+
 ```bash
 npm install
 npm run tauri dev

@@ -146,8 +146,11 @@ Actions:
                   "workspaceMode":"current","worktreeCwd":"<path>","draft":false,
                   "placement":"right",
                   "besideSessionId":"<visible session ID>"}
-                  Create a tab with the prompt, or set placement to right or
-                  down to split a visible session pane. A split defaults to the
+                  Start a session with the prompt. It waits in the sidebar,
+                  under the calling session, until the user opens it. Set
+                  reveal:true or placement right or down only when the user
+                  asks to see it open; a split puts it beside a visible
+                  session pane. A split defaults to the
                   calling session; besideSessionId chooses another visible
                   session in this project, including one just created. Set
                   draft:true to save the prompt unsent; no agent turn runs.

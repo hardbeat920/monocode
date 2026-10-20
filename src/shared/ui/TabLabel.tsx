@@ -19,7 +19,8 @@ export function TabLabel({
         label.clientWidth > 0 && label.scrollWidth > label.clientWidth,
       );
     };
-    measure();
+    // ResizeObserver delivers an initial size after layout, including when
+    // text changes. The cosmetic fade must not force layout during a switch.
     const observer = new ResizeObserver(measure);
     observer.observe(label);
     return () => observer.disconnect();

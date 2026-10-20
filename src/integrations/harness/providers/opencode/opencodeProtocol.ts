@@ -12,6 +12,7 @@ import {
 } from "../../../../features/sessions/model/attachments";
 import { isTaskListToolName } from "../../../../features/sessions/model/taskList";
 import { extractToolPreview } from "../../core/preview";
+import { titleCaseSlug } from "../../core/providerNames";
 import type { HarnessEvent } from "../../core/types";
 
 export const MINIMUM_OPENCODE_VERSION = "1.14.19";
@@ -330,15 +331,7 @@ function commonPrefixLength(left: string, right: string): number {
   return index;
 }
 
-export function titleCaseSlug(value: string): string {
-  const segments: string[] = [];
-  for (const segment of value.split(/[-_/]+/)) {
-    if (segment.length > 0) {
-      segments.push(segment.charAt(0).toUpperCase() + segment.slice(1));
-    }
-  }
-  return segments.join(" ");
-}
+export { titleCaseSlug };
 
 export function inferDefaultVariant(
   providerID: string,

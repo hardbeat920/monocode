@@ -4,7 +4,7 @@ import {
   nextAutomationRunAt,
   type AutomationScheduleKind,
 } from "../../automations/model/automations";
-import type { Block } from "../../sessions/model/session";
+import type { Block, MonoSpawnedSession } from "../../sessions/model/session";
 import type { MonoLook } from "./mono";
 import {
   MonoFileConflict,
@@ -454,6 +454,12 @@ export async function updateHabits<T>(
  */
 const runs = new Map<string, string>();
 
+/**
+ * Sessions a habit run started, to go on its report in the Mono's chat. The
+ * run itself is thrown away, and without this they would be listed nowhere.
+ */
+const launches = new Map<string, MonoSpawnedSession[]>();
+
 export function markHabitRun(sessionId: string, monoId: string): void {
   runs.set(sessionId, monoId);
 }
@@ -469,6 +475,21 @@ export function habitRunMono(sessionId: string): string | undefined {
 
 export function clearHabitRun(sessionId: string): void {
   runs.delete(sessionId);
+  launches.delete(sessionId);
+}
+
+export function noteHabitRunLaunch(
+  sessionId: string,
+  launched: MonoSpawnedSession,
+): void {
+  if (!runs.has(sessionId)) return;
+  const known = launches.get(sessionId) ?? [];
+  if (known.some((entry) => entry.sessionId === launched.sessionId)) return;
+  launches.set(sessionId, [...known, launched]);
+}
+
+export function habitRunLaunches(sessionId: string): MonoSpawnedSession[] {
+  return launches.get(sessionId) ?? [];
 }
 
 /**

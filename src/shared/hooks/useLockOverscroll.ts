@@ -71,12 +71,28 @@ export function innerScrollerTakes(
 }
 
 /**
- * Stop macOS rubber-band bounce when a scroller reaches any edge. Returns the
+ * Stop macOS rubber-band bounce when a gesture has no room left. Returns the
  * detach, and stands alone from the hook so it can be exercised directly.
  */
-export function lockOverscroll(el: HTMLElement): () => void {
+export function lockOverscroll(
+  el: HTMLElement,
+  axis: "both" | "horizontal" = "both",
+): () => void {
   const onWheel = (e: WheelEvent) => {
+    if (axis === "horizontal") {
+      // Let vertical gestures chain to the review's outer scroller, even if
+      // the trackpad sends a small sideways delta at the horizontal edge.
+      if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
+      const horizontal = { deltaX: e.deltaX, deltaY: 0 };
+      if (!atScrollEdge(el, horizontal)) return;
+      if (innerScrollerTakes(el, { ...horizontal, target: e.target })) return;
+      e.preventDefault();
+      return;
+    }
+    // Trackpads send both axes together. Reaching one edge must not cancel
+    // movement that this same scroller can still consume on the other axis.
     if (!atScrollEdge(el, e)) return;
+    if (hasScrollRoom(el, e) && scrollable(el, e)) return;
     if (innerScrollerTakes(el, e)) return;
     e.preventDefault();
   };

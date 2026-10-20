@@ -4,6 +4,14 @@ import { IS_LINUX, IS_MAC } from "../../../platform/tauri/platform";
 import { readFlag, writeFlag } from "./storageFlags";
 import { applyUiScale, loadUiScale } from "./uiScale";
 import {
+  WORKSPACE_THEME_DEFAULT,
+  WORKSPACE_THEME_VARIABLE_NAMES,
+  isWorkspaceThemeId,
+  workspaceTheme,
+  workspaceThemeVariables,
+  type WorkspaceThemeId,
+} from "./workspaceThemes";
+import {
   applyPreparedNewThreadBackground,
   clearPreparedNewThreadBackground,
 } from "./newThreadBackgroundEffects";
@@ -16,8 +24,15 @@ const OPACITY_KEY = "monocode.sidebarOpacity";
 const BLUR_KEY = "monocode.sidebarBlur";
 const PROJECT_RAIL_OPEN_KEY = "monocode.projectRailOpen";
 const SESSION_SIDEBAR_OPEN_KEY = "monocode.sessionSidebarOpen";
+const RIGHT_PANEL_OPEN_KEY = "monocode.rightPanelOpen";
+const RIGHT_PANEL_TAB_KEY = "monocode.rightPanelTab";
+const RIGHT_PANEL_TAB_ORDER_KEY = "monocode.rightPanelTabOrder";
+const RIGHT_PANEL_WIDTH_KEY = "monocode.rightPanelWidth";
 const BODY_KEY = "monocode.bodyGlass";
+const INSET_LAYOUT_KEY = "monocode.insetLayout";
+const INSET_GLASS_KEY = "monocode.insetGlass";
 const SCHEME_KEY = "monocode.colorScheme";
+const WORKSPACE_THEME_KEY = "monocode.workspaceTheme";
 const SIDEBAR_TAB_ORDER_KEY = "monocode.sidebarTabOrder";
 const PROJECT_RAIL_WIDTH_KEY = "monocode.projectRailWidth";
 const TRANSCRIPT_LAYOUT_KEY = "monocode.transcriptLayout";
@@ -139,7 +154,28 @@ export const PROJECT_RAIL_WIDTH_MIN = 180;
 export const PROJECT_RAIL_WIDTH_MAX = 360;
 export const PROJECT_RAIL_WIDTH_DEFAULT = 200;
 
+export const RIGHT_PANEL_WIDTH_MIN = 220;
+export const RIGHT_PANEL_WIDTH_MAX = 640;
+export const RIGHT_PANEL_WIDTH_DEFAULT = 288;
+
 export const BODY_GLASS_DEFAULT = !IS_LINUX;
+
+export const INSET_LAYOUT_DEFAULT = false;
+export const INSET_GLASS_DEFAULT = true;
+
+/** Fired on `window` when the inset layout setting flips. */
+export const INSET_LAYOUT_CHANGE_EVENT = "monocode:inset-layout-change";
+
+/** The inset layout's fixed glass: the 80% tint over the blur and the blur
+ * radius its macOS window sets. The shell grey comes from the
+ * workspace theme (`--inset-surface` in the stylesheet). The translucency
+ * settings don't apply. */
+const INSET_GLASS_OPACITY = 0.8;
+const INSET_BLUR_RADIUS = 60;
+
+function insetLayoutActive(): boolean {
+  return document.documentElement.classList.contains("layout-inset");
+}
 
 export const CHAT_BACKGROUND_OPACITY_MIN = 0.05;
 export const CHAT_BACKGROUND_OPACITY_MAX = 0.65;
@@ -278,13 +314,22 @@ export function saveThemeDarkLightness(value: number) {
   );
 }
 
+/**
+ * The inset layout has a fixed, neutral tint and hides the tint controls, so
+ * the saved ones wait for the classic layout rather than tinting its menus
+ * and dialogs.
+ */
+function insetLayoutApplied(): boolean {
+  return document.documentElement.classList.contains("layout-inset");
+}
+
 export function applyThemeDarkLightness(value: number) {
   const next = Math.round(
     clamp(value, THEME_DARK_LIGHTNESS_MIN, THEME_DARK_LIGHTNESS_MAX),
   );
   document.documentElement.style.setProperty(
     "--theme-dark-lightness",
-    `${next}%`,
+    `${insetLayoutApplied() ? THEME_DARK_LIGHTNESS_DEFAULT : next}%`,
   );
   refreshNativeTint();
   return next;
@@ -295,17 +340,71 @@ export function applyThemeTint(hue: number, saturation: number) {
   const nextSaturation = Math.round(
     clamp(saturation, THEME_SATURATION_MIN, THEME_SATURATION_MAX),
   );
-  document.documentElement.style.setProperty("--theme-hue", String(nextHue));
+  const inset = insetLayoutApplied();
+  document.documentElement.style.setProperty(
+    "--theme-hue",
+    String(inset ? THEME_HUE_DEFAULT : nextHue),
+  );
   document.documentElement.style.setProperty(
     "--theme-saturation",
-    `${nextSaturation}%`,
+    `${inset ? THEME_SATURATION_DEFAULT : nextSaturation}%`,
   );
   refreshNativeTint();
   return { hue: nextHue, saturation: nextSaturation };
 }
 
+export function loadWorkspaceTheme(): WorkspaceThemeId {
+  try {
+    const raw = localStorage.getItem(WORKSPACE_THEME_KEY);
+    return isWorkspaceThemeId(raw) ? raw : WORKSPACE_THEME_DEFAULT;
+  } catch {
+    return WORKSPACE_THEME_DEFAULT;
+  }
+}
+
+export function saveWorkspaceTheme(value: WorkspaceThemeId) {
+  try {
+    if (value === WORKSPACE_THEME_DEFAULT)
+      localStorage.removeItem(WORKSPACE_THEME_KEY);
+    else localStorage.setItem(WORKSPACE_THEME_KEY, value);
+  } catch {
+    // private mode / quota
+  }
+}
+
+/**
+ * The theme on the page. The native tint reads this rather than storage:
+ * Settings applies a theme before saving it, and a stored read would tint
+ * the window with the previous theme until the next apply.
+ */
+let appliedWorkspaceTheme: WorkspaceThemeId = WORKSPACE_THEME_DEFAULT;
+
+/** Sets both schemes' palettes at once; the stylesheet picks one by class, so
+ * a scheme flip needs no reapply. Only the inset layout reads them. */
+export function applyWorkspaceTheme(value: WorkspaceThemeId) {
+  const next = isWorkspaceThemeId(value) ? value : WORKSPACE_THEME_DEFAULT;
+  appliedWorkspaceTheme = next;
+  const root = document.documentElement;
+  for (const name of WORKSPACE_THEME_VARIABLE_NAMES)
+    root.style.removeProperty(name);
+  for (const [name, color] of Object.entries(workspaceThemeVariables(next)))
+    root.style.setProperty(name, color);
+  root.classList.toggle(
+    "has-workspace-theme",
+    next !== WORKSPACE_THEME_DEFAULT,
+  );
+  refreshNativeTint();
+  return next;
+}
+
+function hexToRgb(hex: string): Rgb {
+  const value = Number.parseInt(hex.slice(1), 16);
+  return { r: (value >> 16) & 255, g: (value >> 8) & 255, b: value & 255 };
+}
+
 const THEME_KEYS = new Set([
   ACCENT_COLOR_KEY,
+  WORKSPACE_THEME_KEY,
   THEME_HUE_KEY,
   THEME_SATURATION_KEY,
   THEME_DARK_LIGHTNESS_KEY,
@@ -316,6 +415,7 @@ function applyStoredTheme() {
   applyAccentColor(loadAccentColor());
   applyThemeTint(loadThemeHue(), loadThemeSaturation());
   applyThemeDarkLightness(loadThemeDarkLightness());
+  applyWorkspaceTheme(loadWorkspaceTheme());
   applyThemePreference(loadThemePreference());
 }
 
@@ -397,21 +497,30 @@ export function applyThemePreference(value: ThemePreference): ColorScheme {
 
 /** The page colour, also used by the native macOS glass tint. */
 function opaqueWindowBackground(): Rgb {
+  if (insetLayoutActive()) {
+    const theme = workspaceTheme(appliedWorkspaceTheme);
+    return hexToRgb((isLightScheme() ? theme.light : theme.dark).surface);
+  }
   const style = getComputedStyle(document.documentElement);
   const read = (name: string, fallback: number) => {
     const value = Number.parseFloat(style.getPropertyValue(name));
     return Number.isFinite(value) ? value : fallback;
   };
+  const lightness = read(
+    "--background-lightness",
+    THEME_DARK_LIGHTNESS_DEFAULT,
+  );
   return hslToRgb(
     read("--theme-hue", THEME_HUE_DEFAULT),
     read("--theme-saturation", THEME_SATURATION_DEFAULT),
-    read("--background-lightness", THEME_DARK_LIGHTNESS_DEFAULT),
+    lightness,
   );
 }
 
 /** Compose both shared CSS tints into the native fill, including the shell's
  * base tint, so the steady page and a newly exposed resize edge match. */
 function nativeWindowOpacity(): number {
+  if (insetLayoutActive()) return INSET_GLASS_OPACITY;
   const style = getComputedStyle(document.documentElement);
   const glass = clamp(
     Number.parseFloat(style.getPropertyValue("--sidebar-opacity")) ||
@@ -443,7 +552,15 @@ function glassFadeMs(): number {
  * overtaken is dropped rather than left to settle last.
  */
 export function syncNativeGlass(scheme: ColorScheme) {
-  const enabled = scheme === "dark" && (!IS_LINUX || loadBodyGlass());
+  // The inset layout stays opaque on Linux, where compositor blur is not
+  // guaranteed. Honor its saved glass choice before the shell's CSS class
+  // arrives too: launch and theme refreshes must not fall back to classic glass.
+  const inset = insetLayoutActive() || loadInsetLayout();
+  const enabled =
+    scheme === "dark" &&
+    (inset
+      ? !IS_LINUX && loadInsetGlass()
+      : !IS_LINUX || loadBodyGlass());
   const root = document.documentElement;
   const generation = ++glassSyncGeneration;
   const setWindow = () =>
@@ -544,7 +661,9 @@ export function saveSidebarBlur(value: number) {
 
 export function applySidebarBlur(value: number) {
   const next = Math.round(clamp(value, SIDEBAR_BLUR_MIN, SIDEBAR_BLUR_MAX));
-  void invoke("set_window_background_blur", { radius: next });
+  void invoke("set_window_background_blur", {
+    radius: insetLayoutActive() ? INSET_BLUR_RADIUS : next,
+  });
   return next;
 }
 
@@ -558,6 +677,44 @@ export function saveBodyGlass(value: boolean) {
 
 export function applyBodyGlass(value: boolean) {
   document.documentElement.classList.toggle("glass-body", value);
+  return value;
+}
+
+export function loadInsetGlass(): boolean {
+  return readFlag(INSET_GLASS_KEY) ?? INSET_GLASS_DEFAULT;
+}
+
+export function saveInsetGlass(value: boolean) {
+  writeFlag(INSET_GLASS_KEY, value);
+}
+
+export function loadInsetLayout(): boolean {
+  return readFlag(INSET_LAYOUT_KEY) ?? INSET_LAYOUT_DEFAULT;
+}
+
+export function saveInsetLayout(value: boolean) {
+  writeFlag(INSET_LAYOUT_KEY, value);
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent<boolean>(INSET_LAYOUT_CHANGE_EVENT, { detail: value }),
+  );
+}
+
+export function subscribeInsetLayout(onStoreChange: () => void) {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener(INSET_LAYOUT_CHANGE_EVENT, onStoreChange);
+  return () =>
+    window.removeEventListener(INSET_LAYOUT_CHANGE_EVENT, onStoreChange);
+}
+
+/** Only the main window has the inset shell, so only it applies the class. */
+export function applyInsetLayout(value: boolean) {
+  document.documentElement.classList.toggle("layout-inset", value);
+  // Swaps between the fixed blur and tint and the user's own.
+  applySidebarBlur(loadSidebarBlur());
+  applyThemeTint(loadThemeHue(), loadThemeSaturation());
+  applyThemeDarkLightness(loadThemeDarkLightness());
+  if (nativeGlassReady) syncNativeGlass(isLightScheme() ? "light" : "dark");
   return value;
 }
 
@@ -827,6 +984,86 @@ export function loadSessionSidebarOpen(): boolean {
 
 export function saveSessionSidebarOpen(value: boolean) {
   writeFlag(SESSION_SIDEBAR_OPEN_KEY, value);
+}
+
+/** The inset layout's project tools beside the card. */
+export type RightPanelTab = "files" | "changes" | "graph";
+
+function isRightPanelTab(value: unknown): value is RightPanelTab {
+  return value === "files" || value === "changes" || value === "graph";
+}
+
+export function loadRightPanelOpen(): boolean {
+  return readFlag(RIGHT_PANEL_OPEN_KEY) ?? false;
+}
+
+export function saveRightPanelOpen(value: boolean) {
+  writeFlag(RIGHT_PANEL_OPEN_KEY, value);
+}
+
+export function loadRightPanelTab(): RightPanelTab {
+  try {
+    const value = localStorage.getItem(RIGHT_PANEL_TAB_KEY);
+    return isRightPanelTab(value) ? value : "files";
+  } catch {
+    return "files";
+  }
+}
+
+export function saveRightPanelTab(value: RightPanelTab) {
+  try {
+    localStorage.setItem(RIGHT_PANEL_TAB_KEY, value);
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+export function loadRightPanelTabOrder(): RightPanelTab[] {
+  // Preserve the Explorer/Changes order from before Graph had its own tab.
+  const defaults: RightPanelTab[] = [
+    ...loadSidebarTabOrder().filter(
+      (tab) => tab === "files" || tab === "changes",
+    ),
+    "graph",
+  ];
+  try {
+    const raw = localStorage.getItem(RIGHT_PANEL_TAB_ORDER_KEY);
+    if (!raw) return defaults;
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return defaults;
+    const next = [...new Set(parsed.filter(isRightPanelTab))];
+    for (const tab of defaults) {
+      if (!next.includes(tab)) next.push(tab);
+    }
+    return next;
+  } catch {
+    return defaults;
+  }
+}
+
+export function saveRightPanelTabOrder(value: RightPanelTab[]) {
+  try {
+    localStorage.setItem(RIGHT_PANEL_TAB_ORDER_KEY, JSON.stringify(value));
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+export function loadRightPanelWidth(): number {
+  return Math.round(
+    clamp(
+      readNumber(RIGHT_PANEL_WIDTH_KEY) ?? RIGHT_PANEL_WIDTH_DEFAULT,
+      RIGHT_PANEL_WIDTH_MIN,
+      RIGHT_PANEL_WIDTH_MAX,
+    ),
+  );
+}
+
+export function saveRightPanelWidth(value: number) {
+  writeNumber(
+    RIGHT_PANEL_WIDTH_KEY,
+    Math.round(clamp(value, RIGHT_PANEL_WIDTH_MIN, RIGHT_PANEL_WIDTH_MAX)),
+  );
 }
 
 export function loadSidebarTabOrder(): SidebarTabId[] {

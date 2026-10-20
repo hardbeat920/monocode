@@ -241,27 +241,44 @@ export async function notifySession(
   });
 }
 
-/** One policy decision covers both the OS banner and its in-app sound fallback. */
-export async function announceSessionFinished(
+export function announceSessionFinished(
   session: Session,
+  sessionVisible: boolean,
+): Promise<void> {
+  return announceSession(session, "finished", sessionVisible);
+}
+
+export function announceSessionInput(
+  session: Session,
+  event: InputNotificationEvent,
+  sessionVisible: boolean,
+): Promise<void> {
+  return announceSession(session, event, sessionVisible);
+}
+
+/** One policy decision covers both the OS banner and its in-app sound fallback. */
+async function announceSession(
+  session: Session,
+  event: NotificationEvent,
   sessionVisible: boolean,
 ): Promise<void> {
   if (session.inboxAsk) return;
   const occurredAt = Date.now();
   const project = knownNotificationProject(session.cwd);
   if (!project) return;
+  const finished = event === "finished";
   const subject: NotificationSubject = {
     projectId: project.id,
-    category: "agentFinished",
+    category: finished ? "agentFinished" : "agentInput",
     occurredAt,
   };
   const sent = await notifyProjectSession(
     session,
-    "finished",
+    event,
     sessionVisible,
     subject,
   );
-  if (!sent) playCue("turnFinished", subject);
+  if (!sent) playCue(finished ? "turnFinished" : "inputRequested", subject);
 }
 
 async function notifyProjectSession(

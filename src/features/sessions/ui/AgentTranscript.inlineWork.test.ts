@@ -49,7 +49,7 @@ beforeEach(() => {
   resultStyles = document.createElement("style");
   resultStyles.textContent = [
     ...readFileSync("src/styles/index.css", "utf8").matchAll(
-      /\.transcript-turn(?::has\(\[data-artifact-results\]\)| > :has\(\.word-fading\) ~ \[data-launched-sessions\])[^{]*\{[^}]+\}/g,
+      /\.transcript-turn(?::has\(\[data-artifact-results\]\)|\s*>\s*\[data-history-content\]\s*>\s*:has\(\.word-fading\)\s*~\s*\[data-launched-sessions\])[^{]*\{[^}]+\}/g,
     ),
   ]
     .map((rule) => rule[0])
@@ -362,7 +362,7 @@ it("shows reused sessions in the requesting Mono after its handoff reply, before
       durationMs: 1000,
     },
     receipt("list", "sessions.list", {
-      cwd: "/repo/formshare",
+      cwd: "/repo/example-project",
       sessions: launches,
     }),
     // This prose splits the listing and sends into separate folded groups.

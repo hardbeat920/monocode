@@ -178,6 +178,10 @@ export function isProseBlock(block: Block): boolean {
   return block.role === "assistant" && !!block.text.trim();
 }
 
+export function hasReadableText(text: string): boolean {
+  return /[^\s\p{P}]/u.test(text);
+}
+
 /** First paragraph of a folded prose block, stripped to one plain line. */
 export function proseSummary(text: string): string {
   const body = text.replace(/```[\s\S]*?(?:```|$)/g, " ");
@@ -363,6 +367,23 @@ function groupTranscriptTurns(
   }
   if (current.length > 0) turns.push(current);
   return turns;
+}
+
+/**
+ * A message sent mid-turn opens a turn of its own in `groupTurns`, but it
+ * joined the turn already running: when that turn started.
+ */
+export function joinedTurnStart(
+  turns: Block[][],
+  index: number,
+): number | undefined {
+  for (let i = index; i >= 0; i--) {
+    const first = turns[i]?.[0];
+    if (first?.role !== "user") return undefined;
+    if (first.startedAt != null) return first.startedAt;
+    if (first.sentAt == null) return undefined;
+  }
+  return undefined;
 }
 
 /** The hidden turn the app writes when a session a Mono launched finishes. */
@@ -756,9 +777,12 @@ export function subagentModelName(block: Block): string | undefined {
  * provider puts both in the tool result, so a finished run always has the one
  * thing worth reading at the end of its trail.
  */
-export function subagentReport(block: Block): string | undefined {
+export function subagentReport(
+  block: Block,
+  detail = block.tool?.detail,
+): string | undefined {
   if (toolCallState(block) === "pending") return undefined;
-  return block.tool?.detail?.trim() || undefined;
+  return detail?.trim() || undefined;
 }
 
 /** A failed delegated call must stay visible even when the work trail folds. */
@@ -1084,8 +1108,9 @@ export function activityPhaseTitle(phase: ActivityPhase, live = false): string {
   if (failure) return failure;
   if (phase.headline) {
     const summary = proseSummary(phase.headline.text);
-    if (summary) return summary;
-    return phase.headline.role === "reasoning" ? "Thinking" : "Working";
+    if (hasReadableText(summary)) return summary;
+    if (!summary)
+      return phase.headline.role === "reasoning" ? "Thinking" : "Working";
   }
   return workSummaryLine(phase.steps, live);
 }

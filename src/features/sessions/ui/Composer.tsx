@@ -31,7 +31,7 @@ import {
   pickAttachments,
   revokeAttachment,
 } from "../model/attachments";
-import { resizeComposer } from "../model/composerResize";
+import { resizeComposer, restoreComposerSize } from "../model/composerResize";
 import {
   isFileReferenceText,
   messageFilesFromClipboard,
@@ -46,12 +46,12 @@ import {
   subscribeProjectFiles,
 } from "../../files/model/fileIndex";
 import {
-  buildMentionIndex,
   fileMentionParts,
   mentionLabel,
   mentionTokenAt,
   rankMentionFiles,
   replaceMentionToken,
+  sharedMentionIndex,
   type MentionIndex,
   type MentionToken,
 } from "../../files/model/fileMentions";
@@ -145,6 +145,7 @@ import { resolveTabGroupLogo } from "../../workspace/model/tabGroups";
 import { useComposerSkills } from "./useComposerSkills";
 import { Popover } from "../../../shared/ui/Popover";
 import { UsageLimitNotice } from "./UsageLimitNotice";
+import { UsageLimitAccountPicker } from "./UsageLimitAccountPicker";
 import { consumePlanCommand, PLAN_COMMAND } from "../model/plan";
 import {
   consumeOperatorCommand,
@@ -199,6 +200,11 @@ import {
 } from "../../settings/model/mcpSettingsCache";
 import type { LastTurnRecall } from "../model/editLastTurn";
 import { useComposerAutocorrect } from "../../settings/model/displayPrefs";
+import {
+  INSET_LAYOUT_DEFAULT,
+  loadInsetLayout,
+  subscribeInsetLayout,
+} from "../../settings/model/appearance";
 
 type Props = {
   enabled?: boolean;
@@ -289,6 +295,9 @@ type Props = {
   onUsageLimitResume?: () => void;
   onUsageLimitResumeAtReset?: (enabled: boolean) => void;
   onUsageLimitDismiss?: () => void;
+  /** Continue this session under another account of its provider. */
+  onUsageLimitAccountChange?: (accountId: string) => void;
+  providerAccountId?: string;
   onOpenFile?: (path: string) => void;
   onDraftChange?: (text: string) => void;
   onRecallLastTurnReady?: (recall: () => void) => void;
@@ -405,6 +414,8 @@ export function Composer({
   onUsageLimitResume,
   onUsageLimitResumeAtReset,
   onUsageLimitDismiss,
+  onUsageLimitAccountChange,
+  providerAccountId,
   onOpenFile,
   onDraftChange,
   onRecallLastTurnReady,
@@ -535,8 +546,16 @@ export function Composer({
   const remote = remoteSession;
   // Local indexes (files, skills) must never read a remote session's path.
   const localCwd = remote ? "" : executionCwd;
+  // Inactive tabs stay mounted. Their composers let go of the project listing
+  // and pick it up again when shown.
+  const fileCwd = enabled ? localCwd : "";
   const [files, setFiles] = useState<ProjectFile[]>(
-    () => peekProjectFiles(localCwd) ?? [],
+    () => peekProjectFiles(fileCwd) ?? [],
+  );
+  const insetLayout = useSyncExternalStore(
+    subscribeInsetLayout,
+    loadInsetLayout,
+    () => INSET_LAYOUT_DEFAULT,
   );
   const notesEnabled = useSyncExternalStore(
     subscribeNotesEnabled,
@@ -638,13 +657,10 @@ export function Composer({
     // The indent can rewrap the first line after the input already resized.
     if (ref.current) resizeComposer(ref.current);
   }, [modeIndent]);
-  const mentionFiles = useMemo(
-    () => (notesEnabled ? [...files, ...notesAsProjectFiles(notes)] : files),
-    [files, notes, notesEnabled],
-  );
   const mentionIndex = useMemo(
-    () => buildMentionIndex(mentionFiles),
-    [mentionFiles],
+    () =>
+      sharedMentionIndex(files, notesEnabled ? notesAsProjectFiles(notes) : []),
+    [files, notes, notesEnabled],
   );
   const mentionIndexRef = useRef<MentionIndex>(mentionIndex);
   mentionIndexRef.current = mentionIndex;
@@ -891,21 +907,21 @@ export function Composer({
     const apply = (next: ProjectFile[]) => {
       if (!cancelled) setFiles(next);
     };
-    const cached = peekProjectFiles(localCwd);
+    const cached = peekProjectFiles(fileCwd);
     apply(cached ?? []);
-    if (!localCwd) return;
-    void loadProjectFiles(localCwd, mentionOpen)
+    if (!fileCwd) return;
+    void loadProjectFiles(fileCwd, mentionOpen)
       .then(apply)
       .catch(() => undefined);
     const unsub = subscribeProjectFiles(() => {
-      const next = peekProjectFiles(localCwd);
+      const next = peekProjectFiles(fileCwd);
       if (next) apply(next);
     });
     return () => {
       cancelled = true;
       unsub();
     };
-  }, [localCwd, mentionOpen]);
+  }, [fileCwd, mentionOpen]);
 
   useEffect(() => {
     if (!mentionOpen || !notesEnabled) return;
@@ -940,18 +956,19 @@ export function Composer({
     resizeComposer(el);
   }, [initialDraft]);
 
-  // Drafts changed while hidden could not be measured. Inbox panes are portaled
-  // into place by a parent effect that runs after this one, so the first pass
-  // can still find no layout box; retry once the move has landed.
+  // Measure once the browser has laid out the activated pane. A synchronous
+  // read here forces layout before the pooled transcript has been attached,
+  // then forces it again when that transcript restores its scroll position.
+  // ResizeObserver also handles inbox portals and drafts resized while hidden.
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el || !enabled) return;
-    resizeComposer(el);
-    if (el.scrollHeight !== 0) return;
-    const frame = requestAnimationFrame(() => {
-      if (ref.current === el) resizeComposer(el);
+    const observer = new ResizeObserver((entries) => {
+      if (entries.some((entry) => entry.contentRect.width > 0))
+        restoreComposerSize(el);
     });
-    return () => cancelAnimationFrame(frame);
+    observer.observe(el);
+    return () => observer.disconnect();
   }, [enabled]);
 
   useEffect(() => {
@@ -1200,7 +1217,10 @@ export function Composer({
       )
     )
       return;
-    ref.current?.focus();
+    // Pane activation already positions the composer. Native focus scrolling
+    // otherwise walks the entire workspace and can move transcript ancestors.
+    if (ref.current && document.activeElement !== ref.current)
+      ref.current.focus({ preventScroll: true });
   }, [disabled, focused, question, busy, focusToken]);
 
   const fileDrag = useFileDrop({
@@ -1786,6 +1806,105 @@ export function Composer({
     });
   };
 
+  // The inset layout keeps the box to the prompt and its actions; where the
+  // work runs, and how full the context is, sit on the line beneath it. Its
+  // top padding matches the composer's own bottom padding, and the right
+  // padding centres the 14px context ring under the send button (border 1px,
+  // toolbar px-2, half of the 26px button: 22px in, less half the ring).
+  const workspaceBarOutside = insetLayout;
+  // Without the bar above it, the field's own top padding is the box's top
+  // edge. The field also starts two lines tall there, whether it is centred
+  // in an empty session (`shell`) or docked under a transcript, so both look
+  // the same: `rows` sets the natural height and `min-h-16` (two 22px lines
+  // plus the padding) keeps resizing from collapsing it.
+  const fieldPadding = workspaceBarOutside
+    ? "pt-3.5 pb-1.5 min-h-16"
+    : shell
+      ? "py-4"
+      : "py-3";
+  const workspaceBar = hideTopBar ? null : (
+    <div
+      data-composer-workspace-bar={workspaceBarOutside ? "" : undefined}
+      className={`flex min-w-0 items-center gap-2.5 overflow-hidden ${
+        workspaceBarOutside ? "pt-1.5 pr-[15px] pl-[15px]" : "px-3 pt-2.5"
+      }`}
+    >
+      {!remote && !hideProjectPicker ? (
+        <CwdPicker
+          cwd={cwd}
+          recents={recents}
+          projectLogoPath={projectLogoPath}
+          enabled={enabled}
+          onCwdChange={onCwdChange}
+          onNewTerminal={worktreeRemoved ? undefined : onNewTerminal}
+          onClose={() => ref.current?.focus()}
+        />
+      ) : null}
+      {hideBranchPicker ? null : draftWorkspace &&
+        onWorkspaceModeChange &&
+        onWorktreeBaseChange ? (
+        <>
+          <WorkspacePicker
+            cwd={executionCwd}
+            mode={workspaceMode ?? "current"}
+            base={resolvedWorktreeBase}
+            enabled={enabled && !busy}
+            onModeChange={onWorkspaceModeChange}
+            onBaseChange={onWorktreeBaseChange}
+            onSelectWorktree={onWorktreeChange}
+            onOpenSettings={onManageWorktrees}
+            onClose={() => ref.current?.focus()}
+          />
+          {(workspaceMode ?? "current") === "current" ? (
+            <BranchPicker
+              cwd={executionCwd}
+              branch={branch}
+              enabled={enabled && !busy}
+              onChange={onBranchChange}
+              onClose={() => ref.current?.focus()}
+            />
+          ) : null}
+        </>
+      ) : worktreeRemoved && onWorktreeChange ? (
+        <WorktreePicker
+          cwd={cwd}
+          executionCwd={executionCwd}
+          enabled={enabled && !busy}
+          onSelect={onWorktreeChange}
+          worktreeRemoved={worktreeRemoved}
+          onBranchChange={onBranchChange}
+          onManage={onManageWorktrees}
+          onClose={() => ref.current?.focus()}
+        />
+      ) : (
+        <>
+          {onWorktreeChange ? (
+            <WorkspaceIdentity
+              worktree={!cowId && pathKey(cwd) !== pathKey(executionCwd)}
+              cow={!!cowId}
+            />
+          ) : null}
+          <BranchPicker
+            cwd={executionCwd}
+            branch={branch}
+            cow={!!cowId}
+            enabled={enabled && !busy}
+            onChange={onBranchChange}
+            onClose={() => ref.current?.focus()}
+          />
+        </>
+      )}
+      <div className="ml-auto flex shrink-0 items-center">
+        <ContextMeter
+          usage={context}
+          onCompact={
+            compactSupported && !worktreeRemoved ? onCompactContext : undefined
+          }
+          compactDisabled={busy}
+        />
+      </div>
+    </div>
+  );
   return (
     <div
       data-composer
@@ -1807,6 +1926,16 @@ export function Composer({
           onResume={onUsageLimitResume}
           onResumeAtReset={onUsageLimitResumeAtReset}
           onDismiss={onUsageLimitDismiss}
+          modelPicker={
+            onUsageLimitAccountChange ? (
+              <UsageLimitAccountPicker
+                harness={harness}
+                accountId={providerAccountId}
+                onSelect={onUsageLimitAccountChange}
+                variant="composer"
+              />
+            ) : undefined
+          }
         />
       ) : null}
       <MessageQueue
@@ -1983,7 +2112,7 @@ export function Composer({
           ref={boxRef}
           data-composer-box
           data-composer-editing={resendEdited ? "" : undefined}
-          className={`relative z-10 border bg-content/3 backdrop-blur-sm ${
+          className={`relative z-10 border ${
             resendEdited
               ? "edit-last-turn-composer rounded-lg"
               : "rounded-lg border-content/10 has-focus:border-content/20"
@@ -1996,92 +2125,11 @@ export function Composer({
           }`}
         >
           {fileDrag ? (
-            <div className="pointer-events-none absolute inset-0 z-20 grid place-items-center rounded-lg bg-accent/8 text-[12px] text-content/70">
+            <div className="pointer-events-none absolute inset-0 z-20 grid place-items-center rounded-[inherit] bg-accent/8 text-[12px] text-content/70">
               Drop files to attach
             </div>
           ) : null}
-          {hideTopBar ? null : (
-            <div className="flex min-w-0 items-center gap-2.5 overflow-hidden px-3 pt-2.5">
-              {!remote && !hideProjectPicker ? (
-                <CwdPicker
-                  cwd={cwd}
-                  recents={recents}
-                  projectLogoPath={projectLogoPath}
-                  enabled={enabled}
-                  onCwdChange={onCwdChange}
-                  onNewTerminal={worktreeRemoved ? undefined : onNewTerminal}
-                  onClose={() => ref.current?.focus()}
-                />
-              ) : null}
-              {hideBranchPicker ? null : draftWorkspace &&
-                onWorkspaceModeChange &&
-                onWorktreeBaseChange ? (
-                <>
-                  <WorkspacePicker
-                    cwd={executionCwd}
-                    mode={workspaceMode ?? "current"}
-                    base={resolvedWorktreeBase}
-                    enabled={enabled && !busy}
-                    onModeChange={onWorkspaceModeChange}
-                    onBaseChange={onWorktreeBaseChange}
-                    onSelectWorktree={onWorktreeChange}
-                    onOpenSettings={onManageWorktrees}
-                    onClose={() => ref.current?.focus()}
-                  />
-                  {(workspaceMode ?? "current") === "current" ? (
-                    <BranchPicker
-                      cwd={executionCwd}
-                      branch={branch}
-                      enabled={enabled && !busy}
-                      onChange={onBranchChange}
-                      onClose={() => ref.current?.focus()}
-                    />
-                  ) : null}
-                </>
-              ) : worktreeRemoved && onWorktreeChange ? (
-                <WorktreePicker
-                  cwd={cwd}
-                  executionCwd={executionCwd}
-                  enabled={enabled && !busy}
-                  onSelect={onWorktreeChange}
-                  worktreeRemoved={worktreeRemoved}
-                  onBranchChange={onBranchChange}
-                  onManage={onManageWorktrees}
-                  onClose={() => ref.current?.focus()}
-                />
-              ) : (
-                <>
-                  {onWorktreeChange ? (
-                    <WorkspaceIdentity
-                      worktree={
-                        !cowId && pathKey(cwd) !== pathKey(executionCwd)
-                      }
-                      cow={!!cowId}
-                    />
-                  ) : null}
-                  <BranchPicker
-                    cwd={executionCwd}
-                    branch={branch}
-                    cow={!!cowId}
-                    enabled={enabled && !busy}
-                    onChange={onBranchChange}
-                    onClose={() => ref.current?.focus()}
-                  />
-                </>
-              )}
-              <div className="ml-auto flex shrink-0 items-center">
-                <ContextMeter
-                  usage={context}
-                  onCompact={
-                    compactSupported && !worktreeRemoved
-                      ? onCompactContext
-                      : undefined
-                  }
-                  compactDisabled={busy}
-                />
-              </div>
-            </div>
-          )}
+          {workspaceBarOutside ? null : workspaceBar}
 
           {attachments.length > 0 ? (
             <div className="flex flex-wrap gap-1.5 px-3 pt-2">
@@ -2122,7 +2170,7 @@ export function Composer({
               aria-hidden
               style={{ textIndent: modeIndent }}
               className={`composer-highlight pointer-events-none absolute inset-0 max-h-40 overflow-hidden whitespace-pre-wrap wrap-break-word px-3 text-sm leading-5.5 text-content font-sans ${
-                shell ? "py-4" : "py-3"
+                fieldPadding
               }`}
             >
               <ComposerHighlight
@@ -2137,7 +2185,7 @@ export function Composer({
               ref={ref}
               data-composer-empty={navigationEmpty ? "true" : undefined}
               style={{ textIndent: modeIndent }}
-              rows={1}
+              rows={workspaceBarOutside ? 2 : 1}
               spellCheck={autocorrect}
               autoCorrect={autocorrect ? "on" : "off"}
               defaultValue={mountDraft}
@@ -2158,7 +2206,7 @@ export function Composer({
               aria-label={inputAriaLabel}
               disabled={disabled}
               className={`composer-field scrollbar-none relative max-h-40 w-full resize-none overflow-x-hidden whitespace-pre-wrap wrap-break-word bg-transparent px-3 text-sm leading-5.5 outline-none placeholder:overflow-hidden placeholder:text-ellipsis placeholder:whitespace-nowrap font-sans ${
-                shell ? "py-4" : "py-3"
+                fieldPadding
               }`}
               onFocus={onFocus}
               onKeyDown={onKeyDown}
@@ -2194,7 +2242,11 @@ export function Composer({
             />
           </div>
 
-          <div className="flex items-center gap-1 px-2 pb-2">
+          <div
+            className={`flex items-center gap-1 px-2 ${
+              workspaceBarOutside ? "pb-2.5" : "pb-2"
+            }`}
+          >
             <div
               ref={plusRef}
               className={compact ? "hidden" : "relative shrink-0"}
@@ -2484,6 +2536,7 @@ export function Composer({
             </div>
           </div>
         </div>
+        {workspaceBarOutside ? workspaceBar : null}
         {runnerLive && runnerEnabled && !remote ? (
           <ComposerRunner
             boxRef={boxRef}

@@ -21,6 +21,7 @@ import {
   memo,
   startTransition,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -36,7 +37,20 @@ import { GeneratedImage } from "./GeneratedImage";
 import { MonocodeSparkles } from "./MonocodeSparkles";
 import { OrchestratorConstellation } from "./OrchestratorConstellation";
 import { PlanStepsBurst } from "./PlanStepsBurst";
-import { settleWordFades } from "./wordFade";
+import { settleCatchUpFades } from "./wordFade";
+import { revealMeasuredTurn, useMeasuredHistory } from "./useMeasuredHistory";
+import {
+  layoutTransitionActive,
+  onLayoutTransitionEnd,
+} from "../../../shared/lib/layoutTransition";
+import {
+  ownStepBlock,
+  ToolDetailSession,
+  useToolDetail,
+} from "./useToolDetail";
+import { HistoryTurn } from "./HistoryTurn";
+import { streamMeasurement } from "../model/streamingPerformance";
+import { useReplyReflowAnchor } from "./useReplyReflowAnchor";
 import { FilePreview } from "../../files/ui/FilePreview";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
 import { ToolDiffPreview } from "./ToolDiffPreview";
@@ -95,6 +109,7 @@ import {
   type TurnMetrics,
 } from "../model/session";
 import { HarnessIcon } from "./HarnessIcon";
+import { TranscriptPacing, TranscriptVisibility } from "./transcriptVisibility";
 import {
   innerScrollerTakes,
   useLockOverscroll,
@@ -139,6 +154,7 @@ import {
   turnCopyText,
   workKind,
   workSummaryLine,
+  joinedTurnStart,
   monoTurnLatestStart,
   monoTurnRuns,
   opensNewStretch,
@@ -177,6 +193,8 @@ const STEP_ENTRANCE_MS = 480;
 const STEP_ENTRANCE_MIN_MS = 160;
 const STEP_QUEUE_CALM_MS = 960;
 const STEP_QUEUE_MS = 2000;
+/** How long after its tab returns a group's arriving steps count as history. */
+const STEP_CATCH_UP_MS = 400;
 const INITIAL_TURNS = 20;
 /**
  * Turns built before a transcript first paints. Every turn in the initial
@@ -185,6 +203,12 @@ const INITIAL_TURNS = 20;
  */
 const FIRST_PAINT_TURNS = 3;
 const TURN_PAGE_SIZE = 20;
+const LOADING_OUTPUT = "Loading output…";
+/**
+ * How long the reader stays back at the end before the history they paged in
+ * above unmounts. Each turn retains its DOM, fibers and markdown output.
+ */
+const HISTORY_TRIM_DELAY_MS = 2000;
 
 type Props = {
   blocks: Block[];
@@ -260,6 +284,8 @@ type Props = {
   onScrollerChange?: (el: HTMLDivElement | null) => void;
   /** A worker's transcript: show the orchestrator's turns instead of hiding them. */
   managed?: boolean;
+  /** Saved session that omitted tool output is fetched from. */
+  sessionId?: string;
 };
 
 function AgentTranscriptComponent({
@@ -348,6 +374,7 @@ function AgentTranscriptComponent({
   const showJumpRef = useRef(false);
   const distanceFromBottom = useRef(0);
   const lastScrollTop = useRef(0);
+  const scrollAdjustments = useRef<number | undefined>(undefined);
   const pointerScrolling = useRef(false);
   const wheelHold = useRef(0);
   const prependHeight = useRef<number | null>(null);
@@ -381,12 +408,12 @@ function AgentTranscriptComponent({
   const toggleWork = useCallback((turnId: string, currentlyOpen: boolean) => {
     setOpenWork((open) => ({ ...open, [turnId]: !currentlyOpen }));
   }, []);
-  // Stretch the last turn after a send while this tab stays open. Closing
-  // the tab is a new visit: the remount uses the true transcript height so
-  // the latest reply sits near the composer instead of a hole of empty space.
+  // Keep prompt spacing for this transcript's lifetime, including while it
+  // is parked in the pool. A cold historical mount uses its natural height.
   const [anchorTurn, setAnchorTurn] = useState(!!busy);
-  // Parking detaches the scroller, which drops its scroll offset.
+  // Hidden pooled transcripts are detached, which drops their scroll offset.
   const restoreScroll = useRef(false);
+  if (!visible) restoreScroll.current = true;
   const wasParked = useRef(parked);
   if (wasParked.current !== parked) {
     wasParked.current = parked;
@@ -394,8 +421,6 @@ function AgentTranscriptComponent({
       restoreScroll.current = true;
       setSearchCurrent(null);
       setSearchQuery("");
-    } else if (anchorTurn !== !!busy) {
-      setAnchorTurn(!!busy);
     }
   }
   const { selection, dismissSelection } = useTranscriptSelection(
@@ -419,14 +444,23 @@ function AgentTranscriptComponent({
       block.role === "handoff" && block.handoff?.status === "preparing",
   );
 
+  const historyTrimTimer = useRef(0);
+  const trimHistoryRef = useRef(() => {});
   const setShowJump = useCallback(
     (show: boolean) => {
       if (showJumpRef.current === show) return;
       showJumpRef.current = show;
       onJumpToBottomChange?.(show);
+      clearTimeout(historyTrimTimer.current);
+      if (!show)
+        historyTrimTimer.current = window.setTimeout(
+          () => trimHistoryRef.current(),
+          HISTORY_TRIM_DELAY_MS,
+        );
     },
     [onJumpToBottomChange],
   );
+  useEffect(() => () => clearTimeout(historyTrimTimer.current), []);
 
   const syncPinned = useCallback(
     (el: HTMLElement) => {
@@ -459,6 +493,7 @@ function AgentTranscriptComponent({
   );
 
   const rememberScroll = useCallback((el: HTMLElement) => {
+    scrollAdjustments.current = el.scrollTop;
     lastScrollTop.current = el.scrollTop;
     distanceFromBottom.current =
       el.scrollHeight - el.scrollTop - el.clientHeight;
@@ -643,21 +678,45 @@ function AgentTranscriptComponent({
 
   // In the chat layout a sent prompt rises from the upper screen into its
   // anchored spot at the top. On mount this only plays for a session's first
-  // send.
+  // send, and only just after it: a transcript remounted mid-reply (its tab
+  // was evicted from the pool) must not replay it and hide the turn again.
+  // Nor does a prompt sent while the tab was hidden: a hidden transcript does
+  // not render, so it only reaches here as the tab comes back.
   const introducePrompt = useRef({ chat: false, anchor: false, visible });
   introducePrompt.current = {
     chat: transcriptLayout === "chat",
     anchor: promptAnchor && anchorTurn,
     visible,
   };
-  const introducedPromptMount = useRef(false);
+  // The prompt this has already handled, so the effect running again for the
+  // same one (StrictMode replays effects of a component it places) neither
+  // replays the motion nor cuts it short. Undefined until the first run.
+  const introducedPrompt = useRef<{ id?: string; cancel?: () => void }>(
+    undefined,
+  );
   useLayoutEffect(() => {
-    const mounting = !introducedPromptMount.current;
-    introducedPromptMount.current = true;
+    const previous = introducedPrompt.current;
+    if (previous && previous.id === lastUserId) return;
+    const mounting = !previous;
+    previous?.cancel?.();
+    introducedPrompt.current = { id: lastUserId };
     const { chat, anchor, visible } = introducePrompt.current;
     if (!lastUserId || !chat || !anchor || !visible) return;
-    if (mounting && !(busy && userTurnCount(blocks, managed) === 1)) return;
-    return riseIntoAnchor(scroller.current, lastUserId);
+    // Runs before the effect below records this render's visibility.
+    if (!mounting && !wasVisible.current) return;
+    if (
+      mounting &&
+      !(
+        busy &&
+        userTurnCount(blocks, managed) === 1 &&
+        justSent(blocks.find((block) => block.id === lastUserId))
+      )
+    )
+      return;
+    introducedPrompt.current.cancel = riseIntoAnchor(
+      scroller.current,
+      lastUserId,
+    );
     // Only a new prompt starts the motion; later renders must not replay it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastUserId]);
@@ -668,7 +727,7 @@ function AgentTranscriptComponent({
     if (!opened) return;
     const el = scroller.current;
     if (!el) return;
-    settleWordFades(el);
+    const stopSettling = settleCatchUpFades(el);
     syncTranscriptViewport(el);
     const restore = restoreScroll.current;
     restoreScroll.current = false;
@@ -689,6 +748,7 @@ function AgentTranscriptComponent({
       );
       rememberScroll(el);
     }
+    return stopSettling;
   }, [visible, pinTranscript, rememberScroll, setShowJump]);
 
   useLayoutEffect(() => {
@@ -713,11 +773,22 @@ function AgentTranscriptComponent({
     const observer = new ResizeObserver(onResize);
     observer.observe(inner);
     observer.observe(el);
+    const stopTransitionEnd = onLayoutTransitionEnd(onResize);
     onResize();
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      stopTransitionEnd();
+    };
   }, [bottomAligned, scrollerEl, followTranscript, setShowJump, visible]);
 
   useTurnScrollAnchor(scrollerEl, visible, stickToBottom, rememberScroll);
+  useReplyReflowAnchor(
+    scrollerEl,
+    visible,
+    stickToBottom,
+    rememberScroll,
+    scrollAdjustments,
+  );
 
   const [turnCache] = useState(() => new TranscriptTurnCache());
   const undeliveredMessageIds = useMemo(
@@ -732,11 +803,42 @@ function AgentTranscriptComponent({
     -1,
   );
   const firstVisibleTurn = Math.max(0, turns.length - visibleTurnCount);
-  const visibleTurns = turns.slice(firstVisibleTurn);
+  const hasOpened = useRef(visible);
+  hasOpened.current ||= visible;
+  const visibleTurns = hasOpened.current ? turns.slice(firstVisibleTurn) : [];
+  useMeasuredHistory(scrollerEl, visible, turns, !!searchQuery);
   const turnsRef = useRef(turns);
   turnsRef.current = turns;
   const visibleTurnCountRef = useRef(visibleTurnCount);
   visibleTurnCountRef.current = visibleTurnCount;
+  const searchingRef = useRef(false);
+  searchingRef.current = !!searchQuery;
+
+  // Turns paged in while reading earlier stay mounted only while the reader
+  // is up there. Once following the end again, or hidden while following it,
+  // the window returns to its opening size. Removing turns above a pinned
+  // viewport leaves what the reader sees in place.
+  trimHistoryRef.current = () => {
+    const el = scroller.current;
+    if (
+      !stickToBottom.current ||
+      searchingRef.current ||
+      visibleTurnCountRef.current <= initialTurns
+    )
+      return;
+    const selection = window.getSelection();
+    if (
+      el &&
+      selection &&
+      !selection.isCollapsed &&
+      (el.contains(selection.anchorNode) || el.contains(selection.focusNode))
+    )
+      return;
+    setVisibleTurnCount(initialTurns);
+  };
+  useEffect(() => {
+    if (!visible) trimHistoryRef.current();
+  }, [visible]);
 
   useLayoutEffect(() => {
     const previousHeight = prependHeight.current;
@@ -785,12 +887,23 @@ function AgentTranscriptComponent({
   }, [visibleTurnCount, turns.length, initialTurns]);
 
   useEffect(() => {
-    if (bottomAligned) return;
-    // Interruptible, so switching away before it finishes costs nothing.
-    startTransition(() =>
-      setVisibleTurnCount((count) => Math.max(count, initialTurns)),
-    );
-  }, [bottomAligned, initialTurns]);
+    if (bottomAligned || !visible || visibleTurnCount >= initialTurns) return;
+    // Paint the opening window first, then warm one historical turn at a time.
+    // Expanding all twenty at once forced a large synchronous WebKit layout.
+    let timer = 0;
+    const frame = requestAnimationFrame(() => {
+      timer = window.setTimeout(() => {
+        if (stickToBottom.current)
+          startTransition(() =>
+            setVisibleTurnCount((count) => Math.min(initialTurns, count + 1)),
+          );
+      }, 16);
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      clearTimeout(timer);
+    };
+  }, [bottomAligned, initialTurns, visible, visibleTurnCount]);
 
   const prepareToPrepend = useCallback(() => {
     const el = scroller.current;
@@ -886,10 +999,15 @@ function AgentTranscriptComponent({
       );
       if (index < 0) return false;
       const needed = all.length - index;
-      if (needed <= visibleTurnCountRef.current) return true;
-      prepareToPrepend();
-      // Synchronous. The caller finds the turn in the DOM after this call.
-      flushSync(() => setVisibleTurnCount(needed));
+      if (needed > visibleTurnCountRef.current) {
+        prepareToPrepend();
+        // Synchronous. The caller finds the turn in the DOM after this call.
+        flushSync(() => setVisibleTurnCount(needed));
+      }
+      const row = scroller.current?.querySelector<HTMLElement>(
+        `[data-transcript-turn="${CSS.escape(all[index][0].id)}"]`,
+      );
+      if (row) revealMeasuredTurn(row);
       return true;
     },
     [prepareToPrepend],
@@ -931,6 +1049,7 @@ function AgentTranscriptComponent({
             `[data-transcript-turn="${CSS.escape(turnId)}"]`,
           );
         if (!target) return;
+        revealMeasuredTurn(target);
         const wordRect = query
           ? transcriptWordRanges(el, query).current?.getBoundingClientRect?.()
           : null;
@@ -1002,6 +1121,7 @@ function AgentTranscriptComponent({
     bottomAligned,
     wheelHold,
     bottomAligned,
+    rememberScroll,
   );
 
   return (
@@ -1101,7 +1221,10 @@ function AgentTranscriptComponent({
           const foldedAt = lastActivityIndex(items);
           const initialThinkingAt = initialThinkingIndex(items);
           const startedAt =
-            userBlock?.startedAt ?? habit?.at ?? turn[0].startedAt;
+            userBlock?.startedAt ??
+            habit?.at ??
+            turn[0].startedAt ??
+            joinedTurnStart(turns, firstVisibleTurn + turnIndex);
           const previousTurn = turns[firstVisibleTurn + turnIndex - 1];
           const previousAt = !previousTurn
             ? undefined
@@ -1309,7 +1432,6 @@ function AgentTranscriptComponent({
                   blocks={item.blocks}
                   cwd={cwd}
                   done={
-                    !visible ||
                     settled ||
                     itemIndex < foldedAt ||
                     (answering && !workStillRunning)
@@ -1439,9 +1561,9 @@ function AgentTranscriptComponent({
             </TurnRow>
           );
           return (
-            <div
+            <HistoryTurn
               key={turn[0].id}
-              data-transcript-turn={turnId}
+              id={turnId}
               // A stacked message sits as close as one in the same turn, so
               // the gap between turns gives way.
               className={`transcript-turn flex min-w-0 flex-col${inlineWork && !reactedOnly ? " transcript-turn-mono" : ""}${stacksIntoNextTurn ? " -mb-1" : ""}${
@@ -1636,7 +1758,7 @@ function AgentTranscriptComponent({
                   }
                 />
               ) : null}
-            </div>
+            </HistoryTurn>
           );
         })}
       </TranscriptContent>
@@ -1686,8 +1808,30 @@ function TranscriptContent({
 
 // Keep hidden panes' local state, and catch up with current props on activation.
 export const AgentTranscript = memo(
-  AgentTranscriptComponent,
-  (previous, next) => previous.visible === false && next.visible === false,
+  function VisibleTranscript(props: Props) {
+    return (
+      <TranscriptVisibility.Provider value={props.visible ?? true}>
+        <TranscriptPacing.Provider value={!props.bottomAligned}>
+          <ToolDetailSession.Provider value={props.sessionId}>
+            <AgentTranscriptComponent {...props} />
+          </ToolDetailSession.Provider>
+        </TranscriptPacing.Provider>
+      </TranscriptVisibility.Provider>
+    );
+  },
+  (previous, next) => {
+    if (
+      previous.visible === false &&
+      next.visible === false &&
+      previous.parked === next.parked
+    )
+      return true;
+    const keys = Object.keys(next) as (keyof Props)[];
+    return (
+      keys.length === Object.keys(previous).length &&
+      keys.every((key) => Object.is(previous[key], next[key]))
+    );
+  },
 );
 
 /** "Today", "Yesterday" or the date, in bold, with the time beside it. */
@@ -2357,6 +2501,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
     >
       <AgentMarkdown
         text={block.text}
+        measurement={streamMeasurement(block)}
         streaming={block.streaming}
         revealOnMount={revealOnMount}
         cwd={cwd}
@@ -2369,7 +2514,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
 
 /**
  * A Mono's emoji answer, on the corner of the message it answers. The top
- * left keeps it clear of the bubble's tail and the hover actions below.
+ * left keeps it clear of the hover actions below.
  */
 function MonoReactionBadge({ emoji, live }: { emoji: string; live: boolean }) {
   return (
@@ -2629,10 +2774,6 @@ function UserMessageBlock({
                   ? "border border-dashed border-content/30 bg-content/4"
                   : "bg-content/10"
               } ${editing ? "edit-last-turn-bubble" : ""} ${
-                bubbleTail && chat && !block.draft && !compactFollowUp
-                  ? `agent-chat-bubble-tail-right ${singleLine ? "[--agent-bubble-radius:1.125rem]" : "[--agent-bubble-radius:0.75rem]"}`
-                  : ""
-              } ${
                 chat
                   ? `w-fit max-w-[min(100%,36rem)] ${singleLine ? "rounded-full" : "rounded-xl"}`
                   : "rounded-lg border border-content/10"
@@ -2812,17 +2953,24 @@ function TurnRow({
   const [foldState, setFoldState] = useState<
     "open" | "opening" | "closing" | "closed"
   >(folded ? "closed" : "open");
+  // A fold that changes as the tab hides or comes back jumps to where it is
+  // going: nobody watched the change, and opening one on return would push
+  // the whole reply below it down the screen.
+  const visible = useContext(TranscriptVisibility);
+  const wasVisible = useRef(visible);
 
   useLayoutEffect(() => {
+    const animate = visible && wasVisible.current;
+    wasVisible.current = visible;
     setFoldState((current) => {
       if (folded) {
-        return current === "closed" || current === "closing"
-          ? current
-          : "closing";
+        if (current === "closed") return current;
+        return animate ? "closing" : "closed";
       }
-      return current === "open" || current === "opening" ? current : "opening";
+      if (current === "open") return current;
+      return animate ? "opening" : "open";
     });
-  }, [folded]);
+  }, [folded, visible]);
 
   useEffect(() => {
     if (foldState !== "opening" && foldState !== "closing") return;
@@ -3444,7 +3592,7 @@ export function MonoActivityTrail({
             <li
               key={first.id}
               data-mono-activity-block={first.id}
-              className="min-w-0 px-1 text-content/80"
+              className="mono-activity-prose min-w-0 px-1 text-content/80"
             >
               <AgentMarkdown
                 text={first.text}
@@ -3534,9 +3682,26 @@ function ActivityPhaseGroup({
   const waiting = phase.steps.some(needsApproval);
   const open = waiting || (override ?? active);
   const [liveScroller, setLiveScroller] = useState<HTMLDivElement | null>(null);
-  useLivePhaseScroll(liveScroller, active && open, phase.steps);
-  // Steps already here when the group mounted, or that landed while it was
-  // folded, are history: only a step you watch arrive gets the entrance.
+  // A hidden tab stays as it was, open and live, so coming back neither
+  // unfolds the group again nor plays in the steps that ran meanwhile. Those
+  // land a render or two after the tab shows, once the app delivers what it
+  // held back, so the return is a short window rather than one render. The
+  // detached window lost its offset, so it pins again on return.
+  const visible = useContext(TranscriptVisibility);
+  const wasVisible = useRef(visible);
+  const returnedAt = useRef(-Infinity);
+  const returning =
+    !visible ||
+    !wasVisible.current ||
+    performance.now() - returnedAt.current < STEP_CATCH_UP_MS;
+  useLayoutEffect(() => {
+    if (visible && !wasVisible.current) returnedAt.current = performance.now();
+    wasVisible.current = visible;
+  }, [visible]);
+  useLivePhaseScroll(liveScroller, active && open && visible, phase.steps);
+  // Steps already here when the group mounted, that landed while it was
+  // folded, or while its tab was hidden, are history: only a step you watch
+  // arrive gets the entrance.
   const settled = useRef<Set<Block["id"]> | null>(null);
   settled.current ??= new Set(phase.steps.map((step) => step.id));
   useEffect(() => {
@@ -3653,7 +3818,8 @@ function ActivityPhaseGroup({
                 </div>
               ) : null}
               {phase.steps.map((block) => {
-                const arriving = active && !settled.current?.has(block.id);
+                const arriving =
+                  active && !returning && !settled.current?.has(block.id);
                 return (
                   <PhaseStep
                     key={block.id}
@@ -3737,6 +3903,14 @@ function PhaseStep({
     const timer = window.setTimeout(() => setStage("entering"), turn.wait);
     return () => window.clearTimeout(timer);
   }, [stage, turn]);
+
+  // A hidden tab's animations stop where they are and start over when it
+  // shows again, so an entrance cut short by leaving would play again on
+  // return. Leaving finishes it instead.
+  const visible = useContext(TranscriptVisibility);
+  useLayoutEffect(() => {
+    if (!visible && stage !== "settled") setStage("settled");
+  }, [visible, stage]);
 
   return (
     <div
@@ -3871,9 +4045,13 @@ function SubagentPanel({
   // The run's trail as transcript blocks, so the panel groups it the way the
   // main transcript groups the agent's own work: what it said, then the calls
   // that line introduced, folding behind it once it moves on.
-  const stepBlocks = useMemo(() => steps.map(agentStepBlock), [steps]);
+  const stepBlocks = useMemo(
+    () => steps.map((step) => agentStepBlock(step, block.id)),
+    [steps, block.id],
+  );
   const status = subagentStatusLine(block, steps);
-  const report = subagentReport(block);
+  const output = useToolDetail(block, open);
+  const report = subagentReport(block, output.detail);
   const failed = state === "rejected";
 
   // The name takes the room it needs and gives the rest back: a provider that
@@ -3913,7 +4091,7 @@ function SubagentPanel({
 
   // A run that has not reported a step yet has nothing to open into. The row
   // still holds its place, so the chevron arriving does not move anything.
-  if (steps.length === 0 && !report) {
+  if (steps.length === 0 && !report && !output.omitted) {
     return (
       <div
         aria-label={`Subagent: ${name}`}
@@ -4026,7 +4204,7 @@ function SubagentMascot({
  * A mirrored step as the transcript block it stands for, so a subagent's trail
  * goes through the same rows — labels, file chips, diffs — as the main agent's.
  */
-function agentStepBlock(step: AgentStep): Block {
+function agentStepBlock(step: AgentStep, parentId: string): Block {
   if (step.kind !== "tool") {
     return {
       id: step.id,
@@ -4034,7 +4212,7 @@ function agentStepBlock(step: AgentStep): Block {
       text: step.text,
     };
   }
-  return {
+  const block: Block = {
     id: step.id,
     role: "tool",
     text: step.text,
@@ -4044,9 +4222,11 @@ function agentStepBlock(step: AgentStep): Block {
       ...(step.toolKind ? { kind: step.toolKind } : {}),
       ...(step.status ? { status: step.status } : {}),
       ...(step.detail ? { detail: step.detail } : {}),
+      ...(step.detailOmitted ? { detailOmitted: true } : {}),
       ...(step.preview ? { preview: step.preview } : {}),
     },
   };
+  return ownStepBlock(block, parentId, step.id);
 }
 
 /** What a delegated run is up to: its newest step, or how much it got through. */
@@ -4409,6 +4589,7 @@ function ActivityToolRow({
   onOpenDiff?: (path: string) => void;
 }) {
   const [errorOpen, setErrorOpen] = useState(false);
+  const output = useToolDetail(block, errorOpen);
   const appCall = monoCodeToolCall(block);
   if (appCall) {
     return (
@@ -4419,7 +4600,11 @@ function ActivityToolRow({
   const state = toolCallState(block);
   const pending = needsApproval(block);
   const errorDetail =
-    !pending && state === "rejected" ? block.tool?.detail?.trim() : undefined;
+    !pending && state === "rejected"
+      ? output.omitted
+        ? (output.detail?.trim() ?? LOADING_OUTPUT)
+        : output.detail?.trim()
+      : undefined;
   const summary = (
     <ToolCallSummary
       label={label}
@@ -4500,10 +4685,13 @@ function MonoCodeCallRow({
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
 }) {
   const state = toolCallState(block);
-  const output =
-    block.tool?.detail?.trim() || block.tool?.preview?.output?.trim();
   const [errorOpen, setErrorOpen] = useState(false);
-  const hasError = state === "rejected" && !!output;
+  const stored = useToolDetail(block, errorOpen);
+  const output =
+    stored.detail?.trim() ||
+    (stored.pending ? LOADING_OUTPUT : undefined) ||
+    block.tool?.preview?.output?.trim();
+  const hasError = state === "rejected" && (!!output || stored.omitted);
   const pendingApproval = needsApproval(block);
   const command = `monocode app ${call.action}`;
   const verb = pendingApproval
@@ -4674,10 +4862,15 @@ function ToolCall({
   embedded?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const output = useToolDetail(block, open);
   const preview = block.tool?.preview;
   const label = toolCallLabel(block, cwd);
-  const detail = block.tool?.detail?.trim();
-  const expanded = detail && detail !== label ? detail : label;
+  const detail = output.detail?.trim();
+  const expanded = output.pending
+    ? LOADING_OUTPUT
+    : detail && detail !== label
+      ? detail
+      : label;
   const state = toolCallState(block);
   const stateLabel =
     state === "accepted"
@@ -4693,7 +4886,8 @@ function ToolCall({
   const compact =
     isReadTool(block.tool?.kind, label, preview) ||
     isSearchTool(block.tool?.kind, label, preview);
-  const expandable = !compact && !!detail && detail !== label;
+  const expandable =
+    !compact && (output.omitted || (!!detail && detail !== label));
 
   const frame = embedded ? "py-0.5" : "px-4 py-1";
 
@@ -5151,6 +5345,13 @@ function userTurnCount(blocks: Block[], managed = false): number {
   ).length;
 }
 
+/** Whether `block` is a prompt sent so recently that its rise has not played. */
+function justSent(block: Block | undefined): boolean {
+  const at = block?.sentAt ?? block?.startedAt;
+  return at != null && Date.now() - at < PROMPT_JUST_SENT_MS;
+}
+
+const PROMPT_JUST_SENT_MS = 1500;
 const PROMPT_RISE_MS = 560;
 // Keep in sync with the prompt-turn-reveal animation in index.css.
 const PROMPT_REVEAL_MS = 320;
@@ -5160,10 +5361,29 @@ const PROMPT_RISE_FROM = 0.3;
 
 /** Fades the prompt in while sliding it from the upper viewport to its row. */
 function riseIntoAnchor(scroller: HTMLElement | null, blockId: string) {
+  if (!scroller) return;
   const row = scroller?.querySelector<HTMLElement>(
     `[data-prompt-anchor="${CSS.escape(blockId)}"]`,
   );
-  if (!scroller || !row || typeof row.animate !== "function") return;
+  if (!row) {
+    // Retained turns attach their portal before mounting its children. Wait
+    // for that commit so the prompt keeps its existing entry animation.
+    let cancel: (() => void) | undefined;
+    const observer = new MutationObserver(() => {
+      if (
+        !scroller.querySelector(`[data-prompt-anchor="${CSS.escape(blockId)}"]`)
+      )
+        return;
+      observer.disconnect();
+      cancel = riseIntoAnchor(scroller, blockId);
+    });
+    observer.observe(scroller, { subtree: true, childList: true });
+    return () => {
+      observer.disconnect();
+      cancel?.();
+    };
+  }
+  if (typeof row.animate !== "function") return;
   if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
   const view = scroller.getBoundingClientRect();
   const dy =
@@ -5225,14 +5445,35 @@ function pinToBottom(el: HTMLElement | null) {
   el.scrollTop = el.scrollHeight;
 }
 
-/** Keep the live turn's min-height in lockstep with the visible transcript. */
+/**
+ * Keep the live turn's min-height in lockstep with the visible transcript.
+ * The content's top padding comes off too, so an anchored prompt rests as far
+ * below the top fade as the first message does.
+ */
 function syncTranscriptViewport(el: HTMLElement | null) {
   if (!el || el.clientHeight <= 0) return;
   const inner = el.querySelector<HTMLElement>("[data-transcript-content]");
-  const pad = inner
-    ? Number.parseFloat(getComputedStyle(inner).paddingBottom) || 0
+  const style = inner ? getComputedStyle(inner) : null;
+  const pad = style
+    ? (Number.parseFloat(style.paddingBottom) || 0) +
+      (Number.parseFloat(style.paddingTop) || 0)
     : 0;
   const next = `${Math.max(0, el.clientHeight - pad)}px`;
+  const anchors = inner?.querySelectorAll<HTMLElement>(
+    ":scope > .transcript-turn-anchor",
+  );
+  // Changing the inherited value restyles the whole history. While a pane
+  // slides, only the anchored turn follows; the rest catches up once at
+  // the end.
+  if (layoutTransitionActive()) {
+    anchors?.forEach((anchor) =>
+      anchor.style.setProperty("--transcript-viewport", next),
+    );
+    return;
+  }
+  anchors?.forEach((anchor) =>
+    anchor.style.removeProperty("--transcript-viewport"),
+  );
   if (el.style.getPropertyValue("--transcript-viewport") === next) return;
   el.style.setProperty("--transcript-viewport", next);
 }
