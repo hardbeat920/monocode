@@ -90,6 +90,7 @@ export function useFileDrop({
         event.stopPropagation();
         setFileDrag(false);
         if (!state.current.attachmentsSupported) return;
+        if (Date.now() - nativeDropAt < 250) return;
         const files = filesFromClipboard(data);
         if (files.length === 0) return;
         queuedSinkRef?.current?.ingestFiles(files);
