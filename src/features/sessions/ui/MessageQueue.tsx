@@ -109,10 +109,6 @@ export function MessageQueue({
     (ids) => onReorder?.(ids),
     "y",
   );
-  if (messages.length === 0) return null;
-  const paused = status === "paused";
-  const failed = messages.some((message) => message.error);
-
   const discardAddedAttachments = (files: Attachment[]) => {
     for (const file of files) {
       if (!editOriginalIdsRef.current.has(file.id)) revokeAttachment(file);
@@ -258,6 +254,10 @@ export function MessageQueue({
     if (!attachmentsSupported) return;
     ingestQueuedFiles(messageId, [...event.dataTransfer.files]);
   };
+
+  if (messages.length === 0) return null;
+  const paused = status === "paused";
+  const failed = messages.some((message) => message.error);
 
   return (
     <div className="px-2 text-content/55" data-message-queue>

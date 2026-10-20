@@ -1810,6 +1810,74 @@ describe("Composer question focus", () => {
     }
   });
 
+  it("keeps the composer alive when the queue empties and fills again", async () => {
+    await act(async () =>
+      root.render(
+        createElement(Composer, {
+          focused: true,
+          harness: "claude",
+          model: "claude-sonnet",
+          runtimeMode: "supervised",
+          executionCwd: "/repo",
+          hideProjectPicker: true,
+          hideBranchPicker: true,
+          queuedMessages: [],
+          onFocus: vi.fn(),
+          onCwdChange: vi.fn(),
+          onModelChange: vi.fn(),
+          onRuntimeModeChange: vi.fn(),
+          onSubmit: vi.fn(),
+        }),
+      ),
+    );
+
+    await act(async () =>
+      root.render(
+        createElement(Composer, {
+          focused: true,
+          harness: "claude",
+          model: "claude-sonnet",
+          runtimeMode: "supervised",
+          executionCwd: "/repo",
+          hideProjectPicker: true,
+          hideBranchPicker: true,
+          queuedMessages: [
+            { id: "q1", text: "follow up", attachments: [] },
+          ],
+          onFocus: vi.fn(),
+          onCwdChange: vi.fn(),
+          onModelChange: vi.fn(),
+          onRuntimeModeChange: vi.fn(),
+          onSubmit: vi.fn(),
+        }),
+      ),
+    );
+    expect(
+      container.querySelector('[data-message-queue-row="q1"]'),
+    ).not.toBeNull();
+
+    await act(async () =>
+      root.render(
+        createElement(Composer, {
+          focused: true,
+          harness: "claude",
+          model: "claude-sonnet",
+          runtimeMode: "supervised",
+          executionCwd: "/repo",
+          hideProjectPicker: true,
+          hideBranchPicker: true,
+          queuedMessages: [],
+          onFocus: vi.fn(),
+          onCwdChange: vi.fn(),
+          onModelChange: vi.fn(),
+          onRuntimeModeChange: vi.fn(),
+          onSubmit: vi.fn(),
+        }),
+      ),
+    );
+    expect(container.querySelector("[data-message-queue]")).toBeNull();
+  });
+
   it("shows queued images and files while editing", async () => {
     await act(async () =>
       root.render(
