@@ -293,7 +293,8 @@ export function MessageQueue({
         {messages.map((message, index) => {
           const sending = sendingId === message.id;
           const editing = editingId === message.id;
-          const canDrag = messages.length > 1 && !editing;
+          const reorderable = messages.length > 1 && !!onReorder;
+          const canDrag = reorderable && !editing;
           const label =
             (message.monoSessionCompletion
               ? message.monoSessionCompletion.sessionCount
@@ -311,9 +312,7 @@ export function MessageQueue({
               className={`flex min-h-8 gap-2.5 text-[12px] ${
                 editing ? "items-start py-1" : "items-center"
               } ${index > 0 ? "border-t border-content/5" : ""} ${
-                messages.length > 1
-                  ? "queue-reorder-item reorder-item relative"
-                  : ""
+                reorderable ? "queue-reorder-item reorder-item relative" : ""
               } ${canDrag ? "cursor-grab touch-none active:cursor-grabbing" : ""}`}
               onPointerDown={(event) => {
                 if (!canDrag) return;

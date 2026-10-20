@@ -60,14 +60,6 @@ export function useFileDrop({
       if (!root) return null;
       return sessionDropHit(root, { x, y });
     };
-    const ingestPaths = (paths: string[]) => {
-      const sink = queuedSinkRef?.current;
-      if (sink) {
-        sink.ingestPaths(paths);
-        return;
-      }
-      read(() => attachmentsFromPaths(paths));
-    };
 
     const onDragOver = (event: DragEvent) => {
       const data = event.dataTransfer;

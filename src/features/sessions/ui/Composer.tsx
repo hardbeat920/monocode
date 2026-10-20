@@ -1191,7 +1191,7 @@ export function Composer({
     state: fileDropStateRef,
     read: readDroppedAttachments,
     onError: setPasteError,
-    queuedSinkRef,
+    queuedSinkRef: queuedDropSinkRef,
   });
   const restoreDraft = useCallback(
     (
