@@ -619,9 +619,11 @@ import {
   createMono,
   findMono,
   monoWorksOn,
+  markMonoOpened,
   isMonoSession,
   listMonos,
   loadOpenMono,
+  projectLandingMono,
   monoForSession,
   monoLook,
   monosSnapshot,
@@ -663,6 +665,7 @@ import {
 } from "../features/monos/model/monoRotation";
 import {
   detachMonoTabs,
+  ensureLatestMonoSession,
   ensureMonoSession,
   resetMonoSession,
 } from "../features/monos/model/monoWorkspace";
@@ -781,6 +784,7 @@ import {
   loadAutosave,
   loadCollapsedProjectRailMode,
   loadFileTabMode,
+  loadProjectMonoLanding,
   loadLiveAgentsEnabled,
   loadNotesEnabled,
   loadMonosEnabled,
@@ -5056,12 +5060,11 @@ function Workspace({
 
   /** A Mono's conversation is a view over the existing workspace tabs. */
   const onOpenMono = useCallback(
-    async (monoId: string) => {
+    async (monoId: string, keepWorkspaceNavigation = false) => {
       setMonoActivity(null);
-      workspaceNavigation.cancel();
-      const request = ++monoViewRequest.current;
+      if (!keepWorkspaceNavigation) workspaceNavigation.cancel();
       lastMonoIdRef.current = monoId;
-      const session = await ensureMonoSession(monoId, {
+      const session = await ensureLatestMonoSession(monoId, monoViewRequest, {
         home: homeDir,
         load: ensureOpenSession,
         create: (path) => newDefaultSession(path),
@@ -5070,7 +5073,8 @@ function Workspace({
           setSessions(sessionsRef.current);
         },
       });
-      if (!session || request !== monoViewRequest.current) return;
+      if (!session) return;
+      markMonoOpened(monoId);
       // What the last Mono had open over its overview is its own; another
       // Mono opens on its list.
       if (monoViewIdRef.current !== session.id) {
@@ -6544,13 +6548,19 @@ function Workspace({
 
   const onSelectProject = useCallback(
     (path: string) => {
+      const lastOpenedMono = loadOpenMono();
       closeMonoView();
       workspaceNavigation.cancel();
       openProjects([path]);
       workspaceNavigation.selectProject(path);
+      const mono = loadProjectMonoLanding()
+        ? projectLandingMono(path, lastOpenedMono)
+        : undefined;
+      if (mono) void onOpenMono(mono.id, true);
     },
     [
       openProjects,
+      onOpenMono,
       closeMonoView,
       workspaceNavigation.cancel,
       workspaceNavigation.selectProject,

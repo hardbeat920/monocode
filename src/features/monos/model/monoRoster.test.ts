@@ -5,12 +5,15 @@ import {
   createMono,
   findMono,
   listMonos,
+  markMonoOpened,
   monoLook,
   monoProjectsPhrase,
   monoWorksOn,
   removeMono,
   removeMonoProject,
   reorderMonos,
+  projectLandingMono,
+  saveMonoSessionId,
 } from "./mono";
 import { monoBackgroundKey, monoChatBackground } from "./monoBackground";
 import { saveProjectChatBackgroundSettings } from "../../projects/model/projectChatBackground";
@@ -23,7 +26,10 @@ beforeEach(() => {
     removeItem: (key: string) => stored.delete(key),
   });
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 it("gives each new Mono a mascot and color the others are not using", () => {
   const first = createMono();
@@ -42,6 +48,23 @@ it("adds each project once and takes one away by its path", () => {
   expect(monoWorksOn(findMono(id)!, "/code/site/")).toBe(true);
   removeMonoProject(id, "/code/app/");
   expect(findMono(id)?.projects).toEqual(["/code/site"]);
+});
+
+it("lands on the most recently opened used Mono assigned to a project", () => {
+  const first = createMono(["/code/app"]);
+  const second = createMono(["/code/app", "/code/site"]);
+  const unused = createMono(["/code/app"]);
+  saveMonoSessionId(first.id, "first-session");
+  saveMonoSessionId(second.id, "second-session");
+  expect(projectLandingMono("/code/app", second.id)?.id).toBe(second.id);
+  vi.spyOn(Date, "now").mockReturnValueOnce(10).mockReturnValueOnce(20);
+  markMonoOpened(first.id);
+  markMonoOpened(second.id);
+
+  expect(projectLandingMono("/code/app/")?.id).toBe(second.id);
+  expect(projectLandingMono("/code/site")?.id).toBe(second.id);
+  expect(projectLandingMono("/code/unused")).toBeUndefined();
+  expect(projectLandingMono("/code/app")?.id).not.toBe(unused.id);
 });
 
 it("keeps the rail's order and forgets a removed Mono", () => {

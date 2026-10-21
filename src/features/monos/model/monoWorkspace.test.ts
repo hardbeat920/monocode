@@ -8,6 +8,7 @@ import { planAgentContext, recordAgentContext } from "./monoFiles";
 import { loadMonoRotation, saveMonoRotation } from "./monoRotation";
 import {
   detachMonoTabs,
+  ensureLatestMonoSession,
   ensureMonoSession,
   resetMonoSession,
 } from "./monoWorkspace";
@@ -101,6 +102,35 @@ it("shares concurrent first opens of the same Mono", async () => {
   expect(host.home).toHaveBeenCalledOnce();
   expect(host.create).toHaveBeenCalledOnce();
   expect(host.add).toHaveBeenCalledOnce();
+});
+
+it("ignores a Mono load that finishes after a later project selection", async () => {
+  const first = chat("first-session", "/first");
+  const second = chat("second-session", "/second");
+  const firstMono = monoFor("/first", first.id);
+  const secondMono = monoFor("/second", second.id);
+  let resolveFirst!: (session: typeof first) => void;
+  let resolveSecond!: (session: typeof second) => void;
+  const firstLoad = new Promise<typeof first>((resolve) => {
+    resolveFirst = resolve;
+  });
+  const secondLoad = new Promise<typeof second>((resolve) => {
+    resolveSecond = resolve;
+  });
+  const host = {
+    home: vi.fn().mockResolvedValue("/home"),
+    load: vi.fn((id: string) => (id === first.id ? firstLoad : secondLoad)),
+    create: vi.fn(createSession),
+    add: vi.fn(),
+  };
+  const request = { current: 0 };
+  const firstRequest = ensureLatestMonoSession(firstMono, request, host);
+  const secondRequest = ensureLatestMonoSession(secondMono, request, host);
+
+  resolveSecond(second);
+  expect(await secondRequest).toBe(second);
+  resolveFirst(first);
+  expect(await firstRequest).toBeUndefined();
 });
 
 it("allows retrying an open after the home lookup fails", async () => {

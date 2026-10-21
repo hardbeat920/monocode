@@ -41,6 +41,17 @@ export function ensureMonoSession(
   return opening;
 }
 
+/** Let only the latest asynchronous Mono view request finish navigation. */
+export async function ensureLatestMonoSession(
+  monoId: string,
+  request: { current: number },
+  host: Parameters<typeof ensureMonoSession>[1],
+): Promise<Session | undefined> {
+  const current = ++request.current;
+  const session = await ensureMonoSession(monoId, host);
+  return current === request.current ? session : undefined;
+}
+
 async function loadMonoSession(
   monoId: string,
   host: Parameters<typeof ensureMonoSession>[1],
