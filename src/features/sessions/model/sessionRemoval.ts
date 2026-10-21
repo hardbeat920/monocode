@@ -7,7 +7,10 @@ import {
   sessionChildHarnesses,
 } from "./handoff";
 import { flushSessionCheckpoint } from "./checkpoint";
-import { isFilesystemTab, type WorkspaceTab } from "../../workspace/model/layout";
+import {
+  isFilesystemTab,
+  type WorkspaceTab,
+} from "../../workspace/model/layout";
 import { orchestrator } from "../../orchestration/model/orchestration";
 import {
   newSession,
@@ -52,12 +55,15 @@ type WorkspaceChange =
       removal: SessionWorkspaceRemoval;
       session?: Session;
       savedSummary?: SessionSummary;
+      archivedChanged?: boolean;
     };
 
 type SessionRemovalMode = "archive" | "delete";
 
 type SessionRemovalOptions = {
   mode: SessionRemovalMode;
+  /** API archive may remove only idle sessions and must never cancel a turn. */
+  archiveIdleOnly?: boolean;
   /** Keep file and terminal panes open when removing a session through the CLI. */
   preserveOpenFiles?: boolean;
   scope?: WorkspaceTabCloseScope;
@@ -103,6 +109,14 @@ async function removeSession(
   options: SessionRemovalOptions,
 ): Promise<boolean> {
   const initial = options.workspace.snapshot();
+  const isBusy = () =>
+    options.workspace
+      .snapshot()
+      .sessions.find((session) => session.id === sessionId)?.busy ||
+    orchestrator.run(sessionId);
+  const archiveIdleOnly =
+    options.mode === "archive" && options.archiveIdleOnly === true;
+  if (archiveIdleOnly && isBusy()) return false;
   const canCloseTab = (tab: WorkspaceTab) =>
     !options.preserveOpenFiles ||
     (tab.editorPanes.length === 0 && tab.terminalPanes.length === 0);
@@ -114,6 +128,7 @@ async function removeSession(
     canCloseTab,
   });
   if (!(await options.confirm(plan.closedTabs, options.mode))) return false;
+  if (archiveIdleOnly && isBusy()) return false;
 
   if (options.mode === "delete") {
     const run = orchestrator.forSession(sessionId);
@@ -121,12 +136,12 @@ async function removeSession(
       await orchestrator.stopRun(run.leadId);
     }
   }
-  await options.stop(sessionId);
+  if (!archiveIdleOnly) await options.stop(sessionId);
   const latest = options.workspace
     .snapshot()
     .sessions.find((session) => session.id === sessionId);
   let stopped = latest;
-  if (latest) {
+  if (latest && !archiveIdleOnly) {
     stopped = latest.busy ? stopStreaming(latest) : latest;
     if (isPreparingHandoff(stopped)) {
       stopped = completeHandoff(stopped, buildDeterministicHandoff(stopped));
@@ -149,12 +164,18 @@ async function removeSession(
     );
   }
 
-  if (stopped) await flushSessionCheckpoint(sessionId);
+  if (stopped) {
+    if (archiveIdleOnly && isBusy()) return false;
+    await flushSessionCheckpoint(sessionId);
+    if (archiveIdleOnly && isBusy()) return false;
+  }
   let savedSummary: SessionSummary | undefined;
+  let archivedChanged: boolean | undefined;
   if (options.mode === "delete") {
-    const imagePaths = stopped?.blocks.flatMap((block) =>
-      block.role === "image" && block.image ? [block.image.path] : [],
-    ) ?? [];
+    const imagePaths =
+      stopped?.blocks.flatMap((block) =>
+        block.role === "image" && block.image ? [block.image.path] : [],
+      ) ?? [];
     await orchestrator.deleteSession(sessionId, () =>
       deleteSession(sessionId, imagePaths),
     );
@@ -167,8 +188,13 @@ async function removeSession(
       const saved = await upsertSession(stopped);
       if (!saved) throw new Error("The conversation could not be saved.");
       savedSummary = saved;
+      if (archiveIdleOnly && isBusy()) return false;
     }
-    await setSessionArchived(sessionId, true);
+    archivedChanged = await setSessionArchived(sessionId, true);
+    if (archiveIdleOnly && isBusy()) {
+      if (archivedChanged) await setSessionArchived(sessionId, false);
+      return false;
+    }
   }
 
   const current = options.workspace.snapshot();
@@ -215,6 +241,7 @@ async function removeSession(
     removal,
     session: removedSession,
     savedSummary,
+    archivedChanged,
   });
   return true;
 }
