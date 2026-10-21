@@ -195,6 +195,44 @@ describe("tabCommand", () => {
     ).toBe(true);
   });
 
+  it("allows only project navigation from an empty Mono composer", () => {
+    const monoComposer = {
+      blockedTarget: true,
+      emptyComposerTarget: false,
+      monoComposerEmptyTarget: true,
+      surfaceOpen: false,
+    };
+    for (const [keyName, expected] of [
+      ["ArrowLeft", "prev-project"],
+      ["ArrowRight", "next-project"],
+    ] as const) {
+      const command = tabCommand(
+        key({ key: keyName, metaKey: true, shiftKey: true }),
+      );
+      expect(command).toBe(expected);
+      expect(
+        shouldHandleListNavigation({
+          ...monoComposer,
+          projectNavigation:
+            command === "prev-project" || command === "next-project",
+        }),
+      ).toBe(true);
+    }
+    expect(
+      tabCommand(key({ key: "ArrowRight", ctrlKey: true, shiftKey: true })),
+    ).toBe("next-project");
+    expect(
+      shouldHandleListNavigation({ ...monoComposer, projectNavigation: false }),
+    ).toBe(false);
+    expect(
+      shouldHandleListNavigation({
+        ...monoComposer,
+        projectNavigation: true,
+        surfaceOpen: true,
+      }),
+    ).toBe(false);
+  });
+
   it("blocks list navigation while another text or app surface owns focus", () => {
     expect(
       shouldHandleListNavigation({

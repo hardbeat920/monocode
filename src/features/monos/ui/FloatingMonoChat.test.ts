@@ -137,6 +137,45 @@ it("shows this window's Mono with its status beneath the name", async () => {
   ).not.toBeNull();
 });
 
+it("routes project cycling from the empty Mono composer and preserves text selection", async () => {
+  await render();
+  const field = container.querySelector<HTMLTextAreaElement>(
+    '[aria-label="Message Captain"]',
+  )!;
+  const previous = new KeyboardEvent("keydown", {
+    key: "ArrowLeft",
+    code: "ArrowLeft",
+    metaKey: true,
+    shiftKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  act(() => field.dispatchEvent(previous));
+  expect(previous.defaultPrevented).toBe(true);
+  expect(native.invoke).toHaveBeenCalledWith("mono_chat_action", {
+    monoId: "first",
+    action: { kind: "navigateProject", delta: -1 },
+  });
+
+  const props = Object.entries(field).find(([key]) =>
+    key.startsWith("__reactProps"),
+  )![1];
+  act(() => props.onChange({ target: { value: "Draft" } }));
+  const next = new KeyboardEvent("keydown", {
+    key: "ArrowRight",
+    code: "ArrowRight",
+    metaKey: true,
+    shiftKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  act(() => field.dispatchEvent(next));
+  expect(next.defaultPrevented).toBe(false);
+  expect(
+    native.invoke.mock.calls.filter(([command]) => command === "mono_chat_action"),
+  ).toHaveLength(1);
+});
+
 it("lists every Mono beside the chat and switches or adds from there", async () => {
   await render();
   const rail = container.querySelector("[data-floating-mono-rail]")!;
@@ -316,6 +355,25 @@ it("reads a Mono's document in a sheet over the chat and slides it away", async 
     sheet?.querySelector('[role="dialog"]')?.getAttribute("aria-label"),
   ).toBe("Menu plan");
   expect(sheet?.textContent).toContain("Soup first.");
+  const projectShortcut = new KeyboardEvent("keydown", {
+    key: "ArrowLeft",
+    code: "ArrowLeft",
+    metaKey: true,
+    shiftKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  act(() =>
+    container.querySelector<HTMLButtonElement>("[data-open-doc]")!
+      .dispatchEvent(projectShortcut),
+  );
+  expect(projectShortcut.defaultPrevented).toBe(false);
+  expect(native.invoke).not.toHaveBeenCalledWith(
+    "mono_chat_action",
+    expect.objectContaining({
+      action: expect.objectContaining({ kind: "navigateProject" }),
+    }),
+  );
   // Reading in place never asks the main window to take over.
   expect(native.invoke).not.toHaveBeenCalledWith(
     "mono_chat_action",

@@ -186,10 +186,16 @@ export function adjacentItemId(
 export function shouldHandleListNavigation(input: {
   blockedTarget: boolean;
   emptyComposerTarget: boolean;
+  monoComposerEmptyTarget?: boolean;
+  projectNavigation?: boolean;
   surfaceOpen: boolean;
 }): boolean {
   return (
-    !input.surfaceOpen && (!input.blockedTarget || input.emptyComposerTarget)
+    !input.surfaceOpen &&
+    (!input.blockedTarget ||
+      input.emptyComposerTarget ||
+      (input.projectNavigation === true &&
+        input.monoComposerEmptyTarget === true))
   );
 }
 

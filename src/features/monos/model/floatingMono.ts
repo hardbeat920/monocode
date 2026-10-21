@@ -32,7 +32,8 @@ export type FloatingMonoAction =
   | { kind: "reveal" }
   | { kind: "openFile"; path: string }
   | { kind: "openArtifact"; id: string }
-  | { kind: "resume" };
+  | { kind: "resume" }
+  | { kind: "navigateProject"; delta: -1 | 1 };
 export type FloatingMonoRequest = {
   id: number;
   monoId: string;
@@ -111,6 +112,7 @@ export type FloatingMonoHost = {
   openFile(path: string): void | Promise<void>;
   openArtifact?(monoId: string, id: string): void | Promise<void>;
   resume(sessionId: string): void;
+  navigateProject(delta: -1 | 1): void;
   /** Add a Mono and show it in place of the chat that asked. */
   create?(fromMonoId: string): Promise<void>;
 };
@@ -158,6 +160,9 @@ export async function deliverFloatingMonoRequest(
       break;
     case "resume":
       host.resume(session.id);
+      break;
+    case "navigateProject":
+      host.navigateProject(action.delta);
       break;
     case "create":
       if (!host.create) throw new Error("New Monos are unavailable here.");

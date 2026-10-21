@@ -27,6 +27,16 @@ import {
   type FloatingMonoEntry,
   type FloatingMonoView,
 } from "../model/floatingMono";
+import {
+  keybindingPressed,
+  matchCustomKeybinding,
+} from "../../settings/model/settings";
+import {
+  shouldHandleListNavigation,
+  tabCommand,
+  tabCommandForKeybinding,
+  tabCommandKeybinding,
+} from "../../workspace/model/tabKeys";
 import { MonoComposer } from "./MonoComposer";
 import { MonoStatusDot } from "./MonoRailMascot";
 import { MonoStatus } from "./MonoStatus";
@@ -143,6 +153,54 @@ export function FloatingMonoChat({ onShown }: { onShown: () => void }) {
     },
     [view.monoId],
   );
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!view.monoId || event.defaultPrevented || event.isComposing) return;
+      const custom = matchCustomKeybinding(event);
+      const command = custom
+        ? tabCommandForKeybinding(custom, event)
+        : tabCommand(event);
+      if (
+        (command !== "prev-project" && command !== "next-project") ||
+        !keybindingPressed(
+          tabCommandKeybinding(command),
+          event,
+          custom === null,
+        )
+      ) {
+        return;
+      }
+      const target = event.target instanceof Element ? event.target : null;
+      const blockedTarget = Boolean(
+        target?.closest(
+          'input, textarea, select, [contenteditable="true"], .cm-editor, .monocode-terminal',
+        ),
+      );
+      const monoComposerEmptyTarget = Boolean(
+        target?.matches('textarea[data-mono-composer-empty="true"]'),
+      );
+      const surfaceOpen = document.querySelector('[role="dialog"]') !== null;
+      if (
+        !shouldHandleListNavigation({
+          blockedTarget,
+          emptyComposerTarget: false,
+          monoComposerEmptyTarget,
+          projectNavigation: true,
+          surfaceOpen,
+        })
+      ) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      void action({
+        kind: "navigateProject",
+        delta: command === "prev-project" ? -1 : 1,
+      });
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [action, view.monoId]);
   const state = view.session
     ? monoState(view.session)
     : { status: "idle" as const };
