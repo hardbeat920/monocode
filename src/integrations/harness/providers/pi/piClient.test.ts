@@ -261,6 +261,108 @@ describe("PiRpc protocol negotiation", () => {
     expect(mocks.writeChild).not.toHaveBeenCalled();
     rpc.close();
   });
+
+  it("decodes chunks after a negotiation success that outlived the grace", async () => {
+    vi.useFakeTimers();
+    mocks.writeChild.mockResolvedValue(undefined);
+    const rpc = new PiRpc("probe", vi.fn(), OMP_FLAVOR);
+    push(rpc, READY);
+    const request = rpc.request({ type: "get_state" });
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    const [, held] = written();
+    expect(held).toEqual({ type: "get_state", id: expect.any(String) });
+    push(rpc, negotiateResponse(NEGOTIATED));
+    for (const chunk of chunkFrames(largeResponse(held.id))) push(rpc, chunk);
+    await expect(request).resolves.toEqual(largeResponse(held.id));
+    rpc.close();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("negotiates when ready arrives after the grace", async () => {
+    vi.useFakeTimers();
+    mocks.writeChild.mockResolvedValue(undefined);
+    const rpc = new PiRpc("probe", vi.fn(), OMP_FLAVOR);
+    const early = rpc.request({ type: "get_state" });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(written()).toEqual([{ type: "get_state", id: "mc_1" }]);
+
+    push(rpc, READY);
+    const late = rpc.request({ type: "get_commands" });
+    expect(written().map((command) => command.type)).toEqual([
+      "get_state",
+      "negotiate_protocol",
+    ]);
+    push(rpc, {
+      type: "response",
+      id: "mc_1",
+      command: "get_state",
+      success: true,
+    });
+    await expect(early).resolves.toMatchObject({ id: "mc_1" });
+
+    push(rpc, negotiateResponse(NEGOTIATED));
+    const held = written()[2];
+    expect(held).toEqual({ type: "get_commands", id: expect.any(String) });
+    for (const chunk of chunkFrames(largeResponse(held.id))) push(rpc, chunk);
+    await expect(late).resolves.toEqual(largeResponse(held.id));
+    rpc.close();
+  });
+
+  it.each([
+    [
+      "cancelled",
+      (rpc: PiRpc) => rpc.cancelRequest("turn"),
+      "omp request cancelled",
+    ],
+    [
+      "timed out",
+      (_rpc: PiRpc) => vi.advanceTimersByTimeAsync(1_000),
+      "omp prompt timed out",
+    ],
+  ])(
+    "never sends a held request that was %s when its id is reused",
+    async (_, drop, reason) => {
+      vi.useFakeTimers();
+      mocks.writeChild.mockResolvedValue(undefined);
+      const rpc = new PiRpc("probe", vi.fn(), OMP_FLAVOR);
+      const dropped = expect(
+        rpc.request({ type: "prompt", id: "turn", message: "stale" }, 1_000),
+      ).rejects.toThrow(reason);
+      await drop(rpc);
+      await dropped;
+      const reused = rpc.request({ type: "get_state", id: "turn" });
+
+      push(rpc, READY);
+      push(rpc, negotiateResponse(NEGOTIATED));
+      expect(written().map((command) => command.type)).toEqual([
+        "negotiate_protocol",
+        "get_state",
+      ]);
+      const response = {
+        type: "response",
+        id: "turn",
+        command: "get_state",
+        success: true,
+      };
+      push(rpc, response);
+      await expect(reused).resolves.toEqual(response);
+      rpc.close();
+    },
+  );
+
+  it("ignores a ready frame that arrives after close", async () => {
+    vi.useFakeTimers();
+    mocks.writeChild.mockResolvedValue(undefined);
+    const rpc = new PiRpc("probe", vi.fn(), OMP_FLAVOR);
+    const request = rpc.request({ type: "get_state" });
+    rpc.close();
+    await expect(request).rejects.toThrow("omp process exited");
+
+    push(rpc, READY);
+    expect(mocks.writeChild).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });
 
 describe("PiRpc protocol v2 chunks", () => {
@@ -336,6 +438,44 @@ describe("PiRpc protocol v2 chunks", () => {
     await expect(rpc.request({ type: "get_state" })).rejects.toThrow(error);
     push(rpc, { type: "agent_end" });
     expect(onFrame).toHaveBeenCalledExactlyOnceWith(READY);
+  });
+
+  it.each([
+    [
+      "a non-object line interrupting a sequence",
+      (chunks: string[]) => [chunks[0], "[1,2]"],
+      /^omp RPC transport failed: rpc chunk sequence interrupted$/,
+    ],
+    [
+      "a non-object line",
+      (_chunks: string[]) => ['"text"'],
+      /^omp RPC transport failed: rpc frame must be an object$/,
+    ],
+    [
+      "a malformed chunk line",
+      (chunks: string[]) => [chunks[0], chunks[1].slice(0, -10)],
+      /^omp RPC transport failed: .*JSON/,
+    ],
+    [
+      "a reassembled payload that is not JSON",
+      ([first, ...rest]: string[]) => [
+        JSON.stringify({
+          ...JSON.parse(first),
+          data: Buffer.alloc(CHUNK_BYTES, "x").toString("base64"),
+        }),
+        ...rest,
+      ],
+      /^omp RPC transport failed: .*JSON/,
+    ],
+  ])("fails the connection on %s", async (_, lines, reason) => {
+    mocks.writeChild.mockResolvedValue(undefined);
+    const rpc = connectV2();
+    const request = rpc.request({ type: "get_state" }, 100);
+    const [, held] = written();
+    const chunks = frames(held.id).map((chunk) => JSON.stringify(chunk));
+
+    for (const line of lines(chunks)) rpc.pushLine(line);
+    await expect(request).rejects.toThrow(reason);
   });
 
   it("delivers a reassembled event frame to onFrame", () => {

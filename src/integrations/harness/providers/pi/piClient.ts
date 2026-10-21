@@ -12,7 +12,7 @@ type Pending = {
   reject: (error: Error) => void;
 };
 
-type HeldRequest = { id: string; line: string };
+type HeldRequest = { id: string; line: string; entry: Pending };
 
 type ChunkSequence = {
   chunkId: string;
@@ -50,9 +50,11 @@ function decodeBase64(data: unknown): Uint8Array {
 class RpcChunkDecoder {
   private sequence?: ChunkSequence;
 
-  push(rec: Record<string, unknown>): Record<string, unknown> | undefined {
-    if (rec.type !== "rpc_chunk") {
+  push(value: unknown): Record<string, unknown> | undefined {
+    const rec = asRecord(value);
+    if (rec?.type !== "rpc_chunk") {
       if (this.sequence) throw new Error("rpc chunk sequence interrupted");
+      if (!rec) throw new Error("rpc frame must be an object");
       return rec;
     }
     const { chunkId, index, count, byteLength } = rec;
@@ -146,14 +148,20 @@ export class PiRpc {
 
   pushLine(line: string) {
     if (this.transportError) return;
-    const parsed = parseJsonLine(line);
-    if (!parsed) return;
-    let rec: Record<string, unknown> | undefined;
-    try {
-      rec = this.chunks ? this.chunks.push(parsed) : parsed;
-    } catch (error) {
-      this.failTransport(error);
-      return;
+    let rec: Record<string, unknown> | null | undefined;
+    if (this.chunks) {
+      // Negotiated streams carry only JSON objects, so anything else means
+      // the transport is corrupt, as for omp's own decoder.
+      const text = line.trim();
+      if (!text) return;
+      try {
+        rec = this.chunks.push(JSON.parse(text));
+      } catch (error) {
+        this.failTransport(error);
+        return;
+      }
+    } else {
+      rec = parseJsonLine(line);
     }
     if (!rec) return;
     const response = parseRpcResponse(rec);
@@ -192,13 +200,14 @@ export class PiRpc {
     const id = stringField(command, "id") ?? `mc_${this.nextId++}`;
     if (this.pending.has(id)) throw new Error(`Duplicate RPC request id: ${id}`);
     const line = JSON.stringify({ ...command, id });
+    let entry!: Pending;
     const pending = new Promise<Record<string, unknown>>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         const type = stringField(command, "type") ?? "command";
         reject(new Error(`${this.label} ${type} timed out`));
       }, timeoutMs);
-      this.pending.set(id, {
+      entry = {
         resolve: (value) => {
           clearTimeout(timer);
           resolve(value);
@@ -207,10 +216,11 @@ export class PiRpc {
           clearTimeout(timer);
           reject(error);
         },
-      });
+      };
+      this.pending.set(id, entry);
     });
     if (this.holding) {
-      this.held.push({ id, line });
+      this.held.push({ id, line, entry });
       this.handshakeTimer ??= setTimeout(
         () => this.release(),
         this.readyGraceMs,
@@ -224,7 +234,11 @@ export class PiRpc {
   close(error?: Error) {
     if (this.closed) return;
     this.closed = true;
+    this.awaitingReady = false;
+    this.holding = false;
+    this.negotiateId = undefined;
     clearTimeout(this.handshakeTimer);
+    this.handshakeTimer = undefined;
     this.held.length = 0;
     const err = error ?? new Error(`${this.label} process exited`);
     for (const pending of this.pending.values()) pending.reject(err);
@@ -271,8 +285,9 @@ export class PiRpc {
     clearTimeout(this.handshakeTimer);
     this.handshakeTimer = undefined;
     this.holding = false;
-    for (const { id, line } of this.held.splice(0)) {
-      if (this.pending.has(id)) this.write(id, line);
+    for (const { id, line, entry } of this.held.splice(0)) {
+      // A cancelled or timed-out request may have handed its id to a new one.
+      if (this.pending.get(id) === entry) this.write(id, line);
     }
   }
 
