@@ -668,6 +668,7 @@ import {
   ensureLatestMonoSession,
   ensureMonoSession,
   loadLatestMonoSession,
+  rememberMonoAfterOpen,
   resetMonoSession,
 } from "../features/monos/model/monoWorkspace";
 import {
@@ -5061,13 +5062,9 @@ function Workspace({
 
   /** A Mono's conversation is a view over the existing workspace tabs. */
   const onOpenMono = useCallback(
-    async (
-      monoId: string,
-      options: { loadOnly?: boolean } = {},
-    ) => {
+    async (monoId: string, options: { loadOnly?: boolean } = {}) => {
       setMonoActivity(null);
       workspaceNavigation.cancel();
-      lastMonoIdRef.current = monoId;
       const host = {
         home: homeDir,
         load: ensureOpenSession,
@@ -5077,11 +5074,17 @@ function Workspace({
           setSessions(sessionsRef.current);
         },
       };
-      const session = options.loadOnly
-        ? await loadLatestMonoSession(monoId, monoViewRequest, host)
-        : await ensureLatestMonoSession(monoId, monoViewRequest, host);
+      const session = await rememberMonoAfterOpen(
+        monoId,
+        options.loadOnly
+          ? loadLatestMonoSession(monoId, monoViewRequest, host)
+          : ensureLatestMonoSession(monoId, monoViewRequest, host),
+        (openedMonoId) => {
+          lastMonoIdRef.current = openedMonoId;
+          markMonoOpened(openedMonoId);
+        },
+      );
       if (!session) return;
-      markMonoOpened(monoId);
       // What the last Mono had open over its overview is its own; another
       // Mono opens on its list.
       if (monoViewIdRef.current !== session.id) {

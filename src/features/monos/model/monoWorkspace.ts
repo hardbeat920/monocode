@@ -18,6 +18,16 @@ import { forgetMonoRotation } from "./monoRotation";
 
 const openingMonos = new Map<string, Promise<Session | undefined>>();
 
+export async function rememberMonoAfterOpen(
+  monoId: string,
+  opening: Promise<Session | undefined>,
+  onOpened: (monoId: string) => void,
+): Promise<Session | undefined> {
+  const session = await opening;
+  if (session) onOpened(monoId);
+  return session;
+}
+
 /**
  * Load the Mono's conversation without opening or replacing a workspace tab.
  * A new one starts with Auto permissions in the home folder: no single
