@@ -381,7 +381,9 @@ export function MonoComposer({
     >
       <div
         ref={box}
-        data-mono-composer-pending={pendingReads > 0 ? "true" : undefined}
+        data-mono-composer-pending={
+          enabled && pendingReads > 0 ? "true" : undefined
+        }
         className={`agent-chat-composer relative rounded-lg border bg-content/3 backdrop-blur-sm ${fileDrag ? "border-accent/60" : "border-content/10 has-focus:border-content/20"}`}
       >
         {fileDrag ? (

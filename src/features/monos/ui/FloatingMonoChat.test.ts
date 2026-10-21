@@ -229,6 +229,49 @@ it("blocks floating Mono project cycling while its attachment read is pending", 
   await act(async () => finishRead([]));
 });
 
+it("blocks floating Mono project cycling after focus leaves a pending composer", async () => {
+  let finishRead!: (attachments: never[]) => void;
+  pickAttachments.mockReturnValueOnce(
+    new Promise<never[]>((resolve) => {
+      finishRead = resolve;
+    }),
+  );
+  await render();
+  const attach = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Attach files"]',
+  )!;
+  await act(async () => {
+    attach.click();
+    await Promise.resolve();
+  });
+  const otherControl = container.querySelector<HTMLButtonElement>(
+    '[data-floating-mono-rail] [aria-label="Scout"]',
+  )!;
+  act(() => otherControl.focus());
+  expect(document.activeElement).toBe(otherControl);
+
+  const next = new KeyboardEvent("keydown", {
+    key: "ArrowRight",
+    code: "ArrowRight",
+    metaKey: true,
+    shiftKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  act(() => otherControl.dispatchEvent(next));
+  expect(next.defaultPrevented).toBe(false);
+  expect(
+    native.invoke.mock.calls.filter(
+      ([command, args]) =>
+        command === "mono_chat_action" &&
+        (args as { action?: { kind?: string } }).action?.kind ===
+          "navigateProject",
+    ),
+  ).toHaveLength(0);
+
+  await act(async () => finishRead([]));
+});
+
 it("blocks floating Mono project cycling while its emoji picker remains open", async () => {
   await render();
   const picker = document.createElement("div");

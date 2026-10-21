@@ -158,6 +158,35 @@ it("blocks project navigation while an attachment read is pending", async () => 
   expect(field().hasAttribute("data-mono-composer-empty")).toBe(false);
 });
 
+it("does not mark a hidden composer as a blocking project-navigation surface", async () => {
+  let finishRead!: (attachments: (typeof file)[]) => void;
+  pick.mockReturnValueOnce(
+    new Promise<(typeof file)[]>((resolve) => {
+      finishRead = resolve;
+    }),
+  );
+  render();
+  await act(async () => {
+    container
+      .querySelector<HTMLButtonElement>('[aria-label="Attach files"]')!
+      .click();
+    await Promise.resolve();
+  });
+
+  render({ enabled: false });
+  expect(
+    container
+      .querySelector(".agent-chat-composer")
+      ?.hasAttribute("data-mono-composer-pending"),
+  ).toBe(false);
+  const outside = document.createElement("button");
+  document.body.append(outside);
+  expect(hasBlockingProjectNavigationSurface(outside)).toBe(false);
+  outside.remove();
+
+  await act(async () => finishRead([file]));
+});
+
 it("blocks project cycling from the focused emoji toggle while its portal is open", async () => {
   render({ controls: createElement("span", null, "Model") });
   const toggle = container.querySelector<HTMLButtonElement>(

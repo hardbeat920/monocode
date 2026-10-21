@@ -206,6 +206,7 @@ export function hasBlockingProjectNavigationSurface(
 ): boolean {
   return Boolean(
     target?.closest('[data-mono-composer-pending="true"]') ||
+    document.querySelector('[data-mono-composer-pending="true"]') ||
     document.querySelector("[data-emoji-picker]"),
   );
 }

@@ -326,6 +326,38 @@ describe("tabCommand", () => {
     ).toBe(false);
     composer.remove();
   });
+
+  it("blocks project navigation while an active Mono read is pending after focus leaves it", () => {
+    const composer = document.createElement("div");
+    composer.dataset.monoComposerPending = "true";
+    const outside = document.createElement("button");
+    document.body.append(composer, outside);
+
+    const projectNavigationSurfaceOpen =
+      hasBlockingProjectNavigationSurface(outside);
+    expect(projectNavigationSurfaceOpen).toBe(true);
+    expect(
+      shouldHandleListNavigation({
+        blockedTarget: false,
+        emptyComposerTarget: false,
+        projectNavigation: true,
+        projectNavigationSurfaceOpen,
+        surfaceOpen: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldHandleListNavigation({
+        blockedTarget: false,
+        emptyComposerTarget: false,
+        projectNavigation: false,
+        projectNavigationSurfaceOpen,
+        surfaceOpen: false,
+      }),
+    ).toBe(true);
+
+    composer.remove();
+    outside.remove();
+  });
 });
 
 describe("shouldStopFocusedTurnOnEscape", () => {
