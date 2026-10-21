@@ -75,7 +75,24 @@ beforeEach(() => {
   events = [];
   transport.requests.length = 0;
   transport.spawnChild.mockReset();
-  transport.spawnChild.mockResolvedValue(undefined);
+  // Like omp 18.11, announce protocol v2 before answering any command.
+  transport.spawnChild.mockImplementation(
+    async (
+      sessionId: string,
+      _command: string,
+      _args: string[],
+      _cwd: string,
+      _account: unknown,
+      provider?: string,
+    ) => {
+      if (provider !== "omp") return;
+      frame(sessionId, {
+        type: "ready",
+        protocolVersion: 1,
+        supportedProtocolVersions: [1, 2],
+      });
+    },
+  );
   transport.fast = undefined;
   transport.forkData = undefined;
   transport.stateSessionId = undefined;
@@ -92,15 +109,17 @@ beforeEach(() => {
       response(
         sessionId,
         command,
-        command.type === "get_state"
-          ? { sessionId: transport.stateSessionId ?? "provider-session" }
-          : command.type === "get_available_commands"
-            ? { commands: [{ name: "workflow", source: "custom" }] }
-            : command.type === "get_fork_messages"
-              ? { messages: [{ entryId: "entry", text: "latest" }] }
-              : command.type === "fork"
-                ? (transport.forkData ?? {})
-                : {},
+        command.type === "negotiate_protocol"
+          ? { protocolVersion: 2 }
+          : command.type === "get_state"
+            ? { sessionId: transport.stateSessionId ?? "provider-session" }
+            : command.type === "get_available_commands"
+              ? { commands: [{ name: "workflow", source: "custom" }] }
+              : command.type === "get_fork_messages"
+                ? { messages: [{ entryId: "entry", text: "latest" }] }
+                : command.type === "fork"
+                  ? (transport.forkData ?? {})
+                  : {},
       );
     },
   );

@@ -56,7 +56,7 @@ async function discoverCommands(
       JSON.stringify(extensionUiResponse(request, "deny")),
     ).catch(() => undefined);
   };
-  const rpc = new PiRpc(childId, replyToUi, flavor.label);
+  const rpc = new PiRpc(childId, replyToUi, flavor);
 
   try {
     watchChild(
