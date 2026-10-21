@@ -188,14 +188,25 @@ export function shouldHandleListNavigation(input: {
   emptyComposerTarget: boolean;
   monoComposerEmptyTarget?: boolean;
   projectNavigation?: boolean;
+  projectNavigationSurfaceOpen?: boolean;
   surfaceOpen: boolean;
 }): boolean {
   return (
+    !(input.projectNavigation && input.projectNavigationSurfaceOpen) &&
     !input.surfaceOpen &&
     (!input.blockedTarget ||
       input.emptyComposerTarget ||
       (input.projectNavigation === true &&
         input.monoComposerEmptyTarget === true))
+  );
+}
+
+export function hasBlockingProjectNavigationSurface(
+  target: Element | null,
+): boolean {
+  return Boolean(
+    target?.closest('[data-mono-composer-pending="true"]') ||
+    document.querySelector("[data-emoji-picker]"),
   );
 }
 

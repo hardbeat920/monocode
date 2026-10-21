@@ -594,6 +594,7 @@ import {
   adjacentItemId,
   deferUnhandledEscape,
   focusedBusyAgentSessionId,
+  hasBlockingProjectNavigationSurface,
   hasBlockingListNavigationSurface,
   shouldHandleListNavigation,
   shouldStopFocusedTurnOnEscape,
@@ -12995,6 +12996,9 @@ function Workspace({
               emptyComposerTarget,
               monoComposerEmptyTarget,
               projectNavigation,
+              projectNavigationSurfaceOpen:
+                projectNavigation &&
+                hasBlockingProjectNavigationSurface(target),
               surfaceOpen,
             })
           ) {

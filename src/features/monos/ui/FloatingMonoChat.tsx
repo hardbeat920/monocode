@@ -32,6 +32,7 @@ import {
   matchCustomKeybinding,
 } from "../../settings/model/settings";
 import {
+  hasBlockingProjectNavigationSurface,
   hasBlockingListNavigationSurface,
   shouldHandleListNavigation,
   tabCommand,
@@ -189,6 +190,8 @@ export function FloatingMonoChat({ onShown }: { onShown: () => void }) {
           emptyComposerTarget: false,
           monoComposerEmptyTarget,
           projectNavigation: true,
+          projectNavigationSurfaceOpen:
+            hasBlockingProjectNavigationSurface(target),
           surfaceOpen,
         })
       ) {

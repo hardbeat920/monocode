@@ -4,6 +4,7 @@ import {
   adjacentItemId,
   deferUnhandledEscape,
   focusedBusyAgentSessionId,
+  hasBlockingProjectNavigationSurface,
   hasBlockingListNavigationSurface,
   shouldHandleListNavigation,
   shouldStopFocusedTurnOnEscape,
@@ -266,24 +267,64 @@ describe("tabCommand", () => {
     ).toBe(false);
   });
 
-  it("blocks project navigation from a portalled emoji picker", () => {
+  it("blocks project navigation after focus leaves a portalled emoji picker", () => {
     const picker = document.createElement("div");
     picker.dataset.emojiPicker = "";
-    picker.innerHTML = '<button type="button">😀</button>';
+    const toggle = document.createElement("button");
+    const composer = document.createElement("textarea");
+    composer.dataset.monoComposerEmpty = "true";
     document.body.append(picker);
-    const target = picker.querySelector("button")!;
-    const surfaceOpen = hasBlockingListNavigationSurface(target);
+    document.body.append(toggle, composer);
 
+    for (const target of [toggle, composer]) {
+      expect(hasBlockingProjectNavigationSurface(target)).toBe(true);
+      expect(
+        shouldHandleListNavigation({
+          blockedTarget: target === composer,
+          emptyComposerTarget: false,
+          monoComposerEmptyTarget: target === composer,
+          projectNavigation: true,
+          projectNavigationSurfaceOpen:
+            hasBlockingProjectNavigationSurface(target),
+          surfaceOpen: false,
+        }),
+      ).toBe(false);
+    }
+    expect(
+      shouldHandleListNavigation({
+        blockedTarget: false,
+        emptyComposerTarget: false,
+        projectNavigation: false,
+        projectNavigationSurfaceOpen: true,
+        surfaceOpen: hasBlockingListNavigationSurface(toggle),
+      }),
+    ).toBe(true);
+
+    picker.remove();
+    toggle.remove();
+    composer.remove();
+  });
+
+  it("blocks project navigation from a pending composer attachment button", () => {
+    const composer = document.createElement("div");
+    composer.dataset.monoComposerPending = "true";
+    const button = document.createElement("button");
+    composer.append(button);
+    document.body.append(composer);
+
+    expect(hasBlockingProjectNavigationSurface(button)).toBe(true);
     expect(
       shouldHandleListNavigation({
         blockedTarget: false,
         emptyComposerTarget: false,
         monoComposerEmptyTarget: false,
         projectNavigation: true,
-        surfaceOpen,
+        projectNavigationSurfaceOpen:
+          hasBlockingProjectNavigationSurface(button),
+        surfaceOpen: false,
       }),
     ).toBe(false);
-    picker.remove();
+    composer.remove();
   });
 });
 

@@ -7,6 +7,7 @@ import { clearComposerDraft } from "../../sessions/model/draftCache";
 import type { FloatingMonoView } from "../model/floatingMono";
 import { FloatingMonoChat } from "./FloatingMonoChat";
 
+const { pickAttachments } = vi.hoisted(() => ({ pickAttachments: vi.fn() }));
 const native = vi.hoisted(() => ({
   invoke: vi.fn(),
   listen: vi.fn(),
@@ -18,6 +19,12 @@ vi.mock("@tauri-apps/api/window", () => ({
 }));
 vi.mock("@tauri-apps/api/webviewWindow", () => ({
   getCurrentWebviewWindow: () => ({ listen: native.listen }),
+}));
+vi.mock("../../sessions/model/attachments", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../sessions/model/attachments")
+  >()),
+  pickAttachments,
 }));
 vi.mock("../../sessions/hooks/useFileDrop", () => ({
   useFileDrop: () => false,
@@ -107,6 +114,7 @@ beforeEach(() => {
     return () => {};
   });
   native.hide.mockReset().mockResolvedValue(undefined);
+  pickAttachments.mockReset().mockResolvedValue([]);
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -176,6 +184,78 @@ it("routes project cycling from the empty Mono composer and preserves text selec
       ([command]) => command === "mono_chat_action",
     ),
   ).toHaveLength(1);
+});
+
+it("blocks floating Mono project cycling while its attachment read is pending", async () => {
+  let finishRead!: (attachments: never[]) => void;
+  pickAttachments.mockReturnValueOnce(
+    new Promise<never[]>((resolve) => {
+      finishRead = resolve;
+    }),
+  );
+  await render();
+  const button = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Attach files"]',
+  )!;
+
+  await act(async () => {
+    button.focus();
+    button.click();
+    await Promise.resolve();
+  });
+  expect(document.activeElement).toBe(button);
+  expect(
+    container
+      .querySelector(".agent-chat-composer")
+      ?.getAttribute("data-mono-composer-pending"),
+  ).toBe("true");
+
+  const next = new KeyboardEvent("keydown", {
+    key: "ArrowRight",
+    code: "ArrowRight",
+    metaKey: true,
+    shiftKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  act(() => button.dispatchEvent(next));
+  expect(next.defaultPrevented).toBe(false);
+  expect(
+    native.invoke.mock.calls.filter(
+      ([command]) => command === "mono_chat_action",
+    ),
+  ).toHaveLength(0);
+
+  await act(async () => finishRead([]));
+});
+
+it("blocks floating Mono project cycling while its emoji picker remains open", async () => {
+  await render();
+  const picker = document.createElement("div");
+  picker.dataset.emojiPicker = "";
+  document.body.append(picker);
+  const field = container.querySelector<HTMLTextAreaElement>(
+    '[aria-label="Message Captain"]',
+  )!;
+  act(() => field.focus());
+  expect(document.activeElement).toBe(field);
+
+  const next = new KeyboardEvent("keydown", {
+    key: "ArrowRight",
+    code: "ArrowRight",
+    metaKey: true,
+    shiftKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  act(() => field.dispatchEvent(next));
+  expect(next.defaultPrevented).toBe(false);
+  expect(
+    native.invoke.mock.calls.filter(
+      ([command]) => command === "mono_chat_action",
+    ),
+  ).toHaveLength(0);
+  picker.remove();
 });
 
 it("lists every Mono beside the chat and switches or adds from there", async () => {
