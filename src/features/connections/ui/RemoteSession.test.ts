@@ -8,6 +8,7 @@ import {
   type SessionPaneProps,
 } from "../../sessions/ui/SessionPane";
 import type { Block, Session } from "../../sessions/model/session";
+import { CONTINUE_PROMPT } from "../../sessions/model/inFlight";
 import type { AgentModel } from "../../sessions/model/models";
 import { rememberRemoteProject } from "../model/remoteProjects";
 import { preloadRemoteSession } from "./RemoteSession";
@@ -1060,6 +1061,33 @@ it.each([false, true])("retries a lost create response without duplicating the f
   expect(commands.map((command) => command.type)).toEqual(["create", "send"]);
   expect(commands[1]).toMatchObject({ text: "Keep this first message", sessionId: "host-session" });
   expect(transcriptItems("Keep this first message")).toHaveLength(1);
+});
+
+it("resumes a remote session from the usage limit notice", async () => {
+  await render();
+  await send("First");
+  host = {
+    ...host!,
+    revision: host!.revision + 1,
+    session: { ...host!.session, usageLimit: { resetsAt: 1 } },
+  };
+  const resume = await vi.waitFor(
+    () => {
+      const button = [...container.querySelectorAll("button")].find(
+        (item) => item.textContent === "Resume",
+      );
+      expect(button).toBeTruthy();
+      return button!;
+    },
+    { timeout: 4_000 },
+  );
+  await act(async () => resume.click());
+  await settle();
+  expect(commands.at(-1)).toMatchObject({
+    type: "send",
+    sessionId: "host-session",
+    text: CONTINUE_PROMPT,
+  });
 });
 
 it("ignores a late create response after its tab has switched conversations", async () => {
