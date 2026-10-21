@@ -2103,7 +2103,7 @@ function Workspace({
   useEffect(() => {
     if (!activeSkillContext || !activeSkillCwd) return;
     warmNativeSkills(activeSkillContext);
-  }, [activeSkillCwd, active?.id, active?.harness]);
+  }, [activeSkillCwd, activeSkillContext?.accountId, active?.id, active?.harness]);
 
   const activeFile = activeTab ? focusedFileTab(activeTab) : undefined;
   // A Mono belongs to no project, so its view keeps the project in place.
@@ -7582,7 +7582,8 @@ function Workspace({
               harness: current.harness,
               sessionId,
               cwd: initialWorkCwd,
-            });
+              ...(providerAccountId ? { accountId: providerAccountId } : {}),
+            }, { steer: true });
             await steerHarnessTurn({
               harness: current.harness,
               sessionId,
@@ -8216,7 +8217,15 @@ function Workspace({
                   harness: current.harness,
                   sessionId,
                   cwd: workCwd,
-                });
+                  ...(providerAccountId
+                    ? { accountId: providerAccountId }
+                    : {}),
+                }, { effort: current.modelSettings?.effort });
+          // Preparing can wait on the harness; a stop meanwhile wins.
+          if (turnGen.current.get(sessionId) !== gen) {
+            recoverEditedResend();
+            return;
+          }
           const turnPrompt = proposalDraft
             ? options?.orchestrationRetry?.response
               ? orchestrationRepairPrompt({

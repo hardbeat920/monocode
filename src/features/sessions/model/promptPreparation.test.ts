@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   applyNotesToTurn: vi.fn(),
   applySkillsToTurn: vi.fn(),
   events: [] as string[],
+  prepareNativeCommand: vi.fn(),
   warmNativeSkills: vi.fn(),
 }));
 
@@ -18,6 +19,7 @@ vi.mock("../../notes", () => ({
 
 vi.mock("../../skills/model/skills", () => ({
   applySkillsToTurn: mocks.applySkillsToTurn,
+  prepareNativeCommand: mocks.prepareNativeCommand,
   warmNativeSkills: mocks.warmNativeSkills,
   isNativeCommandPrompt: (text: string, harness: string) =>
     harness === "omp" && text.startsWith("/"),
@@ -40,12 +42,54 @@ beforeEach(() => {
   mocks.applyNotesToTurn.mockImplementation(async (text: string) => text);
   mocks.applySkillsToTurn.mockReset();
   mocks.warmNativeSkills.mockReset();
+  mocks.prepareNativeCommand.mockReset();
+  mocks.prepareNativeCommand.mockResolvedValue(undefined);
   mocks.warmNativeSkills.mockImplementation(() => {
     mocks.events.push("warm");
   });
 });
 
 describe("preparePrompt", () => {
+  it("never waits on the harness's pre-send step for a steer", async () => {
+    mocks.applyFileMentionsToTurn.mockImplementation(async (text: string) => text);
+    mocks.applySkillsToTurn.mockImplementation(async (text: string) => text);
+
+    await expect(
+      preparePrompt(
+        "/newskill go",
+        { harness: "claude", cwd: "/repo" },
+        { steer: true },
+      ),
+    ).resolves.toBe("/newskill go");
+    expect(mocks.prepareNativeCommand).not.toHaveBeenCalled();
+  });
+
+  it("waits for the harness's pre-send step before returning", async () => {
+    const step = deferred<void>();
+    mocks.prepareNativeCommand.mockReturnValue(step.promise);
+    mocks.applyFileMentionsToTurn.mockImplementation(async (text: string) => text);
+    mocks.applySkillsToTurn.mockImplementation(async (text: string) => text);
+    let done = false;
+    const prepared = preparePrompt(
+      "/newskill go",
+      { harness: "claude", cwd: "/repo", accountId: "work" },
+      { effort: "ultrathink" },
+    ).then((text) => {
+      done = true;
+      return text;
+    });
+
+    await Promise.resolve();
+    expect(done).toBe(false);
+    expect(mocks.prepareNativeCommand).toHaveBeenCalledWith(
+      "/newskill go",
+      { harness: "claude", cwd: "/repo", accountId: "work" },
+      "ultrathink",
+    );
+    step.resolve();
+    await expect(prepared).resolves.toBe("/newskill go");
+  });
+
   it.each([
     "/workflow foo @README.md",
     "/Review_Code a:b",

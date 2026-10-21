@@ -40,7 +40,7 @@ export function rankSkills(
           ].join(" "),
         );
     const descHit =
-      nameHit || invocationHit ? null : fuzzyMatch(needle, skill.description);
+      nameHit || invocationHit ? null : describes(needle, skill.description);
     const hit = nameHit ?? invocationHit ?? descHit;
     if (!hit) continue;
     const score = nameHit || invocationHit ? hit.score + 400 : hit.score;
@@ -51,6 +51,17 @@ export function rankSkills(
     return a.skill.name.localeCompare(b.skill.name);
   });
   return scored.slice(0, limit).map((row) => row.skill);
+}
+
+/**
+ * Descriptions are prose: a scattered-letter match hits nearly every long
+ * one, so each query word must appear verbatim.
+ */
+function describes(needle: string, description: string) {
+  const text = description.toLowerCase();
+  const words = needle.split(/\s+/).filter(Boolean);
+  if (!words.every((word) => text.includes(word))) return null;
+  return fuzzyMatch(needle, description);
 }
 
 function scopeRank(skill: Skill): number {
