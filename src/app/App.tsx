@@ -23,6 +23,7 @@ import {
   monoSessionCompletionResult,
   MonoSessionCompletionBatches,
 } from "../features/monos/model/monoSessionCompletion";
+import { selectProjectWithMonoLanding } from "./model/projectSelection";
 import { acceptQuickLaunch } from "./model/quickLaunchSession";
 import { useWorkspaceNavigation } from "./hooks/useWorkspaceNavigation";
 import { useIdleSessionDetach } from "./hooks/useIdleSessionDetach";
@@ -623,7 +624,6 @@ import {
   isMonoSession,
   listMonos,
   loadOpenMono,
-  projectLandingMono,
   monoForSession,
   monoLook,
   monosSnapshot,
@@ -6555,16 +6555,15 @@ function Workspace({
 
   const onSelectProject = useCallback(
     (path: string) => {
-      closeMonoView();
-      workspaceNavigation.cancel();
-      openProjects([path]);
-      workspaceNavigation.selectProject(path, () => {
-        const mono = projectLandingMono(
-          path,
-          loadOpenMono(),
-          loadMonosEnabled() && loadProjectMonoLanding(),
-        );
-        if (mono) void onOpenMono(mono.id, { loadOnly: true });
+      selectProjectWithMonoLanding(path, {
+        loadOpenMono,
+        closeMonoView,
+        cancelNavigation: workspaceNavigation.cancel,
+        openProject: (project) => openProjects([project]),
+        selectProject: workspaceNavigation.selectProject,
+        monosEnabled: loadMonosEnabled,
+        landingEnabled: loadProjectMonoLanding,
+        openMono: (monoId) => void onOpenMono(monoId, { loadOnly: true }),
       });
     },
     [

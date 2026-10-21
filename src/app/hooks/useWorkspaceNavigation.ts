@@ -51,6 +51,10 @@ export function useWorkspaceNavigation(options: Options) {
   const latest = useRef(options);
   latest.current = options;
   const request = useRef<Request | null>(null);
+  const remoteProjectLanding = useRef<{
+    project: string;
+    onRestored: () => void;
+  } | null>(null);
   const running = useRef(false);
   const mounted = useRef(true);
   const moving = useRef(new Set<string>());
@@ -64,11 +68,13 @@ export function useWorkspaceNavigation(options: Options) {
 
   const cancel = useCallback(() => {
     request.current = null;
+    remoteProjectLanding.current = null;
     setPending(null);
     setError(null);
   }, []);
 
   const select = useCallback((next: Request) => {
+    remoteProjectLanding.current = null;
     if (
       !next.project ||
       next.project === "~" ||
@@ -87,6 +93,19 @@ export function useWorkspaceNavigation(options: Options) {
   );
   const selectProject = useCallback(
     (project: string, onRestored?: () => void) => {
+      if (isRemoteProjectPath(project)) {
+        request.current = null;
+        setPending(null);
+        setError(null);
+        remoteProjectLanding.current = onRestored
+          ? { project, onRestored }
+          : null;
+        if (onRestored && sameProjectPath(latest.current.project, project)) {
+          remoteProjectLanding.current = null;
+          onRestored();
+        }
+        return;
+      }
       select({
         kind: "project",
         project,
@@ -237,8 +256,16 @@ export function useWorkspaceNavigation(options: Options) {
     return () => {
       mounted.current = false;
       request.current = null;
+      remoteProjectLanding.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    const next = remoteProjectLanding.current;
+    if (!next || !sameProjectPath(options.project, next.project)) return;
+    remoteProjectLanding.current = null;
+    next.onRestored();
+  }, [options.project]);
 
   // A session opened directly joins the workspace on screen without changing
   // the session's checkout. No navigation reason survives for a future open.

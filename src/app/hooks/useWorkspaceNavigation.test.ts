@@ -2,6 +2,7 @@
 import { act, createElement, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createMono, saveMonoSessionId } from "../../features/monos/model/mono";
 import {
   newSession,
   sessionWorkCwd,
@@ -24,6 +25,7 @@ import {
   type WorkspaceTab,
 } from "../../features/workspace/model/layout";
 import { workspaceTabWorktree } from "../../features/workspace/model/workspaceTabGroups";
+import { selectProjectWithMonoLanding } from "../model/projectSelection";
 import { useWorkspaceNavigation } from "./useWorkspaceNavigation";
 
 const project = "/navigation-project";
@@ -41,6 +43,7 @@ let view: {
   sessions: Session[];
 };
 let directOpen: (id: string) => void;
+let openLanding: (path: string, landingTab: string) => void;
 let openProject: (
   path: string,
   landingTab: string,
@@ -134,9 +137,12 @@ async function mount(
         activeTabId: `tab-${id}`,
       }));
     };
+    openLanding = (path, landingTab) => {
+      setState((prev) => ({ ...prev, project: path, activeTabId: landingTab }));
+    };
     openProject = (path, landingTab, onRestored) => {
       navigation.cancel();
-      setState((prev) => ({ ...prev, project: path, activeTabId: landingTab }));
+      openLanding(path, landingTab);
       navigation.selectProject(path, onRestored);
     };
     return createElement(
@@ -380,6 +386,47 @@ it("opens only the latest project Mono after its workspace restore activates", a
     workspace: treeForThird.path,
     pending: false,
   });
+});
+
+it("opens the current remote project's Mono and ignores a stale remote selection", async () => {
+  const firstRemote = "remote://host/first";
+  const secondRemote = "remote://host/second";
+  const stored = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => stored.get(key) ?? null,
+    setItem: (key: string, value: string) => stored.set(key, value),
+  });
+  const firstMono = createMono([firstRemote]);
+  const secondMono = createMono([secondRemote]);
+  saveMonoSessionId(firstMono.id, "first-session");
+  saveMonoSessionId(secondMono.id, "second-session");
+  await mount([
+    chat("blank"),
+    chat("first-remote", firstRemote),
+    chat("second-remote", secondRemote),
+  ]);
+  const opened: string[] = [];
+  const selectWithMono = (path: string, tab: string) =>
+    selectProjectWithMonoLanding(path, {
+      loadOpenMono: () => undefined,
+      closeMonoView: () => {},
+      cancelNavigation: navigation.cancel,
+      openProject: (projectPath) => openLanding(projectPath, tab),
+      selectProject: navigation.selectProject,
+      monosEnabled: () => true,
+      landingEnabled: () => true,
+      openMono: (monoId) => opened.push(monoId),
+    });
+
+  await act(async () => {
+    selectWithMono(firstRemote, "tab-first-remote");
+    selectWithMono(secondRemote, "tab-second-remote");
+  });
+
+  expect(view.project).toBe(secondRemote);
+  expect(opened).toEqual([secondMono.id]);
+  expect(navigation.pending).toBeNull();
+  expect(move).not.toHaveBeenCalled();
 });
 
 it("selects an existing workspace tab without moving the current session", async () => {
