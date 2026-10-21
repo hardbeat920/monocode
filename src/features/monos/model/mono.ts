@@ -356,7 +356,9 @@ export function monoWorksOn(mono: Pick<Mono, "projects">, path: string) {
 export function projectLandingMono(
   path: string,
   lastOpenedId?: string,
+  enabled = true,
 ): Mono | undefined {
+  if (!enabled) return undefined;
   const eligible = listMonos().filter(
     (mono) => mono.sessionId && monoWorksOn(mono, path),
   );

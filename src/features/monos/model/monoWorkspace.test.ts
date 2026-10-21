@@ -10,6 +10,7 @@ import {
   detachMonoTabs,
   ensureLatestMonoSession,
   ensureMonoSession,
+  loadLatestMonoSession,
   resetMonoSession,
 } from "./monoWorkspace";
 
@@ -79,6 +80,24 @@ it("opens nothing for a Mono that no longer exists", async () => {
   };
   expect(await ensureMonoSession("gone", host)).toBeUndefined();
   expect(host.create).not.toHaveBeenCalled();
+});
+
+it("does not create a conversation when a project's saved Mono session is stale", async () => {
+  const monoId = monoFor("/project", "deleted-session");
+  const host = {
+    load: vi.fn().mockResolvedValue(null),
+    home: vi.fn().mockResolvedValue("/home"),
+    create: vi.fn(createSession),
+    add: vi.fn(),
+  };
+
+  expect(
+    await loadLatestMonoSession(monoId, { current: 0 }, host),
+  ).toBeUndefined();
+  expect(host.load).toHaveBeenCalledExactlyOnceWith("deleted-session");
+  expect(host.home).not.toHaveBeenCalled();
+  expect(host.create).not.toHaveBeenCalled();
+  expect(host.add).not.toHaveBeenCalled();
 });
 
 it("shares concurrent first opens of the same Mono", async () => {

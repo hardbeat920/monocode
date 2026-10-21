@@ -67,6 +67,13 @@ it("lands on the most recently opened used Mono assigned to a project", () => {
   expect(projectLandingMono("/code/app")?.id).not.toBe(unused.id);
 });
 
+it("stops automatic project landing when Monos are hidden", () => {
+  const mono = createMono(["/code/app"]);
+  saveMonoSessionId(mono.id, "session");
+  expect(projectLandingMono("/code/app", undefined, true)?.id).toBe(mono.id);
+  expect(projectLandingMono("/code/app", undefined, false)).toBeUndefined();
+});
+
 it("keeps the rail's order and forgets a removed Mono", () => {
   const a = createMono();
   const b = createMono();

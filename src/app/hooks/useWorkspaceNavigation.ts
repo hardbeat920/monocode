@@ -19,7 +19,10 @@ import {
 import { pathKey } from "../../shared/lib/paths";
 
 type Destination = { project: string; focus?: WorktreeFocus };
-type Request = Destination & { kind: "project" | "workspace" };
+type Request = Destination & {
+  kind: "project" | "workspace";
+  onRestored?: () => void;
+};
 type Options = {
   project: string;
   activeTabId: string;
@@ -83,8 +86,13 @@ export function useWorkspaceNavigation(options: Options) {
     [select],
   );
   const selectProject = useCallback(
-    (project: string) => {
-      select({ kind: "project", project, focus: worktreeFocus(project) });
+    (project: string, onRestored?: () => void) => {
+      select({
+        kind: "project",
+        project,
+        focus: worktreeFocus(project),
+        onRestored,
+      });
     },
     [select],
   );
@@ -113,6 +121,7 @@ export function useWorkspaceNavigation(options: Options) {
           latest.current.tabs.find((entry) => entry.id === tab.id)
             ?.focusedId === tab.focusedId &&
           sameProjectPath(latest.current.project, next.project);
+        let completed = false;
         try {
           // Mixed-project split tabs keep their existing grouping when the
           // focused pane's project changes. Consume the request without
@@ -124,6 +133,7 @@ export function useWorkspaceNavigation(options: Options) {
             )
           ) {
             setWorktreeFocus(next.project, next.focus);
+            completed = true;
             continue;
           }
           const scoped = filterTabsForProject(
@@ -185,6 +195,7 @@ export function useWorkspaceNavigation(options: Options) {
           memory.current.set(key, tabId);
           setWorktreeFocus(next.project, next.focus);
           view.activateTab(tabId);
+          completed = true;
         } catch (caught) {
           if (isCurrent()) {
             // A project rail landing may still be in its default workspace.
@@ -205,11 +216,13 @@ export function useWorkspaceNavigation(options: Options) {
               message:
                 caught instanceof Error ? caught.message : String(caught),
             });
+            completed = true;
           }
         } finally {
           if (request.current === next) {
             request.current = null;
             setPending(null);
+            if (completed) next.onRestored?.();
           }
         }
       }

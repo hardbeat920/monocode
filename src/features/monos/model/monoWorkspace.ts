@@ -52,6 +52,20 @@ export async function ensureLatestMonoSession(
   return current === request.current ? session : undefined;
 }
 
+/** Load a saved Mono conversation without creating one when it is missing. */
+export async function loadLatestMonoSession(
+  monoId: string,
+  request: { current: number },
+  host: Pick<Parameters<typeof ensureMonoSession>[1], "load">,
+): Promise<Session | undefined> {
+  const current = ++request.current;
+  const sessionId = findMono(monoId)?.sessionId;
+  const session = sessionId
+    ? ((await host.load(sessionId)) ?? undefined)
+    : undefined;
+  return current === request.current ? session : undefined;
+}
+
 async function loadMonoSession(
   monoId: string,
   host: Parameters<typeof ensureMonoSession>[1],

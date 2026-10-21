@@ -41,7 +41,11 @@ let view: {
   sessions: Session[];
 };
 let directOpen: (id: string) => void;
-let openProject: (path: string, landingTab: string) => void;
+let openProject: (
+  path: string,
+  landingTab: string,
+  onRestored?: () => void,
+) => void;
 let pins: Map<string, string>;
 const activate = vi.fn();
 const move =
@@ -130,10 +134,10 @@ async function mount(
         activeTabId: `tab-${id}`,
       }));
     };
-    openProject = (path, landingTab) => {
+    openProject = (path, landingTab, onRestored) => {
       navigation.cancel();
       setState((prev) => ({ ...prev, project: path, activeTabId: landingTab }));
-      navigation.selectProject(path);
+      navigation.selectProject(path, onRestored);
     };
     return createElement(
       "output",
@@ -345,6 +349,37 @@ it("project selection still restores the last tab in its remembered workspace", 
   });
   expect(move).not.toHaveBeenCalled();
   expect(pins.get("tab-main")).toBeUndefined();
+});
+
+it("opens only the latest project Mono after its workspace restore activates", async () => {
+  const first = deferred();
+  const second = deferred();
+  setWorktreeFocus(other, treeA);
+  const third = "/navigation-third";
+  const treeForThird = { ...treeB, path: "/navigation-trees/third" };
+  setWorktreeFocus(third, treeForThird);
+  move
+    .mockImplementationOnce(() => first.promise)
+    .mockImplementationOnce(() => second.promise);
+  await mount([chat("blank"), chat("second", other), chat("third", third)]);
+  const opened: string[] = [];
+  const onProject = (path: string, tab: string, mono: string) =>
+    openProject(path, tab, () =>
+      opened.push(`${mono}:${activate.mock.calls.length}`),
+    );
+
+  await act(async () => onProject(other, "tab-second", "mono-second"));
+  await act(async () => onProject(third, "tab-third", "mono-third"));
+  await act(async () => first.resolve());
+  expect(move).toHaveBeenCalledTimes(2);
+  expect(opened).toEqual([]);
+  await act(async () => second.resolve());
+  expect(opened).toEqual(["mono-third:1"]);
+  expect(screen()).toMatchObject({
+    activeTab: "tab-third",
+    workspace: treeForThird.path,
+    pending: false,
+  });
 });
 
 it("selects an existing workspace tab without moving the current session", async () => {
