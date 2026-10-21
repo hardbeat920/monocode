@@ -199,6 +199,16 @@ export function shouldHandleListNavigation(input: {
   );
 }
 
+export function hasBlockingListNavigationSurface(
+  target: Element | null,
+): boolean {
+  return Boolean(
+    target?.closest(
+      '[role="dialog"], [data-model-picker], [data-file-picker], [data-branch-picker], [data-skill-picker], [data-mention-picker], [data-app-search], [data-emoji-picker]',
+    ),
+  );
+}
+
 type EscapeKeyEvent = Pick<
   KeyboardEvent,
   | "key"

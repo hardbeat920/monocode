@@ -1,8 +1,10 @@
+// @vitest-environment happy-dom
 import { describe, expect, it, vi } from "vitest";
 import {
   adjacentItemId,
   deferUnhandledEscape,
   focusedBusyAgentSessionId,
+  hasBlockingListNavigationSurface,
   shouldHandleListNavigation,
   shouldStopFocusedTurnOnEscape,
   tabCommand,
@@ -262,6 +264,26 @@ describe("tabCommand", () => {
         surfaceOpen: true,
       }),
     ).toBe(false);
+  });
+
+  it("blocks project navigation from a portalled emoji picker", () => {
+    const picker = document.createElement("div");
+    picker.dataset.emojiPicker = "";
+    picker.innerHTML = '<button type="button">😀</button>';
+    document.body.append(picker);
+    const target = picker.querySelector("button")!;
+    const surfaceOpen = hasBlockingListNavigationSurface(target);
+
+    expect(
+      shouldHandleListNavigation({
+        blockedTarget: false,
+        emptyComposerTarget: false,
+        monoComposerEmptyTarget: false,
+        projectNavigation: true,
+        surfaceOpen,
+      }),
+    ).toBe(false);
+    picker.remove();
   });
 });
 

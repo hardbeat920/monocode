@@ -32,6 +32,7 @@ import {
   matchCustomKeybinding,
 } from "../../settings/model/settings";
 import {
+  hasBlockingListNavigationSurface,
   shouldHandleListNavigation,
   tabCommand,
   tabCommandForKeybinding,
@@ -179,7 +180,9 @@ export function FloatingMonoChat({ onShown }: { onShown: () => void }) {
       const monoComposerEmptyTarget = Boolean(
         target?.matches('textarea[data-mono-composer-empty="true"]'),
       );
-      const surfaceOpen = document.querySelector('[role="dialog"]') !== null;
+      const surfaceOpen =
+        document.querySelector('[role="dialog"]') !== null ||
+        hasBlockingListNavigationSurface(target);
       if (
         !shouldHandleListNavigation({
           blockedTarget,

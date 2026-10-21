@@ -172,7 +172,9 @@ it("routes project cycling from the empty Mono composer and preserves text selec
   act(() => field.dispatchEvent(next));
   expect(next.defaultPrevented).toBe(false);
   expect(
-    native.invoke.mock.calls.filter(([command]) => command === "mono_chat_action"),
+    native.invoke.mock.calls.filter(
+      ([command]) => command === "mono_chat_action",
+    ),
   ).toHaveLength(1);
 });
 
@@ -364,7 +366,8 @@ it("reads a Mono's document in a sheet over the chat and slides it away", async 
     cancelable: true,
   });
   act(() =>
-    container.querySelector<HTMLButtonElement>("[data-open-doc]")!
+    container
+      .querySelector<HTMLButtonElement>("[data-open-doc]")!
       .dispatchEvent(projectShortcut),
   );
   expect(projectShortcut.defaultPrevented).toBe(false);

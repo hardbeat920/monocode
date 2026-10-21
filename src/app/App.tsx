@@ -594,6 +594,7 @@ import {
   adjacentItemId,
   deferUnhandledEscape,
   focusedBusyAgentSessionId,
+  hasBlockingListNavigationSurface,
   shouldHandleListNavigation,
   shouldStopFocusedTurnOnEscape,
   tabCommand,
@@ -12987,11 +12988,7 @@ function Workspace({
             settingsOpenRef.current ||
             filePickerOpenRef.current ||
             Boolean(whatsNewVersionRef.current) ||
-            Boolean(
-              target?.closest(
-                '[role="dialog"], [data-model-picker], [data-file-picker], [data-branch-picker], [data-skill-picker], [data-mention-picker], [data-app-search]',
-              ),
-            );
+            hasBlockingListNavigationSurface(target);
           if (
             !shouldHandleListNavigation({
               blockedTarget,

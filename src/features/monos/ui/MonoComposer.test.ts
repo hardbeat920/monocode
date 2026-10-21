@@ -104,6 +104,28 @@ it("marks only an empty Mono composer for project navigation", async () => {
   expect(field().hasAttribute("data-mono-composer-empty")).toBe(false);
 });
 
+it("blocks project navigation while an attachment read is pending", async () => {
+  let finishRead!: (attachments: (typeof file)[]) => void;
+  pick.mockReturnValueOnce(
+    new Promise<(typeof file)[]>((resolve) => {
+      finishRead = resolve;
+    }),
+  );
+  render();
+
+  await act(async () => {
+    container
+      .querySelector<HTMLButtonElement>('[aria-label="Attach files"]')!
+      .click();
+    await Promise.resolve();
+  });
+  expect(field().value).toBe("");
+  expect(field().hasAttribute("data-mono-composer-empty")).toBe(false);
+
+  await act(async () => finishRead([file]));
+  expect(field().hasAttribute("data-mono-composer-empty")).toBe(false);
+});
+
 it("consumes quotes once and adds them to the current draft", () => {
   const consumed = vi.fn();
   render();

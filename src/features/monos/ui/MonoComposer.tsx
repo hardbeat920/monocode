@@ -328,7 +328,9 @@ export function MonoComposer({
       rows={1}
       aria-label={`Message ${name}`}
       data-mono-composer-empty={
-        text.length === 0 && attachments.length === 0 ? "true" : undefined
+        text.length === 0 && attachments.length === 0 && pendingReads === 0
+          ? "true"
+          : undefined
       }
       placeholder={`Message ${name}`}
       spellCheck={autocorrect}
