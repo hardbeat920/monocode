@@ -6786,9 +6786,23 @@ function Workspace({
         projectCwdRef.current = to;
         setProjectCwd(to);
       }
+      // Open files and terminals also name the project they belong to; a
+      // plain file move leaves that alone, but here the project itself moved.
+      const rebaseProject = (path: string) =>
+        sameProjectPath(path, from) ? to : path;
+      const rebasePane = (pane: EditorPane): EditorPane => ({
+        ...pane,
+        files: pane.files.map((file) => ({
+          ...file,
+          cwd: rebaseProject(file.cwd),
+          ...(file.projectCwd
+            ? { projectCwd: rebaseProject(file.projectCwd) }
+            : {}),
+        })),
+      });
       const nextDocks = projectTerminalsRef.current.map((dock) =>
         sameProjectPath(dock.projectPath, from)
-          ? { ...dock, projectPath: to }
+          ? { ...dock, projectPath: to, pane: rebasePane(dock.pane) }
           : dock,
       );
       projectTerminalsRef.current = nextDocks;
@@ -6801,23 +6815,11 @@ function Workspace({
       );
       setRecents(replaceProjectPath(from, to));
       onFileMoved(from, to);
-      // Open files also name the project they belong to; a plain file move
-      // leaves that alone, but here the project itself moved.
-      const rebaseProject = (path: string) =>
-        sameProjectPath(path, from) ? to : path;
       setTabs((prev) =>
         prev.map((tab) => ({
           ...tab,
-          editorPanes: tab.editorPanes.map((pane) => ({
-            ...pane,
-            files: pane.files.map((file) => ({
-              ...file,
-              cwd: rebaseProject(file.cwd),
-              ...(file.projectCwd
-                ? { projectCwd: rebaseProject(file.projectCwd) }
-                : {}),
-            })),
-          })),
+          editorPanes: tab.editorPanes.map(rebasePane),
+          terminalPanes: (tab.terminalPanes ?? []).map(rebasePane),
         })),
       );
       notifyDirsChanged();
