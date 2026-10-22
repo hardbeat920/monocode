@@ -363,15 +363,29 @@ export function useProjectMenu({
     try {
       await revealPath(path);
       return;
-    } catch {
+    } catch (error) {
       // A folder moved or renamed outside the app leaves nothing to reveal;
-      // offer to point the project at its new location instead.
+      // offer to point the project at its new location instead. Any other
+      // failure is reported as is.
+      if (!onRelocateProject || !isLocalProject(path)) throw error;
+      const location = await resolveProjectLocation(path).catch(() => null);
+      if (location) throw error;
     }
-    if (!onRelocateProject || !isLocalProject(path)) return;
-    const location = await resolveProjectLocation(path).catch(() => null);
-    if (location) return;
     const next = await relocate(path);
     if (next) await revealPath(next);
+  };
+
+  /** Keeps the menu open until `task` settles, so a failure shows in it. */
+  const runInMenu = (task: Promise<unknown>) => {
+    void task
+      .then(() => {
+        setProjectMenu(null);
+        restoreFocus();
+      })
+      .catch((error: unknown) => {
+        setMenuError(error instanceof Error ? error.message : String(error));
+      });
+    return false;
   };
 
   const onPick = (action: string) => {
@@ -430,9 +444,9 @@ export function useProjectMenu({
         name: resolveTabGroupLabel(key, groupLabels, basename(path)),
       });
     } else if (action === "reveal") {
-      void reveal(path).catch(() => undefined);
+      return runInMenu(reveal(path));
     } else if (action === "relocate") {
-      void relocate(path).catch(() => undefined);
+      return runInMenu(relocate(path));
     } else if (action === "archive") {
       onRemoveProject?.(path, { purgeData: false });
     } else if (action === "delete") {

@@ -457,6 +457,7 @@ import {
   archiveProject,
   forgetProject,
   lastProjectPath,
+  loadArchivedProjects,
   loadRecents,
   loadPinnedProjects,
   isLocalProject,
@@ -6800,6 +6801,25 @@ function Workspace({
       );
       setRecents(replaceProjectPath(from, to));
       onFileMoved(from, to);
+      // Open files also name the project they belong to; a plain file move
+      // leaves that alone, but here the project itself moved.
+      const rebaseProject = (path: string) =>
+        sameProjectPath(path, from) ? to : path;
+      setTabs((prev) =>
+        prev.map((tab) => ({
+          ...tab,
+          editorPanes: tab.editorPanes.map((pane) => ({
+            ...pane,
+            files: pane.files.map((file) => ({
+              ...file,
+              cwd: rebaseProject(file.cwd),
+              ...(file.projectCwd
+                ? { projectCwd: rebaseProject(file.projectCwd) }
+                : {}),
+            })),
+          })),
+        })),
+      );
       notifyDirsChanged();
     },
     [onFileMoved],
@@ -6812,6 +6832,15 @@ function Workspace({
       const previous = normalizeProjectPath(from);
       const next = normalizeProjectPath(to);
       if (sameProjectPath(previous, next)) return;
+      // Moving onto another project would merge their chats for good.
+      const taken = [...loadRecents(), ...loadArchivedProjects()].some(
+        (project) => sameProjectPath(project.path, next),
+      );
+      if (taken) {
+        throw new Error(
+          `${displayPath(next)} is already a project. Choose another folder.`,
+        );
+      }
       await applyProjectLocationChange(previous, next);
       forgetProjectLocation(previous);
       void rememberProjectLocation(next).catch(() => undefined);
