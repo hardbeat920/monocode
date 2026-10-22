@@ -553,7 +553,8 @@ impl SettingsView {
         cx: &mut Context<Self>,
         change: impl Fn(&mut Self, String, &mut Context<Self>) + Clone + 'static,
     ) -> AnyElement {
-        let open = self.select_open == Some(id);
+        let enabled = !options.is_empty();
+        let open = enabled && self.select_open == Some(id);
         let slot: AnchorSlot = self
             .select_anchors
             .borrow_mut()
@@ -582,7 +583,11 @@ impl SettingsView {
                     .id(SharedString::from(format!("select-{id}")))
                     .debug_selector(move || format!("settings-select-{id}"))
                     .role(Role::ComboBox)
-                    .aria_label(format!("{label}: {trigger_label}"))
+                    .aria_label(if enabled {
+                        format!("{label}: {trigger_label}")
+                    } else {
+                        format!("{label}: {trigger_label}. No choices available.")
+                    })
                     .aria_expanded(open)
                     .relative()
                     .w_full()
@@ -599,8 +604,10 @@ impl SettingsView {
                     .text_size(px(12.))
                     .line_height(px(16.))
                     .text_color(content(1.))
-                    .cursor_pointer()
-                    .hover(|s| s.border_color(content(0.2)))
+                    .when(enabled, |d| {
+                        d.cursor_pointer().hover(|s| s.border_color(content(0.2)))
+                    })
+                    .when(!enabled, |d| d.opacity(0.5))
                     .child(slot.probe())
                     .child(
                         div()
@@ -631,16 +638,30 @@ impl SettingsView {
                                 ))
                             }),
                     )
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        if this.select_open == Some(id) {
-                            this.select_open = None;
-                        } else {
-                            this.select_open = Some(id);
-                            this.select_active = selected.unwrap_or(0);
-                            window.focus(&this.select_focus, cx);
-                        }
-                        cx.notify();
-                    })),
+                    .when(enabled, |d| {
+                        d.on_click(cx.listener(move |this, _, window, cx| {
+                            if this.select_open == Some(id) {
+                                this.select_open = None;
+                            } else {
+                                this.select_open = Some(id);
+                                this.select_active = selected.unwrap_or(0);
+                                this.select_scroll.set_offset(Default::default());
+                                // The scroll viewport is measured by the first open frame.
+                                let weak = cx.weak_entity();
+                                window.on_next_frame(move |_, cx| {
+                                    let _ = weak.update(cx, |this, cx| {
+                                        if this.select_open == Some(id) {
+                                            this.select_scroll
+                                                .scroll_to_top_of_item(this.select_active);
+                                            cx.notify();
+                                        }
+                                    });
+                                });
+                                window.focus(&this.select_focus, cx);
+                            }
+                            cx.notify();
+                        }))
+                    }),
             )
             .when(open, |d| {
                 let active = self.select_active;
@@ -658,6 +679,7 @@ impl SettingsView {
                             .aria_label(text.clone())
                             .aria_selected(is_selected)
                             .w_full()
+                            .flex_shrink_0()
                             .flex()
                             .items_center()
                             .gap_2()
@@ -726,9 +748,14 @@ impl SettingsView {
                     .child(
                         div()
                             .id(SharedString::from(format!("select-list-{id}")))
+                            .debug_selector(move || format!("settings-select-list-{id}"))
                             .role(Role::ListBox)
                             .aria_label(label)
                             .track_focus(&self.select_focus)
+                            .track_scroll(&self.select_scroll)
+                            .min_h_0()
+                            .max_h(px(310.))
+                            .overflow_y_scroll()
                             .flex()
                             .flex_col()
                             .on_key_down(cx.listener(
@@ -758,6 +785,7 @@ impl SettingsView {
                                         }
                                         _ => return,
                                     }
+                                    this.select_scroll.scroll_to_item(this.select_active);
                                     cx.stop_propagation();
                                     cx.notify();
                                 },
