@@ -1786,9 +1786,13 @@ function Workspace({
   const loadedSessionCache = useRef(new Map<string, Session>());
   const sessionLoads = useRef(new Map<string, Promise<Session | null>>());
   const sessionLoadEpochs = useRef(new Map<string, number>());
-  /** Project moves made while a session was still loading, oldest first. */
+  /** Project moves made while a session was still loading, oldest first.
+   * `applied` settles once the stored rows were rebased, false if that failed. */
   const sessionLoadMoves = useRef(
-    new Map<string, { from: string; to: string }[]>(),
+    new Map<
+      string,
+      { from: string; to: string; applied: Promise<boolean> }[]
+    >(),
   );
   const openingSessionIds = useRef(new Set<string>());
   const activeSessionPrefetch = useRef<Promise<Session | null> | null>(null);
@@ -4738,26 +4742,28 @@ function Workspace({
       const epoch = sessionLoadEpochs.current.get(sessionId) ?? 0;
       // Owned by this load, so a replaced load finishing late cannot take
       // the moves recorded for its replacement.
-      const moves: { from: string; to: string }[] = [];
+      const moves: { from: string; to: string; applied: Promise<boolean> }[] =
+        [];
       sessionLoadMoves.current.set(sessionId, moves);
+      const stale = () =>
+        removingSessionIds.current.has(sessionId) ||
+        (sessionLoadEpochs.current.get(sessionId) ?? 0) !== epoch;
       const loading = readSession(sessionId)
-        .then((loaded) => {
-          if (
-            !loaded ||
-            removingSessionIds.current.has(sessionId) ||
-            (sessionLoadEpochs.current.get(sessionId) ?? 0) !== epoch
-          ) {
-            return null;
-          }
-          // The read may have run before its project moved; follow the move
-          // so a later save does not write the old folder back.
-          return moves.reduce(
-            (session, move) =>
+        .then(async (loaded) => {
+          if (!loaded || stale()) return null;
+          // The read may have run before its project moved; follow each move
+          // that went through so a later save does not write the old folder
+          // back, and keep the folder when one failed.
+          let session = loaded;
+          for (const move of moves) {
+            if (
+              (await move.applied) &&
               sameProjectPath(session.cwd, move.from)
-                ? { ...session, cwd: move.to }
-                : session,
-            loaded,
-          );
+            ) {
+              session = { ...session, cwd: move.to };
+            }
+          }
+          return stale() ? null : session;
         })
         .catch(() => null);
       sessionLoads.current.set(sessionId, loading);
@@ -6762,20 +6768,22 @@ function Workspace({
 
   const applyProjectLocationChange = useCallback(
     async (from: string, to: string) => {
-      // Loads in flight see the move while the stored rows are rebased, but
-      // lose it again if that fails and the project stays where it was.
-      const move = { from, to };
-      const pendingMoves = [...sessionLoadMoves.current.values()];
-      for (const moves of pendingMoves) moves.push(move);
+      // Loads in flight wait for the stored rows to be rebased, then follow
+      // the move only if that went through.
+      let settle: (applied: boolean) => void = () => {};
+      const applied = new Promise<boolean>((resolve) => {
+        settle = resolve;
+      });
+      for (const moves of sessionLoadMoves.current.values()) {
+        moves.push({ from, to, applied });
+      }
       try {
         await rebaseProjectSessions(from, to);
       } catch (error) {
-        for (const moves of pendingMoves) {
-          const index = moves.indexOf(move);
-          if (index >= 0) moves.splice(index, 1);
-        }
+        settle(false);
         throw error;
       }
+      settle(true);
       rebaseCiRepairs(from, to);
 
       const nextSessions = sessionsRef.current.map((session) =>
