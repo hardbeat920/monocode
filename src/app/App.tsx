@@ -1786,6 +1786,10 @@ function Workspace({
   const loadedSessionCache = useRef(new Map<string, Session>());
   const sessionLoads = useRef(new Map<string, Promise<Session | null>>());
   const sessionLoadEpochs = useRef(new Map<string, number>());
+  /** Project moves made while a session was still loading, oldest first. */
+  const sessionLoadMoves = useRef(
+    new Map<string, { from: string; to: string }[]>(),
+  );
   const openingSessionIds = useRef(new Set<string>());
   const activeSessionPrefetch = useRef<Promise<Session | null> | null>(null);
   const [transcriptPool] = useState(() => new TranscriptPool());
@@ -4734,6 +4738,8 @@ function Workspace({
       const epoch = sessionLoadEpochs.current.get(sessionId) ?? 0;
       const loading = readSession(sessionId)
         .then((loaded) => {
+          const moves = sessionLoadMoves.current.get(sessionId) ?? [];
+          sessionLoadMoves.current.delete(sessionId);
           if (
             !loaded ||
             removingSessionIds.current.has(sessionId) ||
@@ -4741,7 +4747,15 @@ function Workspace({
           ) {
             return null;
           }
-          return loaded;
+          // The read may have run before its project moved; follow the move
+          // so a later save does not write the old folder back.
+          return moves.reduce(
+            (session, move) =>
+              sameProjectPath(session.cwd, move.from)
+                ? { ...session, cwd: move.to }
+                : session,
+            loaded,
+          );
         })
         .catch(() => null);
       sessionLoads.current.set(sessionId, loading);
@@ -6743,6 +6757,10 @@ function Workspace({
 
   const applyProjectLocationChange = useCallback(
     async (from: string, to: string) => {
+      for (const id of sessionLoads.current.keys()) {
+        const moves = sessionLoadMoves.current.get(id) ?? [];
+        sessionLoadMoves.current.set(id, [...moves, { from, to }]);
+      }
       await rebaseProjectSessions(from, to);
       rebaseCiRepairs(from, to);
 
