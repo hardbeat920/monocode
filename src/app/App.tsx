@@ -4736,10 +4736,12 @@ function Workspace({
       if (pending) return pending;
 
       const epoch = sessionLoadEpochs.current.get(sessionId) ?? 0;
+      // Owned by this load, so a replaced load finishing late cannot take
+      // the moves recorded for its replacement.
+      const moves: { from: string; to: string }[] = [];
+      sessionLoadMoves.current.set(sessionId, moves);
       const loading = readSession(sessionId)
         .then((loaded) => {
-          const moves = sessionLoadMoves.current.get(sessionId) ?? [];
-          sessionLoadMoves.current.delete(sessionId);
           if (
             !loaded ||
             removingSessionIds.current.has(sessionId) ||
@@ -4762,6 +4764,9 @@ function Workspace({
       void loading.then(() => {
         if (sessionLoads.current.get(sessionId) === loading) {
           sessionLoads.current.delete(sessionId);
+        }
+        if (sessionLoadMoves.current.get(sessionId) === moves) {
+          sessionLoadMoves.current.delete(sessionId);
         }
       });
       return loading;
@@ -6757,9 +6762,8 @@ function Workspace({
 
   const applyProjectLocationChange = useCallback(
     async (from: string, to: string) => {
-      for (const id of sessionLoads.current.keys()) {
-        const moves = sessionLoadMoves.current.get(id) ?? [];
-        sessionLoadMoves.current.set(id, [...moves, { from, to }]);
+      for (const moves of sessionLoadMoves.current.values()) {
+        moves.push({ from, to });
       }
       await rebaseProjectSessions(from, to);
       rebaseCiRepairs(from, to);
@@ -6833,6 +6837,12 @@ function Workspace({
       );
       setRecents(replaceProjectPath(from, to));
       onFileMoved(from, to);
+      // Saved tabs keep only those pinned to their project's folder.
+      for (const [id, workspace] of workspacePins.current) {
+        if (isEqualOrInside(workspace, from)) {
+          workspacePins.current.set(id, rebasePath(workspace, from, to));
+        }
+      }
       setTabs((prev) =>
         prev.map((tab) => ({
           ...tab,
