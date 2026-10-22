@@ -4,7 +4,7 @@ import { displayPath } from "../../../shared/lib/paths";
 export class ProjectNotFoundError extends Error {
   constructor(cwd: string) {
     super(
-      `Project folder not found: ${displayPath(cwd)}. Reopen the folder to reconnect it.`,
+      `Project folder not found: ${displayPath(cwd)}. Right-click the project and choose "Edit folder path…" to reconnect it.`,
     );
     this.name = "ProjectNotFoundError";
   }
