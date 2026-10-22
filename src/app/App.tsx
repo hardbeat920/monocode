@@ -6805,6 +6805,20 @@ function Workspace({
     [onFileMoved],
   );
 
+  // The user pointed a project at another folder, usually after moving it
+  // outside the app. Its sessions, tabs and settings follow it there.
+  const onRelocateProject = useCallback(
+    async (from: string, to: string) => {
+      const previous = normalizeProjectPath(from);
+      const next = normalizeProjectPath(to);
+      if (sameProjectPath(previous, next)) return;
+      await applyProjectLocationChange(previous, next);
+      forgetProjectLocation(previous);
+      void rememberProjectLocation(next).catch(() => undefined);
+    },
+    [applyProjectLocationChange],
+  );
+
   const onFileDeleted = useCallback((path: string) => {
     invalidateProjectFiles();
     const dropped = new Set<string>();
@@ -14048,6 +14062,7 @@ function Workspace({
       onSelectProject={onSelectProject}
       onOpenProject={pickProject}
       onRemoveProject={onRemoveProject}
+      onRelocateProject={onRelocateProject}
       monos={sidebarMonos}
       monoViewActive={monoCovers}
       onNew={onNew}
