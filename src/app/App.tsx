@@ -6762,10 +6762,20 @@ function Workspace({
 
   const applyProjectLocationChange = useCallback(
     async (from: string, to: string) => {
-      for (const moves of sessionLoadMoves.current.values()) {
-        moves.push({ from, to });
+      // Loads in flight see the move while the stored rows are rebased, but
+      // lose it again if that fails and the project stays where it was.
+      const move = { from, to };
+      const pendingMoves = [...sessionLoadMoves.current.values()];
+      for (const moves of pendingMoves) moves.push(move);
+      try {
+        await rebaseProjectSessions(from, to);
+      } catch (error) {
+        for (const moves of pendingMoves) {
+          const index = moves.indexOf(move);
+          if (index >= 0) moves.splice(index, 1);
+        }
+        throw error;
       }
-      await rebaseProjectSessions(from, to);
       rebaseCiRepairs(from, to);
 
       const nextSessions = sessionsRef.current.map((session) =>
