@@ -58,8 +58,11 @@ vi.mock("../../../integrations/harness/core/jsonRpc", () => ({
 import { invoke } from "@tauri-apps/api/core";
 import {
   cachedDevinIdentity,
+  fetchCmdAccounts,
+  fetchCmdAccountsUsage,
   fetchCodexRateLimits,
   fetchDevinRateLimits,
+  switchCmdAccount,
 } from "./rateLimitsFetch";
 
 describe("fetchDevinRateLimits", () => {
@@ -117,5 +120,34 @@ describe("fetchCodexRateLimits", () => {
     expect(results.map((result) => result.session?.usedPercent)).toEqual([
       10, 10, 10,
     ]);
+  });
+});
+
+describe("Command Code account bridge", () => {
+  beforeEach(() => {
+    vi.mocked(invoke).mockReset();
+  });
+
+  it("lists accounts through list_cmd_accounts", async () => {
+    const state = { available: true, accounts: [] };
+    vi.mocked(invoke).mockResolvedValue(state);
+    await expect(fetchCmdAccounts()).resolves.toBe(state);
+    expect(invoke).toHaveBeenCalledWith("list_cmd_accounts");
+  });
+
+  it("switches through switch_cmd_account with the account id", async () => {
+    const result = { activeId: "2", userName: "gpiedadpersvk0y" };
+    vi.mocked(invoke).mockResolvedValue(result);
+    await expect(switchCmdAccount("2")).resolves.toBe(result);
+    expect(invoke).toHaveBeenCalledWith("switch_cmd_account", { id: "2" });
+  });
+
+  it("fetches per-account usage through fetch_cmd_accounts_usage", async () => {
+    const snapshots = [
+      { id: "1", status: "ok", body: "{}", error: null },
+    ];
+    vi.mocked(invoke).mockResolvedValue(snapshots);
+    await expect(fetchCmdAccountsUsage()).resolves.toBe(snapshots);
+    expect(invoke).toHaveBeenCalledWith("fetch_cmd_accounts_usage");
   });
 });

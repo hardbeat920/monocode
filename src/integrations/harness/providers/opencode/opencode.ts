@@ -1,5 +1,6 @@
 import { TurnNotReadyError } from "../../core/types";
 import {
+  DEFAULT_MODEL_ID,
   modelContextWindow,
   nativeModelId,
 } from "../../../../features/sessions/model/models";
@@ -145,6 +146,17 @@ const liveByThread = new Map<string, Live>();
 const resumeByThread = new Map<string, Resume>();
 const cancelledThreads = new Set<string>();
 
+/**
+ * OpenCode needs `provider/model`. Sessions saved before the default became
+ * provider-qualified can still hold a bare id (for example `glm-5`); use the
+ * current default instead of failing the turn.
+ */
+function openCodeNativeModelId(model: string): string {
+  const native = nativeModelId(model);
+  if (native.includes("/")) return native;
+  return nativeModelId(DEFAULT_MODEL_ID.opencode);
+}
+
 let resolveOpenCodeBinaryImpl: () => Promise<{ path: string }> =
   resolveOpenCodeBinary;
 
@@ -195,7 +207,7 @@ export async function compactOpenCodeContext(
   }
   if (cancelledThreads.delete(input.sessionId)) return;
 
-  const model = parseOpenCodeModelSlug(nativeModelId(input.model));
+  const model = parseOpenCodeModelSlug(openCodeNativeModelId(input.model));
   if (!model) {
     throw new Error(
       "OpenCode models use provider/model ids. Wait for the catalog to load, then pick a model.",
@@ -278,7 +290,7 @@ export async function steerOpenCodeTurn(input: SteerTurnInput): Promise<void> {
   const live = liveByThread.get(input.sessionId);
   if (!live?.activeTurn) throw new TurnNotReadyError("No active turn to steer");
 
-  const parsed = parseOpenCodeModelSlug(nativeModelId(input.model));
+  const parsed = parseOpenCodeModelSlug(openCodeNativeModelId(input.model));
   if (!parsed) {
     throw new Error(
       "OpenCode models use provider/model ids. Wait for the catalog to load, then pick a model.",
@@ -619,7 +631,7 @@ function isEmptySessionFork(error: unknown): boolean {
 }
 
 async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
-  const parsed = parseOpenCodeModelSlug(nativeModelId(input.model));
+  const parsed = parseOpenCodeModelSlug(openCodeNativeModelId(input.model));
   if (!parsed) {
     throw new Error(
       "OpenCode models use provider/model ids. Wait for the catalog to load, then pick a model.",

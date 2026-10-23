@@ -17,6 +17,7 @@ import { loadProjectProviderSettings } from "./projectProviders";
 
 export type HarnessId =
   | "claude"
+  | "cmd"
   | "codex"
   | "cursor"
   | "grok"
@@ -30,6 +31,7 @@ export type HarnessId =
 
 export const HARNESSES: HarnessId[] = [
   "claude",
+  "cmd",
   "codex",
   "cursor",
   "grok",
@@ -540,6 +542,7 @@ export type PendingHarnessSwitch = {
 
 export const HARNESS_LABEL: Record<HarnessId, string> = {
   claude: "claude",
+  cmd: "cmd",
   codex: "codex",
   cursor: "cursor",
   grok: "grok",
@@ -554,6 +557,7 @@ export const HARNESS_LABEL: Record<HarnessId, string> = {
 
 export const HARNESS_TITLE: Record<HarnessId, string> = {
   claude: "Claude Code",
+  cmd: "Command Code",
   codex: "Codex",
   cursor: "Cursor",
   grok: "Grok Build",

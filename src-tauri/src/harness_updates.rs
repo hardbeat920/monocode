@@ -15,6 +15,7 @@ fn npm_package(provider: &str) -> Option<&'static str> {
     match provider {
         "claude" => Some("@anthropic-ai/claude-code"),
         "codex" => Some("@openai/codex"),
+        "cmd" => Some("command-code"),
         "opencode" => Some("opencode-ai"),
         "pi" => Some("@earendil-works/pi-coding-agent"),
         _ => None,
@@ -27,6 +28,7 @@ fn update_args(provider: &str) -> Option<&'static [&'static str]> {
     match provider {
         "claude" => Some(&["update"]),
         "codex" => Some(&["update"]),
+        "cmd" => Some(&["update"]),
         "opencode" => Some(&["upgrade"]),
         "pi" => Some(&["update", "--self"]),
         _ => None,
@@ -124,6 +126,7 @@ mod tests {
     #[test]
     fn maps_only_npm_published_harnesses() {
         assert_eq!(npm_package("claude"), Some("@anthropic-ai/claude-code"));
+        assert_eq!(npm_package("cmd"), Some("command-code"));
         assert_eq!(npm_package("pi"), Some("@earendil-works/pi-coding-agent"));
         assert_eq!(npm_package("cursor"), None);
         assert_eq!(npm_package("../../evil"), None);
@@ -131,6 +134,7 @@ mod tests {
 
     #[test]
     fn updates_only_through_each_cli_own_updater() {
+        assert_eq!(update_args("cmd"), Some(&["update"][..]));
         assert_eq!(update_args("pi"), Some(&["update", "--self"][..]));
         assert_eq!(update_args("opencode"), Some(&["upgrade"][..]));
         assert_eq!(update_args("cursor"), None);

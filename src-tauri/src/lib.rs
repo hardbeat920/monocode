@@ -7,6 +7,7 @@ mod azure_devops;
 mod background_work;
 mod chat_background;
 mod checkpoint;
+mod cmd_accounts;
 mod codex_mono_store;
 mod control;
 pub mod control_cli;
@@ -501,6 +502,7 @@ pub fn run() {
             harness::harness_resolve_grok,
             harness::harness_resolve_hermes,
             harness::harness_resolve_devin,
+            harness::harness_resolve_cmd,
             harness::harness_resolve_antigravity,
             harness::harness_free_port,
             harness::harness_spawn,
@@ -522,8 +524,12 @@ pub fn run() {
             account_identity::provider_account_identity,
             pi_usage::fetch_pi_usage,
             rate_limits::fetch_claude_usage,
+            rate_limits::fetch_cmd_usage,
             rate_limits::fetch_opencode_go_usage,
             devin_usage::fetch_devin_usage,
+            cmd_accounts::list_cmd_accounts,
+            cmd_accounts::switch_cmd_account,
+            cmd_accounts::fetch_cmd_accounts_usage,
             pty::pty_spawn,
             pty::pty_write,
             pty::pty_resize,

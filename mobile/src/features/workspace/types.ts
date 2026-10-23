@@ -15,7 +15,8 @@ export type Harness =
   | "fx"
   | "hermes"
   | "antigravity"
-  | "devin";
+  | "devin"
+  | "cmd";
 
 export type Project = {
   id: string;

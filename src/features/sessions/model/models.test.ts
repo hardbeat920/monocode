@@ -264,12 +264,29 @@ describe("provider defaults", () => {
     });
   });
 
+  it("defaults OpenCode to DeepSeek V4.1 Flash with max thinking", () => {
+    resetHarnessModelOverlays();
+    const model = resolveModel("opencode", defaultModelId("opencode"));
+    expect(model.nativeId).toBe("opencode-go/deepseek-v4.1-flash");
+    expect(model.settings?.find((setting) => setting.id === "variant")?.value).toBe(
+      "max",
+    );
+  });
+
+  it("migrates a saved OpenCode model id without a provider", () => {
+    saveDefaultModel("opencode", "opencode:glm-5");
+    expect(preferredModelId("opencode")).toBe(defaultModelId("opencode"));
+    expect(resolveModel("opencode", "opencode:glm-5").nativeId).toBe(
+      "opencode-go/deepseek-v4.1-flash",
+    );
+  });
+
   it("swaps a hidden default provider for the first enabled one", () => {
     saveLastModelChoice("claude", "claude:opus-5");
     setProjectProviderHidden("/repo/a", "claude", true);
     expect(defaultSessionChoice("/repo/a")).toEqual({
-      harness: "codex",
-      model: defaultModelId("codex"),
+      harness: "cmd",
+      model: defaultModelId("cmd"),
     });
     expect(defaultSessionChoice("/repo/b")).toEqual({
       harness: "claude",

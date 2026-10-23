@@ -3,6 +3,7 @@ import { homeDir } from "../../../platform/tauri/fs";
 import {
   errorRateLimits,
   parseClaudeOAuthUsage,
+  parseCmdUsage,
   parseCodexRateLimits,
   parseDevinUsage,
   parseOpencodeGoUsage,
@@ -132,12 +133,14 @@ export async function fetchDevinRateLimits(): Promise<ProviderRateLimits> {
 export type CodexRateLimitResetOutcome =
   "reset" | "nothingToReset" | "noCredit" | "alreadyRedeemed";
 
-type ClaudeUsageFetch = {
+type ProviderUsageFetch = {
   status: "ok" | "error" | "unavailable" | string;
   httpStatus?: number | null;
   body?: string | null;
   error?: string | null;
 };
+
+type ClaudeUsageFetch = ProviderUsageFetch;
 
 export async function fetchClaudeRateLimits(
   accountId = "default",
@@ -170,6 +173,79 @@ export async function fetchClaudeRateLimits(
       error instanceof Error ? error.message : "Claude usage unavailable",
     );
   }
+}
+
+export type CmdAccountInfo = {
+  id: string;
+  userName: string;
+  keyName: string;
+};
+
+export type CmdAccountState = {
+  available: boolean;
+  accountsDir: string | null;
+  accounts: CmdAccountInfo[];
+  activeId: string | null;
+  currentUser: string | null;
+  currentKey: string | null;
+  hint: string | null;
+};
+
+export type CmdAccountSwitch = {
+  activeId: string;
+  userName: string;
+};
+
+export type CmdAccountUsageSnapshot = {
+  id: string;
+  userName: string;
+  keyName: string;
+  status: "ok" | "error" | string;
+  body: string | null;
+  error: string | null;
+};
+
+export async function fetchCmdRateLimits(): Promise<ProviderRateLimits> {
+  try {
+    const result = await invoke<ProviderUsageFetch>("fetch_cmd_usage");
+    if (result.status === "ok" && result.body) {
+      const parsed = parseCmdUsage(result.body);
+      if (parsed.session || parsed.weekly || parsed.cmdCredits) return parsed;
+      return {
+        ...parsed,
+        status: parsed.status === "ok" ? "ok" : parsed.status,
+      };
+    }
+    if (result.status === "unavailable") {
+      return unavailableRateLimits(
+        "cmd",
+        result.error?.trim() || "Command Code not signed in",
+      );
+    }
+    return errorRateLimits(
+      "cmd",
+      result.error?.trim() || "Command Code usage unavailable",
+    );
+  } catch (error) {
+    return errorRateLimits(
+      "cmd",
+      error instanceof Error ? error.message : "Command Code usage unavailable",
+    );
+  }
+}
+
+export async function fetchCmdAccounts(): Promise<CmdAccountState> {
+  return invoke<CmdAccountState>("list_cmd_accounts");
+}
+
+export async function switchCmdAccount(id: string): Promise<CmdAccountSwitch> {
+  return invoke<CmdAccountSwitch>("switch_cmd_account", { id });
+}
+
+export async function fetchCmdAccountsUsage(): Promise<
+  CmdAccountUsageSnapshot[]
+> {
+  return invoke<CmdAccountUsageSnapshot[]>("fetch_cmd_accounts_usage");
 }
 
 export async function fetchCodexRateLimits(

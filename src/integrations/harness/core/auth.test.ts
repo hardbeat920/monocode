@@ -6,6 +6,7 @@ const child = vi.hoisted(() => ({
   unwatchChild: vi.fn(),
   watchChild: vi.fn(),
   resolveClaudeBinary: vi.fn(async () => ({ path: "/bin/claude" })),
+  resolveCmdBinary: vi.fn(async () => ({ path: "/bin/cmd" })),
   resolveCodexBinary: vi.fn(async () => ({ path: "/bin/codex" })),
   resolveCursorBinary: vi.fn(async () => ({ path: "/bin/agent" })),
   resolveGrokBinary: vi.fn(async () => ({ path: "/bin/grok" })),
@@ -35,6 +36,7 @@ beforeEach(() => {
 describe("harness login", () => {
   it("advertises only deterministic account login commands", () => {
     expect(harnessLoginArgs("claude")).toEqual(["auth", "login"]);
+    expect(harnessLoginArgs("cmd")).toEqual(["login"]);
     expect(harnessLoginArgs("codex")).toEqual(["login"]);
     expect(harnessLoginArgs("cursor")).toEqual(["login"]);
     expect(harnessLoginArgs("grok")).toEqual(["login", "--oauth"]);

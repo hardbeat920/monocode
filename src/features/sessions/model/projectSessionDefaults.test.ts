@@ -37,7 +37,7 @@ describe("newSessionForProject", () => {
     setProjectProviderHidden("/repo/a", "claude", true);
     const seed = newSession("claude", "/repo/a", "claude:opus-5");
     const session = newSessionForProject(seed, "/repo/a");
-    expect(session.harness).toBe("codex");
+    expect(session.harness).toBe("cmd");
     expect(session.cwd).toBe("/repo/a");
   });
 

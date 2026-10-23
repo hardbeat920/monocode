@@ -12,6 +12,7 @@ import {
 export const UPDATABLE_HARNESSES: ReadonlySet<HarnessId> = new Set([
   "claude",
   "codex",
+  "cmd",
   "opencode",
   "pi",
 ]);

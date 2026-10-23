@@ -9,6 +9,7 @@ export type HarnessAvailability = Record<HarnessId, boolean>;
 
 let availability: HarnessAvailability = {
   claude: false,
+  cmd: false,
   codex: false,
   cursor: false,
   grok: false,

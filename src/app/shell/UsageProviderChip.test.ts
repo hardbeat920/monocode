@@ -534,3 +534,222 @@ describe("UsageProviderChip", () => {
     expect(useButtons).toHaveLength(2);
   });
 });
+describe("UsageProviderChip for Command Code", () => {
+  function cmdLimits(): ProviderRateLimits {
+    return {
+      provider: "cmd",
+      session: {
+        usedPercent: 0,
+        windowMinutes: 300,
+        resetsAt: null,
+      },
+      weekly: {
+        usedPercent: 40.4,
+        windowMinutes: 10_080,
+        resetsAt: now + 2 * 86_400_000,
+      },
+      monthly: null,
+      resetCredits: null,
+      cmdCredits: {
+        monthlyCredits: 7.5776918458,
+        purchasedCredits: 0,
+        freeCredits: 0,
+      },
+      updatedAt: now,
+      error: null,
+      status: "ok",
+    };
+  }
+
+  function cmdAccounts() {
+    return {
+      available: true,
+      accountsDir: "/home/test/.local/bin/accounts",
+      accounts: [
+        { id: "1", userName: "onlygabriel1999gbum", keyName: "key-one" },
+        { id: "2", userName: "gpiedadpersvk0y", keyName: "key-two" },
+      ],
+      activeId: "2",
+      currentUser: "gpiedadpersvk0y",
+      currentKey: "key-two",
+      hint: null,
+    };
+  }
+
+  function usageBody(fiveUsed: number, weeklyUsed: number): string {
+    return JSON.stringify({
+      credits: { monthlyCredits: 1, purchasedCredits: 0, freeCredits: 0 },
+      windowLimits: {
+        fiveHour: { used: fiveUsed, cap: 3, resetAt: 0 },
+        weekly: { used: weeklyUsed, cap: 6, resetAt: 0 },
+      },
+    });
+  }
+
+  it("shows usage windows, credit balances, and the account list", async () => {
+    act(() =>
+      root.render(
+        createElement(UsageProviderChip, {
+          limits: cmdLimits(),
+          now,
+          cmdAccounts: cmdAccounts(),
+          onSwitchCmdAccount: vi.fn(async () => ({
+            activeId: "2",
+            userName: "gpiedadpersvk0y",
+          })),
+        }),
+      ),
+    );
+
+    await act(async () => button("Command Code usage details").click());
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog?.textContent).toContain("5-hour limit");
+    expect(dialog?.textContent).toContain("Weekly limit");
+    expect(dialog?.textContent).toContain("Monthly credits");
+    expect(dialog?.textContent).toContain("Command Code account");
+    expect(dialog?.textContent).toContain("onlygabriel1999gbum");
+    expect(dialog?.textContent).toContain("gpiedadpersvk0y");
+    expect(dialog?.textContent).toContain("Active");
+    expect(dialog?.textContent).toContain("Switch");
+  });
+
+  it("shows per-account usage limits for swap decisions", async () => {
+    act(() =>
+      root.render(
+        createElement(UsageProviderChip, {
+          limits: cmdLimits(),
+          now,
+          cmdAccounts: cmdAccounts(),
+          cmdAccountsUsage: [
+            {
+              id: "1",
+              userName: "onlygabriel1999gbum",
+              keyName: "key-one",
+              status: "ok",
+              body: usageBody(0, 2.42),
+              error: null,
+            },
+            {
+              id: "2",
+              userName: "gpiedadpersvk0y",
+              keyName: "key-two",
+              status: "error",
+              body: null,
+              error: "Command Code sign-in expired",
+            },
+          ],
+        }),
+      ),
+    );
+
+    await act(async () => button("Command Code usage details").click());
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog?.textContent).toContain("5h 0% · wk 40%");
+    expect(dialog?.textContent).toContain("Command Code sign-in expired");
+  });
+
+  it("marks per-account usage as pending before snapshots load", async () => {
+    act(() =>
+      root.render(
+        createElement(UsageProviderChip, {
+          limits: cmdLimits(),
+          now,
+          cmdAccounts: cmdAccounts(),
+        }),
+      ),
+    );
+
+    await act(async () => button("Command Code usage details").click());
+    expect(document.body.textContent).toContain("checking usage…");
+  });
+
+  it("refreshes account usage when the popover opens", async () => {
+    const onRefreshCmdAccountsUsage = vi.fn();
+    act(() =>
+      root.render(
+        createElement(UsageProviderChip, {
+          limits: cmdLimits(),
+          now,
+          cmdAccounts: cmdAccounts(),
+          onRefreshCmdAccountsUsage,
+        }),
+      ),
+    );
+
+    await act(async () => button("Command Code usage details").click());
+    expect(onRefreshCmdAccountsUsage).toHaveBeenCalledOnce();
+  });
+
+  it("switches to the chosen account", async () => {
+    const onSwitchCmdAccount = vi.fn(async () => ({
+      activeId: "1",
+      userName: "onlygabriel1999gbum",
+    }));
+    act(() =>
+      root.render(
+        createElement(UsageProviderChip, {
+          limits: cmdLimits(),
+          now,
+          cmdAccounts: cmdAccounts(),
+          onSwitchCmdAccount,
+        }),
+      ),
+    );
+
+    await act(async () => button("Command Code usage details").click());
+    const switchButton = [
+      ...document.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((item) => item.textContent === "Switch");
+    expect(switchButton).toBeDefined();
+    await act(async () => switchButton!.click());
+    expect(onSwitchCmdAccount).toHaveBeenCalledOnce();
+    expect(onSwitchCmdAccount).toHaveBeenCalledWith("1");
+  });
+
+  it("surfaces account switch failures", async () => {
+    const onSwitchCmdAccount = vi.fn(async () => {
+      throw new Error("Account not found");
+    });
+    act(() =>
+      root.render(
+        createElement(UsageProviderChip, {
+          limits: cmdLimits(),
+          now,
+          cmdAccounts: cmdAccounts(),
+          onSwitchCmdAccount,
+        }),
+      ),
+    );
+
+    await act(async () => button("Command Code usage details").click());
+    const switchButton = [
+      ...document.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((item) => item.textContent === "Switch");
+    await act(async () => switchButton!.click());
+    expect(document.body.textContent).toContain("Account not found");
+  });
+
+  it("explains when account switching is unavailable", async () => {
+    act(() =>
+      root.render(
+        createElement(UsageProviderChip, {
+          limits: cmdLimits(),
+          now,
+          cmdAccounts: {
+            available: false,
+            accountsDir: null,
+            accounts: [],
+            activeId: null,
+            currentUser: null,
+            currentKey: null,
+            hint: "cc-switch was not found.",
+          },
+        }),
+      ),
+    );
+
+    await act(async () => button("Command Code usage details").click());
+    expect(document.body.textContent).toContain("cc-switch was not found.");
+    expect(document.body.textContent).not.toContain("Switch");
+  });
+});

@@ -259,14 +259,25 @@ export async function attachmentsFromPaths(
 
 export async function attachmentsFromFiles(
   files: File[],
+  options?: { snapshot?: boolean },
 ): Promise<Attachment[]> {
   const out: Attachment[] = [];
   const pathFiles: string[] = [];
   const blobs: File[] = [];
   for (const file of files) {
     const path = nativePath(file);
-    if (path) pathFiles.push(path);
-    else blobs.push(file);
+    // Snapshot volatile paths only when the file can be read into memory.
+    // A large clipboard file keeps its path instead of being dropped.
+    const snapshot =
+      options?.snapshot &&
+      path != null &&
+      isVolatileSourcePath(path) &&
+      file.size <= MAX_EMBED_BYTES;
+    if (path && !snapshot) {
+      pathFiles.push(path);
+    } else {
+      blobs.push(file);
+    }
   }
   if (pathFiles.length) {
     out.push(...(await attachmentsFromPaths(pathFiles)));
@@ -280,20 +291,29 @@ export async function attachmentsFromFiles(
 
 export async function prepareAttachments(
   files: Attachment[],
+  options?: { skipEmbed?: boolean },
 ): Promise<Attachment[]> {
   return Promise.all(
     files.map(async (file) => {
-      if (file.data || !file.path) return file;
-      if (!isVisionImage(file.mimeType) || file.size > MAX_EMBED_BYTES) {
-        return file;
+      let next = file;
+      if (!next.path?.trim() && next.data) {
+        const path = await persistAttachmentBytes(next.name, next.data);
+        if (path) next = { ...next, path };
+      }
+      if (next.data || !next.path) return next;
+      // Print-mode CLIs (cmd) only ever read the file path, so skip the
+      // base64 backfill they can never use (up to 20MB per image).
+      if (options?.skipEmbed) return next;
+      if (!isVisionImage(next.mimeType) || next.size > MAX_EMBED_BYTES) {
+        return next;
       }
       try {
         const data = await invoke<string>("read_file_base64", {
-          path: file.path,
+          path: next.path,
         });
-        return { ...file, data };
+        return { ...next, data };
       } catch {
-        return file;
+        return next;
       }
     }),
   );
@@ -327,11 +347,32 @@ export function attachmentPathText(file: Attachment): string {
   if (isAttachmentFolder(file)) {
     return `Attached folder (list or read the files inside from this path): ${JSON.stringify(attachmentPath(file))}`;
   }
-  return `Attached file (read from disk): ${JSON.stringify(attachmentPath(file))}`;
+  const path = JSON.stringify(attachmentPath(file));
+  if (file.kind === "image" || isVisionImage(file.mimeType)) {
+    return `Attached image for this message. Read this exact file only. Do not glob the parent folder or other temp screenshots: ${path}`;
+  }
+  return `Attached file (read from disk): ${path}`;
 }
 
 export function isAttachmentFolder(file: Attachment): boolean {
   return file.mimeType === FOLDER_MIME;
+}
+
+/** Shared screenshot dumps (Lightshot, clipboard, $TMPDIR) get overwritten. */
+export function isVolatileSourcePath(path: string): boolean {
+  const normalized = path.replace(/\\/g, "/");
+  const lower = normalized.toLowerCase();
+  if (lower.includes("/monocode-attachments/")) return true;
+  if (
+    /(^|\/)(tmp|temp|var\/folders)\//.test(lower) ||
+    lower.includes("/temporaryitems/")
+  ) {
+    return true;
+  }
+  const leaf = lower.split("/").pop() ?? "";
+  return /^(image|screenshot|capture|untitled)(\s*\d*)?\.(png|jpe?g|gif|webp|tiff?)$/.test(
+    leaf,
+  );
 }
 
 function contentBlockFor(file: Attachment): PromptContentBlock {
@@ -392,7 +433,11 @@ async function attachmentFromBlob(file: File): Promise<Attachment | null> {
   const name = file.name.trim() || fallbackName(mimeType);
   const previewUrl = kind === "image" ? URL.createObjectURL(file) : undefined;
   const data = await readBlobBase64(file);
-  if (kind === "image" && isVisionImage(mimeType) && data) {
+  if (data === null) {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    return null;
+  }
+  if (kind === "image" && isVisionImage(mimeType)) {
     return {
       id: crypto.randomUUID(),
       name,
@@ -403,12 +448,12 @@ async function attachmentFromBlob(file: File): Promise<Attachment | null> {
       previewUrl,
     };
   }
-  if (data === null) {
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
-    return null;
-  }
   try {
     const path = await invoke<string>("write_attachment", { name, data });
+    if (!path.trim()) {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      return null;
+    }
     return {
       id: crypto.randomUUID(),
       name,
@@ -421,6 +466,18 @@ async function attachmentFromBlob(file: File): Promise<Attachment | null> {
   } catch {
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     return null;
+  }
+}
+
+async function persistAttachmentBytes(
+  name: string,
+  data: string,
+): Promise<string | undefined> {
+  try {
+    const path = await invoke<string>("write_attachment", { name, data });
+    return path.trim() || undefined;
+  } catch {
+    return undefined;
   }
 }
 

@@ -1713,7 +1713,7 @@ export function Composer({
     if (!attachmentsSupported) return;
     const generation = pasteGenerationRef.current;
     rememberAttachmentRead(
-      attachmentsFromFiles(files).then((pasted) => {
+      attachmentsFromFiles(files, { snapshot: true }).then((pasted) => {
         if (pasteGenerationRef.current !== generation) {
           pasted.forEach(revokeAttachment);
           return;

@@ -389,6 +389,16 @@ describe("OpenCode helpers", () => {
     expect(inferDefaultVariant("some-cloud", ["low", "xhigh"])).toBeUndefined();
   });
 
+  it("starts the default OpenCode model at max reasoning", () => {
+    expect(
+      inferDefaultVariant(
+        "opencode-go",
+        ["low", "high", "max"],
+        "deepseek-v4.1-flash",
+      ),
+    ).toBe("max");
+  });
+
   it("labels variants like Codex/Cursor effort levels", () => {
     expect(openCodeVariantLabel("xhigh")).toBe("Extra High");
     expect(openCodeVariantLabel("extra-high")).toBe("Extra High");

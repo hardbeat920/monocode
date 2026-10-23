@@ -42,6 +42,25 @@ describe("file attachment preparation", () => {
     },
   );
 
+  it("keeps a large volatile file as a path when snapshot mode cannot read it", async () => {
+    const file = new File([], "Screenshot.png", { type: "image/png" });
+    Object.defineProperty(file, "path", { value: "/tmp/Screenshot.png" });
+    Object.defineProperty(file, "size", { value: MAX_EMBED_BYTES + 1 });
+    invoke.mockResolvedValue([
+      {
+        path: "/tmp/Screenshot.png",
+        name: "Screenshot.png",
+        size: MAX_EMBED_BYTES + 1,
+        isDir: false,
+      },
+    ]);
+    const files = await attachmentsFromFiles([file], { snapshot: true });
+    expect(files[0]).toMatchObject({ path: "/tmp/Screenshot.png" });
+    expect(invoke).toHaveBeenCalledWith("inspect_paths", {
+      paths: ["/tmp/Screenshot.png"],
+    });
+  });
+
   it("keeps large disk documents as paths without reading them into the prompt", async () => {
     invoke.mockResolvedValue([
       {
@@ -83,5 +102,33 @@ describe("file attachment preparation", () => {
       mimeType: "image/png",
     });
     expect(files[0].data).toBeUndefined();
+  });
+
+  it("skips the base64 backfill for print-mode CLIs that only read paths", async () => {
+    const files = [
+      {
+        id: "img",
+        name: "red.png",
+        mimeType: "image/png",
+        kind: "image",
+        size: 95,
+        path: "/tmp/monocode-attachments/red.png",
+      },
+    ] as const;
+    invoke.mockResolvedValue("aGVsbG8=");
+    const skipped = await prepareAttachments([...files], { skipEmbed: true });
+    expect(skipped[0].data).toBeUndefined();
+    expect(skipped[0].path).toBe("/tmp/monocode-attachments/red.png");
+    expect(invoke).not.toHaveBeenCalledWith("read_file_base64", {
+      path: "/tmp/monocode-attachments/red.png",
+    });
+
+    invoke.mockClear();
+    invoke.mockResolvedValue("aGVsbG8=");
+    const embedded = await prepareAttachments([...files]);
+    expect(embedded[0].data).toBe("aGVsbG8=");
+    expect(invoke).toHaveBeenCalledWith("read_file_base64", {
+      path: "/tmp/monocode-attachments/red.png",
+    });
   });
 });

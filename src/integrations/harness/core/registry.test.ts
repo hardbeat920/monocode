@@ -134,6 +134,7 @@ describe("harness registry", () => {
     registerBuiltinHarnesses();
     const ids: HarnessId[] = [
       "claude",
+      "cmd",
       "codex",
       "cursor",
       "grok",
@@ -148,6 +149,7 @@ describe("harness registry", () => {
       Object.fromEntries(ids.map((id) => [id, canCompactHarnessContext(id)])),
     ).toEqual({
       claude: true,
+      cmd: false,
       codex: true,
       cursor: false,
       grok: true,
@@ -257,6 +259,17 @@ describe("harness registry", () => {
       omp: true,
       fx: false,
     });
+  });
+
+  it("registers CommandCode as a live harness", () => {
+    registerBuiltinHarnesses();
+    expect(isLiveHarness("cmd")).toBe(true);
+    const adapter = listHarnesses().find((adapter) => adapter.id === "cmd")!;
+    expect(adapter.canSteer).toBe(false);
+    expect(adapter.bindSession).toBeTypeOf("function");
+    expect(adapter.refreshCatalog).toBeTypeOf("function");
+    expect(adapter.generateTitle).toBeTypeOf("function");
+    expect(adapter.generateCommitMessage).toBeTypeOf("function");
   });
 
   it("registers Antigravity as a live fx-tier harness", () => {

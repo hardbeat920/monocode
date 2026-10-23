@@ -10,6 +10,14 @@ import { HarnessIcon } from "../../features/sessions/ui/HarnessIcon";
 import { Popover, type PopoverDismissReason } from "../../shared/ui/Popover";
 import { consumeCodexRateLimitResetCredit } from "../../features/providers/model/rateLimitsFetch";
 import {
+  fetchCmdAccounts,
+  fetchCmdAccountsUsage,
+  switchCmdAccount as requestCmdAccountSwitch,
+  type CmdAccountState,
+  type CmdAccountSwitch,
+  type CmdAccountUsageSnapshot,
+} from "../../features/providers/model/rateLimitsFetch";
+import {
   errorRateLimits,
   unavailableRateLimits,
   type RateLimitProvider,
@@ -227,10 +235,18 @@ export function UsageChips({
   const wantCodex = providers.includes("codex");
   const wantOpencode = providers.includes("opencode");
   const wantDevin = providers.includes("devin");
+  const wantCmd = providers.includes("cmd");
   const [now, setNow] = useState(() => Date.now());
   const [refreshing, setRefreshing] = useState(false);
   const [, setAccountsVersion] = useState(0);
   const inflight = useRef<Promise<void> | null>(null);
+  const [cmdAccounts, setCmdAccounts] = useState<CmdAccountState | null>(null);
+  const [cmdAccountsUsage, setCmdAccountsUsage] = useState<
+    CmdAccountUsageSnapshot[] | null
+  >(null);
+  const cmdAccountsUsageAt = useRef(0);
+  const cmdAccountsSeq = useRef(0);
+  const cmdUsageSeq = useRef(0);
   const claudeAccountId =
     session?.harness === "claude" && session.providerAccountId
       ? session.providerAccountId
@@ -250,6 +266,7 @@ export function UsageChips({
   const cachedCodex = useCachedRateLimits("codex", codexAccountId);
   const opencode = useCachedRateLimits("opencode");
   const devin = useCachedRateLimits("devin");
+  const cmd = useCachedRateLimits("cmd");
   const claude = claudeAccountAvailable
     ? cachedClaude
     : unavailableRateLimits(
@@ -278,6 +295,7 @@ export function UsageChips({
       void loadRateLimits("codex", codexAccountId);
     if (wantOpencode) void loadRateLimits("opencode");
     if (wantDevin) void loadRateLimits("devin");
+    if (wantCmd) void loadRateLimits("cmd");
   }, [
     claudeAccountAvailable,
     claudeAccountId,
@@ -287,7 +305,35 @@ export function UsageChips({
     wantCodex,
     wantOpencode,
     wantDevin,
+    wantCmd,
   ]);
+
+  const refreshCmdAccounts = useCallback(async () => {
+    if (!wantCmd) return;
+    const seq = ++cmdAccountsSeq.current;
+    try {
+      const accounts = await fetchCmdAccounts();
+      if (seq !== cmdAccountsSeq.current) return;
+      setCmdAccounts(accounts);
+    } catch {
+      if (seq === cmdAccountsSeq.current) setCmdAccounts(null);
+    }
+  }, [wantCmd]);
+
+  const refreshCmdAccountsUsage = useCallback(async (force = false) => {
+    if (!wantCmd) return;
+    const nowMs = Date.now();
+    if (!force && nowMs - cmdAccountsUsageAt.current < 60_000) return;
+    const seq = ++cmdUsageSeq.current;
+    try {
+      const usage = await fetchCmdAccountsUsage();
+      if (seq !== cmdUsageSeq.current) return;
+      setCmdAccountsUsage(usage);
+      cmdAccountsUsageAt.current = Date.now();
+    } catch {
+      // Rows fall back to "usage unavailable"; the account list still works.
+    }
+  }, [wantCmd]);
 
   const refresh = useCallback(() => {
     if (inflight.current) return inflight.current;
@@ -299,6 +345,10 @@ export function UsageChips({
       jobs.push(loadRateLimits("codex", codexAccountId, true));
     if (wantOpencode) jobs.push(loadRateLimits("opencode", "default", true));
     if (wantDevin) jobs.push(loadRateLimits("devin", "default", true));
+    if (wantCmd) {
+      jobs.push(loadRateLimits("cmd", "default", true));
+      void refreshCmdAccountsUsage(true);
+    }
     const run = Promise.allSettled(jobs)
       .then(() => undefined)
       .finally(() => {
@@ -316,12 +366,44 @@ export function UsageChips({
     wantCodex,
     wantOpencode,
     wantDevin,
+    wantCmd,
+    refreshCmdAccountsUsage,
   ]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), CLOCK_MS);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    void refreshCmdAccounts();
+    void refreshCmdAccountsUsage();
+  }, [refreshCmdAccounts, refreshCmdAccountsUsage]);
+
+  const switchCmdAccount = useCallback(
+    async (id: string): Promise<CmdAccountSwitch> => {
+      while (inflight.current) await inflight.current;
+      setRefreshing(true);
+      let result: CmdAccountSwitch;
+      const operation = (async () => {
+        const seq = ++cmdAccountsSeq.current;
+        result = await requestCmdAccountSwitch(id);
+        const accounts = await fetchCmdAccounts();
+        if (seq === cmdAccountsSeq.current) setCmdAccounts(accounts);
+        // Usage is keyed to the active account file, so re-read it too.
+        await loadRateLimits("cmd", "default", true);
+        await refreshCmdAccountsUsage(true);
+      })();
+      const tracked = operation.finally(() => {
+        inflight.current = null;
+        setRefreshing(false);
+      });
+      inflight.current = tracked.catch(() => undefined);
+      await tracked;
+      return result!;
+    },
+    [refreshCmdAccountsUsage],
+  );
 
   const consumeCodexReset = useCallback(
     async (creditId?: string) => {
@@ -441,7 +523,9 @@ export function UsageChips({
   );
 
   const showOpencodeChip = wantOpencode && opencode.status !== "unavailable";
-  const showUsage = wantClaude || wantCodex || showOpencodeChip || wantDevin;
+  const showCmdChip = wantCmd;
+  const showUsage =
+    wantClaude || wantCodex || showOpencodeChip || wantDevin || showCmdChip;
   const claudeAccountProps = accountPicker
     ? {
         accounts: claudeAccounts,
@@ -516,6 +600,18 @@ export function UsageChips({
           project={project}
           variant={variant}
           onReconnect={reconnectDevin}
+        />
+      ) : null}
+      {showCmdChip ? (
+        <UsageProviderChip
+          limits={cmd}
+          now={now}
+          project={project}
+          variant={variant}
+          cmdAccounts={cmdAccounts}
+          cmdAccountsUsage={cmdAccountsUsage}
+          onSwitchCmdAccount={switchCmdAccount}
+          onRefreshCmdAccountsUsage={() => void refreshCmdAccountsUsage()}
         />
       ) : null}
       <button

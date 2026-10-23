@@ -1,4 +1,5 @@
 import { ensureClaudeRegistered } from "../providers/claude/claudeAdapter";
+import { ensureCmdRegistered } from "../providers/cmd/cmdAdapter";
 import { ensureCodexRegistered } from "../providers/codex/codexAdapter";
 import { ensureCursorRegistered } from "../providers/cursor/cursorAdapter";
 import { ensureFxRegistered } from "../providers/fx/fxAdapter";
@@ -13,6 +14,7 @@ import { ensureDevinRegistered } from "../providers/devin/devinAdapter";
 /** Register all known live harness adapters. Idempotent. */
 export function registerBuiltinHarnesses(): void {
   ensureClaudeRegistered();
+  ensureCmdRegistered();
   ensureCursorRegistered();
   ensureCodexRegistered();
   ensureGrokRegistered();

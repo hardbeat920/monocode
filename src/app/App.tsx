@@ -2238,7 +2238,8 @@ function Workspace({
       usageSource?.harness === "claude" ||
       usageSource?.harness === "codex" ||
       usageSource?.harness === "opencode" ||
-      usageSource?.harness === "devin"
+      usageSource?.harness === "devin" ||
+      usageSource?.harness === "cmd"
     ) {
       return [usageSource.harness];
     }
@@ -7577,7 +7578,9 @@ function Workspace({
         setSessions(nextSessions);
         void (async () => {
           try {
-            const prepared = await prepareAttachments(attachments);
+            const prepared = await prepareAttachments(attachments, {
+              skipEmbed: current.harness === "cmd",
+            });
             const prompt = await preparePrompt(harnessText, {
               harness: current.harness,
               sessionId,
@@ -8208,7 +8211,9 @@ function Workspace({
         }
         let buildSucceeded = false;
         try {
-          const prepared = await prepareAttachments(attachments);
+          const prepared = await prepareAttachments(attachments, {
+            skipEmbed: current.harness === "cmd",
+          });
           const prompt =
             intent === "build" && approvedPlan
               ? buildPlanPrompt(approvedPlan.text)

@@ -333,10 +333,20 @@ function commonPrefixLength(left: string, right: string): number {
 
 export { titleCaseSlug };
 
+const DEFAULT_VARIANTS: Record<string, string> = {
+  // MonoCode's default OpenCode model should start at max reasoning.
+  "opencode-go/deepseek-v4.1-flash": "max",
+};
+
 export function inferDefaultVariant(
   providerID: string,
   variants: string[],
+  modelID?: string,
 ): string | undefined {
+  const preferred = modelID
+    ? DEFAULT_VARIANTS[`${providerID}/${modelID}`]
+    : undefined;
+  if (preferred && variants.includes(preferred)) return preferred;
   if (variants.length === 1) return variants[0];
   if (providerID === "anthropic" || providerID.startsWith("google")) {
     return variants.includes("high") ? "high" : undefined;

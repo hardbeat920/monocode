@@ -328,7 +328,11 @@ function openCodeModelSettings(
   const settings: ModelSetting[] = [];
   const variantValues = sortOpenCodeVariants(Object.keys(model.variants ?? {}));
   if (variantValues.length > 0) {
-    const defaultVariant = inferDefaultVariant(providerID, variantValues);
+    const defaultVariant = inferDefaultVariant(
+      providerID,
+      variantValues,
+      model.id,
+    );
     const options: ModelSettingChoice[] = variantValues.map((value) => ({
       value,
       label: openCodeVariantLabel(value),

@@ -154,22 +154,25 @@ export const MODELS: AgentModel[] = [
     ],
   },
 
-  { id: "opencode:glm-5", harness: "opencode", name: "GLM 5" },
-  { id: "opencode:minimax-m2.5", harness: "opencode", name: "MiniMax M2.5" },
-  { id: "opencode:kimi-k2.5", harness: "opencode", name: "Kimi K2.5" },
   {
-    id: "opencode:deepseek-v4-flash",
+    id: "opencode:opencode-go/deepseek-v4.1-flash",
     harness: "opencode",
-    name: "DeepSeek V4 Flash",
+    name: "DeepSeek V4.1 Flash",
+    nativeId: "opencode-go/deepseek-v4.1-flash",
+    settings: [
+      {
+        id: "variant",
+        label: "Variant",
+        kind: "select",
+        value: "max",
+        options: [
+          { value: "low", label: "Low" },
+          { value: "high", label: "High" },
+          { value: "max", label: "Max" },
+        ],
+      },
+    ],
   },
-  { id: "opencode:qwen-3.5", harness: "opencode", name: "Qwen 3.5" },
-  { id: "opencode:grok-4.5", harness: "opencode", name: "Grok 4.5" },
-  {
-    id: "opencode:claude-sonnet-4.6",
-    harness: "opencode",
-    name: "Claude Sonnet 4.6",
-  },
-  { id: "opencode:gpt-5.4", harness: "opencode", name: "GPT-5.4" },
   {
     id: "pi:default",
     harness: "pi",
@@ -195,6 +198,26 @@ export const MODELS: AgentModel[] = [
     nativeId: "",
   },
   {
+    id: "cmd:meta/muse-spark-1.3-contributor",
+    harness: "cmd",
+    name: "Muse Spark 1.3 Contributor",
+    nativeId: "meta/muse-spark-1.3-contributor",
+    settings: [
+      {
+        id: "effort",
+        label: "Reasoning",
+        kind: "select",
+        value: "xhigh",
+        options: [
+          { value: "low", label: "Low" },
+          { value: "medium", label: "Medium" },
+          { value: "high", label: "High" },
+          { value: "xhigh", label: "Extra High" },
+        ],
+      },
+    ],
+  },
+  {
     id: "antigravity:gemini-3.8-flash-high",
     harness: "antigravity",
     name: "Gemini 3.8 Flash (High)",
@@ -210,10 +233,11 @@ export const MODELS: AgentModel[] = [
 
 export const DEFAULT_MODEL_ID: Record<HarnessId, string> = {
   claude: "claude:sonnet-5",
+  cmd: "cmd:meta/muse-spark-1.3-contributor",
   codex: "",
   cursor: "cursor:composer-2.5",
   grok: "grok:grok-4.6",
-  opencode: "opencode:glm-5",
+  opencode: "opencode:opencode-go/deepseek-v4.1-flash",
   pi: "pi:default",
   omp: "omp:default",
   fx: "fx:zai/glm-5.2-fast",
@@ -240,6 +264,7 @@ export type LastModelChoice = {
 
 const HARNESS_ORDER: HarnessId[] = [
   "claude",
+  "cmd",
   "codex",
   "cursor",
   "grok",
@@ -360,6 +385,12 @@ function lookupModel(id: string): AgentModel | undefined {
 
 export function resolveModel(harness: HarnessId, id?: string): AgentModel {
   const available = modelsFor(harness);
+  if (harness === "opencode" && id && !nativeIdFrom(id).includes("/")) {
+    const preferred = defaultModelId(harness);
+    if (preferred && preferred !== id) {
+      return resolveModel(harness, preferred);
+    }
+  }
   if (id) {
     const exact = findModel(id);
     if (exact && exact.harness === harness) return exact;
@@ -816,12 +847,21 @@ export function saveDefaultModel(harness: HarnessId, model: string) {
   }
 }
 
+/** OpenCode only accepts provider-qualified model ids. */
+function compatibleSavedModelId(harness: HarnessId, id: string): string {
+  if (harness !== "opencode") return id;
+  const native = id.startsWith("opencode:") ? id.slice("opencode:".length) : id;
+  return native.includes("/") ? id : "";
+}
+
 /** User-picked model for a provider, else the catalog default. */
 export function preferredModelId(harness: HarnessId): string {
   const saved = loadDefaultModels()[harness];
-  if (saved) return saved;
+  if (saved && compatibleSavedModelId(harness, saved)) return saved;
   const last = loadLastModelChoice();
-  if (last?.harness === harness) return last.model;
+  if (last?.harness === harness && compatibleSavedModelId(harness, last.model)) {
+    return last.model;
+  }
   return defaultModelId(harness);
 }
 

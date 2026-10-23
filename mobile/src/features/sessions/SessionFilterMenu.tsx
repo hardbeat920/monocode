@@ -36,6 +36,7 @@ const HARNESS_NAMES: Record<Harness, string> = {
   hermes: "Hermes",
   antigravity: "Antigravity",
   devin: "Devin",
+  cmd: "Command Code",
 };
 
 export function filterSessions(sessions: SessionSummary[], filter: SessionFilter) {

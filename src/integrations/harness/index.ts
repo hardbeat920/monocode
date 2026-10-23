@@ -55,6 +55,14 @@ export {
   bindClaudeSession,
 } from "./providers/claude/claude";
 export {
+  sendCmdTurn,
+  cancelCmdTurn,
+  respondCmdApproval,
+  stopCmdSession,
+  forgetCmdSession,
+  bindCmdSession,
+} from "./providers/cmd/cmd";
+export {
   sendPiTurn,
   compactPiContext,
   rewindPiLastTurn,
@@ -112,6 +120,7 @@ export { generateCursorSessionTitle } from "./providers/cursor/cursorTitle";
 export { generateCodexSessionTitle } from "./providers/codex/codexTitle";
 export { generateOpenCodeSessionTitle } from "./providers/opencode/opencodeTitle";
 export { generateClaudeSessionTitle } from "./providers/claude/claudeTitle";
+export { generateCmdSessionTitle } from "./providers/cmd/cmdTitle";
 export {
   generatePiSessionTitle,
   generateOmpSessionTitle,
@@ -135,6 +144,11 @@ export {
   generateClaudePrContent,
 } from "./providers/claude/claudeGit";
 export {
+  generateCmdCommitMessage,
+  generateCmdPrContent,
+  generateCmdBranchName,
+} from "./providers/cmd/cmdGit";
+export {
   generateGrokCommitMessage,
   generateGrokPrContent,
 } from "./providers/grok/grokGit";
@@ -147,12 +161,14 @@ export {
 export { warmupCursorText } from "./providers/cursor/cursorText";
 export { warmupOpenCodeText } from "./providers/opencode/opencodeText";
 export { warmupClaudeText } from "./providers/claude/claudeText";
+export { warmupCmdText } from "./providers/cmd/cmdText";
 export { warmupPiText, warmupOmpText } from "./providers/pi/piText";
 export { warmupGrokText } from "./providers/grok/grokText";
 export { refreshCursorCatalog } from "./providers/cursor/cursorCatalog";
 export { refreshCodexCatalog } from "./providers/codex/codexCatalog";
 export { refreshOpenCodeCatalog } from "./providers/opencode/opencodeCatalog";
 export { refreshClaudeCatalog } from "./providers/claude/claudeCatalog";
+export { refreshCmdCatalog } from "./providers/cmd/cmdCatalog";
 export { refreshPiCatalog, refreshOmpCatalog } from "./providers/pi/piCatalog";
 export { refreshFxCatalog } from "./providers/fx/fxCatalog";
 export { refreshGrokCatalog } from "./providers/grok/grokCatalog";

@@ -7,6 +7,7 @@ import type { Block, HarnessId } from "../../../features/sessions/model/session"
  */
 const LOGIN_ARGS: Partial<Record<HarnessId, readonly string[]>> = {
   claude: ["auth", "login"],
+  cmd: ["login"],
   codex: ["login"],
   cursor: ["login"],
   grok: ["login", "--oauth"],

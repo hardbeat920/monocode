@@ -1,6 +1,11 @@
 import { asRecord } from "../../../integrations/harness/providers/codex/codexProtocol";
 
-export type RateLimitProvider = "claude" | "codex" | "opencode" | "devin";
+export type RateLimitProvider =
+  | "claude"
+  | "codex"
+  | "opencode"
+  | "devin"
+  | "cmd";
 
 export type RateLimitStatus =
   "idle" | "fetching" | "ok" | "error" | "unavailable";
@@ -30,6 +35,12 @@ export type RateLimitResetCredits = {
   credits: RateLimitResetCredit[] | null;
 };
 
+export type CmdCreditBalance = {
+  monthlyCredits: number | null;
+  purchasedCredits: number | null;
+  freeCredits: number | null;
+};
+
 export type ProviderRateLimits = {
   provider: RateLimitProvider;
   session: RateLimitWindow | null;
@@ -39,6 +50,8 @@ export type ProviderRateLimits = {
   resetCredits: RateLimitResetCredits | null;
   /** Devin-only extra (overage) usage balance in US dollars; negative once billed. */
   extraUsageBalance?: number | null;
+  /** Command Code credit balances from the billing endpoint, when present. */
+  cmdCredits?: CmdCreditBalance | null;
   updatedAt: number;
   error: string | null;
   status: RateLimitStatus;
@@ -77,7 +90,8 @@ export function fetchingRateLimits(
     (previous.session ||
       previous.weekly ||
       previous.monthly ||
-      previous.resetCredits)
+      previous.resetCredits ||
+      previous.cmdCredits)
   ) {
     return { ...previous, status: "fetching" };
   }
@@ -87,6 +101,7 @@ export function fetchingRateLimits(
     weekly: previous?.weekly ?? null,
     monthly: previous?.monthly ?? null,
     resetCredits: previous?.resetCredits ?? null,
+    cmdCredits: previous?.cmdCredits ?? null,
     updatedAt: previous?.updatedAt ?? 0,
     error: null,
     status: "fetching",
@@ -103,6 +118,7 @@ export function unavailableRateLimits(
     weekly: null,
     monthly: null,
     resetCredits: null,
+    cmdCredits: null,
     updatedAt: Date.now(),
     error,
     status: "unavailable",
@@ -119,7 +135,8 @@ export function errorRateLimits(
     (previous.session ||
       previous.weekly ||
       previous.monthly ||
-      previous.resetCredits)
+      previous.resetCredits ||
+      previous.cmdCredits)
   ) {
     return {
       ...previous,
@@ -134,6 +151,7 @@ export function errorRateLimits(
     weekly: null,
     monthly: null,
     resetCredits: null,
+    cmdCredits: null,
     updatedAt: Date.now(),
     error,
     status: "error",
@@ -272,10 +290,93 @@ export function mapUsageWindow(
 function usedPercentFrom(rec: Record<string, unknown>): number | null {
   const value =
     numberField(rec, "used_percentage") ??
+    numberField(rec, "used_percent") ??
     numberField(rec, "usedPercent") ??
     numberField(rec, "utilization");
   if (value == null) return null;
   return value;
+}
+
+export function mapCmdUsageWindow(
+  raw: unknown,
+  windowMinutes: number,
+): RateLimitWindow | null {
+  const rec = asRecord(raw);
+  if (!rec) return null;
+
+  let usedPercent: number | null = null;
+  const used = numberField(rec, "used");
+  const cap = numberField(rec, "cap");
+  if (used != null && cap != null && cap > 0) {
+    usedPercent = (used / cap) * 100;
+  } else {
+    usedPercent = usedPercentFrom(rec);
+  }
+  if (usedPercent == null) return null;
+
+  const resetsAt =
+    parseResetTimestamp(rec.resetAt) ??
+    parseResetTimestamp(rec.reset_at) ??
+    parseResetTimestamp(rec.resetsAt) ??
+    parseResetTimestamp(rec.resets_at);
+
+  return {
+    usedPercent: clampUsedPercent(usedPercent),
+    windowMinutes,
+    resetsAt,
+  };
+}
+
+export function parseCmdCreditBalance(
+  raw: unknown,
+): CmdCreditBalance | null {
+  const rec = asRecord(raw);
+  if (!rec) return null;
+  const monthlyCredits = numberField(rec, "monthlyCredits");
+  const purchasedCredits = numberField(rec, "purchasedCredits");
+  const freeCredits = numberField(rec, "freeCredits");
+  if (monthlyCredits == null && purchasedCredits == null && freeCredits == null) {
+    return null;
+  }
+  return { monthlyCredits, purchasedCredits, freeCredits };
+}
+
+export function parseCmdUsage(body: string): ProviderRateLimits {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return errorRateLimits("cmd", "Command Code usage response was not JSON");
+  }
+  const rec = asRecord(parsed);
+  if (!rec) {
+    return errorRateLimits("cmd", "Command Code usage response was empty");
+  }
+
+  const windowLimits =
+    asRecord(rec.windowLimits) ?? asRecord(rec.window_limits);
+  const fiveHourRaw = windowLimits
+    ? (asRecord(windowLimits.fiveHour) ?? asRecord(windowLimits.five_hour))
+    : asRecord(rec.five_hour);
+  const weeklyRaw = windowLimits
+    ? (asRecord(windowLimits.weekly) ?? asRecord(windowLimits.seven_day))
+    : (asRecord(rec.seven_day) ?? asRecord(rec.weekly));
+
+  const session = mapCmdUsageWindow(fiveHourRaw, SESSION_WINDOW_MINUTES);
+  const weekly = mapCmdUsageWindow(weeklyRaw, WEEKLY_WINDOW_MINUTES);
+  const cmdCredits = parseCmdCreditBalance(asRecord(rec.credits));
+
+  return {
+    provider: "cmd",
+    session,
+    weekly,
+    monthly: null,
+    resetCredits: null,
+    cmdCredits,
+    updatedAt: Date.now(),
+    error: null,
+    status: "ok",
+  };
 }
 
 export function parseClaudeOAuthUsage(body: string): ProviderRateLimits {

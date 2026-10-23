@@ -44,6 +44,112 @@ pub struct OpencodeGoUsageFetch {
 
 const OPENCODE_GO_USAGE_URL: &str = "https://opencode.ai/zen/go/v1/usage";
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CmdUsageFetch {
+    pub status: String,
+    pub http_status: Option<u16>,
+    pub body: Option<String>,
+    pub error: Option<String>,
+}
+
+pub(crate) const CMD_CREDITS_URL: &str = "https://api.commandcode.ai/alpha/billing/credits";
+
+fn cmd_usage_result(
+    status: &str,
+    http_status: Option<u16>,
+    body: Option<String>,
+    error: Option<String>,
+) -> CmdUsageFetch {
+    CmdUsageFetch {
+        status: status.into(),
+        http_status,
+        body,
+        error,
+    }
+}
+
+/// Fetch Command Code 5-hour / weekly window limits and credits via ~/.commandcode/auth.json.
+#[tauri::command]
+pub async fn fetch_cmd_usage() -> Result<CmdUsageFetch, String> {
+    tauri::async_runtime::spawn_blocking(fetch_cmd_usage_sync)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn fetch_cmd_usage_sync() -> Result<CmdUsageFetch, String> {
+    let Some(api_key) = read_cmd_api_key() else {
+        return Ok(cmd_usage_result(
+            "unavailable",
+            None,
+            None,
+            Some("Command Code not signed in".into()),
+        ));
+    };
+
+    let agent = ureq::AgentBuilder::new().timeout(HTTP_TIMEOUT).build();
+    let result = agent
+        .get(CMD_CREDITS_URL)
+        .set("Authorization", &format!("Bearer {api_key}"))
+        .set("User-Agent", USER_AGENT)
+        .call();
+
+    match result {
+        Ok(response) => {
+            let http_status = response.status();
+            let body = response.into_string().unwrap_or_default();
+            if (200..300).contains(&http_status) {
+                Ok(cmd_usage_result("ok", Some(http_status), Some(body), None))
+            } else {
+                Ok(cmd_usage_result(
+                    "error",
+                    Some(http_status),
+                    None,
+                    Some(format!("Command Code usage request failed ({http_status})")),
+                ))
+            }
+        }
+        Err(ureq::Error::Status(status, response)) => {
+            let _ = response.into_string();
+            let message = if status == 401 {
+                "Command Code sign-in expired".into()
+            } else {
+                format!("Command Code usage request failed ({status})")
+            };
+            Ok(cmd_usage_result("error", Some(status), None, Some(message)))
+        }
+        Err(error) => Ok(cmd_usage_result(
+            "error",
+            None,
+            None,
+            Some(format!("Command Code usage request failed: {error}")),
+        )),
+    }
+}
+
+pub(crate) fn cmd_auth_path() -> Option<PathBuf> {
+    let home = dirs_home().or_else(|| {
+        std::env::var_os("USERPROFILE").map(|value| value.to_string_lossy().into_owned())
+    })?;
+    Some(PathBuf::from(home).join(".commandcode/auth.json"))
+}
+
+pub(crate) fn extract_cmd_api_key(raw: &str) -> Option<String> {
+    let val: Value = serde_json::from_str(raw.trim()).ok()?;
+    let key = val.get("apiKey").and_then(Value::as_str)?.trim();
+    if key.is_empty() {
+        None
+    } else {
+        Some(key.to_string())
+    }
+}
+
+fn read_cmd_api_key() -> Option<String> {
+    let path = cmd_auth_path()?;
+    let raw = std::fs::read_to_string(&path).ok()?;
+    extract_cmd_api_key(&raw)
+}
+
 /// Fetch OpenCode Go 5h / weekly / monthly usage via the local Go API key.
 /// Runs in the host process so the webview CORS policy does not apply.
 /// The key never leaves the host process.
@@ -153,10 +259,17 @@ fn env_var(name: &str) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
-/// The Go key lives at `auth.json -> "opencode-go" -> "key"` inside the
-/// OpenCode data directory. Resolution mirrors OpenCode's own precedence:
-/// the `OPENCODE_AUTH_CONTENT` blob, then an explicit provider key in
-/// opencode config, then stored credentials on disk.
+/// Resolve the OpenCode Go API key. Resolution mirrors OpenCode's own
+/// precedence, with storage generations in order:
+/// 1. the `OPENCODE_AUTH_CONTENT` blob,
+/// 2. an explicit provider key in opencode config,
+/// 3. the active credential in OpenCode 2's SQLite store,
+/// 4. legacy `auth.json -> "opencode-go" -> "key"` credentials.
+///
+/// OpenCode 2 moved credentials into `opencode.db` and left `auth.json`
+/// behind. Reading the old file first marked a live subscription as expired
+/// while `opencode` itself kept working, so the database is authoritative
+/// whenever it has an active credential.
 fn read_opencode_go_api_key() -> Option<String> {
     // Env-injected auth blob is authoritative when it parses: a valid blob
     // without opencode-go means "no key", not "look elsewhere".
@@ -170,26 +283,139 @@ fn read_opencode_go_api_key() -> Option<String> {
     if let Some(key) = read_opencode_config_api_key() {
         return Some(key);
     }
+    if let Some(key) = opencode_db_paths()
+        .iter()
+        .find_map(|path| read_opencode_go_db_key(path))
+    {
+        return Some(key);
+    }
+    // The database can be briefly locked while the CLI checkpoints its WAL.
+    // Ask OpenCode itself before falling back to the stale v1 file.
+    if let Some(key) = read_opencode_go_cli_key() {
+        return Some(key);
+    }
     let primary = opencode_data_dir()?.join("auth.json");
     let raw = std::fs::read_to_string(&primary)
         .or_else(|_| {
             // Legacy macOS location.
-            dirs_home()
-                .or_else(|| {
-                    std::env::var_os("USERPROFILE")
-                        .map(|value| value.to_string_lossy().into_owned())
-                })
-                .ok_or_else(|| {
-                    std::io::Error::new(std::io::ErrorKind::NotFound, "no home directory")
-                })
-                .and_then(|home| {
-                    std::fs::read_to_string(
-                        PathBuf::from(home).join("Library/Application Support/opencode/auth.json"),
-                    )
+            legacy_macos_opencode_dir()
+                .map(|dir| std::fs::read_to_string(dir.join("auth.json")))
+                .unwrap_or_else(|| {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "no home directory",
+                    ))
                 })
         })
         .ok()?;
     extract_opencode_go_api_key(&raw)
+}
+
+fn legacy_macos_opencode_dir() -> Option<PathBuf> {
+    dirs_home()
+        .or_else(|| {
+            std::env::var_os("USERPROFILE").map(|value| value.to_string_lossy().into_owned())
+        })
+        .map(|home| PathBuf::from(home).join("Library/Application Support/opencode"))
+}
+
+/// OpenCode 2 stores every credential in one SQLite file. The current data
+/// directory wins; the legacy macOS location stays as a read-only fallback.
+fn opencode_db_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(dir) = opencode_data_dir() {
+        paths.push(dir.join("opencode.db"));
+    }
+    if let Some(dir) = legacy_macos_opencode_dir() {
+        let legacy = dir.join("opencode.db");
+        if !paths.contains(&legacy) {
+            paths.push(legacy);
+        }
+    }
+    paths
+}
+
+/// Read the active `opencode-go` credential from the OpenCode 2 database.
+/// Read-only access keeps the CLI free to own and rotate the database; a
+/// missing table (OpenCode 1 or an old database) simply falls through.
+fn read_opencode_go_db_key(path: &std::path::Path) -> Option<String> {
+    let connection = rusqlite::Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+            | rusqlite::OpenFlags::SQLITE_OPEN_URI
+            | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .ok()?;
+    let _ = connection.busy_timeout(Duration::from_millis(2_000));
+    query_opencode_go_db_key(&connection)
+}
+
+fn query_opencode_go_db_key(connection: &rusqlite::Connection) -> Option<String> {
+    let raw: String = connection
+        .query_row(
+            "SELECT value FROM credential \
+             WHERE integration_id = 'opencode-go' AND active = 1 \
+             ORDER BY time_updated DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .ok()?;
+    let value: Value = serde_json::from_str(&raw).ok()?;
+    let key = value.get("key")?.as_str()?.trim();
+    if key.is_empty() {
+        None
+    } else {
+        Some(key.to_string())
+    }
+}
+
+/// Ask the installed CLI for its active credential. `opencode auth export`
+/// reads through the same store the running app uses, including any busy WAL
+/// state that a direct read might miss.
+fn read_opencode_go_cli_key() -> Option<String> {
+    let path = crate::harness::resolve_opencode()?;
+    let args = vec![
+        "auth".to_string(),
+        "export".to_string(),
+        "opencode-go".to_string(),
+    ];
+    let output = crate::harness::exec_output(
+        &path.to_string_lossy(),
+        &args,
+        None,
+        Duration::from_secs(10),
+    )
+    .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    extract_active_opencode_go_key(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// `opencode auth export` returns an array of credential records; choose the
+/// active `opencode-go` entry rather than the first stale export.
+fn extract_active_opencode_go_key(raw: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(raw.trim()).ok()?;
+    for item in value.as_array()? {
+        let Some(record) = item.as_object() else {
+            continue;
+        };
+        if record.get("integrationID").and_then(Value::as_str) != Some("opencode-go") {
+            continue;
+        }
+        if record.get("active").and_then(Value::as_bool) != Some(true) {
+            continue;
+        }
+        let key = record
+            .get("value")
+            .and_then(|value| value.get("key"))
+            .and_then(Value::as_str)?
+            .trim();
+        if !key.is_empty() {
+            return Some(key.to_string());
+        }
+    }
+    None
 }
 
 /// Explicit `provider.options.apiKey` for the Go provider in opencode
@@ -712,6 +938,52 @@ mod tests {
     }
 
     #[test]
+    fn query_opencode_go_db_key_prefers_the_active_credential() {
+        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE credential (
+                    id TEXT PRIMARY KEY,
+                    integration_id TEXT,
+                    label TEXT NOT NULL,
+                    value TEXT NOT NULL,
+                    active INTEGER,
+                    time_updated INTEGER NOT NULL
+                );
+                INSERT INTO credential VALUES
+                    ('old', 'opencode-go', 'API key', '{\"type\":\"api\",\"key\":\"sk-stale\"}', 0, 1),
+                    ('live', 'opencode-go', 'OpenCode Go', '{\"type\":\"api\",\"key\":\"oc_sk_live\"}', 1, 2),
+                    ('other', 'opencode', 'Console', '{\"type\":\"api\",\"key\":\"sk-console\"}', 1, 3);",
+            )
+            .unwrap();
+        assert_eq!(
+            query_opencode_go_db_key(&connection).as_deref(),
+            Some("oc_sk_live")
+        );
+    }
+
+    #[test]
+    fn query_opencode_go_db_key_ignores_inactive_and_other_providers() {
+        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE credential (
+                    id TEXT PRIMARY KEY,
+                    integration_id TEXT,
+                    label TEXT NOT NULL,
+                    value TEXT NOT NULL,
+                    active INTEGER,
+                    time_updated INTEGER NOT NULL
+                );
+                INSERT INTO credential VALUES
+                    ('old', 'opencode-go', 'API key', '{\"type\":\"api\",\"key\":\"sk-stale\"}', 0, 1),
+                    ('other', 'opencode', 'Console', '{\"type\":\"api\",\"key\":\"sk-console\"}', 1, 2);",
+            )
+            .unwrap();
+        assert_eq!(query_opencode_go_db_key(&connection), None);
+    }
+
+    #[test]
     fn opencode_go_forbidden_maps_to_unavailable() {
         // A valid key without a Go subscription hides the chip
         // instead of rendering an error.
@@ -810,6 +1082,21 @@ mod tests {
     }
 
     #[test]
+    fn extract_active_opencode_go_key_from_cli_export() {
+        let raw = r#"[
+            {"integrationID":"opencode-go","active":false,"value":{"type":"api","key":"sk-stale"}},
+            {"integrationID":"opencode","active":true,"value":{"type":"api","key":"oc_sk_console"}},
+            {"integrationID":"opencode-go","active":true,"value":{"type":"api","key":"oc_sk_live"}}
+        ]"#;
+        assert_eq!(
+            extract_active_opencode_go_key(raw).as_deref(),
+            Some("oc_sk_live")
+        );
+        assert_eq!(extract_active_opencode_go_key("[]"), None);
+        assert_eq!(extract_active_opencode_go_key("not json"), None);
+    }
+
+    #[test]
     fn token_expired_uses_actual_expiry() {
         let now = 1_000_000;
         assert!(!token_expired(Some(now + 1), now));
@@ -826,5 +1113,18 @@ mod tests {
             "Claude Code-credentials-902e721c"
         );
         assert_eq!(claude_keychain_service(None), "Claude Code-credentials");
+    }
+
+    #[test]
+    fn extract_cmd_api_key_reads_key() {
+        let raw = r#"{"apiKey":"user_123456","userName":"alice"}"#;
+        assert_eq!(extract_cmd_api_key(raw).as_deref(), Some("user_123456"));
+    }
+
+    #[test]
+    fn extract_cmd_api_key_rejects_empty() {
+        let raw = r#"{"apiKey":"  ","userName":"alice"}"#;
+        assert_eq!(extract_cmd_api_key(raw), None);
+        assert_eq!(extract_cmd_api_key("not json"), None);
     }
 }

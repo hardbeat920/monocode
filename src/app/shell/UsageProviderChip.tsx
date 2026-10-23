@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   clampUsedPercent,
   DAILY_WINDOW_MINUTES,
@@ -8,12 +8,19 @@ import {
   formatResetDuration,
   formatUsagePercent,
   formatWindowLabel,
+  parseCmdUsage,
   rateLimitWindowTooltip,
+  type CmdCreditBalance,
   type ProviderRateLimits,
   type RateLimitResetCredit,
   type RateLimitWindow,
 } from "../../features/providers/model/rateLimits";
-import type { CodexRateLimitResetOutcome } from "../../features/providers/model/rateLimitsFetch";
+import type {
+  CmdAccountState,
+  CmdAccountSwitch,
+  CmdAccountUsageSnapshot,
+  CodexRateLimitResetOutcome,
+} from "../../features/providers/model/rateLimitsFetch";
 import { mascotPath, projectMascot } from "../../features/projects/model/projectMascots";
 import { projectKey, projectName } from "../../shared/lib/paths";
 import { HARNESS_TITLE, type HarnessId } from "../../features/sessions/model/session";
@@ -98,6 +105,10 @@ export function UsageProviderChip({
   onManageAccounts,
   onConsumeReset,
   onReconnect,
+  cmdAccounts,
+  cmdAccountsUsage,
+  onSwitchCmdAccount,
+  onRefreshCmdAccountsUsage,
   presentation,
   variant = "footer",
 }: {
@@ -114,6 +125,10 @@ export function UsageProviderChip({
   onReconnect?: () => Promise<void>;
   /** `composer` matches the quiet tool buttons under a Mono's composer. */
   variant?: UsageChipVariant;
+  cmdAccounts?: CmdAccountState | null;
+  cmdAccountsUsage?: CmdAccountUsageSnapshot[] | null;
+  onSwitchCmdAccount?: (id: string) => Promise<CmdAccountSwitch>;
+  onRefreshCmdAccountsUsage?: () => void;
 }) {
   const showRemaining = useShowRemainingUsage();
   const trigger = useRef<HTMLButtonElement>(null);
@@ -245,6 +260,11 @@ export function UsageProviderChip({
     }
   };
 
+  const toggle = () => {
+    if (!open && limits.provider === "cmd") onRefreshCmdAccountsUsage?.();
+    setOpen((value) => !value);
+  };
+
   return (
     <>
       <button
@@ -263,7 +283,7 @@ export function UsageProviderChip({
               ? "Loading usage…"
               : "Usage details")
         }
-        onClick={() => setOpen((value) => !value)}
+        onClick={toggle}
       >
         <HarnessIcon harness={iconHarness} className="size-3 shrink-0" />
         {loading ? (
@@ -486,6 +506,18 @@ export function UsageProviderChip({
                   onUse={useReset}
                   canUse={Boolean(onConsumeReset)}
                 />
+              ) : null}
+
+              {limits.provider === "cmd" ? (
+                <>
+                  <CmdCreditsCard credits={limits.cmdCredits} />
+                  <CmdAccountSwitcher
+                    state={cmdAccounts}
+                    usage={cmdAccountsUsage}
+                    canSwitch={Boolean(onSwitchCmdAccount)}
+                    onSwitch={onSwitchCmdAccount}
+                  />
+                </>
               ) : null}
             </>
           )}
@@ -857,6 +889,206 @@ function UsageWindowCard({
             : formatResetCountdown(window.resetsAt - now)}
         </span>
       </div>
+    </section>
+  );
+}
+
+function CmdCreditsCard({
+  credits,
+}: {
+  credits: CmdCreditBalance | null | undefined;
+}) {
+  const rows = credits
+    ? [
+        { label: "Monthly credits", value: credits.monthlyCredits },
+        { label: "Purchased credits", value: credits.purchasedCredits },
+        { label: "Free credits", value: credits.freeCredits },
+      ].filter(
+        (row): row is { label: string; value: number } => row.value != null,
+      )
+    : [];
+  if (rows.length === 0) return null;
+  return (
+    <section className="mt-1.5 rounded-lg bg-content/[0.045] px-3 py-2.5 ring-1 ring-inset ring-content/[0.06]">
+      <h3 className="text-[11px] font-medium text-content/65">Credits</h3>
+      <dl className="mt-1.5 flex flex-col gap-1">
+        {rows.map((row) => (
+          <div
+            key={row.label}
+            className="flex items-baseline justify-between gap-3 text-[10px] leading-4"
+          >
+            <dt className="text-content/40">{row.label}</dt>
+            <dd className="shrink-0 font-medium tabular-nums">
+              {formatCreditBalance(row.value)}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  );
+}
+
+function formatCreditBalance(value: number): string {
+  return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
+function formatCmdAccountUsageLine(
+  parsed: ProviderRateLimits | undefined,
+  snapshotError: string | undefined,
+  loaded: boolean,
+): string {
+  if (parsed) {
+    const parts: string[] = [];
+    if (parsed.session) {
+      parts.push(`5h ${formatUsagePercent(parsed.session.usedPercent)}`);
+    }
+    if (parsed.weekly) {
+      parts.push(`wk ${formatUsagePercent(parsed.weekly.usedPercent)}`);
+    }
+    if (parts.length > 0) return parts.join(" · ");
+  }
+  if (snapshotError) return snapshotError;
+  return loaded ? "usage unavailable" : "checking usage…";
+}
+
+function CmdAccountSwitcher({
+  state,
+  usage,
+  canSwitch,
+  onSwitch,
+}: {
+  state: CmdAccountState | null | undefined;
+  usage?: CmdAccountUsageSnapshot[] | null;
+  canSwitch: boolean;
+  onSwitch?: (id: string) => Promise<CmdAccountSwitch>;
+}) {
+  const [switchingId, setSwitchingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const usageById = useMemo(() => {
+    const map = new Map<string, ProviderRateLimits>();
+    for (const snapshot of usage ?? []) {
+      if (snapshot.status === "ok" && snapshot.body) {
+        map.set(snapshot.id, parseCmdUsage(snapshot.body));
+      }
+    }
+    return map;
+  }, [usage]);
+  const usageErrors = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const snapshot of usage ?? []) {
+      if (snapshot.status !== "ok" && snapshot.error) {
+        map.set(snapshot.id, snapshot.error);
+      }
+    }
+    return map;
+  }, [usage]);
+  if (!state) return null;
+  if (!state.available || state.accounts.length === 0) {
+    if (!state.hint) return null;
+    return (
+      <section className="mt-2.5 border-t border-content/[0.08] pt-2.5">
+        <h3 className="px-1 text-[11px] font-medium text-content/65">
+          Command Code account
+        </h3>
+        <p className="mt-1 px-1 text-[10px] leading-4 text-content/40">
+          {state.hint}
+        </p>
+      </section>
+    );
+  }
+
+  const switchTo = async (id: string) => {
+    if (!onSwitch || switchingId) return;
+    setSwitchingId(id);
+    setError(null);
+    try {
+      await onSwitch(id);
+    } catch (switchError) {
+      setError(
+        switchError instanceof Error
+          ? switchError.message
+          : "Could not switch account",
+      );
+    } finally {
+      setSwitchingId(null);
+    }
+  };
+
+  return (
+    <section className="mt-2.5 border-t border-content/[0.08] pt-2.5">
+      <h3 className="px-1 text-[11px] font-medium text-content/65">
+        Command Code account
+      </h3>
+      {state.currentUser ? (
+        <p className="mt-0.5 px-1 text-[10px] leading-4 text-content/40">
+          Signed in as{" "}
+          <span className="font-medium text-content/65">
+            {state.currentUser}
+          </span>
+        </p>
+      ) : null}
+      <div
+        className="mt-1.5 max-h-56 overflow-y-auto overscroll-contain"
+        aria-label="Command Code accounts"
+      >
+        <div className="flex flex-col gap-1.5">
+          {state.accounts.map((account) => {
+            const isActive = state.activeId === account.id;
+            const isSwitching = switchingId === account.id;
+            const busy = switchingId != null;
+            return (
+              <div
+                key={account.id}
+                className="flex min-h-9 items-center justify-between gap-2 rounded-lg bg-content/[0.04] px-2.5 py-1.5 ring-1 ring-inset ring-content/[0.06]"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-[10px] font-medium leading-4 text-content/70">
+                    {account.userName}
+                  </p>
+                  <p className="truncate text-[10px] leading-4 text-content/40">
+                    {account.keyName}
+                  </p>
+                  <p className="truncate text-[10px] leading-4 tabular-nums text-content/40">
+                    {formatCmdAccountUsageLine(
+                      usageById.get(account.id),
+                      usageErrors.get(account.id),
+                      usage !== null && usage !== undefined,
+                    )}
+                  </p>
+                </div>
+                {isActive ? (
+                  <span className="shrink-0 rounded-full bg-emerald-400/10 px-2 py-0.5 text-[9px] font-medium text-emerald-700 ring-1 ring-inset ring-emerald-400/20 dark:text-emerald-300">
+                    Active
+                  </span>
+                ) : isSwitching ? (
+                  <span className="inline-flex shrink-0 items-center gap-1.5 text-[10px] text-content/45">
+                    <RefreshCw
+                      className="size-3 animate-spin"
+                      strokeWidth={1.75}
+                      aria-hidden
+                    />
+                    Switching…
+                  </span>
+                ) : canSwitch ? (
+                  <button
+                    type="button"
+                    className="h-6 shrink-0 rounded-md bg-content/[0.07] px-2.5 text-[10px] font-medium text-content/70 ring-1 ring-inset ring-content/[0.08] transition-[background-color,color,transform] duration-150 ease-out hover:bg-content/[0.11] hover:text-content active:scale-[0.97] disabled:pointer-events-none disabled:opacity-35"
+                    disabled={busy}
+                    onClick={() => void switchTo(account.id)}
+                  >
+                    Switch
+                  </button>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      {error ? (
+        <p className="mt-1.5 px-1 text-[10px] leading-4 text-red-500" role="alert">
+          {error}
+        </p>
+      ) : null}
     </section>
   );
 }

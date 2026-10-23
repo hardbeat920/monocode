@@ -3,6 +3,7 @@ import { HARNESSES } from "../../../features/sessions/model/session";
 import {
   resolveAntigravityBinary,
   resolveClaudeBinary,
+  resolveCmdBinary,
   resolveCodexBinary,
   resolveCursorBinary,
   resolveDevinBinary,
@@ -37,6 +38,7 @@ export {
  */
 const CLI: Record<HarnessId, { name: string; install?: string }> = {
   claude: { name: "Claude Code CLI" },
+  cmd: { name: "Command Code CLI", install: "npm i -g command-code" },
   codex: { name: "Codex CLI" },
   cursor: { name: "Cursor CLI" },
   grok: {
@@ -155,6 +157,14 @@ export function probeHarnessAvailability(
       if (id === "hermes") {
         try {
           await resolveHermesBinary();
+          return [id, true] as const;
+        } catch {
+          return [id, false] as const;
+        }
+      }
+      if (id === "cmd") {
+        try {
+          await resolveCmdBinary();
           return [id, true] as const;
         } catch {
           return [id, false] as const;

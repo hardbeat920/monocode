@@ -5,6 +5,7 @@ Install and sign in to at least one supported agent before using MonoCode. MonoC
 Follow each provider’s linked installation guide for platform requirements and installation options. Use the installation and login commands below where provided.
 
 - [Claude Code](https://claude.com/product/claude-code) - `claude auth login`
+- [Command Code](https://commandcode.ai) - `npm install -g command-code` then `cmd login`
 - [Codex](https://developers.openai.com/codex/cli) - `codex login`
 - [Cursor CLI](https://cursor.com/cli) - `agent login`
 - [Grok Build](https://docs.x.ai/build/overview) - `curl -fsSL https://x.ai/cli/install.sh | bash` then `grok login`
