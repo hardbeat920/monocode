@@ -2,7 +2,7 @@ import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ModelList } from "@/features/models/ModelPicker";
+import { EffortControl, ModelList } from "@/features/models/ModelPicker";
 import {
   useForgetChoiceOnLeave,
   useSessionChoice,
@@ -10,6 +10,12 @@ import {
 import type { ModelCatalog } from "@/features/models/types";
 import type { Project } from "@/features/workspace/types";
 
+const platform = vi.hoisted(() => ({ OS: "ios" }));
+const crossSlider = vi.hoisted(() => ({
+  props: undefined as
+    | undefined
+    | { maximumValue?: number; onValueChange?: (value: number) => void },
+}));
 const desktop = vi.hoisted(() => ({
   fingerprint: "model-picker-desktop",
   configure: vi.fn(),
@@ -48,12 +54,19 @@ vi.mock("react-native", () => ({
   ),
   ActivityIndicator: () => null,
   Switch: () => null,
+  Platform: platform,
   StyleSheet: { hairlineWidth: 1 },
   Alert: { alert: vi.fn() },
 }));
 vi.mock("expo-haptics", () => ({ selectionAsync: vi.fn() }));
 vi.mock("expo-router", () => ({ router: { dismissTo: desktop.dismissTo } }));
 vi.mock("@expo/ui/swift-ui", () => ({ Host: () => null, Slider: () => null }));
+vi.mock("@expo/ui/community/slider", () => ({
+  default: (props: typeof crossSlider.props) => {
+    crossSlider.props = props;
+    return null;
+  },
+}));
 vi.mock("@expo/ui/swift-ui/modifiers", () => ({
   accessibilityLabel: vi.fn(),
   tint: vi.fn(),
@@ -268,5 +281,34 @@ describe("account picker in the model sheet", () => {
     desktop.listModels.mockReturnValue(new Promise(() => {}));
     await render();
     expect(container.querySelector('[aria-label^="Account:"]')).toBeNull();
+  });
+});
+
+describe("effort slider", () => {
+  afterEach(() => {
+    platform.OS = "ios";
+  });
+
+  // SwiftUI's Slider props and event do not match Android's SliderView, so
+  // a drag there never changed the effort.
+  it("reaches every level on Android", () => {
+    platform.OS = "android";
+    const onChange = vi.fn();
+    const root = createRoot(document.createElement("div"));
+    const levels = ["low", "medium", "high", "xhigh", "max"];
+    act(() =>
+      root.render(
+        <EffortControl
+          label="Thinking"
+          options={levels.map((value) => ({ value, label: value }))}
+          value="medium"
+          onChange={onChange}
+        />,
+      ),
+    );
+    expect(crossSlider.props?.maximumValue).toBe(4);
+    act(() => crossSlider.props?.onValueChange?.(4));
+    expect(onChange).toHaveBeenCalledWith("max");
+    act(() => root.unmount());
   });
 });
