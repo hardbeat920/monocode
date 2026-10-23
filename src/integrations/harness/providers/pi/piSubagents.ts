@@ -195,6 +195,28 @@ export function piSubagentEvents(
   return events;
 }
 
+/**
+ * The run a pi-subagents tool call left running in the background. Its
+ * launch result names it by `asyncId`; foreground runs and management
+ * actions (status, stop) do not start one.
+ */
+export function piBackgroundRunId(result: unknown): string | undefined {
+  const details = asRecord(asRecord(result)?.details);
+  if (!details || details.mode === "management") return undefined;
+  return stringField(details, "asyncId");
+}
+
+/** Runs a pi-subagents completion notice reports as finished. */
+export function piFinishedRunIds(message: Record<string, unknown>): string[] {
+  if (message.role !== "custom" || message.customType !== "subagent-notify")
+    return [];
+  return records(asRecord(message.details)?.runs).flatMap((run) =>
+    [stringField(run, "runId"), stringField(run, "workflowRunId")].filter(
+      (id): id is string => id != null,
+    ),
+  );
+}
+
 function records(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value)
     ? value.flatMap<Record<string, unknown>>((item) => asRecord(item) ?? [])

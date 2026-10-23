@@ -76,6 +76,12 @@ export type HarnessAdapter = {
   ): void;
   /** Keep a timed question open once the user starts answering it. */
   keepQuestionOpen?(sessionId: string, requestId: number): void;
+  /**
+   * True while the session's child still runs work outside a MonoCode turn:
+   * background subagents, or an agent loop one of them woke. Idle parking
+   * waits for it to finish, since stopping the child kills that work.
+   */
+  hasBackgroundWork?(sessionId: string): boolean;
   /** Kill the child but keep resume state for later rebind. */
   stopSession(sessionId: string): Promise<void>;
   /** Drop resume state and kill the child (delete, harness switch, idle detach). */
@@ -199,11 +205,19 @@ function cancelIdlePark(sessionId: string): void {
   idleParkTimers.delete(sessionId);
 }
 
+function hasBackgroundWork(harness: HarnessId, sessionId: string): boolean {
+  return getHarness(harness)?.hasBackgroundWork?.(sessionId) === true;
+}
+
 function scheduleIdlePark(harness: HarnessId, sessionId: string): void {
   cancelIdlePark(sessionId);
   idleParkTimers.set(sessionId, {
     harness,
     timer: setTimeout(() => {
+      if (hasBackgroundWork(harness, sessionId)) {
+        scheduleIdlePark(harness, sessionId);
+        return;
+      }
       idleParkTimers.delete(sessionId);
       void stopHarnessSession(harness, sessionId);
     }, HARNESS_IDLE_PARK_MS),
@@ -224,8 +238,11 @@ export function enforceHarnessIdleLimit(): void {
   clearTimeout(idleLimitCheck);
   idleLimitCheck = undefined;
   const limit = Math.max(0, idleParkPolicy.limit());
-  let excess = idleParkTimers.size - limit;
-  for (const [sessionId, { harness }] of [...idleParkTimers]) {
+  const idle = [...idleParkTimers].filter(
+    ([sessionId, { harness }]) => !hasBackgroundWork(harness, sessionId),
+  );
+  let excess = idle.length - limit;
+  for (const [sessionId, { harness }] of idle) {
     if (excess <= 0) return;
     if (sessionOperationTails.has(sessionId)) continue;
     if (limit > 0 && idleParkPolicy.keep(sessionId)) continue;
