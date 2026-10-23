@@ -7,10 +7,11 @@ import {
   shapes,
   tag,
 } from "@expo/ui/swift-ui/modifiers";
-import { StyleSheet, View } from "react-native";
+import { Platform, StyleSheet, View } from "react-native";
 
 import { SEARCH_BAR } from "@/features/files/FileSearchBar";
 import type { Harness, SessionSummary } from "@/features/workspace/types";
+import { ChoiceMenu } from "@/ui/ChoiceMenu";
 import { Icon } from "@/ui/Icon";
 import { LiquidView } from "@/ui/LiquidView";
 import { useColors } from "@/ui/theme";
@@ -64,11 +65,37 @@ export function SessionFilterMenu({
 }) {
   const colors = useColors();
   const on = value.working || !!value.harness;
+  const glass = (
+    <LiquidView borderRadius={SEARCH_BAR / 2} innerStyle={styles.round}>
+      <Icon name="filter" size={20} color={on ? colors.accent : colors.content} />
+    </LiquidView>
+  );
+  // SwiftUI's Menu and Picker are iOS only; Android lists the same choices.
+  if (Platform.OS === "android")
+    return (
+      <ChoiceMenu
+        label={on ? "Filter sessions, on" : "Filter sessions"}
+        actions={[
+          { label: "All sessions", selected: !value.working, onPress: () => onChange({ ...value, working: false }) },
+          { label: "Working now", selected: value.working, onPress: () => onChange({ ...value, working: true }) },
+          ...(harnesses.length > 1 || value.harness
+            ? [
+                { label: "Any agent", selected: !value.harness, onPress: () => onChange({ ...value, harness: null }) },
+                ...harnesses.map((harness) => ({
+                  label: HARNESS_NAMES[harness],
+                  selected: value.harness === harness,
+                  onPress: () => onChange({ ...value, harness }),
+                })),
+              ]
+            : []),
+        ]}
+      >
+        {glass}
+      </ChoiceMenu>
+    );
   return (
     <View>
-      <LiquidView borderRadius={SEARCH_BAR / 2} innerStyle={styles.round}>
-        <Icon name="filter" size={20} color={on ? colors.accent : colors.content} />
-      </LiquidView>
+      {glass}
       {/* The native menu lies over the glass, its label an invisible box of
           the button's size, as in WorkspaceMenu. */}
       <Host style={StyleSheet.absoluteFill}>
