@@ -18,52 +18,6 @@ impl Shell {
             })
             .collect();
         archived.sort_by_key(|s| std::cmp::Reverse(s.updated_at));
-        let mut catalogs = HashMap::new();
-        let active = self
-            .monos
-            .as_ref()
-            .filter(|_| self.mono_active(cx))
-            .and_then(|m| m.read(cx).chat())
-            .or_else(|| {
-                self.workspace.active.and_then(|id| {
-                    self.sessions
-                        .get(&self.workspace.session_for_pane(id))
-                        .cloned()
-                })
-            });
-        let mut profiles: HashMap<_, _> = Kind::ALL
-            .into_iter()
-            .map(|kind| {
-                (
-                    kind,
-                    crate::accounts::get(cx)
-                        .map(|center| center.read(cx).selected(kind, &self.workspace.project).id)
-                        .unwrap_or_else(|| monocode_core::accounts::DEFAULT.into()),
-                )
-            })
-            .collect();
-        if let Some(active) = &active {
-            let v = active.read(cx);
-            profiles.insert(
-                Kind::from_id(&v.summary.provider),
-                v.settings.account.id.clone(),
-            );
-        }
-        for session in active.iter().chain(self.sessions.values()) {
-            let session = session.read(cx);
-            if profiles.get(&Kind::from_id(&session.summary.provider))
-                != Some(&session.settings.account.id)
-            {
-                continue;
-            }
-            if catalogs.contains_key(&session.summary.provider) {
-                continue;
-            }
-            let models = session.settings_models();
-            if !models.is_empty() {
-                catalogs.insert(session.summary.provider.clone(), models);
-            }
-        }
         SettingsContext {
             remote: Some(self.remote.clone()),
             mobile: self.mobile_status(),
@@ -105,7 +59,6 @@ impl Shell {
                         .collect()
                 })
                 .unwrap_or_default(),
-            catalogs,
             classic: self.workspace.classic_layout,
             new_layout_boxy: self.workspace.new_layout_boxy,
             cwd: self.workspace.project.clone(),

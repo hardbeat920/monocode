@@ -11,6 +11,7 @@ mod notification_preferences;
 mod pages;
 mod palettes;
 mod preferences;
+mod provider_models;
 mod skill_document;
 pub(crate) use palettes::palette;
 pub(crate) mod widgets;
@@ -59,7 +60,6 @@ pub(crate) struct SettingsContext {
     pub projects: Vec<(String, String)>,
     pub sessions: Vec<(i64, String, bool)>,
     pub quick_error: Option<String>,
-    pub catalogs: HashMap<String, Vec<(String, String)>>,
     pub inbox_connections: HashMap<String, (bool, String)>,
     /// Mobile access, or `None` when this desktop cannot offer it.
     pub mobile: Option<monocode_core::mobile::Status>,
@@ -83,7 +83,6 @@ impl PartialEq for SettingsContext {
             && self.projects == other.projects
             && self.sessions == other.sessions
             && self.quick_error == other.quick_error
-            && self.catalogs == other.catalogs
             && self.inbox_connections == other.inbox_connections
             && self.mobile == other.mobile
             && self.mobile_invite == other.mobile_invite
@@ -214,6 +213,7 @@ pub(crate) struct SettingsView {
     select_open: Option<&'static str>,
     select_active: usize,
     select_focus: FocusHandle,
+    select_scroll: ScrollHandle,
     select_anchors: RefCell<HashMap<&'static str, AnchorSlot>>,
     search: Entity<Input>,
     search_query: String,
@@ -236,6 +236,8 @@ pub(crate) struct SettingsView {
     discovery: data::Discovery,
     discovery_loading: bool,
     discovery_task: Option<Task<()>>,
+    provider_models: HashMap<monocode_core::provider::Kind, provider_models::Catalog>,
+    provider_models_generation: u64,
     selected_project: String,
     provider_scope: String,
     mcp_filter: String,
@@ -350,6 +352,7 @@ impl SettingsView {
             select_open: None,
             select_active: 0,
             select_focus: cx.focus_handle(),
+            select_scroll: ScrollHandle::new(),
             select_anchors: Default::default(),
             search,
             search_query: String::new(),
@@ -371,6 +374,8 @@ impl SettingsView {
             discovery: data::Discovery::default(),
             discovery_loading: false,
             discovery_task: None,
+            provider_models: HashMap::new(),
+            provider_models_generation: 0,
             selected_project,
             provider_scope: "global".into(),
             mcp_filter: "all".into(),
@@ -420,6 +425,7 @@ impl SettingsView {
                 this.skill_documents.clear();
                 this.discovery = data;
                 this.discovery_loading = false;
+                this.provider_models.clear();
                 if this.section == Section::Mcp {
                     this.refresh_mcp_health(cx);
                 }

@@ -69,6 +69,154 @@ fn workspace_style_is_only_offered_under_the_new_layout(cx: &mut TestAppContext)
 }
 
 #[gpui::test]
+fn provider_models_load_without_chat_catalogs_and_empty_selects_stay_closed(
+    cx: &mut TestAppContext,
+) {
+    use monocode_core::provider::Kind;
+    let window = window(Section::Providers, cx);
+    window
+        .update(cx, |view, _, cx| {
+            view.discovery.binaries = vec![(Kind::Codex, Some("/fixture/codex".into()))];
+            view.prefs
+                .default_models
+                .insert("codex".into(), "model-39".into());
+            view.load_provider_models(Kind::Codex, false, cx);
+            assert!(view.provider_models[&Kind::Codex].loading);
+            cx.notify();
+        })
+        .unwrap();
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    let trigger = visual.debug_bounds("settings-select-codex").unwrap();
+    visual.simulate_click(trigger.center(), Default::default());
+    visual.run_until_parked();
+    window
+        .update(visual, |view, _, cx| {
+            assert!(view.select_open.is_none());
+            let generation = view.provider_models[&Kind::Codex].generation;
+            view.provider_models_finished(
+                Kind::Codex,
+                generation,
+                Ok((0..40)
+                    .map(|i| (format!("model-{i}"), format!("Model {i}")))
+                    .collect()),
+                cx,
+            );
+        })
+        .unwrap();
+    visual.run_until_parked();
+    let trigger = visual.debug_bounds("settings-select-codex").unwrap();
+    visual.simulate_click(trigger.center(), Default::default());
+    visual.run_until_parked();
+    // GPUI tests have no platform frame loop to deliver the initial scroll callback.
+    visual.update(|window, cx| {
+        window.simulate_next_frame(cx);
+    });
+    visual.run_until_parked();
+    let list = visual.debug_bounds("settings-select-list-codex").unwrap();
+    assert!(
+        list.size.height > px(28.) && list.size.height <= px(310.),
+        "{list:?}"
+    );
+    let last = visual.debug_bounds("settings-option-codex-39").unwrap();
+    assert_eq!(last.size.height, px(28.));
+    assert!(
+        last.top() >= list.top() && last.bottom() <= list.bottom(),
+        "list={list:?}, last={last:?}"
+    );
+    visual.simulate_keystrokes("home");
+    visual.run_until_parked();
+    let list = visual.debug_bounds("settings-select-list-codex").unwrap();
+    let first = visual.debug_bounds("settings-option-codex-0").unwrap();
+    assert!(
+        first.top() >= list.top() && first.bottom() <= list.bottom(),
+        "list={list:?}, first={first:?}"
+    );
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    window
+        .update(visual, |view, _, _| {
+            assert_eq!(view.prefs.default_models["codex"], "model-0");
+            assert!(view.select_open.is_none());
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn provider_model_errors_and_empty_results_offer_retry_and_ignore_stale_results(
+    cx: &mut TestAppContext,
+) {
+    use monocode_core::provider::Kind;
+    let window = window(Section::Providers, cx);
+    let old_generation = window
+        .update(cx, |view, _, cx| {
+            view.discovery.binaries = vec![(Kind::Codex, Some("/fixture/codex".into()))];
+            view.load_provider_models(Kind::Codex, false, cx);
+            let generation = view.provider_models[&Kind::Codex].generation;
+            view.provider_models_finished(
+                Kind::Codex,
+                generation,
+                Err("Sign in required".into()),
+                cx,
+            );
+            generation
+        })
+        .unwrap();
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    let retry = visual.debug_bounds("settings-retry-models-codex").unwrap();
+    visual.simulate_click(retry.center(), Default::default());
+    visual.run_until_parked();
+    window
+        .update(visual, |view, _, cx| {
+            let state = &view.provider_models[&Kind::Codex];
+            assert!(state.loading);
+            assert!(state.error.is_none());
+            let generation = state.generation;
+            assert!(generation > old_generation);
+            view.provider_models_finished(
+                Kind::Codex,
+                old_generation,
+                Ok(vec![("stale-model".into(), "Stale model".into())]),
+                cx,
+            );
+            assert!(view.provider_models[&Kind::Codex].models.is_empty());
+            view.provider_models_finished(Kind::Codex, generation, Ok(vec![]), cx);
+        })
+        .unwrap();
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("settings-retry-models-codex").is_some());
+    window
+        .update(visual, |view, _, cx| {
+            view.discovery.binaries[0].1 = Some("/fixture/new-codex".into());
+            view.load_provider_models(Kind::Codex, false, cx);
+            let state = &view.provider_models[&Kind::Codex];
+            assert!(state.loading);
+            assert_eq!(state.binary, std::path::PathBuf::from("/fixture/new-codex"));
+            assert!(state.generation > old_generation);
+            let previous_account_generation = state.generation;
+            view.provider_models
+                .get_mut(&Kind::Codex)
+                .unwrap()
+                .profile
+                .id = "other-account".into();
+            view.load_provider_models(Kind::Codex, false, cx);
+            assert_eq!(
+                view.provider_models[&Kind::Codex].profile,
+                Default::default()
+            );
+            view.provider_models_finished(
+                Kind::Codex,
+                previous_account_generation,
+                Ok(vec![("other-account-model".into(), "Other account".into())]),
+                cx,
+            );
+            assert!(view.provider_models[&Kind::Codex].models.is_empty());
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn skills_document_has_its_own_full_height_pane_and_compact_actions(cx: &mut TestAppContext) {
     let window = window(Section::Skills, cx);
     window

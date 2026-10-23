@@ -80,6 +80,7 @@ impl SettingsView {
         let binaries = self.discovery.binaries.clone();
         let mut clis = Vec::new();
         for (index, kind) in Kind::ALL.into_iter().enumerate() {
+            self.load_provider_models(kind, false, cx);
             let installed = binaries
                 .iter()
                 .find(|(k, _)| *k == kind)
@@ -97,11 +98,11 @@ impl SettingsView {
             let locked = scope != "global" && globally_hidden;
             let visible = !globally_hidden
                 && !project.is_some_and(|p| p.hidden.iter().any(|id| id == kind.id()));
-            let models = self
-                .ctx
-                .catalogs
-                .get(kind.id())
-                .cloned()
+            let catalog = self.provider_models.get(&kind);
+            let loading_models = catalog.is_some_and(|catalog| catalog.loading);
+            let model_error = catalog.and_then(|catalog| catalog.error.clone());
+            let models = catalog
+                .map(|catalog| catalog.models.clone())
                 .unwrap_or_default();
             let selected_model = project
                 .and_then(|p| p.models.get(kind.id()))
@@ -189,13 +190,20 @@ impl SettingsView {
                 )
                 .into_any_element(),
             ];
-            if let Some(model) = &selected_model {
+            if installed.is_some() || selected_model.is_some() {
+                let placeholder = if loading_models {
+                    "Loading models…"
+                } else if model_error.is_some() {
+                    "Models unavailable"
+                } else {
+                    "No models available"
+                };
                 controls.insert(
                     0,
                     self.select(
                         kind.id(),
                         kind.label(),
-                        model,
+                        selected_model.as_deref().unwrap_or(placeholder),
                         models
                             .iter()
                             .map(|(id, name)| (id.clone(), SharedString::from(name.clone()), None))
@@ -217,6 +225,27 @@ impl SettingsView {
                             });
                         },
                     ),
+                );
+            }
+            if installed.is_some()
+                && !loading_models
+                && (models.is_empty() || model_error.is_some())
+            {
+                controls.insert(
+                    1,
+                    secondary_button(
+                        SharedString::from(format!("retry-models-{}", kind.id())),
+                        format!("Retry loading {} models", kind.label()),
+                        false,
+                        false,
+                    )
+                    .debug_selector(move || format!("settings-retry-models-{}", kind.id()))
+                    .child("Retry")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.load_provider_models(kind, true, cx);
+                        cx.notify();
+                    }))
+                    .into_any_element(),
                 );
             }
             if installed.is_some() {
@@ -261,6 +290,15 @@ impl SettingsView {
             }
             let description = installed
                 .map(|_| {
+                    if let Some(error) = &model_error {
+                        return format!("Could not load models: {error}");
+                    }
+                    if loading_models {
+                        return "Loading models…".into();
+                    }
+                    if models.is_empty() {
+                        return "No models available. Retry to check again.".into();
+                    }
                     format!(
                         "{} {} available.",
                         models.len(),
