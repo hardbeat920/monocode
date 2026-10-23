@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Choose where new worktrees are created** in Settings > Worktrees. A worktree folder applies to every project, with each project's worktrees in a subfolder named after it, and a project can have its own folder instead. Left unset, worktrees are still created in `<repo>-worktrees` beside the repository.
+
 ## [0.16.0] - 2026-10-19
 
 ### Added

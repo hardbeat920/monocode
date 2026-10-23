@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useReducer, useState } from "react";
 import { CreateWorktreeDialog } from "./CreateWorktreeDialog";
 import { DeleteWorktreeDialog } from "./DeleteWorktreeDialog";
 import { SearchableProjectPicker } from "../../projects/ui/SearchableProjectPicker";
@@ -11,7 +11,11 @@ import {
   RefreshCw,
   Trash2,
 } from "../../../shared/ui/icons";
-import { revealPath } from "../../../platform/tauri/fs";
+import {
+  notifyGitChanged,
+  pickFolder,
+  revealPath,
+} from "../../../platform/tauri/fs";
 import { useProjectWorktrees } from "../hooks/useProjectWorktrees";
 import { isEqualOrInside, pathKey, prettyCwd, projectName } from "../../../shared/lib/paths";
 import { loadArchivedProjects, type RecentProject } from "../../projects/model/recents";
@@ -22,6 +26,12 @@ import {
   type RemoveWorktree,
   type Worktree,
 } from "../model/worktrees";
+import {
+  loadProjectWorktreesFolder,
+  loadWorktreesFolder,
+  saveProjectWorktreesFolder,
+  saveWorktreesFolder,
+} from "../model/worktreeLocation";
 
 export function WorktreesPage({
   cwd,
@@ -64,12 +74,37 @@ export function WorktreesPage({
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState<Worktree>();
   const [refreshingAfterFailure, setRefreshingAfterFailure] = useState(false);
+  const [globalFolder, setGlobalFolder] = useState(loadWorktreesFolder);
+  // Re-reads the project folder after saving it.
+  const [, rerender] = useReducer((n: number) => n + 1, 0);
+  const mainPath = data?.worktrees.find((tree) => tree.isMain)?.path;
+  // Read on every render so switching projects shows that project's folder.
+  const projectFolder = mainPath ? loadProjectWorktreesFolder(mainPath) : null;
+  const changeGlobalFolder = (folder: string | null) => {
+    saveWorktreesFolder(folder);
+    setGlobalFolder(folder);
+    notifyGitChanged();
+  };
+  const changeProjectFolder = (folder: string | null) => {
+    if (!mainPath) return;
+    saveProjectWorktreesFolder(mainPath, folder);
+    rerender();
+    notifyGitChanged();
+  };
   return (
     <div
       data-setting-id="project-worktrees"
       id="setting-project-worktrees"
       className="flex flex-col gap-4"
     >
+      <div className="overflow-hidden rounded-xl border border-stroke">
+        <FolderSetting
+          label="Worktree folder"
+          description="New worktrees go in this folder, under the project's name. Unset, they go beside each project."
+          folder={globalFolder}
+          onChange={changeGlobalFolder}
+        />
+      </div>
       <div className="flex flex-wrap items-center gap-1">
         <SearchableProjectPicker
           cwd={project || "~"}
@@ -92,6 +127,16 @@ export function WorktreesPage({
           Create worktree
         </button>
       </div>
+      {mainPath && (
+        <div className="overflow-hidden rounded-xl border border-stroke">
+          <FolderSetting
+            label="Folder for this project"
+            description={`Overrides the worktree folder for ${projectName(mainPath)}. New worktrees go directly in it.`}
+            folder={projectFolder}
+            onChange={changeProjectFolder}
+          />
+        </div>
+      )}
       <div className="flex items-center justify-between gap-3">
         <p className="min-w-0 flex-1 text-[12px] text-content/50">
           Sessions can share a worktree. Deleting one keeps its sessions by
@@ -294,6 +339,62 @@ export function WorktreesPage({
             refresh();
           }}
         />
+      )}
+    </div>
+  );
+}
+
+function FolderSetting({
+  label,
+  description,
+  folder,
+  onChange,
+}: {
+  label: string;
+  description: string;
+  folder: string | null;
+  onChange: (folder: string | null) => void;
+}) {
+  const [error, setError] = useState<string>();
+  const choose = async () => {
+    setError(undefined);
+    try {
+      const picked = await pickFolder(label);
+      if (picked) onChange(picked);
+    } catch (e) {
+      const message = String(e);
+      setError(message);
+    }
+  };
+  return (
+    <div className="flex items-start gap-3 p-4">
+      <div className="min-w-0 flex-1">
+        <p className="text-[13px] font-medium">{label}</p>
+        <p className="mt-1 text-[12px] text-content/50">{description}</p>
+        <p className="mt-2 break-all text-[11px] text-content/55">
+          {folder ? prettyCwd(folder) : "Not set"}
+        </p>
+        {error && (
+          <p role="alert" className="mt-1 break-words text-[11px] text-red-400">
+            {error}
+          </p>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={() => void choose()}
+        className="flex h-7 shrink-0 items-center rounded-md bg-content/8 px-2 text-[11px] text-content/65 hover:bg-content/12 active:scale-[0.97]"
+      >
+        Choose…
+      </button>
+      {folder && (
+        <button
+          type="button"
+          onClick={() => onChange(null)}
+          className="flex h-7 shrink-0 items-center rounded-md px-2 text-[11px] text-content/65 hover:bg-content/12 active:scale-[0.97]"
+        >
+          Reset
+        </button>
       )}
     </div>
   );

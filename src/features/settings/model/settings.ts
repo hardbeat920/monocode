@@ -148,7 +148,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     group: "workspace",
     label: "Worktrees",
     description: "Manage additional worktrees for each project.",
-    keywords: "git branch worktree working copy project create delete",
+    keywords: "git branch worktree working copy project create delete folder location path",
   },
 ];
 
@@ -216,7 +216,7 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     id: "project-worktrees",
     section: "worktrees",
     label: "Project worktrees",
-    keywords: "git branch working copy create delete manage",
+    keywords: "git branch working copy create delete manage folder location path",
   },
   {
     id: "update",
