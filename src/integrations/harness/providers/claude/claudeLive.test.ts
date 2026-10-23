@@ -863,6 +863,44 @@ describe("claude assistant message boundaries", () => {
   });
 });
 
+describe("claude turn metrics", () => {
+  const speedResult = {
+    type: "result",
+    subtype: "success",
+    session_id: "sess_1",
+    duration_ms: 60_000,
+    duration_api_ms: 2_000,
+    usage: { output_tokens: 100 },
+    modelUsage: { "claude-sonnet-5": { outputTokens: 100 } },
+  };
+  const metricsOf = (events: HarnessEvent[]) =>
+    events.find((event) => event.type === "turn.metrics");
+
+  it("measures output speed over model time, not the whole turn", async () => {
+    const { events, turn } = await startTurn("s1");
+    emit(speedResult);
+    await turn;
+    expect(metricsOf(events)).toMatchObject({
+      outputTokens: 100,
+      outputTokensPerSecond: 50,
+    });
+  });
+
+  it("leaves speed out when a resumed process carries earlier totals", async () => {
+    bindClaudeSession("s1", "sess_1", "/repo");
+    const { events, turn } = await startTurn("s1");
+    expect(spawned.at(-1)).toEqual(
+      expect.arrayContaining(["--resume", "sess_1"]),
+    );
+    emit(speedResult);
+    await turn;
+    expect(metricsOf(events)).toEqual({
+      type: "turn.metrics",
+      outputTokens: 100,
+    });
+  });
+});
+
 describe("claude model switching", () => {
   it("restarts a named account with the new model while resuming the provider conversation", async () => {
     const first = await startTurn("s1", {
