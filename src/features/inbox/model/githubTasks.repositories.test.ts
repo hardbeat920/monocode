@@ -1,8 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { setRemoteCommandRunner } from "../../../platform/tauri/fs";
 import {
   clearInboxCache,
   githubPrDiff,
+  githubRepo,
   githubRepositories,
   githubWorkItemComment,
   githubWorkItemDetails,
@@ -231,4 +233,36 @@ describe("repository-qualified GitHub item operations", () => {
       inReplyTo: "",
     });
   });
+
+  it("routes repository discovery for remote projects through remoteCommandRunner", async () => {
+    const remoteCalls: Array<{ command: string; args: Record<string, unknown> }> = [];
+    setRemoteCommandRunner(async (command, args) => {
+      remoteCalls.push({ command, args: args as Record<string, unknown> });
+      if (command === "git_github_repositories") {
+        return ["remote-owner/remote-repo"];
+      }
+      if (command === "git_github_repo") {
+        return "remote-owner/remote-repo";
+      }
+      throw new Error(`Unexpected remote command: ${command}`);
+    });
+
+    const repos = await githubRepositories("remote://env-1/home/user/project");
+    expect(repos).toEqual(["remote-owner/remote-repo"]);
+    expect(remoteCalls).toHaveLength(1);
+    expect(remoteCalls[0]).toEqual({
+      command: "git_github_repositories",
+      args: { cwd: "remote://env-1/home/user/project" },
+    });
+    expect(invoke).not.toHaveBeenCalled();
+
+    const repo = await githubRepo("remote://env-1/home/user/other");
+    expect(repo).toBe("remote-owner/remote-repo");
+    expect(remoteCalls).toHaveLength(2);
+    expect(remoteCalls[1]).toEqual({
+      command: "git_github_repo",
+      args: { cwd: "remote://env-1/home/user/other" },
+    });
+  });
 });
+
