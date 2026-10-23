@@ -25,7 +25,7 @@ import {
 import { selectedWorkspace } from "@/features/connection/selection";
 import type { ModelCatalog, ModelChoice } from "@/features/models/types";
 import { toWire, type Attachment } from "@/features/sessions/attachments";
-import type { Message, Mono, Project, SessionSummary, Turn, TurnItem } from "./types";
+import type { Message, Mono, Project, RequestReply, SessionRequest, SessionSummary, Turn, TurnItem } from "./types";
 import { applyFrames, type WatchFrame } from "./watchUpdates";
 /**
  * The workspace: what the desktop has and what can be done with it. Changes
@@ -65,6 +65,8 @@ type Workspace = {
   configureSession: (conversationId: string, choice: Partial<ModelChoice>) => Promise<void>;
   /** Renames a session as the desktop sidebar does; the new title shows at once. */
   renameSession: (session: SessionSummary, title: string) => Promise<void>;
+  /** Answers what a session waits on, as the desktop's approval card and question form do. */
+  respondToRequest: (conversationId: string, reply: RequestReply) => Promise<void>;
   /** Deletes a session on the desktop. It leaves every list at once, and comes
    *  back if the desktop refuses. */
   deleteSession: (conversationId: string) => Promise<void>;
@@ -90,6 +92,8 @@ type Live = {
 type Status = {
   busy: Record<string, boolean>;
   errors: Record<string, string>;
+  /** What each watched conversation waits on the user for, from its stream. */
+  requests: Record<string, SessionRequest | null>;
 };
 export type SessionPage = { sessions: SessionSummary[]; hasMore: boolean };
 /** Narrows a page to sessions active since a time, and without some providers.
@@ -168,6 +172,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     turnsRef.current = turns;
   }, [turns]);
   const [busy, setBusy] = useState<Record<string, boolean>>({});
+  const [requests, setRequests] = useState<Record<string, SessionRequest | null>>({});
   const [pending, setPending] = useState<Record<string, PendingSend>>({});
   const nativeUserCounts = useRef<Record<string, number>>({});
   const nativeLastUsers = useRef<Record<string, string | null>>({});
@@ -184,6 +189,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   // rename holds only while the desktop still has the title it replaced.
   const [renamed, setRenamed] = useState<Record<string, { title: string; from: string }>>({});
   const [deleted, setDeleted] = useState<ReadonlySet<string>>(new Set());
+  // Requests answered here, by session, until the catalog stops carrying them.
+  const [answered, setAnswered] = useState<Record<string, number>>({});
   const [watching, watch] = useState<string | null>(null);
   // Conversations showing turns from the disk cache, until the desktop's arrive.
   // They may be long out of date, so a watch opens on the latest turns rather
@@ -208,6 +215,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       setPending((previous) => withoutConfirmedPending(previous, id, received));
       if (countUserItems(received) > 0) starting.current.delete(id);
       setBusy((previous) => withValue(previous, id, result.busy));
+      if (result.request !== undefined) setRequests((previous) => withValue(previous, id, result.request!));
       // A read carries the whole conversation.
       setWindowOlder((previous) => withValue(previous, id, false));
       setErrors((previous) => withoutKey(previous, id));
@@ -254,6 +262,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       setPending((previous) => withoutConfirmedPending(previous, id, applied.turns));
       if (countUserItems(applied.turns) > 0) starting.current.delete(id);
       if (applied.busy !== undefined) setBusy((previous) => withValue(previous, id, applied.busy!));
+      if (applied.request !== undefined)
+        setRequests((previous) => withValue(previous, id, applied.request!));
       if (applied.older !== undefined)
         setWindowOlder((previous) => withValue(previous, id, applied.older!));
       const error = applied.error && !startupCatalogError(starting.current, id, applied.error)
@@ -473,6 +483,18 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     },
     [mutate, refresh],
   );
+  const respondToRequest = useCallback(
+    async (conversationId: string, reply: RequestReply) => {
+      await mutate("decision" in reply ? "session.approve" : "session.answer", {
+        conversationId,
+        ...reply,
+      });
+      setAnswered((previous) => ({ ...previous, [conversationId]: reply.requestId }));
+      setRequests((previous) => withValue(previous, conversationId, null));
+      void refresh();
+    },
+    [mutate, refresh],
+  );
   const removeSession = useCallback(
     async (method: "session.delete" | "session.archive", conversationId: string) => {
       setDeleted((previous) => new Set(previous).add(conversationId));
@@ -547,12 +569,16 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const workspace = useMemo<Workspace>(() => {
     const selected = selectedWorkspace(catalog, selection);
     const known = new Set(selected.sessions.map((session) => session.id));
-    const edited = (session: SessionSummary) =>
-      deleted.has(session.id)
-        ? null
-        : renamed[session.id]?.from === session.title
+    const edited = (session: SessionSummary) => {
+      if (deleted.has(session.id)) return null;
+      const titled =
+        renamed[session.id]?.from === session.title
           ? { ...session, title: renamed[session.id].title }
           : session;
+      if (titled.request?.requestId !== answered[session.id]) return titled;
+      const { request: _request, waiting: _waiting, ...rest } = titled;
+      return rest;
+    };
     return {
       projects: selected.projects,
       monos: selected.monos,
@@ -570,6 +596,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       listModels,
       configureSession,
       renameSession,
+      respondToRequest,
       deleteSession,
       archiveSession,
       edited,
@@ -578,6 +605,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   }, [
     renamed,
     deleted,
+    answered,
     catalog,
     selection,
     remembered,
@@ -590,6 +618,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     listModels,
     configureSession,
     renameSession,
+    respondToRequest,
     deleteSession,
     archiveSession,
     nativeTranscriptStatus,
@@ -598,7 +627,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     () => ({ messages, turns, pending, history, windowOlder }),
     [messages, turns, pending, history, windowOlder],
   );
-  const status = useMemo<Status>(() => ({ busy, errors }), [busy, errors]);
+  const status = useMemo<Status>(() => ({ busy, errors, requests }), [busy, errors, requests]);
   return (
     <WorkspaceContext value={workspace}>
       <StatusContext value={status}>
@@ -636,6 +665,8 @@ export function useConversation(id: string | null, watching = true) {
   }, [id, watch, watching]);
   return {
     busy: id ? !!status.busy[id] : false,
+    /** Undefined until the stream says, as from an older desktop: use the catalog then. */
+    request: id ? status.requests[id] : undefined,
     error: id ? (status.errors[id] ?? null) : null,
   };
 }

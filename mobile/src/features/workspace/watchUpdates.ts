@@ -1,4 +1,4 @@
-import type { Turn } from "./types";
+import type { SessionRequest, Turn } from "./types";
 
 /** A frame of a watched conversation, from the desktop's watchUpdate. */
 export type WatchFrame = {
@@ -9,6 +9,8 @@ export type WatchFrame = {
   turns?: Turn[];
   patches?: { id: string; edits: WatchEdit[] }[];
   error?: string;
+  /** What it waits on the user for, null once nothing; absent from an older desktop. */
+  request?: SessionRequest | null;
 };
 
 type WatchEdit = {
@@ -74,11 +76,18 @@ function editValue(value: unknown, edit: WatchEdit, depth = 0): unknown {
 export function applyFrames(
   previous: Turn[],
   frames: WatchFrame[],
-): { turns: Turn[]; busy?: boolean; older?: boolean; error?: string } | null {
+): {
+  turns: Turn[];
+  busy?: boolean;
+  older?: boolean;
+  error?: string;
+  request?: SessionRequest | null;
+} | null {
   let turns = previous;
   let busy: boolean | undefined;
   let older: boolean | undefined;
   let error: string | undefined;
+  let request: SessionRequest | null | undefined;
   for (const frame of frames) {
     if (frame.error) {
       error = frame.error;
@@ -87,6 +96,7 @@ export function applyFrames(
     error = undefined;
     if (frame.busy !== undefined) busy = frame.busy;
     if (frame.older !== undefined) older = frame.older;
+    if (frame.request !== undefined) request = frame.request;
     if (!frame.order) continue;
     const known = new Map(turns.map((turn) => [turn.id, turn]));
     for (const turn of frame.turns ?? []) known.set(turn.id, turn);
@@ -113,5 +123,5 @@ export function applyFrames(
         ? turns
         : next;
   }
-  return { turns, busy, older, error };
+  return { turns, busy, older, error, request };
 }

@@ -8,6 +8,7 @@ import {
   mobileNewSession,
   mobileProjectId,
 } from "../features/mobile/model/mobileWorkspace";
+import { mobileQuestionReply } from "../features/mobile/model/mobileRequest";
 import { readMonoConversation } from "../features/monos/model/monoConversation";
 import {
   resumeMonoUsageLimit,
@@ -9134,6 +9135,21 @@ function Workspace({
           onModelSettingsChange(session.id, mergeModelSettings(resolved, choice.modelSettings));
         }
         if (choice.runtimeMode) onRuntimeModeChange(session.id, choice.runtimeMode);
+        return { sessionId: session.id };
+      }
+      // The phone answers through the desktop's own approval card and question form handlers.
+      if (method === "session.approve") {
+        const requestId = Number(params.requestId);
+        if (!session.blocks.some((block) => block.approval?.requestId === requestId && !block.approval.decided))
+          throw new Error("This request was already answered");
+        onApproval(session.id, requestId, params.decision === "allow" ? "allow" : "deny");
+        return { sessionId: session.id };
+      }
+      if (method === "session.answer") {
+        const question = session.pendingQuestion;
+        if (!question || question.requestId !== Number(params.requestId))
+          throw new Error("This question was already answered");
+        onQuestionReply(session.id, question.requestId, mobileQuestionReply(question.questions, params));
         return { sessionId: session.id };
       }
       if (method !== "conversation.send") throw new Error("Unsupported mobile command");

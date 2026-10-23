@@ -6,6 +6,8 @@ export type WatchBaseline = {
   older: boolean;
   order: string[];
   turns: Map<string, string>;
+  /** What the conversation waits on the user for, as JSON. */
+  request?: string;
 };
 
 /** Paths use JSON array indexes; append offsets count UTF-16 code units. */
@@ -68,9 +70,10 @@ function editsBetween(
  */
 export function watchUpdate(
   baseline: WatchBaseline | null,
-  conversation: { busy: boolean; older: boolean; turns: MobileTurn[] },
+  conversation: { busy: boolean; older: boolean; turns: MobileTurn[]; request?: unknown },
   incremental = false,
 ): { update: object; baseline: WatchBaseline } | null {
+  const request = JSON.stringify(conversation.request ?? null);
   const turns = new Map(
     conversation.turns.map((turn) => [turn.id, JSON.stringify(turn)]),
   );
@@ -82,6 +85,7 @@ export function watchUpdate(
     baseline &&
     baseline.busy === conversation.busy &&
     baseline.older === conversation.older &&
+    baseline.request === request &&
     changed.length === 0 &&
     baseline.order.length === order.length &&
     baseline.order.every((id, index) => id === order[index])
@@ -114,8 +118,10 @@ export function watchUpdate(
       order,
       turns: replaced,
       ...(patches.length ? { patches } : {}),
+      // Only when it changes; an older phone ignores it and reads the catalog's.
+      ...(baseline?.request !== request ? { request: conversation.request ?? null } : {}),
     },
-    baseline: { busy, older, order, turns },
+    baseline: { busy, older, order, turns, request },
   };
 }
 

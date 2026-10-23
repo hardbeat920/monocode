@@ -159,6 +159,9 @@ vi.mock("@/features/sessions/Composer", () => ({
 vi.mock("@/features/sessions/EmptySession", () => ({
   EmptySession: () => null,
 }));
+vi.mock("@/features/sessions/SessionRequest", () => ({
+  SessionRequestCard: () => null,
+}));
 vi.mock("@/features/sessions/sessionError", () => ({
   useSessionErrorNotice: () => null,
   useReportSessionError: () => {},
