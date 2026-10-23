@@ -2933,7 +2933,24 @@ function Workspace({
         current.providerAccountId ?? DEFAULT_PROVIDER_ACCOUNT_ID;
       if (currentId === accountId) return;
 
-      // Provider thread ids are account-owned. Keep the current conversation
+      // Claude carries the transcript over to the selected profile, so the
+      // same conversation continues there with its next request.
+      if (current.harness === "claude" && !current.busy) {
+        updateSessionState(sessionsRef, setSessions, (sessions) =>
+          sessions.map((session) =>
+            session.id === current.id
+              ? {
+                  ...session,
+                  providerAccountId: accountId,
+                  usageLimit: undefined,
+                }
+              : session,
+          ),
+        );
+        return;
+      }
+
+      // Other providers' thread ids are account-owned. Keep the current conversation
       // pinned to its account and open a clean one for the selected profile.
       const session = {
         ...newSession(
