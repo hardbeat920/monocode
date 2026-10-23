@@ -1,0 +1,101 @@
+{
+  "expo": {
+    "name": "MonoCode",
+    "slug": "monocode-mobile",
+    "owner": "hardbeat920",
+    "version": "1.0.0",
+    "runtimeVersion": {
+      "policy": "fingerprint"
+    },
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "monocode",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "icon": "./assets/app.icon",
+      "bundleIdentifier": "com.hardbeat920.monocode-mobile",
+      "infoPlist": {
+        "CFBundleDisplayName": "Monocode",
+        "NSLocalNetworkUsageDescription": "Connect securely to your paired Monocode desktop."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#000000",
+        "foregroundImage": "./assets/images/android-icon-foreground.png",
+        "backgroundImage": "./assets/images/android-icon-background.png",
+        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
+      ]
+    },
+    "web": {
+      "output": "static",
+      "favicon": "./assets/images/favicon.png"
+    },
+    "plugins": [
+      "./plugins/with-local-notifications",
+      "./plugins/with-scene-lifecycle",
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#000000",
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 76
+        }
+      ],
+      "expo-secure-store",
+      "expo-sqlite",
+      [
+        "expo-sensors",
+        {
+          "motionPermission": false
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Scan the pairing code from your Monocode desktop.",
+          "recordAudioAndroid": false,
+          "barcodeScannerEnabled": true
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Choose photos to attach to messages, or as the background of new sessions.",
+          "cameraPermission": "Scan the pairing code from your Monocode desktop."
+        }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Dictate messages to your Monocode sessions.",
+          "recordAudioAndroid": false,
+          "enableBackgroundRecording": false,
+          "enableBackgroundPlayback": false
+        }
+      ],
+      "expo-asset"
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "f80fe97b-6056-48a4-9fb2-b45ca2c8974b"
+      }
+    },
+    "updates": {
+      "url": "https://u.expo.dev/f80fe97b-6056-48a4-9fb2-b45ca2c8974b"
+    }
+  }
+}

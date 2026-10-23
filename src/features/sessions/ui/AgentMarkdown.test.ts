@@ -197,3 +197,18 @@ describe("AgentMarkdown local media", () => {
     expect(markup).toContain(">Open the screenshot</a>");
   });
 });
+
+describe("AgentMarkdown document images", () => {
+  it("drops relative images in chat, Markdown or HTML", () => {
+    const markup = renderToStaticMarkup(
+      createElement(AgentMarkdown, {
+        text: '![Shot](shot.png)\n\n<p align="center"><img src=".github/readme/hero.png" alt="Hero"></p>',
+        cwd: "/repo",
+      }),
+    );
+
+    expect(markup).not.toContain("data-document-image");
+    expect(markup).not.toContain("<img");
+    expect(markup).not.toContain("data-image-alt");
+  });
+});

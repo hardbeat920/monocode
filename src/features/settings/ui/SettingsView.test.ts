@@ -8,9 +8,12 @@ import { SettingsView } from "./SettingsView";
 import { rememberNotificationProjects } from "../../notifications/model/notificationProjects";
 import {
   SETTINGS_INDEX,
+  CLASSIC_LAYOUT_HIDDEN_SETTINGS,
+  INSET_LAYOUT_HIDDEN_SETTINGS,
   SETTINGS_SECTIONS,
   type SettingsSectionId,
 } from "../model/settings";
+import { loadInsetLayout } from "../model/appearance";
 import {
   providerAccounts,
   saveProviderAccount,
@@ -108,7 +111,10 @@ beforeEach(() => {
   document.body.append(container);
   root = createRoot(container);
   onSelectSection = vi.fn();
-  vi.mocked(invoke).mockReset().mockResolvedValue(undefined);
+  vi.mocked(invoke).mockReset().mockImplementation(async command => command === "mobile_status" ? {
+    enabled: false, listening: false, name: "Desktop", fingerprint: null,
+    openRouter: true, remoteAddress: "", routerStatus: "Off", addresses: [], devices: [],
+  } : undefined);
   resetBrowserStore(browserState());
 });
 
@@ -775,6 +781,9 @@ describe("settings pages", () => {
     "renders every indexed setting on the $section page",
     async ({ section }) => {
       await render(section);
+      const hidden = loadInsetLayout()
+        ? INSET_LAYOUT_HIDDEN_SETTINGS
+        : CLASSIC_LAYOUT_HIDDEN_SETTINGS;
       const rendered = new Set(renderedSettingIds());
       // Some browser rows belong to one browser mode only.
       if (section === "browser") {
@@ -789,7 +798,7 @@ describe("settings pages", () => {
         for (const id of renderedSettingIds()) rendered.add(id);
       }
       const expected = SETTINGS_INDEX.filter(
-        (entry) => entry.section === section,
+        (entry) => entry.section === section && !hidden.has(entry.id),
       ).map((entry) => entry.id);
       expect([...rendered].sort()).toEqual(expected.sort());
     },

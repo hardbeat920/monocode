@@ -7,6 +7,111 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-19
+
+### Added
+
+- Pair an iPhone from **Settings → Connections → Your phones** to browse projects and conversations, start and continue sessions, follow streamed replies, stop responses, and view code changes. The iPhone companion is currently an **invite-only TestFlight beta**.
+- Swipe between projects in the new sidebar.
+- Project and Inbox actions have keyboard-accessible context menus in the new sidebar.
+
+### Fixed
+
+- The new sidebar keeps **Open project** and **Settings** available before a project is selected.
+- The empty conversation view no longer scrolls a few pixels around the message input.
+- The message input's blurred background stays within its rounded corners on Windows.
+- Phone connections on Windows accept both IPv4 and IPv6.
+
+## [0.15.0] - 2026-10-18
+
+### Added
+
+- An optional **New layout** brings a redesigned sidebar, project switcher, workspace tabs and right panel. Try it from the invitation or Settings > Appearance > Layout, where it can also be turned off to return to the classic layout. Glass remains a separate setting.
+- A **Resource pressure** indicator in the usage footer opens a process view with CPU and memory usage, controls to stop agents and sessions, and controls to stop individual running tools. In #1045 by @hardbeat920.
+- **Smooth text reveal** in Settings → Chat controls whether incoming reply bursts appear gradually or immediately. It is enabled by default. In #1045 by @hardbeat920.
+- The new layout's right panel has a **History** tab with a searchable, refreshable Git history graph. Its tabs can be dragged to reorder.
+- A session that hits a usage limit can **continue on another provider account**. Claude and Codex conversations are copied to the chosen account so the same session resumes there; if the copy fails, it continues from a handoff summary.
+- Sessions started by an operator are grouped under the session that started them in the sidebar.
+
+### Changed
+
+- The footer's **High usage** warning opens a compact view of running sessions, with one Stop button per session. Process details expand when needed, and long lists scroll inside the dialog.
+- Large conversations and busy workspaces stay more responsive: recent transcripts retain their rendered state across tab switches, code highlighting and large diffs run in workers, and navigation avoids unnecessary layout measurements. Large tool output loads when expanded. In #1045 by @hardbeat920.
+- Background Git work and agent tool processes receive lower scheduling priority where supported. Resource pressure reduces retained transcript memory while preserving session history. In #1045 by @hardbeat920.
+- In the new layout, the **terminal panel and split panes slide** open and closed, pushing the workspace aside. A file pane slides in with its tabs and fades its contents in once loaded.
+- Code in the editor, diffs, and replies uses the **VS Code Dark+ and Light+** colors, with a shared code font size for the editor and diffs.
+- Review tabs stay open across editor navigation, keeping their folds and scroll position. Unified diffs render faster, with syntax highlighting in the background, and commit diffs are not refetched when shown again.
+- In the new layout, the session sidebar shortcut (⌘⇧B) toggles the right panel, and Inbox, Notes, and Automations show the active project's items.
+- Glass in the new layout uses native macOS blur.
+- Session review cards and the message queue have lighter, more consistent styling.
+
+### Fixed
+
+- Turning off **Transparent window** keeps the new layout opaque when themes change, including native appearance updates before the layout has mounted. The setting now clearly describes its transparency behavior.
+- Completing a reply, changing a file pane's width, or returning to a cached conversation preserves the reader's position and keeps a following conversation at its reply. Completed provider bursts continue their text reveal without jumping the transcript. In #1045 by @hardbeat920.
+- Session streaming avoids unnecessary background rerenders and repeated history work. Composer resizing and decorative transcript measurements no longer force repeated workspace layout during navigation. In #1045 by @hardbeat920.
+- Notification sounds suspend their audio context after playback finishes, reducing idle resource use. In #1045 by @hardbeat920.
+- Moving focus no longer rechecks the whole page's styles, which took about 45 ms with a long transcript open. In #1038 by @zcy22606.
+- Agent tool calls no longer rebuild every open composer's @-mention index when nothing on disk changed. In #1029 by @zcy22606.
+- Keystrokes no longer search the whole page for an active shortcut recorder. In #1028 by @zcy22606.
+- Revisiting a tab no longer replays its transcript animations.
+- Closing tabs around Mono and app view tabs keeps the right workspace visible, and switching between them no longer flickers.
+- Title bars and the project rail leave room for the window controls in macOS full screen.
+- Model pickers and popovers fit short or zoomed windows without clipping rows.
+- Empty sessions lay out correctly in narrow or short panes.
+- Translucent cards render without flicker on macOS.
+
+
+## [0.14.0] - 2026-10-17
+
+### Added
+
+- The Mono overview has an **Activity** tab showing its current work and completed activity. Reports from habit runs also list the sessions they started.
+- Project groups in the rail support **drag to reorder**. In #787 by @nwoolls.
+- The compact rail has instant hover tooltips and an unseen-reply dot on its Sessions tab.
+- Remote hosts can run on **Linux without systemd**, including containers and Firecracker microVMs. Setup uses a detached background process there and reconnecting starts it again if needed; machines with systemd keep their user service and lingering. In #990 by @pdparchitect.
+- The workspace tab context menu has **Close All Tabs**, with the same unsaved-file and terminal confirmations as the File menu. In #1005 by @pdparchitect.
+- Syntax highlighting supports **Vue, Svelte, SCSS, Sass, and Less files**. In #892 by @RealDewKJ.
+- The editor highlights **.env files**. In #915 by @MrWeb.
+- Terminal hyperlinks can be clicked to open them. In #782 by @nwoolls.
+- Notification sounds also play when an agent asks a question or needs approval. In #801 by @kartava.
+- The keybindings settings list the Escape shortcut for stopping a run. In #897 by @RealDewKJ.
+
+### Changed
+
+- Mono chats use a more compact composer and model controls in narrow panes. Replies no longer have bubble tails, the Mono introduction appears as an inline rail card, unread badges use the accent color, and document readers have tighter spacing.
+- Model pickers group **omp, Pi, and Hermes** models by provider. In #765 by @nwoolls.
+- Claude model labels make their versions easier to distinguish. In #937 by @oskar-albers.
+- Pi and Codex turn token totals include every request in the turn. In #884 by @zcy22606.
+- Previewable files remember the last **Preview or Source** choice. In #929 by @ognjeeen.
+
+### Fixed
+
+- Typing in a composer on macOS no longer rechecks the whole page's styles for each keystroke. In #985 by @zcy22606.
+- The composer runner stops its animation loop while its tab is in the background. In #975 by @zcy22606.
+- A blank session keeps the provider account selected for its own project. In #967 by @watzon.
+- Saved Claude model versions show their settings on first open. In #938 by @50BytesOfJohn.
+- omp model discovery loads extensions. In #846 by @Plume-coder.
+- Asynchronously registered Pi provider models are awaited during discovery. In #921 by @pchuri.
+- Skills remain discoverable when their 16 KiB preview ends partway through a UTF-8 character. In #978 by @keyCat.
+- Replayed Claude background-task notifications no longer end a resumed turn early. In #532 by @itizarsa.
+- A consumed handoff recap is not resent on later turns. In #880 by @zcy22606.
+- Refused fast mode is not reported as a session usage limit. In #958 by @zcy22606.
+- Punctuation-only assistant text does not create a transcript reply. In #763 by @Erickzao.
+- Sending a message during a running turn preserves its existing clock. In #1021 by @zcy22606.
+- Title-bar and Mono overview buttons keep consistent sizing, and branch and commit menus remain anchored to their controls.
+- A session whose worktree was deleted outside the app can select another checkout. In #883 by @zcy22606.
+- Remote session diffs use their linked worktree. In #887 by @santhiprakash.
+- Quoted Git diff paths are read literally. In #815 by @Slowper.
+- Git LFS works when MonoCode is launched from Finder: Git commands include Homebrew and other common install locations on their PATH, plus the terminal's PATH once available. In #1004 by @pdparchitect.
+- Selecting the **whole last paragraph** of a reply opens the Add to chat and Add to notes menu. In #1001 by @pdparchitect.
+- Wrapped diff lines place scrollbar change markers at their rendered positions. In #1002 by @pdparchitect.
+- **Markdown file previews** display local Markdown and HTML images, including centered headers, tables, and picture elements, while preserving dimensions and alignment. Paths resolve within the project; missing, invalid, remote, or out-of-project images fall back to their alt text. In #1027 by @pdparchitect.
+- Right-clicking empty window space no longer opens a native menu offering only **Reload**. Reload remains in the View menu, and controls keep their applicable native menus. In #1003 by @pdparchitect.
+- The footer's **Terminal** button toggles its panel and reflects its pressed state. In #784 by @rxchitrx.
+- HTML artifacts render their surface, muted, and border theme colors opaquely. In #1020 by @rxchitrx.
+- macOS development bundles retain correct version metadata. In #983 by @MRKups.
+
 ## [0.13.0] - 2026-10-12
 
 ### Added
@@ -1476,7 +1581,10 @@ First public release. macOS (Apple Silicon) only.
 - Updater endpoint and minisign public key are injected at release time rather than committed, so forks do not inherit the maintainer's update channel.
 - macOS release builds sign with `APPLE_SIGNING_IDENTITY` via a config overlay; the committed default remains ad-hoc `-` for community builds.
 
-[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/hardbeat920/monocode/compare/v0.15.0...v0.16.0
+[0.15.0]: https://github.com/hardbeat920/monocode/compare/v0.14.0...v0.15.0
+[0.14.0]: https://github.com/hardbeat920/monocode/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/hardbeat920/monocode/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/hardbeat920/monocode/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/hardbeat920/monocode/compare/v0.10.0...v0.11.0

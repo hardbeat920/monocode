@@ -9,11 +9,14 @@ export const MarkdownDocumentPreview = memo(function MarkdownDocumentPreview({
   metadataLabel,
   cwd,
   onOpenFile,
+  documentPath,
 }: {
   text: string;
   metadataLabel: string;
   cwd?: string;
   onOpenFile?: OpenFileFn;
+  /** The Markdown file shown, whose images load from the project, `cwd`. */
+  documentPath?: string;
 }) {
   const document = useMemo(() => splitMarkdownFrontmatter(text), [text]);
 
@@ -22,6 +25,7 @@ export const MarkdownDocumentPreview = memo(function MarkdownDocumentPreview({
       text={document.body}
       cwd={cwd}
       onOpenFile={onOpenFile}
+      documentPath={documentPath}
       hardBreaks
       header={
         document.metadata !== null ? (

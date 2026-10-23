@@ -758,7 +758,7 @@ pub async fn session_checkpoint_file_diff(
 ) -> Result<CheckpointFileDiff, String> {
     validate_id(&session_id, "session")?;
     let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::background_work::read(move || {
         store.exclusive(|store| store.file_diff(&session_id, &cwd, &relative))
     })
     .await

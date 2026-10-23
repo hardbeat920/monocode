@@ -1,5 +1,13 @@
 // @vitest-environment happy-dom
-import { act, createElement, startTransition, Suspense, useState } from "react";
+import {
+  act,
+  Component,
+  createElement,
+  startTransition,
+  Suspense,
+  useState,
+  type ReactNode,
+} from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { lazySurface } from "./lazySurface";
@@ -146,4 +154,84 @@ it("retries a failed warmup when the page is opened", async () => {
   await act(async () => root.render(createElement(Surface)));
   expect(load).toHaveBeenCalledTimes(2);
   expect(container.textContent).toBe("Inbox content");
+});
+
+it("renders a prefetched surface synchronously on its first mount", async () => {
+  const Surface = lazySurface(async () => ({
+    default: () => createElement("main", null, "Ready content"),
+  }));
+  await Surface.preload();
+  act(() => root.render(createElement(Surface)));
+  expect(container.textContent).toBe("Ready content");
+});
+
+it("retains a cold surface's state after loading and parent updates", async () => {
+  function Counter({ label }: { label: string }) {
+    const [count, setCount] = useState(0);
+    return createElement(
+      "button",
+      { onClick: () => setCount((current) => current + 1) },
+      `${label}: ${count}`,
+    );
+  }
+  const Surface = lazySurface(async () => ({ default: Counter }));
+  await act(async () =>
+    root.render(createElement(Surface, { label: "First" })),
+  );
+  act(() => container.querySelector("button")!.click());
+  act(() => root.render(createElement(Surface, { label: "Second" })));
+  expect(container.textContent).toBe("Second: 1");
+});
+
+it("shares a cold import and publishes readiness to every mounted surface", async () => {
+  const Component = ({ label }: { label: string }) =>
+    createElement("main", null, label);
+  let finish!: (module: { default: typeof Component }) => void;
+  const pending = new Promise<{ default: typeof Component }>((resolve) => {
+    finish = resolve;
+  });
+  const load = vi.fn(() => pending);
+  const Surface = lazySurface(load);
+  const render = (label: string) =>
+    root.render(
+      createElement(
+        "div",
+        null,
+        createElement(Surface, { label }),
+        createElement(Surface, { label: "Other" }),
+      ),
+    );
+  act(() => render("First"));
+  act(() => render("Latest"));
+  expect(load).toHaveBeenCalledOnce();
+  expect(container.querySelectorAll("main")).toHaveLength(0);
+  await act(async () => finish({ default: Component }));
+  expect(container.textContent).toBe("LatestOther");
+});
+
+it("reports a cold import failure to the surrounding error boundary", async () => {
+  class Boundary extends Component<
+    { children?: ReactNode },
+    { failed: boolean }
+  > {
+    state = { failed: false };
+    static getDerivedStateFromError() {
+      return { failed: true };
+    }
+    render() {
+      return this.state.failed ? "Load failed" : this.props.children;
+    }
+  }
+  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+  const Surface = lazySurface(async () => {
+    throw new Error("Cold import failed");
+  });
+  try {
+    await act(async () =>
+      root.render(createElement(Boundary, null, createElement(Surface))),
+    );
+    expect(container.textContent).toBe("Load failed");
+  } finally {
+    logged.mockRestore();
+  }
 });

@@ -42,6 +42,11 @@ import {
   saveDiffPalette,
   initAppearance,
   isLightScheme,
+  loadRightPanelTab,
+  saveRightPanelTab,
+  loadRightPanelTabOrder,
+  saveRightPanelTabOrder,
+  loadSidebarTabOrder,
 } from "./appearance";
 
 const KEY = "monocode.transcriptLayout";
@@ -79,6 +84,43 @@ function mockLocalStorage() {
     configurable: true,
   });
 }
+
+describe("right panel tabs", () => {
+  beforeEach(mockLocalStorage);
+
+  it("remembers Graph as the selected tab and falls back for unknown tabs", () => {
+    expect(loadRightPanelTab()).toBe("files");
+    saveRightPanelTab("graph");
+    expect(loadRightPanelTab()).toBe("graph");
+    localStorage.setItem("monocode.rightPanelTab", "unknown");
+    expect(loadRightPanelTab()).toBe("files");
+  });
+
+  it("adds Graph after the existing Explorer/Changes order", () => {
+    localStorage.setItem(
+      "monocode.sidebarTabOrder",
+      JSON.stringify(["sessions", "changes", "inbox", "files"]),
+    );
+    expect(loadRightPanelTabOrder()).toEqual(["changes", "files", "graph"]);
+  });
+
+  it("persists an independent order without changing the classic sidebar", () => {
+    const classic = loadSidebarTabOrder();
+    saveRightPanelTabOrder(["graph", "files", "changes"]);
+    expect(loadRightPanelTabOrder()).toEqual(["graph", "files", "changes"]);
+    expect(loadSidebarTabOrder()).toEqual(classic);
+  });
+
+  it("repairs partial, duplicate and invalid saved orders", () => {
+    localStorage.setItem(
+      "monocode.rightPanelTabOrder",
+      JSON.stringify(["graph", "unknown", "graph"]),
+    );
+    expect(loadRightPanelTabOrder()).toEqual(["graph", "files", "changes"]);
+    localStorage.setItem("monocode.rightPanelTabOrder", "invalid JSON");
+    expect(loadRightPanelTabOrder()).toEqual(["files", "changes", "graph"]);
+  });
+});
 
 describe("accent color setting", () => {
   beforeEach(mockLocalStorage);

@@ -5,6 +5,11 @@
 
 @custom-variant dark (&:where(html:not(.theme-light), html:not(.theme-light) *));
 
+/* Tailwind's own `:is(:where(.group):focus-within *)` hides `.group` from
+   WebKit's invalidation, so every focus move rechecks the whole page. With
+   the whole group inside `:where()` WebKit keys the rule on `.group`. */
+@custom-variant group-focus-within (&:where(.group:focus-within *));
+
 @container settings (width < 560px) {
   .settings-row {
     flex-direction: column;
@@ -99,6 +104,24 @@
   );
 }
 
+/* Code colours for the editor, diffs and previews (editorLanguage.ts).
+   VS Code's Dark+ by default; light mode (Light+) and the inset workspace
+   themes swap them below. */
+:root {
+  /* Code text in the file editor and the unified diff. */
+  --code-font-size: 12.5px;
+  --syntax-keyword: #569cd6;
+  --syntax-callable: #dcdcaa;
+  --syntax-string: #ce9178;
+  --syntax-type: #4ec9b0;
+  --syntax-tag: #569cd6;
+  --syntax-number: #b5cea8;
+  --syntax-comment: #6a9955;
+  --syntax-property: #9cdcfe;
+  --syntax-meta: #dcdcaa;
+  --syntax-invalid: #f44747;
+}
+
 /* Static so Tailwind always emits it: only xterm reads it, via JS. */
 @theme static {
   /* Terminal-only stack. JetBrains Mono Nerd Font leads so prompt text and
@@ -127,6 +150,43 @@
   --window-background-opacity: 0.4;
   --chat-background-empty-opacity: 0.24;
   --chat-background-session-opacity: 0.24;
+  /* The Haze fades its artwork out toward the composer. */
+  --chat-background-fade-mask: linear-gradient(
+    to bottom,
+    #000 0 19%,
+    rgb(0 0 0 / 94%) 30%,
+    rgb(0 0 0 / 72%) 42%,
+    rgb(0 0 0 / 42%) 54%,
+    rgb(0 0 0 / 16%) 66%,
+    rgb(0 0 0 / 4%) 78%,
+    transparent 90%
+  );
+  --chat-background-session-fade-mask: linear-gradient(
+    to bottom,
+    #000 0 18%,
+    transparent 76%
+  );
+  /*
+   * The Haze also darkens toward the bottom, so it reads as gone by the
+   * middle. Plain images have no overlay; these masks bake that darkening in.
+   */
+  --chat-background-image-fade-mask: linear-gradient(
+    to bottom,
+    #000 0 19%,
+    rgb(0 0 0 / 79%) 30%,
+    rgb(0 0 0 / 50%) 42%,
+    rgb(0 0 0 / 20%) 54%,
+    rgb(0 0 0 / 5%) 64%,
+    transparent 72%
+  );
+  --chat-background-image-session-fade-mask: linear-gradient(
+    to bottom,
+    #000 0 18%,
+    rgb(0 0 0 / 61%) 32%,
+    rgb(0 0 0 / 32%) 47%,
+    rgb(0 0 0 / 11%) 62%,
+    transparent 72%
+  );
   --selection-subtle-strength: 8%;
   --selection-strength: 10%;
   --selection-strong-strength: 12%;
@@ -158,6 +218,16 @@ html.theme-light {
   --selection-emphasis-strength: 14%;
   --color-diff-add-fg: #047857;
   --color-diff-del-fg: #be123c;
+  --syntax-keyword: #0000ff;
+  --syntax-callable: #795e26;
+  --syntax-string: #a31515;
+  --syntax-type: #267f99;
+  --syntax-tag: #800000;
+  --syntax-number: #098658;
+  --syntax-comment: #008000;
+  --syntax-property: #001080;
+  --syntax-meta: #795e26;
+  --syntax-invalid: #cd3131;
   color-scheme: light;
 }
 
@@ -407,11 +477,190 @@ html.is-mac.has-native-glass.has-native-glass-tint:not(.theme-light)
     var(--motion-ease-out);
 }
 
+/* Inset layout: the sidebar, tabs and footer sit on an outer layer around a
+   rounded card holding the workspace. Its surfaces ignore the translucency
+   settings. By default they are a neutral shell at 80% over the window blur
+   with a faint wash, and the content panel the deepest plane in dark mode,
+   white in light. A workspace
+   theme swaps the colours through the `--wt-*` variables. */
+html.layout-inset {
+  --inset-surface: var(--wt-dark-surface, #0d0d0d);
+  --inset-panel: var(--wt-dark-panel, #060606);
+  --inset-glass-alpha: 0.8;
+  --inset-panel-alpha: 0.4;
+  --inset-wash: hsl(0 0% 92% / 0.05);
+  /* The card's edge, and every rule inside it and the sidebar, so the
+     separators sit no brighter than the hairline around them. */
+  --inset-stroke: color-mix(in srgb, var(--color-content) 4%, transparent);
+}
+
+/* Keep the opaque pane close to the washed sidebar instead of near black. */
+html.layout-inset:not(.has-native-glass):not(.theme-light) {
+  --inset-panel: var(--wt-dark-panel-solid, #141414);
+}
+
+/* Light mode is opaque here, so the shell is its solid grey under the wash. */
+html.layout-inset.theme-light {
+  --inset-surface: var(--wt-light-surface, #f5f5f5);
+  --inset-panel: var(--wt-light-panel-solid, #ffffff);
+  --inset-wash: hsl(0 0% 10% / 0.01);
+}
+
+/* A workspace theme (workspaceThemes.ts) replaces the hue/saturation tint with
+   its own text, accent, markdown and code colours. Strokes and selections mix from
+   `--color-content`, so they follow. Menus and popovers sit on the shell. */
+html.layout-inset.has-workspace-theme {
+  --color-content: var(--wt-dark-content);
+  --color-background-base: var(--wt-dark-surface);
+  --color-accent: var(--wt-dark-accent);
+  --link-color: var(--wt-dark-link);
+  --color-markdown-heading: var(--wt-dark-heading);
+  --syntax-keyword: var(--wt-dark-syntax-keyword);
+  --syntax-callable: var(--wt-dark-syntax-callable);
+  --syntax-string: var(--wt-dark-syntax-string);
+  --syntax-type: var(--wt-dark-syntax-type);
+  --syntax-tag: var(--wt-dark-syntax-tag);
+  --syntax-number: var(--wt-dark-syntax-number);
+  --syntax-comment: var(--wt-dark-syntax-comment);
+  --syntax-property: var(--wt-dark-syntax-property);
+  --syntax-meta: var(--wt-dark-syntax-meta);
+  --syntax-invalid: var(--wt-dark-syntax-invalid);
+}
+
+html.layout-inset.has-workspace-theme.theme-light {
+  --color-content: var(--wt-light-content);
+  --color-background-base: var(--wt-light-surface);
+  --color-accent: var(--wt-light-accent);
+  --link-color: var(--wt-light-link);
+  --color-markdown-heading: var(--wt-light-heading);
+  --syntax-keyword: var(--wt-light-syntax-keyword);
+  --syntax-callable: var(--wt-light-syntax-callable);
+  --syntax-string: var(--wt-light-syntax-string);
+  --syntax-type: var(--wt-light-syntax-type);
+  --syntax-tag: var(--wt-light-syntax-tag);
+  --syntax-number: var(--wt-light-syntax-number);
+  --syntax-comment: var(--wt-light-syntax-comment);
+  --syntax-property: var(--wt-light-syntax-property);
+  --syntax-meta: var(--wt-light-syntax-meta);
+  --syntax-invalid: var(--wt-light-syntax-invalid);
+}
+
+.inset-outer {
+  background:
+    linear-gradient(var(--inset-wash), var(--inset-wash)), var(--inset-surface);
+  transition: background-color var(--motion-feedback-duration)
+    var(--motion-ease-out);
+}
+
+html.has-native-glass:not(.theme-light) .inset-outer {
+  background:
+    linear-gradient(var(--inset-wash), var(--inset-wash)),
+    color-mix(
+      in srgb,
+      var(--inset-surface) calc(var(--inset-glass-alpha) * 100%),
+      transparent
+    );
+}
+
+/* AppKit already fills the shell colour across the window. */
+html.is-mac.has-native-glass.has-native-glass-tint:not(.theme-light)
+  .inset-outer {
+  background: linear-gradient(var(--inset-wash), var(--inset-wash));
+}
+
+/* Outranks the theme and native-glass fills on `.sidebar-glass`. */
+html.layout-inset .inset-shell .inset-rail-host .sidebar-glass {
+  background: transparent;
+  border-right-color: transparent;
+}
+
+/* Without a rail beside it, the card keeps the same gutter on both sides,
+   and the footer's chips stay lined up with its edge. */
+.inset-shell:not(:has(.inset-rail-host > :not(.hidden))) .inset-card,
+.inset-shell:not(:has(.inset-rail-host > :not(.hidden))) .inset-footer {
+  margin-left: 0.375rem;
+}
+
+.inset-card {
+  /* A hairline, softer than the app's rules, so the card's edge doesn't cut. */
+  --color-stroke: var(--inset-stroke);
+  border-color: var(--inset-stroke);
+  background: var(--inset-panel);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.08);
+  transition: background-color var(--motion-feedback-duration)
+    var(--motion-ease-out);
+}
+
+/* Over the glass the panel lets the blur through; the main pane glass
+   setting does not apply here. */
+html.has-native-glass:not(.theme-light) .inset-card {
+  background: color-mix(
+    in srgb,
+    var(--inset-panel) calc(var(--inset-panel-alpha) * 100%),
+    transparent
+  );
+  box-shadow: none;
+}
+
+/* WebKit otherwise paints the rounded translucent card into the transparent
+   root alongside the window chrome. Give the whole, stationary card its own
+   backing surface so hover and streaming repaints keep the same clip/tint. */
+html.is-mac.has-native-glass:not(.theme-light) .inset-card {
+  transform: translateZ(0);
+}
+
+/* A collapsed sidebar peeking out blurs the workspace under a faint wash,
+   with the rest of the window dimmed behind it. */
+.sidebar-peek {
+  border-color: color-mix(in srgb, var(--color-content) 8%, transparent);
+  background: linear-gradient(var(--inset-wash), var(--inset-wash));
+  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(24px);
+  box-shadow:
+    0 12px 32px rgb(0 0 0 / 0.28),
+    0 2px 6px rgb(0 0 0 / 0.16);
+}
+
+html.theme-light .sidebar-peek {
+  background:
+    linear-gradient(var(--inset-wash), var(--inset-wash)), var(--inset-surface);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.sidebar-peek-backdrop {
+  background: rgb(0 0 0 / 0.4);
+}
+
+html.theme-light .sidebar-peek-backdrop {
+  background: rgb(0 0 0 / 0.18);
+}
+
+/* Lighter rules in the sidebar, so they read as hairlines over the card's
+   glass rather than solid bars. */
+.inset-sidebar {
+  --color-stroke: var(--inset-stroke);
+}
+
+/* Dim inactive tabs together so their plate, label and icons recede. */
+[data-inset-title-bar] [data-title-tab]:not([data-title-tab-active]) {
+  background: color-mix(in srgb, var(--color-content) 4%, transparent);
+  opacity: 0.65;
+}
+
+[data-inset-title-bar] [data-title-tab]:not([data-title-tab-active]):hover,
+[data-inset-title-bar] [data-title-tab]:not([data-title-tab-active]):focus-visible {
+  background: color-mix(in srgb, var(--color-content) 7%, transparent);
+  opacity: 1;
+}
+
 @media (prefers-reduced-motion: reduce) {
   html,
   body,
   #root,
   .sidebar-glass,
+  .inset-outer,
+  .inset-card,
   .body-glass {
     transition: none;
   }
@@ -429,9 +678,21 @@ html.is-mac.has-native-glass.has-native-glass-tint:not(.theme-light)
   background-position: center;
   background-size: cover;
   background-repeat: no-repeat;
+  -webkit-mask-image: var(--chat-background-image-fade-mask);
+  mask-image: var(--chat-background-image-fade-mask);
   opacity: 0;
   transition: opacity var(--motion-feedback-duration) var(--motion-ease-out);
   pointer-events: none;
+}
+
+.chat-pane-background[data-session-empty="false"]::before {
+  -webkit-mask-image: var(--chat-background-image-session-fade-mask);
+  mask-image: var(--chat-background-image-session-fade-mask);
+}
+
+.chat-background-fade {
+  -webkit-mask-image: var(--chat-background-image-fade-mask);
+  mask-image: var(--chat-background-image-fade-mask);
 }
 
 /* Each masked copy samples the same artwork; only the image is blurred. */
@@ -455,16 +716,7 @@ html.is-mac.has-native-glass.has-native-glass-tint:not(.theme-light)
     color-mix(in srgb, var(--color-background-base) 55%, transparent) 55%,
     color-mix(in srgb, var(--color-background-base) 78%, transparent) 75%
   );
-  --gradient-blur-mask: linear-gradient(
-    to bottom,
-    #000 0 19%,
-    rgb(0 0 0 / 94%) 30%,
-    rgb(0 0 0 / 72%) 42%,
-    rgb(0 0 0 / 42%) 54%,
-    rgb(0 0 0 / 16%) 66%,
-    rgb(0 0 0 / 4%) 78%,
-    transparent 90%
-  );
+  --gradient-blur-mask: var(--chat-background-fade-mask);
   overflow: hidden;
   pointer-events: none;
   background-image: var(--chat-background-image, none);
@@ -545,7 +797,7 @@ html.is-mac.has-native-glass.has-native-glass-tint:not(.theme-light)
     transparent 15%,
     color-mix(in srgb, var(--color-background-base) 70%, transparent) 76%
   );
-  --gradient-blur-mask: linear-gradient(to bottom, #000 0 18%, transparent 76%);
+  --gradient-blur-mask: var(--chat-background-session-fade-mask);
 }
 
 html.chat-background-gradient-blur
@@ -641,6 +893,12 @@ html.has-chat-background.chat-background-effect-ready.chat-background-gradient-b
   content-visibility: visible;
 }
 
+/* Heights come from this exact turn at the current pane width. The live turn
+   always keeps its natural layout, including throughout completion. */
+.transcript-turn[data-history-height] {
+  flex-shrink: 0;
+}
+
 ::highlight(monocode-transcript-search-match) {
   background-color: color-mix(in srgb, #e2c08d 46%, transparent);
 }
@@ -674,8 +932,38 @@ html.has-chat-background.chat-background-effect-ready.chat-background-gradient-b
   mask-image: var(--scroll-bottom-mask);
 }
 
-/* Let the latest reply scroll fully clear of the composer's fade. */
+/* In the inset sidebar, rows scrolled up under the project header fade out
+   too; at rest the list starts crisp. Use the viewport mask alone, without
+   a sticky backdrop filter sampling the native glass through another mask. */
+.inset-sidebar .sidebar-session-scroll[data-scrolled] {
+  --scroll-bottom-mask: linear-gradient(
+    to bottom,
+    transparent,
+    #000 1.75rem,
+    #000 calc(100% - 2.5rem),
+    transparent
+  );
+}
+
+/* The transcript fades under the top edge too, like the composer's fade at
+   the bottom. */
+.transcript-composer-fade .agent-transcript {
+  --scroll-bottom-mask: linear-gradient(
+    to bottom,
+    transparent,
+    #000 1.5rem,
+    #000 calc(100% - 2.5rem),
+    transparent
+  );
+  /* A message scrolled to lands where the first one rests, below the fade.
+     The prompt outline reads this too. */
+  scroll-padding-top: 1.25rem;
+}
+
+/* Let the latest reply scroll fully clear of the composer's fade, and the
+   first message rest below the top one. */
 .transcript-composer-fade [data-transcript-content] {
+  padding-top: 1.25rem;
   padding-bottom: 2.5rem;
 }
 
@@ -1379,8 +1667,8 @@ html.has-user-accent .user-message-bubble[data-draft="true"] {
 
 /*
  * After a send, the live turn fills the transcript viewport so the prompt sits
- * at the top. Switching tabs keeps this. Closing the tab drops it, so opening
- * that conversation again uses the true bottom (latest reply on the composer).
+ * at the top, then follows the reply when it outgrows the viewport. A pooled
+ * transcript keeps this spacing across tab switches, including after a run ends.
  */
 .transcript-turn-anchor {
   min-height: var(--transcript-viewport, 0px);
@@ -1389,21 +1677,28 @@ html.has-user-accent .user-message-bubble[data-draft="true"] {
 /* A finished run can still be revealing its reply. Artifacts and actions wait
    for the final word's fade, using the reply's actual animation state. */
 .transcript-turn:has([data-artifact-results]):has(.word-fading)
+  > [data-history-content]
   > :is([data-artifact-results], [data-turn-actions]) {
   display: none;
 }
 /* Session cards wait for the reply above them to finish its reveal; cards
    above a later reply, such as a report back, stay where they are. */
-.transcript-turn > :has(.word-fading) ~ [data-launched-sessions] {
+.transcript-turn
+  > [data-history-content]
+  > :has(.word-fading)
+  ~ [data-launched-sessions] {
   display: none;
 }
 
 /* While a sent prompt rises into place, the rest of its turn waits for it. */
-.transcript-turn[data-prompt-rise="rising"] > :not(:has([data-prompt-anchor])) {
+.transcript-turn[data-prompt-rise="rising"]
+  > [data-history-content]
+  > :not(:has([data-prompt-anchor])) {
   opacity: 0;
 }
 
 .transcript-turn[data-prompt-rise="revealing"]
+  > [data-history-content]
   > :not(:has([data-prompt-anchor])) {
   animation: prompt-turn-reveal 320ms var(--motion-ease-out) both;
 }
@@ -1582,6 +1877,81 @@ html.is-resizing * {
   }
 }
 
+/* The positioned composer box already creates a stacking context. Keep its
+   blur behind the live field and highlight layer, as a separate surface, so
+   caret/hover repaints do not repaint the backdrop-filter's own content.
+   Avoid transforms or paint containment here: pickers must escape the box.
+   The layer bleeds past the box and is clipped back to it, so the blur near
+   the edges averages the backdrop beyond them instead of leaving a band of
+   unblurred background just inside. */
+[data-composer-box] {
+  --composer-radius: var(--radius-lg, 0.5rem);
+  --composer-blur: var(--blur-sm);
+}
+
+/* The inset layout rounds the box like a multi-line user message. */
+html.layout-inset [data-composer-box] {
+  --composer-radius: var(--radius-xl, 0.75rem);
+  --composer-blur: 24px;
+  border-radius: var(--composer-radius);
+}
+
+[data-composer-box]::before {
+  --composer-blur-bleed: calc(var(--composer-blur) * 2);
+  content: "";
+  position: absolute;
+  inset: calc(-1 * var(--composer-blur-bleed));
+  z-index: -1;
+  clip-path: inset(var(--composer-blur-bleed) round var(--composer-radius));
+  pointer-events: none;
+  background: color-mix(in srgb, var(--color-content) 3%, transparent);
+  -webkit-backdrop-filter: blur(var(--composer-blur));
+  backdrop-filter: blur(var(--composer-blur));
+}
+
+/* WebView2 on Windows ignores the rounded clip-path on a backdrop-filter, so
+   the bleed shows as square corners past the border. Clip to the box with
+   border-radius instead, which it does honor, and give up the edge bleed. */
+html:not(.is-mac) [data-composer-box]::before {
+  inset: 0;
+  clip-path: none;
+  border-radius: inherit;
+}
+
+/* The queue ledge tucks behind the inset composer: inset by its corner
+   radius, a quieter edge than the box itself, and the same frost. */
+html.layout-inset [data-message-queue] {
+  padding-inline: var(--radius-xl, 0.75rem);
+}
+
+html.layout-inset [data-message-queue-card] {
+  border-color: color-mix(in srgb, var(--color-content) 6%, transparent);
+  border-top-left-radius: var(--radius-xl, 0.75rem);
+  border-top-right-radius: var(--radius-xl, 0.75rem);
+  background: color-mix(in srgb, var(--color-content) 2.5%, transparent);
+  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(24px);
+}
+
+html.layout-inset.theme-light [data-message-queue-card] {
+  border-color: color-mix(in srgb, var(--color-content) 8%, transparent);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+html.layout-inset:not(.theme-light) .agent-chat-composer {
+  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(24px);
+}
+
+/* The light box is already solid, so a blur behind it has nothing to frost
+   and only smears its shadow in over the edges. */
+html.theme-light [data-composer-box]::before {
+  background: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
 html.theme-light [data-composer-box],
 html.theme-light .agent-chat-composer {
   background: var(--color-background-base);
@@ -1742,6 +2112,12 @@ header[data-tauri-drag-region] button {
 }
 
 .agent-markdown [data-streamdown="code-block"] {
+  /* Streamdown sets inline content-visibility:auto with a 200px estimate.
+     WebKit can use that estimate during a streaming commit, then shrink the
+     scroll range on the next frame. Loaded transcript turns already use real
+     heights; their code fences must do the same, including nested fences. */
+  content-visibility: visible !important;
+  contain-intrinsic-size: none !important;
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
@@ -2221,39 +2597,9 @@ html:not(.theme-light) .markdown-code-token {
 }
 
 /* New split panes; same motion as the linked panel's slide. */
-@keyframes pane-enter {
-  from {
-    opacity: var(--pane-enter-opacity, 1);
-    transform: translate(var(--pane-enter-x, 0), var(--pane-enter-y, 0));
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-
-[data-pane-enter] {
-  animation: pane-enter 260ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-[data-pane-enter="right"] {
-  --pane-enter-x: 100%;
-}
-
-[data-pane-enter="left"] {
-  --pane-enter-x: -100%;
-}
-
-[data-pane-enter="bottom"] {
-  --pane-enter-y: 100%;
-}
-
-[data-pane-enter="top"] {
-  --pane-enter-y: -100%;
-}
-
-[data-pane-enter="fade"] {
-  --pane-enter-opacity: 0;
+/* A sliding pane draws the edge it rides until the layout settles. */
+[data-pane-sliding] > [data-pane-sash] {
+  visibility: hidden;
 }
 
 @keyframes linked-panel-reveal {
@@ -2273,8 +2619,7 @@ html:not(.theme-light) .markdown-code-token {
 
 @media (prefers-reduced-motion: reduce) {
   .linked-panel-slide,
-  .linked-panel-reveal,
-  [data-pane-enter] {
+  .linked-panel-reveal {
     animation: none;
   }
 }
@@ -2946,6 +3291,75 @@ html.theme-light .mono-pill {
   height: 7px;
 }
 
+/* Orchestrated agents, and sessions an /operator thread started, sit a
+   little apart on the inset sidebar's rail. The gap is the step's own
+   padding, so the spine runs through it, and the curve and the spine's end
+   move down with the 28px row's centre. */
+.orchestration-tree-step {
+  padding-top: 2px;
+  padding-bottom: 2px;
+}
+
+.orchestration-tree-step::after {
+  top: 8px;
+}
+
+.orchestration-tree-step:last-child::before {
+  height: 9px;
+}
+
+/* RevealHeight: grows a block open from nothing, pushing what follows down,
+   and folds it away again. The grid row animates rather than a height, so
+   the block keeps its natural size; it only clips while it moves. */
+.reveal-height-in,
+.reveal-height-out {
+  display: grid;
+}
+
+.reveal-height-in > *,
+.reveal-height-out > * {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.reveal-height-in {
+  animation: reveal-height-in 240ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.reveal-height-out {
+  animation: reveal-height-out 180ms cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+
+@keyframes reveal-height-in {
+  from {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+  to {
+    grid-template-rows: 1fr;
+    opacity: 1;
+  }
+}
+
+@keyframes reveal-height-out {
+  from {
+    grid-template-rows: 1fr;
+    opacity: 1;
+  }
+  to {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal-height-in,
+  .reveal-height-out {
+    animation: none;
+  }
+}
+
+
 .zen-phase-step::after {
   top: 6px;
   width: 8px;
@@ -3369,13 +3783,16 @@ html.theme-light .mono-pill {
   }
 }
 
-/* Keep the original glass tint in dark mode. Light popovers use an opaque
-   surface so underlying content cannot show through. */
-.popover-backdrop {
+/* Floating dialogs in the inset layout share the popover glass instead of
+   layering a second, dark base fill over it. Classic dialogs keep their own
+   fills. Light surfaces stay opaque so underlying content cannot show through. */
+.popover-backdrop,
+html.layout-inset .modal-surface {
   background: color-mix(in srgb, var(--color-content) 2%, transparent);
 }
 
-html.theme-light .popover-backdrop {
+html.theme-light .popover-backdrop,
+html.layout-inset.theme-light .modal-surface {
   background: var(--color-background-base);
 }
 
@@ -3777,6 +4194,14 @@ html.theme-light .btw-burst {
 }
 
 /* Centered modals: lift the content inside the stationary glass frame. */
+html.layout-inset .dialog-scrim {
+  background: rgb(0 0 0 / 0.35);
+}
+
+html.layout-inset.theme-light .dialog-scrim {
+  background: rgb(0 0 0 / 0.2);
+}
+
 @keyframes modal-backdrop-in {
   from {
     opacity: 0;
@@ -3885,6 +4310,12 @@ html.theme-light .btw-burst {
   }
 }
 
+/* Match the solid labels' brighter hues on light surfaces. */
+.theme-light .git-history-item {
+  --git-history-color-strength: 100%;
+  --git-history-line-opacity: 1;
+  --git-history-line-width: 1.25px;
+}
 /* Graph node cutouts so lane strokes do not show through the circles. */
 .git-history-item svg {
   display: block;

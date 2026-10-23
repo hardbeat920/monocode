@@ -108,6 +108,8 @@ export function useBottomChatMotion(
   holdUntil?: RefObject<number>,
   /** Preserve the full movement and bound its speed for whole Mono replies. */
   smoothReveals = false,
+  /** Acknowledge native offsets written by the animation, including handoff. */
+  onScrollAdjust?: (scroller: HTMLDivElement) => void,
 ) {
   const latest = useRef({
     blocks,
@@ -264,6 +266,7 @@ export function useBottomChatMotion(
         pause();
       } else {
         scroller.scrollTop = scroller.scrollHeight;
+        onScrollAdjust?.(scroller);
         const resized =
           width !== scroller.clientWidth || height !== scroller.clientHeight;
         width = scroller.clientWidth;
@@ -367,7 +370,10 @@ export function useBottomChatMotion(
       stop();
       // Hand the eased visual position to native scrolling without a jump.
       // Settled motion must not write scrollTop during the native gesture.
-      if (visibleTop !== null) scroller.scrollTop = Math.max(0, visibleTop);
+      if (visibleTop !== null) {
+        scroller.scrollTop = Math.max(0, visibleTop);
+        onScrollAdjust?.(scroller);
+      }
     };
     const onWheel = (event: WheelEvent) => {
       // A nested code block scrolling up leaves the reader at the end.
@@ -398,7 +404,14 @@ export function useBottomChatMotion(
       reducedMotion?.removeEventListener?.("change", stop);
       stop();
     };
-  }, [scroller, enabled, stickToBottom, holdUntil, smoothReveals]);
+  }, [
+    scroller,
+    enabled,
+    stickToBottom,
+    holdUntil,
+    smoothReveals,
+    onScrollAdjust,
+  ]);
 
   // Run after the transcript's pin/restore effects, before this commit paints.
   useLayoutEffect(() => update.current?.());

@@ -22,6 +22,7 @@ import {
 } from "../model/promptOutline";
 import type { Block } from "../model/session";
 import { Popover } from "../../../shared/ui/Popover";
+import { revealMeasuredTurn } from "./useMeasuredHistory";
 
 const OPEN_DELAY_MS = 25;
 const SCROLL_INSET_PX = 8;
@@ -68,6 +69,7 @@ export function PromptOutline({
   const [focusId, setFocusId] = useState<string | null>(null);
   const rail = useRef<HTMLDivElement>(null);
   const frame = useRef<number | null>(null);
+  const measureTimer = useRef<number | null>(null);
   const openTimer = useRef<number | null>(null);
   const pointerInside = useRef(false);
   const lastPromptId = useRef<string | null>(null);
@@ -112,14 +114,21 @@ export function PromptOutline({
   }, [scope]);
 
   const schedule = useCallback(() => {
-    if (frame.current != null) return;
+    if (frame.current != null || measureTimer.current != null) return;
     frame.current = window.requestAnimationFrame(() => {
       frame.current = null;
-      measure();
+      // The outline is decorative. Read after this frame's transcript writes
+      // and layout, so it does not force layout ahead of the selected pane's
+      // first paint or compete with the streaming scroll observers.
+      measureTimer.current = window.setTimeout(() => {
+        measureTimer.current = null;
+        measure();
+      }, 0);
     });
   }, [measure]);
 
   useEffect(() => {
+    if (!visible) return;
     const scroller =
       mountedScroller ?? scope.current?.querySelector<HTMLElement>(SCROLLER);
     if (!scroller) return;
@@ -137,11 +146,15 @@ export function PromptOutline({
         window.cancelAnimationFrame(frame.current);
         frame.current = null;
       }
+      if (measureTimer.current != null) {
+        window.clearTimeout(measureTimer.current);
+        measureTimer.current = null;
+      }
     };
-  }, [mountedScroller, schedule, scope]);
+  }, [mountedScroller, schedule, scope, visible]);
 
   useEffect(() => {
-    schedule();
+    if (visible) schedule();
   }, [schedule, blocks, visible]);
 
   const cancelOpen = () => {
@@ -205,11 +218,17 @@ export function PromptOutline({
       return;
     }
     const target = anchor.closest<HTMLElement>(TURN) ?? anchor;
+    revealMeasuredTurn(target);
+    // Clear of a top fade, where the transcript sets one.
+    const inset = Math.max(
+      SCROLL_INSET_PX,
+      Number.parseFloat(getComputedStyle(scroller).scrollPaddingTop) || 0,
+    );
     const align = () => {
       const delta =
         target.getBoundingClientRect().top -
         scroller.getBoundingClientRect().top -
-        SCROLL_INSET_PX;
+        inset;
       if (Math.abs(delta) > 2) scroller.scrollTop += delta;
     };
     align();
@@ -248,89 +267,94 @@ export function PromptOutline({
   };
 
   return (
-    <div
-      ref={rail}
-      role="toolbar"
-      aria-label="Prompts"
-      aria-orientation="vertical"
-      style={{ width: BAR_WIDTH_LIFTED_PX }}
-      onMouseEnter={() => {
-        pointerInside.current = true;
-      }}
-      onMouseLeave={leaveRail}
-      onBlur={blurRail}
-      onKeyDown={onKeyDown}
-      className="absolute top-1/2 right-4 z-30 flex -translate-y-1/2 flex-col items-end @max-[58rem]:hidden"
-    >
-      {bars.map((prompt, index) => {
-        const lift = barLift(index, hoverIndex);
-        const distance = hoverIndex < 0 ? 0 : Math.abs(index - hoverIndex);
-        // The pointer owns the fill while it is on the rail. Off the rail, the
-        // fill goes back to marking the scroll position.
-        const lit =
-          hoverIndex >= 0 ? index === hoverIndex : prompt.id === activeId;
-        return (
-          <button
-            key={prompt.id}
-            type="button"
-            data-prompt-bar={prompt.id}
-            tabIndex={prompt.id === tabId ? 0 : -1}
-            aria-label={promptLabel(prompt)}
-            aria-current={prompt.id === activeId ? "true" : undefined}
-            onMouseEnter={(event) => hoverBar(prompt.id, event.currentTarget)}
-            onFocus={(event) => {
-              setFocusId(prompt.id);
-              // A click focuses the bar too, and the pointer already opened
-              // the card. Only arrow keys and Tab open it from here.
-              if (event.currentTarget.matches(":focus-visible")) {
-                showBar(prompt.id, event.currentTarget);
-              }
-            }}
-            onClick={() => jumpTo(prompt.id)}
-            style={{ height: BAR_HEIGHT_PX + stack.gap }}
-            className="flex w-full shrink-0 items-center justify-end outline-none"
-          >
-            <span
-              aria-hidden="true"
-              style={{
-                height: BAR_HEIGHT_PX,
-                width:
-                  BAR_WIDTH_PX + (BAR_WIDTH_LIFTED_PX - BAR_WIDTH_PX) * lift,
-                opacity: lit ? BAR_OPACITY_LIT : BAR_OPACITY_IDLE,
-                // The wave reaches the outer bars a beat after the hovered one.
-                transitionDelay: `${Math.min(distance, RIPPLE_SPAN) * RIPPLE_STEP_MS}ms`,
+    // Keep the responsive query container on this overlay, outside the
+    // transcript's ancestry. WebKit can clamp the transcript's scroll offset
+    // during word-span cleanup when its scrolling content is size-contained.
+    <div className="@container pointer-events-none absolute inset-0 z-30">
+      <div
+        ref={rail}
+        role="toolbar"
+        aria-label="Prompts"
+        aria-orientation="vertical"
+        style={{ width: BAR_WIDTH_LIFTED_PX }}
+        onMouseEnter={() => {
+          pointerInside.current = true;
+        }}
+        onMouseLeave={leaveRail}
+        onBlur={blurRail}
+        onKeyDown={onKeyDown}
+        className="pointer-events-auto absolute top-1/2 right-4 flex -translate-y-1/2 flex-col items-end @max-[58rem]:hidden"
+      >
+        {bars.map((prompt, index) => {
+          const lift = barLift(index, hoverIndex);
+          const distance = hoverIndex < 0 ? 0 : Math.abs(index - hoverIndex);
+          // The pointer owns the fill while it is on the rail. Off the rail, the
+          // fill goes back to marking the scroll position.
+          const lit =
+            hoverIndex >= 0 ? index === hoverIndex : prompt.id === activeId;
+          return (
+            <button
+              key={prompt.id}
+              type="button"
+              data-prompt-bar={prompt.id}
+              tabIndex={prompt.id === tabId ? 0 : -1}
+              aria-label={promptLabel(prompt)}
+              aria-current={prompt.id === activeId ? "true" : undefined}
+              onMouseEnter={(event) => hoverBar(prompt.id, event.currentTarget)}
+              onFocus={(event) => {
+                setFocusId(prompt.id);
+                // A click focuses the bar too, and the pointer already opened
+                // the card. Only arrow keys and Tab open it from here.
+                if (event.currentTarget.matches(":focus-visible")) {
+                  showBar(prompt.id, event.currentTarget);
+                }
               }}
-              className="rounded-full bg-content transition-[width,opacity] duration-200 ease-out"
-            />
-          </button>
-        );
-      })}
-      {open && preview && hoverIndex >= 0 ? (
-        <Popover
-          anchor={hover?.el ?? null}
-          side="left"
-          align="center"
-          gap={10}
-          width={POPOVER_WIDTH}
-          onDismiss={close}
-          aria-label="Prompt preview"
-          className="pointer-events-none flex flex-col gap-1.5 p-3 font-sans"
-        >
-          <p className="line-clamp-2 text-sm leading-snug text-content">
-            {preview.title}
-          </p>
-          {preview.reply ? (
-            <p className="line-clamp-2 text-sm leading-snug text-content/45">
-              {preview.reply}
+              onClick={() => jumpTo(prompt.id)}
+              style={{ height: BAR_HEIGHT_PX + stack.gap }}
+              className="flex w-full shrink-0 items-center justify-end outline-none"
+            >
+              <span
+                aria-hidden="true"
+                style={{
+                  height: BAR_HEIGHT_PX,
+                  width:
+                    BAR_WIDTH_PX + (BAR_WIDTH_LIFTED_PX - BAR_WIDTH_PX) * lift,
+                  opacity: lit ? BAR_OPACITY_LIT : BAR_OPACITY_IDLE,
+                  // The wave reaches the outer bars a beat after the hovered one.
+                  transitionDelay: `${Math.min(distance, RIPPLE_SPAN) * RIPPLE_STEP_MS}ms`,
+                }}
+                className="rounded-full bg-content transition-[width,opacity] duration-200 ease-out"
+              />
+            </button>
+          );
+        })}
+        {open && preview && hoverIndex >= 0 ? (
+          <Popover
+            anchor={hover?.el ?? null}
+            side="left"
+            align="center"
+            gap={10}
+            width={POPOVER_WIDTH}
+            onDismiss={close}
+            aria-label="Prompt preview"
+            className="pointer-events-none flex flex-col gap-1.5 p-3 font-sans"
+          >
+            <p className="line-clamp-2 text-sm leading-snug text-content">
+              {preview.title}
             </p>
-          ) : null}
-          {preview.detail ? (
-            <p className="line-clamp-2 border-l-2 border-content/15 pl-3 text-sm leading-snug text-content/35">
-              {preview.detail}
-            </p>
-          ) : null}
-        </Popover>
-      ) : null}
+            {preview.reply ? (
+              <p className="line-clamp-2 text-sm leading-snug text-content/45">
+                {preview.reply}
+              </p>
+            ) : null}
+            {preview.detail ? (
+              <p className="line-clamp-2 border-l-2 border-content/15 pl-3 text-sm leading-snug text-content/35">
+                {preview.detail}
+              </p>
+            ) : null}
+          </Popover>
+        ) : null}
+      </div>
     </div>
   );
 }
