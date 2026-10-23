@@ -746,12 +746,14 @@ import {
 } from "../features/connections/model/remoteProjects";
 import type { HostSession } from "../features/connections/model/protocol";
 import { AddRemoteProjectDialog } from "../features/connections/ui/AddRemoteProjectDialog";
+import { isTrackerSource } from "../features/inbox/model/inboxProviders";
 import type { ConnectableInboxSource } from "../features/inbox/model/inboxFilters";
 import type { InboxSessionPortal } from "../features/inbox/ui/InboxDiscussionPanel";
 import { inboxAskKey, inboxAskPrompt } from "../features/inbox/model/inboxAsk";
 import {
   githubWorkItemThread,
   inboxComposerCard,
+  inboxItemRef,
   type InboxItem,
 } from "../features/inbox/model/githubTasks";
 import {
@@ -3037,10 +3039,7 @@ function Workspace({
         const cwd =
           item.projectPath || active?.cwd || sessionDefaults?.cwd || projectCwd;
         setSidebarTab("sessions", cwd);
-        const ref =
-          item.provider === "linear" || item.provider === "jira"
-            ? item.identifier?.trim() || `#${item.number}`
-            : `#${item.number}`;
+        const ref = inboxItemRef(item);
         const linkedWorkItem = linkedWorkItemFromInboxItem(item);
         const session = {
           ...newDefaultSession(cwd, sessionDefaults?.runtimeMode),
@@ -4941,38 +4940,37 @@ function Workspace({
             candidate && candidate !== "~"
               ? candidate
               : await invoke<string>("default_cwd");
-          const description =
-            item.provider === "linear" || item.provider === "jira"
-              ? await inboxTrackerDescription(item)
-              : item.provider === "gitlab" &&
+          const description = isTrackerSource(item.provider)
+            ? await inboxTrackerDescription(item)
+            : item.provider === "gitlab" &&
+                (item.kind === "issue" || item.kind === "pr")
+              ? (
+                  peekGitlabWorkItemDetails(
+                    item.repo,
+                    item.kind,
+                    item.number,
+                  ) ??
+                  (await gitlabWorkItemDetails(
+                    item.repo,
+                    item.kind,
+                    item.number,
+                  ))
+                ).body
+              : item.provider === "azuredevops" &&
                   (item.kind === "issue" || item.kind === "pr")
                 ? (
-                    peekGitlabWorkItemDetails(
+                    peekAzureDevOpsWorkItemDetails(
                       item.repo,
                       item.kind,
                       item.number,
                     ) ??
-                    (await gitlabWorkItemDetails(
+                    (await azureDevOpsWorkItemDetails(
                       item.repo,
                       item.kind,
                       item.number,
                     ))
                   ).body
-                : item.provider === "azuredevops" &&
-                    (item.kind === "issue" || item.kind === "pr")
-                  ? (
-                      peekAzureDevOpsWorkItemDetails(
-                        item.repo,
-                        item.kind,
-                        item.number,
-                      ) ??
-                      (await azureDevOpsWorkItemDetails(
-                        item.repo,
-                        item.kind,
-                        item.number,
-                      ))
-                    ).body
-                  : undefined;
+                : undefined;
           session = {
             ...newDefaultSession(cwd),
             title: `Ask · ${item.title}`,

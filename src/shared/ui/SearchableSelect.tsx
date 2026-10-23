@@ -41,7 +41,8 @@ export function SearchableSelect({
   emptyLabel?: string;
   disabled?: boolean;
   layer?: number;
-  variant?: "field" | "transparent" | "row" | "panel" | "pill";
+  /** `bar` fills a toolbar row and shows the full label on hover. */
+  variant?: "field" | "transparent" | "row" | "panel" | "pill" | "bar";
   searchable?: boolean;
   align?: PopoverAlign;
 }) {
@@ -85,7 +86,7 @@ export function SearchableSelect({
   const openMenu = () => {
     if (disabled) return;
     setMenuWidth(
-      variant === "pill" || variant === "row"
+      variant === "pill" || variant === "row" || variant === "bar"
         ? Math.max(240, root.current?.getBoundingClientRect().width ?? 0)
         : root.current?.getBoundingClientRect().width,
     );
@@ -172,7 +173,7 @@ export function SearchableSelect({
     }
   };
 
-  const compact = variant === "pill" || variant === "row";
+  const compact = variant === "pill" || variant === "row" || variant === "bar";
   const longMenu = searchable || options.length > 12;
 
   return (
@@ -181,7 +182,9 @@ export function SearchableSelect({
       className={
         variant === "pill" || variant === "row"
           ? "relative inline-flex max-w-56 shrink-0"
-          : "relative min-w-0"
+          : variant === "bar"
+            ? "relative min-w-0 flex-1"
+            : "relative min-w-0"
       }
     >
       <button
@@ -189,6 +192,7 @@ export function SearchableSelect({
         type="button"
         disabled={disabled}
         aria-label={`${label}: ${selected?.label ?? placeholder}`}
+        title={variant === "bar" ? selected?.label : undefined}
         aria-expanded={open}
         aria-haspopup="dialog"
         onClick={() => (open ? close() : openMenu())}
@@ -199,15 +203,17 @@ export function SearchableSelect({
           openMenu();
         }}
         className={
-          variant === "row"
-            ? "inline-flex h-7 max-w-full items-center gap-1 rounded-md bg-content/10 py-0 pr-1.5 pl-2 text-left text-[12px] outline-none hover:bg-content/[0.14] focus-visible:bg-content/[0.14] disabled:opacity-50"
-            : variant === "panel"
-              ? "flex h-14 w-full items-center justify-end gap-3 rounded-xl border border-content/6 bg-content/6 px-4 text-right text-[14px] font-medium outline-none hover:bg-content/8 focus:border-content/12 focus:bg-content/8 disabled:opacity-50 active:scale-[0.995]"
-              : variant === "pill"
-                ? "inline-flex h-7 max-w-full items-center gap-1 rounded-md bg-content/10 py-0 pr-1.5 pl-2 text-left text-[12px] outline-none hover:bg-content/[0.14] focus-visible:bg-content/[0.14] disabled:opacity-50"
-                : variant === "transparent"
-                  ? "flex h-9 w-full items-center justify-between gap-2 rounded-md border border-content/10 bg-transparent px-2.5 text-left text-[13px] outline-none hover:border-content/20 focus:border-content/25 disabled:opacity-50 active:scale-[0.99]"
-                  : "flex h-9 w-full items-center justify-between gap-2 rounded-md border border-content/10 bg-background-base px-2.5 text-left text-[13px] outline-none hover:border-content/20 focus:border-content/25 disabled:opacity-50 active:scale-[0.99]"
+          variant === "bar"
+            ? "flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left text-[12px] outline-none hover:bg-content/5 focus-visible:bg-content/5 disabled:opacity-50"
+            : variant === "row"
+              ? "inline-flex h-7 max-w-full items-center gap-1 rounded-md bg-content/10 py-0 pr-1.5 pl-2 text-left text-[12px] outline-none hover:bg-content/[0.14] focus-visible:bg-content/[0.14] disabled:opacity-50"
+              : variant === "panel"
+                ? "flex h-14 w-full items-center justify-end gap-3 rounded-xl border border-content/6 bg-content/6 px-4 text-right text-[14px] font-medium outline-none hover:bg-content/8 focus:border-content/12 focus:bg-content/8 disabled:opacity-50 active:scale-[0.995]"
+                : variant === "pill"
+                  ? "inline-flex h-7 max-w-full items-center gap-1 rounded-md bg-content/10 py-0 pr-1.5 pl-2 text-left text-[12px] outline-none hover:bg-content/[0.14] focus-visible:bg-content/[0.14] disabled:opacity-50"
+                  : variant === "transparent"
+                    ? "flex h-9 w-full items-center justify-between gap-2 rounded-md border border-content/10 bg-transparent px-2.5 text-left text-[13px] outline-none hover:border-content/20 focus:border-content/25 disabled:opacity-50 active:scale-[0.99]"
+                    : "flex h-9 w-full items-center justify-between gap-2 rounded-md border border-content/10 bg-background-base px-2.5 text-left text-[13px] outline-none hover:border-content/20 focus:border-content/25 disabled:opacity-50 active:scale-[0.99]"
         }
       >
         <span
@@ -216,7 +222,7 @@ export function SearchableSelect({
           {selected?.label ?? placeholder}
         </span>
         <ChevronDown
-          className={`shrink-0 text-content/45 transition-transform duration-150 ease-out ${variant === "pill" || variant === "row" ? "size-3" : "size-3.5"} ${open ? "rotate-180" : ""}`}
+          className={`shrink-0 text-content/45 transition-transform duration-150 ease-out ${compact ? "size-3" : "size-3.5"} ${open ? "rotate-180" : ""}`}
           strokeWidth={1.75}
         />
       </button>
