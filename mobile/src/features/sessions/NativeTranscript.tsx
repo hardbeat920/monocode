@@ -34,6 +34,9 @@ import type { TurnMetrics } from "@/features/workspace/types";
 import { useColors } from "@/ui/theme";
 import { usePushStarted } from "@/ui/usePushedIn";
 
+import { FadingBackground } from "@/features/background/FadingBackground";
+import { useEmptyBackground } from "@/features/background/useEmptyBackground";
+
 import { EmptySession } from "./EmptySession";
 import { FileOpener } from "./Markdown";
 import { SessionErrorSheet } from "./SessionErrorSheet";
@@ -75,10 +78,12 @@ export function NativeTranscript({
   conversationId,
   agent,
   pushed = false,
+  projectId,
 }: {
   conversationId: string;
   agent?: TranscriptAgent;
   pushed?: boolean;
+  projectId?: string;
 }) {
   const { pairing } = useConnection();
   const { pending, onStatus } = useNativeTranscript(conversationId);
@@ -214,6 +219,12 @@ export function NativeTranscript({
         onAction={handleAction}
         onScrollState={scrollState}
       />
+      {projectId ? (
+        <NativeProjectBackground
+          projectId={projectId}
+          empty={empty && !pending}
+        />
+      ) : null}
       {error ? (
         <SessionErrorSheet
           message={error.text}
@@ -234,3 +245,21 @@ export function NativeTranscript({
   );
 }
 const styles = StyleSheet.create({ fill: { flex: 1 } });
+
+function NativeProjectBackground({
+  projectId,
+  empty,
+}: {
+  projectId: string;
+  empty: boolean;
+}) {
+  const { background } = useEmptyBackground(projectId, empty);
+  return background ? (
+    <View
+      pointerEvents="none"
+      style={[StyleSheet.absoluteFill, { zIndex: -1 }]}
+    >
+      <FadingBackground {...background} />
+    </View>
+  ) : null;
+}

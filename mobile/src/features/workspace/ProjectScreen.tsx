@@ -9,7 +9,7 @@ import { useProjectChanges } from "@/features/connection/useProjectChanges";
 import { useProjectWorktrees } from "@/features/connection/useProjectWorktrees";
 import type { Project, SessionSummary } from "@/features/workspace/types";
 import { use, useCallback, useEffect, useState, type ReactNode } from "react";
-import { Platform, Pressable, StyleSheet } from "react-native";
+import { Platform, Pressable, StyleSheet, View } from "react-native";
 import Animated, {
   Easing,
   useAnimatedStyle,
@@ -20,6 +20,7 @@ import Animated, {
 } from "react-native-reanimated";
 import { scheduleOnRN } from "react-native-worklets";
 
+import { FadingBackground } from "@/features/background/FadingBackground";
 import { useEmptyBackground } from "@/features/background/useEmptyBackground";
 import { ProjectMascot } from "@/features/mascots/ProjectMascot";
 import { effortLabel } from "@/features/models/modelChoice";
@@ -553,17 +554,31 @@ function SessionTranscript({
   // view is the one iOS finds to blur under the native header.
   return (
     <FileOpener value={openFile}>
-      {hasNativeTranscript ? <NativeTranscript key={sessionId} conversationId={sessionId} pushed /> : <Transcript
-        key={sessionId}
-        pushed
-        busy={busy}
-        turns={turns}
-        hasOlder={hasOlder}
-        loadOlder={loadOlder}
-      />}
-      {!hasNativeTranscript && turns.length === 0 && !failed ? (
-        <TranscriptLoading key={`loading:${sessionId}`} />
-      ) : null}
+      <View style={styles.chat}>
+        {hasNativeTranscript ? (
+          <NativeTranscript
+            key={sessionId}
+            conversationId={sessionId}
+            projectId={projectId}
+            pushed
+          />
+        ) : (
+          <Transcript
+            key={sessionId}
+            pushed
+            busy={busy}
+            turns={turns}
+            hasOlder={hasOlder}
+            loadOlder={loadOlder}
+          />
+        )}
+        {!hasNativeTranscript && turns.length === 0 && !failed ? (
+          <TranscriptLoading key={`loading:${sessionId}`} />
+        ) : null}
+        {!hasNativeTranscript ? (
+          <SessionBackground projectId={projectId} empty={turns.length === 0} />
+        ) : null}
+      </View>
     </FileOpener>
   );
 }
@@ -615,3 +630,21 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
 });
+
+function SessionBackground({
+  projectId,
+  empty,
+}: {
+  projectId: string;
+  empty: boolean;
+}) {
+  const { background } = useEmptyBackground(projectId, empty);
+  return background ? (
+    <View
+      pointerEvents="none"
+      style={[StyleSheet.absoluteFill, { zIndex: -1 }]}
+    >
+      <FadingBackground {...background} />
+    </View>
+  ) : null;
+}

@@ -4,6 +4,7 @@ import { useReanimatedKeyboardAnimation } from "react-native-keyboard-controller
 import Animated, {
   Easing,
   FadeIn,
+  ReduceMotion,
   useAnimatedStyle,
 } from "react-native-reanimated";
 
@@ -26,7 +27,9 @@ const MARK_OPACITY = 0.3;
 const ACCESSORY_GAP = 10;
 
 /** The photo is drawn a moment after the screen opens, so it eases in slower. */
-const BACKGROUND_ENTER = FadeIn.duration(520).easing(Easing.out(Easing.quad));
+const BACKGROUND_ENTER = FadeIn.duration(520)
+  .easing(Easing.out(Easing.quad))
+  .reduceMotion(ReduceMotion.System);
 
 // Empty conversation: a dimmed Monocode logo above the prompt, and the
 // project's name under it, over the background set for it on this phone, or
