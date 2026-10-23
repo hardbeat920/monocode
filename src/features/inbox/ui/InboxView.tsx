@@ -1266,6 +1266,7 @@ export function LinkedWorkItemPanel({
     target.repo,
     target.kind,
     target.number,
+    cwd,
   );
   const [item, setItem] = useState<InboxItem | null>(() =>
     cachedItem ? { ...cachedItem, projectPath: cwd, provider: "github" } : null,
@@ -1293,7 +1294,7 @@ export function LinkedWorkItemPanel({
 
   useEffect(() => {
     let cancelled = false;
-    const cached = peekGithubWorkItem(target.repo, target.kind, target.number);
+    const cached = peekGithubWorkItem(target.repo, target.kind, target.number, cwd);
     setItem(
       cached ? { ...cached, projectPath: cwd, provider: "github" } : null,
     );
@@ -2102,14 +2103,14 @@ export function InboxDetail({
               item.number,
             )
           : githubKind
-            ? peekGithubWorkItemDetails(item.repo, githubKind, item.number)
+            ? peekGithubWorkItemDetails(item.repo, githubKind, item.number, item.projectPath)
             : null;
   const cachedDiff = isPr
     ? gitlab
       ? peekGitlabMrDiff(item.repo, item.number)
       : azuredevops
         ? peekAzureDevOpsMrDiff(item.repo, item.number)
-        : peekGithubPrDiff(item.repo, item.number)
+        : peekGithubPrDiff(item.repo, item.number, false, item.projectPath)
     : null;
   const cachedThread = linear
     ? peekLinearIssueThread(item.id ?? "")
@@ -2124,7 +2125,7 @@ export function InboxDetail({
               item.number,
             )
           : githubKind
-            ? peekGithubWorkItemThread(item.repo, githubKind, item.number)
+            ? peekGithubWorkItemThread(item.repo, githubKind, item.number, item.projectPath)
             : null;
   const [details, setDetails] = useState<GithubWorkItemDetails | null>(cached);
   const [loading, setLoading] = useState(cached == null);
@@ -2235,7 +2236,7 @@ export function InboxDetail({
                 item.number,
               )
             : githubKind
-              ? peekGithubWorkItemDetails(item.repo, githubKind, item.number)
+              ? peekGithubWorkItemDetails(item.repo, githubKind, item.number, item.projectPath)
               : null;
     if (cachedDetails) {
       setDetails(cachedDetails);
@@ -2435,6 +2436,7 @@ export function InboxDetail({
       item.repo,
       githubKind,
       item.number,
+      item.projectPath,
     );
     if (cachedThread) {
       setThread(cachedThread);
@@ -2490,7 +2492,7 @@ export function InboxDetail({
       ? peekGitlabMrDiff(item.repo, item.number)
       : azuredevops
         ? peekAzureDevOpsMrDiff(item.repo, item.number)
-        : peekGithubPrDiff(item.repo, item.number, fullFile);
+        : peekGithubPrDiff(item.repo, item.number, fullFile, item.projectPath);
     if (cachedDiff) {
       setPrDiff(cachedDiff);
       setDiffLoading(false);

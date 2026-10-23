@@ -36,6 +36,17 @@ const HOST_COMMANDS = new Set([
   "git_sync",
   "git_pr_status",
   "git_pr_create",
+  "git_github_repo",
+  "git_github_repositories",
+  "git_github_work_items",
+  "git_github_work_item",
+  "git_github_work_item_details",
+  "git_github_work_item_thread",
+  "git_github_work_item_comment",
+  "git_github_pr_action",
+  "git_github_pr_diff",
+  "git_github_pr_checks",
+  "git_github_check_details",
   "git_history",
   "git_commit_files",
   "git_commit_file_diff",
@@ -106,7 +117,9 @@ export async function runRemoteCommand(
     });
   } catch (reason) {
     if (/Unsupported (host method|remote operation|workspace command)/i.test(String(reason)))
-      throw new Error(OUTDATED);
+      throw new Error(command.startsWith("git_github_")
+        ? "Update MonoCode Host in Connections settings to use this project’s GitHub Inbox."
+        : OUTDATED);
     throw reason;
   }
   const fromHost = (path: string) => remotePath(env, path);
