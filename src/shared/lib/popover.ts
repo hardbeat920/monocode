@@ -109,7 +109,15 @@ export function placePopover(
   const needed = vertical ? wanted : width;
   const room = roomOn(preferred, anchor, viewport, gap, padding);
   const flipped = roomOn(OPPOSITE[preferred], anchor, viewport, gap, padding);
-  const side = room >= needed || flipped <= room ? preferred : OPPOSITE[preferred];
+  let side = room >= needed || flipped <= room ? preferred : OPPOSITE[preferred];
+
+  // If neither horizontal direction can fit the popover, fall back to
+  // whichever vertical direction has more usable space.
+  if (!vertical && room < width && flipped < width) {
+    const below = roomOn("bottom", anchor, viewport, gap, padding);
+    const above = roomOn("top", anchor, viewport, gap, padding);
+    side = below >= wanted || below >= above ? "bottom" : "top";
+  }
 
   if (side === "top" || side === "bottom") {
     const left = clamp(
