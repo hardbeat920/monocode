@@ -2045,3 +2045,111 @@ describe("claude manual compaction", () => {
     expect(events.some((event) => event.type === "message.delta")).toBe(false);
   });
 });
+
+describe("claude compaction window", () => {
+  const nativePayload = {
+    rawMaxTokens: 400_000,
+    maxTokens: 400_000,
+    autoCompactThreshold: 367_000,
+    isAutoCompactEnabled: true,
+    model: "claude-opus-5-5",
+  };
+
+  const contextRequests = () =>
+    parse().filter((m) => {
+      const request = m.request as Record<string, unknown> | undefined;
+      return request?.subtype === "get_context_usage";
+    });
+
+  function answerContext(index: number, payload: Record<string, unknown>) {
+    const request = contextRequests()[index];
+    emit({
+      type: "control_response",
+      response: {
+        subtype: "success",
+        request_id: request.request_id,
+        response: payload,
+      },
+    });
+  }
+
+  const compactionEvents = (events: HarnessEvent[]) =>
+    events.filter((event) => event.type === "context");
+
+  it("asks on the first turn without delaying the prompt and publishes only the window", async () => {
+    const { events, turn } = await startTurn("s1");
+    const messages = parse();
+    expect(contextRequests()).toHaveLength(1);
+    const queryIndex = messages.findIndex(
+      (m) =>
+        (m.request as Record<string, unknown> | undefined)?.subtype ===
+        "get_context_usage",
+    );
+    expect(queryIndex).toBeGreaterThanOrEqual(0);
+    expect(queryIndex).toBeLessThan(messages.findIndex((m) => m.type === "user"));
+    expect(compactionEvents(events)).toEqual([
+      { type: "context", compactionWindow: null },
+    ]);
+
+    answerContext(0, nativePayload);
+    expect(compactionEvents(events).at(-1)).toEqual({
+      type: "context",
+      compactionWindow: 400_000,
+    });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+  });
+
+  it("refreshes after a main result and clears when a follow-up turns it off", async () => {
+    const { events, turn } = await startTurn("s1");
+    answerContext(0, nativePayload);
+    emit({
+      type: "result",
+      subtype: "success",
+      session_id: "sess_1",
+      parent_tool_use_id: "toolu_agent",
+    });
+    expect(contextRequests()).toHaveLength(1);
+
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+    expect(contextRequests()).toHaveLength(2);
+
+    answerContext(1, { ...nativePayload, isAutoCompactEnabled: false });
+    expect(compactionEvents(events).at(-1)).toEqual({
+      type: "context",
+      compactionWindow: null,
+    });
+
+    emitFollowUpTurn("later");
+    expect(contextRequests()).toHaveLength(3);
+  });
+
+  it("ignores a reply that lands after the session stopped", async () => {
+    const { events, turn } = await startTurn("s1");
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+    const before = compactionEvents(events).length;
+    await stopClaudeSession("s1");
+    answerContext(0, nativePayload);
+    expect(compactionEvents(events)).toHaveLength(before);
+  });
+
+  it("clears the previous reading when a fresh process starts", async () => {
+    const first = await startTurn("s1");
+    answerContext(0, nativePayload);
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await first.turn;
+    await stopClaudeSession("s1");
+    sent.length = 0;
+
+    const second = await startTurn("s1", { providerAccountId: "other" });
+    expect(compactionEvents(second.events)[0]).toEqual({
+      type: "context",
+      compactionWindow: null,
+    });
+    expect(compactionEvents(second.events)).toHaveLength(1);
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await second.turn;
+  });
+});
