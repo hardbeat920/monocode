@@ -288,7 +288,13 @@ import {
   clearInboxCache,
   githubStatus,
   type GithubStatus,
+  type InboxProvider,
 } from "../../inbox/model/githubTasks";
+import {
+  setInboxConnectorEnabled,
+  inboxConnectorEnabled,
+} from "../../inbox/model/inboxConnectors";
+import { INBOX_SOURCE_LABELS } from "../../inbox/model/inboxFilters";
 import {
   disconnectGitlab,
   gitlabConnected,
@@ -1313,6 +1319,7 @@ function InboxPage({
           </span>
         }
         description="Pull requests, reviews, and issues, read through the GitHub CLI."
+        action={<InboxConnectorSwitch source="github" />}
       >
         <GithubSettings />
       </Group>
@@ -1326,6 +1333,7 @@ function InboxPage({
           </span>
         }
         description="Merge requests from GitLab.com or a self-managed instance."
+        action={<InboxConnectorSwitch source="gitlab" />}
       >
         <GitlabSettings />
       </Group>
@@ -1342,6 +1350,7 @@ function InboxPage({
           </span>
         }
         description="Pull requests and Boards work items from your ADO organization."
+        action={<InboxConnectorSwitch source="azuredevops" />}
       >
         <AzureDevOpsSettings />
       </Group>
@@ -1355,6 +1364,7 @@ function InboxPage({
           </span>
         }
         description="Jira Cloud issues from the projects you pick."
+        action={<InboxConnectorSwitch source="jira" />}
       >
         <JiraSettings />
       </Group>
@@ -1368,10 +1378,47 @@ function InboxPage({
           </span>
         }
         description="Issues assigned to you, from the teams you pick."
+        action={<InboxConnectorSwitch source="linear" />}
       >
         <LinearSettings />
       </Group>
     </>
+  );
+}
+
+function InboxConnectorSwitch({ source }: { source: InboxProvider }) {
+  const [enabled, setEnabled] = useState(() => inboxConnectorEnabled(source));
+  // Re-read on mount so returning from the Inbox empty state starts exact.
+  useEffect(() => {
+    setEnabled(inboxConnectorEnabled(source));
+  }, [source]);
+
+  const toggle = (checked: boolean) => {
+    setEnabled(checked);
+    setInboxConnectorEnabled(source, checked);
+    // Items from the switched-off connector must not linger in the cache.
+    clearInboxCache();
+  };
+
+  return (
+    <span className="relative flex shrink-0">
+      <input
+        type="checkbox"
+        role="switch"
+        aria-label={`${INBOX_SOURCE_LABELS[source]} inbox connector enabled`}
+        checked={enabled}
+        onChange={(event) => toggle(event.target.checked)}
+        className="peer sr-only"
+      />
+      <span
+        className="relative h-5 w-9 rounded-full bg-content/20 transition-colors peer-checked:bg-accent peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-accent motion-reduce:transition-none"
+        aria-hidden="true"
+      />
+      <span
+        className="pointer-events-none absolute left-0.5 top-0.5 size-4 rounded-full bg-white transition-transform peer-checked:translate-x-4 motion-reduce:transition-none"
+        aria-hidden="true"
+      />
+    </span>
   );
 }
 

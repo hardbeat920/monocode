@@ -78,6 +78,7 @@ import {
   type InboxItem,
   type InboxProviderErrors,
   type InboxQuery,
+  clearInboxCache,
 } from "../model/githubTasks";
 import {
   applyInboxFilters,
@@ -100,6 +101,10 @@ import {
   type InboxFilters,
   type InboxSource,
 } from "../model/inboxFilters";
+import {
+  INBOX_CONNECTORS_CHANGE_EVENT,
+  loadInboxDisabledConnectors,
+} from "../model/inboxConnectors";
 import { copyText } from "../../../platform/tauri/clipboard";
 import { projectKey, projectName } from "../../../shared/lib/paths";
 import { inProjectScope } from "../../projects/model/projectScope";
@@ -455,8 +460,11 @@ export function InboxView({
   const [targetItem, setTargetItem] = useState<InboxItem | null>(null);
   const [filters, setFilters] = useState(loadInboxFilters);
   const [connections, setConnections] = useState(loadInboxConnections);
+  const [disabledConnectors, setDisabledConnectors] = useState(
+    loadInboxDisabledConnectors,
+  );
   const [source, setSource] = useState(() =>
-    resolveInboxSource(loadInboxSource(), connections),
+    resolveInboxSource(loadInboxSource(), connections, disabledConnectors),
   );
   const [connectMenuOpen, setConnectMenuOpen] = useState(false);
   const connectButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -589,6 +597,19 @@ export function InboxView({
   }, []);
 
   useEffect(() => {
+    const onChange = () => {
+      setDisabledConnectors(loadInboxDisabledConnectors());
+      // Cached lists may still carry items from the connector just switched
+      // off; a clean slate re-fetches only the enabled ones.
+      clearInboxCache();
+      setRefresh((value) => value + 1);
+    };
+    window.addEventListener(INBOX_CONNECTORS_CHANGE_EVENT, onChange);
+    return () =>
+      window.removeEventListener(INBOX_CONNECTORS_CHANGE_EVENT, onChange);
+  }, []);
+
+  useEffect(() => {
     const onChange = () => setRefresh((value) => value + 1);
     window.addEventListener(GITLAB_CHANGE_EVENT, onChange);
     window.addEventListener(AZUREDEVOPS_CHANGE_EVENT, onChange);
@@ -662,16 +683,20 @@ export function InboxView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Disconnecting can pull the tab out from under the current selection.
+  // Disconnecting a connector or switching it off in Settings can pull the
+  // tab out from under the current selection.
   useEffect(() => {
-    const next = resolveInboxSource(source, connections);
+    const next = resolveInboxSource(source, connections, disabledConnectors);
     if (next === source) return;
     setSource(next);
     saveInboxSource(next);
-  }, [connections, source]);
+  }, [connections, disabledConnectors, source]);
 
-  const visibleSources = visibleInboxSources(connections);
-  const connectableSources = connectableInboxSources(connections);
+  const visibleSources = visibleInboxSources(connections, disabledConnectors);
+  const connectableSources = connectableInboxSources(
+    connections,
+    disabledConnectors,
+  );
   const sourceAvailable = visibleSources.includes(source);
   const noSourcesConnected = visibleSources.length === 0;
 
@@ -1046,9 +1071,22 @@ export function InboxView({
         className="min-h-0 flex-1 overflow-y-auto overscroll-none"
       >
         {noSourcesConnected ? (
-          <p className="px-3 py-3 text-[12px] text-content/50">
-            Add a connection to start using the Inbox.
-          </p>
+          disabledConnectors.length > 0 ? (
+            <div className="flex flex-col gap-2 px-3 py-3 text-[12px] text-content/50">
+              <span>All inbox connectors are switched off in Settings.</span>
+              <button
+                type="button"
+                onClick={() => onOpenIntegrations(disabledConnectors[0])}
+                className="w-fit rounded-md border border-content/10 px-2 py-1 text-[12px] text-content/80 hover:border-content/25 hover:text-content"
+              >
+                Open Inbox settings
+              </button>
+            </div>
+          ) : (
+            <p className="px-3 py-3 text-[12px] text-content/50">
+              Add a connection to start using the Inbox.
+            </p>
+          )
         ) : sourceError && visibleItems.length === 0 ? (
           <p className="px-3 py-2 text-[12px] text-content/50">{sourceError}</p>
         ) : loading && items.length === 0 ? (

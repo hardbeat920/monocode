@@ -22,10 +22,7 @@ import {
   clearCachedRateLimits,
   setCachedRateLimits,
 } from "../../providers/model/rateLimitsCache";
-import {
-  HARNESSES,
-  HARNESS_TITLE,
-} from "../../sessions/model/session";
+import { HARNESSES, HARNESS_TITLE } from "../../sessions/model/session";
 import { saveMaskEmails, saveShowRemainingUsage } from "../model/displayPrefs";
 import {
   createMono,
@@ -109,10 +106,23 @@ beforeEach(() => {
   document.body.append(container);
   root = createRoot(container);
   onSelectSection = vi.fn();
-  vi.mocked(invoke).mockReset().mockImplementation(async command => command === "mobile_status" ? {
-    enabled: false, listening: false, name: "Desktop", fingerprint: null,
-    openRouter: true, remoteAddress: "", routerStatus: "Off", addresses: [], devices: [],
-  } : undefined);
+  vi.mocked(invoke)
+    .mockReset()
+    .mockImplementation(async (command) =>
+      command === "mobile_status"
+        ? {
+            enabled: false,
+            listening: false,
+            name: "Desktop",
+            fingerprint: null,
+            openRouter: true,
+            remoteAddress: "",
+            routerStatus: "Off",
+            addresses: [],
+            devices: [],
+          }
+        : undefined,
+    );
 });
 
 afterEach(async () => {
@@ -144,10 +154,12 @@ describe("settings pages", () => {
     await render("general");
     await render("monos");
     expect(toggle(mono.id).getAttribute("aria-checked")).toBe("true");
-    await act(async () => updateMono(mono.id, (entry) => ({
-      ...entry,
-      showStartedSessionsInSidebar: false,
-    })));
+    await act(async () =>
+      updateMono(mono.id, (entry) => ({
+        ...entry,
+        showStartedSessionsInSidebar: false,
+      })),
+    );
     expect(toggle(mono.id).getAttribute("aria-checked")).toBe("false");
   });
 
@@ -448,7 +460,9 @@ describe("settings pages", () => {
     const save = async (provider: "Codex" | "OpenCode", path: string) => {
       const id = `${provider.toLowerCase()}-binary-path`;
       if (!document.querySelector(`#${id}`)) {
-        if (!document.querySelector(`[aria-label="Edit ${provider} CLI path"]`)) {
+        if (
+          !document.querySelector(`[aria-label="Edit ${provider} CLI path"]`)
+        ) {
           await act(async () =>
             container
               .querySelector<HTMLButtonElement>(
@@ -510,11 +524,13 @@ describe("settings pages", () => {
       ).codex,
     ).toBe("/opt/codex/bin/codex");
     await act(async () =>
-      Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
-        (button) => button.textContent === "Cancel",
-      )!.click(),
+      Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
+        .find((button) => button.textContent === "Cancel")!
+        .click(),
     );
-    expect(document.querySelector('[aria-label="Retry Codex configured path"]')).not.toBeNull();
+    expect(
+      document.querySelector('[aria-label="Retry Codex configured path"]'),
+    ).not.toBeNull();
 
     failAutoCodex = true;
     await save("Codex", "");
@@ -782,7 +798,9 @@ describe("settings pages", () => {
   it("shows path details for every Agent CLI", async () => {
     await render("providers");
     expect(
-      vi.mocked(invoke).mock.calls.some(([command]) => command === "harness_exec"),
+      vi
+        .mocked(invoke)
+        .mock.calls.some(([command]) => command === "harness_exec"),
     ).toBe(false);
     for (const harness of HARNESSES) {
       expect(
@@ -812,7 +830,8 @@ describe("settings pages", () => {
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "harness_resolve_codex") return { path: "/auto/codex" };
       if (command === "harness_exec") return "codex-cli 0.156.1";
-      if (command === "reveal_path") throw new Error("File manager unavailable");
+      if (command === "reveal_path")
+        throw new Error("File manager unavailable");
       return undefined;
     });
     await render("providers");
@@ -1157,5 +1176,24 @@ describe("providers scope inheritance", () => {
     expect(cursorToggle.closest(".settings-row")?.textContent).toContain(
       "Hidden globally",
     );
+  });
+
+  it("keeps an inbox connector switch on until it is turned off", async () => {
+    const key = "monocode.inboxDisabledConnectors";
+    expect(JSON.parse(localStorage.getItem(key) ?? "[]")).toEqual([]);
+
+    const switchNode = (source: string) =>
+      container.querySelector<HTMLInputElement>(
+        `input[role="switch"][aria-label="${source} inbox connector enabled"]`,
+      )!;
+    await render("inbox");
+    expect(switchNode("GitHub").checked).toBe(true);
+    await act(async () => switchNode("GitHub").click());
+    expect(switchNode("GitHub").checked).toBe(false);
+    expect(JSON.parse(localStorage.getItem(key) ?? "[]")).toEqual(["github"]);
+
+    await act(async () => switchNode("GitHub").click());
+    expect(switchNode("GitHub").checked).toBe(true);
+    expect(JSON.parse(localStorage.getItem(key) ?? "[]")).toEqual([]);
   });
 });

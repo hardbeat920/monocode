@@ -40,6 +40,7 @@ import {
   type RecentProject,
 } from "../../projects/model/recents";
 import { recordInboxSelfActivity } from "./inboxSelfActivity";
+import { loadInboxDisabledConnectors } from "./inboxConnectors";
 
 export type GithubTaskKind = "issue" | "pr";
 export type GithubPrAction =
@@ -737,10 +738,13 @@ async function fetchInboxItems(
   projects: readonly { path: string }[],
   query: InboxQuery,
 ): Promise<InboxListResult> {
+  const disabled = loadInboxDisabledConnectors();
   const unique = uniqueInboxProjects(projects);
   const preferredPaths = unique.map((project) => project.path);
   const discovery = await Promise.allSettled(
-    unique.map((project) => githubRepositories(project.path)),
+    disabled.includes("github")
+      ? []
+      : unique.map((project) => githubRepositories(project.path)),
   );
   const resolved = discovery.flatMap((result, index) =>
     result.status === "fulfilled"
@@ -770,10 +774,11 @@ async function fetchInboxItems(
     preferredPaths,
   );
   const errors: InboxProviderErrors = {};
-  if (github.error && unique.length > 0) errors.github = github.error;
+  if (github.error && unique.length > 0 && !disabled.includes("github"))
+    errors.github = github.error;
 
   let linearItems: InboxItem[] = [];
-  if ((await linearConnected()).connected) {
+  if ((await linearConnected()).connected && !disabled.includes("linear")) {
     try {
       linearItems = await fetchLinearInboxItems(query);
     } catch (error) {
@@ -783,7 +788,7 @@ async function fetchInboxItems(
 
   let jiraItems: InboxItem[] = [];
   try {
-    if ((await jiraConnected()).connected) {
+    if ((await jiraConnected()).connected && !disabled.includes("jira")) {
       jiraItems = await fetchJiraInboxItems(query);
     }
   } catch (error) {
@@ -791,7 +796,7 @@ async function fetchInboxItems(
   }
 
   let gitlabItems: InboxItem[] = [];
-  if ((await gitlabConnected()).connected) {
+  if ((await gitlabConnected()).connected && !disabled.includes("gitlab")) {
     const gitlab = await fetchRepositoryInboxItems(
       "gitlab",
       unique,
@@ -803,7 +808,10 @@ async function fetchInboxItems(
   }
 
   let azureDevOpsItems: InboxItem[] = [];
-  if ((await azureDevOpsConnected()).connected) {
+  if (
+    (await azureDevOpsConnected()).connected &&
+    !disabled.includes("azuredevops")
+  ) {
     const azuredevops = await fetchRepositoryInboxItems(
       "azuredevops",
       unique,

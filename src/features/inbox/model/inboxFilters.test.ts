@@ -546,6 +546,33 @@ describe("visibleInboxSources", () => {
       }),
     ).toEqual(["github", "linear", "jira", "gitlab", "azuredevops"]);
   });
+
+  it("skips connectors switched off in settings", () => {
+    expect(
+      visibleInboxSources(
+        {
+          github: true,
+          linear: true,
+          jira: true,
+          gitlab: true,
+          azuredevops: true,
+        },
+        ["github", "gitlab"],
+      ),
+    ).toEqual(["linear", "jira", "azuredevops"]);
+    expect(
+      visibleInboxSources(
+        {
+          github: true,
+          linear: true,
+          jira: true,
+          gitlab: true,
+          azuredevops: true,
+        },
+        ["github", "linear", "jira", "gitlab", "azuredevops"],
+      ),
+    ).toEqual([]);
+  });
 });
 
 describe("connectableInboxSources", () => {
@@ -581,6 +608,33 @@ describe("connectableInboxSources", () => {
       }),
     ).toEqual([]);
   });
+
+  it("offers no Add menu entries for connectors switched off in settings", () => {
+    expect(
+      connectableInboxSources(
+        {
+          github: false,
+          linear: false,
+          jira: false,
+          gitlab: false,
+          azuredevops: false,
+        },
+        ["github"],
+      ),
+    ).toEqual(["linear", "jira", "gitlab", "azuredevops"]);
+    expect(
+      connectableInboxSources(
+        {
+          github: false,
+          linear: false,
+          jira: false,
+          gitlab: false,
+          azuredevops: false,
+        },
+        ["github", "linear", "jira", "gitlab", "azuredevops"],
+      ),
+    ).toEqual([]);
+  });
 });
 
 describe("resolveInboxSource", () => {
@@ -614,6 +668,35 @@ describe("resolveInboxSource", () => {
         gitlab: false,
         azuredevops: false,
       }),
+    ).toBe("github");
+  });
+
+  it("switches to the first enabled source when the selection is switched off", () => {
+    expect(
+      resolveInboxSource(
+        "github",
+        {
+          github: true,
+          linear: true,
+          jira: true,
+          gitlab: true,
+          azuredevops: true,
+        },
+        ["github", "linear"],
+      ),
+    ).toBe("jira");
+    expect(
+      resolveInboxSource(
+        "github",
+        {
+          github: true,
+          linear: true,
+          jira: true,
+          gitlab: true,
+          azuredevops: true,
+        },
+        ["github", "linear", "jira", "gitlab", "azuredevops"],
+      ),
     ).toBe("github");
   });
 
