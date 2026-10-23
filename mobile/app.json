@@ -7,11 +7,12 @@
     "runtimeVersion": {
       "policy": "fingerprint"
     },
-    "orientation": "portrait",
+    "orientation": "default",
     "icon": "./assets/images/icon.png",
     "scheme": "monocode",
     "userInterfaceStyle": "automatic",
     "ios": {
+      "supportsTablet": true,
       "icon": "./assets/app.icon",
       "bundleIdentifier": "com.hardbeat920.monocode-mobile",
       "infoPlist": {

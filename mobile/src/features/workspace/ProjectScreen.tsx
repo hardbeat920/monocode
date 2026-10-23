@@ -1,3 +1,4 @@
+import { useWorkspaceSidebar } from "./WorkspaceSidebarContext";
 import { router, Stack, useIsFocused } from "expo-router";
 import {
   ConnectionNotice,
@@ -9,7 +10,7 @@ import { useProjectChanges } from "@/features/connection/useProjectChanges";
 import { useProjectWorktrees } from "@/features/connection/useProjectWorktrees";
 import type { Project, SessionSummary } from "@/features/workspace/types";
 import { use, useCallback, useEffect, useState, type ReactNode } from "react";
-import { Platform, Pressable, StyleSheet } from "react-native";
+import { Platform, Pressable, StyleSheet, Text } from "react-native";
 import Animated, {
   Easing,
   useAnimatedStyle,
@@ -44,7 +45,10 @@ import {
   markStartedHere,
   markViewing,
 } from "@/features/sessions/activityStore";
-import { SessionContent, SessionScreen } from "@/features/sessions/SessionScreen";
+import {
+  SessionContent,
+  SessionScreen,
+} from "@/features/sessions/SessionScreen";
 import { SessionsPage } from "@/features/sessions/SessionsPage";
 import {
   SessionTitle,
@@ -93,13 +97,20 @@ export function ProjectScreen({
   const { startSession, sendMessage, stop } = useWorkspace();
   const [openAfterStarting] = useOpenSessionAfterStarting();
   const colors = useColors();
+  const sidebar = useWorkspaceSidebar();
   const blurTarget = use(GlassBlurTarget);
   // What it runs with, as the model picker, a route over it, sets it.
-  const { session, chosen, startAccess, accounts } = useSessionChoice(project, sessionId);
+  const { session, chosen, startAccess, accounts } = useSessionChoice(
+    project,
+    sessionId,
+  );
   useForgetChoiceOnLeave(project.id, sessionId);
   // Open, however it was reached, a session is off the finished deck, and
   // stays off it as it finishes in front of the user.
-  useEffect(() => (sessionId ? markViewing(sessionId) : undefined), [sessionId]);
+  useEffect(
+    () => (sessionId ? markViewing(sessionId) : undefined),
+    [sessionId],
+  );
   // The session's watch opens as its push starts: its first turns, landing
   // before, would hold the slide back.
   const pushStarted = usePushStarted(!!sessionId);
@@ -125,7 +136,7 @@ export function ProjectScreen({
     sessionId,
   );
   // Only a new session has pages; a session is the chat alone.
-  const pages = useProjectPages(project.id, !sessionId);
+  const pages = useProjectPages(project.id, !sessionId && !sidebar.wide);
   // Between pages, mid-swipe or springing to one.
   const swiping = useDerivedValue(() => {
     const at = pages.progress.get();
@@ -266,27 +277,39 @@ export function ProjectScreen({
   const headerSurface = (content: ReactNode) => (
     <GlassBlurTarget value={blurTarget}>{content}</GlassBlurTarget>
   );
-  const projectAvatar = (
-    <ProjectHeaderButton
-      label={`Switch project, ${project.name}`}
-      onPress={() => router.push({
-        pathname: "/projects",
-        params: { current: project.id },
-      })}
-    >
-      <ProjectMascot
-        project={project.path}
-        name={project.mascot}
-        color={project.color}
-        size={20}
-      />
-    </ProjectHeaderButton>
-  );
+  const projectAvatar =
+    sidebar.wide && sidebar.open ? null : (
+      <ProjectHeaderButton
+        label={
+          sidebar.wide
+            ? sidebar.open
+              ? "Hide sidebar"
+              : "Show sidebar"
+            : `Switch project, ${project.name}`
+        }
+        onPress={() =>
+          sidebar.wide
+            ? sidebar.toggle()
+            : router.push({
+                pathname: "/projects",
+                params: { current: project.id },
+              })
+        }
+      >
+        {sidebar.wide ? (
+          <Icon name="panel" size={22} />
+        ) : (
+          <ProjectMascot
+            project={project.path}
+            name={project.mascot}
+            color={project.color}
+            size={20}
+          />
+        )}
+      </ProjectHeaderButton>
+    );
   const settingsButton = (
-    <ProjectHeaderButton
-      label="Settings"
-      onPress={openSettings}
-    >
+    <ProjectHeaderButton label="Settings" onPress={openSettings}>
       <Icon name="settings" size={22} color={colors.content} />
     </ProjectHeaderButton>
   );
@@ -342,7 +365,7 @@ export function ProjectScreen({
         )
       }
       // The composer, its blur and all, slides off with the new session's page.
-      dockStyle={sessionId ? undefined : pages.slide}
+      dockStyle={sessionId || sidebar.wide ? undefined : pages.slide}
       composer={
         <Composer
           key={sessionId ?? project.id}
@@ -403,14 +426,37 @@ export function ProjectScreen({
                   ...androidBackHeader(sessionTitle),
                   headerTitleAlign: "left",
                   headerRight: () => headerSurface(sessionToolbar),
+                  headerLeft:
+                    sidebar.wide && !sidebar.open
+                      ? () => headerSurface(projectAvatar)
+                      : undefined,
                 }
-              : { headerTitle: "", headerBackVisible: true }
+              : {
+                  headerTitle: "",
+                  headerBackVisible: !(sidebar.wide && !sidebar.open),
+                }
             : {
-                headerTitle: () => <ProjectSwitch pages={pages} />,
+                headerBackVisible: false,
+                headerTitle: () =>
+                  sidebar.wide ? (
+                    <Text
+                      style={{
+                        color: colors.content,
+                        fontSize: 17,
+                        fontWeight: "600",
+                      }}
+                    >
+                      {project.name}
+                    </Text>
+                  ) : (
+                    <ProjectSwitch pages={pages} />
+                  ),
                 ...(Platform.OS === "android"
                   ? {
                       headerTitleAlign: "center" as const,
-                      headerLeft: () => headerSurface(projectAvatar),
+                      headerLeft: projectAvatar
+                        ? () => headerSurface(projectAvatar)
+                        : undefined,
                       headerRight: () => headerSurface(settingsButton),
                       headerBackVisible: false,
                     }
@@ -422,7 +468,7 @@ export function ProjectScreen({
         Platform.OS === "android" ? null : (
           sessionTitle
         )
-      ) : Platform.OS === "android" ? null : (
+      ) : Platform.OS === "android" || !projectAvatar ? null : (
         <Stack.Toolbar placement="left">
           {/* The project's mascot in the bar's glass, for the button. */}
           <Stack.Toolbar.View>{projectAvatar}</Stack.Toolbar.View>
@@ -447,6 +493,15 @@ export function ProjectScreen({
             busy={conversation.busy}
             failed={!!conversation.error}
           />
+        ) : sidebar.wide ? (
+          <Animated.View style={[styles.chat, emptyStyle]}>
+            <ProjectEmptySession
+              project={project}
+              inView={focused}
+              swiping={swiping}
+              onOpen={(session) => openSession(session.id)}
+            />
+          </Animated.View>
         ) : (
           <ProjectPages
             pages={pages}
@@ -553,14 +608,18 @@ function SessionTranscript({
   // view is the one iOS finds to blur under the native header.
   return (
     <FileOpener value={openFile}>
-      {hasNativeTranscript ? <NativeTranscript key={sessionId} conversationId={sessionId} pushed /> : <Transcript
-        key={sessionId}
-        pushed
-        busy={busy}
-        turns={turns}
-        hasOlder={hasOlder}
-        loadOlder={loadOlder}
-      />}
+      {hasNativeTranscript ? (
+        <NativeTranscript key={sessionId} conversationId={sessionId} pushed />
+      ) : (
+        <Transcript
+          key={sessionId}
+          pushed
+          busy={busy}
+          turns={turns}
+          hasOlder={hasOlder}
+          loadOlder={loadOlder}
+        />
+      )}
       {!hasNativeTranscript && turns.length === 0 && !failed ? (
         <TranscriptLoading key={`loading:${sessionId}`} />
       ) : null}
@@ -568,7 +627,11 @@ function SessionTranscript({
   );
 }
 
-function ProjectHeaderButton({ label, onPress, children }: {
+function ProjectHeaderButton({
+  label,
+  onPress,
+  children,
+}: {
   label: string;
   onPress: () => void;
   children: ReactNode;

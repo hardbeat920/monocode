@@ -1,3 +1,4 @@
+import { usePaneWidth } from "@/ui/PaneWidth";
 import * as Haptics from "expo-haptics";
 import { useIsFocused } from "expo-router";
 import {
@@ -8,7 +9,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Keyboard, StyleSheet, useWindowDimensions, View } from "react-native";
+import { Keyboard, StyleSheet, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import {
   ReduceMotion,
@@ -115,7 +116,7 @@ export function useScenePager(
 
 /** The pan behind useScenePager, over the whole scene. */
 export function ScenePagerHost({ children }: { children: ReactNode }) {
-  const { width } = useWindowDimensions();
+  const width = usePaneWidth();
   const progress = useSharedValue(0);
   const target = useSharedValue(0);
   const enabled = useSharedValue(false);

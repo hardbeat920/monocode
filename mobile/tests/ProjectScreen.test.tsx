@@ -327,6 +327,15 @@ describe("new session composer workspace", () => {
       button("Send").click();
       await Promise.resolve();
     });
+  it("hides the native back button on new sessions while keeping it for conversations", () => {
+    render();
+    expect(desktop.header.headerBackVisible).toBe(false);
+    render("existing-session");
+    expect(desktop.header.headerBackVisible).toBe(true);
+    render();
+    expect(desktop.header.headerBackVisible).toBe(false);
+  });
+
   beforeEach(() => {
     desktop.startSession.mockReset().mockResolvedValue("started-session");
     desktop.sendMessage.mockReset().mockResolvedValue(undefined);

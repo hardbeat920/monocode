@@ -5,6 +5,7 @@ import {
   SessionTitle,
   SessionToolbar,
 } from "@/features/sessions/SessionToolbar";
+import { WorkspaceSidebarContext } from "@/features/workspace/WorkspaceSidebarContext";
 import type { SessionSummary } from "@/features/workspace/types";
 
 const app = vi.hoisted(() => ({
@@ -17,15 +18,18 @@ const app = vi.hoisted(() => ({
   remove: vi.fn(async () => {}),
   rename: vi.fn(async () => {}),
 }));
+vi.mock("@/ui/CircleButton", () => ({ CircleButton: ({ label, onPress }: { label: string; onPress: () => void }) => <button aria-label={label} onClick={onPress}>{label}</button> }));
+vi.mock("@/ui/Icon", () => ({ Icon: () => null }));
 vi.mock("@/ui/LiquidView", () => ({
   LiquidView: ({ children, innerStyle }: { children: ReactNode; innerStyle: object }) => <div data-glass style={innerStyle}>{children}</div>,
 }));
 vi.mock("expo-router", () => ({
   router: { push: app.push, back: app.back },
   Stack: {
-    Toolbar: () => {
-      throw new Error("Android must not render native iOS toolbar items");
-    },
+    Toolbar: Object.assign(({ children }: { children: ReactNode }) => {
+      if (app.os === "android") throw new Error("Android must not render native iOS toolbar items");
+      return <div>{children}</div>;
+    }, { View: ({ children }: { children: ReactNode }) => <div>{children}</div> }),
   },
 }));
 vi.mock("expo-clipboard", () => ({ setStringAsync: app.copy }));
@@ -169,6 +173,7 @@ beforeEach(() => {
   (
     globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
   ).IS_REACT_ACT_ENVIRONMENT = true;
+  app.os = "android";
   vi.clearAllMocks();
   container = document.createElement("div");
   root = createRoot(container);
@@ -266,4 +271,26 @@ it("keeps archive/delete confirmations and returns before removing the session",
     ).toHaveBeenCalledWith("session");
     vi.clearAllMocks();
   }
+});
+
+
+it("puts the collapsed sidebar toggle before Back with a gap, and removes it when open", async () => {
+  app.os = "ios";
+  const toggle = vi.fn();
+  const show = (wide: boolean, open: boolean) => act(() => root.render(
+    <WorkspaceSidebarContext value={{ wide, open, toggle }}>
+      <SessionTitle title="Session" subtitle="Project" />
+    </WorkspaceSidebarContext>,
+  ));
+  show(true, false);
+  expect([...container.querySelectorAll("button")].map((item) => item.getAttribute("aria-label"))).toEqual(["Show sidebar", "Back"]);
+  expect(button("Show sidebar").parentElement!.style.gap).toBe("12px");
+  await click("Show sidebar");
+  expect(toggle).toHaveBeenCalledOnce();
+  await click("Back");
+  expect(app.back).toHaveBeenCalledOnce();
+  show(true, true);
+  expect(container.querySelectorAll("button")).toHaveLength(0);
+  show(false, false);
+  expect(container.querySelectorAll("button")).toHaveLength(0);
 });
