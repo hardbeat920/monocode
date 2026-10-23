@@ -487,6 +487,7 @@ export class WorkspaceCommands {
   private async gitCommand(cwd: unknown, args: string[], env?: NodeJS.ProcessEnv): Promise<string> {
     const root = await this.gitRoot(cwd);
     return (await exec("git", ["-c", "core.pager=cat", ...args], {
+      windowsHide: true,
       cwd: root,
       timeout: 30_000,
       maxBuffer: 4 * 1024 * 1024,
@@ -535,6 +536,7 @@ export class WorkspaceCommands {
     let top: string;
     try {
       top = (await exec("git", ["-C", directory, "rev-parse", "--show-toplevel"], {
+        windowsHide: true,
         timeout: 30_000, encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
       })).stdout.replace(/[\r\n]+$/, "");
     } catch (error) {
@@ -585,6 +587,7 @@ export class WorkspaceCommands {
   private async ghCommand(cwd: unknown, args: string[]): Promise<string> {
     const root = await this.gitRoot(cwd);
     return (await exec("gh", args, {
+      windowsHide: true,
       cwd: root,
       timeout: 30_000,
       maxBuffer: 1024 * 1024,
@@ -704,6 +707,7 @@ export class WorkspaceCommands {
   private async gitBlob(root: string, spec: string) {
     try {
       const { stdout } = await exec("git", ["show", spec], {
+        windowsHide: true,
         cwd: root,
         timeout: 30_000,
         maxBuffer: MAX_TEXT_FILE + 1024,

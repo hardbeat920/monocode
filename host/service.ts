@@ -137,6 +137,7 @@ export function startDetached(options: ServiceOptions, path: string): void {
         String(options.port),
       ],
       {
+        windowsHide: true,
         detached: true,
         stdio: ["ignore", log, log],
         env: { ...process.env, PATH: path },
