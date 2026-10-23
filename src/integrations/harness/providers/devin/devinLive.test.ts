@@ -9,7 +9,7 @@ vi.mock("../../core/child", () => ({
   resolveDevinBinary: async () => ({ path: "/fake/devin" }),
   spawnChild: async (...args: unknown[]) => {
     children.spawned += 1;
-    children.askEdits.push(args[7] === true);
+    children.askEdits.push(args[8] === true);
   },
   killChild: async () => {
     children.killed += 1;

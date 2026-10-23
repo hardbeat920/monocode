@@ -18,6 +18,10 @@ import {
   type RemoteProvider,
 } from "../src/features/connections/model/protocol";
 import { providerLaunch, resolveProvider } from "./process";
+import {
+  parseInheritedOpenCodeConfig,
+  serializeOpenCodeConfig,
+} from "./opencode-config";
 
 const exec = promisify(execFile);
 const ALLOWED_EXEC_ARGS: readonly (readonly string[])[] = [
@@ -29,12 +33,14 @@ const ALLOWED_EXEC_ARGS: readonly (readonly string[])[] = [
   ["status", "--json"],
   ["agent", "list"],
 ];
-// OpenCode 2.x runs as a background service; other providers' CLIs may give
-// these subcommands unrelated meanings, so they stay OpenCode-only.
+// OpenCode 2.x runs as a background service, and `debug paths` reports the
+// owned data directory. Other providers' CLIs may give these subcommands
+// unrelated meanings, so they stay OpenCode-only.
 const OPENCODE_EXEC_ARGS: readonly (readonly string[])[] = [
   ["service", "status"],
   ["service", "start"],
   ["service", "get", "password"],
+  ["debug", "paths"],
 ];
 // Devin reads its login location from `auth status`.
 const DEVIN_EXEC_ARGS: readonly (readonly string[])[] = [["auth", "status"]];
@@ -96,6 +102,35 @@ function loopbackUrl(value: unknown): string {
   )
     throw new Error("OpenCode HTTP is limited to localhost");
   return url.href;
+}
+
+export function mergeOpenCodeConfig(
+  base: string | undefined,
+  override: string,
+  cwd = process.cwd(),
+  environment: NodeJS.ProcessEnv = process.env,
+): string {
+  const original = base
+    ? parseInheritedOpenCodeConfig(base, cwd, environment)
+    : {};
+  const policy = JSON.parse(override);
+  const object = (value: unknown): value is Record<string, unknown> =>
+    value !== null && typeof value === "object" && !Array.isArray(value);
+  if (!object(original) || !object(policy))
+    throw new Error("Invalid OpenCode config object");
+  const merge = (
+    target: Record<string, unknown>,
+    patch: Record<string, unknown>,
+  ) => {
+    for (const [key, value] of Object.entries(patch)) {
+      if (["__proto__", "constructor", "prototype"].includes(key))
+        throw new Error("Invalid OpenCode config key");
+      if (object(value) && object(target[key])) merge(target[key], value);
+      else target[key] = value;
+    }
+  };
+  merge(original, policy);
+  return serializeOpenCodeConfig(original);
 }
 
 /** Native process implementation for the headless execution proof. */
@@ -204,12 +239,36 @@ export class HostChildBackend implements ChildBackend {
         this.stopStream(id);
         const controller = new AbortController();
         this.streams.set(id, controller);
-        void this.readStream(
-          id,
-          url,
-          args.headers as Record<string, string> | undefined,
-          controller,
-        );
+        const timer = setTimeout(() => controller.abort(), 10_000);
+        try {
+          const response = await fetch(url, {
+            headers: {
+              Accept: "text/event-stream",
+              ...(args.headers as Record<string, string>),
+            },
+            redirect: "error",
+            signal: controller.signal,
+          });
+          if (
+            !response.ok ||
+            !response.body ||
+            !response.headers
+              .get("content-type")
+              ?.startsWith("text/event-stream")
+          )
+            throw new Error(
+              `OpenCode event stream returned HTTP ${response.status} without SSE`,
+            );
+          if (this.streams.get(id) !== controller)
+            throw new Error("OpenCode event stream was cancelled");
+          void this.readStream(id, response, controller);
+        } catch (error) {
+          controller.abort();
+          if (this.streams.get(id) === controller) this.streams.delete(id);
+          throw error;
+        } finally {
+          clearTimeout(timer);
+        }
         return undefined as T;
       }
       case "harness_sse_close":
@@ -262,34 +321,32 @@ export class HostChildBackend implements ChildBackend {
 
   private async readStream(
     id: string,
-    url: string,
-    headers: Record<string, string> | undefined,
+    response: Response,
     controller: AbortController,
   ): Promise<void> {
     let error: string | undefined;
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     try {
-      const response = await fetch(url, {
-        headers: { Accept: "text/event-stream", ...headers },
-        redirect: "error",
-        signal: controller.signal,
-      });
-      if (!response.ok || !response.body)
-        throw new Error(
-          `OpenCode event stream returned HTTP ${response.status}`,
-        );
-      const reader = response.body.getReader();
+      reader = response.body!.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
       let data: string[] = [];
       let dataLength = 0;
       while (!controller.signal.aborted) {
         const next = await reader.read();
-        if (next.done) break;
+        if (
+          next.done ||
+          controller.signal.aborted ||
+          this.streams.get(id) !== controller
+        )
+          break;
         buffer += decoder.decode(next.value, { stream: true });
         if (buffer.length > 8 * 1024 * 1024)
           throw new Error("OpenCode event stream frame is too large");
         let index: number;
         while ((index = buffer.indexOf("\n")) >= 0) {
+          if (controller.signal.aborted || this.streams.get(id) !== controller)
+            break;
           const line = buffer.slice(0, index).replace(/\r$/, "");
           buffer = buffer.slice(index + 1);
           if (!line) {
@@ -313,8 +370,12 @@ export class HostChildBackend implements ChildBackend {
       if (!controller.signal.aborted)
         error = reason instanceof Error ? reason.message : String(reason);
     } finally {
-      if (this.streams.get(id) === controller) this.streams.delete(id);
-      this.emit("harness-sse-end", { sessionId: id, error });
+      controller.abort();
+      reader?.releaseLock();
+      if (this.streams.get(id) === controller) {
+        this.streams.delete(id);
+        this.emit("harness-sse-end", { sessionId: id, error });
+      }
     }
   }
 
@@ -323,6 +384,31 @@ export class HostChildBackend implements ChildBackend {
     args: Record<string, unknown>,
   ): Promise<number> {
     if (this.closing) throw new Error("Host is stopping");
+    const env: NodeJS.ProcessEnv = { ...process.env, MONOCODE_HOST: "1" };
+    const overrides = args.env as Record<string, string> | undefined;
+    if (
+      args.binaryProvider === "opencode" &&
+      (args.args as string[])[0] === "serve"
+    ) {
+      delete env.OPENCODE_SERVER_PASSWORD;
+      delete env.OPENCODE_SERVER_USERNAME;
+      if (overrides) {
+        if (
+          Object.keys(overrides).some(
+            (key) => key !== "OPENCODE_CONFIG_CONTENT",
+          )
+        )
+          throw new Error("Unsupported OpenCode environment override");
+        if (overrides.OPENCODE_CONFIG_CONTENT)
+          env.OPENCODE_CONFIG_CONTENT = mergeOpenCodeConfig(
+            env.OPENCODE_CONFIG_CONTENT,
+            overrides.OPENCODE_CONFIG_CONTENT,
+            String(args.cwd),
+            env,
+          );
+      }
+    } else if (overrides && Object.keys(overrides).length)
+      throw new Error("Environment overrides are limited to OpenCode servers");
     await this.kill(id);
     if (this.closing) throw new Error("Host is stopping");
     const account = args.account as { id?: string } | undefined;
@@ -355,7 +441,7 @@ export class HostChildBackend implements ChildBackend {
         stdio: ["pipe", "pipe", "pipe", "pipe"],
         detached: process.platform !== "win32",
         windowsHide: true,
-        env: { ...process.env, MONOCODE_HOST: "1" },
+        env,
       },
     );
     this.children.set(id, child);

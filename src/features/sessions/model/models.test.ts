@@ -15,6 +15,7 @@ import {
   loadLastModelSettings,
   loadRecentModelChoices,
   mergeModelSettings,
+  modelContextWindow,
   modelEffortSetting,
   modelPickerTabs,
   nativeModelId,
@@ -28,6 +29,7 @@ import {
   savePickerProviderVisible,
   saveRecentModelChoice,
   setHarnessModels,
+  setProjectHarnessModels,
   showProviderInModelPicker,
   stepModelPickerTab,
   type AgentModel,
@@ -382,6 +384,55 @@ describe("picker provider visibility", () => {
 describe("live catalog overlays", () => {
   afterEach(() => {
     resetHarnessModelOverlays();
+  });
+
+  it("uses each project's context limit for the same provider model ID", () => {
+    const model: AgentModel = {
+      id: "opencode:fixture/same",
+      harness: "opencode",
+      name: "Fixture",
+      contextWindow: 100_000,
+    };
+    setHarnessModels("opencode", [model]);
+    setProjectHarnessModels("opencode", "/project-a", [
+      { ...model, contextWindow: 8_192 },
+    ]);
+    setProjectHarnessModels("opencode", "/project-b", [
+      { ...model, contextWindow: 16_384 },
+    ]);
+    setProjectHarnessModels("opencode", "/project-empty", []);
+    expect(modelContextWindow(model.id)).toBe(100_000);
+    expect(modelContextWindow(model.id, "/project-a")).toBe(8_192);
+    expect(modelContextWindow(model.id, "/project-b")).toBe(16_384);
+    expect(modelContextWindow(model.id, "/project-other")).toBe(100_000);
+    expect(modelContextWindow(model.id, "/project-empty")).toBeUndefined();
+  });
+
+  it("keeps project model selection and settings when creating a session", () => {
+    setHarnessModels("opencode", [
+      { id: "opencode:home/model", harness: "opencode", name: "Home" },
+    ]);
+    const model: AgentModel = {
+      id: "opencode:fixture/model",
+      harness: "opencode",
+      name: "Project",
+      settings: [
+        {
+          id: "agent",
+          label: "Agent",
+          kind: "select",
+          value: "project_agent",
+          options: [{ value: "project_agent", label: "Project agent" }],
+        },
+      ],
+    };
+    setProjectHarnessModels("opencode", "/project", [model]);
+    const session = newSession("opencode", "/project", model.id);
+    expect(session.model).toBe(model.id);
+    expect(session.modelSettings).toEqual({ agent: "project_agent" });
+    expect(newSession("opencode", "/other", model.id).model).toBe(
+      "opencode:home/model",
+    );
   });
 
   it("retains a saved Codex model and settings before its catalog loads", () => {
