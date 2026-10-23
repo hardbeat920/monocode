@@ -1,12 +1,13 @@
 import { pathKey, prettyCwd, slash } from "../../../shared/lib/paths";
 import { REMOTE_PATH_PREFIX } from "../../../shared/lib/remotePaths";
+import { loadProjectGroupAssignments } from "./projectGroups";
+import { notifyProjectPathsChanged } from "./projectPathsChanged";
 
 const KEY = "monocode.recentProjects";
 const RAIL_ORDER_KEY = "monocode.projectRailOrder";
 const RAIL_PINNED_KEY = "monocode.projectRailPinned";
 const ARCHIVED_KEY = "monocode.archivedProjects";
 const ARCHIVED_CHANGED = "monocode:archived-projects-changed";
-const PROJECT_PATHS_CHANGED = "monocode:project-paths-changed";
 const MAX = 20;
 
 export type RecentProject = {
@@ -66,11 +67,33 @@ export function rememberProject(path: string): RecentProject[] {
   const normalized = normalize(path);
   if (normalized === "~") return loadRecents();
   dropArchived(normalized);
-  const prev = loadRecents().filter((p) => !sameProjectPath(p.path, normalized));
-  const next = [{ path: normalized, openedAt: Date.now() }, ...prev].slice(
-    0,
-    MAX,
+  const prev = loadRecents().filter(
+    (p) => !sameProjectPath(p.path, normalized),
   );
+  // A pin or a group membership keeps a project in the rail even when a burst
+  // of short visits to other folders fills the recents cap around it.
+  const protectedPaths = new Set<string>();
+  for (const pinned of loadPinnedProjects()) {
+    protectedPaths.add(pathKey(pinned));
+  }
+  for (const grouped of Object.keys(loadProjectGroupAssignments())) {
+    protectedPaths.add(grouped);
+  }
+  const next: RecentProject[] = [];
+  const seen = new Set<string>();
+  let keptUnprotected = 0;
+  for (const item of [{ path: normalized, openedAt: Date.now() }, ...prev]) {
+    const key = pathKey(item.path);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (protectedPaths.has(key)) {
+      next.push(item);
+      continue;
+    }
+    if (keptUnprotected >= MAX) continue;
+    keptUnprotected += 1;
+    next.push(item);
+  }
   save(next);
   return next;
 }
@@ -124,26 +147,22 @@ export function replaceProjectPath(from: string, to: string): RecentProject[] {
   return recents;
 }
 
-/** Rail projects, pins, groups, or their appearance changed in storage. */
-export function notifyProjectPathsChanged(): void {
-  if (typeof window !== "undefined") {
-    window.dispatchEvent(new Event(PROJECT_PATHS_CHANGED));
-  }
-}
-
-export function subscribeProjectPathsChanged(onChange: () => void): () => void {
-  if (typeof window === "undefined") return () => {};
-  window.addEventListener(PROJECT_PATHS_CHANGED, onChange);
-  return () => window.removeEventListener(PROJECT_PATHS_CHANGED, onChange);
-}
+export {
+  notifyProjectPathsChanged,
+  subscribeProjectPathsChanged,
+} from "./projectPathsChanged";
 
 /** Drops a project from the rail: its recent entry, saved order slot, and pin. */
 function dropFromRail(path: string): RecentProject[] {
   const normalized = normalize(path);
-  const next = loadRecents().filter((item) => !sameProjectPath(item.path, normalized));
+  const next = loadRecents().filter(
+    (item) => !sameProjectPath(item.path, normalized),
+  );
   save(next);
   saveProjectRailOrder(
-    loadProjectRailOrder().filter((entry) => !sameProjectPath(entry, normalized)),
+    loadProjectRailOrder().filter(
+      (entry) => !sameProjectPath(entry, normalized),
+    ),
   );
   savePinnedProjects(
     loadPinnedProjects().filter((entry) => !sameProjectPath(entry, normalized)),

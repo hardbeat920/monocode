@@ -1,7 +1,10 @@
 import { pathKey } from "../../../shared/lib/paths";
 import { PROJECT_MASCOTS } from "./projectMascots";
-import { TAB_GROUP_COLORS, tabGroupColor } from "../../workspace/model/tabGroups";
-import { notifyProjectPathsChanged } from "./recents";
+import {
+  TAB_GROUP_COLORS,
+  tabGroupColor,
+} from "../../workspace/model/tabGroups";
+import { notifyProjectPathsChanged } from "./projectPathsChanged";
 
 const GROUPS_KEY = "monocode.projectGroups";
 const ASSIGNMENTS_KEY = "monocode.projectGroupAssignments";

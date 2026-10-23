@@ -1,4 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { pathKey } from "../../../shared/lib/paths";
+import {
+  createProjectGroup,
+  loadProjectGroups,
+  saveProjectGroups,
+  saveProjectGroupAssignments,
+} from "./projectGroups";
 import {
   archiveProject,
   forgetProject,
@@ -224,5 +231,53 @@ describe("archiveProject", () => {
     forgetProject("/tmp/gone");
     expect(loadArchivedProjects()).toEqual([]);
     expect(loadRecents()).toEqual([]);
+  });
+});
+
+describe("rememberProject recents cap", () => {
+  beforeEach(() => {
+    mockLocalStorage();
+  });
+
+  afterEach(() => {
+    mockLocalStorage();
+  });
+
+  it("keeps a pinned project when the cap trims around it", () => {
+    rememberProject("/tmp/pinned");
+    savePinnedProjects(["/tmp/pinned"]);
+    for (let i = 1; i <= 25; i += 1) {
+      rememberProject(`/tmp/burst-${i}`);
+    }
+    const paths = loadRecents().map((item) => item.path);
+    expect(paths).toContain("/tmp/burst-25");
+    expect(loadPinnedProjects()).toContain("/tmp/pinned");
+    expect(paths).toContain("/tmp/pinned");
+  });
+
+  it("keeps a grouped project when the cap trims around it", () => {
+    rememberProject("/tmp/grouped");
+    const groups = loadProjectGroups();
+    const group = createProjectGroup(groups);
+    saveProjectGroups([group]);
+    saveProjectGroupAssignments({ [pathKey("/tmp/grouped")]: group.id });
+    for (let i = 1; i <= 25; i += 1) {
+      rememberProject(`/tmp/burst-${i}`);
+    }
+    const paths = loadRecents().map((item) => item.path);
+    expect(paths).toContain("/tmp/burst-25");
+    expect(paths).toContain("/tmp/grouped");
+  });
+
+  it("still trims unpinned projects at the cap", () => {
+    for (let i = 1; i <= 30; i += 1) {
+      rememberProject(`/tmp/plain-${i}`);
+    }
+    const paths = loadRecents().map((item) => item.path);
+    expect(paths).not.toContain("/tmp/plain-1");
+    expect(paths).not.toContain("/tmp/plain-10");
+    expect(paths).toContain("/tmp/plain-11");
+    expect(paths).toContain("/tmp/plain-30");
+    expect(paths.length).toBe(20);
   });
 });
