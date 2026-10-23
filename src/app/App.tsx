@@ -384,6 +384,13 @@ import {
 } from "../features/sessions/model/handoff";
 import { requestOutgoingHandoff } from "../features/sessions/model/handoffTurn";
 import {
+  appendShellCommand,
+  finishShellCommand,
+  shellCommandRunning,
+  type ShellCommandOutput,
+  withShellCommands,
+} from "../features/sessions/model/shellCommand";
+import {
   applyBtwHarnessEvent,
   btwTurnHarness,
   buildBtwPrompt,
@@ -1772,6 +1779,8 @@ function Workspace({
     canForward: false,
   });
   const turnGen = useRef(new Map<string, number>());
+  /** Session id → the `!` command it is running. */
+  const shellCommandRuns = useRef(new Map<string, string>());
   const editedResends = useRef(createEditedResendCoordinator()).current;
   const lastPersisted = useRef(new Map<string, string>());
   const lastBoundProvider = useRef(new Map<string, string>());
@@ -7496,6 +7505,7 @@ function Workspace({
           isLiveHarness(current.harness) && canSteerHarness(current.harness);
         const followUpBehavior =
           current.worktreePreparing ||
+          shellCommandRunning(current) ||
           intent === "plan" ||
           intent === "orchestrate" ||
           operatorCommand.matched
@@ -8313,6 +8323,10 @@ function Workspace({
               ...(editedResend ? { onAccepted: acceptEditedResend } : {}),
               onEvent: routeTurnEvent,
             });
+          const commandsPrompt =
+            rawCommand || editedResend
+              ? turnPrompt
+              : withShellCommands(current.blocks, turnPrompt);
           let sendText = orchestrator.prompt(
             sessionId,
             inboxAskPrompt(
@@ -8321,10 +8335,10 @@ function Workspace({
                 ? wrapHandoffPrompt(
                     wrap.text,
                     wrap.from,
-                    turnPrompt.trim() || CONTINUE_PROMPT,
+                    commandsPrompt.trim() || CONTINUE_PROMPT,
                     earlier,
                   )
-                : turnPrompt,
+                : commandsPrompt,
             ),
           );
           if (monoRotation) {
@@ -10608,11 +10622,83 @@ function Workspace({
     [enqueueHarnessEvent, flushHarnessEvents],
   );
 
+  const onRunShellCommand = useCallback(
+    (sessionId: string, command: string) => {
+      const current = sessionsRef.current.find(
+        (session) => session.id === sessionId,
+      );
+      if (!current || current.worktreeRemoved || remoteProjectFor(current.cwd))
+        return false;
+      if (current.busy) {
+        // A command still running already shows on its row.
+        if (!shellCommandRunning(current)) {
+          enqueueHarnessEvent(sessionId, {
+            type: "status",
+            text: "Shell commands run between turns — wait for this one to finish, or stop it first.",
+          });
+          flushHarnessEvents();
+        }
+        return false;
+      }
+      const runId = crypto.randomUUID();
+      const cwd = sessionWorkCwd(current);
+      const update = (change: (session: Session) => Session) => {
+        const next = sessionsRef.current.map((session) =>
+          session.id === sessionId ? change(session) : session,
+        );
+        sessionsRef.current = next;
+        syncDockBadge(next);
+        setSessions(next);
+      };
+      // Busy while it runs: Stop and Escape end it, and messages queue.
+      update((session) =>
+        appendShellCommand({ ...session, busy: true }, runId, command, cwd),
+      );
+      shellCommandRuns.current.set(sessionId, runId);
+      void invoke<ShellCommandOutput>("shell_command_run", {
+        id: runId,
+        cwd,
+        command,
+      })
+        .catch((error: unknown) => ({
+          error: error instanceof Error ? error.message : String(error),
+        }))
+        .then((result) => {
+          shellCommandRuns.current.delete(sessionId);
+          const stopped = "stopped" in result && result.stopped;
+          update((session) =>
+            finishShellCommand(
+              {
+                ...session,
+                busy: false,
+                // A stop pauses the queue, as it does for a turn.
+                ...(stopped && session.queuedMessages?.length
+                  ? { queueStatus: "paused" as const }
+                  : {}),
+              },
+              runId,
+              result,
+            ),
+          );
+          nudgeWorkspace(cwd);
+          notifyGitChanged();
+          nudgeWatchedFiles();
+        });
+      return true;
+    },
+    [enqueueHarnessEvent, flushHarnessEvents],
+  );
+
   const onStop = useCallback(
     (sessionId: string, managed = false) => {
       const remote = sessionsRef.current.find((s) => s.id === sessionId);
       if (remote && remoteProjectFor(remote.cwd)) {
         remoteSessionActions(sessionId)?.stop();
+        return;
+      }
+      const shellRun = shellCommandRuns.current.get(sessionId);
+      if (shellRun) {
+        void invoke("shell_command_stop", { id: shellRun });
         return;
       }
       if (!managed) {
@@ -13457,6 +13543,7 @@ function Workspace({
     onSubmit,
     onStop,
     onCompactContext,
+    onRunShellCommand,
     onPlaceSessionInFolder,
     onDeleteQueuedMessage,
     onEditQueuedMessage,

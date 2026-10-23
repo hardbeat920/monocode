@@ -80,6 +80,24 @@ describe("inFlightRefs", () => {
     ]);
   });
 
+  it("skips a chat that is only running a `!` command", () => {
+    // Its turn is not cut short by a quit, so nothing should continue it.
+    const running = chat("/tmp/a", {
+      busy: true,
+      blocks: [
+        { id: "u1", role: "user", text: "hello" },
+        {
+          id: "c1",
+          role: "shell",
+          text: "npm test",
+          shell: { cwd: "/tmp/a", status: "running" },
+        },
+      ],
+    });
+    expect(inFlightRefs([running], [newTab(running.id)])).toEqual([]);
+    expect(hasInFlightSessions([running])).toBe(true);
+  });
+
   it("skips chats that were never persisted", () => {
     const blank = newSession("cursor", "/tmp/a");
     blank.busy = true;
