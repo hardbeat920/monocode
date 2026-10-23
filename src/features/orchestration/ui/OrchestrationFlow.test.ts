@@ -667,6 +667,7 @@ describe("orchestration composer and card", () => {
             onDeleteQueuedMessage: noop,
             onEditQueuedMessage: noop,
             onQueuedMessageEditingChange: noop,
+            onReorderQueuedMessages: noop,
             onSteerQueuedMessage: noop,
             onResumeQueue: noop,
             onApproval: approve,
