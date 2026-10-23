@@ -23,6 +23,7 @@ vi.mock("../../core/child", () => ({
 }));
 
 const {
+  bindGrokSession,
   compactGrokContext,
   sendGrokTurn,
   respondGrokApproval,
@@ -86,6 +87,39 @@ async function handshake() {
 describe("grok live turn sequence", () => {
   beforeEach(() => {
     sent.length = 0;
+  });
+
+  it("resumes a saved session with its cwd and MCP servers", async () => {
+    bindGrokSession("g-resume", "S9", "/repo");
+    const turn = sendGrokTurn({
+      sessionId: "g-resume",
+      cwd: "/repo",
+      model: "grok-4.6",
+      modelSettings: {},
+      runtimeMode: "supervised",
+      text: "hey",
+      attachments: [],
+      onEvent: () => undefined,
+    } as never);
+    turn.catch(() => undefined);
+    await waitFor(
+      () => parse().some((m) => m.method === "initialize"),
+      "initialize",
+    );
+    reply(parse().find((m) => m.method === "initialize")!.id, initResult);
+    await waitFor(
+      () => parse().some((m) => m.method === "authenticate"),
+      "authenticate",
+    );
+    reply(parse().find((m) => m.method === "authenticate")!.id, {});
+    await waitFor(
+      () => parse().some((m) => m.method === "session/resume"),
+      "session/resume",
+    );
+    const resume = parse().find((m) => m.method === "session/resume")!;
+    expect(resume.params).toMatchObject({ sessionId: "S9", cwd: "/repo" });
+    expect(Array.isArray(resume.params.mcpServers)).toBe(true);
+    await stopGrokSession("g-resume");
   });
 
   it("authenticates, selects the model, and prompts", async () => {
