@@ -21,6 +21,9 @@ import type {
 } from "@/features/workspace/types";
 import {
   nativeCall,
+  openWatch,
+  nextUpdates,
+  closeWatch,
   parseInvitation,
   request,
   type Pairing,
@@ -34,6 +37,9 @@ export type Catalog = {
   monos: Mono[];
   sessions: SessionSummary[];
   addresses?: Desktop["addresses"];
+  selection?: MobileSelection | null;
+  revision?: number;
+  selectionImported?: boolean;
 };
 const EMPTY: Catalog = { projects: [], monos: [], sessions: [] };
 const PAIRING = "monocode.mobile.pairing";
@@ -50,7 +56,10 @@ type Connection = {
   error: string | null;
   pair: (text: string) => Promise<void>;
   refresh: () => Promise<void>;
-  select: (selection: MobileSelection) => Promise<void>;
+  select: (
+    selection: MobileSelection,
+    base?: MobileSelection | null,
+  ) => Promise<void>;
   disconnect: () => Promise<void>;
   command: <T>(method: string, params?: object, id?: string) => Promise<T>;
 };
@@ -64,7 +73,11 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const active = useRef<Pairing | null>(null);
-  const refreshing = useRef(false);
+  const refreshing = useRef<Pairing | null>(null);
+  const chosenNow = useRef<MobileSelection | null>(null);
+  const legacySelection = useRef<MobileSelection | null>(null);
+  const revision = useRef(-1);
+  const saving = useRef(Promise.resolve());
   const lastCatalog = useRef<string | null>(null);
   const pairingNow = useRef(false);
   const generation = useRef(0);
@@ -88,8 +101,22 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         if (disposed) return;
         active.current = value;
         setPairing(value);
-        setSelection(chosen ? normalizeSelection(JSON.parse(chosen)) : null);
-        if (saved) setCatalog(JSON.parse(saved));
+        chosenNow.current = readSelection(chosen);
+        legacySelection.current = chosenNow.current;
+        setSelection(chosenNow.current);
+        if (saved) {
+          try {
+            const cached = JSON.parse(saved) as Catalog;
+            if (
+              Array.isArray(cached.projects) &&
+              Array.isArray(cached.monos) &&
+              Array.isArray(cached.sessions)
+            )
+              setCatalog(cached);
+          } catch {
+            /* Refresh repairs a corrupt optional workspace cache. */
+          }
+        }
       } catch {
         if (!disposed)
           setError("Could not restore the desktop connection. Connect again.");
@@ -101,45 +128,89 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       disposed = true;
     };
   }, []);
-  const refresh = useCallback(async () => {
-    const value = active.current;
-    if (!value || refreshing.current) return;
-    const version = generation.current;
-    refreshing.current = true;
-    try {
-      const next = await request<Catalog>(value, "workspace.list");
-      if (active.current !== value || version !== generation.current) return;
-      if (
-        !Array.isArray(next.projects) ||
-        !Array.isArray(next.monos) ||
-        !Array.isArray(next.sessions)
-      )
-        throw new Error("Desktop sent an invalid workspace");
-      if (next.addresses?.length) {
-        value.desktop.addresses = next.addresses;
-        await Storage.setItem(PAIRING, JSON.stringify(value.desktop));
+  // One ordered cache write queue and a server revision prevent an older list
+  // response from overwriting a newer pushed workspace (including on disk).
+  const accept = useCallback(async (value: Pairing, next: Catalog) => {
+    if (active.current !== value) return;
+    if (
+      !Array.isArray(next.projects) ||
+      !Array.isArray(next.monos) ||
+      !Array.isArray(next.sessions)
+    )
+      throw new Error("Desktop sent an invalid workspace");
+    if (next.revision !== undefined && next.revision < revision.current) return;
+    if (next.revision !== undefined) revision.current = next.revision;
+    const addressesChanged = !!next.addresses?.length &&
+      JSON.stringify(next.addresses) !== JSON.stringify(value.desktop.addresses);
+    if (next.addresses?.length) value.desktop.addresses = next.addresses;
+    if (next.selection !== undefined) {
+      const chosen = normalizeSelection(next.selection);
+      if (JSON.stringify(chosen) !== JSON.stringify(chosenNow.current)) {
+        chosenNow.current = chosen;
+        setSelection(chosen);
       }
-      // The poll repeats every few seconds; only a changed workspace is saved
-      // and re-rendered.
-      const { addresses: _, ...workspace } = next;
-      const serialized = JSON.stringify(workspace);
-      if (serialized !== lastCatalog.current) {
-        await Storage.setItem(key(value.desktop.fingerprint, "catalog"), serialized);
-        if (active.current !== value) return;
-        lastCatalog.current = serialized;
-        setCatalog((previous) => withUnchanged(previous, next));
-      }
+    }
+    const { addresses: _, selectionImported: _imported, ...workspace } = next;
+    const serialized = JSON.stringify(workspace);
+    if (serialized !== lastCatalog.current || addressesChanged) {
+      lastCatalog.current = serialized;
+      setCatalog((previous) => withUnchanged(previous, next));
+      const chosen = chosenNow.current;
+      const write = saving.current
+        .catch(() => {})
+        .then(async () => {
+          if (active.current !== value) return;
+          await Storage.setItem(PAIRING, JSON.stringify(value.desktop));
+          await Storage.setItem(
+            key(value.desktop.fingerprint, "catalog"),
+            serialized,
+          );
+          if (chosen !== null)
+            await Storage.setItem(
+              key(value.desktop.fingerprint, "selection"),
+              JSON.stringify(chosen),
+            );
+        });
+      saving.current = write;
+      // A cache failure must not suppress an already received live update.
+      await write.catch(() => {});
+    }
+    if (active.current === value) {
       setConnected(true);
       setError(null);
+    }
+  }, []);
+  const refresh = useCallback(async () => {
+    const value = active.current;
+    if (!value || refreshing.current === value) return;
+    const version = generation.current;
+    refreshing.current = value;
+    try {
+      let next = await request<Catalog>(value, "workspace.list");
+      if (active.current !== value || version !== generation.current) return;
+      // Import each installation's legacy choice once. The desktop records
+      // the paired identity so stale caches cannot re-import after shared edits.
+      if (
+        next.selectionImported === false &&
+        legacySelection.current !== null
+      ) {
+        next = await request<Catalog>(value, "workspace.select", {
+          selection: legacySelection.current,
+          base: null,
+          initialize: true,
+        });
+      }
+      if (next.selectionImported === true) legacySelection.current = null;
+      await accept(value, next);
     } catch (reason) {
-      if (active.current === value) {
+      if (active.current === value && version === generation.current) {
         setConnected(false);
         setError(reason instanceof Error ? reason.message : String(reason));
       }
     } finally {
-      refreshing.current = false;
+      if (refreshing.current === value) refreshing.current = null;
     }
-  }, []);
+  }, [accept]);
   useEffect(() => {
     if (!pairing) return;
     let disposed = false;
@@ -158,73 +229,139 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       subscription.remove();
     };
   }, [pairing, refresh]);
-  const pair = useCallback(async (text: string) => {
-    if (pairingNow.current) return;
-    pairingNow.current = true;
-    setWorking(true);
-    setError(null);
-    try {
-      const invitation = parseInvitation(text);
-      const existing = await SecureStore.getItemAsync(IDENTITY);
-      const identity = existing
-        ? (JSON.parse(existing) as Identity)
-        : await nativeCall<Identity>({ operation: "identity" });
-      await SecureStore.setItemAsync(IDENTITY, JSON.stringify(identity), {
-        keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
-      });
-      const fingerprint = await nativeCall<string>({
-        operation: "fingerprint",
-        identity: invitation.identity,
-      });
-      const proof = await nativeCall<string>({
-        operation: "proof",
-        identity,
-        invitation: fingerprint,
-      });
-      const desktop = await nativeCall<Desktop>({
-        operation: "exchange",
-        identity: invitation.identity,
-        pin: invitation.fingerprint,
-        addresses: invitation.addresses,
-        request: {
-          version: 1,
-          id: "enroll",
-          method: "device.enroll",
-          params: {
-            certificate: identity.certificate,
-            proof,
-            name: deviceName(),
-          },
-        },
-      });
-      const value = { desktop, identity };
-      await Storage.setItem(PAIRING, JSON.stringify(desktop));
-      const chosen = await Storage.getItem(
-        key(desktop.fingerprint, "selection"),
-      );
-      generation.current++;
-      active.current = value;
-      setPairing(value);
-      setCatalog(EMPTY);
-      lastCatalog.current = null;
-      setSelection(chosen ? normalizeSelection(JSON.parse(chosen)) : null);
-      await refresh();
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      pairingNow.current = false;
-      setWorking(false);
-    }
-  }, [refresh]);
-  const select = useCallback(async (value: MobileSelection) => {
-    const pairing = active.current;
+  useEffect(() => {
     if (!pairing) return;
-    await Storage.setItem(
-      key(pairing.desktop.fingerprint, "selection"),
-      JSON.stringify(value),
-    );
-    if (active.current === pairing) setSelection(value);
-  }, []);
+    let disposed = false;
+    let watchId: number | undefined;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let running = false;
+    const run = async () => {
+      if (disposed || running || AppState.currentState !== "active") return;
+      running = true;
+      try {
+        const id = await openWatch(pairing, "workspace.watch", {});
+        if (disposed || AppState.currentState !== "active") {
+          await closeWatch(id);
+          return;
+        }
+        watchId = id;
+        while (!disposed && watchId === id) {
+          const frames = await nextUpdates<Catalog>(id, 1000);
+          if (disposed || watchId !== id) break;
+          for (const frame of frames) {
+            // Initialization is handled by refresh, with the old local choice.
+            if (frame.selection === null && chosenNow.current !== null)
+              continue;
+            await accept(pairing, frame);
+          }
+        }
+      } catch {
+        // Polling remains a recovery path, including for older desktops.
+        if (!disposed) void refresh();
+      } finally {
+        if (watchId !== undefined) void closeWatch(watchId);
+        watchId = undefined;
+        running = false;
+        if (!disposed) retry = setTimeout(() => void run(), 1000);
+      }
+    };
+    void run();
+    const subscription = AppState.addEventListener("change", (state) => {
+      clearTimeout(retry);
+      if (state === "active") {
+        void run();
+      } else if (watchId !== undefined) {
+        const id = watchId;
+        watchId = undefined;
+        void closeWatch(id);
+      }
+    });
+    return () => {
+      disposed = true;
+      clearTimeout(retry);
+      subscription.remove();
+      if (watchId !== undefined) void closeWatch(watchId);
+    };
+  }, [pairing, accept, refresh]);
+  const pair = useCallback(
+    async (text: string) => {
+      if (pairingNow.current) return;
+      pairingNow.current = true;
+      setWorking(true);
+      setError(null);
+      try {
+        const invitation = parseInvitation(text);
+        const existing = await SecureStore.getItemAsync(IDENTITY);
+        const identity = existing
+          ? (JSON.parse(existing) as Identity)
+          : await nativeCall<Identity>({ operation: "identity" });
+        await SecureStore.setItemAsync(IDENTITY, JSON.stringify(identity), {
+          keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+        });
+        const fingerprint = await nativeCall<string>({
+          operation: "fingerprint",
+          identity: invitation.identity,
+        });
+        const proof = await nativeCall<string>({
+          operation: "proof",
+          identity,
+          invitation: fingerprint,
+        });
+        const desktop = await nativeCall<Desktop>({
+          operation: "exchange",
+          identity: invitation.identity,
+          pin: invitation.fingerprint,
+          addresses: invitation.addresses,
+          request: {
+            version: 1,
+            id: "enroll",
+            method: "device.enroll",
+            params: {
+              certificate: identity.certificate,
+              proof,
+              name: deviceName(),
+            },
+          },
+        });
+        const value = { desktop, identity };
+        await Storage.setItem(PAIRING, JSON.stringify(desktop));
+        const chosen = await Storage.getItem(
+          key(desktop.fingerprint, "selection"),
+        );
+        generation.current++;
+        active.current = value;
+        setPairing(value);
+        setCatalog(EMPTY);
+        lastCatalog.current = null;
+        revision.current = -1;
+        chosenNow.current = readSelection(chosen);
+        legacySelection.current = chosenNow.current;
+        setSelection(chosenNow.current);
+        await refresh();
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : String(reason));
+      } finally {
+        pairingNow.current = false;
+        setWorking(false);
+      }
+    },
+    [refresh],
+  );
+  const select = useCallback(
+    async (
+      selection: MobileSelection,
+      base: MobileSelection | null = chosenNow.current,
+    ) => {
+      const value = active.current;
+      if (!value) return;
+      const next = await request<Catalog>(value, "workspace.select", {
+        selection,
+        base,
+      });
+      await accept(value, next);
+    },
+    [accept],
+  );
   const disconnect = useCallback(async () => {
     const value = active.current;
     generation.current++;
@@ -233,6 +370,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     setConnected(false);
     setCatalog(EMPTY);
     lastCatalog.current = null;
+    chosenNow.current = null;
+    legacySelection.current = null;
+    revision.current = -1;
     setSelection(null);
     setError(null);
     await Storage.removeItem(PAIRING);
@@ -303,11 +443,21 @@ function sameItems<T extends { id: string }>(previous: T[], next: T[]): T[] {
   const known = new Map(previous.map((item) => [item.id, item]));
   const merged = next.map((item) => {
     const before = known.get(item.id);
-    return before && JSON.stringify(before) === JSON.stringify(item) ? before : item;
+    return before && JSON.stringify(before) === JSON.stringify(item)
+      ? before
+      : item;
   });
-  return merged.length === previous.length && merged.every((item, i) => item === previous[i])
+  return merged.length === previous.length &&
+    merged.every((item, i) => item === previous[i])
     ? previous
     : merged;
+}
+function readSelection(saved: string | null): MobileSelection | null {
+  try {
+    return saved ? normalizeSelection(JSON.parse(saved)) : null;
+  } catch {
+    return null;
+  }
 }
 export function useConnection() {
   const value = use(Context);

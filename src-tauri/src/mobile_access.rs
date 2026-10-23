@@ -9,7 +9,7 @@ use std::{
     collections::HashMap,
     path::PathBuf,
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tokio::sync::oneshot;
@@ -31,6 +31,10 @@ struct Config {
     remote_address: String,
     #[serde(default)]
     devices: Vec<Device>,
+    #[serde(default)]
+    workspace_selection: Option<WorkspaceSelection>,
+    #[serde(default)]
+    selection_imported: Vec<String>,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -39,8 +43,22 @@ impl Default for Config {
             open_router: true,
             remote_address: String::new(),
             devices: Vec::new(),
+            workspace_selection: None,
+            selection_imported: Vec::new(),
         }
     }
+}
+/// Shared display preferences, never an authorization grant. Every paired device
+/// already has access to the same catalog and commands.
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WorkspaceSelection {
+    project_ids: Vec<String>,
+    mono_ids: Vec<String>,
+}
+struct WorkspaceWatcher {
+    peer: String,
+    sink: monocode_mobile_link::WatchSink,
 }
 struct Invitation {
     expires: u64,
@@ -57,6 +75,8 @@ struct Watcher {
 }
 struct Inner {
     watches: HashMap<String, Watcher>,
+    workspace_watches: Vec<WorkspaceWatcher>,
+    revision: u64,
     config: Config,
     identity: Option<Identity>,
     endpoint: Option<quinn::Endpoint>,
@@ -72,6 +92,14 @@ pub struct MobileHost {
     inner: Arc<Mutex<Inner>>,
     gate: Gate,
     path: PathBuf,
+}
+// Microsecond epoch leaves room for local increments and stays within JS's
+// exact integer range. A restarted desktop must supersede its old snapshots.
+fn workspace_revision() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_micros() as u64
 }
 pub fn init(app: &AppHandle) -> Result<(), String> {
     let path = app
@@ -99,6 +127,8 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
             catalogs: HashMap::new(),
             pending: HashMap::new(),
             watches: HashMap::new(),
+            workspace_watches: Vec::new(),
+            revision: workspace_revision(),
             router_address: None,
             router_status: "Off".into(),
             router_started: false,
@@ -260,6 +290,8 @@ pub async fn mobile_configure(
             open_router,
             remote_address: remote_address.trim().into(),
             devices: inner.config.devices.clone(),
+            workspace_selection: inner.config.workspace_selection.clone(),
+            selection_imported: inner.config.selection_imported.clone(),
         };
         save(&host, &config)?;
         inner.config = config;
@@ -273,6 +305,7 @@ pub async fn mobile_configure(
             inner.invitations.clear();
             inner.pending.clear();
             inner.watches.clear();
+            inner.workspace_watches.clear();
         }
     }
     if enabled {
@@ -324,6 +357,7 @@ pub fn mobile_revoke(host: State<'_, MobileHost>, device_id: String) -> Result<(
         host.gate.remove(&device.fingerprint);
         let peer = device.fingerprint.clone();
         inner.watches.retain(|_, watch| watch.peer != peer);
+        inner.workspace_watches.retain(|watch| watch.peer != peer);
     }
     config.devices.retain(|device| device.id != device_id);
     save(&host, &config)?;
@@ -345,11 +379,15 @@ pub fn mobile_publish(
     {
         return Err("Invalid mobile catalog".into());
     }
-    host.inner
+    let mut inner = host
+        .inner
         .lock()
-        .map_err(|_| "Mobile service unavailable")?
-        .catalogs
-        .insert(window.label().into(), catalog);
+        .map_err(|_| "Mobile service unavailable")?;
+    if inner.catalogs.get(window.label()) != Some(&catalog) {
+        inner.catalogs.insert(window.label().into(), catalog);
+        inner.revision += 1;
+        broadcast_workspace(window.app_handle(), &mut inner);
+    }
     Ok(())
 }
 #[tauri::command]
@@ -408,6 +446,9 @@ fn watch(
 ) -> Result<(), String> {
     if request["version"] != VERSION {
         return Err("Update MonoCode on both devices".into());
+    }
+    if request["method"] == "workspace.watch" {
+        return watch_workspace(app, host, peer, sink);
     }
     if request["method"] != "conversation.watch" {
         return Err("Unsupported mobile operation".into());
@@ -495,6 +536,120 @@ fn watch(
             json!({"id":id,"action":"stop"}),
         );
     });
+    Ok(())
+}
+fn workspace_snapshot(app: &AppHandle, inner: &mut Inner) -> Value {
+    let mut catalog = merged_catalog(app, inner);
+    catalog["sessions"] = json!(recent_sessions(&catalog["sessions"]));
+    catalog["addresses"] = json!(addresses(inner));
+    catalog["selection"] = json!(inner.config.workspace_selection);
+    catalog["revision"] = json!(inner.revision);
+    catalog
+}
+fn broadcast_workspace(app: &AppHandle, inner: &mut Inner) {
+    let catalog = workspace_snapshot(app, inner);
+    fanout_workspace(inner, catalog);
+}
+fn fanout_workspace(inner: &mut Inner, catalog: Value) {
+    // A full queue must end the watch, so the phone reconnects with a fresh
+    // snapshot rather than silently keeping a stale baseline forever.
+    inner
+        .workspace_watches
+        .retain(|watch| watch.sink.try_send(catalog.clone()).is_ok());
+}
+fn watch_workspace(
+    app: &AppHandle,
+    host: &MobileHost,
+    peer: &str,
+    sink: monocode_mobile_link::WatchSink,
+) -> Result<(), String> {
+    let mut inner = host
+        .inner
+        .lock()
+        .map_err(|_| "Mobile service unavailable")?;
+    if !inner.config.enabled {
+        return Err("Mobile access disabled".into());
+    }
+    if !inner
+        .config
+        .devices
+        .iter()
+        .any(|device| device.fingerprint == peer)
+    {
+        return Err("Device revoked or not paired".into());
+    }
+    inner
+        .workspace_watches
+        .retain(|watch| !watch.sink.is_closed());
+    if inner
+        .workspace_watches
+        .iter()
+        .filter(|watch| watch.peer == peer)
+        .count()
+        >= 2
+    {
+        return Err("Desktop is busy; try again".into());
+    }
+    sink.try_send(workspace_snapshot(app, &mut inner))
+        .map_err(|_| "Workspace watch closed")?;
+    inner.workspace_watches.push(WorkspaceWatcher {
+        peer: peer.into(),
+        sink,
+    });
+    Ok(())
+}
+/// Apply only the user's edits, so saving an older picker cannot remove a
+/// project another phone just added. Import legacy choices once per paired
+/// identity so stale caches cannot overwrite subsequent shared edits.
+fn update_selection(
+    host: &MobileHost,
+    inner: &mut Inner,
+    params: &Value,
+    peer: &str,
+) -> Result<(), String> {
+    let desired: WorkspaceSelection = serde_json::from_value(params["selection"].clone())
+        .map_err(|_| "Invalid workspace selection")?;
+    let mut base: Option<WorkspaceSelection> = serde_json::from_value(params["base"].clone())
+        .map_err(|_| "Invalid workspace selection baseline")?;
+    let mut next = inner.config.workspace_selection.clone().unwrap_or_default();
+    if params["initialize"] == true && inner.config.selection_imported.iter().any(|id| id == peer) {
+        return Ok(());
+    }
+    if params["initialize"] == true {
+        base = None;
+    }
+    for (current, desired, base) in [
+        (
+            &mut next.project_ids,
+            desired.project_ids,
+            base.as_ref().map(|v| &v.project_ids),
+        ),
+        (
+            &mut next.mono_ids,
+            desired.mono_ids,
+            base.as_ref().map(|v| &v.mono_ids),
+        ),
+    ] {
+        if desired.len() > 4096 || desired.iter().any(|id| id.is_empty() || id.len() > 4096) {
+            return Err("Invalid workspace selection".into());
+        }
+        if let Some(base) = base {
+            current.retain(|id| !base.contains(id) || desired.contains(id));
+        }
+        for id in desired {
+            if base.is_none_or(|base| !base.contains(&id)) && !current.contains(&id) {
+                current.push(id);
+            }
+        }
+    }
+    let mut config = inner.config.clone();
+    config.workspace_selection = Some(next);
+    if !config.selection_imported.iter().any(|id| id == peer) {
+        config.selection_imported.push(peer.into());
+    }
+    save(host, &config)?;
+    inner.config = config;
+    inner.revision += 1;
     Ok(())
 }
 fn merged_catalog(app: &AppHandle, inner: &mut Inner) -> Value {
@@ -724,13 +879,22 @@ async fn handle(
             inner.config = config;
             host.gate.remove(peer);
             inner.watches.retain(|_, watch| watch.peer != peer);
+            inner.workspace_watches.retain(|watch| watch.peer != peer);
             return Ok(Value::Null);
         }
+        if method == "workspace.select" {
+            update_selection(host, &mut inner, &params, peer)?;
+            broadcast_workspace(app, &mut inner);
+            let mut snapshot = workspace_snapshot(app, &mut inner);
+            snapshot["selectionImported"] =
+                json!(inner.config.selection_imported.iter().any(|id| id == peer));
+            return Ok(snapshot);
+        }
         if method == "workspace.list" {
-            let mut catalog = merged_catalog(app, &mut inner);
-            catalog["sessions"] = json!(recent_sessions(&catalog["sessions"]));
-            catalog["addresses"] = json!(addresses(&inner));
-            return Ok(catalog);
+            let mut snapshot = workspace_snapshot(app, &mut inner);
+            snapshot["selectionImported"] =
+                json!(inner.config.selection_imported.iter().any(|id| id == peer));
+            return Ok(snapshot);
         }
         if method == "sessions.list" {
             let catalog = merged_catalog(app, &mut inner);
@@ -963,12 +1127,135 @@ mod tests {
                 catalogs: HashMap::new(),
                 pending: HashMap::new(),
                 watches: HashMap::new(),
+                workspace_watches: Vec::new(),
+                revision: workspace_revision(),
                 router_address: None,
                 router_status: "Off".into(),
                 router_started: false,
             })),
         };
         (host, join, phone)
+    }
+    #[test]
+    fn shared_selection_fanout_and_persistence_do_not_lose_concurrent_additions() {
+        let (host, _, _) = fixture();
+        let mut inner = host.inner.lock().unwrap();
+        let (iphone, mut iphone_updates) = tokio::sync::mpsc::channel(4);
+        let (android, mut android_updates) = tokio::sync::mpsc::channel(4);
+        inner.workspace_watches = vec![
+            WorkspaceWatcher {
+                peer: "iphone".into(),
+                sink: iphone,
+            },
+            WorkspaceWatcher {
+                peer: "android".into(),
+                sink: android,
+            },
+        ];
+        update_selection(
+            &host,
+            &mut inner,
+            &json!({
+                "selection":{"projectIds":["a"],"monoIds":[]}, "base":null
+            }),
+            "iphone",
+        )
+        .unwrap();
+        let base = json!({"projectIds":["a"],"monoIds":[]});
+        update_selection(
+            &host,
+            &mut inner,
+            &json!({
+                "selection":{"projectIds":["a","b"],"monoIds":[]}, "base":base
+            }),
+            "iphone",
+        )
+        .unwrap();
+        let frame = json!({"selection":inner.config.workspace_selection,"revision":inner.revision});
+        fanout_workspace(&mut inner, frame.clone());
+        assert_eq!(iphone_updates.try_recv().unwrap(), frame);
+        assert_eq!(android_updates.try_recv().unwrap(), frame);
+        // Android's picker was opened before iPhone added b.
+        update_selection(
+            &host,
+            &mut inner,
+            &json!({
+                "selection":{"projectIds":["a","c"],"monoIds":[]}, "base":base
+            }),
+            "iphone",
+        )
+        .unwrap();
+        assert_eq!(
+            inner
+                .config
+                .workspace_selection
+                .as_ref()
+                .unwrap()
+                .project_ids,
+            ["a", "b", "c"]
+        );
+        // A second phone imports its old local choices once, rather than
+        // losing them to whichever installation upgraded first.
+        update_selection(
+            &host,
+            &mut inner,
+            &json!({"selection":{"projectIds":["d"],"monoIds":[]},"base":null,"initialize":true}),
+            "android",
+        )
+        .unwrap();
+        // A stale phone cache cannot seed over an established shared workspace.
+        update_selection(
+            &host,
+            &mut inner,
+            &json!({
+                "selection":{"projectIds":[],"monoIds":[]}, "base":null, "initialize":true
+            }),
+            "iphone",
+        )
+        .unwrap();
+        let restored: Config = serde_json::from_slice(&std::fs::read(&host.path).unwrap()).unwrap();
+        assert_eq!(
+            restored.workspace_selection.unwrap().project_ids,
+            ["a", "b", "c", "d"]
+        );
+        // Deliberate removal still works, preserving concurrent additions.
+        update_selection(
+            &host,
+            &mut inner,
+            &json!({
+                "selection":{"projectIds":[],"monoIds":[]}, "base":base
+            }),
+            "iphone",
+        )
+        .unwrap();
+        assert_eq!(
+            inner
+                .config
+                .workspace_selection
+                .as_ref()
+                .unwrap()
+                .project_ids,
+            ["b", "c", "d"]
+        );
+        std::fs::remove_dir_all(host.path.parent().unwrap()).unwrap();
+    }
+    #[test]
+    fn a_slow_workspace_watch_is_closed_instead_of_silently_losing_updates() {
+        let (host, _, _) = fixture();
+        let mut inner = host.inner.lock().unwrap();
+        let (sink, mut updates) = tokio::sync::mpsc::channel(1);
+        inner.workspace_watches.push(WorkspaceWatcher {
+            peer: "phone".into(),
+            sink,
+        });
+        fanout_workspace(&mut inner, json!({"revision":1}));
+        fanout_workspace(&mut inner, json!({"revision":2}));
+        assert!(inner.workspace_watches.is_empty());
+        assert_eq!(updates.try_recv().unwrap(), json!({"revision":1}));
+        assert!(matches!(
+            updates.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)
+        ));
     }
     #[test]
     fn invitation_is_consumed_once_and_only_public_device_metadata_is_persisted() {

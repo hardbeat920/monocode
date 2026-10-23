@@ -72,6 +72,7 @@ export function rememberProject(path: string): RecentProject[] {
     MAX,
   );
   save(next);
+  notifyProjectPathsChanged();
   return next;
 }
 
