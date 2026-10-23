@@ -66,6 +66,7 @@ import {
 } from "../../projects/model/recents";
 import type {
   Attachment,
+  BackgroundJob,
   HarnessId,
   MessageQueueStatus,
   QueuedMessage,
@@ -117,6 +118,7 @@ import { NoteMiniCard } from "../../notes/ui/NoteMiniCard";
 import { HandoffMiniCard } from "./HandoffMiniCard";
 import { ModelControlPills, ModelPicker } from "./ModelPicker";
 import { QuestionForm } from "./QuestionForm";
+import { BackgroundJobs } from "./BackgroundJobs";
 import { MessageQueue } from "./MessageQueue";
 import { SkillPicker } from "../../skills/ui/SkillPicker";
 import { pathKey, projectKey } from "../../../shared/lib/paths";
@@ -246,6 +248,8 @@ type Props = {
   editLastTurnSupported?: boolean;
   lastTurnRecall?: LastTurnRecall | null;
   queuedMessages?: QueuedMessage[];
+  backgroundJobs?: BackgroundJob[];
+  onStopBackgroundJob?: (jobId: string) => Promise<void>;
   queueStatus?: MessageQueueStatus;
   usageLimit?: UsageLimit;
   hotkeys?: boolean;
@@ -373,6 +377,8 @@ export function Composer({
   editLastTurnSupported = false,
   lastTurnRecall = null,
   queuedMessages = [],
+  backgroundJobs,
+  onStopBackgroundJob,
   queueStatus,
   usageLimit,
   onFocus,
@@ -1861,6 +1867,7 @@ export function Composer({
           }
         />
       ) : null}
+      <BackgroundJobs jobs={backgroundJobs} onStop={onStopBackgroundJob} />
       <MessageQueue
         messages={queuedMessages}
         status={queueStatus}
