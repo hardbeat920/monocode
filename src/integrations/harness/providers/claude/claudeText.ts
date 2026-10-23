@@ -44,6 +44,7 @@ type TextSettings = {
   settings: Record<string, boolean>;
   permissionMode?: "plan";
   maxTurns?: number;
+  disallowTools?: boolean;
 };
 
 type InFlightTool = {
@@ -94,7 +95,7 @@ function textSettings(
     effort: normalizeClaudeCliEffort(effort, model),
     promptEffort: effort,
     settings,
-    ...(readOnly ? { permissionMode: "plan" as const, maxTurns: 1 } : {}),
+    ...(readOnly ? { permissionMode: "plan" as const, maxTurns: 1, disallowTools: true } : {}),
   };
 }
 
@@ -299,6 +300,7 @@ async function startLive(
         settings: settings.settings,
         permissionMode: settings.permissionMode,
         maxTurns: settings.maxTurns,
+        disallowTools: settings.disallowTools,
       }),
       cwd,
       { provider: "claude", id: providerAccountId ?? "default" },
