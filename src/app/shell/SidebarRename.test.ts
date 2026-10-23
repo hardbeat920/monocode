@@ -5,7 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatSessionTitle } from "../../features/sessions/model/session";
 import { formatReminderTime } from "../../features/sessions/model/sessionReminders";
 import { Sidebar } from "./Sidebar";
-import { saveProjectRailOrder } from "../../features/projects/model/recents";
+import {
+  loadProjectRailOrder,
+  savePinnedProjects,
+  saveProjectRailOrder,
+} from "../../features/projects/model/recents";
 import {
   loadSessionFolders,
   saveSessionFolders,
@@ -226,6 +230,84 @@ describe("project swipe navigation", () => {
       }
     },
   );
+});
+
+it("drags inset project icons into the saved order without moving hidden or pinned projects", () => {
+  const paths = ["a", "b", "c", "d", "e", "f"].map(
+    (name) => `/workspace/${name}`,
+  );
+  saveProjectRailOrder(paths);
+  savePinnedProjects([paths[0]]);
+  props = {
+    ...props,
+    cwd: paths[0],
+    inset: true,
+    recents: paths.map((path) => ({ path, openedAt: 1 })),
+    onSelectProject: vi.fn(),
+  };
+  vi.stubGlobal("matchMedia", () => ({ matches: true }));
+  act(render);
+
+  const tabs = Array.from(
+    container.querySelectorAll<HTMLButtonElement>(
+      '[role="tablist"][aria-label="Projects"] > button',
+    ),
+  );
+  expect(tabs.map((tab) => tab.getAttribute("aria-label"))).toEqual([
+    "a",
+    "b",
+    "c",
+    "d",
+    "e",
+  ]);
+  act(() => tabs[2].click());
+  expect(props.onSelectProject).toHaveBeenCalledExactlyOnceWith(paths[2]);
+  vi.mocked(props.onSelectProject!).mockClear();
+  tabs.forEach((tab, index) => {
+    vi.spyOn(tab, "getBoundingClientRect").mockReturnValue({
+      left: index * 100,
+      right: (index + 1) * 100,
+      width: 100,
+      top: 0,
+      bottom: 20,
+      height: 20,
+    } as DOMRect);
+    tab.setPointerCapture = vi.fn();
+    tab.hasPointerCapture = vi.fn(() => true);
+    tab.releasePointerCapture = vi.fn();
+  });
+  const pointer = (type: string, x: number) =>
+    Object.assign(new Event(type, { bubbles: true }), {
+      button: 0,
+      buttons: type === "pointerup" ? 0 : 1,
+      clientX: x,
+      clientY: 10,
+      pointerId: 1,
+      pointerType: "mouse",
+    });
+  act(() => {
+    tabs[1].dispatchEvent(pointer("pointerdown", 150));
+    window.dispatchEvent(pointer("pointermove", 350));
+    window.dispatchEvent(pointer("pointerup", 350));
+  });
+  expect(loadProjectRailOrder()).toEqual([
+    paths[0],
+    paths[2],
+    paths[3],
+    paths[1],
+    paths[4],
+    paths[5],
+  ]);
+  act(() => tabs[1].click());
+  expect(props.onSelectProject).not.toHaveBeenCalled();
+  expect(
+    Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '[role="tablist"][aria-label="Projects"] > button',
+      ),
+      (tab) => tab.getAttribute("aria-label"),
+    ),
+  ).toEqual(["a", "c", "d", "b", "e"]);
 });
 
 describe("inset session previews", () => {

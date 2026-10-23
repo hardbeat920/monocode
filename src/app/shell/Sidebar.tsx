@@ -166,6 +166,7 @@ import { useAnimatedReorder } from "../../shared/hooks/useAnimatedReorder";
 import { normalizeHex } from "../../shared/lib/colorUtils";
 import {
   collectRailProjects,
+  loadPinnedProjects,
   loadProjectRailOrder,
   looksLikeProject,
   projectRailItems,
@@ -2170,10 +2171,23 @@ function SidebarComponent({
     : undefined;
   // The inset sidebar's spaces: the projects in the rail's order, the same
   // one Project: Previous / Next steps through.
+  const [spaceOrderRevision, setSpaceOrderRevision] = useState(0);
   const spaceProjects = useMemo(
     () =>
       inset ? projectRailItems(recents, cwd).map((item) => item.path) : [],
-    [inset, recents, cwd],
+    [inset, recents, cwd, spaceOrderRevision],
+  );
+  const onReorderSpaces = useCallback(
+    (ids: string[]) => {
+      const subset = new Set(ids);
+      let index = 0;
+      const next = spaceProjects.map((path) =>
+        subset.has(path) ? ids[index++] : path,
+      );
+      saveProjectRailOrder(next);
+      setSpaceOrderRevision((revision) => revision + 1);
+    },
+    [spaceProjects],
   );
   const swipeDestination = useRef<{ from: string; to: string } | null>(null);
   const onSwipeProject = useCallback(
@@ -3113,6 +3127,7 @@ function SidebarComponent({
             cwd={cwd}
             busyProjectPaths={busyProjectPaths}
             onSelectProject={onSelectProject}
+            onReorder={onReorderSpaces}
             onProjectContextMenu={headerProjectMenu.open}
           />
         ) : null}
@@ -3953,12 +3968,14 @@ function ProjectSpacesBar({
   cwd,
   busyProjectPaths,
   onSelectProject,
+  onReorder,
   onProjectContextMenu,
 }: {
   projects: readonly string[];
   cwd: string;
   busyProjectPaths?: Iterable<string>;
   onSelectProject: (path: string) => void;
+  onReorder: (ids: string[]) => void;
   onProjectContextMenu: (
     path: string,
     x: number,
@@ -3995,6 +4012,16 @@ function ProjectSpacesBar({
   }, [activeIndex, shown]);
   const first = Math.min(start, lastStart);
   const visible = projects.slice(first, first + shown);
+  const pinnedPaths = loadPinnedProjects();
+  const pinned = visible.filter((path) =>
+    pinnedPaths.some((item) => sameProjectPath(item, path)),
+  );
+  const unpinned = visible.filter(
+    (path) => !pinnedPaths.some((item) => sameProjectPath(item, path)),
+  );
+  // shortcut: each pin section reorders on its own; cross-section moves would change pinning.
+  const pinnedSortable = useAnimatedReorder(pinned, onReorder, "x");
+  const unpinnedSortable = useAnimatedReorder(unpinned, onReorder, "x");
   const rowRef = useRef<HTMLDivElement>(null);
   const step = (direction: -1 | 1) => {
     const next = Math.min(lastStart, Math.max(0, first + direction));
@@ -4054,6 +4081,9 @@ function ProjectSpacesBar({
           {visible.map((path) => (
             <ProjectSpaceButton
               key={path}
+              sortable={
+                pinned.includes(path) ? pinnedSortable : unpinnedSortable
+              }
               path={path}
               active={sameProjectPath(path, cwd)}
               busy={projectPathBusy(busyProjectPaths, path)}
@@ -4073,6 +4103,7 @@ function ProjectSpacesBar({
 }
 
 function ProjectSpaceButton({
+  sortable,
   path,
   active,
   busy,
@@ -4080,6 +4111,7 @@ function ProjectSpaceButton({
   onSelect,
   onContextMenu,
 }: {
+  sortable: ReturnType<typeof useAnimatedReorder<string>>;
   path: string;
   active: boolean;
   busy: boolean;
@@ -4090,6 +4122,7 @@ function ProjectSpaceButton({
   const label = useProjectLabel(path);
   return (
     <button
+      ref={(el) => sortable.setItemRef(path, el)}
       type="button"
       role="tab"
       aria-selected={active}
@@ -4097,7 +4130,10 @@ function ProjectSpaceButton({
       data-rail-tip={label}
       data-rail-tip-detail={shortcuts || undefined}
       data-tauri-drag-region="false"
-      onClick={active ? undefined : onSelect}
+      onPointerDown={(event) => sortable.onItemPointerDown(path, event)}
+      onClick={() => {
+        if (!sortable.consumeClick() && !active) onSelect();
+      }}
       onContextMenu={(event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -4115,7 +4151,7 @@ function ProjectSpaceButton({
         const rect = event.currentTarget.getBoundingClientRect();
         onContextMenu(rect.left, rect.bottom, event.currentTarget);
       }}
-      className={`relative grid h-5 min-w-0 flex-1 place-items-center rounded-md transition-[opacity,background-color] duration-200 ease-out motion-reduce:transition-none ${
+      className={`reorder-item relative grid h-5 min-w-0 flex-1 touch-none place-items-center rounded-md transition-[opacity,background-color] duration-200 ease-out motion-reduce:transition-none ${
         active
           ? "bg-content/10 opacity-100"
           : "opacity-45 hover:bg-content/5 hover:opacity-100"
