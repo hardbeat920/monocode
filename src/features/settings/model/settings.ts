@@ -392,6 +392,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "scroll position sticky message",
   },
   {
+    id: "visual-replies",
+    section: "chat",
+    label: "Visual replies",
+    keywords: "diagram chart mermaid draw visual graph picture",
+  },
+  {
     id: "paced-reveal",
     section: "chat",
     label: "Smooth text reveal",
