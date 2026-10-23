@@ -120,8 +120,16 @@ jobs:
       - run: cargo test
 
   appimage:
-    name: AppImage host libraries
-    runs-on: ubuntu-22.04
+    name: AppImage host libraries (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            os: ubuntu-22.04
+          - arch: aarch64
+            os: ubuntu-22.04-arm
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: read
     # A full tauri release build is too expensive for every PR. Run when

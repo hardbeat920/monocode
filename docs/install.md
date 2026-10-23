@@ -1,6 +1,13 @@
 # Linux installation
 
-Download the x86_64 `.deb`, `.rpm`, or AppImage from [GitHub Releases](https://github.com/hardbeat920/monocode/releases/latest). Install and sign in to at least one [supported provider](providers.md) before starting a session.
+Download the package for your architecture from [GitHub Releases](https://github.com/hardbeat920/monocode/releases/latest). Install and sign in to at least one [supported provider](providers.md) before starting a session.
+
+| Platform | Release packages |
+| --- | --- |
+| Linux, x86_64 | `*_amd64.deb`, `*.x86_64.rpm`, or `*_amd64.AppImage` |
+| Linux, aarch64 (ARM64) | `*_arm64.deb` or `*_aarch64.AppImage` |
+
+On Arch Linux ARM (including Omarchy on Apple Silicon), use the aarch64 AppImage with the host's `webkit2gtk-4.1` package. The `monocode-host-linux-arm64.tar.gz` archive is the remote host, not the desktop app.
 
 ## Ubuntu / Debian packages
 
