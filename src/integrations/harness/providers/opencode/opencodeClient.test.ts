@@ -99,6 +99,109 @@ describe("OpenCodeClient v2", () => {
     );
   });
 
+  it("reads every v2 message page in chronological order", async () => {
+    mocks.harnessHttp
+      .mockResolvedValueOnce({
+        status: 200,
+        body: JSON.stringify({
+          data: [
+            {
+              id: "msg_user",
+              type: "user",
+              text: "Hello",
+              time: { created: 1 },
+            },
+          ],
+          cursor: { next: "page_2" },
+        }),
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        body: JSON.stringify({
+          data: [
+            {
+              id: "msg_reply",
+              type: "assistant",
+              content: [],
+              time: { created: 2 },
+            },
+          ],
+          cursor: { next: "page_3" },
+        }),
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        body: JSON.stringify({ data: [], cursor: {} }),
+      });
+    const client = new OpenCodeClient("http://127.0.0.1:4096", "/repo", "v2");
+
+    const messages = await client.getMessages("ses_1");
+    expect(messages.map((message) => message.info?.id)).toEqual([
+      "msg_user",
+      "msg_reply",
+    ]);
+    expect(messages[1].info?.parentID).toBe("msg_user");
+    const queries = mocks.harnessHttp.mock.calls.map(([request]) =>
+      Object.fromEntries(new URL(request.url).searchParams),
+    );
+    expect(queries).toEqual([
+      { directory: "/repo", order: "asc", limit: "200" },
+      { directory: "/repo", cursor: "page_2", limit: "200" },
+      { directory: "/repo", cursor: "page_3", limit: "200" },
+    ]);
+  });
+
+  it("rejects a repeated cursor rather than returning incomplete history", async () => {
+    mocks.harnessHttp.mockResolvedValue({
+      status: 200,
+      body: JSON.stringify({
+        data: [{ id: "msg_1", type: "user", text: "Hello" }],
+        cursor: { next: "same_page" },
+      }),
+    });
+    const client = new OpenCodeClient("http://127.0.0.1:4096", "/repo", "v2");
+    await expect(client.getMessages("ses_1")).rejects.toThrow("cursor");
+    expect(mocks.harnessHttp).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves the unpaginated v1 message response", async () => {
+    const messages = [{ info: { id: "msg_1", role: "user" }, parts: [] }];
+    mocks.harnessHttp.mockResolvedValueOnce({
+      status: 200,
+      body: JSON.stringify(messages),
+    });
+    const client = new OpenCodeClient("http://127.0.0.1:4096", "/repo");
+    await expect(client.getMessages("ses_1")).resolves.toEqual(messages);
+    expect(mocks.harnessHttp).toHaveBeenCalledOnce();
+  });
+
+  it("normalizes v2 attachment types without guessing file URI media types", async () => {
+    mocks.harnessHttp.mockResolvedValueOnce({
+      status: 200,
+      body: JSON.stringify({
+        data: [
+          {
+            id: "msg_file",
+            type: "user",
+            files: [
+              {
+                name: "a.bin",
+                uri: "data:application/octet-stream;base64,YQ==",
+              },
+              { name: "b.png", uri: "file:///repo/b.png" },
+            ],
+          },
+        ],
+      }),
+    });
+    const client = new OpenCodeClient("http://127.0.0.1:4096", "/repo", "v2");
+    const messages = await client.getMessages("ses_1");
+    expect(messages[0].parts).toEqual([
+      expect.objectContaining({ mime: "application/octet-stream" }),
+      expect.objectContaining({ mime: undefined }),
+    ]);
+  });
+
   it("authenticates background service requests", async () => {
     mocks.harnessHttp.mockResolvedValueOnce({
       status: 200,
@@ -306,6 +409,52 @@ describe("OpenCodeClient v2", () => {
       }),
     );
   });
+
+  it.each(["string", "multiselect"])(
+    "honors custom answers on %s fields with options",
+    async (type) => {
+      let receive: ((data: string) => void) | undefined;
+      mocks.watchSse.mockImplementation((_id, callback) => {
+        receive = callback;
+      });
+      const client = new OpenCodeClient("http://127.0.0.1:4096", "/repo", "v2");
+      const events: Record<string, unknown>[] = [];
+      await client.subscribeEvents("thread", (event) => events.push(event));
+      receive?.(
+        JSON.stringify({
+          type: "form.created",
+          data: {
+            form: {
+              id: "frm_custom",
+              sessionID: "ses_1",
+              fields: [
+                {
+                  key: "choice",
+                  type,
+                  custom: true,
+                  options: [{ label: "Fast", value: "fast" }],
+                },
+              ],
+            },
+          },
+        }),
+      );
+      expect(events[0]).toMatchObject({
+        properties: { questions: [{ custom: true }] },
+      });
+      await client.replyQuestion("frm_custom", [["My own answer"]]);
+      expect(mocks.harnessHttp).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          body: JSON.stringify({
+            answer: {
+              choice:
+                type === "multiselect" ? ["My own answer"] : "My own answer",
+            },
+          }),
+        }),
+      );
+    },
+  );
 
   it("always answers multiselect fields with a list, even for zero or one choice", async () => {
     let receive: ((data: string) => void) | undefined;
