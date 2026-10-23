@@ -247,9 +247,16 @@ export class OpenCodeClient {
     variant?: string;
     parts: OpenCodePromptPart[];
     delivery?: "queue" | "steer";
+    /** The prompt was never sent: a v2 model or agent update failed first. */
+    onPreSubmissionFailure?: () => void;
   }): Promise<string | undefined> {
     if (this.generation === "v2") {
-      await this.configureTurn(input);
+      try {
+        await this.configureTurn(input);
+      } catch (error) {
+        input.onPreSubmissionFailure?.();
+        throw error;
+      }
       const admitted = await this.request<unknown>(
         "POST",
         this.path(`/session/${enc(input.sessionID)}/prompt`),
