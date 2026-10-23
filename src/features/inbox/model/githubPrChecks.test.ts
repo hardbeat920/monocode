@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import {
+  checksTerms,
   checkDuration,
   countChecks,
   describeCheckCounts,
@@ -220,5 +221,72 @@ describe("isHttpUrl", () => {
     expect(isHttpUrl("not a url")).toBe(false);
     expect(isHttpUrl("")).toBe(false);
     expect(isHttpUrl(null)).toBe(false);
+  });
+});
+
+describe("checksTerms", () => {
+  it("calls GitHub results checks", () => {
+    expect(checksTerms()).toEqual({
+      tab: "Checks",
+      noun: "check",
+      nouns: "checks",
+      host: "GitHub",
+    });
+    expect(checksTerms("github")).toEqual(checksTerms());
+  });
+
+  it("calls Bitbucket results builds, since Bitbucket's own checks are merge checks", () => {
+    expect(checksTerms("bitbucket")).toEqual({
+      tab: "Builds",
+      noun: "build",
+      nouns: "builds",
+      host: "Bitbucket",
+    });
+  });
+});
+
+describe("summarizePrChecks wording per provider", () => {
+  const base = { loading: false, error: null, checks: [] };
+
+  it("keeps GitHub's wording by default", () => {
+    expect(summarizePrChecks({ ...base, loading: true }).description).toBe(
+      "Loading checks",
+    );
+    expect(summarizePrChecks(base).description).toBe("No checks reported");
+    expect(summarizePrChecks({ ...base, error: "x" }).description).toBe(
+      "Checks failed to load",
+    );
+  });
+
+  it("says builds for Bitbucket in every state", () => {
+    const provider = "bitbucket" as const;
+    expect(
+      summarizePrChecks({ ...base, loading: true, provider }).description,
+    ).toBe("Loading builds");
+    expect(summarizePrChecks({ ...base, provider }).description).toBe(
+      "No builds reported",
+    );
+    expect(
+      summarizePrChecks({ ...base, error: "x", provider }).description,
+    ).toBe("Builds failed to load");
+    expect(
+      summarizePrChecks({
+        ...base,
+        error: "x",
+        provider,
+        checks: [
+          {
+            name: "Pipeline",
+            workflow: "",
+            state: "pass",
+            url: null,
+            startedAt: null,
+            completedAt: null,
+          },
+        ],
+      }).description,
+    ).toBe(
+      "Builds failed to load, showing saved results that may be out of date: 1 passed",
+    );
   });
 });
