@@ -455,6 +455,17 @@ describe("transcript scrolling", () => {
     },
   );
 
+  it("keeps the end of the reply in view when the composer grows", () => {
+    const { geometry, observer } = mountScroller();
+    // The reader is at the end and presses nothing: typing multiline text
+    // grows the composer above and shrinks the transcript's viewport, and
+    // the tail must re-pin instead of sliding behind the composer.
+    geometry.viewport = 320;
+    act(() => observer.resize());
+    expect(geometry.top).toBe(680);
+    expect(geometry.top).toBe(geometry.height - geometry.viewport);
+  });
+
   it("keeps following paused when a resize clamps a reader to the bottom", () => {
     const { scroller, geometry, observer } = mountScroller();
     act(() => {
