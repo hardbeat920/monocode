@@ -3,12 +3,22 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { newSession } from "../../sessions/model/session";
 import { leafIds, newTab, splitPane } from "../../workspace/model/layout";
 import { planWorkspaceTabClose } from "../../workspace/model/workspaceTabGroups";
-import { createMono, findMono, saveMonoName, saveMonoSessionId } from "./mono";
+import {
+  createMono,
+  findMono,
+  listMonos,
+  markMonoOpened,
+  saveMonoName,
+  saveMonoSessionId,
+} from "./mono";
 import { planAgentContext, recordAgentContext } from "./monoFiles";
 import { loadMonoRotation, saveMonoRotation } from "./monoRotation";
 import {
   detachMonoTabs,
+  ensureLatestMonoSession,
   ensureMonoSession,
+  loadLatestMonoSession,
+  rememberMonoAfterOpen,
   resetMonoSession,
 } from "./monoWorkspace";
 
@@ -80,6 +90,129 @@ it("opens nothing for a Mono that no longer exists", async () => {
   expect(host.create).not.toHaveBeenCalled();
 });
 
+it("does not create a conversation when a project's saved Mono session is stale", async () => {
+  const monoId = monoFor("/project", "deleted-session");
+  const host = {
+    load: vi.fn().mockResolvedValue(null),
+    home: vi.fn().mockResolvedValue("/home"),
+    create: vi.fn(createSession),
+    add: vi.fn(),
+  };
+
+  expect(
+    await loadLatestMonoSession(monoId, { current: 0 }, host),
+  ).toBeUndefined();
+  expect(host.load).toHaveBeenCalledExactlyOnceWith("deleted-session");
+  expect(host.home).not.toHaveBeenCalled();
+  expect(host.create).not.toHaveBeenCalled();
+  expect(host.add).not.toHaveBeenCalled();
+});
+
+it("keeps the previous toggle Mono when a project landing session is stale", async () => {
+  const previousId = monoFor("/previous", "previous-session");
+  const staleId = monoFor("/project", "deleted-session");
+  const remembered = { current: previousId as string | undefined };
+  const request = { current: 0 };
+  const host = {
+    load: vi.fn().mockResolvedValue(null),
+    home: vi.fn().mockResolvedValue("/home"),
+    create: vi.fn(createSession),
+    add: vi.fn(),
+  };
+  const opening = rememberMonoAfterOpen(
+    staleId,
+    loadLatestMonoSession(staleId, request, host),
+    (id) => {
+      remembered.current = id;
+      markMonoOpened(id);
+    },
+  );
+  const toggleMono = () =>
+    (remembered.current && findMono(remembered.current)
+      ? remembered.current
+      : undefined) ?? listMonos()[0]?.id;
+
+  expect(toggleMono()).toBe(previousId);
+  expect(await opening).toBeUndefined();
+  expect(toggleMono()).toBe(previousId);
+  expect(findMono(staleId)?.lastOpenedAt).toBeUndefined();
+  expect(host.create).not.toHaveBeenCalled();
+});
+
+it("remembers an explicit Mono open after its conversation is created", async () => {
+  const monoId = createMono().id;
+  const remembered = { current: undefined as string | undefined };
+  const host = {
+    load: vi.fn().mockResolvedValue(null),
+    home: vi.fn().mockResolvedValue("/home"),
+    create: vi.fn(createSession),
+    add: vi.fn(),
+  };
+
+  const session = await rememberMonoAfterOpen(
+    monoId,
+    ensureLatestMonoSession(monoId, { current: 0 }, host),
+    (id) => {
+      remembered.current = id;
+      markMonoOpened(id);
+    },
+  );
+
+  expect(session?.cwd).toBe("/home");
+  expect(remembered.current).toBe(monoId);
+  expect(findMono(monoId)?.lastOpenedAt).toBeDefined();
+  expect(host.create).toHaveBeenCalledOnce();
+  expect(host.add).toHaveBeenCalledOnce();
+});
+
+it("keeps the latest successful Mono after an earlier landing load resolves late", async () => {
+  const previousId = monoFor("/previous", "previous-session");
+  const first = chat("first-session", "/first");
+  const second = chat("second-session", "/second");
+  const firstId = monoFor(first.cwd, first.id);
+  const secondId = monoFor(second.cwd, second.id);
+  let resolveFirst!: (session: typeof first | null) => void;
+  const firstLoad = new Promise<typeof first | null>((resolve) => {
+    resolveFirst = resolve;
+  });
+  const host = {
+    load: vi.fn((id: string) =>
+      id === first.id ? firstLoad : Promise.resolve(second),
+    ),
+    home: vi.fn().mockResolvedValue("/home"),
+    create: vi.fn(createSession),
+    add: vi.fn(),
+  };
+  const remembered = { current: previousId as string | undefined };
+  const request = { current: 0 };
+  const onOpened = (id: string) => {
+    remembered.current = id;
+    markMonoOpened(id);
+  };
+  const toggleMono = () =>
+    (remembered.current && findMono(remembered.current)
+      ? remembered.current
+      : undefined) ?? listMonos()[0]?.id;
+  const firstOpening = rememberMonoAfterOpen(
+    firstId,
+    loadLatestMonoSession(firstId, request, host),
+    onOpened,
+  );
+  const secondOpening = rememberMonoAfterOpen(
+    secondId,
+    loadLatestMonoSession(secondId, request, host),
+    onOpened,
+  );
+
+  expect(await secondOpening).toBe(second);
+  expect(remembered.current).toBe(secondId);
+  resolveFirst(first);
+  expect(await firstOpening).toBeUndefined();
+  expect(remembered.current).toBe(secondId);
+  expect(toggleMono()).toBe(secondId);
+  expect(host.create).not.toHaveBeenCalled();
+});
+
 it("shares concurrent first opens of the same Mono", async () => {
   const monoId = createMono().id;
   let resolveHome!: (path: string) => void;
@@ -101,6 +234,35 @@ it("shares concurrent first opens of the same Mono", async () => {
   expect(host.home).toHaveBeenCalledOnce();
   expect(host.create).toHaveBeenCalledOnce();
   expect(host.add).toHaveBeenCalledOnce();
+});
+
+it("ignores a Mono load that finishes after a later project selection", async () => {
+  const first = chat("first-session", "/first");
+  const second = chat("second-session", "/second");
+  const firstMono = monoFor("/first", first.id);
+  const secondMono = monoFor("/second", second.id);
+  let resolveFirst!: (session: typeof first) => void;
+  let resolveSecond!: (session: typeof second) => void;
+  const firstLoad = new Promise<typeof first>((resolve) => {
+    resolveFirst = resolve;
+  });
+  const secondLoad = new Promise<typeof second>((resolve) => {
+    resolveSecond = resolve;
+  });
+  const host = {
+    home: vi.fn().mockResolvedValue("/home"),
+    load: vi.fn((id: string) => (id === first.id ? firstLoad : secondLoad)),
+    create: vi.fn(createSession),
+    add: vi.fn(),
+  };
+  const request = { current: 0 };
+  const firstRequest = ensureLatestMonoSession(firstMono, request, host);
+  const secondRequest = ensureLatestMonoSession(secondMono, request, host);
+
+  resolveSecond(second);
+  expect(await secondRequest).toBe(second);
+  resolveFirst(first);
+  expect(await firstRequest).toBeUndefined();
 });
 
 it("allows retrying an open after the home lookup fails", async () => {
