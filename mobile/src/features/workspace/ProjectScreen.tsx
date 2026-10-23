@@ -32,6 +32,7 @@ import { useOpenSessionAfterStarting } from "@/features/settings/newSessions";
 import type { Attachment } from "@/features/sessions/attachments";
 import { Composer } from "@/features/sessions/Composer";
 import { EmptySession } from "@/features/sessions/EmptySession";
+import { SessionRequestCard } from "@/features/sessions/SessionRequest";
 import {
   latestSessionError,
   useReportSessionError,
@@ -104,6 +105,8 @@ export function ProjectScreen({
   // before, would hold the slide back.
   const pushStarted = usePushStarted(!!sessionId);
   const conversation = useConversation(sessionId ?? null, pushStarted);
+  // The stream says at once; the catalog is all an older desktop sends.
+  const request = conversation.request !== undefined ? conversation.request : session?.request;
 
   // Where a new session works, shared by the header and expanded composer.
   const [workspace, setWorkspace] = useState<Workspace>({ mode: "current" });
@@ -344,6 +347,11 @@ export function ProjectScreen({
       // The composer, its blur and all, slides off with the new session's page.
       dockStyle={sessionId ? undefined : pages.slide}
       composer={
+        <>
+          {/* What the session waits on, answered over the composer as on the desktop. */}
+          {sessionId && request ? (
+            <SessionRequestCard key={request.requestId} sessionId={sessionId} request={request} />
+          ) : null}
         <Composer
           key={sessionId ?? project.id}
           notice={sessionNotice}
@@ -388,6 +396,7 @@ export function ProjectScreen({
                 ),
               })}
         />
+        </>
       }
     >
       {/* The stack's native header: native items, so the same ones morph

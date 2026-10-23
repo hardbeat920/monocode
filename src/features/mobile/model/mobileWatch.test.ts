@@ -70,6 +70,18 @@ describe("mobile watch frames", () => {
     ).toEqual({ busy: false, older: false, order: ["a", "b"], turns: [] });
   });
 
+  it("sends what the conversation waits on only when it changes, and null once it goes", () => {
+    const turns = [turn("a", "done")];
+    const request = { kind: "approval", requestId: 7, label: "Run ls" };
+    const first = watchUpdate(null, { busy: true, older: false, turns, request: null })!;
+    expect(first.update).toMatchObject({ request: null });
+    const asked = watchUpdate(first.baseline, { busy: true, older: false, turns, request })!;
+    expect(asked.update).toMatchObject({ request, turns: [] });
+    expect(watchUpdate(asked.baseline, { busy: true, older: false, turns, request })).toBeNull();
+    const answered = watchUpdate(asked.baseline, { busy: true, older: false, turns, request: null })!;
+    expect(answered.update).toMatchObject({ request: null });
+  });
+
   it("opens on the latest turns and grows from there", () => {
     const ids = ["a", "b", "c", "d", "e"];
     const opened = watchWindow(ids, null, 2);

@@ -15,6 +15,7 @@ import Storage from "expo-sqlite/kv-store";
 import type {
   Project,
   Mono,
+  SessionRequest,
   SessionSummary,
   Message,
   Turn,
@@ -320,6 +321,8 @@ export type Conversation = {
   /** Missing from desktops that predate turn-shaped transcripts. */
   turns?: Turn[];
   busy: boolean;
+  /** What it waits on the user for, null once nothing; absent from an older desktop. */
+  request?: SessionRequest | null;
 };
 
 /** What the desktop lists this phone as, e.g. "Nick's iPhone". */

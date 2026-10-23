@@ -116,6 +116,7 @@ export function useMobileWorkspace(options: Options) {
               busy: conversation.busy,
               older,
               turns: conversation.turns,
+              request: conversation.request,
             },
             watch.incremental,
           );

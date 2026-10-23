@@ -126,7 +126,29 @@ export type SessionSummary = {
   busy?: boolean;
   /** What it waits on the user for; absent from an older desktop. */
   waiting?: "approval" | "question";
+  /** What the phone needs to answer it; absent from an older desktop. */
+  request?: SessionRequest;
 };
+
+// The desktop's UserQuestion (src/features/sessions/model/userQuestion.ts).
+export type RequestQuestion = {
+  id: string;
+  header?: string;
+  prompt: string;
+  multiSelect: boolean;
+  allowCustom: boolean;
+  options: { id: string; label: string; description?: string }[];
+};
+
+export type SessionRequest =
+  | { kind: "approval"; requestId: number; label: string }
+  | { kind: "question"; requestId: number; title?: string; questions: RequestQuestion[] };
+
+/** An answer to a session's request, as the desktop's approval card or question form gives it. */
+export type RequestReply =
+  | { requestId: number; decision: "allow" | "deny" }
+  | { requestId: number; answers: Record<string, string[]>; custom: Record<string, string> }
+  | { requestId: number; skip: true };
 
 export type Message = {
   id: string;
