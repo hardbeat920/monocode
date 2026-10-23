@@ -7,7 +7,6 @@ const RAIL_PINNED_KEY = "monocode.projectRailPinned";
 const ARCHIVED_KEY = "monocode.archivedProjects";
 const ARCHIVED_CHANGED = "monocode:archived-projects-changed";
 const PROJECT_PATHS_CHANGED = "monocode:project-paths-changed";
-const MAX = 20;
 
 export type RecentProject = {
   path: string;
@@ -62,15 +61,17 @@ function save(next: RecentProject[]) {
   }
 }
 
+/**
+ * Remember a project as most recently opened without evicting saved rail entries.
+ * Existing projects are deduplicated by normalized path and restored from the archive.
+ * Projects remain saved until explicitly archived or deleted.
+ */
 export function rememberProject(path: string): RecentProject[] {
   const normalized = normalize(path);
   if (normalized === "~") return loadRecents();
   dropArchived(normalized);
   const prev = loadRecents().filter((p) => !sameProjectPath(p.path, normalized));
-  const next = [{ path: normalized, openedAt: Date.now() }, ...prev].slice(
-    0,
-    MAX,
-  );
+  const next = [{ path: normalized, openedAt: Date.now() }, ...prev];
   save(next);
   return next;
 }
