@@ -7,7 +7,13 @@ import {
 } from "@/features/workspace/WorkspaceMenu.android";
 import type { ChangedFile } from "@/features/workspace/types";
 
+vi.mock("react-native-svg", () => ({
+  default: () => <svg />,
+  Path: () => null,
+}));
 vi.mock("react-native", () => ({
+  useWindowDimensions: () => ({ height: 800 }),
+  ActivityIndicator: () => <i data-spinner />,
   Modal: ({ visible, children }: { visible: boolean; children?: ReactNode }) =>
     visible ? <section>{children}</section> : null,
   ScrollView: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
@@ -26,7 +32,11 @@ vi.mock("react-native", () => ({
   }) => (
     <button
       disabled={disabled}
-      style={style}
+      style={
+        Array.isArray(style)
+          ? Object.assign({}, ...style.filter(Boolean))
+          : style
+      }
       aria-label={accessibilityLabel}
       onClick={onPress}
     >
@@ -34,7 +44,15 @@ vi.mock("react-native", () => ({
     </button>
   ),
   View: ({ children, style }: { children?: ReactNode; style?: object }) => (
-    <div style={style}>{children}</div>
+    <div
+      style={
+        Array.isArray(style)
+          ? Object.assign({}, ...style.filter(Boolean))
+          : style
+      }
+    >
+      {children}
+    </div>
   ),
   Text: ({
     children,
@@ -51,7 +69,11 @@ vi.mock("react-native", () => ({
   }) => (
     <span
       aria-label={accessibilityLabel}
-      style={style}
+      style={
+        Array.isArray(style)
+          ? Object.assign({}, ...style.filter(Boolean))
+          : style
+      }
       data-ellipsis={ellipsizeMode}
       data-lines={numberOfLines}
     >
@@ -60,11 +82,13 @@ vi.mock("react-native", () => ({
   ),
 }));
 vi.mock("react-native-safe-area-context", () => ({
-  useSafeAreaInsets: () => ({ bottom: 0 }),
+  useSafeAreaInsets: () => ({ top: 24, bottom: 16 }),
 }));
 vi.mock("@/ui/Icon", () => ({ Icon: () => null }));
 vi.mock("@/ui/theme", () => ({
   useColors: () => ({ content: "white", muted: "gray" }),
+  themedStyles: (create: (colors: object) => object) => () =>
+    create({ content: "white", muted: "gray" }),
 }));
 vi.mock("@/features/changes/diffTheme", () => ({
   formatCount: String,
@@ -155,7 +179,7 @@ it("keeps worktree selection available while changes load and replaces the pendi
     expect(trigger.disabled).toBe(false);
     act(() => trigger.click());
     const worktree = [...container.querySelectorAll("button")].find(
-      (item) => item.textContent === "New worktree",
+      (item) => item.getAttribute("aria-label") === "New worktree",
     )!;
     act(() => worktree.click());
     expect(onChange).toHaveBeenCalledWith({ mode: "worktree" });
@@ -164,5 +188,108 @@ it("keeps worktree selection available while changes load and replaces the pendi
     expect(container.textContent).toContain("0 files+0-0");
   } finally {
     act(() => root.unmount());
+  }
+});
+
+it("groups Workspace options and opens existing worktrees as a separate page", () => {
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const onChange = vi.fn();
+  const trees = [
+    { name: "mc/orch-first", path: "/repo/.worktrees/first" },
+    { name: "mc/orch-second", path: "/repo/.worktrees/second" },
+  ];
+  const button = (label: string) =>
+    container.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!;
+  const click = (label: string) => act(() => button(label).click());
+  try {
+    act(() =>
+      root.render(
+        <WorkspaceMenu
+          value={{ mode: "current" }}
+          worktrees={trees}
+          onChange={onChange}
+          branch="main"
+          files={[]}
+          loading={false}
+          onOpenChanges={() => {}}
+        />,
+      ),
+    );
+    click("Workspace: main");
+    expect(container.textContent).toContain("Start the session in");
+    expect(container.textContent).toContain("The project's own folder");
+    expect(container.textContent).toContain(
+      "A fresh branch, in a folder of its own",
+    );
+    expect(container.textContent).toContain("2 worktrees");
+    expect(button("mc/orch-first")).toBeNull();
+    click("Existing worktree");
+    expect(container.textContent).toContain("Worktrees");
+    expect(container.textContent).toContain(trees[1].path);
+    expect(button("Current checkout")).toBeNull();
+    click("Back to Workspace");
+    expect(button("Current checkout")).not.toBeNull();
+    click("Existing worktree");
+    click("mc/orch-second");
+    expect(onChange).toHaveBeenCalledWith({
+      mode: "existing",
+      worktree: trees[1],
+    });
+    expect(container.querySelector("section")).toBeNull();
+    click("Workspace: main");
+    expect(button("Current checkout")).not.toBeNull();
+    click("Close workspace");
+    expect(container.querySelector("section")).toBeNull();
+  } finally {
+    act(() => root.unmount());
+  }
+});
+
+it("disables changes for an uncreated worktree and dismisses before opening changes", () => {
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const onOpenChanges = vi.fn();
+  const frame = vi.fn();
+  vi.stubGlobal("requestAnimationFrame", frame);
+  const render = (mode: "current" | "worktree") =>
+    act(() =>
+      root.render(
+        <WorkspaceMenu
+          value={{ mode }}
+          worktrees={[]}
+          onChange={() => {}}
+          branch="main"
+          files={[]}
+          loading={false}
+          onOpenChanges={onOpenChanges}
+        />,
+      ),
+    );
+  const click = (label: string) =>
+    act(() =>
+      container
+        .querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!
+        .click(),
+    );
+  try {
+    render("worktree");
+    click("Workspace: main");
+    expect(
+      container.querySelector<HTMLButtonElement>('[aria-label="View changes"]')!
+        .disabled,
+    ).toBe(true);
+    expect(container.textContent).toContain(
+      "Changes are available after the worktree is created.",
+    );
+    render("current");
+    click("View changes");
+    expect(container.querySelector("section")).toBeNull();
+    expect(onOpenChanges).not.toHaveBeenCalled();
+    act(() => frame.mock.calls[0][0]());
+    expect(onOpenChanges).toHaveBeenCalledOnce();
+  } finally {
+    act(() => root.unmount());
+    vi.unstubAllGlobals();
   }
 });

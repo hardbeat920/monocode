@@ -32,6 +32,7 @@ import {
   presentationDetents,
   presentationDragIndicator,
   scrollContentBackground,
+  scrollEdgeEffectStyle,
   shapes,
   truncationMode,
 } from "@expo/ui/swift-ui/modifiers";
@@ -193,6 +194,7 @@ function WorkspaceSheet({
             // list's background off, and the stack's behind each page as well,
             // which otherwise paints a pushed page opaque.
             scrollContentBackground("hidden"),
+            scrollEdgeEffectStyle("soft", "top"),
             containerBackground("clear", "navigation"),
             navigationTitle("Workspace"),
             navigationBarTitleDisplayMode("inline"),
@@ -289,6 +291,7 @@ function WorkspaceSheet({
             modifiers={[
               listStyle("insetGrouped"),
               scrollContentBackground("hidden"),
+              scrollEdgeEffectStyle("soft", "top"),
               containerBackground("clear", "navigation"),
               navigationTitle("Worktrees"),
               navigationBarTitleDisplayMode("inline"),
