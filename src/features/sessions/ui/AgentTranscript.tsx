@@ -154,7 +154,6 @@ import {
   turnCopyText,
   workKind,
   workSummaryLine,
-  joinedTurnStart,
   monoTurnLatestStart,
   monoTurnRuns,
   opensNewStretch,
@@ -1220,17 +1219,22 @@ function AgentTranscriptComponent({
           // more work. Only the last one can still be the live group.
           const foldedAt = lastActivityIndex(items);
           const initialThinkingAt = initialThinkingIndex(items);
+          // A message sent mid-turn opens a turn of its own here, timed from
+          // when it was sent, not from the turn it joined.
           const startedAt =
             userBlock?.startedAt ??
+            userBlock?.sentAt ??
             habit?.at ??
-            turn[0].startedAt ??
-            joinedTurnStart(turns, firstVisibleTurn + turnIndex);
+            turn[0].startedAt;
           const previousTurn = turns[firstVisibleTurn + turnIndex - 1];
+          const previousUser =
+            previousTurn && turnUserBlock(previousTurn, managed);
           const previousAt = !previousTurn
             ? undefined
             : inlineWork
               ? monoTurnLatestStart(previousTurn)
-              : (turnUserBlock(previousTurn, managed)?.startedAt ??
+              : (previousUser?.startedAt ??
+                previousUser?.sentAt ??
                 previousTurn[0].monoHabit?.at ??
                 previousTurn[0].startedAt);
           const stampAt =
