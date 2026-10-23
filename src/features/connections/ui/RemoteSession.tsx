@@ -21,6 +21,8 @@ import { notifyGitChanged } from "../../../platform/tauri/fs";
 import type { Worktree } from "../../source-control/model/worktrees";
 import { useProjectBranchesState } from "../../source-control/hooks/useProjectBranches";
 import { registerRemoteSessionActions } from "../model/remoteSessionActions";
+import { watchRemoteTurn } from "../model/remoteTurnWatch";
+import type { ControlOutcome } from "../../orchestration/model/orchestration";
 import {
   clearPendingRemoteCommand,
   loadRemoteSession,
@@ -533,11 +535,14 @@ function ConnectedRemoteSession({
     turnModel: selectedTurnModel(),
   });
 
+  // Why the last command failed, for a caller waiting on its outcome.
+  const failure = useRef("");
   const run = async (
     command: HostCommand,
     optimistic?: OptimisticTurn,
     followup?: HostCommand,
   ): Promise<CommandReceipt | undefined> => {
+    failure.current = "The host is busy with another request";
     if (sendingRef.current) return undefined;
     const version = bindingVersion.current;
     sendingRef.current = true;
@@ -615,8 +620,9 @@ function ConnectedRemoteSession({
       setRefresh((value) => value + 1);
       return receipt;
     } catch (reason) {
-      if (!alive.current || version !== bindingVersion.current) return undefined;
       const message = String(reason);
+      failure.current = message.replace(/^Error: /, "");
+      if (!alive.current || version !== bindingVersion.current) return undefined;
       if (message.includes("Host rejected request:")) {
         if (command.type === "send" || command.type === "compact")
           setUnseenSend((current) =>
@@ -710,6 +716,28 @@ function ConnectedRemoteSession({
       });
   });
 
+  // A caller waiting on a turn hears its outcome from a watch that outlives
+  // this pane, since the tab may be in the background or closed meanwhile.
+  const followTurn = (
+    id: string,
+    commandId: string,
+    onSettled?: (outcome: ControlOutcome) => void,
+  ) => {
+    if (!onSettled) return;
+    watchRemoteTurn(shell.id, {
+      commandId,
+      load: (known) => loadRemoteSession(machine.id, id, known),
+      onSnapshot: (next) => {
+        if (remoteSessionFor(shell.id) === id) onSnapshot?.(shell.id, next);
+      },
+      onSettled,
+    });
+  };
+  const turnFailed = (
+    onSettled?: (outcome: ControlOutcome) => void,
+    reason = failure.current,
+  ) => onSettled?.({ status: "failed", text: "", error: reason });
+
   const dispatchTurn = async (
     id: string,
     turn: OptimisticTurn,
@@ -720,7 +748,10 @@ function ConnectedRemoteSession({
       ? []
       : (uploaded ??
         (await uploadRemoteAttachments(machine.id, turn.attachments)));
-    if (!alive.current || version !== bindingVersion.current) return undefined;
+    if (!alive.current || version !== bindingVersion.current) {
+      failure.current = "The session changed before the message was sent";
+      return undefined;
+    }
     return run(
       turn.draft
         ? {
@@ -743,14 +774,18 @@ function ConnectedRemoteSession({
     );
   };
 
-  const startSession = async (turn: OptimisticTurn) => {
+  const startSession = async (
+    turn: OptimisticTurn,
+    onSettled?: (outcome: ControlOutcome) => void,
+  ) => {
     const version = bindingVersion.current;
+    const changed = "The session changed before the message was sent";
     try {
       const uploaded = await uploadRemoteAttachments(
         machine.id,
         turn.attachments,
       );
-      if (version !== bindingVersion.current) return;
+      if (version !== bindingVersion.current) return turnFailed(onSettled, changed);
       let worktreeCwd = selectedCwd;
       let autoWorktreeBranch: string | undefined;
       if (draftWorkspaceMode === "worktree") {
@@ -766,7 +801,8 @@ function ConnectedRemoteSession({
               existing: false,
             },
           );
-          if (version !== bindingVersion.current) return;
+          if (version !== bindingVersion.current)
+            return turnFailed(onSettled, changed);
           worktreeCwd = tree.path;
           autoWorktreeBranch = tree.branch ?? undefined;
           rememberRemotePendingWorktree(shell.id, tree.path);
@@ -779,7 +815,7 @@ function ConnectedRemoteSession({
             setError(String(reason));
             setStarting({ ...turn, failed: true });
           }
-          return;
+          return turnFailed(onSettled, String(reason).replace(/^Error: /, ""));
         }
       }
       const followup: Exclude<HostCommand, { type: "create" }> = turn.draft
@@ -796,13 +832,15 @@ function ConnectedRemoteSession({
         modelSettings: draft.settings,
         runtimeMode: draft.mode,
       }, turn, followup);
-      if (version !== bindingVersion.current) return;
+      if (version !== bindingVersion.current) return turnFailed(onSettled, changed);
       if (!receipt) {
         if (alive.current) setStarting({ ...turn, failed: true });
-        return;
+        return turnFailed(onSettled);
       }
-      if (version !== bindingVersion.current) return;
+      if (version !== bindingVersion.current) return turnFailed(onSettled, changed);
       const sent = await run({ ...followup, sessionId: receipt.sessionId }, turn);
+      if (sent) followTurn(receipt.sessionId, turn.commandId, onSettled);
+      else turnFailed(onSettled);
       if (alive.current && version === bindingVersion.current)
         if (!sent) setStarting({ ...turn, failed: true });
     } catch (reason) {
@@ -810,6 +848,7 @@ function ConnectedRemoteSession({
         setError(String(reason));
         setStarting({ ...turn, failed: true });
       }
+      turnFailed(onSettled, String(reason).replace(/^Error: /, ""));
     } finally {
       preparingRef.current = false;
     }
@@ -846,6 +885,7 @@ function ConnectedRemoteSession({
     options?: ComposerTurnOptions,
     asDraft = false,
     planBlockId?: string,
+    onSettled?: (outcome: ControlOutcome) => void,
   ): boolean => {
     if (
       !online ||
@@ -876,7 +916,7 @@ function ConnectedRemoteSession({
         setStarting(undefined);
         return false;
       }
-      void startSession(turn);
+      void startSession(turn, onSettled);
       return true;
     }
     if (changes) {
@@ -885,12 +925,16 @@ function ConnectedRemoteSession({
       return false;
     }
     const version = bindingVersion.current;
-    void dispatchTurn(hostSession.id, turn)
+    const id = hostSession.id;
+    void dispatchTurn(id, turn)
       .then((receipt) => {
+        if (receipt) followTurn(id, turn.commandId, onSettled);
+        else turnFailed(onSettled);
         if (alive.current && version === bindingVersion.current)
           if (!receipt) setStarting({ ...turn, failed: true });
       })
       .catch((reason) => {
+        turnFailed(onSettled, String(reason).replace(/^Error: /, ""));
         if (alive.current && version === bindingVersion.current) {
           setError(String(reason));
           setStarting({ ...turn, failed: true });
@@ -1156,7 +1200,8 @@ function ConnectedRemoteSession({
   useEffect(
     () => registerRemoteSessionActions(shell.id, {
       buildPlan,
-      submit: (text, attachments, options) => submit(text, attachments, options),
+      submit: (text, attachments, options, onSettled) =>
+        submit(text, attachments, options, false, undefined, onSettled),
       saveDraft,
       stop: stopTurn,
       compact,
