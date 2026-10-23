@@ -169,8 +169,10 @@ import {
   loadPinnedProjects,
   loadProjectRailOrder,
   looksLikeProject,
+  notifyProjectPathsChanged,
   projectRailItems,
   saveProjectRailOrder,
+  subscribeProjectPathsChanged,
   isRemoteProjectPath,
   sameProjectPath,
   type RecentProject,
@@ -2172,6 +2174,13 @@ function SidebarComponent({
   // The inset sidebar's spaces: the projects in the rail's order, the same
   // one Project: Previous / Next steps through.
   const [spaceOrderRevision, setSpaceOrderRevision] = useState(0);
+  useEffect(
+    () =>
+      subscribeProjectPathsChanged(() =>
+        setSpaceOrderRevision((revision) => revision + 1),
+      ),
+    [],
+  );
   const spaceProjects = useMemo(
     () =>
       inset ? projectRailItems(recents, cwd).map((item) => item.path) : [],
@@ -2185,7 +2194,7 @@ function SidebarComponent({
         subset.has(path) ? ids[index++] : path,
       );
       saveProjectRailOrder(next);
-      setSpaceOrderRevision((revision) => revision + 1);
+      notifyProjectPathsChanged();
     },
     [spaceProjects],
   );

@@ -9,6 +9,7 @@ import {
   loadProjectRailOrder,
   savePinnedProjects,
   saveProjectRailOrder,
+  subscribeProjectPathsChanged,
 } from "../../features/projects/model/recents";
 import {
   loadSessionFolders,
@@ -247,6 +248,8 @@ it("drags inset project icons into the saved order without moving hidden or pinn
   };
   vi.stubGlobal("matchMedia", () => ({ matches: true }));
   act(render);
+  const onPathsChanged = vi.fn(loadProjectRailOrder);
+  const unsubscribe = subscribeProjectPathsChanged(onPathsChanged);
 
   const tabs = Array.from(
     container.querySelectorAll<HTMLButtonElement>(
@@ -298,6 +301,9 @@ it("drags inset project icons into the saved order without moving hidden or pinn
     paths[4],
     paths[5],
   ]);
+  expect(onPathsChanged).toHaveBeenCalledOnce();
+  expect(onPathsChanged.mock.results[0].value).toEqual(loadProjectRailOrder());
+  unsubscribe();
   act(() => tabs[1].click());
   expect(props.onSelectProject).not.toHaveBeenCalled();
   expect(
@@ -308,6 +314,15 @@ it("drags inset project icons into the saved order without moving hidden or pinn
       (tab) => tab.getAttribute("aria-label"),
     ),
   ).toEqual(["a", "c", "d", "b", "e"]);
+  act(() => savePinnedProjects([paths[0], paths[5]]));
+  expect(
+    Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '[role="tablist"][aria-label="Projects"] > button',
+      ),
+      (tab) => tab.getAttribute("aria-label"),
+    ),
+  ).toEqual(["a", "f", "c", "d", "b"]);
 });
 
 describe("inset session previews", () => {
