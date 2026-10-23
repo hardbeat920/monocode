@@ -40,6 +40,17 @@ export function isImagePath(path: string): boolean {
   return IMAGE_EXTENSIONS.has(extensionOf(path));
 }
 
+/**
+ * The delimiter for files that get a table preview next to their source, or
+ * null for every other file.
+ */
+export function tableDelimiterForPath(path: string): "," | "\t" | null {
+  const extension = extensionOf(path);
+  if (extension === ".csv") return ",";
+  if (extension === ".tsv") return "\t";
+  return null;
+}
+
 /** Route video containers to the player, which checks codec support on load. */
 export function isVideoPath(path: string): boolean {
   return videoMimeForPath(path) !== null;
