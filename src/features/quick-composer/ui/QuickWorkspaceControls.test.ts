@@ -32,11 +32,11 @@ const onChange = vi.fn();
 const onOpenChange = vi.fn();
 const onClose = vi.fn();
 const onError = vi.fn();
-async function render() {
+async function render(mode: "current" | "worktree" | "cow" = "current") {
   await act(async () =>
     root.render(
       createElement(QuickWorkspaceControls, {
-        value: { cwd: "/repo", mode: "current" },
+        value: { cwd: "/repo", mode },
         enabled: true,
         onChange,
         onOpenChange,
@@ -196,4 +196,14 @@ it("handles native blur before DOM mousedown and still allows switching pickers"
   );
   await act(async () => button("Workspace Current checkout").click());
   expect(request().request.kind).toBe("workspace");
+});
+
+it("uses the base selector for Cow drafts without exposing source checkout actions", async () => {
+  await render("cow");
+  expect(button("Choose branch")).toBeNull();
+  await act(async () => button("Select base branch main").click());
+  expect(request().request).toMatchObject({
+    kind: "base",
+    choice: { cwd: "/repo", mode: "cow", base: "main" },
+  });
 });

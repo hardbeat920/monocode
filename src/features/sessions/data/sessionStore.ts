@@ -65,6 +65,7 @@ export type SessionSummary = {
   providerSessionId?: string;
   branch?: string;
   worktreeCwd?: string;
+  cowId?: string;
   worktreeRemoved?: boolean;
   repo?: string;
   additions?: number;
@@ -98,6 +99,10 @@ type SessionRecord = {
   contextWindow?: number | null;
   branch?: string | null;
   worktreeCwd?: string | null;
+  cowId?: string | null;
+  workspaceMode?: Session["workspaceMode"] | null;
+  worktreeBase?: string | null;
+  cowSourceCwd?: string | null;
   worktreeRemoved?: boolean;
   linkedWorkItem?: LinkedWorkItem | null;
   automationId?: string | null;
@@ -123,6 +128,10 @@ type SessionUpsertPayload = {
   contextWindow?: number;
   branch?: string;
   worktreeCwd?: string;
+  cowId?: string;
+  workspaceMode?: Session["workspaceMode"];
+  worktreeBase?: string;
+  cowSourceCwd?: string;
   worktreeRemoved?: boolean;
   linkedWorkItem?: LinkedWorkItem;
   automationId?: string;
@@ -181,6 +190,10 @@ function persistableMeta(
       : {}),
     ...(session.branch ? { branch: session.branch } : {}),
     ...(session.worktreeCwd ? { worktreeCwd: session.worktreeCwd } : {}),
+    ...(session.cowId ? { cowId: session.cowId } : {}),
+    ...(session.workspaceMode ? { workspaceMode: session.workspaceMode } : {}),
+    ...(session.worktreeBase ? { worktreeBase: session.worktreeBase } : {}),
+    ...(session.cowSourceCwd ? { cowSourceCwd: session.cowSourceCwd } : {}),
     ...(session.worktreeRemoved ? { worktreeRemoved: true } : {}),
     ...(linkedWorkItem ? { linkedWorkItem } : {}),
     ...(session.automationId && isPersistableId(session.automationId)
@@ -1519,6 +1532,10 @@ function recordToSession(record: SessionRecord): Session {
       : {}),
     ...(record.branch ? { branch: record.branch } : {}),
     ...(record.worktreeCwd ? { worktreeCwd: record.worktreeCwd } : {}),
+    workspaceMode: record.workspaceMode ?? undefined,
+    worktreeBase: record.worktreeBase ?? undefined,
+    cowSourceCwd: record.cowSourceCwd ?? undefined,
+    ...(record.cowId ? { cowId: record.cowId } : {}),
     ...(record.worktreeRemoved ? { worktreeRemoved: true } : {}),
     ...(linkedWorkItem ? { linkedWorkItem } : {}),
     ...(record.automationId && isPersistableId(record.automationId)

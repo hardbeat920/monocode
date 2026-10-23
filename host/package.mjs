@@ -1,6 +1,8 @@
+import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import {
   mkdir,
+  mkdtemp,
   readFile,
   writeFile,
   chmod,
@@ -125,6 +127,13 @@ for (const target of targets) {
     ]);
   await copyFile("build/host/monocode-host.mjs", join(folder, "host.mjs"));
   await copyFile("host/provider-guard.mjs", join(folder, "provider-guard.mjs"));
+  if (target.startsWith("darwin-")) {
+    const helper = target === `${process.platform}-${process.arch}`
+      ? "build/host/monocode-isolation"
+      : `build/isolation-helpers/${target}/monocode-isolation`;
+    await copyFile(helper, join(folder, "monocode-isolation"));
+    await chmod(join(folder, "monocode-isolation"), 0o755);
+  }
   await copyFile("LICENSE", join(folder, "MONOCODE-LICENSE"));
   await writeFile(
     join(folder, "version.json"),
@@ -155,6 +164,17 @@ for (const target of targets) {
     ).trim();
     if (actual !== version)
       throw new Error("Packaged host failed its executable smoke test");
+    if (target.startsWith("darwin-")) {
+      const store = await mkdtemp(join(tmpdir(), "monocode-isolation-package-"));
+      try {
+        const probe = JSON.parse(execFileSync(join(folder, "monocode-isolation"), ["--store", store], {
+          input: JSON.stringify({ command: "cow_capability", args: { cwd: process.cwd() } }),
+          encoding: "utf8", timeout: 30_000,
+        }));
+        if (!probe.ok || typeof probe.result?.supported !== "boolean")
+          throw new Error("Packaged isolation helper failed its executable smoke test");
+      } finally { await rm(store, { recursive: true, force: true }); }
+    }
   }
   const filename = `monocode-host-${target}.${extension}`;
   await rm(join(output, filename), { force: true });

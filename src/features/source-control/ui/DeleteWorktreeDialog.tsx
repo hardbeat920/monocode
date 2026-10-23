@@ -44,6 +44,7 @@ export function DeleteWorktreeDialog({
   cwd,
   tree,
   sessionCount = 0,
+  copyOnWrite = false,
   onRemove,
   onClose,
   onDeleted,
@@ -51,6 +52,7 @@ export function DeleteWorktreeDialog({
   cwd: string;
   tree: Worktree;
   sessionCount?: number;
+  copyOnWrite?: boolean;
   onRemove: (
     cwd: string,
     path: string,
@@ -60,6 +62,7 @@ export function DeleteWorktreeDialog({
   onClose: () => void;
   onDeleted: () => void;
 }) {
+  const kind = copyOnWrite ? "copy-on-write workspace" : "worktree";
   const [busy, setBusy] = useState(false);
   const [deleteSessions, setDeleteSessions] = useState(false);
   const [error, setError] = useState<string>();
@@ -81,7 +84,7 @@ export function DeleteWorktreeDialog({
   };
   return (
     <Modal
-      title="Delete worktree?"
+      title={`Delete ${kind}?`}
       size="sm"
       onClose={() => {
         if (!busy) onClose();
@@ -107,8 +110,8 @@ export function DeleteWorktreeDialog({
                 icon={MessageSquare}
                 tone={deleteSessions ? "danger" : "muted"}
               >
-                {sessionCount} session{sessionCount === 1 ? "" : "s"} using this
-                worktree {sessionCount === 1 ? "is" : "are"}{" "}
+                {sessionCount} session{sessionCount === 1 ? "" : "s"} using this{" "}
+                {kind} {sessionCount === 1 ? "is" : "are"}{" "}
                 {deleteSessions
                   ? "permanently deleted."
                   : "kept. Select a branch or worktree to continue them."}
@@ -190,8 +193,8 @@ export function DeleteWorktreeDialog({
           >
             {busy && <Loader className="size-3.5 animate-spin" />}
             {sessionCount && deleteSessions
-              ? `Delete worktree and session${sessionCount === 1 ? "" : "s"}`
-              : "Delete worktree"}
+              ? `Delete ${kind} and session${sessionCount === 1 ? "" : "s"}`
+              : `Delete ${kind}`}
           </button>
         </div>
       </form>

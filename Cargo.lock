@@ -2766,6 +2766,7 @@ dependencies = [
  "junction",
  "keyring",
  "libc",
+ "monocode-isolation",
  "monocode-mobile-link",
  "natpmp",
  "notify-rust",
@@ -2803,6 +2804,17 @@ dependencies = [
  "windows 0.62.2",
  "windows-sys 0.61.2",
  "zstd",
+]
+
+[[package]]
+name = "monocode-isolation"
+version = "0.16.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "uuid",
 ]
 
 [[package]]

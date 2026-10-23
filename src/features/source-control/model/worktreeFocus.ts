@@ -4,7 +4,13 @@ import { pathKey } from "../../../shared/lib/paths";
 /** The working copy a project's sidebar is narrowed to. New sessions in that
  * project start there too. Kept for this run only: the app reopens on each
  * project's default workspace. */
-export type WorktreeFocus = { path: string; branch: string | null };
+export type WorktreeFocus = {
+  path: string;
+  branch: string | null;
+  /** A CoW working copy belongs to this session; navigation must open it. */
+  cowId?: string;
+  sessionId?: string;
+};
 
 const listeners = new Set<() => void>();
 let focuses: Record<string, WorktreeFocus> = {};

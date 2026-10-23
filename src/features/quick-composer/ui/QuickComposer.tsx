@@ -1,3 +1,4 @@
+import { loadDefaultIsolationMode } from "../../settings/model/settings";
 import { QuickWorkspaceControls } from "./QuickWorkspaceControls";
 import {
   workspaceForProject,
@@ -123,7 +124,7 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
   const [choice, setChoice] = useState(initialQuickChoice);
   const [workspaceChoice, setWorkspaceChoice] = useState<QuickWorkspace>({
     cwd,
-    mode: "current",
+    mode: loadDefaultIsolationMode(),
   });
   const workspace = workspaceForProject(workspaceChoice, cwd);
   const [gitOpen, setGitOpen] = useState(false);
@@ -323,7 +324,7 @@ export function QuickComposer({ onShown }: { onShown: () => void }) {
       const path = projectOptions[index];
       if (!path) return;
       setCwd(path);
-      setWorkspaceChoice({ cwd: path, mode: "current" });
+      setWorkspaceChoice({ cwd: path, mode: loadDefaultIsolationMode() });
     }
     closePicker();
   };

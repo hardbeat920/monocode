@@ -28,6 +28,7 @@ type Props = {
   branch?: string;
   enabled?: boolean;
   worktree?: boolean;
+  cow?: boolean;
   initialOpen?: boolean;
   onDismiss?: () => void;
   onChange?: () => void;
@@ -54,6 +55,7 @@ export function BranchPicker({
   branch,
   enabled = true,
   worktree = false,
+  cow = false,
   initialOpen = false,
   onDismiss,
   onChange,
@@ -317,6 +319,7 @@ export function BranchPicker({
         label={label}
         loading={awaitingBranch}
         worktree={worktree}
+        cow={cow}
       />
       {blocked ? (
         <SwitchBranchDialog

@@ -13,8 +13,10 @@ export function newWorkspaceSession(
   const focus = worktreeFocus(project);
   return {
     ...newDefaultSession(project, runtimeMode),
-    ...(focus && !sameProjectPath(focus.path, project)
-      ? { worktreeCwd: focus.path, branch: focus.branch ?? undefined }
-      : {}),
+    ...(focus?.cowId
+      ? { workspaceMode: "cow" as const, cowSourceCwd: focus.path, worktreeBase: undefined }
+      : focus && !sameProjectPath(focus.path, project)
+        ? { worktreeCwd: focus.path, branch: focus.branch ?? undefined, workspaceMode: undefined, worktreeBase: undefined }
+        : {}),
   };
 }

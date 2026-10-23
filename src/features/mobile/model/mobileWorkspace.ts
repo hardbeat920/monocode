@@ -25,6 +25,7 @@ import {
 import { recordInboxSelfActivity } from "../../inbox/model/inboxSelfActivity";
 import { buildUnifiedFile } from "../../source-control/model/unifiedDiff";
 import { listWorktrees } from "../../source-control/model/worktrees";
+import { listCowWorkspaces } from "../../source-control/model/cow";
 import {
   highlightDiffForMobile,
   highlightForMobile,
@@ -414,20 +415,29 @@ export async function mobileWorkspaceChoice(
   params: Record<string, unknown>,
 ): Promise<Partial<Session>> {
   if (params.workspaceMode === "worktree")
-    return { workspaceMode: "worktree", worktreeBase: "HEAD" };
-  if (typeof params.worktreePath !== "string") return {};
+    return { workspaceMode: "worktree", worktreeBase: "HEAD", cowSourceCwd: undefined };
+  if (typeof params.worktreePath !== "string")
+    return params.workspaceMode === "current"
+      ? { workspaceMode: undefined, worktreeBase: undefined, cowSourceCwd: undefined }
+      : {};
   const tree = await mobileWorktree(cwd, params.worktreePath);
-  return { worktreeCwd: tree.path, branch: tree.branch ?? undefined };
+  return { worktreeCwd: tree.path, branch: tree.branch ?? undefined, workspaceMode: undefined, worktreeBase: undefined, cowSourceCwd: undefined };
 }
 
-/** One of the project's other worktrees, by a path the phone named. */
-async function mobileWorktree(cwd: string, path: string) {
+/** New sessions may join worktrees; existing copies are only opened by file/Git routes. */
+async function mobileWorktree(cwd: string, path: string, allowCow = false) {
   const wanted = pathKey(path);
   const tree = (await listWorktrees(cwd)).worktrees.find(
     (tree) => !tree.isMain && !tree.missing && pathKey(tree.path) === wanted,
   );
-  if (!tree) throw new Error("That worktree is no longer available");
-  return tree;
+  if (tree) return tree;
+  if (allowCow) {
+    const copy = (await listCowWorkspaces(cwd)).find(
+      (copy) => pathKey(copy.path) === wanted && sameProjectPath(copy.projectCwd, cwd),
+    );
+    if (copy) return copy;
+  }
+  throw new Error("That worktree is no longer available");
 }
 
 function mobileProjectPaths() {
@@ -455,7 +465,7 @@ async function readSaved(sessionId: string, saved?: Map<string, Session>) {
 async function mobileRoot(projectId: string, worktreePath?: string) {
   const cwd = mobileProjectPaths().find((path) => mobileProjectId(path) === projectId);
   if (!cwd) throw new Error("Project is no longer available");
-  return worktreePath ? (await mobileWorktree(cwd, worktreePath)).path : cwd;
+  return worktreePath ? (await mobileWorktree(cwd, worktreePath, true)).path : cwd;
 }
 
 /** One folder of a working copy, by its path relative to the root. */

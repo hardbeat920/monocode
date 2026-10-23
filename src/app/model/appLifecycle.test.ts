@@ -19,8 +19,11 @@ import {
   hydrateWorkspaceSnapshot,
   parseWorkspaceSnapshot,
 } from "../../features/workspace/model/workspaceSnapshot";
-import { loadWorkspaceSnapshot, saveWorkspaceSnapshot } from "../../features/sessions/data/sessionStore";
+import { getSession, loadWorkspaceSnapshot, saveWorkspaceSnapshot } from "../../features/sessions/data/sessionStore";
 import { reconcileProjectReturn } from "../../features/projects/model/projectReturn";
+
+vi.mock("../../features/source-control/model/cow", () => ({ listCowWorkspaces: vi.fn().mockResolvedValue([]) }));
+import { listCowWorkspaces } from "../../features/source-control/model/cow";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn().mockResolvedValue(undefined),
@@ -509,4 +512,53 @@ describe("remembering the terminal dock side across restarts", () => {
     await handleQuitRequested();
     expect(await lastSavedDockSide()).toBe("left");
   });
+});
+
+describe("restoring copy-on-write session ownership", () => {
+  beforeEach(() => vi.resetModules());
+  it.each(["normalized", "unavailable", "missing"])(
+    "handles a %s copy listing without false removal",
+    async (state) => {
+      const session = {
+        ...newSession("cursor", "/repo"),
+        cowId: "copy",
+        worktreeCwd: "/repo-cow/copy/",
+      };
+      const tab = newTab(session.id);
+      vi.mocked(getSession).mockResolvedValue(session);
+      vi.mocked(loadWorkspaceSnapshot).mockResolvedValue(
+        collectWorkspaceSnapshot(
+          [tab],
+          [session],
+          tab.id,
+          session.cwd,
+          new Map(),
+        ),
+      );
+      if (state === "unavailable")
+        vi.mocked(listCowWorkspaces).mockRejectedValueOnce(
+          new Error("Helper temporarily unavailable"),
+        );
+      else
+        vi.mocked(listCowWorkspaces).mockResolvedValueOnce(
+          state === "missing"
+            ? []
+            : [
+                {
+                  id: "copy",
+                  path: "/repo-cow/copy",
+                  sourceCwd: "/repo",
+                  projectCwd: "/repo",
+                  sessionId: session.id,
+                  head: "abc",
+                },
+              ],
+        );
+      const { loadResumedWorkspace } = await import("./appLifecycle");
+      const resumed = await loadResumedWorkspace();
+      expect(resumed?.sessions[0].worktreeRemoved).toBe(
+        state === "missing" ? true : undefined,
+      );
+    },
+  );
 });

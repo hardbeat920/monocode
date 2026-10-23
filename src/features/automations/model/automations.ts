@@ -5,7 +5,7 @@ import type { HarnessId, RuntimeMode } from "../../sessions/model/session";
 export const AUTOMATIONS_CHANGED = "monocode:automations-changed";
 const LOCAL_CHANGED = "monocode:automations-local-changed";
 
-export type AutomationWorkspaceMode = "current" | "worktree" | "existing";
+export type AutomationWorkspaceMode = "current" | "worktree" | "existing" | "cow";
 export type AutomationScheduleKind = "hourly" | "daily" | "weekdays" | "weekly";
 export type AutomationTriggerKind =
   "time" | "github" | "linear" | "jira" | "gitlab" | "azuredevops";

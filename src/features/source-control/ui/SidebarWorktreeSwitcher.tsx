@@ -1,3 +1,5 @@
+import { listCowWorkspaces, type CowWorkspace } from "../model/cow";
+import { subscribeGitChanged } from "../../../platform/tauri/fs";
 import {
   useEffect,
   useRef,
@@ -13,6 +15,7 @@ import { Popover } from "../../../shared/ui/Popover";
 import { LAYER } from "../../../shared/lib/layers";
 import {
   Check,
+  Copy,
   ChevronDown,
   ChevronRight,
   ChevronsUpDown,
@@ -94,6 +97,30 @@ export function SidebarWorktreeSwitcher({
   const activeOption = useRef<HTMLButtonElement>(null);
   const focus = useWorktreeFocus(cwd);
   const { data, error, refresh } = useProjectWorktrees(cwd, worktreesEnabled);
+  const [cowWorkspaces, setCowWorkspaces] = useState<CowWorkspace[]>();
+  const [cowError, setCowError] = useState<string>();
+  const [cowRevision, setCowRevision] = useState(0);
+  useEffect(
+    () => subscribeGitChanged(() => setCowRevision((value) => value + 1)),
+    [],
+  );
+  useEffect(() => {
+    let disposed = false;
+    setCowWorkspaces(undefined);
+    setCowError(undefined);
+    if (!worktreesEnabled) return;
+    void listCowWorkspaces(cwd).then(
+      (workspaces) => {
+        if (!disposed) setCowWorkspaces(workspaces);
+      },
+      (error) => {
+        if (!disposed) setCowError(String(error));
+      },
+    );
+    return () => {
+      disposed = true;
+    };
+  }, [cwd, cowRevision, worktreesEnabled]);
   // The project folder is the default, unfocused entry; missing worktrees
   // cannot be opened, so they are left out.
   const main = data?.worktrees.find((tree) => tree.isMain);
@@ -106,6 +133,8 @@ export function SidebarWorktreeSwitcher({
       path: main?.path ?? cwd,
       branch: main?.branch ?? null,
       isMain: true,
+      cowId: undefined as string | undefined,
+      sessionId: undefined as string | undefined,
       label: main?.branch ?? "Project folder",
       detail: "Project folder · all sessions",
     },
@@ -113,8 +142,19 @@ export function SidebarWorktreeSwitcher({
       path: tree.path,
       branch: tree.branch,
       isMain: false,
+      cowId: undefined as string | undefined,
+      sessionId: undefined as string | undefined,
       label: tree.branch ?? `Detached ${tree.head.slice(0, 7)}`,
       detail: prettyCwd(tree.path),
+    })),
+    ...(cowWorkspaces ?? []).map((workspace) => ({
+      path: workspace.path,
+      branch: workspace.branch ?? null,
+      isMain: false,
+      cowId: workspace.id,
+      sessionId: workspace.sessionId,
+      label: `Copy-on-write · ${workspace.branch ?? `Detached ${workspace.head.slice(0, 7)}`}`,
+      detail: prettyCwd(workspace.path),
     })),
   ].filter((tree) =>
     `${tree.label}\n${tree.detail}\n${tree.path}`
@@ -155,6 +195,7 @@ export function SidebarWorktreeSwitcher({
     setActive(0);
     setCreationError(undefined);
     void refresh();
+    setCowRevision((value) => value + 1);
   };
 
   useEffect(() => {
@@ -171,7 +212,15 @@ export function SidebarWorktreeSwitcher({
   const pick = (tree: (typeof rows)[number]) => {
     if (creating) return;
     onSelect?.(
-      tree.isMain ? undefined : { path: tree.path, branch: tree.branch },
+      tree.isMain
+        ? undefined
+        : {
+            path: tree.path,
+            branch: tree.branch,
+            ...(tree.cowId
+              ? { cowId: tree.cowId, sessionId: tree.sessionId }
+              : {}),
+          },
     );
     closePicker();
   };
@@ -182,7 +231,7 @@ export function SidebarWorktreeSwitcher({
     setCreationError(undefined);
     try {
       const tree = await createWorktree(
-        focus?.path ?? cwd,
+        focus?.cowId ? cwd : (focus?.path ?? cwd),
         createName,
         "HEAD",
         false,
@@ -197,22 +246,45 @@ export function SidebarWorktreeSwitcher({
     }
   };
 
+  const requestedFallback = useRef<string | undefined>(undefined);
   // A deleted worktree cannot stay focused, or new sessions would start there.
   useEffect(() => {
     if (
       focus &&
       !pending &&
       !switchError &&
-      data &&
-      !data.worktrees.some(
-        (tree) =>
-          !tree.isMain &&
-          !tree.missing &&
-          pathKey(tree.path) === pathKey(focus.path),
-      )
-    )
-      onSelect?.(undefined);
-  }, [cwd, data, focus, onSelect, pending, switchError]);
+      (focus.cowId
+        ? cowWorkspaces &&
+          !cowError &&
+          !cowWorkspaces.some(
+            (workspace) =>
+              workspace.id === focus.cowId &&
+              pathKey(workspace.path) === pathKey(focus.path),
+          )
+        : data &&
+          !data.worktrees.some(
+            (tree) =>
+              !tree.isMain &&
+              !tree.missing &&
+              pathKey(tree.path) === pathKey(focus.path),
+          ))
+    ) {
+      const key = `${pathKey(cwd)}\0${focus.cowId ?? pathKey(focus.path)}`;
+      if (requestedFallback.current !== key) {
+        requestedFallback.current = key;
+        onSelect?.(undefined);
+      }
+    } else if (!focus) requestedFallback.current = undefined;
+  }, [
+    cwd,
+    data,
+    cowWorkspaces,
+    cowError,
+    focus,
+    onSelect,
+    pending,
+    switchError,
+  ]);
 
   useEffect(() => {
     if (!switchError) return;
@@ -223,8 +295,13 @@ export function SidebarWorktreeSwitcher({
   const focused =
     focus &&
     worktrees.find((tree) => pathKey(tree.path) === pathKey(focus.path));
+  const focusedCow = focus?.cowId
+    ? cowWorkspaces?.find((workspace) => workspace.id === focus.cowId)
+    : undefined;
   const title = focus
-    ? (focused?.branch ?? focus.branch ?? "Detached worktree")
+    ? focus.cowId
+      ? `Copy-on-write · ${focusedCow?.branch ?? focus.branch ?? "Detached"}`
+      : (focused?.branch ?? focus.branch ?? "Detached worktree")
     : "Workspace";
   const worktreeTitle = focus
     ? `${focus.branch ?? "detached"}\n${prettyCwd(focus.path)}`
@@ -288,10 +365,11 @@ export function SidebarWorktreeSwitcher({
           className="-ml-1.5 flex h-7 min-w-0 max-w-full items-center gap-2 rounded-md px-1.5 text-[13px] font-semibold leading-tight hover:bg-content/8 aria-expanded:bg-content/8"
         >
           {project.icon}
+          {focus?.cowId ? <Copy className="size-3.5 shrink-0 text-content/50" /> : null}
           <span className="min-w-0 truncate">{project.name}</span>
           {focus ? (
             <span className="min-w-0 shrink-[2] truncate font-normal text-content/45">
-              {focused?.branch ?? focus.branch ?? "detached"}
+              {focus.cowId ? title : (focused?.branch ?? focus.branch ?? "detached")}
             </span>
           ) : null}
           {busyIcon ?? (
@@ -502,6 +580,7 @@ export function SidebarWorktreeSwitcher({
           }}
           className="-ml-1.5 flex h-6.5 min-w-0 max-w-full items-center gap-2 rounded-md px-1.5 text-sm font-medium leading-tight hover:bg-content/8 aria-expanded:bg-content/8"
         >
+          {focus?.cowId ? <Copy className="size-3.5 shrink-0 text-content/50" /> : null}
           <span className="min-w-0 truncate">{title}</span>
           {busyIcon ?? (
             <ChevronsUpDown className="size-3.5 shrink-0 text-content/45" />
@@ -600,7 +679,9 @@ export function SidebarWorktreeSwitcher({
                       : "hover:bg-content/5"
                   }`}
                 >
-                  {tree.isMain ? (
+                  {tree.cowId ? (
+                    <Copy className="size-3.5 shrink-0 text-content/50" />
+                  ) : tree.isMain ? (
                     <GitBranch className="size-3.5 shrink-0 text-content/50" />
                   ) : (
                     <FolderTree className="size-3.5 shrink-0 text-content/50" />
@@ -624,9 +705,9 @@ export function SidebarWorktreeSwitcher({
               </p>
             ) : null}
           </div>
-          {creationError || switchError || error ? (
+          {creationError || switchError || error || cowError ? (
             <p role="alert" className="px-2 py-2 text-[11px] text-red-400">
-              {creationError || switchError || error}
+              {creationError || switchError || error || cowError}
             </p>
           ) : null}
           {canCreate ? (

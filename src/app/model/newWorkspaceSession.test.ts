@@ -44,3 +44,16 @@ it("starts in the project root without session defaults or a separate worktree",
   expect(session.runtimeMode).toBe("supervised");
   expect(session.worktreeCwd).toBeUndefined();
 });
+
+it("creates a separate CoW session from the visible project's selected copy", () => {
+  setWorktreeFocus("/current", { path: "/current-cow/copy", branch: "feature", cowId: "copy", sessionId: "owner" });
+
+  const session = newWorkspaceSession("/current");
+
+  expect(session.cwd).toBe("/current");
+  expect(session.workspaceMode).toBe("cow");
+  expect(session.cowSourceCwd).toBe("/current-cow/copy");
+  expect(session.cowId).toBeUndefined();
+  expect(session.worktreeCwd).toBeUndefined();
+  expect(session.worktreeBase).toBeUndefined();
+});

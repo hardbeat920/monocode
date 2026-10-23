@@ -423,7 +423,30 @@ jobs:
             --cache-control "no-store,max-age=0,must-revalidate" \
             --endpoint-url "$ENDPOINT"
 
+  isolation-helpers:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            rust: aarch64-apple-darwin
+            host: darwin-arm64
+          - os: macos-latest
+            rust: x86_64-apple-darwin
+            host: darwin-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust }}
+      - run: cargo build --locked --release -p monocode-isolation --target ${{ matrix.rust }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: isolation-${{ matrix.host }}
+          path: target/${{ matrix.rust }}/release/monocode-isolation
+
   host:
+    needs: isolation-helpers
     name: Standalone host packages
     strategy:
       fail-fast: false
@@ -437,6 +460,18 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: isolation-*
+          path: build/isolation-helpers-download
+      - name: Arrange native helpers
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p build/isolation-helpers
+          for folder in build/isolation-helpers-download/isolation-*; do
+            mv "$folder" "build/isolation-helpers/${folder##*/isolation-}"
+          done
       - run: npm run test:host
       - run: npm run host:package -- --all
         if: runner.os == 'Linux'

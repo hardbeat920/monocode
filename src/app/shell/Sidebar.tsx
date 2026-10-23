@@ -25,6 +25,7 @@ import {
   CircleDashed,
   CircleDot,
   Clock,
+  Copy,
   FileScript,
   Folder,
   GitBranch,
@@ -5477,13 +5478,13 @@ export const SessionCard = memo(function SessionCard({
                   className="flex min-w-0 flex-1 items-center gap-1 text-[11px] text-content/45"
                   title={
                     session.worktreeCwd
-                      ? `${gitLabel}\n${session.worktreeCwd}`
+                      ? `${session.cowId ? "Copy-on-write · " : ""}${gitLabel}\n${session.worktreeCwd}`
                       : gitLabel
                   }
                 >
-                  <GitBranch className="size-3 shrink-0" strokeWidth={1.75} />
+                  {session.cowId ? <Copy className="size-3 shrink-0" strokeWidth={1.75} /> : <GitBranch className="size-3 shrink-0" strokeWidth={1.75} />}
                   <span className="min-w-0 truncate">
-                    {project ? `${project} · ${gitLabel}` : gitLabel}
+                    {project ? `${project} · ` : ""}{session.cowId ? `Copy-on-write · ${gitLabel}` : gitLabel}
                   </span>
                 </span>
               ) : (

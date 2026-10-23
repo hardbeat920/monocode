@@ -745,3 +745,18 @@ describe("worktree tab cleanup", () => {
     expect(snapshot.sessions.map((stub) => stub.id)).toEqual(["main"]);
   });
 });
+
+it("retains copy-on-write ownership and unstarted clone choices in workspace snapshots", () => {
+  const session = chat("copy", "/repo");
+  session.cowId = "owned-copy";
+  session.worktreeCwd = "/repo-copies/owned-copy";
+  const pending = newSession("codex", "/repo");
+  pending.workspaceMode = "cow";
+  pending.cowSourceCwd = session.worktreeCwd;
+  const tab = newTab(session.id);
+  const snapshot = collectWorkspaceSnapshot([tab, newTab(pending.id)], [session, pending], tab.id, "/repo", new Map());
+  const parsed = parseWorkspaceSnapshot(snapshot);
+  expect(parsed?.sessions[0]).toMatchObject({ cowId: "owned-copy", worktreeCwd: session.worktreeCwd });
+  expect(parsed?.sessions[1]).toMatchObject({ workspaceMode: "cow", cowSourceCwd: session.worktreeCwd });
+
+});

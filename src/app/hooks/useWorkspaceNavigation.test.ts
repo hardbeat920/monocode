@@ -44,6 +44,7 @@ let directOpen: (id: string) => void;
 let openProject: (path: string, landingTab: string) => void;
 let pins: Map<string, string>;
 const activate = vi.fn();
+const openCow = vi.fn<(project: string, focus: WorktreeFocus, isCurrent: () => boolean) => Promise<string>>();
 const move =
   vi.fn<
     (id: string, tree: Worktree, isCurrent: () => boolean) => Promise<void>
@@ -110,6 +111,7 @@ async function mount(
         activate(id);
         setState((prev) => ({ ...prev, activeTabId: id }));
       },
+      openCowSession: (cwd, focus, isCurrent) => openCow(cwd, focus, isCurrent),
       createTab: (cwd, nextFocus) => {
         const session = chat("created", cwd, nextFocus?.path);
         const tab = { ...newTab(session.id), id: "tab-created" };
@@ -160,12 +162,34 @@ const select = async (focus?: WorktreeFocus) => {
 };
 const screen = () => JSON.parse(container.textContent!);
 
+it("opens a separate tab when leaving an owned copy with an empty conversation", async () => {
+  const owner = {
+    ...chat("cow-owner", project, "/navigation-project-cow/owned"),
+    cowId: "owned",
+  };
+  setWorktreeFocus(project, {
+    path: owner.worktreeCwd!,
+    cowId: owner.cowId,
+    sessionId: owner.id,
+  });
+  await mount([owner]);
+  await select(undefined);
+  expect(move).not.toHaveBeenCalled();
+  expect(screen()).toMatchObject({
+    workspace: project,
+    activeTab: "tab-created",
+    checkout: project,
+  });
+  expect(view.sessions.find((session) => session.id === owner.id)).toEqual(owner);
+});
+
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   setWorktreeFocus(project, undefined);
   setWorktreeFocus(other, undefined);
   move.mockReset().mockResolvedValue(undefined);
   activate.mockReset();
+  openCow.mockReset().mockImplementation(async (_project, focus) => `tab-${focus.sessionId}`);
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -453,4 +477,37 @@ it("keeps a split tab grouped under another project without leaving navigation p
   expect(pins.get("tab-main")).toBe(project);
   expect(view.sessions).toHaveLength(2);
   expect(move).not.toHaveBeenCalled();
+});
+
+
+it("opens the owning copy-on-write session without moving a blank session into its clone", async () => {
+  const owner = { ...chat("owner", project, treeA.path, true), cowId: "copy-a" };
+  await mount([chat("blank"), owner]);
+  const focus = { ...treeA, cowId: "copy-a", sessionId: owner.id };
+  await select(focus);
+  expect(openCow).toHaveBeenCalledWith(project, focus, expect.any(Function));
+  expect(move).not.toHaveBeenCalled();
+  expect(view.sessions.find((session) => session.id === "blank")?.worktreeCwd).toBeUndefined();
+  expect(screen()).toMatchObject({ activeTab: "tab-owner", checkout: treeA.path, workspace: treeA.path, pending: false });
+  expect(worktreeFocus(project)).toMatchObject({ cowId: "copy-a", sessionId: "owner" });
+});
+
+it("does not activate a copy-on-write owner after its navigation was cancelled", async () => {
+  const pending = deferred();
+  openCow.mockImplementationOnce(async () => { await pending.promise; return "tab-owner"; });
+  await mount([chat("blank"), { ...chat("owner", project, treeA.path, true), cowId: "copy-a" }]);
+  await select({ ...treeA, cowId: "copy-a", sessionId: "owner" });
+  await act(async () => directOpen("blank"));
+  await act(async () => pending.resolve());
+  expect(screen()).toMatchObject({ activeTab: "tab-blank", checkout: project, workspace: project, pending: false });
+  expect(move).not.toHaveBeenCalled();
+});
+
+it("reports an unavailable copy-on-write owner without reusing its clone", async () => {
+  openCow.mockRejectedValueOnce(new Error("Owning session unavailable"));
+  await mount();
+  await select({ ...treeA, cowId: "copy-a", sessionId: "missing" });
+  expect(screen()).toMatchObject({ checkout: project, workspace: project, error: "Owning session unavailable", pending: false });
+  expect(move).not.toHaveBeenCalled();
+  expect(view.sessions).toHaveLength(1);
 });

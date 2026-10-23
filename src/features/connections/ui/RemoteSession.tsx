@@ -1,3 +1,5 @@
+import { cowCapability, createCowWorkspace, listCowWorkspaces } from "../../source-control/model/cow";
+import { loadDefaultIsolationMode } from "../../settings/model/settings";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { SessionPaneProps } from "../../sessions/ui/SessionPane";
 import type {
@@ -27,6 +29,8 @@ import {
   OPEN_CONNECTIONS_EVENT,
   pendingRemoteCommand,
   pendingRemoteFollowup,
+  rememberRemotePendingCow,
+  remotePendingCow,
   rememberRemotePendingWorktree,
   rememberRemoteSession,
   REMOTE_HISTORY_CHANGE,
@@ -210,6 +214,7 @@ function ConnectedRemoteSession({
     const changed = () => {
       const next = remoteSessionFor(shell.id);
       if (next !== boundSession.current) {
+        for (const commandId of settlements.current.keys()) settleTurn(commandId, { status: "failed", text: "", error: "Remote conversation changed before validation completed" });
         bindingVersion.current++;
         boundSession.current = next;
         setStarting(undefined);
@@ -233,6 +238,22 @@ function ConnectedRemoteSession({
       ? cachedSessionSnapshots.get(snapshotKey(machine.id, sessionId))
       : undefined,
   );
+  const settlements = useRef(new Map<string, {
+    callback: NonNullable<ComposerTurnOptions["onSettled"]>;
+    sessionId?: string;
+    acceptedRevision?: number;
+    sawRunning: boolean;
+  }>());
+  const settleTurn = (commandId: string, outcome: Parameters<NonNullable<ComposerTurnOptions["onSettled"]>>[0]) => {
+    const turn = settlements.current.get(commandId);
+    if (!turn) return;
+    settlements.current.delete(commandId);
+    turn.callback(outcome);
+  };
+  useEffect(() => () => {
+    for (const turn of settlements.current.values()) turn.callback({ status: "failed", text: "", error: "Remote session disconnected before validation completed" });
+    settlements.current.clear();
+  }, []);
   const snapshotRef = useRef(snapshot);
   snapshotRef.current = snapshot;
   const [refresh, setRefresh] = useState(0);
@@ -241,12 +262,15 @@ function ConnectedRemoteSession({
   );
   const [catalogError, setCatalogError] = useState("");
   const [catalogRefresh, setCatalogRefresh] = useState(0);
+  const seededCow = shell.cowId && shell.worktreeCwd ? parseRemotePath(shell.worktreeCwd) : undefined;
   const [selectedCwd, setSelectedCwd] = useState(
-    () => remotePendingWorktree(shell.id) ?? project.cwd,
+    () => seededCow?.environmentId === machine.environmentId ? seededCow.hostPath : remotePendingWorktree(shell.id) ?? project.cwd,
   );
-  const [draftWorkspaceMode, setDraftWorkspaceMode] =
-    useState<WorkspaceMode>("current");
-  const [draftWorktreeBase, setDraftWorktreeBase] = useState("HEAD");
+  const [pendingCow, setPendingCow] = useState(() => seededCow?.environmentId === machine.environmentId && shell.cowId ? { cowId: shell.cowId, path: seededCow.hostPath } : remotePendingCow(shell.id));
+  const [draftWorkspaceMode, setDraftWorkspaceMode] = useState<WorkspaceMode>(() =>
+    remotePendingWorktree(shell.id) ? "current" : shell.workspaceMode ?? loadDefaultIsolationMode(),
+  );
+  const [draftWorktreeBase, setDraftWorktreeBase] = useState(shell.worktreeBase || "HEAD");
   const [sending, setSending] = useState(false);
   const sendingRef = useRef(false);
   const preparingRef = useRef(false);
@@ -301,8 +325,29 @@ function ConnectedRemoteSession({
       ? snapshot.session
       : undefined;
   useEffect(() => {
-    if (hostSession) rememberRemotePendingWorktree(shell.id);
+    if (hostSession) {
+      rememberRemotePendingWorktree(shell.id);
+      rememberRemotePendingCow(shell.id);
+      setPendingCow(undefined);
+    }
   }, [hostSession?.id, shell.id]);
+  useEffect(() => {
+    if (!snapshot || !hostSession) return;
+    for (const [commandId, turn] of settlements.current) {
+      if (turn.sessionId && hostSession.id !== turn.sessionId) continue;
+      const index = hostSession.blocks.findIndex((block) => block.id === commandId);
+      if (index < 0) continue;
+      if (snapshot.status === "running" || hostSession.busy) turn.sawRunning = true;
+      if (snapshot.status === "running" || hostSession.busy || turn.acceptedRevision === undefined) continue;
+      const assistant = hostSession.blocks.slice(index + 1).filter((block) => block.role === "assistant");
+      if (!turn.sawRunning && snapshot.revision <= turn.acceptedRevision && !assistant.length) continue;
+      if (assistant.some((block) => block.streaming)) continue;
+      const text = assistant[assistant.length - 1]?.text ?? "";
+      settleTurn(commandId, snapshot.status === "interrupted"
+        ? { status: "failed", text, error: "Remote provider turn was interrupted" }
+        : text.trim() ? { status: "completed", text } : { status: "failed", text, error: "Remote provider returned no final validation result" });
+    }
+  }, [snapshot, hostSession]);
   const executionCwd = hostSession?.cwd ?? selectedCwd;
   const { branches } = useProjectBranchesState(
     remotePath(machine.environmentId, executionCwd),
@@ -568,6 +613,13 @@ function ConnectedRemoteSession({
         "commands.dispatch",
         command,
       );
+      if (command.type === "send" || command.type === "compact") {
+        const settlement = settlements.current.get(command.commandId);
+        if (settlement) {
+          settlement.sessionId = receipt.sessionId;
+          settlement.acceptedRevision = receipt.revision;
+        }
+      }
       if (command.type === "create") {
         const next = pendingRemoteFollowup(project.key, machine.environmentId, command.commandId);
         if (next && next.type !== "create")
@@ -618,6 +670,10 @@ function ConnectedRemoteSession({
       if (!alive.current || version !== bindingVersion.current) return undefined;
       const message = String(reason);
       if (message.includes("Host rejected request:")) {
+        const trackedCommandId = optimistic?.commandId ?? (command.type === "create"
+          ? pendingRemoteFollowup(project.key, machine.environmentId, command.commandId)?.commandId
+          : undefined) ?? command.commandId;
+        settleTurn(trackedCommandId, { status: "failed", text: "", error: message });
         if (command.type === "send" || command.type === "compact")
           setUnseenSend((current) =>
             current?.commandId === command.commandId ? undefined : current,
@@ -753,7 +809,38 @@ function ConnectedRemoteSession({
       if (version !== bindingVersion.current) return;
       let worktreeCwd = selectedCwd;
       let autoWorktreeBranch: string | undefined;
-      if (draftWorkspaceMode === "worktree") {
+      let cowId = pendingCow?.cowId;
+      if (pendingCow) {
+        const workspace = (await listCowWorkspaces(remotePath(machine.environmentId, project.cwd))).find((entry) => entry.id === pendingCow.cowId);
+        const path = workspace && parseRemotePath(workspace.path);
+        if (!workspace || workspace.sessionId !== shell.id || path?.environmentId !== machine.environmentId || path.hostPath !== pendingCow.path)
+          throw new Error("Copy-on-write workspace ownership could not be verified");
+        worktreeCwd = pendingCow.path;
+      }
+      else if (draftWorkspaceMode === "cow") {
+        if (!descriptor?.capabilities.includes("workspace.cow.v1"))
+          throw new Error("Update MonoCode Host in Connections settings to use copy-on-write isolation.");
+        const cwd = remotePath(machine.environmentId, selectedCwd);
+        const capability = await cowCapability(cwd);
+        if (!capability.supported)
+          throw new Error(capability.reason || "Copy-on-write is unavailable. Choose another isolation mode.");
+        const workspace = await createCowWorkspace(cwd, shell.id, remotePath(machine.environmentId, project.cwd), draftWorktreeBase);
+        const parsed = parseRemotePath(workspace.path);
+        if (!parsed || parsed.environmentId !== machine.environmentId)
+          throw new Error("Copy-on-write workspace belongs to a different machine.");
+        const prepared = { cowId: workspace.id, path: parsed.hostPath };
+        rememberRemotePendingCow(shell.id, prepared);
+        rememberRemotePendingWorktree(shell.id, prepared.path);
+        if (version !== bindingVersion.current) return;
+        cowId = prepared.cowId;
+        worktreeCwd = prepared.path;
+        if (alive.current) {
+          setPendingCow(prepared);
+          setSelectedCwd(prepared.path);
+          setDraftWorkspaceMode("current");
+        }
+      }
+      if (!cowId && draftWorkspaceMode === "worktree") {
         try {
           const tree = await remoteRequest<HostWorktree>(
             machine.id,
@@ -778,6 +865,7 @@ function ConnectedRemoteSession({
           if (alive.current && version === bindingVersion.current) {
             setError(String(reason));
             setStarting({ ...turn, failed: true });
+            settleTurn(turn.commandId, { status: "failed", text: "", error: String(reason) });
           }
           return;
         }
@@ -785,12 +873,14 @@ function ConnectedRemoteSession({
       const followup: Exclude<HostCommand, { type: "create" }> = turn.draft
         ? { type: "draft", commandId: turn.commandId, sessionId: "", text: turn.text, attachments: uploaded }
         : message("", turn.text, turn.commandId, uploaded, turn.intent, turn.draftBlockId, turn.planBlockId);
+      const createCommandId = crypto.randomUUID();
       const receipt = await run({
         type: "create",
-        commandId: crypto.randomUUID(),
+        commandId: createCommandId,
         projectId: project.projectId,
         ...(worktreeCwd !== project.cwd ? { worktreeCwd } : {}),
         ...(autoWorktreeBranch ? { autoWorktreeBranch } : {}),
+        ...(cowId ? { cowId } : {}),
         harness: draft.harness,
         model: draft.model,
         modelSettings: draft.settings,
@@ -798,7 +888,12 @@ function ConnectedRemoteSession({
       }, turn, followup);
       if (version !== bindingVersion.current) return;
       if (!receipt) {
-        if (alive.current) setStarting({ ...turn, failed: true });
+        if (alive.current) {
+          setStarting({ ...turn, failed: true });
+          // An ambiguous response keeps the original command available for retry.
+          if (pendingRemoteCommand(project.key, machine.environmentId, null, shell.id)?.commandId !== createCommandId)
+            settleTurn(turn.commandId, { status: "failed", text: "", error: "Remote session could not be created" });
+        }
         return;
       }
       if (version !== bindingVersion.current) return;
@@ -809,6 +904,7 @@ function ConnectedRemoteSession({
       if (alive.current && version === bindingVersion.current) {
         setError(String(reason));
         setStarting({ ...turn, failed: true });
+        settleTurn(turn.commandId, { status: "failed", text: "", error: String(reason) });
       }
     } finally {
       preparingRef.current = false;
@@ -868,12 +964,14 @@ function ConnectedRemoteSession({
       options?.draftBlockId,
       planBlockId,
     );
+    if (options?.onSettled) settlements.current.set(turn.commandId, { callback: options.onSettled, sawRunning: false });
     preparingRef.current = true;
     setStarting(turn);
     if (!hostSession) {
       if (sessionId || !draft.model) {
         preparingRef.current = false;
         setStarting(undefined);
+        settleTurn(turn.commandId, { status: "failed", text: "", error: "Remote session is not ready" });
         return false;
       }
       void startSession(turn);
@@ -882,6 +980,7 @@ function ConnectedRemoteSession({
     if (changes) {
       preparingRef.current = false;
       setStarting(undefined);
+      settleTurn(turn.commandId, { status: "failed", text: "", error: "Remote model configuration is pending" });
       return false;
     }
     const version = bindingVersion.current;
@@ -894,6 +993,7 @@ function ConnectedRemoteSession({
         if (alive.current && version === bindingVersion.current) {
           setError(String(reason));
           setStarting({ ...turn, failed: true });
+          settleTurn(turn.commandId, { status: "failed", text: "", error: String(reason) });
         }
       })
       .finally(() => {
@@ -1009,7 +1109,8 @@ function ConnectedRemoteSession({
       executionCwd === project.cwd
         ? undefined
         : remotePath(machine.environmentId, executionCwd),
-    workspaceMode: hostSession ? undefined : draftWorkspaceMode,
+    cowId: hostSession?.cowId ?? pendingCow?.cowId,
+    workspaceMode: hostSession || pendingCow ? undefined : draftWorkspaceMode,
     worktreeBase: hostSession ? undefined : draftWorktreeBase,
     branch: branches?.current ?? hostSession?.branch,
     harness: configuration.harness,
@@ -1083,13 +1184,14 @@ function ConnectedRemoteSession({
     const parsed = parseRemotePath(tree.path);
     if (!parsed || parsed.environmentId !== machine.environmentId)
       throw new Error("Choose a worktree on this machine");
-    if (sessionId)
+    if (sessionId || pendingCow)
       throw new Error(
         "This session’s worktree is fixed. Start a new session to use another.",
       );
     if (parsed.hostPath === executionCwd) return;
     rememberRemotePendingWorktree(shell.id, parsed.hostPath);
     setSelectedCwd(parsed.hostPath);
+    setDraftWorkspaceMode("current");
   };
 
   const buildPlan = (blockId: string, target?: PlanBuildTarget) => {
@@ -1184,7 +1286,7 @@ function ConnectedRemoteSession({
       draft: !!descriptor?.capabilities.includes("sessions.draft"),
     },
     remoteSessionLoading: !!sessionId && !hostSession && !session.blocks.length,
-    remoteSessionStarted: !!sessionId,
+    remoteSessionStarted: !!sessionId || !!pendingCow,
     allowedModelHarnesses: hostSession
       ? [hostSession.harness]
       : providers.length
@@ -1221,6 +1323,7 @@ function ConnectedRemoteSession({
     },
     onWorktreeChange: (_, tree) => selectWorktree(tree),
     onWorkspaceModeChange: (_, mode, base) => {
+      if (sessionId || pendingCow) return;
       setDraftWorkspaceMode(mode);
       if (base) setDraftWorktreeBase(base);
     },
@@ -1231,7 +1334,7 @@ function ConnectedRemoteSession({
       if (!hostSession || busy || pending || !online || removingDraft)
         return false;
       setRemovingDraft(draftBlockId);
-      if (hostSession.blocks.every((block) => block.id === draftBlockId))
+      if (!hostSession.cowId && hostSession.blocks.every((block) => block.id === draftBlockId))
         void discardSession(hostSession.id);
       else
         void run({

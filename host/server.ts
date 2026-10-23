@@ -1,3 +1,4 @@
+import { resolveHostWorkspaceAsync, cowHelper } from "./cow";
 import {
   createServer,
   type IncomingMessage,
@@ -26,7 +27,6 @@ import {
 import {
   createHostWorktree,
   hostWorktrees,
-  resolveHostWorktreeAsync,
 } from "./git-worktrees";
 import {
   createHostPath,
@@ -281,6 +281,7 @@ export function createHostServer(
                 "files.list",
                 "files.index",
                 "workspace.run",
+                ...(cowHelper() ? ["workspace.cow.v1"] : []),
                 "files.search",
                 "files.searchContent",
                 "files.create",
@@ -408,7 +409,7 @@ export function createHostServer(
             break;
           }
           case "commands.dispatch":
-            result = engine.command(params);
+            result = await engine.commandAsync(params);
             break;
           case "attachments.upload":
             result = writeAttachmentChunk(engine.store, params);
@@ -437,7 +438,7 @@ export function createHostServer(
                 "--",
               ],
               {
-                cwd: await resolveHostWorktreeAsync(project.cwd, params.cwd),
+                cwd: await resolveHostWorkspaceAsync(engine.store, project.cwd, params.cwd),
                 timeout: 10_000,
                 maxBuffer: 2 * 1024 * 1024,
               },
@@ -450,7 +451,7 @@ export function createHostServer(
               String(params.projectId ?? ""),
             );
             result = await hostBranches(
-              await resolveHostWorktreeAsync(project.cwd, params.cwd),
+              await resolveHostWorkspaceAsync(engine.store, project.cwd, params.cwd),
             );
             break;
           }
@@ -458,7 +459,7 @@ export function createHostServer(
             const project = engine.store.project(
               String(params.projectId ?? ""),
             );
-            const cwd = await resolveHostWorktreeAsync(project.cwd, params.cwd);
+            const cwd = await resolveHostWorkspaceAsync(engine.store, project.cwd, params.cwd);
             result = await engine.withIdleProject(project.id, () =>
               switchHostBranch(cwd, params.branch, params.remote),
             );
@@ -468,7 +469,7 @@ export function createHostServer(
             const project = engine.store.project(
               String(params.projectId ?? ""),
             );
-            const cwd = await resolveHostWorktreeAsync(project.cwd, params.cwd);
+            const cwd = await resolveHostWorkspaceAsync(engine.store, project.cwd, params.cwd);
             result = await engine.withIdleProject(project.id, () =>
               createHostBranch(cwd, params.branch),
             );
@@ -485,7 +486,7 @@ export function createHostServer(
             const project = engine.store.project(
               String(params.projectId ?? ""),
             );
-            const cwd = await resolveHostWorktreeAsync(project.cwd, params.cwd);
+            const cwd = await resolveHostWorkspaceAsync(engine.store, project.cwd, params.cwd);
             result = await engine.withIdleProject(project.id, () =>
               createHostWorktree(
                 project.cwd,
@@ -503,7 +504,7 @@ export function createHostServer(
               String(params.projectId ?? ""),
             );
             result = await readHostFile(
-              await resolveHostWorktreeAsync(project.cwd, params.cwd),
+              await resolveHostWorkspaceAsync(engine.store, project.cwd, params.cwd),
               params.path,
             );
             break;
@@ -513,7 +514,7 @@ export function createHostServer(
               String(params.projectId ?? ""),
             );
             result = await listHostFiles(
-              await resolveHostWorktreeAsync(project.cwd, params.cwd),
+              await resolveHostWorkspaceAsync(engine.store, project.cwd, params.cwd),
               params.path,
             );
             break;
@@ -523,7 +524,7 @@ export function createHostServer(
               String(params.projectId ?? ""),
             );
             result = await indexHostFiles(
-              await resolveHostWorktreeAsync(project.cwd, params.cwd),
+              await resolveHostWorkspaceAsync(engine.store, project.cwd, params.cwd),
             );
             break;
           }
@@ -535,7 +536,7 @@ export function createHostServer(
               String(params.projectId ?? ""),
             );
             result = await searchHostFiles(
-              await resolveHostWorktreeAsync(project.cwd, params.cwd),
+              await resolveHostWorkspaceAsync(engine.store, project.cwd, params.cwd),
               params.query,
             );
             break;
@@ -545,7 +546,7 @@ export function createHostServer(
               String(params.projectId ?? ""),
             );
             result = await searchHostContent(
-              await resolveHostWorktreeAsync(project.cwd, params.cwd),
+              await resolveHostWorkspaceAsync(engine.store, project.cwd, params.cwd),
               params,
             );
             break;
@@ -555,7 +556,7 @@ export function createHostServer(
               String(params.projectId ?? ""),
             );
             result = await createHostPath(
-              await resolveHostWorktreeAsync(project.cwd, params.cwd),
+              await resolveHostWorkspaceAsync(engine.store, project.cwd, params.cwd),
               params.parent,
               params.name,
               params.isDir,
@@ -568,7 +569,7 @@ export function createHostServer(
             );
             result =
               (await writeHostFile(
-                await resolveHostWorktreeAsync(project.cwd, params.cwd),
+                await resolveHostWorkspaceAsync(engine.store, project.cwd, params.cwd),
                 params.path,
                 params.expected,
                 params.content,
@@ -580,7 +581,7 @@ export function createHostServer(
               String(params.projectId ?? ""),
             );
             result = await hostGitIndex(
-              await resolveHostWorktreeAsync(project.cwd, params.cwd),
+              await resolveHostWorkspaceAsync(engine.store, project.cwd, params.cwd),
             );
             break;
           }
@@ -589,7 +590,7 @@ export function createHostServer(
               String(params.projectId ?? ""),
             );
             result = await hostFileDiff(
-              await resolveHostWorktreeAsync(project.cwd, params.cwd),
+              await resolveHostWorkspaceAsync(engine.store, project.cwd, params.cwd),
               params.path,
               params.staged === true,
             );
@@ -599,7 +600,7 @@ export function createHostServer(
             const project = engine.store.project(
               String(params.projectId ?? ""),
             );
-            const cwd = await resolveHostWorktreeAsync(project.cwd, params.cwd);
+            const cwd = await resolveHostWorkspaceAsync(engine.store, project.cwd, params.cwd);
             result =
               (await engine.withIdleProject(project.id, () =>
                 hostGitAction(

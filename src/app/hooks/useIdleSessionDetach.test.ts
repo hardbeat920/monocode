@@ -493,3 +493,19 @@ describe("orchestration worker detachment", () => {
     expect(mocks.forgetHarnessSession).not.toHaveBeenCalled();
   });
 });
+
+
+it("detaches and reopens a copy-on-write owner with its execution directory intact", async () => {
+  const owner = chat("copy-owner", { cowId: "copy-a", worktreeCwd: "/repo-copies/copy-a", providerSessionId: "copy-thread" });
+  const workspace = mountWorkspace({ sessions: [owner, chat("other")], tabs: [newTab("other")], orchestrationRuns: [], busySessionIds: new Set(), liveAgentsEnabled: false });
+  await advance();
+  expect(workspace.snapshot().sessions.map((session) => session.id)).toEqual(["other"]);
+  expect(workspace.cache.get(owner.id)).toMatchObject({ cowId: owner.cowId, worktreeCwd: owner.worktreeCwd });
+  workspace.cache.clear();
+  const reopened = await getSession(owner.id);
+  expect(reopened).toMatchObject({ id: owner.id, cowId: owner.cowId, worktreeCwd: owner.worktreeCwd, providerSessionId: owner.providerSessionId, blocks: owner.blocks });
+  workspace.update({ sessions: [...workspace.snapshot().sessions, reopened!], tabs: [newTab("other"), newTab(owner.id)], activeSessionId: owner.id });
+  await advance();
+  expect(workspace.snapshot().sessions.find((session) => session.id === owner.id)?.worktreeCwd).toBe(owner.worktreeCwd);
+  expect(mocks.invoke.mock.calls.some(([command]) => command === "cow_remove")).toBe(false);
+});

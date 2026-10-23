@@ -1,5 +1,11 @@
+import { sameProjectPath } from "../../projects/model/recents";
 import { composerSeedForAddToChat, type AddToChatMode } from "./quoteDraft";
-import { newDefaultSession, newSessionLike, type Session } from "./session";
+import {
+  newDefaultSession,
+  newSessionLike,
+  sessionWorkCwd,
+  type Session,
+} from "./session";
 import {
   focusedFileTab,
   leafIds,
@@ -96,12 +102,30 @@ export function applyAddToChatRequest({
     fallbackCwd ??
     projectCwd;
   const file = focusedFileTab(tab);
-  const session = createdSession ?? {
+  const cowSource = sessions.find(
+    (entry) =>
+      entry.cowId && sameProjectPath(sessionWorkCwd(entry), file?.cwd ?? cwd),
+  );
+  let session = createdSession ?? {
     ...newDefaultSession(cwd, defaultRuntimeMode),
-    ...(file?.projectCwd ? { worktreeCwd: file.cwd } : {}),
+    ...(file?.projectCwd
+      ? {
+          worktreeCwd: file.cwd,
+          workspaceMode: undefined,
+          worktreeBase: undefined,
+        }
+      : {}),
     composerSeed,
   };
 
+  if (cowSource)
+    session = {
+      ...session,
+      cwd: cowSource.cwd,
+      worktreeCwd: undefined,
+      workspaceMode: "cow",
+      cowSourceCwd: sessionWorkCwd(cowSource),
+    };
   let nextTab: WorkspaceTab;
   if (createdSession) {
     // The fallback tab already hosts the new session; splitting it beside
@@ -120,7 +144,9 @@ export function applyAddToChatRequest({
 
   return {
     sessions: createdSession
-      ? [...currentSessions]
+      ? currentSessions.map((entry) =>
+          entry.id === session.id ? session : entry,
+        )
       : [...currentSessions, session],
     tabs: createdSession
       ? [...currentTabs]
