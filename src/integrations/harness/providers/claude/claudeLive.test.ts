@@ -41,6 +41,7 @@ const {
   respondClaudeApproval,
   respondClaudeQuestion,
   restoreClaudeTaskLists,
+  rewindClaudeLastTurn,
   sendClaudeTurn,
   stopClaudeSession,
   __claudeTestReset,
@@ -2043,5 +2044,219 @@ describe("claude manual compaction", () => {
       text: "Compacted context",
     });
     expect(events.some((event) => event.type === "message.delta")).toBe(false);
+  });
+});
+
+describe("claude edit last message", () => {
+  const base = {
+    sessionId: "s1",
+    cwd: "/repo",
+    model: "claude:claude-sonnet-5",
+    modelSettings: {},
+    runtimeMode: "supervised" as const,
+  };
+  const events: HarnessEvent[] = [];
+  let conversation = "";
+
+  beforeEach(() => {
+    events.length = 0;
+  });
+
+  const userMessages = () =>
+    parse().filter((message) => message.type === "user").length;
+  const initializeRequests = () =>
+    parse().filter(
+      (message) =>
+        (message.request as Record<string, unknown> | undefined)?.subtype ===
+        "initialize",
+    ).length;
+  const turnBoundaries = () =>
+    events.flatMap((event) =>
+      event.type === "turn.started" ? [event.providerTurnId] : [],
+    );
+
+  /** Sends a turn and answers Claude's startup when it has to spawn. */
+  async function send(model = base.model) {
+    const users = userMessages();
+    const spawns = spawned.length;
+    const initializes = initializeRequests();
+    const turn = sendClaudeTurn({
+      ...base,
+      model,
+      text: "do it",
+      attachments: [],
+      onEvent: (event) => events.push(event),
+    });
+    await waitFor(
+      () => userMessages() > users || initializeRequests() > initializes,
+      "prompt or initialize",
+    );
+    if (spawned.length > spawns) {
+      const args = spawned.at(-1)!;
+      conversation = args.includes("--resume")
+        ? args[args.indexOf("--resume") + 1]
+        : args[args.indexOf("--session-id") + 1];
+      emit({ type: "system", subtype: "init", session_id: conversation });
+      emit({ type: "control_response", response: { subtype: "success" } });
+      await waitFor(() => userMessages() > users, "prompt");
+    }
+    return { turn };
+  }
+
+  async function finish(
+    { turn }: { turn: Promise<void> },
+    prompt: string,
+    reply: string,
+  ) {
+    emit({
+      type: "user",
+      isReplay: true,
+      uuid: prompt,
+      session_id: conversation,
+      parent_tool_use_id: null,
+      message: { role: "user", content: [{ type: "text", text: "do it" }] },
+    });
+    emit({
+      type: "assistant",
+      uuid: reply,
+      session_id: conversation,
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+    emit({ type: "result", subtype: "success", session_id: conversation });
+    await turn;
+  }
+
+  async function rewind(providerTurnId: string) {
+    const spawns = spawned.length;
+    const rewound = rewindClaudeLastTurn({
+      ...base,
+      providerTurnId,
+      onEvent: (event) => events.push(event),
+    });
+    return { rewound, spawns };
+  }
+
+  it("marks each prompt with the entry a rewind would resume at", async () => {
+    await finish(await send(), "p1", "a1");
+    await finish(await send(), "p2", "a2");
+
+    expect(turnBoundaries()).toEqual(["_p1", "a1_p2"]);
+  });
+
+  it("resumes truncated at the boundary until the replacement is stored", async () => {
+    await finish(await send(), "p1", "a1");
+    await finish(await send(), "p2", "a2");
+
+    const { rewound, spawns } = await rewind("a1_p2");
+    await waitFor(() => spawned.length > spawns, "truncated Claude process");
+    expect(spawned.at(-1)).toEqual(
+      expect.arrayContaining([
+        "--resume",
+        conversation,
+        "--resume-session-at",
+        "a1",
+        "--resume-drops-turn",
+        "p2",
+      ]),
+    );
+    emit({ type: "control_response", response: { subtype: "success" } });
+    await expect(rewound).resolves.toEqual({ submitted: false });
+
+    // A model change before the replacement is stored must not undo the rewind.
+    const replacement = await send("claude:claude-opus-5");
+    expect(spawned.at(-1)).toEqual(
+      expect.arrayContaining(["--resume-session-at", "a1"]),
+    );
+    await finish(replacement, "p3", "a3");
+    expect(turnBoundaries().at(-1)).toBe("a1_p3");
+
+    await finish(await send(), "p4", "a4");
+    expect(spawned.at(-1)).not.toContain("--resume-session-at");
+  });
+
+  it("starts a new conversation when the first message is edited", async () => {
+    await finish(await send(), "p1", "a1");
+    const first = conversation;
+
+    const { rewound } = await rewind("_p1");
+    await expect(rewound).resolves.toEqual({ submitted: false });
+    await finish(await send(), "p2", "a2");
+
+    expect(spawned).toHaveLength(2);
+    expect(spawned[1]).not.toContain("--resume");
+    expect(conversation).not.toBe(first);
+    expect(turnBoundaries().at(-1)).toBe("_p2");
+  });
+
+  it("fails the edit when Claude refuses the truncated resume", async () => {
+    await finish(await send(), "p1", "a1");
+    await finish(await send(), "p2", "a2");
+
+    const { rewound, spawns } = await rewind("a1_p2");
+    await waitFor(() => spawned.length > spawns, "truncated Claude process");
+    onExit!(1);
+    await expect(rewound).rejects.toThrow(
+      "Claude Code could not rewind this conversation",
+    );
+
+    await send();
+    expect(spawned.at(-1)).toEqual(
+      expect.arrayContaining(["--resume", conversation]),
+    );
+    expect(spawned.at(-1)).not.toContain("--resume-session-at");
+  });
+
+  it("does not offer a rewind it cannot resume at", async () => {
+    await finish(await send(), "p1", "a1");
+
+    const compact = compactClaudeContext({
+      ...base,
+      onEvent: (event) => events.push(event),
+    });
+    await waitFor(() => userMessages() === 2, "compact command");
+    emit({
+      type: "system",
+      subtype: "compact_boundary",
+      session_id: conversation,
+    });
+    emit({ type: "result", subtype: "success", session_id: conversation });
+    await compact;
+    await finish(await send(), "p2", "a2");
+
+    const stopped = await send();
+    await cancelClaudeTurn("s1");
+    await stopped.turn;
+    await finish(await send(), "p4", "a4");
+
+    expect(turnBoundaries()).toEqual(["_p1"]);
+    expect(events).toContainEqual({ type: "turns.sealed" });
+  });
+
+  it("refuses to rewind a conversation it cannot resume", async () => {
+    await finish(await send(), "p1", "a1");
+    await finish(await send(), "p2", "a2");
+    const spawns = spawned.length;
+
+    await expect(
+      rewindClaudeLastTurn({
+        ...base,
+        cwd: "/elsewhere",
+        providerTurnId: "a1_p2",
+        onEvent: (event) => events.push(event),
+      }),
+    ).rejects.toThrow("Claude Code cannot rewind this message");
+    expect(spawned).toHaveLength(spawns);
+
+    // The conversation is left running as it was.
+    await finish(await send(), "p3", "a3");
+    expect(spawned).toHaveLength(spawns);
+    expect(turnBoundaries().at(-1)).toBe("a2_p3");
+  });
+
+  it("refuses to rewind a message without a boundary", async () => {
+    const { rewound } = await rewind("p1");
+    await expect(rewound).rejects.toThrow(
+      "Claude Code cannot rewind this message",
+    );
   });
 });
