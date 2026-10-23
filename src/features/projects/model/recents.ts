@@ -61,12 +61,16 @@ function save(next: RecentProject[]) {
   }
 }
 
+/**
+ * Remember a project as most recently opened without evicting saved rail entries.
+ * Existing projects are deduplicated by normalized path and restored from the archive.
+ * Projects remain saved until explicitly archived or deleted.
+ */
 export function rememberProject(path: string): RecentProject[] {
   const normalized = normalize(path);
   if (normalized === "~") return loadRecents();
   dropArchived(normalized);
   const prev = loadRecents().filter((p) => !sameProjectPath(p.path, normalized));
-  // The rail is a saved project list. Only Archive or Delete should remove entries.
   const next = [{ path: normalized, openedAt: Date.now() }, ...prev];
   save(next);
   return next;
