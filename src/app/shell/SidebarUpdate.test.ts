@@ -17,7 +17,14 @@ const updaterMocks = vi.hoisted(() => ({
 vi.mock("@tauri-apps/api/app", () => ({
   getVersion: vi.fn(),
   getBundleType: vi.fn().mockResolvedValue("appimage"),
-  BundleType: { Nsis: "nsis", Msi: "msi", Deb: "deb", Rpm: "rpm", AppImage: "appimage", App: "app" },
+  BundleType: {
+    Nsis: "nsis",
+    Msi: "msi",
+    Deb: "deb",
+    Rpm: "rpm",
+    AppImage: "appimage",
+    App: "app",
+  },
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   ask: vi.fn(),
@@ -37,6 +44,30 @@ vi.mock("../model/updater", async (importOriginal) => {
 
 function installButtonClick() {
   let onClick: (() => void) | undefined;
+  // SidebarUpdate renders the install button nested in a wrapper div (with an
+  // optional dismiss button for restart-required), so walk the element tree.
+  function findInstallClick(node: unknown): (() => void) | undefined {
+    if (!node || typeof node !== "object") return undefined;
+    const el = node as ReactElement<
+      { onClick?: () => void; children?: unknown } & Record<string, unknown>
+    >;
+    if (
+      el.type === "button" &&
+      typeof el.props?.onClick === "function" &&
+      el.props?.["aria-label"] !== "Dismiss restart notification"
+    ) {
+      return el.props.onClick;
+    }
+    const children = el.props?.children;
+    if (Array.isArray(children)) {
+      for (const child of children) {
+        const found = findInstallClick(child);
+        if (found) return found;
+      }
+      return undefined;
+    }
+    return findInstallClick(children);
+  }
   function Capture() {
     const tree = SidebarUpdate({
       snapshot: {
@@ -45,8 +76,8 @@ function installButtonClick() {
         availableVersion: "0.1.38",
       },
       onSnapshot: vi.fn(),
-    }) as ReactElement<{ onClick: () => void }>;
-    onClick = tree.props.onClick;
+    }) as ReactElement;
+    onClick = findInstallClick(tree);
     return tree;
   }
   renderToStaticMarkup(createElement(Capture));
@@ -62,12 +93,17 @@ describe("isSidebarUpdateActionable", () => {
       "current",
       "available",
       "downloading",
+      "restart-required",
       "error",
     ];
     const actionable = phases.filter((phase) =>
       isSidebarUpdateActionable({ phase, currentVersion: "0.1.37" }),
     );
-    expect(actionable).toEqual(["available", "downloading"]);
+    expect(actionable).toEqual([
+      "available",
+      "downloading",
+      "restart-required",
+    ]);
   });
 });
 
@@ -104,6 +140,49 @@ describe("SidebarUpdate", () => {
 
     expect(markup).toContain("Downloading 42%");
     expect(markup).toContain('disabled=""');
+  });
+
+  it("offers a restart action once the update is installed", () => {
+    const markup = renderToStaticMarkup(
+      createElement(SidebarUpdate, {
+        snapshot: {
+          phase: "restart-required",
+          currentVersion: "0.1.37",
+          availableVersion: "0.1.38",
+        },
+        onSnapshot: vi.fn(),
+      }),
+    );
+
+    expect(markup).toContain("Restart to update to 0.1.38");
+    expect(markup).not.toContain('disabled=""');
+  });
+
+  it("lets a deferred restart be dismissed without losing the install", () => {
+    const withoutDismiss = renderToStaticMarkup(
+      createElement(SidebarUpdate, {
+        snapshot: {
+          phase: "restart-required",
+          currentVersion: "0.1.37",
+          availableVersion: "0.1.38",
+        },
+        onSnapshot: vi.fn(),
+      }),
+    );
+    const withDismiss = renderToStaticMarkup(
+      createElement(SidebarUpdate, {
+        snapshot: {
+          phase: "restart-required",
+          currentVersion: "0.1.37",
+          availableVersion: "0.1.38",
+        },
+        onSnapshot: vi.fn(),
+        onDismiss: vi.fn(),
+      }),
+    );
+
+    expect(withoutDismiss).not.toContain("Dismiss restart notification");
+    expect(withDismiss).toContain('aria-label="Dismiss restart notification"');
   });
 
   it("ignores a second click while readAppVersion is still pending", async () => {
