@@ -87,3 +87,24 @@ export function queuedMessageForSubmit(
   if (!canDispatchQueuedHead(session)) return undefined;
   return message;
 }
+
+/**
+ * A steer the provider refused because no turn was running: take its bubble
+ * back out of the transcript and put it first in line, so it goes out as the
+ * next turn instead of being lost.
+ */
+export function requeueUnsteered(
+  session: Session,
+  blockId: string,
+  message: QueuedMessage,
+  paused = false,
+): Session {
+  return {
+    ...session,
+    blocks: session.blocks.filter((block) => block.id !== blockId),
+    queuedMessages: [message, ...(session.queuedMessages ?? [])],
+    // A stop that overtook the steer must not let it go out on its own.
+    queueStatus:
+      paused || session.queueStatus === "paused" ? "paused" : "active",
+  };
+}
