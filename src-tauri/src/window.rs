@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -10,8 +10,11 @@ use tauri::window::Color;
 #[cfg(target_os = "windows")]
 use tauri::window::{Effect, EffectsBuilder};
 use tauri::{AppHandle, Emitter, EventTarget, Manager, WebviewWindow, WebviewWindowBuilder};
+use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 static WINDOW_COUNTER: AtomicU32 = AtomicU32::new(1);
+static STATE_SAVE_GENERATION: AtomicU64 = AtomicU64::new(0);
+const STATE_SAVE_DELAY: Duration = Duration::from_millis(500);
 
 /// The floating quick composer. It is a webview window but not a workspace:
 /// it has no sessions, takes no part in quitting, and is never shown by the
@@ -265,6 +268,25 @@ pub fn ensure_launch_window_visible(app: &AppHandle) {
         return;
     }
     let _ = show_hidden_or_open_new(app);
+}
+
+/// window-state only writes on a clean exit, which a macOS restart can kill before it fires.
+pub fn schedule_state_save(app: &AppHandle) {
+    let generation = STATE_SAVE_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(STATE_SAVE_DELAY);
+        if STATE_SAVE_GENERATION.load(Ordering::SeqCst) != generation {
+            return;
+        }
+        // On the main thread, the plugin's move/resize handler can't block on the
+        // cache lock while this save waits for window getters on the event loop.
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            // VISIBLE is left out so a closed-to-hidden window isn't restored hidden.
+            let _ = handle.save_window_state(StateFlags::all() - StateFlags::VISIBLE);
+        });
+    });
 }
 
 pub fn allow_exit() -> bool {
