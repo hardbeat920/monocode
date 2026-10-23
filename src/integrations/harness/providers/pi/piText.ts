@@ -246,7 +246,7 @@ async function startLive(
       const current = liveRef.current;
       if (current) handleFrame(current, rec);
     },
-    flavor.label,
+    flavor,
   );
   const session: LiveText = {
     rpc,
