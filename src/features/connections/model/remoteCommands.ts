@@ -1,10 +1,13 @@
 import { setRemoteCommandRunner } from "../../../platform/tauri/fs";
+import { invoke } from "@tauri-apps/api/core";
 import { remoteMachineFor, remoteRequest } from "./connections";
 import { parseRemotePath, remotePath } from "./remoteProjects";
 
 /** File commands a connected machine answers exactly as this computer does
  * (see host/workspace-commands.ts). */
 const HOST_COMMANDS = new Set([
+  // Downloads use the native streaming route rather than workspace.run.
+  "download_file",
   "list_dir",
   "list_project_files",
   "read_text_file",
@@ -99,6 +102,13 @@ export async function runRemoteCommand(
   if (!machine)
     throw new Error("This project’s machine isn’t connected on this computer.");
   let result: unknown;
+  if (command === "download_file") {
+    return invoke("remote_download", {
+      machineId: machine.id,
+      path: hostArgs.path,
+      destination: hostArgs.destination,
+    });
+  }
   try {
     result = await remoteRequest(machine.id, "workspace.run", {
       command,

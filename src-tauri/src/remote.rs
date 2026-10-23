@@ -312,12 +312,55 @@ pub fn remote_request(
     if !supported_remote_method(&method) {
         return Err("Unsupported remote operation".into());
     }
+    with_connection(&app, &state, &machine_id, |machine, endpoint| {
+        let result = rpc(
+            endpoint,
+            &machine.token,
+            Some(&machine.environment_id),
+            &method,
+            params,
+        )?;
+        if method == "environment.describe"
+            && result.get("environmentId").and_then(Value::as_str)
+                != Some(machine.environment_id.as_str())
+        {
+            return Err("Host identity changed. Add this machine again before continuing.".into());
+        }
+        Ok(result)
+    })
+}
+
+#[tauri::command(async)]
+pub fn remote_download(
+    app: AppHandle,
+    state: State<'_, RemoteConnections>,
+    machine_id: String,
+    path: String,
+    destination: String,
+) -> Result<(), String> {
+    with_connection(&app, &state, &machine_id, |machine, endpoint| {
+        download_to_path(
+            endpoint,
+            &machine.token,
+            &machine.environment_id,
+            &path,
+            Path::new(&destination),
+        )
+    })
+}
+
+fn with_connection<T>(
+    app: &AppHandle,
+    state: &RemoteConnections,
+    machine_id: &str,
+    action: impl FnOnce(&StoredMachine, &str) -> Result<T, String>,
+) -> Result<T, String> {
     let machine = {
         let _guard = state
             .store
             .lock()
             .map_err(|_| "Connection store is locked")?;
-        read(&store_path(&app)?)?
+        read(&store_path(app)?)?
             .into_iter()
             .find(|m| m.id == machine_id)
             .ok_or("Machine is no longer connected")?
@@ -331,14 +374,8 @@ pub fn remote_request(
         .as_ref()
         .map(|lease| lease.endpoint.as_str())
         .unwrap_or(&machine.endpoint);
-    let response = rpc(
-        endpoint,
-        &machine.token,
-        Some(&machine.environment_id),
-        &method,
-        params,
-    );
-    if response
+    let result = action(&machine, endpoint);
+    if result
         .as_ref()
         .err()
         .is_some_and(|error| error.starts_with("Machine is unreachable"))
@@ -347,14 +384,70 @@ pub fn remote_request(
             state.tunnels.invalidate(&machine.id, lease);
         }
     }
-    let result = response?;
-    if method == "environment.describe"
-        && result.get("environmentId").and_then(Value::as_str)
-            != Some(machine.environment_id.as_str())
-    {
-        return Err("Host identity changed. Add this machine again before continuing.".into());
-    }
-    Ok(result)
+    result
+}
+
+/// The response reader is copied directly to an atomic local save, never JSON or renderer memory.
+fn download_to_path(
+    endpoint: &str,
+    token: &str,
+    environment: &str,
+    path: &str,
+    destination: &Path,
+) -> Result<(), String> {
+    let agent = ureq::AgentBuilder::new()
+        .redirects(0)
+        .timeout_connect(std::time::Duration::from_secs(5))
+        .timeout_read(std::time::Duration::from_secs(30))
+        .build();
+    let response = agent
+        .post(&format!("{endpoint}/download"))
+        .set("Authorization", &format!("Bearer {token}"))
+        .set("Content-Type", "application/json")
+        .send_string(
+            &json!({"version": 1, "environmentId": environment, "params": {"path": path}})
+                .to_string(),
+        );
+    let mut reader = match response {
+        Ok(response) if response.status() == 200 => response.into_reader(),
+        Ok(_) => return Err("Invalid host download response".into()),
+        // Hosts without the route reject it as forbidden, and native requests
+        // carry no origin, so 403 here only ever means an outdated host.
+        Err(ureq::Error::Status(403, _)) => {
+            return Err("Update MonoCode Host in Connections settings to download files.".into());
+        }
+        Err(ureq::Error::Status(status, response)) => {
+            let mut bytes = Vec::new();
+            response
+                .into_reader()
+                .take(64 * 1024)
+                .read_to_end(&mut bytes)
+                .map_err(|e| e.to_string())?;
+            let message = serde_json::from_slice::<Value>(&bytes)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("error")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                });
+            return Err(match message {
+                Some(message) => format!("Host rejected request: {message}"),
+                None => format!("Host returned HTTP {status}"),
+            });
+        }
+        Err(ureq::Error::Transport(error)) if connection_refused(&error) => {
+            return Err(
+                "Machine is unreachable. Check the host and SSH tunnel, then reconnect.".into(),
+            );
+        }
+        Err(_) => return Err("The host download did not complete. Retry the download.".into()),
+    };
+    crate::fs::write_file_sync(destination, |file| {
+        std::io::copy(&mut reader, file)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    })
 }
 
 fn supported_remote_method(method: &str) -> bool {
@@ -650,6 +743,166 @@ pub fn remote_ssh_cancel(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn downloads_stream_large_files_and_preserve_the_destination_on_interruption() {
+        use std::{io::BufRead, net::TcpListener, thread};
+        let dir = std::env::temp_dir().join(format!("monocode-download-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        let destination = dir.join("large.bin");
+        for interrupted in [false, true] {
+            std::fs::write(&destination, b"original").unwrap();
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let length = 17 * 1024 * 1024;
+            let server = thread::spawn(move || {
+                let (mut socket, _) = listener.accept().unwrap();
+                let mut request = std::io::BufReader::new(&mut socket);
+                let mut headers = String::new();
+                loop {
+                    let mut line = String::new();
+                    request.read_line(&mut line).unwrap();
+                    headers.push_str(&line);
+                    if line == "\r\n" {
+                        break;
+                    }
+                }
+                assert!(headers.starts_with("POST /download "));
+                assert!(headers.contains("Bearer test-token"));
+                let size: usize = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (key, value) = line.split_once(':')?;
+                        key.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse().unwrap())
+                    })
+                    .unwrap();
+                let mut body = vec![0; size];
+                request.read_exact(&mut body).unwrap();
+                let payload: Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(payload["environmentId"], "env");
+                assert_eq!(payload["params"]["path"], "/repo/large.bin");
+                drop(request);
+                write!(
+                    socket,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n"
+                )
+                .unwrap();
+                let bytes = [0xa5; 16 * 1024];
+                let count = if interrupted { 1 } else { length / bytes.len() };
+                for _ in 0..count {
+                    socket.write_all(&bytes).unwrap();
+                }
+            });
+            let result = download_to_path(
+                &endpoint,
+                "test-token",
+                "env",
+                "/repo/large.bin",
+                &destination,
+            );
+            server.join().unwrap();
+            if interrupted {
+                assert!(result.is_err());
+                assert_eq!(std::fs::read(&destination).unwrap(), b"original");
+            } else {
+                result.unwrap();
+                let bytes = std::fs::read(&destination).unwrap();
+                assert_eq!(bytes.len(), length);
+                assert!(bytes.iter().all(|byte| *byte == 0xa5));
+            }
+            assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_chunked_download_cut_short_is_an_error_and_keeps_the_destination() {
+        use std::{io::BufRead, net::TcpListener, thread};
+        let dir = std::env::temp_dir().join(format!("monocode-chunked-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        let destination = dir.join("file.bin");
+        std::fs::write(&destination, b"original").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut request = std::io::BufReader::new(&mut socket);
+            let mut size = 0;
+            loop {
+                let mut line = String::new();
+                request.read_line(&mut line).unwrap();
+                if let Some((key, value)) = line.split_once(':') {
+                    if key.eq_ignore_ascii_case("content-length") {
+                        size = value.trim().parse().unwrap();
+                    }
+                }
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            request.read_exact(&mut vec![0; size]).unwrap();
+            drop(request);
+            // One chunk, then the connection closes without the final chunk.
+            write!(
+                socket,
+                "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n5\r\nhello\r\n"
+            )
+            .unwrap();
+        });
+        let result = download_to_path(
+            &endpoint,
+            "test-token",
+            "env",
+            "/repo/file.bin",
+            &destination,
+        );
+        server.join().unwrap();
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&destination).unwrap(), b"original");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn an_outdated_host_without_the_download_route_asks_for_an_update() {
+        use std::{io::BufRead, net::TcpListener, thread};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut request = std::io::BufReader::new(&mut socket);
+            let mut size = 0;
+            loop {
+                let mut line = String::new();
+                request.read_line(&mut line).unwrap();
+                if let Some((key, value)) = line.split_once(':') {
+                    if key.eq_ignore_ascii_case("content-length") {
+                        size = value.trim().parse().unwrap();
+                    }
+                }
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            request.read_exact(&mut vec![0; size]).unwrap();
+            drop(request);
+            let body = r#"{"error":"Unsupported request origin or route"}"#;
+            write!(
+                socket,
+                "HTTP/1.1 403 Forbidden\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+        let destination =
+            std::env::temp_dir().join(format!("monocode-403-{}", uuid::Uuid::new_v4()));
+        let error =
+            download_to_path(&endpoint, "t", "env", "/repo/a.bin", &destination).unwrap_err();
+        server.join().unwrap();
+        assert!(error.contains("Update MonoCode Host"));
+        assert!(!destination.exists());
+    }
+
     #[test]
     fn a_slow_host_does_not_look_like_a_dead_tunnel() {
         use std::{net::TcpListener, thread, time::Duration};

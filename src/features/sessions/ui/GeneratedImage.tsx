@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { readBinaryFile } from "../../../platform/tauri/fs";
 import { formatFileSize, sniffImageMime } from "../../files/model/filePreview";
 import { ImageLightbox } from "../../../shared/ui/ImageLightbox";
+import { DownloadButton } from "../../../shared/ui/DownloadButton";
+import { withMimeExtension } from "../model/attachments";
 import type { GeneratedImageMeta } from "../model/session";
 
 type State =
@@ -71,9 +73,17 @@ export function GeneratedImage({ image }: { image: GeneratedImageMeta }) {
           className="max-h-[min(70vh,640px)] max-w-full object-contain"
         />
       </button>
-      <div className="mt-1 flex min-w-0 items-center gap-2 text-[11px] text-content/45">
+      <div className="mt-1 -ml-1 flex min-w-0 items-center gap-2.5 font-sans text-sm text-content/40">
+        <DownloadButton
+          name={withMimeExtension(image.name, image.mimeType)}
+          source={{ path: image.path }}
+        />
+        <span
+          aria-hidden="true"
+          className="size-[3px] shrink-0 rounded-full bg-content/25"
+        />
         <span className="truncate">{image.name}</span>
-        <span>{formatFileSize(state.size)}</span>
+        <span className="shrink-0">{formatFileSize(state.size)}</span>
       </div>
       {open ? (
         <ImageLightbox src={state.url} alt={alt} onClose={() => setOpen(false)} />
