@@ -125,6 +125,7 @@ import { markLinkedSessionUpdateSeen } from "../../inbox/model/linkedSessionSeen
 import { RemoteSession } from "../../connections/ui/RemoteSession";
 import { isRemoteProjectPath } from "../../projects/model/recents";
 import type { HostSession } from "../../connections/model/protocol";
+import type { RemoteChoice } from "../../connections/model/remoteSessionState";
 
 export type SessionPaneProps = {
   session: Session;
@@ -163,6 +164,7 @@ export type SessionPaneProps = {
   onBranchChange: (sessionId: string) => void;
   onWorktreeChange?: (sessionId: string, tree: Worktree) => Promise<void>;
   onRemoteSnapshot?: (shellId: string, snapshot?: HostSession) => void;
+  onRemoteChoice?: (shellId: string, choice: RemoteChoice) => void;
   onWorkspaceModeChange: (
     sessionId: string,
     mode: WorkspaceMode,
@@ -292,6 +294,7 @@ export const SessionPane = memo(function SessionPane(input: SessionPaneProps) {
         shell={props.session}
         visible={props.visible}
         onSnapshot={props.onRemoteSnapshot}
+        onChoice={props.onRemoteChoice}
         onOpenFile={props.onOpenFile}
         onOpenDiff={props.onOpenDiff}
         onOpenPlan={props.onOpenPlan}
