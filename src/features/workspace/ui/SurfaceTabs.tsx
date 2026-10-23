@@ -1,6 +1,8 @@
 import {
   GitCompare,
   GripVertical,
+  iconByName,
+  Puzzle,
   Terminal,
   X,
 } from "../../../shared/ui/icons";
@@ -17,6 +19,7 @@ import {
   isChangesTab,
   isCommitTab,
   isFilesystemTab,
+  isModTab,
   isPlanTab,
   isReleaseNotesTab,
   isReviewTab,
@@ -151,6 +154,16 @@ export function surfaceTabPresentation(
       label: name,
       iconName: "AGENT",
       tooltip: `${name} — orchestration agent`,
+    };
+  }
+
+  if (isModTab(file)) {
+    const name = file.mod.title.trim() || file.mod.name;
+    return {
+      name,
+      label: name,
+      iconName: "MOD",
+      tooltip: `${name} — ${file.mod.name}`,
     };
   }
 
@@ -303,6 +316,9 @@ export function SurfaceTabs({
           const review = isReviewTab(file) && !changes;
           const terminal = isTerminalTab(file);
           const agent = isAgentTab(file) ? file.agent : null;
+          const ModIcon = isModTab(file)
+            ? (iconByName(file.mod.icon) ?? Puzzle)
+            : null;
           const { label, iconName, tooltip } = surfaceTabPresentation(file);
           const tab = (
             <div
@@ -376,6 +392,8 @@ export function SurfaceTabs({
                     harness={agent.harness}
                     className="size-3.5 shrink-0"
                   />
+                ) : ModIcon ? (
+                  <ModIcon className="size-3.5 shrink-0" strokeWidth={1.75} />
                 ) : changes || commit || review ? (
                   <GitCompare
                     className="size-3.5 shrink-0"

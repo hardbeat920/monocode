@@ -51,6 +51,14 @@ export type AgentTabSource = {
   harness: HarnessId;
 };
 
+/** A mod's `Pane` view. Live only — not persisted. */
+export type ModTabSource = {
+  name: string;
+  viewId: string;
+  title: string;
+  icon?: string;
+};
+
 export type SessionChangesSource = {
   sessionId: string;
 };
@@ -74,6 +82,7 @@ export type FilePaneTab = {
   commit?: CommitTabSource;
   /** Read-only transcript of an orchestration worker. Live only — not persisted. */
   agent?: AgentTabSource;
+  mod?: ModTabSource;
   terminal?: boolean;
   /** Foreground command when it isn't the shell. Live only — not persisted. */
   foreground?: string;
@@ -210,6 +219,15 @@ export function newPlanTab(
     path: `plan:${blockId}`,
     cwd,
     plan: { sessionId, blockId, title },
+  };
+}
+
+export function newModTab(mod: ModTabSource, cwd: string): FilePaneTab {
+  return {
+    id: crypto.randomUUID(),
+    path: `mod:${mod.name}:${mod.viewId}`,
+    cwd,
+    mod,
   };
 }
 
@@ -430,12 +448,19 @@ export function isAgentTab(
   return !!file.agent;
 }
 
+export function isModTab(
+  file: FilePaneTab,
+): file is FilePaneTab & { mod: ModTabSource } {
+  return !!file.mod;
+}
+
 export function isVirtualDocumentTab(file: FilePaneTab): boolean {
   return (
     isPlanTab(file) ||
     isReleaseNotesTab(file) ||
     isCommitTab(file) ||
-    isAgentTab(file)
+    isAgentTab(file) ||
+    isModTab(file)
   );
 }
 
@@ -514,6 +539,7 @@ export function isSessionChangesTab(
 export function editorTabKey(file: FilePaneTab): string {
   if (file.terminal) return `terminal:${file.id}`;
   if (file.agent) return `agent:${file.agent.sessionId}`;
+  if (file.mod) return `mod:${file.mod.name}:${file.mod.viewId}`;
   if (file.plan) return `plan:${file.plan.blockId}`;
   if (file.releaseNotes) return `release-notes:${file.releaseNotes.version}`;
   if (file.commit) return `commit:${file.cwd}:${file.commit.sha}`;
@@ -543,6 +569,7 @@ export function isPreviewableTab(file: FilePaneTab): boolean {
   return (
     !file.terminal &&
     !file.agent &&
+    !file.mod &&
     !file.plan &&
     !file.releaseNotes &&
     !file.changes
