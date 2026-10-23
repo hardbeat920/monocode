@@ -132,6 +132,7 @@ type Props = {
   onSelectProject: (path: string) => void;
   onOpenProject: () => void;
   onRemoveProject?: (path: string, options: { purgeData: boolean }) => void;
+  onRelocateProject?: (from: string, to: string) => Promise<void>;
   liveAgents?: LiveAgent[];
   activeSessionId?: string;
   onSelectAgent?: (sessionId: string) => void;
@@ -173,6 +174,7 @@ export function ProjectRail({
   onSelectProject,
   onOpenProject,
   onRemoveProject,
+  onRelocateProject,
   liveAgents = [],
   activeSessionId,
   onSelectAgent,
@@ -237,6 +239,7 @@ export function ProjectRail({
   } | null>(null);
   const projectMenu = useProjectMenu({
     onRemoveProject,
+    onRelocateProject,
     onOpenNotificationSettings,
     onOpen: () => setInboxMenu(null),
   });
