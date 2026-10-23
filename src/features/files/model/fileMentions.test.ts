@@ -1,3 +1,4 @@
+import tokenFixtures from "./fileMentionTokens.fixture.json";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProjectFile } from "../../../platform/tauri/fs";
 import { loadProjectFiles } from "./fileIndex";
@@ -418,3 +419,15 @@ describe("applyFileMentionsToTurn", () => {
     expect(out).toBe("look at @notes/read-me.md~2");
   });
 });
+
+it.each(tokenFixtures)(
+  "keeps the shared composer token fixture: $text at $cursor",
+  ({ text, cursor, token: expected, replacement }) => {
+    const token = mentionTokenAt(text, cursor);
+    expect(token).toEqual(expected);
+    if (token)
+      expect(replaceMentionToken(text, token, "docs/read-me.md")).toBe(
+        replacement,
+      );
+  },
+);

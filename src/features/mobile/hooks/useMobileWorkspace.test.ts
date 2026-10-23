@@ -10,10 +10,14 @@ const desktop = vi.hoisted(() => ({
   listen: vi.fn(),
   catalog: vi.fn(),
   usage: vi.fn(),
+  search: vi.fn(),
 }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: desktop.invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: desktop.listen }));
-vi.mock("../model/mobileWorkspace", () => ({ mobileCatalog: desktop.catalog }));
+vi.mock("../model/mobileWorkspace", () => ({
+  mobileCatalog: desktop.catalog,
+  mobileProjectSearch: desktop.search,
+}));
 vi.mock("../model/mobileAccountUsage", () => ({
   mobileAccountUsage: desktop.usage,
 }));
@@ -75,6 +79,35 @@ describe("new mobile session publication", () => {
   afterEach(() => {
     act(() => root.unmount());
     vi.useRealTimers();
+  });
+
+  it("routes mention searches through the existing project search command with checkout scope", async () => {
+    desktop.search.mockResolvedValue({
+      results: [{ path: "docs", label: "docs", isDir: true }],
+    });
+    act(() => root.render(createElement(Probe)));
+    await flush();
+    request({
+      payload: {
+        id: "search",
+        commandId: "search",
+        method: "project.search",
+        params: {
+          projectId: "project",
+          query: "",
+          worktreePath: "/repo/branch",
+          mentions: true,
+        },
+      },
+    });
+    await flush();
+    expect(desktop.search).toHaveBeenCalledWith(
+      "project",
+      "",
+      "/repo/branch",
+      true,
+    );
+    expect(command).not.toHaveBeenCalled();
   });
 
   it("routes account usage reads and refreshes to the shared desktop usage cache", async () => {

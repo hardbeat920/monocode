@@ -1,0 +1,62 @@
+[
+  {
+    "text": "@",
+    "cursor": 1,
+    "token": {
+      "start": 0,
+      "end": 1,
+      "query": ""
+    },
+    "replacement": "@docs/read-me.md "
+  },
+  {
+    "text": "Look @src/main.tsx after",
+    "cursor": 9,
+    "token": {
+      "start": 5,
+      "end": 18,
+      "query": "src"
+    },
+    "replacement": "Look @docs/read-me.md after"
+  },
+  {
+    "text": "@one @two then",
+    "cursor": 7,
+    "token": {
+      "start": 5,
+      "end": 9,
+      "query": "t"
+    },
+    "replacement": "@one @docs/read-me.md then"
+  },
+  {
+    "text": "nick@example.com",
+    "cursor": 8,
+    "token": null
+  },
+  {
+    "text": "> @src",
+    "cursor": 6,
+    "token": null
+  },
+  {
+    "text": "a@b",
+    "cursor": 3,
+    "token": null
+  },
+  {
+    "text": "@a@b",
+    "cursor": 4,
+    "token": null
+  },
+  {
+    "text": "Hi\n@docs/",
+    "cursor": 9,
+    "token": {
+      "start": 3,
+      "end": 9,
+      "query": "docs/"
+    },
+    "replacement": "Hi\n@docs/read-me.md "
+  }
+]

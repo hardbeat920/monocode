@@ -308,6 +308,7 @@ export function useMobileWorkspace(options: Options) {
                 typeof payload.params.worktreePath === "string"
                   ? payload.params.worktreePath
                   : undefined,
+                payload.params.mentions === true,
               );
             } else if (payload.method === "project.git") {
               result = await mobileProjectGit(

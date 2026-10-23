@@ -6,6 +6,7 @@ import type { View } from "react-native";
 
 const runtime = vi.hoisted(() => ({
   os: "android",
+  scheme: "dark",
   blur: {} as {
     blurTarget?: unknown;
     blurMethod?: string;
@@ -36,6 +37,9 @@ vi.mock("react-native", () => ({
     },
   },
   StyleSheet: { hairlineWidth: 1 },
+  View: ({ style }: { style: object[] }) => (
+    <div data-tint style={Object.assign({}, ...style)} />
+  ),
   Pressable: () => null,
 }));
 vi.mock("react-native-reanimated", () => ({
@@ -47,18 +51,54 @@ vi.mock("react-native-reanimated", () => ({
   useAnimatedStyle: () => ({}),
 }));
 vi.mock("@/ui/theme", () => ({
-  useScheme: () => "dark",
+  useScheme: () => runtime.scheme,
   withAlpha: (color: string, alpha: number) => `${color}:${alpha}`,
   themedStyles: (fn: (colors: { surface: string }) => object) => () =>
     fn({ surface: "surface" }),
 }));
 let root: ReturnType<typeof createRoot>;
+let container: HTMLDivElement;
 beforeEach(() => {
   (
     globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
   ).IS_REACT_ACT_ENVIRONMENT = true;
   runtime.os = "android";
-  root = createRoot(document.createElement("div"));
+  runtime.scheme = "dark";
+  container = document.createElement("div");
+  root = createRoot(container);
+});
+it("uses soft white for Android light-mode surfaces, with and without a blur target", () => {
+  runtime.scheme = "light";
+  act(() => root.render(<LiquidView>Settings</LiquidView>));
+  expect(
+    (container.querySelector("[data-tint]") as HTMLElement).style.backgroundColor,
+  ).toBe("rgba(255, 255, 255, 0.88)");
+  expect(container.querySelector("[data-tint]")?.nextSibling?.textContent).toBe(
+    "Settings",
+  );
+  act(() =>
+    root.render(
+      <GlassBlurTarget value={createRef<View>()}>
+        <LiquidView>Project</LiquidView>
+      </GlassBlurTarget>,
+    ),
+  );
+  expect(
+    (container.querySelector("[data-tint]") as HTMLElement).style.backgroundColor,
+  ).toBe("rgba(255, 255, 255, 0.88)");
+  runtime.os = "ios";
+  act(() => root.render(<LiquidView>Project</LiquidView>));
+  expect(runtime.blur.style).not.toContainEqual({
+    backgroundColor: "rgba(255,255,255,0.88)",
+  });
+  expect(container.querySelector("[data-tint]")).toBeNull();
+});
+it("keeps an explicitly supplied surface tint", () => {
+  runtime.scheme = "light";
+  act(() => root.render(<LiquidView tintColor="pink">Project</LiquidView>));
+  expect(
+    (container.querySelector("[data-tint]") as HTMLElement).style.backgroundColor,
+  ).toBe("pink");
 });
 afterEach(() => act(() => root.unmount()));
 it("enables Android blur against an explicit target and lightens the surface overlay", () => {

@@ -20,8 +20,10 @@ import { remotePrContent } from "../../source-control/ui/GitChangesPanel";
 import {
   loadProjectFiles,
   rankProjectFiles,
+  recentOpenedFiles,
   resolveOpenablePath,
 } from "../../files/model/fileIndex";
+import { mobileMentionResults } from "./mobileMentionResults";
 import { recordInboxSelfActivity } from "../../inbox/model/inboxSelfActivity";
 import { buildUnifiedFile } from "../../source-control/model/unifiedDiff";
 import { listWorktrees } from "../../source-control/model/worktrees";
@@ -481,8 +483,13 @@ export async function mobileProjectSearch(
   projectId: string,
   query: string,
   worktreePath?: string,
+  mentions = false,
 ) {
   const root = await mobileRoot(projectId, worktreePath);
+  if (mentions) {
+    const files = await loadProjectFiles(root);
+    return { results: mobileMentionResults(files, query, recentOpenedFiles(root)) };
+  }
   if (!query.trim()) return { results: [] };
   // Files only: a folder has nothing for the phone to open.
   const files = (await loadProjectFiles(root)).filter((file) => !file.isDir);
