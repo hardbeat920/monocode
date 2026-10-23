@@ -18,6 +18,7 @@ function host(): FloatingMonoHost {
     reveal: vi.fn().mockResolvedValue(undefined),
     openFile: vi.fn(),
     resume: vi.fn(),
+    navigateProject: vi.fn(),
   };
 }
 
@@ -104,6 +105,20 @@ describe("floating Mono delivery", () => {
         async () => true,
       ),
     ).rejects.toThrow("could not be sent");
+  });
+
+  it("routes project navigation through the owning workspace", async () => {
+    const runtime = host();
+    await deliverFloatingMonoRequest(
+      {
+        id: 1,
+        monoId: "mono",
+        action: { kind: "navigateProject", delta: -1 },
+      },
+      runtime,
+      async () => true,
+    );
+    expect(runtime.navigateProject).toHaveBeenCalledWith(-1);
   });
 
   it("transfers attachment bytes instead of another webview's blob URL", () => {

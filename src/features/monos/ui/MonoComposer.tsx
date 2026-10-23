@@ -327,6 +327,11 @@ export function MonoComposer({
       ref={field}
       rows={1}
       aria-label={`Message ${name}`}
+      data-mono-composer-empty={
+        text.length === 0 && attachments.length === 0 && pendingReads === 0
+          ? "true"
+          : undefined
+      }
       placeholder={`Message ${name}`}
       spellCheck={autocorrect}
       autoCorrect={autocorrect ? "on" : "off"}
@@ -376,6 +381,9 @@ export function MonoComposer({
     >
       <div
         ref={box}
+        data-mono-composer-pending={
+          enabled && pendingReads > 0 ? "true" : undefined
+        }
         className={`agent-chat-composer relative rounded-lg border bg-content/3 backdrop-blur-sm ${fileDrag ? "border-accent/60" : "border-content/10 has-focus:border-content/20"}`}
       >
         {fileDrag ? (
