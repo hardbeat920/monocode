@@ -18,6 +18,64 @@ export type InboxObservation = {
   appeared: InboxItem[];
 };
 
+/**
+ * Stable identity for an item across sessions and query scopes. Work items
+ * keyed by their local project path re-appear as brand-new whenever a project
+ * is added or its scope changes, which made event automations replay every
+ * open item (e.g. review all old PRs) after a baseline change. Remote
+ * providers are identified by the hosting repo/team instead, so items only
+ * "appear" when they are new upstream.
+ */
+function observationKey(item: InboxItem): string {
+  if (item.provider === "jira") {
+    // Jira URLs are {site}/browse/{key}; include the site so identical issue
+    // keys on different Jira instances stay distinct.
+    return `jira:${urlHost(item.url)}:${item.teamId || item.repo.toLowerCase()}:${item.id || item.identifier || item.number}`;
+  }
+  if (item.provider === "linear") {
+    return `linear:${item.projectId || item.teamId || "unknown"}:${item.id || item.identifier || item.number}`;
+  }
+  if (item.provider === "azuredevops") {
+    const remote = remoteRepoIdentity(item.url, item.repo);
+    return `azuredevops:${remote}:${item.kind}:${item.id || item.number}`;
+  }
+  const remote = remoteRepoIdentity(item.url, item.repo);
+  return `${item.provider}:${remote}:${item.kind}:${item.id || item.number}`;
+}
+
+function remoteRepoIdentity(url: string, repo: string | undefined): string {
+  const fallback = (repo ?? "unknown").trim().toLowerCase();
+  try {
+    const parsed = new URL(url);
+    const segments = parsed.pathname
+      .replace(/\/+$/, "")
+      .split("/")
+      .filter(Boolean);
+    if (segments.length === 0) return fallback;
+    // Azure DevOps URLs are /org/project/_git/repo; GitLab nests repos under
+    // /group/sub/.../repo/-/...; GitHub is /owner/repo/pull|issues/N.
+    const gitIndex = segments.indexOf("_git");
+    const dashIndex = segments.indexOf("-");
+    const nameSegments =
+      gitIndex >= 0
+        ? segments.slice(0, gitIndex + 2)
+        : dashIndex >= 0
+          ? segments.slice(0, dashIndex)
+          : segments.slice(0, 2);
+    return `${parsed.host.toLowerCase()}/${nameSegments.join("/")}`.toLowerCase();
+  } catch {
+    return fallback;
+  }
+}
+
+function urlHost(url: string): string {
+  try {
+    return new URL(url).host.toLowerCase();
+  } catch {
+    return "unknown";
+  }
+}
+
 /** Tracks fetched revisions separately from the user's read/unread state. */
 export class InboxNotificationTracker {
   private revisions = new Map<string, number>();
@@ -36,11 +94,7 @@ export class InboxNotificationTracker {
     const appeared: InboxItem[] = [];
     for (const item of items) {
       if (failed.has(item.provider)) continue;
-      const key = JSON.stringify([
-        inboxNotificationProject(item).id,
-        item.kind,
-        item.id || item.number,
-      ]);
+      const key = observationKey(item);
       const updatedAt = Date.parse(item.updatedAt);
       if (!Number.isFinite(updatedAt)) continue;
       const previous = this.revisions.get(key);
