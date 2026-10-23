@@ -10,6 +10,7 @@ import {
 import { newSession, type Session } from "./session";
 import type { SessionWorkspaceRemoval } from "./sessionWorkspaceLifecycle";
 import { createSessionRemover } from "./sessionRemoval";
+import { shouldCloseMonoViewAfterSessionRemoval } from "../../../app/model/monoViewSessionRemoval";
 
 const mocks = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
@@ -41,6 +42,7 @@ function fixture(mode: "archive" | "delete", preserveOpenFiles = false) {
     dirtyFiles: new Set<string>(),
   };
   state.activeTabId = state.tabs[0].id;
+  let monoViewId: string | null = closing.id;
   const confirmClose = vi.fn(async () => true);
   const stop = vi.fn(async () => {});
   const commit = vi.fn((removal: SessionWorkspaceRemoval) => {
@@ -61,7 +63,11 @@ function fixture(mode: "archive" | "delete", preserveOpenFiles = false) {
     confirmClose,
     stop,
     commit,
-    run: () => {
+    monoViewId: () => monoViewId,
+    setMonoViewId: (id: string | null) => {
+      monoViewId = id;
+    },
+    run: (sessionId = closing.id) => {
       const remover = createSessionRemover({
         mode,
         preserveOpenFiles,
@@ -71,6 +77,8 @@ function fixture(mode: "archive" | "delete", preserveOpenFiles = false) {
           apply: (change) => {
             if (change.type === "orchestrationReleased") return;
             if (change.type === "removed") {
+              if (shouldCloseMonoViewAfterSessionRemoval(monoViewId, sessionId))
+                monoViewId = null;
               commit(change.removal);
               return;
             }
@@ -85,7 +93,7 @@ function fixture(mode: "archive" | "delete", preserveOpenFiles = false) {
         confirm: confirmClose,
         stop,
       });
-      return remover.remove(closing.id);
+      return remover.remove(sessionId);
     },
   };
 }
@@ -193,6 +201,7 @@ describe.each(["archive", "delete"] as const)("%s lifecycle", (mode) => {
     });
     expect(f.read().sessions[0].blocks[1].streaming).toBeFalsy();
     expect(f.read().tabs).toHaveLength(2);
+    expect(f.monoViewId()).toBe(f.closing.id);
   });
 
   it("does not stop or write anything if confirmation is declined", async () => {
@@ -202,6 +211,18 @@ describe.each(["archive", "delete"] as const)("%s lifecycle", (mode) => {
     expect(f.stop).not.toHaveBeenCalled();
     expect(mocks.invoke).not.toHaveBeenCalled();
     expect(f.read().sessions[0].busy).toBe(true);
+    expect(f.monoViewId()).toBe(f.closing.id);
+  });
+
+  it("clears the Mono view only when its session is successfully removed", async () => {
+    const active = fixture(mode);
+    expect(await active.run()).toBe(true);
+    expect(active.monoViewId()).toBeNull();
+
+    const unrelated = fixture(mode);
+    unrelated.setMonoViewId(unrelated.other.id);
+    expect(await unrelated.run()).toBe(true);
+    expect(unrelated.monoViewId()).toBe(unrelated.other.id);
   });
 
   it("keeps files that become dirty while storage is pending", async () => {
