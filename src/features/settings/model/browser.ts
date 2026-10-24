@@ -305,6 +305,18 @@ export const setSessionBrowserGrant = (sessionId: string, enabled: boolean) =>
  */
 export const answerBrowserRequest = (sessionId: string, allow: boolean) =>
   command("browser_answer_request", { sessionId, allow });
+/**
+ * An answer from away from the thread (the phone): only while the request
+ * still waits, so a late tap never grants a thread that is no longer asking.
+ */
+export async function answerPendingBrowserRequest(
+  sessionId: string,
+  allow: boolean,
+): Promise<BrowserState> {
+  if (!browserRequestPending(current, sessionId))
+    throw new Error("The agent is no longer waiting for the browser");
+  return answerBrowserRequest(sessionId, allow);
+}
 
 /**
  * The access requests this window declines without asking: requests of the
@@ -533,6 +545,16 @@ export function sessionBrowserGranted(
 ): boolean {
   return (
     !!state?.toggle_on && !!sessionBrowserAccess(state, sessionId)?.granted
+  );
+}
+
+/** Whether an agent in the session waits for the user to allow the browser. */
+export function browserRequestPending(
+  state: BrowserState | null,
+  sessionId: string | undefined,
+): boolean {
+  return (
+    !!state?.toggle_on && !!sessionBrowserAccess(state, sessionId)?.requested
   );
 }
 

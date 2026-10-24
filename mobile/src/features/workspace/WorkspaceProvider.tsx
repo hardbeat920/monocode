@@ -49,6 +49,8 @@ type Workspace = {
   ) => Promise<string>;
   sendMessage: (conversationId: string, text: string, attachments?: Attachment[]) => Promise<void>;
   stop: (conversationId: string) => Promise<void>;
+  /** Answers the agent's request to use the browser, as the desktop's Allow bar does. */
+  answerBrowser: (conversationId: string, allow: boolean) => Promise<void>;
   /** A page of a project's sessions, newest first, beyond the recent ones the poll carries. */
   listSessions: (
     projectId: string,
@@ -465,6 +467,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     },
     [mutate, read],
   );
+  const answerBrowser = useCallback(
+    async (conversationId: string, allow: boolean) => {
+      await mutate("browser.answer", { conversationId, allow });
+      void refresh();
+    },
+    [mutate, refresh],
+  );
   const renameSession = useCallback(
     async (session: SessionSummary, title: string) => {
       await mutate("session.rename", { conversationId: session.id, title });
@@ -564,6 +573,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       startSession,
       sendMessage,
       stop,
+      answerBrowser,
       listSessions,
       rememberSession,
       loadOlder,
@@ -584,6 +594,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     startSession,
     sendMessage,
     stop,
+    answerBrowser,
     listSessions,
     rememberSession,
     loadOlder,

@@ -22,6 +22,11 @@ import {
 } from "../model/mobileWatch";
 import type { RuntimeMode, Session } from "../../sessions/model/session";
 import { mobileAccountUsage } from "../model/mobileAccountUsage";
+import {
+  browserRequestPending,
+  browserStateSnapshot,
+  subscribeBrowserState,
+} from "../../settings/model/browser";
 
 type Request = {
   id: string;
@@ -215,15 +220,35 @@ export function useMobileWorkspace(options: Options) {
       publication = next.catch(() => {});
       return next;
     };
+    let enabled = false;
     const publish = async () => {
       try {
         const status = await invoke<{ enabled: boolean }>("mobile_status");
+        enabled = status.enabled;
         if (status.enabled && !disposed) await publishCatalog();
       } catch (error) {
         if (!disposed) console.error("Mobile workspace publish failed", error);
       }
       if (!disposed) timer = setTimeout(() => void publish(), 3000);
     };
+    // A browser request waits only so long for an answer: the phone hears of
+    // it, and of its end, straight away rather than on the next poll. Other
+    // browser news (a tab at work, a page loaded) is none of the catalog's.
+    let requests = "";
+    const unsubscribeBrowser = subscribeBrowserState(() => {
+      const state = browserStateSnapshot();
+      const next = (state?.sessions ?? [])
+        .filter((access) => browserRequestPending(state, access.session_id))
+        .map((access) => access.session_id)
+        .sort()
+        .join("\n");
+      if (next === requests) return;
+      requests = next;
+      if (enabled && !disposed)
+        void publishCatalog().catch((error) =>
+          console.error("Mobile workspace publish failed", error),
+        );
+    });
     const listening = listen<Request>(
       "monocode-mobile-request",
       ({ payload }) => {
@@ -401,6 +426,7 @@ export function useMobileWorkspace(options: Options) {
     return () => {
       disposed = true;
       clearTimeout(timer);
+      unsubscribeBrowser();
       void listening.then((unlisten) => unlisten());
     };
   }, []);

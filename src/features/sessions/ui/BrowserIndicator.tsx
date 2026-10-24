@@ -5,12 +5,12 @@ import { SecondaryButton } from "../../../shared/ui/SecondaryButton";
 import {
   answerBrowserRequest,
   type BranchApp,
+  browserRequestPending,
   cancelBrowserPick,
   listBranchApps,
   openBranchApp,
   pickBrowserElement,
   type PickedBrowserElement,
-  sessionBrowserAccess,
   sessionBrowserIndicator,
   sessionBrowserTabs,
   setSessionBrowserGrant,
@@ -264,8 +264,7 @@ export function BrowserRequestPrompt({ sessionId }: { sessionId: string }) {
   const state = useBrowserState();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  if (!state?.toggle_on || !sessionBrowserAccess(state, sessionId)?.requested)
-    return null;
+  if (!browserRequestPending(state, sessionId)) return null;
   const answer = (allow: boolean) => {
     setBusy(true);
     setError(null);

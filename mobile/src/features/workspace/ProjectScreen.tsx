@@ -30,6 +30,7 @@ import {
 import { useModelCatalog } from "@/features/models/useModelCatalog";
 import { useOpenSessionAfterStarting } from "@/features/settings/newSessions";
 import type { Attachment } from "@/features/sessions/attachments";
+import { useBrowserRequest } from "@/features/sessions/browserRequest";
 import { Composer } from "@/features/sessions/Composer";
 import { EmptySession } from "@/features/sessions/EmptySession";
 import {
@@ -256,6 +257,7 @@ export function ProjectScreen({
   }
 
   const sessionNotice = useSessionErrorNotice(sessionId);
+  const browserRequest = useBrowserRequest(sessionId, session?.browserRequest);
   const offline = useOffline();
 
   const openSettings = () =>
@@ -347,6 +349,7 @@ export function ProjectScreen({
         <Composer
           key={sessionId ?? project.id}
           notice={sessionNotice}
+          browserRequest={browserRequest}
           context={project.name}
           branch={sessionId ? (session?.branch ?? project.branch) : branch}
           model={model}

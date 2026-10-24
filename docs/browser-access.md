@@ -18,7 +18,7 @@ Open Settings → Browser and switch on **Let agents use my browser**. MonoCode 
 
 **Thread access** in Settings → Browser decides how a thread gets the browser.
 
-- **Ask in the thread** (the default): the first time an agent needs the browser, the thread shows "This agent wants to use the browser." above the composer. **Allow for this thread** gives the thread access until you take it away. **Not now** tells the agent to go on without the browser; it does not ask again until your next message. The agent waits about 45 seconds for your answer.
+- **Ask in the thread** (the default): the first time an agent needs the browser, the thread shows "This agent wants to use the browser." above the composer. **Allow for this thread** gives the thread access until you take it away. **Not now** tells the agent to go on without the browser; it does not ask again until your next message. The agent waits about 45 seconds for your answer. On a paired phone the same request shows in the thread's composer, with **Allow** and **Not now**, and as a notification while the app is open in the background; the browser itself still runs on the desktop.
 - **Always on**: every thread gets access without asking.
 
 A thread set to **Full access** in the composer's access picker gets access without asking in both modes.

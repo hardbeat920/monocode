@@ -631,6 +631,7 @@ import {
   BROWSER_OFF_NOTICE,
   browserAccessTurnedOff,
   browserAgentInstructions,
+  answerPendingBrowserRequest,
   browserRequestsToDecline,
   browserStateSnapshot,
   ensureBrowserMcp,
@@ -9299,6 +9300,11 @@ function Workspace({
       if (!session) throw new Error("Session is no longer available");
       if (method === "session.cancel") {
         await onStop(session.id);
+        return { sessionId: session.id };
+      }
+      if (method === "browser.answer") {
+        // The thread's browser Allow bar, answered from the phone.
+        await answerPendingBrowserRequest(session.id, params.allow === true);
         return { sessionId: session.id };
       }
       if (method === "session.configure") {

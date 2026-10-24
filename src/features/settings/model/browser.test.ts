@@ -3,7 +3,9 @@ import { listen } from "@tauri-apps/api/event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   answerBrowserRequest,
+  answerPendingBrowserRequest,
   BROWSER_CHANNELS,
+  browserRequestPending,
   browserAccessTurnedOff,
   browserRequestsToDecline,
   cancelBrowserPick,
@@ -415,6 +417,31 @@ describe("browser store", () => {
     });
     await openBrowserWindow();
     expect(invoke).toHaveBeenCalledWith("browser_open_window", undefined);
+  });
+
+  it("answers from the phone only while the thread still asks", async () => {
+    const asking = browserState({
+      sessions: [{ ...granted(), granted: false, requested: true }],
+    });
+    expect(browserRequestPending(asking, "s1")).toBe(true);
+    expect(browserRequestPending(asking, "s2")).toBe(false);
+    expect(browserRequestPending({ ...asking, toggle_on: false }, "s1")).toBe(
+      false,
+    );
+    await expect(answerPendingBrowserRequest("s1", true)).rejects.toThrow(
+      "no longer waiting",
+    );
+    expect(invoke).not.toHaveBeenCalled();
+    resetBrowserStore(asking);
+    vi.mocked(invoke).mockResolvedValue(browserState({ sessions: [granted()] }));
+    await answerPendingBrowserRequest("s1", true);
+    expect(invoke).toHaveBeenCalledWith("browser_answer_request", {
+      sessionId: "s1",
+      allow: true,
+    });
+    await expect(answerPendingBrowserRequest("s1", false)).rejects.toThrow(
+      "no longer waiting",
+    );
   });
 
   it("reads which threads the user turned off from the backend", async () => {

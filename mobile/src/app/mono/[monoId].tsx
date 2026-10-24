@@ -4,6 +4,7 @@ import { ConnectionNotice } from "@/features/connection/ConnectionNotice";
 import { hasNativeTranscript } from "@/features/connection/nativeLink";
 
 import { PixelMascot } from "@/features/mascots/PixelMascot";
+import { useBrowserRequest } from "@/features/sessions/browserRequest";
 import { Composer } from "@/features/sessions/Composer";
 import { EmptySession } from "@/features/sessions/EmptySession";
 import { SessionScreen } from "@/features/sessions/SessionScreen";
@@ -24,6 +25,7 @@ export default function MonoScreen() {
   const mono = monos.find((m) => m.id === monoId);
   const conversationId = mono ? monoConversationId(mono.id) : null;
   const conversation = useConversation(conversationId);
+  const browserRequest = useBrowserRequest(conversationId, mono?.browserRequest);
   // Stable, so the memoized turns keep their rows across polls.
   const name = mono?.name ?? "";
   const mascot = mono?.mascot ?? "";
@@ -47,6 +49,7 @@ export default function MonoScreen() {
           busy={conversation.busy}
           onStop={() => stop(conversationId)}
           onSend={(text, attachments) => sendMessage(conversationId, text, attachments)}
+          browserRequest={browserRequest}
         />
       }
     >
