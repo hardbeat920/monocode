@@ -1018,3 +1018,33 @@ fn focused_rail_sits_left_of_the_sidebar_and_stays_when_it_hides(cx: &mut TestAp
         );
     }
 }
+
+#[gpui::test]
+fn focused_rail_marks_the_current_project_even_in_its_mono_tab(cx: &mut TestAppContext) {
+    let (window, _) = setup(cx, false, false);
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    let ix = window
+        .update(visual, |shell, window, cx| {
+            Surface::Mono.open(shell, window, cx);
+            shell
+                .workspace
+                .projects
+                .iter()
+                .position(|p| p == &shell.workspace.project)
+                .unwrap()
+        })
+        .unwrap();
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    window
+        .read_with(visual, |shell, cx| assert!(shell.mono_active(cx)))
+        .unwrap();
+    let selected: &'static str = Box::leak(format!("rail-project-selected-{ix}").into_boxed_str());
+    assert!(
+        visual.debug_bounds(selected).is_some(),
+        "a Mono is one of the project's tabs; the project stays marked"
+    );
+    let other: &'static str =
+        Box::leak(format!("rail-project-selected-{}", 1 - ix).into_boxed_str());
+    assert!(visual.debug_bounds(other).is_none());
+}

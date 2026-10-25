@@ -547,15 +547,18 @@ impl Shell {
             .iter()
             .position(|p| p == &path)
             .unwrap_or(ix);
-        let selected = self.workspace.project == path
-            && !self.app_view_open()
-            && self.app_search.is_none()
-            && !self.mono_active(cx);
+        // Monos and app views are the project's own tabs here, so the
+        // project stays selected while one of them is open.
+        let selected = self.workspace.project == path;
         let label = self.project_label(&path);
         let tooltip = label.clone();
         let menu_path = path.clone();
         let drag_path = path.clone();
         let offset = self.project_rail_project_offset(&path);
+        let mut fill = accent_color();
+        fill.a *= 0.24;
+        let mut stroke = accent_color();
+        stroke.a *= 0.75;
         let raised = self.project_rail_project_raised(&path);
         let bounds = self
             .project_rail_list
@@ -568,29 +571,43 @@ impl Shell {
         let row = div()
             .id(("rail-project", ix))
             .debug_selector(move || format!("rail-project-{ix}"))
+            .group("rail-project-row")
             .relative()
             .w_full()
             .h(px(FOCUSED_RAIL_ROW))
             .flex()
             .items_center()
             .justify_center()
-            .when(selected, |d| {
-                d.child(
+            // Discord's pill: tall beside the selected project, a nub on hover.
+            .map(|d| {
+                let pill = |height: f32| {
                     div()
                         .absolute()
                         .left_0()
-                        .top(px((FOCUSED_RAIL_ROW - 20.) / 2. + offset))
+                        .top(px((FOCUSED_RAIL_ROW - height) / 2. + offset))
                         .w(px(4.))
-                        .h(px(20.))
-                        .rounded_r(px(2.))
-                        .bg(content(1.)),
-                )
+                        .h(px(height))
+                        .rounded_r(px(3.))
+                };
+                if selected {
+                    d.child(
+                        pill(28.)
+                            .debug_selector(move || format!("rail-project-selected-{ix}"))
+                            .bg(content(1.)),
+                    )
+                } else {
+                    d.child(
+                        pill(10.)
+                            .bg(content(0.7))
+                            .invisible()
+                            .group_hover("rail-project-row", |s| s.visible()),
+                    )
+                }
             })
             .child(
                 div()
                     .id(("rail-project-button", ix))
                     .debug_selector(move || format!("rail-project-button-{ix}"))
-                    .group("rail-project-tile")
                     .role(Role::Button)
                     .aria_label(format!("Switch project, {label}"))
                     .aria_description(path.clone())
@@ -604,14 +621,24 @@ impl Shell {
                     .justify_center()
                     .child(div().absolute().top_0().left_0().child(ring))
                     .child(
+                        // The selected tile squares off in the accent; the rest
+                        // stay round and dim until hovered.
                         div()
-                            .size(px(28.))
-                            .rounded_lg()
+                            .size(px(30.))
                             .flex()
                             .items_center()
                             .justify_center()
-                            .bg(content(if selected { 0.12 } else { 0.05 }))
-                            .group_hover("rail-project-tile", |s| s.bg(content(0.1)))
+                            .when(selected, |d| {
+                                d.rounded(px(9.)).bg(fill).border_1().border_color(stroke)
+                            })
+                            .when(!selected, |d| {
+                                d.rounded_full()
+                                    .bg(content(0.05))
+                                    .opacity(0.6)
+                                    .group_hover("rail-project-row", |s| {
+                                        s.rounded(px(9.)).bg(content(0.1)).opacity(1.)
+                                    })
+                            })
                             .child(self.project_mark(&path, 16.)),
                     )
                     .child(bounds.probe())
