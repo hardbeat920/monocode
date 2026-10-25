@@ -153,7 +153,7 @@ impl Render for Chrome {
             .update(cx, |shell, cx| match kind {
                 ChromeKind::Sidebar => {
                     let sidebar = shell.sidebar(cx);
-                    if shell.spaces_nudge.is_some() || shell.classic_tabs.animating() {
+                    if shell.classic_tabs.animating() {
                         window.request_animation_frame();
                     }
                     sidebar
@@ -678,12 +678,6 @@ pub(crate) struct Shell {
     tab_shifts: HashMap<TitleTab, TabShift>,
     pane_ticks: HashMap<i64, PaneTick>,
     skip_tab_click: bool,
-    spaces_start: usize,
-    /// The spaces bar's short nudge after a chevron pages it.
-    spaces_nudge: Option<(f32, std::time::Instant)>,
-    /// The space under the pointer, whose name and shortcuts show above it.
-    hovered_space: Option<String>,
-    space_anchor: AnchorSlot,
     error: Option<String>,
     tab_scroll: ScrollHandle,
     tab_scroll_task: Option<gpui::Task<()>>,
@@ -1019,10 +1013,6 @@ impl Shell {
             pane_ticks: HashMap::new(),
             skip_tab_click: false,
             project_rings: HashMap::new(),
-            spaces_start: 0,
-            spaces_nudge: None,
-            hovered_space: None,
-            space_anchor: AnchorSlot::default(),
             error: None,
             tab_scroll: ScrollHandle::new(),
             tab_scroll_task: None,
@@ -4006,13 +3996,6 @@ impl Shell {
         }
         self.workspace.project = path.clone();
         self.workspace.active = None;
-        if let Some(ix) = self.workspace.projects.iter().position(|p| p == &path) {
-            if ix < self.spaces_start {
-                self.spaces_start = ix;
-            } else if ix >= self.spaces_start + 5 {
-                self.spaces_start = ix - 4;
-            }
-        }
         self.workspace.collapsed.remove(&path);
         // Original-layout project buttons leave the standalone Mono/app view.
         // The new layout restores each project's selected tab, including Monos.
@@ -5169,33 +5152,6 @@ impl Shell {
             }
             // SidebarWorktreeSwitcher's menu under the project header.
             MenuTarget::Header => {
-                let picker = cx.new(|cx| {
-                    ProjectPicker::new(&self.workspace.projects, &self.workspace.project, cx)
-                        .appearance(self.workspace.project_appearance.clone())
-                        .allow_remote()
-                });
-                events.push(cx.subscribe_in(
-                    &picker,
-                    window,
-                    |this, _, picked: &ProjectPicked, window, cx| {
-                        this.close_menu(cx);
-                        match picked {
-                            ProjectPicked::Project(path) if *path != this.workspace.project => {
-                                this.select_project(path.clone(), window, cx)
-                            }
-                            ProjectPicked::Project(_) | ProjectPicked::Mono(_) => {}
-                            ProjectPicked::New => this.open_project(cx),
-                            ProjectPicked::Remote => {
-                                this.open_remote_project(window, cx);
-                                return;
-                            }
-                        }
-                        this.focus_active(window, cx);
-                        this.invalidate_chrome(cx);
-                        cx.notify();
-                    },
-                ));
-                let focus = picker.read(cx).search_focus(cx);
                 let branch = self
                     .worktree_focus
                     .get(&self.workspace.project)
@@ -5217,18 +5173,6 @@ impl Shell {
                         }
                         .into(),
                         MenuItem::Separator,
-                        MenuAction::new("switch-project", "Switch project")
-                            .icon("folder")
-                            .flyout(Flyout {
-                                view: picker.into(),
-                                width: 286.,
-                                padding: 0.,
-                                height: None,
-                                max_height: Some(380.),
-                                focus: Some(focus),
-                                surface: None,
-                            })
-                            .into(),
                         MenuAction::new("project-settings", "Project settings")
                             .icon("sliders")
                             .flyout(self.project_settings_flyout(events, window, cx))
@@ -6369,9 +6313,6 @@ impl Shell {
                         .child(self.app_update_footer(cx)),
                 ),
             )
-            .when(!self.workspace.classic_layout, |d| {
-                d.child(self.project_spaces(cx))
-            })
             .when_some(self.session_preview.as_ref(), |d, preview| {
                 let id = preview.id;
                 d.child(
@@ -6418,186 +6359,6 @@ impl Shell {
                 )
             })
             .into_any()
-    }
-
-    fn project_spaces(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        // Sidebar.tsx's ProjectSpacesBar: five equal spaces, paged by chevrons.
-        let shown = self.workspace.projects.len().min(5);
-        let last = self.workspace.projects.len().saturating_sub(shown);
-        self.spaces_start = self.spaces_start.min(last);
-        let first = self.spaces_start;
-        let projects: Vec<_> = self
-            .workspace
-            .projects
-            .iter()
-            .enumerate()
-            .skip(first)
-            .take(shown)
-            .map(|(ix, p)| (ix, p.clone()))
-            .collect();
-        if self
-            .hovered_space
-            .as_ref()
-            .is_some_and(|hovered| !projects.iter().any(|(_, path)| path == hovered))
-        {
-            self.hovered_space = None;
-        }
-        let prefs = &self.workspace.preferences;
-        let shortcuts = ["Project: Previous", "Project: Next"]
-            .into_iter()
-            .filter_map(|command| crate::settings::command_shortcut(prefs, command))
-            .collect::<Vec<_>>()
-            .join(" / ");
-        // A short slide in from the side the new spaces come from.
-        let (nudge_x, nudge_opacity) = match self.spaces_nudge {
-            Some((direction, start)) => {
-                let t = start.elapsed().as_secs_f32() / 0.2;
-                if t >= 1. {
-                    self.spaces_nudge = None;
-                    (0., 1.)
-                } else {
-                    let eased = crate::reveal::bezier(t, 0.32, 0.72, 0., 1.);
-                    (direction * 12. * (1. - eased), 0.4 + 0.6 * eased)
-                }
-            }
-            None => (0., 1.),
-        };
-        let tooltip = self.hovered_space.clone().map(|path| {
-            popover(
-                "project-space-tooltip",
-                Anchor::Slot(self.space_anchor.clone()),
-            )
-            .side(Side::Top)
-            .align(Align::Center)
-            .gap(8.)
-            .padding(8.)
-            .without_animation()
-            .allow_outside_press()
-            .child(
-                div()
-                    .id("project-space-tip")
-                    .role(Role::Tooltip)
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .whitespace_nowrap()
-                    .text_size(px(12.))
-                    .line_height(px(15.))
-                    .child(
-                        div()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(content(1.))
-                            .child(self.project_label(&path)),
-                    )
-                    .when(!shortcuts.is_empty(), |d| {
-                        d.child(div().text_color(content(0.55)).child(shortcuts.clone()))
-                    }),
-            )
-        });
-        div()
-            .h(px(30.))
-            .flex_shrink_0()
-            .px_2()
-            .pb_0p5()
-            .flex()
-            .items_center()
-            .gap_1()
-            .child(
-                icon_button("previous-projects", "Previous projects", "chevron-left")
-                    .size(px(20.))
-                    .opacity(if first == 0 { 0.3 } else { 1. })
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        if this.spaces_start > 0 {
-                            this.spaces_start -= 1;
-                            this.nudge_spaces(-1., cx);
-                        }
-                    })),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .relative()
-                    .left(px(nudge_x))
-                    .opacity(nudge_opacity)
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .children(projects.into_iter().map(|(ix, path)| {
-                        let active = path == self.workspace.project;
-                        let hovered = self.hovered_space.as_ref() == Some(&path);
-                        div()
-                            .id(("project-space", ix))
-                            .debug_selector(move || format!("project-space-{ix}"))
-                            .group("project-space")
-                            .role(Role::Tab)
-                            .aria_label(format!("Project {}", self.project_label(&path)))
-                            .aria_description(path.clone())
-                            .aria_selected(active)
-                            .cursor_pointer()
-                            .flex_1()
-                            .min_w_0()
-                            .h(px(20.))
-                            .rounded_md()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .opacity(if active { 1. } else { 0.45 })
-                            .when(active, |d| d.bg(content(0.1)))
-                            .hover(|s| s.opacity(1.).bg(content(if active { 0.1 } else { 0.05 })))
-                            .child(self.project_mark(&path, 12.))
-                            .when(hovered, |d| d.child(self.space_anchor.probe()))
-                            .on_hover({
-                                let path = path.clone();
-                                cx.listener(move |this, hovered: &bool, _, cx| {
-                                    if *hovered {
-                                        this.hovered_space = Some(path.clone());
-                                    } else if this.hovered_space.as_ref() == Some(&path) {
-                                        this.hovered_space = None;
-                                    } else {
-                                        return;
-                                    }
-                                    this.invalidate_chrome(cx);
-                                })
-                            })
-                            .on_mouse_down(MouseButton::Right, {
-                                let path = path.clone();
-                                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                                    let anchor = Anchor::Point(event.position);
-                                    let target = MenuTarget::Project {
-                                        path: path.clone(),
-                                        rail: true,
-                                    };
-                                    this.open_menu(target, anchor, window, cx);
-                                })
-                            })
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                // The tip steps aside once a space is clicked.
-                                this.hovered_space = None;
-                                this.select_project(path.clone(), window, cx)
-                            }))
-                    })),
-            )
-            .child(
-                icon_button("more-projects", "More projects", "chevron-right")
-                    .size(px(20.))
-                    .opacity(if first >= last { 0.3 } else { 1. })
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if this.spaces_start < last {
-                            this.spaces_start += 1;
-                            this.nudge_spaces(1., cx);
-                        }
-                    })),
-            )
-            .children(tooltip)
-            .into_any()
-    }
-
-    fn nudge_spaces(&mut self, direction: f32, cx: &mut Context<Self>) {
-        if !cx.reduce_motion() {
-            self.spaces_nudge = Some((direction, std::time::Instant::now()));
-        }
-        self.invalidate_chrome(cx);
     }
 
     /// App.tsx's toTitleTab with TitleBar's tabCopy: a split tab, or a chat
@@ -9045,30 +8806,24 @@ mod tests {
             .unwrap();
     }
     #[gpui::test]
-    fn header_menu_switches_projects_from_its_picker_flyout(cx: &mut TestAppContext) {
+    fn header_menu_leaves_switching_projects_to_the_rail(cx: &mut TestAppContext) {
         let (window, _, _) = window(cx);
         cx.update(|cx| {
             input::bind(cx);
             crate::popover::bind(cx);
         });
-        let before = window
+        window
             .update(cx, |shell, w, cx| {
                 let anchor = Anchor::Slot(shell.project_anchor.clone());
                 shell.open_menu(MenuTarget::Header, anchor, w, cx);
-                shell.workspace.project.clone()
             })
             .unwrap();
         cx.run_until_parked();
-        // Switch worktree is first; skip the separator to Switch project, open
-        // its picker (which focuses the search field), and take the next project.
-        cx.simulate_keystrokes(window.into(), "down right down enter");
-        cx.run_until_parked();
-        window
-            .update(cx, |shell, _, _| {
-                assert!(shell.menu.is_none());
-                assert_ne!(shell.workspace.project, before);
-            })
-            .unwrap();
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.refresh().unwrap();
+        assert!(visual.debug_bounds("menu-action-switch-project").is_none());
+        assert!(visual.debug_bounds("menu-action-switch-worktree").is_some());
+        assert!(visual.debug_bounds("menu-action-project-settings").is_some());
     }
     #[gpui::test]
     fn project_appearance_menu_edits_and_background_dialog_persist_per_project(
@@ -9088,8 +8843,9 @@ mod tests {
             })
             .unwrap();
         cx.run_until_parked();
-        // The settings flyout opens beside the header menu and focuses its name.
-        cx.simulate_keystrokes(window.into(), "down down right");
+        // The settings flyout, one below Switch worktree, opens beside the
+        // header menu and focuses its name.
+        cx.simulate_keystrokes(window.into(), "down right");
         cx.run_until_parked();
         cx.simulate_input(window.into(), "Small");
         cx.simulate_keystrokes(window.into(), "space");

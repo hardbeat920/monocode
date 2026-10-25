@@ -15,7 +15,6 @@ mod worktrees;
 
 pub(super) use appearance::parse_hex;
 pub(super) use connections::ConnectionsState;
-pub(crate) use keybindings::command_shortcut;
 pub(super) use mobile::MobileState;
 
 use super::{Section, SettingsView};

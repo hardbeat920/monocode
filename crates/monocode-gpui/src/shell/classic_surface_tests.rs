@@ -479,7 +479,7 @@ fn new_layout_projects_restore_the_last_session_or_mono_tab(cx: &mut TestAppCont
                         .iter()
                         .position(|p| p == path)
                         .unwrap();
-                    (stable(format!("project-space-{ix}")), session, mono)
+                    (stable(format!("rail-project-button-{ix}")), session, mono)
                 })
                 .unwrap();
             visual.run_until_parked();
@@ -1003,6 +1003,7 @@ fn focused_rail_sits_left_of_the_sidebar_and_stays_when_it_hides(cx: &mut TestAp
         assert_eq!(rail.size.width, px(48.));
         assert_eq!(sidebar.left(), px(48.));
         assert!(main.left() >= px(48. + 260.) - px(1.), "{main:?}");
+        assert!(visual.debug_bounds("project-space-0").is_none());
         window
             .update(visual, |shell, _, cx| shell.set_sidebar_visible(false, cx))
             .unwrap();
