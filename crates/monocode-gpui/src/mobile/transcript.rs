@@ -568,6 +568,18 @@ fn agent_turn(source: &Source, turn: &Turn, live: bool) -> Value {
     Value::Object(out)
 }
 
+/// yieldedReplies: the prose ending at `end` answered the user before the
+/// Mono waited on a background command, whose finish woke it up again.
+fn yielded(rows: &[Row], end: usize, run_end: usize) -> bool {
+    messages_in(rows, end, run_end)
+        .take_while(|&(at, _)| matches!(rows[at].role.as_str(), "tool" | "reasoning"))
+        .any(|(at, end)| {
+            rows[at].role == "tool"
+                && serde_json::from_str::<ToolCall>(&joined(&rows[at..end]))
+                    .is_ok_and(|call| call.is_background())
+        })
+}
+
 fn reaction(text: &str) -> Option<&str> {
     text.trim()
         .strip_prefix("<reaction>")
@@ -610,11 +622,13 @@ fn mono_turn(source: &Source, turn: &Turn, live: bool, name: &str) -> Value {
                     continue;
                 }
                 // groupMonoTurnItems: prose said while working stays in the
-                // activity trail, as does all of it while the run is live.
-                let hidden = run_live
-                    || rows[at + 1..run.end]
-                        .iter()
-                        .any(|r| r.first && matches!(r.role.as_str(), "tool" | "reasoning"));
+                // activity trail, as does all of it while the run is live,
+                // except a reply the Mono yielded with.
+                let hidden = !yielded(rows, end, run.end)
+                    && (run_live
+                        || rows[at + 1..run.end]
+                            .iter()
+                            .any(|r| r.first && matches!(r.role.as_str(), "tool" | "reasoning")));
                 if hidden {
                     continue;
                 }
@@ -1046,5 +1060,39 @@ mod tests {
         let turn = &all(&live)[0];
         assert_eq!(types(turn), ["user", "header"]);
         assert_eq!(turn["items"][1]["label"], "Reading file…");
+    }
+
+    #[test]
+    fn mono_keeps_the_replies_it_yielded_with_before_waiting_in_the_background() {
+        let wait = |id: &str| {
+            let mut call = ToolCall::new(id, "Bash");
+            call.input = json!({"command": "sleep 300"}).to_string();
+            call.state = ToolState::Completed;
+            row("tool", &serde_json::to_string(&call).unwrap())
+        };
+        let check = || {
+            tool(
+                "Bash",
+                json!({"command": "git status"}),
+                ToolState::Completed,
+            )
+        };
+        let rows = [
+            sent("user", "Run the tests", 1_000),
+            check(),
+            row("assistant", "Started; I'll report back."),
+            wait("background:wait-1"),
+            check(),
+            row("assistant", "4 of 5 passed."),
+            wait("background:wait-2"),
+            check(),
+        ];
+        let infos = HashMap::new();
+        let mut live = source(&rows, &infos, true);
+        live.mono = Some("Ada");
+        let turn = &all(&live)[0];
+        assert_eq!(types(turn), ["user", "header", "text", "text"]);
+        assert_eq!(turn["items"][2]["text"], "Started; I'll report back.");
+        assert_eq!(turn["items"][3]["text"], "4 of 5 passed.");
     }
 }

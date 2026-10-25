@@ -554,6 +554,7 @@ fn run_turn_using(
                 prompt = discovery.prepend(prompt);
             }
         }
+        let mono_session = settings.mono.is_some();
         let request = Request {
             kind,
             binary,
@@ -817,9 +818,22 @@ fn run_turn_using(
                             boundary = true;
                         }
                         Event::Status(text) => status = text,
-                        Event::Background(tasks) => background = Some(tasks),
+                        Event::Background(tasks) => {
+                            if mono_session
+                                && let Some(at) =
+                                    background_rows(&mut transcript, &mut tool_rows, &tasks)?
+                            {
+                                start = start.min(at);
+                                pending.changed(at);
+                            }
+                            background = Some(tasks);
+                        }
                         Event::UsageLimited(limit) => usage_limit = Some(limit),
                         Event::Done => {
+                            if let Some(at) = settle_background(&mut transcript, &tool_rows, &[])? {
+                                start = start.min(at);
+                                pending.changed(at);
+                            }
                             status = "Ready".into();
                             boundary = true;
                         }
@@ -1103,6 +1117,72 @@ pub(crate) fn edited_paths(rows: &[Row]) -> Vec<String> {
     paths
 }
 
+/// showBackgroundRows: a command a Mono left running when it yielded gets a
+/// row after that reply, as the desktop app saves it, so the transcript keeps
+/// the reply in view. Returns the first changed row.
+fn background_rows(
+    transcript: &mut Transcript,
+    tool_rows: &mut std::collections::HashMap<String, usize>,
+    tasks: &[provider::BackgroundTask],
+) -> Result<Option<usize>, String> {
+    // The list also clears when Claude picks the thread back up, which says
+    // nothing about the commands themselves. Done settles what remains.
+    if tasks.is_empty() {
+        return Ok(None);
+    }
+    let listed: Vec<String> = tasks
+        .iter()
+        .map(|task| format!("{}{}", monocode_core::tool::BACKGROUND, task.id))
+        .collect();
+    let mut changed = settle_background(transcript, tool_rows, &listed)?;
+    for (task, id) in tasks.iter().zip(&listed) {
+        // A subagent already has a row of its own.
+        if task.agent || tool_rows.contains_key(id) {
+            continue;
+        }
+        let name = if task.command.is_some() {
+            "Bash"
+        } else {
+            "Background task"
+        };
+        let mut call = monocode_core::tool::ToolCall::new(id, name);
+        call.input = match &task.command {
+            Some(command) => serde_json::json!({ "command": command }),
+            None => serde_json::json!({ "description": task.description }),
+        }
+        .to_string();
+        call.display = Some(serde_json::json!({ "background": true }));
+        let at = transcript.begin("tool");
+        transcript.rows[at].text = serde_json::to_string(&call).map_err(|e| e.to_string())?;
+        tool_rows.insert(id.clone(), at);
+        changed = Some(changed.map_or(at, |first: usize| first.min(at)));
+    }
+    Ok(changed)
+}
+
+/// Finishes the background rows of commands that are no longer running.
+fn settle_background(
+    transcript: &mut Transcript,
+    tool_rows: &std::collections::HashMap<String, usize>,
+    running: &[String],
+) -> Result<Option<usize>, String> {
+    let mut changed = None;
+    for (id, &at) in tool_rows {
+        if !id.starts_with(monocode_core::tool::BACKGROUND) || running.contains(id) {
+            continue;
+        }
+        let mut call: monocode_core::tool::ToolCall =
+            serde_json::from_str(&transcript.rows[at].text).map_err(|e| e.to_string())?;
+        if call.state != monocode_core::tool::ToolState::Running {
+            continue;
+        }
+        call.state = monocode_core::tool::ToolState::Completed;
+        transcript.rows[at].text = serde_json::to_string(&call).map_err(|e| e.to_string())?;
+        changed = Some(changed.map_or(at, |first: usize| first.min(at)));
+    }
+    Ok(changed)
+}
+
 fn shlex_quote(text: &str) -> String {
     format!(
         "\"{}\"",
@@ -1166,5 +1246,76 @@ mod edited_paths_tests {
             ),
         ];
         assert_eq!(edited_paths(&rows), ["/repo/a.rs", "relative.rs"]);
+    }
+}
+
+#[cfg(test)]
+mod background_row_tests {
+    use super::*;
+    use monocode_core::tool::{ToolCall, ToolState};
+
+    fn task(id: &str, command: Option<&str>, agent: bool) -> provider::BackgroundTask {
+        provider::BackgroundTask {
+            id: id.into(),
+            description: format!("Task {id}"),
+            agent,
+            command: command.map(str::to_owned),
+            started_at: 0,
+        }
+    }
+    fn call(transcript: &Transcript, at: usize) -> ToolCall {
+        serde_json::from_str(&transcript.rows[at].text).unwrap()
+    }
+
+    #[test]
+    fn a_yield_leaves_rows_after_the_reply_that_settle_once_their_commands_finish() {
+        let mut transcript = Transcript::default();
+        transcript.begin("assistant");
+        transcript.append("Waiting for the worker.");
+        let mut rows = std::collections::HashMap::new();
+        let tasks = [
+            task("wait", Some("sleep 300"), false),
+            task("review", None, true),
+        ];
+        assert_eq!(
+            background_rows(&mut transcript, &mut rows, &tasks).unwrap(),
+            Some(1)
+        );
+        assert_eq!(transcript.rows.len(), 2, "a subagent keeps its own row");
+        let wait = call(&transcript, 1);
+        assert!(wait.is_background());
+        assert_eq!(wait.id, "background:wait");
+        assert_eq!(wait.state, ToolState::Running);
+        assert!(wait.input.contains("sleep 300"));
+
+        // Claude picking the thread back up clears the list; the command may still run.
+        assert_eq!(
+            background_rows(&mut transcript, &mut rows, &[]).unwrap(),
+            None
+        );
+        assert_eq!(transcript.rows.len(), 2);
+        assert_eq!(call(&transcript, 1).state, ToolState::Running);
+
+        transcript.begin("assistant");
+        transcript.append("The first batch finished.");
+        let next = [task("wait-2", Some("sleep 300"), false)];
+        assert_eq!(
+            background_rows(&mut transcript, &mut rows, &next).unwrap(),
+            Some(1),
+            "the finished command settles as the next one starts"
+        );
+        assert_eq!(call(&transcript, 1).state, ToolState::Completed);
+        assert_eq!(transcript.rows[3].role, "tool");
+        assert_eq!(call(&transcript, 3).id, "background:wait-2");
+
+        assert_eq!(
+            settle_background(&mut transcript, &rows, &[]).unwrap(),
+            Some(3)
+        );
+        assert_eq!(call(&transcript, 3).state, ToolState::Completed);
+        assert_eq!(
+            settle_background(&mut transcript, &rows, &[]).unwrap(),
+            None
+        );
     }
 }
