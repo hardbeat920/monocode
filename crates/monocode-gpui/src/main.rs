@@ -55,6 +55,7 @@ mod particle_text;
 mod pickers;
 mod popover;
 mod project_background;
+mod project_ring;
 mod project_search;
 mod project_settings;
 mod project_tabs;
