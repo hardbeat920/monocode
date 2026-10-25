@@ -572,6 +572,8 @@ pub(crate) struct Shell {
     remote_project_picker: Option<remote_projects::Open>,
     remote_refreshing: bool,
     remote_marks: HashMap<i64, (bool, bool)>,
+    /// The focused rail's ring per project; see `refresh_project_rings`.
+    project_rings: HashMap<String, Entity<crate::project_ring::ProjectRing>>,
     _remote_clock: gpui::Task<()>,
     sessions: HashMap<i64, Entity<Conversation>>,
     /// Lightweight history index; only opened or previewed chats own GPUI entities.
@@ -1016,6 +1018,7 @@ impl Shell {
             tab_shifts: HashMap::new(),
             pane_ticks: HashMap::new(),
             skip_tab_click: false,
+            project_rings: HashMap::new(),
             spaces_start: 0,
             spaces_nudge: None,
             hovered_space: None,
@@ -1358,6 +1361,7 @@ impl Shell {
         let provider = session.summary.provider.clone();
         self.session_marks[&id].update(cx, |mark, cx| mark.set(&provider, state, cx));
         self.tab_marks[&id].update(cx, |mark, cx| mark.set(&provider, tab_state, cx));
+        self.refresh_project_rings(cx);
     }
     fn toggle_archive(&mut self, id: i64, cx: &mut Context<Self>) {
         if !self.archiving.insert(id) {
@@ -9511,6 +9515,45 @@ mod tests {
         }
     }
 
+    #[gpui::test]
+    fn project_rings_follow_their_projects_sessions(cx: &mut TestAppContext) {
+        let (window, a, _) = window(cx);
+        let (ring, other) = window
+            .update(cx, |shell, _, cx| {
+                (
+                    shell.project_ring("/work/another-project", cx),
+                    shell.project_ring("/work/monocode", cx),
+                )
+            })
+            .unwrap();
+        window
+            .update(cx, |shell, _, cx| {
+                shell.sessions[&a].update(cx, |session, cx| {
+                    session.busy = true;
+                    cx.emit(SessionChanged);
+                });
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |_, _, cx| {
+                assert!(ring.read(cx).state() == MarkState::Working);
+                assert!(other.read(cx).state() == MarkState::Idle);
+            })
+            .unwrap();
+        window
+            .update(cx, |shell, _, cx| {
+                shell.sessions[&a].update(cx, |session, cx| {
+                    session.busy = false;
+                    cx.emit(SessionChanged);
+                });
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |_, _, cx| assert!(ring.read(cx).state() == MarkState::Idle))
+            .unwrap();
+    }
     #[gpui::test]
     fn title_tabs_draw_their_own_session_marks(cx: &mut TestAppContext) {
         let (window, a, _) = window(cx);

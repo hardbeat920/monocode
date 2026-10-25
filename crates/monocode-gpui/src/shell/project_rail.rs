@@ -1367,6 +1367,67 @@ impl Shell {
             row
         }
     }
+    /// Each project's state from its sessions, local and remote.
+    fn project_activity(&self, cx: &App) -> HashMap<String, MarkState> {
+        let mut items = Vec::new();
+        for (id, view) in &self.sessions {
+            let session = view.read(cx);
+            if session.summary.archived {
+                continue;
+            }
+            let remote = self.remote_marks.get(id).copied().unwrap_or_default();
+            items.push((
+                session.summary.cwd.clone(),
+                session.responding() || remote.0,
+                session.needs_approval() || remote.1,
+            ));
+        }
+        for (id, &(running, waiting)) in &self.remote_marks {
+            if self.sessions.contains_key(id) {
+                continue;
+            }
+            if let Some(summary) = self.session_summaries.get(id)
+                && !summary.archived
+            {
+                items.push((summary.cwd.clone(), running, waiting));
+            }
+        }
+        crate::project_ring::project_states(
+            items
+                .iter()
+                .map(|(path, working, attention)| (path.as_str(), *working, *attention)),
+        )
+    }
+    /// The project's ring, made on first use with the project's current state.
+    pub(super) fn project_ring(
+        &mut self,
+        path: &str,
+        cx: &mut Context<Self>,
+    ) -> Entity<crate::project_ring::ProjectRing> {
+        if let Some(ring) = self.project_rings.get(path) {
+            return ring.clone();
+        }
+        let state = self
+            .project_activity(cx)
+            .get(path)
+            .copied()
+            .unwrap_or(MarkState::Idle);
+        let ring = cx.new(|_| crate::project_ring::ProjectRing::new());
+        ring.update(cx, |ring, cx| ring.set(state, cx));
+        self.project_rings.insert(path.to_owned(), ring.clone());
+        ring
+    }
+    /// Sets every drawn ring to its project's state; unchanged rings stay quiet.
+    pub(super) fn refresh_project_rings(&mut self, cx: &mut Context<Self>) {
+        if self.project_rings.is_empty() {
+            return;
+        }
+        let states = self.project_activity(cx);
+        for (path, ring) in &self.project_rings {
+            let state = states.get(path).copied().unwrap_or(MarkState::Idle);
+            ring.update(cx, |ring, cx| ring.set(state, cx));
+        }
+    }
     pub(super) fn reveal_active_project_rail(&self) {
         if let Some(ix) = self.project_rail_list.rows.iter().position(
             |row| matches!(row,ProjectRailRow::Project {path,..} if path==&self.workspace.project),

@@ -108,6 +108,7 @@ impl Shell {
                             }
                             this.session_summaries.insert(id, summary);
                         }
+                        this.refresh_project_rings(cx);
                         if this.workspace.project == project {
                             this.refresh_sidebar_structure(cx);
                             this.invalidate_chrome(cx);
