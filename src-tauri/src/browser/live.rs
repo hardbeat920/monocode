@@ -373,6 +373,14 @@ pub fn run(
                 paused = true;
                 moving = None;
                 let _ = send(link, &tab.main, Method::PageStopScreencast, json!({}));
+                // The capture is as fast as with no pane only on the tab's
+                // own viewport; the pane's comes back on resume.
+                let _ = send(
+                    link,
+                    &tab.main,
+                    Method::EmulationClearDeviceMetricsOverride,
+                    json!({}),
+                );
                 control.paused.store(true, Ordering::Release);
             }
             // Pictures already on the way are taken and let go.

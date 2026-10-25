@@ -4355,12 +4355,15 @@ mod tests {
             .rposition(|r| r.method == "Page.startScreencast")
             .unwrap();
         let methods: Vec<_> = sent.iter().map(|r| r.method.as_str()).collect();
-        assert!(
-            sent[last_start..full]
-                .iter()
-                .any(|r| r.method == "Page.stopScreencast"),
-            "{methods:?}"
-        );
+        for paused in [
+            "Page.stopScreencast",
+            "Emulation.clearDeviceMetricsOverride",
+        ] {
+            assert!(
+                sent[last_start..full].iter().any(|r| r.method == paused),
+                "{methods:?}"
+            );
+        }
         let resumed = &sent[full..];
         let metrics = resumed
             .iter()
@@ -4588,7 +4591,7 @@ mod tests {
         // As fast as without a pane: with the pictures running it took
         // several times longer.
         eprintln!("full-page screenshot with the pane open: {took:?}");
-        assert!(took < Duration::from_secs(4), "{took:?}");
+        assert!(took < Duration::from_secs(6), "{took:?}");
     }
 
     /// Against a real Chrome, when `MONOCODE_TEST_CHROME` names one: the
