@@ -266,7 +266,9 @@ impl Shell {
                 .min_h_0()
                 .flex()
                 .relative()
-                .when(rail > 0., |d| d.child(self.focused_project_rail_frame(false)))
+                .when(rail > 0., |d| {
+                    d.child(self.focused_project_rail_frame(false))
+                })
                 .when(sidebar_width > 0., |d| {
                     d.child(
                         // Keep the sidebar still beneath the moving card. Clip

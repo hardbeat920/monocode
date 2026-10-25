@@ -8823,7 +8823,11 @@ mod tests {
         visual.refresh().unwrap();
         assert!(visual.debug_bounds("menu-action-switch-project").is_none());
         assert!(visual.debug_bounds("menu-action-switch-worktree").is_some());
-        assert!(visual.debug_bounds("menu-action-project-settings").is_some());
+        assert!(
+            visual
+                .debug_bounds("menu-action-project-settings")
+                .is_some()
+        );
     }
     #[gpui::test]
     fn project_appearance_menu_edits_and_background_dialog_persist_per_project(
@@ -9304,7 +9308,9 @@ mod tests {
             .unwrap();
         cx.run_until_parked();
         window
-            .update(cx, |_, _, cx| assert!(ring.read(cx).state() == MarkState::Idle))
+            .update(cx, |_, _, cx| {
+                assert!(ring.read(cx).state() == MarkState::Idle)
+            })
             .unwrap();
     }
     #[gpui::test]
@@ -9812,9 +9818,17 @@ mod tests {
         cx.simulate_mouse_move(gpui::point(px(2.), px(300.)), None, Default::default());
         cx.run_until_parked();
         assert!(!open(cx));
-        cx.simulate_mouse_move(gpui::point(px(rail + 2.), px(20.)), None, Default::default());
+        cx.simulate_mouse_move(
+            gpui::point(px(rail + 2.), px(20.)),
+            None,
+            Default::default(),
+        );
         assert!(!open(cx));
-        cx.simulate_mouse_move(gpui::point(px(rail + 2.), px(300.)), None, Default::default());
+        cx.simulate_mouse_move(
+            gpui::point(px(rail + 2.), px(300.)),
+            None,
+            Default::default(),
+        );
         cx.run_until_parked();
         assert!(open(cx));
         let panel = cx.debug_bounds("sidebar-peek").unwrap();
@@ -9845,7 +9859,10 @@ mod tests {
         cx.simulate_mouse_move(toggle.center(), None, Default::default());
         cx.run_until_parked();
         assert!(open(cx));
-        cx.simulate_click(gpui::point(px(rail + width + 200.), px(300.)), Default::default());
+        cx.simulate_click(
+            gpui::point(px(rail + width + 200.), px(300.)),
+            Default::default(),
+        );
         cx.run_until_parked();
         assert!(!open(cx));
         // Docking the sidebar drops the peek, and an open sidebar never peeks.
@@ -9860,7 +9877,11 @@ mod tests {
                 assert!(shell.sidebar_peek.is_none());
             })
             .unwrap();
-        cx.simulate_mouse_move(gpui::point(px(rail + 2.), px(300.)), None, Default::default());
+        cx.simulate_mouse_move(
+            gpui::point(px(rail + 2.), px(300.)),
+            None,
+            Default::default(),
+        );
         cx.run_until_parked();
         assert!(!open(cx));
     }
@@ -11963,13 +11984,20 @@ mod tests {
     fn typing_and_streaming_do_not_rebuild_sidebar_or_tabs(cx: &mut TestAppContext) {
         let (window, _, b) = window(cx);
         let root = window.root(cx).unwrap();
-        let chrome = root.read_with(cx, |s, _| (s.sidebar_frame.clone(), s.tabs_frame.clone()));
+        let chrome = root.read_with(cx, |s, _| {
+            (
+                s.sidebar_frame.clone(),
+                s.tabs_frame.clone(),
+                s.projects_frame.clone(),
+            )
+        });
         let before = (
             chrome.0.read_with(cx, |v, _| v.renders),
             chrome.1.read_with(cx, |v, _| v.renders),
+            chrome.2.read_with(cx, |v, _| v.renders),
         );
         assert!(
-            before.0 > 0 && before.1 > 0,
+            before.0 > 0 && before.1 > 0 && before.2 > 0,
             "the cached surfaces must have actually rendered"
         );
         window
@@ -12005,6 +12033,11 @@ mod tests {
             chrome.1.read_with(cx, |v, _| v.renders),
             before.1,
             "chat changes must reuse the tabs"
+        );
+        assert_eq!(
+            chrome.2.read_with(cx, |v, _| v.renders),
+            before.2,
+            "chat changes must reuse the project rail"
         );
     }
 

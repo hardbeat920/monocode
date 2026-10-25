@@ -18,7 +18,10 @@ enum ProjectRailRow {
     Monos,
     Heading(&'static str),
     Group(String),
-    Project { path: String, grouped: bool },
+    Project {
+        path: String,
+        grouped: bool,
+    },
     Gap,
     Empty,
     /// The focused rail's open-project button, after the projects.

@@ -117,14 +117,11 @@ impl Render for ProjectRing {
                                     .size_full()
                                     .child(arc(0., TAU, track)),
                             )
-                            .child(
-                                div()
-                                    .absolute()
-                                    .top_0()
-                                    .left_0()
-                                    .size_full()
-                                    .child(arc(phase * TAU, TAU * 0.3, accent_color())),
-                            )
+                            .child(div().absolute().top_0().left_0().size_full().child(arc(
+                                phase * TAU,
+                                TAU * 0.3,
+                                accent_color(),
+                            )))
                     },
                 ))
                 .into_any_element(),
