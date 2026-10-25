@@ -4006,20 +4006,45 @@ mod tests {
     fn screencast_fake(frames: i64) -> FakeCdp {
         use super::testing::Event;
         let counter = Arc::new(AtomicU64::new(1));
-        let frame = |n: i64, session: Option<&str>| {
+        // The viewport MonoCode asked for: pictures show the page at it.
+        let viewport = Arc::new(Mutex::new((800, 600)));
+        let picture = move |data: String, n: i64, size: (i64, i64), session: Option<&str>| {
             Event::new(
                 "Page.screencastFrame",
                 json!({
-                    "data": format!("frame{n}"),
+                    "data": data,
                     "sessionId": n,
-                    "metadata": { "deviceWidth": 800, "deviceHeight": 600, "offsetTop": 0, "pageScaleFactor": 1 }
+                    "metadata": { "deviceWidth": size.0, "deviceHeight": size.1, "offsetTop": 0, "pageScaleFactor": 1 }
                 }),
                 session,
             )
         };
+        let size = {
+            let viewport = viewport.clone();
+            move || *viewport.lock().unwrap()
+        };
+        let frame =
+            move |n: i64, session: Option<&str>| picture(format!("frame{n}"), n, size(), session);
         FakeCdp::start_with(move |received| {
             let session = received.session.as_deref();
             match received.method.as_str() {
+                "Emulation.setDeviceMetricsOverride" => {
+                    let params = &received.params;
+                    *viewport.lock().unwrap() = (
+                        params["width"].as_i64().unwrap_or(0),
+                        params["height"].as_i64().unwrap_or(0),
+                    );
+                    Response::Result(json!({}))
+                }
+                // While the page loads, one picture of the tab's own window
+                // comes before the panel's again.
+                "Page.reload" => Response::ResultThen(
+                    json!({}),
+                    vec![
+                        picture("loading".into(), 2000, (1200, 800), session),
+                        picture("loaded".into(), 2001, *viewport.lock().unwrap(), session),
+                    ],
+                ),
                 "Page.navigate" => {
                     let url = received.params["url"].as_str().unwrap_or("").to_string();
                     Response::ResultThen(
@@ -4043,13 +4068,10 @@ mod tests {
                 // a screenshot.
                 "Page.captureScreenshot" => Response::ResultThen(
                     json!({ "data": "still" }),
-                    vec![Event::new(
-                        "Page.screencastFrame",
-                        json!({
-                            "data": format!("frame{}", frames.max(1)),
-                            "sessionId": 1000,
-                            "metadata": { "deviceWidth": 800, "deviceHeight": 600, "offsetTop": 0, "pageScaleFactor": 1 }
-                        }),
+                    vec![picture(
+                        format!("frame{}", frames.max(1)),
+                        1000,
+                        *viewport.lock().unwrap(),
                         session,
                     )],
                 ),
@@ -4128,7 +4150,7 @@ mod tests {
             vec![1, 2, 3]
         );
         assert_eq!(frames[0].data, "frame1");
-        assert_eq!((frames[0].width, frames[0].height), (800.0, 600.0));
+        assert_eq!((frames[0].width, frames[0].height), (640.0, 480.0));
         assert_eq!(frames[0].tab, tab.0);
 
         let sent = server.received();
@@ -4195,7 +4217,56 @@ mod tests {
             formats,
             vec![("jpeg", "frame1"), ("jpeg", "frame2"), ("png", "still")]
         );
-        assert_eq!((frames[2].width, frames[2].height), (800.0, 600.0));
+        assert_eq!((frames[2].width, frames[2].height), (640.0, 480.0));
+    }
+
+    #[test]
+    fn a_picture_of_the_tabs_own_window_never_shows_in_the_pane() {
+        let server = screencast_fake(0);
+        let dir = profile_for(&server);
+        let host = BrowserHost::for_tests(settings_for(&dir));
+        host.set_toggle(true);
+        assert!(wait_state(&host, ConnectionState::Connected));
+        host.turn_started("s1", "main", "/repo", Some(true));
+        let tab = opened_tab(&host, "s1", "https://example.com/");
+        let frames = Arc::new(Mutex::new(Vec::new()));
+        let viewing = {
+            let (host, tab, frames) = (host.clone(), tab.clone(), frames.clone());
+            thread::spawn(move || {
+                host.live_view(
+                    "s1",
+                    &tab,
+                    "v1",
+                    live::PanelSize::new(640, 480, 1.0),
+                    |frame| frames.lock().unwrap().push(frame),
+                )
+            })
+        };
+        let shown = |data: &str| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !frames.lock().unwrap().iter().any(|f| f.data == data) {
+                assert!(Instant::now() < deadline, "{data} was not shown");
+                thread::sleep(Duration::from_millis(5));
+            }
+        };
+        shown("frame1");
+        host.live_navigate("s1", &tab, &live::LiveNav::Reload)
+            .unwrap();
+        shown("loaded");
+        host.stop_live(None);
+        assert_eq!(viewing.join().unwrap(), Ok(live::LiveEnd::Stopped));
+        let frames = frames.lock().unwrap();
+        assert!(frames.iter().all(|f| f.data != "loading"), "{frames:?}");
+        assert!(frames.iter().all(|f| (f.width, f.height) == (640.0, 480.0)));
+        // And the panel's viewport went back to the tab.
+        let sent: Vec<_> = server.received().into_iter().map(|r| r.method).collect();
+        let reload = sent.iter().position(|m| m == "Page.reload").unwrap();
+        assert!(
+            sent[reload..]
+                .iter()
+                .any(|m| m == "Emulation.setDeviceMetricsOverride"),
+            "{sent:?}"
+        );
     }
 
     #[test]
@@ -4302,6 +4373,115 @@ mod tests {
         assert!(other.contains("another thread"), "{other}");
     }
 
+    /// A real Chrome at `exe` on a fresh profile, ready for MonoCode to
+    /// connect to.
+    fn start_real_chrome(exe: &std::ffi::OsStr) -> (std::process::Child, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("monocode-live-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut args = vec![
+            format!("--user-data-dir={}", dir.display()),
+            "--remote-debugging-port=0".to_string(),
+            "--no-first-run".to_string(),
+            "--no-default-browser-check".to_string(),
+            "--window-size=1000,700".to_string(),
+        ];
+        #[cfg(unix)]
+        if unsafe { libc::geteuid() } == 0 {
+            args.push("--no-sandbox".to_string());
+        }
+        if std::env::var_os("DISPLAY").is_none() && cfg!(target_os = "linux") {
+            args.push("--headless=new".to_string());
+        }
+        args.push("about:blank".to_string());
+        let chrome = std::process::Command::new(exe).args(&args).spawn().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while !dir.join(discovery::ACTIVE_PORT_FILE).is_file() {
+            assert!(Instant::now() < deadline, "Chrome did not start");
+            thread::sleep(Duration::from_millis(50));
+        }
+        // The port is up a moment before the first window.
+        thread::sleep(Duration::from_secs(1));
+
+        (chrome, dir)
+    }
+
+    /// Against a real Chrome: a full-page screenshot of a long page can leave
+    /// the tab's viewport the page's height (in about half the runs), and
+    /// the pane would show the whole page squeezed into a strip.
+    #[test]
+    fn a_full_page_screenshot_leaves_the_pane_at_its_size_in_a_real_chrome() {
+        let Some(exe) = std::env::var_os("MONOCODE_TEST_CHROME") else {
+            return;
+        };
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        thread::spawn(move || {
+            let page = format!(
+                "<!doctype html><title>long</title><body style='margin:0;font:30px sans-serif'>\
+                <div id=n>0</div><p>{}</p>\
+                <script>let k=0;setInterval(()=>document.getElementById('n').textContent=++k,100)</script>",
+                "lorem ipsum dolor ".repeat(2000)
+            );
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut buffer = [0u8; 2048];
+                let _ = stream.read(&mut buffer);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{page}",
+                    page.len()
+                );
+            }
+        });
+        let (mut chrome, dir) = start_real_chrome(&exe);
+        let host = BrowserHost::for_tests(settings_for(&dir));
+        host.set_toggle(true);
+        assert!(wait_state(&host, ConnectionState::Connected));
+        host.turn_started("s1", "main", "/repo", Some(true));
+        let tab = opened_tab(&host, "s1", &format!("http://127.0.0.1:{port}/"));
+        let frames = Arc::new(Mutex::new(Vec::new()));
+        let viewing = {
+            let (host, tab, frames) = (host.clone(), tab.clone(), frames.clone());
+            thread::spawn(move || {
+                host.live_view(
+                    "s1",
+                    &tab,
+                    "v1",
+                    live::PanelSize::new(900, 600, 1.0),
+                    |frame| frames.lock().unwrap().push(frame),
+                )
+            })
+        };
+        thread::sleep(Duration::from_secs(1));
+        let shot = host.handle_request(
+            "s1",
+            request(
+                "full",
+                "screenshot",
+                json!({ "tab": tab.0, "full_page": true }),
+            ),
+        );
+        assert_eq!(shot.outcome, Outcome::Done, "{shot:?}");
+        let seen = frames.lock().unwrap().len();
+        thread::sleep(Duration::from_millis(1500));
+        host.stop_live(None);
+        let _ = viewing.join();
+        host.set_toggle(false);
+        let _ = chrome.kill();
+        let _ = chrome.wait();
+        let _ = std::fs::remove_dir_all(&dir);
+        let after: Vec<_> = frames.lock().unwrap()[seen..]
+            .iter()
+            .map(|f| (f.width, f.height))
+            .collect();
+        assert!(after.len() > 5, "{after:?}");
+        assert!(
+            after.iter().all(|size| *size == (900.0, 600.0)),
+            "{after:?}"
+        );
+    }
+
     /// Against a real Chrome, when `MONOCODE_TEST_CHROME` names one: the
     /// agent's tab stays in the background, and the live view still gets
     /// moving pictures, and a click and typed text reach the page.
@@ -4339,32 +4519,7 @@ mod tests {
             }
         });
 
-        let dir = std::env::temp_dir().join(format!("monocode-live-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let mut args = vec![
-            format!("--user-data-dir={}", dir.display()),
-            "--remote-debugging-port=0".to_string(),
-            "--no-first-run".to_string(),
-            "--no-default-browser-check".to_string(),
-            "--window-size=1000,700".to_string(),
-        ];
-        #[cfg(unix)]
-        if unsafe { libc::geteuid() } == 0 {
-            args.push("--no-sandbox".to_string());
-        }
-        if std::env::var_os("DISPLAY").is_none() && cfg!(target_os = "linux") {
-            args.push("--headless=new".to_string());
-        }
-        args.push("about:blank".to_string());
-        let mut chrome = std::process::Command::new(exe).args(&args).spawn().unwrap();
-        let deadline = Instant::now() + Duration::from_secs(15);
-        while !dir.join(discovery::ACTIVE_PORT_FILE).is_file() {
-            assert!(Instant::now() < deadline, "Chrome did not start");
-            thread::sleep(Duration::from_millis(50));
-        }
-        // The port is up a moment before the first window.
-        thread::sleep(Duration::from_secs(1));
-
+        let (mut chrome, dir) = start_real_chrome(&exe);
         let host = BrowserHost::for_tests(settings_for(&dir));
         host.set_toggle(true);
         assert!(

@@ -28,6 +28,11 @@ const POLL: Duration = Duration::from_millis(100);
 /// A page this long without a new picture gets a lossless one: moving
 /// pictures are JPEG, which softens text, a still one should be sharp.
 const STILL_AFTER: Duration = Duration::from_millis(250);
+/// How long pictures that don't fit the panel are left out. A browser that
+/// never sends fitting ones still gets shown after this.
+const MISFIT_FOR: Duration = Duration::from_secs(1);
+/// How often the panel's viewport is put back while pictures don't fit.
+const HEAL_EVERY: Duration = Duration::from_millis(300);
 /// JPEG quality of the pictures, 0 to 100.
 const QUALITY: u32 = 90;
 /// Bounds for the panel size, in CSS pixels.
@@ -312,6 +317,9 @@ pub fn run(
     // The data of the last JPEG: Chrome on Windows sends it again right
     // after a screenshot, and it must not cover the PNG.
     let mut last = String::new();
+    // Since when the pictures have not fit the panel.
+    let mut misfit: Option<std::time::Instant> = None;
+    let mut healed: Option<std::time::Instant> = None;
     let end = loop {
         if control.stopped() {
             break LiveEnd::Stopped;
@@ -337,7 +345,9 @@ pub fn run(
             if let Some((at, width, height)) = moving {
                 if at.elapsed() >= STILL_AFTER {
                     moving = None;
-                    if let Some(data) = still(link, tab) {
+                    if let Some(data) =
+                        still(link, tab).filter(|data| fits(current, width, height, png_size(data)))
+                    {
                         seq += 1;
                         sink(LiveFrame {
                             tab: tab.tab.0.clone(),
@@ -370,11 +380,26 @@ pub fn run(
         if data == last {
             continue;
         }
-        last = data.to_string();
-        seq += 1;
         let metadata = &event.params["metadata"];
         let width = metadata["deviceWidth"].as_f64().unwrap_or(0.0);
         let height = metadata["deviceHeight"].as_f64().unwrap_or(0.0);
+        if fits(current, width, height, jpeg_size(data)) {
+            misfit = None;
+        } else {
+            let since = *misfit.get_or_insert_with(std::time::Instant::now);
+            // Something else changed the tab's viewport (a full-page
+            // screenshot does): the panel's is put back.
+            if healed.is_none_or(|at: std::time::Instant| at.elapsed() >= HEAL_EVERY) {
+                healed = Some(std::time::Instant::now());
+                let _ = send(link, &tab.main, Method::PageStopScreencast, json!({}));
+                let _ = show(link, tab, current);
+            }
+            if since.elapsed() < MISFIT_FOR {
+                continue;
+            }
+        }
+        last = data.to_string();
+        seq += 1;
         moving = Some((std::time::Instant::now(), width, height));
         sink(LiveFrame {
             tab: tab.tab.0.clone(),
@@ -387,6 +412,62 @@ pub fn run(
     };
     restore(link, tab);
     Ok(end)
+}
+
+/// Whether a picture shows the page at the panel's size: its viewport is
+/// the panel's, and its pixels have the panel's shape. While a page loads,
+/// Chrome can send pictures of the tab's own viewport; shown in the panel,
+/// each looks like a sudden zoom.
+fn fits(size: PanelSize, width: f64, height: f64, pixels: Option<(u32, u32)>) -> bool {
+    let (want_w, want_h) = (f64::from(size.width), f64::from(size.height));
+    if (width - want_w).abs() > 1.0 || (height - want_h).abs() > 1.0 {
+        return false;
+    }
+    pixels.is_none_or(|(w, h)| {
+        let (w, h) = (f64::from(w), f64::from(h));
+        h > 0.0 && (w / h - want_w / want_h).abs() <= 0.02 * want_w / want_h
+    })
+}
+
+/// The pixel size in a base64 JPEG's header, if it has one up front.
+fn jpeg_size(data: &str) -> Option<(u32, u32)> {
+    let head = head(data)?;
+    let mut at = 2;
+    while at + 9 < head.len() {
+        if head[at] != 0xFF {
+            return None;
+        }
+        let marker = head[at + 1];
+        // Start of frame, baseline or progressive.
+        if matches!(marker, 0xC0..=0xC2) {
+            let height = u16::from_be_bytes([head[at + 5], head[at + 6]]);
+            let width = u16::from_be_bytes([head[at + 7], head[at + 8]]);
+            return Some((u32::from(width), u32::from(height)));
+        }
+        at += 2 + usize::from(u16::from_be_bytes([head[at + 2], head[at + 3]]));
+    }
+    None
+}
+
+/// The pixel size in a base64 PNG's header.
+fn png_size(data: &str) -> Option<(u32, u32)> {
+    let head = head(data)?;
+    if head.get(1..4) != Some(b"PNG".as_slice()) || head.len() < 24 {
+        return None;
+    }
+    Some((
+        u32::from_be_bytes(head[16..20].try_into().ok()?),
+        u32::from_be_bytes(head[20..24].try_into().ok()?),
+    ))
+}
+
+/// The first few KB of a base64 picture, decoded.
+fn head(data: &str) -> Option<Vec<u8>> {
+    use base64::Engine as _;
+    let end = data.len().min(8192) / 4 * 4;
+    base64::engine::general_purpose::STANDARD
+        .decode(data.get(..end)?)
+        .ok()
 }
 
 /// A lossless picture of what the tab shows now.
@@ -593,6 +674,31 @@ mod tests {
             "kind": "text", "text": "x", "extra": 1
         }))
         .is_err());
+    }
+
+    #[test]
+    fn only_pictures_of_the_panels_viewport_fit() {
+        use base64::Engine as _;
+        let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+        // SOI, an APP0 segment, then a baseline frame of 900x600.
+        let jpeg = b64(&[
+            0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x04, 0x00, 0x00, 0xFF, 0xC0, 0x00, 0x11, 0x08, 0x02,
+            0x58, 0x03, 0x84, 0x03, 0x00, 0x00, 0x00, 0x00,
+        ]);
+        assert_eq!(jpeg_size(&jpeg), Some((900, 600)));
+        let mut png = vec![0x89, b'P', b'N', b'G', 13, 10, 26, 10, 0, 0, 0, 13];
+        png.extend_from_slice(b"IHDR");
+        png.extend_from_slice(&1350u32.to_be_bytes());
+        png.extend_from_slice(&900u32.to_be_bytes());
+        assert_eq!(png_size(&b64(&png)), Some((1350, 900)));
+
+        let panel = PanelSize::new(900, 600, 1.5);
+        assert!(fits(panel, 900.0, 600.0, Some((900, 600))));
+        assert!(fits(panel, 900.0, 600.0, Some((1350, 900))));
+        assert!(fits(panel, 900.0, 600.0, None));
+        // The tab's own window, or a picture of another shape.
+        assert!(!fits(panel, 1200.0, 800.0, Some((900, 600))));
+        assert!(!fits(panel, 900.0, 600.0, Some((900, 501))));
     }
 
     #[test]
