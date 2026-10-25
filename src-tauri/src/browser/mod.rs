@@ -4039,7 +4039,20 @@ mod tests {
                     )
                 }
                 "Page.startScreencast" => Response::ResultThen(json!({}), vec![frame(1, session)]),
-                "Page.captureScreenshot" => Response::Result(json!({ "data": "still" })),
+                // Chrome on Windows sends the last picture again right after
+                // a screenshot.
+                "Page.captureScreenshot" => Response::ResultThen(
+                    json!({ "data": "still" }),
+                    vec![Event::new(
+                        "Page.screencastFrame",
+                        json!({
+                            "data": format!("frame{}", frames.max(1)),
+                            "sessionId": 1000,
+                            "metadata": { "deviceWidth": 800, "deviceHeight": 600, "offsetTop": 0, "pageScaleFactor": 1 }
+                        }),
+                        session,
+                    )],
+                ),
                 "Page.screencastFrameAck" => {
                     let n = received.params["sessionId"].as_i64().unwrap_or(0);
                     if n < frames {

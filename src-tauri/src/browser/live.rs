@@ -309,6 +309,9 @@ pub fn run(
     let mut seq = 0;
     // The last JPEG, until the page has been still long enough for a PNG.
     let mut moving: Option<(std::time::Instant, f64, f64)> = None;
+    // The data of the last JPEG: Chrome on Windows sends it again right
+    // after a screenshot, and it must not cover the PNG.
+    let mut last = String::new();
     let end = loop {
         if control.stopped() {
             break LiveEnd::Stopped;
@@ -325,6 +328,7 @@ pub fn run(
                 return Err(error);
             }
             current = next;
+            last.clear();
         }
         let wait = moving.map_or(POLL, |(at, _, _)| {
             STILL_AFTER.saturating_sub(at.elapsed()).min(POLL)
@@ -362,6 +366,11 @@ pub fn run(
         let Some(data) = event.params["data"].as_str() else {
             continue;
         };
+        // The same picture again: nothing moved.
+        if data == last {
+            continue;
+        }
+        last = data.to_string();
         seq += 1;
         let metadata = &event.params["metadata"];
         let width = metadata["deviceWidth"].as_f64().unwrap_or(0.0);
@@ -369,7 +378,7 @@ pub fn run(
         moving = Some((std::time::Instant::now(), width, height));
         sink(LiveFrame {
             tab: tab.tab.0.clone(),
-            data: data.to_string(),
+            data: last.clone(),
             format: "jpeg",
             width,
             height,
