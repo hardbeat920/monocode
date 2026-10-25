@@ -51,6 +51,12 @@ export type AgentTabSource = {
   harness: HarnessId;
 };
 
+/** One of a thread's browser tabs, shown live beside the thread. */
+export type BrowserPaneSource = {
+  sessionId: string;
+  tab: string;
+};
+
 export type SessionChangesSource = {
   sessionId: string;
 };
@@ -74,6 +80,8 @@ export type FilePaneTab = {
   commit?: CommitTabSource;
   /** Read-only transcript of an orchestration worker. Live only — not persisted. */
   agent?: AgentTabSource;
+  /** A browser tab shown live. Live only — not persisted. */
+  browser?: BrowserPaneSource;
   terminal?: boolean;
   /** Foreground command when it isn't the shell. Live only — not persisted. */
   foreground?: string;
@@ -307,6 +315,15 @@ export function newAgentTab(
   return { id: crypto.randomUUID(), path: title, cwd, agent };
 }
 
+/** `path` carries the page title, which the pane keeps up to date. */
+export function newBrowserPaneTab(
+  title: string,
+  cwd: string,
+  browser: BrowserPaneSource,
+): FilePaneTab {
+  return { id: crypto.randomUUID(), path: title || "Browser", cwd, browser };
+}
+
 export function newTerminalFile(
   cwd: string,
   title?: string,
@@ -430,12 +447,24 @@ export function isAgentTab(
   return !!file.agent;
 }
 
+export function isBrowserPaneTab(
+  file: FilePaneTab,
+): file is FilePaneTab & { browser: BrowserPaneSource } {
+  return !!file.browser;
+}
+
+/** Tabs that watch something live and are not restored with the window. */
+export function isLiveOnlyTab(file: FilePaneTab): boolean {
+  return isAgentTab(file) || isBrowserPaneTab(file);
+}
+
 export function isVirtualDocumentTab(file: FilePaneTab): boolean {
   return (
     isPlanTab(file) ||
     isReleaseNotesTab(file) ||
     isCommitTab(file) ||
-    isAgentTab(file)
+    isAgentTab(file) ||
+    isBrowserPaneTab(file)
   );
 }
 
@@ -514,6 +543,8 @@ export function isSessionChangesTab(
 export function editorTabKey(file: FilePaneTab): string {
   if (file.terminal) return `terminal:${file.id}`;
   if (file.agent) return `agent:${file.agent.sessionId}`;
+  if (file.browser)
+    return `browser:${file.browser.sessionId}:${file.browser.tab}`;
   if (file.plan) return `plan:${file.plan.blockId}`;
   if (file.releaseNotes) return `release-notes:${file.releaseNotes.version}`;
   if (file.commit) return `commit:${file.cwd}:${file.commit.sha}`;
@@ -543,6 +574,7 @@ export function isPreviewableTab(file: FilePaneTab): boolean {
   return (
     !file.terminal &&
     !file.agent &&
+    !file.browser &&
     !file.plan &&
     !file.releaseNotes &&
     !file.changes
@@ -1430,5 +1462,111 @@ export function replacePaneWithLayout(
     children: node.children.map((child) =>
       replacePaneWithLayout(child, targetId, incoming),
     ),
+  };
+}
+
+/** Where a browser pane sits beside its thread, remembered for the next one. */
+export type BrowserPanePlacement = { edge: PaneEdge; size: number };
+
+const BROWSER_PANE_MIN = 0.15;
+
+/** `paneId`'s side of `sessionId` and its share of the split they are in. */
+export function browserPanePlacement(
+  layout: LayoutNode,
+  paneId: string,
+  sessionId: string,
+): BrowserPanePlacement | null {
+  const leaves = layoutLeaves(layout);
+  const pane = leaves.find((entry) => entry.id === paneId)?.rect;
+  const session = leaves.find((entry) => entry.id === sessionId)?.rect;
+  if (!pane || !session) return null;
+  const dx = pane.x + pane.w / 2 - (session.x + session.w / 2);
+  const dy = pane.y + pane.h / 2 - (session.y + session.h / 2);
+  const across = Math.abs(dx) >= Math.abs(dy);
+  const edge: PaneEdge = across
+    ? dx < 0
+      ? "left"
+      : "right"
+    : dy < 0
+      ? "top"
+      : "bottom";
+  const parent = leafParent(layout, paneId);
+  const split = parent && findSplit(layout, parent.parentId);
+  const share =
+    split && (split.dir === "right") === across
+      ? (split.sizes[parent.index] ?? 0.5)
+      : 0.5;
+  return {
+    edge,
+    size: Math.min(1 - BROWSER_PANE_MIN, Math.max(BROWSER_PANE_MIN, share)),
+  };
+}
+
+function findSplit(node: LayoutNode, id: string): SplitNode | null {
+  if (node.type === "leaf") return null;
+  if (node.id === id) return node;
+  for (const child of node.children) {
+    const found = findSplit(child, id);
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
+ * Open a browser tab beside `sessionId`: in the pane that already shows
+ * one of its browser tabs, else in a pane of its own on the remembered side
+ * and share (right and half the first time). Files keep their own pane.
+ */
+export function openBrowserPane(
+  tab: WorkspaceTab,
+  file: FilePaneTab,
+  sessionId: string,
+  placement?: BrowserPanePlacement | null,
+): WorkspaceTab {
+  const key = editorTabKey(file);
+  if (
+    tab.editorPanes.some((pane) =>
+      pane.files.some((entry) => editorTabKey(entry) === key),
+    )
+  ) {
+    return openEditorTab(tab, file);
+  }
+  const browserPane = tab.editorPanes.find((pane) =>
+    pane.files.some(isBrowserPaneTab),
+  );
+  if (browserPane) {
+    return openEditorTab({ ...tab, focusedId: browserPane.id }, file);
+  }
+  const anchor = leafIds(tab.layout).includes(sessionId)
+    ? sessionId
+    : tab.focusedId;
+  const pane = newEditorPane(withoutPreview(file));
+  let layout = placeLayout(
+    tab.layout,
+    leaf(pane.id),
+    anchor,
+    placement?.edge ?? "right",
+  );
+  const parent = leafParent(layout, pane.id);
+  const split = parent && findSplit(layout, parent.parentId);
+  if (placement && parent && split?.children.length === 2) {
+    const size = Math.min(
+      1 - BROWSER_PANE_MIN,
+      Math.max(BROWSER_PANE_MIN, placement.size),
+    );
+    layout = setSplitRatio(
+      layout,
+      split.id,
+      0,
+      parent.index === 0 ? size : 1 - size,
+    );
+  }
+  const base = isolateTerminalPanes(tab);
+  return {
+    ...base,
+    layout,
+    focusedId: pane.id,
+    diffFocused: false,
+    editorPanes: [...base.editorPanes, pane],
   };
 }

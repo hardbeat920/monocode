@@ -237,6 +237,13 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "browser ask allow always on permission thread /browser",
   },
   {
+    id: "browser-tabs-in-monocode",
+    section: "browser",
+    label: "Show agent tabs",
+    keywords:
+      "browser panel pane integrated built in inside monocode beside thread live view",
+  },
+  {
     id: "browser-choice",
     section: "browser",
     label: "Which browser",

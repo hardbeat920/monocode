@@ -260,6 +260,10 @@ import {
   openChangesTab,
   openCommitTab,
   newAgentTab,
+  newBrowserPaneTab,
+  openBrowserPane,
+  browserPanePlacement,
+  isBrowserPaneTab,
   openEditorTab,
   openSessionChangesTab,
   pinEditorFile,
@@ -746,6 +750,13 @@ import { ProjectTerminalDock } from "../features/terminal/ui/ProjectTerminalDock
 import { lazySurface } from "../shared/ui/lazySurface";
 import { preloadNavigationWhenIdle } from "./model/preloadNavigation";
 import { requestTranscriptJump } from "../features/sessions/model/transcriptJump";
+import {
+  loadBrowserPanePlacement,
+  openNewBrowserTabsInPanes,
+  saveBrowserPanePlacement,
+  subscribeBrowserPaneRequests,
+  takeBrowserPaneRequests,
+} from "../features/sessions/model/browserPane";
 import type { SettingsAnchor } from "../features/settings/ui/SettingsView";
 import {
   OPEN_CONNECTIONS_EVENT,
@@ -11954,6 +11965,80 @@ function Workspace({
     setActiveTabId(tab.id);
     setComposerFocused(false);
   }, [tabs, workerDetailRequest]);
+  // "Show in MonoCode": the thread's browser tab opens in a pane beside the
+  // thread, on the side and at the share the user last left one. A tab the
+  // user asked for from a thread outside the workspace (a side or standalone
+  // conversation) shows in the active tab; one that opened on its own shows
+  // only beside its thread and leaves focus where it is.
+  useEffect(() => {
+    const open = () => {
+      for (const request of takeBrowserPaneRequests()) {
+        const { sessionId } = request;
+        const holds = (entry: WorkspaceTab) =>
+          leafIds(entry.layout).includes(sessionId);
+        const tab =
+          tabsRef.current.find(
+            (entry) => entry.id === activeTabIdRef.current && holds(entry),
+          ) ??
+          tabsRef.current.find(holds) ??
+          (request.auto
+            ? undefined
+            : tabsRef.current.find(
+                (entry) => entry.id === activeTabIdRef.current,
+              ));
+        if (!tab) continue;
+        const cwd =
+          sessionsRef.current.find((entry) => entry.id === sessionId)?.cwd ??
+          projectCwdRef.current;
+        const file = newBrowserPaneTab(request.title, cwd, {
+          sessionId,
+          tab: request.tab,
+        });
+        const placement = loadBrowserPanePlacement();
+        setTabs((prev) =>
+          prev.map((entry) => {
+            if (entry.id !== tab.id) return entry;
+            const opened = openBrowserPane(entry, file, sessionId, placement);
+            return request.auto
+              ? { ...opened, focusedId: entry.focusedId }
+              : opened;
+          }),
+        );
+        if (request.auto) continue;
+        setActiveTabId(tab.id);
+        setComposerFocused(false);
+      }
+    };
+    const unsubscribe = subscribeBrowserPaneRequests(open);
+    const stopWatching = openNewBrowserTabsInPanes();
+    return () => {
+      unsubscribe();
+      stopWatching();
+    };
+  }, [setActiveTabId]);
+  // Remember where the user leaves a browser pane, for the next one.
+  useEffect(() => {
+    const tab = tabs.find((entry) => entry.id === activeTabId);
+    if (!tab) return;
+    for (const pane of tab.editorPanes) {
+      const browser = pane.files.find(isBrowserPaneTab)?.browser;
+      if (!browser) continue;
+      const placement = browserPanePlacement(
+        tab.layout,
+        pane.id,
+        browser.sessionId,
+      );
+      const saved = loadBrowserPanePlacement();
+      if (
+        placement &&
+        (placement.edge !== saved?.edge ||
+          Math.abs(placement.size - saved.size) > 0.01)
+      ) {
+        saveBrowserPanePlacement(placement);
+      }
+      return;
+    }
+  }, [tabs, activeTabId]);
   const orchestrationWorkers = useMemo(
     () => ({
       selectedId: inspectedWorkerId,

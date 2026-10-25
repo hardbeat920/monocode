@@ -9,6 +9,7 @@ import {
   leaf,
   leafIds,
   newAgentTab,
+  newBrowserPaneTab,
   newChangesTab,
   newCommitTab,
   newFileTab,
@@ -280,6 +281,34 @@ describe("collectWorkspaceSnapshot", () => {
     ]);
     expect(panes[0]!.activeFileId).toBe(file.id);
     expect(leafIds(snapshot.tabs[0]!.layout)).toEqual(["s1"]);
+  });
+
+  it("drops browser panes like agent tabs", () => {
+    const file = newFileTab("/tmp/a/README.md", "/tmp/a");
+    const browser = newBrowserPaneTab("Checkout", "/tmp/a", {
+      sessionId: "s1",
+      tab: "t_live0001",
+    });
+    const tab = {
+      ...newTab("s1"),
+      id: "t1",
+      layout: splitPane(newTab("s1").layout, "s1", "right", "e1"),
+      editorPanes: [
+        { id: "e1", files: [file, browser], activeFileId: browser.id },
+      ],
+    };
+    const snapshot = collectWorkspaceSnapshot(
+      [tab],
+      [],
+      "t1",
+      "/tmp/a",
+      new Map(),
+    );
+    const panes = snapshot.tabs[0]!.editorPanes;
+    expect(panes[0]!.files.map((entry) => entry.path)).toEqual([
+      "/tmp/a/README.md",
+    ]);
+    expect(panes[0]!.activeFileId).toBe(file.id);
   });
 
   it("round-trips a unified Changes tab", () => {

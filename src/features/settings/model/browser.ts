@@ -90,6 +90,8 @@ export type BrowserSettings = {
   enabled: boolean;
   /** Managed only; false runs the browser without a window. */
   show_window: boolean;
+  /** A thread's new tab opens in a pane beside the thread. */
+  tabs_in_monocode: boolean;
 };
 
 export type BrowserTabState =
@@ -171,6 +173,7 @@ export const DEFAULT_BROWSER_SETTINGS: BrowserSettings = {
   access: "ask",
   enabled: false,
   show_window: true,
+  tabs_in_monocode: false,
 };
 
 /** Channel ids discovery knows, in its own search order. */
@@ -420,6 +423,121 @@ export function pickBrowserElement(
 
 export function cancelBrowserPick(): Promise<void> {
   return invoke<void>("browser_cancel_pick");
+}
+
+/** Tauri event with each picture of the tab shown live in MonoCode. */
+export const BROWSER_LIVE_FRAME_EVENT = "monocode-browser-live-frame";
+
+/** One picture of the live view (mirrors `live::LiveFrame`). */
+export type BrowserLiveFrame = {
+  tab: string;
+  /** JPEG, base64. */
+  data: string;
+  /** The page's viewport in CSS pixels; input coordinates use this space. */
+  width: number;
+  height: number;
+  seq: number;
+};
+
+/** What the user does in the live view (mirrors `live::LiveInput`). */
+export type BrowserLiveInput =
+  | {
+      kind: "mouse";
+      event: "mousePressed" | "mouseReleased" | "mouseMoved";
+      x: number;
+      y: number;
+      button?: "none" | "left" | "middle" | "right";
+      buttons?: number;
+      clickCount?: number;
+      modifiers?: number;
+    }
+  | {
+      kind: "wheel";
+      x: number;
+      y: number;
+      deltaX: number;
+      deltaY: number;
+      modifiers?: number;
+    }
+  | {
+      kind: "key";
+      event: "keyDown" | "rawKeyDown" | "keyUp";
+      key: string;
+      code: string;
+      text?: string;
+      keyCode?: number;
+      modifiers?: number;
+    }
+  | { kind: "text"; text: string };
+
+/**
+ * "Show in MonoCode": pictures of `tab` arrive as
+ * {@link BROWSER_LIVE_FRAME_EVENT} until {@link stopBrowserLive}, another
+ * view, or the tab is gone; the promise settles then. Meanwhile the tab's
+ * viewport is `width` × `height` CSS pixels at `scale`, the panel's size.
+ */
+export function startBrowserLive(
+  sessionId: string,
+  tab: string,
+  view: string,
+  width: number,
+  height: number,
+  scale: number,
+): Promise<"stopped" | "tab_gone"> {
+  return invoke("browser_live_start", {
+    sessionId,
+    tab,
+    view,
+    width,
+    height,
+    scale,
+  });
+}
+
+/** Stop `view`, the one a pane started (a newer pane's view keeps running). */
+export function stopBrowserLive(view?: string): Promise<void> {
+  return invoke<void>("browser_live_stop", { view });
+}
+
+export function sendBrowserLiveInput(
+  sessionId: string,
+  tab: string,
+  input: BrowserLiveInput,
+): Promise<void> {
+  return invoke<void>("browser_live_input", { sessionId, tab, input });
+}
+
+/** The pane of `view` changed size; the tab's viewport follows it. */
+export function resizeBrowserLive(
+  view: string,
+  width: number,
+  height: number,
+  scale: number,
+): Promise<void> {
+  return invoke<void>("browser_live_resize", { view, width, height, scale });
+}
+
+/** The panel's Back, Forward, Reload and address field (mirrors `live::LiveNav`). */
+export type BrowserLiveNav =
+  | { kind: "back" }
+  | { kind: "forward" }
+  | { kind: "reload" }
+  | { kind: "go"; url: string };
+
+export function navigateBrowserLive(
+  sessionId: string,
+  tab: string,
+  nav: BrowserLiveNav,
+): Promise<void> {
+  return invoke<void>("browser_live_navigate", { sessionId, tab, nav });
+}
+
+export function listenBrowserLiveFrames(
+  onFrame: (frame: BrowserLiveFrame) => void,
+): Promise<() => void> {
+  return listen<BrowserLiveFrame>(BROWSER_LIVE_FRAME_EVENT, (event) =>
+    onFrame(event.payload),
+  );
 }
 
 export const saveBrowserSettings = (settings: BrowserSettings) =>

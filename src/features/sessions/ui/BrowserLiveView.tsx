@@ -1,0 +1,577 @@
+import {
+  type FormEvent,
+  type KeyboardEvent,
+  type MouseEvent,
+  type WheelEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Globe,
+  Lock,
+  RefreshCw,
+} from "../../../shared/ui/icons";
+import {
+  type BrowserLiveFrame,
+  type BrowserLiveInput,
+  type BrowserLiveNav,
+  type BrowserTab,
+  listenBrowserLiveFrames,
+  navigateBrowserLive,
+  resizeBrowserLive,
+  sendBrowserLiveInput,
+  startBrowserLive,
+  stopBrowserLive,
+  useBrowserState,
+} from "../../settings/model/browser";
+import { TabLabel } from "../../../shared/ui/TabLabel";
+
+/** CDP modifier bits: Alt 1, Ctrl 2, Meta 4, Shift 8. */
+export function liveModifiers(event: {
+  altKey: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+}): number {
+  return (
+    (event.altKey ? 1 : 0) |
+    (event.ctrlKey ? 2 : 0) |
+    (event.metaKey ? 4 : 0) |
+    (event.shiftKey ? 8 : 0)
+  );
+}
+
+/** Keys that edit or move rather than type, with their virtual key codes. */
+const RAW_KEYS: Record<string, number> = {
+  Backspace: 8,
+  Tab: 9,
+  Enter: 13,
+  Escape: 27,
+  PageUp: 33,
+  PageDown: 34,
+  End: 35,
+  Home: 36,
+  ArrowLeft: 37,
+  ArrowUp: 38,
+  ArrowRight: 39,
+  ArrowDown: 40,
+  Delete: 46,
+};
+
+/**
+ * The CDP input for a key the user pressed in the live view, for editing
+ * keys and shortcuts. `null` for everything that types: text reaches the
+ * page from the capture field's input events, so keyboard layouts, dead
+ * keys, IME and paste all arrive as the text they produced.
+ */
+export function liveKeyInput(
+  event: Pick<
+    globalThis.KeyboardEvent,
+    | "key"
+    | "code"
+    | "altKey"
+    | "ctrlKey"
+    | "metaKey"
+    | "shiftKey"
+    | "isComposing"
+  >,
+  phase: "down" | "up",
+): BrowserLiveInput | null {
+  if (event.isComposing) return null;
+  const modifiers = liveModifiers(event);
+  const base = { kind: "key" as const, key: event.key, code: event.code };
+  if (event.key in RAW_KEYS) {
+    const keyCode = RAW_KEYS[event.key];
+    if (phase === "up") return { ...base, event: "keyUp", keyCode, modifiers };
+    return event.key === "Enter"
+      ? { ...base, event: "keyDown", text: "\r", keyCode, modifiers }
+      : { ...base, event: "rawKeyDown", keyCode, modifiers };
+  }
+  // Ctrl/Cmd + a letter or digit: a shortcut for the page (select all, undo).
+  // Ctrl+V stays with the capture field, which pastes it as text.
+  const shortcut =
+    (event.ctrlKey || event.metaKey) &&
+    !event.altKey &&
+    /^[a-z0-9]$/i.test(event.key) &&
+    event.key.toLowerCase() !== "v";
+  if (!shortcut) return null;
+  const keyCode = event.key.toUpperCase().charCodeAt(0);
+  return {
+    ...base,
+    event: phase === "up" ? "keyUp" : "rawKeyDown",
+    keyCode,
+    modifiers,
+  };
+}
+
+/** A point on the shown picture, in the page's CSS pixels. */
+export function livePoint(
+  client: { x: number; y: number },
+  picture: { left: number; top: number; width: number; height: number },
+  frame: { width: number; height: number },
+): { x: number; y: number } {
+  const x = ((client.x - picture.left) / picture.width) * frame.width;
+  const y = ((client.y - picture.top) / picture.height) * frame.height;
+  return {
+    x: Math.round(Math.min(Math.max(x, 0), frame.width) * 10) / 10,
+    y: Math.round(Math.min(Math.max(y, 0), frame.height) * 10) / 10,
+  };
+}
+
+/** The address split the way the address field shows it: host strong, the rest quiet. */
+export function liveAddress(url: string): {
+  secure: boolean;
+  host: string;
+  rest: string;
+} {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return { secure: false, host: url, rest: "" };
+    }
+    const rest = `${parsed.pathname === "/" ? "" : parsed.pathname}${parsed.search}${parsed.hash}`;
+    return { secure: parsed.protocol === "https:", host: parsed.host, rest };
+  } catch {
+    return { secure: false, host: url, rest: "" };
+  }
+}
+
+const BUTTONS = ["left", "middle", "right"] as const;
+
+/** The thread's tab as the browser module knows it now, while it is the thread's. */
+export function useLiveBrowserTab(
+  sessionId: string,
+  tab: string,
+): BrowserTab | undefined {
+  const state = useBrowserState();
+  return state?.tabs.find(
+    (entry) => entry.tab === tab && entry.session_id === sessionId,
+  );
+}
+
+/** A browser pane's tab label: the page's title as it changes. */
+export function BrowserPaneTitle({
+  sessionId,
+  tab,
+  fallback,
+  className,
+}: {
+  sessionId: string;
+  tab: string;
+  fallback: string;
+  className?: string;
+}) {
+  const live = useLiveBrowserTab(sessionId, tab);
+  return <TabLabel className={className}>{live?.title || fallback}</TabLabel>;
+}
+
+type Phase =
+  | { kind: "connecting" }
+  | { kind: "live" }
+  | { kind: "elsewhere" }
+  | { kind: "gone" }
+  | { kind: "failed"; message: string };
+
+/**
+ * "Show in MonoCode": one of the thread's browser tabs, live in a workspace
+ * pane. The picture comes from the browser, which keeps painting the tab in
+ * the background at the pane's size; clicks, scrolling and typing go back to
+ * the tab. Only one pane streams at a time, so a pane that is hidden stops
+ * and the one shown last takes over.
+ */
+export function BrowserLiveView({
+  sessionId,
+  tab: tabId,
+  visible,
+  focused = visible,
+}: {
+  sessionId: string;
+  tab: string;
+  visible: boolean;
+  focused?: boolean;
+}) {
+  const tab = useLiveBrowserTab(sessionId, tabId);
+  const stage = useRef<HTMLDivElement>(null);
+  const picture = useRef<HTMLImageElement>(null);
+  const capture = useRef<HTMLTextAreaElement>(null);
+  const frame = useRef<BrowserLiveFrame | null>(null);
+  const [src, setSrc] = useState<string | null>(null);
+  const [fps, setFps] = useState(0);
+  const [phase, setPhase] = useState<Phase>({ kind: "connecting" });
+  const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const open = tab?.state === "open";
+
+  useEffect(() => {
+    if (!visible || !open) return;
+    const box = stage.current;
+    if (!box) return;
+    let live = true;
+    // This pane's own view: stopping it never stops a newer pane's.
+    const view = crypto.randomUUID();
+    let unlisten: (() => void) | null = null;
+    let count = 0;
+    let started = false;
+    let resizeTimer = 0;
+    const meter = window.setInterval(() => {
+      setFps(count);
+      count = 0;
+    }, 1000);
+    // The tab's viewport takes the pane's size, so the page fills it.
+    const size = () => {
+      const rect = box.getBoundingClientRect();
+      return {
+        width: Math.max(1, Math.round(rect.width)),
+        height: Math.max(1, Math.round(rect.height)),
+        scale: window.devicePixelRatio || 1,
+      };
+    };
+    const observer = new ResizeObserver(() => {
+      if (!started) return;
+      window.clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(() => {
+        const { width, height, scale } = size();
+        void resizeBrowserLive(view, width, height, scale).catch(() => {});
+      }, 120);
+    });
+    observer.observe(box);
+    setPhase({ kind: "connecting" });
+    void listenBrowserLiveFrames((next) => {
+      if (!live || next.tab !== tabId) return;
+      count += 1;
+      frame.current = next;
+      setSrc(`data:image/jpeg;base64,${next.data}`);
+      setPhase((current) =>
+        current.kind === "live" ? current : { kind: "live" },
+      );
+    }).then((stop) => {
+      if (!live) {
+        stop();
+        return;
+      }
+      unlisten = stop;
+      const { width, height, scale } = size();
+      started = true;
+      startBrowserLive(sessionId, tabId, view, width, height, scale)
+        .then((end) => {
+          if (!live) return;
+          // Stopped while this pane still shows: another pane took over.
+          setPhase({ kind: end === "tab_gone" ? "gone" : "elsewhere" });
+        })
+        .catch((err: unknown) => {
+          if (live)
+            setPhase({
+              kind: "failed",
+              message: err instanceof Error ? err.message : String(err),
+            });
+        });
+    });
+    return () => {
+      live = false;
+      observer.disconnect();
+      window.clearTimeout(resizeTimer);
+      window.clearInterval(meter);
+      unlisten?.();
+      void stopBrowserLive(view).catch(() => {});
+    };
+  }, [sessionId, tabId, visible, open, attempt]);
+
+  useEffect(() => {
+    if (focused && phase.kind === "live") capture.current?.focus();
+  }, [focused, phase.kind]);
+
+  const fail = useCallback((err: unknown) => {
+    setError(err instanceof Error ? err.message : String(err));
+  }, []);
+  const send = useCallback(
+    (input: BrowserLiveInput) => {
+      setError(null);
+      void sendBrowserLiveInput(sessionId, tabId, input).catch(fail);
+    },
+    [sessionId, tabId, fail],
+  );
+  const navigate = useCallback(
+    (nav: BrowserLiveNav) => {
+      setError(null);
+      void navigateBrowserLive(sessionId, tabId, nav).catch(fail);
+    },
+    [sessionId, tabId, fail],
+  );
+  const point = (event: { clientX: number; clientY: number }) => {
+    const shown = picture.current?.getBoundingClientRect();
+    const current = frame.current;
+    if (!shown || !current) return null;
+    return livePoint({ x: event.clientX, y: event.clientY }, shown, current);
+  };
+  const lastMove = useRef(0);
+  const mouse = (
+    kind: "mousePressed" | "mouseReleased" | "mouseMoved",
+    event: MouseEvent,
+  ) => {
+    const at = point(event);
+    if (!at) return;
+    if (kind === "mouseMoved") {
+      const now = performance.now();
+      if (now - lastMove.current < 30) return;
+      lastMove.current = now;
+    } else {
+      // Keyboard input keeps going to the tab.
+      event.preventDefault();
+      capture.current?.focus();
+    }
+    send({
+      kind: "mouse",
+      event: kind,
+      ...at,
+      button:
+        kind === "mouseMoved" ? "none" : (BUTTONS[event.button] ?? "left"),
+      buttons: event.buttons,
+      clickCount: kind === "mouseMoved" ? 0 : Math.max(event.detail, 1),
+      modifiers: liveModifiers(event),
+    });
+  };
+  const wheel = (event: WheelEvent) => {
+    const at = point(event);
+    if (!at) return;
+    send({
+      kind: "wheel",
+      ...at,
+      deltaX: event.deltaX,
+      deltaY: event.deltaY,
+      modifiers: liveModifiers(event),
+    });
+  };
+  const key = (phase: "down" | "up", event: KeyboardEvent) => {
+    const input = liveKeyInput(event.nativeEvent, phase);
+    if (!input) return;
+    event.preventDefault();
+    send(input);
+  };
+  // Typed, composed and pasted text arrives here as the text itself.
+  const typed = (event: FormEvent<HTMLTextAreaElement>) => {
+    const native = event.nativeEvent as InputEvent;
+    const field = event.currentTarget;
+    if (native.isComposing) return;
+    if (field.value) send({ kind: "text", text: field.value });
+    field.value = "";
+  };
+
+  const notice =
+    !open && tab
+      ? "This tab is no longer the thread's."
+      : !tab
+        ? "This tab was closed."
+        : phase.kind === "gone"
+          ? "This tab was closed."
+          : phase.kind === "failed"
+            ? phase.message
+            : null;
+
+  return (
+    <div
+      data-browser-live
+      data-live-fps={fps}
+      className="flex h-full min-h-0 flex-col bg-background-base"
+    >
+      <BrowserToolbar
+        url={tab?.url ?? ""}
+        busy={!!tab?.busy}
+        disabled={!open}
+        onNavigate={navigate}
+      />
+      <div
+        ref={stage}
+        role="application"
+        aria-label={`Browser tab ${tab?.title || "Untitled"}`}
+        onMouseDown={(event) => mouse("mousePressed", event)}
+        onMouseUp={(event) => mouse("mouseReleased", event)}
+        onMouseMove={(event) => mouse("mouseMoved", event)}
+        onWheel={wheel}
+        onContextMenu={(event) => event.preventDefault()}
+        className="relative min-h-0 flex-1 overflow-hidden"
+      >
+        <textarea
+          ref={capture}
+          aria-label="Type into the browser tab"
+          autoCapitalize="off"
+          autoComplete="off"
+          autoCorrect="off"
+          spellCheck={false}
+          onKeyDown={(event) => key("down", event)}
+          onKeyUp={(event) => key("up", event)}
+          onInput={typed}
+          onCompositionEnd={(event) => {
+            const field = event.currentTarget;
+            if (event.data) send({ kind: "text", text: event.data });
+            field.value = "";
+          }}
+          className="pointer-events-none absolute top-0 left-0 size-px resize-none opacity-0"
+        />
+        {src ? (
+          <img
+            ref={picture}
+            src={src}
+            alt=""
+            draggable={false}
+            className={`absolute inset-0 size-full object-fill select-none transition-opacity duration-150 ${
+              phase.kind === "live" && !notice ? "" : "opacity-40"
+            }`}
+          />
+        ) : null}
+        {notice || phase.kind === "elsewhere" ? (
+          <div className="absolute inset-0 grid place-items-center p-6">
+            <div className="flex max-w-xs flex-col items-center gap-3 rounded-xl border border-content/10 bg-background-base/95 px-5 py-4 text-center text-[12px] text-content/65 shadow-sm">
+              <Globe className="size-4 text-content/40" strokeWidth={1.75} />
+              <p>{notice ?? "This tab is showing in another pane."}</p>
+              {!notice ? (
+                <button
+                  type="button"
+                  onClick={() => setAttempt((n) => n + 1)}
+                  className="h-7 rounded-md bg-content/8 px-3 text-content hover:bg-content/12"
+                >
+                  Show here
+                </button>
+              ) : null}
+            </div>
+          </div>
+        ) : !src ? (
+          <div className="absolute inset-0 grid place-items-center">
+            <p className="flex items-center gap-2 text-[12px] text-content/45">
+              <span className="size-1.5 animate-pulse rounded-full bg-teal-500" />
+              Connecting to the tab…
+            </p>
+          </div>
+        ) : null}
+        {error ? (
+          <p
+            role="status"
+            className="absolute right-3 bottom-3 left-3 rounded-lg border border-content/10 bg-background-base/95 px-3 py-2 text-[12px] text-content/70 shadow-sm"
+          >
+            {error}
+          </p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+const TOOL =
+  "grid size-7 shrink-0 place-items-center rounded-md text-content/55 hover:bg-content/8 hover:text-content disabled:pointer-events-none disabled:opacity-35";
+
+/** Back, Forward, Reload, the address and what the agent is doing. */
+function BrowserToolbar({
+  url,
+  busy,
+  disabled,
+  onNavigate,
+}: {
+  url: string;
+  busy: boolean;
+  disabled: boolean;
+  onNavigate: (nav: BrowserLiveNav) => void;
+}) {
+  const [editing, setEditing] = useState<string | null>(null);
+  const field = useRef<HTMLInputElement>(null);
+  const address = liveAddress(url);
+  return (
+    <div className="flex h-10 shrink-0 items-center gap-0.5 border-b border-content/8 px-1.5">
+      <button
+        type="button"
+        title="Back"
+        aria-label="Back"
+        disabled={disabled}
+        onClick={() => onNavigate({ kind: "back" })}
+        className={TOOL}
+      >
+        <ChevronLeft className="size-4" strokeWidth={1.75} />
+      </button>
+      <button
+        type="button"
+        title="Forward"
+        aria-label="Forward"
+        disabled={disabled}
+        onClick={() => onNavigate({ kind: "forward" })}
+        className={TOOL}
+      >
+        <ChevronRight className="size-4" strokeWidth={1.75} />
+      </button>
+      <button
+        type="button"
+        title="Reload"
+        aria-label="Reload"
+        disabled={disabled}
+        onClick={() => onNavigate({ kind: "reload" })}
+        className={TOOL}
+      >
+        <RefreshCw className="size-3.5" strokeWidth={1.75} />
+      </button>
+      <form
+        className="mx-1 min-w-0 flex-1"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const typed = editing?.trim();
+          setEditing(null);
+          field.current?.blur();
+          if (typed && typed !== url) onNavigate({ kind: "go", url: typed });
+        }}
+      >
+        <label className="relative flex h-7 min-w-0 items-center gap-1.5 rounded-md bg-content/5 px-2.5 text-[12px] focus-within:bg-content/8">
+          {address.secure ? (
+            <Lock
+              className="size-3 shrink-0 text-content/40"
+              strokeWidth={1.75}
+            />
+          ) : (
+            <Globe
+              className="size-3 shrink-0 text-content/40"
+              strokeWidth={1.75}
+            />
+          )}
+          {editing === null ? (
+            <span className="pointer-events-none min-w-0 flex-1 truncate">
+              <span className="text-content">{address.host}</span>
+              <span className="text-content/45">{address.rest}</span>
+            </span>
+          ) : null}
+          <input
+            ref={field}
+            aria-label="Address"
+            disabled={disabled}
+            spellCheck={false}
+            value={editing ?? ""}
+            onFocus={(event) => {
+              setEditing(url);
+              const input = event.currentTarget;
+              requestAnimationFrame(() => input.select());
+            }}
+            onBlur={() => setEditing(null)}
+            onChange={(event) => setEditing(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key !== "Escape") return;
+              setEditing(null);
+              event.currentTarget.blur();
+            }}
+            className={
+              editing === null
+                ? "absolute inset-0 cursor-text bg-transparent opacity-0 outline-none"
+                : "min-w-0 flex-1 bg-transparent text-content outline-none"
+            }
+          />
+        </label>
+      </form>
+      {busy ? (
+        <span
+          className="mr-1 flex h-6 shrink-0 items-center gap-1.5 rounded-full bg-teal-400/12 px-2 text-[11px] text-teal-700 dark:text-teal-300"
+          title="The agent is acting in this tab"
+        >
+          <span className="size-1.5 animate-pulse rounded-full bg-teal-500" />
+          Agent
+        </span>
+      ) : null}
+    </div>
+  );
+}

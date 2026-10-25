@@ -17,6 +17,7 @@ import {
   useBrowserState,
 } from "../../settings/model/browser";
 import { AddFreeTab, BrowserTabRow } from "../../settings/ui/BrowserSettings";
+import { requestBrowserPane } from "../model/browserPane";
 
 const INDICATOR = {
   granted: {
@@ -36,17 +37,21 @@ const INDICATOR = {
 /**
  * The thread's browser indicator: shown while the thread has access (any
  * grant: `/browser`, Allow, Always on, a handed-over tab), it lists the thread's tabs with the same actions as Settings,
- * plus "Point at an element", whose result goes to `onPicked`, and the app
+ * plus "Point at an element", whose result goes to `onPicked`, "Show in
+ * MonoCode" (the tab live in a pane beside the thread, when `canShow`), and the app
  * the thread's worktree serves (`cwd`), to open in a tab of the thread.
  */
 export function BrowserIndicator({
   sessionId,
   cwd,
   onPicked,
+  canShow = false,
 }: {
   sessionId: string;
   cwd?: string;
   onPicked?: (picked: PickedBrowserElement) => void;
+  /** The workspace can open the thread's tabs in a pane ("Show in MonoCode"). */
+  canShow?: boolean;
 }) {
   const state = useBrowserState();
   const indicator = sessionBrowserIndicator(state, sessionId);
@@ -147,6 +152,18 @@ export function BrowserIndicator({
                   run={run}
                   onPick={onPicked ? () => pick(tab.tab) : undefined}
                   picking={picking === tab.tab}
+                  onShow={
+                    canShow
+                      ? () => {
+                          requestBrowserPane({
+                            sessionId,
+                            tab: tab.tab,
+                            title: tab.title,
+                          });
+                          setOpen(false);
+                        }
+                      : undefined
+                  }
                 />
               ))}
             </ul>

@@ -1855,6 +1855,7 @@ export function Composer({
             sessionId={sessionId}
             cwd={executionCwd}
             onPicked={insertBrowserPick}
+            canShow
           />
         ) : null}
         <ContextMeter

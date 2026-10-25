@@ -34,6 +34,8 @@
 //! - [`pick`]: "Point at an element": the user picks an element of a thread's
 //!   tab with the browser's inspect highlight; the composer gets a line
 //!   naming it and the agent's next snapshot marks it.
+//! - [`live`]: "Show in MonoCode": a thread's tab shown live in a MonoCode
+//!   panel (CDP screencast), with the user's clicks and typing sent back.
 //! - [`agent`]: the agent side, in the same `monocode` binary: the
 //!   `monocode browser` CLI, the `monocode browser-mcp` server, their shared
 //!   transport client and the provider registration.
@@ -65,6 +67,7 @@ pub mod diagnostics;
 pub mod discovery;
 pub mod launch;
 pub mod link;
+pub mod live;
 pub mod pick;
 pub mod policy;
 pub mod protocol;
@@ -294,6 +297,8 @@ pub struct BrowserHost {
     startup_pages: Mutex<Vec<TargetId>>,
     /// Cancels the element pick running now, if any (one at a time).
     picking: Mutex<Option<Arc<AtomicBool>>>,
+    /// Stops the live view running now, if any (one at a time).
+    live: Mutex<Option<Arc<live::LiveControl>>>,
     /// Requests being handled now, by session and request id.
     inflight: Mutex<HashMap<(String, String), Arc<InFlight>>>,
     /// Serialises the Settings and thread-menu commands, which run off the
@@ -378,6 +383,7 @@ impl BrowserHost {
             force_window: AtomicBool::new(false),
             startup_pages: Mutex::new(Vec::new()),
             picking: Mutex::new(None),
+            live: Mutex::new(None),
             inflight: Mutex::new(HashMap::new()),
             commands: Mutex::new(()),
             #[cfg(test)]
@@ -1797,6 +1803,111 @@ impl BrowserHost {
         }
     }
 
+    /// The main-frame session of `tab` when `session` holds it open.
+    fn held_tab(&self, session: &str, tab: &TabId) -> Result<live::LiveTab, String> {
+        let state = self.policy.read();
+        let lease = state.lease(tab).ok_or("That tab is gone.")?;
+        if lease.owner != session {
+            return Err("That tab belongs to another thread.".into());
+        }
+        if lease.state != TabState::Open {
+            return Err("That tab is not open.".into());
+        }
+        Ok(live::LiveTab {
+            tab: tab.clone(),
+            main: lease
+                .cdp_session
+                .clone()
+                .ok_or("That tab is still opening.")?,
+        })
+    }
+
+    /// "Show in MonoCode": stream pictures of `tab`, one of `session`'s tabs,
+    /// to `sink` until [`Self::stop_live`], another view, or the tab is gone.
+    /// Blocks while the view runs.
+    pub fn live_view(
+        &self,
+        session: &str,
+        tab: &TabId,
+        view: &str,
+        size: live::PanelSize,
+        sink: impl FnMut(live::LiveFrame),
+    ) -> Result<live::LiveEnd, String> {
+        if !self.link.is_open() {
+            return Err("MonoCode is not connected to the browser.".into());
+        }
+        let target = self.held_tab(session, tab)?;
+        let control = Arc::new(live::LiveControl::new(view.to_string()));
+        let previous = self
+            .live
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .replace(control.clone());
+        if let Some(previous) = previous {
+            previous.stop();
+            previous.wait_finished(Duration::from_secs(2));
+        }
+        let alive = || {
+            self.policy
+                .read()
+                .lease(tab)
+                .is_some_and(|lease| lease.state == TabState::Open && lease.owner == session)
+        };
+        let outcome = live::run(&self.link, &target, size, &control, alive, sink);
+        control.finish();
+        {
+            let mut running = self.live.lock().unwrap_or_else(|e| e.into_inner());
+            if running.as_ref().is_some_and(|c| Arc::ptr_eq(c, &control)) {
+                *running = None;
+            }
+        }
+        outcome
+    }
+
+    /// Stop the live view running now, if it is `view` (any view without
+    /// one). A pane that goes away stops only its own view, never the one a
+    /// newer pane started, even for the same tab (a pane moved in the
+    /// layout is a new pane while the old one animates out).
+    pub fn stop_live(&self, view: Option<&str>) {
+        let mut running = self.live.lock().unwrap_or_else(|e| e.into_inner());
+        if view.is_some_and(|view| running.as_ref().is_some_and(|c| c.view != view)) {
+            return;
+        }
+        if let Some(control) = running.take() {
+            control.stop();
+        }
+    }
+
+    /// The pane of `view` changed size: its view follows it.
+    pub fn resize_live(&self, view: &str, size: live::PanelSize) {
+        let running = self.live.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(control) = running.as_ref().filter(|c| c.view == view) {
+            control.resize(size);
+        }
+    }
+
+    /// The panel's Back, Forward, Reload or address field, in `tab`.
+    pub fn live_navigate(
+        &self,
+        session: &str,
+        tab: &TabId,
+        nav: &live::LiveNav,
+    ) -> Result<(), String> {
+        let target = self.held_tab(session, tab)?;
+        live::navigate(&self.link, &target, nav)
+    }
+
+    /// The user's click, scroll or key in the live view of `tab`.
+    pub fn live_input(
+        &self,
+        session: &str,
+        tab: &TabId,
+        input: &live::LiveInput,
+    ) -> Result<(), String> {
+        let target = self.held_tab(session, tab)?;
+        live::input(&self.link, &target, input)
+    }
+
     /// Settings "Close tab" for any agent tab, whoever owns it.
     pub fn close_tab_by_user(&self, tab: &TabId) -> Result<(), String> {
         let target = {
@@ -2944,6 +3055,71 @@ pub fn browser_cancel_pick() -> Result<(), String> {
 }
 
 #[tauri::command]
+pub async fn browser_live_start(
+    window: WebviewWindow,
+    session_id: String,
+    tab: String,
+    view: String,
+    width: u32,
+    height: u32,
+    scale: Option<f64>,
+) -> Result<live::LiveEnd, String> {
+    let host = require_host()?;
+    let size = live::PanelSize::new(width, height, scale.unwrap_or(1.0));
+    tauri::async_runtime::spawn_blocking(move || {
+        host.live_view(&session_id, &TabId(tab), &view, size, |frame| {
+            let _ = window.emit(live::FRAME_EVENT, frame);
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub fn browser_live_stop(view: Option<String>) -> Result<(), String> {
+    require_host()?.stop_live(view.as_deref());
+    Ok(())
+}
+
+#[tauri::command]
+pub fn browser_live_resize(
+    view: String,
+    width: u32,
+    height: u32,
+    scale: Option<f64>,
+) -> Result<(), String> {
+    require_host()?.resize_live(
+        &view,
+        live::PanelSize::new(width, height, scale.unwrap_or(1.0)),
+    );
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn browser_live_navigate(
+    session_id: String,
+    tab: String,
+    nav: live::LiveNav,
+) -> Result<(), String> {
+    let host = require_host()?;
+    tauri::async_runtime::spawn_blocking(move || host.live_navigate(&session_id, &TabId(tab), &nav))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn browser_live_input(
+    session_id: String,
+    tab: String,
+    input: live::LiveInput,
+) -> Result<(), String> {
+    let host = require_host()?;
+    tauri::async_runtime::spawn_blocking(move || host.live_input(&session_id, &TabId(tab), &input))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub async fn browser_open_window() -> Result<BrowserState, String> {
     on_host(|host| {
         host.open_window()?;
@@ -3811,6 +3987,458 @@ mod tests {
         }
         host.cancel_pick();
         assert_eq!(waiting.join().unwrap(), Ok(None));
+    }
+
+    /// A tab whose screencast sends `frames` pictures, the next one after
+    /// each acknowledgement.
+    fn screencast_fake(frames: i64) -> FakeCdp {
+        use super::testing::Event;
+        let counter = Arc::new(AtomicU64::new(1));
+        let frame = |n: i64, session: Option<&str>| {
+            Event::new(
+                "Page.screencastFrame",
+                json!({
+                    "data": format!("frame{n}"),
+                    "sessionId": n,
+                    "metadata": { "deviceWidth": 800, "deviceHeight": 600, "offsetTop": 0, "pageScaleFactor": 1 }
+                }),
+                session,
+            )
+        };
+        FakeCdp::start_with(move |received| {
+            let session = received.session.as_deref();
+            match received.method.as_str() {
+                "Page.navigate" => {
+                    let url = received.params["url"].as_str().unwrap_or("").to_string();
+                    Response::ResultThen(
+                        json!({ "frameId": "T1", "loaderId": "L2" }),
+                        vec![
+                            Event::new(
+                                "Page.frameNavigated",
+                                json!({ "frame": { "id": "T1", "loaderId": "L2", "url": url } }),
+                                session,
+                            ),
+                            Event::new(
+                                "Page.lifecycleEvent",
+                                json!({ "frameId": "T1", "loaderId": "L2", "name": "load" }),
+                                session,
+                            ),
+                        ],
+                    )
+                }
+                "Page.startScreencast" => Response::ResultThen(json!({}), vec![frame(1, session)]),
+                "Page.screencastFrameAck" => {
+                    let n = received.params["sessionId"].as_i64().unwrap_or(0);
+                    if n < frames {
+                        Response::ResultThen(json!({}), vec![frame(n + 1, session)])
+                    } else {
+                        Response::Result(json!({}))
+                    }
+                }
+                _ => super::testing::default_response(received, &counter),
+            }
+        })
+    }
+
+    fn opened_tab(host: &Arc<BrowserHost>, session: &str, url: &str) -> TabId {
+        let opened = host.handle_request(
+            session,
+            request(
+                "open",
+                "tabs.open",
+                json!({ "url": url, "snapshot": false }),
+            ),
+        );
+        assert_eq!(opened.outcome, Outcome::Done, "{opened:?}");
+        TabId(
+            opened.data.as_ref().unwrap()["tab"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+        )
+    }
+
+    #[test]
+    fn the_live_view_streams_acknowledged_pictures_until_stopped() {
+        let server = screencast_fake(3);
+        let dir = profile_for(&server);
+        let host = BrowserHost::for_tests(settings_for(&dir));
+        host.set_toggle(true);
+        assert!(wait_state(&host, ConnectionState::Connected));
+        host.turn_started("s1", "main", "/repo", Some(true));
+        let tab = opened_tab(&host, "s1", "https://example.com/");
+
+        let frames = Arc::new(Mutex::new(Vec::new()));
+        let viewing = {
+            let (host, tab, frames) = (host.clone(), tab.clone(), frames.clone());
+            thread::spawn(move || {
+                host.live_view(
+                    "s1",
+                    &tab,
+                    "v1",
+                    live::PanelSize::new(640, 480, 1.0),
+                    |frame| frames.lock().unwrap().push(frame),
+                )
+            })
+        };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while frames.lock().unwrap().len() < 3 {
+            assert!(Instant::now() < deadline, "pictures never came");
+            thread::sleep(Duration::from_millis(5));
+        }
+        host.stop_live(None);
+        assert_eq!(viewing.join().unwrap(), Ok(live::LiveEnd::Stopped));
+
+        let frames = frames.lock().unwrap().clone();
+        assert_eq!(
+            frames.iter().map(|f| f.seq).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        assert_eq!(frames[0].data, "frame1");
+        assert_eq!((frames[0].width, frames[0].height), (800.0, 600.0));
+        assert_eq!(frames[0].tab, tab.0);
+
+        let sent = server.received();
+        let start = sent
+            .iter()
+            .find(|r| r.method == "Page.startScreencast")
+            .expect("screencast started");
+        assert_eq!(start.params["maxWidth"], 640);
+        assert_eq!(start.params["format"], "jpeg");
+        let acks: Vec<i64> = sent
+            .iter()
+            .filter(|r| r.method == "Page.screencastFrameAck")
+            .filter_map(|r| r.params["sessionId"].as_i64())
+            .collect();
+        assert_eq!(acks, vec![1, 2, 3]);
+        let at = |method: &str| {
+            sent.iter()
+                .position(|r| r.method == method)
+                .unwrap_or_else(|| panic!("{method} not sent"))
+        };
+        assert!(at("Emulation.setDeviceMetricsOverride") < at("Page.startScreencast"));
+        assert!(at("Page.stopScreencast") < at("Emulation.clearDeviceMetricsOverride"));
+        let metrics = &sent[at("Emulation.setDeviceMetricsOverride")].params;
+        assert_eq!(
+            (metrics["width"].as_u64(), metrics["height"].as_u64()),
+            (Some(640), Some(480))
+        );
+    }
+
+    #[test]
+    fn a_moved_pane_takes_over_the_tab_after_the_old_view_hands_it_back() {
+        let server = screencast_fake(0);
+        let dir = profile_for(&server);
+        let host = BrowserHost::for_tests(settings_for(&dir));
+        host.set_toggle(true);
+        assert!(wait_state(&host, ConnectionState::Connected));
+        host.turn_started("s1", "main", "/repo", Some(true));
+        let tab = opened_tab(&host, "s1", "https://example.com/");
+        let view = |name: &'static str| {
+            let (host, tab) = (host.clone(), tab.clone());
+            thread::spawn(move || {
+                host.live_view(
+                    "s1",
+                    &tab,
+                    name,
+                    live::PanelSize::new(640, 480, 1.0),
+                    |_| {},
+                )
+            })
+        };
+        let started = |count: usize| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while server
+                .received()
+                .iter()
+                .filter(|r| r.method == "Page.startScreencast")
+                .count()
+                < count
+            {
+                assert!(Instant::now() < deadline, "the view never started");
+                thread::sleep(Duration::from_millis(5));
+            }
+        };
+        let old = view("old");
+        started(1);
+        let new = view("new");
+        assert_eq!(old.join().unwrap(), Ok(live::LiveEnd::Stopped));
+        started(2);
+        // The old pane goes away late: the new view keeps running.
+        host.stop_live(Some("old"));
+        thread::sleep(Duration::from_millis(250));
+        assert!(!new.is_finished());
+        host.stop_live(Some("new"));
+        assert_eq!(new.join().unwrap(), Ok(live::LiveEnd::Stopped));
+
+        // The old view's clean-up came before the new view's viewport.
+        let sent = server.received();
+        let methods: Vec<&str> = sent.iter().map(|r| r.method.as_str()).collect();
+        let first_clear = methods
+            .iter()
+            .position(|m| *m == "Emulation.clearDeviceMetricsOverride")
+            .unwrap();
+        let second_metrics = methods
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| **m == "Emulation.setDeviceMetricsOverride")
+            .nth(1)
+            .map(|(i, _)| i)
+            .unwrap();
+        assert!(first_clear < second_metrics, "{methods:?}");
+    }
+
+    #[test]
+    fn live_input_reaches_only_the_owning_threads_tab() {
+        let server = screencast_fake(0);
+        let dir = profile_for(&server);
+        let host = BrowserHost::for_tests(settings_for(&dir));
+        host.set_toggle(true);
+        assert!(wait_state(&host, ConnectionState::Connected));
+        host.turn_started("s1", "main", "/repo", Some(true));
+        let tab = opened_tab(&host, "s1", "https://example.com/");
+        let click: live::LiveInput = serde_json::from_value(json!({
+            "kind": "mouse", "event": "mousePressed", "x": 12.0, "y": 34.0,
+            "button": "left", "buttons": 1, "clickCount": 1
+        }))
+        .unwrap();
+
+        host.live_input("s1", &tab, &click).unwrap();
+        let pressed = server
+            .received()
+            .into_iter()
+            .find(|r| r.method == "Input.dispatchMouseEvent")
+            .expect("click sent");
+        assert_eq!(pressed.params["type"], "mousePressed");
+        assert_eq!(
+            (pressed.params["x"].as_f64(), pressed.params["y"].as_f64()),
+            (Some(12.0), Some(34.0))
+        );
+
+        let refused = host.live_input("s2", &tab, &click).unwrap_err();
+        assert!(refused.contains("another thread"), "{refused}");
+        let other = host
+            .live_view(
+                "s2",
+                &tab,
+                "v2",
+                live::PanelSize::new(640, 480, 1.0),
+                |_| {},
+            )
+            .unwrap_err();
+        assert!(other.contains("another thread"), "{other}");
+    }
+
+    /// Against a real Chrome, when `MONOCODE_TEST_CHROME` names one: the
+    /// agent's tab stays in the background, and the live view still gets
+    /// moving pictures, and a click and typed text reach the page.
+    #[test]
+    fn live_view_of_a_background_tab_in_a_real_chrome() {
+        let Some(exe) = std::env::var_os("MONOCODE_TEST_CHROME") else {
+            return;
+        };
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        thread::spawn(move || {
+            const PAGE: &str = "<!doctype html><meta charset=utf-8><title>start</title>\
+                <body style='margin:0;font:20px sans-serif'><div id=n>0</div>\
+                <button id=b style='position:absolute;left:20px;top:80px;width:200px;height:60px' \
+                onclick=\"this.textContent='clicked'\">click me</button>\
+                <form onsubmit=\"document.getElementById('b').textContent='sent: '+document.getElementById('i').value;return false\">\
+                <input id=i oninput=\"document.getElementById('b').textContent='typed: '+this.value\" style='position:absolute;left:20px;top:160px;width:300px;height:40px'></form>\
+                <script>let k=0;(function f(){document.getElementById('n').textContent=++k;requestAnimationFrame(f)})()</script>";
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut buffer = [0u8; 2048];
+                let _ = stream.read(&mut buffer);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{PAGE}",
+                    PAGE.len()
+                );
+            }
+        });
+
+        let dir = std::env::temp_dir().join(format!("monocode-live-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut args = vec![
+            format!("--user-data-dir={}", dir.display()),
+            "--remote-debugging-port=0".to_string(),
+            "--no-first-run".to_string(),
+            "--no-default-browser-check".to_string(),
+            "--window-size=1000,700".to_string(),
+        ];
+        #[cfg(unix)]
+        if unsafe { libc::geteuid() } == 0 {
+            args.push("--no-sandbox".to_string());
+        }
+        if std::env::var_os("DISPLAY").is_none() && cfg!(target_os = "linux") {
+            args.push("--headless=new".to_string());
+        }
+        args.push("about:blank".to_string());
+        let mut chrome = std::process::Command::new(exe).args(&args).spawn().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while !dir.join(discovery::ACTIVE_PORT_FILE).is_file() {
+            assert!(Instant::now() < deadline, "Chrome did not start");
+            thread::sleep(Duration::from_millis(50));
+        }
+        // The port is up a moment before the first window.
+        thread::sleep(Duration::from_secs(1));
+
+        let host = BrowserHost::for_tests(settings_for(&dir));
+        host.set_toggle(true);
+        assert!(
+            wait_state(&host, ConnectionState::Connected),
+            "{:?}",
+            host.connection()
+        );
+        host.turn_started("s1", "main", "/repo", Some(true));
+        let tab = opened_tab(&host, "s1", &format!("http://127.0.0.1:{port}/"));
+
+        let frames = Arc::new(Mutex::new(Vec::new()));
+        let started = Instant::now();
+        let viewing = {
+            let (host, tab, frames) = (host.clone(), tab.clone(), frames.clone());
+            thread::spawn(move || {
+                host.live_view(
+                    "s1",
+                    &tab,
+                    "v1",
+                    live::PanelSize::new(900, 600, 1.0),
+                    |frame| frames.lock().unwrap().push((started.elapsed(), frame)),
+                )
+            })
+        };
+        thread::sleep(Duration::from_secs(3));
+        let count = frames.lock().unwrap().len();
+
+        let send = |input: Value| {
+            let input: live::LiveInput = serde_json::from_value(input).unwrap();
+            host.live_input("s1", &tab, &input).unwrap();
+        };
+        let click = |x: f64, y: f64| {
+            for (event, buttons) in [("mousePressed", 1), ("mouseReleased", 0)] {
+                send(json!({ "kind": "mouse", "event": event, "x": x, "y": y,
+                    "button": "left", "buttons": buttons, "clickCount": 1 }));
+            }
+        };
+        let looks = AtomicU64::new(0);
+        let snapshot = || {
+            let id = format!("look{}", looks.fetch_add(1, Ordering::Relaxed));
+            let taken =
+                host.handle_request("s1", request(&id, "snapshot", json!({ "tab": tab.0 })));
+            taken
+                .data
+                .as_ref()
+                .and_then(|d| d["snapshot"].as_str())
+                .unwrap_or("")
+                .to_string()
+        };
+        let wait_for = |want: &str| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                let now = snapshot();
+                if now.contains(want) || Instant::now() >= deadline {
+                    return now;
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+        };
+        click(120.0, 110.0);
+        let after_click = wait_for("button \"clicked\"");
+        assert!(after_click.contains("button \"clicked\""), "{after_click}");
+        click(170.0, 180.0);
+        send(json!({ "kind": "text", "text": "Ćao šđž" }));
+        let after_text = wait_for("button \"typed: Ćao šđž\"");
+        assert!(
+            after_text.contains("button \"typed: Ćao šđž\""),
+            "{after_text}"
+        );
+        send(
+            json!({ "kind": "key", "event": "keyDown", "key": "Enter", "code": "Enter",
+            "text": "\r", "keyCode": 13 }),
+        );
+        send(
+            json!({ "kind": "key", "event": "keyUp", "key": "Enter", "code": "Enter",
+            "keyCode": 13 }),
+        );
+        let after_typing = wait_for("sent: Ćao šđž");
+        assert!(after_typing.contains("sent: Ćao šđž"), "{after_typing}");
+
+        // The pane got smaller: pictures follow at the new size.
+        host.resize_live("v1", live::PanelSize::new(700, 500, 1.0));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while frames.lock().unwrap().last().map(|(_, f)| f.width) != Some(700.0) {
+            assert!(Instant::now() < deadline, "the view kept its old size");
+            thread::sleep(Duration::from_millis(50));
+        }
+        // The address field takes a bare host; Back returns.
+        let current = || {
+            host.state()
+                .tabs
+                .into_iter()
+                .find(|t| t.tab.tab == tab)
+                .unwrap()
+                .tab
+                .url
+        };
+        let wait_url = |want: &str| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !current().ends_with(want) {
+                assert!(Instant::now() < deadline, "{} is not {want}", current());
+                thread::sleep(Duration::from_millis(50));
+            }
+        };
+        host.live_navigate(
+            "s1",
+            &tab,
+            &live::LiveNav::Go {
+                url: format!("127.0.0.1:{port}/next"),
+            },
+        )
+        .unwrap();
+        wait_url("/next");
+        host.live_navigate("s1", &tab, &live::LiveNav::Back)
+            .unwrap();
+        wait_url(&format!("{port}/"));
+        assert!(host
+            .live_navigate(
+                "s1",
+                &tab,
+                &live::LiveNav::Go {
+                    url: "file:///etc/passwd".into()
+                }
+            )
+            .is_err());
+        // An older pane of the same tab going away leaves this view running.
+        host.stop_live(Some("v0"));
+        assert!(!viewing.is_finished());
+
+        host.stop_live(None);
+        assert_eq!(viewing.join().unwrap(), Ok(live::LiveEnd::Stopped));
+        let frames = frames.lock().unwrap();
+        let first = frames.first().map(|(at, _)| *at);
+        eprintln!(
+            "live view: {count} pictures in 3 s, first after {first:?}, last {}x{} css px, {} bytes",
+            frames.last().map_or(0.0, |(_, f)| f.width),
+            frames.last().map_or(0.0, |(_, f)| f.height),
+            frames.last().map_or(0, |(_, f)| f.data.len()),
+        );
+        if let (Some(path), Some((_, frame))) =
+            (std::env::var_os("MONOCODE_TEST_LIVE_FRAME"), frames.last())
+        {
+            use base64::Engine as _;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(&frame.data)
+                .unwrap();
+            std::fs::write(path, bytes).unwrap();
+        }
+        host.set_toggle(false);
+        let _ = chrome.kill();
+        let _ = chrome.wait();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(count >= 30, "only {count} pictures in 3 s");
     }
 
     #[test]

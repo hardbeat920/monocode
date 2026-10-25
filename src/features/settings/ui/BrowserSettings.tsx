@@ -4,6 +4,7 @@ import { copyText } from "../../../platform/tauri/clipboard";
 import { pickFolders } from "../../../platform/tauri/fs";
 import {
   Copy,
+  AppWindow,
   CursorMagicSelection,
   RefreshCw,
   RotateCcw,
@@ -183,6 +184,31 @@ export function BrowserSettings({
               { value: "always", label: "Always on" },
             ]}
             onChange={(access) => save({ access: access as BrowserAccessMode })}
+          />
+        </Row>
+        <Row
+          id="browser-tabs-in-monocode"
+          label="Show agent tabs"
+          description={
+            state.settings.tabs_in_monocode
+              ? `A thread's new tab opens in a pane beside the thread, where you can watch it, click and type. Move or resize the pane and the next one opens the same way.${
+                  managed && state.settings.show_window
+                    ? " Turn off Show browser window to keep the browser itself out of sight."
+                    : ""
+                }`
+              : 'Tabs stay in the browser. "Show in MonoCode" in the thread\'s browser menu still opens one beside the thread.'
+          }
+        >
+          <Select
+            label="Show agent tabs"
+            value={state.settings.tabs_in_monocode ? "monocode" : "browser"}
+            options={[
+              { value: "browser", label: "In the browser window" },
+              { value: "monocode", label: "In MonoCode, beside the thread" },
+            ]}
+            onChange={(where) =>
+              save({ tabs_in_monocode: where === "monocode" })
+            }
           />
         </Row>
         {managed ? (
@@ -802,6 +828,8 @@ export function BrowserTabRow({
   run,
   onPick,
   picking = false,
+  onShow,
+  showing = false,
 }: {
   tab: BrowserTab;
   /** Threads with access the tab can move to. */
@@ -811,6 +839,10 @@ export function BrowserTabRow({
   onPick?: () => void;
   /** A pick runs in this tab now. */
   picking?: boolean;
+  /** The thread indicator: "Show in MonoCode" for this tab. */
+  onShow?: () => void;
+  /** The tab is shown in MonoCode now. */
+  showing?: boolean;
 }) {
   const released = tab.state === "revoked";
   return (
@@ -841,6 +873,18 @@ export function BrowserTabRow({
           className={`grid size-7 shrink-0 place-items-center rounded-md hover:bg-content/10 hover:text-content ${picking ? "bg-teal-400/15 text-teal-600 dark:text-teal-300" : "text-content/55"}`}
         >
           <CursorMagicSelection className="size-3.5" strokeWidth={1.75} />
+        </button>
+      ) : null}
+      {onShow && !released && tab.state === "open" ? (
+        <button
+          type="button"
+          title="Show this tab in MonoCode"
+          aria-label="Show in MonoCode"
+          aria-pressed={showing}
+          onClick={onShow}
+          className={`grid size-7 shrink-0 place-items-center rounded-md hover:bg-content/10 hover:text-content ${showing ? "bg-teal-400/15 text-teal-600 dark:text-teal-300" : "text-content/55"}`}
+        >
+          <AppWindow className="size-3.5" strokeWidth={1.75} />
         </button>
       ) : null}
       {!released ? (

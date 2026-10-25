@@ -123,6 +123,16 @@ pub enum Method {
     OverlayDisable,
     OverlaySetInspectMode,
     OverlayHideHighlight,
+    /// The user watches an agent tab in a MonoCode panel ([`super::live`]);
+    /// never sent for an agent.
+    PageStartScreencast,
+    PageStopScreencast,
+    PageScreencastFrameAck,
+    EmulationSetDeviceMetricsOverride,
+    EmulationClearDeviceMetricsOverride,
+    EmulationSetScrollbarsHidden,
+    /// The user's Reload in that panel.
+    PageReload,
 }
 
 impl Method {
@@ -176,6 +186,13 @@ impl Method {
             OverlayDisable => "Overlay.disable",
             OverlaySetInspectMode => "Overlay.setInspectMode",
             OverlayHideHighlight => "Overlay.hideHighlight",
+            PageStartScreencast => "Page.startScreencast",
+            PageStopScreencast => "Page.stopScreencast",
+            PageScreencastFrameAck => "Page.screencastFrameAck",
+            EmulationSetDeviceMetricsOverride => "Emulation.setDeviceMetricsOverride",
+            EmulationClearDeviceMetricsOverride => "Emulation.clearDeviceMetricsOverride",
+            EmulationSetScrollbarsHidden => "Emulation.setScrollbarsHidden",
+            PageReload => "Page.reload",
         }
     }
 

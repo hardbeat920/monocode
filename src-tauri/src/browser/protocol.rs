@@ -1364,6 +1364,9 @@ pub struct BrowserSettings {
     pub enabled: bool,
     /// Managed mode: a visible window; off starts the browser headless.
     pub show_window: bool,
+    /// A thread's new tab opens in a MonoCode pane beside the thread (the
+    /// UI does it); off, tabs show only in the browser.
+    pub tabs_in_monocode: bool,
 }
 
 impl Default for BrowserSettings {
@@ -1379,6 +1382,7 @@ impl Default for BrowserSettings {
             access: AccessMode::Ask,
             enabled: false,
             show_window: true,
+            tabs_in_monocode: false,
         }
     }
 }
