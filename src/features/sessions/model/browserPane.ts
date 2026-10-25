@@ -105,3 +105,37 @@ export function saveBrowserPanePlacement(
     // Not remembered this time.
   }
 }
+
+const shown = new Map<string, number>();
+let picking: string | null = null;
+const pickListeners = new Set<() => void>();
+
+/** A pane shows `tab` live now; call the result when it no longer does. */
+export function markBrowserTabShown(tab: string): () => void {
+  shown.set(tab, (shown.get(tab) ?? 0) + 1);
+  return () => {
+    const left = (shown.get(tab) ?? 1) - 1;
+    if (left > 0) shown.set(tab, left);
+    else shown.delete(tab);
+  };
+}
+
+export function browserTabShown(tab: string): boolean {
+  return shown.has(tab);
+}
+
+/** The tab where "Point at an element" waits for the user's click. */
+export function setBrowserPickTab(tab: string | null): void {
+  if (picking === tab) return;
+  picking = tab;
+  for (const listener of pickListeners) listener();
+}
+
+export function browserPickTab(): string | null {
+  return picking;
+}
+
+export function subscribeBrowserPick(listener: () => void): () => void {
+  pickListeners.add(listener);
+  return () => pickListeners.delete(listener);
+}

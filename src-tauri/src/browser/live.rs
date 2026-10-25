@@ -25,8 +25,11 @@ use super::protocol::TabId;
 pub const FRAME_EVENT: &str = "monocode-browser-live-frame";
 const FRAME: &str = "Page.screencastFrame";
 const POLL: Duration = Duration::from_millis(100);
+/// A page this long without a new picture gets a lossless one: moving
+/// pictures are JPEG, which softens text, a still one should be sharp.
+const STILL_AFTER: Duration = Duration::from_millis(250);
 /// JPEG quality of the pictures, 0 to 100.
-const QUALITY: u32 = 70;
+const QUALITY: u32 = 90;
 /// Bounds for the panel size, in CSS pixels.
 const MIN_SIDE: u32 = 200;
 const MAX_SIDE: u32 = 3840;
@@ -45,8 +48,11 @@ pub struct LiveTab {
 #[serde(rename_all = "camelCase")]
 pub struct LiveFrame {
     pub tab: String,
-    /// JPEG, base64.
+    /// The picture, base64, in `format`.
     pub data: String,
+    /// "jpeg" while the page moves; "png" for the lossless still once it
+    /// has stopped.
+    pub format: &'static str,
     /// Size of the page's viewport in CSS pixels; input coordinates are in
     /// this space.
     pub width: f64,
@@ -169,10 +175,13 @@ impl PanelSize {
         }
     }
 
+    /// The largest picture to ask for: never under the page's own device
+    /// pixels, so the browser never scales a picture down (a pixel short
+    /// blurs the whole frame).
     fn picture(self) -> (u32, u32) {
         (
-            (f64::from(self.width) * self.scale).round() as u32,
-            (f64::from(self.height) * self.scale).round() as u32,
+            (f64::from(self.width) * self.scale).ceil() as u32 + 2,
+            (f64::from(self.height) * self.scale).ceil() as u32 + 2,
         )
     }
 }
@@ -298,6 +307,8 @@ pub fn run(
     }
     let mut current = size;
     let mut seq = 0;
+    // The last JPEG, until the page has been still long enough for a PNG.
+    let mut moving: Option<(std::time::Instant, f64, f64)> = None;
     let end = loop {
         if control.stopped() {
             break LiveEnd::Stopped;
@@ -315,7 +326,26 @@ pub fn run(
             }
             current = next;
         }
-        let Some(event) = events.recv_timeout(POLL) else {
+        let wait = moving.map_or(POLL, |(at, _, _)| {
+            STILL_AFTER.saturating_sub(at.elapsed()).min(POLL)
+        });
+        let Some(event) = events.recv_timeout(wait) else {
+            if let Some((at, width, height)) = moving {
+                if at.elapsed() >= STILL_AFTER {
+                    moving = None;
+                    if let Some(data) = still(link, tab) {
+                        seq += 1;
+                        sink(LiveFrame {
+                            tab: tab.tab.0.clone(),
+                            data,
+                            format: "png",
+                            width,
+                            height,
+                            seq,
+                        });
+                    }
+                }
+            }
             continue;
         };
         if event.method != FRAME {
@@ -334,16 +364,33 @@ pub fn run(
         };
         seq += 1;
         let metadata = &event.params["metadata"];
+        let width = metadata["deviceWidth"].as_f64().unwrap_or(0.0);
+        let height = metadata["deviceHeight"].as_f64().unwrap_or(0.0);
+        moving = Some((std::time::Instant::now(), width, height));
         sink(LiveFrame {
             tab: tab.tab.0.clone(),
             data: data.to_string(),
-            width: metadata["deviceWidth"].as_f64().unwrap_or(0.0),
-            height: metadata["deviceHeight"].as_f64().unwrap_or(0.0),
+            format: "jpeg",
+            width,
+            height,
             seq,
         });
     };
     restore(link, tab);
     Ok(end)
+}
+
+/// A lossless picture of what the tab shows now.
+fn still(link: &Link, tab: &LiveTab) -> Option<String> {
+    send(
+        link,
+        &tab.main,
+        Method::PageCaptureScreenshot,
+        json!({ "format": "png", "fromSurface": true }),
+    )
+    .ok()?["data"]
+        .as_str()
+        .map(str::to_string)
 }
 
 /// The panel's Back, Forward, Reload and address field.
@@ -546,7 +593,8 @@ mod tests {
             (tiny.width, tiny.height, tiny.scale),
             (MIN_SIDE, MAX_SIDE, 1.0)
         );
-        assert_eq!(PanelSize::new(800, 600, 2.0).picture(), (1600, 1200));
+        assert_eq!(PanelSize::new(800, 600, 2.0).picture(), (1602, 1202));
+        assert_eq!(PanelSize::new(885, 600, 1.25).picture(), (1109, 752));
         assert_eq!(PanelSize::new(800, 600, 9.0).scale, MAX_SCALE);
     }
 

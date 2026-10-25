@@ -7,6 +7,7 @@ import {
   useEffect,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import {
   ChevronLeft,
@@ -20,6 +21,7 @@ import {
   type BrowserLiveInput,
   type BrowserLiveNav,
   type BrowserTab,
+  cancelBrowserPick,
   listenBrowserLiveFrames,
   navigateBrowserLive,
   resizeBrowserLive,
@@ -29,6 +31,11 @@ import {
   useBrowserState,
 } from "../../settings/model/browser";
 import { TabLabel } from "../../../shared/ui/TabLabel";
+import {
+  browserPickTab,
+  markBrowserTabShown,
+  subscribeBrowserPick,
+} from "../model/browserPane";
 
 /** CDP modifier bits: Alt 1, Ctrl 2, Meta 4, Shift 8. */
 export function liveModifiers(event: {
@@ -205,6 +212,14 @@ export function BrowserLiveView({
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const open = tab?.state === "open";
+  const picking =
+    useSyncExternalStore(subscribeBrowserPick, browserPickTab, () => null) ===
+    tabId;
+
+  useEffect(() => {
+    if (!visible || !open) return;
+    return markBrowserTabShown(tabId);
+  }, [tabId, visible, open]);
 
   useEffect(() => {
     if (!visible || !open) return;
@@ -244,7 +259,7 @@ export function BrowserLiveView({
       if (!live || next.tab !== tabId) return;
       count += 1;
       frame.current = next;
-      setSrc(`data:image/jpeg;base64,${next.data}`);
+      setSrc(`data:image/${next.format ?? "jpeg"};base64,${next.data}`);
       setPhase((current) =>
         current.kind === "live" ? current : { kind: "live" },
       );
@@ -346,6 +361,11 @@ export function BrowserLiveView({
     });
   };
   const key = (phase: "down" | "up", event: KeyboardEvent) => {
+    if (picking && event.key === "Escape") {
+      event.preventDefault();
+      if (phase === "down") void cancelBrowserPick().catch(() => {});
+      return;
+    }
     const input = liveKeyInput(event.nativeEvent, phase);
     if (!input) return;
     event.preventDefault();
@@ -383,6 +403,20 @@ export function BrowserLiveView({
         disabled={!open}
         onNavigate={navigate}
       />
+      {picking ? (
+        <div className="flex h-8 shrink-0 items-center gap-2 border-b border-teal-500/20 bg-teal-400/10 px-3 text-[12px] text-teal-700 dark:text-teal-200">
+          <span className="min-w-0 flex-1 truncate">
+            Click an element to show it to the agent.
+          </span>
+          <button
+            type="button"
+            onClick={() => void cancelBrowserPick().catch(() => {})}
+            className="h-6 shrink-0 rounded-md px-2 hover:bg-teal-400/15"
+          >
+            Cancel
+          </button>
+        </div>
+      ) : null}
       <div
         ref={stage}
         role="application"
@@ -417,7 +451,17 @@ export function BrowserLiveView({
             src={src}
             alt=""
             draggable={false}
-            className={`absolute inset-0 size-full object-fill select-none transition-opacity duration-150 ${
+            // At the page's own CSS size: one picture pixel per screen
+            // pixel, never stretched to the pane (that blurs text).
+            style={
+              frame.current
+                ? {
+                    width: `${frame.current.width}px`,
+                    height: `${frame.current.height}px`,
+                  }
+                : undefined
+            }
+            className={`absolute top-0 left-0 max-w-none select-none transition-opacity duration-150 ${
               phase.kind === "live" && !notice ? "" : "opacity-40"
             }`}
           />

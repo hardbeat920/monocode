@@ -261,6 +261,14 @@ describe("browser state views", () => {
     expect(invoke).toHaveBeenCalledWith("browser_pick_element", {
       sessionId: "s1",
       tab: "t_1",
+      inPane: false,
+    });
+    vi.mocked(invoke).mockResolvedValueOnce(null);
+    await pickBrowserElement("s1", "t_1", true);
+    expect(invoke).toHaveBeenLastCalledWith("browser_pick_element", {
+      sessionId: "s1",
+      tab: "t_1",
+      inPane: true,
     });
     vi.mocked(invoke).mockResolvedValueOnce(undefined);
     await cancelBrowserPick();
@@ -456,9 +464,7 @@ describe("browser store", () => {
     await revokeBrowserSession("s1");
     expect(invoke).toHaveBeenCalledWith("browser_revoke", { sessionId: "s1" });
     expect(browserAccessTurnedOff(browserStateSnapshot(), "s1")).toBe(true);
-    vi.mocked(invoke).mockResolvedValue(
-      browserState({ sessions: [granted()] }),
-    );
+    vi.mocked(invoke).mockResolvedValue(browserState({ sessions: [granted()] }));
     await setSessionBrowserGrant("s1", true);
     expect(browserAccessTurnedOff(browserStateSnapshot(), "s1")).toBe(false);
   });

@@ -191,10 +191,10 @@ export function BrowserSettings({
           label="Show agent tabs"
           description={
             state.settings.tabs_in_monocode
-              ? `A thread's new tab opens in a pane beside the thread, where you can watch it, click and type. Move or resize the pane and the next one opens the same way.${
-                  managed && state.settings.show_window
-                    ? " Turn off Show browser window to keep the browser itself out of sight."
-                    : ""
+              ? `A thread's new tab opens in a pane beside the thread, where you can watch it, click and type. Move or resize the pane and the next one opens the same way. No browser window comes forward for agent tabs${
+                  managed
+                    ? "; the MonoCode browser runs without one (Open browser still shows it, to sign in to sites)."
+                    : "."
                 }`
               : 'Tabs stay in the browser. "Show in MonoCode" in the thread\'s browser menu still opens one beside the thread.'
           }
@@ -217,17 +217,19 @@ export function BrowserSettings({
               choice={state.settings.browser}
               onChange={(browser) => save({ browser })}
             />
-            <Row
-              id="browser-show-window"
-              label="Show browser window"
-              description="Off: the MonoCode browser runs without a window. Agents work the same way, and Open browser still shows one."
-            >
-              <Toggle
+            {state.settings.tabs_in_monocode ? null : (
+              <Row
+                id="browser-show-window"
                 label="Show browser window"
-                on={state.settings.show_window}
-                onChange={(show_window) => save({ show_window })}
-              />
-            </Row>
+                description="Off: the MonoCode browser runs without a window. Agents work the same way, and Open browser still shows one."
+              >
+                <Toggle
+                  label="Show browser window"
+                  on={state.settings.show_window}
+                  onChange={(show_window) => save({ show_window })}
+                />
+              </Row>
+            )}
             {isPrivate ? null : (
               <Row
                 id="browser-open"

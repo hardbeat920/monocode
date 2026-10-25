@@ -17,7 +17,11 @@ import {
   useBrowserState,
 } from "../../settings/model/browser";
 import { AddFreeTab, BrowserTabRow } from "../../settings/ui/BrowserSettings";
-import { requestBrowserPane } from "../model/browserPane";
+import {
+  browserTabShown,
+  requestBrowserPane,
+  setBrowserPickTab,
+} from "../model/browserPane";
 
 const INDICATOR = {
   granted: {
@@ -73,20 +77,35 @@ export function BrowserIndicator({
         return;
       }
       setPicking(tab);
-      pickBrowserElement(sessionId, tab)
+      // With tabs shown in MonoCode the user picks in the tab's pane (opened
+      // for it if needed), and the browser window stays where it is.
+      const inPane = !!state?.settings.tabs_in_monocode || browserTabShown(tab);
+      if (inPane) {
+        if (!browserTabShown(tab)) {
+          const title =
+            state?.tabs.find((entry) => entry.tab === tab)?.title ?? "";
+          requestBrowserPane({ sessionId, tab, title });
+        }
+        setBrowserPickTab(tab);
+        setOpen(false);
+      }
+      pickBrowserElement(sessionId, tab, inPane)
         .then((picked) => {
           if (!picked) return;
           onPicked?.(picked);
           setOpen(false);
         })
-        .catch((err: unknown) =>
-          setError(err instanceof Error ? err.message : String(err)),
-        )
-        .finally(() =>
-          setPicking((current) => (current === tab ? null : current)),
-        );
+        .catch((err: unknown) => {
+          setError(err instanceof Error ? err.message : String(err));
+          // The menu is where the error shows.
+          if (inPane) setOpen(true);
+        })
+        .finally(() => {
+          setPicking((current) => (current === tab ? null : current));
+          if (inPane) setBrowserPickTab(null);
+        });
     },
-    [onPicked, picking, sessionId],
+    [onPicked, picking, sessionId, state],
   );
   // A pick still running when the composer goes away is cancelled, so the
   // browser stops highlighting for a message nobody can send.

@@ -411,13 +411,17 @@ export type PickedBrowserElement = {
  * "Point at an element": the browser highlights what the pointer is over in
  * `tab` until the user clicks. `null` when the pick was cancelled.
  */
+/** `inPane`: the user clicks the tab's picture in a MonoCode pane, so the
+ * browser window is neither needed nor brought forward. */
 export function pickBrowserElement(
   sessionId: string,
   tab: string,
+  inPane = false,
 ): Promise<PickedBrowserElement | null> {
   return invoke<PickedBrowserElement | null>("browser_pick_element", {
     sessionId,
     tab,
+    inPane,
   });
 }
 
@@ -431,8 +435,10 @@ export const BROWSER_LIVE_FRAME_EVENT = "monocode-browser-live-frame";
 /** One picture of the live view (mirrors `live::LiveFrame`). */
 export type BrowserLiveFrame = {
   tab: string;
-  /** JPEG, base64. */
+  /** The picture, base64, in `format`. */
   data: string;
+  /** JPEG while the page moves, a lossless PNG once it is still. */
+  format: "jpeg" | "png";
   /** The page's viewport in CSS pixels; input coordinates use this space. */
   width: number;
   height: number;

@@ -309,11 +309,13 @@ pub fn open_tab(
         };
         state.reserve_tab(&ctx.session)?;
         // The MonoCode browser is ours: its window shows what the agent does.
-        // In the user's browser the tab stays in the background.
+        // In the user's browser the tab stays in the background. With agent
+        // tabs shown in MonoCode no window comes forward for them at all.
         let managed = state.settings.mode.launches();
+        let in_monocode = state.settings.tabs_in_monocode;
         (
-            state.settings.separate_window && !managed,
-            managed,
+            state.settings.separate_window && !managed && !in_monocode,
+            managed && !in_monocode,
             target_url,
         )
     };

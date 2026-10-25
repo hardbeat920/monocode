@@ -36,6 +36,9 @@ pub struct PickTab {
     /// Out-of-process frames of the tab.
     pub frames: Vec<CdpSessionId>,
     pub url: String,
+    /// Bring the tab forward in its window first; not when the user picks
+    /// in the tab's MonoCode pane.
+    pub bring_to_front: bool,
 }
 
 /// The node the user clicked.
@@ -104,7 +107,9 @@ pub fn wait_for_pick(
     let sessions: Vec<CdpSessionId> = std::iter::once(tab.main.clone())
         .chain(tab.frames.iter().cloned())
         .collect();
-    let _ = send(link, &tab.main, Method::PageBringToFront, json!({}));
+    if tab.bring_to_front {
+        let _ = send(link, &tab.main, Method::PageBringToFront, json!({}));
+    }
     let mut started = false;
     for session in &sessions {
         // Overlay needs the DOM domain; a frame that refuses is skipped.

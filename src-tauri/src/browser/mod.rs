@@ -1126,7 +1126,11 @@ impl BrowserHost {
                     stop_managed(previous);
                 }
                 let user_opened = self.force_window.swap(false, Ordering::AcqRel);
-                let show_window = self.policy.read().settings.show_window || user_opened;
+                // Agent tabs shown in MonoCode need no browser window of their own.
+                let show_window = {
+                    let settings = &self.policy.read().settings;
+                    (settings.show_window && !settings.tabs_in_monocode) || user_opened
+                };
                 // Started and registered under the lock, so OFF or a mode
                 // change (generation first, then the slot) either stops this
                 // browser or comes before it is started at all.
@@ -1625,11 +1629,12 @@ impl BrowserHost {
         // Blank first, so the tab is ours (marker, console) before the
         // app's first script runs; then the app.
         let managed = self.mode().launches();
+        let in_monocode = self.policy.read().settings.tabs_in_monocode;
         let created = self
             .link
             .send_system(Command::browser(
                 Method::TargetCreateTarget,
-                json!({ "url": "about:blank", "background": !managed }),
+                json!({ "url": "about:blank", "background": !managed || in_monocode }),
             ))
             .map_err(|error| format!("{error:?}"))?;
         let target = created["targetId"]
@@ -1702,6 +1707,7 @@ impl BrowserHost {
         &self,
         session: &str,
         tab: &TabId,
+        in_pane: bool,
     ) -> Result<Option<pick::PickedElement>, String> {
         if !self.link.is_open() {
             return Err("MonoCode is not connected to the browser.".into());
@@ -1712,7 +1718,9 @@ impl BrowserHost {
             .unwrap_or_else(|e| e.into_inner())
             .as_ref()
             .is_some_and(|managed| !managed.show_window);
-        if headless {
+        // In a MonoCode pane the user clicks the tab's picture; a window is
+        // only needed to pick in the browser itself.
+        if headless && !in_pane {
             return Err("The MonoCode browser runs without a window. Turn its window on in Settings to point at elements.".into());
         }
         let target = {
@@ -1736,6 +1744,7 @@ impl BrowserHost {
                     .map(|frame| frame.cdp_session.clone())
                     .collect(),
                 url: lease.url.clone(),
+                bring_to_front: !in_pane,
             }
         };
         let cancel = Arc::new(AtomicBool::new(false));
@@ -3041,11 +3050,14 @@ pub async fn browser_open_app(
 pub async fn browser_pick_element(
     session_id: String,
     tab: String,
+    in_pane: Option<bool>,
 ) -> Result<Option<pick::PickedElement>, String> {
     let host = require_host()?;
-    tauri::async_runtime::spawn_blocking(move || host.pick_element(&session_id, &TabId(tab)))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        host.pick_element(&session_id, &TabId(tab), in_pane.unwrap_or(false))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -3915,7 +3927,7 @@ mod tests {
                 .to_string(),
         );
 
-        let picked = host.pick_element("s1", &tab).unwrap().unwrap();
+        let picked = host.pick_element("s1", &tab, false).unwrap().unwrap();
         assert_eq!(picked.role, "button");
         assert_eq!(picked.name, "Save");
         assert_eq!(picked.tag, "<button id=\"save\">");
@@ -3965,12 +3977,12 @@ mod tests {
         );
 
         // Picked again after the snapshot: the ref comes along.
-        let again = host.pick_element("s1", &tab).unwrap().unwrap();
+        let again = host.pick_element("s1", &tab, false).unwrap().unwrap();
         assert_eq!(again.reference.as_deref(), Some("e3"));
         assert!(again.text.ends_with(", ref e3."), "{}", again.text);
 
         // Another thread's tab is not the user's to pick in for this one.
-        let other = host.pick_element("s2", &tab).unwrap_err();
+        let other = host.pick_element("s2", &tab, false).unwrap_err();
         assert!(other.contains("another thread"), "{other}");
 
         // No click: the user cancels.
@@ -3978,7 +3990,7 @@ mod tests {
         let waiting = {
             let host = host.clone();
             let tab = tab.clone();
-            thread::spawn(move || host.pick_element("s1", &tab))
+            thread::spawn(move || host.pick_element("s1", &tab, false))
         };
         let deadline = Instant::now() + Duration::from_secs(5);
         while host.picking.lock().unwrap().is_none() {
@@ -4027,6 +4039,7 @@ mod tests {
                     )
                 }
                 "Page.startScreencast" => Response::ResultThen(json!({}), vec![frame(1, session)]),
+                "Page.captureScreenshot" => Response::Result(json!({ "data": "still" })),
                 "Page.screencastFrameAck" => {
                     let n = received.params["sessionId"].as_i64().unwrap_or(0);
                     if n < frames {
@@ -4089,7 +4102,14 @@ mod tests {
         host.stop_live(None);
         assert_eq!(viewing.join().unwrap(), Ok(live::LiveEnd::Stopped));
 
-        let frames = frames.lock().unwrap().clone();
+        // A slow run may end on the still picture too; the moving ones come first.
+        let frames: Vec<_> = frames
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|f| f.format == "jpeg")
+            .cloned()
+            .collect();
         assert_eq!(
             frames.iter().map(|f| f.seq).collect::<Vec<_>>(),
             vec![1, 2, 3]
@@ -4103,7 +4123,7 @@ mod tests {
             .iter()
             .find(|r| r.method == "Page.startScreencast")
             .expect("screencast started");
-        assert_eq!(start.params["maxWidth"], 640);
+        assert_eq!(start.params["maxWidth"], 642);
         assert_eq!(start.params["format"], "jpeg");
         let acks: Vec<i64> = sent
             .iter()
@@ -4123,6 +4143,46 @@ mod tests {
             (metrics["width"].as_u64(), metrics["height"].as_u64()),
             (Some(640), Some(480))
         );
+    }
+
+    #[test]
+    fn a_still_page_gets_one_lossless_picture() {
+        let server = screencast_fake(2);
+        let dir = profile_for(&server);
+        let host = BrowserHost::for_tests(settings_for(&dir));
+        host.set_toggle(true);
+        assert!(wait_state(&host, ConnectionState::Connected));
+        host.turn_started("s1", "main", "/repo", Some(true));
+        let tab = opened_tab(&host, "s1", "https://example.com/");
+        let frames = Arc::new(Mutex::new(Vec::new()));
+        let viewing = {
+            let (host, tab, frames) = (host.clone(), tab.clone(), frames.clone());
+            thread::spawn(move || {
+                host.live_view(
+                    "s1",
+                    &tab,
+                    "v1",
+                    live::PanelSize::new(640, 480, 1.0),
+                    |frame| frames.lock().unwrap().push(frame),
+                )
+            })
+        };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while frames.lock().unwrap().len() < 3 {
+            assert!(Instant::now() < deadline, "no still picture came");
+            thread::sleep(Duration::from_millis(5));
+        }
+        // Still: only one lossless picture, not one per poll.
+        thread::sleep(Duration::from_millis(700));
+        host.stop_live(None);
+        assert_eq!(viewing.join().unwrap(), Ok(live::LiveEnd::Stopped));
+        let frames = frames.lock().unwrap().clone();
+        let formats: Vec<_> = frames.iter().map(|f| (f.format, f.data.as_str())).collect();
+        assert_eq!(
+            formats,
+            vec![("jpeg", "frame1"), ("jpeg", "frame2"), ("png", "still")]
+        );
+        assert_eq!((frames[2].width, frames[2].height), (800.0, 600.0));
     }
 
     #[test]
@@ -4251,11 +4311,17 @@ mod tests {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { continue };
                 let mut buffer = [0u8; 2048];
-                let _ = stream.read(&mut buffer);
+                let read = stream.read(&mut buffer).unwrap_or(0);
+                // A page that keeps still, for the lossless picture.
+                let page = if buffer[..read].starts_with(b"GET /calm") {
+                    "<!doctype html><title>calm</title><h1>calm</h1>"
+                } else {
+                    PAGE
+                };
                 let _ = write!(
                     stream,
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{PAGE}",
-                    PAGE.len()
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{page}",
+                    page.len()
                 );
             }
         });
@@ -4366,6 +4432,27 @@ mod tests {
         let after_typing = wait_for("sent: Ćao šđž");
         assert!(after_typing.contains("sent: Ćao šđž"), "{after_typing}");
 
+        // "Point at an element" in the pane: the click on the picture picks.
+        let picking = {
+            let (host, tab) = (host.clone(), tab.clone());
+            thread::spawn(move || host.pick_element("s1", &tab, true))
+        };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let picked = loop {
+            send(
+                json!({ "kind": "mouse", "event": "mouseMoved", "x": 120.0, "y": 110.0,
+                "button": "none", "buttons": 0, "clickCount": 0 }),
+            );
+            click(120.0, 110.0);
+            thread::sleep(Duration::from_millis(200));
+            if picking.is_finished() || Instant::now() >= deadline {
+                host.cancel_pick();
+                break picking.join().unwrap();
+            }
+        };
+        let picked = picked.unwrap().expect("the click in the pane picked");
+        assert_eq!(picked.role, "button", "{picked:?}");
+
         // The pane got smaller: pictures follow at the new size.
         host.resize_live("v1", live::PanelSize::new(700, 500, 1.0));
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -4402,6 +4489,34 @@ mod tests {
         host.live_navigate("s1", &tab, &live::LiveNav::Back)
             .unwrap();
         wait_url(&format!("{port}/"));
+        // A page that stops moving gets one lossless picture at the pane's size.
+        host.live_navigate(
+            "s1",
+            &tab,
+            &live::LiveNav::Go {
+                url: format!("127.0.0.1:{port}/calm"),
+            },
+        )
+        .unwrap();
+        wait_url("/calm");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let png = loop {
+            let last = frames.lock().unwrap().last().map(|(_, f)| f.clone());
+            if let Some(frame) = last.filter(|f| f.format == "png") {
+                break frame;
+            }
+            assert!(Instant::now() < deadline, "no lossless picture");
+            thread::sleep(Duration::from_millis(50));
+        };
+        {
+            use base64::Engine as _;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(&png.data)
+                .unwrap();
+            assert_eq!(&bytes[1..4], b"PNG");
+            let width = u32::from_be_bytes(bytes[16..20].try_into().unwrap());
+            assert_eq!((width, png.width), (700, 700.0));
+        }
         assert!(host
             .live_navigate(
                 "s1",
