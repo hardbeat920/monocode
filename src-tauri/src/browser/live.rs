@@ -10,7 +10,7 @@
 //! viewport takes the panel's size, so the page fills it the way a built-in
 //! browser would.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -31,6 +31,8 @@ const STILL_AFTER: Duration = Duration::from_millis(250);
 /// How long pictures that don't fit the panel are left out. A browser that
 /// never sends fitting ones still gets shown after this.
 const MISFIT_FOR: Duration = Duration::from_secs(1);
+/// How long a hold waits for the pictures to stop.
+const HOLD_WAIT: Duration = Duration::from_millis(500);
 /// How often the panel's viewport is put back while pictures don't fit.
 const HEAL_EVERY: Duration = Duration::from_millis(300);
 /// JPEG quality of the pictures, 0 to 100.
@@ -196,19 +198,48 @@ impl PanelSize {
 #[derive(Debug)]
 pub struct LiveControl {
     pub view: String,
+    pub tab: TabId,
     stop: AtomicBool,
     finished: AtomicBool,
     resize: Mutex<Option<PanelSize>>,
+    held: AtomicUsize,
+    /// The view has stopped its pictures for a hold.
+    paused: AtomicBool,
 }
 
 impl LiveControl {
-    pub fn new(view: String) -> LiveControl {
+    pub fn new(view: String, tab: TabId) -> LiveControl {
         LiveControl {
             view,
+            tab,
             stop: AtomicBool::new(false),
             finished: AtomicBool::new(false),
             resize: Mutex::new(None),
+            held: AtomicUsize::new(0),
+            paused: AtomicBool::new(false),
         }
+    }
+
+    /// Pause the pictures while the agent needs the tab's viewport to
+    /// itself (a full-page screenshot): with the screencast running, the
+    /// capture takes several times longer and can leave the viewport at
+    /// the page's height. The view resumes at its own size when the hold
+    /// is dropped.
+    /// Waits, at most a moment, until the pictures have stopped.
+    pub fn hold(self: &std::sync::Arc<Self>) -> LiveHold {
+        self.held.fetch_add(1, Ordering::AcqRel);
+        let deadline = std::time::Instant::now() + HOLD_WAIT;
+        while !self.paused.load(Ordering::Acquire)
+            && !self.finished.load(Ordering::Acquire)
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        LiveHold(self.clone())
+    }
+
+    fn held(&self) -> bool {
+        self.held.load(Ordering::Acquire) > 0
     }
 
     pub fn stop(&self) {
@@ -239,6 +270,15 @@ impl LiveControl {
 
     fn take_resize(&self) -> Option<PanelSize> {
         self.resize.lock().unwrap_or_else(|e| e.into_inner()).take()
+    }
+}
+
+/// A pause of a live view; see [`LiveControl::hold`].
+pub struct LiveHold(std::sync::Arc<LiveControl>);
+
+impl Drop for LiveHold {
+    fn drop(&mut self) {
+        self.0.held.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -320,12 +360,36 @@ pub fn run(
     // Since when the pictures have not fit the panel.
     let mut misfit: Option<std::time::Instant> = None;
     let mut healed: Option<std::time::Instant> = None;
+    let mut paused = false;
     let end = loop {
         if control.stopped() {
             break LiveEnd::Stopped;
         }
         if !alive() || events.is_closed() {
             break LiveEnd::TabGone;
+        }
+        if control.held() {
+            if !paused {
+                paused = true;
+                moving = None;
+                let _ = send(link, &tab.main, Method::PageStopScreencast, json!({}));
+                control.paused.store(true, Ordering::Release);
+            }
+            // Pictures already on the way are taken and let go.
+            if let Some(event) = events.recv_timeout(POLL) {
+                ack(link, tab, &event);
+            }
+            continue;
+        }
+        if paused {
+            paused = false;
+            control.paused.store(false, Ordering::Release);
+            misfit = None;
+            last.clear();
+            if let Err(error) = show(link, tab, current) {
+                restore(link, tab);
+                return Err(error);
+            }
         }
         if let Some(next) = control.take_resize().filter(|next| *next != current) {
             // A new size needs pictures of the new size, so the screencast
@@ -365,14 +429,7 @@ pub fn run(
         if event.method != FRAME {
             continue;
         }
-        if let Some(id) = event.params["sessionId"].as_i64() {
-            let _ = send(
-                link,
-                &tab.main,
-                Method::PageScreencastFrameAck,
-                json!({ "sessionId": id }),
-            );
-        }
+        ack(link, tab, &event);
         let Some(data) = event.params["data"].as_str() else {
             continue;
         };
@@ -412,6 +469,18 @@ pub fn run(
     };
     restore(link, tab);
     Ok(end)
+}
+
+/// Let Chrome send the next picture.
+fn ack(link: &Link, tab: &LiveTab, event: &super::link::CdpEvent) {
+    if let Some(id) = event.params["sessionId"].as_i64() {
+        let _ = send(
+            link,
+            &tab.main,
+            Method::PageScreencastFrameAck,
+            json!({ "sessionId": id }),
+        );
+    }
 }
 
 /// Whether a picture shows the page at the panel's size: its viewport is

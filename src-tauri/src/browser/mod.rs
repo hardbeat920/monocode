@@ -1846,7 +1846,7 @@ impl BrowserHost {
             return Err("MonoCode is not connected to the browser.".into());
         }
         let target = self.held_tab(session, tab)?;
-        let control = Arc::new(live::LiveControl::new(view.to_string()));
+        let control = Arc::new(live::LiveControl::new(view.to_string(), tab.clone()));
         let previous = self
             .live
             .lock()
@@ -1871,6 +1871,17 @@ impl BrowserHost {
             }
         }
         outcome
+    }
+
+    /// Pause the live view of `tab`, if one runs, until the hold is dropped.
+    fn hold_live(&self, tab: &TabId) -> Option<live::LiveHold> {
+        let control = self
+            .live
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .filter(|control| control.tab == *tab)?;
+        Some(control.hold())
     }
 
     /// Stop the live view running now, if it is `view` (any view without
@@ -2188,6 +2199,10 @@ impl BrowserHost {
                 return self.finish(session, Some(kind), None, &request, started, 0, result);
             }
         };
+        // A full-page screenshot gets the tab's viewport to itself.
+        let _live = (kind == ActionKind::Screenshot && request.input["full_page"] == true)
+            .then(|| common.tab.as_ref().and_then(|tab| self.hold_live(tab)))
+            .flatten();
         let mut guard = match self.claim(session, &request_id, &request.input) {
             Claim::Fresh(guard) => guard,
             Claim::Cached(result) => return *result,
@@ -4036,6 +4051,11 @@ mod tests {
                     );
                     Response::Result(json!({}))
                 }
+                "Page.getLayoutMetrics" => Response::Result(json!({
+                    "cssContentSize": { "x": 0, "y": 0, "width": 800, "height": 5000 },
+                    "cssLayoutViewport": { "pageX": 0, "pageY": 0, "clientWidth": 800, "clientHeight": 600 },
+                    "cssVisualViewport": { "pageX": 0, "pageY": 0, "clientWidth": 800, "clientHeight": 600, "scale": 1 },
+                })),
                 // While the page loads, one picture of the tab's own window
                 // comes before the panel's again.
                 "Page.reload" => Response::ResultThen(
@@ -4270,6 +4290,86 @@ mod tests {
     }
 
     #[test]
+    fn a_full_page_screenshot_pauses_the_live_view() {
+        let server = screencast_fake(0);
+        let dir = profile_for(&server);
+        let host = BrowserHost::for_tests(settings_for(&dir));
+        host.set_toggle(true);
+        assert!(wait_state(&host, ConnectionState::Connected));
+        host.turn_started("s1", "main", "/repo", Some(true));
+        let tab = opened_tab(&host, "s1", "https://example.com/");
+        let frames = Arc::new(AtomicU64::new(0));
+        let viewing = {
+            let (host, tab, frames) = (host.clone(), tab.clone(), frames.clone());
+            thread::spawn(move || {
+                host.live_view(
+                    "s1",
+                    &tab,
+                    "v1",
+                    live::PanelSize::new(640, 480, 1.0),
+                    |_| {
+                        frames.fetch_add(1, Ordering::Relaxed);
+                    },
+                )
+            })
+        };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while frames.load(Ordering::Relaxed) == 0 {
+            assert!(Instant::now() < deadline, "no picture");
+            thread::sleep(Duration::from_millis(5));
+        }
+        let shot = host.handle_request(
+            "s1",
+            request(
+                "full",
+                "screenshot",
+                json!({ "tab": tab.0, "full_page": true }),
+            ),
+        );
+        assert_eq!(shot.outcome, Outcome::Done, "{shot:?}");
+        // The view starts again at the pane's size once the shot is taken.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let sent = loop {
+            let sent = server.received();
+            let full = sent
+                .iter()
+                .position(|r| r.params["captureBeyondViewport"] == true)
+                .expect("a full-page capture");
+            if sent[full..]
+                .iter()
+                .any(|r| r.method == "Page.startScreencast")
+            {
+                break sent;
+            }
+            assert!(Instant::now() < deadline, "the view did not resume");
+            thread::sleep(Duration::from_millis(10));
+        };
+        host.stop_live(None);
+        assert_eq!(viewing.join().unwrap(), Ok(live::LiveEnd::Stopped));
+        let full = sent
+            .iter()
+            .position(|r| r.params["captureBeyondViewport"] == true)
+            .unwrap();
+        let last_start = sent[..full]
+            .iter()
+            .rposition(|r| r.method == "Page.startScreencast")
+            .unwrap();
+        let methods: Vec<_> = sent.iter().map(|r| r.method.as_str()).collect();
+        assert!(
+            sent[last_start..full]
+                .iter()
+                .any(|r| r.method == "Page.stopScreencast"),
+            "{methods:?}"
+        );
+        let resumed = &sent[full..];
+        let metrics = resumed
+            .iter()
+            .position(|r| r.method == "Emulation.setDeviceMetricsOverride")
+            .expect("the pane's viewport again");
+        assert_eq!(resumed[metrics].params["width"], 640);
+    }
+
+    #[test]
     fn a_moved_pane_takes_over_the_tab_after_the_old_view_hands_it_back() {
         let server = screencast_fake(0);
         let dir = profile_for(&server);
@@ -4405,9 +4505,9 @@ mod tests {
         (chrome, dir)
     }
 
-    /// Against a real Chrome: a full-page screenshot of a long page can leave
-    /// the tab's viewport the page's height (in about half the runs), and
-    /// the pane would show the whole page squeezed into a strip.
+    /// Against a real Chrome: a full-page screenshot of a long page could
+    /// leave the tab's viewport the page's height, and the pane showed the
+    /// whole page squeezed into a strip.
     #[test]
     fn a_full_page_screenshot_leaves_the_pane_at_its_size_in_a_real_chrome() {
         let Some(exe) = std::env::var_os("MONOCODE_TEST_CHROME") else {
@@ -4425,13 +4525,16 @@ mod tests {
             );
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { continue };
-                let mut buffer = [0u8; 2048];
-                let _ = stream.read(&mut buffer);
-                let _ = write!(
-                    stream,
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{page}",
-                    page.len()
-                );
+                let page = page.clone();
+                thread::spawn(move || {
+                    let mut buffer = [0u8; 2048];
+                    let _ = stream.read(&mut buffer);
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{page}",
+                        page.len()
+                    );
+                });
             }
         });
         let (mut chrome, dir) = start_real_chrome(&exe);
@@ -4454,6 +4557,7 @@ mod tests {
             })
         };
         thread::sleep(Duration::from_secs(1));
+        let taking = Instant::now();
         let shot = host.handle_request(
             "s1",
             request(
@@ -4462,6 +4566,7 @@ mod tests {
                 json!({ "tab": tab.0, "full_page": true }),
             ),
         );
+        let took = taking.elapsed();
         assert_eq!(shot.outcome, Outcome::Done, "{shot:?}");
         let seen = frames.lock().unwrap().len();
         thread::sleep(Duration::from_millis(1500));
@@ -4480,6 +4585,10 @@ mod tests {
             after.iter().all(|size| *size == (900.0, 600.0)),
             "{after:?}"
         );
+        // As fast as without a pane: with the pictures running it took
+        // several times longer.
+        eprintln!("full-page screenshot with the pane open: {took:?}");
+        assert!(took < Duration::from_secs(4), "{took:?}");
     }
 
     /// Against a real Chrome, when `MONOCODE_TEST_CHROME` names one: the
@@ -4503,19 +4612,23 @@ mod tests {
                 <script>let k=0;(function f(){document.getElementById('n').textContent=++k;requestAnimationFrame(f)})()</script>";
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { continue };
-                let mut buffer = [0u8; 2048];
-                let read = stream.read(&mut buffer).unwrap_or(0);
-                // A page that keeps still, for the lossless picture.
-                let page = if buffer[..read].starts_with(b"GET /calm") {
-                    "<!doctype html><title>calm</title><h1>calm</h1>"
-                } else {
-                    PAGE
-                };
-                let _ = write!(
+                // One thread each: a connection Chrome opens ahead and
+                // leaves idle must not hold up the next request.
+                thread::spawn(move || {
+                    let mut buffer = [0u8; 2048];
+                    let read = stream.read(&mut buffer).unwrap_or(0);
+                    // A page that keeps still, for the lossless picture.
+                    let page = if buffer[..read].starts_with(b"GET /calm") {
+                        "<!doctype html><title>calm</title><h1>calm</h1>"
+                    } else {
+                        PAGE
+                    };
+                    let _ = write!(
                     stream,
                     "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{page}",
                     page.len()
                 );
+                });
             }
         });
 
