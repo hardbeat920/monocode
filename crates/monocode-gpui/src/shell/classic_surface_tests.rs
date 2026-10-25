@@ -949,3 +949,41 @@ fn new_layout_app_tabs_survive_frame_changes_and_close_like_session_tabs(cx: &mu
             .unwrap();
     }
 }
+
+#[gpui::test]
+fn focused_rail_lists_every_project_and_switches_on_click(cx: &mut TestAppContext) {
+    for boxy in [false, true] {
+        let (window, _) = setup(cx, false, boxy);
+        let visual = &mut VisualTestContext::from_window(window.into(), cx);
+        visual.refresh().unwrap();
+        let ix = window
+            .read_with(visual, |shell, _| {
+                shell
+                    .workspace
+                    .projects
+                    .iter()
+                    .position(|p| p != &shell.workspace.project)
+                    .unwrap()
+            })
+            .unwrap();
+        for i in 0..2 {
+            let selector: &'static str =
+                Box::leak(format!("rail-project-button-{i}").into_boxed_str());
+            assert!(
+                visual.debug_bounds(selector).is_some(),
+                "project {i} has a button"
+            );
+        }
+        assert!(visual.debug_bounds("rail-open-project").is_some());
+        let selector: &'static str =
+            Box::leak(format!("rail-project-button-{ix}").into_boxed_str());
+        let bounds = visual.debug_bounds(selector).unwrap();
+        visual.simulate_click(bounds.center(), Default::default());
+        visual.run_until_parked();
+        window
+            .read_with(visual, |shell, _| {
+                assert_eq!(shell.workspace.project, shell.workspace.projects[ix]);
+            })
+            .unwrap();
+    }
+}

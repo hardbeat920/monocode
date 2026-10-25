@@ -1479,14 +1479,10 @@ impl Shell {
     fn invalidate_chrome(&self, cx: &mut Context<Self>) {
         self.notify_sidebar(cx);
         self.tabs_frame.update(cx, |_, cx| cx.notify());
-        if self.workspace.classic_layout {
-            self.projects_frame.update(cx, |_, cx| cx.notify());
-        }
+        self.projects_frame.update(cx, |_, cx| cx.notify());
     }
     fn reveal_active_tab(&self, cx: &App) {
-        if self.workspace.classic_layout {
-            self.reveal_active_project_rail();
-        }
+        self.reveal_active_project_rail();
         if let Some(ix) = self
             .visible_tabs(cx)
             .iter()

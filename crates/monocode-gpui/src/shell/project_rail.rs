@@ -9,6 +9,9 @@ use gpui::{ListAlignment, ListState, list};
 use monocode_core::scm::DiffStats;
 
 const ICON_RAIL_WIDTH: f32 = 48.;
+/// The focused layout's project rail, Discord's server column.
+pub(super) const FOCUSED_RAIL_WIDTH: f32 = 48.;
+const FOCUSED_RAIL_ROW: f32 = 44.;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ProjectRailRow {
@@ -18,6 +21,8 @@ enum ProjectRailRow {
     Project { path: String, grouped: bool },
     Gap,
     Empty,
+    /// The focused rail's open-project button, after the projects.
+    Add,
 }
 pub(super) struct ProjectRailList {
     state: ListState,
@@ -146,7 +151,11 @@ impl Render for ProjectTooltip {
 impl Shell {
     pub(super) fn project_rail_drawn_width(&self) -> f32 {
         if !self.workspace.classic_layout {
-            0.
+            if self.settings.is_none() {
+                FOCUSED_RAIL_WIDTH
+            } else {
+                0.
+            }
         } else if self.workspace.project_rail_open || self.settings.is_some() {
             self.workspace.project_rail_width
         } else {
@@ -256,6 +265,9 @@ impl Shell {
         }
     }
     pub(super) fn project_rail(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        if !self.workspace.classic_layout {
+            return self.focused_project_rail(cx);
+        }
         let compact = !self.workspace.project_rail_open && self.settings.is_none();
         let header = titlebar_drag_area().h(px(TITLE_BAR_HEIGHT)).flex_shrink_0();
         if self.settings.is_some() {
@@ -327,7 +339,7 @@ impl Shell {
     }
     fn prepare_project_rail(&mut self, compact: bool) {
         let mut rows = Vec::new();
-        if self.workspace.preferences.monos {
+        if self.workspace.preferences.monos && !compact {
             rows.push(ProjectRailRow::Monos);
         }
         let projects = &self.workspace.projects;
@@ -362,16 +374,25 @@ impl Shell {
                 if !compact {
                     rows.push(ProjectRailRow::Group(group.id.clone()));
                 }
+                // The icon rail keeps each group's block apart instead of a header.
+                let gap = compact && !items.is_empty();
                 if compact || !group.collapsed {
                     rows.extend(items.into_iter().map(|path| ProjectRailRow::Project {
                         path,
                         grouped: !compact,
                     }));
                 }
+                if gap {
+                    rows.push(ProjectRailRow::Gap);
+                }
             }
-            rows.push(ProjectRailRow::Gap);
+            if !compact {
+                rows.push(ProjectRailRow::Gap);
+            }
         }
-        rows.push(ProjectRailRow::Heading("Projects"));
+        if !compact {
+            rows.push(ProjectRailRow::Heading("Projects"));
+        }
         let mut count = 0;
         for path in projects {
             let grouped = self
@@ -395,7 +416,14 @@ impl Shell {
         if count == 0 && self.workspace.project_rail_groups.is_empty() {
             rows.push(ProjectRailRow::Empty);
         }
-        rows.push(ProjectRailRow::Gap);
+        if compact {
+            if rows.last().is_some_and(|row| *row != ProjectRailRow::Gap) {
+                rows.push(ProjectRailRow::Gap);
+            }
+            rows.push(ProjectRailRow::Add);
+        } else {
+            rows.push(ProjectRailRow::Gap);
+        }
         self.project_rail_list.update(rows, compact);
     }
     fn project_rail_list_row(
@@ -419,8 +447,13 @@ impl Shell {
                 .unwrap_or_else(|| div().into_any()),
             ProjectRailRow::Heading(label) => self.project_rail_heading(label, compact, cx),
             ProjectRailRow::Project { path, grouped } => {
-                self.project_rail_row(ix, path, compact, grouped, row_gap, cx)
+                if compact {
+                    self.focused_rail_row(ix, path, cx)
+                } else {
+                    self.project_rail_row(ix, path, compact, grouped, row_gap, cx)
+                }
             }
+            ProjectRailRow::Add => self.focused_rail_add(cx),
             ProjectRailRow::Group(id) => self.project_rail_group_header(id, cx),
             ProjectRailRow::Gap => div().h(px(8.)).into_any(),
             ProjectRailRow::Empty => div()
@@ -432,6 +465,182 @@ impl Shell {
                 .when(!compact, |d| d.child("No projects yet"))
                 .into_any(),
         }
+    }
+    /// The focused layout's rail: one icon per project, the open-project
+    /// button after them.
+    fn focused_project_rail(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        self.prepare_project_rail(true);
+        let owner = cx.weak_entity();
+        let rows = list(self.project_rail_list.state.clone(), move |ix, _, cx| {
+            owner
+                .update(cx, |this, cx| this.project_rail_list_row(ix, true, cx))
+                .unwrap_or_else(|_| div().into_any())
+        })
+        .size_full();
+        div()
+            .id("project-rail")
+            .debug_selector(|| "project-rail".into())
+            .role(Role::Navigation)
+            .aria_label("Projects")
+            .size_full()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .pt(px(4.))
+            .child(
+                div()
+                    .id("project-rail-scroll")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .child(rows),
+            )
+            .into_any_element()
+    }
+    /// A project's icon on the focused rail: Discord's pill beside the
+    /// selected one, its ring while the project's sessions work.
+    fn focused_rail_row(&mut self, ix: usize, path: String, cx: &mut Context<Self>) -> AnyElement {
+        let ix = self
+            .workspace
+            .projects
+            .iter()
+            .position(|p| p == &path)
+            .unwrap_or(ix);
+        let selected = self.workspace.project == path
+            && !self.app_view_open()
+            && self.app_search.is_none()
+            && !self.mono_active(cx);
+        let label = self.project_label(&path);
+        let tooltip = label.clone();
+        let menu_path = path.clone();
+        let drag_path = path.clone();
+        let offset = self.project_rail_project_offset(&path);
+        let raised = self.project_rail_project_raised(&path);
+        let bounds = self
+            .project_rail_list
+            .bounds
+            .entry(path.clone())
+            .or_default()
+            .clone();
+        let ring = self.project_ring(&path, cx);
+        let side = crate::project_ring::RING_SIDE;
+        let row = div()
+            .id(("rail-project", ix))
+            .debug_selector(move || format!("rail-project-{ix}"))
+            .relative()
+            .w_full()
+            .h(px(FOCUSED_RAIL_ROW))
+            .flex()
+            .items_center()
+            .justify_center()
+            .when(selected, |d| {
+                d.child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top(px((FOCUSED_RAIL_ROW - 20.) / 2. + offset))
+                        .w(px(4.))
+                        .h(px(20.))
+                        .rounded_r(px(2.))
+                        .bg(content(1.)),
+                )
+            })
+            .child(
+                div()
+                    .id(("rail-project-button", ix))
+                    .debug_selector(move || format!("rail-project-button-{ix}"))
+                    .group("rail-project-tile")
+                    .role(Role::Button)
+                    .aria_label(format!("Switch project, {label}"))
+                    .aria_description(path.clone())
+                    .aria_selected(selected)
+                    .cursor_pointer()
+                    .relative()
+                    .top(px(offset))
+                    .size(px(side))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(div().absolute().top_0().left_0().child(ring))
+                    .child(
+                        div()
+                            .size(px(28.))
+                            .rounded_lg()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .bg(content(if selected { 0.12 } else { 0.05 }))
+                            .group_hover("rail-project-tile", |s| s.bg(content(0.1)))
+                            .child(self.project_mark(&path, 16.)),
+                    )
+                    .child(bounds.probe())
+                    .tooltip(move |_, cx| cx.new(|_| ProjectTooltip(tooltip.clone())).into())
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if std::mem::take(&mut this.project_rail_list.skip_click) {
+                            return;
+                        }
+                        this.select_project(path.clone(), window, cx)
+                    }))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                            this.start_project_rail_drag(drag_path.clone(), false, e, window, cx);
+                        }),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                            this.open_menu(
+                                MenuTarget::Project {
+                                    path: menu_path.clone(),
+                                    rail: true,
+                                },
+                                Anchor::Point(e.position),
+                                window,
+                                cx,
+                            );
+                            cx.stop_propagation();
+                        }),
+                    ),
+            )
+            .into_any_element();
+        if raised {
+            gpui::deferred(row).with_priority(1).into_any()
+        } else {
+            row
+        }
+    }
+    /// The focused rail's open-project button: local or remote folders.
+    fn focused_rail_add(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let anchor = AnchorSlot::default();
+        let open = self.menu_open(&MenuTarget::ProjectRailAdd);
+        div()
+            .w_full()
+            .h(px(FOCUSED_RAIL_ROW))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                icon_button("rail-open-project", "Open project", "plus")
+                    .debug_selector(|| "rail-open-project".into())
+                    .child(anchor.probe())
+                    .aria_expanded(open)
+                    .size(px(28.))
+                    .when(open, |d| d.bg(content(0.08)).text_color(content(1.)))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if this.menu_open(&MenuTarget::ProjectRailAdd) {
+                            this.close_menu(cx);
+                        } else {
+                            this.open_menu(
+                                MenuTarget::ProjectRailAdd,
+                                Anchor::Slot(anchor.clone()),
+                                window,
+                                cx,
+                            );
+                        }
+                    })),
+            )
+            .into_any()
     }
     fn project_rail_heading(
         &self,
@@ -1538,8 +1747,7 @@ impl Shell {
             .is_some_and(|drag| drag.active)
     }
     pub(super) fn project_rail_animating(&self) -> bool {
-        self.workspace.classic_layout
-            && self.workspace.project_rail_open
+        (!self.workspace.classic_layout || self.workspace.project_rail_open)
             && self
                 .project_rail_list
                 .shifts
