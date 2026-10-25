@@ -4281,7 +4281,8 @@ impl Shell {
                 closed
             };
         }
-        closed + (self.workspace.sidebar_width.max(closed + 6.) - closed) * self.sidebar_fraction
+        let open = self.project_rail_drawn_width() + self.workspace.sidebar_width;
+        closed + (open.max(closed + 6.) - closed) * self.sidebar_fraction
     }
     /// Classic: the strip's room before its tabs, wherever the navigation
     /// overhangs the sidebar.
@@ -10002,8 +10003,12 @@ mod tests {
         // The toggle sits just past the traffic lights either way.
         assert_eq!(open_toggle.origin, closed_toggle.origin);
         assert_eq!(open_toggle.left(), px(TRAFFIC_LIGHTS));
-        // Open, history rides the sidebar's edge, inside its `pr-1.5`.
-        assert_eq!(open_forward.right(), px(width - 6.));
+        // Open, history rides the sidebar's edge past the project rail,
+        // inside its `pr-1.5`.
+        let rail = window
+            .update(cx, |shell, _, _| shell.project_rail_drawn_width())
+            .unwrap();
+        assert_eq!(open_forward.right(), px(rail + width - 6.));
         // Closed, it follows the toggle directly.
         assert_eq!(closed_back.left(), closed_toggle.right());
         assert_eq!(closed_forward.right(), px(TRAFFIC_LIGHTS + 72.));
@@ -10033,21 +10038,31 @@ mod tests {
             .update(cx, |shell, window, cx| shell.toggle_sidebar(window, cx))
             .unwrap();
         cx.run_until_parked();
-        let width = window
-            .update(cx, |shell, _, _| shell.workspace.sidebar_width)
+        // The project rail keeps its column; the sidebar peeks past it.
+        let (width, rail) = window
+            .update(cx, |shell, _, _| {
+                (
+                    shell.workspace.sidebar_width,
+                    shell.project_rail_drawn_width(),
+                )
+            })
             .unwrap();
         let open = |cx: &mut gpui::VisualTestContext| {
             window.update(cx, |shell, _, _| shell.peek_open()).unwrap()
         };
         assert!(cx.debug_bounds("sidebar-peek").is_none());
-        // The window's left edge peeks it out, below the title bar.
-        cx.simulate_mouse_move(gpui::point(px(2.), px(20.)), None, Default::default());
-        assert!(!open(cx));
+        // The rail's edge peeks it out, below the title bar; the rail itself
+        // stays clickable.
         cx.simulate_mouse_move(gpui::point(px(2.), px(300.)), None, Default::default());
+        cx.run_until_parked();
+        assert!(!open(cx));
+        cx.simulate_mouse_move(gpui::point(px(rail + 2.), px(20.)), None, Default::default());
+        assert!(!open(cx));
+        cx.simulate_mouse_move(gpui::point(px(rail + 2.), px(300.)), None, Default::default());
         cx.run_until_parked();
         assert!(open(cx));
         let panel = cx.debug_bounds("sidebar-peek").unwrap();
-        assert_eq!(panel.left(), px(6.));
+        assert_eq!(panel.left(), px(rail + 6.));
         assert_eq!(panel.top(), px(TITLE_BAR_HEIGHT));
         assert_eq!(panel.size.width, px(width));
         // Crossing onto the panel keeps it out; leaving it puts it away after
@@ -10058,7 +10073,7 @@ mod tests {
         cx.run_until_parked();
         assert!(open(cx));
         cx.simulate_mouse_move(
-            gpui::point(px(width + 200.), px(300.)),
+            gpui::point(px(rail + width + 200.), px(300.)),
             None,
             Default::default(),
         );
@@ -10074,7 +10089,7 @@ mod tests {
         cx.simulate_mouse_move(toggle.center(), None, Default::default());
         cx.run_until_parked();
         assert!(open(cx));
-        cx.simulate_click(gpui::point(px(width + 200.), px(300.)), Default::default());
+        cx.simulate_click(gpui::point(px(rail + width + 200.), px(300.)), Default::default());
         cx.run_until_parked();
         assert!(!open(cx));
         // Docking the sidebar drops the peek, and an open sidebar never peeks.
@@ -10089,7 +10104,7 @@ mod tests {
                 assert!(shell.sidebar_peek.is_none());
             })
             .unwrap();
-        cx.simulate_mouse_move(gpui::point(px(2.), px(300.)), None, Default::default());
+        cx.simulate_mouse_move(gpui::point(px(rail + 2.), px(300.)), None, Default::default());
         cx.run_until_parked();
         assert!(!open(cx));
     }
@@ -10469,7 +10484,11 @@ mod tests {
                 })
                 .unwrap();
             let (_, main, _) = frames(cx);
-            assert_eq!(main.left() == px(0.), !visible);
+            // Hidden, the workspace starts right after the project rail.
+            let rail = window
+                .update(cx, |shell, _, _| shell.project_rail_drawn_width())
+                .unwrap();
+            assert_eq!(main.left() == px(rail), !visible);
             assert_eq!(toggle(cx), open);
         }
         cx.update(|cx| cx.set_reduce_motion(false));
@@ -10542,6 +10561,10 @@ mod tests {
             w.draw(cx).clear(cx);
         })
         .unwrap();
+        // The sidebar sits past the project rail.
+        let rail = window
+            .update(cx, |shell, _, _| shell.project_rail_drawn_width())
+            .unwrap();
         let row = window
             .update(cx, |shell, w, _| {
                 w.painted_quads()
@@ -10551,7 +10574,8 @@ mod tests {
                             && q.bounds.size.height.0 == 32. * w.scale_factor()
                             && q.bounds.size.width.0
                                 > shell.workspace.sidebar_width / 2. * w.scale_factor()
-                            && q.bounds.right().0 < shell.workspace.sidebar_width * w.scale_factor()
+                            && q.bounds.right().0
+                                < (rail + shell.workspace.sidebar_width) * w.scale_factor()
                     })
                     .expect("selected session has a painted background")
                     .bounds
@@ -10591,7 +10615,7 @@ mod tests {
                     visual.debug_bounds("toggle-sidebar").unwrap().origin,
                     toggle.origin
                 );
-                assert_eq!(content.left(), px(0.));
+                assert_eq!(content.left(), px(rail));
                 assert!((clip.right() - main.left()).abs() < px(1.));
                 window
                     .update(visual, |shell, w, _| {
@@ -10930,14 +10954,16 @@ mod tests {
         let transcript =
             root.read_with(cx, |s, cx| s.sessions[&active].read(cx).transcript.clone());
         let before = transcript.read_with(cx, |t, _| t.render_passes);
+        // The sidebar's rows start past the project rail.
+        let rail = root.read_with(cx, |s, _| s.project_rail_drawn_width());
         cx.update_window(window.into(), |_, w, cx| {
-            w.simulate_mouse_move(gpui::point(px(40.), px(136.)), cx)
+            w.simulate_mouse_move(gpui::point(px(rail + 40.), px(136.)), cx)
         })
         .unwrap();
         cx.run_until_parked();
         assert_eq!(root.read_with(cx, |s, _| s.sidebar_hover), Some("Inbox"));
         cx.update_window(window.into(), |_, w, cx| {
-            w.simulate_mouse_move(gpui::point(px(40.), px(169.)), cx)
+            w.simulate_mouse_move(gpui::point(px(rail + 40.), px(169.)), cx)
         })
         .unwrap();
         cx.run_until_parked();

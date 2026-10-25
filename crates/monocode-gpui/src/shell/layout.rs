@@ -253,6 +253,7 @@ impl Shell {
             )
             .child(card_corner_mask(false));
         let footer = self.footer_row(cx);
+        let rail = self.project_rail_drawn_width();
         vec![
             div()
                 .h(px(TITLE_BAR_HEIGHT))
@@ -265,6 +266,7 @@ impl Shell {
                 .min_h_0()
                 .flex()
                 .relative()
+                .when(rail > 0., |d| d.child(self.focused_project_rail_frame(false)))
                 .when(sidebar_width > 0., |d| {
                     d.child(
                         // Keep the sidebar still beneath the moving card. Clip
@@ -274,7 +276,7 @@ impl Shell {
                             .id("sidebar-frame")
                             .debug_selector(|| "sidebar-frame".into())
                             .absolute()
-                            .left_0()
+                            .left(px(rail))
                             .top_0()
                             .w(px(sidebar_width))
                             .h_full()
@@ -379,8 +381,14 @@ impl Shell {
             .min_h_0()
             .flex()
             .relative()
-            .when(self.workspace.classic_layout, |d| {
-                d.child(self.project_rail_frame(cx))
+            .map(|d| {
+                if self.workspace.classic_layout {
+                    d.child(self.project_rail_frame(cx))
+                } else if self.project_rail_drawn_width() > 0. {
+                    d.child(self.focused_project_rail_frame(true))
+                } else {
+                    d
+                }
             })
             .when(sidebar_width > 0., |d| {
                 d.child(

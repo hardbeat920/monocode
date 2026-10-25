@@ -127,8 +127,9 @@ impl Shell {
 
     fn peek_contains(&self, position: Point<Pixels>) -> bool {
         let (x, y) = (position.x.as_f32(), position.y.as_f32());
-        x >= PEEK_INSET
-            && x <= PEEK_INSET + self.workspace.sidebar_width
+        let left = self.project_rail_drawn_width() + PEEK_INSET;
+        x >= left
+            && x <= left + self.workspace.sidebar_width
             && y >= TITLE_BAR_HEIGHT
             && y <= self.viewport_height - PEEK_INSET
     }
@@ -150,8 +151,9 @@ impl Shell {
     }
 
     fn peek_pointer(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
-        let edge =
-            event.position.x.as_f32() <= PEEK_EDGE && event.position.y.as_f32() > TITLE_BAR_HEIGHT;
+        // The focused rail keeps its own column; the edge is just past it.
+        let x = event.position.x.as_f32() - self.project_rail_drawn_width();
+        let edge = (0. ..=PEEK_EDGE).contains(&x) && event.position.y.as_f32() > TITLE_BAR_HEIGHT;
         if edge && event.pressed_button.is_none() {
             self.set_peek(true, cx);
             return;
@@ -276,7 +278,9 @@ impl Shell {
             // Closing, it lets the pointer through to the workspace.
             .when(self.peek_open(), |d| d.occlude())
             .absolute()
-            .left(px(PEEK_INSET - PEEK_DRIFT * (1. - progress)))
+            .left(px(
+                self.project_rail_drawn_width() + PEEK_INSET - PEEK_DRIFT * (1. - progress)
+            ))
             .top(px(TITLE_BAR_HEIGHT))
             .bottom(px(PEEK_INSET))
             .w(px(self.workspace.sidebar_width))

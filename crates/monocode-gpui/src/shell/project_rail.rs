@@ -264,6 +264,44 @@ impl Shell {
             frame
         }
     }
+    /// The focused rail's column. Boxy frames head it with the title bar's
+    /// height under the traffic lights, as their sidebar does.
+    pub(super) fn focused_project_rail_frame(&self, boxy: bool) -> AnyElement {
+        let width = FOCUSED_RAIL_WIDTH;
+        let rail = div()
+            .id("project-rail-frame")
+            .debug_selector(|| "project-rail-frame".into())
+            .w(px(width))
+            .flex_1()
+            .min_h_0()
+            .when(boxy, |d| {
+                d.border_r_1().border_color(crate::right_panel::stroke())
+            })
+            .child(
+                self.projects_frame.clone().cached(
+                    StyleRefinement::default()
+                        .w(px(width - if boxy { 1. } else { 0. }))
+                        .h_full(),
+                ),
+            );
+        div()
+            .w(px(width))
+            .h_full()
+            .flex_shrink_0()
+            .flex()
+            .flex_col()
+            .when(!boxy, |d| d.bg(inset_chrome_wash()))
+            .when(boxy, |d| {
+                d.child(
+                    titlebar_drag_area()
+                        .w_full()
+                        .h(px(TITLE_BAR_HEIGHT))
+                        .flex_shrink_0(),
+                )
+            })
+            .child(rail)
+            .into_any_element()
+    }
     pub(super) fn project_rail(&mut self, cx: &mut Context<Self>) -> AnyElement {
         if !self.workspace.classic_layout {
             return self.focused_project_rail(cx);

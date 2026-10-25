@@ -852,7 +852,9 @@ fn original_app_surfaces_leave_both_new_layout_styles_tabbed(cx: &mut TestAppCon
             }
             assert!(visual.debug_bounds("classic-app-surface-header").is_none());
             assert!(visual.debug_bounds("classic-mono-title").is_none());
-            assert!(visual.debug_bounds("project-rail-frame").is_none());
+            // The focused layout keeps its own icon rail, not the original one.
+            assert!(visual.debug_bounds("project-rail-frame").is_some());
+            assert!(visual.debug_bounds("rail-workspace-sessions").is_none());
             window
                 .read_with(visual, |shell, _| {
                     assert!(!shell.workspace.classic_layout);
@@ -985,5 +987,33 @@ fn focused_rail_lists_every_project_and_switches_on_click(cx: &mut TestAppContex
                 assert_eq!(shell.workspace.project, shell.workspace.projects[ix]);
             })
             .unwrap();
+    }
+}
+
+#[gpui::test]
+fn focused_rail_sits_left_of_the_sidebar_and_stays_when_it_hides(cx: &mut TestAppContext) {
+    for boxy in [false, true] {
+        let (window, _) = setup(cx, false, boxy);
+        let visual = &mut VisualTestContext::from_window(window.into(), cx);
+        visual.refresh().unwrap();
+        let rail = visual.debug_bounds("project-rail-frame").unwrap();
+        let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
+        let main = visual.debug_bounds("main-pane-frame").unwrap();
+        assert_eq!(rail.left(), px(0.));
+        assert_eq!(rail.size.width, px(48.));
+        assert_eq!(sidebar.left(), px(48.));
+        assert!(main.left() >= px(48. + 260.) - px(1.), "{main:?}");
+        window
+            .update(visual, |shell, _, cx| shell.set_sidebar_visible(false, cx))
+            .unwrap();
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        let rail = visual.debug_bounds("project-rail-frame").unwrap();
+        let main = visual.debug_bounds("main-pane-frame").unwrap();
+        assert_eq!(rail.size.width, px(48.));
+        assert!(
+            main.left() >= px(48.) && main.left() < px(48. + 16.),
+            "{main:?}"
+        );
     }
 }
