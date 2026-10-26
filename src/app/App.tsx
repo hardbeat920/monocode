@@ -12070,10 +12070,10 @@ function Workspace({
   }, []);
 
   // The inset layout has no project rail, so its sidebar takes the primary
-  // toggle.
+  // toggle. Settings stand in for that sidebar and can't be hidden.
   const onToggleSidebar = useCallback(() => {
     if (insetLayout) {
-      onToggleSessionSidebar();
+      if (!settingsOpenRef.current) onToggleSessionSidebar();
       return;
     }
     setProjectRailOpen((open) => {
@@ -13924,6 +13924,7 @@ function Workspace({
       cwd={sidebarCwd}
       projectRailOpen={projectRailOpen}
       sessionSidebarOpen={sessionSidebarOpen}
+      sidebarToggleHidden={settingsOpen}
       compactRail={!insetLayout && compactTitleNavigation}
       inset={insetLayout}
       rightPanelOpen={rightPanelOpen}
@@ -13932,7 +13933,8 @@ function Workspace({
       }
       rightPanelDot={(rightPanelChanges?.files ?? 0) > 0}
       rightPanelUnavailable={!!activeAppView}
-      canGoBack={!!monoViewId || tabVisitNav.canBack}
+      // Back also leaves Settings, Search and the other full views.
+      canGoBack={!!monoViewId || tabVisitNav.canBack || chromeSurfaceOpen}
       canGoForward={tabVisitNav.canForward}
       onGoBack={onRailBack}
       onGoForward={onRailForward}
@@ -14020,15 +14022,7 @@ function Workspace({
       onOpenTerminal={onOpenTerminal}
       onFileMoved={onFileMoved}
       onFileDeleted={onFileDeleted}
-      canGoBack={
-        !!monoViewId ||
-        tabVisitNav.canBack ||
-        searchViewOpen ||
-        settingsOpen ||
-        inboxViewOpen ||
-        notesViewOpen ||
-        automationsViewOpen
-      }
+      canGoBack={!!monoViewId || tabVisitNav.canBack || chromeSurfaceOpen}
       canGoForward={tabVisitNav.canForward}
       onGoBack={onRailBack}
       onGoForward={onRailForward}

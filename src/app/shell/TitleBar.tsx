@@ -133,6 +133,9 @@ type Props = {
   hideWindowControls?: boolean;
   projectRailOpen?: boolean;
   sessionSidebarOpen?: boolean;
+  /** Inset layout: Settings fills the sidebar's place, so its toggle steps
+   * aside. */
+  sidebarToggleHidden?: boolean;
   compactRail?: boolean;
   /**
    * Spans the inset layout's outer glass, above the rail and the card, and
@@ -752,6 +755,7 @@ function TitleBarComponent({
   hideWindowControls = false,
   projectRailOpen = true,
   sessionSidebarOpen = true,
+  sidebarToggleHidden = false,
   compactRail = false,
   inset = false,
   rightPanelOpen = false,
@@ -1143,8 +1147,18 @@ function TitleBarComponent({
             className={`shrink-0 ${trafficLightsVisible ? "w-[78px]" : "w-2.5"}`}
           />
           {onToggleSessionSidebar ? (
-            // Hovering the toggle peeks a collapsed sidebar out.
-            <span data-sidebar-peek-trigger className="flex">
+            // Hovering the toggle peeks a collapsed sidebar out. Hidden, it
+            // keeps its slot so nothing beside it shifts.
+            <span
+              data-sidebar-peek-trigger
+              aria-hidden={sidebarToggleHidden || undefined}
+              inert={sidebarToggleHidden || undefined}
+              className={`flex transition-[opacity,transform,filter] duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none ${
+                sidebarToggleHidden
+                  ? "pointer-events-none scale-75 opacity-0 blur-[3px]"
+                  : ""
+              }`}
+            >
               <IconButton
                 label={`Toggle Sidebar (${MOD}B)`}
                 onClick={onToggleSessionSidebar}
