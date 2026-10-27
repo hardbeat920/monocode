@@ -828,6 +828,7 @@ impl Shell {
         self.order.retain(|s| *s != id);
         self.busy_sessions.remove(&id);
         self.unseen_finished.remove(&id);
+        self.refresh_project_rings(cx);
         self.selected_sessions.remove(&id);
         self.reminders.retain(|r| r.session_id != id);
         self.workspace.project_focus.retain(|_, s| *s != id);

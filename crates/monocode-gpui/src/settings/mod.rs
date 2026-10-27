@@ -17,7 +17,6 @@ pub(crate) mod widgets;
 
 pub(crate) use keymap::apply as apply_keybindings;
 pub(crate) use model::Section;
-pub(crate) use pages::command_shortcut;
 pub(crate) use preferences::{ModelChoice, Preferences, UI_SCALE_PERCENTS};
 
 use crate::{

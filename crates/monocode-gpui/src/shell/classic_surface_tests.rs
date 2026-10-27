@@ -479,7 +479,7 @@ fn new_layout_projects_restore_the_last_session_or_mono_tab(cx: &mut TestAppCont
                         .iter()
                         .position(|p| p == path)
                         .unwrap();
-                    (stable(format!("project-space-{ix}")), session, mono)
+                    (stable(format!("rail-project-button-{ix}")), session, mono)
                 })
                 .unwrap();
             visual.run_until_parked();
@@ -852,7 +852,9 @@ fn original_app_surfaces_leave_both_new_layout_styles_tabbed(cx: &mut TestAppCon
             }
             assert!(visual.debug_bounds("classic-app-surface-header").is_none());
             assert!(visual.debug_bounds("classic-mono-title").is_none());
-            assert!(visual.debug_bounds("project-rail-frame").is_none());
+            // The focused layout keeps its own icon rail, not the original one.
+            assert!(visual.debug_bounds("project-rail-frame").is_some());
+            assert!(visual.debug_bounds("rail-workspace-sessions").is_none());
             window
                 .read_with(visual, |shell, _| {
                     assert!(!shell.workspace.classic_layout);
@@ -948,4 +950,101 @@ fn new_layout_app_tabs_survive_frame_changes_and_close_like_session_tabs(cx: &mu
             })
             .unwrap();
     }
+}
+
+#[gpui::test]
+fn focused_rail_lists_every_project_and_switches_on_click(cx: &mut TestAppContext) {
+    for boxy in [false, true] {
+        let (window, _) = setup(cx, false, boxy);
+        let visual = &mut VisualTestContext::from_window(window.into(), cx);
+        visual.refresh().unwrap();
+        let ix = window
+            .read_with(visual, |shell, _| {
+                shell
+                    .workspace
+                    .projects
+                    .iter()
+                    .position(|p| p != &shell.workspace.project)
+                    .unwrap()
+            })
+            .unwrap();
+        for i in 0..2 {
+            let selector: &'static str =
+                Box::leak(format!("rail-project-button-{i}").into_boxed_str());
+            assert!(
+                visual.debug_bounds(selector).is_some(),
+                "project {i} has a button"
+            );
+        }
+        assert!(visual.debug_bounds("rail-open-project").is_some());
+        let selector: &'static str =
+            Box::leak(format!("rail-project-button-{ix}").into_boxed_str());
+        let bounds = visual.debug_bounds(selector).unwrap();
+        visual.simulate_click(bounds.center(), Default::default());
+        visual.run_until_parked();
+        window
+            .read_with(visual, |shell, _| {
+                assert_eq!(shell.workspace.project, shell.workspace.projects[ix]);
+            })
+            .unwrap();
+    }
+}
+
+#[gpui::test]
+fn focused_rail_sits_left_of_the_sidebar_and_stays_when_it_hides(cx: &mut TestAppContext) {
+    for boxy in [false, true] {
+        let (window, _) = setup(cx, false, boxy);
+        let visual = &mut VisualTestContext::from_window(window.into(), cx);
+        visual.refresh().unwrap();
+        let rail = visual.debug_bounds("project-rail-frame").unwrap();
+        let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
+        let main = visual.debug_bounds("main-pane-frame").unwrap();
+        assert_eq!(rail.left(), px(0.));
+        assert_eq!(rail.size.width, px(48.));
+        assert_eq!(sidebar.left(), px(48.));
+        assert!(main.left() >= px(48. + 260.) - px(1.), "{main:?}");
+        assert!(visual.debug_bounds("project-space-0").is_none());
+        window
+            .update(visual, |shell, _, cx| shell.set_sidebar_visible(false, cx))
+            .unwrap();
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        let rail = visual.debug_bounds("project-rail-frame").unwrap();
+        let main = visual.debug_bounds("main-pane-frame").unwrap();
+        assert_eq!(rail.size.width, px(48.));
+        assert!(
+            main.left() >= px(48.) && main.left() < px(48. + 16.),
+            "{main:?}"
+        );
+    }
+}
+
+#[gpui::test]
+fn focused_rail_marks_the_current_project_even_in_its_mono_tab(cx: &mut TestAppContext) {
+    let (window, _) = setup(cx, false, false);
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    let ix = window
+        .update(visual, |shell, window, cx| {
+            Surface::Mono.open(shell, window, cx);
+            shell
+                .workspace
+                .projects
+                .iter()
+                .position(|p| p == &shell.workspace.project)
+                .unwrap()
+        })
+        .unwrap();
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    window
+        .read_with(visual, |shell, cx| assert!(shell.mono_active(cx)))
+        .unwrap();
+    let selected: &'static str = Box::leak(format!("rail-project-selected-{ix}").into_boxed_str());
+    assert!(
+        visual.debug_bounds(selected).is_some(),
+        "a Mono is one of the project's tabs; the project stays marked"
+    );
+    let other: &'static str =
+        Box::leak(format!("rail-project-selected-{}", 1 - ix).into_boxed_str());
+    assert!(visual.debug_bounds(other).is_none());
 }
