@@ -8,6 +8,7 @@ use std::collections::HashMap;
 pub struct Baseline {
     busy: bool,
     older: bool,
+    usage_limit: Value,
     order: Vec<String>,
     turns: HashMap<String, String>,
 }
@@ -56,12 +57,14 @@ fn edits_between(before: &Value, after: &Value, path: &mut Vec<Value>, out: &mut
 /// The next frame for a watched conversation. While a reply streams that is
 /// the one live turn, not the whole transcript. Capable phones opt into field
 /// edits and text suffixes instead of a growing turn. None when nothing changed.
+/// Usage state changes must publish even when no transcript row changes.
 pub fn update(
     baseline: Option<&Baseline>,
     busy: bool,
     older: bool,
     turns: &[Value],
     incremental: bool,
+    usage_limit: &Value,
 ) -> Option<(Value, Baseline)> {
     let order: Vec<String> = turns
         .iter()
@@ -80,6 +83,7 @@ pub fn update(
     if let Some(baseline) = baseline {
         if baseline.busy == busy
             && baseline.older == older
+            && baseline.usage_limit == *usage_limit
             && changed.is_empty()
             && baseline.order == order
         {
@@ -108,6 +112,7 @@ pub fn update(
         }
     }
     let mut frame = Map::new();
+    frame.insert("usageLimit".into(), usage_limit.clone());
     frame.insert("busy".into(), json!(busy));
     frame.insert("older".into(), json!(older));
     frame.insert("order".into(), json!(order));
@@ -120,6 +125,7 @@ pub fn update(
         Baseline {
             busy,
             older,
+            usage_limit: usage_limit.clone(),
             order,
             turns: serialized,
         },
@@ -164,15 +170,25 @@ mod tests {
 
     #[test]
     fn unchanged_conversations_send_nothing_and_new_turns_send_only_themselves() {
-        let (first, baseline) = update(None, true, false, &[turn("1", "hi")], false).unwrap();
+        let (first, baseline) =
+            update(None, true, false, &[turn("1", "hi")], false, &Value::Null).unwrap();
         assert_eq!(first["turns"].as_array().unwrap().len(), 1);
-        assert!(update(Some(&baseline), true, false, &[turn("1", "hi")], false).is_none());
+        assert!(update(
+            Some(&baseline),
+            true,
+            false,
+            &[turn("1", "hi")],
+            false,
+            &Value::Null
+        )
+        .is_none());
         let (next, _) = update(
             Some(&baseline),
             false,
             false,
             &[turn("1", "hi"), turn("2", "yo")],
             false,
+            &Value::Null,
         )
         .unwrap();
         assert_eq!(next["order"], json!(["1", "2"]));
@@ -183,9 +199,18 @@ mod tests {
     #[test]
     fn incremental_watches_receive_streamed_text_as_utf16_suffixes() {
         let long = "é".repeat(200);
-        let (_, baseline) = update(None, true, false, &[turn("1", &long)], true).unwrap();
+        let (_, baseline) =
+            update(None, true, false, &[turn("1", &long)], true, &Value::Null).unwrap();
         let grown = format!("{long} more");
-        let (frame, _) = update(Some(&baseline), true, false, &[turn("1", &grown)], true).unwrap();
+        let (frame, _) = update(
+            Some(&baseline),
+            true,
+            false,
+            &[turn("1", &grown)],
+            true,
+            &Value::Null,
+        )
+        .unwrap();
         assert!(frame["turns"].as_array().unwrap().is_empty());
         let edit = &frame["patches"][0]["edits"][0];
         assert_eq!(edit["path"], json!(["items", 0, "text"]));
@@ -201,5 +226,18 @@ mod tests {
         assert_eq!(window(&ids, Some("gone"), 20), (0, Some("0".into()), false));
         assert_eq!(before(&ids, "5", 3).unwrap(), (2, 5, true));
         assert!(before(&ids, "missing", 3).is_err());
+    }
+
+    #[test]
+    fn usage_state_changes_publish_without_transcript_changes() {
+        let limit = json!({"token":"a", "resetsAt":123456, "resumeAtReset":false});
+        let (first, baseline) = update(None, false, false, &[], true, &limit).unwrap();
+        assert_eq!(first["usageLimit"], limit);
+        assert!(update(Some(&baseline), false, false, &[], true, &limit).is_none());
+        let armed = json!({"token":"b", "resetsAt":123456, "resumeAtReset":true});
+        let (next, baseline) = update(Some(&baseline), false, false, &[], true, &armed).unwrap();
+        assert_eq!(next["usageLimit"], armed);
+        let (cleared, _) = update(Some(&baseline), false, false, &[], true, &Value::Null).unwrap();
+        assert!(cleared["usageLimit"].is_null());
     }
 }

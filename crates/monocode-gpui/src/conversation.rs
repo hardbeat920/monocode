@@ -40,7 +40,9 @@ use gpui::{
     AnyElement, Context, CursorStyle, Entity, EventEmitter, Focusable, MouseButton, Role,
     SharedString, StyleRefinement, Subscription, Window, canvas, div, prelude::*, px,
 };
-pub(crate) use mobile::{Waiting as MobileWaiting, mobile_access_modes};
+pub(crate) use mobile::{
+    Waiting as MobileWaiting, mobile_access_modes, usage_state as mobile_usage_state,
+};
 pub(crate) use mono::QueueChanged as MonoQueueChanged;
 pub(crate) use mono::Submitted as MonoSubmitted;
 use monocode_core::{

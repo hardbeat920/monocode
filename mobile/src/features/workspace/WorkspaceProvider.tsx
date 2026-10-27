@@ -25,7 +25,7 @@ import {
 import { selectedWorkspace } from "@/features/connection/selection";
 import type { ModelCatalog, ModelChoice } from "@/features/models/types";
 import { toWire, type Attachment } from "@/features/sessions/attachments";
-import type { Message, Mono, Project, QuestionPrompt, QuestionReply, SessionSummary, Turn, TurnItem } from "./types";
+import type { Message, Mono, Project, UsageLimitState, QuestionPrompt, QuestionReply, SessionSummary, Turn, TurnItem } from "./types";
 import { applyFrames, type WatchFrame } from "./watchUpdates";
 /**
  * The workspace: what the desktop has and what can be done with it. Changes
@@ -49,6 +49,7 @@ type Workspace = {
   ) => Promise<string>;
   sendMessage: (conversationId: string, text: string, attachments?: Attachment[]) => Promise<void>;
   stop: (conversationId: string) => Promise<void>;
+  recoverUsage: (conversationId: string, state: UsageLimitState, automatic?: boolean) => Promise<void>;
   /** Answers, or skips, the question an agent waits on, as the desktop's card does. */
   answerQuestion: (
     conversationId: string,
@@ -100,6 +101,7 @@ type Status = {
   errors: Record<string, string>;
   /** What each conversation's agent waits on the user to answer. */
   questions: Record<string, QuestionPrompt>;
+  usageLimits: Record<string, UsageLimitState>;
 };
 export type SessionPage = { sessions: SessionSummary[]; hasMore: boolean };
 /** Narrows a page to sessions active since a time, and without some providers.
@@ -127,6 +129,7 @@ export type NativeTranscriptStatus = {
   notice?: Extract<TurnItem, { type: "notice" }> | null;
   /** Absent from a native build that predates questions. */
   question?: QuestionPrompt | null;
+  usageLimit?: UsageLimitState | null;
 };
 const WorkspaceContext = createContext<Workspace | null>(null);
 const LiveContext = createContext<Live | null>(null);
@@ -180,6 +183,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     turnsRef.current = turns;
   }, [turns]);
   const [busy, setBusy] = useState<Record<string, boolean>>({});
+  const [usageLimits, setUsageLimits] = useState<Record<string, UsageLimitState>>({});
+  const showUsageLimit = useCallback((id: string, state: UsageLimitState | null | undefined) => {
+    setUsageLimits(previous => state
+      ? JSON.stringify(previous[id]) === JSON.stringify(state) ? previous : withValue(previous, id, state)
+      : withoutKey(previous, id));
+  }, []);
+  const usagePending = useRef(new Set<string>());
   const [questions, setQuestions] = useState<Record<string, QuestionPrompt>>({});
   // The question each conversation answered here last. A frame sent before
   // the desktop took the answer must not bring its card back.
@@ -245,6 +255,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       if (countUserItems(received) > 0) starting.current.delete(id);
       setBusy((previous) => withValue(previous, id, result.busy));
       showQuestion(id, result.question);
+      showUsageLimit(id, result.usageLimit);
       // A read carries the whole conversation.
       setWindowOlder((previous) => withValue(previous, id, false));
       setErrors((previous) => withoutKey(previous, id));
@@ -253,7 +264,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       if (current.current.pairing === paired && !startupCatalogError(starting.current, id, message))
         setErrors((previous) => withValue(previous, id, message));
     }
-  }, [showQuestion]);
+  }, [showQuestion, showUsageLimit]);
   // The open conversation streams from the desktop: one watch, whose frames
   // land as the desktop sends them. A desktop that cannot watch, or a dropped
   // link, falls back to reading once a second until a watch opens again.
@@ -291,6 +302,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       setPending((previous) => withoutConfirmedPending(previous, id, applied.turns));
       if (countUserItems(applied.turns) > 0) starting.current.delete(id);
       if (applied.busy !== undefined) setBusy((previous) => withValue(previous, id, applied.busy!));
+      if (applied.usageLimit !== undefined) showUsageLimit(id, applied.usageLimit);
       for (const question of applied.questions) showQuestion(id, question);
       if (applied.older !== undefined)
         setWindowOlder((previous) => withValue(previous, id, applied.older!));
@@ -366,7 +378,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       save();
       if (watchId !== null) void closeWatch(watchId);
     };
-  }, [watching, desktop, read, showQuestion]);
+  }, [watching, desktop, read, showQuestion, showUsageLimit]);
   const mutationIds = useRef(new Map<string, string>());
   const { command, refresh } = connection;
   const mutate = useCallback(async <T,>(method: string, params: object): Promise<T> => {
@@ -503,6 +515,20 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     },
     [mutate, read],
   );
+  const recoverUsage = useCallback(async (conversationId: string, state: UsageLimitState, automatic?: boolean) => {
+    if (usagePending.current.has(conversationId)) return;
+    usagePending.current.add(conversationId);
+    try {
+      await mutate(automatic === undefined ? "session.resumeUsage" : "session.resumeUsageAtReset", {
+        conversationId, token: state.token, ...(automatic === undefined ? {} : { enabled: automatic }),
+      });
+    } finally {
+      usagePending.current.delete(conversationId);
+      // Refresh after errors too, so a stale card can be retried with current state.
+      if (!hasNativeTranscript) void read(conversationId);
+    }
+  }, [mutate, read]);
+
   const answerQuestion = useCallback(
     async (conversationId: string, requestId: number, reply: QuestionReply) => {
       const shown = displayed.current.get(conversationId);
@@ -594,6 +620,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     if (status.ready === false) return;
     setBusy((previous) => withValue(previous, id, status.busy));
     showQuestion(id, status.question);
+    showUsageLimit(id, status.usageLimit);
     if (status.userCount > 0) starting.current.delete(id);
     if (!status.pendingId) {
       setPending((previous) => {
@@ -604,7 +631,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         return confirmed ? withoutKey(previous, id) : previous;
       });
     }
-  }, [showQuestion]);
+  }, [showQuestion, showUsageLimit]);
   const workspace = useMemo<Workspace>(() => {
     const selected = selectedWorkspace(catalog, selection);
     const known = new Set(selected.sessions.map((session) => session.id));
@@ -627,6 +654,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       stop,
       answerQuestion,
       keepQuestionOpen,
+      recoverUsage,
       listSessions,
       rememberSession,
       loadOlder,
@@ -649,6 +677,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     stop,
     answerQuestion,
     keepQuestionOpen,
+    recoverUsage,
     listSessions,
     rememberSession,
     loadOlder,
@@ -664,8 +693,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     [messages, turns, pending, history, windowOlder],
   );
   const status = useMemo<Status>(
-    () => ({ busy, errors, questions }),
-    [busy, errors, questions],
+    () => ({ busy, errors, questions, usageLimits }),
+    [busy, errors, questions, usageLimits],
   );
   return (
     <WorkspaceContext value={workspace}>
@@ -706,6 +735,7 @@ export function useConversation(id: string | null, watching = true) {
     busy: id ? !!status.busy[id] : false,
     error: id ? (status.errors[id] ?? null) : null,
     question: id ? (status.questions[id] ?? null) : null,
+    usageLimit: id ? (status.usageLimits[id] ?? null) : null,
   };
 }
 /** A conversation's turns as they stream in. Re-renders with every frame. */

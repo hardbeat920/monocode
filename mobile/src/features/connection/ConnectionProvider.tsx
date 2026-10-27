@@ -18,6 +18,7 @@ import type {
   SessionSummary,
   Message,
   QuestionPrompt,
+  UsageLimitState,
   Turn,
 } from "@/features/workspace/types";
 import {
@@ -323,6 +324,7 @@ export type Conversation = {
   busy: boolean;
   /** What the agent waits on the user to answer; absent from an older desktop. */
   question?: QuestionPrompt | null;
+  usageLimit?: UsageLimitState | null;
 };
 
 /** What the desktop lists this phone as, e.g. "Nick's iPhone". */
