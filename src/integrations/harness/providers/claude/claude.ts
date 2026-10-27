@@ -22,6 +22,7 @@ import {
   assistantTextBlocks,
   assistantThinkingBlocks,
   assistantToolUses,
+  contextFromCompactBoundary,
   contextFromResult,
   contextUsedFromAssistant,
   turnMetricsFromResult,
@@ -176,6 +177,8 @@ type Live = {
   pendingAssistantBoundary: boolean;
   manualCompaction: boolean;
   compactionConfirmed: boolean;
+  /** Context level observed in the active turn; supersedes cumulative result.usage. */
+  turnContextUsed?: number;
 };
 
 type Resume = {
@@ -262,6 +265,7 @@ export async function compactClaudeContext(
       live.muteUpdates = false;
       live.manualCompaction = true;
       live.compactionConfirmed = false;
+      live.turnContextUsed = undefined;
       try {
         await runTurn(live, {
           ...input,
@@ -513,6 +517,7 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     pendingAssistantBoundary: false,
     manualCompaction: false,
     compactionConfirmed: false,
+    turnContextUsed: undefined,
   };
   liveRef.current = live;
 
@@ -595,6 +600,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
   live.backgroundKey = "";
   live.taskNotes = [];
   live.turnResultSeen = false;
+  live.turnContextUsed = undefined;
 
   const turnPromise = new Promise<void>((resolve, reject) => {
     live.turnDone = resolve;
@@ -738,6 +744,11 @@ function handleLine(sessionId: string, live: Live, line: string): void {
       }
       live.onEvent({ type: "status", text });
     }
+    const compactedUsed = contextFromCompactBoundary(rec);
+    if (compactedUsed !== undefined) {
+      live.turnContextUsed = compactedUsed;
+      live.onEvent({ type: "context", used: compactedUsed });
+    }
   }
 }
 
@@ -824,7 +835,10 @@ function handleAssistant(live: Live, rec: Record<string, unknown>): void {
   }
 
   const used = contextUsedFromAssistant(rec);
-  if (used !== undefined) live.onEvent({ type: "context", used });
+  if (used !== undefined) {
+    live.turnContextUsed = used;
+    live.onEvent({ type: "context", used });
+  }
 
   const snapshot = assistantTextBlocks(rec).join("");
   if (snapshot) closePendingAssistantMessage(live);
@@ -979,7 +993,25 @@ function handleResult(live: Live, rec: Record<string, unknown>): void {
   // conversation level. The next real turn will provide the fresh reading.
   if (!live.manualCompaction) {
     const context = contextFromResult(rec);
-    if (context) live.onEvent({ type: "context", ...context });
+    if (context) {
+      // If an assistant message already reported the accurate context level
+      // for this turn, do not let cumulative turn-level `result.usage` overwrite it.
+      const used = live.turnContextUsed !== undefined ? undefined : context.used;
+      const window = context.window;
+      if (used !== undefined || window !== undefined) {
+        live.onEvent({
+          type: "context",
+          ...(used !== undefined ? { used } : {}),
+          ...(window !== undefined ? { window } : {}),
+        });
+      }
+    }
+  } else {
+    // When manual compaction finishes, still record the model window if present.
+    const context = contextFromResult(rec);
+    if (context?.window) {
+      live.onEvent({ type: "context", window: context.window });
+    }
   }
   const metrics = turnMetricsFromResult(rec);
   if (metrics) live.onEvent({ type: "turn.metrics", ...metrics });

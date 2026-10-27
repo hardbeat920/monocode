@@ -9,8 +9,10 @@ import {
   askUserQuestionAllowInput,
   buildClaudeSpawnArgs,
   buildClaudeUserMessage,
+  contextFromCompactBoundary,
   contextFromResult,
   contextUsedFromAssistant,
+  parseCompactTokens,
   extractExitPlanModePlan,
   isClaudeInitMessage,
   isSubagentMessage,
@@ -777,6 +779,76 @@ describe("helpers", () => {
     ).toBeUndefined();
     expect(
       statusTextFromSystem({ type: "assistant", message: "hello" }),
+    ).toBeUndefined();
+  });
+});
+
+describe("parseCompactTokens", () => {
+  it("parses tokens with k/m suffix or raw number", () => {
+    expect(parseCompactTokens("Compacted context to 40k tokens")).toBe(40_000);
+    expect(parseCompactTokens("Compacted context to 1.5M tokens")).toBe(1_500_000);
+    expect(parseCompactTokens("Compacted context to 32,500 tokens")).toBe(32_500);
+    expect(parseCompactTokens("Compacted context to 1200 tokens")).toBe(1_200);
+  });
+
+  it("returns undefined for non-matching prose", () => {
+    expect(parseCompactTokens("Retrying in 3s")).toBeUndefined();
+    expect(parseCompactTokens("")).toBeUndefined();
+  });
+});
+
+describe("contextFromCompactBoundary", () => {
+  it("reads post_tokens from compact_metadata", () => {
+    expect(
+      contextFromCompactBoundary({
+        type: "system",
+        subtype: "compact_boundary",
+        compact_metadata: {
+          trigger: "manual",
+          pre_tokens: 180_000,
+          post_tokens: 42_000,
+        },
+      }),
+    ).toBe(42_000);
+  });
+
+  it("calculates post tokens from pre_tokens and dropped tokens if post_tokens is absent", () => {
+    expect(
+      contextFromCompactBoundary({
+        type: "system",
+        subtype: "compact_boundary",
+        compact_metadata: {
+          trigger: "auto",
+          pre_tokens: 190_000,
+          cumulative_dropped_tokens: 150_000,
+        },
+      }),
+    ).toBe(40_000);
+  });
+
+  it("falls back to message prose if metadata has no tokens", () => {
+    expect(
+      contextFromCompactBoundary({
+        type: "system",
+        subtype: "compact_boundary",
+        message: "Compacted context to 38k tokens",
+      }),
+    ).toBe(38_000);
+  });
+
+  it("returns undefined for non-compaction system messages or missing token data", () => {
+    expect(
+      contextFromCompactBoundary({
+        type: "system",
+        subtype: "status",
+        message: "hello",
+      }),
+    ).toBeUndefined();
+    expect(
+      contextFromCompactBoundary({
+        type: "system",
+        subtype: "compact_boundary",
+      }),
     ).toBeUndefined();
   });
 });

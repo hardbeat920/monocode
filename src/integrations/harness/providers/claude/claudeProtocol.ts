@@ -477,6 +477,57 @@ export function statusTextFromSystem(
   return compact ? "Compacted context" : undefined;
 }
 
+/** Parse compact token counts like "40k tokens", "35,200 tokens", "1.2M tokens". */
+export function parseCompactTokens(text: string): number | undefined {
+  const match = text.match(/compacted context to\s+([\d,.]+)\s*([kKmM])?\s*tokens/i);
+  if (!match) return undefined;
+  const rawNum = parseFloat(match[1].replace(/,/g, ""));
+  if (!Number.isFinite(rawNum) || rawNum < 0) return undefined;
+  const unit = match[2]?.toLowerCase();
+  if (unit === "k") return Math.round(rawNum * 1000);
+  if (unit === "m") return Math.round(rawNum * 1000000);
+  return Math.round(rawNum);
+}
+
+/**
+ * Context level from a compaction boundary system event.
+ *
+ * Claude Code emits `system` messages with `subtype: "compact_boundary"`
+ * after compaction, reporting the post-compaction context occupancy either in
+ * `compact_metadata` or within the status message prose.
+ */
+export function contextFromCompactBoundary(
+  rec: Record<string, unknown>,
+): number | undefined {
+  if (stringField(rec, "type") !== "system") return undefined;
+  const subtype = stringField(rec, "subtype") ?? "";
+  if (!subtype.startsWith("compact")) return undefined;
+
+  const meta = asRecord(rec.compact_metadata) ?? asRecord(rec.compactMetadata);
+  if (meta) {
+    const postTokens =
+      numberField(meta, "post_tokens") || numberField(meta, "postTokens");
+    if (postTokens > 0) return postTokens;
+
+    const preTokens =
+      numberField(meta, "pre_tokens") || numberField(meta, "preTokens");
+    const dropped =
+      numberField(meta, "cumulative_dropped_tokens") ||
+      numberField(meta, "cumulativeDroppedTokens");
+    if (preTokens > 0 && dropped > 0 && preTokens > dropped) {
+      return preTokens - dropped;
+    }
+  }
+
+  const message = stringField(rec, "message");
+  if (message) {
+    const parsed = parseCompactTokens(message);
+    if (parsed && parsed > 0) return parsed;
+  }
+
+  return undefined;
+}
+
 export function turnStatusFromResult(rec: Record<string, unknown>): {
   status: "completed" | "failed" | "interrupted" | "cancelled";
   error?: string;

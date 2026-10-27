@@ -2044,4 +2044,116 @@ describe("claude manual compaction", () => {
     });
     expect(events.some((event) => event.type === "message.delta")).toBe(false);
   });
+
+  it("emits post-compaction context usage from compact_boundary metadata", async () => {
+    const { turn } = await startTurn("s1");
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+    sent.length = 0;
+
+    const events: HarnessEvent[] = [];
+    const compact = compactClaudeContext({
+      sessionId: "s1",
+      cwd: "/repo",
+      model: "claude:claude-sonnet-5",
+      runtimeMode: "supervised",
+      onEvent: (event) => events.push(event),
+    });
+    await waitFor(
+      () => parse().some((message) => message.type === "user"),
+      "compact command",
+    );
+
+    emit({
+      type: "system",
+      subtype: "compact_boundary",
+      session_id: "sess_1",
+      compact_metadata: {
+        trigger: "manual",
+        pre_tokens: 150_000,
+        post_tokens: 38_000,
+      },
+    });
+    emit({
+      type: "result",
+      subtype: "success",
+      session_id: "sess_1",
+      modelUsage: {
+        "claude-sonnet-5": { contextWindow: 200_000 },
+      },
+    });
+    await compact;
+
+    expect(events).toContainEqual({
+      type: "context",
+      used: 38_000,
+    });
+    expect(events).toContainEqual({
+      type: "context",
+      window: 200_000,
+    });
+  });
+
+  it("retains the assistant context level and does not let cumulative result usage overwrite it", async () => {
+    const { turn, events } = await startTurn("s1");
+
+    // First assistant step (e.g. tool call) reports 30k tokens
+    emit({
+      type: "assistant",
+      session_id: "sess_1",
+      message: {
+        usage: {
+          input_tokens: 10_000,
+          cache_read_input_tokens: 20_000,
+          output_tokens: 200,
+        },
+      },
+    });
+
+    // Second assistant step (final answer) reports 35k tokens
+    emit({
+      type: "assistant",
+      session_id: "sess_1",
+      message: {
+        usage: {
+          input_tokens: 12_000,
+          cache_read_input_tokens: 22_500,
+          output_tokens: 500,
+        },
+      },
+    });
+
+    // Result reports the cumulative sum (65_200 tokens) across all tool iterations
+    emit({
+      type: "result",
+      subtype: "success",
+      session_id: "sess_1",
+      usage: {
+        input_tokens: 22_000,
+        cache_read_input_tokens: 42_500,
+        output_tokens: 700,
+      },
+      modelUsage: {
+        "claude-sonnet-5": { contextWindow: 200_000 },
+      },
+    });
+    await turn;
+
+    expect(events).toContainEqual({
+      type: "context",
+      used: 30_200,
+    });
+    expect(events).toContainEqual({
+      type: "context",
+      used: 35_000,
+    });
+    // The result should only emit the window, NOT the cumulative 65_200 tokens
+    expect(events).toContainEqual({
+      type: "context",
+      window: 200_000,
+    });
+    expect(
+      events.filter((e) => e.type === "context" && "used" in e && (e as any).used === 65_200),
+    ).toHaveLength(0);
+  });
 });
