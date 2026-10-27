@@ -168,6 +168,13 @@ impl Shell {
                         .update(cx, |notice, cx| notice.check_now(hidden, cx));
                 }
                 SettingsEvent::Changed(prefs) => {
+                    if this.workspace.preferences.harness_update_notifications
+                        && !prefs.harness_update_notifications
+                    {
+                        this.notification_state
+                            .harness
+                            .update(cx, |notice, cx| notice.dismiss(cx));
+                    }
                     #[cfg(target_os = "linux")]
                     if this.workspace.preferences.wayland_window_decorations
                         != prefs.wayland_window_decorations
@@ -736,6 +743,33 @@ mod tests {
         let dark = visual.debug_bounds("settings-theme-dark").unwrap();
         visual.simulate_click(dark.center(), Default::default());
         visual.run_until_parked();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn harness_update_notifications_toggle_persists(cx: &mut TestAppContext) {
+        let (window, _, _) = window(cx);
+        window
+            .update(cx, |shell, w, cx| {
+                assert!(shell.workspace.preferences.harness_update_notifications);
+                shell.open_settings(Section::General, w, cx)
+            })
+            .unwrap();
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        let toggle = visual
+            .debug_bounds("settings-toggle-harness-update-notifications")
+            .unwrap();
+        visual.simulate_click(toggle.center(), Default::default());
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, _, _| {
+                assert!(!shell.workspace.preferences.harness_update_notifications);
+                let saved = shell.latest_state.lock().unwrap().clone();
+                let restored: Workspace = serde_json::from_str(&saved).unwrap();
+                assert!(!restored.preferences.harness_update_notifications);
+            })
+            .unwrap();
     }
 
     #[gpui::test]
