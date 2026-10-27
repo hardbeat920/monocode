@@ -5936,22 +5936,18 @@ impl Shell {
             .flex_1()
             .min_w_0()
             .h(px(20.))
-            .when(nested, |d| {
-                d.text_size(px(13.))
-                    .text_color(content(if active { 1. } else { 0.55 }))
-                    .when(!active, |d| {
-                        d.group_hover("session-row", |s| s.text_color(content(0.8)))
-                    })
+            // Only the open or chosen session reads at full strength, in or
+            // out of a folder.
+            .text_color(content(if active { 1. } else { 0.55 }))
+            .when(!active, |d| {
+                d.group_hover("session-row", |s| s.text_color(content(0.8)))
             })
+            .when(nested, |d| d.text_size(px(13.)))
             .when(!nested && compact, |d| {
-                d.text_size(px(14.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(content(1.))
+                d.text_size(px(14.)).font_weight(FontWeight::MEDIUM)
             })
             .when(!compact, |d| {
-                d.text_size(px(13.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(content(1.))
+                d.text_size(px(13.)).font_weight(FontWeight::SEMIBOLD)
             })
             .child(crate::particle_text::particle_text(session.display_title()));
         let badges = div()
