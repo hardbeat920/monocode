@@ -727,6 +727,11 @@ export function useKeyboardLift(offset: number) {
   };
   useKeyboardHandler(
     {
+      onStart: () => {
+        "worklet";
+        // Until this transition's frame arrives, onEnd has nothing settled.
+        settledHeight.set(-1);
+      },
       onMove: follow,
       onInteractive: follow,
       onEnd: (event) => {
