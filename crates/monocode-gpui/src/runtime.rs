@@ -53,6 +53,24 @@ pub(crate) struct Update {
     pub(crate) status: String,
     pub(crate) finished: bool,
 }
+/// Final transition per provider request ID in one emitted update.
+#[derive(Default)]
+pub(crate) struct ApprovalUpdates {
+    pub(crate) pending: Vec<Approval>,
+    pub(crate) resolved: Vec<String>,
+}
+impl ApprovalUpdates {
+    pub(crate) fn request(&mut self, approval: Approval) {
+        self.resolved.retain(|id| id != &approval.id);
+        self.pending.retain(|a| a.id != approval.id);
+        self.pending.push(approval);
+    }
+    pub(crate) fn resolve(&mut self, id: String) {
+        self.pending.retain(|a| a.id != id);
+        self.resolved.push(id);
+    }
+}
+
 fn publish(
     tx: &async_channel::Sender<Update>,
     cancel: &AtomicBool,
@@ -592,8 +610,7 @@ fn run_turn_using(
                 let mut context_changed = false;
                 let mut metrics = None;
                 let mut background = None;
-                let mut approvals = Vec::new();
-                let mut approvals_resolved = Vec::new();
+                let mut approvals = ApprovalUpdates::default();
                 let mut questions = Vec::new();
                 let mut questions_resolved = Vec::new();
                 let mut handoff = None;
@@ -800,11 +817,11 @@ fn run_turn_using(
                         }
                         Event::Approval(approval) => {
                             status = "Waiting for approval".into();
-                            approvals.push(approval);
+                            approvals.request(approval);
                             boundary = true;
                         }
                         Event::ApprovalResolved(id) => {
-                            approvals_resolved.push(id);
+                            approvals.resolve(id);
                             boundary = true;
                         }
                         Event::Question(question) => {
@@ -860,8 +877,8 @@ fn run_turn_using(
                             metrics,
                             usage_limit: None,
                             background,
-                            approvals,
-                            approvals_resolved,
+                            approvals: approvals.pending,
+                            approvals_resolved: approvals.resolved,
                             questions,
                             questions_resolved,
                             handoff,

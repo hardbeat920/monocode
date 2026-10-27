@@ -5,6 +5,7 @@ import { hasNativeTranscript } from "@/features/connection/nativeLink";
 
 import { PixelMascot } from "@/features/mascots/PixelMascot";
 import { Composer } from "@/features/sessions/Composer";
+import { ApprovalCard } from "@/features/sessions/ApprovalCard";
 import { QuestionCard } from "@/features/sessions/QuestionCard";
 import { EmptySession } from "@/features/sessions/EmptySession";
 import { SessionScreen } from "@/features/sessions/SessionScreen";
@@ -40,6 +41,9 @@ export default function MonoScreen() {
       }}
       composer={
         <>
+          {conversationId && conversation.approvals?.length ? (
+            <ApprovalCard conversationId={conversationId} prompts={conversation.approvals} />
+          ) : null}
           {conversation.question ? (
             <QuestionCard conversationId={conversationId} prompt={conversation.question} />
           ) : null}

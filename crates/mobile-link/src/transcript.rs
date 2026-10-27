@@ -366,6 +366,7 @@ pub struct Transcript {
     busy: bool,
     /// What the agent waits on the user to answer, as the desktop sent it.
     question: Value,
+    approvals: Value,
     older: bool,
     error: Option<String>,
     ready: bool,
@@ -385,6 +386,7 @@ impl Transcript {
             pending: Value::Null,
             busy: false,
             question: Value::Null,
+            approvals: json!([]),
             older: false,
             error: None,
             ready: false,
@@ -415,6 +417,10 @@ impl Transcript {
                     .unwrap_or_else(|| from_messages(&command["messages"]));
                 self.busy = command["busy"].as_bool().unwrap_or(false);
                 self.question = command["question"].clone();
+                self.approvals = command
+                    .get("approvals")
+                    .cloned()
+                    .unwrap_or_else(|| json!([]));
                 self.older = false;
                 self.error = None;
                 self.ready = true;
@@ -521,6 +527,9 @@ impl Transcript {
                 }
                 if let Some(older) = frame["older"].as_bool() {
                     self.older = older;
+                }
+                if let Some(approvals) = frame.get("approvals") {
+                    self.approvals = approvals.clone();
                 }
                 // Sent when it changes; null once answered.
                 if let Some(question) = frame.get("question") {
@@ -659,7 +668,7 @@ impl Transcript {
             "order": if order == self.order { None } else { Some(&order) },
             "status": { "busy":self.busy, "error":self.error, "hasTurns":!turns.is_empty(), "ready":self.ready, "lastUserId":self.last_user_id(),
                 "userCount":self.user_count(), "pendingId":self.pending["turn"]["id"], "notice":latest_error,
-                "question":self.question },
+                "question":self.question, "approvals":self.approvals },
             "older": self.history_older.unwrap_or(self.older),
             "firstTurnId": self.history.first().or(self.turns.first()).map(|t| string(t,"id")),
             "watchFrom": self.turns.first().map(|t| string(t,"id")),
@@ -1146,6 +1155,35 @@ mod tests {
         assert!(after["status"]["pendingId"].is_null());
         assert_eq!(after["status"]["lastUserId"], "4/u");
     }
+    #[test]
+    fn approvals_survive_streaming_and_batched_replacements_preserve_the_new_instance() {
+        let mut t = Transcript::new(vec![], false);
+        let first = json!([{"token":"old","requestId":7}]);
+        let second = json!([{"token":"new","requestId":7}]);
+        let read = t
+            .update(json!({"type":"replace","turns":[],"approvals":first}))
+            .unwrap();
+        assert_eq!(read["status"]["approvals"], first);
+        let streaming = t
+            .update(json!({"type":"frames","frames":[{"busy":true}]}))
+            .unwrap();
+        assert_eq!(streaming["status"]["approvals"], first);
+        let replaced = t
+            .update(json!({"type":"frames","frames":[{"approvals":[]},{"approvals":second}]}))
+            .unwrap();
+        assert_eq!(replaced["status"]["approvals"], second);
+        let read = t.update(json!({"type":"replace","turns":[]})).unwrap();
+        assert_eq!(
+            read["status"]["approvals"],
+            json!([]),
+            "a replacement from an older desktop clears stale cards"
+        );
+        let cleared = t
+            .update(json!({"type":"frames","frames":[{"approvals":[]}]}))
+            .unwrap();
+        assert_eq!(cleared["status"]["approvals"], json!([]));
+    }
+
     #[test]
     fn pending_question_holds_until_the_desktop_clears_it() {
         let mut t = Transcript::new(Vec::new(), true);

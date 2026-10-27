@@ -1,3 +1,4 @@
+import type { MobileApproval } from "./mobileApprovals";
 import type { UserQuestionPrompt } from "../../sessions/model/userQuestion";
 import type { MobileTurn } from "./mobileTranscript";
 
@@ -7,6 +8,7 @@ export type WatchBaseline = {
   older: boolean;
   /** The pending question as last sent, as JSON; "null" for none. */
   question: string;
+  approvals?: string;
   order: string[];
   turns: Map<string, string>;
 };
@@ -78,9 +80,11 @@ export function watchUpdate(
     older: boolean;
     turns: MobileTurn[];
     question?: UserQuestionPrompt | null;
+    approvals?: MobileApproval[];
   },
   incremental = false,
 ): { update: object; baseline: WatchBaseline } | null {
+  const approvals = JSON.stringify(conversation.approvals ?? []);
   const question = JSON.stringify(conversation.question ?? null);
   const turns = new Map(
     conversation.turns.map((turn) => [turn.id, JSON.stringify(turn)]),
@@ -94,6 +98,7 @@ export function watchUpdate(
     baseline.busy === conversation.busy &&
     baseline.older === conversation.older &&
     baseline.question === question &&
+    baseline.approvals === approvals &&
     changed.length === 0 &&
     baseline.order.length === order.length &&
     baseline.order.every((id, index) => id === order[index])
@@ -123,6 +128,7 @@ export function watchUpdate(
     update: {
       busy,
       older,
+      ...(baseline?.approvals !== approvals ? { approvals: conversation.approvals ?? [] } : {}),
       order,
       turns: replaced,
       ...(patches.length ? { patches } : {}),
@@ -130,7 +136,7 @@ export function watchUpdate(
         ? { question: conversation.question ?? null }
         : {}),
     },
-    baseline: { busy, older, question, order, turns },
+    baseline: { busy, older, question, approvals, order, turns },
   };
 }
 

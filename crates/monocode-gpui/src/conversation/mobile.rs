@@ -11,6 +11,98 @@ pub(crate) enum Waiting {
 }
 
 impl Conversation {
+    pub(super) fn sync_approvals(&mut self, approvals: Vec<Approval>, resolved: Vec<String>) {
+        self.approvals.retain(|a| !resolved.contains(&a.id));
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        self.mobile_approval_tokens
+            .retain(|id, _| self.approvals.iter().any(|a| &a.id == id));
+        for approval in approvals {
+            let token = format!(
+                "{}-{}",
+                monocode_core::time::now_ms(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            );
+            self.mobile_approval_tokens
+                .insert(approval.id.clone(), token);
+            if let Some(current) = self.approvals.iter_mut().find(|a| a.id == approval.id) {
+                *current = approval;
+            } else {
+                self.approvals.push_back(approval);
+            }
+        }
+    }
+
+    pub(crate) fn mobile_approvals(&self) -> serde_json::Value {
+        use serde_json::json;
+        let mut remaining = 64_000;
+        let mut approvals = self.approvals.iter().take(64).filter_map(|approval| {
+            let token = self.mobile_approval_tokens.get(&approval.id)?;
+            let mut decisions = vec![json!({"id":"deny","label":"Deny"})];
+            if approval.can_remember {
+                decisions.push(json!({"id":"session","label":"Allow for this session"}));
+            }
+            decisions.push(json!({"id":"allow","label":"Allow once"}));
+            let id: String = approval.id.chars().take(512).collect();
+            let title: String = approval.title.chars().take(512).collect();
+            let limit = remaining.min(16_000);
+            let detail: String = approval.detail.chars().take(limit).collect();
+            remaining -= detail.chars().count();
+            let truncated = id.len() < approval.id.len()
+                || title.len() < approval.title.len() || detail.len() < approval.detail.len();
+            let unsupported = if truncated {
+                Some("Context is too large to show completely. Review and respond on the desktop.")
+            } else if self.is_remote() {
+                Some("Respond on the desktop: this remote connection cannot confirm mobile approval delivery.")
+            } else {
+                self.controls.is_none().then_some("The provider is no longer waiting. Resolve this on the desktop.")
+            };
+            Some(json!({"token":token,"requestId":id,"title":title,"detail":detail,
+                "decisions":if unsupported.is_some() { vec![] } else { decisions }, "unsupported":unsupported}))
+        }).collect::<Vec<_>>();
+        if self.approvals.len() > 64 {
+            approvals.push(json!({"token":"overflow","requestId":"", "title":"More approvals are waiting", "detail":"", "decisions":[], "unsupported":"Review the remaining approvals on the desktop."}));
+        }
+        json!(approvals)
+    }
+
+    pub(crate) fn mobile_respond_approval(
+        &mut self,
+        params: &serde_json::Value,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        if self.is_remote() {
+            return Err("Respond on the desktop: this remote connection cannot confirm mobile approval delivery.".into());
+        }
+        let id = params["requestId"]
+            .as_str()
+            .ok_or("Invalid approval request ID")?;
+        if self.mobile_approval_tokens.get(id).map(String::as_str) != params["token"].as_str()
+            || !params["token"].is_string()
+            || !self.approvals.iter().any(|a| a.id == id)
+        {
+            return Err("This approval was already resolved or replaced".into());
+        }
+        let advertised = self.mobile_approvals();
+        let offered = advertised
+            .as_array()
+            .and_then(|items| items.iter().find(|a| a["token"] == params["token"]))
+            .ok_or("Review this approval on the desktop")?;
+        if let Some(reason) = offered["unsupported"].as_str() {
+            return Err(reason.into());
+        }
+        let decision = match params["decision"].as_str() {
+            Some("allow") => Decision::Allow,
+            Some("deny") => Decision::Deny,
+            Some("session") => Decision::Session,
+            _ => return Err("This decision is not available for this approval".into()),
+        };
+        if !self.decide_notification_request(id, decision, cx) {
+            return Err("The desktop could not deliver this decision. The approval may have changed; try again on the desktop.".into());
+        }
+        Ok(())
+    }
+
     /// A phone's message, as if typed: it starts a turn, or while one runs it
     /// steers or queues. The desktop composer's own draft and files stay put.
     pub(crate) fn mobile_submit(

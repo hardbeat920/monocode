@@ -25,7 +25,10 @@ import {
 import { selectedWorkspace } from "@/features/connection/selection";
 import type { ModelCatalog, ModelChoice } from "@/features/models/types";
 import { toWire, type Attachment } from "@/features/sessions/attachments";
-import type { Message, Mono, Project, QuestionPrompt, QuestionReply, SessionSummary, Turn, TurnItem } from "./types";
+import type {
+  ApprovalPrompt, ApprovalDecision, Message, Mono, Project, QuestionPrompt,
+  QuestionReply, SessionSummary, Turn, TurnItem,
+} from "./types";
 import { applyFrames, type WatchFrame } from "./watchUpdates";
 /**
  * The workspace: what the desktop has and what can be done with it. Changes
@@ -49,6 +52,9 @@ type Workspace = {
   ) => Promise<string>;
   sendMessage: (conversationId: string, text: string, attachments?: Attachment[]) => Promise<void>;
   stop: (conversationId: string) => Promise<void>;
+  respondApproval: (
+    conversationId: string, approval: ApprovalPrompt, decision: ApprovalDecision,
+  ) => Promise<void>;
   /** Answers, or skips, the question an agent waits on, as the desktop's card does. */
   answerQuestion: (
     conversationId: string,
@@ -100,6 +106,7 @@ type Status = {
   errors: Record<string, string>;
   /** What each conversation's agent waits on the user to answer. */
   questions: Record<string, QuestionPrompt>;
+  approvals: Record<string, ApprovalPrompt[]>;
 };
 export type SessionPage = { sessions: SessionSummary[]; hasMore: boolean };
 /** Narrows a page to sessions active since a time, and without some providers.
@@ -127,6 +134,7 @@ export type NativeTranscriptStatus = {
   notice?: Extract<TurnItem, { type: "notice" }> | null;
   /** Absent from a native build that predates questions. */
   question?: QuestionPrompt | null;
+  approvals?: ApprovalPrompt[];
 };
 const WorkspaceContext = createContext<Workspace | null>(null);
 const LiveContext = createContext<Live | null>(null);
@@ -181,6 +189,24 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   }, [turns]);
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [questions, setQuestions] = useState<Record<string, QuestionPrompt>>({});
+  const [approvals, setApprovals] = useState<Record<string, ApprovalPrompt[]>>({});
+  const resolvedApprovals = useRef(new Set<string>());
+  // Last authoritative snapshot per alias. A desktop clear retires its
+  // suppression token once no alias still carries a pre-response snapshot.
+  const approvalSnapshots = useRef(new Map<string, Set<string>>());
+  const approvalFlights = useRef(new Map<string, Promise<void>>());
+  const showApprovals = useCallback((id: string, prompts: ApprovalPrompt[] | undefined) => {
+    approvalSnapshots.current.set(id, new Set((prompts ?? []).map((prompt) => prompt.token)));
+    for (const token of resolvedApprovals.current) {
+      if (![...approvalSnapshots.current.values()].some((tokens) => tokens.has(token)))
+        resolvedApprovals.current.delete(token);
+    }
+    const shown = (prompts ?? []).filter((prompt) =>
+      !resolvedApprovals.current.has(prompt.token));
+    setApprovals((previous) =>
+      JSON.stringify(previous[id] ?? []) === JSON.stringify(shown)
+        ? previous : withValue(previous, id, shown));
+  }, []);
   // The question each conversation answered here last. A frame sent before
   // the desktop took the answer must not bring its card back.
   const answered = useRef(new Map<string, number>());
@@ -245,6 +271,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       if (countUserItems(received) > 0) starting.current.delete(id);
       setBusy((previous) => withValue(previous, id, result.busy));
       showQuestion(id, result.question);
+      showApprovals(id, result.approvals);
       // A read carries the whole conversation.
       setWindowOlder((previous) => withValue(previous, id, false));
       setErrors((previous) => withoutKey(previous, id));
@@ -253,7 +280,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       if (current.current.pairing === paired && !startupCatalogError(starting.current, id, message))
         setErrors((previous) => withValue(previous, id, message));
     }
-  }, [showQuestion]);
+  }, [showQuestion, showApprovals]);
   // The open conversation streams from the desktop: one watch, whose frames
   // land as the desktop sends them. A desktop that cannot watch, or a dropped
   // link, falls back to reading once a second until a watch opens again.
@@ -292,6 +319,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       if (countUserItems(applied.turns) > 0) starting.current.delete(id);
       if (applied.busy !== undefined) setBusy((previous) => withValue(previous, id, applied.busy!));
       for (const question of applied.questions) showQuestion(id, question);
+      for (const prompts of applied.approvals) showApprovals(id, prompts);
       if (applied.older !== undefined)
         setWindowOlder((previous) => withValue(previous, id, applied.older!));
       const error = applied.error && !startupCatalogError(starting.current, id, applied.error)
@@ -366,7 +394,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       save();
       if (watchId !== null) void closeWatch(watchId);
     };
-  }, [watching, desktop, read, showQuestion]);
+  }, [watching, desktop, read, showQuestion, showApprovals]);
   const mutationIds = useRef(new Map<string, string>());
   const { command, refresh } = connection;
   const mutate = useCallback(async <T,>(method: string, params: object): Promise<T> => {
@@ -503,6 +531,30 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     },
     [mutate, read],
   );
+  const respondApproval = useCallback(
+    (
+      conversationId: string, approval: ApprovalPrompt, decision: ApprovalDecision,
+    ): Promise<void> => {
+      const key = approval.token;
+      const flight = approvalFlights.current.get(key);
+      if (flight) return flight;
+      const paired = current.current.pairing;
+      const response = (async () => {
+        await mutate("session.respondApproval", {
+          conversationId, requestId: approval.requestId, token: key, decision,
+        });
+        if (current.current.pairing !== paired) return;
+        if ([...approvalSnapshots.current.values()].some((tokens) => tokens.has(key)))
+          resolvedApprovals.current.add(key);
+        // A Mono and its underlying session can expose the same request.
+        setApprovals((previous) => Object.fromEntries(Object.entries(previous).map(
+          ([id, prompts]) => [id, prompts.filter((prompt) => prompt.token !== key)],
+        )));
+      })().finally(() => { approvalFlights.current.delete(key); });
+      approvalFlights.current.set(key, response);
+      return response;
+    }, [mutate],
+  );
   const answerQuestion = useCallback(
     async (conversationId: string, requestId: number, reply: QuestionReply) => {
       const shown = displayed.current.get(conversationId);
@@ -594,6 +646,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     if (status.ready === false) return;
     setBusy((previous) => withValue(previous, id, status.busy));
     showQuestion(id, status.question);
+    showApprovals(id, status.approvals);
     if (status.userCount > 0) starting.current.delete(id);
     if (!status.pendingId) {
       setPending((previous) => {
@@ -604,7 +657,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         return confirmed ? withoutKey(previous, id) : previous;
       });
     }
-  }, [showQuestion]);
+  }, [showQuestion, showApprovals]);
   const workspace = useMemo<Workspace>(() => {
     const selected = selectedWorkspace(catalog, selection);
     const known = new Set(selected.sessions.map((session) => session.id));
@@ -625,6 +678,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       startSession,
       sendMessage,
       stop,
+      respondApproval,
       answerQuestion,
       keepQuestionOpen,
       listSessions,
@@ -647,6 +701,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     startSession,
     sendMessage,
     stop,
+    respondApproval,
     answerQuestion,
     keepQuestionOpen,
     listSessions,
@@ -664,8 +719,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     [messages, turns, pending, history, windowOlder],
   );
   const status = useMemo<Status>(
-    () => ({ busy, errors, questions }),
-    [busy, errors, questions],
+    () => ({ busy, errors, questions, approvals }),
+    [busy, errors, questions, approvals],
   );
   return (
     <WorkspaceContext value={workspace}>
@@ -706,6 +761,7 @@ export function useConversation(id: string | null, watching = true) {
     busy: id ? !!status.busy[id] : false,
     error: id ? (status.errors[id] ?? null) : null,
     question: id ? (status.questions[id] ?? null) : null,
+    approvals: id ? (status.approvals[id] ?? []) : [],
   };
 }
 /** A conversation's turns as they stream in. Re-renders with every frame. */

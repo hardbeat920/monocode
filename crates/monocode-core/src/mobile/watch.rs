@@ -7,6 +7,7 @@ use std::collections::HashMap;
 #[derive(Clone, Debug, Default)]
 pub struct Baseline {
     busy: bool,
+    approvals: Value,
     older: bool,
     order: Vec<String>,
     turns: HashMap<String, String>,
@@ -62,6 +63,7 @@ pub fn update(
     older: bool,
     turns: &[Value],
     incremental: bool,
+    approvals: &Value,
 ) -> Option<(Value, Baseline)> {
     let order: Vec<String> = turns
         .iter()
@@ -80,6 +82,7 @@ pub fn update(
     if let Some(baseline) = baseline {
         if baseline.busy == busy
             && baseline.older == older
+            && baseline.approvals == *approvals
             && changed.is_empty()
             && baseline.order == order
         {
@@ -108,6 +111,9 @@ pub fn update(
         }
     }
     let mut frame = Map::new();
+    if baseline.is_none_or(|b| b.approvals != *approvals) {
+        frame.insert("approvals".into(), approvals.clone());
+    }
     frame.insert("busy".into(), json!(busy));
     frame.insert("older".into(), json!(older));
     frame.insert("order".into(), json!(order));
@@ -119,6 +125,7 @@ pub fn update(
         Value::Object(frame),
         Baseline {
             busy,
+            approvals: approvals.clone(),
             older,
             order,
             turns: serialized,
@@ -163,16 +170,41 @@ mod tests {
     }
 
     #[test]
+    fn approvals_change_without_transcript_changes_and_clear_after_desktop_resolution() {
+        let approvals = json!([{"token":"first","requestId":"7","title":"Run?","detail":"git status","decisions":[{"id":"allow","label":"Allow once"}]}]);
+        let (first, baseline) = update(None, true, false, &[], true, &approvals).unwrap();
+        assert_eq!(first["approvals"], approvals);
+        assert!(update(Some(&baseline), true, false, &[], true, &approvals).is_none());
+        let mut replacement = approvals.clone();
+        replacement[0]["token"] = json!("second");
+        let (next, baseline) =
+            update(Some(&baseline), true, false, &[], true, &replacement).unwrap();
+        assert_eq!(next["approvals"], replacement);
+        let (clear, _) = update(Some(&baseline), true, false, &[], true, &json!([])).unwrap();
+        assert_eq!(clear["approvals"], json!([]));
+    }
+
+    #[test]
     fn unchanged_conversations_send_nothing_and_new_turns_send_only_themselves() {
-        let (first, baseline) = update(None, true, false, &[turn("1", "hi")], false).unwrap();
+        let (first, baseline) =
+            update(None, true, false, &[turn("1", "hi")], false, &json!([])).unwrap();
         assert_eq!(first["turns"].as_array().unwrap().len(), 1);
-        assert!(update(Some(&baseline), true, false, &[turn("1", "hi")], false).is_none());
+        assert!(update(
+            Some(&baseline),
+            true,
+            false,
+            &[turn("1", "hi")],
+            false,
+            &json!([])
+        )
+        .is_none());
         let (next, _) = update(
             Some(&baseline),
             false,
             false,
             &[turn("1", "hi"), turn("2", "yo")],
             false,
+            &json!([]),
         )
         .unwrap();
         assert_eq!(next["order"], json!(["1", "2"]));
@@ -183,9 +215,18 @@ mod tests {
     #[test]
     fn incremental_watches_receive_streamed_text_as_utf16_suffixes() {
         let long = "é".repeat(200);
-        let (_, baseline) = update(None, true, false, &[turn("1", &long)], true).unwrap();
+        let (_, baseline) =
+            update(None, true, false, &[turn("1", &long)], true, &json!([])).unwrap();
         let grown = format!("{long} more");
-        let (frame, _) = update(Some(&baseline), true, false, &[turn("1", &grown)], true).unwrap();
+        let (frame, _) = update(
+            Some(&baseline),
+            true,
+            false,
+            &[turn("1", &grown)],
+            true,
+            &json!([]),
+        )
+        .unwrap();
         assert!(frame["turns"].as_array().unwrap().is_empty());
         let edit = &frame["patches"][0]["edits"][0];
         assert_eq!(edit["path"], json!(["items", 0, "text"]));

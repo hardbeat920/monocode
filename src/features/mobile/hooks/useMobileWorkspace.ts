@@ -117,6 +117,7 @@ export function useMobileWorkspace(options: Options) {
               older,
               turns: conversation.turns,
               question: conversation.question,
+              approvals: conversation.approvals,
             },
             watch.incremental,
           );
