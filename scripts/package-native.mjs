@@ -94,7 +94,7 @@ async function notices(directory) {
     join(directory, "material-icons.LICENSE"),
   );
 }
-async function linuxTree(directory, binary, kind) {
+export async function linuxTree(directory, binary, kind) {
   const app = join(directory, "usr/lib/monocode-native");
   await mkdir(app, { recursive: true });
   await cp(binary, join(app, "monocode-gpui"));
@@ -114,7 +114,7 @@ async function linuxTree(directory, binary, kind) {
   const desktop =
     "[Desktop Entry]\nType=Application\nName=Monocode Native\nExec=monocode-native %F\nIcon=monocode-native\nCategories=Development;\nTerminal=false\nStartupWMClass=dev.usemono.gpui\n";
   await writeFile(
-    join(directory, "usr/share/applications/monocode-native.desktop"),
+    join(directory, "usr/share/applications/dev.usemono.gpui.desktop"),
     desktop,
   );
   const icons = join(directory, "usr/share/icons/hicolor/256x256/apps");
@@ -270,7 +270,7 @@ export async function packageNative({
     const appDir = join(work, "MonocodeNative.AppDir");
     const { desktop } = await linuxTree(appDir, binary, "appimage");
     await writeFile(
-      join(appDir, "monocode-native.desktop"),
+      join(appDir, "dev.usemono.gpui.desktop"),
       desktop.replace("Exec=monocode-native %F", "Exec=monocode-gpui %F"),
     );
     await cp(
@@ -304,7 +304,7 @@ export async function packageNative({
     const spec = join(top, "SPECS/monocode-native.spec");
     await writeFile(
       spec,
-      `Name: monocode-native\nVersion: ${parsed.base}\nRelease: 0.preview.${parsed.sequence}%{?dist}\nSummary: Monocode Native experimental preview\nLicense: MIT AND Apache-2.0\nBuildArch: x86_64\nRequires: polkit\n%description\nMonocode Native experimental preview.\n%install\nmkdir -p %{buildroot}\ncp -a %{_sourcedir}/tree/. %{buildroot}/\n%files\n/usr/bin/monocode-native\n/usr/lib/monocode-native\n/usr/share/applications/monocode-native.desktop\n/usr/share/icons/hicolor/256x256/apps/monocode-native.png\n`,
+      `Name: monocode-native\nVersion: ${parsed.base}\nRelease: 0.preview.${parsed.sequence}%{?dist}\nSummary: Monocode Native experimental preview\nLicense: MIT AND Apache-2.0\nBuildArch: x86_64\nRequires: polkit\n%description\nMonocode Native experimental preview.\n%install\nmkdir -p %{buildroot}\ncp -a %{_sourcedir}/tree/. %{buildroot}/\n%files\n/usr/bin/monocode-native\n/usr/lib/monocode-native\n/usr/share/applications/dev.usemono.gpui.desktop\n/usr/share/icons/hicolor/256x256/apps/monocode-native.png\n`,
     );
     run("rpmbuild", [
       "--define",

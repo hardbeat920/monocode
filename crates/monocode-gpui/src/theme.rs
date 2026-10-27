@@ -100,10 +100,13 @@ pub(crate) fn configure(p: &crate::settings::Preferences, system_light: bool) ->
     })
 }
 
-/// Platforms whose compositor blurs the desktop behind the window: macOS
-/// vibrancy and Windows Acrylic. Linux blur is compositor-dependent, so it
-/// stays opaque rather than exposing the raw desktop.
-pub(crate) const GLASS_PLATFORM: bool = cfg!(any(target_os = "macos", target_os = "windows"));
+/// Platforms that can reveal the desktop behind the window. macOS vibrancy
+/// and Windows Acrylic supply blur; Linux blur is compositor-dependent.
+pub(crate) const GLASS_PLATFORM: bool = cfg!(any(
+    target_os = "macos",
+    target_os = "windows",
+    target_os = "linux"
+));
 pub(crate) fn window_glass(p: &crate::settings::Preferences, system_light: bool) -> bool {
     GLASS_PLATFORM && p.theme != "light" && !(p.theme == "system" && system_light)
 }
@@ -487,14 +490,79 @@ pub(crate) fn diff_background(add: bool, gutter: bool) -> Hsla {
 mod composer_tests {
     use super::*;
 
+    struct Restore(Option<Tokens>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TOKENS.with(|tokens| *tokens.borrow_mut() = self.0);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_glass_follows_theme() {
+        let mut preferences = crate::settings::Preferences::default();
+        for (theme, system_light, expected) in [
+            ("dark", false, true),
+            ("dark", true, true),
+            ("light", false, false),
+            ("light", true, false),
+            ("system", false, true),
+            ("system", true, false),
+        ] {
+            preferences.theme = theme.into();
+            let glass = window_glass(&preferences, system_light);
+            assert_eq!(glass, expected);
+            assert_eq!(
+                window_backdrop(glass),
+                if expected {
+                    gpui::WindowBackgroundAppearance::Blurred
+                } else {
+                    gpui::WindowBackgroundAppearance::Opaque
+                }
+            );
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_surface_alpha_tracks_saved_opacity_and_main_pane_glass() {
+        let _restore = Restore(TOKENS.with(|tokens| *tokens.borrow()));
+        let mut preferences = crate::settings::Preferences {
+            theme: "dark".into(),
+            ..Default::default()
+        };
+        for (opacity, alpha) in [(0, 0.15), (15, 0.15), (40, 0.4), (100, 1.), (200, 1.)] {
+            preferences.sidebar_opacity = opacity;
+            configure(&preferences, false);
+            assert_eq!(shell_fill().a, alpha);
+            assert_eq!(pane_fill().a, 0.28);
+            assert_eq!(inset_pane_fill().a, 0.);
+        }
+
+        preferences.sidebar_opacity = 40;
+        preferences.body_glass = false;
+        configure(&preferences, false);
+        assert_eq!(shell_fill().a, 0.4);
+        assert_eq!(pane_fill().a, 1.);
+        assert_eq!(inset_pane_fill().a, 1.);
+
+        preferences.theme = "light".into();
+        preferences.body_glass = true;
+        configure(&preferences, false);
+        assert_eq!(shell_fill().a, 1.);
+        assert_eq!(pane_fill().a, 1.);
+        assert_eq!(inset_pane_fill().a, 1.);
+        assert_eq!(preferences.sidebar_opacity, 40);
+        assert!(preferences.body_glass);
+
+        preferences.theme = "dark".into();
+        configure(&preferences, false);
+        assert_eq!(shell_fill().a, 0.4);
+        assert_eq!(inset_pane_fill().a, 0.);
+    }
+
     #[test]
     fn composer_surface_matches_react_dark_ink_and_solid_light_background() {
-        struct Restore(Option<Tokens>);
-        impl Drop for Restore {
-            fn drop(&mut self) {
-                TOKENS.with(|tokens| *tokens.borrow_mut() = self.0);
-            }
-        }
         let _restore = Restore(TOKENS.with(|tokens| *tokens.borrow()));
         let mut preferences = crate::settings::Preferences::default();
         configure(&preferences, false);

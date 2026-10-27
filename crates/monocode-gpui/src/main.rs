@@ -445,6 +445,7 @@ fn main() {
                         .wayland_decorations(cx.compositor_name()),
                     // Linux desktops match this to the .desktop file's
                     // StartupWMClass to show the app icon.
+                    // Wayland also needs the .desktop filename to match this ID.
                     app_id: Some("dev.usemono.gpui".into()),
                     window_background: theme::window_backdrop(true),
                     // GPUI owns the custom chrome. AppKit must not reinterpret
