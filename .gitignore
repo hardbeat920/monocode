@@ -26,7 +26,6 @@ test-results/
 .vite/
 .turbo/
 *.tsbuildinfo
-temp_auto_push.bat
 *.dmg
 *.app/
 *.msi
@@ -46,6 +45,9 @@ pnpm-debug.log*
 lerna-debug.log*
 *.local
 .idea/
+.vscode/settings.json
+.vscode/launch.json
+.vscode/tasks.json
 .DS_Store
 ._*
 .Spotlight-V100
@@ -56,5 +58,3 @@ Desktop.ini
 
 # Local document preview mockup
 /work/mono-document-preview.html
-.gitignore
-branch_structure.json
