@@ -272,7 +272,7 @@ Keep the same --request-id when retrying a call after an uncertain result.
 /// the path needs it. The path is absolute, so a leading slash means a POSIX
 /// shell — where a backslash escapes rather than separates, and so is never
 /// safe bare.
-fn quoted(value: &str) -> String {
+pub(crate) fn quoted(value: &str) -> String {
     if !value.starts_with('/') {
         return if value.contains([' ', '\t', '"']) {
             format!("\"{}\"", value.replace('"', ""))

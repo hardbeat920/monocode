@@ -58,7 +58,9 @@ export default defineConfig(async ({ mode }) => {
             }
           : undefined,
       watch: {
-        ignored: stable ? ["**/*"] : ["**/src-tauri/**"],
+        // Cargo's workspace target/ sits at the root; watching it fails with
+        // EBUSY on Windows while the app binary is being linked.
+        ignored: stable ? ["**/*"] : ["**/src-tauri/**", "**/target/**"],
       },
     },
   };

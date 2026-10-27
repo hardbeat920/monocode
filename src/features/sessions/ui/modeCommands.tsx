@@ -2,10 +2,12 @@ import {
   AiIdea,
   CircleDashed,
   CursorMagicSelection,
+  Globe,
   MessageSquare,
   Share,
   X,
 } from "../../../shared/ui/icons";
+import { BROWSER_COMMAND } from "../model/browserCommand";
 import { BTW_COMMAND } from "../model/btw";
 import { DRAFT_COMMAND } from "../model/draftCommand";
 import { OPERATOR_COMMAND } from "../model/operatorCommand";
@@ -52,6 +54,10 @@ export const MODE_COMMAND_STYLES: Record<string, ModeCommandStyle> = {
       description: "Give this thread access to MonoCode",
       iconClassName: "text-sky-300/80",
     },
+  },
+  [BROWSER_COMMAND.name]: {
+    Icon: Globe,
+    className: "text-teal-700 dark:text-teal-200/90",
   },
   [ORCHESTRATOR_COMMAND.name]: {
     Icon: Share,

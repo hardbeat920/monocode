@@ -66,6 +66,11 @@ import {
 import { isHarnessAvailable } from "../../../integrations/harness/core/availability";
 import { mobileTranscript } from "./mobileTranscript";
 import {
+  browserRequestPending,
+  browserStateSnapshot,
+  type BrowserState,
+} from "../../settings/model/browser";
+import {
   mobileAccountChoice,
   mobileProviderAccounts,
   mobileSessionAccountId,
@@ -93,6 +98,7 @@ export async function mobileCatalog(
   runtimeMode?: RuntimeMode,
 ) {
   const roster = listMonos();
+  const browser = browserStateSnapshot();
   const paths = [
     ...new Set([
       ...loadRecents().map((project) => project.path),
@@ -157,12 +163,7 @@ export async function mobileCatalog(
           [...session.blocks].reverse().find((block) => block.startedAt)
             ?.startedAt ?? 0,
         busy: !!session.busy,
-        // What it waits on the user for, so the phone can notify of it.
-        ...(hasPendingApproval(session.blocks)
-          ? { waiting: "approval" as const }
-          : session.pendingQuestion
-            ? { waiting: "question" as const }
-            : {}),
+        ...mobileWaiting(session, browser),
         live: true,
       });
   }
@@ -190,6 +191,9 @@ export async function mobileCatalog(
         busy: !!session?.busy,
         live: live.some((current) => current.id === mono.sessionId),
         sessionId: mono.sessionId,
+        ...(session && browserRequestPending(browser, session.id)
+          ? { browserRequest: true }
+          : {}),
         harness: session?.harness,
         model: session?.model,
         lastMessage: last?.text ?? "",
@@ -201,6 +205,28 @@ export async function mobileCatalog(
     projects,
     monos,
     sessions: [...sessions.values()].sort((a, b) => b.updatedAt - a.updatedAt),
+  };
+}
+/**
+ * What a live session waits on the user for, so the phone can notify of it.
+ * A browser request is also flagged on its own: the phone answers it in the
+ * composer, as the desktop's Allow bar does, whatever else is waiting.
+ */
+export function mobileWaiting(
+  session: Pick<Session, "id" | "blocks" | "pendingQuestion">,
+  browser: BrowserState | null,
+) {
+  const browserRequest = browserRequestPending(browser, session.id);
+  const waiting = hasPendingApproval(session.blocks)
+    ? "approval"
+    : session.pendingQuestion
+      ? "question"
+      : browserRequest
+        ? "browser"
+        : undefined;
+  return {
+    ...(waiting ? { waiting } : {}),
+    ...(browserRequest ? { browserRequest: true } : {}),
   };
 }
 /** The worktree a session works in, so the phone shows its changes and files

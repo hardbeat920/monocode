@@ -25,6 +25,7 @@ export type SettingsSectionId =
   | "chat"
   | "providers"
   | "mcp"
+  | "browser"
   | "skills"
   | "monos"
   | "inbox"
@@ -47,7 +48,11 @@ export type SettingsSection = {
   description: string;
   /** Extra words search matches the section on, beyond its label. */
   keywords?: string;
+  /** A short tag next to the label, for a section still in development. */
+  badge?: SettingsBadge;
 };
+
+export type SettingsBadge = { label: string; hint: string };
 
 export const SETTINGS_SECTIONS: SettingsSection[] = [
   {
@@ -110,6 +115,19 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
       "Find MCP servers across providers and manage their connections.",
     keywords:
       "tools servers connections oauth authenticate login claude codex cursor opencode",
+  },
+  {
+    id: "browser",
+    group: "agents",
+    label: "Browser",
+    description:
+      "Let agents open and use their own tabs in the MonoCode browser or your own browser, and see what they did there.",
+    keywords:
+      "chrome edge web page tabs automation remote debugging cdp /browser monocode browser sign in beta",
+    badge: {
+      label: "Beta",
+      hint: "Still in development and testing. Behavior and settings may change.",
+    },
   },
   {
     id: "skills",
@@ -192,6 +210,104 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     section: "mcp",
     label: "MCP servers",
     keywords: "claude tools connections oauth authenticate login add remove",
+  },
+  {
+    id: "browser-toggle",
+    section: "browser",
+    label: "Let agents use my browser",
+    keywords: "browser access chrome edge on off enable agents web",
+  },
+  {
+    id: "browser-mode",
+    section: "browser",
+    label: "Browser",
+    keywords:
+      "monocode browser your chrome edge managed attach own profile private incognito",
+  },
+  {
+    id: "browser-attach-steps",
+    section: "browser",
+    label: "Steps for your own browser",
+    keywords: "remote debugging chrome://inspect edge://inspect allow setup",
+  },
+  {
+    id: "browser-access-mode",
+    section: "browser",
+    label: "Thread access",
+    keywords: "browser ask allow always on permission thread /browser",
+  },
+  {
+    id: "browser-choice",
+    section: "browser",
+    label: "Which browser",
+    keywords: "chrome edge chromium beta dev canary profile user data folder",
+  },
+  {
+    id: "browser-show-window",
+    section: "browser",
+    label: "Show browser window",
+    keywords: "monocode browser window headless hidden",
+  },
+  {
+    id: "browser-open",
+    section: "browser",
+    label: "Sign in to sites",
+    keywords: "open monocode browser sign in login accounts",
+  },
+  {
+    id: "browser-separate-window",
+    section: "browser",
+    label: "Agent tabs in a separate window",
+    keywords: "browser window tabs background",
+  },
+  {
+    id: "browser-connection",
+    section: "browser",
+    label: "Browser connection",
+    keywords:
+      "connect disconnect consent allow remote debugging inspect chrome edge",
+  },
+  {
+    id: "browser-sessions",
+    section: "browser",
+    label: "Threads and tabs",
+    keywords: "browser revoke take back close agent tabs move",
+  },
+  {
+    id: "browser-give-tab",
+    section: "browser",
+    label: "Give a tab to a thread",
+    keywords: "browser hand over share my tab adopt free tabs thread agent",
+  },
+  {
+    id: "browser-audit",
+    section: "browser",
+    label: "Browser activity",
+    keywords: "audit log history actions clear",
+  },
+  {
+    id: "browser-upload-roots",
+    section: "browser",
+    label: "Upload folders",
+    keywords: "browser file upload folders allowed",
+  },
+  {
+    id: "browser-dotfiles",
+    section: "browser",
+    label: "Allow hidden files in uploads",
+    keywords: "dotfiles hidden upload browser",
+  },
+  {
+    id: "browser-mcp",
+    section: "browser",
+    label: "Browser tools in providers",
+    keywords: "mcp register claude codex cursor opencode tools browser",
+  },
+  {
+    id: "browser-limits",
+    section: "browser",
+    label: "Browser limits",
+    keywords: "tabs per thread total concurrent actions limit",
   },
   {
     id: "monos-enabled",
@@ -625,6 +741,12 @@ export function settingsSectionLabel(id: SettingsSectionId): string {
   return (
     SETTINGS_SECTIONS.find((section) => section.id === id)?.label ?? "General"
   );
+}
+
+export function settingsSectionBadge(
+  id: SettingsSectionId,
+): SettingsBadge | undefined {
+  return SETTINGS_SECTIONS.find((section) => section.id === id)?.badge;
 }
 
 export function settingsSectionDescription(id: SettingsSectionId): string {

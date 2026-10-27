@@ -753,6 +753,7 @@ async fn handle(
             "session.start",
             "conversation.send",
             "session.cancel",
+            "browser.answer",
             "session.rename",
             "session.delete",
             "session.archive",

@@ -31,6 +31,7 @@ import {
 import { DictationBar } from "./DictationBar";
 import { canDictate, insertDictation } from "./dictation";
 import { ProviderLogo } from "./ProviderLogo";
+import type { BrowserRequest } from "./browserRequest";
 import { COMPOSER_INPUT_ID } from "./SessionScreen";
 
 export const COMPOSER_PLACEHOLDER = "Plan, ask, build…";
@@ -63,9 +64,9 @@ const DICTATION_FADE = { duration: 180, easing: Easing.out(Easing.cubic) };
  * One progress value drives the morph, and the TextInput stays the same
  * element throughout so focus and the keyboard are never interrupted. A React
  * Native TextInput, so keyboard-controller can track it (it matches `nativeID`).
- * While the desktop can't be reached, or the session's latest error stands,
- * the field gives way to a line saying so and nothing can be sent; a draft
- * waits under it.
+ * While the desktop can't be reached, the agent asks for the browser, or the
+ * session's latest error stands, the field gives way to a line saying so and
+ * nothing can be sent; a draft waits under it.
  */
 export function Composer({
   context,
@@ -79,6 +80,7 @@ export function Composer({
   onModelPress,
   workspace,
   notice,
+  browserRequest,
 }: {
   /** Where this runs: the project, or the mono. */
   context: string;
@@ -96,12 +98,20 @@ export function Composer({
   workspace?: ReactNode;
   /** The session's latest error, in place of the field until tapped away. */
   notice?: { text: string; dismiss: () => void } | null;
+  /** The agent waits to use the browser: the desktop's Allow bar, here. */
+  browserRequest?: BrowserRequest | null;
 }) {
   const scheme = useScheme();
   const colors = useColors();
   const styles = useStyles();
   const offline = useOffline();
-  const blocked = offline ? "offline" : notice ? "error" : null;
+  const blocked = offline
+    ? "offline"
+    : browserRequest
+      ? "browser"
+      : notice
+        ? "error"
+        : null;
   const input = useRef<TextInput>(null);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
@@ -320,6 +330,50 @@ export function Composer({
             <Text style={styles.statusLabel} numberOfLines={1}>
               Reconnecting to desktop
             </Text>
+          </Animated.View>
+        ) : blocked === "browser" && browserRequest ? (
+          <Animated.View
+            key="browser"
+            entering={FadeIn.duration(DICTATION_FADE.duration)}
+            exiting={FadeOut.duration(DICTATION_FADE.duration)}
+            style={styles.status}
+          >
+            <Icon name="globe" size={16} color={colors.accent} />
+            <Text
+              accessibilityRole="text"
+              style={[styles.statusLabel, styles.requestLabel]}
+              numberOfLines={1}
+            >
+              Wants to use the browser
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Allow the browser for this thread"
+              accessibilityState={{ disabled: browserRequest.answering }}
+              disabled={browserRequest.answering}
+              onPress={browserRequest.allow}
+              style={({ pressed }) => [
+                styles.requestButton,
+                styles.requestAllow,
+                (pressed || browserRequest.answering) && styles.pressed,
+              ]}
+            >
+              <Text style={styles.requestAllowLabel}>Allow</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Not now"
+              accessibilityHint="The agent goes on without the browser until your next message"
+              accessibilityState={{ disabled: browserRequest.answering }}
+              disabled={browserRequest.answering}
+              onPress={browserRequest.decline}
+              style={({ pressed }) => [
+                styles.requestButton,
+                (pressed || browserRequest.answering) && styles.pressed,
+              ]}
+            >
+              <Text style={styles.requestLabelButton}>Not now</Text>
+            </Pressable>
           </Animated.View>
         ) : blocked === "error" && notice ? (
           <Animated.View
@@ -686,6 +740,30 @@ const useStyles = themedStyles((colors) => ({
   errorLabel: {
     flex: 1,
     color: colors.deletions,
+  },
+  requestLabel: {
+    flex: 1,
+    color: colors.content,
+  },
+  requestButton: {
+    height: 30,
+    justifyContent: "center",
+    paddingHorizontal: 12,
+    borderRadius: 15,
+    backgroundColor: colors.fill,
+  },
+  requestAllow: {
+    backgroundColor: colors.accent,
+  },
+  requestAllowLabel: {
+    color: "#ffffff",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  requestLabelButton: {
+    color: colors.content,
+    fontSize: 14,
+    fontWeight: "500",
   },
   hidden: {
     opacity: 0,

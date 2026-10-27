@@ -5,6 +5,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
@@ -13,6 +14,22 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 
 const APP_TURN_INACTIVE: &str = "MonoCode app access is inactive. Use /operator once in this thread to enable it, then call the CLI during an active agent turn. Retrying this request now will not enable access.";
+/// The error for a token the server does not know (revoked, or from before
+/// an app restart). Clients tell it apart from other refusals by this text.
+pub(crate) const UNAUTHORIZED: &str = "Connection revoked or unauthorized";
+/// The error when every slot for a request is taken; nothing was run.
+pub(crate) const BUSY: &str =
+    "MonoCode is busy with other requests; nothing was run. Retry in a moment.";
+/// Longest request line the server reads, the newline included.
+pub(crate) const MAX_REQUEST_LINE: usize = 256 * 1024;
+/// Readers of request lines: control, app and browser requests alike. A
+/// browser request leaves its reader for a thread of its own as soon as it
+/// is read, since it may wait for the user and the browser for minutes.
+const SERVE_THREADS: usize = 8;
+/// Accepted connections waiting for a reader.
+const SERVE_QUEUE: usize = 32;
+/// Browser requests handled at the same time; more get [`BUSY`].
+const MAX_BROWSER_REQUESTS: usize = 64;
 
 #[derive(Clone)]
 struct Grant {
@@ -165,7 +182,7 @@ fn request_grant(host: &Inner, namespace: &str, token: &str) -> Result<Grant, St
         _ => return Err("Unknown control namespace".into()),
     }
     .cloned()
-    .ok_or("Connection revoked or unauthorized")?;
+    .ok_or(UNAUTHORIZED)?;
     if namespace == "app"
         && (host.grants.contains_key(&grant.session)
             || host.workers.contains_key(&grant.session)
@@ -193,47 +210,129 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
     let app = app.clone();
     std::thread::spawn(move || {
         // Limit concurrent readers, including unauthenticated sockets.
-        let (tx, rx) = mpsc::sync_channel::<TcpStream>(32);
+        let (tx, rx) = mpsc::sync_channel::<TcpStream>(SERVE_QUEUE);
         let rx = Arc::new(Mutex::new(rx));
-        for _ in 0..8 {
+        let browser = Arc::new(AtomicUsize::new(0));
+        for _ in 0..SERVE_THREADS {
             let rx = rx.clone();
             let app = app.clone();
             let inner = inner.clone();
+            let browser = browser.clone();
             std::thread::spawn(move || loop {
                 let stream = match rx.lock() {
                     Ok(rx) => rx.recv(),
                     Err(_) => return,
                 };
                 let Ok(stream) = stream else { return };
-                serve(stream, &app, &inner);
+                serve(stream, &app, &inner, &browser);
             });
         }
         for stream in listener.incoming().flatten() {
-            let _ = tx.try_send(stream);
+            if let Err(mpsc::TrySendError::Full(stream)) = tx.try_send(stream) {
+                // Say so rather than drop the connection: the client then
+                // knows nothing ran. A short write timeout keeps a client
+                // that does not read from holding up the accept loop.
+                let _ = stream.set_write_timeout(Some(Duration::from_millis(200)));
+                respond(stream, Err(BUSY.into()));
+            }
         }
     });
     Ok(())
 }
 
-fn serve(mut stream: TcpStream, app: &AppHandle, inner: &Arc<Mutex<Inner>>) {
+/// Hand a browser request to a thread of its own, at most
+/// [`MAX_BROWSER_REQUESTS`] at a time; the reader returns to the pool.
+fn spawn_browser_request(stream: TcpStream, request: Request, running: &Arc<AtomicUsize>) {
+    if running
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+            (n < MAX_BROWSER_REQUESTS).then_some(n + 1)
+        })
+        .is_err()
+    {
+        respond(stream, Err(BUSY.into()));
+        return;
+    }
+    let slot = running.clone();
+    let spawned = std::thread::Builder::new()
+        .name("control-browser".into())
+        .spawn(move || {
+            let result = browser_reply(request, crate::browser::handle_token_request);
+            respond(stream, result);
+            slot.fetch_sub(1, Ordering::AcqRel);
+        });
+    if spawned.is_err() {
+        // The stream went with the closure; the client sees the close as a
+        // lost answer, and nothing ran.
+        running.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// Read and validate one request line.
+fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(3)));
+    let mut raw = String::new();
+    BufReader::new(stream)
+        .take(MAX_REQUEST_LINE as u64 + 1)
+        .read_line(&mut raw)
+        .map_err(|e| e.to_string())?;
+    if raw.len() > MAX_REQUEST_LINE {
+        return Err("Request exceeds 256 KiB".into());
+    }
+    let request: Request = serde_json::from_str(&raw).map_err(|_| "Invalid control request")?;
+    if !request.input.is_object() || request.request_id.is_empty() || request.request_id.len() > 128
+    {
+        return Err("Invalid input or request ID".into());
+    }
+    Ok(request)
+}
+
+/// Browser actions never go through the window: the BrowserHost answers
+/// synchronously, and policy refusals are ordinary `blocked` results. Only
+/// an unknown token is a transport error.
+fn browser_reply(
+    request: Request,
+    handle: impl FnOnce(
+        &str,
+        crate::browser::protocol::ActionRequest,
+    ) -> Result<crate::browser::protocol::ActionResult, String>,
+) -> Result<Value, String> {
+    let result = handle(
+        &request.token,
+        crate::browser::protocol::ActionRequest {
+            request_id: request.request_id,
+            action: request.action,
+            input: request.input,
+        },
+    )?;
+    Ok(json!({"ok": true, "result": result}))
+}
+
+fn respond(mut stream: TcpStream, result: Result<Value, String>) {
+    let response = result.unwrap_or_else(|error| {
+        if error == APP_TURN_INACTIVE {
+            json!({"ok": false, "error": error, "retryable": false})
+        } else {
+            json!({"ok": false, "error": error})
+        }
+    });
+    let _ = writeln!(stream, "{response}");
+}
+
+fn serve(
+    mut stream: TcpStream,
+    app: &AppHandle,
+    inner: &Arc<Mutex<Inner>>,
+    browser: &Arc<AtomicUsize>,
+) {
+    let request = match read_request(&mut stream) {
+        Ok(request) => request,
+        Err(error) => return respond(stream, Err(error)),
+    };
+    if request.namespace == crate::browser::protocol::NAMESPACE {
+        return spawn_browser_request(stream, request, browser);
+    }
     let result = (|| -> Result<Value, String> {
-        let mut raw = String::new();
-        BufReader::new(&mut stream)
-            .take(262_145)
-            .read_line(&mut raw)
-            .map_err(|e| e.to_string())?;
-        if raw.len() > 262_144 {
-            return Err("Request exceeds 256 KiB".into());
-        }
-        let request: Request = serde_json::from_str(&raw).map_err(|_| "Invalid control request")?;
-        if !request.input.is_object()
-            || request.request_id.is_empty()
-            || request.request_id.len() > 128
-        {
-            return Err("Invalid input or request ID".into());
-        }
         let id = uuid::Uuid::new_v4().to_string();
         let (tx, rx) = mpsc::channel();
         let grant = {
@@ -271,14 +370,32 @@ fn serve(mut stream: TcpStream, app: &AppHandle, inner: &Arc<Mutex<Inner>>) {
         }
         result
     })();
-    let response = result.unwrap_or_else(|error| {
-        if error == APP_TURN_INACTIVE {
-            json!({"ok": false, "error": error, "retryable": false})
-        } else {
-            json!({"ok": false, "error": error})
-        }
-    });
-    let _ = writeln!(stream, "{response}");
+    respond(stream, result);
+}
+
+/// The control transport's browser path without a Tauri app: the same
+/// request parsing, browser dispatch and reply framing as [`serve`], against
+/// a test host. Used by the browser module's end-to-end tests.
+#[cfg(test)]
+pub(crate) fn serve_browser_for_tests(
+    listener: TcpListener,
+    host: Arc<crate::browser::BrowserHost>,
+) {
+    for stream in listener.incoming() {
+        let Ok(mut stream) = stream else { return };
+        let host = host.clone();
+        std::thread::spawn(move || {
+            let result = read_request(&mut stream).and_then(|request| {
+                if request.namespace != crate::browser::protocol::NAMESPACE {
+                    return Err("Unknown control namespace".into());
+                }
+                browser_reply(request, |token, request| {
+                    host.handle_token_request(token, request)
+                })
+            });
+            respond(stream, result);
+        });
+    }
 }
 
 #[tauri::command]
@@ -409,6 +526,7 @@ pub fn control_authorize_turn(
     session_id: String,
     cwd: String,
     app_access: bool,
+    browser_access: Option<bool>,
 ) -> Result<(), String> {
     let workdir = crate::fs::expand_home(&cwd);
     let cwd = std::fs::canonicalize(&workdir)
@@ -432,13 +550,18 @@ pub fn control_authorize_turn(
     let eligible = inner.prepare_app_grant(&session_id, window.label(), &cwd);
     let app_allowed = app_access && eligible;
     inner.active.insert(
-        session_id,
+        session_id.clone(),
         ActiveTurn {
             window: window.label().to_string(),
-            cwd,
+            cwd: cwd.clone(),
             app_allowed,
         },
     );
+    drop(inner);
+    // Browser access, outside the control lock (it may detach tabs over
+    // CDP): token prepared before the provider spawns, grant set when the
+    // frontend passes the flag.
+    crate::browser::turn_started(&session_id, window.label(), &cwd, browser_access);
     Ok(())
 }
 
@@ -447,6 +570,7 @@ pub fn control_turn_finished(host: State<'_, ControlHost>, session_id: String) {
     if let Ok(mut inner) = host.inner.lock() {
         inner.active.remove(&session_id);
     }
+    crate::browser::turn_finished(&session_id);
 }
 
 pub fn window_closed(app: &AppHandle, label: &str) {
@@ -461,16 +585,25 @@ pub fn window_closed(app: &AppHandle, label: &str) {
     if let Ok(mut inner) = host.inner.lock() {
         inner.close_window(label);
     };
+    crate::browser::window_closed(label);
 }
 
 pub fn configure_child(app: &AppHandle, session_id: &str, cmd: &mut Command) {
     cmd.env_remove("MONOCODE_CONTROL_ENDPOINT")
         .env_remove("MONOCODE_CONTROL_TOKEN")
         .env_remove("MONOCODE_APP_ENDPOINT")
-        .env_remove("MONOCODE_APP_TOKEN");
+        .env_remove("MONOCODE_APP_TOKEN")
+        .env_remove(crate::browser::protocol::ENV_ENDPOINT)
+        .env_remove(crate::browser::protocol::ENV_TOKEN);
     let Some(host) = app.try_state::<ControlHost>() else {
         return;
     };
+    // Every session gets a browser token at spawn; whether it may use it is
+    // decided per request by the BrowserHost.
+    if let Some(token) = crate::browser::child_token(session_id) {
+        cmd.env(crate::browser::protocol::ENV_ENDPOINT, &host.endpoint)
+            .env(crate::browser::protocol::ENV_TOKEN, token);
+    }
     if let Ok(inner) = host.inner.lock() {
         if let Some(grant) = inner.grants.get(session_id) {
             cmd.env("MONOCODE_CONTROL_ENDPOINT", &host.endpoint)
