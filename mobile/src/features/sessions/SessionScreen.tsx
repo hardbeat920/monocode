@@ -13,6 +13,8 @@ import {
   type RefObject,
 } from "react";
 import {
+  Dimensions,
+  Keyboard,
   Platform,
   Text,
   View,
@@ -701,13 +703,42 @@ export function SessionFrame({
 export function useKeyboardLift(offset: number) {
   const height = useSharedValue(0);
   const progress = useSharedValue(0);
+  const settledHeight = useSharedValue(-1);
+  useEffect(() => {
+    if (Platform.OS !== "ios") return;
+    // Rotation can finish without movement events, or with a late animation
+    // completion for the old orientation. UIKit's settled frame wins either way.
+    const subscription = Keyboard.addListener("keyboardDidChangeFrame", (event) => {
+      const frame = event.endCoordinates;
+      const bottom = Dimensions.get("window").height;
+      const overlap = frame.screenY + frame.height >= bottom - 1
+        ? Math.max(0, Math.min(frame.height, bottom - frame.screenY))
+        : 0;
+      settledHeight.set(overlap);
+      height.set(overlap);
+      progress.set(overlap > 0 ? 1 : 0);
+    });
+    return () => subscription.remove();
+  }, [height, progress, settledHeight]);
   const follow = (e: { height: number; progress: number }) => {
     "worklet";
     height.set(e.height);
     progress.set(e.progress);
   };
   useKeyboardHandler(
-    { onMove: follow, onInteractive: follow, onEnd: follow },
+    {
+      onMove: follow,
+      onInteractive: follow,
+      onEnd: (event) => {
+        "worklet";
+        const settled = settledHeight.get();
+        if (Platform.OS === "ios" && settled >= 0) {
+          follow({ height: settled, progress: settled > 0 ? 1 : 0 });
+        } else {
+          follow(event);
+        }
+      },
+    },
     [],
   );
 

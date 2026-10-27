@@ -8,9 +8,10 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Keyboard, StyleSheet, useWindowDimensions, View } from "react-native";
+import { Keyboard, StyleSheet, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import {
+  cancelAnimation,
   ReduceMotion,
   useAnimatedReaction,
   useSharedValue,
@@ -18,6 +19,7 @@ import {
   type SharedValue,
 } from "react-native-reanimated";
 import { scheduleOnRN } from "react-native-worklets";
+import { useContentWidth } from "./ContentPane";
 
 // The Expo Router drawer's motion (react-native-drawer-layout): its spring and
 // its swipe thresholds, as the pages moved when a drawer drove them.
@@ -115,7 +117,7 @@ export function useScenePager(
 
 /** The pan behind useScenePager, over the whole scene. */
 export function ScenePagerHost({ children }: { children: ReactNode }) {
-  const { width } = useWindowDimensions();
+  const width = useContentWidth();
   const progress = useSharedValue(0);
   const target = useSharedValue(0);
   const enabled = useSharedValue(false);
@@ -136,11 +138,19 @@ export function ScenePagerHost({ children }: { children: ReactNode }) {
   /** Whether the current drag moves the pages; none on a screen without them. */
   const paging = useSharedValue(false);
 
+  // A fold can interrupt a drag or spring. Settle on the selected page before
+  // accepting a new gesture in the resized pane; never leave it halfway offscreen.
+  useEffect(() => {
+    paging.set(false);
+    cancelAnimation(progress);
+    progress.set(target.get());
+  }, [width, paging, progress, target]);
+
   // Built once per width: a new gesture each render would be attached anew.
   const pan = useMemo(
     () =>
       Gesture.Pan()
-        .enabled(on)
+        .enabled(on && width > 0)
         // Takes only a swipe towards a page there is, so one off the edge (left
         // on the last page, say) goes to what is under the finger, such as a
         // row's own swipe actions.

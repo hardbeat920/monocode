@@ -346,6 +346,7 @@ export function ProjectScreen({
       composer={
         <Composer
           key={sessionId ?? project.id}
+          active={focused && (sessionId != null || pages.view === "chat")}
           notice={sessionNotice}
           context={project.name}
           branch={sessionId ? (session?.branch ?? project.branch) : branch}

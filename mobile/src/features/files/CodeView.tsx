@@ -10,7 +10,6 @@ import {
   FlatList,
   ScrollView,
   Text,
-  useWindowDimensions,
   View,
 } from "react-native";
 import Animated, {
@@ -22,6 +21,8 @@ import Animated, {
 
 import { useHeaderHeight } from "expo-router/react-navigation";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+
+import { useContentWidth } from "@/ui/ContentPane";
 
 import { MONO } from "@/features/changes/diffTheme";
 import { themedStyles, useScheme, withAlpha } from "@/ui/theme";
@@ -155,7 +156,7 @@ function PannedList({
   resetKey,
 }: ListProps & { resetKey: string }) {
   const styles = useStyles();
-  const screen = useWindowDimensions().width;
+  const screen = useContentWidth();
   const gutterWidth = NUMBER_WIDTH + (signs ? SIGN_WIDTH : 0);
   // The code's width at its longest line, so every line scrolls as one page.
   const codeWidth = useMemo(

@@ -90,6 +90,11 @@ vi.mock("react-native", () => {
     )),
   };
 });
+vi.mock("@/features/sessions/TypingPostureFocus", () => ({
+  TypingPostureFocus: ({ enabled, onEnterTypingPosture }: {
+    enabled: boolean; onEnterTypingPosture: () => void;
+  }) => <button aria-label="Enter typing posture" disabled={!enabled} onClick={onEnterTypingPosture} />,
+}));
 vi.mock("react-native-reanimated", () => {
   const transition = { duration: () => ({}) };
   return {
@@ -196,10 +201,11 @@ let root: ReturnType<typeof createRoot>;
 const model = vi.fn();
 const send = vi.fn();
 const stop = vi.fn(async () => {});
-const render = () =>
+const render = (active = true) =>
   act(() =>
     root.render(
       <Composer
+        active={active}
         context="Project"
         branch="main"
         model="GPT"
@@ -305,4 +311,23 @@ it("opens a content-sized attachment menu with safe-area padding and retains bot
       .click(),
   );
   expect(runtime.files).toHaveBeenCalledWith(10);
+});
+
+// The native observer handles posture transitions; the composer focuses its
+// existing input, preserving its draft and leaving inactive routes alone.
+it("focuses the existing draft on typing posture only for the active route", () => {
+  render();
+  const input = container.querySelector("textarea")!;
+  act(() => {
+    input.value = "Unsent draft";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  act(() => button("Enter typing posture").click());
+  expect(document.activeElement).toBe(input);
+  expect(input.value).toBe("Unsent draft");
+  act(() => input.blur());
+  render(false);
+  act(() => button("Enter typing posture").click());
+  expect(document.activeElement).not.toBe(input);
+  expect(input.value).toBe("Unsent draft");
 });
