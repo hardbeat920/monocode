@@ -32,7 +32,24 @@ pub(crate) fn bind(cx: &mut App) {
     }
 }
 
+/// Set once the first window has presented a frame.
+struct MenuReady;
+impl gpui::Global for MenuReady {}
+
+/// Installs the menu bar, called after the first frame is on screen. Setting
+/// the main menu makes AppKit check for Writing Tools, which loads a framework
+/// on the main thread (about 70 ms), so launch must not wait for it.
+pub(crate) fn ready(cx: &mut App) {
+    cx.set_global(MenuReady);
+    if let Some(prefs) = cx.try_global::<crate::settings::Preferences>().cloned() {
+        install(&prefs, cx);
+    }
+}
+
 pub(crate) fn install(prefs: &crate::settings::Preferences, cx: &mut App) {
+    if !cx.has_global::<MenuReady>() {
+        return;
+    }
     cx.set_menus(vec![
         Menu::new("Monocode Native").items([
             MenuItem::action("About Monocode Native", About),

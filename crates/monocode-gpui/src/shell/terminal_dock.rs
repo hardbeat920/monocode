@@ -49,7 +49,10 @@ impl LiveMark {
                 cx.background_executor()
                     .timer(Duration::from_secs_f32(LIVE_CYCLE / 4.))
                     .await;
-                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                // Each step redraws the whole window; hold the mark while
+                // nobody is looking at it or motion is reduced.
+                let still = cx.update(|cx| cx.reduce_motion() || !crate::pulse::app_active(cx));
+                if !still && this.update(cx, |_, cx| cx.notify()).is_err() {
                     break;
                 }
             }
@@ -269,7 +272,9 @@ impl Shell {
                     self.terminals
                         .get(&project)
                         .and_then(|t| t.get(dock.active))
-                        .cloned(),
+                        // The grid shapes every line; redraw it only when the
+                        // terminal itself changes.
+                        .map(|t| t.clone().cached(StyleRefinement::default().size_full())),
                 ),
             )
             .into_any_element()

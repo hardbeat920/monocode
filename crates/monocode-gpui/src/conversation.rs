@@ -229,6 +229,7 @@ pub(crate) struct Conversation {
     cancel: Arc<AtomicBool>,
     title_cancel: Option<Arc<AtomicBool>>,
     _submission: Subscription,
+    _alternate_submission: Subscription,
     response_events: Option<Subscription>,
     response_menu: Option<ResponseMenu>,
     response_request: Option<(usize, monocode_core::response::TransferKind, Instant)>,
@@ -508,7 +509,12 @@ impl Conversation {
             }
             this.open_typed_btw(cx);
         });
+        input.update(cx, |input, _| input.set_alternate_submit(true));
         let submission = cx.subscribe(&input, |this, _, _: &input::Submitted, cx| this.send(cx));
+        let alternate_submission = cx
+            .subscribe(&input, |this, _, _: &input::AlternateSubmitted, cx| {
+                this.send_follow_up(true, cx)
+            });
         let review =
             cx.new(|_| crate::session_review::SessionReview::new(summary.id, summary.cwd.clone()));
         let review_events = cx.subscribe(&review, |this, review, event, cx| match event {
@@ -661,6 +667,7 @@ impl Conversation {
             cancel: Arc::new(AtomicBool::new(false)),
             title_cancel: None,
             _submission: submission,
+            _alternate_submission: alternate_submission,
             response_events: None,
             response_menu: None,
             response_request: None,
@@ -700,17 +707,9 @@ impl Conversation {
         self.refresh_catalog(cx);
         let store = self.store.clone();
         let id = self.summary.id;
-        let cwd = self.summary.cwd.clone();
         let mono = self.settings.mono.is_some();
         let work = cx.background_executor().spawn(async move {
             let settings = locked(&store).and_then(|s| s.agent_settings(id));
-            let execution_cwd = settings
-                .as_ref()
-                .ok()
-                .and_then(|s| s.as_ref())
-                .and_then(|s| s.worktree_cwd.as_deref())
-                .unwrap_or(&cwd);
-            let git = crate::git_cache::load(Path::new(execution_cwd)).ok();
             (
                 locked(&store)
                     .and_then(|s| {
@@ -728,7 +727,6 @@ impl Conversation {
                             edits,
                         )
                     }),
-                git,
                 settings,
                 locked(&store).and_then(|s| s.context_usage(id)),
                 locked(&store).and_then(|s| s.follow_ups(id)),
@@ -736,11 +734,9 @@ impl Conversation {
             )
         });
         cx.spawn(async move |this, cx| {
-            let (result, git, settings, context, follow_ups, before) = work.await;
+            let (result, settings, context, follow_ups, before) = work.await;
             let _ = this.update(cx, |this, cx| {
                 this.loading = false;
-                this.branch = git.as_ref().and_then(|s| s.current.clone());
-                this.git = git;
                 this.context = context.ok().flatten();
                 match follow_ups {
                     Ok(state) => {
@@ -755,6 +751,7 @@ impl Conversation {
                     }
                     Err(error) => {
                         this.status = error;
+                        this.load_git(cx);
                         return;
                     }
                 }
@@ -808,6 +805,12 @@ impl Conversation {
                     }
                     Err(e) => this.status = e,
                 }
+                // Git can take tens of milliseconds; history shows first.
+                if let Some(git) = crate::git_cache::get(this.execution_cwd()) {
+                    this.branch = git.current.clone();
+                    this.git = Some(git);
+                }
+                this.load_git(cx);
                 this.mono_flush_external(cx);
                 cx.emit(SessionChanged);
                 cx.notify();
@@ -853,11 +856,16 @@ impl Conversation {
         self.send(cx);
     }
     fn send(&mut self, cx: &mut Context<Self>) {
+        self.send_follow_up(false, cx);
+    }
+    /// `invert` sends a mid-turn message the opposite way from the follow-up
+    /// preference: queued when it steers, steering when it queues.
+    fn send_follow_up(&mut self, invert: bool, cx: &mut Context<Self>) {
         if self.is_remote() && self.remote_send_guard(cx) {
             return;
         }
         if self.needs_history_restore() {
-            self.defer_history_action(|this, cx| this.send(cx), cx);
+            self.defer_history_action(move |this, cx| this.send_follow_up(invert, cx), cx);
             return;
         }
         if self.submit_edited(cx) {
@@ -939,12 +947,8 @@ impl Conversation {
             // the outgoing provider and commits the handoff.
             self.stop(cx);
         }
-        if self.stopping
-            || self.busy
-            || self.settings.pending_provider_switch.is_some()
-            || (!self.follow_ups.state.messages.is_empty() && !self.follow_ups.state.paused)
-        {
-            self.enqueue_follow_up(prompt, mode.map(str::to_owned), cx);
+        if self.sends_as_follow_up() {
+            self.enqueue_follow_up_inverted(prompt, mode.map(str::to_owned), invert, cx);
             if self.stopping || self.settings.pending_provider_switch.is_some() {
                 // A fresh Send continues the conversation, while older queued
                 // messages remain paused after Stop.
@@ -973,6 +977,37 @@ impl Conversation {
         if self.busy && mode.is_some() {
             self.clear_submitted_mode(cx);
         }
+    }
+    /// A message sent now joins the follow-ups instead of starting a turn.
+    fn sends_as_follow_up(&self) -> bool {
+        self.stopping
+            || self.busy
+            || self.settings.pending_provider_switch.is_some()
+            || (!self.follow_ups.state.messages.is_empty() && !self.follow_ups.state.paused)
+    }
+    /// The submit icon for a message that will steer or queue, if it will.
+    fn follow_up_action(
+        &self,
+        alternate: bool,
+        cx: &gpui::App,
+    ) -> Option<(&'static str, &'static str)> {
+        // Stop and provider switches send the message as the next turn.
+        if self.settings.mono.is_some()
+            || self.is_remote()
+            || self.stopping
+            || self.settings.pending_provider_switch.is_some()
+            || !self.sends_as_follow_up()
+        {
+            return None;
+        }
+        let mode = self.settings.orchestrator || self.settings.plan || self.settings.operator;
+        Some(
+            if self.busy && !mode && self.steers_follow_up(alternate, cx) {
+                ("Steer", "queue-steer")
+            } else {
+                ("Queue", "queue-list")
+            },
+        )
     }
     fn launch_prompt(&mut self, prompt: String, cx: &mut Context<Self>) {
         if self.stopping {
@@ -1695,6 +1730,9 @@ impl Conversation {
     }
     fn refresh_git(&mut self, cx: &mut Context<Self>) {
         self.sync_review(cx);
+        self.load_git(cx);
+    }
+    fn load_git(&mut self, cx: &mut Context<Self>) {
         let cwd = self.execution_cwd().to_owned();
         let work_cwd = cwd.clone();
         let work = cx
@@ -2944,7 +2982,7 @@ impl Conversation {
                                             .child(icon("chevron-down", 12.)),
                                     ),
                             )
-                            .child(self.action(has_value, cx)),
+                            .child(self.action(has_value, window, cx)),
                     )
                     .children(self.attachment_drop_overlay(12.)),
             )
@@ -3160,9 +3198,18 @@ impl Conversation {
     }
 
     // ComposerAction: a solid submit, dimmed while empty; Stop while busy.
-    fn action(&self, has_value: bool, cx: &mut Context<Self>) -> impl IntoElement {
+    fn action(&self, has_value: bool, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let busy = self.responding() && !has_value;
         let draft = self.draft_active(cx);
+        let modifiers = window.modifiers();
+        let alternate = if cfg!(target_os = "macos") {
+            modifiers.platform
+        } else {
+            modifiers.control
+        };
+        let follow_up = (has_value && !draft)
+            .then(|| self.follow_up_action(alternate, cx))
+            .flatten();
         let enabled = !self.attaching
             && (!self.preparing_worktree || self.busy || self.stopping)
             && (busy || (has_value && self.loaded))
@@ -3174,19 +3221,26 @@ impl Conversation {
             } else if draft {
                 "Save draft"
             } else {
-                "Send"
+                follow_up.map_or("Send", |(label, _)| label)
             },
             busy,
+            follow_up.map_or("send", |(_, glyph)| glyph),
             enabled,
         )
-        .on_click(cx.listener(move |this, _, _, cx| {
+        .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
             if !enabled {
                 return;
             }
             if busy {
                 this.stop(cx);
             } else {
-                this.send(cx);
+                let modifiers = event.modifiers();
+                let alternate = if cfg!(target_os = "macos") {
+                    modifiers.platform
+                } else {
+                    modifiers.control
+                };
+                this.send_follow_up(alternate, cx);
             }
         }))
     }
@@ -3445,12 +3499,12 @@ mod composer_motion_tests {
                                             <= 2.
                                 })
                                 .expect("the composer paints React's content-3% surface");
-                            #[cfg(target_os = "macos")]
+                            #[cfg(any(target_os = "macos", target_os = "windows"))]
                             assert_eq!(
                                 surface.border_color,
-                                gpui_apple::metal_renderer::backdrop_blur_marker(24. * scale)
+                                gpui::backdrop_blur_marker(24. * scale)
                             );
-                            #[cfg(not(target_os = "macos"))]
+                            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
                             let _ = surface;
                             assert!(window.painted_quads().iter().any(|quad| {
                                 quad.border_color == content(0.2)
@@ -3727,15 +3781,13 @@ fn composer_surface(radius: f32) -> impl IntoElement {
         |_, _, _| {},
         move |bounds, _, window, _| {
             let surface = gpui::fill(bounds, fill).corner_radii(px(radius - 1.));
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             let surface = if blur > 0. {
-                surface.border_color(gpui_apple::metal_renderer::backdrop_blur_marker(
-                    blur * window.scale_factor(),
-                ))
+                surface.border_color(gpui::backdrop_blur_marker(blur * window.scale_factor()))
             } else {
                 surface
             };
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             let _ = blur;
             window.paint_quad(surface);
         },
@@ -3750,11 +3802,18 @@ fn send_button(
     id: &'static str,
     label: &'static str,
     busy: bool,
+    glyph: &'static str,
     enabled: bool,
 ) -> gpui::Stateful<gpui::Div> {
     let accent = primary_action(enabled);
+    // Without an accent the button is the inverse of the surface: white with
+    // black ink on dark, black with white ink on light.
+    let light = crate::theme::is_light();
+    let solid: fn(f32) -> gpui::Hsla = if light { black } else { white };
+    let ink: fn(f32) -> gpui::Hsla = if light { white } else { black };
     div()
         .id(id)
+        .debug_selector(|| id.into())
         .role(Role::Button)
         .aria_label(label)
         .cursor_pointer()
@@ -3769,15 +3828,15 @@ fn send_button(
                 .bg(fill)
                 .when(enabled, |d| d.hover(|s| s.bg(fill.blend(content(0.12))))),
             None => d
-                .bg(white(if enabled { 1. } else { 0.3 }))
-                .when(enabled, |d| d.hover(|s| s.bg(white(0.9)))),
+                .bg(solid(if enabled { 1. } else { 0.3 }))
+                .when(enabled, |d| d.hover(|s| s.bg(solid(0.9)))),
         })
         .map(|d| {
-            let ink = accent.map_or(black(if enabled { 1. } else { 0.4 }), |(_, ink)| ink);
+            let ink = accent.map_or(ink(if enabled { 1. } else { 0.4 }), |(_, ink)| ink);
             if busy {
                 d.child(div().size(px(10.)).rounded(px(2.)).bg(ink))
             } else {
-                d.child(icon("send", 14.).text_color(ink))
+                d.child(icon(glyph, 14.).text_color(ink))
             }
         })
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())

@@ -303,6 +303,74 @@ mod tests {
     }
 
     #[gpui::test]
+    fn project_folder_selection_keeps_subfolder_sessions_and_new_session_cwd(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| {
+            input::bind(cx);
+            crate::popover::bind(cx);
+            crate::shell::bind_keys(cx);
+        });
+        let project = "/work/monocode";
+        crate::git_cache::remember(
+            project,
+            &monocode_core::git::Snapshot {
+                worktrees: vec![monocode_core::git::Worktree {
+                    path: "/work".into(),
+                    branch: Some("main".into()),
+                    main: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        );
+        let (window, _, existing) = window(cx);
+        window
+            .update(cx, |shell, w, cx| {
+                shell.sessions[&existing]
+                    .update(cx, |session, _| session.summary.has_messages = true);
+                shell.open_menu(
+                    MenuTarget::Header,
+                    Anchor::Slot(shell.project_anchor.clone()),
+                    w,
+                    cx,
+                );
+            })
+            .unwrap();
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        let row = visual.debug_bounds("menu-action-switch-worktree").unwrap();
+        visual.simulate_click(row.center(), Default::default());
+        visual.run_until_parked();
+        let row = visual.debug_bounds("working-copy-1").unwrap();
+        visual.simulate_click(row.center(), Default::default());
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, _, cx| {
+                assert!(shell.sidebar_session_ids(cx).contains(&existing));
+                shell.create(Kind::Claude, cx);
+            })
+            .unwrap();
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, _, cx| {
+                let id = shell.workspace.active.unwrap();
+                assert_ne!(id, existing);
+                let session = shell.sessions[&id].read(cx);
+                assert_eq!(session.summary.cwd, project);
+                assert_eq!(
+                    session
+                        .settings
+                        .worktree_cwd
+                        .as_deref()
+                        .unwrap_or(&session.summary.cwd),
+                    project
+                );
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
     fn copies_keep_running_sessions_and_route_new_tabs_and_splits(cx: &mut TestAppContext) {
         let (window, feature_session, main_session) = window(cx);
         window

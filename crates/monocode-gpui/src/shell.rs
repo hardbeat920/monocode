@@ -40,7 +40,7 @@ mod sidebar_list;
 mod sidebar_peek;
 mod terminal_dock;
 mod title_tabs;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 mod window_chrome;
 mod worktrees;
 
@@ -259,6 +259,12 @@ pub(crate) fn bind_keys(cx: &mut App) {
     ]);
 }
 
+/// Windows has no caption of its own (`appears_transparent`), so the app
+/// draws the window controls. Test windows keep the captionless geometry
+/// that Linux tests get from server decorations.
+#[cfg(target_os = "windows")]
+const WINDOWS_CONTROLS: bool = cfg!(not(test));
+
 pub(crate) fn client_controls_width(window: &Window) -> f32 {
     #[cfg(target_os = "linux")]
     if !window.is_fullscreen()
@@ -269,13 +275,30 @@ pub(crate) fn client_controls_width(window: &Window) -> f32 {
     {
         return window_chrome::CONTROLS_WIDTH;
     }
+    #[cfg(target_os = "windows")]
+    if WINDOWS_CONTROLS && !window.is_fullscreen() {
+        return window_chrome::CONTROLS_WIDTH;
+    }
     let _ = window;
     0.
+}
+
+/// Client-drawn window controls that hold the corner's right end, inside the
+/// bar: Windows only. Client-decorated Linux shifts the whole bar left of its
+/// controls instead (`titlebar_controls_space`).
+pub(crate) fn corner_controls_width(window: &Window) -> f32 {
+    if cfg!(target_os = "windows") {
+        client_controls_width(window)
+    } else {
+        0.
+    }
 }
 
 /// macOS must receive button clicks as app content. Only blank titlebar
 /// regions initiate native dragging or the system double-click action.
 /// Client-decorated Linux windows also need explicit native drag requests.
+/// Windows hit-tests the drag area as the caption, which drags, snaps and
+/// maximizes on double-click natively.
 pub(crate) fn titlebar_drag_area() -> gpui::Div {
     let bounds = AnchorSlot::default();
     div()
@@ -594,6 +617,11 @@ pub(crate) struct Shell {
     /// useTrafficLightsVisible: fullscreen hides the native buttons, so the
     /// title bar takes their room back.
     fullscreen: bool,
+    /// `corner_controls_width` as of this render, for the corner's layout.
+    window_controls: f32,
+    /// The narrowest right panel whose header holds the corner's tools
+    /// beside client-drawn window controls.
+    right_panel_min: f32,
     #[cfg(target_os = "linux")]
     client_decorations: bool,
     tabs_frame: Entity<Chrome>,
@@ -614,8 +642,10 @@ pub(crate) struct Shell {
     /// The live agents card's spinners, apart from the sidebar rows' marks.
     live_marks: HashMap<i64, Entity<SessionMark>>,
     live_agents_expanded: bool,
-    /// Repaints the live agents card's elapsed times once a second.
+    /// Repaints the live agents card when one of its elapsed times changes.
     live_tick: Option<gpui::Task<()>>,
+    /// Milliseconds until the next elapsed label in the live agents card changes.
+    live_next_change: u64,
     busy_sessions: HashSet<i64>,
     notification_state: notifications::State,
     quick: crate::quick_composer::Controller,
@@ -679,6 +709,8 @@ pub(crate) struct Shell {
     shortcuts: Option<shortcuts::Shortcuts>,
     window_active: bool,
     window_glass: Option<bool>,
+    /// The project whose colors were last painted; leaving it blends colors.
+    theme_project: Option<String>,
     quit_prompted: bool,
     pub(crate) menu: Option<ShellMenu>,
     background_dialog: Option<project_settings::OpenBackground>,
@@ -954,6 +986,8 @@ impl Shell {
             peek_close: None,
             peek_toggle_bounds: AnchorSlot::default(),
             fullscreen: false,
+            window_controls: 0.,
+            right_panel_min: crate::right_panel::WIDTH_MIN,
             #[cfg(target_os = "linux")]
             client_decorations: false,
             tabs_frame,
@@ -973,6 +1007,7 @@ impl Shell {
             live_marks: HashMap::new(),
             live_agents_expanded: false,
             live_tick: None,
+            live_next_change: 1000,
             busy_sessions: HashSet::new(),
             notification_state,
             quick: Default::default(),
@@ -1031,6 +1066,7 @@ impl Shell {
             shortcuts: None,
             window_active: false,
             window_glass: None,
+            theme_project: None,
             quit_prompted: false,
             menu: None,
             background_dialog: None,
@@ -1662,7 +1698,7 @@ impl Shell {
         {
             self.focus_active(window, cx);
         }
-        let full = self.workspace.right_panel_width;
+        let full = self.right_panel_width();
         let to = if open { full } else { 0. };
         self.workspace.right_panel_open = open;
         let previous = self.right_slide.take();
@@ -2772,7 +2808,7 @@ impl Shell {
             main -= self.workspace.sidebar_width;
         }
         if self.right_panel_shown(cx) {
-            main -= self.workspace.right_panel_width;
+            main -= self.right_panel_width();
         }
         if self.mono_active(cx) {
             return main;
@@ -3229,7 +3265,9 @@ impl Shell {
                     self.terminals
                         .get(&project)
                         .and_then(|t| t.get(dock.active))
-                        .cloned(),
+                        // The grid shapes every line; redraw it only when the
+                        // terminal itself changes.
+                        .map(|t| t.clone().cached(StyleRefinement::default().size_full())),
                 ),
             );
         let sash = div()
@@ -3388,10 +3426,12 @@ impl Shell {
         let cwd = self.workspace.project.clone();
         let worktree = target.and_then(|id| {
             let path = self.session_working_copy(id, cx);
-            (path != cwd).then(|| crate::worktree_switcher::WorktreeFocus {
-                path: path.into(),
-                branch: self.worktree_focus.get(&cwd).and_then(|f| f.branch.clone()),
-            })
+            (monocode_core::files::path_key(path) != monocode_core::files::path_key(&cwd)).then(
+                || crate::worktree_switcher::WorktreeFocus {
+                    path: path.into(),
+                    branch: self.worktree_focus.get(&cwd).and_then(|f| f.branch.clone()),
+                },
+            )
         });
         let worktree_cwd = worktree.as_ref().map(|f| f.path.clone());
         let work = cx.background_executor().spawn(async move {
@@ -3782,9 +3822,9 @@ impl Shell {
                 (self.workspace.sidebar_width, 200., max, 1.)
             }
             ResizeTarget::RightPanel => {
-                let (min, max) = (crate::right_panel::WIDTH_MIN, crate::right_panel::WIDTH_MAX);
+                let (min, max) = (self.right_panel_min, crate::right_panel::WIDTH_MAX);
                 let max = max.min((self.viewport_width * 0.5).floor()).max(min);
-                (self.workspace.right_panel_width, min, max, 1.)
+                (self.right_panel_width(), min, max, 1.)
             }
             ResizeTarget::Dock(project) => {
                 let dock = self.workspace.docks.get(project)?;
@@ -4162,7 +4202,12 @@ impl Shell {
         self.open_app_search(window, cx);
     }
 
-    fn select_project(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn select_project(
+        &mut self,
+        path: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.selected_sessions.clear();
         self.selection_anchor = None;
         self.sidebar_target = None;
@@ -4319,6 +4364,10 @@ impl Shell {
         let store = self.store.clone();
         let cwd = self.workspace.project.clone();
         let focus = self.worktree_focus.get(&cwd).cloned();
+        // The project folder as a selected checkout is not a separate worktree.
+        let copy = focus.clone().filter(|f| {
+            monocode_core::files::path_key(&f.path) != monocode_core::files::path_key(&cwd)
+        });
         let blank_key = format!("{cwd}\0{}", focus.as_ref().map_or("", |f| f.path.as_str()));
         if only_if_empty && !self.pending_project_blanks.insert(blank_key.clone()) {
             return;
@@ -4339,7 +4388,7 @@ impl Shell {
         let effort = crate::conversation::preferred_effort(kind.id(), cx);
         let work = cx.background_executor().spawn({
             let cwd = cwd.clone();
-            let worktree_cwd = focus.as_ref().map(|f| f.path.clone());
+            let worktree_cwd = copy.as_ref().map(|f| f.path.clone());
             async move {
                 let store = locked(&store)?;
                 let summary = store.create(kind.id(), &cwd)?;
@@ -4399,7 +4448,7 @@ impl Shell {
                         if let Some(view) = this.sessions.get(&id) {
                             view.update(cx, |view, cx| view.seed_new_settings(settings, cx));
                         }
-                        this.seed_worktree(id, focus.as_ref(), cx);
+                        this.seed_worktree(id, copy.as_ref(), cx);
                         // A pending blank belongs to the copy that requested it;
                         // navigation to another copy must never redirect that request.
                         if this.workspace.project != cwd
@@ -4633,7 +4682,7 @@ impl Shell {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                    this.right_resize = Some((event.position.x, this.workspace.right_panel_width));
+                    this.right_resize = Some((event.position.x, this.right_panel_width()));
                     cx.stop_propagation();
                     cx.notify();
                 }),
@@ -4694,8 +4743,15 @@ impl Shell {
         true
     }
 
+    /// Client-decorated Linux: the bar ends left of the window controls.
+    /// The panel's width as drawn: the user's width, widened while Windows'
+    /// controls need room beside the corner's tools. The stored width stays
+    /// as the user set it, so closing a Mono gives it back.
+    pub(super) fn right_panel_width(&self) -> f32 {
+        self.workspace.right_panel_width.max(self.right_panel_min)
+    }
     fn titlebar_controls_space(&self, bar: AnyElement, window: &Window) -> AnyElement {
-        let room = client_controls_width(window);
+        let room = client_controls_width(window) - corner_controls_width(window);
         if room == 0. {
             return bar;
         }
@@ -4713,6 +4769,10 @@ impl Shell {
     fn titlebar_content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         // Same hierarchy as TitleBar.tsx's inset layout: window navigation and
         // session tabs share the outer shell, above the rounded workspace card.
+        // Windows' controls sit in the settings header's padding, so its
+        // bottom rule still runs beneath them. Session bars leave them to the
+        // corner (`toggle_room`, `corner_room`).
+        let controls = px(self.window_controls);
         if let Some(settings) = self.settings.clone() {
             let classic = self.workspace.boxy_layout();
             let lead = if classic {
@@ -4726,6 +4786,7 @@ impl Shell {
                 .flex_shrink_0()
                 .flex()
                 .items_center()
+                .pr(controls)
                 .when(classic, |d| d.border_b_1().border_color(content(0.1)))
                 .child(if classic {
                     titlebar_drag_area()
@@ -4796,7 +4857,11 @@ impl Shell {
         let tabs = if mono && panel_active {
             self.monos.clone().map(|m| {
                 m.update(cx, |m, cx| {
-                    m.overview_controls(self.workspace.right_panel_width >= 312., window, cx)
+                    m.overview_controls(
+                        self.right_panel_width() >= 312. + self.window_controls,
+                        window,
+                        cx,
+                    )
                 })
             })
         } else {
@@ -4826,7 +4891,10 @@ impl Shell {
             .items_center()
             .map(|d| {
                 if !toggle {
-                    return d.pl_1p5().pr_3().child(self.file_search_button(cx));
+                    return d
+                        .pl_1p5()
+                        .pr(px(12. + self.window_controls))
+                        .child(self.file_search_button(cx));
                 }
                 let ink = if panel_off {
                     content(0.25)
@@ -4847,7 +4915,7 @@ impl Shell {
                         } else {
                             6.
                         }))
-                        .pr_3()
+                        .pr(px(12. + self.window_controls))
                         .when_some(tabs, |d, tabs| {
                             d.child(tabs)
                                 .when(!mono, |d| d.child(titlebar_drag_area().flex_1().min_w_0()))
@@ -4999,8 +5067,9 @@ impl Shell {
         let controls = crate::right_panel::tab_icons_width(self.right_tab_count(cx))
             + 6.
             + CORNER_BUTTONS_WIDTH
-            + 12.;
-        natural.min((self.workspace.right_panel_width - controls).max(48.))
+            + 12.
+            + self.window_controls;
+        natural.min((self.right_panel_width() - controls).max(48.))
     }
     fn project_tabs_width(&self, cx: &App) -> f32 {
         let padding = if self.workspace.boxy_layout() {
@@ -5008,10 +5077,11 @@ impl Shell {
         } else {
             12.
         };
-        (self.workspace.right_panel_width
+        (self.right_panel_width()
             - self.diff_stat_room(cx)
             - CORNER_BUTTONS_WIDTH
-            - padding)
+            - padding
+            - self.window_controls)
             .clamp(
                 crate::right_panel::tab_icons_width(self.right_tab_count(cx)),
                 crate::right_panel::tabs_width(self.right_tab_count(cx)),
@@ -5027,15 +5097,17 @@ impl Shell {
         if self.workspace.boxy_layout() {
             return self.corner_room(cx);
         }
+        // Client-drawn window controls hold the corner's right end.
+        let controls = self.window_controls;
         if self.mono_active(cx) || self.git.read(cx).available() {
             if self.workspace.right_panel_open && !self.app_view_open() {
                 if self.mono_active(cx) {
-                    let minimum = if self.workspace.right_panel_width >= 312. {
+                    let minimum = if self.right_panel_width() >= 312. + controls {
                         312.
                     } else {
                         252.
                     };
-                    return (self.right_drawn + 7.).max(minimum);
+                    return (self.right_drawn + 7.).max(minimum + controls);
                 }
                 // Follow the rounded panel's left edge, including the card's
                 // right inset, while keeping room for all controls when narrow.
@@ -5044,13 +5116,14 @@ impl Shell {
                         + self.project_tabs_width(cx)
                         + self.diff_stat_room(cx)
                         + CORNER_BUTTONS_WIDTH
-                        + 12.,
+                        + 12.
+                        + controls,
                 )
             } else {
-                6. + self.diff_stat_room(cx) + CORNER_BUTTONS_WIDTH + 12.
+                6. + self.diff_stat_room(cx) + CORNER_BUTTONS_WIDTH + 12. + controls
             }
         } else {
-            6. + 24. + 12.
+            6. + 24. + 12. + controls
         }
     }
     /// Classic: the strip's room after its tabs, wherever the toggle
@@ -5462,6 +5535,9 @@ impl Shell {
                 let mut items: Vec<MenuItem> = vec![
                     MenuItem::Custom(controls.clone().into(), controls.read(cx).focus(cx)),
                     MenuItem::Separator,
+                    MenuAction::new("project-theme", "Theme colors")
+                        .icon("palette")
+                        .into(),
                     MenuAction::new("background", "Background image")
                         .icon("image-add")
                         .into(),
@@ -5614,6 +5690,8 @@ impl Shell {
                     } else {
                         cx.reveal_path(std::path::Path::new(&path));
                     }
+                } else if action == "project-theme" {
+                    self.open_project_theme(path, window, cx);
                 } else if action == "background" {
                     self.open_background_dialog(path, window, cx);
                 } else if action == "archive" {
@@ -7343,7 +7421,10 @@ impl Shell {
         } else {
             self.navigation_width()
         };
-        (window.viewport_size().width.as_f32() - lead - trailing - client_controls_width(window))
+        (window.viewport_size().width.as_f32()
+            - lead
+            - trailing
+            - (client_controls_width(window) - self.window_controls))
             .max(0.)
     }
     fn tabs(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -7980,6 +8061,16 @@ impl Render for Shell {
         }
         // Native fullscreen transitions resize the window, which redraws it.
         self.fullscreen = window.is_fullscreen();
+        self.window_controls = corner_controls_width(window);
+        // The corner's tools share the panel's header with client-drawn
+        // window controls, so the panel keeps room for both. A Mono's icon
+        // tabs need 252px (`corner_room`).
+        let tools = if self.window_controls > 0. && self.mono_active(cx) {
+            252.
+        } else {
+            crate::right_panel::WIDTH_MIN
+        };
+        self.right_panel_min = tools + self.window_controls;
         #[cfg(target_os = "linux")]
         {
             let client = matches!(
@@ -8006,8 +8097,26 @@ impl Render for Shell {
             cx.window_appearance(),
             gpui::WindowAppearance::Light | gpui::WindowAppearance::VibrantLight
         );
-        if configure(p, system_light) {
+        let project = &self.workspace.project;
+        let animate = !cx.reduce_motion()
+            && self
+                .theme_project
+                .as_ref()
+                .is_some_and(|previous| previous != project);
+        let project_theme = self
+            .workspace
+            .project_appearance
+            .get(project)
+            .and_then(|a| a.theme.as_ref());
+        // Repainting bypasses cached views, so every surface follows the blend.
+        if configure_project(p, project_theme, system_light, animate) {
             cx.refresh_windows();
+        }
+        if tweening() {
+            window.request_animation_frame();
+        }
+        if self.theme_project.as_ref() != Some(project) {
+            self.theme_project = Some(project.clone());
         }
         let glass = window_glass(p, system_light);
         if self.window_glass != Some(glass) {
@@ -8102,7 +8211,7 @@ impl Render for Shell {
         self.viewport_height = window.viewport_size().height.as_f32();
         self.refit_sidebar_to_room(window, cx);
         self.ensure_right_panel(window, cx);
-        let full = self.workspace.right_panel_width;
+        let full = self.right_panel_width();
         let right_width = match &self.right_slide {
             Some(slide) => {
                 let (width, done) = slide.at(std::time::Instant::now());
@@ -8616,8 +8725,14 @@ impl Render for Shell {
             )
             .map(|root| {
                 #[cfg(target_os = "linux")]
+                let caption = self.client_decorations;
+                // `resize_handles` stays empty on Windows: GPUI reports server
+                // decorations and the native frame does the resizing.
+                #[cfg(target_os = "windows")]
+                let caption = WINDOWS_CONTROLS;
+                #[cfg(any(target_os = "linux", target_os = "windows"))]
                 let root = root
-                    .when(self.client_decorations && !self.fullscreen, |root| {
+                    .when(caption && !self.fullscreen, |root| {
                         root.child(window_chrome::controls(
                             window,
                             cx.listener(|this, _, window, cx| this.request_quit(window, cx)),
@@ -9611,6 +9726,59 @@ mod tests {
         assert!(body.bottom() <= compact.bottom());
     }
     #[gpui::test]
+    fn theme_colors_dialog_saves_a_project_theme_and_can_return_to_app_colors(
+        cx: &mut TestAppContext,
+    ) {
+        let (window, _, _) = window(cx);
+        cx.update(|cx| {
+            input::bind(cx);
+            crate::popover::bind(cx);
+            cx.set_reduce_motion(true);
+        });
+        let project = window
+            .update(cx, |shell, w, cx| {
+                let project = shell.workspace.project.clone();
+                shell.open_project_theme(project.clone(), w, cx);
+                project
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let theme = |cx: &mut TestAppContext| {
+            window
+                .update(cx, |shell, _, _| shell.appearance(&project).theme)
+                .unwrap()
+        };
+        assert_eq!(theme(cx), None, "opening the dialog alone changes nothing");
+        // The modal centers itself once its height is measured.
+        cx.refresh().unwrap();
+        cx.run_until_parked();
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        let dialog = visual.debug_bounds("project-theme-dialog").unwrap();
+        assert!(dialog.top() >= px(16.));
+        let harbor = visual.debug_bounds("project-theme-palette-harbor").unwrap();
+        visual.simulate_click(harbor.center(), gpui::Modifiers::none());
+        let red = visual.debug_bounds("project-theme-accent-4").unwrap();
+        visual.simulate_click(red.center(), gpui::Modifiers::none());
+        visual.run_until_parked();
+        let saved = theme(visual).expect("the first pick gives the project its colors");
+        assert_eq!(saved.workspace_theme, "harbor");
+        assert_eq!(saved.accent_color.as_deref(), Some("#ef4444"));
+        assert_eq!(crate::theme::accent_color(), gpui::rgb(0xef4444).into());
+        let reset = visual
+            .debug_bounds("project-settings-Use app colors")
+            .unwrap();
+        visual.simulate_click(reset.center(), gpui::Modifiers::none());
+        visual.run_until_parked();
+        assert_eq!(theme(visual), None);
+        visual.simulate_keystrokes("escape");
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, _, _| {
+                assert!(shell.background_dialog.is_none())
+            })
+            .unwrap();
+    }
+    #[gpui::test]
     fn backgrounds_survive_tab_and_notes_switches_until_the_tab_closes(cx: &mut TestAppContext) {
         use monocode_core::project_appearance::{Background, Effect, ProjectAppearance};
         let (window, a, b) = window(cx);
@@ -10602,12 +10770,11 @@ mod tests {
                 w.draw(cx).clear(cx);
             })
             .unwrap();
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             window
                 .update(cx, |_, w, _| {
                     let (blur, radius) = (24., 11.);
-                    let marker =
-                        gpui_apple::metal_renderer::backdrop_blur_marker(blur * w.scale_factor());
+                    let marker = gpui::backdrop_blur_marker(blur * w.scale_factor());
                     assert!(
                         w.painted_quads().iter().any(|q| q.border_color == marker
                             && q.corner_radii.top_left.0 == radius * w.scale_factor()),

@@ -149,25 +149,28 @@ impl Input {
             })
         }
     }
-    pub(super) fn display_text(&self) -> (SharedString, Option<CommandLayout>) {
+    pub(super) fn display_text(&self) -> (SharedString, DisplayLayout) {
         if self.secret && !self.content.is_empty() {
             // Preserve byte positions used by the native selection handler.
-            return ("*".repeat(self.content.len()).into(), None);
+            return (
+                "*".repeat(self.content.len()).into(),
+                DisplayLayout::default(),
+            );
         }
         let text = if self.content.is_empty() {
             &self.placeholder
         } else {
             &self.content
         };
-        let command = self.command_layout();
-        let display = match command {
+        let layout = self.display_layout();
+        let display = match layout.command {
             Some(command) if command.source_prefix == 1 => {
                 format!("{ICON_SLOT}{}", &text[1..]).into()
             }
             Some(command) => format!("{ICON_SLOT}{} {text}", command.mode.name()).into(),
             None => text.clone(),
         };
-        (display, command)
+        (layout.apply(display), layout)
     }
     pub(super) fn command_removed(&self, previous: Option<Command>, cx: &mut Context<Self>) {
         if let Some(mode) = previous

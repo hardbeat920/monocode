@@ -31,6 +31,7 @@ mod git_cache;
 mod git_graph;
 mod git_picker;
 mod git_status;
+mod gpu_trim;
 #[cfg(target_os = "macos")]
 mod hang_watchdog;
 mod history;
@@ -58,6 +59,7 @@ mod project_background;
 mod project_search;
 mod project_settings;
 mod project_tabs;
+mod project_theme;
 mod pulse;
 mod questions;
 mod quick_composer;
@@ -407,6 +409,7 @@ fn main() {
             image_memory::init(cx);
             #[cfg(target_os = "macos")]
             memory_log::start(cx);
+            gpu_trim::start(cx);
             #[cfg(target_os = "macos")]
             hang_watchdog::start(database.with_file_name("gpui-hangs"), cx);
             input::bind(cx);
@@ -452,7 +455,9 @@ fn main() {
                     app_owns_titlebar_drag: cfg!(target_os = "macos"),
                     titlebar: Some(TitlebarOptions {
                         title: Some("Monocode Native".into()),
-                        appears_transparent: cfg!(target_os = "macos"),
+                        // Windows also drops its caption: the app's drag areas
+                        // hit-test as the caption and the frame still resizes.
+                        appears_transparent: cfg!(any(target_os = "macos", target_os = "windows")),
                         traffic_light_position: if cfg!(target_os = "macos") {
                             // Original macOS chrome: 12 pt left inset, with
                             // 14 pt native buttons centered in the 40 pt bar.
@@ -464,6 +469,27 @@ fn main() {
                     ..Default::default()
                 },
                 |window, cx| {
+                    // Install the menu one frame later, after the first frame presents.
+                    window.on_next_frame(|window, _| {
+                        window.on_next_frame(|_, cx| app_menu::ready(cx));
+                    });
+                    // Off the launch path: it lists every conversation folder.
+                    let cleanup = db.clone();
+                    window.on_next_frame(move |_, cx| {
+                        cx.background_executor()
+                            .spawn(async move {
+                                let result = cleanup
+                                    .lock()
+                                    .map_err(|error| error.to_string())
+                                    .and_then(|store| store.sweep_thread_dirs());
+                                if let Err(error) = result {
+                                    eprintln!(
+                                        "Cannot clean up deleted conversations' files: {error}"
+                                    );
+                                }
+                            })
+                            .detach();
+                    });
                     let shell = cx.new(|cx| {
                         shell::Shell::new_with_metadata(
                             db,

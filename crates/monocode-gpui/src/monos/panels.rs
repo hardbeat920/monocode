@@ -810,7 +810,8 @@ impl Monos {
             // MonoSidebarHeader's pl-4 and OverviewTabs' -ml-2 combine
             // into an 8px inset, keeping the tab icons aligned with actions.
             .pl(px(8.))
-            .pr_3()
+            // The window's top-right corner: clear of client-drawn controls.
+            .pr(px(12. + crate::shell::corner_controls_width(window)))
             .border_b_1()
             .border_color(content(0.07))
             .flex()

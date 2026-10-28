@@ -584,6 +584,21 @@ impl ImageSource {
         }
     }
 
+    /// Remove this image source from the asset system and free the GPU sprites
+    /// its decoded image left in every window. [`Self::remove_asset`] alone
+    /// keeps those sprites until the window closes.
+    pub fn evict(&self, cx: &mut App) {
+        let image = match self {
+            ImageSource::Resource(resource) => cx.take_asset::<ImgResourceLoader>(resource),
+            ImageSource::Image(data) => cx.take_asset::<AssetLogger<ImageDecoder>>(data),
+            ImageSource::Render(image) => Some(Ok(image.clone())),
+            ImageSource::Custom(_) => None,
+        };
+        if let Some(Ok(image)) = image {
+            cx.drop_image(image, None);
+        }
+    }
+
     /// Check whether this image source is present in the asset system (loading
     /// or loaded), without fetching it.
     #[cfg(any(test, feature = "test-support"))]

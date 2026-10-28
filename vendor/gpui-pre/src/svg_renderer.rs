@@ -191,6 +191,29 @@ impl SvgRenderer {
         usvg::Tree::from_data(bytes, &self.usvg_options).map(ParsedSvg)
     }
 
+    /// Parses generated, untrusted SVG without resolving any image references.
+    /// Both file/URL and data-image resolvers are disabled, including nested SVG.
+    /// Font selection still uses this renderer's installed and bundled fonts.
+    pub fn parse_svg_without_images(&self, bytes: &[u8]) -> Result<ParsedSvg, usvg::Error> {
+        let options = usvg::Options {
+            fontdb: self.usvg_options.fontdb.clone(),
+            font_resolver: usvg::FontResolver {
+                select_font: Box::new(|font, db| {
+                    (self.usvg_options.font_resolver.select_font)(font, db)
+                }),
+                select_fallback: Box::new(|ch, fonts, db| {
+                    (self.usvg_options.font_resolver.select_fallback)(ch, fonts, db)
+                }),
+            },
+            image_href_resolver: usvg::ImageHrefResolver {
+                resolve_string: Box::new(|_, _| None),
+                resolve_data: Box::new(|_, _, _| None),
+            },
+            ..Default::default()
+        };
+        usvg::Tree::from_data(bytes, &options).map(ParsedSvg)
+    }
+
     /// Rasterizes a previously parsed SVG into an image buffer.
     pub fn render_parsed(
         &self,

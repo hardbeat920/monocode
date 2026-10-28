@@ -40,21 +40,31 @@ pub(crate) enum Event {
 struct Row {
     path: String,
     branch: Option<String>,
-    main: bool,
+    /// The "All checkouts" entry: no workspace filter, the whole project.
+    all: bool,
     label: String,
     detail: String,
 }
 fn rows(cwd: &str, state: Option<&Snapshot>, query: &str) -> Vec<Row> {
     let main = state.and_then(|s| s.worktrees.iter().find(|t| t.main));
-    let mut rows = vec![Row {
-        path: main.map_or_else(|| cwd.to_owned(), |t| t.path.clone()),
-        branch: main.and_then(|t| t.branch.clone()),
-        main: true,
-        label: main
-            .and_then(|t| t.branch.clone())
-            .unwrap_or_else(|| "Project folder".into()),
-        detail: "Project folder · all sessions".into(),
-    }];
+    let mut rows = vec![
+        Row {
+            path: cwd.to_owned(),
+            branch: None,
+            all: true,
+            label: "All checkouts".into(),
+            detail: "Every checkout · all sessions".into(),
+        },
+        Row {
+            path: cwd.to_owned(),
+            branch: main.and_then(|t| t.branch.clone()),
+            all: false,
+            label: main
+                .and_then(|t| t.branch.clone())
+                .unwrap_or_else(|| "Project folder".into()),
+            detail: "Project folder".into(),
+        },
+    ];
     rows.extend(
         state
             .into_iter()
@@ -63,7 +73,7 @@ fn rows(cwd: &str, state: Option<&Snapshot>, query: &str) -> Vec<Row> {
             .map(|t| Row {
                 path: t.path.clone(),
                 branch: t.branch.clone(),
-                main: false,
+                all: false,
                 label: t.branch.clone().unwrap_or_else(|| {
                     format!("Detached {}", t.head.chars().take(7).collect::<String>())
                 }),
@@ -241,7 +251,7 @@ impl WorktreeSwitcher {
             return;
         }
         if let Some(row) = rows(&self.cwd, self.state.as_ref(), &self.query(cx)).get(index) {
-            cx.emit(Event::Selected((!row.main).then(|| WorktreeFocus {
+            cx.emit(Event::Selected((!row.all).then(|| WorktreeFocus {
                 path: row.path.clone(),
                 branch: row.branch.clone(),
             })));
@@ -367,14 +377,26 @@ impl Render for WorktreeSwitcher {
                         )
                     })
                     .children(rows.into_iter().enumerate().map(|(index, row)| {
-                        let selected = if row.main {
+                        let selected = if row.all {
                             self.focused.is_none()
                         } else {
                             self.focused
                                 .as_ref()
                                 .is_some_and(|focus| path_key(&focus.path) == path_key(&row.path))
                         };
-                        let stats = self.tabs.get(&path_key(&row.path));
+                        let is_project = row.path == self.cwd;
+                        let all_stats = row.all.then(|| {
+                            self.tabs.values().fold(Tabs::default(), |mut all, t| {
+                                all.tabs.extend(&t.tabs);
+                                all.busy |= t.busy;
+                                all
+                            })
+                        });
+                        let stats = if row.all {
+                            all_stats.as_ref()
+                        } else {
+                            self.tabs.get(&path_key(&row.path))
+                        };
                         div()
                             .id(("working-copy", index))
                             .debug_selector(|| format!("working-copy-{index}"))
@@ -402,7 +424,9 @@ impl Render for WorktreeSwitcher {
                             })
                             .child(
                                 icon(
-                                    if row.main {
+                                    if row.all {
+                                        "dashboard"
+                                    } else if is_project {
                                         "git-branch"
                                     } else {
                                         "folder-tree"
@@ -576,10 +600,15 @@ mod tests {
     fn rows_match_the_react_main_entry_filter_and_detached_names() {
         let state = snapshot();
         let all = rows("/repo/project", Some(&state), "");
-        assert_eq!(all.len(), 3);
-        assert_eq!(all[0].label, "main");
-        assert_eq!(all[0].detail, "Project folder · all sessions");
-        assert_eq!(all[2].label, "Detached 1234567");
+        assert_eq!(all.len(), 4);
+        assert!(all[0].all);
+        assert_eq!(all[0].label, "All checkouts");
+        assert_eq!(all[0].detail, "Every checkout · all sessions");
+        assert!(!all[1].all);
+        assert_eq!(all[1].label, "main");
+        assert_eq!(all[1].detail, "Project folder");
+        assert_eq!(all[1].path, "/repo/project");
+        assert_eq!(all[3].label, "Detached 1234567");
         assert_eq!(rows("/repo/project", Some(&state), "FEATURE").len(), 1);
         assert_eq!(
             rows(
@@ -648,7 +677,7 @@ mod tests {
             )
         });
         view.update(cx, |view, _| {
-            assert_eq!(rows(cwd, view.state.as_ref(), "").len(), 2);
+            assert_eq!(rows(cwd, view.state.as_ref(), "").len(), 3);
             assert_eq!(view.tabs[&path_key(cwd)].tabs.len(), 1);
         });
         cx.run_until_parked();
