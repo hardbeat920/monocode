@@ -5,15 +5,31 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProjectScreen } from "@/features/workspace/ProjectScreen";
 import type { Project } from "@/features/workspace/types";
 import type { Workspace } from "@/features/workspace/WorkspaceMenu";
+import { GlassBlurTarget } from "@/ui/LiquidView";
 
 const desktop = vi.hoisted(() => ({
   startSession: vi.fn(),
   sendMessage: vi.fn(),
   offline: false,
+  os: "ios",
+  headerTarget: undefined as unknown,
+  header: {} as {
+    headerTitle?: unknown;
+    headerLeft?: unknown;
+    headerRight?: unknown;
+    headerTitleAlign?: string;
+    headerBackVisible?: boolean;
+  },
   existing: { path: "/repo/.worktrees/mobile", name: "feature/mobile" },
 }));
 
+vi.mock("react-native-svg", () => ({ default: () => <svg />, Path: () => null }));
 vi.mock("react-native", () => ({
+  Platform: {
+    get OS() {
+      return desktop.os;
+    },
+  },
   View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
   Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
   Pressable: ({
@@ -21,16 +37,25 @@ vi.mock("react-native", () => ({
     onPress,
     accessibilityLabel,
     disabled,
+    style,
   }: {
     children?: ReactNode;
     onPress?: () => void;
     accessibilityLabel?: string;
     disabled?: boolean;
+    style?: object | object[];
   }) => (
     <button
       aria-label={accessibilityLabel}
       onClick={onPress}
       disabled={disabled}
+      style={
+        typeof style === "function"
+          ? undefined
+          : Array.isArray(style)
+            ? Object.assign({}, ...style)
+            : style
+      }
     >
       {children}
     </button>
@@ -60,7 +85,23 @@ vi.mock("react-native-worklets", () => ({ scheduleOnRN: vi.fn() }));
 vi.mock("expo-router", () => ({
   router: { push: vi.fn() },
   Stack: {
-    Screen: () => null,
+    Screen: ({ options }: { options: typeof desktop.header }) => {
+      desktop.header = options;
+      if (desktop.os !== "android") return null;
+      return (
+        <>
+          {typeof options.headerLeft === "function"
+            ? options.headerLeft()
+            : null}
+          {typeof options.headerTitle === "function"
+            ? options.headerTitle()
+            : null}
+          {typeof options.headerRight === "function"
+            ? options.headerRight()
+            : null}
+        </>
+      );
+    },
     Toolbar: Object.assign(() => null, { View: () => null }),
   },
   useIsFocused: () => true,
@@ -135,16 +176,20 @@ vi.mock("@/features/sessions/activityStore", () => ({
   markViewing: () => () => {},
 }));
 vi.mock("@/features/sessions/SessionScreen", () => ({
+  SessionContent: ({ children }: { children?: ReactNode }) => <>{children}</>,
   SessionScreen: ({
     below,
     composer,
+    children,
   }: {
     below?: ReactNode;
     composer?: ReactNode;
+    children?: ReactNode;
   }) => (
     <>
       <header>{below}</header>
       {composer}
+      {children}
     </>
   ),
 }));
@@ -170,7 +215,7 @@ vi.mock("@/features/workspace/WorkspaceProvider", () => ({
     sendMessage: desktop.sendMessage,
   }),
   useConversation: () => ({}),
-  useConversationTurns: () => ({}),
+  useConversationTurns: () => ({ turns: [], hasOlder: false }),
 }));
 vi.mock("@/features/workspace/WorkspaceMenu", () => ({
   WorkspaceMenu: ({
@@ -200,6 +245,38 @@ vi.mock("@/features/workspace/WorkspaceMenu", () => ({
   WorkspaceLine: ({ branch }: { branch: string }) => <span>{branch}</span>,
 }));
 vi.mock("@/ui/Icon", () => ({ Icon: () => null }));
+vi.mock("@/ui/LiquidView", async () => {
+  const { createContext, use } = await import("react");
+  const targetContext = createContext<unknown>(undefined);
+  return {
+    GlassBlurTarget: targetContext,
+    LiquidView: ({
+      children,
+      accessibilityLabel,
+      onPress,
+      borderRadius,
+      innerStyle,
+    }: {
+      children?: ReactNode;
+      accessibilityLabel?: string;
+      onPress?: () => void;
+      borderRadius?: number;
+      innerStyle?: object;
+    }) => {
+      desktop.headerTarget = use(targetContext);
+      return (
+        <button
+          data-glass
+          aria-label={accessibilityLabel}
+          onClick={onPress}
+          style={{ ...innerStyle, borderRadius }}
+        >
+          {children}
+        </button>
+      );
+    },
+  };
+});
 vi.mock("@/ui/theme", () => {
   const colors = { content: "white", muted: "gray", fill: "gray" };
   return {
@@ -254,10 +331,58 @@ describe("new session composer workspace", () => {
     desktop.startSession.mockReset().mockResolvedValue("started-session");
     desktop.sendMessage.mockReset().mockResolvedValue(undefined);
     desktop.offline = false;
+    desktop.os = "ios";
     container = document.createElement("div");
     root = createRoot(container);
   });
   afterEach(() => act(() => root.unmount()));
+
+  it("keeps circular Android project/settings controls after switching projects", () => {
+    desktop.os = "android";
+    render();
+    for (const label of ["Switch project, Monocode", "Settings"]) {
+      expect(button(label).style.borderRadius).toBe("22px");
+      expect(button(label).hasAttribute("data-glass")).toBe(true);
+    }
+    act(() =>
+      root.render(
+        <ProjectScreen
+          project={{ ...project, id: "other", name: "Other" }}
+          sessionId={undefined}
+        />,
+      ),
+    );
+    expect(button("Switch project, Other").style.borderRadius).toBe("22px");
+    expect(button("Settings").hasAttribute("data-glass")).toBe(true);
+    expect(desktop.header.headerTitleAlign).toBe("center");
+  });
+
+  it("carries the page blur target into header callbacks rendered outside the screen", () => {
+    desktop.os = "android";
+    const target = { current: null };
+    act(() =>
+      root.render(
+        <GlassBlurTarget value={target}>
+          <ProjectScreen project={project} sessionId={undefined} />
+        </GlassBlurTarget>,
+      ),
+    );
+    const renderAvatar = desktop.header.headerLeft as () => ReactNode;
+    act(() => root.render(<>{renderAvatar()}</>));
+    expect(desktop.headerTarget).toBe(target);
+    expect(button("Switch project, Monocode").hasAttribute("data-glass")).toBe(
+      true,
+    );
+  });
+
+  it("keeps Android session titles next to the back target and actions on the right", () => {
+    desktop.os = "android";
+    render("existing-session");
+    expect(desktop.header.headerTitleAlign).toBe("left");
+    expect(desktop.header.headerBackVisible).toBe(false);
+    expect(desktop.header.headerTitle).toBeTypeOf("function");
+    expect(desktop.header.headerRight).toBeTypeOf("function");
+  });
 
   it("switches to a new worktree from the composer and sends that choice", async () => {
     render();

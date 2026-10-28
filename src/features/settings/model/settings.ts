@@ -351,9 +351,9 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
   {
     id: "inset-layout",
     section: "appearance",
-    label: "New layout",
+    label: "Layout",
     keywords:
-      "classic preview sidebar navigation tabs inset workspace card rounded floating linear frame",
+      "classic focused new preview sidebar navigation tabs inset workspace card rounded floating linear frame",
   },
   {
     id: "interface-scale",

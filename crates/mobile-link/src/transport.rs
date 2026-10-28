@@ -12,7 +12,7 @@ use std::{
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    sync::{mpsc, Semaphore},
+    sync::{mpsc, Notify, Semaphore},
     task::JoinSet,
     time::timeout,
 };
@@ -466,11 +466,25 @@ pub struct Watch {
     endpoint: quinn::Endpoint,
     connection: quinn::Connection,
     updates: tokio::sync::Mutex<mpsc::UnboundedReceiver<LinkResult<Value>>>,
+    ready: Arc<Notify>,
     task: tokio::task::JoinHandle<()>,
     /// Set once the stream failed or the desktop ended it.
     ended: Arc<AtomicBool>,
 }
 impl Watch {
+    /// Wait without consuming/projecting data, so the layout worker remains
+    /// responsive to commands and drains a whole burst on its own thread.
+    pub async fn ready(&self) {
+        let notified = self.ready.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        let updates = self.updates.lock().await;
+        if !updates.is_empty() || updates.is_closed() {
+            return;
+        }
+        drop(updates);
+        notified.await;
+    }
     /// The updates that arrived, waiting up to `wait` for the first. Empty when
     /// none came in time; an error once the watch has ended.
     pub async fn next(&self, wait: Duration) -> LinkResult<Vec<Value>> {
@@ -497,6 +511,7 @@ impl Watch {
     pub async fn close(&self) {
         // Dropping the task's streams finishes ours and stops the desktop's.
         self.task.abort();
+        self.ready.notify_waiters();
         if self.ended.load(Ordering::Relaxed) || self.connection.close_reason().is_some() {
             self.connection.close(0_u32.into(), b"Stopped watching");
             let _ = timeout(Duration::from_secs(2), self.endpoint.wait_idle()).await;
@@ -543,6 +558,8 @@ pub async fn watch(
     .await?;
     let (endpoint, connection, send, mut recv) = opened?;
     let (sender, updates) = mpsc::unbounded_channel();
+    let ready = Arc::new(Notify::new());
+    let incoming = ready.clone();
     let ended = Arc::new(AtomicBool::new(false));
     let ending = ended.clone();
     let task = tokio::spawn(async move {
@@ -564,11 +581,13 @@ pub async fn watch(
             if update.is_err() {
                 ending.store(true, Ordering::Relaxed);
                 let _ = sender.send(update);
+                incoming.notify_waiters();
                 break;
             }
             if sender.send(update).is_err() {
                 break;
             }
+            incoming.notify_waiters();
         }
     });
     Ok(Watch {
@@ -576,6 +595,7 @@ pub async fn watch(
         endpoint,
         connection,
         updates: tokio::sync::Mutex::new(updates),
+        ready,
         task,
         ended,
     })
@@ -589,6 +609,65 @@ mod tests {
 
     async fn no_watch(_: String, _: Value, _: WatchSink) -> LinkResult<()> {
         Err("Unsupported mobile operation".into())
+    }
+
+    #[tokio::test]
+    async fn waiting_for_a_watch_sleeps_until_data_and_does_not_consume_it() {
+        let desktop = Identity::generate().unwrap();
+        let phone = Identity::generate().unwrap();
+        let gate = Gate::default();
+        gate.allow(phone.fingerprint().unwrap(), None);
+        let endpoint =
+            server_endpoint(&desktop, gate.clone(), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let port = endpoint.local_addr().unwrap().port();
+        let (sinks, mut opened) = mpsc::channel(1);
+        let task = tokio::spawn(serve(
+            endpoint.clone(),
+            gate,
+            |_, request| async move { Ok(request) },
+            move |_, _, sink| {
+                let sinks = sinks.clone();
+                async move {
+                    sinks.send(sink).await.unwrap();
+                    Ok(())
+                }
+            },
+        ));
+        let watching = watch(
+            &phone,
+            &desktop.fingerprint().unwrap(),
+            &[Address {
+                host: "127.0.0.1".into(),
+                port,
+            }],
+            json!({"method":"conversation.watch"}),
+        )
+        .await
+        .unwrap();
+        let sink = opened.recv().await.unwrap();
+        let ready = watching.ready();
+        tokio::pin!(ready);
+        assert!(timeout(Duration::from_millis(10), &mut ready)
+            .await
+            .is_err());
+        sink.send(json!({"text":"arrived"})).await.unwrap();
+        timeout(Duration::from_secs(5), &mut ready).await.unwrap();
+        timeout(Duration::from_secs(5), watching.ready())
+            .await
+            .unwrap();
+        assert_eq!(
+            watching.next(Duration::ZERO).await.unwrap(),
+            vec![json!({"text":"arrived"})]
+        );
+        let ready = watching.ready();
+        tokio::pin!(ready);
+        assert!(timeout(Duration::from_millis(10), &mut ready)
+            .await
+            .is_err());
+        watching.close().await;
+        timeout(Duration::from_secs(5), &mut ready).await.unwrap();
+        endpoint.close(0_u32.into(), b"Test complete");
+        task.await.unwrap();
     }
 
     #[tokio::test]

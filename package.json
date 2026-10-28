@@ -26,7 +26,12 @@
     "setup:linux:fedora": "bash scripts/install-linux-deps-fedora.sh",
     "build:linux": "tauri build --bundles deb,appimage && bash scripts/repack-appimage.sh",
     "build:fedora": "tauri build --bundles rpm",
-    "build:windows": "set \"RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-msvc\" && tauri build --bundles nsis"
+    "build:windows": "set \"RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-msvc\" && tauri build --bundles nsis",
+    "native:dev": "node scripts/dev-native.mjs",
+    "native:test:dev": "node --test scripts/dev-native.test.mjs scripts/bundle-native-macos.test.mjs scripts/native-dependencies.test.mjs scripts/native-release.test.mjs scripts/package-native.test.mjs",
+    "native:build": "node scripts/build-native.mjs",
+    "native:test": "cargo test --locked --manifest-path crates/monocode-gpui/Cargo.toml -p monocode-core --profile native-dev && cargo test --locked --manifest-path crates/monocode-gpui/Cargo.toml -p monocode-gpui --profile native-dev -- --test-threads=1",
+    "native:check": "npm run native:test:dev && cargo fmt --manifest-path crates/monocode-gpui/Cargo.toml --all --check && cargo clippy --locked --manifest-path crates/monocode-gpui/Cargo.toml -p monocode-core -p monocode-gpui --all-targets --profile native-dev -- -D warnings && npm run native:test"
   },
   "dependencies": {
     "@codemirror/lang-cpp": "^6.0.3",

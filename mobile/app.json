@@ -26,7 +26,14 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
+      ]
     },
     "web": {
       "output": "static",
@@ -64,7 +71,7 @@
         "expo-image-picker",
         {
           "photosPermission": "Choose photos to attach to messages, or as the background of new sessions.",
-          "cameraPermission": false
+          "cameraPermission": "Scan the pairing code from your Monocode desktop."
         }
       ],
       [
@@ -72,7 +79,8 @@
         {
           "microphonePermission": "Dictate messages to your Monocode sessions.",
           "recordAudioAndroid": false,
-          "enableBackgroundRecording": false
+          "enableBackgroundRecording": false,
+          "enableBackgroundPlayback": false
         }
       ],
       "expo-asset"

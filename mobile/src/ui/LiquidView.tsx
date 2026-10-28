@@ -9,10 +9,13 @@ import {
   useMemo,
   useState,
   type ReactNode,
+  type RefObject,
 } from "react";
 import {
   Pressable,
+  Platform,
   StyleSheet,
+  type View,
   type StyleProp,
   type ViewStyle,
 } from "react-native";
@@ -47,6 +50,11 @@ export const GlassPresence = createContext<{
   /** Seconds. */
   duration: number;
 } | null>(null);
+
+/** Android surfaces explicitly sample this content, excluding their own UI. */
+export const GlassBlurTarget = createContext<
+  RefObject<View | null> | undefined
+>(undefined);
 
 /** A spring with some bounce, for glass popping up into place. */
 export const POP_SPRING = { damping: 14, stiffness: 190, mass: 0.9 };
@@ -165,6 +173,8 @@ export function LiquidView({
   const interactive = !!onPress && !disabled;
   const presence = use(GlassPresence);
   const scheme = useScheme();
+  const blurTarget = use(GlassBlurTarget);
+  const androidBlur = Platform.OS === "android" && !!blurTarget;
 
   const surface: StyleProp<ViewStyle> = [
     styles.surface,
@@ -196,11 +206,14 @@ export function LiquidView({
       style={[styles.border, { borderRadius }, fill && styles.fill]}
     >
       <BlurView
+        blurTarget={androidBlur ? blurTarget : undefined}
+        blurMethod={androidBlur ? "dimezisBlurViewSdk31Plus" : undefined}
         intensity={30}
         tint={scheme}
         style={[
           surface,
           styles.fallback,
+          androidBlur && styles.androidBlur,
           tintColor ? { backgroundColor: tintColor } : null,
         ]}
       >
@@ -251,5 +264,8 @@ const useStyles = themedStyles((colors) => ({
   },
   fallback: {
     backgroundColor: withAlpha(colors.surface, 0.92),
+  },
+  androidBlur: {
+    backgroundColor: withAlpha(colors.surface, 0.45),
   },
 }));

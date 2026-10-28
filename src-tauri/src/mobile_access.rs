@@ -457,6 +457,8 @@ fn watch(
             // from the first turn it already has.
             "tail": request["params"]["tail"].as_u64(),
             "from": request["params"]["from"].as_str().filter(|from| from.len() <= 256),
+            // Opt in: older phones continue receiving complete changed turns.
+            "incremental": request["params"]["incremental"] == true,
         }),
     )
     .map_err(|_| "Desktop window is unavailable")?;

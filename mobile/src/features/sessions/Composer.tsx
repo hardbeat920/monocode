@@ -1,7 +1,8 @@
+import { ChoiceMenu } from "@/ui/ChoiceMenu";
 import { Button, Host, HStack, Menu, Spacer } from "@expo/ui/swift-ui";
 import { accessibilityLabel, contentShape, frame, shapes } from "@expo/ui/swift-ui/modifiers";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Alert, Platform, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import Animated, {
   Easing,
   FadeIn,
@@ -151,15 +152,28 @@ export function Composer({
   });
   // Dictation takes over the bottom row: its buttons, and the pill's field.
   const dictation = useSharedValue(0);
-  // Fully transparent once collapsed, which iOS also skips when hit-testing.
+  // Android still hit-tests transparent views. These absolute rows overlap the
+  // collapsed input, so only their children may receive touches once the card
+  // has finished opening. Keep this on the UI thread with the morph (no focus
+  // state/React commit that would interrupt the iOS keyboard animation).
   const expandedOnly = useAnimatedStyle(() => ({
     opacity:
       interpolate(progress.get(), [0.35, 1], [0, 1], "clamp") * (1 - dictation.get()),
+    ...(Platform.OS === "android" ? {
+      pointerEvents: progress.get() === 1 && dictation.get() === 0
+        ? "box-none" as const
+        : "none" as const,
+    } : {}),
   }));
   useEffect(() => {
     dictation.set(withTiming(dictating ? 1 : 0, DICTATION_FADE));
   }, [dictating, dictation]);
-  const undictated = useAnimatedStyle(() => ({ opacity: 1 - dictation.get() }));
+  const undictated = useAnimatedStyle(() => ({
+    opacity: 1 - dictation.get(),
+    ...(Platform.OS === "android" ? {
+      pointerEvents: dictation.get() === 0 && !blocked ? "auto" as const : "none" as const,
+    } : {}),
+  }));
   const fieldShown = useAnimatedStyle(() => ({
     opacity: 1 - dictation.get() * (1 - progress.get()),
   }));
@@ -397,6 +411,14 @@ export function Composer({
 function AddMenu({ onPhotos, onFiles }: { onPhotos: () => void; onFiles: () => void }) {
   const styles = useStyles();
   const colors = useColors();
+  if (Platform.OS === "android") return (
+    <ChoiceMenu label="Add photos or files" actions={[
+      { label: "Photo Library", onPress: onPhotos },
+      { label: "Files", onPress: onFiles },
+    ]}>
+      <View style={styles.round}><Icon name="add" size={18} color={colors.content} /></View>
+    </ChoiceMenu>
+  );
   return (
     <View>
       <View style={styles.round}>

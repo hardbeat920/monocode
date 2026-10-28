@@ -114,7 +114,7 @@ export default function SettingsScreen() {
       </View>
       {blocked ? (
         <Text style={styles.note} onPress={() => void Linking.openSettings()}>
-          Notifications are off for this app in iOS Settings.{" "}
+          Notifications are off for this app in system settings.{" "}
           <Text style={{ color: colors.accent }}>Open Settings</Text>
         </Text>
       ) : null}

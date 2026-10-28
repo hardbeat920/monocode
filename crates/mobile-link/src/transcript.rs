@@ -504,44 +504,62 @@ impl Transcript {
             .into_iter()
             .map(|t| (string(&t, "id").into(), t))
             .collect();
-        for frame in frames {
-            if let Some(error) = frame["error"].as_str() {
-                self.error = Some(error.into());
-                continue;
-            }
-            self.error = None;
-            self.ready = true;
-            if let Some(busy) = frame["busy"].as_bool() {
-                self.busy = busy;
-            }
-            if let Some(older) = frame["older"].as_bool() {
-                self.older = older;
-            }
-            for turn in frame["turns"].as_array().into_iter().flatten() {
-                let id = string(turn, "id");
-                if known.get(id).is_none_or(|before| before != turn) {
-                    known.insert(id.into(), turn.clone());
+        let applied = (|| -> LinkResult<()> {
+            for frame in frames {
+                if let Some(error) = frame["error"].as_str() {
+                    self.error = Some(error.into());
+                    continue;
+                }
+                self.error = None;
+                self.ready = true;
+                if let Some(busy) = frame["busy"].as_bool() {
+                    self.busy = busy;
+                }
+                if let Some(older) = frame["older"].as_bool() {
+                    self.older = older;
+                }
+                for turn in frame["turns"].as_array().into_iter().flatten() {
+                    let id = string(turn, "id");
+                    if known.get(id).is_none_or(|before| before != turn) {
+                        known.insert(id.into(), turn.clone());
+                        if let Some(cache) = self.cache.get_mut(id) {
+                            cache.source = Value::Null;
+                        }
+                    }
+                }
+                for patch in frame["patches"].as_array().into_iter().flatten() {
+                    let id = string(patch, "id");
+                    let turn = known
+                        .get_mut(id)
+                        .ok_or("Transcript window needs to reopen")?;
                     if let Some(cache) = self.cache.get_mut(id) {
                         cache.source = Value::Null;
                     }
+                    apply_edits(turn, patch)?;
+                    if string(turn, "id") != id {
+                        return Err("Transcript window needs to reopen".into());
+                    }
+                }
+                if let Some(ids) = frame["order"].as_array() {
+                    order = ids
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect();
                 }
             }
-            if let Some(ids) = frame["order"].as_array() {
-                order = ids
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_owned)
-                    .collect();
+            if order.iter().any(|id| !known.contains_key(id)) {
+                return Err("Transcript window needs to reopen".into());
             }
-        }
-        if order.iter().any(|id| !known.contains_key(id)) {
-            self.turns = original_order
-                .iter()
-                .filter_map(|id| known.remove(id))
-                .collect();
-            return Err("Transcript window needs to reopen".into());
-        }
-        self.turns = order.iter().filter_map(|id| known.remove(id)).collect();
+            Ok(())
+        })();
+        let retained = if applied.is_ok() {
+            &order
+        } else {
+            &original_order
+        };
+        self.turns = retained.iter().filter_map(|id| known.remove(id)).collect();
+        applied?;
         self.confirm_pending();
         Ok(())
     }
@@ -642,6 +660,73 @@ impl Transcript {
         self.order = order;
         output
     }
+}
+
+/// The desktop opts capable phones into field edits, including UTF-16 text
+/// append offsets (the same units as JavaScript's String.length).
+fn apply_edits(turn: &mut Value, patch: &Value) -> LinkResult<()> {
+    let invalid = || "Transcript window needs to reopen".to_owned();
+    for edit in patch["edits"].as_array().ok_or_else(invalid)? {
+        let path = edit["path"].as_array().ok_or_else(invalid)?;
+        let (last, parents) = path.split_last().ok_or_else(invalid)?;
+        let mut parent = &mut *turn;
+        for key in parents {
+            parent = match key {
+                Value::String(key) => parent.get_mut(key),
+                Value::Number(index) => index.as_u64().and_then(|i| parent.get_mut(i as usize)),
+                _ => None,
+            }
+            .ok_or_else(invalid)?;
+        }
+        if edit["remove"] == true {
+            match (parent, last) {
+                (Value::Object(object), Value::String(key)) if object.contains_key(key) => {
+                    object.remove(key);
+                }
+                (Value::Array(array), Value::Number(index)) => {
+                    let index = index.as_u64().ok_or_else(invalid)? as usize;
+                    if index >= array.len() {
+                        return Err(invalid());
+                    }
+                    array.remove(index);
+                }
+                _ => return Err(invalid()),
+            }
+        } else if let Some(append) = edit["append"].as_str() {
+            let target = match last {
+                Value::String(key) => parent.get_mut(key),
+                Value::Number(index) => index.as_u64().and_then(|i| parent.get_mut(i as usize)),
+                _ => None,
+            }
+            .ok_or_else(invalid)?;
+            let Value::String(text) = target else {
+                return Err(invalid());
+            };
+            if edit["from"].as_u64() != Some(text.encode_utf16().count() as u64) {
+                return Err(invalid());
+            }
+            text.push_str(append);
+        } else {
+            let value = edit.get("value").ok_or_else(invalid)?.clone();
+            match (parent, last) {
+                (Value::Object(object), Value::String(key)) => {
+                    object.insert(key.clone(), value);
+                }
+                (Value::Array(array), Value::Number(index)) => {
+                    let index = index.as_u64().ok_or_else(invalid)? as usize;
+                    if index < array.len() {
+                        array[index] = value;
+                    } else if index == array.len() {
+                        array.push(value);
+                    } else {
+                        return Err(invalid());
+                    }
+                }
+                _ => return Err(invalid()),
+            }
+        }
+    }
+    Ok(())
 }
 
 fn string<'a>(v: &'a Value, key: &str) -> &'a str {
@@ -935,6 +1020,67 @@ mod tests {
                 assert_eq!(md.blocks,parse_blocks("item",&source[..end],0),"prefix {:?}",&source[..end]);
             }
         }
+    }
+    #[test]
+    fn incremental_watch_edits_append_unicode_and_keep_completed_rows() {
+        let stable = json!({"id":"a","items":[{"id":"reply","type":"text","text":"Done"}]});
+        let live = json!({"id":"b","items":[{"id":"reply","type":"text","text":"Hello 👋","streaming":true}]});
+        let mut t = Transcript::new(vec![stable.clone(), live], true);
+        t.update(json!({"type":"render"})).unwrap();
+        let delta = t
+            .update(json!({"type":"frames","frames":[{
+                "order":["a","b"],"busy":true,"patches":[{"id":"b","edits":[
+                    {"path":["items",0,"text"],"from":8,"append":" world"}
+                ]}]
+            }]}))
+            .unwrap();
+        assert_eq!(t.turns[0], stable);
+        assert_eq!(t.turns[1]["items"][0]["text"], "Hello 👋 world");
+        let rows = delta["rows"].as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0]["id"].as_str().unwrap().starts_with("b/"));
+    }
+
+    #[test]
+    fn incremental_watch_edits_change_nested_state_and_recover_from_stale_appends() {
+        let original = json!({"id":"a","durationMs":1,"items":[
+            {"id":"reply","type":"text","text":"Hello"},
+            {"id":"h","type":"header","live":true,"entries":[{"id":"p","type":"prose","text":"Read"}]}
+        ]});
+        let mut t = Transcript::new(vec![original.clone()], true);
+        t.update(
+            json!({"type":"frames","frames":[{"order":["a"],"patches":[{"id":"a","edits":[
+                {"path":["items",1,"entries",0,"text"],"from":4,"append":" files"},
+                {"path":["items",1,"entries",1],"value":{"id":"p2","type":"prose","text":"Next"}},
+                {"path":["items",1,"live"],"value":false},
+                {"path":["durationMs"],"remove":true}
+            ]}]}]}),
+        )
+        .unwrap();
+        assert_eq!(t.turns[0]["items"][1]["entries"][0]["text"], "Read files");
+        assert_eq!(
+            t.turns[0]["items"][1]["entries"].as_array().unwrap().len(),
+            2
+        );
+        assert_eq!(t.turns[0]["items"][1]["live"], false);
+        assert!(t.turns[0].get("durationMs").is_none());
+        t.update(
+            json!({"type":"frames","frames":[{"order":["a"],"patches":[{"id":"a","edits":[
+                {"path":["items",1],"remove":true}
+            ]}]}]}),
+        )
+        .unwrap();
+        assert_eq!(t.turns[0]["items"].as_array().unwrap().len(), 1);
+        assert!(t
+            .update(
+                json!({"type":"frames","frames":[{"order":["a"],"patches":[{"id":"a","edits":[
+                    {"path":["items",0,"text"],"from":999,"append":" lost"}
+                ]}]}]})
+            )
+            .is_err());
+        t.update(json!({"type":"replace","turns":[original.clone()],"busy":false}))
+            .unwrap();
+        assert_eq!(t.turns, vec![original]);
     }
     #[test]
     fn changed_tail_sends_no_completed_rows_and_history_does_not_confirm_pending() {

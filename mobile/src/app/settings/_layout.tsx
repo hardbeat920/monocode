@@ -6,6 +6,7 @@ import {
   sheetScreenLayout,
 } from "@/features/files/codeScreen";
 import { MONOS_ENABLED } from "@/features/connection/selection";
+import { androidBackHeader } from "@/ui/AndroidHeader";
 import { useColors } from "@/ui/theme";
 
 // Settings: a native modal with its own stack, so its pages push inside the
@@ -30,14 +31,26 @@ export default function SettingsLayout() {
           ),
         }}
       />
-      <Stack.Screen name="appearance" options={{ title: "Appearance" }} />
-      <Stack.Screen name="providers" options={{ title: "Providers" }} />
-      <Stack.Screen name="permissions" options={{ title: "Permissions" }} />
+      <Stack.Screen
+        name="appearance"
+        options={{ title: "Appearance", ...androidBackHeader("Appearance") }}
+      />
+      <Stack.Screen
+        name="providers"
+        options={{ title: "Providers", ...androidBackHeader("Providers") }}
+      />
+      <Stack.Screen
+        name="permissions"
+        options={{ title: "Permissions", ...androidBackHeader("Permissions") }}
+      />
       {/* The provider's models title themselves. */}
       <Stack.Screen name="models" options={{ title: "" }} />
       <Stack.Screen
         name="workspace"
-        options={{ title: MONOS_ENABLED ? "Projects and monos" : "Projects" }}
+        options={{
+          title: MONOS_ENABLED ? "Projects and monos" : "Projects",
+          ...androidBackHeader(MONOS_ENABLED ? "Projects and monos" : "Projects"),
+        }}
       />
     </Stack>
   );

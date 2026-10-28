@@ -42,6 +42,10 @@ enum Call {
         timeout_ms: u64,
     },
     #[serde(rename_all = "camelCase")]
+    Wait {
+        watch_id: u64,
+    },
+    #[serde(rename_all = "camelCase")]
     Unwatch {
         watch_id: u64,
     },
@@ -146,6 +150,11 @@ fn execute(input: &str) -> LinkResult<Value> {
                     Err(error)
                 }
             }
+        }
+        Call::Wait { watch_id } => {
+            let watch = watching(watch_id)?;
+            runtime().block_on(watch.ready());
+            Ok(json!({"ready":true}))
         }
         Call::Unwatch { watch_id } => {
             if let Some(watch) = watches().lock().unwrap().remove(&watch_id) {

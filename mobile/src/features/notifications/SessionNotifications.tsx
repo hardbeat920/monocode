@@ -1,7 +1,7 @@
 import * as Notifications from "expo-notifications";
 import { router } from "expo-router";
 import { useEffect, useRef, useState } from "react";
-import { AppState } from "react-native";
+import { AppState, Platform } from "react-native";
 
 import { useConnection } from "@/features/connection/ConnectionProvider";
 import {
@@ -27,6 +27,7 @@ Notifications.setNotificationHandler({
 
 type Seen = Pick<SessionSummary, "busy" | "waiting">;
 type Data = { projectId: string; sessionId: string };
+const SESSION_CHANNEL = "sessions";
 
 /**
  * Local notifications for the desktop's sessions, after its own: an agent
@@ -49,16 +50,30 @@ export function SessionNotifications() {
     preferences.enabled(id),
   );
 
-  // Asked once something is on to notify of; iOS asks only the first time.
+  // Ask after pairing, only when alerts are enabled and the OS allows asking.
   useEffect(() => {
     if (!anyOn || !connection.pairing) return;
-    void Notifications.getPermissionsAsync().then((settings) => {
-      if (
-        settings.ios?.status ===
-        Notifications.IosAuthorizationStatus.NOT_DETERMINED
-      )
-        void Notifications.requestPermissionsAsync();
-    });
+    const prepare = async () => {
+      // Android needs a channel before its permission prompt can appear.
+      if (Platform.OS === "android") {
+        await Notifications.setNotificationChannelAsync(SESSION_CHANNEL, {
+          name: "Session alerts",
+          importance: Notifications.AndroidImportance.DEFAULT,
+        });
+      }
+      const settings = await Notifications.getPermissionsAsync();
+      const shouldRequest =
+        Platform.OS === "ios"
+          ? settings.ios?.status ===
+            Notifications.IosAuthorizationStatus.NOT_DETERMINED
+          : settings.status !== "granted";
+      if (shouldRequest && settings.canAskAgain) {
+        await Notifications.requestPermissionsAsync();
+      }
+    };
+    void prepare().catch((reason) =>
+      console.warn("Could not enable session notifications", reason),
+    );
   }, [anyOn, connection.pairing]);
 
   useEffect(() => {
@@ -105,7 +120,7 @@ export function SessionNotifications() {
             sessionId: session.id,
           } satisfies Data,
         },
-        trigger: null,
+        trigger: Platform.OS === "android" ? { channelId: SESSION_CHANNEL } : null,
       });
     }
   }, [connection.connected, connection.catalog]);
@@ -128,16 +143,14 @@ export function SessionNotifications() {
   return null;
 }
 
-/** Whether iOS has notifications turned off for the app; checked again each
- *  time the app comes back, as they are changed in iOS Settings. */
+/** Whether notifications are turned off for the app; checked again each
+ *  time the app comes back from system settings. */
 export function useNotificationsBlocked() {
   const [blocked, setBlocked] = useState(false);
   useEffect(() => {
     const check = () =>
       void Notifications.getPermissionsAsync().then((settings) =>
-        setBlocked(
-          settings.ios?.status === Notifications.IosAuthorizationStatus.DENIED,
-        ),
+        setBlocked(settings.status === "denied" && !settings.canAskAgain),
       );
     check();
     const subscription = AppState.addEventListener("change", (state) => {
