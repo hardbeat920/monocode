@@ -1,10 +1,60 @@
+import { appendUser } from "../../../integrations/harness/core/apply";
 import { describe, expect, it } from "vitest";
-import { newSession, type Block, type Session } from "../model/session";
 import {
+  newSession,
+  type Block,
+  type BtwThread,
+  type Session,
+} from "../model/session";
+import {
+  backfillClaudeShellCommands,
   isPersistableId,
   persistFingerprint,
   sanitizeSessionForPersist,
+  shouldPersistSession,
 } from "./sessionStore";
+
+it("keeps host-owned transcripts out of local session storage", () => {
+  const session = newSession("codex", "remote://env/home/me/repo");
+  session.blocks = [{ id: "turn", role: "user", text: "Continue" }];
+  expect(shouldPersistSession(session)).toBe(false);
+});
+
+describe("Claude Shell row recovery", () => {
+  it("restores only matching placeholder rows and preserves tool output", () => {
+    const blocks: Block[] = [
+      {
+        id: "shell",
+        role: "tool",
+        text: "Shell",
+        tool: {
+          callId: "toolu_shell",
+          title: "Shell",
+          kind: "execute",
+          status: "completed",
+          detail: "tests passed",
+        },
+      },
+      {
+        id: "read",
+        role: "tool",
+        text: "Read file.ts",
+        tool: { callId: "toolu_read", kind: "read" },
+      },
+    ];
+    const command = `npm run check:web ${"--filter tests ".repeat(20)}`.trim();
+    const repaired = backfillClaudeShellCommands(blocks, {
+      toolu_shell: command,
+      toolu_read: "ignore me",
+    });
+    expect(repaired[0]).toMatchObject({
+      text: command,
+      tool: { title: command, status: "completed", detail: "tests passed" },
+    });
+    expect(repaired[1]).toBe(blocks[1]);
+    expect(backfillClaudeShellCommands(repaired, {})).toBe(repaired);
+  });
+});
 
 describe("isPersistableId", () => {
   it("accepts alphanumeric ids with hyphens and underscores", () => {
@@ -45,7 +95,8 @@ describe("persisting a subagent's trail", () => {
             kind: "tool",
             text: "Read src/App.tsx",
             toolKind: "read",
-            status: "completed",
+            status: "failed",
+            detail: "File not found",
           },
           { id: "s2", kind: "message", text: "Nothing to flag." },
         ],
@@ -59,7 +110,8 @@ describe("persisting a subagent's trail", () => {
           kind: "tool",
           text: "Read src/App.tsx",
           toolKind: "read",
-          status: "completed",
+          status: "failed",
+          detail: "File not found",
         },
         { id: "s2", kind: "message", text: "Nothing to flag." },
       ],
@@ -92,6 +144,44 @@ describe("persisting a subagent's trail", () => {
 });
 
 describe("sanitizeSessionForPersist", () => {
+  it("keeps the stripped /operator turn marker for later turns", () => {
+    const submitted = appendUser(newSession("codex", "/repo"), "list notes", [], {
+      monocode: true,
+    });
+    expect(sanitizeSessionForPersist(submitted).blocks[0]).toMatchObject({
+      role: "user",
+      text: "list notes",
+      monocode: true,
+    });
+  });
+
+  it("persists the request ID for an agent-sent follow-up", () => {
+    const submitted = appendUser(newSession("codex", "/repo"), "Continue", [], {
+      appRequestId: "app-source-request-1",
+    });
+    expect(sanitizeSessionForPersist(submitted).blocks[0]).toMatchObject({
+      text: "Continue",
+      appRequestId: "app-source-request-1",
+    });
+  });
+
+  it("persists the request ID on an unsent agent-created draft", () => {
+    const session = newSession("codex", "/repo");
+    session.blocks = [
+      {
+        id: "draft",
+        role: "user",
+        text: "Review later",
+        draft: true,
+        appRequestId: "app-source-draft-1",
+      },
+    ];
+    expect(sanitizeSessionForPersist(session).blocks[0]).toMatchObject({
+      draft: true,
+      appRequestId: "app-source-draft-1",
+    });
+  });
+
   it("keeps an unsent user turn appended to a started thread", () => {
     const session = newSession("codex", "/repo");
     session.blocks = [
@@ -103,6 +193,60 @@ describe("sanitizeSessionForPersist", () => {
       { id: "sent", role: "user", text: "Start here" },
       { id: "reply", role: "assistant", text: "Done" },
       { id: "draft", role: "user", text: "Explore this", draft: true },
+    ]);
+  });
+
+  it("persists generated image metadata without binary payloads", () => {
+    const session = newSession("codex", "/repo");
+    session.blocks = [
+      { id: "u", role: "user", text: "Draw this" },
+      {
+        id: "image",
+        role: "image",
+        text: "",
+        image: {
+          path: "/app-data/generated-images/image.png",
+          name: "generated-image",
+          mimeType: "image/png",
+          size: 8,
+          alt: "A clean product photo",
+        },
+      },
+    ];
+
+    expect(sanitizeSessionForPersist(session).blocks[1]).toEqual({
+      id: "image",
+      role: "image",
+      text: "",
+      image: {
+        path: "/app-data/generated-images/image.png",
+        name: "generated-image",
+        mimeType: "image/png",
+        size: 8,
+        alt: "A clean product photo",
+      },
+    });
+  });
+
+  it("drops malformed generated image metadata", () => {
+    const session = newSession("codex", "/repo");
+    session.blocks = [
+      { id: "u", role: "user", text: "Draw this" },
+      {
+        id: "image",
+        role: "image",
+        text: "",
+        image: {
+          path: "",
+          name: "generated-image",
+          mimeType: "image/png",
+          size: 0,
+        },
+      },
+    ];
+
+    expect(sanitizeSessionForPersist(session).blocks).toEqual([
+      { id: "u", role: "user", text: "Draw this" },
     ]);
   });
 
@@ -166,6 +310,33 @@ describe("sanitizeSessionForPersist", () => {
       id: "claude:opus-5",
       name: "Claude Opus 5",
     });
+  });
+
+  it("persists a BTW thread's model and provider settings", () => {
+    const session = newSession("codex", "/tmp/project");
+    const thread: BtwThread = {
+      id: "btw-1",
+      sourceEndBlockId: "u1",
+      createdAt: 1,
+      updatedAt: 2,
+      status: "ready",
+      messages: [
+        { id: "m1", role: "user", text: "Why?", createdAt: 1 },
+        { id: "m2", role: "assistant", text: "Because.", createdAt: 2 },
+      ],
+      model: "codex:gpt-5.4",
+      modelSettings: {
+        reasoningEffort: "high",
+        serviceTier: "fast",
+      },
+    };
+    session.blocks = [
+      { id: "u1", role: "user", text: "Explain this", btwThreads: [thread] },
+    ];
+
+    expect(sanitizeSessionForPersist(session).blocks[0]?.btwThreads).toEqual([
+      thread,
+    ]);
   });
 
   it("persists provider metrics recorded on a user turn", () => {
@@ -569,5 +740,21 @@ describe("persistFingerprint", () => {
     expect(
       persistFingerprint({ ...session, context: { used: 10, window: 0 } }),
     ).toBe(persistFingerprint({ ...session, context: { used: 10 } }));
+  });
+});
+it("saves the exact CI context alongside the compact user message", () => {
+  const context =
+    "Checked commit: abc123\n\nRun tests failed at src/app.test.ts:42\nExpected 2, received 1";
+  const session = appendUser(
+    newSession("codex", "/tmp/project"),
+    "Fix 1 failed CI check for acme/web PR #42.",
+    [],
+    { ciContext: context },
+  );
+  const saved = JSON.parse(JSON.stringify(sanitizeSessionForPersist(session)));
+  expect(saved.blocks[0]).toMatchObject({
+    role: "user",
+    text: "Fix 1 failed CI check for acme/web PR #42.",
+    ciContext: context,
   });
 });

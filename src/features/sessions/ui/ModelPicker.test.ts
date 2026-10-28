@@ -224,6 +224,38 @@ describe("model picker", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
+  it("lists Claude Opus 5.5 after Opus 5 in the built-in Claude catalog", () => {
+    act(() =>
+      root.render(
+        createElement(ModelPicker, {
+          harness: "claude",
+          model: "claude:opus-5-5",
+          values: {},
+          onChange: vi.fn(),
+          onSettingsChange: vi.fn(),
+        }),
+      ),
+    );
+
+    const trigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-haspopup="menu"]',
+    )!;
+    expect(trigger.textContent).toContain("Claude Opus 5.5");
+
+    act(() => trigger.click());
+    const modelRow = [
+      ...container.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent?.startsWith("Model"));
+    if (modelRow) hover(modelRow);
+    const options = [...container.querySelectorAll('[role="option"]')].map(
+      (option) => option.textContent,
+    );
+    expect(options).toContain("Claude Opus 5.5");
+    expect(options.indexOf("Claude Opus 5.5")).toBe(
+      options.indexOf("Claude Opus 5") + 1,
+    );
+  });
+
   it("groups OpenCode models by provider and searches provider names", () => {
     setHarnessModels("opencode", [
       {

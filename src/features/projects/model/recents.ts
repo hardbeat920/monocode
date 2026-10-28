@@ -1,10 +1,12 @@
 import { pathKey, prettyCwd, slash } from "../../../shared/lib/paths";
+import { REMOTE_PATH_PREFIX } from "../../../shared/lib/remotePaths";
 
 const KEY = "monocode.recentProjects";
 const RAIL_ORDER_KEY = "monocode.projectRailOrder";
 const RAIL_PINNED_KEY = "monocode.projectRailPinned";
 const ARCHIVED_KEY = "monocode.archivedProjects";
 const ARCHIVED_CHANGED = "monocode:archived-projects-changed";
+const PROJECT_PATHS_CHANGED = "monocode:project-paths-changed";
 const MAX = 20;
 
 export type RecentProject = {
@@ -71,6 +73,68 @@ export function rememberProject(path: string): RecentProject[] {
   );
   save(next);
   return next;
+}
+
+function replacePath(paths: string[], from: string, to: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const path of paths) {
+    const next = sameProjectPath(path, from) ? to : path;
+    const key = pathKey(next);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(next);
+  }
+  return out;
+}
+
+/** Replace a renamed project's path everywhere the project rail stores it. */
+export function replaceProjectPath(from: string, to: string): RecentProject[] {
+  const previous = normalize(from);
+  const nextPath = normalize(to);
+  if (sameProjectPath(previous, nextPath)) return loadRecents();
+
+  const recents: RecentProject[] = [];
+  const seen = new Set<string>();
+  for (const item of loadRecents()) {
+    const path = sameProjectPath(item.path, previous) ? nextPath : item.path;
+    const key = pathKey(path);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    recents.push({ ...item, path });
+  }
+  save(recents);
+  saveProjectRailOrder(replacePath(loadProjectRailOrder(), previous, nextPath));
+  savePinnedProjects(replacePath(loadPinnedProjects(), previous, nextPath));
+
+  const archived = loadArchivedProjects();
+  if (archived.some((item) => sameProjectPath(item.path, previous))) {
+    const replaced: ArchivedProject[] = [];
+    const archivedSeen = new Set<string>();
+    for (const item of archived) {
+      const path = sameProjectPath(item.path, previous) ? nextPath : item.path;
+      const key = pathKey(path);
+      if (archivedSeen.has(key)) continue;
+      archivedSeen.add(key);
+      replaced.push({ ...item, path });
+    }
+    saveArchived(replaced);
+  }
+  notifyProjectPathsChanged();
+  return recents;
+}
+
+/** Rail projects, pins, groups, or their appearance changed in storage. */
+export function notifyProjectPathsChanged(): void {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(PROJECT_PATHS_CHANGED));
+  }
+}
+
+export function subscribeProjectPathsChanged(onChange: () => void): () => void {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener(PROJECT_PATHS_CHANGED, onChange);
+  return () => window.removeEventListener(PROJECT_PATHS_CHANGED, onChange);
 }
 
 /** Drops a project from the rail: its recent entry, saved order slot, and pin. */
@@ -215,6 +279,16 @@ export function loadPinnedProjects(): string[] {
 
 export function savePinnedProjects(pinned: string[]) {
   savePathList(RAIL_PINNED_KEY, pinned.map(normalize));
+  notifyProjectPathsChanged();
+}
+
+export function toggleProjectPin(path: string): void {
+  const pinned = loadPinnedProjects();
+  savePinnedProjects(
+    pinned.some((item) => sameProjectPath(item, path))
+      ? pinned.filter((item) => !sameProjectPath(item, path))
+      : [...pinned, path],
+  );
 }
 
 /** Every project path we still remember — rail, pins, saved order, archive. */
@@ -316,6 +390,20 @@ export function projectRailItems(
 }
 
 /** True if this looks like a user project, not an app bundle or system root. */
+/** Projects on another machine use `remote://<host id>/<host path>` keys. They
+ * appear in the rail like any project, but are never folders on this computer. */
+export const REMOTE_PROJECT_PREFIX = REMOTE_PATH_PREFIX;
+
+export function isRemoteProjectPath(path: string): boolean {
+  return slash(path).startsWith(REMOTE_PROJECT_PREFIX);
+}
+
+/** A project folder on this computer: safe to index, search, or run git and
+ * terminals in. Use `looksLikeProject` where a remote project also counts. */
+export function isLocalProject(path: string): boolean {
+  return looksLikeProject(path) && !isRemoteProjectPath(path);
+}
+
 export function looksLikeProject(path: string): boolean {
   if (!path || path === "/" || path === "~") return false;
   const normalized = slash(path).replace(/\/+$/, "") || "/";

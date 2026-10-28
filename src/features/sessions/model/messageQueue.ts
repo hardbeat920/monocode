@@ -31,10 +31,12 @@ export function dequeueQueuedMessage(
 
 /**
  * True when the idle session can send its queued head as a new turn.
- * Busy / paused / resuming / preparing-handoff / editing-the-head all wait.
+ * Busy / paused / resuming / usage-limited / preparing-handoff /
+ * editing-the-head all wait.
  */
 export function canDispatchQueuedHead(session: Session): boolean {
   if (session.busy) return false;
+  if (session.usageLimit) return false;
   if (session.queueStatus === "paused" || session.queueStatus === "resuming") {
     return false;
   }

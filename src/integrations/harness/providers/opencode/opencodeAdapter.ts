@@ -5,6 +5,7 @@ import {
   forgetOpenCodeSession,
   respondOpenCodeApproval,
   respondOpenCodeQuestion,
+  rewindOpenCodeLastTurn,
   sendOpenCodeTurn,
   steerOpenCodeTurn,
   stopOpenCodeSession,
@@ -16,12 +17,17 @@ import {
   generateOpenCodePrContent,
 } from "./opencodeGit";
 import { generateOpenCodeSessionTitle } from "./opencodeTitle";
-import { warmupOpenCodeText } from "./opencodeText";
+import {
+  runOpenCodeTextPrompt,
+  stopOpenCodeTextPrompt,
+  warmupOpenCodeText,
+} from "./opencodeText";
 import { registerHarness, type HarnessAdapter } from "../../core/registry";
 
 export const openCodeAdapter: HarnessAdapter = {
   id: "opencode",
   live: true,
+  rewindLastTurn: rewindOpenCodeLastTurn,
   sendTurn: sendOpenCodeTurn,
   compactContext: compactOpenCodeContext,
   steerTurn: steerOpenCodeTurn,
@@ -37,6 +43,8 @@ export const openCodeAdapter: HarnessAdapter = {
   generatePrContent: generateOpenCodePrContent,
   generateBranchName: generateOpenCodeBranchName,
   warmupText: warmupOpenCodeText,
+  runTextPrompt: runOpenCodeTextPrompt,
+  stopTextPrompt: stopOpenCodeTextPrompt,
 };
 
 let registered = false;

@@ -20,6 +20,7 @@ import {
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { useColorScheme } from "../../../shared/hooks/useColorScheme";
+import { formatInteger } from "../../../shared/lib/numbers";
 import type { ColorScheme } from "../../settings/model/appearance";
 import { basename } from "../../../platform/tauri/fs";
 import { highlightDiffFile, type SyntaxToken } from "../../files/editor/syntaxTokens";
@@ -1031,12 +1032,12 @@ function DiffCounts({
 }) {
   if (additions <= 0 && deletions <= 0) return null;
   return (
-    <span className="flex shrink-0 items-center gap-1.5 font-mono text-[11px] font-semibold tabular-nums">
+    <span className="flex shrink-0 items-center gap-1.5 font-sans text-[11px] font-semibold tabular-nums">
       {additions > 0 ? (
-        <span className="text-emerald-400">+{additions}</span>
+        <span className="text-emerald-400">+{formatInteger(additions)}</span>
       ) : null}
       {deletions > 0 ? (
-        <span className="text-red-400">-{deletions}</span>
+        <span className="text-red-400">-{formatInteger(deletions)}</span>
       ) : null}
     </span>
   );

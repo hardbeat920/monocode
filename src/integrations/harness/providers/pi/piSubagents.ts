@@ -128,6 +128,7 @@ export function piSubagentEvents(
           const tool = stringField(part, "name") ?? "tool";
           const args = asRecord(part.arguments) ?? {};
           const outcome = toolResults.get(id);
+          const output = textFromContent(outcome?.content);
           emit({
             stepId: `${rowId}:tool:${id ?? `${messageIndex}:${partIndex}`}`,
             kind: "tool",
@@ -140,11 +141,10 @@ export function piSubagentEvents(
               : status === "in_progress"
                 ? "in_progress"
                 : status,
-            preview: previewFromTool(
-              tool,
-              args,
-              textFromContent(outcome?.content),
-            ),
+            // Only a failure earns detail: a preview's output is never shown
+            // on the row, so this is the one place the error can be read.
+            ...(outcome?.isError && output ? { detail: output } : {}),
+            preview: previewFromTool(tool, args, output),
           });
         }
       });

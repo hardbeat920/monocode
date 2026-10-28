@@ -8,6 +8,7 @@ export {
 } from "./core/auth";
 export {
   applyHarnessEvent,
+  applyHarnessEvents,
   appendUser,
   appendSteerUser,
   promoteLastAssistantToPlan,
@@ -24,6 +25,7 @@ export {
 export {
   sendCodexTurn,
   compactCodexContext,
+  rewindCodexLastTurn,
   cancelCodexTurn,
   respondCodexApproval,
   stopCodexSession,
@@ -33,8 +35,10 @@ export {
 export {
   sendOpenCodeTurn,
   compactOpenCodeContext,
+  rewindOpenCodeLastTurn,
   cancelOpenCodeTurn,
   respondOpenCodeApproval,
+  respondOpenCodeQuestion,
   stopOpenCodeSession,
   forgetOpenCodeSession,
   bindOpenCodeSession,
@@ -51,6 +55,7 @@ export {
 export {
   sendPiTurn,
   compactPiContext,
+  rewindPiLastTurn,
   cancelPiTurn,
   respondPiApproval,
   stopPiSession,
@@ -60,6 +65,7 @@ export {
 export {
   sendOmpTurn,
   compactOmpContext,
+  rewindOmpLastTurn,
   cancelOmpTurn,
   respondOmpApproval,
   stopOmpSession,
@@ -104,14 +110,20 @@ export { generateCursorSessionTitle } from "./providers/cursor/cursorTitle";
 export { generateCodexSessionTitle } from "./providers/codex/codexTitle";
 export { generateOpenCodeSessionTitle } from "./providers/opencode/opencodeTitle";
 export { generateClaudeSessionTitle } from "./providers/claude/claudeTitle";
-export { generatePiSessionTitle, generateOmpSessionTitle } from "./providers/pi/piTitle";
+export {
+  generatePiSessionTitle,
+  generateOmpSessionTitle,
+} from "./providers/pi/piTitle";
 export { generateGrokSessionTitle } from "./providers/grok/grokTitle";
 export {
   generateCursorCommitMessage,
   generateCursorPrContent,
   stopCursorGitText,
 } from "./providers/cursor/cursorGit";
-export { generateCodexCommitMessage, generateCodexPrContent } from "./providers/codex/codexGit";
+export {
+  generateCodexCommitMessage,
+  generateCodexPrContent,
+} from "./providers/codex/codexGit";
 export {
   generateOpenCodeCommitMessage,
   generateOpenCodePrContent,
@@ -120,7 +132,10 @@ export {
   generateClaudeCommitMessage,
   generateClaudePrContent,
 } from "./providers/claude/claudeGit";
-export { generateGrokCommitMessage, generateGrokPrContent } from "./providers/grok/grokGit";
+export {
+  generateGrokCommitMessage,
+  generateGrokPrContent,
+} from "./providers/grok/grokGit";
 export {
   generateCommitMessage,
   generatePrContent,
@@ -159,6 +174,8 @@ export {
   canCompactHarnessContext,
   steerHarnessTurn,
   canSteerHarness,
+  canRewindHarnessLastTurn,
+  rewindHarnessLastTurn,
   cancelHarnessTurn,
   respondHarnessApproval,
   respondHarnessQuestion,
@@ -171,6 +188,9 @@ export {
   generateHarnessCommitMessage,
   generateHarnessPrContent,
   generateHarnessBranchName,
+  canRunHarnessTextPrompt,
+  runHarnessTextPrompt,
+  stopHarnessTextPrompts,
 } from "./core/registry";
 export type {
   ApprovalDecision,
@@ -183,4 +203,4 @@ export type {
   UserQuestionPrompt,
   UserQuestionReply,
 } from "../../features/sessions/model/userQuestion";
-export type { HarnessAdapter } from "./core/registry";
+export type { HarnessAdapter, TextPromptInput } from "./core/registry";

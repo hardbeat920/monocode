@@ -19,6 +19,7 @@ import {
   openAddToChatSessionPane,
   planWorkspaceTabClose,
   replaceGroupInTabOrder,
+  switchSessionInTab,
   workspaceTabProject,
   focusedWorkspaceTabCwd,
   workspaceTabCwd,
@@ -134,6 +135,53 @@ describe("findOpenSessionTab", () => {
         "parked-session",
       ),
     ).toBe(ghost);
+  });
+});
+
+describe("switchSessionInTab", () => {
+  it("replaces the focused session while keeping the tab and its other panes", () => {
+    const split = {
+      ...tab("current-tab", "current"),
+      layout: splitPane(newTab("current").layout, "current", "right", "other"),
+    };
+    const [next] = switchSessionInTab([split], split.id, "current", "target")!;
+    expect(next.id).toBe(split.id);
+    expect(leafIds(next.layout)).toEqual(["target", "other"]);
+    expect(next.focusedId).toBe("target");
+  });
+
+  it("focuses a session already in the current tab", () => {
+    const split = {
+      ...tab("current-tab", "current"),
+      layout: splitPane(newTab("current").layout, "current", "right", "target"),
+    };
+    const [next] = switchSessionInTab([split], split.id, "current", "target")!;
+    expect(leafIds(next.layout)).toEqual(["current", "target"]);
+    expect(next.focusedId).toBe("target");
+  });
+
+  it("swaps sessions across tabs instead of mounting one twice", () => {
+    const current = tab("current-tab", "current");
+    const other = tab("other-tab", "target");
+    const next = switchSessionInTab(
+      [current, other],
+      current.id,
+      "current",
+      "target",
+    )!;
+    expect(next.map((entry) => entry.id)).toEqual(["current-tab", "other-tab"]);
+    expect(next.map((entry) => leafIds(entry.layout))).toEqual([
+      ["target"],
+      ["current"],
+    ]);
+    expect(next.map((entry) => entry.focusedId)).toEqual(["target", "current"]);
+  });
+
+  it("ignores a switch after the focused session has changed", () => {
+    const current = tab("current-tab", "new-focus");
+    expect(
+      switchSessionInTab([current], current.id, "old-focus", "target"),
+    ).toBeNull();
   });
 });
 

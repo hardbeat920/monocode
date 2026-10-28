@@ -20,7 +20,11 @@ vi.mock("../../../platform/tauri/fs", () => ({
 }));
 
 import { BranchPicker } from "./BranchPicker";
-import { gitCreateBranch } from "../../../platform/tauri/fs";
+import {
+  gitBranches,
+  gitCheckout,
+  gitCreateBranch,
+} from "../../../platform/tauri/fs";
 
 let container: HTMLDivElement;
 let root: Root;
@@ -157,4 +161,64 @@ it("updates the branch creation row with the entered name", async () => {
   );
   expect(create).not.toBeUndefined();
   expect(create?.parentElement?.className).toContain("border-t");
+});
+
+it("checks out the highlighted matching branch when Enter is pressed", async () => {
+  vi.mocked(gitBranches).mockResolvedValueOnce({
+    current: "main",
+    detached: false,
+    branches: [
+      { name: "main", current: true, remote: null },
+      { name: "feature/picker", current: false, remote: null },
+    ],
+  });
+  act(() =>
+    root.render(
+      createElement(BranchPicker, {
+        cwd: "/repo-enter-existing",
+        branch: "main",
+      }),
+    ),
+  );
+  await act(async () => {});
+  await act(async () => container.querySelector("button")!.click());
+
+  const input = document.querySelector<HTMLInputElement>(
+    'input[aria-label="Search or create a branch"]',
+  )!;
+  const setter = Object.getOwnPropertyDescriptor(
+    HTMLInputElement.prototype,
+    "value",
+  )!.set!;
+  act(() => {
+    setter.call(input, "picker");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+
+  const picker = document.querySelector<HTMLElement>("[data-branch-picker]")!;
+  const highlighted = picker.querySelector<HTMLButtonElement>(
+    '[role="option"]',
+  )!;
+  expect(highlighted.textContent).toContain("feature/picker");
+  expect(
+    [...picker.querySelectorAll<HTMLButtonElement>("button")].some(
+      (button) => button.textContent === "Create and checkout picker",
+    ),
+  ).toBe(true);
+
+  await act(async () => {
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    );
+  });
+
+  expect(gitCheckout).toHaveBeenCalledWith(
+    "/repo-enter-existing",
+    "feature/picker",
+    null,
+  );
+  expect(gitCreateBranch).not.toHaveBeenCalledWith(
+    "/repo-enter-existing",
+    "picker",
+  );
 });

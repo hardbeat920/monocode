@@ -2,7 +2,7 @@
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { Note, NoteUpsert } from "../notes";
+import { NOTES_CHANGED_EVENT, type Note, type NoteUpsert } from "../notes";
 import { NotesView } from "./NotesView";
 import { savePinnedProjects, saveProjectRailOrder } from "../../projects/model/recents";
 
@@ -84,6 +84,15 @@ async function render(projects = recents, cwd = "/work/Edefyn") {
     ),
   );
 }
+
+it("refreshes an open note after an Operator write", async () => {
+  await render();
+  stored = { ...stored, title: "Updated by Operator", body: "New text", updatedAt: 2 };
+  await act(async () => window.dispatchEvent(new Event(NOTES_CHANGED_EVENT)));
+  expect(container.querySelector<HTMLInputElement>('[aria-label="Note title"]')?.value)
+    .toBe("Updated by Operator");
+  expect(container.textContent).toContain("New text");
+});
 
 it("uses the searchable rail project picker when moving a note", async () => {
   const projects = [

@@ -2,6 +2,7 @@
 import { act, createElement, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { saveShowExcludedFiles } from "../../settings/model/appearance";
 import {
   listCachedDir,
   notifyDirsChanged,
@@ -64,12 +65,12 @@ let cwd: string;
 let props: ComponentProps<typeof FileTree>;
 let project = 0;
 
-function file(name: string): FsEntry {
-  return { name, path: `${cwd}/${name}`, isDir: false, ignored: false };
+function file(name: string, ignored = false): FsEntry {
+  return { name, path: `${cwd}/${name}`, isDir: false, ignored };
 }
 
-function folder(name: string): FsEntry {
-  return { name, path: `${cwd}/${name}`, isDir: true, ignored: false };
+function folder(name: string, ignored = false): FsEntry {
+  return { name, path: `${cwd}/${name}`, isDir: true, ignored };
 }
 
 function pressPaste(el: HTMLElement) {
@@ -77,6 +78,12 @@ function pressPaste(el: HTMLElement) {
     el.dispatchEvent(
       new KeyboardEvent("keydown", { key: "v", metaKey: true, bubbles: true }),
     );
+  });
+}
+
+function press(el: HTMLElement, init: KeyboardEventInit) {
+  return act(async () => {
+    el.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, ...init }));
   });
 }
 
@@ -116,6 +123,7 @@ beforeEach(async () => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  localStorage.removeItem("monocode.showExcludedFiles");
   vi.clearAllMocks();
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -192,6 +200,33 @@ describe("FileTree render isolation", () => {
   });
 });
 
+describe("FileTree excluded files", () => {
+  it("hides ignored entries by default and follows the setting", async () => {
+    directories.set(cwd, [
+      folder("dist", true),
+      folder("src"),
+      file("first.ts"),
+      file("debug.log", true),
+    ]);
+    await refreshDir(cwd);
+    await act(async () => render());
+
+    expect(row("src")).not.toBeNull();
+    expect(row("first.ts")).not.toBeNull();
+    expect(row("dist")).toBeNull();
+    expect(row("debug.log")).toBeNull();
+
+    act(() => saveShowExcludedFiles(true));
+    expect(row("dist")).not.toBeNull();
+    expect(row("debug.log")).not.toBeNull();
+
+    act(() => saveShowExcludedFiles(false));
+    expect(row("dist")).toBeNull();
+    expect(row("debug.log")).toBeNull();
+    expect(row("first.ts")).not.toBeNull();
+  });
+});
+
 describe("FileTree accepts files from outside the tree", () => {
   beforeEach(async () => {
     directories.set(cwd, [folder("docs"), file("first.ts")]);
@@ -218,6 +253,16 @@ describe("FileTree accepts files from outside the tree", () => {
     await pressPaste(row("first.ts"));
     expect(copied).toEqual([
       { from: "/Users/me/Desktop/a.txt", destParent: cwd },
+    ]);
+  });
+
+  it("pastes on a non-Latin layout", async () => {
+    clipboardFiles.push("/Users/me/Desktop/a.txt");
+    saveSelected(cwd, `${cwd}/docs`);
+    await act(async () => render());
+    await press(row("docs"), { key: "м", code: "KeyV", metaKey: true });
+    expect(copied).toEqual([
+      { from: "/Users/me/Desktop/a.txt", destParent: `${cwd}/docs` },
     ]);
   });
 
@@ -266,6 +311,50 @@ describe("FileTree accepts files from outside the tree", () => {
     document.elementFromPoint = () => document.body;
     await nativeDrop(["/Users/me/Desktop/a.txt"]);
     expect(copied).toEqual([]);
+  });
+});
+
+describe("FileTree copies paths", () => {
+  beforeEach(async () => {
+    saveSelected(cwd, `${cwd}/first.ts`);
+    await navigator.clipboard.writeText("before");
+    await act(async () => render());
+  });
+
+  it("copies the selected path on Mod+Shift+C", async () => {
+    await press(row("first.ts"), { key: "C", metaKey: true, shiftKey: true });
+    expect(await navigator.clipboard.readText()).toBe(`${cwd}/first.ts`);
+  });
+
+  it("copies the project root path from the root row", async () => {
+    const rootRow = container.querySelector<HTMLButtonElement>(
+      "[data-explorer-root]",
+    );
+    if (!rootRow) throw new Error("Root row not rendered");
+    await act(async () => rootRow.click());
+    await press(rootRow, { key: "C", metaKey: true, shiftKey: true });
+    expect(await navigator.clipboard.readText()).toBe(cwd);
+  });
+
+  it("copies the selected path on a non-Latin layout", async () => {
+    await press(row("first.ts"), {
+      key: "С",
+      code: "KeyC",
+      metaKey: true,
+      shiftKey: true,
+    });
+    expect(await navigator.clipboard.readText()).toBe(`${cwd}/first.ts`);
+  });
+
+  it("matches the typed Latin letter, not the physical key", async () => {
+    // Dvorak types "j" on the physical C key.
+    await press(row("first.ts"), {
+      key: "J",
+      code: "KeyC",
+      metaKey: true,
+      shiftKey: true,
+    });
+    expect(await navigator.clipboard.readText()).toBe("before");
   });
 });
 

@@ -66,6 +66,44 @@ describe("Pi live session", () => {
     );
   });
 
+  it("publishes the resolved Pi default model for provider usage", async () => {
+    mocks.request.mockImplementation(async (command: Record<string, unknown>) => {
+      if (command.type === "get_state") return { data: {
+        sessionId: "pi_default",
+        model: { provider: "openai-codex", id: "gpt-5.4", contextWindow: 200_000 },
+      } };
+      return { data: {} };
+    });
+    const events: HarnessEvent[] = [];
+    await compactPiContext({
+      sessionId: "pi-default", cwd: "/repo", model: "pi:default",
+      runtimeMode: "supervised", onEvent: event => events.push(event),
+    });
+    expect(events).toContainEqual({
+      type: "session.configChanged", model: "pi:openai-codex/gpt-5.4",
+    });
+    await stopPiSession("pi-default");
+  });
+
+  it("does not publish an intermediate default when explicit model selection fails", async () => {
+    mocks.request.mockImplementation(async (command: Record<string, unknown>) => {
+      if (command.type === "get_state") return { data: {
+        sessionId: "pi_explicit",
+        model: { provider: "anthropic", id: "claude-sonnet-5", contextWindow: 200_000 },
+      } };
+      if (command.type === "set_model") throw new Error("Model unavailable");
+      return { data: {} };
+    });
+    const events: HarnessEvent[] = [];
+    await expect(compactPiContext({
+      sessionId: "pi-explicit", cwd: "/repo", model: "pi:openai-codex/gpt-5.4",
+      runtimeMode: "supervised", onEvent: event => events.push(event),
+    })).rejects.toThrow("Model unavailable");
+    expect(events.filter(event => event.type === "session.configChanged")).toEqual([]);
+    expect(mocks.request).toHaveBeenCalledWith({ type: "set_model", provider: "openai-codex", modelId: "gpt-5.4" });
+    await stopPiSession("pi-explicit");
+  });
+
   it("uses the compact RPC command and publishes the post-compact estimate", async () => {
     const events: HarnessEvent[] = [];
 

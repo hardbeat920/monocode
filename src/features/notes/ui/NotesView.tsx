@@ -25,6 +25,7 @@ import {
   deleteNote,
   loadNotes,
   MAX_NOTE_TAGS,
+  NOTES_CHANGED_EVENT,
   normalizeNoteTags,
   notePreview,
   noteSourceProject,
@@ -143,6 +144,8 @@ export function NotesView({
 
   useEffect(() => {
     void refresh();
+    window.addEventListener(NOTES_CHANGED_EVENT, refresh);
+    return () => window.removeEventListener(NOTES_CHANGED_EVENT, refresh);
   }, [refresh]);
 
   useEffect(() => {

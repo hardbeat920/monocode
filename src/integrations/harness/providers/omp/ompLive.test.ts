@@ -12,6 +12,8 @@ const transport = vi.hoisted(() => ({
     ((sessionId: string, command: Record<string, unknown>) => void) | undefined,
   writeChild: vi.fn(),
   spawnChild: vi.fn(),
+  forkData: undefined as unknown,
+  stateSessionId: undefined as string | undefined,
 }));
 
 vi.mock("../../core/child", () => ({
@@ -28,6 +30,7 @@ vi.mock("../../core/child", () => ({
 
 import {
   cancelOmpTurn,
+  rewindOmpLastTurn,
   sendOmpTurn,
   steerOmpTurn,
   forgetOmpSession,
@@ -38,6 +41,7 @@ import { OMP_FLAVOR } from "../pi/piFlavor";
 import type { HarnessEvent, SendTurnInput } from "../../core/types";
 import { applyHarnessEvent } from "../../core/apply";
 import { newSession } from "../../../../features/sessions/model/session";
+import { ATTACHMENT_ONLY_PROMPT } from "../../../../features/sessions/model/attachments";
 
 function frame(sessionId: string, value: Record<string, unknown>) {
   transport.watchers.get(sessionId)?.(JSON.stringify(value));
@@ -72,8 +76,9 @@ beforeEach(() => {
   transport.requests.length = 0;
   transport.spawnChild.mockReset();
   transport.spawnChild.mockResolvedValue(undefined);
-  transport.prompt = (id, command) => response(id, command);
   transport.fast = undefined;
+  transport.forkData = undefined;
+  transport.stateSessionId = undefined;
   transport.writeChild.mockReset();
   transport.writeChild.mockImplementation(
     async (sessionId: string, line: string) => {
@@ -88,10 +93,14 @@ beforeEach(() => {
         sessionId,
         command,
         command.type === "get_state"
-          ? { sessionId: "provider-session" }
+          ? { sessionId: transport.stateSessionId ?? "provider-session" }
           : command.type === "get_available_commands"
             ? { commands: [{ name: "workflow", source: "custom" }] }
-            : {},
+            : command.type === "get_fork_messages"
+              ? { messages: [{ entryId: "entry", text: "latest" }] }
+              : command.type === "fork"
+                ? (transport.forkData ?? {})
+                : {},
       );
     },
   );
@@ -126,6 +135,56 @@ async function started(turnInput = input()) {
   return { turn, request, settled: () => settled };
 }
 
+describe("Pi-family edit recovery", () => {
+  it("reads fork cancellation from the RPC data payload", async () => {
+    const running = await started();
+    frame("omp-test", {
+      type: "prompt_result",
+      id: running.request.id,
+      agentInvoked: false,
+    });
+    await running.turn;
+
+    transport.forkData = { cancelled: true };
+    await expect(
+      rewindOmpLastTurn({
+        sessionId: "omp-test",
+        cwd: "/repo",
+        model: "omp:default",
+        runtimeMode: "supervised",
+        onEvent: () => undefined,
+      }),
+    ).rejects.toThrow("Edit cancelled");
+  });
+
+  it("rebinds to the provider session created by fork", async () => {
+    const running = await started();
+    frame("omp-test", {
+      type: "prompt_result",
+      id: running.request.id,
+      agentInvoked: false,
+    });
+    await running.turn;
+
+    transport.stateSessionId = "forked-provider-session";
+    const events: HarnessEvent[] = [];
+    await expect(
+      rewindOmpLastTurn({
+        sessionId: "omp-test",
+        cwd: "/repo",
+        model: "omp:default",
+        runtimeMode: "supervised",
+        onEvent: (event) => events.push(event),
+      }),
+    ).resolves.toEqual({ submitted: false });
+
+    expect(events).toContainEqual({
+      type: "session.providerBound",
+      providerSessionId: "forked-provider-session",
+    });
+  });
+});
+
 describe("OMP command lifecycle over the real RPC multiplexer", () => {
   it.each([["pi", sendPiTurn], ["omp", sendOmpTurn]] as const)(
     "forwards %s extension result details into the subagent trail",
@@ -145,6 +204,66 @@ describe("OMP command lifecycle over the real RPC multiplexer", () => {
         expect(row?.agentRun?.steps).toEqual([expect.objectContaining({ kind: "message", text: "Reading auth" })]);
         expect(row?.tool?.status).toBe("completed");
         expect(row?.tool?.detail).toBe("Found auth");
+      } finally {
+        frame(sessionId, { type: "agent_end" });
+        await turn;
+      }
+    },
+  );
+
+  it.each([["pi", sendPiTurn], ["omp", sendOmpTurn]] as const)(
+    "keeps a %s tool finished when a progress update arrives after its end",
+    async (flavor, send) => {
+      const sessionId = `${flavor}-late-update`;
+      const turn = send({
+        ...input(sessionId, "Run it"),
+        model: `${flavor}:default`,
+      });
+      await vi.waitFor(() =>
+        expect(
+          transport.requests.some(
+            (r) => r.sessionId === sessionId && r.command.type === "prompt",
+          ),
+        ).toBe(true),
+      );
+      const text = (value: string) => ({
+        content: [{ type: "text", text: value }],
+      });
+      const update = {
+        type: "tool_execution_update",
+        toolCallId: "sh",
+        partialResult: text("building"),
+      };
+      try {
+        frame(sessionId, {
+          type: "tool_execution_start",
+          toolCallId: "sh",
+          toolName: "bash",
+          args: { command: "make" },
+        });
+        frame(sessionId, update);
+        frame(sessionId, {
+          type: "tool_execution_end",
+          toolCallId: "sh",
+          result: text("built"),
+          isError: false,
+        });
+        // omp#12875: steering during bash can deliver an update after the end.
+        frame(sessionId, update);
+        const row = events
+          .reduce(applyHarnessEvent, newSession(flavor, "/repo"))
+          .blocks.find((block) => block.tool?.callId === "sh");
+        expect(row?.tool).toMatchObject({
+          status: "completed",
+          detail: "built",
+        });
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: "tool.updated",
+            status: "running",
+            detail: "building",
+          }),
+        );
       } finally {
         frame(sessionId, { type: "agent_end" });
         await turn;
@@ -188,13 +307,17 @@ describe("OMP command lifecycle over the real RPC multiplexer", () => {
           transport.requests.find(
             (r) => r.sessionId === sessionId && r.command.type === "prompt",
           )?.command.message,
-        ).toBe('Attached file (read from disk): "/tmp/report.pdf"');
+        ).toBe(
+          `${ATTACHMENT_ONLY_PROMPT}\n\nAttached file (read from disk): "/tmp/report.pdf"`,
+        );
         await steer(turnInput);
         expect(
           transport.requests.find(
             (r) => r.sessionId === sessionId && r.command.type === "steer",
           )?.command.message,
-        ).toBe('Attached file (read from disk): "/tmp/report.pdf"');
+        ).toBe(
+          `${ATTACHMENT_ONLY_PROMPT}\n\nAttached file (read from disk): "/tmp/report.pdf"`,
+        );
       } finally {
         frame(sessionId, { type: "agent_end" });
         await turn;
@@ -330,7 +453,20 @@ describe("OMP command lifecycle over the real RPC multiplexer", () => {
       "/fake/omp",
       ["--mode", "rpc"],
       "/repo",
+      undefined,
+      "omp",
     );
+  });
+
+  it("reports when OMP accepts a turn", async () => {
+    const onAccepted = vi.fn();
+    transport.prompt = (id, command) => {
+      response(id, command, { agentInvoked: false });
+    };
+
+    await sendOmpTurn({ ...input(), onAccepted });
+
+    expect(onAccepted).toHaveBeenCalledOnce();
   });
 
   it.each(["before", "after"])(

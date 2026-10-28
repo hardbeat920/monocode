@@ -1,4 +1,9 @@
-import type { HarnessId } from "../../../features/sessions/model/session";
+import type {
+  Block,
+  HarnessId,
+  TaskListMeta,
+  TurnIntent,
+} from "../../../features/sessions/model/session";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import type { GeneratedSessionTitle } from "../../../features/sessions/model/sessionTitle";
 import type { PrContent } from "../../../features/source-control/model/gitText";
@@ -8,6 +13,9 @@ import type { NativeCommandProvider } from "./nativeCommands";
 import type {
   ApprovalDecision,
   CompactContextInput,
+  HarnessEvent,
+  RewindLastTurnInput,
+  RewindLastTurnResult,
   SendTurnInput,
   SteerTurnInput,
 } from "./types";
@@ -17,6 +25,21 @@ export type TitleInput = {
   cwd: string;
   message: string;
   providerAccountId?: string;
+};
+
+/** One-shot, isolated text generation shared by titles and side questions. */
+export type TextPromptInput = {
+  cwd: string;
+  providerAccountId?: string;
+  model?: string;
+  modelSettings?: Record<string, string>;
+  threadId?: string;
+  onThreadId?: (threadId: string) => void;
+  intent?: TurnIntent;
+  prompt: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  onEvent?: (event: HarnessEvent) => void;
 };
 
 /**
@@ -33,6 +56,8 @@ export type HarnessAdapter = {
   sendTurn(input: SendTurnInput): Promise<void>;
   /** Trigger provider-owned compaction outside MonoCode's normal user-turn path. */
   compactContext?(input: CompactContextInput): Promise<void>;
+  /** Rewind provider state so the last user turn can be replaced. */
+  rewindLastTurn?(input: RewindLastTurnInput): Promise<RewindLastTurnResult>;
   steerTurn(input: SteerTurnInput): Promise<void>;
   cancelTurn(sessionId: string): Promise<void>;
   respondApproval(
@@ -58,12 +83,14 @@ export type HarnessAdapter = {
     cwd: string,
     providerAccountId?: string,
   ): void;
+  /** Seed provider task state from a restored session's persisted panels. */
+  restoreTaskLists?(threadId: string, lists: TaskListMeta[]): void;
   /** Refresh the model catalog overlay when supported. */
   refreshCatalog?(): Promise<void>;
   /** Optional LLM tab title for the first turn. */
   generateTitle?(input: TitleInput): Promise<GeneratedSessionTitle | null>;
   /** Optional LLM commit message from staged changes. */
-  generateCommitMessage?(cwd: string): Promise<string>;
+  generateCommitMessage?(cwd: string, signal?: AbortSignal): Promise<string>;
   /** Optional LLM pull request title/body from branch diff context. */
   generatePrContent?(
     cwd: string,
@@ -72,6 +99,10 @@ export type HarnessAdapter = {
   generateBranchName?(cwd: string, message: string): Promise<string | null>;
   /** Optional warmup for text-generation backends. */
   warmupText?(cwd: string): Promise<void>;
+  /** Run an isolated, read-only prompt without mutating the main session. */
+  runTextPrompt?(input: TextPromptInput): Promise<string>;
+  /** Stop an isolated text-generation backend. */
+  stopTextPrompt?(): Promise<void>;
 };
 
 const adapters = new Map<HarnessId, HarnessAdapter>();
@@ -82,6 +113,55 @@ const adapters = new Map<HarnessId, HarnessAdapter>();
  */
 export const HARNESS_IDLE_PARK_MS = 5 * 60_000;
 const idleParkTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const sessionOperationTails = new Map<string, Promise<void>>();
+const sessionSteerTails = new Map<string, Promise<void>>();
+const activeTurnSessions = new Set<string>();
+
+function queueSessionOperation<T>(
+  sessionId: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const previous = sessionOperationTails.get(sessionId) ?? Promise.resolve();
+  const current = previous.catch(() => undefined).then(operation);
+  const settled = current.then(
+    () => undefined,
+    () => undefined,
+  );
+  sessionOperationTails.set(sessionId, settled);
+  void settled.then(() => {
+    if (sessionOperationTails.get(sessionId) === settled) {
+      sessionOperationTails.delete(sessionId);
+    }
+  });
+  return current;
+}
+
+function queueSteerOperation<T>(
+  sessionId: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const previousSteer = sessionSteerTails.get(sessionId) ?? Promise.resolve();
+  // A live turn must remain steerable while its long-running send is pending.
+  // Other provider-state operations still form a barrier for the steer.
+  const barrier = activeTurnSessions.has(sessionId)
+    ? Promise.resolve()
+    : (sessionOperationTails.get(sessionId) ?? Promise.resolve());
+  const current = Promise.all([
+    previousSteer.catch(() => undefined),
+    barrier.catch(() => undefined),
+  ]).then(operation);
+  const settled = current.then(
+    () => undefined,
+    () => undefined,
+  );
+  sessionSteerTails.set(sessionId, settled);
+  void settled.then(() => {
+    if (sessionSteerTails.get(sessionId) === settled) {
+      sessionSteerTails.delete(sessionId);
+    }
+  });
+  return current;
+}
 
 function cancelIdlePark(sessionId: string): void {
   const timer = idleParkTimers.get(sessionId);
@@ -130,27 +210,30 @@ export function listHarnesses(): HarnessAdapter[] {
   return [...adapters.values()];
 }
 
-export async function sendHarnessTurn(
-  input: SendTurnInput & { harness: HarnessId },
-) {
-  const adapter = requireHarness(input.harness);
-  if (!adapter.live) {
-    throw new Error(`${input.harness} is not connected yet`);
-  }
-  cancelIdlePark(input.sessionId);
-  const controlled = typeof isTauri === "function" && isTauri();
-  if (controlled)
-    await invoke("control_authorize_turn", {
-      sessionId: input.sessionId,
-      cwd: input.cwd,
-    });
-  try {
-    await adapter.sendTurn(input);
-  } finally {
+export function sendHarnessTurn(input: SendTurnInput & { harness: HarnessId }) {
+  return queueSessionOperation(input.sessionId, async () => {
+    const adapter = requireHarness(input.harness);
+    if (!adapter.live) {
+      throw new Error(`${input.harness} is not connected yet`);
+    }
+    cancelIdlePark(input.sessionId);
+    const controlled = typeof isTauri === "function" && isTauri();
     if (controlled)
-      await invoke("control_turn_finished", { sessionId: input.sessionId });
-    scheduleIdlePark(input.harness, input.sessionId);
-  }
+      await invoke("control_authorize_turn", {
+        sessionId: input.sessionId,
+        cwd: input.cwd,
+        appAccess: input.appAccess === true,
+      });
+    activeTurnSessions.add(input.sessionId);
+    try {
+      await adapter.sendTurn(input);
+    } finally {
+      activeTurnSessions.delete(input.sessionId);
+      if (controlled)
+        await invoke("control_turn_finished", { sessionId: input.sessionId });
+      scheduleIdlePark(input.harness, input.sessionId);
+    }
+  });
 }
 
 export function canCompactHarnessContext(id: HarnessId): boolean {
@@ -158,22 +241,24 @@ export function canCompactHarnessContext(id: HarnessId): boolean {
   return adapter?.live === true && adapter.compactContext != null;
 }
 
-export async function compactHarnessContext(
+export function compactHarnessContext(
   input: CompactContextInput & { harness: HarnessId },
 ): Promise<void> {
-  const adapter = requireHarness(input.harness);
-  if (!adapter.live) {
-    throw new Error(`${input.harness} is not connected yet`);
-  }
-  if (!adapter.compactContext) {
-    throw new Error(`${input.harness} does not support manual compaction`);
-  }
-  cancelIdlePark(input.sessionId);
-  try {
-    await adapter.compactContext(input);
-  } finally {
-    scheduleIdlePark(input.harness, input.sessionId);
-  }
+  return queueSessionOperation(input.sessionId, async () => {
+    const adapter = requireHarness(input.harness);
+    if (!adapter.live) {
+      throw new Error(`${input.harness} is not connected yet`);
+    }
+    if (!adapter.compactContext) {
+      throw new Error(`${input.harness} does not support manual compaction`);
+    }
+    cancelIdlePark(input.sessionId);
+    try {
+      await adapter.compactContext(input);
+    } finally {
+      scheduleIdlePark(input.harness, input.sessionId);
+    }
+  });
 }
 
 export function canSteerHarness(id: HarnessId): boolean {
@@ -182,15 +267,41 @@ export function canSteerHarness(id: HarnessId): boolean {
   return adapter.canSteer !== false;
 }
 
-export async function steerHarnessTurn(
+export function canRewindHarnessLastTurn(id: HarnessId): boolean {
+  const adapter = adapters.get(id);
+  return adapter?.live === true && adapter.rewindLastTurn != null;
+}
+
+export function rewindHarnessLastTurn(
+  input: RewindLastTurnInput & { harness: HarnessId },
+): Promise<RewindLastTurnResult> {
+  return queueSessionOperation(input.sessionId, async () => {
+    const adapter = requireHarness(input.harness);
+    if (!adapter.rewindLastTurn) {
+      throw new Error(
+        `${input.harness} does not support editing the last message`,
+      );
+    }
+    cancelIdlePark(input.sessionId);
+    try {
+      return await adapter.rewindLastTurn(input);
+    } finally {
+      scheduleIdlePark(input.harness, input.sessionId);
+    }
+  });
+}
+
+export function steerHarnessTurn(
   input: SteerTurnInput & { harness: HarnessId },
 ): Promise<void> {
-  const adapter = requireHarness(input.harness);
-  if (!adapter.live) {
-    throw new Error(`${input.harness} is not connected yet`);
-  }
-  cancelIdlePark(input.sessionId);
-  await adapter.steerTurn(input);
+  return queueSteerOperation(input.sessionId, async () => {
+    const adapter = requireHarness(input.harness);
+    if (!adapter.live) {
+      throw new Error(`${input.harness} is not connected yet`);
+    }
+    cancelIdlePark(input.sessionId);
+    await adapter.steerTurn(input);
+  });
 }
 
 export async function cancelHarnessTurn(
@@ -256,13 +367,16 @@ export function bindHarnessSession(
   providerSessionId: string,
   cwd: string,
   providerAccountId?: string,
+  /** Restored transcript, so the adapter can reseed its task state. */
+  blocks?: Block[],
 ): void {
-  getHarness(harness)?.bindSession(
-    threadId,
-    providerSessionId,
-    cwd,
-    providerAccountId,
+  const adapter = getHarness(harness);
+  adapter?.bindSession(threadId, providerSessionId, cwd, providerAccountId);
+  if (!blocks || !adapter?.restoreTaskLists) return;
+  const lists = blocks.flatMap((block) =>
+    block.role === "tasks" && block.taskList ? [block.taskList] : [],
   );
+  if (lists.length > 0) adapter.restoreTaskLists(threadId, lists);
 }
 
 /**
@@ -270,8 +384,10 @@ export function bindHarnessSession(
  * Boot used to refresh every adapter; that spawned unused CLIs (Pi with
  * extensions can sit at ~1GB) even when the workspace never touched them.
  */
+/** `force` re-reads a catalog that already loaded, e.g. after a CLI update. */
 export async function refreshHarnessCatalogs(
   ids: Iterable<HarnessId>,
+  options?: { force?: boolean },
 ): Promise<void> {
   const wanted = new Set(ids);
   if (wanted.size === 0) return;
@@ -279,7 +395,8 @@ export async function refreshHarnessCatalogs(
     [...adapters.values()]
       .filter((adapter) => wanted.has(adapter.id))
       .map(async (adapter) => {
-        if (!adapter.refreshCatalog || hasLiveCatalog(adapter.id)) return;
+        if (!adapter.refreshCatalog) return;
+        if (!options?.force && hasLiveCatalog(adapter.id)) return;
         await adapter.refreshCatalog().catch((error: unknown) => {
           console.debug(`[monocode] ${adapter.id} catalog`, error);
         });
@@ -299,12 +416,14 @@ export async function generateHarnessTitle(
 export async function generateHarnessCommitMessage(
   harness: HarnessId,
   cwd: string,
+  signal?: AbortSignal,
 ): Promise<string> {
   const adapter = requireHarness(harness);
   if (!adapter.generateCommitMessage) {
     throw new Error(`${harness} does not support commit message generation`);
   }
-  return adapter.generateCommitMessage(cwd);
+  signal?.throwIfAborted();
+  return adapter.generateCommitMessage(cwd, signal);
 }
 
 export async function generateHarnessPrContent(
@@ -331,4 +450,94 @@ export async function warmupHarnessText(
   cwd: string,
 ): Promise<void> {
   await getHarness(harness)?.warmupText?.(cwd);
+}
+
+export function canRunHarnessTextPrompt(harness: HarnessId): boolean {
+  const adapter = getHarness(harness);
+  return adapter?.live === true && adapter.runTextPrompt != null;
+}
+
+function stopTextPrompt(adapter: HarnessAdapter): Promise<void> {
+  return adapter.stopTextPrompt
+    ? adapter.stopTextPrompt().catch(() => undefined)
+    : Promise.resolve();
+}
+
+const activeTextPromptOwners = new Map<HarnessAdapter, Set<symbol>>();
+
+function beginTextPrompt(adapter: HarnessAdapter): symbol {
+  const owner = Symbol("text-prompt");
+  const owners = activeTextPromptOwners.get(adapter) ?? new Set<symbol>();
+  owners.add(owner);
+  activeTextPromptOwners.set(adapter, owners);
+  return owner;
+}
+
+function finishTextPrompt(
+  adapter: HarnessAdapter,
+  owner: symbol,
+  stopIfLast: boolean,
+): void {
+  const owners = activeTextPromptOwners.get(adapter);
+  if (!owners?.delete(owner)) return;
+  if (owners.size > 0) return;
+  activeTextPromptOwners.delete(adapter);
+  if (stopIfLast) void stopTextPrompt(adapter);
+}
+
+function cancelledTextPrompt(): Error {
+  return new Error("By-the-way request cancelled");
+}
+
+export async function runHarnessTextPrompt(
+  input: TextPromptInput & { harness: HarnessId },
+): Promise<string> {
+  const adapter = requireHarness(input.harness);
+  if (!adapter.live) {
+    throw new Error(`${input.harness} is not connected yet`);
+  }
+  if (!adapter.runTextPrompt) {
+    throw new Error(`${input.harness} does not support isolated text prompts`);
+  }
+
+  const signal = input.signal;
+  if (signal?.aborted) {
+    throw cancelledTextPrompt();
+  }
+
+  const owner = beginTextPrompt(adapter);
+  let run: Promise<string>;
+  try {
+    run = adapter.runTextPrompt(input);
+  } catch (error) {
+    finishTextPrompt(adapter, owner, false);
+    throw error;
+  }
+  if (!signal) {
+    try {
+      return await run;
+    } finally {
+      finishTextPrompt(adapter, owner, false);
+    }
+  }
+
+  let abortHandler: (() => void) | undefined;
+  const abortPromise = new Promise<never>((_, reject) => {
+    abortHandler = () => {
+      finishTextPrompt(adapter, owner, false);
+      reject(cancelledTextPrompt());
+    };
+    signal.addEventListener("abort", abortHandler, { once: true });
+    if (signal.aborted) abortHandler();
+  });
+  try {
+    return await Promise.race([run, abortPromise]);
+  } finally {
+    if (abortHandler) signal.removeEventListener("abort", abortHandler);
+    finishTextPrompt(adapter, owner, false);
+  }
+}
+
+export async function stopHarnessTextPrompts(): Promise<void> {
+  await Promise.all([...adapters.values()].map(stopTextPrompt));
 }

@@ -23,6 +23,7 @@ import {
   MINIMUM_CLAUDE_FABLE_5_VERSION,
   MINIMUM_CLAUDE_OPUS_4_7_VERSION,
   MINIMUM_CLAUDE_OPUS_4_8_VERSION,
+  MINIMUM_CLAUDE_OPUS_5_5_VERSION,
   MINIMUM_CLAUDE_OPUS_5_VERSION,
   MINIMUM_CLAUDE_SONNET_5_VERSION,
   parseClaudeVersion,
@@ -131,6 +132,13 @@ export const CLAUDE_MODEL_CATALOG: AgentModel[] = [
     settings: [EFFORT_WITH_XHIGH, FAST_MODE, contextWindow("1m")],
   },
   {
+    id: "claude:opus-5-5",
+    harness: "claude",
+    name: "Claude Opus 5.5",
+    nativeId: "claude-opus-5-5",
+    settings: [EFFORT_WITH_XHIGH, FAST_MODE, contextWindow("1m")],
+  },
+  {
     id: "claude:sonnet-5",
     harness: "claude",
     name: "Claude Sonnet 5",
@@ -225,19 +233,26 @@ export function refreshClaudeCatalog(): Promise<void> {
   return inflight;
 }
 
-async function discoverClaudeModels(): Promise<AgentModel[]> {
-  const listed = await discoverViaListModels().catch((error: unknown) => {
-    console.debug("[monocode] claude list_models catalog failed", error);
-    return [];
-  });
+export async function discoverClaudeModels(
+  workingDirectory?: string,
+): Promise<AgentModel[]> {
+  const listed = await discoverViaListModels(workingDirectory).catch(
+    (error: unknown) => {
+      console.debug("[monocode] claude list_models catalog failed", error);
+      return [];
+    },
+  );
   if (listed.length > 0) return listed;
-  return discoverViaVersion();
+  return discoverViaVersion(workingDirectory);
 }
 
-async function discoverViaListModels(): Promise<AgentModel[]> {
+async function discoverViaListModels(
+  workingDirectory?: string,
+): Promise<AgentModel[]> {
   const { path } = await resolveClaudeBinary();
-  const cwd = await homeDir();
+  const cwd = workingDirectory ?? (await homeDir());
   const sessionId = crypto.randomUUID();
+  const probeId = `${PROBE_ID}-${sessionId}`;
 
   let listed: ((models: AgentModel[]) => void) | null = null;
   let failed: ((error: Error) => void) | null = null;
@@ -251,7 +266,7 @@ async function discoverViaListModels(): Promise<AgentModel[]> {
     if (asked) return;
     asked = true;
     void writeChild(
-      PROBE_ID,
+      probeId,
       JSON.stringify(
         buildControlRequest(LIST_MODELS_REQUEST_ID, { subtype: "list_models" }),
       ),
@@ -261,12 +276,12 @@ async function discoverViaListModels(): Promise<AgentModel[]> {
   };
 
   const stop = async () => {
-    unwatchChild(PROBE_ID);
-    await killChild(PROBE_ID).catch(() => undefined);
+    unwatchChild(probeId);
+    await killChild(probeId).catch(() => undefined);
   };
 
   watchChild(
-    PROBE_ID,
+    probeId,
     (line) => {
       const rec = parseJsonLine(line);
       if (!rec) return;
@@ -281,13 +296,15 @@ async function discoverViaListModels(): Promise<AgentModel[]> {
 
   try {
     await spawnChild(
-      PROBE_ID,
+      probeId,
       path,
       buildClaudeSpawnArgs({ isolated: true, sessionId }),
       cwd,
+      undefined,
+      "claude",
     );
     await writeChild(
-      PROBE_ID,
+      probeId,
       JSON.stringify(
         buildControlRequest(INIT_REQUEST_ID, { subtype: "initialize" }),
       ),
@@ -300,10 +317,12 @@ async function discoverViaListModels(): Promise<AgentModel[]> {
   }
 }
 
-async function discoverViaVersion(): Promise<AgentModel[]> {
+async function discoverViaVersion(
+  workingDirectory?: string,
+): Promise<AgentModel[]> {
   const { path } = await resolveClaudeBinary();
-  const cwd = await homeDir();
-  const versionOut = await execChild(path, ["--version"], cwd);
+  const cwd = workingDirectory ?? (await homeDir());
+  const versionOut = await execChild(path, ["--version"], cwd, "claude");
   const version = parseClaudeVersion(versionOut);
   return modelsForClaudeVersion(version);
 }
@@ -353,13 +372,16 @@ function modelFromListRow(raw: unknown): AgentModel | null {
   const resolved = stringField(rec, "resolvedModel") ?? "";
   const fromValue = splitClaudeModelValue(value);
   const fromResolved = splitClaudeModelValue(resolved);
-  const nativeId = fromValue.id || fromResolved.id;
+  const nativeId = claudeLaunchId(fromValue.id, fromResolved.id);
   if (!nativeId) return null;
 
   const displayName = stringField(rec, "displayName") ?? "";
   const description = stringField(rec, "description") ?? "";
-  const name = pickerName(displayName, description, nativeId);
-  const settings = settingsFromListRow(rec, fromValue.context1m || fromResolved.context1m);
+  const name = pickerName(displayName, description, nativeId, fromResolved.id);
+  const settings = settingsFromListRow(
+    rec,
+    fromValue.context1m || fromResolved.context1m,
+  );
 
   return {
     id: claudeCatalogId(nativeId),
@@ -389,14 +411,17 @@ function settingsFromListRow(
 function advertisedEffortLevels(rec: Record<string, unknown>): string[] {
   const raw = rec.supportedEffortLevels;
   if (!Array.isArray(raw)) return [];
-  return raw.filter((level): level is string => typeof level === "string" && level.trim() !== "");
+  return raw.filter(
+    (level): level is string =>
+      typeof level === "string" && level.trim() !== "",
+  );
 }
 
 function effortSetting(levels: string[]): ModelSetting {
   const known = levels.filter((level) => EFFORT_LABELS[level]);
-  const options = (known.length > 0 ? known : ["low", "medium", "high", "max"]).map(
-    (value) => ({ value, label: EFFORT_LABELS[value] ?? value }),
-  );
+  const options = (
+    known.length > 0 ? known : ["low", "medium", "high", "max"]
+  ).map((value) => ({ value, label: EFFORT_LABELS[value] ?? value }));
   if (options.some((option) => option.value === "xhigh")) {
     options.push({ value: "ultracode", label: "Ultracode" });
   }
@@ -417,29 +442,103 @@ function pickerName(
   displayName: string,
   description: string,
   fallback: string,
+  resolvedModel: string,
 ): string {
   const name = displayName.trim();
   const head = description.split("·")[0]?.trim() ?? "";
+  let picked = name || head || fallback;
   if (
     head &&
     name &&
     head.toLowerCase().startsWith(name.toLowerCase()) &&
     head.length > name.length
   ) {
-    return head;
+    picked = head;
   }
-  return name || head || fallback;
+  return qualifyClaudeAliasName(picked, resolvedModel);
 }
 
-function splitClaudeModelValue(value: string): { id: string; context1m: boolean } {
+/**
+ * Claude's live catalog can name a moving alias only as "Opus" while also
+ * reporting its concrete target as `claude-opus-5-5`. Keep the alias for CLI
+ * launches, but include the resolved version in the label so model releases do
+ * not silently look like the previous generation.
+ */
+function qualifyClaudeAliasName(name: string, resolvedModel: string): string {
+  const resolved = resolvedClaudeModelName(resolvedModel);
+  if (!resolved) return name;
+
+  const family = escapeRegExp(resolved.family);
+  const match = new RegExp(`^(Claude\\s+)?(${family})(.*)$`, "i").exec(name);
+  if (!match) return name;
+
+  const suffix = match[3] ?? "";
+  // A catalog-supplied version is more authoritative than our interpretation
+  // of the concrete id. Otherwise, enrich any generic alias variation.
+  if (/^\s+v?\d+(?:[.-]\d+)*/i.test(suffix)) return name;
+  return `${match[1] ?? ""}${match[2]} ${resolved.version}${suffix}`;
+}
+
+function resolvedClaudeModelName(
+  model: string,
+): { family: string; version: string } | null {
+  const { id } = splitClaudeModelValue(model);
+  if (!id.toLowerCase().startsWith("claude-")) return null;
+  const parts = id.slice("claude-".length).split("-");
+  const versionStart = parts.findIndex(
+    (part) => /^\d+(?:\.\d+)*$/.test(part) && !/^\d{8}$/.test(part),
+  );
+  if (versionStart <= 0) return null;
+
+  const version: string[] = [];
+  for (const part of parts.slice(versionStart)) {
+    if (!/^\d+(?:\.\d+)*$/.test(part) || /^\d{8}$/.test(part)) break;
+    version.push(...part.split("."));
+  }
+  if (version.length === 0) return null;
+
+  const family = parts
+    .slice(0, versionStart)
+    .map(
+      (part) => `${part[0]?.toUpperCase() ?? ""}${part.slice(1).toLowerCase()}`,
+    )
+    .join(" ");
+  return { family, version: version.join(".") };
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function splitClaudeModelValue(value: string): {
+  id: string;
+  context1m: boolean;
+} {
   const match = /^(.*)\[1m\]$/i.exec(value.trim());
   if (match?.[1]?.trim()) return { id: match[1].trim(), context1m: true };
   return { id: value.trim(), context1m: false };
 }
 
 function claudeCatalogId(nativeId: string): string {
-  const slug = nativeId.startsWith("claude-") ? nativeId.slice("claude-".length) : nativeId;
+  const slug = nativeId.startsWith("claude-")
+    ? nativeId.slice("claude-".length)
+    : nativeId;
   return `claude:${slug}`;
+}
+
+/**
+ * `--model` argument for a `list_models` row.
+ *
+ * Claude advertises family aliases (`opus`) that must stay bare, and concrete
+ * ids that need the `claude-` prefix. A versioned `value` of `opus-5-5` is
+ * not a valid CLI model name; prefer `resolvedModel` when it is the full id,
+ * otherwise restore the prefix.
+ */
+function claudeLaunchId(valueId: string, resolvedId: string): string {
+  const nativeId = valueId || resolvedId;
+  if (!nativeId) return "";
+  if (nativeId.startsWith("claude-") || !/\d/.test(nativeId)) return nativeId;
+  return resolvedId.startsWith("claude-") ? resolvedId : `claude-${nativeId}`;
 }
 
 export function modelsForClaudeVersion(
@@ -447,6 +546,11 @@ export function modelsForClaudeVersion(
 ): AgentModel[] {
   return CLAUDE_MODEL_CATALOG.filter((model) => {
     const slug = model.nativeId ?? "";
+    if (slug === "claude-opus-5-5") {
+      return version
+        ? compareSemver(version, MINIMUM_CLAUDE_OPUS_5_5_VERSION) >= 0
+        : false;
+    }
     if (slug === "claude-opus-5") {
       return version
         ? compareSemver(version, MINIMUM_CLAUDE_OPUS_5_VERSION) >= 0

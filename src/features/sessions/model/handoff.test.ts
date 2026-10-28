@@ -198,11 +198,14 @@ describe("deterministic handoff", () => {
   it("prefers a long agent recap over the fallback and drops a Goal heading", () => {
     const agent =
       "## Goal\nadd dark mode\n\n## Session so far\nShipped tokens.\n\n## Files edited in this session\n- src/index.css";
-    expect(chooseHandoffBrief(agent, "fallback")).toContain("Shipped tokens");
-    expect(chooseHandoffBrief(agent, "fallback")).toContain("src/index.css");
-    expect(chooseHandoffBrief(agent, "fallback")).not.toMatch(/##\s*Goal/i);
-    expect(chooseHandoffBrief("too short", "fallback packet")).toBe(
-      "fallback packet",
+    const session = sessionWith([
+      { id: "u1", role: "user", text: "fallback packet" },
+    ]);
+    expect(chooseHandoffBrief(agent, session)).toContain("Shipped tokens");
+    expect(chooseHandoffBrief(agent, session)).toContain("src/index.css");
+    expect(chooseHandoffBrief(agent, session)).not.toMatch(/##\s*Goal/i);
+    expect(chooseHandoffBrief("too short", session)).toBe(
+      "## Session so far\nUser: fallback packet",
     );
   });
 });

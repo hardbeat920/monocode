@@ -95,3 +95,37 @@ describe("title tab response status", () => {
     ).not.toBeNull();
   });
 });
+
+it.each([true, false])(
+  "offers a separate session sidebar toggle when the project rail is %s",
+  (projectRailOpen) => {
+    const onToggleSidebar = vi.fn();
+    const onToggleSessionSidebar = vi.fn();
+    act(() =>
+      root.render(
+        createElement(TitleBar, {
+          tabs: [tab("active")],
+          activeId: "active",
+          cwd: "/project",
+          projectRailOpen,
+          sessionSidebarOpen: false,
+          onToggleSidebar,
+          onToggleSessionSidebar,
+          onNew: vi.fn(),
+          onSelect: vi.fn(),
+          onClose: vi.fn(),
+          onCloseMany: vi.fn(),
+          onReorder: vi.fn(),
+        }),
+      ),
+    );
+
+    const toggle = container.querySelector<HTMLButtonElement>(
+      'button[aria-label^="Toggle Session Sidebar"]',
+    );
+    expect(toggle).not.toBeNull();
+    act(() => toggle?.click());
+    expect(onToggleSessionSidebar).toHaveBeenCalledOnce();
+    expect(onToggleSidebar).not.toHaveBeenCalled();
+  },
+);

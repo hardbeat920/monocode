@@ -222,6 +222,16 @@ describe("grok protocol", () => {
     ]);
   });
 
+  it("accepts Hermes-style ACP usage size as the context window", () => {
+    expect(
+      eventsFromAcpUpdate({
+        sessionUpdate: "usage_update",
+        size: 131072,
+        used: 32768,
+      }),
+    ).toEqual([{ type: "context", used: 32768, window: 131072 }]);
+  });
+
   it("maps plan entries", () => {
     expect(
       eventsFromAcpUpdate({

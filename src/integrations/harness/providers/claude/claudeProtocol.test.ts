@@ -5,6 +5,7 @@ import {
 } from "./claudeCatalog";
 import {
   applyClaudePromptEffortPrefix,
+  applyClaudeTaskTool,
   askUserQuestionAllowInput,
   buildClaudeSpawnArgs,
   buildClaudeUserMessage,
@@ -16,7 +17,7 @@ import {
   isTodoTool,
   listModelsFromControlResponse,
   normalizeClaudeCliEffort,
-  parseBackgroundAgentTasks,
+  parseBackgroundTasks,
   parseClaudeVersion,
   parseControlRequest,
   parseControlResponse,
@@ -37,6 +38,8 @@ import {
   toolTitle,
   turnStatusFromResult,
   turnMetricsFromResult,
+  isUsageLimitResult,
+  usageLimitFromRateLimitEvent,
 } from "./claudeProtocol";
 
 describe("runtimeModeToPermission", () => {
@@ -148,6 +151,18 @@ describe("buildClaudeSpawnArgs", () => {
     const settings = args[args.indexOf("--settings") + 1];
     expect(JSON.parse(settings)).toMatchObject({ disableAllHooks: true });
     expect(args).not.toContain("--permission-prompt-tool");
+  });
+
+  it("locks isolated read-only prompts to plan mode", () => {
+    const args = buildClaudeSpawnArgs({
+      isolated: true,
+      permissionMode: "plan",
+      maxTurns: 1,
+      model: "claude-haiku-4-5",
+    });
+    expect(args).toEqual(
+      expect.arrayContaining(["--permission-mode", "plan", "--max-turns", "1"]),
+    );
   });
 
   it("adds bypass flag for full-access", () => {
@@ -262,6 +277,53 @@ describe("stream mapping", () => {
   });
 });
 
+describe("usage limits", () => {
+  it("reads a refused window and when it resets", () => {
+    expect(
+      usageLimitFromRateLimitEvent({
+        type: "rate_limit_event",
+        rate_limit_info: {
+          status: "rejected",
+          resetsAt: 1_790_000_000,
+          rateLimitType: "five_hour",
+        },
+      }),
+    ).toEqual({ resetsAt: 1_790_000_000_000 });
+  });
+
+  it("ignores allowed windows and extra usage", () => {
+    expect(
+      usageLimitFromRateLimitEvent({
+        rate_limit_info: { status: "allowed_warning", resetsAt: 1 },
+      }),
+    ).toBeNull();
+    expect(
+      usageLimitFromRateLimitEvent({
+        rate_limit_info: { status: "rejected", isUsingOverage: true },
+      }),
+    ).toBeNull();
+  });
+
+  it("recognizes a limit in an errored result", () => {
+    expect(
+      isUsageLimitResult({
+        type: "result",
+        subtype: "success",
+        is_error: true,
+        result: "You've hit your limit · resets 3am (Europe/Sofia)",
+      }),
+    ).toBe(true);
+    expect(
+      isUsageLimitResult({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: "You've hit your limit",
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("turnStatusFromResult", () => {
   it("treats aborted terminals as interrupted", () => {
     expect(
@@ -293,6 +355,24 @@ describe("modelsForClaudeVersion", () => {
     expect(next).toContain("claude-opus-5");
     expect(next).toContain("claude-fable-5");
     expect(next).toContain("claude-sonnet-5");
+    expect(next).not.toContain("claude-opus-5-5");
+  });
+
+  it("hides Opus 5.5 until 2.1.280, and rejects a missing version", () => {
+    const beforeMinimum = modelsForClaudeVersion("2.1.279").map(
+      (model) => model.nativeId,
+    );
+    expect(beforeMinimum).not.toContain("claude-opus-5-5");
+    expect(beforeMinimum).toContain("claude-opus-5");
+
+    const atMinimum = modelsForClaudeVersion("2.1.280").map(
+      (model) => model.nativeId,
+    );
+    expect(atMinimum).toContain("claude-opus-5-5");
+    expect(atMinimum).toContain("claude-opus-5");
+
+    const missing = modelsForClaudeVersion(null).map((model) => model.nativeId);
+    expect(missing).not.toContain("claude-opus-5-5");
   });
 
   it("hides Sonnet 5 until 2.1.197, and rejects a missing version", () => {
@@ -444,6 +524,77 @@ describe("list_models catalog", () => {
     expect(haiku?.settings).toBeUndefined();
   });
 
+  it("adds resolved versions to generic live-catalog alias labels", () => {
+    const models = modelsFromClaudeListModels([
+      {
+        value: "opus[1m]",
+        resolvedModel: "claude-opus-5-5",
+        displayName: "Opus (1M context)",
+        description: "Most capable for complex tasks",
+      },
+      {
+        value: "fable",
+        resolvedModel: "claude-fable-5-1",
+        displayName: "Fable",
+        description: "Fast and capable",
+      },
+      {
+        value: "haiku",
+        resolvedModel: "claude-haiku-4-5-20251001",
+        displayName: "Haiku 4.5",
+        description: "Fastest for quick answers",
+      },
+      {
+        value: "next-family",
+        resolvedModel: "claude-next-family-7.2-20300101",
+        displayName: "Next Family — recommended",
+        description: "A future model family",
+      },
+    ]);
+
+    expect(models.map((model) => model.name)).toEqual([
+      "Opus 5.5 (1M context)",
+      "Fable 5.1",
+      "Haiku 4.5",
+      "Next Family 7.2 — recommended",
+    ]);
+    expect(models[0]).toMatchObject({
+      id: "claude:opus",
+      nativeId: "opus",
+    });
+    expect(
+      models[0]?.settings?.find((setting) => setting.id === "context")?.value,
+    ).toBe("1m");
+  });
+
+  it("launches a versioned short value with the claude- prefix", () => {
+    const models = modelsFromClaudeListModels([
+      {
+        value: "opus-5-5",
+        resolvedModel: "claude-opus-5-5",
+        displayName: "Opus 5.5",
+      },
+      {
+        value: "opus",
+        resolvedModel: "claude-opus-5-5",
+        displayName: "Opus",
+      },
+    ]);
+
+    expect(models.map((model) => model.nativeId)).toEqual([
+      "claude-opus-5-5",
+      "opus",
+    ]);
+    expect(models[0]).toMatchObject({
+      id: "claude:opus-5-5",
+      nativeId: "claude-opus-5-5",
+    });
+    expect(models[1]).toMatchObject({
+      id: "claude:opus",
+      nativeId: "opus",
+    });
+  });
+
   it("parses success and error control responses", () => {
     expect(
       parseControlResponse({
@@ -499,6 +650,9 @@ describe("helpers", () => {
     );
     expect(isTodoTool("TodoWrite")).toBe(true);
     expect(toolKindFromName("TodoWrite")).toBe("tasks");
+    expect(toolKindFromName("TaskCreate")).toBe("tasks");
+    expect(toolKindFromName("TaskUpdate")).toBe("tasks");
+    expect(toolKindFromName("TaskOutput")).not.toBe("agent");
     expect(
       taskListFromTodos({
         todos: [
@@ -763,7 +917,7 @@ describe("subagent messages", () => {
       summary: "Found the tokens",
     });
     expect(
-      parseBackgroundAgentTasks({
+      parseBackgroundTasks({
         type: "system",
         subtype: "background_tasks_changed",
         tasks: [
@@ -787,6 +941,7 @@ describe("subagent messages", () => {
       }),
     ).toEqual([
       { taskId: "t1", taskType: "local_agent", description: "Explore" },
+      { taskId: "bash_1", taskType: "local_bash", description: "sleep 10" },
     ]);
     expect(
       parseToolProgress({
@@ -798,5 +953,35 @@ describe("subagent messages", () => {
       toolUseId: "toolu_agent",
       subagentType: "explore",
     });
+  });
+});
+
+describe("applyClaudeTaskTool", () => {
+  it("creates from the result id, updates, renames and deletes", () => {
+    const tasks = new Map();
+    expect(
+      applyClaudeTaskTool(
+        tasks,
+        "TaskCreate",
+        { subject: "One" },
+        "Task #7 created successfully: One",
+      ),
+    ).toBe(true);
+    expect([...tasks.values()]).toEqual([
+      { id: "7", text: "One", status: "pending" },
+    ]);
+    applyClaudeTaskTool(tasks, "TaskUpdate", { taskId: 7, status: "in_progress" }, "");
+    applyClaudeTaskTool(tasks, "TaskUpdate", { taskId: "7", subject: "Uno" }, "");
+    expect(tasks.get("7")).toEqual({ id: "7", text: "Uno", status: "in_progress" });
+    applyClaudeTaskTool(tasks, "TaskUpdate", { taskId: "7", status: "deleted" }, "");
+    expect(tasks.size).toBe(0);
+  });
+
+  it("ignores unknown ids, missing result ids and other tools", () => {
+    const tasks = new Map();
+    expect(applyClaudeTaskTool(tasks, "TaskCreate", { subject: "One" }, "error")).toBe(false);
+    expect(applyClaudeTaskTool(tasks, "TaskUpdate", { taskId: "9", status: "completed" }, "")).toBe(false);
+    expect(applyClaudeTaskTool(tasks, "TaskList", {}, "#1 [pending] One")).toBe(false);
+    expect(tasks.size).toBe(0);
   });
 });

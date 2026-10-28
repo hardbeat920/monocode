@@ -1,5 +1,6 @@
 import { CircleDashed, X } from "../../../shared/ui/icons";
 import { MAX_PREVIEW_LINES } from "../../../integrations/harness/core/preview";
+import { formatInteger } from "../../../shared/lib/numbers";
 import { displayPath, resolveWorkspacePath } from "../../../shared/lib/paths";
 import type { ToolPreview, ToolPreviewLine } from "../../sessions/model/session";
 import { FileTypeIcon } from "./FileTypeIcon";
@@ -115,13 +116,13 @@ export function FilePreview({
           </span>
         )}
         {added > 0 || deleted > 0 ? (
-          <span className="shrink-0 font-mono text-[11px] font-semibold">
+          <span className="shrink-0 font-sans text-[11px] font-semibold tabular-nums">
             {added > 0 ? (
-              <span className="text-emerald-400">+{added}</span>
+              <span className="text-emerald-400">+{formatInteger(added)}</span>
             ) : null}
             {added > 0 && deleted > 0 ? " " : null}
             {deleted > 0 ? (
-              <span className="text-red-400">-{deleted}</span>
+              <span className="text-red-400">-{formatInteger(deleted)}</span>
             ) : null}
           </span>
         ) : (

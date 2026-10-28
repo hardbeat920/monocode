@@ -1,4 +1,7 @@
-import { gitRangeContext, gitStagedContext } from "../../../../platform/tauri/fs";
+import {
+  gitRangeContext,
+  gitStagedContext,
+} from "../../../../platform/tauri/fs";
 import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
@@ -13,8 +16,13 @@ import { runOpenCodeTextPrompt } from "./opencodeText";
 
 const GIT_TIMEOUT_MS = 90_000;
 
-export async function generateOpenCodeCommitMessage(cwd: string): Promise<string> {
+export async function generateOpenCodeCommitMessage(
+  cwd: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  signal?.throwIfAborted();
   const context = await gitStagedContext(cwd);
+  signal?.throwIfAborted();
   const output = await runOpenCodeTextPrompt({
     cwd,
     prompt: buildCommitMessagePrompt({
@@ -23,6 +31,7 @@ export async function generateOpenCodeCommitMessage(cwd: string): Promise<string
       stagedPatch: context.patch,
     }),
     timeoutMs: GIT_TIMEOUT_MS,
+    signal,
   });
   const parsed = parseCommitMessage(output);
   if (parsed) return formatCommitMessage(parsed);

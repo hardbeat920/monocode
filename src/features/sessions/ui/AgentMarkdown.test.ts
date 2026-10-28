@@ -67,6 +67,96 @@ describe("AgentMarkdown inline code", () => {
   });
 });
 
+describe("AgentMarkdown code fence highlighting", () => {
+  it("falls back to JS highlighting for a fence tagged text", () => {
+    const markup = renderToStaticMarkup(
+      createElement(AgentMarkdown, {
+        text: "```text\nconst x = 1;\n```",
+      }),
+    );
+
+    expect(markup).toContain('data-language="js"');
+    expect(markup).not.toContain('data-language="text"');
+  });
+
+  it("falls back to JS highlighting for an untagged fence", () => {
+    const markup = renderToStaticMarkup(
+      createElement(AgentMarkdown, {
+        text: "```\nconst x = 1;\n```",
+      }),
+    );
+
+    expect(markup).toContain('data-language="js"');
+  });
+
+  it("leaves an explicit real language alone", () => {
+    const markup = renderToStaticMarkup(
+      createElement(AgentMarkdown, {
+        text: "```python\nx = 1\n```",
+      }),
+    );
+
+    expect(markup).toContain('data-language="python"');
+  });
+
+  it("keeps a text fence labeled text despite the JS highlighting fallback", () => {
+    const markup = renderToStaticMarkup(
+      createElement(AgentMarkdown, {
+        text: "```text\nconst x = 1;\n```",
+      }),
+    );
+
+    expect(markup).toContain('data-language="js"');
+    expect(markup).toMatch(
+      /class="markdown-code-fallback-label"[^>]*>text<\/span>/,
+    );
+  });
+
+  it("leaves an untagged fence without a visible language label", () => {
+    const markup = renderToStaticMarkup(
+      createElement(AgentMarkdown, {
+        text: "```\nconst x = 1;\n```",
+      }),
+    );
+
+    expect(markup).toMatch(
+      /class="markdown-code-fallback-label"[^>]*><\/span>/,
+    );
+  });
+
+  it("keeps the plaintext and txt fallbacks labeled with their own fence language", () => {
+    const plaintextMarkup = renderToStaticMarkup(
+      createElement(AgentMarkdown, {
+        text: "```plaintext\nconst x = 1;\n```",
+      }),
+    );
+    expect(plaintextMarkup).toContain('data-language="js"');
+    expect(plaintextMarkup).toMatch(
+      /class="markdown-code-fallback-label"[^>]*>plaintext<\/span>/,
+    );
+
+    const txtMarkup = renderToStaticMarkup(
+      createElement(AgentMarkdown, {
+        text: "```txt\nconst x = 1;\n```",
+      }),
+    );
+    expect(txtMarkup).toContain('data-language="js"');
+    expect(txtMarkup).toMatch(
+      /class="markdown-code-fallback-label"[^>]*>txt<\/span>/,
+    );
+  });
+
+  it("does not add a fallback label for a real language", () => {
+    const markup = renderToStaticMarkup(
+      createElement(AgentMarkdown, {
+        text: "```python\nx = 1\n```",
+      }),
+    );
+
+    expect(markup).not.toContain("markdown-code-fallback-label");
+  });
+});
+
 describe("AgentMarkdown note images", () => {
   it("keeps app-owned note image references for the async image resolver", () => {
     const markup = renderToStaticMarkup(

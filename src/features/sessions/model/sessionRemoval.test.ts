@@ -179,7 +179,10 @@ describe.each(["archive", "delete"] as const)("%s lifecycle", (mode) => {
     const file = newFileTab("/tmp/project/new.ts", "/tmp/project");
     f.write({
       ...f.read(),
-      tabs: [openEditorTab(f.read().tabs[0], file), f.read().tabs[1]],
+      tabs: [
+        openEditorTab(f.read().tabs[0], file, { pin: true }),
+        f.read().tabs[1],
+      ],
     });
     mocks.invoke.mockImplementation(async (command, args) => {
       f.write({ ...f.read(), dirtyFiles: new Set([file.id]) });

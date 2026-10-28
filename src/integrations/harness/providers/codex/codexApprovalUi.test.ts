@@ -7,7 +7,10 @@ import { ApprovalToasts } from "../../../../features/sessions/ui/ApprovalToasts"
 import { AgentTranscript } from "../../../../features/sessions/ui/AgentTranscript";
 import { hiddenApprovalNotices } from "../../../../features/notifications/model/approvalToast";
 import { useInputNotifications } from "../../../../features/notifications/hooks/useInputNotifications";
-import { newSession, type Session } from "../../../../features/sessions/model/session";
+import {
+  newSession,
+  type Session,
+} from "../../../../features/sessions/model/session";
 import {
   probeNotificationPermission,
   saveNotificationsEnabled,
@@ -15,6 +18,7 @@ import {
 } from "../../../../features/notifications/model/notifications";
 import { applyHarnessEvent } from "../../core/apply";
 import type { HarnessEvent } from "../../core/types";
+import type * as ChildModule from "../../core/child";
 
 const sent: Array<Record<string, unknown>> = [];
 let onLine: (line: string) => void;
@@ -24,18 +28,22 @@ const invoke = vi.hoisted(() =>
   }),
 );
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
-vi.mock("../../core/child", () => ({
-  resolveCodexBinary: async () => ({ path: "/fake/codex" }),
-  spawnChild: async () => undefined,
-  killChild: async () => undefined,
-  unwatchChild: () => undefined,
-  watchChild: (_id: string, line: (line: string) => void) => {
-    onLine = line;
-  },
-  writeChild: async (_id: string, line: string) => {
-    sent.push(JSON.parse(line));
-  },
-}));
+vi.mock("../../core/child", async (importOriginal) => {
+  const actual = await importOriginal<typeof ChildModule>();
+  return {
+    ...actual,
+    resolveCodexBinary: async () => ({ path: "/fake/codex" }),
+    spawnChild: async () => undefined,
+    killChild: async () => undefined,
+    unwatchChild: () => undefined,
+    watchChild: (_id: string, line: (line: string) => void) => {
+      onLine = line;
+    },
+    writeChild: async (_id: string, line: string) => {
+      sent.push(JSON.parse(line));
+    },
+  };
+});
 const { codexAdapter } = await import("./codexAdapter");
 const { __codexTestReset } = await import("./codex");
 

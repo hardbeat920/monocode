@@ -37,6 +37,19 @@ function decodeBase64(data: string): Uint8Array {
 }
 
 /**
+ * Same as decodeBase64, but a payload the backend never actually sends
+ * malformed should not throw inside the pty-data listener and lose the
+ * chunk (and whatever else was queued behind it). Returns null instead.
+ */
+export function decodePtyChunk(data: string): Uint8Array | null {
+  try {
+    return decodeBase64(data);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Leading chunks to drop to bring a replay buffer back within budget, and the
  * byte total that remains. Never drops the newest chunk, even when that chunk
  * alone exceeds the budget — replaying something beats replaying nothing.
@@ -81,7 +94,8 @@ function ensureBridge() {
       const { id, data } = event.payload;
       const handler = dataHandlers.get(id);
       if (!handler && !openedPtys.has(id)) return;
-      const chunk = decodeBase64(data);
+      const chunk = decodePtyChunk(data);
+      if (!chunk) return;
       if (handler) handler(chunk);
       else pushBuffered(id, chunk);
     }),

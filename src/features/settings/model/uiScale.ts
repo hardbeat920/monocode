@@ -6,6 +6,10 @@ export const UI_SCALE_DEFAULT = 1;
 export const UI_SCALE_MIN = 0.5;
 export const UI_SCALE_MAX = 2;
 export const UI_SCALE_STEP = 0.1;
+export const UI_SCALE_PERCENTS = Array.from(
+  { length: Math.round((UI_SCALE_MAX - UI_SCALE_MIN) / UI_SCALE_STEP) + 1 },
+  (_, i) => Math.round((UI_SCALE_MIN + i * UI_SCALE_STEP) * 100),
+);
 
 /** Fired on `window` whenever the UI scale changes (detail: number). */
 export const UI_SCALE_CHANGE_EVENT = "monocode:uiscalechange";

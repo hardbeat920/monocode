@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildThreadTitlePrompt,
   parseGeneratedSessionTitle,
+  shouldGenerateSessionTitle,
 } from "./sessionTitle";
 
 describe("session title metadata", () => {
@@ -36,5 +37,11 @@ describe("session title metadata", () => {
     expect(parseGeneratedSessionTitle("Fix session links", "anything")).toEqual(
       { title: "Fix session links", workItem: null },
     );
+  });
+
+  it("can refresh a generated title for an event added to an existing session", () => {
+    expect(shouldGenerateSessionTitle(false, false, true)).toBe(true);
+    expect(shouldGenerateSessionTitle(false, false)).toBe(false);
+    expect(shouldGenerateSessionTitle(true, true)).toBe(true);
   });
 });

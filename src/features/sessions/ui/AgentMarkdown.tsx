@@ -1,6 +1,6 @@
 import { code } from "@streamdown/code";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import { openPath, openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   createContext,
   isValidElement,
@@ -17,15 +17,18 @@ import {
 } from "react";
 import { harden } from "rehype-harden";
 import {
+  Block,
   CodeBlock,
   Streamdown,
   defaultRehypePlugins,
   defaultRemarkPlugins,
   useIsCodeFenceIncomplete,
+  type BlockProps,
   type Components,
 } from "streamdown";
 import type { PluggableList } from "unified";
 import { ExplorerMenu, type ExplorerMenuItem } from "../../files/ui/ExplorerMenu";
+import { FileActionError } from "../../files/ui/FileActionError";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
 import { createLazyMermaidPlugin } from "../../files/editor/mermaidPlugin";
 import {
@@ -39,11 +42,12 @@ import { isAtxHeadingLine } from "../../files/model/markdownSource";
 import { useColorScheme } from "../../../shared/hooks/useColorScheme";
 import { useLockOverscroll } from "../../../shared/hooks/useLockOverscroll";
 import { copyText } from "../../../platform/tauri/clipboard";
-import { revealPath } from "../../../platform/tauri/fs";
+import { openPathWithDefaultApp, revealPath } from "../../../platform/tauri/fs";
 import { INBOX_MEDIA_PREFIXES, isInboxMediaUrl } from "../../inbox/model/inboxMedia";
 import { isNoteImagePath } from "../../notes";
 import { IS_MAC, IS_WIN } from "../../../platform/tauri/platform";
 import { InboxMedia } from "../../inbox/ui/InboxMedia";
+import { rehypeWordFade, usePacedText, useWordFading } from "./wordFade";
 
 const MERMAID_BASE_CONFIG = {
   startOnLoad: false,
@@ -89,6 +93,17 @@ const INBOX_MEDIA_REHYPE_PLUGINS: PluggableList = [
       imageBlockPolicy: "remove" as const,
     },
   ],
+];
+
+// A reply that streams renders its words as spans that fade in as they land.
+const FADING_MARKDOWN_REHYPE_PLUGINS: PluggableList = [
+  ...MARKDOWN_REHYPE_PLUGINS,
+  rehypeWordFade,
+];
+
+const FADING_INBOX_MEDIA_REHYPE_PLUGINS: PluggableList = [
+  ...INBOX_MEDIA_REHYPE_PLUGINS,
+  rehypeWordFade,
 ];
 
 type FileLinkMenu = {
@@ -194,6 +209,17 @@ const LANGUAGE_FILE_NAMES: Record<string, string> = {
   yml: "code.yaml",
   zsh: "code.sh",
 };
+
+// Shiki (via Streamdown's CodeBlock) treats these as plaintext and renders no
+// syntax colors at all, which is common in agent output (pseudocode, file
+// trees, command output) fenced as `text` or left untagged. Falling back to
+// the JS grammar for these still colors strings, numbers, and punctuation,
+// matching what most agent-output fences actually look like.
+const PLAINTEXT_FENCE_LANGUAGES = new Set(["text", "plaintext", "txt", ""]);
+
+function highlightLanguageFor(language: string): string {
+  return PLAINTEXT_FENCE_LANGUAGES.has(language.toLowerCase()) ? "js" : language;
+}
 
 type MarkdownLinkProps = ComponentProps<"a"> & { node?: unknown };
 
@@ -317,6 +343,15 @@ function MarkdownCode({
     (fence.language ? fileNameForLanguage(fence.language) : "");
   const lineNumbers = !/\bnoLineNumbers\b/.test(meta);
   const code = textContent(children);
+  // highlightLanguageFor swaps the fence language for "js" so Shiki still
+  // colors plaintext fences, but Streamdown's CodeBlock reuses that same
+  // value for the header label. Without this, a `text` fence would show a
+  // "js" header, and an untagged fence would gain a header it never had.
+  // Render our own label with the original language instead, and hide
+  // Streamdown's via CSS (see .markdown-code-fallback-label in index.css).
+  const isPlaintextFallback = PLAINTEXT_FENCE_LANGUAGES.has(
+    fence.language.toLowerCase(),
+  );
 
   return (
     <div className="markdown-code-shell" dir="ltr">
@@ -327,13 +362,15 @@ function MarkdownCode({
       ) : null}
       {fence.filePath ? (
         <MarkdownCodePath path={fence.filePath} startLine={fence.startLine} />
+      ) : isPlaintextFallback ? (
+        <span className="markdown-code-fallback-label">{fence.language}</span>
       ) : null}
       <CodeCopyButton code={code} />
       <CodeBlock
         className={className}
         code={code}
         isIncomplete={incomplete}
-        language={fence.language}
+        language={highlightLanguageFor(fence.language)}
         lineNumbers={lineNumbers}
         startLine={fence.startLine}
       />
@@ -445,6 +482,25 @@ const MARKDOWN_COMPONENTS = {
   img: MarkdownImage,
 } satisfies Components;
 
+/**
+ * With dir="auto" Streamdown wraps each block in
+ * `<div dir="..." style="display: contents">`. WebKit's triple-click then runs
+ * past the block to the end of the reply, because a contents box gives the
+ * selection no block boundary to stop at (#496). Keep the per-block direction
+ * but put it on a real block box; index.css zeroes its margins so spacing still
+ * comes from the block inside it.
+ */
+function DirectionalBlock({ dir, ...props }: BlockProps) {
+  const block = <Block {...props} />;
+  return dir ? (
+    <div dir={dir} className="agent-markdown-block">
+      {block}
+    </div>
+  ) : (
+    block
+  );
+}
+
 export const AgentMarkdown = memo(function AgentMarkdown({
   text,
   streaming,
@@ -461,6 +517,7 @@ export const AgentMarkdown = memo(function AgentMarkdown({
   allowRemoteMedia?: boolean;
 }) {
   const [fileMenu, setFileMenu] = useState<FileLinkMenu | null>(null);
+  const [fileActionError, setFileActionError] = useState<string | null>(null);
   const onFileContextMenu = useCallback(
     (event: ReactMouseEvent, path: string, navigation?: EditorNavigation) => {
       event.preventDefault();
@@ -481,11 +538,25 @@ export const AgentMarkdown = memo(function AgentMarkdown({
     [cwd],
   );
   const remoteMedia = !!allowRemoteMedia;
+  const paced = usePacedText(text, !!streaming);
+  const fading = useWordFading(!!streaming || paced.revealing);
+  // Spans stay while words are fading so a word already on screen keeps its
+  // element. Dropping one mid-fade would remount it and fade it again. Once
+  // the fade is over they come off, or a finished reply would keep a span per
+  // word for as long as this transcript stays mounted.
+  const rehypePlugins = fading
+    ? remoteMedia
+      ? FADING_INBOX_MEDIA_REHYPE_PLUGINS
+      : FADING_MARKDOWN_REHYPE_PLUGINS
+    : remoteMedia
+      ? INBOX_MEDIA_REHYPE_PLUGINS
+      : MARKDOWN_REHYPE_PLUGINS;
 
   const onFileMenuPick = (id: string) => {
     if (!fileMenu) return;
     const path = fileMenu.path;
     setFileMenu(null);
+    setFileActionError(null);
 
     if (id === "open-monocode") {
       if (fileMenu.navigation) onOpenFile?.(path, fileMenu.navigation);
@@ -496,7 +567,7 @@ export const AgentMarkdown = memo(function AgentMarkdown({
     let action: Promise<void>;
     switch (id) {
       case "open-default":
-        action = openPath(path);
+        action = openPathWithDefaultApp(path);
         break;
       case "reveal":
         action = revealPath(path);
@@ -512,6 +583,9 @@ export const AgentMarkdown = memo(function AgentMarkdown({
     }
     void action.catch((error) => {
       console.error(`Failed to run file-link action ${id}:`, error);
+      setFileActionError(
+        `Could not ${id === "open-default" ? "open the file in its default app" : "complete the file action"}: ${String(error)}`,
+      );
     });
   };
 
@@ -520,18 +594,20 @@ export const AgentMarkdown = memo(function AgentMarkdown({
       <FileOpenContext.Provider value={fileOpen}>
         <>
           <Streamdown
-            className={`agent-markdown min-w-0 font-sans text-sm leading-6 ${className ?? ""}`}
+            // Streamdown keeps a parsed tree while the text is unchanged, so
+            // the plugin swap has to remount it once the fade is over.
+            key={fading ? "fade" : "plain"}
+            BlockComponent={DirectionalBlock}
+            className={`agent-markdown min-w-0 font-sans text-sm leading-6 ${fading ? "word-fading" : ""} ${className ?? ""}`}
             components={MARKDOWN_COMPONENTS}
             controls={false}
             dir="auto"
-            isAnimating={!!streaming}
+            isAnimating={!!streaming || paced.revealing}
             plugins={MARKDOWN_PLUGINS}
             remarkPlugins={remarkPlugins}
-            rehypePlugins={
-              remoteMedia ? INBOX_MEDIA_REHYPE_PLUGINS : MARKDOWN_REHYPE_PLUGINS
-            }
+            rehypePlugins={rehypePlugins}
           >
-            {text}
+            {paced.text}
           </Streamdown>
           {fileMenu ? (
             <ExplorerMenu
@@ -541,6 +617,12 @@ export const AgentMarkdown = memo(function AgentMarkdown({
               ariaLabel="File link actions"
               onPick={onFileMenuPick}
               onClose={() => setFileMenu(null)}
+            />
+          ) : null}
+          {fileActionError ? (
+            <FileActionError
+              message={fileActionError}
+              onDismiss={() => setFileActionError(null)}
             />
           ) : null}
         </>

@@ -53,6 +53,8 @@ import type {
   CompactContextInput,
   HarnessEvent,
   HarnessSessionInput,
+  RewindLastTurnInput,
+  RewindLastTurnResult,
   SendTurnInput,
   SteerTurnInput,
 } from "../../core/types";
@@ -185,6 +187,63 @@ export async function compactOpenCodeContext(
       }
     });
   await live.turns;
+}
+
+export async function rewindOpenCodeLastTurn(
+  input: RewindLastTurnInput,
+): Promise<RewindLastTurnResult> {
+  let live: Live;
+  try {
+    live = await ensureLive(input);
+  } catch (error) {
+    cancelledThreads.delete(input.sessionId);
+    throw error;
+  }
+  if (cancelledThreads.delete(input.sessionId)) return { submitted: false };
+
+  live.onEvent = input.onEvent;
+  await live.turns;
+  if (live.activeTurn) {
+    throw new Error("Stop the current turn before editing the last message");
+  }
+
+  const messageID = await latestOpenCodeUserMessageId(live);
+  await live.client.revertSession(live.openCodeSessionId, messageID);
+  return { submitted: false };
+}
+
+async function latestOpenCodeUserMessageId(live: Live): Promise<string> {
+  const messages = await live.client.getMessages(live.openCodeSessionId);
+  const candidates = messages.flatMap((message) => {
+    const info = asRecord(message.info);
+    if (stringField(info, "role") !== "user") return [];
+    const id = stringField(info, "id");
+    if (!id) return [];
+    const created = asRecord(info?.time)?.created;
+    return [
+      {
+        id,
+        created:
+          typeof created === "number" && Number.isFinite(created)
+            ? created
+            : undefined,
+      },
+    ];
+  });
+  const timestamped = candidates.filter(
+    (candidate): candidate is { id: string; created: number } =>
+      candidate.created !== undefined,
+  );
+  const latest =
+    candidates.length > 0 && timestamped.length === candidates.length
+      ? timestamped.reduce((current, candidate) =>
+          candidate.created >= current.created ? candidate : current,
+        )
+      : candidates[candidates.length - 1];
+  if (!latest) {
+    throw new Error("OpenCode did not expose the last user message");
+  }
+  return latest.id;
 }
 
 export async function steerOpenCodeTurn(input: SteerTurnInput): Promise<void> {
@@ -351,6 +410,8 @@ async function ensureLive(input: HarnessSessionInput): Promise<Live> {
     path,
     ["serve", `--hostname=127.0.0.1`, `--port=${port}`],
     input.cwd,
+    undefined,
+    "opencode",
   );
 
   try {
@@ -520,6 +581,7 @@ async function runTurn(live: Live, input: SendTurnInput): Promise<void> {
       variant: input.modelSettings?.variant,
       parts,
     });
+    input.onAccepted?.();
     settlePendingTurn(live);
     await turnPromise;
   } catch (error) {
@@ -1055,6 +1117,7 @@ function emitSubagentStep(
     }) ||
     (typeof state.title === "string" && state.title) ||
     tool;
+  const failed = status === "error";
   live.onEvent({
     type: "agent.step",
     callId,
@@ -1062,12 +1125,13 @@ function emitSubagentStep(
     kind: "tool",
     text: title,
     toolKind: kind,
-    status:
-      status === "error"
-        ? "failed"
-        : status === "completed"
-          ? "completed"
-          : "in_progress",
+    status: failed
+      ? "failed"
+      : status === "completed"
+        ? "completed"
+        : "in_progress",
+    // Only a failure earns detail; a preview's output is never shown here.
+    ...(failed ? { detail: detailFromToolPart(part) } : {}),
     ...(preview ? { preview } : {}),
   });
   if (kind === "agent") trackSubagentRow(live, callId, part);
@@ -1258,7 +1322,7 @@ function unsupportedFileMediaType(error: unknown): string | undefined {
 }
 
 async function assertOpenCodeVersion(path: string, cwd: string): Promise<void> {
-  const output = await execChild(path, ["--version"], cwd).catch(() => "");
+  const output = await execChild(path, ["--version"], cwd, "opencode").catch(() => "");
   const version = parseOpenCodeVersion(output);
   if (!version) {
     throw new Error(

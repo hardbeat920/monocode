@@ -51,7 +51,9 @@ export function EmptySession({ cwd, composer, hasChatBackground }: Props) {
     >
       {arcadeEnabled && !hasChatBackground ? <TerminalGridBackground /> : null}
       {composer ? (
-        <div className="pointer-events-none relative z-10 mx-auto flex w-full max-w-3xl flex-1 flex-col justify-center px-6 py-12">
+        // Same box as the docked composer (max-w-4xl, p-1.5), so the input
+        // keeps its width when the first message docks it.
+        <div className="pointer-events-none relative z-10 mx-auto flex w-full max-w-4xl flex-1 flex-col justify-center px-1.5 py-12">
           <div className="pointer-events-auto mb-4 px-2.5">
             <h1
               className="truncate text-lg text-content"

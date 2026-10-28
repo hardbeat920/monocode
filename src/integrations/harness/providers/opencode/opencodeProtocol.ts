@@ -8,6 +8,7 @@ import {
   attachmentPath,
   attachmentPathText,
   isVisionImage,
+  promptText,
 } from "../../../../features/sessions/model/attachments";
 import { isTaskListToolName } from "../../../../features/sessions/model/taskList";
 import { extractToolPreview } from "../../core/preview";
@@ -177,7 +178,8 @@ export function toOpenCodePromptParts(
   text: string,
   attachments: Attachment[] | undefined,
 ): OpenCodePromptPart[] {
-  const textParts = text.trim() ? [text.trim()] : [];
+  const body = promptText(text, attachments ?? []);
+  const textParts = body ? [body] : [];
   const parts: Array<{
     type: "file";
     mime: string;

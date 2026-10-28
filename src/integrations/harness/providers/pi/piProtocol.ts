@@ -1,5 +1,8 @@
 import type { Attachment, ToolPreview, TurnMetrics } from "../../../../features/sessions/model/session";
-import { attachmentPathText } from "../../../../features/sessions/model/attachments";
+import {
+  attachmentPathText,
+  promptText,
+} from "../../../../features/sessions/model/attachments";
 import type { AgentModel, ModelSetting } from "../../../../features/sessions/model/models";
 import { isTaskListToolName } from "../../../../features/sessions/model/taskList";
 import type { PiFlavor } from "./piFlavor";
@@ -183,7 +186,8 @@ export function piNativeId(provider: string, modelId: string): string {
 
 function piPromptContent(text: string, attachments: Attachment[] = []) {
   const images: PiImage[] = [];
-  const parts = text ? [text] : [];
+  const body = promptText(text, attachments);
+  const parts = body ? [body] : [];
   for (const attachment of attachments) {
     const mimeType = attachment.mimeType.trim().toLowerCase();
     if (
@@ -213,6 +217,24 @@ export function buildPiPrompt(input: {
   };
   if (input.streaming) command.streamingBehavior = "steer";
   return command;
+}
+
+export type PiForkMessage = {
+  entryId: string;
+  text: string;
+};
+
+export function forkMessagesFromRpcData(data: unknown): PiForkMessage[] {
+  const rec = asRecord(data);
+  const messages = Array.isArray(rec?.messages) ? rec.messages : [];
+  const parsed: PiForkMessage[] = [];
+  for (const item of messages) {
+    const row = asRecord(item);
+    const entryId = stringField(row, "entryId");
+    const text = stringField(row, "text") ?? "";
+    if (entryId) parsed.push({ entryId, text });
+  }
+  return parsed;
 }
 
 export function buildPiSteer(input: {

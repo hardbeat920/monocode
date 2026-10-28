@@ -31,6 +31,7 @@ import {
   turnMetricsFromUsage,
   extensionUiResponse,
   extensionUiTitle,
+  forkMessagesFromRpcData,
   isAgentSettled,
   isPiThinkingLevel,
   mergeToolInput,
@@ -61,6 +62,7 @@ import type {
   CompactContextInput,
   HarnessEvent,
   HarnessSessionInput,
+  RewindLastTurnInput,
   SendTurnInput,
   SteerTurnInput,
 } from "../../core/types";
@@ -76,6 +78,8 @@ type InFlightTool = {
   input: Record<string, unknown>;
   partialJson: string;
   title: string;
+  /** Set on `tool_execution_end`; later progress updates are stale. */
+  finished?: boolean;
 };
 
 type Live = {
@@ -277,6 +281,41 @@ export async function compactContext(
       }
     });
   await live.turns;
+}
+
+export async function rewindLastTurn(
+  flavor: PiFlavor,
+  input: RewindLastTurnInput,
+): Promise<{ submitted: boolean }> {
+  const state = stateFor(flavor);
+  let live = state.liveByThread.get(input.sessionId);
+  if (!live || live.cwd !== input.cwd) {
+    live = await ensureLive(flavor, input);
+  } else {
+    live.onEvent = input.onEvent;
+    await applyModel(flavor, live, input);
+  }
+  if (live.activeTurn) {
+    throw new Error("Stop the current turn before editing the last message");
+  }
+
+  const forkMessages = await live.rpc.request({ type: "get_fork_messages" });
+  const messages = forkMessagesFromRpcData(forkMessages.data);
+  const last = messages[messages.length - 1];
+  if (!last) throw new Error("No user message to edit");
+
+  const fork = await live.rpc.request({ type: "fork", entryId: last.entryId });
+  if (asRecord(fork.data)?.cancelled === true) {
+    throw new Error("Edit cancelled");
+  }
+  const forkState = await live.rpc.request({ type: "get_state" });
+  const providerSessionId = providerSessionIdFromState(forkState.data);
+  if (!providerSessionId) {
+    throw new Error("Pi did not expose the forked session");
+  }
+  bindState(flavor, input.sessionId, live, forkState.data);
+  live.onEvent({ type: "session.providerBound", providerSessionId });
+  return { submitted: false };
 }
 
 export async function steerTurn(
@@ -525,6 +564,8 @@ async function startLive(
       plan: input.intent === "plan",
     }),
     input.cwd,
+    undefined,
+    flavor.id,
   );
 
   liveByThread.set(input.sessionId, live);
@@ -589,6 +630,7 @@ async function runTurn(
       ),
       turnPromise.then(() => null),
     ]);
+    input.onAccepted?.();
     if (
       flavor.id === "omp" &&
       asRecord(response?.data)?.agentInvoked === false
@@ -875,7 +917,9 @@ function handleFrame(
   const execUpdate = toolExecutionUpdateFromEvent(rec);
   if (execUpdate) {
     const tool = live.toolsById.get(execUpdate.id);
-    if (tool) {
+    // omp can deliver an update after the tool's end (omp#12875, steer during
+    // bash); replaying it would flip the finished card back to "running".
+    if (tool && !tool.finished) {
       if (Object.keys(execUpdate.input).length > 0) {
         tool.input = mergeToolInput(tool.input, execUpdate.input);
         tool.title = toolTitle(tool.name, tool.input);
@@ -899,6 +943,7 @@ function handleFrame(
   if (execEnd) {
     const tool = live.toolsById.get(execEnd.id);
     if (tool) {
+      tool.finished = true;
       live.onEvent({
         type: "tool.updated",
         callId: tool.id,
@@ -1129,6 +1174,16 @@ async function applyModel(
       }
     }
   }
+
+  if (
+    flavor.id === "pi" &&
+    parsePiModelRef(live.nativeModel) &&
+    input.model !== `pi:${live.nativeModel}` &&
+    stateFor(flavor).liveByThread.get(input.sessionId) === live &&
+    !live.muteUpdates
+  ) {
+    live.onEvent({ type: "session.configChanged", model: `pi:${live.nativeModel}` });
+  }
 }
 
 function bindState(
@@ -1150,7 +1205,7 @@ function bindState(
   const model = asRecord(asRecord(data)?.model);
   const provider = stringField(model, "provider");
   const modelId = stringField(model, "id");
-  if (provider && modelId && !live.nativeModel) {
+  if (provider && modelId && (flavor.id === "pi" || !live.nativeModel)) {
     live.nativeModel = piNativeId(provider, modelId);
   }
   const fastModeEnabled = asRecord(data)?.fastModeEnabled;

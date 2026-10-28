@@ -74,6 +74,51 @@ export function findOpenSessionTab(
   return tabs.find((tab) => leafIds(tab.layout).includes(sessionId));
 }
 
+/** Show another session in the focused pane without changing the active tab. */
+export function switchSessionInTab(
+  tabs: readonly WorkspaceTab[],
+  activeTabId: string,
+  currentSessionId: string,
+  targetSessionId: string,
+): WorkspaceTab[] | null {
+  const activeTab = tabs.find((tab) => tab.id === activeTabId);
+  if (!activeTab || activeTab.diffFocused) return null;
+  if (activeTab.focusedId !== currentSessionId) return null;
+  if (!leafIds(activeTab.layout).includes(currentSessionId)) return null;
+  if (currentSessionId === targetSessionId) return null;
+
+  const targetTab = tabs.find((tab) =>
+    leafIds(tab.layout).includes(targetSessionId),
+  );
+  if (targetTab?.id === activeTabId) {
+    return tabs.map((tab) =>
+      tab.id === activeTabId
+        ? { ...tab, focusedId: targetSessionId, diffFocused: false }
+        : tab,
+    );
+  }
+
+  return tabs.map((tab) => {
+    if (tab.id === activeTabId) {
+      return {
+        ...tab,
+        layout: replaceLeafId(tab.layout, currentSessionId, targetSessionId),
+        focusedId: targetSessionId,
+        diffFocused: false,
+      };
+    }
+    if (tab.id === targetTab?.id) {
+      return {
+        ...tab,
+        layout: replaceLeafId(tab.layout, targetSessionId, currentSessionId),
+        focusedId:
+          tab.focusedId === targetSessionId ? currentSessionId : tab.focusedId,
+      };
+    }
+    return tab;
+  });
+}
+
 /** Add a chat beside a file-only tab so an add-to-chat request has a target. */
 export function openAddToChatSessionPane({
   tab,

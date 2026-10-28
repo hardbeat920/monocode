@@ -11,6 +11,7 @@ import {
 import {
   inboxItemMatchesLinkedWorkItem,
   linkedWorkItemInboxKey,
+  linkedWorkItemFromAutomationEvent,
   linkedWorkItemFromInboxItem,
   parseGithubWorkItemUrl,
   relatedSessionsForInboxItem,
@@ -55,6 +56,38 @@ describe("session work items", () => {
     });
     expect(inboxItemMatchesLinkedWorkItem(item, linked!)).toBe(true);
     expect(linkedWorkItemInboxKey(linked!)).toBe(inboxItemKey(item));
+  });
+
+  it("restores a linked PR from a persisted automation event", () => {
+    expect(
+      linkedWorkItemFromAutomationEvent({
+        trigger: "event",
+        eventKind: "github",
+        eventKey: "github:pr:openai/codex:321",
+      }),
+    ).toEqual({
+      kind: "pr",
+      repo: "openai/codex",
+      number: 321,
+      url: "https://github.com/openai/codex/pull/321",
+    });
+  });
+
+  it("does not link non-GitHub or malformed automation events", () => {
+    expect(
+      linkedWorkItemFromAutomationEvent({
+        trigger: "event",
+        eventKind: "gitlab",
+        eventKey: "gitlab:pr:openai/codex:321",
+      }),
+    ).toBeNull();
+    expect(
+      linkedWorkItemFromAutomationEvent({
+        trigger: "event",
+        eventKind: "github",
+        eventKey: "github:pr:missing-number",
+      }),
+    ).toBeNull();
   });
 
   it("resolves an explicit PR number against the session repository", async () => {

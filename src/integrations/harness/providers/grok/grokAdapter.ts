@@ -16,7 +16,11 @@ import {
   generateGrokPrContent,
 } from "./grokGit";
 import { generateGrokSessionTitle } from "./grokTitle";
-import { warmupGrokText } from "./grokText";
+import {
+  runGrokTextPrompt,
+  stopGrokTextPrompt,
+  warmupGrokText,
+} from "./grokText";
 import { registerHarness, type HarnessAdapter } from "../../core/registry";
 
 export const grokAdapter: HarnessAdapter = {
@@ -38,6 +42,8 @@ export const grokAdapter: HarnessAdapter = {
   generatePrContent: generateGrokPrContent,
   generateBranchName: generateGrokBranchName,
   warmupText: warmupGrokText,
+  runTextPrompt: runGrokTextPrompt,
+  stopTextPrompt: stopGrokTextPrompt,
 };
 
 let registered = false;

@@ -19,6 +19,16 @@ export function consumePlanCommand(text: string): {
   return { text: text.slice(match[0].length), planning: true };
 }
 
+/**
+ * Names the plan block a turn owns, so its later snapshots reach that block
+ * even once a mid-turn follow-up has appended a user block past it. The turn
+ * counter restarts with the app while the key is saved with the transcript, so
+ * the number alone would let a fresh turn adopt a plan from before the restart.
+ */
+export function planTurnKey(gen: number): string {
+  return `turn:${gen}:${crypto.randomUUID()}`;
+}
+
 export function planTurnPrompt(request: string): string {
   return [
     "You are in plan mode. Investigate the request and the repository, but do not modify files, run destructive commands, or start implementing.",

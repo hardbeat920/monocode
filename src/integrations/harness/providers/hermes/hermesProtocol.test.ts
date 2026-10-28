@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   hermesCurrentModelId,
+  hermesBackgroundDispatch,
   hermesModeId,
   hermesPromptBlocks,
   hermesSessionId,
@@ -34,6 +35,40 @@ describe("Hermes ACP protocol", () => {
       { type: "text", text: "inspect this" },
       { type: "image", mimeType: "image/png", data: "AAAA" },
     ]);
+  });
+
+  it("recovers Hermes background delegation handles from ACP tool content", () => {
+    expect(
+      hermesBackgroundDispatch({
+        sessionId: "hermes-session-1",
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "tool-delegate",
+          status: "completed",
+          content: [
+            {
+              type: "content",
+              content: {
+                type: "text",
+                text: JSON.stringify({
+                  status: "dispatched",
+                  mode: "background",
+                  delegation_id: "deleg_1234",
+                  live_transcripts: [
+                    "/tmp/deleg_1234/task-0.log",
+                    "/tmp/deleg_1234/task-1.log",
+                  ],
+                }),
+              },
+            },
+          ],
+        },
+      }),
+    ).toEqual({
+      callId: "tool-delegate",
+      delegationId: "deleg_1234",
+      transcripts: ["/tmp/deleg_1234/task-0.log", "/tmp/deleg_1234/task-1.log"],
+    });
   });
 
   it("reads Hermes model state and puts its current model first", () => {

@@ -50,6 +50,7 @@ afterEach(() => {
   mocks.invoke.mockReset();
   mocks.listen.mockReset();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 describe("isCurrentChildExit", () => {
@@ -137,6 +138,73 @@ describe("child bridge", () => {
     await spawning;
     expect(onExit).toHaveBeenCalledWith(1);
     release();
+  });
+
+  it("passes stored overrides through resolution and command validation", async () => {
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) =>
+        key === "monocode.providerBinaryPaths.v1"
+          ? JSON.stringify({
+              claude: "/opt/claude/bin/claude",
+              codex: "/opt/codex/bin/codex",
+              cursor: "/opt/cursor/bin/cursor-agent",
+              grok: "/opt/grok/bin/grok",
+              opencode: "/opt/opencode/bin/opencode",
+              pi: "/opt/pi/bin/pi",
+              omp: "/opt/omp/bin/omp",
+              fx: "/opt/fx/bin/fx",
+              hermes: "/opt/hermes/bin/hermes",
+              antigravity: "/opt/antigravity/bin/agy_acp_server.par",
+            })
+          : null,
+    });
+    mocks.invoke.mockResolvedValue({ path: "/resolved" });
+    const child = await loadChild();
+
+    await child.resolveCodexBinary();
+    expect(mocks.invoke).toHaveBeenCalledWith("harness_resolve_configured", {
+      provider: "codex",
+      binaryPath: "/opt/codex/bin/codex",
+    });
+
+    for (const [provider, binaryPath, resolve] of [
+      ["claude", "/opt/claude/bin/claude", child.resolveClaudeBinary],
+      ["cursor", "/opt/cursor/bin/cursor-agent", child.resolveCursorBinary],
+      ["grok", "/opt/grok/bin/grok", child.resolveGrokBinary],
+      ["pi", "/opt/pi/bin/pi", child.resolvePiBinary],
+      ["omp", "/opt/omp/bin/omp", child.resolveOmpBinary],
+      ["fx", "/opt/fx/bin/fx", child.resolveFxBinary],
+      ["hermes", "/opt/hermes/bin/hermes", child.resolveHermesBinary],
+      [
+        "antigravity",
+        "/opt/antigravity/bin/agy_acp_server.par",
+        child.resolveAntigravityBinary,
+      ],
+    ] as const) {
+      await resolve();
+      expect(mocks.invoke).toHaveBeenLastCalledWith("harness_resolve_configured", {
+        provider,
+        binaryPath,
+      });
+    }
+
+    await child.execChild("/resolved", ["--version"], undefined, "opencode");
+    expect(mocks.invoke).toHaveBeenCalledWith("harness_exec", {
+      command: "/resolved",
+      args: ["--version"],
+      cwd: undefined,
+      binaryProvider: "opencode",
+      binaryPath: "/opt/opencode/bin/opencode",
+    });
+
+    await child.execChild("/resolved", ["--version"], undefined, "codex", null);
+    expect(mocks.invoke).toHaveBeenLastCalledWith("harness_exec", {
+      command: "/resolved",
+      args: ["--version"],
+      cwd: undefined,
+      binaryProvider: "codex",
+      binaryPath: null,
+    });
   });
 
   it("never routes a retired generation's stdout or exit to its replacement", async () => {

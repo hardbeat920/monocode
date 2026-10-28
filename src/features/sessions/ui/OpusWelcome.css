@@ -1,0 +1,250 @@
+.opus-welcome {
+  --opus-clay: #d97757;
+  --opus-note: #f4ede4;
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  overflow: hidden;
+  pointer-events: none;
+  border-radius: inherit;
+  animation: opus-welcome-fade var(--opus-duration) ease-out both;
+}
+
+.opus-welcome-glow {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse at 82% 14%, #d9775724, transparent 46%),
+    radial-gradient(ellipse at 40% 18%, #d9775712, transparent 60%),
+    radial-gradient(ellipse at 10% 85%, #f4ede40c, transparent 55%);
+  box-shadow: inset 0 0 50px #d9775708;
+  animation: opus-glow-breathe var(--opus-duration) ease-in-out both;
+}
+
+/* Rising motes: small thoughts drifting up while the phrase is written. */
+.opus-mote {
+  position: absolute;
+  left: var(--mote-x);
+  top: var(--mote-y);
+  width: var(--mote-size);
+  height: var(--mote-size);
+  border-radius: 50%;
+  background: var(--opus-clay);
+  box-shadow: 0 0 6px #d9775780;
+  opacity: 0;
+  animation: opus-mote-rise var(--mote-duration) ease-out var(--mote-delay) both;
+}
+
+.opus-mote-ring {
+  width: calc(var(--mote-size) * 2.2);
+  height: calc(var(--mote-size) * 2.2);
+  background: transparent;
+  border: 1px solid #d9775799;
+  box-shadow: none;
+}
+
+/* The composition's band beside the composer; its layout is set in pixels. */
+.opus-stage {
+  position: absolute;
+  left: 0;
+  right: 0;
+}
+
+/* The staff rises from the lower left and runs off the right edge. */
+.opus-staff {
+  position: absolute;
+  inset: 0;
+}
+
+.opus-staff-line {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  /* A soft pen edge sweeps left to right, so each line writes itself. */
+  mask-image: linear-gradient(90deg, #000 42%, transparent 58%);
+  mask-size: 250% 100%;
+  mask-repeat: no-repeat;
+  animation:
+    opus-line-write 2.3s cubic-bezier(0.55, 0.1, 0.3, 1) var(--line-delay) both,
+    opus-line-settle var(--opus-duration) ease-in-out both;
+}
+
+.opus-staff-line path {
+  fill: none;
+  stroke: var(--opus-clay);
+  stroke-width: 1px;
+  stroke-linecap: round;
+  opacity: 0.55;
+}
+
+.opus-staff-line:nth-child(3) path {
+  opacity: 0.8;
+}
+
+.opus-note {
+  position: absolute;
+  left: var(--note-x);
+  top: var(--note-y);
+  width: calc(var(--note-size) * 1.45);
+  height: var(--note-size);
+  translate: -50% -50%;
+  opacity: 0;
+  animation: opus-note-play 3.6s cubic-bezier(0.2, 0.9, 0.3, 1.2)
+    var(--note-delay) both;
+}
+
+.opus-note-head {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--opus-note);
+  box-shadow:
+    0 0 6px #d9775799,
+    0 0 14px #d9775740;
+  transform: rotate(-22deg);
+}
+
+/* Each note rings once as it lands, like a key being struck. */
+.opus-note::before {
+  content: "";
+  position: absolute;
+  inset: -40%;
+  border: 1px solid var(--opus-clay);
+  border-radius: 50%;
+  opacity: 0;
+  animation: opus-note-ring 1.1s ease-out var(--note-delay) both;
+}
+
+.opus-note::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 45%;
+  width: max(1px, calc(var(--note-size) * 0.12));
+  height: calc(var(--note-size) * 3.1);
+  border-radius: 1px;
+  background: var(--opus-note);
+  opacity: 0.85;
+}
+
+.opus-note-stem-down::after {
+  right: auto;
+  left: 0;
+  top: 45%;
+  bottom: auto;
+}
+
+html.theme-light .opus-welcome {
+  --opus-clay: #bd5d3a;
+  --opus-note: #8a4128;
+}
+
+html.theme-light .opus-note-head,
+html.theme-light .opus-mote {
+  box-shadow: 0 0 5px #bd5d3a40;
+}
+
+@keyframes opus-glow-breathe {
+  from {
+    opacity: 0;
+  }
+  22%,
+  58% {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes opus-mote-rise {
+  from {
+    opacity: 0;
+    transform: translate(0, 0) scale(0.6);
+  }
+  25% {
+    opacity: 0.55;
+    transform: translate(calc(var(--mote-drift) * 0.3), -10px) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translate(var(--mote-drift), -46px) scale(0.8);
+  }
+}
+
+@keyframes opus-line-write {
+  from {
+    mask-position: 100% 0;
+  }
+  to {
+    mask-position: 0 0;
+  }
+}
+
+@keyframes opus-line-settle {
+  0%,
+  60% {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes opus-note-play {
+  from {
+    opacity: 0;
+    transform: translateY(-40%) scale(0.2);
+  }
+  12% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  60% {
+    opacity: 0.9;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(18%);
+  }
+}
+
+@keyframes opus-note-ring {
+  from {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+  20% {
+    opacity: 0.6;
+  }
+  to {
+    opacity: 0;
+    transform: scale(2.6);
+  }
+}
+
+@keyframes opus-welcome-fade {
+  0% {
+    opacity: 0;
+  }
+  6%,
+  78% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .opus-welcome {
+    display: none;
+  }
+  .opus-welcome,
+  .opus-welcome * {
+    animation: none;
+  }
+}

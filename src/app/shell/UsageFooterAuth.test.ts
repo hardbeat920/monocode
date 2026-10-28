@@ -14,12 +14,21 @@ const rateLimitsFetch = vi.hoisted(() => ({
 }));
 
 vi.mock("../../integrations/harness/core/auth", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../integrations/harness/core/auth")>()),
+  ...(await importOriginal<
+    typeof import("../../integrations/harness/core/auth")
+  >()),
   loginHarness: auth.loginHarness,
 }));
-vi.mock("../../features/providers/model/rateLimitsFetch", () => rateLimitsFetch);
+vi.mock(
+  "../../features/providers/model/rateLimitsFetch",
+  () => rateLimitsFetch,
+);
 
-import type { ProviderRateLimits, RateLimitProvider } from "../../features/providers/model/rateLimits";
+import type {
+  ProviderRateLimits,
+  RateLimitProvider,
+} from "../../features/providers/model/rateLimits";
+import { clearCachedRateLimits } from "../../features/providers/model/rateLimitsCache";
 import { UsageFooter } from "./UsageFooter";
 
 let container: HTMLDivElement;
@@ -38,6 +47,7 @@ beforeEach(() => {
   rateLimitsFetch.consumeCodexRateLimitResetCredit.mockReset();
   rateLimitsFetch.fetchClaudeRateLimits.mockReset();
   rateLimitsFetch.fetchCodexRateLimits.mockReset();
+  clearCachedRateLimits();
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -81,6 +91,27 @@ function connectedLimits(provider: RateLimitProvider): ProviderRateLimits {
 }
 
 describe("UsageFooter provider authentication", () => {
+  it("reuses usage on remount and only fetches again on Refresh", async () => {
+    rateLimitsFetch.fetchCodexRateLimits.mockResolvedValue(
+      connectedLimits("codex"),
+    );
+    await act(async () =>
+      root.render(createElement(UsageFooter, { providers: ["codex"] })),
+    );
+    expect(rateLimitsFetch.fetchCodexRateLimits).toHaveBeenCalledTimes(1);
+
+    act(() => root.unmount());
+    root = createRoot(container);
+    await act(async () =>
+      root.render(createElement(UsageFooter, { providers: ["codex"] })),
+    );
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(rateLimitsFetch.fetchCodexRateLimits).toHaveBeenCalledTimes(1);
+
+    await act(async () => button("Refresh usage").click());
+    expect(rateLimitsFetch.fetchCodexRateLimits).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps a healthy Grok provider label non-interactive", () => {
     act(() =>
       root.render(

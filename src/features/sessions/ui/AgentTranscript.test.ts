@@ -25,6 +25,148 @@ function render(
 }
 
 describe("AgentTranscript collapsed work", () => {
+  it("keeps the completed time beside actions when a turn has no BTW control", () => {
+    const markup = render([
+      {
+        id: "user",
+        role: "user",
+        text: "Inspect",
+        startedAt: 1_000,
+        durationMs: 2_000,
+      },
+      { id: "answer", role: "assistant", text: "Done" },
+    ]);
+    expect(markup).toContain('aria-label="Worked for 2s"');
+    expect(markup).toContain("flex shrink-0 items-center gap-2.5");
+    expect(markup).not.toContain("ml-auto flex shrink-0 items-center gap-2.5");
+  });
+
+  it("shows a /operator request without the command in its amber bubble", () => {
+    const markup = render([
+      { id: "user", role: "user", text: "list my notes", monocode: true },
+    ]);
+    expect(markup).toContain('data-monocode="true"');
+    expect(markup).toContain("list my notes");
+    expect(markup).not.toContain("/operator");
+
+    const legacy = render([
+      { id: "old", role: "user", text: "/monocode list my notes" },
+    ]);
+    expect(legacy).toContain('data-monocode="true"');
+    expect(legacy).not.toContain("/monocode");
+  });
+
+  it("shows MonoCode CLI actions instead of their long shell commands", () => {
+    const command =
+      "/repo/target/debug/MonoCode.app/Contents/MacOS/monocode";
+    const markup = render(
+      [
+        { id: "user", role: "user", text: "/monocode list my notes" },
+        {
+          id: "help",
+          role: "tool",
+          text: `${command} app --help`,
+          tool: { kind: "shell", status: "completed" },
+        },
+        {
+          id: "notes",
+          role: "tool",
+          text: `${command} app notes.list --json '{}'`,
+          tool: { kind: "shell", status: "in_progress" },
+        },
+      ],
+      true,
+    );
+    expect(markup).toContain("Using MonoCode");
+    expect(markup).toContain('data-monocode-tool-call="--help"');
+    expect(markup).toContain('data-monocode-tool-call="notes.list"');
+    expect(markup).toContain("monocode app --help");
+    expect(markup).toContain("monocode app notes.list");
+    expect(markup).toContain("Ran");
+    expect(markup).toContain("Running");
+    expect(markup).not.toContain("Contents/MacOS/monocode");
+    expect(markup).not.toContain("Show error details for MonoCode");
+  });
+
+  it("shows the full command before approving a MonoCode CLI call", () => {
+    const command = "monocode app sessions.send --json '{\"prompt\":\"private-marker\"}'";
+    const markup = renderToStaticMarkup(
+      createElement(AgentTranscript, {
+        blocks: [
+          { id: "user", role: "user", text: "Send a follow-up" },
+          {
+            id: "call",
+            role: "tool",
+            text: command,
+            tool: { kind: "shell", status: "pending" },
+            approval: { requestId: 1 },
+          },
+        ],
+        busy: true,
+        onApproval: () => {},
+      }),
+    );
+    expect(markup).toContain('data-monocode-tool-call="sessions.send"');
+    expect(markup).toContain("private-marker");
+    expect(markup).toContain("Allow</button>");
+
+    const compound = renderToStaticMarkup(
+      createElement(AgentTranscript, {
+        blocks: [
+          { id: "user", role: "user", text: "List notes" },
+          {
+            id: "call",
+            role: "tool",
+            text: "monocode app notes.list && echo extra",
+            tool: { kind: "shell", status: "pending" },
+            approval: { requestId: 2 },
+          },
+        ],
+        busy: true,
+        onApproval: () => {},
+      }),
+    );
+    expect(compound).not.toContain("data-monocode-tool-call");
+    expect(compound).toContain("echo extra");
+    expect(compound).toContain("Allow</button>");
+  });
+
+  it("keeps a failed MonoCode call compact until its error is opened", () => {
+    const markup = render([
+      { id: "user", role: "user", text: "/monocode list notes" },
+      {
+        id: "notes",
+        role: "tool",
+        text: "monocode app notes.list",
+        tool: { kind: "shell", status: "failed", detail: "Connection refused" },
+      },
+    ]);
+    expect(markup).toContain('data-monocode-tool-call="notes.list"');
+    expect(markup).toContain("Ran");
+    expect(markup).toContain("monocode app notes.list");
+    expect(markup).toContain("Show error details for MonoCode: List notes");
+    expect(markup).not.toContain("Connection refused");
+  });
+
+  it("offers the saved CI context in a collapsed disclosure beside the short request", () => {
+    const markup = render([
+      {
+        id: "ci-repair",
+        role: "user",
+        text: "Fix 1 failed CI check for acme/web PR #42.",
+        ciContext:
+          "Checked commit: abc123\n\nRun tests: expected <main>, received <script>",
+      },
+    ]);
+    expect(markup).toContain("Fix 1 failed CI check for acme/web PR #42.");
+    expect(markup).toMatch(/<details\b[^>]*>/);
+    expect(markup).not.toMatch(/<details\b[^>]*\bopen[\s=>]/);
+    expect(markup).toContain("CI context</span>");
+    expect(markup).toContain(
+      "Checked commit: abc123\n\nRun tests: expected &lt;main&gt;, received &lt;script&gt;",
+    );
+  });
+
   it("hides provider authentication errors handled by the sign-in modal", () => {
     const markup = renderToStaticMarkup(
       createElement(AgentTranscript, {
@@ -78,7 +220,11 @@ describe("AgentTranscript collapsed work", () => {
       },
       card, // Existing records have the card before the work.
       tool("inspection"),
-      { id: "answer", role: "assistant", text: "The investigation is complete." },
+      {
+        id: "answer",
+        role: "assistant",
+        text: "The investigation is complete.",
+      },
     ];
     expect(render(blocks, true)).not.toContain("data-orchestration-review");
     const finished = render(blocks);
@@ -198,6 +344,20 @@ describe("AgentTranscript collapsed work", () => {
 
     expect(markup).toContain("Worked for 9s");
     expect(markup).not.toContain("Claude Opus 5 worked for 9s");
+  });
+  it("marks the edited message with a quiet visual state instead of a text banner", () => {
+    const markup = renderToStaticMarkup(
+      createElement(AgentTranscript, {
+        blocks: [{ id: "user", role: "user", text: "Edit this prompt" }],
+        onEditLastTurn: () => {},
+        editingLastTurn: true,
+      }),
+    );
+
+    expect(markup).toContain('data-editing-last-turn="true"');
+    expect(markup).toContain("edit-last-turn-bubble");
+    expect(markup).toContain('aria-label="Cancel edit"');
+    expect(markup).not.toContain("Editing this message");
   });
 
   it("renders the summary and answer without mounting a large completed tool trail", () => {
@@ -421,6 +581,62 @@ describe("AgentTranscript collapsed work", () => {
     expect(markup).not.toContain("src/lib/session.ts");
   });
 
+  it("offers failed subagent tool results in the same error control as top-level tools", () => {
+    const markup = render([
+      { id: "user", role: "user", text: "Run tests" },
+      {
+        id: "agent",
+        role: "tool",
+        text: "Run tests",
+        tool: { callId: "agent-1", kind: "agent", status: "failed" },
+        agentRun: {
+          name: "Run tests",
+          steps: [
+            {
+              id: "bash",
+              kind: "tool",
+              text: "npm test",
+              toolKind: "execute",
+              status: "failed",
+              detail: "Tests failed: assertion error",
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(markup).toContain("Show error details for npm test");
+  });
+
+  it("counts a failed step on a folded subagent row, so it is not hidden", () => {
+    const markup = render([
+      { id: "user", role: "user", text: "Run tests" },
+      {
+        id: "agent",
+        role: "tool",
+        text: "Run tests",
+        // The run itself finished; only one of its steps did not.
+        tool: { callId: "agent-1", kind: "agent", status: "completed" },
+        agentRun: {
+          name: "Run tests",
+          steps: [
+            { id: "read", kind: "tool", text: "Read package.json" },
+            {
+              id: "bash",
+              kind: "tool",
+              text: "npm test",
+              status: "failed",
+              detail: "Tests failed: assertion error",
+            },
+            { id: "fix", kind: "tool", text: "Edit src/App.tsx" },
+          ],
+        },
+      },
+    ]);
+
+    expect(markup).toContain("3 steps, 1 failed");
+  });
+
   it("opens a lone subagent straight into its own transcript", () => {
     const markup = render(
       [
@@ -546,9 +762,9 @@ describe("AgentTranscript collapsed work", () => {
 
     // While the turn is live the same notes still land as their own rows.
     const live = render(blocks, true);
-    expect(
-      live.match(/aria-label="Interjection: irc:incoming"/g),
-    ).toHaveLength(3);
+    expect(live.match(/aria-label="Interjection: irc:incoming"/g)).toHaveLength(
+      3,
+    );
     expect(live).toContain("ping from #general");
   });
 });

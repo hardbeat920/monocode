@@ -11,6 +11,7 @@ import {
   attachmentPathText,
   isVisionImage,
   normalizeImageMime,
+  promptText,
 } from "../../../../features/sessions/model/attachments";
 import { displayPath } from "../../../../shared/lib/paths";
 import { normalizeTaskListStatus } from "../../../../features/sessions/model/taskList";
@@ -36,8 +37,8 @@ export type CodexThreadConfig = {
 
 /**
  * `readOnly` and `workspaceWrite` both default to networkAccess: false, which
- * blocks loopback too. An orchestration lead has to reach the control CLI's
- * socket, so it opts in; every other session keeps the default.
+ * blocks loopback too. An orchestration lead or a /operator-enabled thread
+ * needs the local CLI socket, so its turns enable network access.
  */
 function withNetwork(
   config: CodexThreadConfig,
@@ -185,7 +186,8 @@ function codexInput(
   attachments: Attachment[] = [],
 ): Array<Record<string, unknown>> {
   const input: Array<Record<string, unknown>> = [];
-  if (prompt) input.push({ type: "text", text: prompt });
+  const body = promptText(prompt ?? "", attachments);
+  if (body) input.push({ type: "text", text: body });
   for (const file of attachments) {
     if (isVisionImage(file.mimeType)) {
       input.push(
@@ -267,6 +269,10 @@ export type MappedCodexNotification = {
     error?: string;
   };
   activeTurnId?: string | null;
+  /** Codex refused the turn because the account's usage limit is spent. */
+  usageLimited?: boolean;
+  /** A sparse `account/rateLimits/updated` snapshot. */
+  rateLimits?: Record<string, unknown>;
 };
 
 /**
@@ -396,7 +402,15 @@ export function mapCodexNotification(
       // for every attempt and interrupt any streaming transcript block.
       return { events: [], diagnostic: message };
     }
-    return { events: [{ type: "session.error", message }] };
+    return {
+      events: [{ type: "session.error", message }],
+      ...(isUsageLimitError(errorObj) ? { usageLimited: true } : {}),
+    };
+  }
+
+  if (method === "account/rateLimits/updated") {
+    const rateLimits = asRecord(rec.rateLimits);
+    return { events: [], ...(rateLimits ? { rateLimits } : {}) };
   }
 
   if (method === "configWarning" || method === "warning") {
@@ -506,7 +520,14 @@ function mapTurnTerminal(
     events,
     turnCompleted: { status, ...(error ? { error } : {}) },
     activeTurnId: null,
+    ...(status === "failed" && isUsageLimitError(errorObj)
+      ? { usageLimited: true }
+      : {}),
   };
+}
+
+function isUsageLimitError(error: Record<string, unknown> | null): boolean {
+  return error?.codexErrorInfo === "usageLimitExceeded";
 }
 
 function mapItemLifecycle(
@@ -554,6 +575,24 @@ function mapItemLifecycle(
       return { events };
     }
     return { events: [] };
+  }
+
+  if (itemType === "imageGeneration") {
+    if (!completed) return { events: [] };
+    const result = stringField(item, "result")?.trim();
+    if (!result) return { events: [] };
+    const prompt = stringField(item, "revisedPrompt")?.trim();
+    return {
+      events: [
+        {
+          type: "image.generated",
+          itemId: callId,
+          data: result,
+          name: "generated-image",
+          ...(prompt ? { alt: prompt } : {}),
+        },
+      ],
+    };
   }
 
   if (itemType === "reasoning") {
@@ -997,6 +1036,12 @@ export function mapCodexSubagentSteps(
   return mapCodexNotification(method, params).events.flatMap(
     (event): HarnessEvent[] => {
       if (event.type === "tool.started" || event.type === "tool.updated") {
+        // Only a failure earns detail: a settled result already rides in the
+        // preview, and a long one would weigh the run down for nothing.
+        const detail =
+          event.type === "tool.updated" && event.status === "failed"
+            ? event.detail
+            : undefined;
         return [
           {
             type: "agent.step",
@@ -1006,6 +1051,7 @@ export function mapCodexSubagentSteps(
             text: event.title ?? "",
             ...(event.kind ? { toolKind: event.kind } : {}),
             ...(event.status ? { status: event.status } : {}),
+            ...(detail ? { detail } : {}),
             ...(event.preview ? { preview: event.preview } : {}),
           },
         ];

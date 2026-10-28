@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { NativePopupHost } from "../../../shared/ui/NativePopupHost";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useProjectBranchesState } from "../../source-control/hooks/useProjectBranches";
 import { useProjectWorktrees } from "../../source-control/hooks/useProjectWorktrees";
 import type { Worktree } from "../../source-control/model/worktrees";
@@ -18,6 +26,11 @@ import {
 import { GitPickerTrigger } from "../../source-control/ui/GitPickerTrigger";
 import { Popover } from "../../../shared/ui/Popover";
 import { LAYER } from "../../../shared/lib/layers";
+import {
+  keybindingPressed,
+  keybindingShortcutLabel,
+  keybindingShortcutTokens,
+} from "../../settings/model/settings";
 
 export const WORKSPACE_MODE_SHORTCUT = `${MOD}${SHIFT}G`;
 const WORKSPACE_SURFACES =
@@ -26,17 +39,20 @@ const SUBMENU_GAP = 4;
 const HOVER_CLOSE_MS = 100;
 
 export function isWorkspaceModeShortcut(event: {
+  code: string;
   key: string;
   metaKey: boolean;
   ctrlKey: boolean;
   altKey: boolean;
   shiftKey: boolean;
 }): boolean {
-  return (
+  return keybindingPressed(
+    "Composer: Toggle Workspace",
+    event,
     (event.metaKey || event.ctrlKey) &&
-    event.shiftKey &&
-    !event.altKey &&
-    event.key.toLowerCase() === "g"
+      event.shiftKey &&
+      !event.altKey &&
+      event.key.toLowerCase() === "g",
   );
 }
 
@@ -50,7 +66,11 @@ export function WorkspacePicker({
   onSelectWorktree,
   onOpenSettings,
   onClose,
+  onOpenChange,
+  popoverSide = "top",
+  initialPicker,
 }: {
+  initialPicker?: "workspace" | "base";
   cwd: string;
   mode: WorkspaceMode;
   base?: string;
@@ -60,7 +80,17 @@ export function WorkspacePicker({
   onSelectWorktree?: (tree: Worktree) => Promise<void>;
   onOpenSettings?: () => void;
   onClose?: () => void;
+  onOpenChange?: (open: boolean) => void;
+  popoverSide?: "top" | "bottom";
 }) {
+  const [modeOpen, setModeOpen] = useState(false);
+  const [baseOpen, setBaseOpen] = useState(false);
+  const reportMode = useCallback((open: boolean) => setModeOpen(open), []);
+  const reportBase = useCallback((open: boolean) => setBaseOpen(open), []);
+  useEffect(() => {
+    onOpenChange?.(modeOpen || baseOpen);
+  }, [modeOpen, baseOpen, onOpenChange]);
+  useEffect(() => () => onOpenChange?.(false), [onOpenChange]);
   const { branches, settled } = useProjectBranchesState(
     cwd,
     enabled && !!cwd && cwd !== "~",
@@ -71,6 +101,7 @@ export function WorkspacePicker({
   return (
     <>
       <WorkspaceModePicker
+        initialOpen={initialPicker === "workspace"}
         cwd={cwd}
         mode={mode}
         enabled={enabled && !!resolvedBase}
@@ -80,15 +111,20 @@ export function WorkspacePicker({
         onSelectWorktree={onSelectWorktree}
         onOpenSettings={onOpenSettings}
         onClose={onClose}
+        onOpenChange={reportMode}
+        popoverSide={popoverSide}
       />
       {mode === "worktree" ? (
         <WorktreeBasePicker
+          initialOpen={initialPicker === "base"}
           branches={branches?.branches ?? []}
           selected={effectiveBase}
           loading={!settled}
           enabled={enabled && !!branches}
           onChange={onBaseChange}
           onClose={onClose}
+          onOpenChange={reportBase}
+          popoverSide={popoverSide}
         />
       ) : null}
     </>
@@ -119,6 +155,9 @@ function WorkspaceModePicker({
   onSelectWorktree,
   onOpenSettings,
   onClose,
+  onOpenChange,
+  popoverSide = "top",
+  initialOpen = false,
 }: {
   cwd: string;
   mode: WorkspaceMode;
@@ -127,8 +166,16 @@ function WorkspaceModePicker({
   onSelectWorktree?: (tree: Worktree) => Promise<void>;
   onOpenSettings?: () => void;
   onClose?: () => void;
+  initialOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  popoverSide?: "top" | "bottom";
 }) {
-  const [open, setOpen] = useState(false);
+  const host = useContext(NativePopupHost);
+  const [open, setOpen] = useState(initialOpen);
+  useEffect(() => {
+    onOpenChange?.(open);
+  }, [open, onOpenChange]);
+  useEffect(() => () => onOpenChange?.(false), [onOpenChange]);
   const [worktreeMenu, setWorktreeMenu] = useState(false);
   const [busyPath, setBusyPath] = useState<string>();
   const [pickError, setPickError] = useState<string>();
@@ -207,35 +254,45 @@ function WorkspaceModePicker({
     }, HOVER_CLOSE_MS);
   };
   const label = mode === "worktree" ? "New worktree" : "Current checkout";
+  const shortcut = keybindingShortcutLabel(
+    "Composer: Toggle Workspace",
+    WORKSPACE_MODE_SHORTCUT,
+  );
+  const shortcutTokens = keybindingShortcutTokens(
+    "Composer: Toggle Workspace",
+    "Meta+Shift+G Control+Shift+G",
+  );
   const Icon = mode === "worktree" ? FolderTree : Folder;
 
   return (
     <div ref={anchor} className="relative flex min-w-0 shrink-0">
-      <button
-        type="button"
-        disabled={!enabled}
-        title={`Workspace: ${label} (${WORKSPACE_MODE_SHORTCUT})`}
-        aria-label={`Workspace ${label}`}
-        aria-keyshortcuts="Meta+Shift+G Control+Shift+G"
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        onMouseDown={(event) => event.preventDefault()}
-        onClick={() => {
-          if (open) {
-            dismiss();
-            return;
-          }
-          setOpen(true);
-        }}
-        className="-ml-1.5 flex h-6 min-w-0 max-w-48 items-center gap-1.5 rounded-md px-1.5 text-[12px] text-content/55 hover:bg-content/8 hover:text-content aria-expanded:bg-content/8 aria-expanded:text-content disabled:opacity-40 disabled:hover:bg-transparent active:scale-[0.97]"
-      >
-        <Icon className="size-3.5 shrink-0" />
-        <span className="truncate">{label}</span>
-      </button>
+      {!host ? (
+        <button
+          type="button"
+          disabled={!enabled}
+          title={shortcut ? `Workspace: ${label} (${shortcut})` : undefined}
+          aria-label={`Workspace ${label}`}
+          aria-keyshortcuts={shortcutTokens ?? undefined}
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => {
+            if (open) {
+              dismiss();
+              return;
+            }
+            setOpen(true);
+          }}
+          className="-ml-1.5 flex h-6 min-w-0 max-w-48 items-center gap-1.5 rounded-md px-1.5 text-[12px] text-content/55 hover:bg-content/8 hover:text-content aria-expanded:bg-content/8 aria-expanded:text-content disabled:opacity-40 disabled:hover:bg-transparent active:scale-[0.97]"
+        >
+          <Icon className="size-3.5 shrink-0" />
+          <span className="truncate">{label}</span>
+        </button>
+      ) : null}
       {open ? (
         <Popover
           anchor={anchor}
-          side="top"
+          side={popoverSide}
           width={240}
           constrainHeight={false}
           onDismiss={dismiss}
@@ -247,9 +304,11 @@ function WorkspaceModePicker({
         >
           <div className="flex items-center justify-between gap-3 px-2 py-1 text-[11px] font-medium text-content/45">
             <span>Workspace</span>
-            <kbd className="font-sans text-[10px] font-normal text-content/35">
-              {WORKSPACE_MODE_SHORTCUT}
-            </kbd>
+            {shortcut ? (
+              <kbd className="font-sans text-[10px] font-normal text-content/35">
+                {shortcut}
+              </kbd>
+            ) : null}
           </div>
           {(
             [
@@ -267,7 +326,7 @@ function WorkspaceModePicker({
                 onChange(value);
                 dismiss();
               }}
-              className={`flex h-9 w-full items-center gap-2 rounded-lg px-2 text-left text-[13px] hover:bg-content/8 ${
+              className={`flex h-9 w-full items-center gap-2 rounded-lg px-2 text-left text-[13px] hover:bg-content/8 disabled:opacity-40 ${
                 mode === value ? "bg-selection text-content" : "text-content/80"
               }`}
             >
@@ -411,13 +470,16 @@ function branchRef(branch: BaseBranch): string {
   return branch.remote ? `${branch.remote}/${branch.name}` : branch.name;
 }
 
-function WorktreeBasePicker({
+export function WorktreeBasePicker({
   branches,
   selected,
   loading,
   enabled,
   onChange,
   onClose,
+  onOpenChange,
+  popoverSide = "top",
+  initialOpen = false,
 }: {
   branches: BaseBranch[];
   selected: string;
@@ -425,8 +487,15 @@ function WorktreeBasePicker({
   enabled: boolean;
   onChange: (base: string) => void;
   onClose?: () => void;
+  initialOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  popoverSide?: "top" | "bottom";
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(initialOpen);
+  useEffect(() => {
+    onOpenChange?.(open);
+  }, [open, onOpenChange]);
+  useEffect(() => () => onOpenChange?.(false), [onOpenChange]);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const anchor = useRef<HTMLDivElement>(null);
@@ -474,7 +543,7 @@ function WorktreeBasePicker({
       {open ? (
         <Popover
           anchor={anchor}
-          side="top"
+          side={popoverSide}
           width={280}
           minHeight={160}
           maxHeight={280}

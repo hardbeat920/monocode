@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { newSession } from "../../../features/sessions/model/session";
+import {
+  newSession,
+  type Session,
+} from "../../../features/sessions/model/session";
+import { planTurnKey } from "../../../features/sessions/model/plan";
+import { sanitizeSessionForPersist } from "../../../features/sessions/data/sessionStore";
 import { previewFromTool } from "../providers/claude/claudeProtocol";
 import {
   appendUser,
@@ -18,6 +23,30 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe("background work", () => {
+  it("tracks what a yielded turn waits on and drops it when the turn ends", () => {
+    let session = appendUser(newSession("claude", "/tmp"), "hi");
+    session = applyHarnessEvent(session, {
+      type: "background.updated",
+      tasks: ["npm test"],
+    });
+    expect(session.backgroundTasks).toEqual(["npm test"]);
+
+    session = applyHarnessEvent(session, {
+      type: "background.updated",
+      tasks: [],
+    });
+    expect(session.backgroundTasks).toBeUndefined();
+
+    session = applyHarnessEvent(session, {
+      type: "background.updated",
+      tasks: ["npm run dev"],
+    });
+    session = stopStreaming(session);
+    expect(session.backgroundTasks).toBeUndefined();
+  });
 });
 
 describe("turn duration", () => {
@@ -166,6 +195,35 @@ describe("streamed markdown", () => {
     expect(session.blocks[0]?.text).toBe(chunks.join(""));
   });
 
+  it("stores generated images as standalone blocks without assistant text", () => {
+    const session = applyHarnessEvent(
+      newSession("codex", "/tmp"),
+      {
+        type: "image.generated",
+        itemId: "image_1",
+        path: "/app-data/generated-images/image.png",
+        name: "generated-image",
+        mimeType: "image/png",
+        size: 8,
+        alt: "A clean product photo",
+      },
+    );
+
+    expect(session.blocks).toMatchObject([
+      {
+        role: "image",
+        text: "",
+        image: {
+          path: "/app-data/generated-images/image.png",
+          name: "generated-image",
+          mimeType: "image/png",
+          size: 8,
+          alt: "A clean product photo",
+        },
+      },
+    ]);
+  });
+
   it("does not double an assistant block when a completed snapshot repeats it", () => {
     let session = newSession("claude", "/tmp");
     session = applyHarnessEvent(session, {
@@ -194,6 +252,34 @@ describe("streamed markdown", () => {
     session = applyHarnessEvent(session, { type: "message.delta", text: "Next message." });
     expect(session.blocks[0].streaming).toBe(false);
     expect(session.blocks[2]).toMatchObject({ role: "assistant", text: "Next message." });
+  });
+
+  it("keeps adjacent completed assistant messages in separate blocks", () => {
+    let session = newSession("codex", "/tmp");
+    session = applyHarnessEvent(session, {
+      type: "message.delta",
+      text: "- update the notes and commit",
+    });
+    session = applyHarnessEvent(session, { type: "message.completed" });
+    session = applyHarnessEvent(session, {
+      type: "message.delta",
+      text: "Connect returned an empty file for one image.",
+    });
+    session = applyHarnessEvent(session, { type: "message.completed" });
+
+    expect(session.blocks).toMatchObject([
+      {
+        role: "assistant",
+        text: "- update the notes and commit",
+        streaming: false,
+      },
+      {
+        role: "assistant",
+        text: "Connect returned an empty file for one image.",
+        streaming: false,
+      },
+    ]);
+    expect(session.blocks[0].id).not.toBe(session.blocks[1].id);
   });
 
   it.each([false, true])("seals open prose at an interjection, with preceding status: %s", status => {
@@ -311,6 +397,20 @@ describe("appendSteerUser", () => {
       text: "hi",
       noteCard: { id: "n1", slug: "overview", title: "Overview" },
     });
+  });
+});
+
+describe("usage limits", () => {
+  it("records when a limited turn can resume", () => {
+    const limited = applyHarnessEvent(newSession("codex", "/tmp"), {
+      type: "usage.limited",
+      resetsAt: 5_000,
+    });
+    expect(limited.usageLimit).toEqual({ resetsAt: 5_000 });
+    expect(
+      applyHarnessEvent(newSession("codex", "/tmp"), { type: "usage.limited" })
+        .usageLimit,
+    ).toEqual({});
   });
 });
 
@@ -494,6 +594,48 @@ describe("task list updates", () => {
     ]);
   });
 
+  it("keeps a keyed task list from another provider conversation", () => {
+    let session = appendUser(newSession("claude", "/tmp"), "first");
+    session = applyHarnessEvent(session, {
+      type: "tasks.updated",
+      key: "claude-tasks",
+      providerSessionId: "sess_1",
+      authoritative: true,
+      items: [{ id: "1", text: "Old task", status: "completed" }],
+    });
+    session = appendUser(session, "second");
+    session = applyHarnessEvent(session, {
+      type: "tasks.updated",
+      key: "claude-tasks",
+      providerSessionId: "sess_2",
+      authoritative: true,
+      items: [{ id: "1", text: "New task", status: "pending" }],
+    });
+    session = applyHarnessEvent(session, {
+      type: "tasks.updated",
+      key: "claude-tasks",
+      providerSessionId: "sess_2",
+      authoritative: true,
+      items: [{ id: "1", text: "New task", status: "completed" }],
+    });
+
+    const lists = session.blocks
+      .filter((block) => block.role === "tasks")
+      .map((block) => block.taskList);
+    expect(lists).toEqual([
+      {
+        key: "claude-tasks",
+        providerSessionId: "sess_1",
+        items: [{ id: "1", text: "Old task", status: "completed" }],
+      },
+      {
+        key: "claude-tasks",
+        providerSessionId: "sess_2",
+        items: [{ id: "1", text: "New task", status: "completed" }],
+      },
+    ]);
+  });
+
   it("resets an in-progress task to pending when the turn stops", () => {
     let session = appendUser(newSession("cursor", "/tmp"), "fix it");
     session = applyHarnessEvent(session, {
@@ -660,6 +802,65 @@ describe("task list updates", () => {
   });
 });
 
+describe("plan keys", () => {
+  it("reaches this turn's plan block past a mid-turn follow-up", () => {
+    const key = planTurnKey(1);
+    let session = appendUser(newSession("claude", "/repo"), "plan it");
+    session = applyHarnessEvent(session, {
+      type: "plan",
+      key,
+      text: "# Approach",
+      streaming: true,
+    });
+    session = appendSteerUser(session, "also cover the tests");
+    session = applyHarnessEvent(session, {
+      type: "plan",
+      key,
+      text: "# Approach\n\nCover the tests too.",
+    });
+
+    const plans = session.blocks.filter((block) => block.role === "plan");
+    expect(plans).toHaveLength(1);
+    expect(plans[0].text).toBe("# Approach\n\nCover the tests too.");
+  });
+
+  it("does not adopt a saved plan block when the turn counter starts over", () => {
+    // First run of the app: this is the session's first turn, so gen is 1.
+    let session = appendUser(
+      newSession("claude", "/repo"),
+      "plan the refactor",
+    );
+    session = applyHarnessEvent(session, {
+      type: "plan",
+      key: planTurnKey(1),
+      text: "# Old plan",
+    });
+
+    // The key is saved with the transcript, so it survives the restart.
+    const saved = sanitizeSessionForPersist(session);
+    expect(saved.blocks.find((block) => block.role === "plan")?.plan?.key).toBe(
+      session.blocks.find((block) => block.role === "plan")?.plan?.key,
+    );
+
+    // Second run: the counter is back to 1 and the user plans again.
+    let reopened: Session = { ...session, blocks: saved.blocks };
+    reopened = appendUser(reopened, "plan the follow-up");
+    reopened = applyHarnessEvent(reopened, {
+      type: "plan",
+      key: planTurnKey(1),
+      text: "# New plan",
+    });
+
+    const plans = reopened.blocks.filter((block) => block.role === "plan");
+    expect(plans.map((block) => block.text)).toEqual([
+      "# Old plan",
+      "# New plan",
+    ]);
+    // The new plan belongs to the turn that produced it, not to the old one.
+    expect(reopened.blocks.at(-1)?.text).toBe("# New plan");
+  });
+});
+
 describe("applyHarnessEvent context", () => {
   it("tracks the newest level instead of summing turns", () => {
     let session = newSession("claude", "/repo");
@@ -781,6 +982,32 @@ describe("tool enrichment", () => {
       (block) => block.tool?.callId === "call_1",
     );
     expect(tool?.text).toBe("ls");
+  });
+
+  it("keeps a long shell command instead of the earlier Shell placeholder", () => {
+    const command = `npm run check:web 2>&1 | grep -E "${"test output".repeat(28)}"`;
+    expect(command.length).toBeGreaterThan(240);
+    let session = applyHarnessEvent(newSession("claude", "/repo"), {
+      type: "tool.started",
+      callId: "call_1",
+      title: "Shell",
+      kind: "execute",
+      status: "pending",
+    });
+    session = applyHarnessEvent(session, {
+      type: "tool.updated",
+      callId: "call_1",
+      title: command,
+      kind: "execute",
+      status: "pending",
+    });
+    session = applyHarnessEvent(session, {
+      type: "tool.updated",
+      callId: "call_1",
+      status: "completed",
+    });
+    expect(session.blocks[0].text).toBe(command);
+    expect(session.blocks[0].tool?.status).toBe("completed");
   });
 });
 
@@ -963,6 +1190,38 @@ describe("subagent steps", () => {
         text: "Read src/App.tsx",
       }),
     ).toBe(session);
+  });
+
+  it("caps a failed step's error output like the parent's own", () => {
+    let session = spawn();
+    session = applyHarnessEvent(session, {
+      type: "agent.step",
+      callId: "agent-1",
+      stepId: "t1",
+      kind: "tool",
+      text: "npm test",
+      status: "failed",
+      detail: "boom ".repeat(4_000),
+    });
+
+    const detail = session.blocks[0].agentRun?.steps[0].detail ?? "";
+    expect(detail.length).toBeLessThanOrEqual(8_002);
+    expect(detail.endsWith("…")).toBe(true);
+  });
+
+  it("drops a blank error output rather than carrying it around", () => {
+    let session = spawn();
+    session = applyHarnessEvent(session, {
+      type: "agent.step",
+      callId: "agent-1",
+      stepId: "t1",
+      kind: "tool",
+      text: "npm test",
+      status: "failed",
+      detail: "   ",
+    });
+
+    expect(session.blocks[0].agentRun?.steps[0]).not.toHaveProperty("detail");
   });
 
   it("keeps the parent tool block's own identity", () => {

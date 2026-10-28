@@ -1,9 +1,14 @@
+import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { ConnectionsSettings } from "../../connections/ui/ConnectionsSettings";
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
   ArrowDownCircle,
   Check,
   ChevronDown,
+  ExternalLink,
+  FolderOpen,
+  Globe,
   ImagePlus,
   Loader,
   Pencil,
@@ -35,6 +40,9 @@ import {
 } from "../../../shared/ui/ColorPickerPopover";
 import { Popover } from "../../../shared/ui/Popover";
 import { SecondaryButton } from "../../../shared/ui/SecondaryButton";
+import { JiraSettings } from "./JiraSettings";
+import { GradientBlurBackground } from "./GradientBlurBackground";
+import { McpSettings } from "./McpSettings";
 import { InboxProviderMark } from "../../inbox/ui/InboxProviderMark";
 import { RemoveProjectDialog } from "../../projects/ui/RemoveProjectDialog";
 import { WindowControls } from "../../../app/shell/WindowControls";
@@ -67,6 +75,7 @@ import {
   loadChatBackgroundPath,
   loadChatBackgroundSessionOpacity,
   loadChatBackgroundScope,
+  loadNewThreadBackgroundEffect,
   loadThemeDarkLightness,
   loadThemePreference,
   loadSidebarBlur,
@@ -81,15 +90,21 @@ import {
   saveChatBackgroundPath,
   saveChatBackgroundSessionOpacity,
   saveChatBackgroundScope,
+  setNewThreadBackgroundEffect,
   saveThemeDarkLightness,
   saveThemePreference,
   saveSidebarBlur,
   saveSidebarOpacity,
   saveThemeHue,
   saveThemeSaturation,
+  isLightScheme,
   saveTranscriptLayout,
   saveTranscriptAnchor,
+  syncNativeGlass,
   TRANSCRIPT_ANCHOR_CHANGE_EVENT,
+  loadShowExcludedFiles,
+  saveShowExcludedFiles,
+  SHOW_EXCLUDED_FILES_DEFAULT,
   SIDEBAR_BLUR_DEFAULT,
   SIDEBAR_BLUR_MAX,
   SIDEBAR_BLUR_MIN,
@@ -107,6 +122,11 @@ import {
   THEME_SATURATION_MIN,
   type ThemePreference,
   type ChatBackgroundScope,
+  NEW_THREAD_BACKGROUND_EFFECTS,
+  NEW_THREAD_BACKGROUND_EFFECT_LABELS,
+  NEW_THREAD_BACKGROUND_EFFECT_DESCRIPTIONS,
+  NEW_THREAD_BACKGROUND_EFFECT_DEFAULT,
+  type NewThreadBackgroundEffect,
   type TranscriptLayout,
 } from "../model/appearance";
 import {
@@ -119,8 +139,7 @@ import {
   saveUiScale,
   subscribeUiScale,
   UI_SCALE_DEFAULT,
-  UI_SCALE_MAX,
-  UI_SCALE_MIN,
+  UI_SCALE_PERCENTS,
 } from "../model/uiScale";
 import {
   getHarnessAvailabilitySnapshot,
@@ -129,13 +148,29 @@ import {
   probeHarnessAvailability,
   subscribeHarnessAvailability,
 } from "../../../integrations/harness/core/availability";
+import {
+  inspectHarnessBinary,
+  type HarnessBinaryInspection,
+} from "../../../integrations/harness/core/child";
+import {
+  loadProviderBinaryPath,
+  providerBinaryPathChangePending,
+  saveProviderBinaryPath,
+  type ConfigurableBinaryProvider,
+} from "../../providers/model/providerBinaryPaths";
+import {
+  compareSemver,
+  MINIMUM_OPENCODE_VERSION,
+  parseOpenCodeVersion,
+} from "../../../integrations/harness/providers/opencode/opencodeProtocol";
 import { refreshHarnessCatalogs } from "../../../integrations/harness/core/registry";
 import { loginHarness } from "../../../integrations/harness/core/auth";
 import {
   defaultModelId,
+  firstEnabledHarness,
   getModelSnapshot,
-  isPickerProviderVisible,
   loadDefaultModels,
+  loadHiddenPickerProviders,
   loadLastModelChoice,
   modelsFor,
   resolveModel,
@@ -144,8 +179,14 @@ import {
   savePickerProviderVisible,
   subscribeModels,
 } from "../../sessions/model/models";
-import { prettyCwd, projectKey, projectName } from "../../../shared/lib/paths";
-import { IS_MAC, IS_WIN } from "../../../platform/tauri/platform";
+import {
+  pathKey,
+  prettyCwd,
+  projectKey,
+  projectName,
+} from "../../../shared/lib/paths";
+import { revealPath } from "../../../platform/tauri/fs";
+import { IS_LINUX, IS_MAC, IS_WIN } from "../../../platform/tauri/platform";
 import {
   loadArchivedProjects,
   looksLikeProject,
@@ -160,6 +201,14 @@ import {
   type HarnessId,
 } from "../../sessions/model/session";
 import {
+  loadProjectProviderSettings,
+  projectProvidersRevision,
+  setProjectDefaultModel,
+  setProjectDefaultProvider,
+  setProjectProviderHidden,
+  subscribeProjectProviders,
+} from "../../sessions/model/projectProviders";
+import {
   newProviderAccount,
   providerAccounts,
   PROVIDER_ACCOUNT_PROVIDERS,
@@ -171,6 +220,23 @@ import {
   type ProviderAccountProvider,
 } from "../../providers/model/providerAccounts";
 import { removeProviderAccountCredentials } from "../../providers/model/providerAccountCredentials";
+import {
+  identityKey,
+  identityOrganizationTag,
+  useProviderAccountIdentities,
+} from "../../providers/model/providerAccountIdentity";
+import { ProviderAccountSubtitle } from "../../providers/ui/ProviderAccountSubtitle";
+import {
+  accountStatus,
+  accountUsageKey,
+  useProviderAccountUsage,
+} from "../../providers/model/accountUsage";
+import { clearCachedRateLimits } from "../../providers/model/rateLimitsCache";
+import {
+  AccountStatusLabel,
+  AccountUsageMeters,
+  AccountUsageRefresh,
+} from "../../providers/ui/ProviderAccountUsage";
 import {
   loadSessionSidebarFilters,
   saveSessionSidebarFilters,
@@ -202,10 +268,22 @@ import {
   saveLinearToken,
   type LinearTeam,
 } from "../../inbox/model/linear";
-import { loadTabGroupLabels, resolveTabGroupLabel } from "../../workspace/model/tabGroups";
+import {
+  loadTabGroupColors,
+  loadTabGroupCustomColors,
+  loadTabGroupLabels,
+  loadTabGroupMascots,
+  resolveTabGroupColor,
+  resolveTabGroupLabel,
+  resolveTabGroupLogo,
+  resolveTabGroupMascot,
+} from "../../workspace/model/tabGroups";
+import { useTabGroupLogos } from "../../projects/hooks/useTabGroupLogos";
+import { ProjectLogoIcon } from "../../projects/ui/ProjectLogoIcon";
+import { ProjectMascot } from "../../projects/ui/ProjectMascot";
 import {
   filterKeybindings,
-  KEYBINDINGS,
+  currentKeybindings,
   loadClaudeHooks,
   loadCloseToTray,
   loadCollapsedProjectRailMode,
@@ -213,10 +291,14 @@ import {
   loadDiffViewer,
   loadFileTabMode,
   loadFollowUpBehavior,
+  loadFormatOnSave,
   loadGridArcadeEnabled,
   loadLiveAgentsEnabled,
   loadModelControls,
   loadNotesEnabled,
+  loadKeybindingOverrides,
+  loadQuickComposerEnabled,
+  loadQuickComposerShortcut,
   loadTabAnimationsEnabled,
   saveClaudeHooks,
   saveCloseToTray,
@@ -225,10 +307,17 @@ import {
   saveDiffViewer,
   saveFileTabMode,
   saveFollowUpBehavior,
+  saveFormatOnSave,
   saveGridArcadeEnabled,
   saveLiveAgentsEnabled,
   saveModelControls,
   saveNotesEnabled,
+  saveKeybindingOverride,
+  validateKeybindingShortcut,
+  saveQuickComposerEnabled,
+  saveQuickComposerShortcut,
+  subscribeKeybindings,
+  type KeybindingOverride,
   saveTabAnimationsEnabled,
   searchSettings,
   settingsSectionDescription,
@@ -243,6 +332,14 @@ import {
   type SettingsSectionId,
 } from "../model/settings";
 import { loadSoundsEnabled, playCue, saveSoundsEnabled } from "../model/sounds";
+import { setQuickComposerShortcut } from "../../quick-composer/model/quickComposer";
+import {
+  isGlobalShortcut,
+  QUICK_COMPOSER_DEFAULT_SHORTCUT,
+  quickComposerShortcutLabel,
+  quickComposerShortcutPreview,
+  shortcutFromKeyEvent,
+} from "../../quick-composer/model/quickComposerShortcut";
 import {
   cachedNotificationPermission,
   loadNotificationsEnabled,
@@ -262,7 +359,10 @@ import {
 import { SkillsPage } from "../../skills/ui/SkillsPage";
 import { ProjectNotificationSettings } from "../../notifications/ui/ProjectNotificationSettings";
 import { WorktreesPage } from "../../source-control/ui/WorktreesPage";
-import { removeWorktree, type RemoveWorktree } from "../../source-control/model/worktrees";
+import {
+  removeWorktree,
+  type RemoveWorktree,
+} from "../../source-control/model/worktrees";
 import type { Session } from "../../sessions/model/session";
 
 /**
@@ -441,12 +541,18 @@ export function SettingsView({
               {section === "general" ? (
                 <GeneralPage onOpenWhatsNew={onOpenWhatsNew} />
               ) : null}
+              {section === "connections" ? <ConnectionsSettings /> : null}
               {section === "appearance" ? (
                 <AppearancePage appearance={appearance} />
               ) : null}
               {section === "chat" ? <ChatPage /> : null}
               {section === "keybindings" ? <KeybindingsPage /> : null}
-              {section === "providers" ? <ProvidersPage /> : null}
+              {section === "mcp" ? (
+                <McpSettings cwd={cwd} recents={recents} />
+              ) : null}
+              {section === "providers" ? (
+                <ProvidersPage cwd={cwd} recents={recents} />
+              ) : null}
               {section === "worktrees" ? (
                 <WorktreesPage
                   cwd={cwd}
@@ -626,6 +732,12 @@ function GeneralPage({
     loadTabAnimationsEnabled,
   );
   const [closeToTray, setCloseToTray] = useState(loadCloseToTray);
+  const [quickComposerEnabled, setQuickComposerEnabled] = useState(
+    loadQuickComposerEnabled,
+  );
+  const [quickComposerError, setQuickComposerError] = useState<string | null>(
+    null,
+  );
 
   // The user may flip the switch in System Settings and come back: re-read
   // the OS state whenever the window regains focus while the toggle is on.
@@ -654,6 +766,17 @@ function GeneralPage({
   const onNotesEnabled = (next: boolean) => {
     saveNotesEnabled(next);
     setNotesEnabled(next);
+  };
+
+  const onQuickComposerEnabled = (next: boolean) => {
+    saveQuickComposerEnabled(next);
+    setQuickComposerEnabled(next);
+    setQuickComposerError(null);
+    void setQuickComposerShortcut(next).catch((error: unknown) => {
+      // Another app already owns the combination. Leave the switch where the
+      // user put it so the next launch tries again, but say why it is dead.
+      setQuickComposerError(String(error));
+    });
   };
 
   const onLiveAgentsEnabled = (next: boolean) => {
@@ -751,6 +874,24 @@ function GeneralPage({
         >
           <Toggle label="Notes" on={notesEnabled} onChange={onNotesEnabled} />
         </Row>
+        {IS_MAC && (
+          <Row
+            id="quick-composer"
+            label="Quick composer"
+            description={`Press ${quickComposerShortcutLabel(loadQuickComposerShortcut())} in any app to float a prompt over it and start a session without switching to MonoCode. Change the shortcut in Keybindings. Return starts it in the background; ⌘Return starts it and brings the session forward.`}
+          >
+            {quickComposerError ? (
+              <span className="text-[12px] text-content/45">
+                {quickComposerError}
+              </span>
+            ) : null}
+            <Toggle
+              label="Quick composer"
+              on={quickComposerEnabled}
+              onChange={onQuickComposerEnabled}
+            />
+          </Row>
+        )}
         <Row
           id="working-agents"
           label="Working agents"
@@ -794,6 +935,7 @@ function ChatPage() {
   const [modelControls, setModelControls] =
     useState<ModelControls>(loadModelControls);
   const [diffViewer, setDiffViewer] = useState<DiffViewer>(loadDiffViewer);
+  const [formatOnSave, setFormatOnSave] = useState(loadFormatOnSave);
   const [composerRunner, setComposerRunner] = useState(loadComposerRunner);
   const [gridArcadeEnabled, setGridArcadeEnabled] = useState(
     loadGridArcadeEnabled,
@@ -832,6 +974,11 @@ function ChatPage() {
   const onDiffViewer = (next: DiffViewer) => {
     saveDiffViewer(next);
     setDiffViewer(next);
+  };
+
+  const onFormatOnSave = (next: boolean) => {
+    saveFormatOnSave(next);
+    setFormatOnSave(next);
   };
 
   const onComposerRunner = (next: boolean) => {
@@ -910,6 +1057,23 @@ function ChatPage() {
               { value: "beside", label: "Beside" },
             ]}
             onChange={onModelControls}
+          />
+        </Row>
+      </Group>
+
+      <Group
+        title="Editor"
+        description="What happens when you save a file in the workspace editor."
+      >
+        <Row
+          id="format-on-save"
+          label="Format on save"
+          description="Run Prettier on supported files before writing. Off keeps the text you typed, including quote style."
+        >
+          <Toggle
+            label="Format on save"
+            on={formatOnSave}
+            onChange={onFormatOnSave}
           />
         </Row>
       </Group>
@@ -1032,6 +1196,19 @@ function InboxPage({
         description="Pull requests and Boards work items from your ADO organization."
       >
         <AzureDevOpsSettings />
+      </Group>
+
+      <Group
+        id="jira"
+        title={
+          <span className="flex items-center gap-2">
+            <InboxProviderMark provider="jira" className="size-4 shrink-0" />
+            Jira
+          </span>
+        }
+        description="Jira Cloud issues from the projects you pick."
+      >
+        <JiraSettings />
       </Group>
 
       <Group
@@ -1627,6 +1804,9 @@ function useAppearanceSettings(
     loadThemeDarkLightness,
   );
   const [bodyGlass, setBodyGlass] = useState(loadBodyGlass);
+  const [showExcludedFiles, setShowExcludedFiles] = useState(
+    loadShowExcludedFiles,
+  );
   const [chatBackgroundPath, setChatBackgroundPath] = useState(
     loadChatBackgroundPath,
   );
@@ -1637,6 +1817,8 @@ function useAppearanceSettings(
     useState(loadChatBackgroundSessionOpacity);
   const [chatBackgroundScope, setChatBackgroundScope] =
     useState<ChatBackgroundScope>(loadChatBackgroundScope);
+  const [newThreadBackgroundEffect, setBackgroundEffect] =
+    useState<NewThreadBackgroundEffect>(loadNewThreadBackgroundEffect);
   const [chatBackgroundBusy, setChatBackgroundBusy] = useState(false);
   const [chatBackgroundError, setChatBackgroundError] = useState<string | null>(
     null,
@@ -1691,6 +1873,12 @@ function useAppearanceSettings(
     applyBodyGlass(next);
     saveBodyGlass(next);
     setBodyGlass(next);
+    if (IS_LINUX) syncNativeGlass(isLightScheme() ? "light" : "dark");
+  }, []);
+
+  const onShowExcludedFiles = useCallback((next: boolean) => {
+    saveShowExcludedFiles(next);
+    setShowExcludedFiles(next);
   }, []);
 
   const onChooseChatBackground = useCallback(async () => {
@@ -1746,6 +1934,14 @@ function useAppearanceSettings(
     setChatBackgroundScope(next);
   }, []);
 
+  const onNewThreadBackgroundEffect = useCallback(
+    (next: NewThreadBackgroundEffect) => {
+      setNewThreadBackgroundEffect(next);
+      setBackgroundEffect(next);
+    },
+    [],
+  );
+
   const onUiScale = useCallback((percent: number) => {
     const next = saveUiScale(percent / 100);
     setUiScale(next);
@@ -1769,6 +1965,7 @@ function useAppearanceSettings(
     onTint(THEME_HUE_DEFAULT, THEME_SATURATION_DEFAULT);
     onDarkLightness(THEME_DARK_LIGHTNESS_DEFAULT);
     onBodyGlass(BODY_GLASS_DEFAULT);
+    onShowExcludedFiles(SHOW_EXCLUDED_FILES_DEFAULT);
     onChatBackgroundEmptyOpacity(
       Math.round(CHAT_BACKGROUND_EMPTY_OPACITY_DEFAULT * 100),
     );
@@ -1776,6 +1973,7 @@ function useAppearanceSettings(
       Math.round(CHAT_BACKGROUND_SESSION_OPACITY_DEFAULT * 100),
     );
     onChatBackgroundScope(CHAT_BACKGROUND_SCOPE_DEFAULT);
+    onNewThreadBackgroundEffect(NEW_THREAD_BACKGROUND_EFFECT_DEFAULT);
     if (chatBackgroundPath) void onClearChatBackground();
     onUiScale(Math.round(UI_SCALE_DEFAULT * 100));
     onCollapsedProjectRailMode(COLLAPSED_PROJECT_RAIL_MODE_DEFAULT);
@@ -1786,8 +1984,10 @@ function useAppearanceSettings(
     onChatBackgroundEmptyOpacity,
     onChatBackgroundSessionOpacity,
     onChatBackgroundScope,
+    onNewThreadBackgroundEffect,
     onClearChatBackground,
     onAccentColor,
+    onShowExcludedFiles,
     onThemePreference,
     onOpacity,
     onTint,
@@ -1805,10 +2005,12 @@ function useAppearanceSettings(
     themeSaturation,
     themeDarkLightness,
     bodyGlass,
+    showExcludedFiles,
     chatBackgroundPath,
     chatBackgroundEmptyOpacity,
     chatBackgroundSessionOpacity,
     chatBackgroundScope,
+    newThreadBackgroundEffect,
     chatBackgroundBusy,
     chatBackgroundError,
     uiScale,
@@ -1820,11 +2022,13 @@ function useAppearanceSettings(
     onTint,
     onDarkLightness,
     onBodyGlass,
+    onShowExcludedFiles,
     onChooseChatBackground,
     onClearChatBackground,
     onChatBackgroundEmptyOpacity,
     onChatBackgroundSessionOpacity,
     onChatBackgroundScope,
+    onNewThreadBackgroundEffect,
     onUiScale,
     onCollapsedProjectRailMode,
     restoreDefaults,
@@ -1999,14 +2203,25 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
           label="Interface scale"
           description="Zoom the whole interface. You can also use Ctrl+=, Ctrl+-, and Ctrl+0 (Cmd on macOS)."
         >
-          <Slider
+          <Select
             label="Interface scale"
-            value={Math.round(appearance.uiScale * 100)}
-            display={`${Math.round(appearance.uiScale * 100)}%`}
-            min={Math.round(UI_SCALE_MIN * 100)}
-            max={Math.round(UI_SCALE_MAX * 100)}
-            step={10}
-            onChange={appearance.onUiScale}
+            value={String(Math.round(appearance.uiScale * 100))}
+            options={UI_SCALE_PERCENTS.map((percent) => ({
+              value: String(percent),
+              label: `${percent}%`,
+            }))}
+            onChange={(value) => appearance.onUiScale(Number(value))}
+          />
+        </Row>
+        <Row
+          id="show-excluded-files"
+          label="Show excluded files"
+          description="Show files and folders Git excludes, such as build output and dependencies, in the explorer."
+        >
+          <Toggle
+            label="Show excluded files"
+            on={appearance.showExcludedFiles}
+            onChange={appearance.onShowExcludedFiles}
           />
         </Row>
       </Group>
@@ -2038,14 +2253,24 @@ function ChatBackgroundCard({
       <div className="border-b border-content/5 p-4 last:border-b-0">
         <div className="overflow-hidden rounded-lg border border-content/10">
           {hasImage ? (
-            <div className="relative h-36">
-              <img
-                src={src ?? undefined}
-                alt=""
-                draggable={false}
-                className="size-full object-cover"
-                style={{ opacity: appearance.chatBackgroundEmptyOpacity }}
-              />
+            <div
+              className={`relative h-36 ${appearance.newThreadBackgroundEffect === "gradient-blur" ? "bg-background-base" : ""}`}
+            >
+              {appearance.newThreadBackgroundEffect === "gradient-blur" ? (
+                <GradientBlurBackground
+                  className="gradient-blur-preview absolute inset-0"
+                  style={{ opacity: appearance.chatBackgroundEmptyOpacity }}
+                />
+              ) : (
+                <div
+                  aria-hidden
+                  className="size-full bg-cover bg-center bg-no-repeat"
+                  style={{
+                    backgroundImage: "var(--chat-background-image)",
+                    opacity: appearance.chatBackgroundEmptyOpacity,
+                  }}
+                />
+              )}
               <span className="pointer-events-none absolute bottom-2 left-2 text-[11px] text-content/40">
                 Empty chat preview at {emptyVisibility}%
               </span>
@@ -2095,6 +2320,25 @@ function ChatBackgroundCard({
       {hasImage ? (
         <>
           <Row
+            label="Background effect"
+            description={
+              NEW_THREAD_BACKGROUND_EFFECT_DESCRIPTIONS[
+                appearance.newThreadBackgroundEffect
+              ]
+            }
+          >
+            <Segmented
+              label="Background effect"
+              value={appearance.newThreadBackgroundEffect}
+              options={NEW_THREAD_BACKGROUND_EFFECTS.map((effect) => ({
+                value: effect,
+                label: NEW_THREAD_BACKGROUND_EFFECT_LABELS[effect],
+              }))}
+              onChange={appearance.onNewThreadBackgroundEffect}
+              optionIdPrefix="new-thread-background-effect"
+            />
+          </Row>
+          <Row
             label="Show on"
             description="Empty sessions only, or every conversation."
           >
@@ -2140,14 +2384,279 @@ function ChatBackgroundCard({
   );
 }
 
+type ShortcutModifier = "metaKey" | "ctrlKey" | "altKey" | "shiftKey";
+
+function shortcutModifier(event: KeyboardEvent): ShortcutModifier | null {
+  if (event.key === "Meta" || event.code.startsWith("Meta")) return "metaKey";
+  if (event.key === "Control" || event.code.startsWith("Control"))
+    return "ctrlKey";
+  if (event.key === "Alt" || event.code.startsWith("Alt")) return "altKey";
+  if (event.key === "Shift" || event.code.startsWith("Shift"))
+    return "shiftKey";
+  return null;
+}
+
+function ShortcutEditor({
+  name,
+  display,
+  resetVisible,
+  onApply,
+  onDisable,
+  onReset,
+}: {
+  name: string;
+  display: string | null;
+  resetVisible: boolean;
+  onApply: (shortcut: string) => void | Promise<void>;
+  onDisable: () => void | Promise<void>;
+  onReset: () => void | Promise<void>;
+}) {
+  const [recording, setRecording] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [preview, setPreview] = useState("");
+  const held = useRef({
+    metaKey: false,
+    ctrlKey: false,
+    altKey: false,
+    shiftKey: false,
+  });
+
+  const run = async (action: () => void | Promise<void>) => {
+    setRecording(false);
+    setBusy(true);
+    setError(null);
+    try {
+      await action();
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const beginRecording = () => {
+    held.current = {
+      metaKey: false,
+      ctrlKey: false,
+      altKey: false,
+      shiftKey: false,
+    };
+    setPreview("");
+    setError(null);
+    setRecording(true);
+  };
+
+  useEffect(() => {
+    if (!recording) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      const bare =
+        !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
+      // An unmodified Tab leaves the recorder instead of trapping focus.
+      if (bare && event.code === "Tab") {
+        setRecording(false);
+        return;
+      }
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (event.code === "Escape") {
+        setRecording(false);
+        setError(null);
+        return;
+      }
+      // Delete disables, but only on its own so Cmd+Delete still records.
+      if (bare && (event.code === "Backspace" || event.code === "Delete")) {
+        void run(onDisable);
+        return;
+      }
+      const modifier = shortcutModifier(event);
+      if (modifier) held.current[modifier] = true;
+      const modifiers = {
+        metaKey: event.metaKey || held.current.metaKey,
+        ctrlKey: event.ctrlKey || held.current.ctrlKey,
+        altKey: event.altKey || held.current.altKey,
+        shiftKey: event.shiftKey || held.current.shiftKey,
+      };
+      setPreview(
+        quickComposerShortcutPreview(
+          modifiers,
+          modifier ? undefined : event.code,
+          event.key,
+        ),
+      );
+      if (modifier) return;
+      const next = shortcutFromKeyEvent({ ...modifiers, code: event.code });
+      if (next) void run(() => onApply(next));
+    };
+    const onKeyUp = (event: KeyboardEvent) => {
+      const modifier = shortcutModifier(event);
+      if (!modifier) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      held.current[modifier] = false;
+      const modifiers = {
+        metaKey: event.metaKey || held.current.metaKey,
+        ctrlKey: event.ctrlKey || held.current.ctrlKey,
+        altKey: event.altKey || held.current.altKey,
+        shiftKey: event.shiftKey || held.current.shiftKey,
+      };
+      modifiers[modifier] = false;
+      setPreview(quickComposerShortcutPreview(modifiers));
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("keyup", onKeyUp, true);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("keyup", onKeyUp, true);
+    };
+  }, [onApply, onDisable, recording]);
+
+  return (
+    <div className="relative w-40 shrink-0">
+      <div className="flex items-center gap-0.5">
+        <input
+          type="text"
+          readOnly
+          aria-label={`Change ${name} shortcut`}
+          data-shortcut-recorder-active={recording ? "true" : undefined}
+          aria-busy={busy || undefined}
+          value={
+            recording || busy ? preview || "Record…" : (display ?? "Disabled")
+          }
+          onFocus={beginRecording}
+          onClick={beginRecording}
+          onBlur={() => setRecording(false)}
+          className={`h-6 w-28 shrink-0 truncate rounded-md border bg-transparent px-1.5 py-0 font-mono text-[11px] leading-none outline-none focus:border-accent ${
+            busy ? "opacity-50" : ""
+          } ${
+            display === null
+              ? "border-dashed border-content/15 text-content/35"
+              : "border-content/15 text-content/80 hover:bg-content/10"
+          }`}
+        />
+        {resetVisible ? (
+          <button
+            type="button"
+            aria-label={`Reset ${name} shortcut`}
+            disabled={busy}
+            onClick={() => void run(onReset)}
+            className="rounded-md px-1 py-1 text-content/35 hover:bg-content/10 hover:text-content disabled:opacity-50"
+          >
+            <RotateCcw className="size-3.5" />
+          </button>
+        ) : null}
+      </div>
+      {recording ? (
+        <p
+          className="pointer-events-none absolute top-1/2 right-full z-40 mr-3 -translate-y-1/2 text-[10px] whitespace-nowrap text-content/50"
+          aria-live="polite"
+        >
+          Del disables · Esc cancels
+        </p>
+      ) : null}
+      {error ? (
+        <p
+          role="alert"
+          className="absolute top-full left-0 z-40 mt-1.5 w-max max-w-64 rounded-md border border-content/10 bg-background-base/95 px-2 py-1 text-[11px] whitespace-nowrap text-red-400 shadow-lg"
+        >
+          {error}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function QuickComposerShortcutEditor() {
+  const [shortcut, setShortcut] = useState(loadQuickComposerShortcut);
+  const [enabled, setEnabled] = useState(loadQuickComposerEnabled);
+  const apply = async (next: string) => {
+    if (!isGlobalShortcut(next))
+      throw new Error("Quick Composer needs ⌘ or Ctrl as a global hotkey");
+    // Validate before the native call: a rejected chord must not leave the OS
+    // holding a registered global hotkey that settings does not know about.
+    validateKeybindingShortcut("App: Quick Composer", next);
+    // Recording while the feature is off must not silently switch it back on.
+    if (enabled) await setQuickComposerShortcut(true, next);
+    saveQuickComposerShortcut(next);
+    setShortcut(next);
+  };
+  const reset = async () => {
+    // Reset restores the whole default state, including the enabled flag.
+    validateKeybindingShortcut(
+      "App: Quick Composer",
+      QUICK_COMPOSER_DEFAULT_SHORTCUT,
+    );
+    await setQuickComposerShortcut(true, QUICK_COMPOSER_DEFAULT_SHORTCUT);
+    saveQuickComposerEnabled(true);
+    saveQuickComposerShortcut(QUICK_COMPOSER_DEFAULT_SHORTCUT);
+    setShortcut(QUICK_COMPOSER_DEFAULT_SHORTCUT);
+    setEnabled(true);
+  };
+  return (
+    <ShortcutEditor
+      name="quick composer"
+      display={enabled ? quickComposerShortcutLabel(shortcut) : null}
+      resetVisible={
+        enabled !== true || shortcut !== QUICK_COMPOSER_DEFAULT_SHORTCUT
+      }
+      onApply={apply}
+      onDisable={async () => {
+        await setQuickComposerShortcut(false);
+        saveQuickComposerEnabled(false);
+        setEnabled(false);
+      }}
+      onReset={reset}
+    />
+  );
+}
+
+function KeybindingShortcutEditor({
+  command,
+  display,
+  modified,
+  onSave,
+}: {
+  command: string;
+  display: string | null;
+  modified: boolean;
+  onSave: (
+    command: string,
+    override: KeybindingOverride,
+  ) => void | Promise<void>;
+}) {
+  return (
+    <ShortcutEditor
+      name={command}
+      display={display}
+      resetVisible={modified}
+      onApply={(shortcut) => onSave(command, { shortcut })}
+      onDisable={() => onSave(command, { disabled: true })}
+      onReset={() => onSave(command, {})}
+    />
+  );
+}
+
 function KeybindingsPage() {
   const [query, setQuery] = useState("");
-  const rows = useMemo(() => filterKeybindings(KEYBINDINGS, query), [query]);
+  const [overrides, setOverrides] = useState(loadKeybindingOverrides);
+  useEffect(
+    () => subscribeKeybindings(() => setOverrides(loadKeybindingOverrides())),
+    [],
+  );
+  const rows = useMemo(
+    () => filterKeybindings(currentKeybindings(), query),
+    [query, overrides],
+  );
+
+  const save = async (command: string, override: KeybindingOverride) => {
+    const next = saveKeybindingOverride(command, override);
+    if (IS_MAC) await invoke("keybindings_set_overrides", { overrides: next });
+  };
 
   return (
     <Group
       title="Shortcuts"
-      description="Bindings come from the app menu and the workspace key handler; they aren’t customizable yet."
+      description="Click a shortcut to record new keys. Press Delete while recording to disable it."
       action={
         <div className="flex items-center gap-3">
           <span className="shrink-0 text-[12px] text-content/40 tabular-nums">
@@ -2178,39 +2687,444 @@ function KeybindingsPage() {
           No matching bindings
         </p>
       ) : (
-        rows.map((row) => (
-          <div
-            key={`${row.command}-${row.keys}`}
-            className="flex items-center border-b border-content/5 px-4 py-2 text-[12px] last:border-b-0"
-          >
-            <span className="min-w-0 flex-1 truncate">{row.command}</span>
-            <span className="w-40 shrink-0 font-mono text-[12px] text-content/80">
-              {row.keys}
-            </span>
-            <span className="w-28 shrink-0 font-mono text-[11px] text-content/40">
-              {row.when}
-            </span>
-          </div>
-        ))
+        rows.map((row) => {
+          const override = overrides[row.command];
+          const disabled = override?.disabled === true;
+          return (
+            <div
+              key={row.command}
+              className="flex h-11 items-center border-b border-content/5 px-4 text-[12px] last:border-b-0"
+            >
+              <span
+                className={`min-w-0 flex-1 truncate ${disabled ? "text-content/45" : ""}`}
+              >
+                {row.command}
+              </span>
+              {row.command === "App: Quick Composer" ? (
+                <QuickComposerShortcutEditor />
+              ) : (
+                <KeybindingShortcutEditor
+                  command={row.command}
+                  display={disabled ? null : row.keys}
+                  modified={Boolean(override)}
+                  onSave={save}
+                />
+              )}
+              <span className="w-28 shrink-0 font-mono text-[11px] text-content/40">
+                {row.when}
+              </span>
+            </div>
+          );
+        })
       )}
     </Group>
   );
 }
 
-function ProvidersPage() {
+const GLOBAL_PROVIDER_SCOPE = "global";
+
+function binaryInspectionError(
+  provider: ConfigurableBinaryProvider,
+  inspection: HarnessBinaryInspection,
+): string | null {
+  if (inspection.error) return inspection.error;
+  if (provider === "codex" && !/^codex-cli\s+\d+\.\d+\.\d+/.test(inspection.version ?? "")) {
+    return "Codex CLI returned an invalid version.";
+  }
+  if (provider === "opencode") {
+    const version = parseOpenCodeVersion(inspection.version ?? "");
+    if (!version) return "OpenCode CLI returned an invalid version.";
+    if (compareSemver(version, MINIMUM_OPENCODE_VERSION) < 0) {
+      return `OpenCode v${version} is too old. Upgrade to v${MINIMUM_OPENCODE_VERSION} or newer.`;
+    }
+  }
+  return null;
+}
+
+function ProviderBinaryControl({
+  provider,
+}: {
+  provider: ConfigurableBinaryProvider;
+}) {
+  const root = useRef<HTMLSpanElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const editInput = useRef<HTMLInputElement>(null);
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(
+    () => loadProviderBinaryPath(provider) ?? "",
+  );
+  const [overridden, setOverridden] = useState(() =>
+    Boolean(loadProviderBinaryPath(provider)),
+  );
+  const [inspection, setInspection] = useState<
+    HarnessBinaryInspection & { overridden: boolean }
+  >();
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [revealError, setRevealError] = useState<string | null>(null);
+
+  const inspect = useCallback(
+    async (binaryPath?: string | null) => {
+      setWorking(true);
+      setInspection(undefined);
+      setError(null);
+      setRevealError(null);
+      try {
+        const next = await inspectHarnessBinary(provider, binaryPath);
+        setInspection({
+          ...next,
+          overridden: Boolean(binaryPath?.trim()),
+        });
+        setError(binaryInspectionError(provider, next));
+        return next;
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        setError(message);
+        return null;
+      } finally {
+        setWorking(false);
+      }
+    },
+    [provider],
+  );
+
+  useEffect(() => {
+    if (editing) editInput.current?.focus();
+  }, [editing]);
+
+  const dismiss = (restoreFocus = false) => {
+    setOpen(false);
+    setEditing(false);
+    if (restoreFocus) queueMicrotask(() => trigger.current?.focus());
+  };
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (working) return;
+    const value = draft.trim();
+    if (!value) {
+      await useAuto();
+      return;
+    }
+    const next = await inspect(value);
+    if (!next) return;
+    const validationError = binaryInspectionError(provider, next);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+    if (!saveProviderBinaryPath(provider, value)) {
+      setInspection(undefined);
+      setError("Could not save the binary path.");
+      return;
+    }
+    setOverridden(true);
+    dismiss(true);
+  };
+
+  const useAuto = async () => {
+    if (working) return;
+    const next = await inspect(null);
+    if (!next || binaryInspectionError(provider, next)) return;
+    if (!saveProviderBinaryPath(provider, null)) {
+      setInspection(undefined);
+      setError("Could not save the binary path.");
+      return;
+    }
+    setDraft("");
+    setOverridden(false);
+    dismiss(true);
+  };
+
+  const title = HARNESS_TITLE[provider];
+  const restartRequired = providerBinaryPathChangePending(provider);
+
+  return (
+    <span ref={root} className="inline-flex align-middle">
+      <button
+        ref={trigger}
+        type="button"
+        aria-label={
+          restartRequired
+            ? `Show ${title} CLI details, restart required`
+            : `Show ${title} CLI details`
+        }
+        aria-expanded={open}
+        aria-controls={`${provider}-binary-popover`}
+        aria-haspopup="dialog"
+        title={`${title} CLI path${restartRequired ? " — restart required" : ""}`}
+        onClick={() => {
+          if (!open && !inspection && !working && !error) {
+            void inspect(loadProviderBinaryPath(provider));
+          }
+          setOpen((value) => !value);
+          setEditing(false);
+        }}
+        className={`grid size-6 place-items-center rounded hover:bg-content/10 focus-visible:outline-2 focus-visible:outline-accent ${
+          restartRequired ? "text-amber-300" : "text-content/35 hover:text-content"
+        }`}
+      >
+        <FolderOpen className="size-3.5" strokeWidth={1.75} />
+      </button>
+      {open ? (
+        <Popover
+          id={`${provider}-binary-popover`}
+          role="dialog"
+          aria-label={`${title} CLI details`}
+          aria-busy={working}
+          tabIndex={-1}
+          anchor={root}
+          side="bottom"
+          align="start"
+          width={440}
+          className="p-3"
+          autoFocus
+          onKeyDown={(event) => {
+            if (event.key !== "Tab") return;
+            const focusable = Array.from(
+              event.currentTarget.querySelectorAll<HTMLElement>(
+                'button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+              ),
+            );
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+            if (!first || !last) return;
+            if (event.shiftKey && document.activeElement === first) {
+              event.preventDefault();
+              last.focus();
+            } else if (!event.shiftKey && document.activeElement === last) {
+              event.preventDefault();
+              first.focus();
+            }
+          }}
+          onDismiss={(reason) => dismiss(reason === "escape")}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-[12px] font-medium text-content">
+              {title} CLI
+            </span>
+            <div className="flex items-center gap-1.5">
+              <span className="rounded-full bg-content/10 px-1.5 py-0.5 text-[10px] text-content/50">
+                Global path
+              </span>
+              <span className="rounded-full bg-content/10 px-1.5 py-0.5 text-[10px] text-content/50">
+                {error
+                  ? "Needs attention"
+                  : restartRequired
+                    ? "Restart required"
+                    : overridden
+                      ? "Configured"
+                      : "Auto-detected"}
+              </span>
+            </div>
+          </div>
+          {editing ? (
+            <form className="mt-2" onSubmit={submit}>
+              <label
+                htmlFor={`${provider}-binary-path`}
+                className="text-[11px] text-content/50"
+              >
+                CLI path
+              </label>
+              <input
+                id={`${provider}-binary-path`}
+                ref={editInput}
+                type="text"
+                value={draft}
+                placeholder={inspection?.path ?? "Auto-detected path"}
+                disabled={working}
+                autoFocus
+                onChange={(event) => setDraft(event.target.value)}
+                className="mt-1.5 h-8 w-full rounded-md border border-content/10 bg-content/[0.04] px-2 font-mono text-[11px] text-content outline-none placeholder:font-sans placeholder:text-content/35 focus:border-accent/45 disabled:opacity-50"
+              />
+              <p className="mt-1.5 text-[10px] text-content/40">
+                Enter the absolute path to the CLI executable. Changes apply after restarting MonoCode.
+              </p>
+              {error ? (
+                <span
+                  role="alert"
+                  className="mt-1.5 block text-[11px] text-red-400"
+                >
+                  {error}
+                </span>
+              ) : null}
+              <div className="mt-3 flex justify-end gap-2">
+                <SecondaryButton
+                  disabled={working}
+                  onClick={() => {
+                    setDraft(loadProviderBinaryPath(provider) ?? "");
+                    setEditing(false);
+                    queueMicrotask(() => trigger.current?.focus());
+                  }}
+                >
+                  Cancel
+                </SecondaryButton>
+                {overridden ? (
+                  <SecondaryButton
+                    disabled={working}
+                    onClick={() => void useAuto()}
+                  >
+                    Use auto-detected path
+                  </SecondaryButton>
+                ) : null}
+                <SecondaryButton type="submit" disabled={working}>
+                  Save path
+                </SecondaryButton>
+              </div>
+            </form>
+          ) : (
+            <>
+              <div className="mt-2 rounded-md border border-content/10 bg-content/[0.03] px-2.5 py-2">
+                <span className="block max-h-12 overflow-y-auto whitespace-pre-wrap break-all font-mono text-[10px] text-content/65">
+                  {inspection?.path ??
+                    (error ? "CLI could not be resolved" : "Checking the selected CLI…")}
+                </span>
+                <span className="mt-1 block max-h-10 overflow-y-auto whitespace-pre-wrap break-words text-[10px] text-content/40">
+                  {inspection?.version ??
+                    (error ? "Retry to check this CLI" : "Checking version…")}
+                </span>
+              </div>
+               {error ? (
+                 <span
+                   role="alert"
+                   title={error}
+                   className="mt-1.5 block max-h-20 overflow-y-auto whitespace-pre-wrap break-words text-[10px] leading-4 text-red-400"
+                 >
+                   {error}
+                 </span>
+               ) : null}
+               {revealError ? (
+                 <span
+                   role="alert"
+                   className="mt-1.5 block max-h-20 overflow-y-auto whitespace-pre-wrap break-words text-[10px] leading-4 text-red-400"
+                 >
+                   Could not open the CLI location: {revealError}
+                 </span>
+               ) : null}
+               <div className="mt-3 flex justify-end gap-2">
+                {error ? (
+                  <SecondaryButton
+                    disabled={working}
+                    aria-label={`Retry ${title} ${
+                      overridden ? "configured path" : "auto-detect"
+                    }`}
+                    onClick={() =>
+                      void inspect(overridden ? draft.trim() || null : null)
+                    }
+                  >
+                    <RefreshCw className="size-3.5" strokeWidth={1.75} />
+                    {overridden ? "Retry configured path" : "Retry auto-detect"}
+                  </SecondaryButton>
+                ) : null}
+                <SecondaryButton
+                  aria-label={`Open ${title} CLI location`}
+                  disabled={!inspection}
+                  onClick={() => {
+                    if (inspection) {
+                      void revealPath(inspection.path).catch((cause) => {
+                        setRevealError(
+                          cause instanceof Error ? cause.message : String(cause),
+                        );
+                      });
+                    }
+                  }}
+                >
+                  <ExternalLink className="size-3.5" strokeWidth={1.75} />
+                  Open location
+                </SecondaryButton>
+                <SecondaryButton
+                  aria-label={`Edit ${title} CLI path`}
+                  disabled={working}
+                  onClick={() => setEditing(true)}
+                >
+                  <Pencil className="size-3.5" strokeWidth={1.75} />
+                  Edit path
+                </SecondaryButton>
+              </div>
+            </>
+          )}
+        </Popover>
+      ) : null}
+    </span>
+  );
+}
+
+function ProvidersPage({
+  cwd,
+  recents,
+}: {
+  cwd?: string;
+  recents?: RecentProject[];
+}) {
   useSyncExternalStore(subscribeModels, getModelSnapshot, getModelSnapshot);
   useSyncExternalStore(
     subscribeHarnessAvailability,
     getHarnessAvailabilitySnapshot,
     getHarnessAvailabilitySnapshot,
   );
+  const providersRevision = useSyncExternalStore(
+    subscribeProjectProviders,
+    projectProvidersRevision,
+    projectProvidersRevision,
+  );
+  void providersRevision;
   const [choice, setChoice] = useState(loadLastModelChoice);
   const [defaultModels, setDefaultModels] = useState(loadDefaultModels);
   const [claudeHooks, setClaudeHooks] = useState(loadClaudeHooks);
+  const [scope, setScope] = useState<string>(GLOBAL_PROVIDER_SCOPE);
+  const [hiddenGlobally, setHiddenGlobally] = useState(
+    loadHiddenPickerProviders,
+  );
+
+  const scopeOptions = useMemo(() => {
+    const options: { value: string; label: string; icon?: ReactNode }[] = [
+      {
+        value: GLOBAL_PROVIDER_SCOPE,
+        label: "Global",
+        icon: (
+          <Globe
+            className="size-3.5 shrink-0 text-content/60"
+            strokeWidth={1.75}
+          />
+        ),
+      },
+    ];
+    const seen = new Set<string>();
+    for (const path of [cwd, ...(recents ?? []).map((entry) => entry.path)]) {
+      if (!path || !looksLikeProject(path)) continue;
+      const key = pathKey(path);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      options.push({
+        value: path,
+        label: projectName(path),
+        icon: <ProjectScopeIcon path={path} />,
+      });
+    }
+    return options;
+  }, [cwd, recents]);
+
+  const project = scope === GLOBAL_PROVIDER_SCOPE ? null : scope;
+  const projectSettings = project ? loadProjectProviderSettings(project) : {};
+  // A project without overrides inherits the global default provider, the same
+  // way `defaultSessionChoice` resolves it for new conversations.
+  const effectiveDefaultHarness = project
+    ? firstEnabledHarness(
+        project,
+        projectSettings.defaultHarness ?? choice?.harness ?? "cursor",
+      )
+    : (choice?.harness ?? null);
 
   useEffect(() => {
     void probeHarnessAvailability();
   }, []);
+
+  useEffect(() => {
+    if (!scopeOptions.some((option) => option.value === scope)) {
+      setScope(GLOBAL_PROVIDER_SCOPE);
+    }
+  }, [scope, scopeOptions]);
 
   const onClaudeHooks = (next: boolean) => {
     saveClaudeHooks(next);
@@ -2218,6 +3132,10 @@ function ProvidersPage() {
   };
 
   const onModelChange = (harness: HarnessId, model: string) => {
+    if (project) {
+      setProjectDefaultModel(project, harness, model);
+      return;
+    }
     saveDefaultModel(harness, model);
     setDefaultModels((prev) => ({ ...prev, [harness]: model }));
     if (choice?.harness === harness) {
@@ -2227,9 +3145,26 @@ function ProvidersPage() {
   };
 
   const onDefault = (harness: HarnessId, model: string) => {
+    if (project) {
+      setProjectDefaultProvider(project, harness, model);
+      return;
+    }
     saveLastModelChoice(harness, model);
     setDefaultModels((prev) => ({ ...prev, [harness]: model }));
     setChoice({ harness, model });
+  };
+
+  const onPickerVisible = (harness: HarnessId, visible: boolean) => {
+    if (project) {
+      setProjectProviderHidden(project, harness, !visible);
+      return;
+    }
+    savePickerProviderVisible(harness, visible);
+    setHiddenGlobally((prev) =>
+      visible
+        ? prev.filter((id) => id !== harness)
+        : [...new Set([...prev, harness])],
+    );
   };
 
   return (
@@ -2237,24 +3172,61 @@ function ProvidersPage() {
       <ProviderAccountsSettings />
 
       <Group
+        id="agent-clis"
         title="Agent CLIs"
-        description="A provider is listed as installed once its CLI is found on your PATH. Uninstalled CLIs stay listed but are left out of the model picker, as are installed ones with Show in picker off. The model beside a provider is what its new conversations start with; Use by default picks the provider itself."
+        action={
+          <Select
+            label="Provider defaults scope"
+            value={scope}
+            options={scopeOptions}
+            onChange={setScope}
+          />
+        }
+        description={
+          project
+            ? `These defaults apply to ${projectName(project)} only. A provider with Show in picker off is also kept out of new conversations started in this project. CLI paths remain global for MonoCode.`
+            : "A provider is listed as installed once its CLI is found on your PATH. Uninstalled CLIs stay listed but are left out of the model picker, as are installed ones with Show in picker off. The model beside a provider is what its new conversations start with; Use by default picks the provider itself. CLI paths are global for MonoCode and apply to every project."
+        }
       >
-        {HARNESSES.map((harness) => (
-          <ProviderRow
-            key={harness}
-            harness={harness}
-            selectedModel={
+        {HARNESSES.map((harness) => {
+          const inPicker = project
+            ? !(projectSettings.hidden ?? []).includes(harness) &&
+              !hiddenGlobally.includes(harness)
+            : !hiddenGlobally.includes(harness);
+          // A globally hidden provider stays out of every project's picker, so
+          // the project toggle is shown locked rather than appearing to work.
+          const pickerLocked =
+            project != null && hiddenGlobally.includes(harness);
+          const selectedModel = project
+            ? (projectSettings.models?.[harness] ??
+              (projectSettings.defaultHarness === harness
+                ? projectSettings.defaultModel
+                : undefined) ??
               defaultModels[harness] ??
               (choice?.harness === harness
                 ? choice.model
-                : defaultModelId(harness))
-            }
-            isDefault={choice?.harness === harness}
-            onDefault={onDefault}
-            onModelChange={onModelChange}
-          />
-        ))}
+                : defaultModelId(harness)))
+            : (defaultModels[harness] ??
+              (choice?.harness === harness
+                ? choice.model
+                : defaultModelId(harness)));
+          const isDefault = project
+            ? effectiveDefaultHarness === harness
+            : choice?.harness === harness;
+          return (
+            <ProviderRow
+              key={harness}
+              harness={harness}
+              selectedModel={selectedModel}
+              isDefault={isDefault}
+              inPicker={inPicker}
+              pickerLocked={pickerLocked}
+              onDefault={onDefault}
+              onModelChange={onModelChange}
+              onPickerVisible={(visible) => onPickerVisible(harness, visible)}
+            />
+          );
+        })}
       </Group>
 
       <Group title="Advanced">
@@ -2281,7 +3253,7 @@ type AccountEditor = {
 };
 
 function ProviderAccountsSettings() {
-  const [, setVersion] = useState(0);
+  const [version, setVersion] = useState(0);
   const [editor, setEditor] = useState<AccountEditor | null>(null);
   const [working, setWorking] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -2351,6 +3323,7 @@ function ProviderAccountsSettings() {
     try {
       await removeProviderAccountCredentials(account.provider, account.id);
       removeProviderAccount(account.provider, account.id);
+      clearCachedRateLimits(account.provider, account.id);
       if (
         editor?.provider === account.provider &&
         editor.accountId === account.id
@@ -2368,11 +3341,18 @@ function ProviderAccountsSettings() {
     }
   };
 
+  const identities = useProviderAccountIdentities(
+    PROVIDER_ACCOUNT_PROVIDERS.flatMap(providerAccounts),
+    version,
+  );
+  const usage = useProviderAccountUsage(version);
+
   return (
     <Group
       id="provider-accounts"
       title="Accounts"
       description="Create isolated sign-ins for providers that support account profiles. Account switching stays available from the usage control in the footer."
+      action={<AccountUsageRefresh usage={usage} />}
     >
       {PROVIDER_ACCOUNT_PROVIDERS.map((provider) => {
         const accounts = providerAccounts(provider);
@@ -2413,6 +3393,9 @@ function ProviderAccountsSettings() {
                   editor?.provider === provider &&
                   editor.accountId === account.id;
                 const removing = working === `remove:${provider}:${account.id}`;
+                const identity = identities[identityKey(account)];
+                const orgTag = identityOrganizationTag(identity);
+                const limits = usage.usage[accountUsageKey(account)];
                 return editing ? (
                   <ProviderAccountEditor
                     key={account.id}
@@ -2432,16 +3415,34 @@ function ProviderAccountsSettings() {
                     className="flex h-12 items-center gap-3 border-b border-content/5 px-4 py-2 last:border-b-0"
                   >
                     <div className="min-w-0 flex-1">
-                      <div className="truncate text-[12px] text-content/85">
-                        {account.label}
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        <span className="truncate text-[12px] text-content/85">
+                          {account.label}
+                        </span>
+                        {orgTag ? (
+                          <span className="max-w-[8rem] shrink-0 truncate rounded bg-content/[0.07] px-1 text-[9px] leading-4 text-content/50">
+                            {orgTag}
+                          </span>
+                        ) : null}
                       </div>
-                      <div className="mt-0.5 text-[10px] text-content/35">
-                        {account.isDefault
-                          ? "Provider CLI profile"
-                          : "Isolated profile"}
+                      <div className="mt-0.5 flex min-w-0 items-center gap-2.5 text-[10px]">
+                        <AccountStatusLabel
+                          status={accountStatus(limits, usage.now)}
+                          className="shrink-0"
+                        />
+                        <ProviderAccountSubtitle
+                          identity={identity}
+                          fallback={
+                            account.isDefault
+                              ? "Provider CLI profile"
+                              : "Isolated profile"
+                          }
+                          className="truncate text-content/30"
+                        />
                       </div>
                     </div>
-                    <div className="flex shrink-0 items-center gap-1">
+                    <AccountUsageMeters limits={limits} now={usage.now} />
+                    <div className="flex w-24 shrink-0 items-center justify-end gap-1">
                       {account.isDefault ? (
                         <span className="mr-1 text-[10px] font-medium uppercase tracking-wide text-content/30">
                           Default
@@ -2568,36 +3569,63 @@ function ProviderAccountEditor({
   );
 }
 
+/** The icon the project rail shows: custom logo, else the project mascot. */
+function ProjectScopeIcon({ path }: { path: string }) {
+  const logos = useTabGroupLogos();
+  const [colors] = useState(loadTabGroupColors);
+  const [customColors] = useState(loadTabGroupCustomColors);
+  const [mascots] = useState(loadTabGroupMascots);
+  const key = projectKey(path);
+  const name = projectName(path);
+  const logoPath = resolveTabGroupLogo(key, logos);
+  if (logoPath) {
+    return (
+      <ProjectLogoIcon
+        path={logoPath}
+        className="size-4 rounded-sm"
+        imageClassName="size-4"
+      />
+    );
+  }
+  return (
+    <ProjectMascot
+      project={name}
+      color={resolveTabGroupColor(key, colors, customColors, name)}
+      name={resolveTabGroupMascot(key, mascots)}
+      className="size-3.5"
+    />
+  );
+}
+
 function ProviderRow({
   harness,
   selectedModel,
   isDefault,
+  inPicker,
+  pickerLocked = false,
   onDefault,
   onModelChange,
+  onPickerVisible,
 }: {
   harness: HarnessId;
   selectedModel: string;
   isDefault: boolean;
+  inPicker: boolean;
+  /** Globally hidden providers cannot be turned on per project. */
+  pickerLocked?: boolean;
   onDefault: (harness: HarnessId, model: string) => void;
   onModelChange: (harness: HarnessId, model: string) => void;
+  onPickerVisible: (visible: boolean) => void;
 }) {
   const models = modelsFor(harness);
   const available = isHarnessAvailable(harness);
   const current =
     models.length > 0 ? resolveModel(harness, selectedModel) : null;
-  const [inPicker, setInPicker] = useState(() =>
-    isPickerProviderVisible(harness),
-  );
 
   useEffect(() => {
     if (!available || models.length > 0) return;
     void refreshHarnessCatalogs([harness]);
   }, [available, harness, models.length]);
-
-  const onPickerVisible = (visible: boolean) => {
-    savePickerProviderVisible(harness, visible);
-    setInPicker(visible);
-  };
 
   return (
     <Row
@@ -2605,6 +3633,7 @@ function ProviderRow({
         <span className="flex items-center gap-2">
           <HarnessIcon harness={harness} className="size-4 shrink-0" />
           {HARNESS_TITLE[harness]}
+          <ProviderBinaryControl provider={harness} />
           {isDefault ? (
             <span className="rounded-full bg-content/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-content/60">
               Default
@@ -2637,11 +3666,14 @@ function ProviderRow({
       </SecondaryButton>
       {available ? (
         <div className="flex items-center gap-2">
-          <span className="text-[12px] text-content/50">Show in picker</span>
+          <span className="text-[12px] text-content/50">
+            {pickerLocked ? "Hidden globally" : "Show in picker"}
+          </span>
           <Toggle
             label={`Show ${HARNESS_TITLE[harness]} in the model picker`}
             on={inPicker}
             onChange={onPickerVisible}
+            disabled={pickerLocked}
           />
         </div>
       ) : null}
@@ -2941,11 +3973,13 @@ function Segmented<T extends string>({
   value,
   options,
   onChange,
+  optionIdPrefix,
 }: {
   label: string;
   value: T;
   options: { value: T; label: string }[];
   onChange: (value: T) => void;
+  optionIdPrefix?: string;
 }) {
   return (
     <div
@@ -2958,6 +3992,11 @@ function Segmented<T extends string>({
     >
       {options.map((option) => (
         <button
+          id={
+            optionIdPrefix
+              ? `${optionIdPrefix}-${option.value.toLowerCase()}`
+              : undefined
+          }
           key={option.value}
           type="button"
           role="radio"
@@ -3146,7 +4185,7 @@ function Select({
 }: {
   label: string;
   value: string;
-  options: { value: string; label: string }[];
+  options: { value: string; label: string; icon?: ReactNode }[];
   onChange: (value: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -3231,8 +4270,15 @@ function Select({
         onClick={() => setOpen((prev) => !prev)}
         className="flex w-full items-center justify-between gap-2 rounded-md border border-content/10 bg-content/5 px-2 py-1 text-left text-[12px] text-content outline-none hover:border-content/20"
       >
-        <span className="min-w-0 flex-1 truncate">
-          {selected ? selected.label : value}
+        <span className="flex min-w-0 flex-1 items-center gap-1.5">
+          {selected?.icon ? (
+            <span className="grid size-4 shrink-0 place-items-center">
+              {selected.icon}
+            </span>
+          ) : null}
+          <span className="min-w-0 truncate">
+            {selected ? selected.label : value}
+          </span>
         </span>
         <ChevronDown
           className={`size-3.5 shrink-0 text-content/50 transition-transform ${open ? "rotate-180" : ""}`}
@@ -3279,6 +4325,11 @@ function Select({
                     : "text-content hover:bg-content/5"
                 }`}
               >
+                {option.icon ? (
+                  <span className="grid size-4 shrink-0 place-items-center">
+                    {option.icon}
+                  </span>
+                ) : null}
                 <span className="min-w-0 flex-1 truncate">{option.label}</span>
                 {isSelected ? (
                   <Check className="size-3.5 shrink-0" strokeWidth={2.25} />

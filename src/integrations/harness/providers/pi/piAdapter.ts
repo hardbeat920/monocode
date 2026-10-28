@@ -4,13 +4,14 @@ import {
   compactPiContext,
   forgetPiSession,
   respondPiApproval,
+  rewindPiLastTurn,
   sendPiTurn,
   steerPiTurn,
   stopPiSession,
 } from "./pi";
 import { refreshPiCatalog } from "./piCatalog";
 import { generatePiSessionTitle } from "./piTitle";
-import { warmupPiText } from "./piText";
+import { runPiTextPrompt, stopPiTextPrompt, warmupPiText } from "./piText";
 import { registerHarness, type HarnessAdapter } from "../../core/registry";
 import { discoverPiSkills } from "./piSkills";
 
@@ -20,6 +21,7 @@ export const piAdapter: HarnessAdapter = {
   commands: { discover: ({ cwd }) => discoverPiSkills(cwd) },
   sendTurn: sendPiTurn,
   compactContext: compactPiContext,
+  rewindLastTurn: rewindPiLastTurn,
   steerTurn: steerPiTurn,
   cancelTurn: cancelPiTurn,
   respondApproval: respondPiApproval,
@@ -29,6 +31,8 @@ export const piAdapter: HarnessAdapter = {
   refreshCatalog: refreshPiCatalog,
   generateTitle: generatePiSessionTitle,
   warmupText: warmupPiText,
+  runTextPrompt: runPiTextPrompt,
+  stopTextPrompt: stopPiTextPrompt,
 };
 
 let registered = false;

@@ -88,7 +88,8 @@ import { formatRelativeTime, githubStatus } from "../../inbox/model/githubTasks"
 import { GITLAB_CHANGE_EVENT, gitlabConnected } from "../../inbox/model/gitlab";
 import { LAYER } from "../../../shared/lib/layers";
 import { LINEAR_CHANGE_EVENT, linearConnected } from "../../inbox/model/linear";
-import { defaultSessionChoice, modelsFor, resolveModel } from "../../sessions/model/models";
+import { JIRA_CHANGE_EVENT, jiraConnected } from "../../inbox/model/jira";
+import { defaultSessionChoice, firstEnabledHarness, modelsFor, preferredModelId, resolveModel } from "../../sessions/model/models";
 import { projectKey, projectName } from "../../../shared/lib/paths";
 import { IS_MAC } from "../../../platform/tauri/platform";
 import { looksLikeProject, type RecentProject } from "../../projects/model/recents";
@@ -257,14 +258,18 @@ function AutomationsContent({
   const selected = automations.find((entry) => entry.id === selectedId) ?? null;
 
   const defaultDraftTarget = () => {
-    const preferred = defaultSessionChoice();
-    const harness = selected?.harness ?? preferred.harness;
-    const model =
-      (selected?.harness === harness ? selected.model : undefined) ??
-      modelsFor(harness)[0]?.id ??
-      preferred.model;
     const project =
       cwd && looksLikeProject(cwd) ? cwd : (recents[0]?.path ?? "~");
+    const preferred = defaultSessionChoice(project);
+    const harness = firstEnabledHarness(
+      project,
+      selected?.harness ?? preferred.harness,
+    );
+    const model =
+      (selected?.harness === harness ? selected.model : undefined) ??
+      (preferred.harness === harness ? preferred.model : undefined) ??
+      modelsFor(harness)[0]?.id ??
+      preferredModelId(harness);
     return { project, harness, model };
   };
 
@@ -496,19 +501,20 @@ function AutomationCard({
   const model = resolveModel(automation.harness, automation.model);
   return (
     <div
-      className={`group rounded-md border px-2.5 py-2 ${
+      className={`group relative rounded-md border ${
         active
           ? "border-transparent bg-selection"
           : "border-transparent hover:bg-content/5"
       }`}
     >
-      <div className="flex items-center gap-1.5">
-        <button
-          type="button"
-          aria-current={active ? "true" : undefined}
-          onClick={onSelect}
-          className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-[10px] text-content/45"
-        >
+      <button
+        type="button"
+        aria-current={active ? "true" : undefined}
+        aria-label={`Open ${automation.name}`}
+        onClick={onSelect}
+        className="block w-full rounded-md px-2.5 py-2 text-left"
+      >
+        <span className="flex min-w-0 items-center gap-1.5 pr-8 text-[10px] text-content/45">
           <TriggerMark
             kind={
               automationTriggers(automation)[0]?.kind ?? automation.triggerKind
@@ -516,20 +522,8 @@ function AutomationCard({
             className="size-3"
           />
           <span className="min-w-0 truncate">{triggerLabel(automation)}</span>
-        </button>
-        <ToggleSwitch
-          label={`${automation.enabled ? "Pause" : "Enable"} ${automation.name}`}
-          on={automation.enabled}
-          onChange={onToggle}
-          compact
-        />
-      </div>
-      <button
-        type="button"
-        onClick={onSelect}
-        className="mt-1 w-full text-left"
-      >
-        <span className="block truncate text-[13px] font-semibold text-content">
+        </span>
+        <span className="mt-1 block truncate text-[13px] font-semibold text-content">
           {automation.name}
         </span>
         <span className="mt-1 flex min-w-0 items-center gap-1.5 text-[11px] text-content/45">
@@ -566,6 +560,14 @@ function AutomationCard({
           </span>
         </span>
       </button>
+      <span className="absolute right-2.5 top-2 flex">
+        <ToggleSwitch
+          label={`${automation.enabled ? "Pause" : "Enable"} ${automation.name}`}
+          on={automation.enabled}
+          onChange={onToggle}
+          compact
+        />
+      </span>
     </div>
   );
 }
@@ -830,6 +832,7 @@ function AutomationEditor({
   const [providerConnected, setProviderConnected] = useState({
     github: false,
     linear: false,
+    jira: false,
     gitlab: false,
     azuredevops: false,
   });
@@ -847,25 +850,30 @@ function AutomationEditor({
         linearConnected()
           .then((status) => status.connected)
           .catch(() => false),
+        jiraConnected()
+          .then((status) => status.connected)
+          .catch(() => false),
         gitlabConnected()
           .then((status) => status.connected)
           .catch(() => false),
         azureDevOpsConnected()
           .then((status) => status.connected)
           .catch(() => false),
-      ]).then(([github, linear, gitlab, azuredevops]) => {
+      ]).then(([github, linear, jira, gitlab, azuredevops]) => {
         if (!cancelled) {
-          setProviderConnected({ github, linear, gitlab, azuredevops });
+          setProviderConnected({ github, linear, jira, gitlab, azuredevops });
         }
       });
     };
     load();
     window.addEventListener(LINEAR_CHANGE_EVENT, load);
+    window.addEventListener(JIRA_CHANGE_EVENT, load);
     window.addEventListener(GITLAB_CHANGE_EVENT, load);
     window.addEventListener(AZUREDEVOPS_CHANGE_EVENT, load);
     return () => {
       cancelled = true;
       window.removeEventListener(LINEAR_CHANGE_EVENT, load);
+      window.removeEventListener(JIRA_CHANGE_EVENT, load);
       window.removeEventListener(GITLAB_CHANGE_EVENT, load);
       window.removeEventListener(AZUREDEVOPS_CHANGE_EVENT, load);
     };
@@ -1318,6 +1326,7 @@ function AutomationEditor({
                         harness={draft.harness}
                         model={draft.model}
                         values={draft.modelSettings}
+                        project={draft.cwd}
                         hideSettings={controlsBeside}
                         onChange={(harness, model) =>
                           onChange({ ...draft, harness, model })
@@ -1654,6 +1663,7 @@ const TRIGGER_CATEGORIES: readonly {
   { value: "time", label: "Scheduled" },
   { value: "github", label: "GitHub" },
   { value: "linear", label: "Linear" },
+  { value: "jira", label: "Jira" },
   { value: "gitlab", label: "GitLab" },
   { value: "azuredevops", label: "Azure DevOps" },
 ];
@@ -1676,6 +1686,7 @@ const TRIGGER_EVENTS: Record<AutomationTriggerKind, readonly TriggerEvent[]> = {
     { value: "issue_opened", label: "Issue opened" },
   ],
   linear: [{ value: "issue_created", label: "Issue created" }],
+  jira: [{ value: "issue_created", label: "Issue appeared" }],
   gitlab: [
     { value: "merge_request_opened", label: "Merge request opened" },
     { value: "issue_opened", label: "Issue opened" },

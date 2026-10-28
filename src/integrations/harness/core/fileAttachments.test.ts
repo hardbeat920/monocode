@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { Attachment } from "../../../features/sessions/model/session";
-import { attachmentPathText, promptBlocks } from "../../../features/sessions/model/attachments";
+import {
+  ATTACHMENT_ONLY_PROMPT,
+  attachmentPathText,
+  promptBlocks,
+} from "../../../features/sessions/model/attachments";
 import { buildClaudeUserMessage } from "../providers/claude/claudeProtocol";
 import { buildPiPrompt, buildPiSteer } from "../providers/pi/piProtocol";
 import { grokPromptBlocks } from "../providers/grok/grokProtocol";
@@ -25,6 +29,15 @@ const image: Attachment = {
   path: "/tmp/screenshot.png",
 };
 
+const folder: Attachment = {
+  id: "folder",
+  name: "reports",
+  mimeType: "inode/directory",
+  kind: "file",
+  size: 4096,
+  path: "/tmp/reports",
+};
+
 function claudeContent(text: string, attachments: Attachment[]) {
   const result = buildClaudeUserMessage({ text, attachments });
   return (result.message as { content: unknown[] }).content;
@@ -36,6 +49,7 @@ describe("native file attachment formats", () => {
     ["Grok ACP", grokPromptBlocks],
   ] as const)("keeps %s documents as resource links", (_name, build) => {
     expect(build("", [document])).toEqual([
+      { type: "text", text: ATTACHMENT_ONLY_PROMPT },
       {
         type: "resource_link",
         uri: "file:///tmp/report.pdf",
@@ -51,6 +65,33 @@ describe("native file attachment formats", () => {
     });
   });
 
+  it("sends a folder as its path, never as a resource link", () => {
+    const expected = [
+      {
+        type: "text",
+        text: 'Attached folder (list or read the files inside from this path): "/tmp/reports"',
+      },
+    ];
+    for (const build of [promptBlocks, grokPromptBlocks]) {
+      expect(build("", [folder])).toEqual([
+        { type: "text", text: ATTACHMENT_ONLY_PROMPT },
+        ...expected,
+      ]);
+    }
+  });
+
+  it("gives a folder to Claude and OpenCode as a path they can read", () => {
+    const folderText = expect.stringContaining("Attached folder");
+    expect(claudeContent("look", [folder])).toEqual([
+      { type: "text", text: "look" },
+      { type: "text", text: folderText },
+    ]);
+    // OpenCode joins the prompt and the path into one text part.
+    expect(toOpenCodePromptParts("look", [folder])).toEqual([
+      { type: "text", text: folderText },
+    ]);
+  });
+
   it("keeps OpenCode's native file parts for supported text and images", () => {
     const text = {
       ...document,
@@ -61,6 +102,7 @@ describe("native file attachment formats", () => {
     expect(
       toOpenCodePromptParts("", [text, { ...image, path: undefined }]),
     ).toEqual([
+      { type: "text", text: ATTACHMENT_ONLY_PROMPT },
       {
         type: "file",
         mime: "text/markdown",
@@ -96,6 +138,46 @@ describe("native file attachment formats", () => {
   });
 });
 
+describe("attachment-only turns", () => {
+  it("tells the model to read the attachments in the light of the conversation", () => {
+    expect(claudeContent("", [document])[0]).toEqual({
+      type: "text",
+      text: ATTACHMENT_ONLY_PROMPT,
+    });
+    for (const build of [buildPiPrompt, buildPiSteer])
+      expect(build({ text: "", attachments: [document] })).toMatchObject({
+        message: expect.stringContaining(ATTACHMENT_ONLY_PROMPT),
+      });
+    expect(promptBlocks("", [document])[0]).toEqual({
+      type: "text",
+      text: ATTACHMENT_ONLY_PROMPT,
+    });
+    // OpenCode joins the stand-in and the path into one text part.
+    expect(toOpenCodePromptParts("", [document])[0]).toEqual({
+      type: "text",
+      text: expect.stringContaining(ATTACHMENT_ONLY_PROMPT),
+    });
+  });
+
+  it("treats a whitespace-only draft as no text at all", () => {
+    expect(claudeContent("  ", [document])[0]).toEqual({
+      type: "text",
+      text: ATTACHMENT_ONLY_PROMPT,
+    });
+  });
+
+  it("leaves a real message, and a turn with nothing attached, untouched", () => {
+    expect(claudeContent("Review", [document])[0]).toEqual({
+      type: "text",
+      text: "Review",
+    });
+    // No attachment means no stand-in, so a bare turn stays bare.
+    expect(promptBlocks("")).toEqual([]);
+    expect(promptBlocks("   ")).toEqual([]);
+    expect(claudeContent("", [])).toEqual([]);
+  });
+});
+
 describe("file paths in native harness prompts", () => {
   it.each([
     ["report.pdf", "application/pdf", "file"],
@@ -109,11 +191,12 @@ describe("file paths in native harness prompts", () => {
       const file = { ...document, name, mimeType, kind, path: `/tmp/${name}` };
       const expected = `Attached file (read from disk): ${JSON.stringify(file.path)}`;
       expect(claudeContent("", [file])).toEqual([
+        { type: "text", text: ATTACHMENT_ONLY_PROMPT },
         { type: "text", text: expected },
       ]);
       for (const build of [buildPiPrompt, buildPiSteer]) {
         expect(build({ text: "", attachments: [file] })).toMatchObject({
-          message: expected,
+          message: `${ATTACHMENT_ONLY_PROMPT}\n\n${expected}`,
         });
         expect(build({ text: "Review", attachments: [file] })).toMatchObject({
           message: `Review\n\n${expected}`,
@@ -154,11 +237,12 @@ describe("file paths in native harness prompts", () => {
     },
   ])("falls back for an image that cannot be embedded: $name", (file) => {
     expect(claudeContent("", [file])).toEqual([
+      { type: "text", text: ATTACHMENT_ONLY_PROMPT },
       { type: "text", text: attachmentPathText(file) },
     ]);
     for (const build of [buildPiPrompt, buildPiSteer]) {
       expect(build({ text: "", attachments: [file] })).toMatchObject({
-        message: attachmentPathText(file),
+        message: `${ATTACHMENT_ONLY_PROMPT}\n\n${attachmentPathText(file)}`,
       });
       expect(build({ text: "", attachments: [file] }).images).toBeUndefined();
     }
@@ -172,7 +256,6 @@ describe("file paths in native harness prompts", () => {
     const text = attachmentPathText({ ...document, path });
     expect(JSON.parse(text.slice(text.indexOf(": ") + 2))).toBe(path);
   });
-
   it("reports a missing source instead of silently dropping an attachment", () => {
     const files = [{ ...document, path: undefined }];
     const builders = [

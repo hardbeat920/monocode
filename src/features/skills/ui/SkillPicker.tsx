@@ -7,7 +7,7 @@ import {
   type ReactNode,
   type MouseEvent as ReactMouseEvent,
 } from "react";
-import { looksLikeProject } from "../../projects/model/recents";
+import { isLocalProject } from "../../projects/model/recents";
 import {
   isValidSkillName,
   slugSkillName,
@@ -217,7 +217,7 @@ export function CreateSkillForm({
   onCreate: (name: string, scope: "project" | "user") => void;
 }): ReactNode {
   const input = useRef<HTMLInputElement>(null);
-  const project = looksLikeProject(cwd);
+  const project = isLocalProject(cwd);
   const [name, setName] = useState(() => slugSkillName(query));
   const [scope, setScope] = useState<"project" | "user">(
     project ? "project" : "user",

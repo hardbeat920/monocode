@@ -92,14 +92,15 @@ export function MarkdownViewShell({
   actions,
 }: ShellProps) {
   return (
-    <div className="relative min-h-0 min-w-0 flex-1">
-      <div className="pointer-events-none absolute top-2 right-2 z-20">
+    <div className="markdown-view-shell relative min-h-0 min-w-0 flex-1">
+      <div className="markdown-view-actions pointer-events-none absolute right-2 z-20">
         <div className="pointer-events-auto flex items-center gap-1.5">
           {actions}
           <MarkdownModeToggle mode={mode} onChange={onModeChange} />
         </div>
       </div>
       <div
+        data-markdown-view-active={mode === "preview" ? "" : undefined}
         className={
           mode === "preview"
             ? "absolute inset-0"
@@ -109,6 +110,7 @@ export function MarkdownViewShell({
         {preview}
       </div>
       <div
+        data-markdown-view-active={mode === "source" ? "" : undefined}
         className={
           mode === "source"
             ? "absolute inset-0"

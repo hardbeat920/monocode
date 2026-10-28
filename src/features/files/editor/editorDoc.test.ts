@@ -1,6 +1,11 @@
 import { EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
-import { editorDocChanges } from "./editorDoc";
+import {
+  detectLineEnding,
+  editorDocChanges,
+  normalizeLineBreaks,
+  restoreLineEnding,
+} from "./editorDoc";
 
 describe("editorDocChanges", () => {
   it("returns no changes when the documents match", () => {
@@ -22,6 +27,20 @@ describe("editorDocChanges", () => {
     expect(changes).toEqual([{ from: 16, to: 16, insert: "\n" }]);
   });
 
+  it("treats CRLF disk content as identical to the LF document", () => {
+    expect(editorDocChanges("alpha\nbeta\n", "alpha\r\nbeta\r\n")).toEqual([]);
+  });
+
+  it("never doubles lines when the target uses CRLF", () => {
+    const from = "alpha\nbeta\ngamma\n";
+    const to = "alpha\r\nBETA\r\ngamma\r\n";
+    const state = EditorState.create({ doc: from });
+    const next = state.update({ changes: editorDocChanges(from, to) }).state;
+    // Pre-fix this produced "alpha\n\nBETA\n\ngamma\n\n": the lone "\r"
+    // inserts were converted into line breaks by CodeMirror.
+    expect(next.doc.toString()).toBe("alpha\nBETA\ngamma\n");
+  });
+
   it("keeps a later search selection on the same match after an earlier edit", () => {
     const from = "const hello = 1;\nconst hello = 2;\n";
     const to = "const hallo = 1;\nconst hello = 2;\n";
@@ -36,4 +55,19 @@ describe("editorDocChanges", () => {
     ).toBe("hello");
     expect(next.doc.lineAt(next.selection.main.from).number).toBe(2);
   });
+});
+
+describe("line-ending round trip", () => {
+  it.each(["alpha\nbeta\n", "alpha\r\nbeta\r\n", "alpha\rbeta\r"])(
+    "load then save leaves %j byte-identical",
+    (raw) => {
+      // The FileEditor load/save contract: normalize into the LF document,
+      // restore the file's own convention on write.
+      const restored = restoreLineEnding(
+        normalizeLineBreaks(raw),
+        detectLineEnding(raw),
+      );
+      expect(restored).toBe(raw);
+    },
+  );
 });

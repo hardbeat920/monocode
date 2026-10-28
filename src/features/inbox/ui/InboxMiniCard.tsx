@@ -19,11 +19,13 @@ export function InboxMiniCard({ card, onDismiss }: Props) {
   const providerLabel =
     card.provider === "linear"
       ? "Linear"
-      : card.provider === "gitlab"
-        ? "GitLab"
-        : card.provider === "azuredevops"
-          ? "ADO"
-          : "GitHub";
+      : card.provider === "jira"
+        ? "Jira"
+        : card.provider === "gitlab"
+          ? "GitLab"
+          : card.provider === "azuredevops"
+            ? "ADO"
+            : "GitHub";
 
   return (
     <div className="px-3 pt-2">

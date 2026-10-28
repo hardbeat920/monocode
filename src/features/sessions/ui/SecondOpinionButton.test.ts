@@ -3,10 +3,14 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const { DEFAULT_AVAILABLE } = vi.hoisted(() => ({
+  DEFAULT_AVAILABLE: (harness: string) => harness === "grok",
+}));
+
 vi.mock("../../../integrations/harness/core/availability", () => ({
   getHarnessAvailabilitySnapshot: () => 0,
   hasProbedHarnessAvailability: () => true,
-  isHarnessAvailable: (harness: string) => harness === "grok",
+  isHarnessAvailable: vi.fn(DEFAULT_AVAILABLE),
   probeHarnessAvailability: () => Promise.resolve(),
   subscribeHarnessAvailability: () => () => undefined,
 }));
@@ -16,6 +20,7 @@ vi.mock("../../../integrations/harness/core/registry", () => ({
 }));
 
 import { SecondOpinionButton } from "./SecondOpinionButton";
+import { isHarnessAvailable } from "../../../integrations/harness/core/availability";
 import { resetHarnessModelOverlays, setHarnessModels } from "../model/models";
 
 let container: HTMLDivElement;
@@ -56,6 +61,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   resetHarnessModelOverlays();
+  vi.mocked(isHarnessAvailable).mockImplementation(DEFAULT_AVAILABLE);
   container.remove();
   vi.unstubAllGlobals();
 });
@@ -147,5 +153,95 @@ describe("secondary model target picker", () => {
       model: "grok:quick",
       modelSettings: {},
     });
+  });
+
+  it("hides the current model from a same-harness second opinion", () => {
+    const onPick = vi.fn();
+    act(() =>
+      root.render(
+        createElement(SecondOpinionButton, {
+          from: "grok",
+          fromModel: "grok:review",
+          onPick,
+          includeCurrent: true,
+          excludeFromModel: true,
+        }),
+      ),
+    );
+
+    act(() =>
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Second opinion"]')!
+        .click(),
+    );
+    const provider = [...document.querySelectorAll('[role="menuitem"]')].find(
+      (row) => row.textContent?.includes("Grok Build"),
+    )!;
+    hover(provider);
+
+    const modelLabels = [
+      ...document.querySelectorAll(
+        '[role="menu"][aria-label="Grok Build models"] [role="menuitem"]',
+      ),
+    ].map((row) => row.textContent);
+    expect(modelLabels.some((text) => text?.includes("Review Model"))).toBe(
+      false,
+    );
+    expect(modelLabels.some((text) => text?.includes("Quick Model"))).toBe(
+      true,
+    );
+  });
+
+  it("disables the second-opinion button once the current model is the only one left", () => {
+    setHarnessModels("grok", [
+      { id: "grok:review", harness: "grok", name: "Review Model" },
+    ]);
+    const onPick = vi.fn();
+    act(() =>
+      root.render(
+        createElement(SecondOpinionButton, {
+          from: "grok",
+          fromModel: "grok:review",
+          onPick,
+          includeCurrent: true,
+          excludeFromModel: true,
+        }),
+      ),
+    );
+
+    const button = container.querySelector<HTMLButtonElement>(
+      '[aria-label="No different model available for a second opinion"]',
+    );
+    expect(button).toBeTruthy();
+    expect(button?.disabled).toBe(true);
+  });
+
+  it("keeps the button enabled for an installed provider whose catalog has not loaded yet", () => {
+    // Codex has no built-in fallback list in MODELS, so modelsFor("codex")
+    // is empty until its live catalog loads. If it is the only other
+    // installed provider, the button must stay enabled so the menu can
+    // open and refreshHarnessCatalogs can populate it - not get disabled
+    // first because the (not yet loaded) list looks empty.
+    vi.mocked(isHarnessAvailable).mockImplementation(
+      (harness: string) => harness === "codex",
+    );
+    const onPick = vi.fn();
+    act(() =>
+      root.render(
+        createElement(SecondOpinionButton, {
+          from: "cursor",
+          fromModel: "cursor:main",
+          onPick,
+          includeCurrent: true,
+          excludeFromModel: true,
+        }),
+      ),
+    );
+
+    const button = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Second opinion"]',
+    );
+    expect(button).toBeTruthy();
+    expect(button?.disabled).toBe(false);
   });
 });

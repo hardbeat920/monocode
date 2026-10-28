@@ -6,9 +6,10 @@ import {
   Copy,
   FilePlusCorner,
   Minus,
+  Pencil,
+  PenLine,
   Bot,
   ChartBreakoutSquare,
-  PenLine,
   Search,
   Terminal,
   Trash2,
@@ -17,28 +18,33 @@ import {
 } from "../../../shared/ui/icons";
 import {
   memo,
+  startTransition,
   useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { flushSync } from "react-dom";
 import { AttachmentChip } from "./AttachmentChip";
+import { GeneratedImage } from "./GeneratedImage";
+import { MonocodeSparkles } from "./MonocodeSparkles";
+import { OrchestratorConstellation } from "./OrchestratorConstellation";
+import { PlanStepsBurst } from "./PlanStepsBurst";
 import { FilePreview } from "../../files/ui/FilePreview";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
 import { ToolDiffPreview } from "./ToolDiffPreview";
 import { PlanPreview } from "./PlanPreview";
 import { OrchestrationPreview } from "../../orchestration/ui/OrchestrationPreview";
 import { TaskListPreview } from "./TaskListPreview";
-import {
-  HandoffButton,
-  SecondOpinionButton,
-} from "./SecondOpinionButton";
+import { HandoffButton, SecondOpinionButton } from "./SecondOpinionButton";
 import { SecondOpinionCard } from "./SecondOpinionCard";
-import { NoteMiniCard } from "../../notes/ui";
+import { NoteMiniCard } from "../../notes/ui/NoteMiniCard";
+
 import { TerminalSpinner } from "./TerminalSpinner";
 import { Popover } from "../../../shared/ui/Popover";
 import { ProjectMascot } from "../../projects/ui/ProjectMascot";
@@ -58,7 +64,6 @@ import type { Attachment } from "../model/session";
 import { visibleUserPrompt } from "../../orchestration/model/orchestration";
 import { playCue } from "../../settings/model/sounds";
 import { legacyTaskListFromText } from "../model/taskList";
-import { displayPath, resolveWorkspacePath } from "../../../shared/lib/paths";
 import { resolveModel } from "../model/models";
 import { harnessForTurn } from "../model/secondOpinion";
 import { Shimmer } from "../../../shared/ui/Shimmer";
@@ -88,13 +93,13 @@ import {
   activityPhaseTitle,
   activityStillRunning,
   buildActivityPhases,
-  editVerb,
   firstFoldableIndex,
   foldableWork,
   foldedBlocks,
   groupTurnItems,
   groupTurns,
   initialThinkingIndex,
+  isFailedStatus,
   isIncompleteTool,
   isSubagentBlock,
   isThinkingBlock,
@@ -103,6 +108,7 @@ import {
   needsApproval,
   nestedScrollAbsorbsWheel,
   proseSummary,
+  resolveToolCallDisplay,
   subagentBrief,
   subagentModelName,
   subagentName,
@@ -117,9 +123,42 @@ import {
   type ToolCallState,
   type TurnItem,
 } from "../model/transcriptActivity";
+import { lastUserTurnBlock } from "../model/editLastTurn";
+import {
+  monoCodeToolCall,
+  monoCodeWorkSummary,
+  type MonoCodeToolCall,
+} from "../model/monocodeToolCall";
+import {
+  isOperatorUserTurn,
+  operatorUserPrompt,
+} from "../model/operatorCommand";
+import {
+  clearTranscriptHighlights,
+  paintTranscriptHighlights,
+  transcriptMutationNeedsRepaint,
+  transcriptWordRanges,
+} from "../model/transcriptHighlights";
 
 const NEAR_BOTTOM_PX = 16;
+/*
+ * Tool calls often land in a burst. Each arrival waits for the one before it
+ * to finish its whole entrance — rail, branch, row — before starting its own.
+ * The first few play at STEP_ENTRANCE_MS; a queue running past
+ * STEP_QUEUE_CALM_MS plays the rest faster, down to STEP_ENTRANCE_MIN_MS by
+ * STEP_QUEUE_MS, so a long burst still catches up.
+ */
+const STEP_ENTRANCE_MS = 480;
+const STEP_ENTRANCE_MIN_MS = 160;
+const STEP_QUEUE_CALM_MS = 960;
+const STEP_QUEUE_MS = 2000;
 const INITIAL_TURNS = 20;
+/**
+ * Turns built before a transcript first paints. Every turn in the initial
+ * window costs markdown work on open, so paint the latest few (more if they
+ * leave the viewport short) and build the rest of the window after.
+ */
+const FIRST_PAINT_TURNS = 3;
 const TURN_PAGE_SIZE = 20;
 
 type Props = {
@@ -130,6 +169,8 @@ type Props = {
   model?: string;
   modelSettings?: Record<string, string>;
   pendingQuestion?: boolean;
+  /** Work the agent left running when it yielded; the turn waits on it. */
+  backgroundTasks?: string[];
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
   onAddToChat?: (text: string) => void;
   onSaveNote?: (text: string) => void | Promise<void>;
@@ -140,16 +181,26 @@ type Props = {
   onOpenDiff?: (path: string) => void;
   onOpenPlan?: (blockId: string) => void;
   onBuildPlan?: (blockId: string, target?: PlanBuildTarget) => void;
+  planBuildTargets?: boolean;
   onSecondOpinion?: (target: ModelTarget, turn: Block[]) => void;
   onHandoff?: (target: ModelTarget, turn: Block[]) => void;
+  onEditLastTurn?: () => void;
+  editingLastTurn?: boolean;
   onJumpToBottomChange?: (show: boolean) => void;
+
   onJumpToBottomReady?: (jump: () => void) => void;
   /** Passes a function that renders the turn that holds a block. The render completes before the function returns. */
   onRevealReady?: (reveal: (blockId: string) => boolean) => void;
+  onNavigateReady?: (
+    navigate: (blockId: string | null, query?: string) => boolean,
+  ) => void;
   /** Session-level output shown after the latest reply and before its action row. */
   latestTurnAccessory?: ReactNode;
   /** False while another tab is in front; local transcript state is retained. */
   visible?: boolean;
+  /** Kept mounted after its pane closed. Showing it again counts as a new visit. */
+  parked?: boolean;
+  onScrollerChange?: (el: HTMLDivElement | null) => void;
   /** A worker's transcript: show the orchestrator's turns instead of hiding them. */
   managed?: boolean;
 };
@@ -162,6 +213,7 @@ function AgentTranscriptComponent({
   model,
   modelSettings,
   pendingQuestion = false,
+  backgroundTasks,
   onApproval,
   onAddToChat,
   onSaveNote,
@@ -172,13 +224,20 @@ function AgentTranscriptComponent({
   onOpenDiff,
   onOpenPlan,
   onBuildPlan,
+  planBuildTargets = true,
   onSecondOpinion,
   onHandoff,
+  onEditLastTurn,
+  editingLastTurn = false,
   onJumpToBottomChange,
   onJumpToBottomReady,
   onRevealReady,
+  onNavigateReady,
   latestTurnAccessory,
+
   visible = true,
+  parked = false,
+  onScrollerChange,
   managed = false,
 }: Props) {
   const blocks = useMemo(() => {
@@ -195,6 +254,10 @@ function AgentTranscriptComponent({
       ? sourceBlocks
       : visibleBlocks;
   }, [harness, sourceBlocks]);
+  const editableUserBlockId = useMemo(
+    () => lastUserTurnBlock(blocks)?.id,
+    [blocks],
+  );
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const scroller = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
@@ -203,16 +266,32 @@ function AgentTranscriptComponent({
   const prependHeight = useRef<number | null>(null);
   const wasVisible = useRef(false);
   const [scrollerEl, setScrollerEl] = useState<HTMLDivElement | null>(null);
-  const [visibleTurnCount, setVisibleTurnCount] = useState(INITIAL_TURNS);
+  const [visibleTurnCount, setVisibleTurnCount] = useState(FIRST_PAINT_TURNS);
   // Turns whose folded work the reader has opened, by turn id.
   const [openWork, setOpenWork] = useState<Record<string, boolean>>({});
+  const [searchCurrent, setSearchCurrent] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const highlightOwner = useRef(Symbol("transcript-search"));
   const toggleWork = useCallback((turnId: string, currentlyOpen: boolean) => {
     setOpenWork((open) => ({ ...open, [turnId]: !currentlyOpen }));
   }, []);
   // Stretch the last turn after a send while this tab stays open. Closing
   // the tab is a new visit: the remount uses the true transcript height so
-  // the latest reply sits on the composer instead of a hole of empty space.
+  // the latest reply sits near the composer instead of a hole of empty space.
   const [anchorTurn, setAnchorTurn] = useState(!!busy);
+  // Parking detaches the scroller, which drops its scroll offset.
+  const restoreScroll = useRef(false);
+  const wasParked = useRef(parked);
+  if (wasParked.current !== parked) {
+    wasParked.current = parked;
+    if (parked) {
+      restoreScroll.current = true;
+      setSearchCurrent(null);
+      setSearchQuery("");
+    } else if (anchorTurn !== !!busy) {
+      setAnchorTurn(!!busy);
+    }
+  }
   const { selection, dismissSelection } = useTranscriptSelection(
     scrollerEl,
     onAddToChat !== undefined || onSaveSelectionNote !== undefined,
@@ -245,10 +324,14 @@ function AgentTranscriptComponent({
 
   const syncPinned = useCallback(
     (el: HTMLElement) => {
-      const near = isNearBottom(el);
+      const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+      // Scrolling up inside the bottom margin is the reader leaving. Pinning
+      // again here would snap each streamed chunk back down under the wheel.
+      const leaving =
+        !stickToBottom.current && distance > distanceFromBottom.current;
+      const near = isNearBottom(el) && !leaving;
       stickToBottom.current = near;
-      distanceFromBottom.current =
-        el.scrollHeight - el.scrollTop - el.clientHeight;
+      distanceFromBottom.current = distance;
       setShowJump(!near);
     },
     [setShowJump],
@@ -276,6 +359,16 @@ function AgentTranscriptComponent({
     onJumpToBottomReady?.(jumpToBottom);
   }, [jumpToBottom, onJumpToBottomReady]);
 
+  // A pooled transcript outlives its pane; tell each new owner where it stands.
+  useEffect(() => {
+    onJumpToBottomChange?.(showJumpRef.current);
+  }, [onJumpToBottomChange]);
+
+  useLayoutEffect(() => {
+    onScrollerChange?.(scrollerEl);
+    return () => onScrollerChange?.(null);
+  }, [onScrollerChange, scrollerEl]);
+
   useEffect(() => {
     if (!visible || !scrollerEl) return;
     syncPinned(scrollerEl);
@@ -302,6 +395,27 @@ function AgentTranscriptComponent({
     pinToBottom(el);
   }, [lastUserId, setShowJump]);
 
+  // In the chat layout a sent prompt rises from the upper screen into its
+  // anchored spot at the top. On mount this only plays for a session's first
+  // send.
+  const introducePrompt = useRef({ chat: false, anchor: false, visible });
+  introducePrompt.current = {
+    chat: transcriptLayout === "chat",
+    anchor: promptAnchor && anchorTurn,
+    visible,
+  };
+  const introducedPromptMount = useRef(false);
+  useLayoutEffect(() => {
+    const mounting = !introducedPromptMount.current;
+    introducedPromptMount.current = true;
+    const { chat, anchor, visible } = introducePrompt.current;
+    if (!lastUserId || !chat || !anchor || !visible) return;
+    if (mounting && !(busy && userTurnCount(blocks, managed) === 1)) return;
+    return riseIntoAnchor(scroller.current, lastUserId);
+    // Only a new prompt starts the motion; later renders must not replay it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastUserId]);
+
   useLayoutEffect(() => {
     const opened = visible && !wasVisible.current;
     wasVisible.current = visible;
@@ -309,12 +423,19 @@ function AgentTranscriptComponent({
     const el = scroller.current;
     if (!el) return;
     syncTranscriptViewport(el);
+    const restore = restoreScroll.current;
+    restoreScroll.current = false;
     // Previously opened tabs normally retain their scroll position. Only pin
     // when the scroller looks empty after being hidden with `display: none`.
     if (el.scrollHeight <= el.clientHeight + NEAR_BOTTOM_PX) {
       stickToBottom.current = true;
       setShowJump(false);
       pinToBottom(el);
+    } else if (restore && !stickToBottom.current) {
+      el.scrollTop = Math.max(
+        0,
+        el.scrollHeight - el.clientHeight - distanceFromBottom.current,
+      );
     }
   }, [visible, setShowJump]);
 
@@ -330,6 +451,8 @@ function AgentTranscriptComponent({
     const inner = el?.firstElementChild;
     if (!visible || !el || !inner) return;
     const onResize = () => {
+      // A parked transcript's scroller is detached and measures zero.
+      if (!el.isConnected) return;
       syncTranscriptViewport(el);
       const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
       if (stickToBottom.current) {
@@ -347,6 +470,8 @@ function AgentTranscriptComponent({
     return () => observer.disconnect();
   }, [scrollerEl, setShowJump, visible]);
 
+  useTurnScrollAnchor(scrollerEl, visible, stickToBottom);
+
   const turns = groupTurns(blocks, managed);
   const firstVisibleTurn = Math.max(0, turns.length - visibleTurnCount);
   const visibleTurns = turns.slice(firstVisibleTurn);
@@ -358,12 +483,45 @@ function AgentTranscriptComponent({
   useLayoutEffect(() => {
     const previousHeight = prependHeight.current;
     const el = scroller.current;
-    if (previousHeight == null || !el) return;
+    if (!el) return;
+    if (previousHeight == null) {
+      // The opening window grows above the screen. Settle the offset in this
+      // commit: a scroll event queued by an earlier pin would otherwise read
+      // the taller transcript first and unpin it partway up.
+      if (stickToBottom.current) {
+        syncTranscriptViewport(el);
+        pinToBottom(el);
+      } else {
+        el.scrollTop =
+          el.scrollHeight - el.clientHeight - distanceFromBottom.current;
+      }
+      return;
+    }
     prependHeight.current = null;
     el.scrollTop += el.scrollHeight - previousHeight;
     distanceFromBottom.current =
       el.scrollHeight - el.scrollTop - el.clientHeight;
   }, [visibleTurnCount]);
+
+  // Short turns can leave the first paint with empty space above them, and
+  // the rest of the window arriving later would then push everything down.
+  // Top up before painting until the viewport is covered.
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (!el || el.clientHeight === 0) return;
+    if (visibleTurnCount >= Math.min(INITIAL_TURNS, turns.length)) return;
+    if (el.scrollHeight > el.clientHeight) return;
+    setVisibleTurnCount((count) =>
+      Math.min(INITIAL_TURNS, count + FIRST_PAINT_TURNS),
+    );
+  }, [visibleTurnCount, turns.length]);
+
+  useEffect(() => {
+    // Interruptible, so switching away before it finishes costs nothing.
+    startTransition(() =>
+      setVisibleTurnCount((count) => Math.max(count, INITIAL_TURNS)),
+    );
+  }, []);
 
   const prepareToPrepend = useCallback(() => {
     const el = scroller.current;
@@ -399,12 +557,101 @@ function AgentTranscriptComponent({
     onRevealReady?.(revealBlock);
   }, [revealBlock, onRevealReady]);
 
+  const navigateToBlock = useCallback(
+    (blockId: string | null, query = ""): boolean => {
+      if (!blockId) {
+        setSearchCurrent(null);
+        setSearchQuery("");
+        return true;
+      }
+      const turn = turnsRef.current.find((item) =>
+        item.some((block) => block.id === blockId),
+      );
+      if (!turn || !revealBlock(blockId)) return false;
+      const turnId = turn[0].id;
+      // A result inside folded work needs its row rendered before measuring it.
+      flushSync(() => {
+        setOpenWork((current) =>
+          current[turnId] ? current : { ...current, [turnId]: true },
+        );
+        setSearchCurrent(blockId);
+        setSearchQuery(query);
+      });
+      const el = scroller.current;
+      if (!el) return false;
+      el.dispatchEvent(new WheelEvent("wheel", { deltaY: -1 }));
+      const align = () => {
+        const target =
+          el.querySelector<HTMLElement>(
+            '[data-transcript-search-current="true"]',
+          ) ??
+          el.querySelector<HTMLElement>(
+            `[data-transcript-turn="${CSS.escape(turnId)}"]`,
+          );
+        if (!target) return;
+        const wordRect = query
+          ? transcriptWordRanges(el, query).current?.getBoundingClientRect?.()
+          : null;
+        const targetTop =
+          wordRect && wordRect.height > 0
+            ? wordRect.top
+            : target.getBoundingClientRect().top;
+        const delta = targetTop - el.getBoundingClientRect().top - 42;
+        if (Math.abs(delta) > 2) el.scrollTop += delta;
+      };
+      align();
+      requestAnimationFrame(align);
+      return true;
+    },
+    [revealBlock],
+  );
+
+  useEffect(() => {
+    onNavigateReady?.(navigateToBlock);
+  }, [navigateToBlock, onNavigateReady]);
+
+  useEffect(() => {
+    const el = scroller.current;
+    const owner = highlightOwner.current;
+    if (!el || !visible || !searchQuery) {
+      clearTranscriptHighlights(owner);
+      return;
+    }
+    let frame = 0;
+    let pending: MutationRecord[] = [];
+    const paint = () => {
+      const { matches, current } = transcriptWordRanges(el, searchQuery);
+      paintTranscriptHighlights(owner, matches, current);
+    };
+    const observer = new MutationObserver((records) => {
+      for (const record of records) pending.push(record);
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        const changed = pending;
+        pending = [];
+        if (transcriptMutationNeedsRepaint(changed, searchQuery)) paint();
+      });
+    });
+    observer.observe(el, {
+      childList: true,
+      characterData: true,
+      subtree: true,
+    });
+    paint();
+    return () => {
+      observer.disconnect();
+      if (frame) cancelAnimationFrame(frame);
+      clearTranscriptHighlights(owner);
+    };
+  }, [visible, searchQuery, searchCurrent, visibleTurnCount, openWork]);
+
   return (
     <div
       ref={setScroller}
       className="agent-transcript h-full overflow-y-auto overscroll-none [overflow-anchor:none] font-mono text-[13px] leading-5"
     >
-      <div className="mx-auto flex w-full min-w-0 max-w-4xl flex-col gap-1 pb-1">
+      <div className="mx-auto flex w-full min-w-0 max-w-4xl flex-col gap-1 pb-8">
         {firstVisibleTurn > 0 ? (
           <div className="flex justify-center px-4 py-3">
             <button
@@ -476,6 +723,7 @@ function AgentTranscriptComponent({
                     ? "Waiting for answers"
                     : undefined
               }
+              background={backgroundTasks}
               modelName={turnModelName}
             />
           ) : durationMs != null ? (
@@ -493,6 +741,10 @@ function AgentTranscriptComponent({
             : firstWork >= 0
               ? firstWork
               : items.length;
+          const isCurrentItem = (item: TurnItem) =>
+            item.type === "block"
+              ? item.block.id === searchCurrent
+              : item.blocks.some((block) => block.id === searchCurrent);
           const renderItem = (item: TurnItem, itemIndex: number) =>
             item.type === "subagents" ? (
               <SubagentStack
@@ -549,10 +801,24 @@ function AgentTranscriptComponent({
                 onOpenPlan={onOpenPlan}
                 onBuildPlan={onBuildPlan}
                 planBusy={!!busy}
-                planHarness={harness}
+                planHarness={planBuildTargets ? harness : undefined}
                 planModel={model}
                 planModelSettings={modelSettings}
                 cwd={cwd}
+                onEditLastTurn={
+                  onEditLastTurn &&
+                  settled &&
+                  item.block.role === "user" &&
+                  item.block.id === editableUserBlockId &&
+                  !item.block.draft
+                    ? onEditLastTurn
+                    : undefined
+                }
+                editing={
+                  editingLastTurn &&
+                  item.block.role === "user" &&
+                  item.block.id === editableUserBlockId
+                }
               />
             );
           // The fold reaches across a stack of delegated runs, but those rows
@@ -586,6 +852,7 @@ function AgentTranscriptComponent({
           return (
             <div
               key={turn[0].id}
+              data-transcript-turn={turnId}
               className={`transcript-turn flex min-w-0 flex-col${
                 isLastTurn ? " transcript-turn-live" : ""
               }${
@@ -606,6 +873,10 @@ function AgentTranscriptComponent({
                         foldWork.map(({ entry, index }, offset) => (
                           <div
                             key={turnItemKey(entry)}
+                            data-transcript-search-item
+                            data-transcript-search-current={
+                              isCurrentItem(entry) || undefined
+                            }
                             className={`flow-root pb-1 last:pb-0 pl-5 zen-fold-rail ${
                               offset === foldWork.length - 1
                                 ? "zen-fold-tail"
@@ -630,14 +901,28 @@ function AgentTranscriptComponent({
                     // and reading them as the first steps of the main trail
                     // is what made them look like its work.
                     ...foldSubagents.map(({ entry, index }) => (
-                      <div key={turnItemKey(entry)} className="flow-root pb-1">
+                      <div
+                        key={turnItemKey(entry)}
+                        data-transcript-search-item
+                        data-transcript-search-current={
+                          isCurrentItem(entry) || undefined
+                        }
+                        className="flow-root pb-1"
+                      >
                         {renderItem(entry, index)}
                       </div>
                     )),
                   ];
                 }
                 const row = (
-                  <div key={turnItemKey(item)} className="flow-root pb-1">
+                  <div
+                    key={turnItemKey(item)}
+                    data-transcript-search-item
+                    data-transcript-search-current={
+                      isCurrentItem(item) || undefined
+                    }
+                    className="flow-root pb-1"
+                  >
                     {renderItem(item, itemIndex)}
                   </div>
                 );
@@ -657,7 +942,10 @@ function AgentTranscriptComponent({
                       <OrchestrationPreview block={block} busy={!!busy} />
                     </div>
                   ))}
-              {isLastTurn && latestTurnAccessory ? latestTurnAccessory : null}
+              {/* The accessory keeps the pane's props, which go stale once parked. */}
+              {isLastTurn && latestTurnAccessory && !parked
+                ? latestTurnAccessory
+                : null}
               {durationMs != null && settled ? (
                 <TurnDuration
                   elapsedMs={durationMs}
@@ -671,6 +959,7 @@ function AgentTranscriptComponent({
                   onSaveNote={onSaveNote}
                   harness={turnHarness}
                   fromHarness={turnHarness}
+                  fromModel={turnModel?.id}
                   onSecondOpinion={
                     onSecondOpinion
                       ? (target) => onSecondOpinion(target, turn)
@@ -704,9 +993,17 @@ export const AgentTranscript = memo(
 );
 
 /** Placeholder for private reasoning before the first assistant text arrives. */
-function InitialThinking({ live }: { live: boolean }) {
+function InitialThinking({
+  live,
+  embedded = false,
+}: {
+  live: boolean;
+  embedded?: boolean;
+}) {
   return (
-    <div className="min-w-0 px-4 pt-3 pb-1 font-sans text-sm text-content/50">
+    <div
+      className={`min-w-0 pt-3 pb-1 font-sans text-sm text-content/50 ${embedded ? "" : "px-4"}`}
+    >
       {live ? <Shimmer duration={1.6}>Thinking…</Shimmer> : "Thinking…"}
     </div>
   );
@@ -722,22 +1019,41 @@ function LiveFoldTitle({
   startedAt,
   paused,
   waitingLabel,
+  background,
   modelName,
 }: {
   startedAt?: number;
   paused: boolean;
   waitingLabel?: string;
+  background?: string[];
   modelName?: string;
 }) {
   const elapsedMs = useElapsedFrom(startedAt, paused);
+  // Yielding with a command still going is not the end of the turn. The clock
+  // keeps running and the line says what it is waiting on.
   const text = paused
     ? (waitingLabel ?? "Waiting for approval")
-    : formatWorkingDuration(elapsedMs, modelName);
-  return (
+    : background?.length
+      ? `${formatWorkingDuration(elapsedMs, modelName)} · ${backgroundLabel(background)}`
+      : formatWorkingDuration(elapsedMs, modelName);
+  const shimmer = (
     <Shimmer className="min-w-0 truncate font-sans text-sm" duration={1}>
       {text}
     </Shimmer>
   );
+  return background?.length ? (
+    <span className="flex min-w-0" title={background.join("\n")}>
+      {shimmer}
+    </span>
+  ) : (
+    shimmer
+  );
+}
+
+function backgroundLabel(tasks: string[]): string {
+  return tasks.length === 1
+    ? "running in background"
+    : `${tasks.length} tasks running in background`;
 }
 
 /**
@@ -755,6 +1071,7 @@ function TurnDuration({
   copyText: output,
   onSaveNote,
   fromHarness,
+  fromModel,
   onSecondOpinion,
   onHandoff,
 }: {
@@ -768,6 +1085,8 @@ function TurnDuration({
   copyText?: string;
   onSaveNote?: (text: string) => void | Promise<void>;
   fromHarness?: HarnessId;
+  /** The turn's own model, so a same-harness second opinion can hide it. */
+  fromModel?: string;
   onSecondOpinion?: (target: ModelTarget) => void;
   onHandoff?: (target: ModelTarget) => void;
 }) {
@@ -781,7 +1100,7 @@ function TurnDuration({
   return (
     <div
       aria-label={label}
-      className="flex min-w-0 items-center gap-2.5 px-4 pt-1 pb-3 font-sans text-sm text-content/40"
+      className="flex w-full min-w-0 max-w-full items-center gap-2.5 overflow-hidden px-4 pt-1 pb-3 font-sans text-sm text-content/40"
     >
       <span className="flex shrink-0 items-center gap-1">
         {output ? (
@@ -798,13 +1117,18 @@ function TurnDuration({
           <HandoffButton from={fromHarness} onPick={onHandoff} />
         ) : null}
         {fromHarness && onSecondOpinion ? (
-          <SecondOpinionButton from={fromHarness} onPick={onSecondOpinion} />
+          <SecondOpinionButton
+            from={fromHarness}
+            fromModel={fromModel}
+            onPick={onSecondOpinion}
+            includeCurrent
+            excludeFromModel
+          />
         ) : null}
         <TurnMetricsBadge metrics={metrics} elapsedMs={elapsedMs} />
       </span>
-
       {labelHidden ? null : (
-        <>
+        <span className="flex min-w-0 items-center gap-2.5">
           {dot}
           <span className="flex min-w-0 items-center gap-1.5">
             {harness ? (
@@ -814,16 +1138,15 @@ function TurnDuration({
               {label}
             </span>
           </span>
-        </>
+        </span>
       )}
-
       {completedAt != null ? (
-        <>
+        <span className="flex shrink-0 items-center gap-2.5">
           {dot}
           <span className="shrink-0 text-content/35">
             {formatClockTime(completedAt)}
           </span>
-        </>
+        </span>
       ) : null}
     </div>
   );
@@ -873,7 +1196,7 @@ function TurnMetricsBadge({
   return (
     <div
       ref={root}
-      className="relative shrink-0 pl-1"
+      className="relative shrink-0"
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onFocus={() => setHovered(true)}
@@ -884,9 +1207,9 @@ function TurnMetricsBadge({
         tabIndex={0}
         aria-label={`Turn metrics: ${label}`}
         title="Turn metrics"
-        className="grid rounded-sm p-1 outline-none hover:text-content focus-visible:ring-1 focus-visible:ring-accent"
+        className="grid rounded-md p-1 text-content/40 outline-none hover:bg-content/8 hover:text-content/70 focus-visible:ring-1 focus-visible:ring-accent"
       >
-        <ChartBreakoutSquare className="size-3.5" strokeWidth={1.6} />
+        <ChartBreakoutSquare className="size-3.5" strokeWidth={1.75} />
       </span>
       {hovered ? (
         <Popover
@@ -1057,11 +1380,41 @@ function SaveNoteButton({
   );
 }
 
+function EditLastTurnButton({
+  onEdit,
+  editing = false,
+}: {
+  onEdit: () => void;
+  editing?: boolean;
+}) {
+  const label = editing ? "Cancel edit" : "Edit and resend";
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      aria-pressed={editing}
+      onClick={(event) => {
+        event.stopPropagation();
+        onEdit();
+      }}
+      className={`rounded-md p-1 transition-[background-color,color] duration-150 focus-visible:ring-1 focus-visible:ring-accent ${
+        editing
+          ? "edit-last-turn-button"
+          : "text-content/40 hover:bg-content/8 hover:text-content/70"
+      }`}
+    >
+      <Pencil className="size-3.5" strokeWidth={1.75} />
+    </button>
+  );
+}
+
 const TranscriptBlock = memo(function TranscriptBlock({
   block,
   layout,
   stickyIndex,
   underLine = false,
+  embedded = false,
   cwd,
   onApproval,
   onSaveNote,
@@ -1075,12 +1428,16 @@ const TranscriptBlock = memo(function TranscriptBlock({
   planHarness,
   planModel,
   planModelSettings,
+  onEditLastTurn,
+  editing = false,
 }: {
   block: Block;
   layout: TranscriptLayout;
   stickyIndex: number;
   /** True when something already sits directly above this in the turn. */
   underLine?: boolean;
+  /** True when the parent surface already provides the horizontal gutter. */
+  embedded?: boolean;
   cwd?: string;
   onApproval?: (requestId: number, decision: ApprovalDecision) => void;
   onSaveNote?: (text: string) => void | Promise<void>;
@@ -1094,6 +1451,8 @@ const TranscriptBlock = memo(function TranscriptBlock({
   planHarness?: HarnessId;
   planModel?: string;
   planModelSettings?: Record<string, string>;
+  onEditLastTurn?: () => void;
+  editing?: boolean;
 }) {
   if (block.role === "user") {
     return (
@@ -1102,6 +1461,8 @@ const TranscriptBlock = memo(function TranscriptBlock({
         layout={layout}
         stickyIndex={stickyIndex}
         cwd={cwd}
+        onEdit={onEditLastTurn}
+        editing={editing}
         onSaveNote={onSaveNote}
         onSendDraft={onSendDraft}
         onRemoveDraft={onRemoveDraft}
@@ -1109,11 +1470,16 @@ const TranscriptBlock = memo(function TranscriptBlock({
     );
   }
 
+  if (block.role === "image") {
+    return block.image ? <GeneratedImage image={block.image} /> : null;
+  }
+
   if (block.role === "tool") {
     return (
       <ToolCall
         block={block}
         cwd={cwd}
+        embedded={embedded}
         onApproval={onApproval}
         onOpenFile={onOpenFile}
         onOpenDiff={onOpenDiff}
@@ -1128,7 +1494,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
   if (block.role === "tasks") {
     if (!block.taskList?.items.length) return null;
     return (
-      <div className="px-4 py-1">
+      <div className={embedded ? "py-1" : "px-4 py-1"}>
         <TaskListPreview
           items={block.taskList.items}
           explanation={block.taskList.explanation}
@@ -1142,13 +1508,13 @@ const TranscriptBlock = memo(function TranscriptBlock({
     const legacyTasks = legacyTaskListFromText(block.text);
     if (legacyTasks) {
       return (
-        <div className="px-4 py-1">
+        <div className={embedded ? "py-1" : "px-4 py-1"}>
           <TaskListPreview items={legacyTasks} />
         </div>
       );
     }
     return (
-      <div className="px-4 py-1">
+      <div className={embedded ? "py-1" : "px-4 py-1"}>
         <PlanPreview
           text={block.text}
           streaming={block.streaming}
@@ -1171,6 +1537,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
       <ToolCall
         block={block}
         cwd={cwd}
+        embedded={embedded}
         onApproval={onApproval}
         onOpenFile={onOpenFile}
         onOpenDiff={onOpenDiff}
@@ -1187,7 +1554,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
       return <InterjectionDivider block={block} />;
     }
     return (
-      <div className="px-4 py-2 text-content/50">
+      <div className={`${embedded ? "" : "px-4"} py-2 text-content/50`}>
         <pre className="min-w-0 whitespace-pre-wrap break-words">
           {block.text}
         </pre>
@@ -1200,7 +1567,7 @@ const TranscriptBlock = memo(function TranscriptBlock({
   return (
     <div
       data-selectable-agent-response={block.streaming ? undefined : block.id}
-      className={`min-w-0 px-4 pb-1 text-content ${underLine ? "pt-1" : "pt-3"}`}
+      className={`min-w-0 pb-1 text-content ${embedded ? "" : "px-4"} ${underLine ? "pt-1" : "pt-3"}`}
     >
       <AgentMarkdown
         text={block.text}
@@ -1216,6 +1583,8 @@ function UserMessageBlock({
   block,
   layout,
   stickyIndex,
+  onEdit,
+  editing = false,
   cwd,
   onSaveNote,
   onSendDraft,
@@ -1224,6 +1593,8 @@ function UserMessageBlock({
   block: Block;
   layout: TranscriptLayout;
   stickyIndex: number;
+  onEdit?: () => void;
+  editing?: boolean;
   cwd?: string;
   onSaveNote?: (text: string) => void | Promise<void>;
   onSendDraft?: (block: Block) => boolean | void;
@@ -1235,8 +1606,11 @@ function UserMessageBlock({
   const textRef = useRef<HTMLElement>(null);
   const card = block.secondOpinion;
   const note = block.noteCard;
+  const monocode = isOperatorUserTurn(block);
   const text =
-    card && card.kind !== "handoff" ? "" : visibleUserPrompt(block.text);
+    card && card.kind !== "handoff"
+      ? ""
+      : visibleUserPrompt(monocode ? operatorUserPrompt(block) : block.text);
   const messageLink = text ? parseUserMessageLink(text) : null;
   const displayText = messageLink
     ? `${messageLink.beforeText}${messageLink.afterText}`
@@ -1247,7 +1621,8 @@ function UserMessageBlock({
     !block.draft &&
     !block.attachments?.length &&
     !card &&
-    !note;
+    !note &&
+    !block.ciContext;
 
   // Only the chat layout rounds a single line; the document layout always uses
   // the square corners, so it never needs the measurement at all.
@@ -1296,20 +1671,22 @@ function UserMessageBlock({
   return (
     <div
       data-prompt-anchor={block.id}
-      className={`user-message-row ${
+      data-editing-last-turn={editing ? "true" : undefined}
+      className={`user-message-row group/usermsg overflow-visible ${
         chat ? "flex flex-col items-end pt-1.5 pr-4 pb-5 pl-14" : "p-1.5 pb-4"
       }`}
     >
       <div
-        className={`user-message-hover-zone min-w-0 ${chat ? "flex w-fit max-w-full flex-col items-end" : "w-full"}`}
+        className={`user-message-hover-zone min-w-0 overflow-visible ${chat ? "flex w-fit max-w-full flex-col items-end" : "w-full"}`}
       >
         <div
           data-draft={block.draft ? "true" : undefined}
-          className={`user-message-bubble min-w-0 px-3 py-2 font-sans text-content ${
+          data-monocode={monocode ? "true" : undefined}
+          className={`user-message-bubble relative min-w-0 px-3 py-2 font-sans text-content transition-[background-color] duration-200 ${
             block.draft
               ? "border border-dashed border-content/30 bg-content/4"
               : "bg-content/10"
-          } ${
+          } ${editing ? "edit-last-turn-bubble" : ""} ${
             chat
               ? `w-fit max-w-xl ${singleLine ? "rounded-full" : "rounded-xl"}`
               : "rounded-lg border border-content/10"
@@ -1368,6 +1745,23 @@ function UserMessageBlock({
               {expanded ? "Show less" : "Show more"}
             </button>
           ) : null}
+          {block.ciContext ? (
+            <details
+              className="group/ci mt-2 min-w-0 border-t border-content/10 pt-2"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded text-xs text-content/50 transition-colors hover:text-content/80 focus-visible:outline focus-visible:outline-1 focus-visible:outline-content/40 [&::-webkit-details-marker]:hidden">
+                <ChevronRight className="size-3 shrink-0 transition-transform group-open/ci:rotate-90" />
+                <span>CI context</span>
+              </summary>
+              <p className="mt-2 text-xs text-content/50">
+                CI instructions and failure details included with this request.
+              </p>
+              <pre className="mt-2 max-h-72 min-w-0 overflow-auto overscroll-contain rounded-md bg-content/5 p-2.5 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words text-content/70">
+                {block.ciContext}
+              </pre>
+            </details>
+          ) : null}
           {block.draft ? (
             <div className="mt-2 flex items-center justify-between gap-4 border-t border-dashed border-content/20 pt-2">
               <span className="flex items-center gap-1.5 text-xs text-content/50">
@@ -1398,8 +1792,21 @@ function UserMessageBlock({
               </span>
             </div>
           ) : null}
+          {monocode ? (
+            <MonocodeSparkles blockId={block.id} startedAt={block.startedAt} />
+          ) : block.intent === "plan" ? (
+            <PlanStepsBurst blockId={block.id} startedAt={block.startedAt} />
+          ) : block.intent === "orchestrate" ? (
+            <OrchestratorConstellation
+              blockId={block.id}
+              startedAt={block.startedAt}
+            />
+          ) : null}
         </div>
-        {text || block.attachments?.length || block.startedAt != null ? (
+        {text ||
+        block.attachments?.length ||
+        block.startedAt != null ||
+        onEdit ? (
           <div className="user-message-actions flex items-center gap-1 px-3 pt-1">
             {text || block.attachments?.length ? (
               <CopyTurnButton
@@ -1407,6 +1814,9 @@ function UserMessageBlock({
                 attachments={block.attachments}
                 label="Copy message"
               />
+            ) : null}
+            {onEdit ? (
+              <EditLastTurnButton onEdit={onEdit} editing={editing} />
             ) : null}
             {text && onSaveNote ? (
               <SaveNoteButton text={text} onSave={onSaveNote} />
@@ -1651,6 +2061,67 @@ function sameActivity(a: ActivityPhasesProps, b: ActivityPhasesProps): boolean {
 }
 
 /**
+ * Hold the reader's place while turns above the viewport change height. An
+ * off-screen turn keeps its content-visibility placeholder until it is first
+ * laid out, and the scroller opts out of native scroll anchoring, so scrolling
+ * up through a freshly opened chat would otherwise shove the view down by
+ * each turn's correction.
+ */
+function useTurnScrollAnchor(
+  el: HTMLDivElement | null,
+  enabled: boolean,
+  stickToBottom: RefObject<boolean>,
+) {
+  useLayoutEffect(() => {
+    const inner = el?.firstElementChild;
+    if (!enabled || !el || !inner) return;
+    const heights = new WeakMap<Element, number>();
+    const resize = new ResizeObserver((entries) => {
+      // A parked transcript's scroller is detached and measures zero.
+      if (!el.isConnected) return;
+      const viewportTop = el.getBoundingClientRect().top;
+      let shift = 0;
+      for (const entry of entries) {
+        const height =
+          entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height;
+        const previous = heights.get(entry.target);
+        heights.set(entry.target, height);
+        if (previous === undefined || stickToBottom.current) continue;
+        // Only turns that sat wholly above the view. A turn the reader is
+        // looking at grows downward from where they are reading.
+        const top = entry.target.getBoundingClientRect().top;
+        if (top + previous <= viewportTop) shift += height - previous;
+      }
+      if (shift) el.scrollTop += shift;
+    });
+    let observed = new WeakSet<Element>();
+    const observeTurns = () => {
+      for (const turn of inner.children) {
+        if (observed.has(turn) || !turn.classList.contains("transcript-turn"))
+          continue;
+        observed.add(turn);
+        resize.observe(turn);
+      }
+    };
+    const mutations = new MutationObserver((records) => {
+      // Removal is rare (a rewind or edit), so start over rather than hold
+      // detached turns. Re-observed turns report the height already stored.
+      if (records.some((record) => record.removedNodes.length > 0)) {
+        resize.disconnect();
+        observed = new WeakSet();
+      }
+      observeTurns();
+    });
+    mutations.observe(inner, { childList: true });
+    observeTurns();
+    return () => {
+      mutations.disconnect();
+      resize.disconnect();
+    };
+  }, [el, enabled, stickToBottom]);
+}
+
+/**
  * Keep a live phase body on its newest step. Pinning happens in layout
  * before paint so the window follows without a visible hitch; only a real
  * wheel away from the bottom pauses that.
@@ -1682,8 +2153,14 @@ function useLivePhaseScroll(
     const pin = () => {
       if (stickToBottom.current) el.scrollTop = el.scrollHeight;
     };
+    let lastDistance = 0;
     const onScroll = () => {
-      if (isNearBottom(el)) stickToBottom.current = true;
+      // Only a scroll toward the end re-pins; one leaving it must not.
+      const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+      if (isNearBottom(el) && distance <= lastDistance) {
+        stickToBottom.current = true;
+      }
+      lastDistance = distance;
     };
     const onWheel = (e: WheelEvent) => {
       if (!nestedScrollAbsorbsWheel(el, e.deltaY)) return;
@@ -1733,7 +2210,16 @@ function ActivityPhaseGroup({
   const open = waiting || (override ?? active);
   const [liveScroller, setLiveScroller] = useState<HTMLDivElement | null>(null);
   useLivePhaseScroll(liveScroller, active && open, phase.steps);
+  // Steps already here when the group mounted, or that landed while it was
+  // folded, are history: only a step you watch arrive gets the entrance.
+  const settled = useRef<Set<Block["id"]> | null>(null);
+  settled.current ??= new Set(phase.steps.map((step) => step.id));
+  useEffect(() => {
+    for (const step of phase.steps) settled.current?.add(step.id);
+  }, [phase.steps]);
+  const turnFor = useStepQueue();
   const title = activityPhaseTitle(phase, active);
+  const monoCodePhase = !!monoCodeWorkSummary(phase.steps, active);
   // Opening a group on purpose is also how you read the line that titled it,
   // whole. The auto-open while it runs is a live view, not a reading one, and
   // a one-line note the header already shows in full has nothing to add.
@@ -1748,7 +2234,9 @@ function ActivityPhaseGroup({
   if (!phase.headline && phase.steps.length === 1) {
     return (
       <div className="flex min-w-0 items-start gap-1.5">
-        <ActivityPhaseIcon kind={phase.kind} className="mt-[7px]" />
+        {monoCodePhase ? null : (
+          <ActivityPhaseIcon kind={phase.kind} className="mt-[7px]" />
+        )}
         <div className="min-w-0 flex-1">
           <ActivityRow
             block={phase.steps[0]}
@@ -1801,10 +2289,14 @@ function ActivityPhaseGroup({
          * between them leaves both half-drawn on top of each other.
          */}
         <span className="relative flex size-3.5 shrink-0 items-center justify-center">
-          <ActivityPhaseIcon
-            kind={phase.kind}
-            className="group-hover:opacity-0"
-          />
+          {monoCodePhase ? (
+            <MonoCodeMark className="size-3.5 group-hover:opacity-0" />
+          ) : (
+            <ActivityPhaseIcon
+              kind={phase.kind}
+              className="group-hover:opacity-0"
+            />
+          )}
           <ChevronRight
             className={`absolute size-3.5 text-content/45 opacity-0 transition-transform duration-200 group-hover:opacity-100 ${
               open ? "rotate-90" : ""
@@ -1835,25 +2327,114 @@ function ActivityPhaseGroup({
                   />
                 </div>
               ) : null}
-              {phase.steps.map((block) => (
-                <div
-                  key={block.id}
-                  className={`zen-phase-step${active ? " zen-step-in" : ""}`}
-                >
-                  <ActivityRow
-                    block={block}
-                    cwd={cwd}
+              {phase.steps.map((block) => {
+                const arriving = active && !settled.current?.has(block.id);
+                return (
+                  <PhaseStep
+                    key={block.id}
                     live={active}
-                    onApproval={onApproval}
-                    onOpenFile={onOpenFile}
-                    onOpenDiff={onOpenDiff}
-                  />
-                </div>
-              ))}
+                    turn={arriving ? turnFor(block.id) : undefined}
+                  >
+                    <ActivityRow
+                      block={block}
+                      cwd={cwd}
+                      live={active}
+                      onApproval={onApproval}
+                      onOpenFile={onOpenFile}
+                      onOpenDiff={onOpenDiff}
+                    />
+                  </PhaseStep>
+                );
+              })}
             </div>
           </div>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+type StepTurn = { wait: number; pace: number };
+
+/**
+ * A group's queue of arriving steps: how long each one waits for the step
+ * before it to finish, and how long its own entrance then takes. A step keeps
+ * the turn it was first given however often the group renders.
+ */
+function useStepQueue() {
+  const queue = useRef({ next: 0, turns: new Map<Block["id"], StepTurn>() });
+
+  return (id: Block["id"]) => {
+    const { turns } = queue.current;
+    let turn = turns.get(id);
+    if (!turn) {
+      const now = performance.now();
+      const start = Math.max(now, queue.current.next);
+      const wait = start - now;
+      const backlog =
+        (STEP_QUEUE_MS - wait) / (STEP_QUEUE_MS - STEP_QUEUE_CALM_MS);
+      const pace = Math.max(
+        STEP_ENTRANCE_MIN_MS,
+        STEP_ENTRANCE_MS * Math.min(1, backlog),
+      );
+      queue.current.next = start + pace;
+      turn = { wait, pace };
+      turns.set(id, turn);
+    }
+    return turn;
+  };
+}
+
+/**
+ * One step on a phase's rail. A step that lands while you watch makes room
+ * first — what is below glides down, the rail runs into the gap and branches
+ * off — and only then does the row fade in. One that lands behind others
+ * stays out of the layout until its turn. The grid and clipping that does
+ * that come off once the row has settled, so nothing inside stays clipped.
+ */
+function PhaseStep({
+  live,
+  turn: arrival,
+  children,
+}: {
+  live: boolean;
+  /** Set only on the render a step arrives in; later renders drop it. */
+  turn?: StepTurn;
+  children: ReactNode;
+}) {
+  const [turn] = useState(arrival);
+  const [stage, setStage] = useState<"waiting" | "entering" | "settled">(() =>
+    !turn ? "settled" : turn.wait > 0 ? "waiting" : "entering",
+  );
+
+  useEffect(() => {
+    if (stage !== "waiting" || !turn) return;
+    const timer = window.setTimeout(() => setStage("entering"), turn.wait);
+    return () => window.clearTimeout(timer);
+  }, [stage, turn]);
+
+  return (
+    <div
+      className="zen-phase-step"
+      style={
+        turn
+          ? ({ "--step-ms": `${Math.round(turn.pace)}ms` } as CSSProperties)
+          : undefined
+      }
+      data-live={live || undefined}
+      data-waiting={stage === "waiting" || undefined}
+      data-entering={stage === "entering" || undefined}
+      onAnimationEnd={(e) => {
+        // The row's own fade is the last beat; nested rails bubble theirs.
+        if (
+          e.animationName === "zen-step-in" &&
+          (e.target as Element).parentElement === e.currentTarget
+        ) {
+          setStage("settled");
+        }
+      }}
+    >
+      {children}
     </div>
   );
 }
@@ -1871,17 +2452,19 @@ function SubagentStack({
   blocks,
   cwd,
   live = false,
+  embedded = false,
   onOpenFile,
   onOpenDiff,
 }: {
   blocks: Block[];
   cwd?: string;
   live?: boolean;
+  embedded?: boolean;
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string) => void;
 }) {
   return (
-    <div className="flex min-w-0 flex-col px-4">
+    <div className={`flex min-w-0 flex-col ${embedded ? "" : "px-4"}`}>
       {blocks.map((block) => (
         <SubagentRow
           key={block.id}
@@ -2131,6 +2714,7 @@ function agentStepBlock(step: AgentStep): Block {
       title: step.text,
       ...(step.toolKind ? { kind: step.toolKind } : {}),
       ...(step.status ? { status: step.status } : {}),
+      ...(step.detail ? { detail: step.detail } : {}),
       ...(step.preview ? { preview: step.preview } : {}),
     },
   };
@@ -2146,7 +2730,14 @@ function subagentStatusLine(block: Block, steps: AgentStep[]): string {
   if (toolCallState(block) === "rejected") return "failed";
   const tools = steps.filter((step) => step.kind === "tool").length;
   if (tools === 0) return "";
-  return tools === 1 ? "1 step" : `${tools} steps`;
+  const count = tools === 1 ? "1 step" : `${tools} steps`;
+  // A step that failed inside a run that went on to finish still has to say so
+  // here, or the row reads clean until someone opens the trail.
+  const failed = steps.filter(
+    (step) => step.kind === "tool" && isFailedStatus(step.status),
+  ).length;
+  if (!failed) return count;
+  return `${count}, ${failed === 1 ? "1 failed" : `${failed} failed`}`;
 }
 
 /** Whether the line that titled a group has more in it than the header shows. */
@@ -2488,6 +3079,16 @@ function ActivityToolRow({
   onOpenDiff?: (path: string) => void;
 }) {
   const [errorOpen, setErrorOpen] = useState(false);
+  const appCall = monoCodeToolCall(block);
+  if (appCall) {
+    return (
+      <MonoCodeCallRow
+        block={block}
+        call={appCall}
+        onApproval={onApproval}
+      />
+    );
+  }
   const label = toolCallLabel(block, cwd);
   const state = toolCallState(block);
   const pending = needsApproval(block);
@@ -2554,6 +3155,86 @@ function ActivityToolRow({
           {errorDetail}
         </pre>
       ) : null}
+    </div>
+  );
+}
+
+function MonoCodeMark({ className = "size-4" }: { className?: string }) {
+  return <img src="/monocode.png" alt="" className={`shrink-0 ${className}`} />;
+}
+
+/** MonoCode commands read like the other activity rows; failures expose their output. */
+function MonoCodeCallRow({
+  block,
+  call,
+  onApproval,
+}: {
+  block: Block;
+  call: MonoCodeToolCall;
+  onApproval?: (requestId: number, decision: ApprovalDecision) => void;
+}) {
+  const state = toolCallState(block);
+  const output = block.tool?.detail?.trim() || block.tool?.preview?.output?.trim();
+  const [errorOpen, setErrorOpen] = useState(false);
+  const hasError = state === "rejected" && !!output;
+  const pendingApproval = needsApproval(block);
+  const command = `monocode app ${call.action}`;
+  const verb = pendingApproval
+    ? "Run"
+    : state === "pending"
+      ? "Running"
+      : "Ran";
+  const summary = (
+    <>
+      <span
+        className={`shrink-0 font-sans text-sm ${state === "rejected" ? "text-red-400" : "text-content/50"}`}
+      >
+        {verb}
+      </span>
+      <span
+        className={`flex min-w-0 max-w-full items-center gap-1 rounded bg-content/6 px-1 font-mono text-[13px] ${state === "rejected" ? "text-red-400" : "text-content/70"}`}
+        title={command}
+      >
+        <MonoCodeMark className="size-3.5" />
+        <span className="min-w-0 truncate">{command}</span>
+      </span>
+      <ToolCallStatusIcon state={state} />
+      {hasError ? (
+        <ChevronRight
+          className={`size-3.5 shrink-0 text-red-400/60 transition-transform ${errorOpen ? "rotate-90" : ""}`}
+          strokeWidth={1.75}
+        />
+      ) : null}
+    </>
+  );
+  return (
+    <div data-monocode-tool-call={call.action} className="min-w-0">
+      {hasError ? (
+        <button
+          type="button"
+          aria-expanded={errorOpen}
+          aria-label={`${errorOpen ? "Hide" : "Show"} error details for MonoCode: ${call.label}`}
+          onClick={() => setErrorOpen((value) => !value)}
+          className="flex w-full min-w-0 items-center gap-1.5 py-1 text-left"
+        >
+          {summary}
+        </button>
+      ) : (
+        <div className="flex min-w-0 items-center gap-1.5 py-1">
+          {summary}
+        </div>
+      )}
+      {errorOpen && hasError ? (
+        <pre className="min-w-0 whitespace-pre-wrap break-words py-1 pl-5 font-mono text-[12px] leading-5 text-red-400/80">
+          {output}
+        </pre>
+      ) : null}
+      {pendingApproval ? (
+        <pre className="max-h-32 min-w-0 overflow-auto whitespace-pre-wrap break-all py-1 pl-5 font-mono text-[12px] leading-5 text-content/70">
+          {call.command}
+        </pre>
+      ) : null}
+      <ApprovalControls block={block} onApproval={onApproval} />
     </div>
   );
 }
@@ -2691,6 +3372,19 @@ function ToolCall({
 
   const frame = embedded ? "py-0.5" : "px-4 py-1";
 
+  const appCall = monoCodeToolCall(block);
+  if (appCall) {
+    return (
+      <div className={frame}>
+        <MonoCodeCallRow
+          block={block}
+          call={appCall}
+          onApproval={onApproval}
+        />
+      </div>
+    );
+  }
+
   if (editTool) {
     return (
       <div className={frame}>
@@ -2792,61 +3486,20 @@ function ToolCallSummary({
   failed?: boolean;
   status?: ToolCallState;
 }) {
-  const parts = label.match(/^(Read|Find|Skill|List|Edit|Write)\s+(.+)$/);
-  // A write preview carries the path itself, so edits get the same verb + file
-  // chip as reads rather than falling through to a raw label.
-  const writeTarget =
-    preview?.kind === "write"
-      ? preview.path
-        ? displayPath(preview.path, cwd)
-        : preview.fileName
-      : undefined;
-  const action =
-    parts?.[1] ??
-    (writeTarget ? editVerb(label) : undefined) ??
-    (/^read$/i.test(label.trim()) && (preview?.path || preview?.fileName)
-      ? "Read"
-      : /^find$/i.test(label.trim()) && preview?.query
-        ? "Find"
-        : /^list$/i.test(label.trim()) && (preview?.path || preview?.fileName)
-          ? "List"
-          : /^skill$/i.test(label.trim())
-            ? "Skill"
-            : undefined);
-  const target =
-    parts?.[2] ??
-    writeTarget ??
-    (action === "Read" ||
-    action === "List" ||
-    action === "Edit" ||
-    action === "Write"
-      ? preview?.path
-        ? displayPath(preview.path, cwd)
-        : preview?.fileName
-      : action === "Find"
-        ? preview?.query
-        : undefined);
+  const { action, target, fileName, filePath, isFile, previewMatchesFile } =
+    resolveToolCallDisplay(label, preview, cwd);
   if (!action || !target) {
     return (
       <span
         className={`min-w-0 flex-1 truncate font-mono text-[13px] ${
           failed ? "text-red-400" : chip ? "text-content/65" : "text-content/80"
         }`}
+        title={label}
       >
         {label}
       </span>
     );
   }
-  const isFile = action !== "Find" && action !== "Skill";
-  const fileName =
-    preview?.fileName ||
-    target
-      .replace(/[/\\]+$/, "")
-      .split(/[/\\]/)
-      .filter(Boolean)
-      .pop() ||
-    "file";
-  const filePath = resolveWorkspacePath(preview?.path || target, cwd);
   const openFile =
     action === "Edit" || action === "Write"
       ? (onOpenDiff ?? onOpenFile)
@@ -2855,6 +3508,7 @@ function ToolCallSummary({
   const canPreview =
     interactive &&
     preview?.kind === "write" &&
+    previewMatchesFile &&
     (preview.contentOnly ||
       preview.lines?.some((line) => line.kind !== "context"));
   const actionTone = failed ? "text-red-400" : "text-content/50";
@@ -2895,7 +3549,7 @@ function ToolCallSummary({
                 ? `max-w-full bg-content/6 hover:bg-content/10 ${targetTone}`
                 : `flex-1 hover:underline ${targetTone}`
             }`}
-            title={preview?.path || target}
+            title={target}
             onClick={(event) => {
               event.stopPropagation();
               openFile?.(filePath);
@@ -2911,7 +3565,7 @@ function ToolCallSummary({
                 ? `max-w-full bg-content/6 ${targetTone}`
                 : `flex-1 ${targetTone}`
             }`}
-            title={preview?.path || target}
+            title={target}
           >
             <FileTypeIcon name={fileName} isDir={action === "List"} />
             <span className="min-w-0 truncate">{target}</span>
@@ -3122,6 +3776,59 @@ function turnUserBlock(blocks: Block[], managed = false): Block | undefined {
     if (block.role === "user" && (managed || !block.internal)) return block;
   }
   return undefined;
+}
+
+function userTurnCount(blocks: Block[], managed = false): number {
+  return blocks.filter(
+    (block) => block.role === "user" && (managed || !block.internal),
+  ).length;
+}
+
+const PROMPT_RISE_MS = 560;
+// Keep in sync with the prompt-turn-reveal animation in index.css.
+const PROMPT_REVEAL_MS = 320;
+const PROMPT_FADE_MS = 480;
+// Where the prompt starts, as a fraction of the viewport height from the top.
+const PROMPT_RISE_FROM = 0.3;
+
+/** Fades the prompt in while sliding it from the upper viewport to its row. */
+function riseIntoAnchor(scroller: HTMLElement | null, blockId: string) {
+  const row = scroller?.querySelector<HTMLElement>(
+    `[data-prompt-anchor="${CSS.escape(blockId)}"]`,
+  );
+  if (!scroller || !row || typeof row.animate !== "function") return;
+  if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+  const view = scroller.getBoundingClientRect();
+  const dy =
+    view.top + view.height * PROMPT_RISE_FROM - row.getBoundingClientRect().top;
+  if (dy <= 1) return;
+  const animation = row.animate(
+    [{ transform: `translateY(${dy}px)` }, { transform: "translateY(0)" }],
+    { duration: PROMPT_RISE_MS, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
+  );
+  // The fade gets its own gentler curve; on the rise's sharp ease-out it
+  // would be over before the eye catches it.
+  const fade = row.animate([{ opacity: 0 }, { opacity: 1 }], {
+    duration: PROMPT_FADE_MS,
+    easing: "ease-out",
+  });
+  // The rest of the turn waits until the prompt lands, then fades in.
+  const turn = row.closest<HTMLElement>(".transcript-turn");
+  let revealTimer: ReturnType<typeof setTimeout> | undefined;
+  turn?.setAttribute("data-prompt-rise", "rising");
+  animation.onfinish = () => {
+    turn?.setAttribute("data-prompt-rise", "revealing");
+    revealTimer = setTimeout(
+      () => turn?.removeAttribute("data-prompt-rise"),
+      PROMPT_REVEAL_MS,
+    );
+  };
+  return () => {
+    animation.cancel();
+    fade.cancel();
+    clearTimeout(revealTimer);
+    turn?.removeAttribute("data-prompt-rise");
+  };
 }
 
 function isNearBottom(el: HTMLElement): boolean {

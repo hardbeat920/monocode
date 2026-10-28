@@ -10,6 +10,7 @@ import {
 import { invalidateProjectFiles } from "../../files/model/fileIndex";
 import { invalidateWatchedFiles } from "../../files/model/fileWatch";
 import { basename, notifyGitChanged, subscribeGitChanged } from "../../../platform/tauri/fs";
+import { formatInteger } from "../../../shared/lib/numbers";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
 
 type Props = {
@@ -136,9 +137,13 @@ export function SessionReview({
             <div className="truncate text-[12px] font-medium text-content/80">
               Changed {files.length} {files.length === 1 ? "file" : "files"}
             </div>
-            <div className="flex items-center gap-1.5 font-mono text-[11px] font-semibold -mt-0.5">
-              <span className="text-emerald-400">+{totals.additions}</span>
-              <span className="text-red-400">-{totals.deletions}</span>
+            <div className="flex items-center gap-1.5 font-sans text-[11px] font-semibold tabular-nums -mt-0.5">
+              <span className="text-emerald-400">
+                +{formatInteger(totals.additions)}
+              </span>
+              <span className="text-red-400">
+                -{formatInteger(totals.deletions)}
+              </span>
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-0.5">
@@ -256,9 +261,9 @@ function DiffCounts({ file }: { file: CheckpointFile }) {
     );
   }
   return (
-    <span className="flex shrink-0 gap-2 font-mono text-[11px] font-semibold">
-      <span className="text-emerald-400">+{file.additions}</span>
-      <span className="text-red-400">-{file.deletions}</span>
+    <span className="flex shrink-0 gap-2 font-sans text-[11px] font-semibold tabular-nums">
+      <span className="text-emerald-400">+{formatInteger(file.additions)}</span>
+      <span className="text-red-400">-{formatInteger(file.deletions)}</span>
     </span>
   );
 }

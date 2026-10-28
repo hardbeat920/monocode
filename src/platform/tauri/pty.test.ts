@@ -1,7 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { trimReplay } from "./pty";
+import { decodePtyChunk, trimReplay } from "./pty";
 
 const KB = 1024;
+
+describe("decodePtyChunk", () => {
+  it("decodes a valid base64 payload", () => {
+    // "hi" in base64
+    const chunk = decodePtyChunk("aGk=");
+    expect(chunk).not.toBeNull();
+    expect(Array.from(chunk!)).toEqual([104, 105]);
+  });
+
+  it("returns null instead of throwing on a malformed payload", () => {
+    expect(() => decodePtyChunk("not valid base64!!!")).not.toThrow();
+    expect(decodePtyChunk("not valid base64!!!")).toBeNull();
+  });
+});
 
 describe("trimReplay", () => {
   it("keeps a small buffer whole", () => {

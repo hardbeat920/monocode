@@ -15,7 +15,10 @@ import {
   useExternalPaneDrop,
   type TitleTabDropPosition,
 } from "../model/paneDrop";
-import type { ApprovalDecision, UserQuestionReply } from "../../../integrations/harness";
+import type {
+  ApprovalDecision,
+  UserQuestionReply,
+} from "../../../integrations/harness";
 import type { EditorNavigationTarget } from "../../search/model/search";
 import {
   layoutLeaves,
@@ -26,7 +29,10 @@ import {
   type LayoutSash,
   type PaneEdge,
 } from "../model/layout";
-import { sameProjectPath, type RecentProject } from "../../projects/model/recents";
+import {
+  sameProjectPath,
+  type RecentProject,
+} from "../../projects/model/recents";
 import type { TerminalMetaPatch } from "../../terminal/model/terminalTab";
 import {
   sessionWorkCwd,
@@ -43,6 +49,7 @@ import {
 } from "../../sessions/model/session";
 import { FilePane } from "../../files/ui/FilePane";
 import { SessionPane } from "../../sessions/ui/SessionPane";
+import type { TranscriptPool } from "../../sessions/ui/TranscriptPool";
 import type { SessionFolderTarget } from "../../sessions/model/sessionFolders";
 import type { Worktree } from "../../source-control/model/worktrees";
 
@@ -63,6 +70,7 @@ type Shared = {
   onSelectFile: (paneId: string, fileId: string) => void;
   onCloseFile: (paneId: string, fileId: string) => void;
   onCloseOtherFiles: (paneId: string, fileId: string) => void;
+  onPinFile?: (fileId: string) => void;
   onReorderFiles: (paneId: string, ids: string[]) => void;
   onFileDirtyChange: (fileId: string, dirty: boolean) => void;
   onFileErrorCountChange: (fileId: string, count: number) => void;
@@ -110,6 +118,9 @@ type Shared = {
   onQueuedMessageEditingChange: (sessionId: string, messageId?: string) => void;
   onSteerQueuedMessage: (sessionId: string, messageId: string) => void;
   onResumeQueue: (sessionId: string) => void;
+  onUsageLimitResume: (sessionId: string) => void;
+  onUsageLimitResumeAtReset: (sessionId: string, enabled: boolean) => void;
+  onUsageLimitDismiss: (sessionId: string) => void;
   onInboxCardDismiss?: (sessionId: string) => void;
   onLinkedWorkItemUpdateCardDismiss?: (sessionId: string) => void;
   onNoteCardDismiss?: (sessionId: string) => void;
@@ -147,6 +158,25 @@ type Shared = {
     turn: Block[],
   ) => void;
   onHandoff?: (sessionId: string, target: ModelTarget, turn: Block[]) => void;
+  onBtwSubmit?: (
+    sessionId: string,
+    turn: Block[],
+    threadId: string,
+    messageId: string,
+    text: string,
+    model?: string,
+    modelSettings?: Record<string, string>,
+  ) => boolean | void;
+  onBtwRetry?: (sessionId: string, turn: Block[], threadId: string) => void;
+  onBtwDelete?: (sessionId: string, turn: Block[], threadId: string) => void;
+  onBtwStop?: (sessionId: string, turn: Block[], threadId: string) => void;
+  onBtwModelChange?: (
+    sessionId: string,
+    turn: Block[],
+    threadId: string,
+    model: string,
+    modelSettings: Record<string, string>,
+  ) => void;
   onMovePane: (fromId: string, toId: string, edge: PaneEdge) => void;
   onDetachPane: (
     paneId: string,
@@ -155,6 +185,7 @@ type Shared = {
   ) => void;
   onNewTerminal: (sessionId: string) => void;
   onTerminalMetaChange?: (fileId: string, patch: TerminalMetaPatch) => void;
+  transcriptPool?: TranscriptPool;
 };
 
 type Props = Shared & { layout: LayoutNode };
@@ -185,6 +216,7 @@ function PaneTreeComponent({
   onSelectFile,
   onCloseFile,
   onCloseOtherFiles,
+  onPinFile,
   onReorderFiles,
   onFileDirtyChange,
   onFileErrorCountChange,
@@ -209,6 +241,9 @@ function PaneTreeComponent({
   onQueuedMessageEditingChange,
   onSteerQueuedMessage,
   onResumeQueue,
+  onUsageLimitResume,
+  onUsageLimitResumeAtReset,
+  onUsageLimitDismiss,
   onInboxCardDismiss,
   onLinkedWorkItemUpdateCardDismiss,
   onNoteCardDismiss,
@@ -226,11 +261,17 @@ function PaneTreeComponent({
   onUpdatePlan,
   onBuildPlan,
   onSecondOpinion,
+  onBtwSubmit,
+  onBtwRetry,
+  onBtwDelete,
+  onBtwStop,
+  onBtwModelChange,
   onHandoff,
   onMovePane,
   onDetachPane,
   onNewTerminal,
   onTerminalMetaChange,
+  transcriptPool,
 }: Props) {
   const treeRef = useRef<HTMLDivElement>(null);
   const layoutRef = useRef(layout);
@@ -403,6 +444,7 @@ function PaneTreeComponent({
                 onSelectFile={onSelectFile}
                 onCloseFile={onCloseFile}
                 onCloseOtherFiles={onCloseOtherFiles}
+                onPinFile={onPinFile}
                 onReorderFiles={onReorderFiles}
                 onDirtyChange={onFileDirtyChange}
                 onErrorCountChange={onFileErrorCountChange}
@@ -455,6 +497,9 @@ function PaneTreeComponent({
                 onQueuedMessageEditingChange={onQueuedMessageEditingChange}
                 onSteerQueuedMessage={onSteerQueuedMessage}
                 onResumeQueue={onResumeQueue}
+                onUsageLimitResume={onUsageLimitResume}
+                onUsageLimitResumeAtReset={onUsageLimitResumeAtReset}
+                onUsageLimitDismiss={onUsageLimitDismiss}
                 onInboxCardDismiss={onInboxCardDismiss}
                 onLinkedWorkItemUpdateCardDismiss={
                   onLinkedWorkItemUpdateCardDismiss
@@ -473,8 +518,14 @@ function PaneTreeComponent({
                 onBuildPlan={onBuildPlan}
                 onSecondOpinion={onSecondOpinion}
                 onHandoff={onHandoff}
+                onBtwSubmit={onBtwSubmit}
+                onBtwRetry={onBtwRetry}
+                onBtwDelete={onBtwDelete}
+                onBtwStop={onBtwStop}
+                onBtwModelChange={onBtwModelChange}
                 onNewTerminal={onNewTerminal}
                 onPaneDragStart={onPaneDragStart}
+                transcriptPool={transcriptPool}
               />
             ) : null}
           </div>

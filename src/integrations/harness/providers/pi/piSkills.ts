@@ -69,6 +69,8 @@ async function discoverCommands(
       path,
       buildPiSpawnArgs(flavor, { noSession: true }),
       cwd,
+      undefined,
+      flavor.id,
     );
     const response = await rpc.request({ type: command }, REQUEST_TIMEOUT_MS);
     return asRecord(response)?.data;

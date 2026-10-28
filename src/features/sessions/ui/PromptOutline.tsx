@@ -46,6 +46,8 @@ type Hover = { id: string; el: HTMLElement };
 type Props = {
   blocks: Block[];
   scope: RefObject<HTMLElement | null>;
+  /** The transcript's scroller once it has mounted, which can trail the pane. */
+  scroller?: HTMLElement | null;
   visible?: boolean;
   /** Renders the turn that holds the block. Returns false when the block is unknown. */
   revealBlock?: (blockId: string) => boolean;
@@ -54,6 +56,7 @@ type Props = {
 export function PromptOutline({
   blocks,
   scope,
+  scroller: mountedScroller,
   visible = true,
   revealBlock,
 }: Props) {
@@ -117,7 +120,8 @@ export function PromptOutline({
   }, [measure]);
 
   useEffect(() => {
-    const scroller = scope.current?.querySelector<HTMLElement>(SCROLLER);
+    const scroller =
+      mountedScroller ?? scope.current?.querySelector<HTMLElement>(SCROLLER);
     if (!scroller) return;
     scroller.addEventListener("scroll", schedule, { passive: true });
     const observer = new ResizeObserver(schedule);
@@ -134,7 +138,7 @@ export function PromptOutline({
         frame.current = null;
       }
     };
-  }, [schedule, scope]);
+  }, [mountedScroller, schedule, scope]);
 
   useEffect(() => {
     schedule();

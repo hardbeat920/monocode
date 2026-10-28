@@ -11,8 +11,24 @@ vi.mock("../../../platform/tauri/platform", async (importOriginal) => ({
   },
 }));
 
+function memoryStorage(): Storage {
+  const values = new Map<string, string>();
+  return {
+    get length() {
+      return values.size;
+    },
+    clear: () => values.clear(),
+    getItem: (key) => values.get(key) ?? null,
+    key: (index) => [...values.keys()][index] ?? null,
+    removeItem: (key) => values.delete(key),
+    setItem: (key, value) => {
+      values.set(key, value);
+    },
+  };
+}
+
 beforeEach(() => {
-  localStorage.clear();
+  vi.stubGlobal("localStorage", memoryStorage());
   platform.isWindows = true;
 });
 
@@ -75,13 +91,20 @@ describe.each([
     "monocode.bodyGlass",
     appearance.loadBodyGlass,
     appearance.saveBodyGlass,
-    true,
+    appearance.BODY_GLASS_DEFAULT,
     undefined,
   ],
   [
     "monocode.projectRailOpen",
     appearance.loadProjectRailOpen,
     appearance.saveProjectRailOpen,
+    true,
+    undefined,
+  ],
+  [
+    "monocode.sessionSidebarOpen",
+    appearance.loadSessionSidebarOpen,
+    appearance.saveSessionSidebarOpen,
     true,
     undefined,
   ],
