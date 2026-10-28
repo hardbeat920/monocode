@@ -6,6 +6,7 @@ import {
   type ReactNode,
 } from "react";
 import { formatInteger } from "../../shared/lib/numbers";
+import type { PopoverSide } from "../../shared/lib/popover";
 import { Popover } from "../../shared/ui/Popover";
 
 type Tip = {
@@ -40,7 +41,7 @@ function tipFor(target: EventTarget | null): Tip | null {
  * Shows on hover with no delay, or on keyboard focus, and steps aside once a
  * control is clicked until the pointer moves to another.
  */
-export function useRailTooltip(): {
+export function useRailTooltip(side: PopoverSide = "right"): {
   handlers: {
     onPointerOver: (event: PointerEvent) => void;
     onPointerLeave: () => void;
@@ -96,7 +97,7 @@ export function useRailTooltip(): {
   const tooltip = tip ? (
     <Popover
       anchor={tip.el}
-      side="right"
+      side={side}
       align="center"
       gap={8}
       constrainHeight={false}

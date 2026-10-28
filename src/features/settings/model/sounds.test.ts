@@ -17,6 +17,7 @@ import {
   resetSoundCues,
   saveSoundsEnabled,
   SOUNDS_DEFAULT,
+  SOUNDS_SUSPEND_MS,
   SOUNDS_VOLUME,
 } from "./sounds";
 import { updateNotificationPreferences } from "../../notifications/model/notificationPreferences";
@@ -143,5 +144,50 @@ describe("sounds", () => {
     expect(play).toHaveBeenCalledTimes(1);
     announceUpdateAvailable("0.2.1");
     expect(play).toHaveBeenCalledTimes(2);
+  });
+
+  it("suspends the audio context once the last cue has played out", () => {
+    class FakeAudioContext {
+      state = "running";
+      suspend = vi.fn(async () => {
+        this.state = "suspended";
+      });
+    }
+    const contexts: FakeAudioContext[] = [];
+    let shared: FakeAudioContext | undefined;
+    // Like cuelume: one lazily created context, resumed by later plays.
+    play.mockImplementation(() => {
+      if (!shared) {
+        const Ctor = (
+          window as unknown as { AudioContext: typeof FakeAudioContext }
+        ).AudioContext;
+        shared = new Ctor();
+        contexts.push(shared);
+      }
+      shared.state = "running";
+    });
+    vi.stubGlobal("window", { AudioContext: FakeAudioContext });
+    vi.useFakeTimers();
+    try {
+      playCue("copy");
+      expect(contexts).toHaveLength(1);
+      expect(window.AudioContext).toBe(FakeAudioContext);
+      vi.advanceTimersByTime(SOUNDS_SUSPEND_MS - 1);
+      playCue("switch");
+      vi.advanceTimersByTime(SOUNDS_SUSPEND_MS - 1);
+      expect(shared!.suspend).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(shared!.suspend).toHaveBeenCalledTimes(1);
+      expect(shared!.state).toBe("suspended");
+
+      playCue("copy");
+      expect(contexts).toHaveLength(1);
+      vi.advanceTimersByTime(SOUNDS_SUSPEND_MS);
+      expect(shared!.suspend).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+      play.mockReset();
+    }
   });
 });

@@ -1,4 +1,4 @@
-//! macOS chrome: traffic lights and WindowServer background blur.
+//! macOS chrome: traffic lights and native window background blur.
 //!
 //! The overlay titlebar is ~28pt. Our HTML tab bar is 40px (`h-10`), so the
 //! native `NSTitlebarContainerView` has to be stretched to match or the
@@ -10,13 +10,10 @@
 //! pinned once. The container is `setFrame`'d to 40px on install,
 //! resize, and focus — not from `drawRect`.
 //!
-//! Sidebar glass uses a transparent NSWindow plus
-//! `CGSSetWindowBackgroundBlurRadius` (private WindowServer API). That
-//! blurs the desktop behind the window. The shared glass tint is painted by
-//! NSWindow so newly exposed areas are filled during resize, even before
-//! WebKit's next frame. CSS keeps opaque panes above that native tint.
-//! A nearly transparent AppKit visual-effect view behind the WKWebView keeps
-//! CSS backdrop filters stable during hover repaints and window capture.
+//! Window glass uses an AppKit visual-effect backdrop below WKWebView. Its
+//! Gaussian blur samples the desktop; a separate native view supplies the
+//! shared tint, including newly exposed resize edges before WebKit paints.
+//! The legacy WindowServer blur is only a fallback without a native backing.
 //!
 //! Decorated workspace windows keep tiny alpha (0.01) to avoid a chamfered
 //! shadow gap. Borderless chats use a masked NSVisualEffectView below Wry's
@@ -24,7 +21,7 @@
 //! Rounded layers clip WebKit and paint the tint during live resize. They
 //! must not use the rectangular WindowServer background-blur surface.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::ffi::{c_char, c_int, c_void, OsStr};
 use std::path::{Component, Path};
@@ -42,7 +39,10 @@ use objc2_app_kit::{
     NSUserInterfaceItemIdentification, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
     NSVisualEffectState, NSVisualEffectView, NSWindow, NSWindowOrderingMode,
 };
-use objc2_foundation::{NSDictionary, NSEdgeInsets, NSNumber, NSSize, NSString, NSUserDefaults};
+use objc2_foundation::{
+    NSArray, NSDictionary, NSEdgeInsets, NSNumber, NSRect, NSSize, NSString, NSUserDefaults,
+};
+use objc2_quartz_core::CALayer;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use tauri::{AppHandle, Manager, WebviewWindow, WindowEvent};
 
@@ -59,6 +59,7 @@ pub const BLUR_MAX: u8 = 64;
 pub const BLUR_DEFAULT: u8 = 24;
 
 const GLASS_BACKING_ID: &str = "monocode.webview-glass-backing";
+const GLASS_TINT_ID: &str = "monocode.webview-glass-tint";
 const FLOATING_GLASS_ID: &str = "monocode.floating-glass";
 const FLOATING_CONTENT_ID: &str = "monocode.floating-content";
 /// Matches the floating chat's `rounded-2xl` CSS outline.
@@ -331,6 +332,20 @@ fn set_native_background(window: &WebviewWindow, native: &NSWindow, color: &NSCo
             return;
         }
     }
+    if let Some(tint) = native.contentView().and_then(|content| {
+        content.subviews().iter().find(|view| {
+            view.identifier().as_deref() == Some(&NSString::from_str(GLASS_TINT_ID))
+                && !view.isHidden()
+        })
+    }) {
+        if let Some(layer) = tint.layer() {
+            layer.setBackgroundColor(Some(&color.CGColor()));
+            // The tint belongs above the live backdrop, which covers the
+            // NSWindow background. Keep tiny alpha for the native shadow.
+            native.setBackgroundColor(Some(&NSColor::clearColor().colorWithAlphaComponent(0.01)));
+            return;
+        }
+    }
     native.setBackgroundColor(Some(color));
 }
 
@@ -388,12 +403,118 @@ fn prepare_glass(
     opacity.is_some()
 }
 
-/// Keep an AppKit backdrop surface below the transparent WKWebView. With only
-/// WindowServer blur, native hover/capture tests expose unfiltered web content
-/// for individual frames. A visual-effect backing prevents that without
-/// removing CSS blur or making the page opaque; an ordinary layer-backed
-/// NSView did not. Keep a nonzero alpha so AppKit retains the effect, but only
-/// tint at 1% so the existing glass appearance and blur-radius control remain.
+struct WindowBackdropIvars {
+    radius: Cell<u8>,
+}
+
+define_class!(
+    #[unsafe(super(NSVisualEffectView))]
+    #[name = "MonoCodeWindowBackdrop"]
+    #[ivars = WindowBackdropIvars]
+    struct WindowBackdrop;
+
+    impl WindowBackdrop {
+        #[unsafe(method(updateLayer))]
+        fn update_layer(&self) {
+            // AppKit rebuilds its private material layers when appearance
+            // changes. Always let it finish before adjusting the backdrop.
+            unsafe { let _: () = msg_send![super(self), updateLayer]; }
+            self.configure_layers();
+        }
+    }
+);
+
+impl WindowBackdrop {
+    fn new(frame: NSRect, mtm: MainThreadMarker) -> Retained<Self> {
+        let allocated = Self::alloc(mtm).set_ivars(WindowBackdropIvars {
+            radius: Cell::new(BLUR_RADIUS.load(Ordering::Relaxed)),
+        });
+        let view: Retained<Self> = unsafe { msg_send![super(allocated), initWithFrame: frame] };
+        view.setMaterial(NSVisualEffectMaterial::UnderWindowBackground);
+        view.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+        view.setState(NSVisualEffectState::Active);
+        view.setWantsLayer(true);
+        view
+    }
+
+    fn set_radius(&self, radius: u8) {
+        self.ivars().radius.set(radius);
+        self.configure_layers();
+        self.setNeedsDisplay(true);
+    }
+
+    fn configure_layers(&self) {
+        let Some(layer) = self.layer() else {
+            return;
+        };
+        // These are AppKit-owned private filters. An OS change must not let
+        // an Objective-C exception escape through the updateLayer callback.
+        let configured = objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
+            configure_backdrop_layer(&layer, self.ivars().radius.get());
+        }));
+        if configured.is_ok() {
+            // Window snapshots omit live backdrops. An opaque base behind
+            // that layer keeps Mission Control previews from showing raw
+            // desktop through a window whose blur was omitted.
+            layer.setBackgroundColor(Some(&NSColor::blackColor().CGColor()));
+        }
+    }
+}
+
+/// Preserve AppKit's downsampled Gaussian backdrop while replacing material
+/// coloration with our theme's own tint. This leaves in-app CSS blur alone.
+fn configure_backdrop_layer(layer: &CALayer, radius: u8) {
+    layer.setBackgroundColor(None);
+    if layer.class().name().to_bytes() == b"CAChameleonLayer" {
+        layer.setHidden(true);
+        return;
+    }
+    if let Some(filters) = layer.filters() {
+        let mut retained = Vec::with_capacity(filters.len());
+        let mut changed = false;
+        for filter in filters.iter() {
+            let description: Retained<NSString> = unsafe { msg_send![&*filter, description] };
+            let description = description.to_string();
+            if description.contains("Saturat") {
+                changed = true;
+                continue;
+            }
+            if description.contains("Blur") {
+                let key = NSString::from_str("inputRadius");
+                let current: Option<Retained<NSNumber>> =
+                    unsafe { msg_send![&*filter, valueForKey: &*key] };
+                if current.as_ref().map(|value| value.doubleValue()) != Some(f64::from(radius)) {
+                    // AppKit's filters are shared with Core Animation's
+                    // committed render tree. Mutating the installed filter
+                    // and reassigning an equal array does not invalidate it.
+                    // Install a changed copy so the displayed blur updates.
+                    let replacement: Retained<objc2::runtime::AnyObject> =
+                        unsafe { msg_send![&*filter, copy] };
+                    let value = NSNumber::numberWithDouble(f64::from(radius));
+                    unsafe {
+                        let _: () = msg_send![&*replacement, setValue: &*value, forKey: &*key];
+                    }
+                    retained.push(replacement);
+                    changed = true;
+                    continue;
+                }
+            }
+            retained.push(filter);
+        }
+        if changed {
+            unsafe {
+                layer.setFilters(Some(&NSArray::from_retained_slice(&retained)));
+            }
+        }
+    }
+    if let Some(children) = unsafe { layer.sublayers() } {
+        for child in children.iter() {
+            configure_backdrop_layer(&child, radius);
+        }
+    }
+}
+
+/// Native desktop blur and its tint sit below the unchanged Wry webview.
 fn set_glass_backing(window: &NSWindow, enabled: bool) {
     let Some(content) = window.contentView() else {
         return;
@@ -415,27 +536,35 @@ fn set_glass_backing(window: &NSWindow, enabled: bool) {
         .find(|view| view.identifier().as_deref() == Some(&identifier))
     {
         backing.setHidden(!enabled);
+        if let Some(tint) = content
+            .subviews()
+            .iter()
+            .find(|view| view.identifier().as_deref() == Some(&NSString::from_str(GLASS_TINT_ID)))
+        {
+            tint.setHidden(!enabled);
+        }
         return;
     }
     if !enabled {
         return;
     }
 
-    let backing = NSVisualEffectView::initWithFrame(
-        NSVisualEffectView::alloc(window.mtm()),
-        content.bounds(),
-    );
+    let backing = WindowBackdrop::new(content.bounds(), window.mtm());
     backing.setIdentifier(Some(&identifier));
-    backing.setMaterial(NSVisualEffectMaterial::UnderWindowBackground);
-    backing.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
-    backing.setState(NSVisualEffectState::Active);
-    backing.setAlphaValue(0.01);
     backing.setAutoresizingMask(
         NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
     );
     // Wry owns the parent and WKWebView. Insert a sibling below the webview;
     // do not replace its parent, first responder, or event-handling view.
     content.addSubview_positioned_relativeTo(&backing, NSWindowOrderingMode::Below, None);
+
+    let tint = NSView::initWithFrame(NSView::alloc(window.mtm()), content.bounds());
+    tint.setIdentifier(Some(&NSString::from_str(GLASS_TINT_ID)));
+    tint.setWantsLayer(true);
+    tint.setAutoresizingMask(
+        NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
+    );
+    content.addSubview_positioned_relativeTo(&tint, NSWindowOrderingMode::Above, Some(&backing));
 }
 
 fn apply_blur(window: &WebviewWindow, radius: u8) {
@@ -449,6 +578,21 @@ fn apply_blur(window: &WebviewWindow, radius: u8) {
     let Some(ns_window) = ns_window(window) else {
         return;
     };
+    let native_backing = ns_window.contentView().and_then(|content| {
+        content.subviews().iter().find(|view| {
+            view.identifier().as_deref() == Some(&NSString::from_str(GLASS_BACKING_ID))
+        })
+    });
+    let legacy_radius = if let Some(backing) = native_backing {
+        if let Some(backdrop) = backing.downcast_ref::<WindowBackdrop>() {
+            backdrop.set_radius(radius);
+        }
+        // Avoid applying two desktop blurs. Floating windows also keep
+        // their existing masked native material rather than this backdrop.
+        0
+    } else {
+        radius
+    };
     let Some(set_blur) = set_blur_fn() else {
         return;
     };
@@ -460,7 +604,7 @@ fn apply_blur(window: &WebviewWindow, radius: u8) {
         return;
     }
     unsafe {
-        set_blur(connection, window_number as c_int, radius as c_int);
+        set_blur(connection, window_number as c_int, legacy_radius as c_int);
     }
 }
 
@@ -919,6 +1063,52 @@ mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn native_backdrop_accepts_radius_updates_without_material_saturation() {
+        let result = objc2::exception::catch(|| {
+            let layer = CALayer::new();
+            let filter_class = objc2::runtime::AnyClass::get(c"CAFilter")
+                .expect("Core Animation provides backdrop filters");
+            let blur: Retained<objc2::runtime::AnyObject> = unsafe {
+                msg_send![filter_class, filterWithType: &*NSString::from_str("gaussianBlur")]
+            };
+            let saturation: Retained<objc2::runtime::AnyObject> = unsafe {
+                msg_send![filter_class, filterWithType: &*NSString::from_str("colorSaturate")]
+            };
+            unsafe {
+                layer.setFilters(Some(&NSArray::from_retained_slice(&[blur, saturation])));
+            }
+            let filter_radius = |filter: &objc2::runtime::AnyObject| {
+                let value: Option<Retained<NSNumber>> =
+                    unsafe { msg_send![filter, valueForKey: &*NSString::from_str("inputRadius")] };
+                value.as_ref().map(|value| value.doubleValue())
+            };
+            for radius in [60, 1, 64, 24] {
+                let previous = layer.filters().unwrap().objectAtIndex(0);
+                let previous_radius = filter_radius(&previous);
+                configure_backdrop_layer(&layer, radius);
+                let filters = layer.filters().expect("Gaussian blur remains installed");
+                assert_eq!(filters.len(), 1);
+                let updated = filters.objectAtIndex(0);
+                assert_eq!(filter_radius(&updated), Some(f64::from(radius)));
+                assert!(
+                    !std::ptr::eq(&*previous, &*updated),
+                    "A radius change must replace the filter in the render tree"
+                );
+                assert_eq!(filter_radius(&previous), previous_radius);
+
+                configure_backdrop_layer(&layer, radius);
+                assert!(
+                    std::ptr::eq(&*updated, &*layer.filters().unwrap().objectAtIndex(0)),
+                    "Unchanged radii must reuse the installed filter"
+                );
+            }
+        });
+        result.unwrap_or_else(|exception| {
+            panic!("Core Animation rejected the native backdrop configuration: {exception:?}")
+        });
+    }
 
     #[test]
     fn floating_mask_supports_appkit_stretching_without_an_exception() {

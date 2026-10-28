@@ -4,6 +4,16 @@ MonoCode is early and I’m the only maintainer, so small and focused lands much
 
 Please don’t open PRs that add a new provider right now. The existing harnesses still need to agree on a few patterns, and a new adapter would copy whatever is there today. See [New providers](#new-providers).
 
+## PR policy during the GPUI preview
+
+The Rust + GPUI preview is developed on `main` alongside the production React/Tauri app. Development is focused on the native preview while the production app remains supported.
+
+- Bug fixes, security fixes, documentation improvements, and changes useful to both apps are still welcome on `main`.
+- Larger Tauri-specific features and refactors are temporarily deferred during the migration.
+- Target GPUI contributions at `main`. See [the native guide](docs/native/README.md) for setup and checks.
+
+Before starting a larger change, open an issue so we can agree on the scope and target branch and avoid duplicated work. Existing PRs will be reviewed individually.
+
 ## Get it running
 
 You need Node.js 20+, a current stable Rust toolchain, and at least one provider CLI installed and logged in. See [provider setup](docs/providers.md) for installation and login instructions.
@@ -25,6 +35,16 @@ npm run tauri dev
 - `src-tauri/src/` - the Rust side: PTYs, filesystem and git, session storage, native window
 
 `src/integrations/harness/` is the most useful place to start if you want to fix something real. Each folder under `providers/` has an adapter (`claudeAdapter.ts`) that implements the shared `HarnessAdapter` lifecycle from `core/registry.ts`, and a protocol module (`claudeProtocol.ts`) that translates the CLI’s output into MonoCode’s own event types. The protocol modules are pure functions with unit tests beside them, so you can fix a Codex parsing bug with only Claude Code installed. That’s for the providers we already ship - please don’t add a new one yet.
+
+## Experimental GPUI work
+
+The production React/Tauri app continues to use the commands above. GPUI work
+lives in `crates/monocode-core` and `crates/monocode-gpui`, with an independent
+Cargo workspace and lockfile. Use `npm run native:dev` to develop,
+`npm run native:build` to package an optimized build, and
+`npm run native:check` for its checks. Keep production UI behavior, dependencies,
+CI and release/update distribution intact while the native port is tested.
+See the [native guide](docs/native/README.md) and [architecture](docs/native/migration.md).
 
 ## Before you push
 

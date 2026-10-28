@@ -217,6 +217,8 @@ export type AgentStep = {
   toolKind?: string;
   status?: string;
   detail?: string;
+  /** Large output left in storage on load; see `loadToolDetail`. */
+  detailOmitted?: boolean;
   preview?: ToolPreview;
 };
 
@@ -344,6 +346,8 @@ export type Block = {
     kind?: string;
     status?: string;
     detail?: string;
+    /** Large output left in storage on load; see `loadToolDetail`. */
+    detailOmitted?: boolean;
     preview?: ToolPreview;
     /** Every file in a multi-file edit, retained for checkpoint recovery. */
     paths?: string[];

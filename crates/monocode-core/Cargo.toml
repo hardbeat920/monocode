@@ -1,0 +1,63 @@
+[package]
+workspace = "../monocode-gpui"
+name = "monocode-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+# Stored floats must reload exactly, or saved revisions stop matching.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
+rusqlite.workspace = true
+async-channel = "2"
+shlex = "2"
+url = "2"
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+sha2 = "0.10"
+rand = "0.9"
+regex = "1"
+zstd = "0.13"
+toml = "0.8"
+ureq = "2.12"
+webpki-roots = "0.26.11"
+similar = "2"
+unicode-width = "0.2"
+monocode-mobile-link = { path = "../mobile-link" }
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+uuid = { version = "1", features = ["v4"] }
+if-addrs = "0.15"
+hostname = "0.4"
+igd-next = "0.18"
+natpmp = "0.5"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico"] }
+rquickjs = "0.14.0"
+semver = { version = "1", features = ["serde"] }
+minisign-verify = "0.2.5"
+tempfile = "3"
+flate2 = "1"
+tar = "0.4"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3.6", default-features = false, features = ["apple-native"] }
+unicode-normalization = "0.1"
+
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3.6", default-features = false, features = ["windows-native"] }
+rusty-leveldb = "1"
+tempfile = "3"
+
+# Exercise WebView2 storage fixtures on Linux and macOS too.
+[target.'cfg(not(windows))'.dev-dependencies]
+rusty-leveldb = "1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3.6", default-features = false, features = ["linux-native-sync-persistent", "crypto-rust"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

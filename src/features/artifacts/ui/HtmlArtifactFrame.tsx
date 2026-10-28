@@ -9,9 +9,13 @@ type FrameTheme = { scheme: "dark" | "light"; vars: Record<string, string> };
 const THEME_COLORS: Record<string, string> = {
   "--background": "var(--color-background-base)",
   "--foreground": "var(--color-content)",
-  "--muted": "color-mix(in srgb, var(--color-content) 55%, transparent)",
-  "--surface": "color-mix(in srgb, var(--color-content) 5%, transparent)",
-  "--border": "color-mix(in srgb, var(--color-content) 12%, transparent)",
+  // Blend against the page background so these also work as solid text/fill colors.
+  "--muted":
+    "color-mix(in srgb, var(--color-content) 55%, var(--color-background-base))",
+  "--surface":
+    "color-mix(in srgb, var(--color-content) 5%, var(--color-background-base))",
+  "--border":
+    "color-mix(in srgb, var(--color-content) 12%, var(--color-background-base))",
   "--accent": "var(--color-accent)",
   "--link": "var(--link-color)",
   "--positive": "var(--color-diff-add)",
