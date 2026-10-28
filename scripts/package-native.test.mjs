@@ -105,6 +105,10 @@ test("AppImage desktop registration is opt-in and launches the permanent image",
 
   const validate = spawnSync("desktop-file-validate", [desktop], { encoding: "utf8" });
   if (validate.error?.code !== "ENOENT") assert.equal(validate.status, 0, validate.stderr);
+  if (process.platform !== "linux") {
+    t.diagnostic("Desktop launcher round-trip is Linux-only");
+    return;
+  }
   const launched = join(directory, "launched");
   const gio = spawnSync("gio", ["launch", desktop], {
     env: { ...env, NATIVE_TEST_LAUNCH: launched }, encoding: "utf8",
