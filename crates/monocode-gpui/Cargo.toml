@@ -10,6 +10,7 @@ serde.workspace = true
 serde_json.workspace = true
 monocode-core = { path = "../monocode-core" }
 pulldown-cmark = "0.13"
+mermaid-rs-renderer = { version = "0.3.1", default-features = false }
 syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
 gpui = { package = "gpui-pre", version = "=0.3.9", default-features = false }
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.9", default-features = false, features = ["font-kit", "runtime_shaders", "x11", "wayland"] }

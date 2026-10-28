@@ -166,10 +166,10 @@ impl Photo {
             });
         })
         .detach();
-        cx.on_release(|this, cx| match this.source.take() {
-            Some(ImageSource::Render(image)) => cx.drop_image(image, None),
-            Some(source) => source.remove_asset(cx),
-            None => {}
+        cx.on_release(|this, cx| {
+            if let Some(source) = this.source.take() {
+                source.evict(cx);
+            }
         })
         .detach();
         Self {
@@ -317,5 +317,45 @@ impl TranscriptView {
                 }
             }))
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::{
+        Context, ImageSource, ImgResourceLoader, IntoElement, Render, Resource, Styled,
+        TestAppContext, Window, img, px,
+    };
+
+    struct Viewer(ImageSource);
+
+    impl Render for Viewer {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            img(self.0.clone()).size(px(2.))
+        }
+    }
+
+    #[gpui::test]
+    fn evicting_a_decoded_source_frees_its_sprite(cx: &mut TestAppContext) {
+        let path = std::env::temp_dir().join(format!("photo-evict-{}.png", std::process::id()));
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([255, 0, 0, 255]))
+            .save(&path)
+            .unwrap();
+        let resource = Resource::Path(path.clone().into());
+        let source = ImageSource::Resource(resource.clone());
+        let (_view, cx) = cx.add_window_view(|_, _| Viewer(source.clone()));
+        cx.run_until_parked();
+        let image = cx
+            .update(|_, cx| cx.fetch_asset::<ImgResourceLoader>(&resource))
+            .and_then(Result::ok)
+            .expect("the image should have decoded");
+        assert!(cx.update(|window, _| window.has_image_atlas_entry(&image)));
+
+        // Views release their images from outside any window update.
+        let app: &TestAppContext = cx;
+        app.update(|cx| source.evict(cx));
+        assert!(!cx.update(|window, _| window.has_image_atlas_entry(&image)));
+        assert!(!cx.update(|_, cx| source.is_asset_cached(cx)));
+        let _ = std::fs::remove_file(path);
     }
 }

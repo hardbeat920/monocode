@@ -1089,17 +1089,16 @@ fn pairing_backdrop(classic: bool) -> impl IntoElement {
             } else {
                 content(0.02)
             };
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             let fill = {
                 let mut fill = shell_fill();
                 fill.a = 1.;
                 fill
             };
-            #[cfg(target_os = "macos")]
-            let quad = gpui::fill(bounds, fill).border_color(
-                gpui_apple::metal_renderer::backdrop_blur_marker(24. * window.scale_factor()),
-            );
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            let quad = gpui::fill(bounds, fill)
+                .border_color(gpui::backdrop_blur_marker(24. * window.scale_factor()));
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             let quad = gpui::fill(bounds, fill);
             window.paint_quad(quad.corner_radii(px(DIALOG_RADIUS)));
         },
@@ -1121,20 +1120,21 @@ fn expired_qr_blur() -> impl IntoElement {
     canvas(
         |_, _, _| {},
         |bounds, _, window, _| {
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
                 // A fully transparent fill is optimized out by GPUI before
                 // reaching Metal. This invisible white tint retains the
                 // marker without changing the dimmed QR's appearance.
                 let mut tint: gpui::Hsla = rgb(0xffffff).into();
                 tint.a = 0.000001;
-                window.paint_quad(gpui::fill(bounds, tint).border_color(
-                    gpui_apple::metal_renderer::backdrop_blur_marker(2. * window.scale_factor()),
-                ));
+                window.paint_quad(
+                    gpui::fill(bounds, tint)
+                        .border_color(gpui::backdrop_blur_marker(2. * window.scale_factor())),
+                );
             });
             // Other renderers keep the dimmed expired image and the usable
             // New code control; they have no backdrop-blur primitive.
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             let _ = (bounds, window);
         },
     )

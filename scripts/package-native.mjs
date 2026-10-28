@@ -83,6 +83,7 @@ async function notices(directory) {
     "LICENSE",
     "NOTICE",
     "docs/native/LICENSE-GPUI-APACHE",
+    "docs/native/LICENSE-MERMAID-MIT",
     "crates/monocode-gpui/assets/hugeicons.LICENSE",
     "crates/monocode-gpui/assets/dark-plus.LICENSE",
     "crates/monocode-gpui/assets/native-editor.LICENSE.txt",

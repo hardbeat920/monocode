@@ -16,6 +16,9 @@ macOS is the primary preview target. A Linux ARM64 source build has been
 smoke-tested in a VM; Linux x64 packages and Windows GUI interaction still need
 runtime testing. See [preview limitations](parity.md).
 
+Fenced `mermaid` blocks render as native diagrams in Markdown previews and
+conversations. See [Mermaid diagrams](mermaid.md) for examples and limitations.
+
 ## Develop
 
 From the repository root:

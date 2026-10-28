@@ -142,6 +142,7 @@ fn attachment(
 /// measures its leading rows; scrolling only constructs rows intersecting the
 /// page's content mask. This keeps the original flowing document and one scroll.
 struct Measurements {
+    diagram_generation: u64,
     width: Pixels,
     text: TextStyle,
     rem: Pixels,
@@ -289,15 +290,18 @@ impl InboxDocument {
             .as_ref()
             .map_or(0, |layout| layout.bottoms.len());
         let images = self.image_states(count, window, cx);
+        let diagram_generation = markdown::mermaid::generation(cx);
         let text = window.text_style();
         if self.layout.as_ref().is_none_or(|layout| {
             layout.width != width
+                || layout.diagram_generation != diagram_generation
                 || layout.text != text
                 || layout.rem != window.rem_size()
                 || layout.scale != window.scale_factor()
                 || layout.images != images
         }) {
             self.layout = Some(Measurements {
+                diagram_generation,
                 width,
                 text,
                 rem: window.rem_size(),
@@ -621,6 +625,70 @@ mod tests {
     }
     fn prose() -> String {
         (0..300).map(|ix| format!("### Finding {ix}\n\nCheck **retries** in `src/main.rs` before returning from this operation. Preserve the reader's place.\n\n")).collect()
+    }
+    #[gpui::test]
+    fn mermaid_completion_updates_retained_document_heights(cx: &mut TestAppContext) {
+        let window = fixture(
+            "```mermaid\ngraph LR; A-->B-->C-->D\n```\n".into(),
+            None,
+            cx,
+        );
+        let initial = window
+            .update(cx, |view, _, cx| {
+                *view
+                    .document
+                    .read(cx)
+                    .layout
+                    .as_ref()
+                    .unwrap()
+                    .bottoms
+                    .last()
+                    .unwrap()
+            })
+            .unwrap();
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(200));
+        draw(window, cx);
+        let ready = window
+            .update(cx, |view, _, cx| {
+                *view
+                    .document
+                    .read(cx)
+                    .layout
+                    .as_ref()
+                    .unwrap()
+                    .bottoms
+                    .last()
+                    .unwrap()
+            })
+            .unwrap();
+        assert_ne!(
+            initial, ready,
+            "the loading placeholder must be remeasured after rendering"
+        );
+        window
+            .update(cx, |view, _, cx| {
+                view.eager = true;
+                cx.notify();
+            })
+            .unwrap();
+        draw(window, cx);
+        window
+            .update(cx, |view, _, cx| {
+                assert_eq!(
+                    *view
+                        .document
+                        .read(cx)
+                        .layout
+                        .as_ref()
+                        .unwrap()
+                        .bottoms
+                        .last()
+                        .unwrap(),
+                    ready
+                );
+            })
+            .unwrap();
     }
     #[gpui::test]
     fn scroll_keeps_exact_heights_and_only_materializes_visible_markdown(cx: &mut TestAppContext) {

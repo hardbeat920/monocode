@@ -174,6 +174,17 @@ impl Preferences {
         self.workspace_theme = id;
     }
 
+    /// The color settings a project copies when it gets its own theme.
+    pub(crate) fn project_theme(&self) -> monocode_core::project_appearance::ProjectTheme {
+        monocode_core::project_appearance::ProjectTheme {
+            workspace_theme: self.workspace_theme.clone(),
+            accent_color: self.accent_color.clone(),
+            hue: self.theme_hue,
+            saturation: self.theme_saturation,
+            dark_lightness: self.theme_dark_lightness,
+        }
+    }
+
     pub(crate) fn wayland_decorations(&self, compositor: &str) -> Option<gpui::WindowDecorations> {
         (compositor == "Wayland").then_some(if self.wayland_window_decorations {
             gpui::WindowDecorations::Server

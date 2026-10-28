@@ -85,6 +85,25 @@ launch/UI smoke test, not live provider or packaged Linux x64 upgrade coverage.
 Packaged preview-to-preview updates, Windows GUI execution, and macOS
 completion/approval alerts, sounds and Dock badges still need runtime testing.
 
+## Windows title bar — October 27, 2026
+
+On Windows 10 22H2 x64, a `native-dev` build was launched and its title bar
+exercised by hand. The window showed one bar, the app's tab row. Dragging it
+moved the window, double-clicking it maximized and restored the window, and
+dragging it to the screen's edge snapped the window to half the screen. The
+edges and corners resized the window. Minimize, maximize/restore and close
+worked. `WM_NCHITTEST` returned the caption for the bar's empty parts, the
+client area for tabs and buttons, the caption buttons for the window controls
+and the resize edges for the frame.
+
+All 684 GPUI tests ran serially: 668 passed and 16 failed. The same 16 failed
+on `f23cb29c` without these changes, in file-link, worktree, terminal and
+pane-layout fixtures. Core tests (589 passed, 2 ignored), native script tests
+and formatting passed. Strict Clippy failed on existing compiler warnings in
+unrelated files of the Windows build.
+
+Client-decorated Linux and the Windows 11 Snap Layouts flyout were not checked.
+
 ## Local checks
 
 Run the complete native check from the repository root:

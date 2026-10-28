@@ -57,6 +57,9 @@ pub(crate) struct Completion {
     disabled_paths: Vec<String>,
     known: std::collections::HashSet<String>,
     files: Vec<ProjectFile>,
+    /// `@name` → `@relative/path` for file names unique in the project; the
+    /// picker writes the short label and sending expands it back.
+    short_mentions: std::collections::HashMap<String, String>,
     choices: Vec<Choice>,
     active: usize,
     scroll: gpui::ScrollHandle,
@@ -72,6 +75,28 @@ pub(crate) struct Completion {
     _observe: Subscription,
 }
 impl EventEmitter<ModePicked> for Completion {}
+/// Composer.tsx's `buildMentionIndex`: a name is a label only when it is
+/// unique and needs no quoting.
+fn short_mentions(files: &[ProjectFile]) -> std::collections::HashMap<String, String> {
+    let mut counts = std::collections::HashMap::<&str, usize>::new();
+    for file in files {
+        *counts.entry(file.name.as_str()).or_default() += 1;
+    }
+    files
+        .iter()
+        .filter(|file| {
+            file.name != file.relative
+                && counts[file.name.as_str()] == 1
+                && !file.name.chars().any(char::is_whitespace)
+        })
+        .map(|file| {
+            (
+                composer::mention_text(&file.name),
+                composer::mention_text(&file.relative),
+            )
+        })
+        .collect()
+}
 impl Drop for Completion {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Relaxed);
@@ -111,6 +136,7 @@ impl Completion {
             .into_iter()
             .collect(),
             files: Vec::new(),
+            short_mentions: Default::default(),
             choices: Vec::new(),
             active: 0,
             scroll: gpui::ScrollHandle::new(),
@@ -162,6 +188,7 @@ impl Completion {
         self.selected_mcp.clear();
         self.mcp_open = false;
         self.files.clear();
+        self.short_mentions.clear();
         self.notes.clear();
         self.known = [
             "/plan",
@@ -250,7 +277,8 @@ impl Completion {
         if self.cwd.starts_with("remote://") {
             return text.to_owned();
         }
-        let text = monocode_core::provider::native_prompt(self.provider, text);
+        let text = self.expand_mentions(text);
+        let text = monocode_core::provider::native_prompt(self.provider, &text);
         let text = self
             .store
             .as_ref()
@@ -295,6 +323,30 @@ impl Completion {
                 servers.join(", ")
             )
         }
+    }
+    /// The bare file name when no other project file shares it.
+    fn mention_label(&self, file: &ProjectFile) -> String {
+        let full = composer::mention_text(&file.relative);
+        let short = composer::mention_text(&file.name);
+        if self.short_mentions.get(&short) == Some(&full) {
+            short
+        } else {
+            full
+        }
+    }
+    /// Short `@name` labels back to the project-relative paths the prompt
+    /// resolves.
+    pub(crate) fn expand_mentions(&self, text: &str) -> String {
+        if self.short_mentions.is_empty() {
+            return text.to_owned();
+        }
+        let labels = self.short_mentions.keys().cloned().collect();
+        let mut text = text.to_owned();
+        for range in composer::highlight_ranges(&text, &labels).into_iter().rev() {
+            let full = self.short_mentions[&text[range.clone()]].clone();
+            text.replace_range(range, &full);
+        }
+        text
     }
     pub(crate) fn dismiss(&mut self, cx: &mut Context<Self>) {
         self.mcp_open = false;
@@ -446,6 +498,7 @@ impl Completion {
                     Ok(files) => this.files = files,
                     Err(error) => this.error = Some(error),
                 }
+                this.short_mentions = short_mentions(&this.files);
                 this.known = [
                     "/plan",
                     "/operator",
@@ -470,6 +523,7 @@ impl Completion {
                         .iter()
                         .map(|f| composer::mention_text(&f.relative)),
                 )
+                .chain(this.short_mentions.keys().cloned())
                 .chain(this.notes.iter().map(|n| format!("@note/{}", n.slug)))
                 .collect();
                 this.highlight(cx);
@@ -526,7 +580,7 @@ impl Completion {
                 .map(|file| Choice {
                     label: file.name.clone(),
                     detail: file.relative.clone(),
-                    insertion: composer::mention_text(&file.relative),
+                    insertion: self.mention_label(file),
                     mode: None,
                     file: true,
                     server: None,
@@ -1312,6 +1366,42 @@ mod tests {
             .update(cx, |v, _, cx| {
                 assert_eq!(v.input.read(cx).content, "@my");
                 assert!(v.token.is_none());
+            })
+            .unwrap();
+    }
+    #[gpui::test]
+    fn unique_file_names_insert_short_and_expand_on_send(cx: &mut TestAppContext) {
+        let window = window(cx);
+        let file = |relative: &str| ProjectFile {
+            name: relative.rsplit('/').next().unwrap().into(),
+            relative: relative.into(),
+            path: format!("/repo/{relative}"),
+        };
+        window
+            .update(cx, |v, _, cx| {
+                v.files = vec![
+                    file("app/apps/README.md"),
+                    file("src/mod.rs"),
+                    file("lib/mod.rs"),
+                ];
+                v.short_mentions = short_mentions(&v.files);
+                v.input.update(cx, |i, cx| {
+                    i.set_text("@READ".into(), cx);
+                    i.select_range(5..5, cx);
+                });
+            })
+            .unwrap();
+        cx.run_until_parked();
+        cx.simulate_keystrokes(window.into(), "tab");
+        cx.run_until_parked();
+        window
+            .update(cx, |v, _, cx| {
+                assert_eq!(v.input.read(cx).content.trim_end(), "@README.md");
+                assert_eq!(v.mention_label(&v.files[1]), "@src/mod.rs");
+                assert_eq!(
+                    v.expand_mentions("see @README.md and @src/mod.rs\n> @README.md"),
+                    "see @app/apps/README.md and @src/mod.rs\n> @README.md"
+                );
             })
             .unwrap();
     }

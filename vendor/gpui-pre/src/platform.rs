@@ -1749,6 +1749,10 @@ pub trait PlatformAtlas {
     ) -> Result<Option<AtlasTile>>;
     fn remove(&self, key: &AtlasKey);
 
+    /// Drop every tile and texture. Frames painted afterwards upload only
+    /// what they draw again.
+    fn clear(&self) {}
+
     #[cfg(any(test, feature = "test-support", feature = "bench-support"))]
     fn contains(&self, _key: &AtlasKey) -> bool {
         false
@@ -1783,6 +1787,16 @@ impl<Backend> AtlasState<Backend> {
 
     pub fn contains(&self, key: &AtlasKey) -> bool {
         self.tiles_by_key.contains_key(key)
+    }
+
+    /// Every cached key and its tile.
+    pub fn tiles(&self) -> impl Iterator<Item = (&AtlasKey, &AtlasTile)> {
+        self.tiles_by_key.iter()
+    }
+
+    /// The tile cached for `key`, if any.
+    pub fn tile(&self, key: &AtlasKey) -> Option<&AtlasTile> {
+        self.tiles_by_key.get(key)
     }
 
     pub fn clear(&mut self, reset_backend: impl FnOnce(&mut Backend)) {
@@ -1877,6 +1891,10 @@ impl PlatformAtlas for HeadlessAtlas {
 
     fn remove(&self, key: &AtlasKey) {
         self.0.lock().remove(key);
+    }
+
+    fn clear(&self) {
+        self.0.lock().clear(|_| {});
     }
 
     #[cfg(any(test, feature = "test-support", feature = "bench-support"))]

@@ -1309,6 +1309,17 @@ impl App {
         self.pending_effects.push_back(Effect::RefreshWindows);
     }
 
+    /// Empty every window's sprite atlas and redraw them all, so glyphs, icons
+    /// and images come back only for what is on screen. Atlases otherwise keep
+    /// everything ever drawn. A window mid-update is skipped, so call this
+    /// from a task rather than inside a window's update.
+    pub fn clear_sprite_atlases(&mut self) {
+        for window in self.windows.values_mut().flatten() {
+            window.sprite_atlas.clear();
+        }
+        self.refresh_windows();
+    }
+
     #[inline(always)]
     pub(crate) fn update<R>(&mut self, update: impl FnOnce(&mut Self) -> R) -> R {
         self.start_update();
@@ -3012,6 +3023,16 @@ impl App {
         self.loading_assets.remove(&asset_id);
     }
 
+    /// Remove an asset from the cache and return its result if it had loaded.
+    pub fn take_asset<A: Asset>(&mut self, source: &A::Source) -> Option<A::Output> {
+        let asset_id = (TypeId::of::<A>(), hash(source));
+        self.loading_assets
+            .remove(&asset_id)?
+            .downcast::<crate::asset_cache::CachedLoad<A::Output>>()
+            .ok()?
+            .get()
+    }
+
     /// Check whether an asset is present in GPUI's cache (loading or loaded),
     /// without fetching it.
     #[cfg(any(test, feature = "test-support"))]
@@ -3050,6 +3071,16 @@ impl App {
 
     /// Tell GPUI that an entity has changed and observers of it should be notified.
     pub fn notify(&mut self, entity_id: EntityId) {
+        self.notify_windows(entity_id, true);
+    }
+
+    /// Like [`Self::notify`], for a change that keeps every element's size,
+    /// such as an animation step. See [`Window::view_layout_dirty`].
+    pub fn notify_paint(&mut self, entity_id: EntityId) {
+        self.notify_windows(entity_id, false);
+    }
+
+    fn notify_windows(&mut self, entity_id: EntityId, layout: bool) {
         let window_invalidators = mem::take(
             self.window_invalidators_by_entity
                 .entry(entity_id)
@@ -3077,7 +3108,11 @@ impl App {
             }
         } else {
             for invalidator in &live_invalidators {
-                invalidator.invalidate_view(entity_id, self);
+                if layout {
+                    invalidator.invalidate_view(entity_id, self);
+                } else {
+                    invalidator.invalidate_view_paint(entity_id, self);
+                }
             }
         }
 
