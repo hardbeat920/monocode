@@ -84,10 +84,16 @@ pub(crate) struct Launch {
     pub access: AccessMode,
     pub prompt: String,
     pub attachments: Vec<PathBuf>,
+    pub staged_attachments: Vec<PathBuf>,
     pub new_worktree: bool,
     pub worktree_base: Option<String>,
     pub worktree_cwd: Option<String>,
     pub foreground: bool,
+}
+/// Pasted images wait here until the launch creates their conversation, which
+/// then adopts them into its own folder.
+pub(crate) fn paste_staging_dir() -> PathBuf {
+    std::env::temp_dir().join("monocode-quick-composer")
 }
 impl Launch {
     pub(crate) fn choice(
@@ -105,6 +111,7 @@ impl Launch {
             access,
             prompt: String::new(),
             attachments: Vec::new(),
+            staged_attachments: Vec::new(),
             new_worktree: false,
             worktree_base: None,
             worktree_cwd: None,
@@ -193,6 +200,7 @@ pub(crate) struct QuickComposer {
     git_settled: bool,
     git_epoch: usize,
     attachments: Vec<PathBuf>,
+    staged_attachments: Vec<PathBuf>,
     photos: HashMap<PathBuf, Entity<crate::transcript::attachments::Photo>>,
     attaching: bool,
     dragging: bool,
@@ -261,6 +269,7 @@ impl QuickComposer {
             git_settled: false,
             git_epoch: 0,
             attachments: Vec::new(),
+            staged_attachments: Vec::new(),
             photos: HashMap::new(),
             attaching: false,
             dragging: false,
@@ -451,6 +460,7 @@ impl QuickComposer {
             access: self.access,
             prompt: self.prompt(cx),
             attachments: std::mem::take(&mut self.attachments),
+            staged_attachments: std::mem::take(&mut self.staged_attachments),
             new_worktree,
             worktree_base: new_worktree.then_some(base),
             worktree_cwd: self
@@ -730,18 +740,23 @@ impl QuickComposer {
             return false;
         }
         for image in images {
-            let dir = std::env::temp_dir().join("monocode-quick-composer");
+            let dir = paste_staging_dir();
             let path = dir.join(format!(
                 "pasted-{}.{}",
                 monocode_core::mono::new_id(),
                 image.format().extension()
             ));
             match std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&path, image.bytes())) {
-                Ok(()) => paths.push(path),
+                Ok(()) => {
+                    self.staged_attachments.push(path.clone());
+                    paths.push(path);
+                }
                 Err(error) => self.error = Some(format!("Could not paste the image: {error}")),
             }
         }
         self.add_attachments(paths, cx);
+        self.staged_attachments
+            .retain(|path| self.attachments.contains(path));
         true
     }
     fn choose_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -799,7 +814,12 @@ impl QuickComposer {
             let _ = this.update_in(cx, |this, window, cx| {
                 this.attaching = false;
                 match result {
-                    Ok(Some(path)) => this.add_attachments(vec![path], cx),
+                    Ok(Some(path)) => {
+                        this.staged_attachments.push(path.clone());
+                        this.add_attachments(vec![path], cx);
+                        this.staged_attachments
+                            .retain(|path| this.attachments.contains(path));
+                    }
                     Ok(None) => {}
                     Err(error) => this.error = Some(error),
                 }
@@ -1130,7 +1150,8 @@ impl QuickComposer {
                         .child(icon("close", 10.))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if ix < this.attachments.len() {
-                                this.attachments.remove(ix);
+                                let path = this.attachments.remove(ix);
+                                this.staged_attachments.retain(|staged| staged != &path);
                                 cx.notify();
                             }
                         }));

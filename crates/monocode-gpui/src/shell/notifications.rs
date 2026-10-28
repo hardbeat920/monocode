@@ -44,6 +44,8 @@ pub(super) struct State {
     sounds_enabled: bool,
     sounds_enabled_at: u64,
     poll: Option<gpui::Task<()>>,
+    /// How many notification mute and resume times had passed at the last poll.
+    rule_times_passed: usize,
 }
 
 impl State {
@@ -83,6 +85,7 @@ impl State {
             sounds_enabled: workspace.preferences.sounds,
             sounds_enabled_at: 0,
             poll: None,
+            rule_times_passed: 0,
         }
     }
 }
@@ -333,14 +336,22 @@ impl Shell {
                         }
                         this.poll_reminders(cx);
                         this.poll_linked_activity(cx);
-                        // Scheduled mutes expire without a preference change.
-                        if !this.notification_state.approvals.read(cx).is_empty()
-                            || this
-                                .notification_chats(cx)
-                                .iter()
-                                .any(|v| v.read(cx).needs_approval())
-                        {
-                            cx.notify();
+                        // Scheduled mutes expire without a preference change;
+                        // redraw when one does, not on every tick.
+                        let passed = this
+                            .workspace
+                            .preferences
+                            .notification_times_passed(monocode_core::time::now_ms());
+                        if passed != this.notification_state.rule_times_passed {
+                            this.notification_state.rule_times_passed = passed;
+                            if !this.notification_state.approvals.read(cx).is_empty()
+                                || this
+                                    .notification_chats(cx)
+                                    .iter()
+                                    .any(|v| v.read(cx).needs_approval())
+                            {
+                                cx.notify();
+                            }
                         }
                     })
                     .is_err()

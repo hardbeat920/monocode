@@ -1266,3 +1266,97 @@ float4 polychrome_sprite_fragment(PolychromeSpriteFragmentInput input): SV_Targe
     color.a *= sprite.opacity * saturate(0.5 - distance);
     return color;
 }
+
+/*
+**
+**              Backdrop blur
+**
+*/
+
+// Modified by Monocode: frosted popovers, matching the Metal renderer. The
+// renderer copies what is already drawn around a marked quad, blurs that
+// horizontally into a scratch texture, then blurs the scratch vertically while
+// writing it back inside the quad's rounded bounds, before drawing the quad.
+
+cbuffer BackdropParams: register(b2) {
+    // The rectangle drawn, in the pixels of the target it is drawn into.
+    float2 backdrop_rect_origin;
+    float2 backdrop_rect_size;
+    float2 backdrop_target_size;
+    // Where the snapshot was taken from, in the same pixels.
+    float2 backdrop_region_origin;
+    float2 backdrop_region_size;
+    float2 backdrop_bounds_origin;
+    float2 backdrop_bounds_size;
+    float backdrop_corner_radius;
+    float backdrop_sigma;
+    // The scratch textures grow to fit, so the snapshot fills only their
+    // top-left corner.
+    float2 backdrop_texture_size;
+    float2 backdrop_pad;
+};
+
+Texture2D<float4> t_backdrop_original: register(t2);
+Texture2D<float4> t_backdrop_horizontal: register(t3);
+SamplerState s_backdrop: register(s1);
+
+float4 backdrop_position(uint vertex_id) {
+    float2 unit_vertex = float2(float(vertex_id & 1u), 0.5 * float(vertex_id & 2u));
+    float2 position = backdrop_rect_origin + unit_vertex * backdrop_rect_size;
+    return float4(position / backdrop_target_size * float2(2., -2.) + float2(-1., 1.), 0., 1.);
+}
+
+float4 backdrop_sample(Texture2D<float4> source, float2 pixel) {
+    // Clamped to the snapshot's outer pixel centres, like MPSImageEdgeModeClamp.
+    pixel = clamp(pixel, float2(0.5, 0.5), backdrop_region_size - 0.5);
+    return source.SampleLevel(s_backdrop, pixel / backdrop_texture_size, 0.);
+}
+
+// A full-resolution Gaussian along `direction` from the snapshot pixel centre
+// `pixel`. Pairs of taps share one bilinear sample at their weighted midpoint.
+float4 backdrop_gaussian(Texture2D<float4> source, float2 pixel, float2 direction) {
+    float sigma = max(backdrop_sigma, 0.01);
+    int radius = int(ceil(sigma * 3.));
+    float denominator = 2. * sigma * sigma;
+    float4 sum = backdrop_sample(source, pixel);
+    float total = 1.;
+    [loop]
+    for (int i = 1; i <= radius; i += 2) {
+        float near_weight = exp(-float(i * i) / denominator);
+        float far_weight = exp(-float((i + 1) * (i + 1)) / denominator);
+        float weight = near_weight + far_weight;
+        float offset = (float(i) * near_weight + float(i + 1) * far_weight) / weight;
+        sum += (backdrop_sample(source, pixel + direction * offset)
+            + backdrop_sample(source, pixel - direction * offset)) * weight;
+        total += 2. * weight;
+    }
+    return sum / total;
+}
+
+float4 backdrop_blur_vertex(uint vertex_id: SV_VertexID): SV_Position {
+    return backdrop_position(vertex_id);
+}
+
+float4 backdrop_blur_fragment(float4 position: SV_Position): SV_Target {
+    float2 local = position.xy - backdrop_region_origin;
+    return backdrop_gaussian(t_backdrop_original, local, float2(1., 0.));
+}
+
+float4 backdrop_composite_vertex(uint vertex_id: SV_VertexID): SV_Position {
+    return backdrop_position(vertex_id);
+}
+
+// Writes the blurred backdrop inside the rounded bounds, keeping the original
+// pixels outside so the antialiased corner blends into what was there.
+float4 backdrop_composite_fragment(float4 position: SV_Position): SV_Target {
+    float2 local = position.xy - backdrop_region_origin;
+    float4 soft = backdrop_gaussian(t_backdrop_horizontal, local, float2(0., 1.));
+    int2 pixel = int2(clamp(local, float2(0., 0.), backdrop_region_size - 1.));
+    float4 sharp = t_backdrop_original.Load(int3(pixel, 0));
+    float2 half_size = backdrop_bounds_size * 0.5;
+    float2 corner = abs(position.xy - (backdrop_bounds_origin + half_size)) - half_size
+        + backdrop_corner_radius;
+    float distance = length(max(corner, float2(0., 0.))) + min(max(corner.x, corner.y), 0.)
+        - backdrop_corner_radius;
+    return lerp(sharp, soft, saturate(0.5 - distance));
+}

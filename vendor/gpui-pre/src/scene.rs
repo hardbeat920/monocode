@@ -549,6 +549,37 @@ impl From<Quad> for Primitive {
     }
 }
 
+// Modified by Monocode: frosted popovers. A quad marked with this border
+// colour (and no border width) asks the renderer to blur the backdrop beneath
+// it first. Shared so every renderer that frosts agrees on the marker.
+const BACKDROP_MARKER_HUE: f32 = 0.707_106_77;
+const BACKDROP_MARKER_SATURATION: f32 = 0.577_215_7;
+const BACKDROP_MAX_SIGMA: f32 = 4096.;
+
+/// The border colour that marks a quad as frosted glass: before drawing it,
+/// the renderer blurs what is already drawn behind it by `sigma` device
+/// pixels, like CSS `backdrop-filter: blur()`. Its background then tints the
+/// glass. Give the quad no border width.
+pub fn backdrop_blur_marker(sigma: f32) -> Hsla {
+    Hsla {
+        h: BACKDROP_MARKER_HUE,
+        s: BACKDROP_MARKER_SATURATION,
+        l: (sigma / BACKDROP_MAX_SIGMA).clamp(0., 1.),
+        a: 0.,
+    }
+}
+
+/// The blur `quad` asks for in device pixels, if it carries
+/// [`backdrop_blur_marker`].
+pub fn backdrop_blur_sigma(quad: &Quad) -> Option<f32> {
+    let color = quad.border_color;
+    (color.h == BACKDROP_MARKER_HUE
+        && color.s == BACKDROP_MARKER_SATURATION
+        && color.a == 0.
+        && color.l > 0.)
+        .then_some(color.l * BACKDROP_MAX_SIGMA)
+}
+
 #[derive(Debug, Copy, Clone)]
 #[repr(C)]
 #[expect(missing_docs)]

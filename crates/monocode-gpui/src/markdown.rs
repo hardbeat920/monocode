@@ -1,5 +1,6 @@
 //! GPUI port of AgentMarkdown.tsx and its .agent-markdown CSS.
 mod cache;
+pub(crate) mod mermaid;
 mod search;
 use crate::markdown_model::{Block, InlineRun, TableAlign};
 use crate::syntax::HighlightedDocument;
@@ -154,6 +155,9 @@ pub(crate) enum Part {
         fence: Arc<Fence>,
         lines: Range<usize>,
     },
+    Mermaid {
+        fence: Arc<Fence>,
+    },
     Table {
         cells: Vec<Vec<Vec<InlineRun>>>,
         columns: Arc<[f32]>,
@@ -220,14 +224,18 @@ fn flatten(
         }
         Block::CodeBlock { language, code } => {
             let fence = Arc::new(Fence::new(language.as_deref().unwrap_or(""), code));
-            for at in (0..fence.lines.len()).step_by(PART_LINES) {
-                add(
-                    Part::Code {
-                        fence: fence.clone(),
-                        lines: at..(at + PART_LINES).min(fence.lines.len()),
-                    },
-                    if at == 0 { 16. } else { 0. },
-                );
+            if fence.language.eq_ignore_ascii_case("mermaid") {
+                add(Part::Mermaid { fence }, 16.);
+            } else {
+                for at in (0..fence.lines.len()).step_by(PART_LINES) {
+                    add(
+                        Part::Code {
+                            fence: fence.clone(),
+                            lines: at..(at + PART_LINES).min(fence.lines.len()),
+                        },
+                        if at == 0 { 16. } else { 0. },
+                    );
+                }
             }
         }
         Block::List {
@@ -861,6 +869,13 @@ pub(crate) fn body_selected(
             )
             .into_any_element(),
         Part::Code { .. } => body.into_any_element(),
+        Part::Mermaid { fence } => body
+            .child(mermaid::Diagram {
+                id,
+                fence: fence.clone(),
+                selection,
+            })
+            .into_any_element(),
     }
 }
 
