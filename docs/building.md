@@ -73,3 +73,33 @@ To trial AppImage updates, install a beta AppImage in a writable directory, publ
 The [release workflow](../.github/workflows/release.yml) packages the platform builds and publishes the updater feed. [scripts/release-channel.cjs](../scripts/release-channel.cjs) selects the stable or beta feed.
 
 Read [CONTRIBUTING.md](../CONTRIBUTING.md) for contribution guidelines and checks. The experimental remote host has its own [build and packaging instructions](remote-access.md#release-packaging).
+
+## Monocode Native preview
+
+The experimental GPUI app uses a separate Cargo workspace. The production
+commands above continue to build React/Tauri.
+
+Requires Node.js 22+, stable Rust, and Xcode with macOS components on macOS.
+Native commands do not need npm dependencies installed.
+
+```sh
+npm run native:dev     # launch with a separate development database
+npm run native:build   # create an optimized app using installed MonoCode data
+npm run native:check   # run native checks
+```
+
+Type `r` then Enter in the development terminal to rebuild and restart. There is
+no hot reload or automatic rebuild on save. Ctrl+C stops the runner and app.
+
+The build command does not launch the app. On macOS, open the result with:
+
+```sh
+open "crates/monocode-gpui/target/release/Monocode Native.app"
+```
+
+The release app reads and writes your installed MonoCode data. It is locally
+signed, without notarization or automatic updates. Linux/Windows GUI builds
+remain unverified.
+
+See the [native guide](native/README.md) for data paths, output locations,
+fixtures and preview limitations.

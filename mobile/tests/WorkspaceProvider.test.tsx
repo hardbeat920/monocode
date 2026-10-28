@@ -132,7 +132,7 @@ describe("starting mobile sessions", () => {
     expect(conversation.busy).toBe(true);
     // A local pending ID must never be sent as the watch's desktop history cursor.
     expect(link.openWatch).toHaveBeenCalledWith(expect.anything(), "conversation.watch", {
-      conversationId: "session", tail: 3,
+      conversationId: "session", tail: 3, incremental: true,
     });
 
     await frame([{ order: [], turns: [], busy: true }]);
@@ -242,7 +242,7 @@ describe("starting mobile sessions", () => {
     expect(conversation.turns).toEqual([cached]);
     // Possibly long out of date, so the watch opens on the latest turns.
     expect(link.openWatch).toHaveBeenCalledWith(expect.anything(), "conversation.watch", {
-      conversationId: "existing", tail: 3,
+      conversationId: "existing", tail: 3, incremental: true,
     });
 
     const latest: Turn = { id: "new", items: [{ type: "user", id: "new", text: "After" }] };

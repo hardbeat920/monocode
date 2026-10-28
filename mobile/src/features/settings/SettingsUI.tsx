@@ -1,5 +1,7 @@
 import type { ReactElement, ReactNode } from "react";
+import { useHeaderHeight } from "expo-router/react-navigation";
 import {
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -31,6 +33,10 @@ export function SettingsPage({
   const styles = useStyles();
   const colors = useColors();
   const { bottom } = useSafeAreaInsets();
+  // The native height includes the top safe area. Android doesn't apply
+  // ScrollView's iOS-only automatic content insets under transparent headers.
+  const headerHeight = useHeaderHeight();
+  const contentTop = top ?? (Platform.OS === "android" ? headerHeight + 12 : undefined);
   return (
     <ScrollView
       refreshControl={
@@ -43,11 +49,11 @@ export function SettingsPage({
           />
         ) : undefined
       }
-      contentInsetAdjustmentBehavior={top === undefined ? "automatic" : "never"}
+      contentInsetAdjustmentBehavior={contentTop === undefined ? "automatic" : "never"}
       showsVerticalScrollIndicator={false}
       contentContainerStyle={[
         styles.page,
-        top === undefined ? null : { paddingTop: top },
+        contentTop === undefined ? null : { paddingTop: contentTop },
         { paddingBottom: bottom + 40 },
       ]}
     >

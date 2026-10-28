@@ -38,6 +38,7 @@ type WatchEvent =
       tail?: number | null;
       /** The first turn the phone already has, to carry on from instead. */
       from?: string | null;
+      incremental?: boolean;
     }
   | { id: string; action: "stop" };
 /** At most this often while a reply streams, so the phone gets ~20 frames a second. */
@@ -76,6 +77,7 @@ export function useMobileWorkspace(options: Options) {
         conversationId: string;
         baseline: WatchBaseline | null;
         tail: number;
+        incremental: boolean;
         /** The first turn the watch carries; the window grows from here. */
         from: string | null;
         /** Sessions read from disk, kept for the watch's lifetime. */
@@ -108,11 +110,15 @@ export function useMobileWorkspace(options: Options) {
               return [window.start, turnIds.length];
             },
           );
-          frame = watchUpdate(watch.baseline, {
-            busy: conversation.busy,
-            older,
-            turns: conversation.turns,
-          });
+          frame = watchUpdate(
+            watch.baseline,
+            {
+              busy: conversation.busy,
+              older,
+              turns: conversation.turns,
+            },
+            watch.incremental,
+          );
           if (!watch.baseline && frame)
             console.info(
               `[mobile] first frame for ${watch.conversationId}: ${Math.round(performance.now() - started)}ms, ` +
@@ -160,6 +166,7 @@ export function useMobileWorkspace(options: Options) {
         if (payload.action === "start") {
           watches.set(payload.id, {
             conversationId: payload.conversationId,
+            incremental: payload.incremental === true,
             baseline: null,
             tail: Math.min(MAX_PAGE, Math.max(1, payload.tail ?? DEFAULT_TAIL)),
             from: payload.from ?? null,

@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["src-tauri", "crates/mobile-link"]
-exclude = ["vendor/portable-pty"]
+exclude = ["vendor/portable-pty", "vendor/gpui-pre", "vendor/gpui-pre-apple", "vendor/gpui-pre-linux", "vendor/gpui-pre-windows", "crates/monocode-core", "crates/monocode-gpui"]
 
 [workspace.package]
 version = "0.16.0"

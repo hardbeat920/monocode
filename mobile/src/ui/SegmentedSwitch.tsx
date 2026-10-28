@@ -1,6 +1,6 @@
 import * as Haptics from "expo-haptics";
 import { useEffect, useState, type ReactNode } from "react";
-import { Pressable, View, type LayoutChangeEvent } from "react-native";
+import { Platform, Pressable, View, type LayoutChangeEvent } from "react-native";
 import Animated, {
   Easing,
   interpolate,
@@ -109,7 +109,12 @@ export function SegmentedSwitch<T extends string>({
   });
 
   return (
-    <LiquidView innerStyle={styles.track}>
+    <LiquidView
+      // Android's native title container fills the available header width.
+      // Keep the glass at the segments' natural width inside that container.
+      style={Platform.OS === "android" ? styles.compact : undefined}
+      innerStyle={styles.track}
+    >
       <View style={styles.row}>
         <Animated.View pointerEvents="none" style={[styles.thumb, thumbStyle]} />
         {segments.map((segment, index) => (
@@ -210,6 +215,9 @@ function Segment({
 }
 
 const useStyles = themedStyles((colors) => ({
+  compact: {
+    alignSelf: "center",
+  },
   track: {
     height: HEIGHT,
     padding: INSET,

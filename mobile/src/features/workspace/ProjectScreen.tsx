@@ -8,8 +8,8 @@ import { hasNativeTranscript } from "@/features/connection/nativeLink";
 import { useProjectChanges } from "@/features/connection/useProjectChanges";
 import { useProjectWorktrees } from "@/features/connection/useProjectWorktrees";
 import type { Project, SessionSummary } from "@/features/workspace/types";
-import { useCallback, useEffect, useState } from "react";
-import { Pressable, StyleSheet } from "react-native";
+import { use, useCallback, useEffect, useState, type ReactNode } from "react";
+import { Platform, Pressable, StyleSheet } from "react-native";
 import Animated, {
   Easing,
   useAnimatedStyle,
@@ -44,7 +44,7 @@ import {
   markStartedHere,
   markViewing,
 } from "@/features/sessions/activityStore";
-import { SessionScreen } from "@/features/sessions/SessionScreen";
+import { SessionContent, SessionScreen } from "@/features/sessions/SessionScreen";
 import { SessionsPage } from "@/features/sessions/SessionsPage";
 import {
   SessionTitle,
@@ -68,6 +68,8 @@ import {
 } from "@/features/workspace/WorkspaceMenu";
 import { ComposerWorkspace } from "@/features/workspace/ComposerWorkspace";
 import { Icon } from "@/ui/Icon";
+import { androidBackHeader } from "@/ui/AndroidHeader";
+import { GlassBlurTarget, LiquidView } from "@/ui/LiquidView";
 import { useColors } from "@/ui/theme";
 import { usePushedIn, usePushStarted } from "@/ui/usePushedIn";
 
@@ -91,6 +93,7 @@ export function ProjectScreen({
   const { startSession, sendMessage, stop } = useWorkspace();
   const [openAfterStarting] = useOpenSessionAfterStarting();
   const colors = useColors();
+  const blurTarget = use(GlassBlurTarget);
   // What it runs with, as the model picker, a route over it, sets it.
   const { session, chosen, startAccess, accounts } = useSessionChoice(project, sessionId);
   useForgetChoiceOnLeave(project.id, sessionId);
@@ -258,6 +261,54 @@ export function ProjectScreen({
   const openSettings = () =>
     router.push({ pathname: "/settings", params: { projectId: project.id } });
 
+  // Native headers render outside the screen's context tree. Carry the page's
+  // blur target into each button callback so its glass samples page content.
+  const headerSurface = (content: ReactNode) => (
+    <GlassBlurTarget value={blurTarget}>{content}</GlassBlurTarget>
+  );
+  const projectAvatar = (
+    <ProjectHeaderButton
+      label={`Switch project, ${project.name}`}
+      onPress={() => router.push({
+        pathname: "/projects",
+        params: { current: project.id },
+      })}
+    >
+      <ProjectMascot
+        project={project.path}
+        name={project.mascot}
+        color={project.color}
+        size={20}
+      />
+    </ProjectHeaderButton>
+  );
+  const settingsButton = (
+    <ProjectHeaderButton
+      label="Settings"
+      onPress={openSettings}
+    >
+      <Icon name="settings" size={22} color={colors.content} />
+    </ProjectHeaderButton>
+  );
+
+  const sessionTitle = sessionId ? (
+    <SessionTitle
+      title={session?.title ?? "Session"}
+      subtitle={[project.name, branch].filter(Boolean).join(" · ")}
+    />
+  ) : null;
+  const sessionToolbar = sessionId ? (
+    <SessionToolbar
+      projectId={project.id}
+      sessionId={sessionId}
+      session={session}
+      worktreePath={worktreePath}
+      harness={harness}
+      changed={changes.length}
+      onSettings={openSettings}
+    />
+  ) : null;
+
   return (
     <SessionScreen
       // Where a new session will work, under the tabs and in view across its
@@ -347,98 +398,81 @@ export function ProjectScreen({
         options={
           sessionId
             ? // A session's title is on the left, beside the back button.
-              { headerTitle: "", headerBackVisible: true }
-            : { headerTitle: () => <ProjectSwitch pages={pages} /> }
+              Platform.OS === "android"
+              ? {
+                  ...androidBackHeader(sessionTitle),
+                  headerTitleAlign: "left",
+                  headerRight: () => headerSurface(sessionToolbar),
+                }
+              : { headerTitle: "", headerBackVisible: true }
+            : {
+                headerTitle: () => <ProjectSwitch pages={pages} />,
+                ...(Platform.OS === "android"
+                  ? {
+                      headerTitleAlign: "center" as const,
+                      headerLeft: () => headerSurface(projectAvatar),
+                      headerRight: () => headerSurface(settingsButton),
+                      headerBackVisible: false,
+                    }
+                  : {}),
+              }
         }
       />
       {sessionId ? (
-        <SessionTitle
-          title={session?.title ?? "Session"}
-          subtitle={[project.name, branch].filter(Boolean).join(" · ")}
-        />
-      ) : (
+        Platform.OS === "android" ? null : (
+          sessionTitle
+        )
+      ) : Platform.OS === "android" ? null : (
         <Stack.Toolbar placement="left">
           {/* The project's mascot in the bar's glass, for the button. */}
-          <Stack.Toolbar.View>
-            <Pressable
-              style={styles.projectButton}
-              accessibilityRole="button"
-              accessibilityLabel={`Switch project, ${project.name}`}
-              onPress={() =>
-                router.push({
-                  pathname: "/projects",
-                  params: { current: project.id },
-                })
-              }
-            >
-              <ProjectMascot
-                project={project.path}
-                name={project.mascot}
-                color={project.color}
-                size={20}
-              />
-            </Pressable>
-          </Stack.Toolbar.View>
+          <Stack.Toolbar.View>{projectAvatar}</Stack.Toolbar.View>
         </Stack.Toolbar>
       )}
       {sessionId ? (
-        <SessionToolbar
-          projectId={project.id}
-          sessionId={sessionId}
-          session={session}
-          worktreePath={worktreePath}
-          harness={harness}
-          changed={changes.length}
-          onSettings={openSettings}
-        />
-      ) : (
+        Platform.OS === "android" ? null : (
+          sessionToolbar
+        )
+      ) : Platform.OS === "android" ? null : (
         <Stack.Toolbar placement="right">
           {/* The app's own cog in the bar's glass, as the mascot on the left. */}
-          <Stack.Toolbar.View>
-            <Pressable
-              style={styles.projectButton}
-              accessibilityRole="button"
-              accessibilityLabel="Settings"
-              onPress={openSettings}
-            >
-              <Icon name="settings" size={22} color={colors.content} />
-            </Pressable>
-          </Stack.Toolbar.View>
+          <Stack.Toolbar.View>{settingsButton}</Stack.Toolbar.View>
         </Stack.Toolbar>
       )}
-      {sessionId ? (
-        <SessionTranscript
-          sessionId={sessionId}
-          projectId={project.id}
-          worktreePath={worktreePath}
-          busy={conversation.busy}
-          failed={!!conversation.error}
-        />
-      ) : (
-        <ProjectPages
-          pages={pages}
-          chat={
-            <Animated.View style={[styles.chat, emptyStyle]}>
-              <ProjectEmptySession
-                project={project}
-                inView={focused && pages.view === "chat"}
-                swiping={swiping}
+      <SessionContent>
+        {sessionId ? (
+          <SessionTranscript
+            sessionId={sessionId}
+            projectId={project.id}
+            worktreePath={worktreePath}
+            busy={conversation.busy}
+            failed={!!conversation.error}
+          />
+        ) : (
+          <ProjectPages
+            pages={pages}
+            chat={
+              <Animated.View style={[styles.chat, emptyStyle]}>
+                <ProjectEmptySession
+                  project={project}
+                  inView={focused && pages.view === "chat"}
+                  swiping={swiping}
+                  onOpen={(session) => openSession(session.id)}
+                />
+              </Animated.View>
+            }
+            sessions={
+              <SessionsPage
+                projectId={project.id}
+                active={pages.view === "sessions"}
+                worktree={
+                  workspace.mode === "existing" ? workspace.worktree : undefined
+                }
                 onOpen={(session) => openSession(session.id)}
               />
-            </Animated.View>
-          }
-          sessions={
-            <SessionsPage
-              projectId={project.id}
-              active={pages.view === "sessions"}
-              worktree={
-                workspace.mode === "existing" ? workspace.worktree : undefined
-              }
-              onOpen={(session) => openSession(session.id)}
-            />
-          }
-        />
-      )}
+            }
+          />
+        )}
+      </SessionContent>
       {/* After the content: iOS blurs under the header the scroll view it
           finds first, down each view's first child. */}
       <ConnectionNotice error={conversation.error} />
@@ -534,6 +568,34 @@ function SessionTranscript({
   );
 }
 
+function ProjectHeaderButton({ label, onPress, children }: {
+  label: string;
+  onPress: () => void;
+  children: ReactNode;
+}) {
+  if (Platform.OS === "android")
+    return (
+      <LiquidView
+        accessibilityLabel={label}
+        onPress={onPress}
+        borderRadius={22}
+        innerStyle={styles.androidProjectButton}
+      >
+        {children}
+      </LiquidView>
+    );
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      onPress={onPress}
+      style={styles.projectButton}
+    >
+      {children}
+    </Pressable>
+  );
+}
+
 const styles = StyleSheet.create({
   chat: {
     flex: 1,
@@ -542,6 +604,13 @@ const styles = StyleSheet.create({
   projectButton: {
     width: 36,
     height: 36,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  androidProjectButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     alignItems: "center",
     justifyContent: "center",
   },
