@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import {
   access,
   chmod,
@@ -28,6 +29,92 @@ test("Linux desktop identity resolves the bundled application icon on Wayland", 
   const bundled = await readFile(join(tree, "usr/share/icons/hicolor/256x256/apps", `${icon}.png`));
   assert.deepEqual(bundled, await readFile(new URL("../public/monocode.png", import.meta.url)));
   await access(join(tree, "usr/bin/monocode-native"));
+});
+
+test("AppImage desktop registration is opt-in and launches the permanent image", {
+  skip: process.platform === "win32",
+}, async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'native AppImage " $ ` %F \\-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const tools = join(directory, "tools");
+  await mkdir(tools);
+  for (const name of ["dpkg-deb", "appimagetool"]) {
+    const tool = join(tools, name);
+    await writeFile(tool, '#!/bin/sh\nfor output do :; done\n: > "$output"\nchmod +x "$output"\n');
+    await chmod(tool, 0o755);
+  }
+  const binary = join(directory, "monocode-gpui");
+  await writeFile(binary, '#!/bin/sh\nif [ "${1-}" = "--version" ]; then\nprintf "Monocode Native 0.16.0-preview.2\\n"\nelse\nprintf "<%s>\\n" "$@"\nfi\n');
+  await chmod(binary, 0o755);
+  const out = join(directory, "packages");
+  const originalPath = process.env.PATH;
+  const originalTool = process.env.APPIMAGETOOL;
+  try {
+    process.env.PATH = `${tools}${delimiter}${originalPath}`;
+    process.env.APPIMAGETOOL = join(tools, "appimagetool");
+    await packageNative({ kind: "linux", binary, out, version: "0.16.0-preview.2" });
+  } finally {
+    process.env.PATH = originalPath;
+    if (originalTool === undefined) delete process.env.APPIMAGETOOL;
+    else process.env.APPIMAGETOOL = originalTool;
+  }
+  const appDir = join(out, "work/MonocodeNative.AppDir");
+  const appImage = join(directory, 'MonoCode " $ ` %F \\.AppImage');
+  await writeFile(appImage, '#!/bin/sh\nprintf "%s\\n" "$0" "$@" > "$NATIVE_TEST_LAUNCH"\n');
+  await chmod(appImage, 0o755);
+  const data = join(directory, "desktop data");
+  const env = { ...process.env, APPDIR: appDir, APPIMAGE: appImage, XDG_DATA_HOME: data };
+  const launch = (args, overrides = {}) => spawnSync(join(appDir, "AppRun"), args, {
+    env: { ...env, ...overrides }, encoding: "utf8",
+  });
+
+  const normal = launch(["--dev-data", "--cwd", "a project with spaces"]);
+  assert.equal(normal.status, 0, normal.stderr);
+  assert.equal(normal.stdout, "<--dev-data>\n<--cwd>\n<a project with spaces>\n");
+  await assert.rejects(access(data), { code: "ENOENT" });
+  for (const overrides of [{ APPIMAGE: "" }, { APPIMAGE: "relative.AppImage" }, { APPIMAGE: join(directory, "missing.AppImage") }, { XDG_DATA_HOME: "relative" }]) {
+    const invalid = launch(["--install-desktop"], overrides);
+    assert.notEqual(invalid.status, 0);
+    await assert.rejects(access(data), { code: "ENOENT" });
+  }
+  for (const name of ["invalid=name.AppImage", "invalid\nname.AppImage"]) {
+    const invalidImage = join(directory, name);
+    await writeFile(invalidImage, "#!/bin/sh\n");
+    await chmod(invalidImage, 0o755);
+    assert.notEqual(launch(["--install-desktop"], { APPIMAGE: invalidImage }).status, 0);
+    await assert.rejects(access(data), { code: "ENOENT" });
+  }
+  assert.notEqual(launch(["--install-desktop", "extra"]).status, 0);
+
+  const installed = launch(["--install-desktop"]);
+  assert.equal(installed.status, 0, installed.stderr);
+  const desktop = join(data, "applications/dev.usemono.gpui.desktop");
+  const entry = await readFile(desktop, "utf8");
+  assert.ok(entry.includes("StartupWMClass=dev.usemono.gpui\n"));
+  assert.ok(!entry.includes(appDir));
+  assert.deepEqual(await readFile(join(data, "icons/hicolor/256x256/apps/monocode-native.png")),
+    await readFile(new URL("../public/monocode.png", import.meta.url)));
+  const repeated = launch(["--install-desktop"]);
+  assert.equal(repeated.status, 0, repeated.stderr);
+  assert.equal(await readFile(desktop, "utf8"), entry);
+
+  const fallbackHome = join(directory, "home");
+  const fallback = launch(["--install-desktop"], { XDG_DATA_HOME: "", HOME: fallbackHome });
+  assert.equal(fallback.status, 0, fallback.stderr);
+  await access(join(fallbackHome, ".local/share/applications/dev.usemono.gpui.desktop"));
+
+  const validate = spawnSync("desktop-file-validate", [desktop], { encoding: "utf8" });
+  if (validate.error?.code !== "ENOENT") assert.equal(validate.status, 0, validate.stderr);
+  const launched = join(directory, "launched");
+  const gio = spawnSync("gio", ["launch", desktop], {
+    env: { ...env, NATIVE_TEST_LAUNCH: launched }, encoding: "utf8",
+  });
+  if (gio.error?.code !== "ENOENT") {
+    assert.equal(gio.status, 0, gio.stderr);
+    assert.equal((await readFile(launched, "utf8")).trimEnd(), appImage);
+  } else {
+    t.diagnostic("gio unavailable; desktop launcher round-trip was not exercised");
+  }
 });
 
 test(

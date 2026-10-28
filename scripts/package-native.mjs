@@ -277,11 +277,8 @@ export async function packageNative({
       join(root, "public/monocode.png"),
       join(appDir, "monocode-native.png"),
     );
-    await writeFile(
-      join(appDir, "AppRun"),
-      '#!/bin/sh\nexec "$APPDIR/usr/lib/monocode-native/monocode-gpui" "$@"\n',
-      { mode: 0o755 },
-    );
+    await cp(join(root, "scripts/native-appimage-apprun.sh"), join(appDir, "AppRun"));
+    await chmod(join(appDir, "AppRun"), 0o755);
     run(
       process.env.APPIMAGETOOL || "appimagetool",
       [
