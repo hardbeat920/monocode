@@ -24,6 +24,35 @@ export function resumeUsageLimitedSession(session: Session): Session {
   };
 }
 
+/**
+ * Point a usage-limited session at another account of its provider. When its
+ * native transcript was carried to that account, the same provider session
+ * resumes there. Otherwise the next turn starts a new provider thread from a
+ * handoff brief; the limited account cannot be asked for a recap.
+ */
+export function withUsageLimitAccount(
+  session: Session,
+  accountId: string,
+  carried: boolean,
+): Session {
+  if (carried) return { ...session, providerAccountId: accountId };
+  return {
+    ...session,
+    providerAccountId: accountId,
+    providerSessionId: undefined,
+    pendingSwitch: {
+      ...(session.pendingSwitch ?? {
+        from: session.harness,
+        fromModel: session.model,
+        fromSettings: session.modelSettings,
+        fromProviderSessionId: session.providerSessionId,
+        fromProviderAccountId: session.providerAccountId,
+      }),
+      skipOutgoingRecap: true,
+    },
+  };
+}
+
 /** Providers can still refuse right at the reset; give them a moment. */
 export const USAGE_LIMIT_RESUME_GRACE_MS = 30_000;
 

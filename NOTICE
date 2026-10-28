@@ -2,3 +2,74 @@ MonoCode is not affiliated with, endorsed by, or sponsored by the makers of the
 agent harnesses it can drive.
 
 Provider marks that appear in the UI (including Claude, Codex, Cursor, GitHub, GitLab, Linear, Grok, OpenCode, Pi, omp, fx, Hermes, Nous Research, Devin, and Cognition) are trademarks of their respective owners and are used only to identify those products.
+
+The native UI uses Zed Industries' GPUI framework through gpui-pre and
+gpui-pre-platform 0.3.9 (Zed snapshot
+93d745668805029476e6d7fbb19652116fed51de), licensed under Apache-2.0.
+Copyright 2022 - 2025 Zed Industries, Inc.
+The native composer in crates/monocode-gpui/src/input.rs adapts text input
+plumbing from that snapshot's GPUI examples/input.rs.
+Source: https://github.com/zed-industries/zed/blob/93d745668805029476e6d7fbb19652116fed51de/crates/gpui/examples/input.rs
+License: https://www.apache.org/licenses/LICENSE-2.0
+License text: docs/native/LICENSE-GPUI-APACHE
+
+Native Mermaid previews use mermaid-rs-renderer 0.3.1, licensed under MIT.
+Copyright (c) 2026 mermaid-rs-renderer contributors.
+Source: https://github.com/1jehuang/mermaid-rs-renderer
+License text: docs/native/LICENSE-MERMAID-MIT
+
+Native window and sidebar glyphs reuse Monocode's Hugeicons Stroke Rounded set
+from @hugeicons/core-free-icons 4.3.0, copyright Hugeicons, licensed under MIT.
+Source: https://github.com/hugeicons/hugeicons
+
+vendor/gpui-pre-apple contains gpui-pre-apple 0.3.9 (Zed snapshot
+93d745668805029476e6d7fbb19652116fed51de), copyright Zed Industries,
+licensed under Apache-2.0 (license included). Monocode modifications include
+source-over alpha blending, backdrop blur, edge fades, text reveal, rounded
+clipping, project-background compositing, shadow clipping, and font-weight
+matching in the text system.
+Source: https://github.com/zed-industries/zed/tree/93d745668805029476e6d7fbb19652116fed51de/crates/gpui_apple
+License text: vendor/gpui-pre-apple/LICENSE-APACHE
+
+vendor/gpui-pre, vendor/gpui-pre-linux and vendor/gpui-pre-windows contain
+gpui-pre 0.3.9 components from the same Zed snapshot, copyright Zed Industries,
+licensed under Apache-2.0 (LICENSE-APACHE included in each directory).
+The GPUI SVG renderer also exposes an image-free parsing mode for untrusted
+generated Mermaid diagrams, preserving normal image resolution for other SVGs.
+Monocode removes the unused zed-scap dependency and its feature links from their
+manifests, and rejects screen-capture builds in gpui-pre/build.rs pending license
+review. The retained framework code remains Apache-2.0.
+Unused upstream examples and their demo assets are omitted, together with four
+upstream SVG tests requiring font fixtures absent from the published crate.
+The small EXIF image regression fixture is retained under tests/assets.
+
+Native chat file icons and the Dark+ token palette reuse the React UI's
+react-material-icon-theme 1.2.0 and @shikijs/themes assets. Their MIT license
+notices are included alongside the assets in crates/monocode-gpui/assets.
+
+The native editor's analysis and formatting bundles reuse CodeMirror, Lezer,
+the Replit Svelte grammar and Prettier under their MIT licenses. Package versions and complete license notices are included in
+crates/monocode-gpui/assets/native-editor.LICENSE.txt. The bundle is generated
+from scripts/native-editor and the retained React editor language, syntax,
+lint, typing and Git hunk implementations. Prettier dependency notices are
+included alongside the package licenses.
+
+Cuelume sound recipes
+---------------------
+The native success, arrival and linked-activity chime cues adapt cuelume 0.2.2's synthesis recipes.
+Copyright (c) Daniel Belyi. Licensed under the MIT License.
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

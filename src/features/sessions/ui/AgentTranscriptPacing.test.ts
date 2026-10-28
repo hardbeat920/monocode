@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Block } from "../model/session";
 import { AgentTranscript } from "./AgentTranscript";
-import { WORD_FADE_MS } from "./wordFade";
+import { PACED_REVEAL_KEY, WORD_FADE_MS } from "./wordFade";
 
 let container: HTMLDivElement;
 let root: Root;
@@ -27,12 +27,15 @@ beforeEach(() => {
       disconnect() {}
     },
   );
+  // Explicitly exercise pacing unless a test selects the fallback.
+  localStorage.setItem(PACED_REVEAL_KEY, "1");
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
 });
 
 afterEach(() => {
+  localStorage.removeItem(PACED_REVEAL_KEY);
   act(() => root.unmount());
   container.remove();
   vi.unstubAllGlobals();
@@ -97,6 +100,38 @@ it("paces a burst of tool calls so each enters after the one before it", () => {
 
   act(() => vi.advanceTimersByTime(480));
   expect(stages()).toEqual(["settled", "entering", "entering", "entering"]);
+});
+
+it("does not replay or play in tool calls when their tab comes back", () => {
+  const head: Block[] = [
+    { id: "user", role: "user", text: "Review the diff" },
+    { id: "intro", role: "assistant", text: "Checking the repo first." },
+    tool("first"),
+  ];
+  const burst = [...head, tool("second"), tool("third")];
+  render(head);
+  render(burst);
+  expect(stages()).toEqual(["settled", "entering", "waiting"]);
+
+  // Leaving cuts the entrances short; they must not start over on return.
+  render(burst, true, false);
+  expect(stages()).toEqual(["settled", "settled", "settled"]);
+
+  // Steps that ran while the tab was hidden land just after it returns.
+  render(burst);
+  render([...burst, tool("fourth"), tool("fifth")]);
+  expect(stages()).toEqual([
+    "settled",
+    "settled",
+    "settled",
+    "settled",
+    "settled",
+  ]);
+
+  // Once caught up, a step you watch arrive still enters.
+  act(() => vi.advanceTimersByTime(1_000));
+  render([...burst, tool("fourth"), tool("fifth"), tool("sixth")]);
+  expect(stages().at(-1)).toBe("entering");
 });
 
 const reply =
@@ -214,6 +249,24 @@ it("shows output received in a hidden tab immediately when switching to it", () 
     ],
     false,
   );
+  expect(answerText()).toBe(reply);
+  expect(container.querySelector(".word-fading")).toBeNull();
+});
+
+it("shows a new reply at once and fades it in without the paced reveal", () => {
+  localStorage.setItem(PACED_REVEAL_KEY, "0");
+  render([prompt]);
+  render(
+    [
+      prompt,
+      { id: "answer", role: "assistant", text: reply, streaming: false },
+    ],
+    false,
+  );
+  expect(answerText()).toBe(reply);
+  expect(container.querySelector(".word-fading")).not.toBeNull();
+
+  act(() => vi.advanceTimersByTime(400));
   expect(answerText()).toBe(reply);
   expect(container.querySelector(".word-fading")).toBeNull();
 });

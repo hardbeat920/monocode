@@ -67,7 +67,7 @@ export function SessionReview({
       <div className="px-4 pt-1 pb-2 font-sans" data-session-review-shell>
         <div
           role="status"
-          className="rounded-xl border border-content/12 bg-content/3 px-3 py-2.5"
+          className="rounded-xl border border-content/6 bg-content/3 px-3 py-2.5"
         >
           <p className="text-[12px] font-medium text-content/80">
             Couldn’t record changes
@@ -107,7 +107,7 @@ export function SessionReview({
   return (
     <div className="px-4 pt-1 pb-2 font-sans" data-session-review-shell>
       <div
-        className="overflow-hidden rounded-xl border border-content/12 bg-content/3"
+        className="overflow-hidden rounded-xl border border-content/6 bg-content/3"
         data-session-review
       >
         <div className="flex min-w-0 items-center gap-2.5 px-3 py-2.5">
@@ -168,14 +168,14 @@ export function SessionReview({
               type="button"
               title="Review changes"
               onClick={() => onOpenDiff(undefined, { sessionId, cwd })}
-              className="h-7 rounded-md border border-content/12 bg-content/8 px-2.5 text-[11px] font-medium text-content/75 hover:bg-content/12 hover:text-content"
+              className="h-7 rounded-md bg-content/8 px-2.5 text-[11px] font-medium text-content/75 hover:bg-content/12 hover:text-content"
             >
               Review
             </button>
           </div>
         </div>
         <ul
-          className={`scrollbar-none border-t border-stroke py-1 ${
+          className={`scrollbar-none border-t border-content/5 py-1 ${
             expanded ? "max-h-64 overflow-y-auto" : ""
           }`}
         >
@@ -195,7 +195,7 @@ export function SessionReview({
             type="button"
             aria-expanded={expanded}
             onClick={() => setExpanded((open) => !open)}
-            className="flex h-8 w-full items-center gap-1.5 border-t border-stroke px-3 text-left text-[11px] text-content/45 hover:bg-content/5 hover:text-content/70"
+            className="flex h-8 w-full items-center gap-1.5 border-t border-content/5 px-3 text-left text-[11px] text-content/45 hover:bg-content/5 hover:text-content/70"
           >
             {expanded ? (
               <ChevronDown className="size-3.5" strokeWidth={1.75} />
@@ -261,18 +261,25 @@ function useSessionReviewFiles(
   return { files, setFiles, error, load, filesRef };
 }
 
-/** A Mono's compact review: the recorded line counts, opening the diff. */
-export function SessionChangesButton({
-  sessionId,
-  cwd,
-  enabled = true,
-  busy = false,
-  editedPaths,
-  onOpenDiff,
-}: Pick<
-  Props,
-  "sessionId" | "cwd" | "enabled" | "busy" | "editedPaths" | "onOpenDiff"
->) {
+export type SessionChangeTotals = {
+  files: number;
+  additions: number;
+  deletions: number;
+};
+
+/**
+ * A session's recorded changes as one summary. A running turn keeps the
+ * last settled summary, so the count does not drop out and back each turn.
+ */
+export function useSessionChangeTotals(
+  sessionId: string,
+  cwd: string,
+  {
+    enabled = true,
+    busy = false,
+    editedPaths,
+  }: Pick<Props, "enabled" | "busy" | "editedPaths"> = {},
+): SessionChangeTotals | null {
   const { files } = useSessionReviewFiles(
     sessionId,
     cwd,
@@ -280,26 +287,25 @@ export function SessionChangesButton({
     busy,
     editedPaths,
   );
-  if (busy || files.length === 0) return null;
-  const totals = sumChanges(files);
-  const label = `Changed ${files.length} ${files.length === 1 ? "file" : "files"}`;
-  return (
-    <button
-      type="button"
-      title={`${label}. Review changes`}
-      aria-label={`${label}, ${totals.additions} additions, ${totals.deletions} deletions. Review changes`}
-      onClick={() => onOpenDiff(undefined, { sessionId, cwd })}
-      className="flex items-center gap-1 rounded-md p-1 font-sans text-[11px] font-semibold leading-none tabular-nums outline-none hover:bg-content/8 focus-visible:ring-1 focus-visible:ring-accent"
-      data-session-changes
-    >
-      <span className="text-diff-add-fg">
-        +{formatInteger(totals.additions)}
-      </span>
-      <span className="text-diff-del-fg">
-        -{formatInteger(totals.deletions)}
-      </span>
-    </button>
-  );
+  const settled = useRef<{
+    key: string;
+    totals: SessionChangeTotals | null;
+  } | null>(null);
+  const key = JSON.stringify([sessionId, cwd]);
+  if (settled.current?.key !== key) settled.current = { key, totals: null };
+  if (!busy) {
+    const previous = settled.current.totals;
+    const totals = sumChanges(files);
+    settled.current.totals =
+      files.length === 0
+        ? null
+        : previous?.files === files.length &&
+            previous.additions === totals.additions &&
+            previous.deletions === totals.deletions
+          ? previous
+          : { files: files.length, ...totals };
+  }
+  return settled.current.totals;
 }
 
 function sumChanges(files: CheckpointFile[]) {

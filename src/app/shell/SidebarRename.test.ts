@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatSessionTitle } from "../../features/sessions/model/session";
 import { formatReminderTime } from "../../features/sessions/model/sessionReminders";
 import { Sidebar } from "./Sidebar";
+import { saveProjectRailOrder } from "../../features/projects/model/recents";
 import {
   loadSessionFolders,
   saveSessionFolders,
@@ -149,6 +150,226 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+});
+
+describe("project swipe navigation", () => {
+  it("starts a short swipe transition immediately while the destination is loading", () => {
+    const animate = vi
+      .spyOn(HTMLElement.prototype, "animate")
+      .mockImplementation(
+        () =>
+          ({
+            cancel: vi.fn(),
+            finished: new Promise(() => {}),
+          }) as unknown as Animation,
+      );
+    const paths = ["/workspace/project", "/workspace/other"];
+    saveProjectRailOrder(paths);
+    props = {
+      ...props,
+      inset: true,
+      recents: paths.map((path) => ({ path, openedAt: 1 })),
+      onSelectProject: vi.fn((cwd: string) => {
+        props = { ...props, cwd, pending: true, sessions: [] };
+        render();
+      }),
+    };
+    act(render);
+    animate.mockClear();
+    act(() => {
+      container.querySelector("aside")!.dispatchEvent(
+        new WheelEvent("wheel", {
+          deltaX: 30,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    expect(props.onSelectProject).toHaveBeenCalledExactlyOnceWith(paths[1]);
+    expect(animate).toHaveBeenCalled();
+    expect(
+      animate.mock.calls.some(
+        ([, options]) =>
+          typeof options === "object" && options?.duration === 180,
+      ),
+    ).toBe(true);
+  });
+
+  it.each([true, false])(
+    "enables swiping only in the inset sidebar (inset=%s)",
+    (inset) => {
+      const paths = ["/workspace/project", "/workspace/other", "/workspace/last"];
+      saveProjectRailOrder(paths);
+      props = {
+        ...props,
+        inset,
+        recents: paths.map((path) => ({ path, openedAt: 1 })),
+        onSelectProject: vi.fn((cwd: string) => {
+          props = { ...props, cwd };
+          render();
+        }),
+      };
+      act(render);
+      const swipe = () => act(() => {
+        container.querySelector("aside")!.dispatchEvent(new WheelEvent("wheel", {
+          deltaX: 80,
+          bubbles: true,
+          cancelable: true,
+        }));
+      });
+      swipe();
+      swipe();
+      if (inset) {
+        expect(props.onSelectProject).toHaveBeenCalledExactlyOnceWith(paths[1]);
+      } else {
+        expect(props.onSelectProject).not.toHaveBeenCalled();
+      }
+    },
+  );
+});
+
+describe("inset session previews", () => {
+  function hover(target = card()) {
+    act(() =>
+      target.dispatchEvent(
+        new PointerEvent("pointerover", {
+          bubbles: true,
+          pointerType: "mouse",
+        }),
+      ),
+    );
+  }
+
+  function preview() {
+    return document.querySelector<HTMLElement>("[data-session-preview]");
+  }
+
+  beforeEach(() => {
+    props.inset = true;
+  });
+
+  it("shows the full session details immediately without a native title tooltip", () => {
+    props.sessions[0] = {
+      ...props.sessions[0],
+      title: "Review hover previews",
+      harness: "claude",
+      model: "claude:sonnet-4.6",
+      repo: "monocode",
+      branch: "feature/session-preview",
+      worktreeCwd: "/workspace/worktrees/session-preview",
+      additions: 42,
+      deletions: 7,
+    };
+    act(() => render());
+    expect(preview()).toBeNull();
+    hover();
+
+    expect(card().hasAttribute("title")).toBe(false);
+    expect(preview()?.dataset.popoverSide).toBe("right");
+    expect(preview()?.textContent).toContain("Review hover previews");
+    expect(preview()?.textContent).toContain("Sonnet 4.6");
+    expect(preview()?.textContent).toContain("Working...");
+    expect(preview()?.textContent).toContain(
+      "/workspace/worktrees/session-preview",
+    );
+    expect(preview()?.textContent).toContain("feature/session-preview");
+    expect(preview()?.querySelector("dl")?.textContent).not.toMatch(
+      /Model|Mode|Repository|Updated/,
+    );
+    expect(preview()?.textContent).toContain("+42");
+    expect(preview()?.textContent).toContain("−7");
+    expect(
+      card()
+        .querySelector("[data-session-select]")
+        ?.getAttribute("aria-describedby"),
+    ).toBe(preview()?.id);
+  });
+
+  it("stays open while the pointer crosses into the preview", () => {
+    vi.useFakeTimers();
+    act(() => render());
+    hover();
+    const surface = preview()!;
+    act(() =>
+      card().dispatchEvent(
+        new PointerEvent("pointerout", {
+          bubbles: true,
+          relatedTarget: document.body,
+        }),
+      ),
+    );
+    hover(surface);
+    act(() => vi.advanceTimersByTime(200));
+    expect(preview()).toBe(surface);
+
+    act(() =>
+      surface.dispatchEvent(
+        new PointerEvent("pointerout", {
+          bubbles: true,
+          relatedTarget: document.body,
+        }),
+      ),
+    );
+    act(() => vi.advanceTimersByTime(200));
+    expect(preview()).toBeNull();
+  });
+
+  it("replaces the preview when another session is hovered", () => {
+    props.sessions.push({
+      ...props.sessions[0],
+      id: "session-2",
+      title: "Second conversation",
+    });
+    act(() => render());
+    hover();
+    hover(
+      container.querySelector<HTMLElement>('[data-session-card="session-2"]')!,
+    );
+    expect(document.querySelectorAll("[data-session-preview]")).toHaveLength(1);
+    expect(preview()?.dataset.sessionPreview).toBe("session-2");
+  });
+
+  it.each(["escape", "scroll", "contextmenu"])("dismisses on %s", (action) => {
+    act(() => render());
+    hover();
+    expect(preview()).not.toBeNull();
+    act(() => {
+      if (action === "escape") {
+        window.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+        );
+      } else if (action === "scroll") {
+        card().parentElement!.dispatchEvent(new Event("scroll"));
+      } else {
+        card().dispatchEvent(
+          new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+        );
+      }
+    });
+    expect(preview()).toBeNull();
+  });
+
+  it("does not open for touch pointers", () => {
+    act(() => render());
+    act(() =>
+      card().dispatchEvent(
+        new PointerEvent("pointerover", {
+          bubbles: true,
+          pointerType: "touch",
+        }),
+      ),
+    );
+    expect(preview()).toBeNull();
+  });
+
+  it("stays open when transcript prefetching scrolls another pane", () => {
+    act(() => render());
+    hover();
+    const transcript = document.createElement("div");
+    container.append(transcript);
+    act(() => transcript.dispatchEvent(new Event("scroll")));
+    expect(preview()).not.toBeNull();
+  });
 });
 
 it("leaves the resident agent and its description out of the session list", () => {
@@ -313,6 +534,31 @@ describe.each([false, true])("Mono rail selection (compact: %s)", (compact) => {
     await act(async () => render());
     expect(monoSelected()).toBe(true);
   });
+});
+
+it.each([
+  "inboxActive",
+  "notesActive",
+  "automationsActive",
+  "searchActive",
+] as const)("does not show the covered inset session selected while %s", async (active) => {
+  const selected = () =>
+    container
+      .querySelector('[data-session-select="session-1"]')
+      ?.getAttribute("aria-current");
+  // The inset sidebar keeps the session list beside these views.
+  props = { ...props, inset: true };
+  await act(async () => render());
+  expect(selected()).toBe("true");
+
+  props = { ...props, [active]: true };
+  await act(async () => render());
+  expect(selected() ?? undefined).toBeUndefined();
+  expect(container.querySelector('[data-session-select="session-1"]')).not.toBeNull();
+
+  props = { ...props, [active]: false };
+  await act(async () => render());
+  expect(selected()).toBe("true");
 });
 
 describe("sidebar session multiselection", () => {

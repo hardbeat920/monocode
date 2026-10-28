@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Block } from "./session";
-import { groupTurns } from "./transcriptActivity";
+import { groupMonoChatTurns, groupTurns } from "./transcriptActivity";
 import { TranscriptTurnCache } from "./transcriptTurnCache";
 
 function conversation(): Block[] {
@@ -217,3 +217,51 @@ describe("transcript turn cache", () => {
     }
   });
 });
+
+it("regroups when a changed Mono boundary joins the preceding turn", () => {
+  const cache = new TranscriptTurnCache();
+  const blocks = conversation();
+  cache.group(blocks, false, true);
+  const changed = blocks.slice();
+  changed[changed.length - 2] = { ...changed[changed.length - 2], sentAt: 10 };
+  expect(cache.group(changed, false, true)).toEqual(
+    groupMonoChatTurns(changed),
+  );
+});
+
+it.each([false, true])(
+  "matches fresh grouping across streaming, edits and rewinds (Mono=%s)",
+  (mono) => {
+    const cache = new TranscriptTurnCache();
+    const group = mono ? groupMonoChatTurns : groupTurns;
+    let blocks = conversation();
+    for (let i = 0; i < 100; i++) {
+      if (i % 13 === 0) blocks = blocks.slice(0, -3);
+      else if (i % 7 === 0)
+        blocks = [
+          ...blocks,
+          {
+            id: `hidden-${i}`,
+            role: "user",
+            text: "completion",
+            internal: true,
+            appRequestId: `mono-completion-${i}`,
+          },
+          { id: `reply-${i}`, role: "assistant", text: "Completed" },
+        ];
+      else if (i % 5 === 0)
+        blocks = [
+          ...blocks,
+          { id: `user-${i}`, role: "user", text: "Next" },
+          { id: `answer-${i}`, role: "assistant", text: "Answer" },
+        ];
+      else {
+        const at = i % 11 === 0 ? 1 : blocks.length - 1;
+        blocks = blocks.map((block, index) =>
+          index === at ? { ...block, text: block.text + " more" } : block,
+        );
+      }
+      expect(cache.group(blocks, false, mono)).toEqual(group(blocks));
+    }
+  },
+);

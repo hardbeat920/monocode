@@ -1,0 +1,109 @@
+[package]
+name = "monocode-gpui"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+monocode-core = { path = "../monocode-core" }
+pulldown-cmark = "0.13"
+mermaid-rs-renderer = { version = "0.3.1", default-features = false }
+syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
+gpui = { package = "gpui-pre", version = "=0.3.9", default-features = false }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.9", default-features = false, features = ["font-kit", "runtime_shaders", "x11", "wayland"] }
+unicode-segmentation = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+async-channel = "2"
+base64 = "0.22"
+# Attachment chips build their thumbnail sprites directly.
+image = { version = "0.25", default-features = false }
+# The terminal dock: PTY, VT parser and grid (as Zed's terminal uses).
+alacritty_terminal = "0.26"
+libc = "0.2"
+rquickjs = "0.14.0"
+# The file editor's native syntax: incremental parses, highlights, folds and
+# syntax errors. Languages without a grammar here use the QuickJS fallback.
+tree-sitter = "0.26"
+tree-sitter-language = "0.1"
+streaming-iterator = "0.1"
+notify = "8.2"
+similar = "2.7"
+tree-sitter-javascript = "0.25"
+tree-sitter-typescript = "0.23"
+tree-sitter-json = "0.24"
+tree-sitter-css = "0.25"
+tree-sitter-html = "0.23"
+tree-sitter-python = "0.25"
+tree-sitter-rust = "0.24"
+tree-sitter-go = "0.25"
+tree-sitter-bash = "0.25"
+tree-sitter-c = "0.24"
+tree-sitter-cpp = "0.23"
+tree-sitter-java = "0.23"
+tree-sitter-yaml = "0.7"
+tree-sitter-toml-ng = "0.7"
+tree-sitter-ruby = "0.23"
+# Settings → Mobile draws the pairing code from the module matrix.
+qrcode = { version = "0.14", default-features = false }
+
+[build-dependencies]
+embed-resource = "3"
+
+[dev-dependencies]
+gpui = { package = "gpui-pre", version = "=0.3.9", default-features = false, features = ["test-support"] }
+
+# The vendored renderer's backdrop-blur marker for frosted popovers.
+[target.'cfg(target_os = "macos")'.dependencies]
+gpui_apple = { package = "gpui-pre-apple", version = "=0.3.9" }
+# Pins the native traffic lights to the Tauri app's spacing.
+objc2 = "0.6"
+block2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "NSEvent", "NSApplication", "NSDockTile", "NSButton", "NSControl", "NSLayoutAnchor", "NSLayoutConstraint", "NSResponder", "NSView", "NSWindow", "NSStatusBar", "NSStatusItem", "NSStatusBarButton", "NSMenu", "NSMenuItem", "NSImage"] }
+raw-window-handle = "0.6"
+objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "objc2-app-kit", "objc2-core-foundation", "WKWebView", "WKWebViewConfiguration", "WKPreferences", "WKWebsiteDataStore", "WKNavigation", "WKNavigationDelegate", "WKNavigationAction", "block2"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSGeometry", "NSData", "NSRange", "NSArray", "NSSet", "NSError", "NSBundle"] }
+objc2-user-notifications = "0.3"
+# libmalloc keeps freed large spans dirty, so startup and image churn stayed
+# resident. mimalloc 3 retains churn the same way; the v2 feature pins 2.x.
+mimalloc = { version = "0.1", default-features = false, features = ["v2"] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+gpui_apple = { package = "gpui-pre-apple", version = "=0.3.9", features = ["test-support", "runtime_shaders"] }
+parking_lot = "0.12"
+
+# Experimental native builds resolve separately from the production Tauri app.
+[workspace]
+resolver = "2"
+members = [".", "../monocode-core"]
+
+[workspace.package]
+version = "0.16.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.40.2", features = ["bundled", "hooks"], default-features = false }
+
+# Exclude the unused screen-capture dependency from all native platforms.
+# Keep the Apple renderer's alpha and font-matching fixes.
+[patch.crates-io]
+gpui-pre = { path = "../../vendor/gpui-pre" }
+gpui-pre-apple = { path = "../../vendor/gpui-pre-apple" }
+gpui-pre-linux = { path = "../../vendor/gpui-pre-linux" }
+gpui-pre-windows = { path = "../../vendor/gpui-pre-windows" }
+
+[profile.native-dev]
+inherits = "dev"
+debug = 0
+incremental = false
+
+[profile.native-dev.package."*"]
+opt-level = 1
+
+[profile.native-dev.package.monocode-gpui]
+opt-level = 1

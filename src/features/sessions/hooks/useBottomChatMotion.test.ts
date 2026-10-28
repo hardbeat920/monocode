@@ -3,7 +3,11 @@ import { act, createElement, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Block } from "../model/session";
-import { useBottomChatMotion } from "./useBottomChatMotion";
+import {
+  followSpring,
+  stepFollowSpring,
+  useBottomChatMotion,
+} from "./useBottomChatMotion";
 
 let container: HTMLDivElement;
 let root: Root;
@@ -17,6 +21,10 @@ let reduced: boolean;
 let scrollHeight: number;
 let top: number;
 let scrollWrites: number[];
+let scrollAdjustments: number[];
+const recordAdjustment = (scroller: HTMLDivElement) => {
+  scrollAdjustments.push(scroller.scrollTop);
+};
 let entrances: Array<{
   message: HTMLElement;
   cancel: ReturnType<typeof vi.fn>;
@@ -28,11 +36,13 @@ function Harness({
   enabled = true,
   busy = true,
   historicalBlockIds,
+  smoothReveals = false,
 }: {
   blocks: Block[];
   enabled?: boolean;
   busy?: boolean;
   historicalBlockIds?: ReadonlySet<string>;
+  smoothReveals?: boolean;
 }) {
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
   useBottomChatMotion(
@@ -43,6 +53,10 @@ function Harness({
     false,
     busy,
     historicalBlockIds,
+    true,
+    undefined,
+    smoothReveals,
+    recordAdjustment,
   );
   return createElement(
     "div",
@@ -84,10 +98,17 @@ function render(
   enabled = true,
   busy = true,
   historicalBlockIds?: ReadonlySet<string>,
+  smoothReveals = false,
 ) {
   act(() =>
     root.render(
-      createElement(Harness, { blocks, enabled, busy, historicalBlockIds }),
+      createElement(Harness, {
+        blocks,
+        enabled,
+        busy,
+        historicalBlockIds,
+        smoothReveals,
+      }),
     ),
   );
 }
@@ -139,6 +160,7 @@ beforeEach(() => {
   scrollHeight = 400;
   top = 0;
   scrollWrites = [];
+  scrollAdjustments = [];
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
     frames.set(++nextFrame, callback);
@@ -190,6 +212,44 @@ afterEach(() => {
 });
 
 describe("bottom chat motion", () => {
+  it("glides through a whole Mono reply without skipping most of its height", () => {
+    const blocks: Block[] = [{ id: "user", role: "user", text: "Hello" }];
+    render(blocks, true, true, undefined, true);
+    const view = viewport();
+    scrollHeight += 940;
+    render(blocks, true, false, undefined, true);
+    expect(offset(view.content)).toBe(940);
+
+    // An answer landing in one commit must not be treated as a fast stream.
+    for (let frame = 0; frame < 12; frame++) advance(1000 / 60);
+    expect(offset(view.content)).toBeGreaterThan(600);
+    expect(offset(view.content)).toBeLessThan(940);
+    for (let frame = 0; frame < 120; frame++) advance(1000 / 60);
+    expect(view.content.style.transform).toBe("");
+    expect(top).toBe(940);
+  });
+
+  it("hands off a large Mono reveal at its visible position when scrolling up", () => {
+    scrollHeight = 1000;
+    const blocks: Block[] = [{ id: "user", role: "user", text: "Hello" }];
+    render(blocks, true, true, undefined, true);
+    const view = viewport();
+    scrollHeight += 940;
+    render(blocks, true, false, undefined, true);
+    advance(40);
+    const visibleTop = top - offset(view.content);
+    act(() =>
+      view.scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 })),
+    );
+    expect(top).toBeCloseTo(visibleTop);
+    expect(following.current).toBe(false);
+    expect(view.content.style.transform).toBe("");
+    scrollHeight += 100;
+    view.resize();
+    expect(top).toBeCloseTo(visibleTop);
+    expect(frames.size).toBe(0);
+  });
+
   it.each(["short", "scrolling"])(
     "eases growing %s conversations upward",
     (length) => {
@@ -274,6 +334,7 @@ describe("bottom chat motion", () => {
     );
     const scrollerRect = vi.spyOn(view.scroller, "getBoundingClientRect");
     scrollWrites = [];
+    scrollAdjustments = [];
 
     for (const deltaY of [-4, -6, -12]) {
       act(() => {
@@ -286,6 +347,7 @@ describe("bottom chat motion", () => {
     expect(top).toBe(578);
     expect(following.current).toBe(false);
     expect(scrollWrites).toEqual([]);
+    expect(scrollAdjustments).toEqual([]);
     expect(anchorRect).not.toHaveBeenCalled();
     expect(scrollerRect).not.toHaveBeenCalled();
     expect(frames.size).toBe(0);
@@ -306,6 +368,7 @@ describe("bottom chat motion", () => {
       "getBoundingClientRect",
     );
     scrollWrites = [];
+    scrollAdjustments = [];
 
     for (const deltaY of [-4, -6]) {
       act(() => {
@@ -316,6 +379,7 @@ describe("bottom chat motion", () => {
     }
     expect(top).toBeCloseTo(visibleTop - 10);
     expect(scrollWrites).toEqual([visibleTop]);
+    expect(scrollAdjustments).toEqual([visibleTop]);
     expect(anchorRect).not.toHaveBeenCalled();
     expect(view.content.style.transform).toBe("");
     advance(85);
@@ -462,5 +526,38 @@ describe("bottom chat motion", () => {
     expect(entrances.map(({ message }) => message.dataset.chatMessage)).toEqual(
       ["reply"],
     );
+  });
+});
+
+describe("follow spring", () => {
+  it("settles a single jump without overshooting", () => {
+    const spring = followSpring();
+    let offset = stepFollowSpring(spring, 60, 60, 1);
+    let previous = 60;
+    for (let frame = 0; frame < 40; frame++) {
+      expect(offset).toBeLessThanOrEqual(previous);
+      expect(offset).toBeGreaterThanOrEqual(0);
+      previous = offset;
+      offset = stepFollowSpring(spring, offset, 0, 1);
+    }
+    expect(offset).toBe(0);
+  });
+
+  it("glides at the stream's speed instead of jolting at each update", () => {
+    const spring = followSpring();
+    let offset = 0;
+    const travelled: number[] = [];
+    // 12px every other frame: an update lands, then a frame with none.
+    for (let frame = 0; frame < 120; frame++) {
+      const grew = frame % 2 === 0 ? 12 : 0;
+      const before = offset + grew;
+      offset = stepFollowSpring(spring, before, grew, 1, 1);
+      if (frame >= 80) travelled.push(before - offset);
+    }
+    // Settled into a steady trail behind the end, moving every frame.
+    expect(offset).toBeGreaterThan(0);
+    expect(offset).toBeLessThanOrEqual(32);
+    expect(Math.min(...travelled)).toBeGreaterThan(3);
+    expect(Math.max(...travelled)).toBeLessThan(9);
   });
 });

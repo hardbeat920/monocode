@@ -104,6 +104,25 @@ describe("layoutGitGraph", () => {
 });
 
 describe("historyItemGraph", () => {
+  it("extends lanes for taller history rows without stretching the nodes", () => {
+    const rows = layoutGitGraph([
+      { sha: "M", parents: ["A", "F"] },
+      { sha: "A", parents: ["B"] },
+      { sha: "F", parents: ["B"] },
+      { sha: "B", parents: [] },
+    ]);
+    const merge = historyItemGraph(rows[0]!, 44);
+    expect(merge.height).toBe(44);
+    expect(merge.circles.map((circle) => [circle.cy, circle.r])).toEqual([
+      [22, 6],
+      [22, 3],
+    ]);
+    expect(merge.paths[0]?.d).toContain("A 11 11 0 0 1 22 33 V 44");
+    const join = historyItemGraph(rows[3]!, 44);
+    expect(join.paths[0]?.d).toContain("M 22 0 V 11 A 11 11 0 0 1 11 22");
+    expect(join.circles[0]?.cy).toBe(22);
+  });
+
   it("draws a vertical trunk through a linear row", () => {
     const [row] = layoutGitGraph([
       { sha: "c", parents: ["b"] },

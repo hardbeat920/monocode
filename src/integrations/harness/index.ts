@@ -187,6 +187,7 @@ export {
   enforceHarnessIdleLimit,
   forgetHarnessSession,
   bindHarnessSession,
+  transferHarnessSessionAccount,
   refreshHarnessCatalogs,
   generateHarnessTitle,
   generateHarnessCommitMessage,

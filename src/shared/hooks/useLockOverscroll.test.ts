@@ -136,12 +136,83 @@ describe("useLockOverscroll wheel guard", () => {
     expect(atScrollEdge(box(), { deltaX: -40, deltaY: 0 })).toBe(false);
   });
 
+  it.each([
+    { scrollTop: 0, scrollLeft: 100, deltaX: 80, deltaY: -1, blocked: false },
+    { scrollTop: 400, scrollLeft: 100, deltaX: 80, deltaY: 1, blocked: false },
+    { scrollTop: 100, scrollLeft: 0, deltaX: -1, deltaY: 80, blocked: false },
+    { scrollTop: 100, scrollLeft: 400, deltaX: 1, deltaY: 80, blocked: false },
+    { scrollTop: 0, scrollLeft: 0, deltaX: -80, deltaY: -1, blocked: true },
+    { scrollTop: 400, scrollLeft: 400, deltaX: 80, deltaY: 1, blocked: true },
+  ])(
+    "preserves diagonal movement while either axis has room ($scrollTop, $scrollLeft, $deltaX, $deltaY)",
+    ({ scrollTop, scrollLeft, deltaX, deltaY, blocked }) => {
+      const scroller = sized(
+        document.createElement("div"),
+        box({
+          scrollTop,
+          scrollLeft,
+          scrollWidth: 800,
+        }),
+      );
+      scroller.style.overflowX = "auto";
+      scroller.style.overflowY = "auto";
+      document.body.append(scroller);
+      const detach = lockOverscroll(scroller);
+      const wheel = new WheelEvent("wheel", {
+        deltaX,
+        deltaY,
+        cancelable: true,
+      });
+      scroller.dispatchEvent(wheel);
+      expect(wheel.defaultPrevented).toBe(blocked);
+      detach();
+      scroller.remove();
+    },
+  );
+
   it("still blocks vertical rubber-band at the top and bottom", () => {
     expect(atScrollEdge(box(), { deltaX: 0, deltaY: -40 })).toBe(true);
     expect(
       atScrollEdge(box({ scrollTop: 400 }), { deltaX: 0, deltaY: 40 }),
     ).toBe(true);
   });
+
+  it.each([
+    { scrollLeft: 0, deltaX: -80, deltaY: 1, blocked: true },
+    { scrollLeft: 400, deltaX: 80, deltaY: -1, blocked: true },
+    { scrollLeft: 0, deltaX: 80, deltaY: 1, blocked: false },
+    { scrollLeft: 200, deltaX: -80, deltaY: 1, blocked: false },
+    { scrollLeft: 0, deltaX: -1, deltaY: 80, blocked: false },
+    { scrollLeft: 400, deltaX: 1, deltaY: -80, blocked: false },
+  ])(
+    "locks horizontal bounce without swallowing vertical gestures ($scrollLeft, $deltaX, $deltaY)",
+    ({ scrollLeft, deltaX, deltaY, blocked }) => {
+      const scroller = sized(
+        document.createElement("div"),
+        box({
+          scrollLeft,
+          scrollWidth: 800,
+          scrollHeight: 400,
+        }),
+      );
+      const detach = lockOverscroll(scroller, "horizontal");
+      const wheel = new WheelEvent("wheel", {
+        deltaX,
+        deltaY,
+        cancelable: true,
+      });
+      scroller.dispatchEvent(wheel);
+      expect(wheel.defaultPrevented).toBe(blocked);
+      detach();
+      const afterDetach = new WheelEvent("wheel", {
+        deltaX,
+        deltaY,
+        cancelable: true,
+      });
+      scroller.dispatchEvent(afterDetach);
+      expect(afterDetach.defaultPrevented).toBe(false);
+    },
+  );
 
   it("reads room in the direction the wheel is pushing", () => {
     expect(hasScrollRoom(box(), { deltaX: 0, deltaY: 40 })).toBe(true);

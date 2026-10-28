@@ -1,5 +1,11 @@
 import { RefreshCw, Terminal } from "../../shared/ui/icons";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { HarnessIcon } from "../../features/sessions/ui/HarnessIcon";
 import { Popover, type PopoverDismissReason } from "../../shared/ui/Popover";
 import { consumeCodexRateLimitResetCredit } from "../../features/providers/model/rateLimitsFetch";
@@ -28,7 +34,12 @@ import {
   type RunningTerminal,
 } from "../../features/terminal/model/terminalTab";
 import { MOD } from "../../platform/tauri/platform";
-import { UsageProviderChip } from "./UsageProviderChip";
+import {
+  USAGE_CHIP_CLASSES,
+  USAGE_REFRESH_CLASSES,
+  UsageProviderChip,
+  type UsageChipVariant,
+} from "./UsageProviderChip";
 import { PiUsage } from "./PiUsage";
 import {
   ProviderSignInPanel,
@@ -63,10 +74,13 @@ export function UsageFooter({
   terminalOpen = false,
   onToggleTerminal,
   onNewTerminal,
-  onShowTerminal,
+  onToggleProjectTerminal,
   projectTerminalActive = false,
+  projectTerminalOpen = false,
   onSelectAccount,
   onManageAccounts,
+  inset = false,
+  pressureSlot,
 }: {
   providers: RateLimitProvider[];
   session?: UsageFooterSession;
@@ -75,13 +89,139 @@ export function UsageFooter({
   terminalOpen?: boolean;
   onToggleTerminal?: (fileId: string) => void;
   onNewTerminal?: () => void;
-  onShowTerminal?: () => void;
+  onToggleProjectTerminal?: () => void;
   projectTerminalActive?: boolean;
+  projectTerminalOpen?: boolean;
   onSelectAccount?: (
     provider: ProviderAccountProvider,
     accountId: string,
   ) => void;
   onManageAccounts?: (provider: ProviderAccountProvider) => void;
+  /** Sits on the inset layout's outer glass, below the card. */
+  inset?: boolean;
+  /** Receives the slot beside the terminal button for the pressure chip. */
+  pressureSlot?: (element: HTMLSpanElement | null) => void;
+}) {
+  const opencode = useCachedRateLimits("opencode");
+  const showUsage =
+    providers.some((provider) => provider !== "opencode") ||
+    (providers.includes("opencode") && opencode.status !== "unavailable");
+  const showTerminals = terminals.length > 0;
+  const showTerminalButton = Boolean(
+    onNewTerminal || onToggleProjectTerminal,
+  );
+  const terminalLabel = projectTerminalActive
+    ? "Terminal"
+    : `New Terminal (${MOD}\`)`;
+  const onTerminalClick = projectTerminalActive
+    ? (onToggleProjectTerminal ?? onNewTerminal)
+    : (onNewTerminal ?? onToggleProjectTerminal);
+  const ariaLabel = showUsage || session?.harness === "pi"
+    ? "Provider usage"
+    : showTerminals || showTerminalButton
+      ? "Terminals"
+      : session
+        ? "Session"
+        : undefined;
+
+  return (
+    <footer
+      aria-label={ariaLabel}
+      // Inset: the card's edge above reads as part of the gap, so a little
+      // room below keeps the chips optically centred. The pills line up with
+      // the card's edges, which carry their own padding.
+      className={`flex shrink-0 items-center gap-1.5 overflow-x-auto text-[11px] text-content/55${
+        inset
+          ? " inset-footer mr-1.5 h-[30px] pb-0.5"
+          : " h-7 border-t border-stroke px-3"
+      }`}
+    >
+      <UsageChips
+        providers={providers}
+        session={session}
+        project={project}
+        onSelectAccount={onSelectAccount}
+        onManageAccounts={onManageAccounts}
+        variant={inset ? "inset" : "footer"}
+        fallback={
+          session ? (
+            <SessionChip
+              key={session.id ?? session.harness}
+              session={session}
+              inset={inset}
+            />
+          ) : null
+        }
+      />
+      {showTerminals || showTerminalButton || pressureSlot ? (
+        <div className="ml-auto flex shrink-0 items-center gap-2">
+          {pressureSlot ? (
+            <span
+              ref={pressureSlot}
+              className="flex items-center empty:hidden"
+            />
+          ) : null}
+          {showTerminals ? (
+            <RunningTerminalChip
+              terminals={terminals}
+              open={terminalOpen}
+              onToggle={onToggleTerminal}
+              inset={inset}
+            />
+          ) : showTerminalButton ? (
+            <button
+              type="button"
+              className={`inline-flex h-5 shrink-0 items-center gap-1.5 whitespace-nowrap hover:bg-content/10 ${
+                inset ? "rounded-full px-2" : "rounded-md px-1.5"
+              } ${
+                projectTerminalOpen
+                  ? "text-accent"
+                  : "text-content/40 hover:text-content"
+              }`}
+              aria-label={terminalLabel}
+              aria-pressed={projectTerminalOpen}
+              title={terminalLabel}
+              onClick={onTerminalClick}
+            >
+              <Terminal className="size-3.5" strokeWidth={1.75} aria-hidden />
+              <span>Terminal</span>
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </footer>
+  );
+}
+
+/**
+ * The provider usage chips and their refresh button, for the session footer
+ * and anywhere else a conversation shows how much of its plan is left.
+ * `accountPicker` off keeps the chips to usage alone, for a conversation
+ * whose account is not switched from here. `variant` `composer` matches
+ * the tool buttons under a Mono's composer instead of the footer.
+ */
+export function UsageChips({
+  providers,
+  session,
+  project,
+  onSelectAccount,
+  onManageAccounts,
+  accountPicker = true,
+  fallback = null,
+  variant = "footer",
+}: {
+  providers: RateLimitProvider[];
+  session?: UsageFooterSession;
+  project?: string;
+  onSelectAccount?: (
+    provider: ProviderAccountProvider,
+    accountId: string,
+  ) => void;
+  onManageAccounts?: (provider: ProviderAccountProvider) => void;
+  accountPicker?: boolean;
+  /** Shown when there is no usage to show. */
+  fallback?: ReactNode;
+  variant?: UsageChipVariant;
 }) {
   const wantClaude = providers.includes("claude");
   const wantCodex = providers.includes("codex");
@@ -302,121 +442,97 @@ export function UsageFooter({
 
   const showOpencodeChip = wantOpencode && opencode.status !== "unavailable";
   const showUsage = wantClaude || wantCodex || showOpencodeChip || wantDevin;
-  const showTerminals = terminals.length > 0;
-  const showTerminalButton = Boolean(onNewTerminal || onShowTerminal);
-  const terminalLabel = projectTerminalActive
-    ? "Terminal"
-    : `New Terminal (${MOD}\`)`;
-  const onTerminalClick = projectTerminalActive
-    ? (onShowTerminal ?? onNewTerminal)
-    : (onNewTerminal ?? onShowTerminal);
-  const ariaLabel = showUsage || session?.harness === "pi"
-    ? "Provider usage"
-    : showTerminals || showTerminalButton
-      ? "Terminals"
-      : session
-        ? "Session"
-        : undefined;
+  const claudeAccountProps = accountPicker
+    ? {
+        accounts: claudeAccounts,
+        accountId: claudeAccountId,
+        onSelectAccount: (accountId: string) =>
+          selectAccount("claude", accountId),
+        onAddAccount: (label: string) => addAccount("claude", label),
+        onManageAccounts: onManageAccounts
+          ? () => onManageAccounts("claude")
+          : undefined,
+      }
+    : {};
+  const codexAccountProps = accountPicker
+    ? {
+        accounts: codexAccounts,
+        accountId: codexAccountId,
+        onSelectAccount: (accountId: string) =>
+          selectAccount("codex", accountId),
+        onAddAccount: (label: string) => addAccount("codex", label),
+        onManageAccounts: onManageAccounts
+          ? () => onManageAccounts("codex")
+          : undefined,
+      }
+    : {};
 
+  if (session?.harness === "pi") {
+    return (
+      <PiUsage
+        key={`${session.id}:${session.model}`}
+        model={session.model}
+        now={now}
+        variant={variant}
+      />
+    );
+  }
+  if (!showUsage) return <>{fallback}</>;
   return (
-    <footer
-      aria-label={ariaLabel}
-      className="flex h-7 shrink-0 items-center gap-1.5 overflow-x-auto border-t border-stroke px-3 text-[11px] text-content/55"
-    >
-      {session?.harness === "pi" ? (
-        <PiUsage key={`${session.id}:${session.model}`} model={session.model} now={now} />
-      ) : showUsage ? (
-        <>
-          {wantClaude ? (
-            <UsageProviderChip
-              limits={claude}
-              now={now}
-              accounts={claudeAccounts}
-              accountId={claudeAccountId}
-              onSelectAccount={(accountId) =>
-                selectAccount("claude", accountId)
-              }
-              onAddAccount={(label) => addAccount("claude", label)}
-              onManageAccounts={
-                onManageAccounts ? () => onManageAccounts("claude") : undefined
-              }
-              onReconnect={reconnectClaude}
-            />
-          ) : null}
-          {wantCodex ? (
-            <UsageProviderChip
-              limits={codex}
-              now={now}
-              project={project}
-              accounts={codexAccounts}
-              accountId={codexAccountId}
-              onSelectAccount={(accountId) => selectAccount("codex", accountId)}
-              onAddAccount={(label) => addAccount("codex", label)}
-              onManageAccounts={
-                onManageAccounts ? () => onManageAccounts("codex") : undefined
-              }
-              onConsumeReset={consumeCodexReset}
-              onReconnect={reconnectCodex}
-            />
-          ) : null}
-          {showOpencodeChip ? (
-            <UsageProviderChip limits={opencode} now={now} project={project} />
-          ) : null}
-          {wantDevin ? (
-            // Devin has one login per machine, so there is no account picker.
-            <UsageProviderChip
-              limits={devin}
-              now={now}
-              project={project}
-              onReconnect={reconnectDevin}
-            />
-          ) : null}
-          <button
-            type="button"
-            className="grid size-4.5 shrink-0 place-items-center rounded text-content/40 hover:bg-content/10 hover:text-content disabled:opacity-50"
-            aria-label="Refresh usage"
-            title="Refresh usage"
-            disabled={refreshing}
-            onClick={() => void refresh()}
-          >
-            <RefreshCw
-              className={`size-2.5 ${refreshing ? "animate-spin" : ""}`}
-              strokeWidth={1.75}
-              aria-hidden
-            />
-          </button>
-        </>
-      ) : session ? (
-        <SessionChip key={session.id ?? session.harness} session={session} />
+    <>
+      {wantClaude ? (
+        <UsageProviderChip
+          limits={claude}
+          now={now}
+          variant={variant}
+          {...claudeAccountProps}
+          onReconnect={reconnectClaude}
+        />
       ) : null}
-      {showTerminals || showTerminalButton ? (
-        <div className="ml-auto flex shrink-0 items-center gap-2">
-          {showTerminals ? (
-            <RunningTerminalChip
-              terminals={terminals}
-              open={terminalOpen}
-              onToggle={onToggleTerminal}
-            />
-          ) : showTerminalButton ? (
-            <button
-              type="button"
-              className={`inline-flex h-5 shrink-0 items-center gap-1.5 whitespace-nowrap rounded px-1.5 hover:bg-content/10 ${
-                projectTerminalActive
-                  ? "text-accent"
-                  : "text-content/40 hover:text-content"
-              }`}
-              aria-label={terminalLabel}
-              aria-pressed={projectTerminalActive}
-              title={terminalLabel}
-              onClick={onTerminalClick}
-            >
-              <Terminal className="size-3.5" strokeWidth={1.75} aria-hidden />
-              <span>Terminal</span>
-            </button>
-          ) : null}
-        </div>
+      {wantCodex ? (
+        <UsageProviderChip
+          limits={codex}
+          now={now}
+          project={project}
+          variant={variant}
+          {...codexAccountProps}
+          onConsumeReset={consumeCodexReset}
+          onReconnect={reconnectCodex}
+        />
       ) : null}
-    </footer>
+      {showOpencodeChip ? (
+        <UsageProviderChip
+          limits={opencode}
+          now={now}
+          project={project}
+          variant={variant}
+        />
+      ) : null}
+      {wantDevin ? (
+        // Devin has one login per machine, so there is no account picker.
+        <UsageProviderChip
+          limits={devin}
+          now={now}
+          project={project}
+          variant={variant}
+          onReconnect={reconnectDevin}
+        />
+      ) : null}
+      <button
+        type="button"
+        className={USAGE_REFRESH_CLASSES[variant]}
+        aria-label="Refresh usage"
+        title="Refresh usage"
+        disabled={refreshing}
+        onClick={() => void refresh()}
+      >
+        <RefreshCw
+          className={`size-2.5 ${refreshing ? "animate-spin" : ""}`}
+          strokeWidth={1.75}
+          aria-hidden
+        />
+      </button>
+    </>
   );
 }
 
@@ -430,7 +546,13 @@ function TerminalLiveMark() {
   );
 }
 
-function SessionChip({ session }: { session: UsageFooterSession }) {
+function SessionChip({
+  session,
+  inset,
+}: {
+  session: UsageFooterSession;
+  inset: boolean;
+}) {
   const trigger = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const [loginState, setLoginState] = useState<ProviderSignInState>("idle");
@@ -485,7 +607,7 @@ function SessionChip({ session }: { session: UsageFooterSession }) {
       <button
         ref={trigger}
         type="button"
-        className="-mx-1 inline-flex h-5 min-w-0 shrink-0 items-center gap-1.5 whitespace-nowrap rounded px-1 text-content/55 transition-[background-color,color,transform] duration-150 ease-out hover:bg-content/10 hover:text-content focus-visible:outline-2 focus-visible:outline-accent active:scale-[0.97]"
+        className={USAGE_CHIP_CLASSES[inset ? "inset" : "footer"]}
         aria-label={`${HARNESS_TITLE[session.harness]} sign-in required`}
         aria-expanded={open}
         aria-haspopup="dialog"
@@ -530,10 +652,12 @@ function RunningTerminalChip({
   terminals,
   open: panelOpen,
   onToggle,
+  inset,
 }: {
   terminals: RunningTerminal[];
   open: boolean;
   onToggle?: (fileId: string) => void;
+  inset: boolean;
 }) {
   const root = useRef<HTMLButtonElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -561,7 +685,9 @@ function RunningTerminalChip({
       <button
         ref={root}
         type="button"
-        className="inline-flex min-w-0 max-w-[16rem] items-center gap-1.5 whitespace-nowrap rounded px-1 -mx-1 hover:bg-content/10 hover:text-content"
+        className={`inline-flex min-w-0 max-w-[16rem] items-center gap-1.5 whitespace-nowrap hover:bg-content/10 hover:text-content ${
+          inset ? "h-5 rounded-full px-2" : "-mx-1 rounded-md px-1"
+        }`}
         aria-label={ariaLabel}
         aria-pressed={panelOpen}
         aria-expanded={many && !panelOpen ? menuOpen : undefined}

@@ -5,6 +5,8 @@
  * one place instead of by whichever stray `z-50` was written last.
  */
 export const LAYER = {
+  /** A collapsed sidebar peeking out over the workspace. */
+  peek: 70,
   /** Anchored menus, dropdowns, and pickers. */
   popover: 80,
   /** A flyout hung off an open popover. */

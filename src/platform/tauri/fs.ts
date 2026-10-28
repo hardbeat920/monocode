@@ -1,6 +1,6 @@
 import { invoke as invokeLocal } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { slash } from "../../shared/lib/paths";
+import { joinPath, slash } from "../../shared/lib/paths";
 import { REMOTE_PATH_PREFIX } from "../../shared/lib/remotePaths";
 import type { InterjectionMeta } from "../../features/sessions/model/session";
 
@@ -180,7 +180,7 @@ export type GitDiffStats = {
 };
 
 export function gitDiffStats(cwd: string): Promise<GitDiffStats> {
-  return invoke<GitDiffStats>("git_diff_stats", { cwd });
+  return readGit<GitDiffStats>("git_diff_stats", cwd);
 }
 
 export type GitChangedFile = {
@@ -208,13 +208,37 @@ export type GitDiffIndex = {
   headPushed: boolean;
 };
 
+const pendingGitReads = new Map<string, Promise<unknown>>();
+let gitReadEpoch = 0;
+
+/** Share concurrent reads, and never resolve with a pre-mutation snapshot. */
+function readGit<T>(command: string, cwd: string): Promise<T> {
+  const key = `${command}\0${cwd}`;
+  const pending = pendingGitReads.get(key);
+  if (pending) return pending as Promise<T>;
+  const epoch = gitReadEpoch;
+  const request = invoke<T>(command, { cwd })
+    .then(
+      (result) => (epoch === gitReadEpoch ? result : readGit<T>(command, cwd)),
+      (error) => {
+        if (epoch !== gitReadEpoch) return readGit<T>(command, cwd);
+        throw error;
+      },
+    )
+    .finally(() => {
+      if (pendingGitReads.get(key) === request) pendingGitReads.delete(key);
+    });
+  pendingGitReads.set(key, request);
+  return request;
+}
+
 export function gitDiffIndex(cwd: string): Promise<GitDiffIndex> {
-  return invoke<GitDiffIndex>("git_diff_index", { cwd });
+  return readGit<GitDiffIndex>("git_diff_index", cwd);
 }
 
 /** File list and counts only, for diff content views that do not need sync data. */
 export function gitDiffFiles(cwd: string): Promise<GitDiffIndex> {
-  return invoke<GitDiffIndex>("git_diff_files", { cwd });
+  return readGit<GitDiffIndex>("git_diff_files", cwd);
 }
 
 export type GitFileDiff = {
@@ -440,7 +464,13 @@ export function isCheckoutBlockedByChanges(message: string): boolean {
 const GIT_CHANGED = "monocode-git-changed";
 
 /** Tell git UIs (diff pane, branch picker) to reload after a local git mutation. */
-export function notifyGitChanged() {
+export function notifyGitChanged({ invalidatePending = true } = {}) {
+  // Publishing an already-read index is not a mutation. All actual mutations
+  // invalidate both new readers and original callers still awaiting old data.
+  if (invalidatePending) {
+    gitReadEpoch++;
+    pendingGitReads.clear();
+  }
   window.dispatchEvent(new Event(GIT_CHANGED));
 }
 
@@ -587,6 +617,19 @@ export async function readBinaryFile(path: string): Promise<Uint8Array> {
   return typeof buffer === "string"
     ? Uint8Array.from(atob(buffer), (char) => char.charCodeAt(0))
     : new Uint8Array(buffer);
+}
+
+/**
+ * Bytes of an image a project's Markdown document shows. `path` is relative to
+ * `root`, and the file is read only if it resolves inside `root`, symlinks
+ * included. A connected machine already keeps every read inside its projects.
+ */
+export function readProjectImage(root: string, path: string): Promise<Uint8Array> {
+  if (root.startsWith(REMOTE_PATH_PREFIX))
+    return readBinaryFile(joinPath(root, path));
+  return invokeLocal<ArrayBuffer>("read_project_image", { root, path }).then(
+    (buffer) => new Uint8Array(buffer),
+  );
 }
 
 export type GeneratedImageAsset = {

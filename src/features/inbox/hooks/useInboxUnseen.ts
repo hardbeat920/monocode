@@ -43,6 +43,7 @@ import {
 import { loadHiddenLinearTeamIds } from "../model/linear";
 import { JIRA_CHANGE_EVENT, loadHiddenJiraProjectIds } from "../model/jira";
 import type { RecentProject } from "../../projects/model/recents";
+import { inProjectScope } from "../../projects/model/projectScope";
 import type { SessionSummary } from "../../sessions/data/sessionStore";
 import { playCue } from "../../settings/model/sounds";
 import {
@@ -68,12 +69,14 @@ const POLL_MS = 2 * 60_000;
 const HIDDEN_POLL_MS = 5 * 60_000;
 const POLL_TICK_MS = 30_000;
 
-type ProjectSeenEntry = InboxSeenEntry & NotificationSubject;
+type ProjectSeenEntry = InboxSeenEntry &
+  NotificationSubject & { projectPath: string };
 
 function seenEntries(items: readonly InboxItem[]): ProjectSeenEntry[] {
   return items.map((item) => ({
     key: inboxItemKey(item),
     updatedAt: item.updatedAt,
+    projectPath: item.projectPath,
     ...inboxNotificationSubject(item),
   }));
 }
@@ -102,7 +105,12 @@ export function useInboxActivity(
   recents: RecentProject[],
   cwd: string,
   sessions: readonly SessionSummary[],
-  options?: { onAppeared?: (items: InboxItem[]) => void },
+  options?: {
+    onAppeared?: (items: InboxItem[]) => void;
+    /** Only this project's items (and project-less ones) light the badge.
+     * Polling, chimes and linked sessions still cover every project. */
+    scopeProject?: string;
+  },
 ): InboxActivity {
   const [unseen, setUnseen] = useState(false);
   const [workItems, setWorkItems] = useState<
@@ -114,6 +122,9 @@ export function useInboxActivity(
   const notifications = useRef(new InboxNotificationTracker());
   const sessionsRef = useRef(sessions);
   const onAppearedRef = useRef(options?.onAppeared);
+  const scopeProject = options?.scopeProject;
+  const scopeRef = useRef(scopeProject);
+  scopeRef.current = scopeProject;
   const lastPulledAt = useRef<number | null>(null);
 
   const applyUnseen = useCallback(() => {
@@ -121,8 +132,10 @@ export function useInboxActivity(
     // Category choices and mute affect badges, never the item's unread state.
     setUnseen(
       inboxHasUnseenItems(
-        entriesRef.current.filter((entry) =>
-          allowsProjectNotificationIndicator(entry, preferences),
+        entriesRef.current.filter(
+          (entry) =>
+            inProjectScope(entry.projectPath, scopeRef.current) &&
+            allowsProjectNotificationIndicator(entry, preferences),
         ),
       ),
     );
@@ -131,6 +144,10 @@ export function useInboxActivity(
   useLayoutEffect(() => {
     sessionsRef.current = sessions;
   }, [sessions]);
+
+  useEffect(() => {
+    applyUnseen();
+  }, [applyUnseen, scopeProject]);
 
   useLayoutEffect(() => {
     onAppearedRef.current = options?.onAppeared;
