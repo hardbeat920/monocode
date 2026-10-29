@@ -6,7 +6,11 @@ MonoCode supports macOS, Linux, and Windows. You need Node.js 20+ and a current 
 
 On Linux, install the standard Tauri prerequisites, including `libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `libsoup-3.0-dev`, and `libjavascriptcoregtk-4.1-dev` on Debian/Ubuntu. The setup helpers below install the native dependencies and packaging tools for their distributions.
 
-On Windows, the packaging script uses `stable-x86_64-pc-windows-msvc`. The installer bootstraps the [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/) runtime when it is missing.
+On Windows, install the following prerequisites before running or building from source:
+
+- [Microsoft C++ Build Tools](https://v2.tauri.app/start/prerequisites/#microsoft-c-build-tools), with the **Desktop development with C++** workload selected.
+- A stable **MSVC Rust toolchain**. For x86_64 Windows, use `stable-x86_64-pc-windows-msvc`, which is also the toolchain used by the Windows packaging script. Run `rustup show active-toolchain` to check your selected toolchain. See [Tauri's Rust setup](https://v2.tauri.app/start/prerequisites/#rust) for installation instructions.
+- The [WebView2 runtime](https://developer.microsoft.com/microsoft-edge/webview2/), required to run the app with `npm run tauri dev`. Windows 10 and 11 normally include it; if it is missing, install the **Evergreen Bootstrapper** from the WebView2 download page. The packaged installer bootstraps WebView2 when it is missing, but running from source requires the runtime to be installed already.
 
 ## Run locally
 
