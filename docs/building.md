@@ -27,7 +27,7 @@ npm ci
 npm run build:linux
 ```
 
-The Linux build emits `.deb` and AppImage bundles under `target/release/bundle/`, in the `deb/` and `appimage/` directories. `build:linux` repacks the AppImage so it uses the host WebKitGTK 4.1 stack instead of bundled Ubuntu libraries. See [Linux installation](install.md) for runtime dependencies and package instructions.
+The Linux build emits native `.deb` and AppImage bundles for x86_64 or aarch64 under `target/release/bundle/`, in the `deb/` and `appimage/` directories. `build:linux` repacks the AppImage so it uses the host WebKitGTK 4.1 stack instead of bundled Ubuntu libraries. Release builds run on native Ubuntu 22.04 runners for each architecture. See [Linux installation](install.md) for runtime dependencies and package instructions.
 
 ## Fedora / Enterprise Linux packages
 

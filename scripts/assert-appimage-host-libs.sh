@@ -5,7 +5,7 @@ set -euo pipefail
 # linuxdeploy GTK hook. Used by CI and the release linux job after
 # scripts/repack-appimage.sh has rewritten the Tauri bundle.
 #
-# Usage: scripts/assert-appimage-host-libs.sh [path/to/MonoCode_x.y.z_amd64.AppImage]
+# Usage: scripts/assert-appimage-host-libs.sh [path/to/MonoCode_x.y.z_ARCH.AppImage]
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 

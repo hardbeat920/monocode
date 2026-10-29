@@ -16,10 +16,9 @@ set -euo pipefail
 # ever enabled, the .AppImage.sig Tauri writes is for the pre-repack file and
 # must be regenerated after this script, or the updater will reject the image.
 #
-# Usage: scripts/repack-appimage.sh [path/to/MonoCode_x.y.z_amd64.AppImage]
+# Usage: scripts/repack-appimage.sh [path/to/MonoCode_x.y.z_ARCH.AppImage]
 
 APPIMAGETOOL_VERSION="1.9.1"
-APPIMAGETOOL_SHA256="ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0"
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -41,21 +40,28 @@ else
   appimage="${candidates[0]}"
 fi
 
-if [[ "$(uname -m)" != "x86_64" ]]; then
-  echo "repack-appimage.sh only supports x86_64 hosts" >&2
-  exit 1
-fi
+arch="$(uname -m)"
+# Digests from the appimagetool 1.9.1 release assets. Keep each architecture's
+# tool in a separate cache entry and verify it before execution.
+case "$arch" in
+  x86_64) APPIMAGETOOL_SHA256="ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0" ;;
+  aarch64) APPIMAGETOOL_SHA256="f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158" ;;
+  *)
+    echo "repack-appimage.sh only supports x86_64 and aarch64 hosts (found $arch)" >&2
+    exit 1
+    ;;
+esac
 
 appimage="$(readlink -f "$appimage")"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 tools_dir="${XDG_CACHE_HOME:-$HOME/.cache}/monocode-build"
-appimagetool="$tools_dir/appimagetool-$APPIMAGETOOL_VERSION-x86_64.AppImage"
+appimagetool="$tools_dir/appimagetool-$APPIMAGETOOL_VERSION-$arch.AppImage"
 mkdir -p "$tools_dir"
 if [[ ! -f "$appimagetool" ]] || ! sha256sum --quiet -c <<<"$APPIMAGETOOL_SHA256  $appimagetool" 2>/dev/null; then
   curl -fsSL --retry 3 -o "$appimagetool.part" \
-    "https://github.com/AppImage/appimagetool/releases/download/$APPIMAGETOOL_VERSION/appimagetool-x86_64.AppImage"
+    "https://github.com/AppImage/appimagetool/releases/download/$APPIMAGETOOL_VERSION/appimagetool-$arch.AppImage"
   if ! sha256sum --quiet -c <<<"$APPIMAGETOOL_SHA256  $appimagetool.part"; then
     echo "appimagetool checksum mismatch" >&2
     rm -f "$appimagetool.part"
@@ -95,7 +101,9 @@ webkit_ok=
 if [ -e /usr/lib/libwebkit2gtk-4.1.so.0 ] ||
    [ -e /usr/lib64/libwebkit2gtk-4.1.so.0 ] ||
    [ -e /usr/lib/x86_64-linux-gnu/libwebkit2gtk-4.1.so.0 ] ||
-   [ -e /lib/x86_64-linux-gnu/libwebkit2gtk-4.1.so.0 ]; then
+   [ -e /lib/x86_64-linux-gnu/libwebkit2gtk-4.1.so.0 ] ||
+   [ -e /usr/lib/aarch64-linux-gnu/libwebkit2gtk-4.1.so.0 ] ||
+   [ -e /lib/aarch64-linux-gnu/libwebkit2gtk-4.1.so.0 ]; then
   webkit_ok=1
 elif command -v ldconfig >/dev/null 2>&1 &&
      ldconfig -p 2>/dev/null | grep -q 'libwebkit2gtk-4\.1\.so\.0'; then
@@ -125,7 +133,7 @@ if [[ -n "$leftover" ]]; then
   exit 1
 fi
 
-(cd "$work" && ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "$appimagetool" --appimage-extract-and-run \
+(cd "$work" && ARCH="$arch" APPIMAGE_EXTRACT_AND_RUN=1 "$appimagetool" --appimage-extract-and-run \
   --no-appstream --runtime-file "$work/runtime" "$appdir" "$work/out.AppImage" >/dev/null)
 
 chmod +x "$work/out.AppImage"
