@@ -95,6 +95,7 @@ rusqlite = { version = "0.40.2", features = ["bundled", "hooks"], default-featur
 gpui-pre = { path = "../../vendor/gpui-pre" }
 gpui-pre-apple = { path = "../../vendor/gpui-pre-apple" }
 gpui-pre-linux = { path = "../../vendor/gpui-pre-linux" }
+gpui-pre-macos = { path = "../../vendor/gpui-pre-macos" }
 gpui-pre-windows = { path = "../../vendor/gpui-pre-windows" }
 
 [profile.native-dev]
