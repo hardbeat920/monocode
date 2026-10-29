@@ -1831,6 +1831,113 @@ describe("claude background tasks", () => {
     ).not.toContain("waiting");
   });
 
+  it("keeps the answer above what a task from an earlier turn wakes Claude to do", async () => {
+    // The task was left running in a turn MonoCode no longer tracks, so this
+    // one ends at Claude's answer and the wake-up comes after it.
+    const { events, turn } = await startTurn("s1");
+    emit({
+      type: "assistant",
+      session_id: "sess_1",
+      message: { content: [{ type: "text", text: "The answer." }] },
+    });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await turn;
+
+    emit({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "b9",
+      tool_use_id: "toolu_old",
+      status: "completed",
+      summary: 'Background command "Heartbeat watcher" completed (exit code 0)',
+    });
+    emit({ type: "system", subtype: "init", session_id: "sess_1" });
+    emit({
+      type: "assistant",
+      session_id: "sess_1",
+      message: {
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_tail",
+            name: "Bash",
+            input: { command: "tail heartbeat.log" },
+          },
+        ],
+      },
+    });
+    emit({
+      type: "user",
+      session_id: "sess_1",
+      message: {
+        content: [
+          { type: "tool_result", tool_use_id: "toolu_tail", content: "ok" },
+        ],
+      },
+    });
+    emit({
+      type: "assistant",
+      session_id: "sess_1",
+      message: {
+        content: [{ type: "text", text: "Pushed back half an hour." }],
+      },
+    });
+    emit({ type: "result", subtype: "success", session_id: "sess_1" });
+    await new Promise((r) => setTimeout(r, 10));
+
+    const session = events.reduce(
+      applyHarnessEvent,
+      newSession("claude", "/repo"),
+    );
+    const blocks = session.blocks;
+    expect(
+      blocks.map((block) =>
+        block.tool?.background
+          ? "[background]"
+          : block.tool
+            ? "[tool]"
+            : block.text,
+      ),
+    ).toEqual([
+      "The answer.",
+      "[background]",
+      "[tool]",
+      "Pushed back half an hour.",
+    ]);
+    expect(blocks[1].tool).toMatchObject({
+      callId: "background:b9",
+      status: "completed",
+    });
+    const items = groupTurnItems(blocks, { settled: true });
+    const fold = foldableWork(items);
+    expect(
+      (fold ? foldedBlocks(items, fold) : []).map((block) => block.text),
+    ).not.toContain("The answer.");
+  });
+
+  it("adds no row for a task that finishes before Claude yields or after a stop", async () => {
+    const { events, turn } = await startTurn("s1");
+    const notify = (taskId: string) =>
+      emit({
+        type: "system",
+        subtype: "task_notification",
+        task_id: taskId,
+        status: "completed",
+        summary: `Task ${taskId} finished`,
+      });
+    notify("b8");
+    emitBackgroundBash();
+    await cancelClaudeTurn("s1");
+    await turn;
+    notify("b9");
+
+    expect(
+      events.flatMap((event) =>
+        event.type === "tool.started" && event.background ? [event.callId] : [],
+      ),
+    ).toEqual(["background:b1"]);
+  });
+
   it("shows the waited-on command as a live row under Claude's last message", async () => {
     const { events } = await startTurn("s1");
     emitBackgroundBash();
