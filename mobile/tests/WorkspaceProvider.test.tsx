@@ -263,7 +263,7 @@ describe("starting mobile sessions", () => {
     link.command.mockResolvedValue({ sessionId: "existing" });
     await act(async () => { render("existing"); });
     await frame([{ order: [], turns: [], busy: true, question: question(1) }]);
-    expect(conversation.question).toEqual(question(1));
+    expect(conversation.question).toMatchObject(question(1));
 
     await act(async () => { await workspace.answerQuestion("existing", 1, reply); });
     expect(link.command).toHaveBeenCalledWith("session.answerQuestion", {
@@ -281,7 +281,7 @@ describe("starting mobile sessions", () => {
       await frame([clear]);
       await frame([replacement]);
     }
-    expect(conversation.question).toEqual(question(1));
+    expect(conversation.question).toMatchObject(question(1));
   });
 
   it("does not hide a reused ID when the desktop's clear lands before the answer's reply", async () => {
@@ -297,7 +297,7 @@ describe("starting mobile sessions", () => {
       await done;
     });
     await frame([{ order: [], turns: [], busy: true, question: question(1) }]);
-    expect(conversation.question).toEqual(question(1));
+    expect(conversation.question).toMatchObject(question(1));
   });
 
   it("does not hide a question reusing the ID that appears before the answer's reply", async () => {
@@ -315,7 +315,7 @@ describe("starting mobile sessions", () => {
       answered.resolve({ sessionId: "existing" });
       await done;
     });
-    expect(conversation.question).toEqual(question(1));
+    expect(conversation.question).toMatchObject(question(1));
   });
 
   it("keeps a question that failed to send", async () => {
@@ -325,7 +325,7 @@ describe("starting mobile sessions", () => {
     await act(async () => {
       await expect(workspace.answerQuestion("existing", 1, reply)).rejects.toThrow("already answered");
     });
-    expect(conversation.question).toEqual(question(1));
+    expect(conversation.question).toMatchObject(question(1));
   });
 
   it("reports a failed keep-open request so the card can retry", async () => {
@@ -339,12 +339,65 @@ describe("starting mobile sessions", () => {
     }, "request-id");
   });
 
+  it.each([
+    [undefined, false], [undefined, true], [3, false], [3, true],
+  ] as const)("preserves native display on baseline adoption (%s, answered: %s)", async (initialGeneration, answered) => {
+    link.nativeTranscript = true;
+    link.command.mockResolvedValue(undefined);
+    render("session");
+    const status = { busy: true, error: null, hasTurns: true, userCount: 1, pendingId: null, question: question(7) };
+    act(() => workspace.nativeTranscriptStatus("session", { ...status, questionGeneration: initialGeneration }));
+    const displayId = conversation.question!.displayId;
+    if (answered) {
+      await act(async () => { await workspace.answerQuestion("session", 7, reply); });
+      expect(conversation.question).toBeNull();
+    }
+    act(() => workspace.nativeTranscriptStatus("session", { ...status, questionGeneration: 1 }));
+    if (answered) expect(conversation.question).toBeNull();
+    else expect(conversation.question).toEqual({ ...question(7), displayId });
+    // The adopted baseline still detects the next real replacement.
+    act(() => workspace.nativeTranscriptStatus("session", { ...status, questionGeneration: 3 }));
+    expect(conversation.question).toMatchObject(question(7));
+    expect(conversation.question!.displayId).not.toBe(displayId);
+  });
+
+  it("uses native generations for display identity and protects replacements from old answers", async () => {
+    link.nativeTranscript = true;
+    const answer = deferred<unknown>();
+    link.command.mockReturnValue(answer.promise);
+    render("session");
+    const status = { busy: true, error: null, hasTurns: true, userCount: 1, pendingId: null };
+    act(() => workspace.nativeTranscriptStatus("session", { ...status, question: question(2), questionGeneration: 1 }));
+    const first = conversation.question!.displayId;
+    let done!: Promise<void>;
+    act(() => { done = workspace.answerQuestion("session", 2, reply); });
+    act(() => workspace.nativeTranscriptStatus("session", {
+      ...status, question: { ...question(2), autoResolveAt: 1234 }, questionGeneration: 1,
+    }));
+    expect(conversation.question!.displayId).toBe(first);
+    // The clear was folded into this snapshot on native, before JS received it.
+    act(() => workspace.nativeTranscriptStatus("session", { ...status, question: question(2), questionGeneration: 3 }));
+    const replacement = conversation.question!.displayId;
+    expect(replacement).not.toBe(first);
+    await act(async () => { answer.resolve(undefined); await done; });
+    expect(conversation.question).toEqual({ ...question(2), displayId: replacement });
+
+    link.command.mockResolvedValue(undefined);
+    await act(async () => { await workspace.answerQuestion("session", 2, reply); });
+    expect(conversation.question).toBeNull();
+    act(() => workspace.nativeTranscriptStatus("session", { ...status, question: question(2), questionGeneration: 3 }));
+    expect(conversation.question).toBeNull();
+    act(() => workspace.nativeTranscriptStatus("session", { ...status, question: question(2), questionGeneration: 5 }));
+    expect(conversation.question).toMatchObject(question(2));
+    expect(conversation.question!.displayId).not.toBe(replacement);
+  });
+
   it("shows a native transcript's question, and clears it when the status has none", async () => {
     link.nativeTranscript = true;
     render("session");
     const status = { busy: true, error: null, hasTurns: true, userCount: 1, pendingId: null };
     act(() => workspace.nativeTranscriptStatus("session", { ...status, question: question(2) }));
-    expect(conversation.question).toEqual(question(2));
+    expect(conversation.question).toMatchObject(question(2));
     act(() => workspace.nativeTranscriptStatus("session", { ...status, question: null }));
     expect(conversation.question).toBeNull();
   });

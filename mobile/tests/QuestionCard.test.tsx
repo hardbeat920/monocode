@@ -2,6 +2,7 @@ import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { useConversation, useWorkspace, WorkspaceProvider } from "@/features/workspace/WorkspaceProvider";
 import { QuestionCard } from "@/features/sessions/QuestionCard";
 import type { QuestionPrompt } from "@/features/workspace/types";
 
@@ -9,10 +10,16 @@ const workspace = vi.hoisted(() => ({
   answerQuestion: vi.fn(),
   keepQuestionOpen: vi.fn(),
   alert: vi.fn(),
+  real: false,
+  nativeTranscript: false,
+  pairing: { desktop: { fingerprint: "desktop" } },
+  command: vi.fn(),
+  nextUpdates: vi.fn(),
 }));
 vi.mock("react-native", () => {
   const View = ({ children }: { children?: ReactNode }) => <div>{children}</div>;
   return {
+    AppState: { currentState: "active", addEventListener: () => ({ remove() {} }) },
     View,
     ScrollView: View,
     Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
@@ -66,9 +73,30 @@ vi.mock("@/ui/theme", () => ({
   useColors: () => new Proxy({}, { get: () => "#000" }),
   useScheme: () => "dark",
 }));
-vi.mock("@/features/workspace/WorkspaceProvider", () => ({
-  useWorkspace: () => workspace,
+vi.mock("@/features/workspace/WorkspaceProvider", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/features/workspace/WorkspaceProvider")>();
+  return { ...actual, useWorkspace: () => workspace.real ? actual.useWorkspace() : workspace };
+});
+vi.mock("@/features/connection/ConnectionProvider", () => ({
+  useConnection: () => ({
+    pairing: workspace.pairing,
+    catalog: { projects: [], monos: [], sessions: [] },
+    selection: { projectIds: [], monoIds: [] },
+    command: workspace.command,
+    refresh: async () => {},
+  }),
 }));
+vi.mock("@/features/connection/nativeLink", () => ({
+  get hasNativeTranscript() { return workspace.nativeTranscript; },
+  makeCommandId: () => "command",
+  openWatch: async () => 1,
+  nextUpdates: workspace.nextUpdates,
+  closeWatch: async () => {},
+}));
+vi.mock("expo-sqlite/kv-store", () => ({
+  default: { getItem: async () => null, setItem: async () => {}, removeItem: async () => {} },
+}));
+vi.mock("@/features/sessions/attachments", () => ({ toWire: () => [] }));
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true;
@@ -98,13 +126,16 @@ describe("question card", () => {
   let host: HTMLDivElement;
   let root: ReturnType<typeof createRoot>;
   const render = (prompt: QuestionPrompt) =>
-    act(() => root.render(<QuestionCard conversationId="session" prompt={prompt} />));
+    act(() => root.render(<QuestionCard conversationId="session" prompt={{ ...prompt, displayId: 1 }} />));
   const button = (label: string) =>
     [...host.querySelectorAll("button")].find((element) => element.textContent === label)!;
   const press = (label: string) => act(async () => { button(label).click(); });
 
   beforeEach(() => {
     vi.clearAllMocks();
+    workspace.real = false;
+    workspace.nativeTranscript = false;
+    vi.stubGlobal("__DEV__", false);
     workspace.answerQuestion.mockResolvedValue(undefined);
     workspace.keepQuestionOpen.mockResolvedValue(undefined);
     host = document.createElement("div");
@@ -114,6 +145,62 @@ describe("question card", () => {
   afterEach(() => {
     act(() => root.unmount());
     host.remove();
+    vi.unstubAllGlobals();
+  });
+
+  it.each([false, true])("resets the whole card for a reused ID (native: %s)", async (native) => {
+    workspace.nativeTranscript = native;
+    workspace.real = true;
+    workspace.command.mockResolvedValue(undefined);
+    let deliver!: (frames: object[]) => void;
+    workspace.nextUpdates.mockImplementation(() => new Promise<object[]>((resolve) => { deliver = resolve; }));
+    let provider!: ReturnType<typeof useWorkspace>;
+    function ConversationCard() {
+      provider = useWorkspace();
+      const { question } = useConversation("session");
+      return question ? <QuestionCard conversationId="session" prompt={question} /> : null;
+    }
+    await act(async () => root.render(<WorkspaceProvider><ConversationCard /></WorkspaceProvider>));
+    const prompt = { requestId: 4, questions: [colour, size], autoResolveAt: Date.now() + 30_000 };
+    const status = { busy: true, error: null, hasTurns: false, userCount: 0, pendingId: null };
+    await act(async () => {
+      if (native) provider.nativeTranscriptStatus("session", { ...status, question: prompt, questionGeneration: 1 });
+      else deliver([{ question: prompt }]);
+    });
+    const touch = () => host.querySelector("section")!.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    await act(async () => { touch(); });
+    await press("Other");
+    await act(async () => {
+      const input = host.querySelector("input")!;
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "Teal");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await press("Continue");
+    await press("Small");
+    expect(host.textContent).toContain("2 of 2");
+
+    // Refreshing the same display must preserve the user's progress.
+    await act(async () => {
+      const refreshed = { ...prompt, autoResolveAt: undefined };
+      if (native) provider.nativeTranscriptStatus("session", { ...status, question: refreshed, questionGeneration: 1 });
+      else deliver([{ question: refreshed }]);
+    });
+    expect(host.textContent).toContain("2 of 2");
+    expect(button("Send").disabled).toBe(false);
+
+    await act(async () => {
+      if (native) provider.nativeTranscriptStatus("session", { ...status, question: prompt, questionGeneration: 3 });
+      else deliver([{ question: null }, { question: prompt }]);
+    });
+    expect(host.textContent).toContain("1 of 2");
+    expect(button("Continue").disabled).toBe(true);
+    expect(host.querySelector("input")).toBeNull();
+    await press("Other");
+    expect(host.querySelector("input")!.value).toBe("");
+    await press("Skip");
+    expect(button("Send").disabled).toBe(true);
+    await act(async () => { touch(); });
+    expect(workspace.command.mock.calls.filter(([method]) => method === "session.keepQuestionOpen")).toHaveLength(2);
   });
 
   it("sends the chosen option once one is picked", async () => {

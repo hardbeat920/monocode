@@ -25,7 +25,7 @@ import {
 import { selectedWorkspace } from "@/features/connection/selection";
 import type { ModelCatalog, ModelChoice } from "@/features/models/types";
 import { toWire, type Attachment } from "@/features/sessions/attachments";
-import type { Message, Mono, Project, UsageLimitState, QuestionPrompt, QuestionReply, SessionSummary, Turn, TurnItem } from "./types";
+import type { DisplayedQuestionPrompt, Message, UsageLimitState, Mono, Project, QuestionPrompt, QuestionReply, SessionSummary, Turn, TurnItem } from "./types";
 import { applyFrames, type WatchFrame } from "./watchUpdates";
 /**
  * The workspace: what the desktop has and what can be done with it. Changes
@@ -100,7 +100,7 @@ type Status = {
   busy: Record<string, boolean>;
   errors: Record<string, string>;
   /** What each conversation's agent waits on the user to answer. */
-  questions: Record<string, QuestionPrompt>;
+  questions: Record<string, DisplayedQuestionPrompt>;
   usageLimits: Record<string, UsageLimitState>;
 };
 export type SessionPage = { sessions: SessionSummary[]; hasMore: boolean };
@@ -130,6 +130,8 @@ export type NativeTranscriptStatus = {
   /** Absent from a native build that predates questions. */
   question?: QuestionPrompt | null;
   usageLimit?: UsageLimitState | null;
+  /** Persistent across coalesced snapshots; absent from older native builds. */
+  questionGeneration?: number;
 };
 const WorkspaceContext = createContext<Workspace | null>(null);
 const LiveContext = createContext<Live | null>(null);
@@ -190,22 +192,31 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       : withoutKey(previous, id));
   }, []);
   const usagePending = useRef(new Set<string>());
-  const [questions, setQuestions] = useState<Record<string, QuestionPrompt>>({});
+  const [questions, setQuestions] = useState<Record<string, DisplayedQuestionPrompt>>({});
   // The question each conversation answered here last. A frame sent before
   // the desktop took the answer must not bring its card back.
   const answered = useRef(new Map<string, number>());
   // A token for each question as it appears, so an answer hides only the
   // showing it answered, not a later one that reuses its ID.
-  const displayed = useRef(new Map<string, { requestId: number; token: number }>());
+  const displayed = useRef(new Map<string, { requestId: number; token: number; generation?: number }>());
   const nextToken = useRef(0);
-  const showQuestion = useCallback((id: string, question: QuestionPrompt | null | undefined) => {
+  const showQuestion = useCallback((id: string, question: QuestionPrompt | null | undefined, generation?: number) => {
+    const previous = displayed.current.get(id);
+    const replaced = generation !== undefined && previous?.generation !== undefined && generation > previous.generation;
     // Gone on the desktop too: a later question may reuse the ID.
     if (!question) {
       answered.current.delete(id);
       displayed.current.delete(id);
-    } else if (displayed.current.get(id)?.requestId !== question.requestId)
-      displayed.current.set(id, { requestId: question.requestId, token: ++nextToken.current });
-    const shown = question && answered.current.get(id) !== question.requestId ? question : null;
+    } else if (previous?.requestId !== question.requestId || replaced) {
+      if (replaced) answered.current.delete(id);
+      displayed.current.set(id, { requestId: question.requestId, token: ++nextToken.current, generation });
+    } else if (generation !== undefined) {
+      // Adopt an unversioned baseline or a recreated transcript's lower counter.
+      previous.generation = generation;
+    }
+    const shown = question && answered.current.get(id) !== question.requestId
+      ? { ...question, displayId: displayed.current.get(id)!.token }
+      : null;
     setQuestions((previous) =>
       shown
         ? JSON.stringify(previous[id]) === JSON.stringify(shown)
@@ -619,7 +630,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     setErrors((previous) => error ? withValue(previous, id, error) : withoutKey(previous, id));
     if (status.ready === false) return;
     setBusy((previous) => withValue(previous, id, status.busy));
-    showQuestion(id, status.question);
+    showQuestion(id, status.question, status.questionGeneration);
     showUsageLimit(id, status.usageLimit);
     if (status.userCount > 0) starting.current.delete(id);
     if (!status.pendingId) {

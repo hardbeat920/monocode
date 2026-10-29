@@ -10,7 +10,7 @@ import {
   View,
 } from "react-native";
 import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
-import type { Question, QuestionPrompt, QuestionReply } from "@/features/workspace/types";
+import type { DisplayedQuestionPrompt, Question, QuestionReply } from "@/features/workspace/types";
 import { useWorkspace } from "@/features/workspace/WorkspaceProvider";
 import { Icon } from "@/ui/Icon";
 import { LiquidView } from "@/ui/LiquidView";
@@ -36,7 +36,15 @@ export function QuestionCard({
   prompt,
 }: {
   conversationId: string;
-  prompt: QuestionPrompt;
+  prompt: DisplayedQuestionPrompt;
+}) {
+  // A clear and replacement may be batched without ever rendering an empty card.
+  return <QuestionForm key={`${conversationId}:${prompt.displayId}`} conversationId={conversationId} prompt={prompt} />;
+}
+
+function QuestionForm({ conversationId, prompt }: {
+  conversationId: string;
+  prompt: DisplayedQuestionPrompt;
 }) {
   const styles = useStyles();
   const colors = useColors();
@@ -48,15 +56,6 @@ export function QuestionCard({
   const [custom, setCustom] = useState<Record<string, string>>({});
   const [sending, setSending] = useState(false);
   const now = useNow(prompt.autoResolveAt != null);
-
-  // A new question starts over.
-  const [shown, setShown] = useState(prompt.requestId);
-  if (shown !== prompt.requestId) {
-    setShown(prompt.requestId);
-    setStep(0);
-    setAnswers({});
-    setCustom({});
-  }
 
   const questions = prompt.questions;
   const total = questions.length;

@@ -150,6 +150,9 @@ export type QuestionReply =
   | { kind: "answered"; answers: Record<string, string[]>; custom?: Record<string, string> }
   | { kind: "skipped" };
 
+/** Phone-local identity for one showing, even when the desktop reuses an ID. */
+export type DisplayedQuestionPrompt = QuestionPrompt & { displayId: number };
+
 export type Message = {
   id: string;
   role: "user" | "assistant";
