@@ -433,7 +433,7 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         "agent-clis",
         Section::Providers,
         "Agent CLIs",
-        "codex opencode cursor grok pi omp fx hermes antigravity devin binary path",
+        "codex opencode cursor grok pi omp fx hermes antigravity copilot devin binary path",
     ),
     (
         "provider-accounts",

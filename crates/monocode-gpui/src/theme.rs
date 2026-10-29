@@ -440,6 +440,7 @@ pub(crate) fn provider_icon(provider: &str, side: f32) -> Div {
         "omp" => ("omp.svg", false, 1.),
         "fx" => ("fx.svg", true, 1.),
         "hermes" => ("hermes.svg", true, 0.72),
+        "copilot" => ("copilot.svg", true, 1.),
         "devin" => ("devin.svg", true, 0.88),
         _ => ("codex.svg", false, 1.),
     };

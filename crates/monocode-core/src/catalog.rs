@@ -262,6 +262,8 @@ pub fn models_for(kind: Kind, account: &crate::accounts::Profile) -> Result<Vec<
     };
     let mut models: Vec<_> = if kind == Kind::Fx {
         fx_models(&value)
+    } else if kind == Kind::Copilot {
+        copilot_models(&value)
     } else if kind == Kind::Devin {
         provider::devin::catalog_models(&value)
     } else if kind.is_acp() {
@@ -389,6 +391,21 @@ fn leaves<'a>(values: &'a Value, out: &mut Vec<&'a Value>) {
             out.push(value);
         }
     }
+}
+// Session config only describes the current Copilot model. Never apply its
+// effort choices or permission/mode controls to every model in the picker.
+fn copilot_models(value: &Value) -> Vec<Model> {
+    let mut models = acp_models(value);
+    for model in &mut models {
+        model.controls.clear();
+        model.fast = false;
+        if !model.default {
+            model.efforts.clear();
+            model.default_effort = None;
+        }
+    }
+    models.sort_by_key(|model| !model.default);
+    models
 }
 fn acp_models(value: &Value) -> Vec<Model> {
     let configs: Vec<_> = value["configOptions"]
@@ -853,6 +870,20 @@ fn query_provider(
 mod tests {
     use super::*;
 
+    #[test]
+    fn copilot_catalog_keeps_current_model_first_and_scopes_effort() {
+        let models = copilot_models(&json!({"models":{"currentModelId":"b","availableModels":[
+            {"modelId":"a","name":"Model A"},{"modelId":"b","name":"Model B"},{"modelId":"a"}
+        ]},"configOptions":[
+            {"id":"reasoning_effort","currentValue":"high","options":[{"value":"low"},{"value":"high"}]},
+            {"id":"allow_all","currentValue":"off","options":[{"value":"on"},{"value":"off"}]}
+        ]}));
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "b");
+        assert_eq!(models[0].efforts, ["low", "high"]);
+        assert!(models[1].efforts.is_empty());
+        assert!(models.iter().all(|model| model.controls.is_empty()));
+    }
     #[test]
     fn cached_catalogs_are_account_scoped_and_invalidated_together() {
         let account = crate::accounts::Profile {
