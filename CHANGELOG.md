@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Added and removed line counts and file status colors are full strength again in the default diff palette, in both the desktop app and the native preview. The diff palette change had made them pale.
+
 ## [0.16.0] - 2026-10-19
 
 ### Added

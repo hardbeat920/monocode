@@ -77,9 +77,10 @@
   /* Diff colors. `diff-add`/`diff-del` are the solid marker hues, `-fg` is
      readable text on the theme background, `-bg`/`-gutter` are row tints.
      Palettes below swap them; diff UI must also show a +/- glyph so color is
-     never the only cue. */
+     never the only cue. The default `-fg` values are Tailwind's emerald-400
+     and red-400, the shades change counts used before palettes existed. */
   --color-diff-add: #10b981;
-  --color-diff-add-fg: #6ee7b7;
+  --color-diff-add-fg: oklch(76.5% 0.177 163.223);
   --color-diff-add-bg: color-mix(
     in srgb,
     var(--color-diff-add) 15%,
@@ -91,7 +92,7 @@
     transparent
   );
   --color-diff-del: #f43f5e;
-  --color-diff-del-fg: #fda4af;
+  --color-diff-del-fg: oklch(70.4% 0.191 22.216);
   --color-diff-del-bg: color-mix(
     in srgb,
     var(--color-diff-del) 15%,

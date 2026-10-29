@@ -575,7 +575,7 @@ fn diff_palette(name: &str, light: bool) -> [u32; 4] {
         ("high-contrast", false) => [0x58a6ff, 0xf0883e, 0xcae8ff, 0xffdfb6],
         ("high-contrast", true) => [0x0550ae, 0x953800, 0x032563, 0x471700],
         (_, true) => [0x10b981, 0xf43f5e, 0x047857, 0xbe123c],
-        _ => [0x10b981, 0xf43f5e, 0x6ee7b7, 0xfda4af],
+        _ => [0x10b981, 0xf43f5e, 0x00d492, 0xff6467],
     }
 }
 pub(crate) fn diff_foreground(add: bool) -> Hsla {

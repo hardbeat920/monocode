@@ -42,8 +42,9 @@ pub(crate) fn stroke() -> Hsla {
 pub(crate) fn selection() -> Hsla {
     content(0.1)
 }
-pub(crate) const DIFF_ADD: u32 = 0x6ee7b7;
-pub(crate) const DIFF_DEL: u32 = 0xfda4af;
+// Tailwind v4 emerald-400 and red-400, the desktop app's default diff text.
+pub(crate) const DIFF_ADD: u32 = 0x00d492;
+pub(crate) const DIFF_DEL: u32 = 0xff6467;
 // Tailwind v4.
 pub(crate) const AMBER_400: u32 = 0xffb900;
 pub(crate) const SKY_400: u32 = 0x00bcff;
