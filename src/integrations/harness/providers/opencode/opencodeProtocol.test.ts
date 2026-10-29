@@ -27,10 +27,20 @@ import {
   parseOpenCodeModelSlug,
   parseOpenCodeVersion,
   parseServerUrlFromOutput,
+  permissionTitle,
   sortOpenCodeVariants,
   toOpenCodePermissionReply,
   toolKindFromName,
 } from "./opencodeProtocol";
+
+describe("permissionTitle", () => {
+  it.each(["bash", "shell"])(
+    "labels %s permissions as commands",
+    (permission) => {
+      expect(permissionTitle(permission, ["npm test"])).toBe("Run npm test");
+    },
+  );
+});
 
 describe("eventSessionId", () => {
   it.each([

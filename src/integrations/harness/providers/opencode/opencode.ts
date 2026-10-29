@@ -82,13 +82,15 @@ import {
 
 type PendingApproval = {
   id: string;
-  resolve: (decision: ApprovalDecision) => void;
+  sessionID: string;
+  resolve: (decision: ApprovalDecision | null) => void;
 };
 
 type PendingQuestion = {
   id: string;
+  sessionID: string;
   questions: UserQuestion[];
-  resolve: (reply: UserQuestionReply) => void;
+  resolve: (reply: UserQuestionReply | null) => void;
 };
 
 type Live = {
@@ -834,6 +836,42 @@ async function handleEvent(
   }
 
   const payloadSessionId = eventSessionId(event);
+  // Only an already-pending request from this owner may be settled externally.
+  // This also handles child sessions without forwarding their terminal events.
+  if (type === "permission.replied") {
+    const id = stringField(properties, "requestID");
+    const reply = stringField(properties, "reply");
+    if (!id || !["once", "always", "reject"].includes(reply ?? "")) return;
+    for (const [requestId, pending] of live.approvals) {
+      if (pending.id !== id || pending.sessionID !== payloadSessionId) continue;
+      live.approvals.delete(requestId);
+      pending.resolve(null);
+      live.onEvent({
+        type: "approval.resolved",
+        requestId,
+        decision: reply === "reject" ? "deny" : "allow",
+      });
+      break;
+    }
+    return;
+  }
+  if (type === "question.replied" || type === "question.rejected") {
+    const id =
+      stringField(properties, "id") ?? stringField(properties, "requestID");
+    for (const [requestId, pending] of live.questions) {
+      if (pending.id !== id || pending.sessionID !== payloadSessionId) continue;
+      live.questions.delete(requestId);
+      pending.resolve(null);
+      live.onEvent({
+        type: "question.resolved",
+        requestId,
+        decision: type === "question.replied" ? "answered" : "cancelled",
+      });
+      showNextQuestion(live);
+      break;
+    }
+    return;
+  }
   if (payloadSessionId && payloadSessionId !== live.openCodeSessionId) {
     if (
       type === "message.updated" ||
@@ -951,7 +989,9 @@ async function handleEvent(
           title: permissionTitle(permission, patterns),
           command:
             extractShellCommand(metadata.input) ??
-            (permission === "bash" ? patterns[0] : undefined),
+            (permission === "bash" || permission === "shell"
+              ? patterns[0]
+              : undefined),
           skill: extractSkillName(metadata.input),
           path: preview?.path,
           query: preview?.query,
@@ -971,7 +1011,12 @@ async function handleEvent(
         break;
       }
       const uiId = live.nextApprovalUiId++;
-      const pending = waitApproval(live, uiId, id);
+      const pending = waitApproval(
+        live,
+        uiId,
+        id,
+        payloadSessionId ?? live.openCodeSessionId,
+      );
       if (callId) {
         live.onEvent({
           type: "tool.updated",
@@ -1000,7 +1045,13 @@ async function handleEvent(
         break;
       const questions = questionsFromUnknown(properties);
       const uiId = live.nextApprovalUiId++;
-      const pending = waitQuestion(live, uiId, id, questions);
+      const pending = waitQuestion(
+        live,
+        uiId,
+        id,
+        questions,
+        payloadSessionId ?? live.openCodeSessionId,
+      );
       showNextQuestion(live);
       await pending;
       break;
@@ -1398,11 +1449,13 @@ async function waitApproval(
   live: Live,
   uiId: number,
   id: string,
+  sessionID: string,
 ): Promise<void> {
-  const decision = await new Promise<ApprovalDecision>((resolve) => {
-    live.approvals.set(uiId, { id, resolve });
+  const decision = await new Promise<ApprovalDecision | null>((resolve) => {
+    live.approvals.set(uiId, { id, sessionID, resolve });
   });
   live.approvals.delete(uiId);
+  if (decision === null) return;
   live.onEvent({ type: "approval.resolved", requestId: uiId, decision });
   await live.client.replyPermission(id, toOpenCodePermissionReply(decision));
 }
@@ -1412,11 +1465,13 @@ async function waitQuestion(
   uiId: number,
   id: string,
   questions: UserQuestion[],
+  sessionID: string,
 ): Promise<void> {
-  const reply = await new Promise<UserQuestionReply>((resolve) => {
-    live.questions.set(uiId, { id, questions, resolve });
+  const reply = await new Promise<UserQuestionReply | null>((resolve) => {
+    live.questions.set(uiId, { id, sessionID, questions, resolve });
   });
   live.questions.delete(uiId);
+  if (reply === null) return;
   live.onEvent({
     type: "question.resolved",
     requestId: uiId,
