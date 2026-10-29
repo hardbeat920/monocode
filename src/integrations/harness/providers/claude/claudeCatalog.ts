@@ -1,5 +1,7 @@
+import { DEFAULT_PROVIDER_ACCOUNT_ID } from "../../../../features/providers/model/providerAccounts";
 import { homeDir } from "../../../../platform/tauri/fs";
 import {
+  hasLiveCatalog,
   setHarnessModels,
   type AgentModel,
   type ModelSetting,
@@ -216,38 +218,88 @@ const EFFORT_LABELS: Record<string, string> = {
   max: "Max",
 };
 
-let inflight: Promise<void> | null = null;
+// `list_models` depends on the account's profile (a gateway profile advertises
+// different models), so each account keeps its own list and probe.
+let selectedAccount = DEFAULT_PROVIDER_ACCOUNT_ID;
+const accountModels = new Map<string, AgentModel[]>();
+const inflight = new Map<string, Promise<void>>();
 
-export function refreshClaudeCatalog(): Promise<void> {
-  if (inflight) return inflight;
-  inflight = discoverClaudeModels()
-    .then((models) => {
-      if (models.length > 0) setHarnessModels("claude", models);
+/** Show the selected account's models, probing only if none are cached yet. */
+export function selectClaudeCatalogAccount(accountId: string): void {
+  if (accountId === selectedAccount) return;
+  selectedAccount = accountId;
+  const cached = accountModels.get(accountId);
+  if (cached) setHarnessModels("claude", cached);
+  else {
+    // Aliases resolve through the account's own Claude Code settings, so they
+    // are safe to show until this account's probe returns (or if it fails).
+    setHarnessModels("claude", aliasModels());
+    void refreshClaudeCatalog(accountId);
+  }
+}
+
+function aliasModels(): AgentModel[] {
+  return modelsFromClaudeListModels(
+    ["opus", "sonnet", "haiku"].map((value) => ({
+      value,
+      displayName: value[0]?.toUpperCase() + value.slice(1),
+    })),
+  );
+}
+
+export function refreshClaudeCatalog(
+  accountId: string = selectedAccount,
+): Promise<void> {
+  const running = inflight.get(accountId);
+  if (running) return running;
+  const probe = discoverClaudeModelsWithSource(undefined, accountId)
+    .then(({ models, fromListModels }) => {
+      if (models.length === 0) return;
+      // Version-based fallback ids are not this account's list: never cache
+      // them, so the account is probed again the next time it is selected.
+      if (fromListModels) accountModels.set(accountId, models);
+      else if (hasLiveCatalog("claude")) return;
+      // A slow probe for an account the user already left stays cached only.
+      if (accountId === selectedAccount) setHarnessModels("claude", models);
     })
     .catch((error: unknown) => {
       console.debug("[monocode] claude catalog", error);
     })
     .finally(() => {
-      inflight = null;
+      inflight.delete(accountId);
     });
-  return inflight;
+  inflight.set(accountId, probe);
+  return probe;
 }
 
 export async function discoverClaudeModels(
   workingDirectory?: string,
+  accountId?: string,
 ): Promise<AgentModel[]> {
-  const listed = await discoverViaListModels(workingDirectory).catch(
+  return (await discoverClaudeModelsWithSource(workingDirectory, accountId))
+    .models;
+}
+
+async function discoverClaudeModelsWithSource(
+  workingDirectory?: string,
+  accountId?: string,
+): Promise<{ models: AgentModel[]; fromListModels: boolean }> {
+  const listed = await discoverViaListModels(workingDirectory, accountId).catch(
     (error: unknown) => {
       console.debug("[monocode] claude list_models catalog failed", error);
       return [];
     },
   );
-  if (listed.length > 0) return listed;
-  return discoverViaVersion(workingDirectory);
+  if (listed.length > 0) return { models: listed, fromListModels: true };
+  return {
+    models: await discoverViaVersion(workingDirectory),
+    fromListModels: false,
+  };
 }
 
 async function discoverViaListModels(
   workingDirectory?: string,
+  accountId?: string,
 ): Promise<AgentModel[]> {
   const { path } = await resolveClaudeBinary();
   const cwd = workingDirectory ?? (await homeDir());
@@ -300,7 +352,7 @@ async function discoverViaListModels(
       path,
       buildClaudeSpawnArgs({ isolated: true, sessionId }),
       cwd,
-      undefined,
+      { provider: "claude", id: accountId ?? DEFAULT_PROVIDER_ACCOUNT_ID },
       "claude",
     );
     await writeChild(
