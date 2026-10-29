@@ -28,6 +28,10 @@ import {
 } from "../../core/preview";
 import { streamTextDelta } from "../../core/streamText";
 import type { ApprovalDecision, HarnessEvent } from "../../core/types";
+import {
+  nativeCommandInvocation,
+  type NativeCommand,
+} from "../../core/nativeCommands";
 
 /** Claude Code versions that first ship Opus 5.5 / Opus 5 / Sonnet 5 / Fable 5 / Opus 4.8 / 4.7. */
 export const MINIMUM_CLAUDE_OPUS_5_5_VERSION = "2.1.280";
@@ -360,6 +364,75 @@ export function listModelsFromControlResponse(
   if (!parsed || parsed.requestId !== requestId) return null;
   if (!parsed.ok) return [];
   return Array.isArray(parsed.payload?.models) ? parsed.payload.models : [];
+}
+
+/**
+ * Every slash command Claude Code knows about, from the `initialize` control
+ * response: built-ins (`/compact`, `/model`, `/mcp`, …) and whatever the
+ * user's own project/user commands, skills, and plugins add (e.g. `/doctor`,
+ * a custom `/claude-api`). Names collide with MonoCode's own reserved
+ * commands via `nativeCommandInvocation`.
+ */
+export function nativeCommandsFromControlResponse(
+  rec: Record<string, unknown>,
+  requestId: string,
+): NativeCommand[] | null {
+  const parsed = parseControlResponse(rec);
+  if (!parsed || parsed.requestId !== requestId) return null;
+  if (!parsed.ok) return [];
+  const raw = Array.isArray(parsed.payload?.commands) ? parsed.payload.commands : [];
+  return raw.flatMap((item) => {
+    const row = asRecord(item);
+    const name = stringField(row, "name");
+    if (!name) return [];
+    const aliases = Array.isArray(row?.aliases)
+      ? row.aliases.filter((alias): alias is string => typeof alias === "string")
+      : undefined;
+    const inputHint = stringField(row, "argumentHint");
+    const command: NativeCommand = {
+      name,
+      description: stringField(row, "description") ?? "",
+      invocation: nativeCommandInvocation("claude", name),
+      source: "claude",
+      ...(aliases && aliases.length > 0 ? { aliases } : {}),
+      ...(inputHint ? { inputHint } : {}),
+    };
+    return [command];
+  });
+}
+
+/**
+ * Best-effort fallback for terminal-only command names when no live session
+ * has reported `system/init` yet (the cold-discovery probe never sends a
+ * real turn, so it never sees that broadcast — see
+ * `terminalSlashCommandsFromSystemInit`). Small and stable enough to hardcode:
+ * these are Claude's own interactive-terminal affordances (health checks,
+ * prompt-bar color, plugin/skill reload), not something a project or plugin
+ * adds. A live session's own reported list, once seen, always wins over this.
+ */
+export const KNOWN_TERMINAL_ONLY_COMMANDS: ReadonlySet<string> = new Set([
+  "doctor",
+  "color",
+  "focus",
+  "reload-plugins",
+]);
+
+/**
+ * Names Claude only accepts from its interactive TUI (e.g. `/doctor`,
+ * `/color`) — meaningless over the headless protocol MonoCode drives it
+ * with. Only ever arrives on the plain `system/init` broadcast a real turn
+ * triggers, never on the `initialize` control handshake alone.
+ */
+export function terminalSlashCommandsFromSystemInit(
+  rec: Record<string, unknown>,
+): string[] | null {
+  if (stringField(rec, "type") !== "system" || stringField(rec, "subtype") !== "init") {
+    return null;
+  }
+  const raw = rec.terminal_slash_commands;
+  return Array.isArray(raw)
+    ? raw.filter((name): name is string => typeof name === "string")
+    : [];
 }
 
 export function isClaudeInitMessage(rec: Record<string, unknown>): boolean {
