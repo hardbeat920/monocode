@@ -6,6 +6,9 @@ pub use presentation::{visual_tool, CommandStep, ToolPresentation, VisualStep};
 
 /// The app's own step while a conversation carries over from another model.
 pub const HANDOFF: &str = "providerHandoff";
+/// The call id prefix of a command left running after the provider yielded,
+/// as claude.ts's showBackgroundRows names it.
+pub const BACKGROUND: &str = "background:";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -50,6 +53,15 @@ impl ToolCall {
     /// Session milestones read as a status line rather than a tool step.
     pub fn is_milestone(&self) -> bool {
         self.is_compaction() || self.is_handoff()
+    }
+    /// A command still running after the provider yielded its answer. Desktop
+    /// history also marks the row's tool `background`.
+    pub fn is_background(&self) -> bool {
+        self.id.starts_with(BACKGROUND)
+            || self
+                .display
+                .as_ref()
+                .is_some_and(|display| display["background"] == true)
     }
     pub fn append_output(&mut self, delta: &str) {
         self.output.push_str(delta);

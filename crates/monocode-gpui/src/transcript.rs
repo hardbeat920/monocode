@@ -1650,8 +1650,12 @@ impl TranscriptView {
         prompt_start(&self.source, turn)
     }
     /// groupMonoTurnItems: prose stays in the activity trail while its run is
-    /// live, and when later work in the run follows it.
+    /// live, and when later work in the run follows it, except a reply the
+    /// Mono yielded with.
     fn mono_prose_hidden(&self, at: usize) -> bool {
+        if self.mono_yielded(at) {
+            return false;
+        }
         let end = (at + 1..self.source.len())
             .find(|&i| self.source[i].is_prompt())
             .unwrap_or(self.source.len());
@@ -1683,6 +1687,38 @@ impl TranscriptView {
             || self.source[at + 1..end]
                 .iter()
                 .any(|r| r.first && matches!(r.role.as_str(), "tool" | "reasoning"))
+    }
+    /// yieldedReplies: the prose at `at` answered the user before the Mono
+    /// waited on a background command, whose finish woke it up again. Later
+    /// work never folds it away.
+    fn mono_yielded(&self, at: usize) -> bool {
+        let mut ix = at + 1;
+        while ix < self.source.len() && (!self.source[ix].first || self.source[ix].is_prompt()) {
+            ix += 1;
+        }
+        while ix < self.source.len()
+            && matches!(self.source[ix].role.as_str(), "tool" | "reasoning")
+        {
+            let end = (ix + 1..self.source.len())
+                .find(|&i| self.source[i].first)
+                .unwrap_or(self.source.len());
+            // Most steps never mention it; skip parsing their saved output.
+            if self.source[ix].role == "tool"
+                && self.source[ix..end]
+                    .iter()
+                    .any(|r| r.text.contains("background"))
+            {
+                let text: String = self.source[ix..end]
+                    .iter()
+                    .map(|r| r.text.as_str())
+                    .collect();
+                if serde_json::from_str::<ToolCall>(&text).is_ok_and(|call| call.is_background()) {
+                    return true;
+                }
+            }
+            ix = end;
+        }
+        false
     }
     /// monoSpawnedSessions: sessions a run's `sessions.start` calls accepted.
     fn run_launches(&self, turn: usize, end: usize) -> Vec<i64> {
@@ -3740,7 +3776,7 @@ impl TranscriptView {
             self.push_pending(self.source.len());
         }
         if self.mono {
-            // An accepted steer stays beside the original user prompt, both
+            // An accepted steer joins the original user prompt's group, both
             // while streaming and after the provider's final answer is saved.
             let messages = &self.messages;
             let pending_group = self.mono_pending_joins_live_turn().then(|| {
@@ -3752,19 +3788,35 @@ impl TranscriptView {
                 self.mono_group_start(latest)
             });
             let tail = self.source.len();
-            self.rows[display_start..].sort_by_key(|row| {
-                let message = messages.get(row.message);
-                let pending = matches!(row.body, Body::Pending(_));
-                let group = message
+            let group = |row: &UiRow| {
+                messages
+                    .get(row.message)
                     .map(|m| m.turn)
-                    .or_else(|| pending.then_some(pending_group).flatten())
-                    .unwrap_or(tail);
-                (
-                    group,
-                    !(pending || message.is_some_and(|m| m.role == "user")),
-                    row.key,
-                )
-            });
+                    .or_else(|| {
+                        matches!(row.body, Body::Pending(_))
+                            .then_some(pending_group)
+                            .flatten()
+                    })
+                    .unwrap_or(tail)
+            };
+            self.rows[display_start..].sort_by_key(|row| (group(row), row.key));
+            // groupMonoTurnItems: the user's messages rise above the work, but
+            // never above a reply already on screen. A message sent after a
+            // visible reply belongs below it.
+            for row in self.rows.split_off(display_start) {
+                let mut at = self.rows.len();
+                if matches!(row.body, Body::Pending(_))
+                    || messages.get(row.message).is_some_and(|m| m.role == "user")
+                {
+                    while at > display_start
+                        && matches!(self.rows[at - 1].body, Body::WorkLine { .. })
+                        && group(&self.rows[at - 1]) == group(&row)
+                    {
+                        at -= 1;
+                    }
+                }
+                self.rows.insert(at, row);
+            }
         }
         self.push_saved_draft();
         let mut pinned_answers = HashMap::new();
@@ -6669,6 +6721,84 @@ mod scroll_tests {
             assert!(
                 pending > header,
                 "a message queued after the Mono spoke follows its words"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn mono_keeps_every_reply_it_yielded_with_and_later_messages_below_them(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let tool = |id: &str, command: &str| {
+            let mut call = ToolCall::new(id, "Bash");
+            call.input = serde_json::json!({ "command": command }).to_string();
+            call.state = ToolState::Completed;
+            row("tool", &serde_json::to_string(&call).unwrap())
+        };
+        let source = vec![
+            row("user", "ask"),
+            tool("check", "git status"),
+            row("assistant", "answer"),
+            tool("background:wait-1", "sleep 300"),
+            tool("collect", "cat results.txt"),
+            row("assistant", "update"),
+            tool("background:wait-2", "sleep 300"),
+            row("user", "why"),
+            tool("look", "git status"),
+            row("assistant", "because"),
+        ];
+        // Source rows in display order: prompts, the header and visible prose.
+        let order = |view: &TranscriptView| {
+            let mut shown: Vec<usize> = Vec::new();
+            for row in &view.rows {
+                if matches!(
+                    row.body,
+                    Body::Plain(_) | Body::Markdown(_) | Body::WorkLine { .. }
+                ) && shown.last() != Some(&row.key.0)
+                {
+                    shown.push(row.key.0);
+                }
+            }
+            shown
+        };
+
+        let settled = cx.new(|_| {
+            let mut view = TranscriptView::new();
+            view.mono_mode("cat", 0xe86b5f, "MonoCat");
+            view
+        });
+        settled.update(cx, |view, cx| {
+            // A message sent while the Mono waited joined its running turn.
+            view.turns.insert(
+                8,
+                monocode_core::agent::TurnInfo {
+                    joined_turn: Some(1),
+                    ..Default::default()
+                },
+            );
+            view.patch(0, source.clone(), cx);
+            settle(view, cx);
+            assert!(!view.mono_prose_hidden(2), "the first yielded reply stays");
+            assert!(!view.mono_prose_hidden(5), "so does every later one");
+            assert_eq!(order(view), [0, 1, 2, 5, 7, 9]);
+        });
+
+        let live = cx.new(|_| {
+            let mut view = TranscriptView::new();
+            view.mono_mode("cat", 0xe86b5f, "MonoCat");
+            view
+        });
+        live.update(cx, |view, cx| {
+            view.streaming(true, cx);
+            view.patch(0, source[..9].to_vec(), cx);
+            settle(view, cx);
+            assert_eq!(view.turns[&8].joined_turn, Some(1));
+            assert!(!view.mono_prose_hidden(2) && !view.mono_prose_hidden(5));
+            assert_eq!(
+                order(view),
+                [0, 1, 2, 5, 7],
+                "the follow-up sits below the replies it came after"
             );
         });
     }

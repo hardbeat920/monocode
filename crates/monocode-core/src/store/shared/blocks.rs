@@ -357,6 +357,10 @@ fn update(old: Option<&Value>, rows: &[Row]) -> Result<Value, String> {
         if let Some(display) = &call.display {
             block["tool"]["nativePresentation"] = display.clone();
         }
+        if call.is_background() {
+            // The desktop transcript keeps the reply a Mono yielded with by this flag.
+            block["tool"]["background"] = json!(true);
+        }
         if previous
             .as_ref()
             .is_none_or(|p| p.name != call.name || p.input != call.input)
@@ -595,6 +599,19 @@ mod panel_tests {
             first: true,
             sent_at: Some(123),
         }
+    }
+    #[test]
+    fn background_rows_keep_the_desktop_flag_both_ways() {
+        let desktop = json!({"id":"wait","role":"tool","text":"sleep 300","tool":{"callId":"background:task-1","kind":"execute","title":"sleep 300","status":"completed","background":true}});
+        assert!(tool(&desktop).is_background());
+        assert!(!tool(&json!({"id":"read","role":"tool","text":"Read","tool":{"callId":"toolu_1","kind":"read","status":"completed"}})).is_background());
+
+        let mut call = ToolCall::new("background:dev", "Bash");
+        call.input = json!({"command":"npm run dev"}).to_string();
+        let saved = merge(&[], 0, &[row(&call)]).unwrap();
+        assert_eq!(saved[0]["tool"]["background"], true);
+        assert_eq!(saved[0]["tool"]["callId"], "background:dev");
+        assert!(tool(&saved[0]).is_background());
     }
     #[test]
     fn structured_task_identity_explanation_and_source_metadata_survive_edits() {
