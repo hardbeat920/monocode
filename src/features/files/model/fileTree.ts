@@ -6,6 +6,14 @@ const expandedByProject = new Map<string, Set<string>>();
 const selectedByProject = new Map<string, string | null>();
 const dirs = new Map<string, FsEntry[]>();
 const listeners = new Set<() => void>();
+/** Roots with an explorer on screen, counted so two can share a cwd. */
+const mountedRoots = new Map<string, number>();
+
+/** One open `listDir`. `retired` marks a listing the cache no longer wants. */
+type Request = { retired: boolean };
+/** Every request open for one path, newest first, so a drop can reach them all. */
+type OpenRequests = { latest: Request; all: Set<Request> };
+const openRequests = new Map<string, OpenRequests>();
 
 const REFRESH_MS = 150;
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -21,6 +29,20 @@ export function saveExpanded(cwd: string, expanded: Set<string>) {
   expandedByProject.set(cwd, new Set(expanded));
 }
 
+/**
+ * An expanded set without `path` or anything under it, for when a folder is
+ * deleted. Returns the same set when there was nothing to drop.
+ */
+export function withoutSubtree(
+  expanded: Set<string>,
+  path: string,
+): Set<string> {
+  const next = new Set(
+    [...expanded].filter((p) => p !== path && !p.startsWith(`${path}/`)),
+  );
+  return next.size === expanded.size ? expanded : next;
+}
+
 export function loadSelected(cwd: string): string | null {
   return selectedByProject.get(cwd) ?? null;
 }
@@ -34,29 +56,148 @@ export function peekDir(path: string): FsEntry[] | null {
   return dirs.get(path) ?? null;
 }
 
+/**
+ * Cached `listDir`, so a repeat read costs nothing. Only the newest open
+ * request for a path writes, and a dropped folder's requests write nothing.
+ */
 export function listCachedDir(path: string): Promise<FsEntry[]> {
   const hit = dirs.get(path);
   if (hit) return Promise.resolve(hit);
-  return listDir(path).then((entries) => {
-    dirs.set(path, entries);
-    return entries;
-  });
+  const pending = listDir(path);
+  const request: Request = { retired: false };
+  const open = openRequests.get(path);
+  if (open) {
+    open.all.add(request);
+    open.latest = request;
+  } else {
+    openRequests.set(path, { latest: request, all: new Set([request]) });
+  }
+  return pending
+    .then((entries) => {
+      // Only the newest open request writes. An overtaken one carries a listing
+      // older than the one the cache already holds, and a retired one describes
+      // a folder that has since been dropped.
+      if (!request.retired && openRequests.get(path)?.latest === request) {
+        dirs.set(path, entries);
+      }
+      return entries;
+    })
+    .finally(() => {
+      const live = openRequests.get(path);
+      if (!live) return;
+      live.all.delete(request);
+      if (live.all.size === 0) openRequests.delete(path);
+    });
 }
 
 export function refreshDir(path: string): Promise<FsEntry[]> {
-  dirs.delete(path);
+  dropDir(path);
   return listCachedDir(path);
 }
 
 export function forgetDir(path: string) {
   for (const key of [...dirs.keys()]) {
-    if (key === path || key.startsWith(`${path}/`)) dirs.delete(key);
+    if (atOrUnder(key, path)) dropDir(key);
+  }
+  // Nothing was cached yet for these, but a listing already on its way would
+  // put the deleted folder straight back.
+  for (const key of [...openRequests.keys()]) {
+    if (atOrUnder(key, path)) retireRequests(key);
   }
 }
 
-/** Re-list every cached folder. Agent writes and window focus use this. */
+/** Evict a path's listing and stop its in-flight requests from restoring it. */
+function dropDir(path: string) {
+  dirs.delete(path);
+  retireRequests(path);
+}
+
+function retireRequests(path: string) {
+  const open = openRequests.get(path);
+  if (!open) return;
+  for (const request of open.all) request.retired = true;
+}
+
+/** `path` itself, or anything inside it. */
+function atOrUnder(key: string, path: string): boolean {
+  return key === path || key.startsWith(`${path}/`);
+}
+
+/**
+ * Roots with an explorer on screen — only their listings stay worth keeping.
+ *
+ * Counted rather than held in a set: two explorers can share a cwd, and the
+ * first one to unmount must not drop the root the other is still showing.
+ */
+export function registerExplorer(cwd: string) {
+  mountedRoots.set(cwd, (mountedRoots.get(cwd) ?? 0) + 1);
+}
+
+export function unregisterExplorer(cwd: string) {
+  const count = mountedRoots.get(cwd);
+  if (count === undefined) return;
+  if (count > 1) mountedRoots.set(cwd, count - 1);
+  else mountedRoots.delete(cwd);
+}
+
+/** Folders the mounted explorers can actually show right now. */
+function visibleDirs(): Set<string> {
+  const visible = new Set<string>();
+  for (const root of mountedRoots.keys()) {
+    visible.add(root);
+    const expanded = expandedByProject.get(root);
+    if (!expanded) continue;
+    for (const path of expanded) {
+      if (path === root || path.startsWith(`${root}/`)) {
+        if (
+          path === root ||
+          (expanded.has(root) && everyFolderAbove(path, root, expanded))
+        ) {
+          visible.add(path);
+        }
+      }
+    }
+  }
+  return visible;
+}
+
+/**
+ * Collapsing a folder only drops that one path from the expanded set, so its
+ * descendants linger there. A descendant is on screen only while the root and
+ * every folder between it and the root are expanded.
+ */
+function everyFolderAbove(
+  path: string,
+  root: string,
+  expanded: Set<string>,
+): boolean {
+  let end = root.length;
+  while (end < path.length) {
+    const slash = path.indexOf("/", end + 1);
+    if (slash === -1) return true;
+    if (!expanded.has(path.slice(0, slash))) return false;
+    end = slash;
+  }
+  return true;
+}
+
+/**
+ * Re-list what the mounted explorers show, drop the rest.
+ *
+ * Agent writes and window focus use this. Collapsed subtrees and other projects
+ * are evicted; expanding them again re-lists on demand.
+ */
 export async function refreshCachedDirs(): Promise<void> {
-  const paths = [...dirs.keys()];
+  const visible = visibleDirs();
+  for (const path of [...dirs.keys()]) {
+    if (!visible.has(path)) dropDir(path);
+  }
+  // A listing still in flight for a folder nothing can show belongs to the
+  // entries the prune above just cleared, so it must not land after this.
+  for (const path of [...openRequests.keys()]) {
+    if (!visible.has(path)) retireRequests(path);
+  }
+  const paths = [...visible].filter((path) => dirs.has(path));
   if (paths.length === 0) return;
   await Promise.all(
     paths.map((path) =>
@@ -107,7 +248,10 @@ async function runRefresh() {
 }
 
 /** Folder to create into, given the explorer selection. */
-export function createParentOf(cwd: string, selectedPath: string | null): string {
+export function createParentOf(
+  cwd: string,
+  selectedPath: string | null,
+): string {
   if (!selectedPath || selectedPath === cwd) return cwd;
   const parent = parentPath(selectedPath);
   const entry = peekDir(parent)?.find((e) => e.path === selectedPath);
