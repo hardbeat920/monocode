@@ -286,6 +286,7 @@ import {
   releaseNotesTitle,
 } from "./model/releaseNotes";
 import { mergeOrderedSubset, orderByIds } from "../shared/lib/reorder";
+import { useStateRef } from "../shared/lib/useStateRef";
 import {
   addTerminalToDock,
   applyDockGridStyle,
@@ -473,9 +474,10 @@ import {
   applyPlaceTabOnPane,
   applyPlaceSessionOnPane,
   filterTabsForProject,
-  findOpenSessionTab,
   planWorkspaceTabClose,
   switchSessionInTab,
+  planBlankPaneReplacement,
+  planFocusOpenSession,
   workspaceTabCwd,
   workspaceTabWorktree,
   focusedWorkspaceTabCwd,
@@ -1121,7 +1123,9 @@ function Workspace({
   history: bootHistory = [],
   historyCwd: bootHistoryCwd = null,
 }: AppProps) {
-  const [projectCwd, setProjectCwd] = useState(
+  // The ref tracks the latest requested project so `followProject` right
+  // after an opener's `setProjectCwd` compares against it, not a stale render.
+  const [projectCwd, setProjectCwd, projectCwdRef] = useStateRef(
     () =>
       windowTransfer?.projectCwd ??
       resumed?.projectCwd ??
@@ -1664,9 +1668,6 @@ function Workspace({
     },
     [workspaceNavigation.cancel, closeMonoView],
   );
-
-  const projectCwdRef = useRef(projectCwd);
-  projectCwdRef.current = projectCwd;
   const searchViewOpenRef = useRef(searchViewOpen);
   searchViewOpenRef.current = searchViewOpen;
   const inboxViewOpenRef = useRef(inboxViewOpen);
@@ -2801,6 +2802,17 @@ function Workspace({
     setSessions,
   });
 
+  // The title tabs, explorer, changes and session list all follow
+  // `projectCwd`, so anything that reveals a tab from another project has to
+  // move it along with the active tab.
+  const followProject = useCallback((cwd: string | null | undefined) => {
+    if (!cwd || !looksLikeProject(cwd)) return;
+    const normalized = normalizeProjectPath(cwd);
+    if (sameProjectPath(normalized, projectCwdRef.current)) return;
+    setProjectCwd(normalized);
+    setRecents(rememberProject(normalized));
+  }, []);
+
   const activateTab = useCallback(
     (
       id: string,
@@ -2835,21 +2847,14 @@ function Workspace({
         const focusedTab = nextFocusedId
           ? { ...tab, focusedId: nextFocusedId }
           : tab;
-        const cwd = focusedWorkspaceTabCwd(focusedTab, sessionsRef.current);
-        if (cwd && looksLikeProject(cwd)) {
-          const normalized = normalizeProjectPath(cwd);
-          if (!sameProjectPath(normalized, projectCwdRef.current)) {
-            setProjectCwd(normalized);
-            setRecents(rememberProject(normalized));
-          }
-        }
+        followProject(focusedWorkspaceTabCwd(focusedTab, sessionsRef.current));
       }
       setComposerFocused(
         !!nextFocusedId &&
           sessionsRef.current.some((session) => session.id === nextFocusedId),
       );
     },
-    [],
+    [followProject],
   );
 
   const commitTabVisit = useCallback((history: TabVisitHistory) => {
@@ -4648,37 +4653,33 @@ function Workspace({
   );
 
   const focusOpenSession = useCallback((sessionId: string) => {
-    const tab = findOpenSessionTab(
+    const plan = planFocusOpenSession(
       tabsRef.current,
       sessionsRef.current,
       sessionId,
     );
-    if (!tab) return false;
+    if (!plan) return false;
     loadedSessionCache.current.delete(sessionId);
-    setActiveTabId(tab.id);
+    setActiveTabId(plan.tabId);
     setTabs((prev) =>
       prev.map((entry) =>
-        entry.id === tab.id ? { ...entry, focusedId: sessionId } : entry,
+        entry.id === plan.tabId ? { ...entry, focusedId: sessionId } : entry,
       ),
     );
+    followProject(plan.projectCwd);
     setComposerFocused(true);
     return true;
-  }, []);
+  }, [followProject]);
 
   const replaceBlankPaneWithSession = useCallback((session: Session) => {
-    const tab =
-      tabsRef.current.find((entry) => entry.id === activeTabIdRef.current) ??
-      tabsRef.current[0];
-    if (!tab) return false;
-
-    const paneId = isBlankSession(
-      sessionsRef.current.find((entry) => entry.id === tab.focusedId),
-    )
-      ? tab.focusedId
-      : leafIds(tab.layout).find((id) =>
-          isBlankSession(sessionsRef.current.find((entry) => entry.id === id)),
-        );
-    if (!paneId || paneId === session.id) return false;
+    const plan = planBlankPaneReplacement({
+      tabs: tabsRef.current,
+      sessions: sessionsRef.current,
+      activeTabId: activeTabIdRef.current,
+      session,
+    });
+    if (!plan) return false;
+    const { tabId, paneId } = plan;
 
     lastPersisted.current.delete(paneId);
     {
@@ -4693,7 +4694,7 @@ function Workspace({
     });
     setTabs((prev) =>
       prev.map((entry) =>
-        entry.id === tab.id
+        entry.id === tabId
           ? {
               ...entry,
               layout: replaceLeafId(entry.layout, paneId, session.id),
@@ -4702,10 +4703,11 @@ function Workspace({
           : entry,
       ),
     );
-    setActiveTabId(tab.id);
+    setActiveTabId(tabId);
+    followProject(plan.projectCwd);
     setComposerFocused(true);
     return true;
-  }, []);
+  }, [followProject]);
 
   const invalidateLoadedSession = useCallback((sessionId: string) => {
     openingSessionIds.current.delete(sessionId);
@@ -5242,6 +5244,7 @@ function Workspace({
       const tab = newTab(session.id);
       appendTab(tab, session.cwd);
       setActiveTabId(tab.id);
+      followProject(session.cwd);
       setComposerFocused(true);
       if (linkedUpdate) revealLinkedSessionUpdate(session.id, linkedUpdate);
     },
@@ -5250,6 +5253,7 @@ function Workspace({
       ensureOpenSession,
       onOpenMono,
       focusOpenSession,
+      followProject,
       replaceBlankPaneWithSession,
       revealLinkedSessionUpdate,
     ],
