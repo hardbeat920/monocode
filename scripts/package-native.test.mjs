@@ -10,6 +10,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { setTimeout as delay } from "node:timers/promises";
 import { delimiter, join } from "node:path";
 import { test } from "node:test";
 import { linuxTree, packageNative, runStapler } from "./package-native.mjs";
@@ -115,6 +116,12 @@ test("AppImage desktop registration is opt-in and launches the permanent image",
   });
   if (gio.error?.code !== "ENOENT") {
     assert.equal(gio.status, 0, gio.stderr);
+    // gio may return before the launched AppImage writes its arguments.
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      const output = await readFile(launched, "utf8").catch(() => "");
+      if (output.endsWith("\n")) break;
+      await delay(100);
+    }
     assert.equal((await readFile(launched, "utf8")).trimEnd(), appImage);
   } else {
     t.diagnostic("gio unavailable; desktop launcher round-trip was not exercised");

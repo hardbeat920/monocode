@@ -41,6 +41,11 @@ sed '/^Exec=/d' "$APPDIR/dev.usemono.gpui.desktop" > "$desktop"
 printf 'Exec=env "%s" %%F\n' "$exec_path" >> "$desktop"
 chmod 644 "$desktop"
 mv -f "$desktop" "$applications/dev.usemono.gpui.desktop"
+# Icon caches only notice new icons when the theme directory changes.
+touch "$data_home/icons/hicolor"
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -q -t "$data_home/icons/hicolor" || true
+fi
 if command -v update-desktop-database >/dev/null 2>&1; then
     update-desktop-database "$applications" || true
 fi
