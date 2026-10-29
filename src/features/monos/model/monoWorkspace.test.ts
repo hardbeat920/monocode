@@ -7,6 +7,13 @@ import { createMono, findMono, saveMonoName, saveMonoSessionId } from "./mono";
 import { planAgentContext, recordAgentContext } from "./monoFiles";
 import { loadMonoRotation, saveMonoRotation } from "./monoRotation";
 import {
+  beginMonoViewRequest,
+  finishMonoViewRequest,
+  isMonoViewRequestCurrent,
+  resetMonoViewAfterSessionReset,
+  type MonoViewRequestState,
+} from "../../../app/model/monoViewRequest";
+import {
   detachMonoTabs,
   ensureMonoSession,
   resetMonoSession,
@@ -185,6 +192,62 @@ it("deletes the Mono's chat before replacing it with an empty provider session",
     memory: false,
   });
 });
+
+it.each([
+  {
+    description: "preserves a pending switch to another Mono",
+    pendingTarget: "other",
+    pendingSessionId: "other-session",
+    pendingOpenWins: true,
+  },
+  {
+    description: "cancels a pending reopen of the reset Mono",
+    pendingTarget: "same",
+    pendingSessionId: "stale-reset-session",
+    pendingOpenWins: false,
+  },
+])(
+  "resetting a displayed Mono $description",
+  async ({ pendingTarget, pendingSessionId, pendingOpenWins }) => {
+    const current = chat("reset-session");
+    const monoId = monoFor(current.cwd, current.id);
+    const requests: MonoViewRequestState = { current: 0 };
+    let monoViewId: string | null = current.id;
+    let resolvePendingOpen!: (sessionId: string) => void;
+    const pendingOpen = new Promise<string>((resolve) => {
+      resolvePendingOpen = resolve;
+    });
+    const request = beginMonoViewRequest(
+      requests,
+      pendingTarget === "same" ? monoId : "other-mono",
+    );
+    const opening = pendingOpen.then((sessionId) => {
+      if (isMonoViewRequestCurrent(requests, request)) monoViewId = sessionId;
+      finishMonoViewRequest(requests, request);
+    });
+
+    const fresh = await resetMonoSession(current, {
+      stop: async () => current,
+      remove: async () => {},
+      replace: (session) => {
+        resetMonoViewAfterSessionReset(
+          requests,
+          monoViewId,
+          current.id,
+          monoId,
+          () => {
+            monoViewId = session.id;
+          },
+        );
+      },
+    });
+    expect(monoViewId).toBe(fresh.id);
+
+    resolvePendingOpen(pendingSessionId);
+    await opening;
+    expect(monoViewId).toBe(pendingOpenWins ? pendingSessionId : fresh.id);
+  },
+);
 
 it("keeps the original chat and context if deletion fails", async () => {
   const current = chat("resident");
