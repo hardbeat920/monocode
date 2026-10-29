@@ -9,7 +9,7 @@ use std::{process::Stdio, sync::mpsc, time::Duration};
 #[cfg(not(windows))]
 const LOGIN_SHELL_TIMEOUT: Duration = Duration::from_secs(5);
 
-static LOGIN_SHELL_ENV: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+pub(crate) static LOGIN_SHELL_ENV: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
 
 pub(crate) fn dirs_home() -> Option<String> {
     #[cfg(windows)]
@@ -265,6 +265,14 @@ fn login_shell_path() -> Option<String> {
         .as_ref()
         .and_then(|map| map.get("PATH").cloned())
         .filter(|value| !value.is_empty())
+}
+
+/// The next lookup reads the login shell again. A version manager that put a
+/// versioned directory on PATH has a new one after an upgrade.
+pub(crate) fn forget_login_shell_env(cache: &Mutex<Option<HashMap<String, String>>>) {
+    if let Ok(mut cache) = cache.lock() {
+        *cache = None;
+    }
 }
 
 /// `try_lock`, not `lock`: the read holds the lock while the shell runs.

@@ -142,9 +142,12 @@ pub fn resolve(kind: Kind) -> Option<PathBuf> {
     }
     resolve_auto(kind)
 }
+/// The environment variable that overrides the CLI path, ahead of PATH.
+pub fn binary_override_var(kind: Kind) -> String {
+    format!("MONOCODE_{}_BINARY", kind.id().to_uppercase())
+}
 pub fn resolve_auto(kind: Kind) -> Option<PathBuf> {
-    let key = format!("MONOCODE_{}_BINARY", kind.id().to_uppercase());
-    if let Some(path) = std::env::var_os(key).filter(|s| !s.is_empty()) {
+    if let Some(path) = std::env::var_os(binary_override_var(kind)).filter(|s| !s.is_empty()) {
         return Some(path.into());
     }
     let mut candidates: Vec<PathBuf> = Some(std::ffi::OsString::from(
