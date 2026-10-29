@@ -2,6 +2,8 @@
 
 An agent can publish an interactive visual into an ordinary conversation. Ask for a chart, comparison, calculator, diagram, or 3D explanation. The visual stays in the transcript with the rest of the reply and remains usable after the turn ends. Monos use the same capability when running a conversation.
 
+Use `/visualize` in an idle desktop conversation to explicitly request a visual of the current topic, or `/visualize <request>` to specify what to show. Like `/stage` and `/commit`, this local command sends a dedicated agent prompt. It requires reading the visual reference, checking the program and publishing a native inline visual before replying, with the executable fallback available when MCP tools are unavailable.
+
 Interactive rendering is a native desktop feature. The phone transcript shows the visual's title with an instruction to open it on desktop.
 
 The app renders visual components directly through GPUI. Programs describe content and interactions; the renderer supplies fonts, colors, control appearance, spacing defaults, and responsive sizing. There is no browser surface or HTML document in this path.

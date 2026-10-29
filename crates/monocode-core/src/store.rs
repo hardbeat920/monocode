@@ -1,5 +1,6 @@
 //! Session storage. Desktop launches use Monocode's existing schema directly.
 mod app_access;
+mod contributions;
 mod managed_sessions;
 mod monocode_import;
 mod monos;

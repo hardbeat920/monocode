@@ -59,6 +59,7 @@ use std::{
 // Keep empty and docked composers aligned with the transcript column. Below
 // this width the empty session drops its title.
 const COMPOSER_COLUMN: f32 = COLUMN;
+const COMPOSER_RADIUS: f32 = 12.;
 // RUNTIME_MODE_LABEL and RUNTIME_MODE_HINT from the React session model,
 // with AccessPicker's icons; Full access is amber.
 const ACCESS_MODES: &[(&str, &str, &str, &str)] = &[
@@ -2719,7 +2720,7 @@ impl Conversation {
         Some(runner)
     }
     fn composer(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
-        let radius = 12.;
+        let radius = COMPOSER_RADIUS;
         let command = if self.follow_ups.draft_selected {
             Some(input::Command::Draft)
         } else if self.settings.orchestrator {
