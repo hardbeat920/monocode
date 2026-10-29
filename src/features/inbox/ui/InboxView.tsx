@@ -22,7 +22,6 @@ import {
   LoaderCircle,
   MessageMultiple,
   PanelLeft,
-  Plus,
   RefreshCw,
   Search,
   type IconComponent,
@@ -38,6 +37,7 @@ import {
 import { InboxFiltersMenu, INBOX_FILTER_MENU_WIDTH } from "./InboxFiltersMenu";
 import { InboxConnectMenu } from "./InboxConnectMenu";
 import { InboxProviderMark } from "./InboxProviderMark";
+import { ScrollableTabStrip } from "../../../shared/ui/ScrollableTabStrip";
 import { ProjectLogoIcon } from "../../projects/ui/ProjectLogoIcon";
 import { ProjectMascot } from "../../projects/ui/ProjectMascot";
 import { Popover } from "../../../shared/ui/Popover";
@@ -310,7 +310,7 @@ function InboxSourceTab({
       role="tab"
       aria-selected={selected}
       onClick={() => onSelect(source)}
-      className={`flex h-6 min-w-0 flex-1 items-center justify-center rounded-md px-2 text-[12px] leading-none ${
+      className={`flex h-6 shrink-0 items-center justify-center whitespace-nowrap rounded-md px-2 text-[12px] leading-none ${
         selected
           ? "bg-selection text-content"
           : "text-content/50 hover:bg-content/5 hover:text-content"
@@ -939,42 +939,30 @@ export function InboxView({
       className="relative flex h-full min-h-0 shrink-0 flex-col border-r border-stroke"
     >
       <div className="flex h-9 shrink-0 items-center gap-px border-b border-stroke px-2">
-        {visibleSources.length > 0 ? (
-          <div
-            role="tablist"
-            aria-label="Inbox source"
-            className="flex min-w-0 basis-0 items-center gap-px"
-            style={{ flexGrow: visibleSources.length }}
-          >
-            {visibleSources.map((option) => (
-              <InboxSourceTab
-                key={option}
-                source={option}
-                selected={source === option}
-                onSelect={onSourceChange}
-              />
-            ))}
-          </div>
-        ) : null}
-        {connectableSources.length > 0 ? (
-          <button
-            ref={connectButtonRef}
-            type="button"
-            aria-label="Connect an inbox source"
-            aria-haspopup="menu"
-            aria-expanded={connectMenuOpen}
-            title="Connect an inbox source"
-            onClick={() => setConnectMenuOpen((open) => !open)}
-            className={`flex h-6 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md px-2 text-[12px] leading-none ${
-              connectMenuOpen
-                ? "bg-selection text-content"
-                : "text-content/40 hover:bg-content/5 hover:text-content"
-            }`}
-          >
-            <Plus className="size-3.5 shrink-0" strokeWidth={1.75} />
-            <span className="min-w-0 truncate">Add connection</span>
-          </button>
-        ) : null}
+        <ScrollableTabStrip
+          label="Inbox source"
+          activeKey={source}
+          add={
+            connectableSources.length > 0
+              ? {
+                  label: "Add connection",
+                  ariaLabel: "Connect an inbox source",
+                  expanded: connectMenuOpen,
+                  onClick: () => setConnectMenuOpen((open) => !open),
+                  ref: connectButtonRef,
+                }
+              : undefined
+          }
+        >
+          {visibleSources.map((option) => (
+            <InboxSourceTab
+              key={option}
+              source={option}
+              selected={source === option}
+              onSelect={onSourceChange}
+            />
+          ))}
+        </ScrollableTabStrip>
       </div>
       {noSourcesConnected ? null : (
         <div className="flex h-9 shrink-0 items-center gap-1 border-b border-stroke px-2">
