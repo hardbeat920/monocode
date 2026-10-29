@@ -1,5 +1,7 @@
 # Bitbucket Cloud inbox
 
+The native GPUI app supports this connector.
+
 Open **Settings → Inbox → Bitbucket**, enter your Atlassian account email and a
 Bitbucket API token, then select **Connect**. The connection is validated before
 credentials are saved. Create a token from

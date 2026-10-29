@@ -67,6 +67,9 @@ pub(crate) struct Inbox {
     diff: Option<Diff>,
     diff_view: Entity<DiffView>,
     checks: Option<Checks>,
+    expanded_builds: std::collections::HashSet<String>,
+    build_details:
+        std::collections::HashMap<String, Result<model::bitbucket::BitbucketBuildDetails, String>>,
     tab: Tab,
     loading: bool,
     detail_loading: bool,
@@ -210,6 +213,15 @@ impl Inbox {
                             {
                                 this.load_detail(false, cx);
                                 if this.tab == Tab::Checks && !this.extra_loading {
+                                    if let Some(item) = this.item() {
+                                        for url in this.expanded_builds.clone() {
+                                            if let Some(build) =
+                                                model::bitbucket::build_id(&url, &item.repo)
+                                            {
+                                                this.load_build(url, item.clone(), build, cx);
+                                            }
+                                        }
+                                    }
                                     this.checks = None;
                                     this.set_tab(Tab::Checks, cx);
                                 }
@@ -251,6 +263,8 @@ impl Inbox {
             diff: None,
             diff_view,
             checks: None,
+            expanded_builds: Default::default(),
+            build_details: Default::default(),
             tab: Tab::Summary,
             loading: false,
             detail_loading: false,
@@ -562,6 +576,8 @@ impl Inbox {
         self.diff_view
             .update(cx, |view, cx| view.set_files(vec![], cx));
         self.checks = None;
+        self.expanded_builds.clear();
+        self.build_details.clear();
         self.extra_loading = false;
         self.extra_error = None;
         self.details = None;
@@ -880,6 +896,14 @@ impl Inbox {
                 match result {
                     Ok(status) => {
                         let connected = status.connected;
+                        if disconnect {
+                            if this.item().is_some_and(|item| item.provider == provider) {
+                                this.selected = None;
+                                this.reset_detail(cx);
+                            }
+                            this.snapshot.items.retain(|item| item.provider != provider);
+                            this.snapshot.errors.remove(&provider);
+                        }
                         this.snapshot.connections.insert(provider.clone(), status);
                         this.connect_token.update(cx, |input, cx| input.set_text(String::new(), cx));
                         if connected || disconnect {
@@ -894,6 +918,39 @@ impl Inbox {
             });
         }).detach();
         cx.notify();
+    }
+    fn toggle_build(&mut self, url: String, cx: &mut Context<Self>) {
+        if self.expanded_builds.remove(&url) {
+            cx.notify();
+            return;
+        }
+        let Some(item) = self.item() else {
+            return;
+        };
+        let Some(build) = model::bitbucket::build_id(&url, &item.repo) else {
+            return;
+        };
+        self.expanded_builds.insert(url.clone());
+        self.build_details.remove(&url);
+        self.load_build(url, item, build, cx);
+        cx.notify();
+    }
+    fn load_build(&mut self, url: String, item: Item, build: String, cx: &mut Context<Self>) {
+        let data_dir = self.service.data_dir.clone();
+        let generation = self.detail_generation;
+        let task = cx.background_executor().spawn(async move {
+            model::bitbucket::bitbucket_build_details(data_dir, item.repo, build)
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                if this.detail_generation == generation {
+                    this.build_details.insert(url, result);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
     fn run_action(&mut self, cx: &mut Context<Self>) {
         if self.acting {
