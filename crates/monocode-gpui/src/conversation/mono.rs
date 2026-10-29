@@ -320,16 +320,38 @@ impl Conversation {
         cx.notify();
         Ok(())
     }
+    /// The access a turn runs with. The saved mode is the user's choice and is
+    /// left alone; a model that can't do it shows (and runs with) the closest
+    /// preceding mode it supports.
+    pub(crate) fn supported_access(&self) -> AccessMode {
+        monocode_core::catalog::supported_access(
+            Kind::from_id(&self.summary.provider),
+            self.access_model(),
+            self.settings.access,
+        )
+    }
+    /// The catalog entry the provider launch checks access against.
+    fn access_model(&self) -> Option<&monocode_core::catalog::Model> {
+        monocode_core::catalog::launch_model(&self.catalog, self.model.as_deref())
+    }
     pub(crate) fn mono_access_options(&self) -> Vec<MenuItem> {
         let provider = Kind::from_id(&self.summary.provider);
+        let access = self.supported_access();
+        let mut offered = monocode_core::catalog::access_modes(provider, self.access_model());
+        if offered.is_empty() {
+            // No approval levels: Supervised is the provider's normal mode.
+            offered.push(AccessMode::Supervised);
+        }
         let mut items = vec![
             MenuAction::new("access:read-only", "Read-only")
                 .icon("square-lock")
                 .description("Inspect without changing files.")
-                .checked(self.settings.access == AccessMode::ReadOnly)
+                .checked(access == AccessMode::ReadOnly)
                 .into(),
         ];
-        items.extend(ACCESS_MODES.iter().map(|(id, label, hint, glyph)| {
+        items.extend(ACCESS_MODES.iter().filter(|(id, ..)| {
+            offered.contains(&AccessMode::from_id(id))
+        }).map(|(id, label, hint, glyph)| {
                     let hint = match (provider,*id) {
                         (Kind::Cursor,"supervised") => "Confirm commands using Cursor's permission policy; Cursor may accept edits automatically.",
                         (Kind::Pi | Kind::Omp,_) => "Tool confirmations follow this provider's configured extensions.",
@@ -338,7 +360,7 @@ impl Conversation {
                     let action = MenuAction::new(format!("access:{id}"), *label)
                         .icon(glyph)
                         .description(hint)
-                        .checked(self.settings.access.id() == *id);
+                        .checked(access.id() == *id);
                     MenuItem::from(if *id == "full-access" {
                         action.icon_color(tint(AMBER_400, 0.9))
                     } else {

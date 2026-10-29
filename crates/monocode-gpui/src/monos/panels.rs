@@ -1782,7 +1782,7 @@ impl Monos {
             .unwrap_or_else(|| "codex".into());
         let mode = chat
             .as_ref()
-            .map(|v| v.read(cx).settings.access)
+            .map(|v| v.read(cx).supported_access())
             .unwrap_or(AccessMode::Auto);
         let model_options = chat
             .as_ref()

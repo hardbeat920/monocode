@@ -681,11 +681,11 @@ impl Protocol {
                         || self.request.settings.plan
                         || self.request.settings.access == AccessMode::ReadOnly;
                     let access = self.request.settings.access;
+                    // Auto leaves approvals to the provider's own reviewer
+                    // (Grok's classifier, Devin's smart mode); whatever it still
+                    // asks about reaches the user.
                     let auto = self.request.kind == Kind::Fx
                         || access == AccessMode::FullAccess
-                        || (access == AccessMode::Auto
-                            && self.request.kind != Kind::Antigravity
-                            && self.request.kind != Kind::Devin)
                         || (access == AccessMode::AutoAcceptEdits
                             && if self.request.kind == Kind::Antigravity {
                                 kind == Some("edit")
@@ -1656,6 +1656,16 @@ mod tests {
         assert!(choices
             .iter()
             .any(|p| p["configId"] == "fast" && p["type"].is_null() && p["value"] == "false"));
+    }
+    #[test]
+    fn grok_auto_leaves_approvals_to_its_classifier_and_the_user() {
+        let mut p = protocol(Kind::Grok);
+        p.request.settings.access = AccessMode::Auto;
+        p.acp.stage = Stage::Prompt;
+        let mut out = Vec::new();
+        let events = p.frame(json!({"id":"permission","method":"session/request_permission","params":{"toolCall":{"kind":"edit"},"options":[{"kind":"allow_once","optionId":"yes"},{"kind":"reject_once","optionId":"no"}]}}), &mut out).unwrap();
+        assert!(matches!(events.as_slice(), [Event::Approval(_)]));
+        assert!(out.is_empty());
     }
     #[test]
     fn cursor_planning_denies_execution_without_requiring_a_session_mode() {
