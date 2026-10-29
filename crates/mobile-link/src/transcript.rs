@@ -367,6 +367,7 @@ pub struct Transcript {
     /// What the agent waits on the user to answer, as the desktop sent it.
     question: Value,
     approvals: Value,
+    question_generation: u64,
     older: bool,
     error: Option<String>,
     ready: bool,
@@ -387,6 +388,7 @@ impl Transcript {
             busy: false,
             question: Value::Null,
             approvals: json!([]),
+            question_generation: 0,
             older: false,
             error: None,
             ready: false,
@@ -416,7 +418,7 @@ impl Transcript {
                     .cloned()
                     .unwrap_or_else(|| from_messages(&command["messages"]));
                 self.busy = command["busy"].as_bool().unwrap_or(false);
-                self.question = command["question"].clone();
+                self.set_question(&command["question"]);
                 self.approvals = command
                     .get("approvals")
                     .cloned()
@@ -506,6 +508,14 @@ impl Transcript {
         Ok(self.frame())
     }
 
+    fn set_question(&mut self, question: &Value) {
+        // Keep clears even when a burst or the UI relay publishes only its last snapshot.
+        if question["requestId"] != self.question["requestId"] {
+            self.question_generation += 1;
+        }
+        self.question = question.clone();
+    }
+
     fn frames(&mut self, frames: &[Value]) -> LinkResult<()> {
         // Merge a whole transport burst before projecting/layout.
         let mut order: Vec<String> = self.turns.iter().map(|t| string(t, "id").into()).collect();
@@ -533,7 +543,7 @@ impl Transcript {
                 }
                 // Sent when it changes; null once answered.
                 if let Some(question) = frame.get("question") {
-                    self.question = question.clone();
+                    self.set_question(question);
                 }
                 for turn in frame["turns"].as_array().into_iter().flatten() {
                     let id = string(turn, "id");
@@ -668,7 +678,7 @@ impl Transcript {
             "order": if order == self.order { None } else { Some(&order) },
             "status": { "busy":self.busy, "error":self.error, "hasTurns":!turns.is_empty(), "ready":self.ready, "lastUserId":self.last_user_id(),
                 "userCount":self.user_count(), "pendingId":self.pending["turn"]["id"], "notice":latest_error,
-                "question":self.question, "approvals":self.approvals },
+                "question":self.question, "questionGeneration":self.question_generation, "approvals":self.approvals },
             "older": self.history_older.unwrap_or(self.older),
             "firstTurnId": self.history.first().or(self.turns.first()).map(|t| string(t,"id")),
             "watchFrom": self.turns.first().map(|t| string(t,"id")),
@@ -1182,6 +1192,54 @@ mod tests {
             .update(json!({"type":"frames","frames":[{"approvals":[]}]}))
             .unwrap();
         assert_eq!(cleared["status"]["approvals"], json!([]));
+    }
+
+    #[test]
+    fn question_generation_survives_coalesced_clears_and_snapshot_refreshes() {
+        let mut transcript = Transcript::new(vec![], false);
+        for command in [
+            json!({"type":"frames","frames":[{"question":null},{"question":null}]}),
+            json!({"type":"replace","turns":[]}),
+        ] {
+            let snapshot = transcript.update(command).unwrap();
+            assert_eq!(snapshot["status"]["questionGeneration"], 0);
+        }
+        let question = json!({"requestId":7,"questions":[]});
+        let asked = transcript
+            .update(json!({"type":"frames","frames":[{"question":question}]}))
+            .unwrap();
+        let first = asked["status"]["questionGeneration"].as_u64().unwrap();
+        let replacement = transcript
+            .update(json!({"type":"frames","frames":[{"question":null},{"question":question}]}))
+            .unwrap();
+        let generation = replacement["status"]["questionGeneration"]
+            .as_u64()
+            .unwrap();
+        assert!(generation > first);
+        assert_eq!(replacement["status"]["question"], question);
+        let refreshed = json!({"requestId":7,"questions":[],"autoResolveAt":1234});
+        for command in [
+            json!({"type":"frames","frames":[{"question":refreshed}]}),
+            json!({"type":"replace","turns":[],"question":refreshed}),
+            json!({"type":"frames","frames":[{"busy":true}]}),
+        ] {
+            let snapshot = transcript.update(command).unwrap();
+            assert_eq!(snapshot["status"]["questionGeneration"], generation);
+        }
+        let different = transcript
+            .update(json!({"type":"frames","frames":[{"question":{"requestId":8,"questions":[]}}]}))
+            .unwrap();
+        assert!(different["status"]["questionGeneration"].as_u64().unwrap() > generation);
+        let cleared = transcript
+            .update(json!({"type":"frames","frames":[{"question":null}]}))
+            .unwrap();
+        let idle = transcript
+            .update(json!({"type":"frames","frames":[{"question":null},{"question":null}]}))
+            .unwrap();
+        assert_eq!(
+            idle["status"]["questionGeneration"],
+            cleared["status"]["questionGeneration"]
+        );
     }
 
     #[test]
