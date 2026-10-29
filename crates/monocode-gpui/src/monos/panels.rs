@@ -1100,11 +1100,8 @@ impl Monos {
             .children(documents.into_iter().map(|document| {
                 // MonoOverview's DocumentRow: laid out like a habit.
                 let id = document.id.clone();
-                let label = if document.kind == "html" {
-                    "Visual"
-                } else {
-                    "Document"
-                };
+                let visual = matches!(document.kind.as_str(), "html" | "visual");
+                let label = if visual { "Visual" } else { "Document" };
                 div()
                     .id(SharedString::from(format!("mono-document-{id}")))
                     .debug_selector({
@@ -1132,14 +1129,7 @@ impl Monos {
                             .items_center()
                             .justify_center()
                             .child(
-                                icon(
-                                    if document.kind == "html" {
-                                        "chart-square"
-                                    } else {
-                                        "file"
-                                    },
-                                    14.,
-                                )
+                                icon(if visual { "chart-square" } else { "file" }, 14.)
                                 .text_color(content(0.6)),
                             ),
                     )
@@ -1270,9 +1260,10 @@ impl Monos {
                     .documents
                     .get(&id)
                     .or_else(|| {
-                        mono.documents
-                            .iter()
-                            .find(|d| d.id == id && !mono.desktop_document_ids.contains(&id))
+                        mono.documents.iter().find(|d| {
+                            d.id == id
+                                && (d.kind == "visual" || !mono.desktop_document_ids.contains(&id))
+                        })
                     })
                     .cloned()
                 else {
@@ -1299,6 +1290,32 @@ impl Monos {
                         .clone();
                     html.update(cx, |html, _| html.set_interactive(interactive));
                     html.into_any_element()
+                } else if document.kind == "visual" {
+                    // The same native dither visual the chat shows, on its own page.
+                    let visual = match self.visual_documents.get(&id) {
+                        Some(view) => Some(view.clone()),
+                        None => serde_json::from_str(&document.body).ok().map(|visual| {
+                            // The page header already titles it.
+                            let view = cx.new(|cx| {
+                                let mut view = crate::visuals::VisualView::new(visual, cx);
+                                view.set_inline(Some(String::new()), cx);
+                                view
+                            });
+                            self.visual_documents.insert(id.clone(), view.clone());
+                            view
+                        }),
+                    };
+                    match visual {
+                        Some(view) => div()
+                            .id("mono-visual-document")
+                            .size_full()
+                            .overflow_y_scroll()
+                            .px_4()
+                            .py_3()
+                            .child(view)
+                            .into_any_element(),
+                        None => empty("Visual unavailable"),
+                    }
                 } else {
                     self.documents
                         .entry(id.clone())
@@ -1318,13 +1335,22 @@ impl Monos {
                     .flex()
                     .flex_col()
                     .child(
-                        self.page_header(&document.title, cx).child(
-                            icon_button("mono-document-copy", "Copy document", "response-copy")
-                                .on_click(move |_, _, cx| {
-                                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                                        document.body.clone(),
-                                    ))
-                                }),
+                        self.page_header(&document.title, cx).when(
+                            document.kind != "visual",
+                            |header| {
+                                header.child(
+                                    icon_button(
+                                        "mono-document-copy",
+                                        "Copy document",
+                                        "response-copy",
+                                    )
+                                    .on_click(move |_, _, cx| {
+                                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                            document.body.clone(),
+                                        ))
+                                    }),
+                                )
+                            },
                         ),
                     )
                     .child(div().flex_1().min_h_0().child(view))

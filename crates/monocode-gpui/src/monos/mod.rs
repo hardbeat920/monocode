@@ -119,6 +119,8 @@ pub(crate) struct Monos {
     menu_anchor: Anchor,
     documents: HashMap<String, Entity<crate::transcript::TranscriptView>>,
     html_documents: HashMap<String, Entity<html::Html>>,
+    /// Native visuals the Mono published in its chat, opened as documents.
+    visual_documents: HashMap<String, Entity<crate::visuals::VisualView>>,
     project_changes: changes::ProjectChanges,
     review: Option<Entity<crate::review::ReviewPane>>,
     activity: Option<(String, Entity<crate::transcript::TranscriptView>)>,
@@ -346,6 +348,7 @@ impl Monos {
             menu_anchor: Anchor::Point(gpui::Point::default()),
             documents: HashMap::new(),
             html_documents: HashMap::new(),
+            visual_documents: HashMap::new(),
             project_changes: Default::default(),
             review: None,
             activity: None,

@@ -19,6 +19,25 @@ pub(crate) fn document_cards(block: &Value) -> Vec<Value> {
     }).collect()
 }
 
+/// A visual block's document, keyed by its visual id so republishing replaces it.
+pub(crate) fn visual_document(block: &Value) -> Option<super::Document> {
+    if block["role"] != "visual" {
+        return None;
+    }
+    let visual: crate::visual::VisualDocument =
+        serde_json::from_str(block["text"].as_str()?).ok()?;
+    let at = block["sentAt"].as_u64().unwrap_or_default();
+    Some(super::Document {
+        id: format!("visual:{}", visual.id),
+        kind: "visual".into(),
+        title: visual.title.clone(),
+        summary: String::new(),
+        body: block["text"].as_str()?.into(),
+        created_at: at,
+        updated_at: at,
+    })
+}
+
 fn launch(value: &Value) -> Option<Value> {
     let id = value["sessionId"].as_str().or(value["id"].as_str())?;
     if id.is_empty()

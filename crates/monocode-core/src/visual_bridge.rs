@@ -23,7 +23,8 @@ const ENV_SESSION: &str = "MONOCODE_VISUAL_SESSION";
 const ENV_EXECUTABLE: &str = "MONOCODE_VISUAL_EXECUTABLE";
 
 /// Loaded through visual_docs or the CLI only when authoring a visual. Keep the
-/// SDK out of ordinary prompts, server instructions and tool descriptions.
+/// SDK out of ordinary prompts, server instructions and tool descriptions; only
+/// the short USAGE trigger is part of the system prompt.
 const DOCUMENTATION: &str = r#"Native session visuals
 Use visual_check to validate a visual, then visual_show to publish it into this
 conversation. They accept {source}; visual_show also accepts {title?,id?}.
@@ -91,6 +92,26 @@ scripts compact. Check validates execution, the initial component tree, and repr
 it does not capture a screenshot. Fix errors before publishing. Set a concise
 title for the published visual. Never expose capability environment variables.
 "#;
+
+/// The system-prompt rule for when to reach for a visual. Only the trigger
+/// lives here; the SDK stays behind visual_docs.
+const USAGE: &str = "### Native visuals\n\nAnswer data with a trend, comparison or breakdown with an inline visual, and show any chart, diagram or visualizer the user asks for the same way: read `visual_docs` once, then `visual_check` and `visual_show`. Never start a server, open a browser or write an HTML file to show it. Ordinary coding answers need no visual.";
+
+/// Usage guidance for a provider that received the visual MCP server. Claude
+/// Code may defer MCP tools behind ToolSearch, so it is told how to load them.
+pub fn instructions(environment: &HashMap<String, String>, deferred: bool) -> Option<String> {
+    configured(environment).then(|| {
+        if deferred {
+            format!("{USAGE} The monocode_visual tools may be deferred: load them with ToolSearch before you call them.")
+        } else {
+            USAGE.to_owned()
+        }
+    })
+}
+
+/// Claude permission rule that pre-approves every visual tool. Publishing
+/// only affects this conversation, so read-only and plan turns may use it.
+pub const CLAUDE_ALLOWED_TOOLS: &str = "mcp__monocode_visual";
 
 #[derive(Serialize, Deserialize)]
 struct Wire {
@@ -712,9 +733,9 @@ pub fn tool_definitions() -> Vec<Value> {
     show_properties["id"] = json!({"type":"string","maxLength":96,"description":"Optional document identifier. A new request appends a new visual; reuse requestId to retry a publication."});
     show_properties["requestId"] = json!({"type":"string","maxLength":128,"description":"Reuse when retrying an uncertain publication"});
     vec![
-        json!({"name":"visual_docs","description":"Read the native visual SDK reference, examples and styling rules when preparing an inline visual. Does not publish.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}}),
+        json!({"name":"visual_docs","description":"Read the native visual SDK reference, examples and styling rules before building an inline chart, diagram or visualizer. Does not publish.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}}),
         json!({"name":"visual_check","description":"Validate a native visual program and representative controls without publishing. Returns its component tree. Read visual_docs for the SDK reference.","inputSchema":{"type":"object","properties":properties,"required":["source"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"openWorldHint":false}}),
-        json!({"name":"visual_show","description":"Publish a native visual for your reply. Returns an embed line: put it on its own line in your final reply where the visual belongs, between the sentences it supports. Read visual_docs first; validate with visual_check.","inputSchema":{"type":"object","properties":show_properties,"required":["source"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}}),
+        json!({"name":"visual_show","description":"Publish a native visual (chart, stat row, diagram, interactive explainer) inline in this conversation. Use it for data with a trend, comparison or breakdown, and whenever the user asks for a visual. Returns an embed line: put it on its own line in your final reply where the visual belongs, between the sentences it supports. Read visual_docs first; validate with visual_check.","inputSchema":{"type":"object","properties":show_properties,"required":["source"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}}),
     ]
 }
 

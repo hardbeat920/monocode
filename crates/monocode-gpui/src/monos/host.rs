@@ -663,8 +663,10 @@ impl Monos {
                     .get("kind")
                     .and_then(Value::as_str)
                     .unwrap_or("document");
-                if !["document", "html", "markdown"].contains(&kind) {
-                    Err("Use document or html".into())
+                if kind == "html" {
+                    Err("HTML artifacts are no longer supported. Write kind document, and show charts or visuals with visual_show in your reply.".into())
+                } else if !["document", "markdown"].contains(&kind) {
+                    Err("Use kind document".into())
                 } else {
                     match text(&input, "title", 512)
                         .and_then(|title| Ok((title, text(&input, "body", 512 * 1024)?)))

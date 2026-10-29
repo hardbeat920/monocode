@@ -3906,6 +3906,22 @@ impl TranscriptView {
         pinned_answers: &HashMap<usize, usize>,
         replaced_work: Option<std::ops::Range<usize>>,
     ) -> Vec<UiRow> {
+        // Exit rows outlive a source patch, but message ordinals do not.
+        let owners: HashMap<_, _> = self
+            .messages
+            .iter()
+            .enumerate()
+            .map(|(index, message)| (message.start, index))
+            .collect();
+        old.retain_mut(|row| {
+            if let Some(&message) = owners.get(&row.key.0) {
+                row.message = message;
+                true
+            } else {
+                self.motions.remove(&row.key);
+                false
+            }
+        });
         let phase_toggle = self.phase_toggle.take();
         if old.is_empty() && !self.streaming && self.motions.is_empty() {
             return target;
@@ -5903,6 +5919,47 @@ mod scroll_tests {
             assert_eq!(restored.offset_in_item, position.offset_in_item);
             assert!(!view.list.is_following_tail());
         });
+    }
+
+    #[gpui::test]
+    fn exit_rows_survive_a_patch_that_merges_messages(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.set_reduce_motion(false));
+        let window = cx.update(|cx| {
+            cx.open_window(WindowOptions::default(), |_, cx| {
+                cx.new(|_| TranscriptView::new())
+            })
+            .unwrap()
+        });
+        window
+            .update(cx, |view, _, cx| {
+                view.patch(
+                    0,
+                    vec![row("user", "Question"), row("assistant", "Answer")],
+                    cx,
+                );
+                settle(view, cx);
+            })
+            .unwrap();
+        cx.refresh().unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, cx| {
+                // The second source row now continues the first message, so
+                // the answer's row exits while only one message remains.
+                assert!(view.rows.iter().any(|r| r.key.0 == 1));
+                let mut continuation = row("assistant", " continued");
+                continuation.first = false;
+                view.patch(0, vec![row("assistant", "Answer"), continuation], cx);
+                assert_eq!(view.messages.len(), 1);
+            })
+            .unwrap();
+        cx.refresh().unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, _| {
+                assert!(view.rows.iter().all(|r| r.message < view.messages.len()));
+            })
+            .unwrap();
     }
 
     #[gpui::test]
