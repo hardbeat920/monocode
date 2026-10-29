@@ -302,6 +302,12 @@ type_complexity = "allow"
 level = "allow"
 priority = -1
 
+# Monocode: vendored as a path dependency, which no longer caps lints. Keep
+# the upstream cocoa deprecations quiet, as they are on crates.io.
+[lints.rust.deprecated]
+level = "allow"
+priority = 0
+
 [lints.rust.unexpected_cfgs]
 level = "allow"
 priority = 0

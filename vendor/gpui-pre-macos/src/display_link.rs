@@ -209,7 +209,7 @@ fn subscribe(
         None
     };
 
-    let (subscriber_id, link_to_start) = {
+    let (subscriber_id, mut link, was_running) = {
         let mut registry = lock_registry();
         let registry = &mut *registry;
         let subscriber_id = SubscriberId(registry.next_subscriber_id);
@@ -235,19 +235,30 @@ fn subscribe(
             frame_requests,
             signal,
         });
-        let link_to_start = if entry.running {
-            None
-        } else {
-            entry.running = true;
-            // Clone the refcounted handle so the CVDisplayLinkStart call can
-            // happen after the lock is released.
-            Some(entry.link.clone())
-        };
-        (subscriber_id, link_to_start)
+        let was_running = std::mem::replace(&mut entry.running, true);
+        // Clone the refcounted handle so the CoreVideo calls can happen after
+        // the lock is released.
+        (subscriber_id, entry.link.clone(), was_running)
     };
 
-    if let Some(mut link) = link_to_start {
-        if let Err(error) = unsafe { link.start() } {
+    // Monocode: `running` only records what we asked CoreVideo for. A link
+    // can still be stopped underneath it, and trusting the flag then leaves
+    // every window on the display without frames: input keeps working but
+    // nothing repaints until a resize happens to restart the link.
+    let needs_start = !was_running || {
+        let stopped = !unsafe { link.is_running() };
+        if stopped {
+            log::warn!("display link for display {display_id} had stopped; restarting it");
+        }
+        stopped
+    };
+    if needs_start {
+        // A start that races the io thread of a just-stopped link can report
+        // an error while the link ends up running; only a link that is
+        // really stopped is a failure.
+        if let Err(error) = unsafe { link.start() }
+            && !unsafe { link.is_running() }
+        {
             let mut registry = lock_registry();
             if let Some(entry) = registry.displays.get_mut(&display_id) {
                 entry.running = false;
@@ -331,6 +342,11 @@ impl WindowFrameSource {
             subscribe(display_id, self.frame_requests.clone(), self.signal.clone())?;
         self.registration = Some((display_id, subscriber_id));
         Ok(())
+    }
+
+    /// The display this source is subscribed to, if it is delivering frames.
+    pub fn display_id(&self) -> Option<CGDirectDisplayID> {
+        self.registration.map(|(display_id, _)| display_id)
     }
 
     pub fn take_signal(&self) -> Option<(Instant, FrameRequestSource)> {
@@ -479,6 +495,7 @@ mod sys {
             callback: CVDisplayLinkOutputCallback,
             user_info: *mut c_void,
         ) -> i32;
+        pub fn CVDisplayLinkIsRunning(display_link: &DisplayLinkRef) -> u8;
         pub fn CVDisplayLinkStart(display_link: &mut DisplayLinkRef) -> i32;
         pub fn CVDisplayLinkStop(display_link: &mut DisplayLinkRef) -> i32;
         pub fn CVDisplayLinkRelease(display_link: *mut CVDisplayLink);
@@ -523,6 +540,11 @@ mod sys {
                 anyhow::ensure!(code == 0, "could not start display link, code: {}", code);
                 Ok(())
             }
+        }
+
+        /// Apple docs: [CVDisplayLinkIsRunning](https://developer.apple.com/documentation/corevideo/cvdisplaylinkisrunning(_:)?language=objc)
+        pub unsafe fn is_running(&self) -> bool {
+            unsafe { CVDisplayLinkIsRunning(self) != 0 }
         }
 
         /// Apple docs: [CVDisplayLinkStop](https://developer.apple.com/documentation/corevideo/1457281-cvdisplaylinkstop?language=objc)
