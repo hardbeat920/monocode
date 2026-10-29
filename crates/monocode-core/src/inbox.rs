@@ -1163,8 +1163,10 @@ mod notification_tests {
         );
         assert!(!path.exists());
         let store = Store::open(&directory.path().join("state.sqlite")).unwrap();
-        let mut state = ViewState::default();
-        state.source = "bitbucket".into();
+        let state = ViewState {
+            source: "bitbucket".into(),
+            ..ViewState::default()
+        };
         state.save(&store).unwrap();
         assert_eq!(ViewState::load(&store).source, "bitbucket");
     }
