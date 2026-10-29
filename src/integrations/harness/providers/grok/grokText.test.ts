@@ -77,8 +77,16 @@ it("forwards Grok text deltas without duplicating snapshots", async () => {
   reply("session/new", { sessionId: "550e8400-e29b-41d4-a716-446655440000" });
   await waitFor(() => !!outbound("session/set_model"), "session/set_model");
   reply("session/set_model", {});
-  await waitFor(() => !!outbound("session/set_mode"), "session/set_mode");
-  reply("session/set_mode", {});
+  await waitFor(
+    () => !!outbound("session/set_config_option"),
+    "session/set_config_option",
+  );
+  expect(outbound("session/set_config_option")?.params).toEqual({
+    sessionId: "550e8400-e29b-41d4-a716-446655440000",
+    configId: "reasoning_effort",
+    value: "low",
+  });
+  reply("session/set_config_option", { configOptions: [] });
   await waitFor(() => !!outbound("session/prompt"), "session/prompt");
 
   onLine?.(
@@ -133,8 +141,11 @@ async function openTextSession(
   reply("session/new", { sessionId });
   await waitFor(() => !!outbound("session/set_model"), "session/set_model");
   reply("session/set_model", {});
-  await waitFor(() => !!outbound("session/set_mode"), "session/set_mode");
-  reply("session/set_mode", {});
+  await waitFor(
+    () => !!outbound("session/set_config_option"),
+    "session/set_config_option",
+  );
+  reply("session/set_config_option", { configOptions: [] });
 }
 
 it("deletes only the temporary session when generation fails", async () => {
