@@ -41,6 +41,7 @@ import {
   type AppSessionPlacement,
 } from "../features/agent-app/model/agentApp";
 import { submitWithSettlement } from "./model/managedSubmission";
+import { persistAfterFailedSessionRemoval } from "./model/sessionRemovalPersistence";
 import {
   submitAfterProjectSync,
   type SubmissionAcceptance,
@@ -5459,6 +5460,7 @@ function Workspace({
 
   const onRenameHistorySession = useCallback(
     async (sessionId: string, displayTitle: string) => {
+      if (removingSessionIds.current.has(sessionId)) return;
       const trimmed = displayTitle.trim();
       if (!trimmed) return;
       invalidateLoadedSession(sessionId);
@@ -5476,7 +5478,7 @@ function Workspace({
         persistSession(updated);
       } else {
         const restored = await getSession(sessionId).catch(() => null);
-        if (!restored) {
+        if (!restored || removingSessionIds.current.has(sessionId)) {
           void refreshHistory(sidebarCwd);
           return;
         }
@@ -5642,12 +5644,14 @@ function Workspace({
     ],
   );
 
+  /** Close views through shared session-removal safeguards. */
   const onRemoveHistorySession = useCallback(
     async (
       sessionId: string,
       mode: "archive" | "delete",
       skipDeleteConfirm = false,
       origin: "ui" | "cli" = "ui",
+      archiveOutcome?: { changed?: boolean },
     ): Promise<boolean> => {
       if (
         removingSessionIds.current.has(sessionId) ||
@@ -5665,6 +5669,7 @@ function Workspace({
         : "this session";
       removingSessionIds.current.add(sessionId);
       let deleteWorktreePath: string | undefined;
+      let removalSucceeded = false;
       if (mode === "delete" && !skipDeleteConfirm) {
         deleteConfirmationPending.current = true;
         let unusedWorktree: string | undefined;
@@ -5703,10 +5708,10 @@ function Workspace({
         }
       }
       invalidateLoadedSession(sessionId);
-      pendingPersist.current.delete(sessionId);
       try {
         const remover = createSessionRemover({
           mode,
+          archiveIdleOnly: mode === "archive" && origin === "cli",
           preserveOpenFiles: origin === "cli",
           scope: tabCloseScope,
           replacement: {
@@ -5767,6 +5772,8 @@ function Workspace({
               }
 
               const { removal } = change;
+              if (change.mode === "archive" && archiveOutcome)
+                archiveOutcome.changed = change.archivedChanged ?? false;
               lastPersisted.current.delete(sessionId);
               pendingPersist.current.delete(sessionId);
               const closingFiles = filesInWorkspaceTabs(removal.closedTabs);
@@ -5838,8 +5845,8 @@ function Workspace({
           },
           stop: stopSessionForRemoval,
         });
-        const removed = await remover.remove(sessionId);
-        if (removed && deleteWorktreePath && seed) {
+        removalSucceeded = await remover.remove(sessionId);
+        if (removalSucceeded && deleteWorktreePath && seed) {
           try {
             await onRemoveWorktree(seed.cwd, deleteWorktreePath, false);
           } catch (error) {
@@ -5849,7 +5856,7 @@ function Workspace({
             );
           }
         }
-        return removed;
+        return removalSucceeded;
       } catch (error) {
         if (origin === "cli") throw error;
         const detail = error instanceof Error ? error.message : String(error);
@@ -5860,6 +5867,16 @@ function Workspace({
         return false;
       } finally {
         removingSessionIds.current.delete(sessionId);
+        persistAfterFailedSessionRemoval(
+          sessionId,
+          removalSucceeded,
+          sessionsRef.current.find(
+            (session) =>
+              session.id === sessionId && shouldPersistSession(session),
+          ),
+          pendingPersist.current,
+          persistSession,
+        );
       }
     },
     [
@@ -5871,6 +5888,7 @@ function Workspace({
       stopSessionForRemoval,
       tabCloseScope,
       onRemoveWorktree,
+      persistSession,
     ],
   );
 
@@ -6995,6 +7013,7 @@ function Workspace({
 
   const onModelChange = useCallback(
     (sessionId: string, harness: HarnessId, model: string) => {
+      if (removingSessionIds.current.has(sessionId)) return;
       const current = sessionsRef.current.find((s) => s.id === sessionId);
       if (!current) return;
       if (isPreparingHandoff(current)) return;
@@ -7048,6 +7067,7 @@ function Workspace({
 
   const onModelSettingsChange = useCallback(
     (sessionId: string, modelSettings: Record<string, string>) => {
+      if (removingSessionIds.current.has(sessionId)) return;
       saveLastModelSettings(modelSettings);
       setSessions((prev) =>
         prev.map((s) => (s.id === sessionId ? { ...s, modelSettings } : s)),
@@ -7058,6 +7078,7 @@ function Workspace({
 
   const onRuntimeModeChange = useCallback(
     (sessionId: string, runtimeMode: RuntimeMode) => {
+      if (removingSessionIds.current.has(sessionId)) return;
       setSessions((prev) =>
         prev.map((s) => (s.id === sessionId ? { ...s, runtimeMode } : s)),
       );
@@ -7072,6 +7093,7 @@ function Workspace({
       attachments: Attachment[] = [],
       appRequestId?: string,
     ) => {
+      if (removingSessionIds.current.has(sessionId)) return false;
       const current = sessionsRef.current.find(
         (session) => session.id === sessionId,
       );
@@ -7123,6 +7145,7 @@ function Workspace({
 
   const onRemoveDraft = useCallback(
     (sessionId: string, draftBlockId: string) => {
+      if (removingSessionIds.current.has(sessionId)) return false;
       const current = sessionsRef.current.find(
         (session) => session.id === sessionId,
       );
@@ -7163,6 +7186,14 @@ function Workspace({
       attachments: Attachment[] = [],
       options?: SubmitOptions,
     ): SubmissionAcceptance => {
+      if (removingSessionIds.current.has(sessionId)) {
+        options?.onSettled?.({
+          status: "failed",
+          text: "",
+          error: "Session is unavailable or already running",
+        });
+        return false;
+      }
       const remote = sessionsRef.current.find(
         (session) => session.id === sessionId,
       );
@@ -7907,6 +7938,7 @@ function Workspace({
           providerAccountId,
         })
           .then(async (generated) => {
+            if (removingSessionIds.current.has(sessionId)) return;
             if (
               options?.refreshTitle &&
               !isFirstTurn &&
@@ -7919,6 +7951,7 @@ function Workspace({
               workCwd,
               generated?.workItem ?? null,
             );
+            if (removingSessionIds.current.has(sessionId)) return;
             if (!generated && !linkedWorkItem) return;
             setSessions((prev) =>
               prev.map((s) => {
@@ -11420,6 +11453,22 @@ function Workspace({
                 ? target
                 : null;
             },
+            /** Restore history visibility without opening or starting the session. */
+            unarchive: async (id, expectedCwd) => {
+              if (
+                !(await listSessionsByProject(expectedCwd)).some(
+                  (session) => session.id === id,
+                )
+              )
+                throw new Error("Session was not found in this project");
+              const changed = await setSessionArchived(id, false);
+              setHistory((current) =>
+                current.map((entry) =>
+                  entry.id === id ? { ...entry, archived: false } : entry,
+                ),
+              );
+              return { changed };
+            },
             readConversation: async (target, options) =>
               isMonoSession(target.id)
                 ? readMonoConversation(target, options)
@@ -11562,17 +11611,20 @@ function Workspace({
                 isHabitRun(id)
               )
                 throw new Error("Session is unavailable in this project");
+              const archiveOutcome: { changed?: boolean } = {};
               const removed = await removeSessionRef.current(
                 id,
                 mode,
                 true,
                 "cli",
+                archiveOutcome,
               );
               if (!removed)
                 throw new Error(
                   `Session could not be ${mode === "archive" ? "archived" : "deleted"}; another session operation is in progress`,
                 );
               dismissCompletion(id);
+              return { changed: archiveOutcome.changed ?? false };
             },
             worktrees: (cwd) => listWorktrees(cwd),
             createWorktree: (cwd, branch, base, existing) =>
