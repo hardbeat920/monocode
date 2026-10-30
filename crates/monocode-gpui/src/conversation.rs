@@ -1059,6 +1059,14 @@ impl Conversation {
         }
         self.settings.usage_limit = None;
         self.attach_account(cx);
+        if let Some(item) = self
+            .completion
+            .read(cx)
+            .picked_item(&prompt)
+            .map(|item| item.work_item())
+        {
+            self.link_first_work_item(item, cx);
+        }
         let worktree_message = if prompt.trim().is_empty() {
             self.settings
                 .attachments

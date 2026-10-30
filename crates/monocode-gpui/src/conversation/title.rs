@@ -106,7 +106,7 @@ impl Conversation {
         .detach();
     }
     /// Links only an unlinked session: a manual or inbox link always wins.
-    fn link_first_work_item(
+    pub(super) fn link_first_work_item(
         &mut self,
         item: monocode_core::session_groups::WorkItem,
         cx: &mut Context<Self>,

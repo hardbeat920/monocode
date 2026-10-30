@@ -230,7 +230,7 @@ fn message(text: impl Into<SharedString>) -> Div {
 fn error(text: impl Into<SharedString>) -> Div {
     message(text).text_color(rgb(0xf87171))
 }
-fn provider_mark(provider: &str) -> gpui::Svg {
+pub(crate) fn provider_mark(provider: &str) -> gpui::Svg {
     let (path, color) = match provider {
         "linear" => ("inbox-linear", content(0.8)),
         "jira" => ("inbox-jira", rgb(0x2684ff).into()),
