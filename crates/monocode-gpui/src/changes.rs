@@ -23,7 +23,7 @@ use monocode_core::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{
         Arc,
@@ -96,10 +96,66 @@ enum Line {
 }
 
 #[derive(Default)]
+pub(crate) struct PreparedChanges {
+    list: Arc<Vec<Line>>,
+    tree: Arc<Vec<Line>>,
+}
+impl PreparedChanges {
+    pub(crate) fn new(index: &DiffIndex) -> Self {
+        let (mut staged, mut unstaged) = (Vec::new(), Vec::new());
+        for (i, file) in index.files.iter().enumerate() {
+            if file.staged {
+                staged.push(i);
+            }
+            if file.unstaged {
+                unstaged.push(i);
+            }
+        }
+        let (mut list, mut tree) = (Vec::new(), Vec::new());
+        for (kind, members) in [(Kind2::Staged, staged), (Kind2::Unstaged, unstaged)] {
+            if members.is_empty() {
+                continue;
+            }
+            list.push(Line::Section(kind));
+            tree.push(Line::Section(kind));
+            list.extend(members.iter().map(|&file| Line::File {
+                kind,
+                file,
+                depth: None,
+            }));
+            append_tree(&build_tree(&index.files, &members), kind, 0, &mut tree);
+        }
+        Self {
+            list: Arc::new(list),
+            tree: Arc::new(tree),
+        }
+    }
+}
+fn append_tree(dir: &ChangeDir, kind: Kind2, depth: usize, lines: &mut Vec<Line>) {
+    for child in &dir.dirs {
+        lines.push(Line::Dir {
+            kind,
+            path: child.path.clone(),
+            name: child.name.clone(),
+            depth,
+            status: child.status.clone(),
+            open: true,
+        });
+        append_tree(child, kind, depth + 1, lines);
+    }
+    lines.extend(dir.files.iter().map(|&file| Line::File {
+        kind,
+        file,
+        depth: Some(depth),
+    }));
+}
+
+#[derive(Default)]
 struct ChangeDir {
     name: String,
     path: String,
     dirs: Vec<ChangeDir>,
+    children: HashMap<String, usize>,
     files: Vec<usize>,
     status: Option<String>,
 }
@@ -111,22 +167,19 @@ fn build_tree(files: &[ChangedFile], members: &[usize]) -> ChangeDir {
         let segments: Vec<&str> = files[ix].relative.split('/').collect();
         let mut node = &mut root;
         for segment in &segments[..segments.len() - 1] {
-            let path = if node.path.is_empty() {
-                segment.to_string()
-            } else {
-                format!("{}/{segment}", node.path)
-            };
-            let pos = match node.dirs.iter().position(|d| d.path == path) {
-                Some(pos) => pos,
-                None => {
-                    node.dirs.push(ChangeDir {
-                        name: segment.to_string(),
-                        path,
-                        ..Default::default()
-                    });
-                    node.dirs.len() - 1
-                }
-            };
+            let pos = *node.children.entry(segment.to_string()).or_insert_with(|| {
+                let pos = node.dirs.len();
+                node.dirs.push(ChangeDir {
+                    name: segment.to_string(),
+                    path: if node.path.is_empty() {
+                        segment.to_string()
+                    } else {
+                        format!("{}/{segment}", node.path)
+                    },
+                    ..Default::default()
+                });
+                pos
+            });
             node = &mut node.dirs[pos];
         }
         node.files.push(ix);
@@ -138,6 +191,7 @@ fn locale_key(s: &str) -> (String, String) {
     (s.to_lowercase(), s.to_owned())
 }
 fn sort_dir(dir: &mut ChangeDir, files: &[ChangedFile]) -> Option<String> {
+    dir.children.clear();
     dir.dirs.sort_by_key(|d| locale_key(&d.name));
     dir.files
         .sort_by_key(|&ix| locale_key(basename(&files[ix].relative)));
@@ -233,7 +287,7 @@ pub(crate) struct Changes {
     /// The row under the pointer, which shows its actions. Kept as state
     /// rather than a group-hover `display`, so layout and paint always agree.
     hovered: Option<usize>,
-    lines: Vec<Line>,
+    lines: Arc<Vec<Line>>,
     menu: Option<OpenMenu>,
     branch_anchor: AnchorSlot,
     commit_anchor: AnchorSlot,
@@ -269,7 +323,7 @@ impl Changes {
             collapsed: HashSet::new(),
             selected: None,
             hovered: None,
-            lines: Vec::new(),
+            lines: Arc::default(),
             menu: None,
             branch_anchor: AnchorSlot::default(),
             commit_anchor: AnchorSlot::default(),
@@ -300,7 +354,7 @@ impl Changes {
             self.load_pr(cx);
         }
     }
-    fn index(&self, cx: &App) -> Option<DiffIndex> {
+    fn index(&self, cx: &App) -> Option<Arc<DiffIndex>> {
         self.git.read(cx).index.clone()
     }
     fn index_changed(&mut self, cx: &mut Context<Self>) {
@@ -369,59 +423,61 @@ impl Changes {
         )
     }
     fn rebuild(&mut self, cx: &mut Context<Self>) {
-        let index = self.git.read(cx).index.clone();
-        let (staged, unstaged) = Self::staged_unstaged(index.as_ref());
-        let files = index.as_ref().map_or(&[][..], |i| &i.files[..]);
-        let mut lines = Vec::new();
-        for (kind, members, open) in [
-            (Kind2::Staged, &staged, self.staged_open),
-            (Kind2::Unstaged, &unstaged, self.changes_open),
-        ] {
-            if members.is_empty() {
-                continue;
-            }
-            lines.push(Line::Section(kind));
-            if !open {
-                continue;
-            }
-            match self.view {
-                ChangesView::List => lines.extend(members.iter().map(|&file| Line::File {
-                    kind,
-                    file,
-                    depth: None,
-                })),
-                ChangesView::Tree => {
-                    let tree = build_tree(files, members);
-                    self.push_dir(&tree, kind, 0, &mut lines);
-                }
-            }
-        }
-        self.lines = lines;
+        let prepared = &self.git.read(cx).changes;
+        let source = match self.view {
+            ChangesView::List => &prepared.list,
+            ChangesView::Tree => &prepared.tree,
+        };
+        self.lines = if self.staged_open
+            && self.changes_open
+            && (self.view == ChangesView::List || self.collapsed.is_empty())
+        {
+            source.clone()
+        } else {
+            let mut section_open = true;
+            let mut hidden_depth = None;
+            Arc::new(
+                source
+                    .iter()
+                    .filter_map(|line| match line {
+                        Line::Section(kind) => {
+                            hidden_depth = None;
+                            section_open = if *kind == Kind2::Staged {
+                                self.staged_open
+                            } else {
+                                self.changes_open
+                            };
+                            Some(line.clone())
+                        }
+                        _ if !section_open => None,
+                        Line::Dir {
+                            kind, path, depth, ..
+                        } => {
+                            if hidden_depth.is_some_and(|hidden| *depth > hidden) {
+                                return None;
+                            }
+                            let open = !self.collapsed.contains(&format!("{}:{path}", kind.key()));
+                            hidden_depth = (!open).then_some(*depth);
+                            let mut line = line.clone();
+                            if let Line::Dir { open: state, .. } = &mut line {
+                                *state = open;
+                            }
+                            Some(line)
+                        }
+                        Line::File { depth, .. }
+                            if hidden_depth
+                                .zip(*depth)
+                                .is_some_and(|(hidden, depth)| depth > hidden) =>
+                        {
+                            None
+                        }
+                        _ => Some(line.clone()),
+                    })
+                    .collect(),
+            )
+        };
         self.hovered = None;
         cx.notify();
-    }
-    fn push_dir(&self, dir: &ChangeDir, kind: Kind2, depth: usize, lines: &mut Vec<Line>) {
-        for child in &dir.dirs {
-            let open = !self
-                .collapsed
-                .contains(&format!("{}:{}", kind.key(), child.path));
-            lines.push(Line::Dir {
-                kind,
-                path: child.path.clone(),
-                name: child.name.clone(),
-                depth,
-                status: child.status.clone(),
-                open,
-            });
-            if open {
-                self.push_dir(child, kind, depth + 1, lines);
-            }
-        }
-        lines.extend(dir.files.iter().map(|&file| Line::File {
-            kind,
-            file,
-            depth: Some(depth),
-        }));
     }
 
     fn set_status(&mut self, text: &str, cx: &mut Context<Self>) {
@@ -567,7 +623,7 @@ impl Changes {
             return;
         }
         let index = self.index(cx);
-        let (_, unstaged) = Self::staged_unstaged(index.as_ref());
+        let (_, unstaged) = Self::staged_unstaged(index.as_deref());
         let Some(index) = index.filter(|_| !unstaged.is_empty()) else {
             return;
         };
@@ -705,7 +761,7 @@ impl Changes {
                     let index = this.index(cx);
                     this.amend = Some((
                         index.as_ref().and_then(|i| i.branch.clone()),
-                        index.and_then(|i| i.head),
+                        index.and_then(|i| i.head.clone()),
                     ));
                     cx.notify();
                 }
@@ -716,7 +772,7 @@ impl Changes {
     }
 
     fn can_commit(&self, cx: &App) -> bool {
-        let index = self.git.read(cx).index.as_ref();
+        let index = self.git.read(cx).index.as_deref();
         let staged = index.is_some_and(|i| i.files.iter().any(|f| f.staged));
         (staged || self.amend.is_some())
             && !self.message.read(cx).content.trim().is_empty()
@@ -732,7 +788,7 @@ impl Changes {
         let index = self.index(cx);
         let mut questions = Vec::new();
         if (push || create_pr)
-            && Self::on_default(index.as_ref())
+            && Self::on_default(index.as_deref())
             && let Some(branch) = index.as_ref().and_then(|i| i.branch.clone())
         {
             questions.push((
@@ -839,7 +895,7 @@ impl Changes {
     fn create_pr(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let index = self.index(cx);
         let ahead = index.as_ref().is_some_and(|i| i.ahead > 0);
-        let question = Self::on_default(index.as_ref()).then(|| {
+        let question = Self::on_default(index.as_deref()).then(|| {
             format!(
                 "Create a pull request from default branch \"{}\"?",
                 index
@@ -948,7 +1004,7 @@ impl Changes {
         cx.notify();
     }
     fn push_options(&self, cx: &App) -> (bool, bool) {
-        let index = self.git.read(cx).index.as_ref();
+        let index = self.git.read(cx).index.as_deref();
         let has_remote = index.is_some_and(|i| i.remote.is_some());
         let diverged = index.is_some_and(|i| i.ahead > 0 && i.behind > 0);
         let head_pushed = index.is_some_and(|i| i.head_pushed);
@@ -2002,6 +2058,63 @@ mod tests {
             })
             .unwrap();
     }
+    #[gpui::test]
+    fn prepared_rows_respect_sections_and_nested_folds(cx: &mut gpui::TestAppContext) {
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |window, cx| {
+                let git = cx.new(|cx| ProjectGit::new("~".into(), cx));
+                let mut a = f("src/nested/a.rs", "modified");
+                a.staged = true;
+                let index = DiffIndex {
+                    files: vec![a, f("src/b.rs", "modified"), f("root.rs", "added")],
+                    ..Default::default()
+                };
+                git.update(cx, |git, _| {
+                    git.changes = Arc::new(PreparedChanges::new(&index));
+                    git.index = Some(Arc::new(index));
+                });
+                cx.new(|cx| Changes::new(git, window, cx))
+            })
+            .unwrap()
+        });
+        window
+            .update(cx, |view, _, cx| {
+                assert_eq!(view.lines.len(), 6); // two sections and four file entries
+                assert!(Arc::ptr_eq(&view.lines, &view.git.read(cx).changes.list));
+                view.view = ChangesView::Tree;
+                view.collapsed.insert("unstaged:src".into());
+                view.rebuild(cx);
+                let visible: Vec<_> = view
+                    .lines
+                    .iter()
+                    .filter_map(|line| match line {
+                        Line::File { kind, file, .. } => Some((*kind, *file)),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(visible, [(Kind2::Staged, 0), (Kind2::Unstaged, 2)]);
+                view.staged_open = false;
+                view.rebuild(cx);
+                assert_eq!(
+                    view.lines
+                        .iter()
+                        .filter(|line| matches!(line, Line::File { .. }))
+                        .count(),
+                    1
+                );
+                view.collapsed.clear();
+                view.rebuild(cx);
+                assert_eq!(
+                    view.lines
+                        .iter()
+                        .filter(|line| matches!(line, Line::File { .. }))
+                        .count(),
+                    3
+                );
+            })
+            .unwrap();
+    }
+
     fn f(relative: &str, status: &str) -> ChangedFile {
         ChangedFile {
             path: format!("/r/{relative}"),

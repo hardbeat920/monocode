@@ -6,17 +6,17 @@ use monocode_core::{
 use std::{
     collections::HashMap,
     path::Path,
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
 };
 
 const LIMIT: usize = 24;
 #[derive(Default)]
 struct Memory {
     clock: u64,
-    entries: HashMap<String, (u64, Snapshot)>,
+    entries: HashMap<String, (u64, Arc<Snapshot>)>,
 }
 impl Memory {
-    fn get(&mut self, cwd: &str) -> Option<Snapshot> {
+    fn get(&mut self, cwd: &str) -> Option<Arc<Snapshot>> {
         let entry = self.entries.get_mut(&path_key(cwd))?;
         self.clock += 1;
         entry.0 = self.clock;
@@ -24,7 +24,8 @@ impl Memory {
     }
     fn put(&mut self, cwd: &str, state: Snapshot) {
         self.clock += 1;
-        self.entries.insert(path_key(cwd), (self.clock, state));
+        self.entries
+            .insert(path_key(cwd), (self.clock, Arc::new(state)));
         while self.entries.len() > LIMIT {
             let oldest = self
                 .entries
@@ -57,7 +58,7 @@ fn memory() -> &'static Mutex<Memory> {
     static MEMORY: OnceLock<Mutex<Memory>> = OnceLock::new();
     MEMORY.get_or_init(Default::default)
 }
-pub(crate) fn get(cwd: &str) -> Option<Snapshot> {
+pub(crate) fn get(cwd: &str) -> Option<Arc<Snapshot>> {
     memory().lock().ok()?.get(cwd)
 }
 pub(crate) fn remember(cwd: &str, state: &Snapshot) {
@@ -65,17 +66,26 @@ pub(crate) fn remember(cwd: &str, state: &Snapshot) {
         memory.remember(cwd, state);
     }
 }
-pub(crate) fn load(cwd: &Path) -> Result<Snapshot, String> {
+pub(crate) fn load(cwd: &Path) -> Result<Arc<Snapshot>, String> {
     let state = git::snapshot(cwd)?;
     // Failure leaves the last successful list intact.
     remember(&cwd.to_string_lossy(), &state);
-    Ok(state)
+    Ok(Arc::new(state))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use monocode_core::git::Worktree;
+    #[test]
+    fn reads_share_the_cached_snapshot() {
+        let mut memory = Memory::default();
+        memory.put("/repo", Snapshot::default());
+        assert!(Arc::ptr_eq(
+            &memory.get("/repo").unwrap(),
+            &memory.get("/repo").unwrap()
+        ));
+    }
     #[test]
     fn linked_checkout_warms_project_lists_without_replacing_its_branch() {
         let mut memory = Memory::default();

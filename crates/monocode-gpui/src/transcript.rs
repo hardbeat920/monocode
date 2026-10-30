@@ -42,7 +42,7 @@ use monocode_core::tool::{ToolCall, ToolState, tasks::Panel};
 use monocode_core::transcript::Row;
 use monocode_core::user_links::{UserMessageLink, parse_user_message_link};
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{BTreeSet, HashMap, HashSet, VecDeque},
     sync::Arc,
     time::Instant,
 };
@@ -515,6 +515,9 @@ pub(crate) struct TranscriptView {
     links: links::State,
     work_item_cards: user_links::Cards,
     source: Vec<Row>,
+    agent_panel_rows: BTreeSet<usize>,
+    batching_updates: bool,
+    pending_rebuild: Option<usize>,
     source_bytes: usize,
     attachment_images: HashMap<String, gpui::Entity<attachments::Photo>>,
     visuals: HashMap<usize, visuals::CachedVisual>,
@@ -2425,6 +2428,9 @@ impl TranscriptView {
             links: Default::default(),
             work_item_cards: Default::default(),
             source: Vec::new(),
+            agent_panel_rows: BTreeSet::new(),
+            batching_updates: false,
+            pending_rebuild: None,
             source_bytes: 0,
             attachment_images: HashMap::new(),
             visuals: HashMap::new(),
@@ -2856,6 +2862,14 @@ impl TranscriptView {
         let known = self.source.len();
         for (ix, row) in rows.into_iter().enumerate() {
             let ix = start + ix;
+            self.agent_panel_rows.remove(&ix);
+            if row.role == "tool"
+                && row.first
+                && serde_json::from_str::<ToolCall>(&row.text)
+                    .is_ok_and(|call| matches!(call.panel(), Some(Panel::Agent(_))))
+            {
+                self.agent_panel_rows.insert(ix);
+            }
             let bytes = row.text.capacity().saturating_add(row.role.capacity());
             if ix < self.source.len() {
                 let old = &self.source[ix];
@@ -3026,12 +3040,26 @@ impl TranscriptView {
         };
         self.rebuild(start, cx);
     }
+    pub(crate) fn begin_update_batch(&mut self) {
+        self.batching_updates = true;
+    }
+    pub(crate) fn end_update_batch(&mut self, cx: &mut Context<Self>) {
+        self.batching_updates = false;
+        if let Some(start) = self.pending_rebuild.take() {
+            self.rebuild(start, cx);
+        }
+    }
     fn rebuild(&mut self, start: usize, cx: &mut Context<Self>) {
         self.rebuild_rows(start, cx);
         cx.notify();
     }
     /// `rebuild` for a caller that notifies itself.
     fn rebuild_rows(&mut self, start: usize, cx: &mut Context<Self>) {
+        if self.batching_updates {
+            self.pending_rebuild = Some(self.pending_rebuild.map_or(start, |old| old.min(start)));
+            return;
+        }
+
         #[cfg(test)]
         {
             self.rebuild_passes += 1;
@@ -3117,20 +3145,20 @@ impl TranscriptView {
             }
         }
         if !self.mono
-            && (self.source[current_turn..current_end].iter().any(|row| {
-                row.role == "tool"
-                    && row.first
-                    && serde_json::from_str::<ToolCall>(&row.text)
-                        .is_ok_and(|call| matches!(call.panel(), Some(Panel::Agent(_))))
-            }) || self.rows.iter().any(|row| {
-                self.messages
-                    .get(row.message)
-                    .is_some_and(|message| message.turn == current_turn)
-                    && matches!(
-                        &row.body,
-                        Body::Tool { call, .. } if matches!(call.panel(), Some(Panel::Agent(_)))
-                    )
-            }))
+            && (self
+                .agent_panel_rows
+                .range(current_turn..current_end)
+                .next()
+                .is_some()
+                || self.rows.iter().any(|row| {
+                    self.messages
+                        .get(row.message)
+                        .is_some_and(|message| message.turn == current_turn)
+                        && matches!(
+                            &row.body,
+                            Body::Tool { call, .. } if matches!(call.panel(), Some(Panel::Agent(_)))
+                        )
+                }))
         {
             // Pinned runs sit below the fold's work rather than at their
             // original source offset. Rebuild the whole turn so a suffix
@@ -3173,8 +3201,7 @@ impl TranscriptView {
                 .unwrap_or(self.rows.len())
         };
         let old_count = self.rows.len();
-        let old_rows = self.rows[display_start..].to_vec();
-        let old_layouts: Vec<_> = old_rows
+        let old_layouts: Vec<_> = self.rows[display_start..]
             .iter()
             .enumerate()
             .map(|(ix, row)| {
@@ -3190,7 +3217,7 @@ impl TranscriptView {
             .into_iter()
             .map(|m| (m.start, m))
             .collect();
-        self.rows.truncate(display_start);
+        let old_rows = self.rows.split_off(display_start);
         let activity = if self.mono {
             phases::Phases::default()
         } else {
@@ -3205,6 +3232,10 @@ impl TranscriptView {
         let mut ready = false;
         let mut git_card: Option<Arc<git_turns::GitCard>> = None;
         let mut git_live_shown = false;
+        let last_prompt = self
+            .mono
+            .then(|| self.source.iter().rposition(Row::is_prompt))
+            .flatten();
         while at < self.source.len() {
             let mut end = at + 1;
             while end < self.source.len() && !self.source[end].first {
@@ -3686,7 +3717,6 @@ impl TranscriptView {
                 attachments,
                 prompt_fingerprint,
             });
-            let last_prompt = self.source.iter().rposition(|r| r.is_prompt());
             if self.mono
                 && is_prompt
                 && self.mono_pending_joins_live_turn()
@@ -5948,6 +5978,148 @@ mod scroll_tests {
         view.prompt_rise = None;
         view.motions.clear();
         view.rebuild(0, cx);
+    }
+
+    #[gpui::test]
+    fn overlapping_stream_updates_rebuild_once(cx: &mut TestAppContext) {
+        let view = cx.new(|_| TranscriptView::new());
+        let reference = cx.new(|_| TranscriptView::new());
+        for entity in [&view, &reference] {
+            entity.update(cx, |view, cx| {
+                view.visible(false, cx);
+                view.streaming(true, cx);
+                view.patch(0, vec![row("user", "Prompt"), row("assistant", "a")], cx);
+            });
+        }
+        let patches = vec![
+            (1, vec![row("assistant", "ab")]),
+            (1, vec![row("assistant", "abc"), row("assistant", "final")]),
+            (0, vec![row("user", "Updated prompt")]),
+        ];
+        reference.update(cx, |view, cx| {
+            for (start, rows) in patches.clone() {
+                view.patch(start, rows, cx);
+            }
+            view.streaming(false, cx);
+        });
+        view.update(cx, |view, cx| {
+            let before = view.rebuild_passes;
+            view.begin_update_batch();
+            for (start, rows) in patches {
+                view.patch(start, rows, cx);
+            }
+            view.streaming(false, cx);
+            assert_eq!(view.rebuild_passes, before);
+            view.end_update_batch(cx);
+            assert_eq!(view.rebuild_passes, before + 1);
+            assert_eq!(view.source[1].text, "abc");
+            assert_eq!(view.source[2].text, "final");
+        });
+        cx.update(|cx| {
+            let actual = view.read(cx);
+            let reference = reference.read(cx);
+            assert_eq!(
+                actual.rows.len(),
+                reference.rows.len(),
+                "batch={:?} sequential={:?}",
+                actual
+                    .rows
+                    .iter()
+                    .map(|r| (r.key, std::mem::discriminant(&r.body)))
+                    .collect::<Vec<_>>(),
+                reference
+                    .rows
+                    .iter()
+                    .map(|r| (r.key, std::mem::discriminant(&r.body)))
+                    .collect::<Vec<_>>()
+            );
+            assert!(
+                actual
+                    .rows
+                    .iter()
+                    .zip(&reference.rows)
+                    .all(|(a, b)| a.key == b.key
+                        && match (&a.body, &b.body) {
+                            (Body::Plain(a), Body::Plain(b)) => a == b,
+                            (Body::Markdown(a), Body::Markdown(b)) => a == b,
+                            (
+                                Body::WorkLine {
+                                    turn: a,
+                                    expandable: x,
+                                },
+                                Body::WorkLine {
+                                    turn: b,
+                                    expandable: y,
+                                },
+                            ) => a == b && x == y,
+                            (
+                                Body::Actions {
+                                    turn: a,
+                                    complete: x,
+                                },
+                                Body::Actions {
+                                    turn: b,
+                                    complete: y,
+                                },
+                            ) => a == b && x == y,
+                            _ => false,
+                        })
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn agent_panel_index_tracks_replaced_tool_rows(cx: &mut TestAppContext) {
+        let view = cx.new(|_| TranscriptView::new());
+        view.update(cx, |view, cx| {
+            let call = ToolCall::new("agent-1", "agent");
+            view.patch(
+                0,
+                vec![
+                    row("user", "Prompt"),
+                    row("tool", &serde_json::to_string(&call).unwrap()),
+                ],
+                cx,
+            );
+            assert!(view.agent_panel_rows.contains(&1));
+            let call = ToolCall::new("read-1", "read_file");
+            view.patch(
+                1,
+                vec![row("tool", &serde_json::to_string(&call).unwrap())],
+                cx,
+            );
+            assert!(view.agent_panel_rows.is_empty());
+        });
+    }
+
+    #[gpui::test]
+    #[ignore]
+    fn long_tool_turn_rebuild_timing(cx: &mut TestAppContext) {
+        let mut source = vec![row("user", "Inspect the files")];
+        source.extend((0..1_999).map(|i| {
+            let mut call = ToolCall::new(&i.to_string(), "read_file");
+            call.output = "file contents\n".repeat(8);
+            call.state = monocode_core::tool::ToolState::Completed;
+            row("tool", &serde_json::to_string(&call).unwrap())
+        }));
+        for trial in 0..5 {
+            let view = cx.new(|_| TranscriptView::new());
+            view.update(cx, |view, cx| view.patch(0, source.clone(), cx));
+            let start = Instant::now();
+            for _ in 0..20 {
+                view.update(cx, |view, cx| view.rebuild(1_999, cx));
+            }
+            let elapsed = start.elapsed();
+            view.update(cx, |view, _| {
+                assert_eq!(view.source.len(), 2_000);
+                assert!(!view.rows.is_empty());
+                assert!(view.messages.iter().any(|message| message.role == "tool"));
+            });
+            eprintln!(
+                "tool-turn trial={trial} rebuilds=20 elapsed_ms={:.3}",
+                elapsed.as_secs_f64() * 1000.
+            );
+        }
     }
 
     #[gpui::test]

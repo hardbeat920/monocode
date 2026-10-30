@@ -23,7 +23,7 @@ use monocode_core::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{BTreeSet, HashMap, VecDeque},
     path::PathBuf,
     sync::{
         Arc,
@@ -156,6 +156,115 @@ struct Loaded {
     error: Option<String>,
 }
 
+fn file_model(entry: &ReviewEntry, file: &ChangedFile, loaded: Option<&Loaded>) -> DiffFile {
+    if let Some(kind) = entry.staged {
+        let unchanged = loaded.is_some_and(|l| {
+            l.unified.is_some() && l.additions == 0 && l.deletions == 0 && !l.diff.binary
+        });
+        let index_counts =
+            loaded.is_some_and(|l| l.error.is_none()) && !(file.staged && file.unstaged);
+        let label = if file.staged && file.unstaged {
+            format!(
+                "{} ({})",
+                file.relative,
+                if kind { "Staged" } else { "Unstaged" }
+            )
+        } else {
+            file.relative.clone()
+        };
+        DiffFile {
+            id: entry.id.clone(),
+            path: file.path.clone(),
+            label,
+            binary: loaded.is_some_and(|l| l.diff.binary),
+            too_large: loaded.is_some_and(|l| l.diff.too_large),
+            empty_message: match loaded {
+                None => Some("Loading…".into()),
+                Some(l) if l.error.is_some() => Some(format!(
+                    "Couldn’t load diff: {}",
+                    l.error.clone().unwrap_or_default()
+                )),
+                _ if unchanged => Some(
+                    if kind {
+                        "No staged changes"
+                    } else {
+                        "No unstaged changes"
+                    }
+                    .into(),
+                ),
+                _ => None,
+            },
+            additions: loaded
+                .filter(|l| l.unified.is_some())
+                .map(|l| l.additions)
+                .unwrap_or(if index_counts {
+                    file.additions as u32
+                } else {
+                    0
+                }),
+            deletions: loaded
+                .filter(|l| l.unified.is_some())
+                .map(|l| l.deletions)
+                .unwrap_or(if index_counts {
+                    file.deletions as u32
+                } else {
+                    0
+                }),
+            blocks: if unchanged {
+                Arc::new(Vec::new())
+            } else {
+                loaded
+                    .and_then(|l| l.unified.clone())
+                    .unwrap_or_else(|| Arc::new(Vec::new()))
+            },
+            can_stage: !kind,
+            can_discard: !kind,
+            can_stage_hunk: !kind && !loaded.is_some_and(|l| l.diff.binary || l.diff.too_large),
+        }
+    } else {
+        let unified = loaded.and_then(|l| l.unified.clone());
+        DiffFile {
+            id: entry.id.clone(),
+            path: file.path.clone(),
+            label: file.relative.clone(),
+            binary: loaded.is_some_and(|l| l.diff.binary),
+            too_large: loaded.is_some_and(|l| l.diff.too_large),
+            empty_message: match loaded {
+                None => Some("Loading…".into()),
+                Some(l) if l.error.is_some() => Some(format!(
+                    "Couldn’t load diff: {}",
+                    l.error.clone().unwrap_or_default()
+                )),
+                Some(l)
+                    if l.unified.is_some()
+                        && l.additions == 0
+                        && l.deletions == 0
+                        && !l.diff.binary =>
+                {
+                    Some("No textual diff".into())
+                }
+                _ => None,
+            },
+            additions: loaded
+                .filter(|l| l.unified.is_some())
+                .map_or(file.additions as u32, |l| l.additions),
+            deletions: loaded
+                .filter(|l| l.unified.is_some())
+                .map_or(file.deletions as u32, |l| l.deletions),
+            blocks: unified.unwrap_or_else(|| Arc::new(Vec::new())),
+            can_stage: false,
+            can_discard: false,
+            can_stage_hunk: false,
+        }
+    }
+}
+
+struct ReviewEntry {
+    id: SharedString,
+    file: usize,
+    staged: Option<bool>,
+}
+
 /// One tab's files and diffs.
 struct Source {
     tab: ReviewTab,
@@ -164,6 +273,10 @@ struct Source {
     editor_mode: bool,
     _editor_events: Option<Subscription>,
     files: Option<Vec<ChangedFile>>,
+    entries: Vec<ReviewEntry>,
+    entry_indices: HashMap<String, usize>,
+    dirty: BTreeSet<usize>,
+    reset_models: bool,
     error: Option<String>,
     loaded: HashMap<String, Arc<Loaded>>,
     generation: Arc<AtomicU64>,
@@ -174,6 +287,44 @@ struct Source {
     _events: Subscription,
 }
 impl Source {
+    fn set_files(&mut self, files: Vec<ChangedFile>) {
+        self.files = Some(files);
+        self.index_entries();
+    }
+    fn index_entries(&mut self) {
+        self.entries = match (&self.tab, &self.files) {
+            (ReviewTab::Changes { staged, .. }, Some(files)) => entries(files, *staged)
+                .into_iter()
+                .map(|(id, staged, file)| ReviewEntry {
+                    id: id.into(),
+                    staged: Some(staged),
+                    file,
+                })
+                .collect(),
+            (ReviewTab::Commit { .. } | ReviewTab::Session { .. }, Some(files)) => files
+                .iter()
+                .enumerate()
+                .map(|(file, entry)| ReviewEntry {
+                    id: entry.relative.clone().into(),
+                    file,
+                    staged: None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        self.entry_indices = self
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| (entry.id.to_string(), i))
+            .collect();
+        self.dirty.clear();
+        self.reset_models = true;
+    }
+    fn set_loaded(&mut self, id: String, loaded: Arc<Loaded>) {
+        self.dirty.insert(self.entry_indices[&id]);
+        self.loaded.insert(id, loaded);
+    }
     fn cancel(&mut self) {
         self.generation.fetch_add(1, Ordering::SeqCst);
         self._tasks.clear();
@@ -272,6 +423,7 @@ pub(crate) struct ReviewPane {
     visible: bool,
     closed: bool,
     deferred: bool,
+    publish_task: Option<Task<()>>,
     /// The deferred body fades from its first rendered frame.
     revealed: Option<PaneReveal>,
     hovered_tab: Option<usize>,
@@ -304,7 +456,7 @@ impl Drop for ReviewPane {
 }
 
 /// workingTreeDiffEntries: staged entries first, or just one side.
-fn entries(files: &[ChangedFile], staged: Option<bool>) -> Vec<(String, bool, ChangedFile)> {
+fn entries(files: &[ChangedFile], staged: Option<bool>) -> Vec<(String, bool, usize)> {
     let kinds: &[bool] = match staged {
         Some(true) => &[true],
         Some(false) => &[false],
@@ -312,14 +464,14 @@ fn entries(files: &[ChangedFile], staged: Option<bool>) -> Vec<(String, bool, Ch
     };
     let mut out = Vec::new();
     for &kind in kinds {
-        for file in files {
+        for (index, file) in files.iter().enumerate() {
             if (kind && file.staged) || (!kind && file.unstaged) {
                 let id = format!(
                     "{}:{}",
                     if kind { "staged" } else { "unstaged" },
                     file.relative
                 );
-                out.push((id, kind, file.clone()));
+                out.push((id, kind, index));
             }
         }
     }
@@ -391,6 +543,7 @@ impl ReviewPane {
             preview_path: None,
             visible: false,
             closed: false,
+            publish_task: None,
             deferred: false,
             revealed: None,
             hovered_tab: None,
@@ -474,13 +627,17 @@ impl ReviewPane {
                 cx.notify();
             })
         });
-        Source {
+        let mut source = Source {
             editor_mode,
             editor,
             _editor_events: editor_events,
             tab,
             view,
             files: cached.as_ref().and_then(|s| s.files.clone()),
+            entries: Vec::new(),
+            entry_indices: HashMap::new(),
+            dirty: BTreeSet::new(),
+            reset_models: true,
             error: None,
             loaded: cached
                 .as_ref()
@@ -491,7 +648,9 @@ impl ReviewPane {
             refresh_pending: false,
             _tasks: Vec::new(),
             _events: events,
-        }
+        };
+        source.index_entries();
+        source
     }
     /// openChangesTab / openCommitTab: an existing tab takes the new focus.
     pub(crate) fn open(&mut self, tab: ReviewTab, cx: &mut Context<Self>) {
@@ -980,7 +1139,7 @@ impl ReviewPane {
                     ReviewTab::File { .. } => unreachable!(),
                     ReviewTab::Changes { cwd, .. } => {
                         let root = PathBuf::from(cwd);
-                        let index = scm::review_index(&root, known_index.as_ref())?;
+                        let index = scm::review_index(&root, known_index.as_deref())?;
                         let versions = scm::file_diff_versions(&root, &index).ok();
                         Ok((index.files, versions))
                     }
@@ -1009,7 +1168,7 @@ impl ReviewPane {
                             ReviewTab::Changes { path, staged, .. } => {
                                 let mut entries: Vec<_> = entries(&files, *staged)
                                     .into_iter()
-                                    .map(|(id, kind, file)| (id, Some(kind), file))
+                                    .map(|(id, kind, file)| (id, Some(kind), files[file].clone()))
                                     .collect();
                                 // The focused file loads first.
                                 if let Some(at) = path.as_ref().and_then(|p| {
@@ -1044,7 +1203,7 @@ impl ReviewPane {
                         let retained: std::collections::HashSet<_> =
                             order.iter().map(|e| e.0.clone()).collect();
                         source.loaded.retain(|id, _| retained.contains(id));
-                        source.files = Some(files);
+                        source.set_files(files);
                         this.publish(cx);
                         Some((order, versions))
                     }
@@ -1173,9 +1332,9 @@ impl ReviewPane {
                                 .iter_mut()
                                 .find(|s| Arc::ptr_eq(&s.generation, &counter))
                             {
-                                source.loaded.insert(id, loaded);
+                                source.set_loaded(id, loaded);
                             }
-                            this.publish(cx);
+                            this.queue_publish(cx);
                         });
                     }
                 });
@@ -1193,6 +1352,9 @@ impl ReviewPane {
                     source.loading = false;
                     refresh = std::mem::take(&mut source.refresh_pending);
                 }
+                if counter.load(Ordering::SeqCst) == generation {
+                    this.publish(cx);
+                }
                 if refresh {
                     this.load_active(cx);
                 }
@@ -1203,142 +1365,63 @@ impl ReviewPane {
         }
     }
 
+    fn queue_publish(&mut self, cx: &mut Context<Self>) {
+        if self.publish_task.is_some() {
+            return;
+        }
+        self.publish_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(50))
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.publish_task = None;
+                this.publish(cx);
+            });
+        }));
+    }
+
     /// WorkingTreeDiff's and CommitDiff's file models.
     fn publish(&mut self, cx: &mut Context<Self>) {
+        self.publish_task = None;
         let ix = self.state.active;
-        let Some(source) = self.sources.get(ix) else {
+        let Some(source) = self.sources.get_mut(ix) else {
             return;
         };
         let Some(files) = &source.files else {
             cx.notify();
             return;
         };
-        let models: Vec<DiffFile> = match &source.tab {
-            ReviewTab::File { .. } => return,
-            ReviewTab::Changes { staged, .. } => entries(files, *staged)
-                .into_iter()
-                .map(|(id, kind, file)| {
-                    let loaded = source.loaded.get(&id);
-                    let unchanged = loaded.is_some_and(|l| {
-                        l.unified.is_some()
-                            && l.additions == 0
-                            && l.deletions == 0
-                            && !l.diff.binary
-                    });
-                    let index_counts = loaded.is_some_and(|l| l.error.is_none())
-                        && !(file.staged && file.unstaged);
-                    let label = if file.staged && file.unstaged {
-                        format!(
-                            "{} ({})",
-                            file.relative,
-                            if kind { "Staged" } else { "Unstaged" }
-                        )
-                    } else {
-                        file.relative.clone()
-                    };
-                    DiffFile {
-                        id: id.into(),
-                        path: file.path.clone(),
-                        label,
-                        binary: loaded.is_some_and(|l| l.diff.binary),
-                        too_large: loaded.is_some_and(|l| l.diff.too_large),
-                        empty_message: match loaded {
-                            None => Some("Loading…".into()),
-                            Some(l) if l.error.is_some() => Some(format!(
-                                "Couldn’t load diff: {}",
-                                l.error.clone().unwrap_or_default()
-                            )),
-                            _ if unchanged => Some(
-                                if kind {
-                                    "No staged changes"
-                                } else {
-                                    "No unstaged changes"
-                                }
-                                .into(),
-                            ),
-                            _ => None,
-                        },
-                        additions: loaded
-                            .filter(|l| l.unified.is_some())
-                            .map(|l| l.additions)
-                            .unwrap_or(if index_counts {
-                                file.additions as u32
-                            } else {
-                                0
-                            }),
-                        deletions: loaded
-                            .filter(|l| l.unified.is_some())
-                            .map(|l| l.deletions)
-                            .unwrap_or(if index_counts {
-                                file.deletions as u32
-                            } else {
-                                0
-                            }),
-                        blocks: if unchanged {
-                            Arc::new(Vec::new())
-                        } else {
-                            loaded
-                                .and_then(|l| l.unified.clone())
-                                .unwrap_or_else(|| Arc::new(Vec::new()))
-                        },
-                        can_stage: !kind,
-                        can_discard: !kind,
-                        can_stage_hunk: !kind
-                            && !loaded.is_some_and(|l| l.diff.binary || l.diff.too_large),
-                    }
-                })
-                .collect(),
-            ReviewTab::Commit { .. } | ReviewTab::Session { .. } => files
-                .iter()
-                .map(|file| {
-                    let loaded = source.loaded.get(&file.relative);
-                    let unified = loaded.and_then(|l| l.unified.clone());
-                    DiffFile {
-                        id: file.relative.clone().into(),
-                        path: file.path.clone(),
-                        label: file.relative.clone(),
-                        binary: loaded.is_some_and(|l| l.diff.binary),
-                        too_large: loaded.is_some_and(|l| l.diff.too_large),
-                        empty_message: match loaded {
-                            None => Some("Loading…".into()),
-                            Some(l) if l.error.is_some() => Some(format!(
-                                "Couldn’t load diff: {}",
-                                l.error.clone().unwrap_or_default()
-                            )),
-                            Some(l)
-                                if l.unified.is_some()
-                                    && l.additions == 0
-                                    && l.deletions == 0
-                                    && !l.diff.binary =>
-                            {
-                                Some("No textual diff".into())
-                            }
-                            _ => None,
-                        },
-                        additions: loaded
-                            .filter(|l| l.unified.is_some())
-                            .map_or(file.additions as u32, |l| l.additions),
-                        deletions: loaded
-                            .filter(|l| l.unified.is_some())
-                            .map_or(file.deletions as u32, |l| l.deletions),
-                        blocks: unified.unwrap_or_else(|| Arc::new(Vec::new())),
-                        can_stage: false,
-                        can_discard: false,
-                        can_stage_hunk: false,
-                    }
-                })
-                .collect(),
+        let reset = std::mem::take(&mut source.reset_models);
+        let changed: Vec<_> = if reset {
+            (0..source.entries.len()).collect()
+        } else {
+            std::mem::take(&mut source.dirty).into_iter().collect()
         };
-        let totals = models
-            .iter()
-            .fold((0, 0), |(a, d), f| (a + f.additions, d + f.deletions));
-        let (focus, file_count) = match &source.tab {
-            ReviewTab::File { .. } => return,
+        source.dirty.clear();
+        let models: Vec<_> = changed
+            .into_iter()
+            .map(|i| {
+                let entry = &source.entries[i];
+                file_model(
+                    entry,
+                    &files[entry.file],
+                    source.loaded.get(entry.id.as_ref()).map(Arc::as_ref),
+                )
+            })
+            .collect();
+        let totals = reset.then(|| {
+            models
+                .iter()
+                .fold((0, 0), |(a, d), f| (a + f.additions, d + f.deletions))
+        });
+        let presentation = reset.then(|| match &source.tab {
+            ReviewTab::File { .. } => (None, 0),
             ReviewTab::Changes { path, staged, .. } => (
                 path.as_ref().and_then(|p| {
                     entries(files, *staged)
                         .into_iter()
-                        .find(|(_, kind, f)| {
+                        .find(|(_, kind, i)| {
+                            let f = &files[*i];
                             staged.is_none_or(|s| s == *kind) && (&f.path == p || &f.relative == p)
                         })
                         .map(|(id, _, _)| SharedString::from(id))
@@ -1359,12 +1442,16 @@ impl ReviewPane {
                 }),
                 models.len(),
             ),
-        };
+        });
         source.view.update(cx, |view, cx| {
-            view.totals = Some(totals);
-            view.file_count = Some(file_count);
-            view.set_files(models, cx);
-            view.focus_file(focus, cx);
+            if let Some((focus, file_count)) = presentation {
+                view.totals = totals;
+                view.file_count = Some(file_count);
+                view.set_files(models, cx);
+                view.focus_file(focus, cx);
+            } else {
+                view.update_files(models, cx);
+            }
         });
         cx.notify();
     }
@@ -1948,6 +2035,131 @@ mod tests {
     impl Drop for Repo {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn loaded_diff(original: &str, current: &str) -> Arc<Loaded> {
+        let unified = diff::build_unified_file(original, current, diff::CONTEXT_DEFAULT);
+        Arc::new(Loaded {
+            version: None,
+            diff: Arc::new(FileDiff {
+                original: original.into(),
+                current: current.into(),
+                ..Default::default()
+            }),
+            unified: Some(Arc::new(unified.blocks)),
+            additions: unified.additions,
+            deletions: unified.deletions,
+            error: None,
+        })
+    }
+
+    #[gpui::test]
+    fn streamed_publications_keep_totals_and_file_count_across_manifest_changes(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let git = cx.new(|cx| ProjectGit::new("~".into(), cx));
+        let pane = cx.new(|cx| {
+            ReviewPane::new(
+                git,
+                ReviewState {
+                    tabs: vec![ReviewTab::Changes {
+                        cwd: "~".into(),
+                        path: None,
+                        staged: None,
+                    }],
+                    ..Default::default()
+                },
+                cx,
+            )
+        });
+        pane.update(cx, |pane, cx| {
+            pane.sources[0].set_files(vec![file("a", true, true), file("b", false, true)]);
+            pane.publish(cx);
+            assert_eq!(pane.sources[0].view.read(cx).totals, Some((0, 0)));
+            let a = loaded_diff("one\n", "two\nthree\nfour\n");
+            let b = loaded_diff("one\ntwo\n", "three\nfour\nfive\nsix\n");
+            pane.sources[0].set_loaded("staged:a".into(), a);
+            pane.publish(cx);
+            assert_eq!(pane.sources[0].view.read(cx).totals, Some((3, 1)));
+            pane.sources[0].set_loaded("unstaged:b".into(), b.clone());
+            pane.publish(cx);
+            assert_eq!(pane.sources[0].view.read(cx).totals, Some((7, 3)));
+            assert_eq!(pane.sources[0].view.read(cx).file_count, Some(2));
+            pane.sources[0].set_loaded("unstaged:b".into(), b);
+            pane.publish(cx);
+            assert_eq!(pane.sources[0].view.read(cx).totals, Some((7, 3)));
+            pane.sources[0].set_files(vec![file("b", false, true)]);
+            pane.publish(cx);
+            assert_eq!(pane.sources[0].view.read(cx).totals, Some((4, 2)));
+            assert_eq!(pane.sources[0].view.read(cx).file_count, Some(1));
+            pane.sources[0].set_loaded("unstaged:b".into(), loaded_diff("same\n", "same\n"));
+            pane.publish(cx);
+            assert_eq!(pane.sources[0].view.read(cx).totals, Some((0, 0)));
+        });
+    }
+
+    #[gpui::test]
+    #[ignore]
+    fn review_publication_timing(cx: &mut gpui::TestAppContext) {
+        let files: Vec<_> = (0..2_000)
+            .map(|i| file(&format!("file-{i}.rs"), false, true))
+            .collect();
+        let text = "added line\n".repeat(250);
+        let unified = diff::build_unified_file("", &text, diff::CONTEXT_DEFAULT);
+        let loaded = Arc::new(Loaded {
+            version: None,
+            diff: Arc::new(FileDiff::default()),
+            unified: Some(Arc::new(unified.blocks)),
+            additions: unified.additions,
+            deletions: unified.deletions,
+            error: None,
+        });
+        for trial in 0..5 {
+            let git = cx.new(|cx| ProjectGit::new("~".into(), cx));
+            let pane = cx.new(|cx| {
+                ReviewPane::new(
+                    git,
+                    ReviewState {
+                        tabs: vec![ReviewTab::Commit {
+                            cwd: "~".into(),
+                            sha: "benchmark".into(),
+                            short_sha: "bench".into(),
+                            subject: "Benchmark".into(),
+                        }],
+                        ..Default::default()
+                    },
+                    cx,
+                )
+            });
+            pane.update(cx, |pane, cx| {
+                pane.sources[0].set_files(files.clone());
+                pane.publish(cx);
+            });
+            let start = std::time::Instant::now();
+            let mut longest = std::time::Duration::ZERO;
+            for batch in (0..files.len()).step_by(4) {
+                let tick = std::time::Instant::now();
+                pane.update(cx, |pane, cx| {
+                    for file in &files[batch..batch + 4] {
+                        pane.sources[0].set_loaded(file.relative.clone(), loaded.clone());
+                    }
+                    pane.publish(cx);
+                });
+                longest = longest.max(tick.elapsed());
+            }
+            let elapsed = start.elapsed();
+            pane.update(cx, |pane, cx| {
+                assert_eq!(pane.sources[0].loaded.len(), 2_000);
+                let view = pane.sources[0].view.read(cx);
+                assert_eq!(view.totals, Some((500_000, 0)));
+                assert_eq!(view.file_count, Some(2_000));
+            });
+            eprintln!(
+                "review-publication trial={trial} total_ms={:.3} longest_update_ms={:.3}",
+                elapsed.as_secs_f64() * 1000.,
+                longest.as_secs_f64() * 1000.
+            );
         }
     }
 

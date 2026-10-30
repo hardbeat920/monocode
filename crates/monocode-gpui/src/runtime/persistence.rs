@@ -67,10 +67,7 @@ impl PendingSave {
                 store
                     .agent_settings(session)?
                     .is_some_and(|settings| settings.account.id == *account)
-                    && store
-                        .sessions()?
-                        .iter()
-                        .any(|current| current.id == session && current.provider == *provider)
+                    && store.session_provider(session)?.as_ref() == Some(provider)
             } else {
                 true
             };
@@ -135,6 +132,51 @@ mod tests {
         transcript.begin("assistant");
         store.write_rows(session.id, 0, &transcript.rows).unwrap();
         (Arc::new(Mutex::new(store)), session.id, transcript)
+    }
+
+    #[test]
+    fn context_flush_does_not_overwrite_a_new_provider_or_account() {
+        for switch_account in [false, true] {
+            let (store, id, transcript) = conversation();
+            let now = Instant::now();
+            let mut pending = PendingSave::new(true, now);
+            let mut settings = locked(&store).unwrap().agent_settings(id).unwrap().unwrap();
+            pending.own_context("codex", &settings.account.id);
+            let usage = monocode_core::context::Usage {
+                used: 123,
+                window: Some(1000),
+            };
+            pending.context_changed();
+            pending.flush(&store, id, &transcript, &usage, now).unwrap();
+            assert_eq!(
+                locked(&store).unwrap().context_usage(id).unwrap(),
+                Some(usage)
+            );
+            if switch_account {
+                settings.account.id = "synthetic-other-account".into();
+                locked(&store)
+                    .unwrap()
+                    .save_agent_settings(id, &settings)
+                    .unwrap();
+            } else {
+                locked(&store)
+                    .unwrap()
+                    .change_provider(id, "claude")
+                    .unwrap();
+            }
+            let before = locked(&store).unwrap().context_usage(id).unwrap();
+            pending.context_changed();
+            pending
+                .flush(
+                    &store,
+                    id,
+                    &transcript,
+                    &monocode_core::context::Usage { used: 999, ..usage },
+                    now,
+                )
+                .unwrap();
+            assert_eq!(locked(&store).unwrap().context_usage(id).unwrap(), before);
+        }
     }
 
     #[test]

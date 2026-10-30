@@ -214,6 +214,15 @@ impl TranscriptView {
         let mut source = page.rows;
         source.append(&mut self.source);
         self.source = source;
+        for (i, row) in self.source[..k].iter().enumerate() {
+            if row.role == "tool"
+                && row.first
+                && serde_json::from_str::<ToolCall>(&row.text)
+                    .is_ok_and(|call| matches!(call.panel(), Some(Panel::Agent(_))))
+            {
+                self.agent_panel_rows.insert(i);
+            }
+        }
         for (turn, info) in page.turns {
             self.turns.entry(turn).or_insert(info);
         }
@@ -243,6 +252,10 @@ impl TranscriptView {
                 f(at)
             }
         };
+        self.agent_panel_rows = std::mem::take(&mut self.agent_panel_rows)
+            .into_iter()
+            .filter_map(f)
+            .collect();
         map(&mut self.visuals, f);
         map(&mut self.prepared_parsers, f);
         map(&mut self.entrances, f);
@@ -398,6 +411,7 @@ impl TranscriptView {
             following: self.list.is_following_tail(),
         });
         self.source = Vec::new();
+        self.agent_panel_rows.clear();
         self.source_bytes = 0;
         self.history_start = 0;
         self.history_loading = false;
@@ -449,6 +463,7 @@ impl TranscriptView {
         self.drop_older_history();
         // Reopening also handles a source that became empty in another window.
         self.source = Vec::new();
+        self.agent_panel_rows.clear();
         self.source_bytes = 0;
         self.messages = Vec::new();
         self.rows = Vec::new();

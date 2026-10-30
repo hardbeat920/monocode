@@ -56,6 +56,22 @@ pub struct Store {
     shared: Option<shared::Shared>,
 }
 impl Store {
+    pub fn session_provider(&self, id: i64) -> Result<Option<String>, String> {
+        use rusqlite::OptionalExtension;
+        if let Some(remote) = self.remote_session(id)? {
+            return Ok(Some(remote.summary.provider));
+        }
+        let query = if self.shared.is_some() {
+            "SELECT harness FROM sessions WHERE id=?1"
+        } else {
+            "SELECT provider FROM native_sessions WHERE id=?1"
+        };
+        self.conn
+            .query_row(query, [self.persisted_session_id(id)?], |row| row.get(0))
+            .optional()
+            .map_err(|error| error.to_string())
+    }
+
     pub fn reset_provider_id_if(&self, id: i64, expected: Option<&str>) -> Result<(), String> {
         if self.shared.is_some() {
             return self.shared_reset_provider_id_if(id, expected);
@@ -1176,6 +1192,25 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn session_provider_tracks_picker_changes_in_both_schemas() {
+        for store in [
+            super::Store::open(std::path::Path::new(":memory:")).unwrap(),
+            super::Store::open_monocode(std::path::Path::new(":memory:")).unwrap(),
+        ] {
+            let session = store.create("codex", "/synthetic-project").unwrap();
+            assert_eq!(
+                store.session_provider(session.id).unwrap().as_deref(),
+                Some("codex")
+            );
+            store.change_provider(session.id, "claude").unwrap();
+            assert_eq!(
+                store.session_provider(session.id).unwrap().as_deref(),
+                Some("claude")
+            );
+        }
+    }
+
     #[test]
     fn removed_worktree_keeps_history_and_requires_reattachment() {
         let mut store = super::Store::open(std::path::Path::new(":memory:")).unwrap();

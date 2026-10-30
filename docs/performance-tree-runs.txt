@@ -1,0 +1,10 @@
+before run=0 changes-tree trial=0 files=20000 elapsed_ms=63.299
+after run=0 changes-tree trial=0 files=20000 elapsed_ms=14.714
+before run=1 changes-tree trial=0 files=20000 elapsed_ms=35.238
+after run=1 changes-tree trial=0 files=20000 elapsed_ms=7.112
+before run=2 changes-tree trial=0 files=20000 elapsed_ms=29.907
+after run=2 changes-tree trial=0 files=20000 elapsed_ms=7.090
+before run=3 changes-tree trial=0 files=20000 elapsed_ms=27.050
+after run=3 changes-tree trial=0 files=20000 elapsed_ms=7.090
+before run=4 changes-tree trial=0 files=20000 elapsed_ms=29.543
+after run=4 changes-tree trial=0 files=20000 elapsed_ms=6.830

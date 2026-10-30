@@ -140,14 +140,26 @@ fn pretty_path(path: &str) -> String {
 }
 /// Port of shared/lib/fuzzy.ts. Positions are native UTF-8 byte ranges.
 pub fn fuzzy(query: &str, text: &str) -> Option<(i64, Vec<Range<usize>>)> {
-    let chars: Vec<_> = text
-        .char_indices()
+    fuzzy_prepared(&query_tokens(query), &lower_chars(text))
+}
+fn lower_chars(text: &str) -> Vec<(usize, char, char)> {
+    text.char_indices()
         .flat_map(|(at, ch)| ch.to_lowercase().map(move |lower| (at, ch, lower)))
-        .collect();
+        .collect()
+}
+fn query_tokens(query: &str) -> Vec<Vec<char>> {
+    query
+        .split_whitespace()
+        .map(|token| token.chars().flat_map(char::to_lowercase).collect())
+        .collect()
+}
+fn fuzzy_prepared(
+    tokens: &[Vec<char>],
+    chars: &[(usize, char, char)],
+) -> Option<(i64, Vec<Range<usize>>)> {
     let mut score = 0;
     let mut ranges = Vec::new();
-    for token in query.split_whitespace() {
-        let needle: Vec<_> = token.chars().flat_map(char::to_lowercase).collect();
+    for needle in tokens {
         let mut qi = 0;
         let mut consecutive = 0;
         for (ix, &(at, ch, lower)) in chars.iter().enumerate() {
@@ -221,41 +233,68 @@ pub fn projects(paths: &[String], query: &str) -> Vec<Hit> {
         })
         .collect()
 }
-pub fn filenames(files: &[ProjectFile], query: &str, recent: &[String]) -> Vec<Hit> {
-    let mut hits: Vec<_> = files
-        .iter()
-        .filter_map(|f| {
-            let (mut score, highlights) = if let Some((s, h)) = fuzzy(query, &f.name) {
-                (s + 400, h)
-            } else {
-                (fuzzy(query, &f.relative)?.0, vec![])
-            };
-            if let Some(ix) = recent.iter().position(|p| p == &f.path) {
-                score += (30 - ix.min(30)) as i64 * 8;
-            }
-            Some(Hit {
-                id: format!("file:{}", f.path),
-                target: Target::File {
-                    path: f.path.clone(),
-                    location: None,
-                },
-                title: f.name.clone(),
-                meta: f.relative.clone(),
-                provider: String::new(),
-                highlights,
-                score,
-                updated_at: 0,
+#[derive(Default)]
+pub struct FilenameIndex {
+    files: Vec<IndexedFile>,
+}
+struct IndexedFile {
+    file: ProjectFile,
+    name: Vec<(usize, char, char)>,
+    relative: Vec<(usize, char, char)>,
+}
+impl FilenameIndex {
+    pub fn new(files: Vec<ProjectFile>) -> Self {
+        Self {
+            files: files
+                .into_iter()
+                .map(|file| IndexedFile {
+                    name: lower_chars(&file.name),
+                    relative: lower_chars(&file.relative),
+                    file,
+                })
+                .collect(),
+        }
+    }
+    pub fn rank(&self, query: &str, recent: &[String]) -> Vec<Hit> {
+        let tokens = query_tokens(query);
+        let mut hits: Vec<_> = self
+            .files
+            .iter()
+            .filter_map(|indexed| {
+                let f = &indexed.file;
+                let (mut score, highlights) =
+                    if let Some((s, h)) = fuzzy_prepared(&tokens, &indexed.name) {
+                        (s + 400, h)
+                    } else {
+                        (fuzzy_prepared(&tokens, &indexed.relative)?.0, vec![])
+                    };
+                if let Some(ix) = recent.iter().position(|p| p == &f.path) {
+                    score += (30 - ix.min(30)) as i64 * 8;
+                }
+                Some(Hit {
+                    id: format!("file:{}", f.path),
+                    target: Target::File {
+                        path: f.path.clone(),
+                        location: None,
+                    },
+                    title: f.name.clone(),
+                    meta: f.relative.clone(),
+                    provider: String::new(),
+                    highlights,
+                    score,
+                    updated_at: 0,
+                })
             })
-        })
-        .collect();
-    hits.sort_by(|a, b| {
-        b.score
-            .cmp(&a.score)
-            .then(a.meta.len().cmp(&b.meta.len()))
-            .then(a.meta.cmp(&b.meta))
-    });
-    hits.truncate(40);
-    hits
+            .collect();
+        hits.sort_by(|a, b| {
+            b.score
+                .cmp(&a.score)
+                .then(a.meta.len().cmp(&b.meta.len()))
+                .then(a.meta.cmp(&b.meta))
+        });
+        hits.truncate(40);
+        hits
+    }
 }
 pub fn literal_ranges(text: &str, query: &str) -> Vec<Range<usize>> {
     if query.is_empty() {

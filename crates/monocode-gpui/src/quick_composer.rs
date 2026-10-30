@@ -17,7 +17,7 @@ use gpui::{
 use monocode_core::{
     agent::AccessMode, git::Snapshot, project_appearance::ProjectAppearance, provider::Kind,
 };
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 #[cfg(all(target_os = "macos", not(test)))]
 mod hotkey;
 
@@ -196,7 +196,7 @@ pub(crate) struct QuickComposer {
     fast: bool,
     access: AccessMode,
     workspace: Workspace,
-    git: Option<Snapshot>,
+    git: Option<Arc<Snapshot>>,
     git_settled: bool,
     git_epoch: usize,
     attachments: Vec<PathBuf>,

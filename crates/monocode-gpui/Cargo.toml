@@ -5,6 +5,9 @@ edition = "2024"
 license.workspace = true
 publish = false
 
+[features]
+perf-trace = ["gpui/profiler"]
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true

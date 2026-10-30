@@ -169,7 +169,10 @@ fn fuzzy_tokens_filename_priority_and_utf8_ranges_match_react() {
             relative: "search.rs".into(),
         },
     ];
-    assert_eq!(filenames(&files, "search", &[])[0].title, "search.rs");
+    assert_eq!(
+        FilenameIndex::new(files).rank("search", &[])[0].title,
+        "search.rs"
+    );
     let preview = snippet(
         &format!("{}café needle{}", "🙂 ".repeat(90), " end".repeat(90)),
         "CAFÉ needle",
@@ -207,4 +210,62 @@ fn unopened_titles_are_searchable_and_the_reader_sees_new_writes() {
             session: session.id,
             row: 1
         }));
+}
+
+#[test]
+#[ignore]
+fn filename_ranking_timing() {
+    let files: Vec<_> = (0..20_000)
+        .map(|i| ProjectFile {
+            name: format!("component-{i}.rs"),
+            path: format!("/repo/src/components/group-{}/component-{i}.rs", i % 100),
+            relative: format!("src/components/group-{}/component-{i}.rs", i % 100),
+        })
+        .collect();
+    let index = FilenameIndex::new(files);
+    for trial in 0..5 {
+        let start = std::time::Instant::now();
+        for _ in 0..20 {
+            let hits = index.rank("src components", &[]);
+            assert_eq!(hits.len(), 40);
+            assert!(hits
+                .iter()
+                .all(|hit| hit.meta.starts_with("src/components/")));
+            std::hint::black_box(hits);
+        }
+        eprintln!(
+            "filename-ranking trial={trial} queries=20 elapsed_ms={:.3}",
+            start.elapsed().as_secs_f64() * 1000.
+        );
+    }
+}
+
+#[test]
+fn indexed_filenames_preserve_recency_and_unicode_ranges() {
+    let index = FilenameIndex::new(vec![
+        ProjectFile {
+            name: "Café.rs".into(),
+            path: "/repo/Café.rs".into(),
+            relative: "Café.rs".into(),
+        },
+        ProjectFile {
+            name: "İstanbul.rs".into(),
+            path: "/repo/İstanbul.rs".into(),
+            relative: "İstanbul.rs".into(),
+        },
+        ProjectFile {
+            name: "Café.rs".into(),
+            path: "/repo/src/Café.rs".into(),
+            relative: "src/Café.rs".into(),
+        },
+    ]);
+    let hits = index.rank("café", &["/repo/src/Café.rs".into()]);
+    assert_eq!(hits.len(), 2);
+    assert_eq!(hits[0].meta, "src/Café.rs");
+    assert_eq!(hits[0].highlights, [0..1, 1..2, 2..3, 3..5]);
+    let hits = index.rank("İ", &[]);
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].highlights.len(), 1);
+    assert_eq!(hits[0].highlights[0], 0..2);
+    assert!(index.rank("missing", &[]).is_empty());
 }

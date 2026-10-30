@@ -8,6 +8,7 @@ use monocode_core::scm::{self, DiffIndex, DiffStats};
 use std::{
     collections::HashMap,
     path::PathBuf,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -61,19 +62,28 @@ fn parent(path: &str) -> &str {
     path.rfind('/').map_or("", |i| &path[..i])
 }
 
+#[derive(Clone)]
+struct PreparedIndex {
+    index: Arc<DiffIndex>,
+    statuses: Arc<StatusMap>,
+    changes: Arc<crate::changes::PreparedChanges>,
+}
+
 pub(crate) struct ProjectGit {
     /// The active session's working folder (its worktree, if it has one):
     /// Sidebar.tsx's `gitRoot`.
     project: String,
     pub root: String,
-    pub index: Option<DiffIndex>,
+    pub index: Option<Arc<DiffIndex>>,
     pub stats: Option<DiffStats>,
-    pub statuses: StatusMap,
+    pub statuses: Arc<StatusMap>,
+    pub changes: Arc<crate::changes::PreparedChanges>,
     /// Bumped on every observed change, for views that reread on it.
     pub epoch: u64,
     pub review_cache: crate::review::ReviewCache,
-    versions: Option<HashMap<String, scm::FileDiffVersion>>,
-    remembered: HashMap<String, (u64, DiffIndex)>,
+    versions: Option<Arc<HashMap<String, scm::FileDiffVersion>>>,
+    remembered: HashMap<String, (u64, PreparedIndex)>,
+    remembered_files: usize,
     clock: u64,
     in_flight: bool,
     pending: bool,
@@ -90,11 +100,13 @@ impl ProjectGit {
             project: String::new(),
             index: None,
             stats: None,
-            statuses: StatusMap::default(),
+            statuses: Arc::default(),
+            changes: Arc::default(),
             epoch: 0,
             review_cache: Default::default(),
             versions: None,
             remembered: HashMap::new(),
+            remembered_files: 0,
             clock: 0,
             in_flight: false,
             pending: false,
@@ -118,12 +130,14 @@ impl ProjectGit {
         }
         self.project = project.clone();
         self.root = project.clone();
-        self.index = self.remembered.get(&project).map(|(_, i)| i.clone());
-        self.stats = self.index.as_ref().map(stats_of);
-        self.statuses = self
-            .index
-            .as_ref()
-            .map(|i| status_maps(i, &self.root))
+        let remembered = self.remembered.get(&project).map(|(_, snapshot)| snapshot);
+        self.index = remembered.map(|snapshot| snapshot.index.clone());
+        self.stats = self.index.as_deref().map(stats_of);
+        self.statuses = remembered
+            .map(|snapshot| snapshot.statuses.clone())
+            .unwrap_or_default();
+        self.changes = remembered
+            .map(|snapshot| snapshot.changes.clone())
             .unwrap_or_default();
         self.stats_loaded = None;
         self.versions = None;
@@ -195,7 +209,6 @@ impl ProjectGit {
         if self
             .stats_loaded
             .is_none_or(|at| at.elapsed() >= RESUME_TTL)
-            || self.poll.is_some()
         {
             self.warm_choices(cx);
             self.reload(cx);
@@ -231,10 +244,18 @@ impl ProjectGit {
         self.in_flight = true;
         let project = self.project.clone();
         let path = PathBuf::from(&project);
+        let previous = self.index.clone();
+        let previous_versions = self.versions.clone();
         let work = cx.background_executor().spawn(async move {
             let index = scm::diff_index(&path)?;
-            let versions = scm::file_diff_versions(&path, &index).ok();
-            Ok::<_, String>((index, versions))
+            let versions = scm::file_diff_versions(&path, &index).ok().map(Arc::new);
+            let changed = previous.as_deref() != Some(&index) || previous_versions != versions;
+            let prepared = changed.then(|| PreparedIndex {
+                statuses: Arc::new(status_maps(&index, &path.to_string_lossy())),
+                changes: Arc::new(crate::changes::PreparedChanges::new(&index)),
+                index: Arc::new(index),
+            });
+            Ok::<_, String>((prepared, versions))
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;
@@ -243,15 +264,16 @@ impl ProjectGit {
                 // A slow or unavailable checkout keeps its last snapshot, and
                 // never takes another checkout's.
                 if this.project == project
-                    && let Ok((next, versions)) = result
+                    && let Ok((prepared, versions)) = result
                 {
                     this.stats_loaded = Some(Instant::now());
-                    this.remember(&project, &next);
-                    if this.index.as_ref() != Some(&next) || this.versions != versions {
+                    if let Some(next) = prepared {
                         let had = this.index.is_some();
-                        this.stats = Some(stats_of(&next));
-                        this.statuses = status_maps(&next, &this.root);
-                        this.index = Some(next);
+                        this.remember(&project, next.clone());
+                        this.stats = Some(stats_of(&next.index));
+                        this.statuses = next.statuses;
+                        this.changes = next.changes;
+                        this.index = Some(next.index);
                         this.versions = versions;
                         if had {
                             this.epoch += 1;
@@ -269,12 +291,16 @@ impl ProjectGit {
     }
     /// rememberIndex: recent checkouts open on their last snapshot, within 24
     /// checkouts and 20,000 files.
-    fn remember(&mut self, project: &str, index: &DiffIndex) {
+    fn remember(&mut self, project: &str, index: PreparedIndex) {
         self.clock += 1;
-        self.remembered
-            .insert(project.to_owned(), (self.clock, index.clone()));
-        let mut files: usize = self.remembered.values().map(|(_, i)| i.files.len()).sum();
-        while self.remembered.len() > 24 || files > 20_000 {
+        self.remembered_files += index.index.files.len();
+        if let Some((_, old)) = self
+            .remembered
+            .insert(project.to_owned(), (self.clock, index))
+        {
+            self.remembered_files -= old.index.files.len();
+        }
+        while self.remembered.len() > 24 || self.remembered_files > 20_000 {
             let Some(oldest) = self
                 .remembered
                 .iter()
@@ -284,7 +310,7 @@ impl ProjectGit {
                 break;
             };
             if let Some((_, gone)) = self.remembered.remove(&oldest) {
-                files -= gone.files.len();
+                self.remembered_files -= gone.index.files.len();
             }
         }
     }

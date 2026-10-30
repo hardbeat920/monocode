@@ -13,6 +13,7 @@ use monocode_core::{
     files::path_key,
     git::{self, Snapshot},
 };
+use std::sync::Arc;
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
@@ -124,7 +125,7 @@ fn tab_stats(
 pub(crate) struct WorktreeSwitcher {
     cwd: String,
     focused: Option<WorktreeFocus>,
-    state: Option<Snapshot>,
+    state: Option<Arc<Snapshot>>,
     search: Entity<input::Input>,
     active: usize,
     scroll: ScrollHandle,
@@ -232,13 +233,13 @@ impl WorktreeSwitcher {
         self.state.is_some()
             && self.load_error.is_none()
             && !self.query(cx).is_empty()
-            && rows(&self.cwd, self.state.as_ref(), &self.query(cx)).is_empty()
+            && rows(&self.cwd, self.state.as_deref(), &self.query(cx)).is_empty()
     }
     fn step(&mut self, delta: isize, cx: &mut Context<Self>) {
         if self.creating {
             return;
         }
-        let count = rows(&self.cwd, self.state.as_ref(), &self.query(cx)).len();
+        let count = rows(&self.cwd, self.state.as_deref(), &self.query(cx)).len();
         self.active = self
             .active
             .saturating_add_signed(delta)
@@ -250,7 +251,7 @@ impl WorktreeSwitcher {
         if self.creating {
             return;
         }
-        if let Some(row) = rows(&self.cwd, self.state.as_ref(), &self.query(cx)).get(index) {
+        if let Some(row) = rows(&self.cwd, self.state.as_deref(), &self.query(cx)).get(index) {
             cx.emit(Event::Selected((!row.all).then(|| WorktreeFocus {
                 path: row.path.clone(),
                 branch: row.branch.clone(),
@@ -290,7 +291,7 @@ impl WorktreeSwitcher {
 }
 impl Render for WorktreeSwitcher {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let rows = rows(&self.cwd, self.state.as_ref(), &self.query(cx));
+        let rows = rows(&self.cwd, self.state.as_deref(), &self.query(cx));
         let empty = rows.is_empty();
         let can_create = self.can_create(cx);
         div()
@@ -677,7 +678,8 @@ mod tests {
             )
         });
         view.update(cx, |view, _| {
-            assert_eq!(rows(cwd, view.state.as_ref(), "").len(), 3);
+            assert_eq!(rows(cwd, view.state.as_deref(), "").len(), 3);
+
             assert_eq!(view.tabs[&path_key(cwd)].tabs.len(), 1);
         });
         cx.run_until_parked();
@@ -758,7 +760,7 @@ mod tests {
         cx.run_until_parked();
         window
             .update(cx, |view, _, cx| {
-                view.state = Some(snapshot());
+                view.state = Some(Arc::new(snapshot()));
                 view.load_error = None;
                 view.error = None;
                 cx.notify();

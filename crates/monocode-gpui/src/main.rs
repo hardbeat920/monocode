@@ -53,6 +53,8 @@ mod notifications;
 mod pane_layout;
 mod pane_motion;
 mod particle_text;
+#[cfg(feature = "perf-trace")]
+mod performance_probe;
 mod pickers;
 mod popover;
 mod project_background;
@@ -170,6 +172,8 @@ fn plist_data_mode(plist: &str) -> Option<bool> {
     }
 }
 fn main() {
+    #[cfg(feature = "perf-trace")]
+    let launched = Instant::now();
     if let Some(code) = monocode_core::remote::ssh_askpass::maybe_run() {
         std::process::exit(code);
     }
@@ -403,6 +407,8 @@ fn main() {
     gpui::Application::with_platform(platform)
         .with_assets(assets::Assets)
         .run(move |cx: &mut App| {
+            #[cfg(feature = "perf-trace")]
+            performance_probe::start(launched, cx);
             #[cfg(debug_assertions)]
             dev_reload::install(cx);
             cx.set_global(title_raster);

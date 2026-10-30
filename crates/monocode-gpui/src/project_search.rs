@@ -6,8 +6,9 @@ use crate::{
     theme::*,
 };
 use gpui::{
-    AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, HighlightStyle, Role,
-    ScrollHandle, StyledText, Subscription, Task, Window, div, point, prelude::*, px, rgb,
+    AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, HighlightStyle,
+    ListAlignment, ListState, Role, StyledText, Subscription, Task, Window, div, list, prelude::*,
+    px, rgb,
 };
 use monocode_core::search::project::{self, SearchMatch, SearchOptions};
 use std::{
@@ -62,7 +63,8 @@ pub(crate) struct ProjectSearch {
     truncated: bool,
     cancel: Arc<AtomicBool>,
     debounce: Option<Task<()>>,
-    scroll: ScrollHandle,
+    rows: Vec<(usize, Option<usize>)>,
+    list: ListState,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -117,7 +119,8 @@ impl ProjectSearch {
             truncated: false,
             cancel: Arc::new(AtomicBool::new(false)),
             debounce: None,
-            scroll: ScrollHandle::new(),
+            rows: Vec::new(),
+            list: ListState::new(0, ListAlignment::Top, px(200.)),
             _subscriptions: subscriptions,
         }
     }
@@ -147,6 +150,8 @@ impl ProjectSearch {
         if self.cwd != cwd {
             self.cwd = cwd;
             self.groups.clear();
+            self.rows.clear();
+            self.list.reset(0);
             self.count = 0;
             self.refresh(cx);
         }
@@ -180,7 +185,8 @@ impl ProjectSearch {
         if options.query.is_empty() || self.cwd.is_empty() || self.cwd == "~" {
             self.groups.clear();
             self.count = 0;
-            self.scroll.set_offset(point(px(0.), px(0.)));
+            self.rows.clear();
+            self.list.reset(0);
             cx.notify();
             return;
         }
@@ -226,7 +232,15 @@ impl ProjectSearch {
                 });
                 groups[index].matches.push(Match { source, highlight });
             }
-            Ok::<_, String>((groups, count, result.truncated))
+            let rows: Vec<_> = groups
+                .iter()
+                .enumerate()
+                .flat_map(|(group, data)| {
+                    std::iter::once((group, None))
+                        .chain((0..data.matches.len()).map(move |i| (group, Some(i))))
+                })
+                .collect();
+            Ok::<_, String>((groups, count, result.truncated, rows))
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;
@@ -236,18 +250,26 @@ impl ProjectSearch {
             let _ = this.update(cx, |this, cx| {
                 this.loading = false;
                 match result {
-                    Ok((groups, count, truncated)) => {
+                    Ok((groups, count, truncated, rows)) => {
                         this.groups = groups;
+                        this.rows = rows;
+                        this.list
+                            .reset_with_uniform_height(this.rows.len(), px(28.));
                         this.count = count;
                         this.truncated = truncated;
                     }
                     Err(error) => {
                         this.groups.clear();
+                        this.rows.clear();
+                        this.list.reset(0);
                         this.count = 0;
                         this.error = Some(error);
                     }
                 }
-                this.scroll.set_offset(point(px(0.), px(0.)));
+                this.list.scroll_to(gpui::ListOffset {
+                    item_ix: 0,
+                    offset_in_item: px(0.),
+                });
                 cx.notify();
             });
         })
@@ -267,6 +289,115 @@ impl ProjectSearch {
                 pin,
             });
         }
+    }
+
+    fn row(&self, row: usize, cx: &mut Context<Self>) -> AnyElement {
+        let (group_index, matched) = self.rows[row];
+        let group = &self.groups[group_index];
+        let Some(index) = matched else {
+            return div()
+                .w_full()
+                .min_w_0()
+                .flex_shrink_0()
+                .child(
+                    div()
+                        .flex()
+                        .min_w_0()
+                        .items_center()
+                        .gap(px(6.))
+                        .px_2()
+                        .py(px(6.))
+                        .child(file_type_icon(&group.name, false, false, 16.))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .flex_1()
+                                .truncate()
+                                .text_size(px(12.))
+                                .child(group.name.clone()),
+                        )
+                        .child(
+                            div()
+                                .rounded_full()
+                                .bg(accent(0.2))
+                                .px(px(6.))
+                                .py(px(2.))
+                                .text_size(px(10.))
+                                .font_features(tabular())
+                                .text_color(accent_color())
+                                .child(group.matches.len().to_string()),
+                        ),
+                )
+                .child(
+                    div()
+                        .truncate()
+                        .px_2()
+                        .pb_1()
+                        .text_size(px(10.))
+                        .text_color(content(0.4))
+                        .child(group.relative.clone()),
+                )
+                .into_any_element();
+        };
+        let matched = &group.matches[index];
+        let text = StyledText::new(matched.source.preview.trim_end().to_owned()).with_highlights(
+            matched.highlight.clone().map(|range| {
+                (
+                    range,
+                    HighlightStyle {
+                        background_color: Some(accent(0.35)),
+                        color: Some(content(1.)),
+                        ..Default::default()
+                    },
+                )
+            }),
+        );
+        div()
+            .id(("project-search-match", group_index * 501 + index))
+            .debug_selector(move || format!("project-search-match-{}", group_index * 501 + index))
+            .role(Role::Button)
+            .aria_label(format!(
+                "{}:{} {}",
+                group.relative, matched.source.line, matched.source.preview
+            ))
+            .w_full()
+            .min_w_0()
+            .flex()
+            .items_start()
+            .gap_2()
+            .px_2()
+            .py_1()
+            .hover(|s| s.bg(content(0.05)))
+            .when(index + 1 == group.matches.len(), |d| {
+                d.border_b_1().border_color(stroke())
+            })
+            .child(
+                div()
+                    .w(px(28.))
+                    .flex_shrink_0()
+                    .pt(px(1.))
+                    .text_align(gpui::TextAlign::Right)
+                    .font_family("monospace")
+                    .font_features(tabular())
+                    .text_size(px(11.))
+                    .text_color(content(0.35))
+                    .child(matched.source.line.to_string()),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .truncate()
+                    .font_family("monospace")
+                    .text_size(px(11.))
+                    .line_height(px(20.))
+                    .text_color(content(0.8))
+                    .child(text),
+            )
+            .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                this.pick(group_index, index, event.click_count() >= 2, cx);
+            }))
+            .into_any_element()
     }
 
     fn toggle(
@@ -338,112 +469,7 @@ impl Render for ProjectSearch {
                 if self.truncated { " (limited)" } else { "" }
             )
         };
-        let groups = self
-            .groups
-            .iter()
-            .enumerate()
-            .map(|(group_index, group)| {
-                div()
-                    .w_full()
-                    .min_w_0()
-                    .flex_shrink_0()
-                    .border_b_1()
-                    .border_color(stroke())
-                    .child(
-                        div()
-                            .flex()
-                            .min_w_0()
-                            .items_center()
-                            .gap(px(6.))
-                            .px_2()
-                            .py(px(6.))
-                            .child(file_type_icon(&group.name, false, false, 16.))
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .flex_1()
-                                    .truncate()
-                                    .text_size(px(12.))
-                                    .child(group.name.clone()),
-                            )
-                            .child(
-                                div()
-                                    .rounded_full()
-                                    .bg(accent(0.2))
-                                    .px(px(6.))
-                                    .py(px(2.))
-                                    .text_size(px(10.))
-                                    .font_features(tabular())
-                                    .text_color(accent_color())
-                                    .child(group.matches.len().to_string()),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .truncate()
-                            .px_2()
-                            .pb_1()
-                            .text_size(px(10.))
-                            .text_color(content(0.4))
-                            .child(group.relative.clone()),
-                    )
-                    .children(group.matches.iter().enumerate().map(|(index, matched)| {
-                        let text = StyledText::new(matched.source.preview.trim_end().to_owned())
-                            .with_highlights(matched.highlight.clone().map(|range| {
-                                (
-                                    range,
-                                    HighlightStyle {
-                                        background_color: Some(accent(0.35)),
-                                        color: Some(content(1.)),
-                                        ..Default::default()
-                                    },
-                                )
-                            }));
-                        div()
-                            .id(("project-search-match", group_index * 501 + index))
-                            .role(Role::Button)
-                            .aria_label(format!(
-                                "{}:{} {}",
-                                group.relative, matched.source.line, matched.source.preview
-                            ))
-                            .w_full()
-                            .min_w_0()
-                            .flex()
-                            .items_start()
-                            .gap_2()
-                            .px_2()
-                            .py_1()
-                            .hover(|s| s.bg(content(0.05)))
-                            .child(
-                                div()
-                                    .w(px(28.))
-                                    .flex_shrink_0()
-                                    .pt(px(1.))
-                                    .text_align(gpui::TextAlign::Right)
-                                    .font_family("monospace")
-                                    .font_features(tabular())
-                                    .text_size(px(11.))
-                                    .text_color(content(0.35))
-                                    .child(matched.source.line.to_string()),
-                            )
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .flex_1()
-                                    .truncate()
-                                    .font_family("monospace")
-                                    .text_size(px(11.))
-                                    .line_height(px(20.))
-                                    .text_color(content(0.8))
-                                    .child(text),
-                            )
-                            .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
-                                this.pick(group_index, index, event.click_count() >= 2, cx);
-                            }))
-                    }))
-                    .into_any_element()
-            })
-            .collect::<Vec<_>>();
+        let entity = cx.entity();
         div()
             .id("explorer-project-search")
             .debug_selector(|| "explorer-project-search".into())
@@ -609,12 +635,83 @@ impl Render for ProjectSearch {
                     .min_h_0()
                     .min_w_0()
                     .flex_1()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.scroll)
                     .flex()
                     .flex_col()
-                    .children(groups),
+                    .child(
+                        list(self.list.clone(), move |row, _, cx| {
+                            entity.update(cx, |view, cx| view.row(row, cx))
+                        })
+                        .flex_1()
+                        .min_h_0(),
+                    ),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[gpui::test]
+    fn large_results_render_only_the_viewport_and_can_reach_the_last_match(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let window = cx.update(|cx| {
+            cx.open_window(
+                gpui::WindowOptions {
+                    window_bounds: Some(gpui::WindowBounds::Windowed(gpui::Bounds::new(
+                        gpui::point(px(0.), px(0.)),
+                        gpui::size(px(400.), px(400.)),
+                    ))),
+                    ..Default::default()
+                },
+                |_, cx| {
+                    cx.new(|cx| {
+                        let mut view = ProjectSearch::new("/repo".into(), false, cx);
+                        view.groups.push(Group {
+                            relative: "src/file.rs".into(),
+                            name: "file.rs".into(),
+                            matches: (0..500)
+                                .map(|i| Match {
+                                    source: SearchMatch {
+                                        path: "/repo/src/file.rs".into(),
+                                        relative: "src/file.rs".into(),
+                                        line: i + 1,
+                                        column: 1,
+                                        preview: format!("match {i}"),
+                                    },
+                                    highlight: None,
+                                })
+                                .collect(),
+                        });
+                        view.rows = std::iter::once((0, None))
+                            .chain((0..500).map(|i| (0, Some(i))))
+                            .collect();
+                        view.list
+                            .reset_with_uniform_height(view.rows.len(), px(28.));
+                        view.count = 500;
+                        view
+                    })
+                },
+            )
+            .unwrap()
+        });
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("project-search-match-0").is_some());
+        assert!(visual.debug_bounds("project-search-match-499").is_none());
+        window
+            .update(visual, |view, _, cx| {
+                view.list.scroll_to(gpui::ListOffset {
+                    item_ix: 500,
+                    offset_in_item: px(0.),
+                });
+                cx.notify();
+            })
+            .unwrap();
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("project-search-match-499").is_some());
+        assert!(visual.debug_bounds("project-search-match-0").is_none());
     }
 }
