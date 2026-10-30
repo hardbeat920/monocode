@@ -222,8 +222,19 @@ test("a background tab of the thread shows live in MonoCode and takes clicks and
       }
     | undefined;
   let frames = 0;
-  let drawn = 0;
+  let pulled = 0;
   const frameTimes: number[] = [];
+  // The newest picture not handed to the pane yet, and the pane's request
+  // waiting for one (`browser_live_frame`), as `live::LiveControl`.
+  type Picture = {
+    format: string;
+    data: string;
+    seq: number;
+    width: number;
+    height: number;
+  };
+  let latest: Picture | null = null;
+  let asking: ((picture: Picture | null) => void) | null = null;
   const inputs: string[] = [];
   const navigations: string[] = [];
   let resize: ((size: any) => Promise<void>) | undefined;
@@ -234,9 +245,26 @@ test("a background tab of the thread shows live in MonoCode and takes clicks and
         if (!args.view || running?.view === args.view) await running?.stop();
         return null;
       }
-      if (command === "browser_live_drawn") {
-        drawn += 1;
-        return null;
+      if (command === "browser_live_frame") {
+        if (latest && latest.seq > args.after) {
+          const picture = latest;
+          latest = null;
+          pulled += 1;
+          return picture;
+        }
+        if (!running) return null;
+        return new Promise<Picture | null>((resolve) => {
+          const timer = setTimeout(() => {
+            if (asking === answer) asking = null;
+            resolve(null);
+          }, 1000);
+          const answer = (picture: Picture | null) => {
+            clearTimeout(timer);
+            if (picture) pulled += 1;
+            resolve(picture);
+          };
+          asking = answer;
+        });
       }
       if (command === "browser_live_resize") {
         if (running?.view === args.view) await running.resize(args);
@@ -281,24 +309,6 @@ test("a background tab of the thread shows live in MonoCode and takes clicks and
       // browser_live_start: stream until stopped, each picture acknowledged.
       return new Promise((resolve) => {
         let seq = 0;
-        let index = 0;
-        let latest: object | null = null;
-        let delivering = false;
-        const deliver = async () => {
-          delivering = true;
-          while (latest) {
-            const frame = latest;
-            latest = null;
-            await page
-              .evaluate(
-                ([channel, index, frame]) =>
-                  (window as any).__emitChannel(channel, index, frame),
-                [args.frames, index++, frame] as const,
-              )
-              .catch(() => {});
-          }
-          delivering = false;
-        };
         const listener = async (message: any) => {
           if (
             message.method !== "Page.screencastFrame" ||
@@ -313,20 +323,30 @@ test("a background tab of the thread shows live in MonoCode and takes clicks and
           seq += 1;
           frames += 1;
           frameTimes.push(Date.now());
-          // One picture in flight to the page at a time, the newest one, the
-          // way a webview keeps up with events it cannot draw in time.
-          latest = {
+          // The pane gets the newest picture when it asks for one.
+          const picture: Picture = {
             format: "jpeg",
             data: message.params.data,
             seq,
             width: message.params.metadata.deviceWidth,
             height: message.params.metadata.deviceHeight,
           };
-          if (!delivering) void deliver();
+          if (asking) {
+            const answer = asking;
+            asking = null;
+            latest = null;
+            answer(picture);
+          } else {
+            latest = picture;
+          }
         };
         const stop = async () => {
           if (running?.view === args.view) running = undefined;
           cdp.listeners = cdp.listeners.filter((l) => l !== listener);
+          // A request waiting for a picture learns there will be none.
+          asking?.(null);
+          asking = null;
+          latest = null;
           await cdp.send("Page.stopScreencast", {}, session).catch(() => {});
           await cdp
             .send("Emulation.clearDeviceMetricsOverride", {}, session)
@@ -470,7 +490,7 @@ test("a background tab of the thread shows live in MonoCode and takes clicks and
   }
   delays.sort((a, b) => a - b);
   console.log(
-    `live panel: ${perSecond.toFixed(1)} pictures/s while the page animates; key to picture median ${delays[5]} ms, max ${delays[9]} ms; ${inputs.length} inputs; ${drawn} pictures drawn`,
+    `live panel: ${perSecond.toFixed(1)} pictures/s while the page animates; key to picture median ${delays[5]} ms, max ${delays[9]} ms; ${inputs.length} inputs; ${pulled} pictures taken by the pane`,
   );
 
   // The address field and Back, as in a browser.
@@ -623,5 +643,5 @@ test("a background tab of the thread shows live in MonoCode and takes clicks and
   expect(navigations).toEqual(["go", "back"]);
   expect(perSecond).toBeGreaterThan(5);
   // The panel reports each picture it draws, which paces the browser.
-  expect(drawn).toBeGreaterThan(0);
+  expect(pulled).toBeGreaterThan(0);
 });

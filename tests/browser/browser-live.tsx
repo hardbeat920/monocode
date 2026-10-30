@@ -1,7 +1,8 @@
 // "Show in MonoCode" prototype: the real workspace, with the browser module's
 // commands answered by the Playwright test, which drives a real Chrome over
-// CDP (`window.liveBridge`). Events reach `listen` through `__emitTauri`,
-// pictures reach the view's channel through `__emitChannel`.
+// CDP (`window.liveBridge`). Events reach `listen` through `__emitTauri`;
+// the pane asks for pictures with `browser_live_frame`, which the bridge
+// answers with the picture's fields, packed here as `live::LiveFrame::packed`.
 import {
   browserState,
   browserTab,
@@ -69,6 +70,10 @@ Object.defineProperty(window, "__TAURI_INTERNALS__", {
         }
         if (command === "plugin:event|unlisten") return;
         if (command === "browser_status") return state;
+        if (command === "browser_live_frame") {
+          const picture = (await bridge(command, args)) as Picture | null;
+          return picture ? pack(picture) : new ArrayBuffer(0);
+        }
         if (command.startsWith("browser_live_")) return bridge(command, args);
         if (command.startsWith("browser_") || command === "dev_servers")
           return [];
@@ -77,37 +82,33 @@ Object.defineProperty(window, "__TAURI_INTERNALS__", {
     };
   },
 });
+type Picture = {
+  format: string;
+  seq: number;
+  width: number;
+  height: number;
+  data: string;
+};
+
+/** A picture as `live::LiveFrame::packed` lays it out. */
+function pack(frame: Picture): ArrayBuffer {
+  const picture = Uint8Array.from(atob(frame.data), (c) => c.charCodeAt(0));
+  const buffer = new ArrayBuffer(24 + picture.length);
+  const head = new DataView(buffer);
+  head.setUint8(0, frame.format === "png" ? 1 : 0);
+  head.setUint32(4, frame.seq, true);
+  head.setFloat64(8, frame.width, true);
+  head.setFloat64(16, frame.height, true);
+  new Uint8Array(buffer, 24).set(picture);
+  return buffer;
+}
+
 Object.assign(window, {
   // The browser store starts only inside Tauri.
   isTauri: true,
   __emitTauri(event: string, payload: unknown) {
     for (const id of listeners.get(event) ?? [])
       callbacks.get(id)?.({ event, id, payload });
-  },
-  // A picture on a channel (`__CHANNEL__:id`), packed as `live::LiveFrame::packed`.
-  __emitChannel(
-    channel: string | { id: number },
-    index: number,
-    frame: {
-      format: string;
-      seq: number;
-      width: number;
-      height: number;
-      data: string;
-    },
-  ) {
-    const picture = Uint8Array.from(atob(frame.data), (c) => c.charCodeAt(0));
-    const buffer = new ArrayBuffer(24 + picture.length);
-    const head = new DataView(buffer);
-    head.setUint8(0, frame.format === "png" ? 1 : 0);
-    head.setUint32(4, frame.seq, true);
-    head.setFloat64(8, frame.width, true);
-    head.setFloat64(16, frame.height, true);
-    new Uint8Array(buffer, 24).set(picture);
-    // The bridge hands the channel over as its JSON or as its fields.
-    const id =
-      typeof channel === "string" ? Number(channel.split(":")[1]) : channel.id;
-    callbacks.get(id)?.({ message: buffer, index });
   },
 });
 

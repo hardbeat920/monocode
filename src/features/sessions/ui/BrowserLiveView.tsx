@@ -21,9 +21,9 @@ import {
   type BrowserLiveInput,
   type BrowserLiveNav,
   type BrowserTab,
-  browserLiveDrawn,
   cancelBrowserPick,
   navigateBrowserLive,
+  pullBrowserLiveFrame,
   resizeBrowserLive,
   sendBrowserLiveInput,
   startBrowserLive,
@@ -254,6 +254,11 @@ type Phase =
  * the background at the pane's size; clicks, scrolling and typing go back to
  * the tab. Only one pane streams at a time, so a pane that is hidden stops
  * and the one shown last takes over.
+ *
+ * The pane asks for pictures one after another: each request is answered
+ * with the newest picture once there is one, the next request goes out the
+ * moment a picture arrives, and decoding and drawing happen meanwhile. A
+ * pane that cannot keep up gets the picture of now, never a backlog.
  */
 export function BrowserLiveView({
   sessionId,
@@ -295,12 +300,16 @@ export function BrowserLiveView({
     // This pane's own view: stopping it never stops a newer pane's.
     const view = crypto.randomUUID();
     let count = 0;
-    // The newest decoded picture not drawn yet, and the newest one asked for.
+    // The newest decoded picture not drawn yet, and the newest one received.
     let pending: { bitmap: ImageBitmap; frame: BrowserLiveFrame } | null = null;
     let newest = 0;
     let painting = 0;
     let started = false;
+    let ended = false;
     let resizeTimer = 0;
+    // One drawing surface for the pane's life: a canvas keeps the first
+    // context it is asked for, and an opaque one is cheaper to show.
+    let context: CanvasRenderingContext2D | null = null;
     const meter = window.setInterval(() => {
       setFps(count);
       count = 0;
@@ -338,7 +347,8 @@ export function BrowserLiveView({
       const { width, height } = bitmap;
       if (canvas.width !== width) canvas.width = width;
       if (canvas.height !== height) canvas.height = height;
-      canvas.getContext("2d")?.drawImage(bitmap, 0, 0);
+      context ??= canvas.getContext("2d", { alpha: false });
+      context?.drawImage(bitmap, 0, 0);
       bitmap.close();
       const scale = window.devicePixelRatio || 1;
       const rect = box.getBoundingClientRect();
@@ -353,7 +363,6 @@ export function BrowserLiveView({
       setPhase((current) =>
         current.kind === "live" ? current : { kind: "live" },
       );
-      void browserLiveDrawn(view, meta.seq).catch(() => {});
     };
     const onFrame = (next: BrowserLiveFrame) => {
       if (!live || next.seq <= newest) return;
@@ -379,23 +388,54 @@ export function BrowserLiveView({
         })
         .catch(() => {});
     };
+    // Ask for the next picture as soon as the last one is in hand, so a
+    // request always waits at the browser module while this one is decoded
+    // and drawn. An empty answer (nothing new for a second) is asked again;
+    // once the view has ended, the asking stops.
+    const pull = async () => {
+      let after = 0;
+      let empty = 0;
+      while (live && !ended) {
+        let frame: BrowserLiveFrame | null = null;
+        try {
+          frame = await pullBrowserLiveFrame(view, after);
+        } catch {
+          if (!live || ended) return;
+          await new Promise((r) => setTimeout(r, 250));
+          continue;
+        }
+        if (!frame) {
+          // A view that is gone answers empty at once, until the start
+          // call settles; a few quick empties in a row are not a loop.
+          const now = performance.now();
+          if (now - empty < 50) await new Promise((r) => setTimeout(r, 100));
+          empty = now;
+          continue;
+        }
+        after = Math.max(after, frame.seq);
+        onFrame(frame);
+      }
+    };
     setPhase({ kind: "connecting" });
     {
       const { width, height, scale } = size();
       started = true;
-      startBrowserLive(sessionId, tabId, view, width, height, scale, onFrame)
+      startBrowserLive(sessionId, tabId, view, width, height, scale)
         .then((end) => {
+          ended = true;
           if (!live) return;
           // Stopped while this pane still shows: another pane took over.
           setPhase({ kind: end === "tab_gone" ? "gone" : "elsewhere" });
         })
         .catch((err: unknown) => {
+          ended = true;
           if (live)
             setPhase({
               kind: "failed",
               message: err instanceof Error ? err.message : String(err),
             });
         });
+      void pull();
     }
     return () => {
       live = false;

@@ -265,8 +265,23 @@ pub fn arguments(profile: &Path, show_window: bool, scale: Option<f64>) -> Vec<S
             args.push(format!("--force-device-scale-factor={scale}"));
         }
     }
+    args.extend(extra_arguments(
+        std::env::var("MONOCODE_BROWSER_ARGS").ok().as_deref(),
+    ));
     args.push("about:blank".into());
     args
+}
+
+/// Switches from `MONOCODE_BROWSER_ARGS`, for trying the browser with other
+/// settings (say, GPU rasterisation for the headless one) without a new
+/// build. Whitespace-separated; only switches, never a page to open.
+fn extra_arguments(value: Option<&str>) -> Vec<String> {
+    value
+        .unwrap_or_default()
+        .split_whitespace()
+        .filter(|arg| arg.starts_with("--"))
+        .map(str::to_string)
+        .collect()
 }
 
 /// Start the browser. A leftover `DevToolsActivePort` from an earlier run
@@ -515,6 +530,11 @@ mod tests {
             .any(|a| a.starts_with("--force-device-scale-factor")));
         assert!(arguments(profile, false, Some(1.25))
             .contains(&"--force-device-scale-factor=1.25".to_string()));
+        assert_eq!(
+            extra_arguments(Some(" --enable-gpu  --use-angle=d3d11 https://x.test ")),
+            vec!["--enable-gpu".to_string(), "--use-angle=d3d11".to_string()]
+        );
+        assert!(extra_arguments(None).is_empty());
         assert!(!arguments(profile, false, Some(1.0))
             .iter()
             .any(|a| a.starts_with("--force-device-scale-factor")));

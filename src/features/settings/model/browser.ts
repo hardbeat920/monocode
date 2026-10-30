@@ -1,4 +1,4 @@
-import { Channel, invoke, isTauri } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useSyncExternalStore } from "react";
 
@@ -495,12 +495,11 @@ export type BrowserLiveInput =
   | { kind: "text"; text: string };
 
 /**
- * "Show in MonoCode": pictures of `tab` reach `onFrame`, as bytes over a
- * channel of their own, until {@link stopBrowserLive}, another view, or the
- * tab is gone; the promise settles then. Meanwhile the tab's viewport is
- * `width` × `height` CSS pixels at `scale`, the panel's size. Tell the
- * browser each picture drawn with {@link browserLiveDrawn}: it sends a new
- * one only while the panel keeps up.
+ * "Show in MonoCode": `tab` is shown live as `view` until
+ * {@link stopBrowserLive}, another view, or the tab is gone; the promise
+ * settles then. Meanwhile the tab's viewport is `width` × `height` CSS
+ * pixels at `scale`, the panel's size. Pictures are not pushed: the panel
+ * asks for each with {@link pullBrowserLiveFrame}.
  */
 export function startBrowserLive(
   sessionId: string,
@@ -509,14 +508,8 @@ export function startBrowserLive(
   width: number,
   height: number,
   scale: number,
-  onFrame: (frame: BrowserLiveFrame) => void,
 ): Promise<"stopped" | "tab_gone"> {
-  const frames = new Channel<ArrayBuffer>((buffer) => {
-    const frame = parseBrowserLiveFrame(buffer);
-    if (frame) onFrame(frame);
-  });
   return invoke("browser_live_start", {
-    frames,
     sessionId,
     tab,
     view,
@@ -526,9 +519,30 @@ export function startBrowserLive(
   });
 }
 
-/** The pane of `view` has drawn picture `seq`. */
-export function browserLiveDrawn(view: string, seq: number): Promise<void> {
-  return invoke<void>("browser_live_drawn", { view, seq });
+/**
+ * The next picture of `view`: the newest one after `after` (a `seq`),
+ * waited for up to about a second. `null` when none came in that time or
+ * the view is over; the pane asks again while it shows. Asking when ready
+ * to draw is what keeps the picture current: a pane that falls behind skips
+ * what it missed instead of catching up through it.
+ */
+export async function pullBrowserLiveFrame(
+  view: string,
+  after: number,
+): Promise<BrowserLiveFrame | null> {
+  const bytes = await invoke<ArrayBuffer | Uint8Array | null>(
+    "browser_live_frame",
+    { view, after },
+  );
+  if (!bytes) return null;
+  const buffer =
+    bytes instanceof ArrayBuffer
+      ? bytes
+      : bytes.buffer.slice(
+          bytes.byteOffset,
+          bytes.byteOffset + bytes.byteLength,
+        );
+  return parseBrowserLiveFrame(buffer as ArrayBuffer);
 }
 
 /** Stop `view`, the one a pane started (a newer pane's view keeps running). */

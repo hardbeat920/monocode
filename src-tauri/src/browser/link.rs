@@ -48,6 +48,8 @@ pub const PING_TIMEOUT: Duration = Duration::from_secs(5);
 const READ_SLICE: Duration = Duration::from_millis(15);
 /// Per-subscription event queue (256, oldest dropped and counted).
 pub const EVENT_QUEUE: usize = 256;
+/// The live view's pictures; see [`EventFilter::matches`].
+pub const SCREENCAST_FRAME: &str = "Page.screencastFrame";
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TargetId(pub String);
@@ -387,7 +389,13 @@ impl EventFilter {
                 return false;
             }
         }
-        self.methods.is_empty() || self.methods.iter().any(|m| *m == event.method)
+        if self.methods.is_empty() {
+            // A picture of the live view is hundreds of KB, sixty times a
+            // second: it goes only to who asks for pictures by name, never
+            // to an action waiting for its tab's events.
+            return event.method != SCREENCAST_FRAME;
+        }
+        self.methods.iter().any(|m| *m == event.method)
     }
 }
 
@@ -496,7 +504,8 @@ struct SendRequest {
 /// The browser's answer to a command, still as JSON text: the caller reads
 /// it (as a `Value` or straight into its own types) on its own thread, so a
 /// large answer is parsed once and never copied as a tree.
-type Reply = Result<Box<RawValue>, CdpError>;
+/// A command's answer, or why there is none.
+pub type Reply = Result<Box<RawValue>, CdpError>;
 
 fn read_reply<T: DeserializeOwned>(reply: &RawValue) -> Result<T, CdpError> {
     serde_json::from_str(reply.get()).map_err(|error| CdpError::Protocol {
@@ -966,6 +975,32 @@ impl Link {
             },
         );
         Ok(())
+    }
+
+    /// [`Self::send_system`] that returns at once: the answer comes through
+    /// the receiver (an `Err(Timeout)` when the browser takes too long).
+    /// For work the caller does not want to stand still for, like the live
+    /// view's lossless picture, which takes the browser a tenth of a second.
+    pub fn request_system(&self, command: Command) -> Result<mpsc::Receiver<Reply>, CdpError> {
+        let timeout = command.method.timeout();
+        let wire = self
+            .inner
+            .wire
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .ok_or(CdpError::NotConnected)?;
+        let (reply, rx) = mpsc::channel();
+        wire.send(
+            &self.inner,
+            SendRequest {
+                ctx: SendCtx::System,
+                command,
+                timeout,
+                reply,
+            },
+        );
+        Ok(rx)
     }
 
     fn dispatch(&self, ctx: SendCtx, command: Command, timeout: Duration) -> Reply {
@@ -1525,6 +1560,31 @@ mod tests {
     /// A subscription made when no connection is open is closed from the
     /// start: its reader (an event pump) ends instead of waiting forever, and
     /// the next connection does not deliver to it.
+    #[test]
+    fn live_pictures_reach_only_who_asks_for_them_by_name() {
+        let session = CdpSessionId("S1".into());
+        let picture = CdpEvent {
+            method: SCREENCAST_FRAME.into(),
+            params: json!({}),
+            session: Some(session.clone()),
+        };
+        let loaded = CdpEvent {
+            method: "Page.loadEventFired".into(),
+            params: json!({}),
+            session: Some(session.clone()),
+        };
+        let everything = EventFilter::session(&session);
+        assert!(everything.matches(&loaded));
+        assert!(!everything.matches(&picture));
+        assert!(!EventFilter::all().matches(&picture));
+        let pictures = EventFilter {
+            session: Some(session),
+            methods: vec![SCREENCAST_FRAME],
+        };
+        assert!(pictures.matches(&picture));
+        assert!(!pictures.matches(&loaded));
+    }
+
     #[test]
     fn subscribing_to_a_closed_link_returns_a_closed_subscription() {
         let server = FakeCdp::start();

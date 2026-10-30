@@ -11,18 +11,23 @@
 //! browser would.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::Mutex;
-use std::time::Duration;
+use std::sync::{mpsc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use super::link::{CdpSessionId, Command, EventFilter, Link, Method};
+use super::link::{CdpSessionId, Command, EventFilter, Link, Method, Reply, SCREENCAST_FRAME};
 use super::policy;
 use super::protocol::TabId;
 
-const FRAME: &str = "Page.screencastFrame";
 const POLL: Duration = Duration::from_millis(100);
+/// How often the view looks for the lossless picture's answer while the
+/// browser makes it.
+const STILL_POLL: Duration = Duration::from_millis(5);
+/// How long the panel's request for the next picture waits for one before
+/// it is answered empty (and the panel asks again).
+pub const PULL_WAIT: Duration = Duration::from_secs(1);
 /// A page this long without a new picture gets a lossless one: moving
 /// pictures are JPEG, which softens text, a still one should be sharp.
 const STILL_AFTER: Duration = Duration::from_millis(250);
@@ -33,10 +38,10 @@ const MISFIT_FOR: Duration = Duration::from_secs(1);
 const HOLD_WAIT: Duration = Duration::from_millis(500);
 /// How often the panel's viewport is put back while pictures don't fit.
 const HEAL_EVERY: Duration = Duration::from_millis(300);
-/// How long a picture waits for the panel to draw the one before it before
+/// How long a picture waits for the panel to take the one before it before
 /// the browser may send the next one anyway.
 const ACK_WAIT: Duration = Duration::from_millis(150);
-/// How often a held-back acknowledgement looks at what the panel has drawn.
+/// How often a held-back acknowledgement looks at what the panel has taken.
 const ACK_POLL: Duration = Duration::from_millis(4);
 /// Bytes in front of the picture in [`LiveFrame::packed`].
 pub const PACKED_HEADER: usize = 24;
@@ -233,8 +238,21 @@ pub struct LiveControl {
     held: AtomicUsize,
     /// The view has stopped its pictures for a hold.
     paused: AtomicBool,
-    /// The last picture the panel has drawn, 0 until it says.
-    drawn: AtomicU64,
+    /// The newest picture for the panel, and what it took so far.
+    mail: Mutex<Mailbox>,
+    ready: Condvar,
+}
+
+/// The picture waiting for the panel. The panel asks for pictures
+/// ([`LiveControl::take`]) rather than being sent each one: whatever it
+/// gets is what the tab shows now, and a picture it was too slow for is
+/// never drawn late.
+#[derive(Debug, Default)]
+struct Mailbox {
+    /// The newest picture not taken yet, packed, with its `seq`.
+    picture: Option<(u64, Vec<u8>)>,
+    /// The `seq` of the last picture the panel took.
+    taken: u64,
 }
 
 impl LiveControl {
@@ -247,8 +265,13 @@ impl LiveControl {
             resize: Mutex::new(None),
             held: AtomicUsize::new(0),
             paused: AtomicBool::new(false),
-            drawn: AtomicU64::new(0),
+            mail: Mutex::new(Mailbox::default()),
+            ready: Condvar::new(),
         }
+    }
+
+    fn mail(&self) -> std::sync::MutexGuard<'_, Mailbox> {
+        self.mail.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Pause the pictures while the agent needs the tab's viewport to
@@ -259,10 +282,10 @@ impl LiveControl {
     /// Waits, at most a moment, until the pictures have stopped.
     pub fn hold(self: &std::sync::Arc<Self>) -> LiveHold {
         self.held.fetch_add(1, Ordering::AcqRel);
-        let deadline = std::time::Instant::now() + HOLD_WAIT;
+        let deadline = Instant::now() + HOLD_WAIT;
         while !self.paused.load(Ordering::Acquire)
             && !self.finished.load(Ordering::Acquire)
-            && std::time::Instant::now() < deadline
+            && Instant::now() < deadline
         {
             std::thread::sleep(Duration::from_millis(5));
         }
@@ -275,34 +298,72 @@ impl LiveControl {
 
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Release);
+        // A panel waiting for a picture learns there will be none.
+        let _mail = self.mail();
+        self.ready.notify_all();
     }
 
     /// The view has handed the tab back (its viewport and scrollbars).
     pub fn finish(&self) {
         self.finished.store(true, Ordering::Release);
+        let _mail = self.mail();
+        self.ready.notify_all();
     }
 
     /// Wait, at most `limit`, for [`Self::finish`], so the next view of the
     /// same tab is not undone by this one's late clean-up.
     pub fn wait_finished(&self, limit: Duration) {
-        let deadline = std::time::Instant::now() + limit;
-        while !self.finished.load(Ordering::Acquire) && std::time::Instant::now() < deadline {
+        let deadline = Instant::now() + limit;
+        while !self.finished.load(Ordering::Acquire) && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(5));
         }
     }
 
-    /// The panel has drawn picture `seq`. Once it says so, the browser
-    /// sends a new picture only while the panel keeps up, so pictures never
-    /// queue up in front of it and what it shows stays current.
-    pub fn drawn(&self, seq: u64) {
-        self.drawn.fetch_max(seq, Ordering::AcqRel);
+    /// A new picture for the panel. One before it that the panel has not
+    /// taken is let go: the panel wants what the tab shows now.
+    fn offer(&self, seq: u64, packed: Vec<u8>) {
+        let mut mail = self.mail();
+        mail.picture = Some((seq, packed));
+        drop(mail);
+        self.ready.notify_all();
     }
 
-    /// Whether picture `seq` waits for the panel: it has not drawn the one
-    /// before it yet.
+    /// The newest picture after `after`, waiting up to `wait` for one.
+    /// `None` when none came in time, or the view is over.
+    pub fn take(&self, after: u64, wait: Duration) -> Option<Vec<u8>> {
+        let deadline = Instant::now() + wait;
+        let mut mail = self.mail();
+        loop {
+            if mail.picture.as_ref().is_some_and(|(seq, _)| *seq > after) {
+                let (seq, packed) = mail.picture.take()?;
+                mail.taken = mail.taken.max(seq);
+                return Some(packed);
+            }
+            if self.stopped() || self.finished.load(Ordering::Acquire) {
+                return None;
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return None;
+            }
+            let (guard, _) = self
+                .ready
+                .wait_timeout(mail, deadline - now)
+                .unwrap_or_else(|e| e.into_inner());
+            mail = guard;
+        }
+    }
+
+    /// The `seq` of the last picture the panel took.
+    fn taken(&self) -> u64 {
+        self.mail().taken
+    }
+
+    /// Whether picture `seq` waits for the panel: it has not taken the one
+    /// before it yet. The browser then sends a new picture only once the
+    /// panel keeps up, so it never makes pictures nobody will see.
     fn behind(&self, seq: u64) -> bool {
-        let drawn = self.drawn.load(Ordering::Acquire);
-        drawn > 0 && seq > drawn + 1
+        self.taken() + 1 < seq
     }
 
     pub fn resize(&self, size: PanelSize) {
@@ -383,7 +444,7 @@ pub fn run(
 ) -> Result<LiveEnd, String> {
     let events = link.subscribe(EventFilter {
         session: Some(tab.main.clone()),
-        methods: vec![FRAME],
+        methods: vec![SCREENCAST_FRAME],
     });
     let _ = send(
         link,
@@ -398,20 +459,23 @@ pub fn run(
     let mut current = size;
     let mut seq = 0;
     // The last JPEG, until the page has been still long enough for a PNG.
-    let mut moving: Option<(std::time::Instant, f64, f64)> = None;
+    let mut moving: Option<(Instant, f64, f64)> = None;
+    // The lossless picture the browser is making; dropped when the page
+    // moves again meanwhile, since it would show the page as it was.
+    let mut still: Option<Still> = None;
     // The data of the last JPEG: Chrome on Windows sends it again right
     // after a screenshot, and it must not cover the PNG.
     let mut last = String::new();
     // Since when the pictures have not fit the panel.
-    let mut misfit: Option<std::time::Instant> = None;
-    let mut healed: Option<std::time::Instant> = None;
+    let mut misfit: Option<Instant> = None;
+    let mut healed: Option<Instant> = None;
     let mut paused = false;
-    // A picture sent to the panel whose acknowledgement waits until the
-    // panel has drawn the one before it.
-    let mut waiting: Option<(super::link::CdpEvent, std::time::Instant)> = None;
+    // A picture offered to the panel whose acknowledgement waits until the
+    // panel has taken the one before it.
+    let mut waiting: Option<(super::link::CdpEvent, Instant)> = None;
     let mut meter = Meter::new();
     let end = loop {
-        meter.drawn(control.drawn.load(Ordering::Acquire));
+        meter.taken(control.taken());
         meter.report();
         if let Some((event, at)) = &waiting {
             if !control.behind(seq) || at.elapsed() >= ACK_WAIT || control.held() {
@@ -429,6 +493,7 @@ pub fn run(
             if !paused {
                 paused = true;
                 moving = None;
+                still = None;
                 let _ = send(link, &tab.main, Method::PageStopScreencast, json!({}));
                 // The capture is as fast as with no pane only on the tab's
                 // own viewport; the pane's comes back on resume.
@@ -467,36 +532,64 @@ pub fn run(
             current = next;
             last.clear();
         }
+        if let Some(pending) = &still {
+            match pending.answer.try_recv() {
+                Ok(answer) => {
+                    let Still { width, height, .. } = still.take().expect("checked");
+                    if let Some(data) = answer
+                        .ok()
+                        .and_then(|value| {
+                            serde_json::from_str::<Value>(value.get()).ok()?["data"]
+                                .as_str()
+                                .map(str::to_string)
+                        })
+                        .filter(|data| fits(current, width, height, png_size(data)))
+                    {
+                        seq += 1;
+                        offer(
+                            control,
+                            &mut sink,
+                            LiveFrame {
+                                tab: tab.tab.0.clone(),
+                                data,
+                                format: "png",
+                                width,
+                                height,
+                                seq,
+                            },
+                        );
+                    }
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => still = None,
+            }
+        }
+        if let Some((at, width, height)) = moving {
+            if at.elapsed() >= STILL_AFTER {
+                // Asked for, not waited for: pictures and input keep flowing
+                // while the browser makes it.
+                moving = None;
+                still = request_still(link, tab).map(|answer| Still {
+                    answer,
+                    width,
+                    height,
+                });
+            }
+        }
         let wait = moving.map_or(POLL, |(at, _, _)| {
             STILL_AFTER.saturating_sub(at.elapsed()).min(POLL)
         });
         let wait = if waiting.is_some() {
             wait.min(ACK_POLL)
+        } else if still.is_some() {
+            wait.min(STILL_POLL)
         } else {
             wait
         };
         let Some(event) = events.recv_timeout(wait) else {
-            if let Some((at, width, height)) = moving {
-                if at.elapsed() >= STILL_AFTER {
-                    moving = None;
-                    if let Some(data) =
-                        still(link, tab).filter(|data| fits(current, width, height, png_size(data)))
-                    {
-                        seq += 1;
-                        sink(LiveFrame {
-                            tab: tab.tab.0.clone(),
-                            data,
-                            format: "png",
-                            width,
-                            height,
-                            seq,
-                        });
-                    }
-                }
-            }
             continue;
         };
-        if event.method != FRAME {
+        if event.method != SCREENCAST_FRAME {
             continue;
         }
         meter.arrived(event.params["metadata"]["timestamp"].as_f64());
@@ -514,11 +607,11 @@ pub fn run(
             if fits(current, width, height, jpeg_size(data)) {
                 misfit = None;
             } else {
-                let since = *misfit.get_or_insert_with(std::time::Instant::now);
+                let since = *misfit.get_or_insert_with(Instant::now);
                 // Something else changed the tab's viewport (a full-page
                 // screenshot does): the panel's is put back.
-                if healed.is_none_or(|at: std::time::Instant| at.elapsed() >= HEAL_EVERY) {
-                    healed = Some(std::time::Instant::now());
+                if healed.is_none_or(|at: Instant| at.elapsed() >= HEAL_EVERY) {
+                    healed = Some(Instant::now());
                     let _ = send(link, &tab.main, Method::PageStopScreencast, json!({}));
                     let _ = show(link, tab, current);
                 }
@@ -528,21 +621,28 @@ pub fn run(
             }
             last = data.to_string();
             seq += 1;
-            moving = Some((std::time::Instant::now(), width, height));
-            let handing = std::time::Instant::now();
-            sink(LiveFrame {
-                tab: tab.tab.0.clone(),
-                data: last.clone(),
-                format: "jpeg",
-                width,
-                height,
-                seq,
-            });
+            moving = Some((Instant::now(), width, height));
+            // The page moved on: a lossless picture still being made would
+            // show it as it was.
+            still = None;
+            let handing = Instant::now();
+            offer(
+                control,
+                &mut sink,
+                LiveFrame {
+                    tab: tab.tab.0.clone(),
+                    data: last.clone(),
+                    format: "jpeg",
+                    width,
+                    height,
+                    seq,
+                },
+            );
             meter.handed(seq, handing);
             true
         };
         if sent && control.behind(seq) {
-            if let Some((older, _)) = waiting.replace((event, std::time::Instant::now())) {
+            if let Some((older, _)) = waiting.replace((event, Instant::now())) {
                 ack(link, tab, &older);
             }
         } else {
@@ -589,23 +689,23 @@ impl Span {
 
 /// Where a view's time goes, printed every [`METER_EVERY`] by development
 /// builds while pictures flow: how many the browser sent, how old they
-/// were when they got here, how long handing one to the panel took, how
-/// long until the panel had it on screen, and how long inputs took.
+/// were when they got here, how long packing one for the panel took, how
+/// long until the panel took it, and how long inputs took.
 struct Meter {
-    since: std::time::Instant,
+    since: Instant,
     from_browser: u64,
     age: Span,
     hand_over: Span,
     on_screen: Span,
-    /// Pictures sent and not yet drawn: seq and when.
-    sent: std::collections::VecDeque<(u64, std::time::Instant)>,
+    /// Pictures offered and not yet taken: seq and when.
+    sent: std::collections::VecDeque<(u64, Instant)>,
     skipped: u64,
 }
 
 impl Meter {
     fn new() -> Meter {
         Meter {
-            since: std::time::Instant::now(),
+            since: Instant::now(),
             from_browser: 0,
             age: Span::default(),
             hand_over: Span::default(),
@@ -627,21 +727,21 @@ impl Meter {
         }
     }
 
-    fn handed(&mut self, seq: u64, started: std::time::Instant) {
+    fn handed(&mut self, seq: u64, started: Instant) {
         self.hand_over.add(started.elapsed().as_secs_f64() * 1000.0);
-        self.sent.push_back((seq, std::time::Instant::now()));
+        self.sent.push_back((seq, Instant::now()));
         while self.sent.len() > 240 {
             self.sent.pop_front();
         }
     }
 
-    fn drawn(&mut self, drawn: u64) {
+    fn taken(&mut self, taken: u64) {
         while let Some(&(seq, at)) = self.sent.front() {
-            if seq > drawn {
+            if seq > taken {
                 break;
             }
             self.sent.pop_front();
-            if seq == drawn {
+            if seq == taken {
                 self.on_screen.add(at.elapsed().as_secs_f64() * 1000.0);
             } else {
                 self.skipped += 1;
@@ -657,7 +757,7 @@ impl Meter {
         let inputs: Vec<u64> = INPUTS.iter().map(|n| n.swap(0, Ordering::AcqRel)).collect();
         if self.from_browser > 0 || inputs[0] > 0 {
             eprintln!(
-                "[live] browser {:.0}/s, age on arrival {} | hand-over {} | on screen after {} ({:.0}/s, {} skipped) | inputs {} ({})",
+                "[live] browser {:.0}/s, age on arrival {} | packed in {} | taken by the panel after {} ({:.0}/s, {} skipped) | inputs {} ({})",
                 self.from_browser as f64 / secs,
                 self.age.show(),
                 self.hand_over.show(),
@@ -750,17 +850,30 @@ fn head(data: &str) -> Option<Vec<u8>> {
         .ok()
 }
 
-/// A lossless picture of what the tab shows now.
-fn still(link: &Link, tab: &LiveTab) -> Option<String> {
-    send(
-        link,
+/// Hand a picture to the panel ([`LiveControl::offer`]) and to `sink`.
+fn offer(control: &LiveControl, sink: &mut impl FnMut(LiveFrame), frame: LiveFrame) {
+    if let Some(packed) = frame.packed() {
+        control.offer(frame.seq, packed);
+    }
+    sink(frame);
+}
+
+/// A lossless picture on its way from the browser.
+struct Still {
+    answer: mpsc::Receiver<Reply>,
+    width: f64,
+    height: f64,
+}
+
+/// Ask for a lossless picture of what the tab shows now. Encoded for speed
+/// rather than size: it is on its way to the screen, not to a file.
+fn request_still(link: &Link, tab: &LiveTab) -> Option<mpsc::Receiver<Reply>> {
+    link.request_system(Command::in_session(
         &tab.main,
         Method::PageCaptureScreenshot,
-        json!({ "format": "png", "fromSurface": true }),
-    )
-    .ok()?["data"]
-        .as_str()
-        .map(str::to_string)
+        json!({ "format": "png", "fromSurface": true, "optimizeForSpeed": true }),
+    ))
+    .ok()
 }
 
 /// The panel's Back, Forward, Reload and address field.
@@ -823,7 +936,7 @@ fn address(typed: &str) -> String {
 /// Hand one input event to the tab.
 pub fn input(link: &Link, tab: &LiveTab, input: &LiveInput) -> Result<(), String> {
     let (method, params) = command_for(input);
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     // Scrolling and moving don't wait for the page: one wheel after another
     // would each wait a round trip, which caps scrolling at about 30 steps a
     // second. They still reach the page in order, behind what came before.
@@ -955,18 +1068,36 @@ mod tests {
     }
 
     #[test]
-    fn pictures_wait_only_once_the_panel_reports_what_it_drew() {
+    fn the_panel_takes_the_newest_picture_and_the_browser_waits_for_it() {
         let control = LiveControl::new("v".into(), TabId("t".into()));
-        // Before the panel says anything, nothing waits.
-        assert!(!control.behind(10));
-        control.drawn(3);
+        // Nothing yet: the request waits, then comes back empty.
+        assert_eq!(control.take(0, Duration::from_millis(20)), None);
+        // The first picture never waits for the panel.
+        assert!(!control.behind(1));
+        control.offer(1, vec![1]);
+        // The second does, until the panel has taken the first.
+        assert!(control.behind(2));
+        assert_eq!(control.take(0, Duration::ZERO), Some(vec![1]));
+        assert!(!control.behind(2));
+        // Two pictures the panel was too slow for: it gets only the newest,
+        // and what it already has is never handed out again.
+        control.offer(2, vec![2]);
+        control.offer(3, vec![3]);
+        assert_eq!(control.take(1, Duration::ZERO), Some(vec![3]));
+        assert_eq!(control.take(3, Duration::ZERO), None);
         assert!(!control.behind(4));
         assert!(control.behind(5));
-        // An older report never moves it back.
-        control.drawn(2);
-        assert!(control.behind(5));
-        control.drawn(4);
-        assert!(!control.behind(5));
+        // A waiting request wakes for a picture, and for the end.
+        let waiter = std::sync::Arc::new(control);
+        let (early, late) = (waiter.clone(), waiter.clone());
+        let got = std::thread::spawn(move || early.take(3, Duration::from_secs(5)));
+        std::thread::sleep(Duration::from_millis(20));
+        waiter.offer(4, vec![4]);
+        assert_eq!(got.join().unwrap(), Some(vec![4]));
+        let none = std::thread::spawn(move || late.take(4, Duration::from_secs(5)));
+        std::thread::sleep(Duration::from_millis(20));
+        waiter.stop();
+        assert_eq!(none.join().unwrap(), None);
     }
 
     #[test]
