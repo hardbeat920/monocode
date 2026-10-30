@@ -232,11 +232,15 @@ test("a background tab of the thread shows live in MonoCode and takes clicks and
     seq: number;
     width: number;
     height: number;
+    scrollX: number;
+    scrollY: number;
   };
   let latest: Picture | null = null;
   let asking: ((picture: Picture | null) => void) | null = null;
   const inputs: string[] = [];
   const navigations: string[] = [];
+  // Holds the pictures back, as a slow browser would.
+  let holding = false;
   let resize: ((size: any) => Promise<void>) | undefined;
   await page.exposeFunction(
     "liveBridge",
@@ -246,6 +250,10 @@ test("a background tab of the thread shows live in MonoCode and takes clicks and
         return null;
       }
       if (command === "browser_live_frame") {
+        if (holding) {
+          await new Promise((r) => setTimeout(r, 40));
+          return null;
+        }
         if (latest && latest.seq > args.after) {
           const picture = latest;
           latest = null;
@@ -330,6 +338,8 @@ test("a background tab of the thread shows live in MonoCode and takes clicks and
             seq,
             width: message.params.metadata.deviceWidth,
             height: message.params.metadata.deviceHeight,
+            scrollX: message.params.metadata.scrollOffsetX,
+            scrollY: message.params.metadata.scrollOffsetY,
           };
           if (asking) {
             const answer = asking;
@@ -427,6 +437,17 @@ test("a background tab of the thread shows live in MonoCode and takes clicks and
   const panel = page.locator("[data-browser-live]");
   const picture = panel.locator("canvas");
   await picture.waitFor();
+  // Drawn by the painter's worker: the canvas is no longer the page's.
+  expect(
+    await picture.evaluate((canvas: HTMLCanvasElement) => {
+      try {
+        canvas.getContext("2d");
+        return "main thread";
+      } catch {
+        return "worker";
+      }
+    }),
+  ).toBe("worker");
   // The spinner in the page's header animates, so pictures keep coming.
   const before = frames;
   await page.waitForTimeout(3000);
@@ -472,6 +493,29 @@ test("a background tab of the thread shows live in MonoCode and takes clicks and
   await expect.poll(() => pageValue("scrollY")).toBeGreaterThan(100);
   await page.waitForTimeout(800);
   await page.screenshot({ path: `${SHOTS}/live-4-scrolled.png` });
+  await page.mouse.wheel(0, -600);
+  await expect.poll(() => pageValue("scrollY")).toBe(0);
+  // The picture moves with the wheel before the browser's next picture.
+  await page.waitForTimeout(400);
+  const region = (await picture.boundingBox())!;
+  holding = true;
+  await page.waitForTimeout(150);
+  const still = await page.screenshot({ clip: region });
+  await page.mouse.wheel(0, 240);
+  // Looked at a few times while the picture is ahead (until the page is
+  // let be, a moment after the wheel).
+  let moved = false;
+  for (let look = 0; look < 4 && !moved; look++) {
+    await page.waitForTimeout(25);
+    const ahead = await page.screenshot({
+      clip: region,
+      path: `${SHOTS}/live-4-ahead.png`,
+    });
+    moved = !ahead.equals(still);
+  }
+  holding = false;
+  expect(moved).toBe(true);
+  await expect.poll(() => pageValue("scrollY")).toBeGreaterThan(100);
   await page.mouse.wheel(0, -600);
   await expect.poll(() => pageValue("scrollY")).toBe(0);
 

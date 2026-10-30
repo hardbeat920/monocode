@@ -36,6 +36,15 @@ import {
   markBrowserTabShown,
   subscribeBrowserPick,
 } from "../model/browserPane";
+import {
+  type Drawn,
+  LivePainter,
+  type PaintFrame,
+  SETTLE_MS,
+  ScrollPredictor,
+  type ScrollTarget,
+} from "./livePainter";
+import type { PainterMessage } from "./livePainter.worker";
 
 /** CDP modifier bits: Alt 1, Ctrl 2, Meta 4, Shift 8. */
 export function liveModifiers(event: {
@@ -214,6 +223,77 @@ export function liveAddress(url: string): {
 
 const BUTTONS = ["left", "middle", "right"] as const;
 
+/** The live view's painter, wherever it runs. */
+type Painter = {
+  frame(frame: PaintFrame): void;
+  scrollTo(target: ScrollTarget | null): void;
+  close(): void;
+};
+
+/**
+ * A painter for `canvas`: in a worker that draws on it as an
+ * OffscreenCanvas, so a busy main thread (a transcript streaming) never
+ * holds a picture back. A webview without OffscreenCanvas draws here.
+ */
+function livePainter(
+  canvas: HTMLCanvasElement,
+  drawn: (shown: Drawn) => void,
+): Painter {
+  if (
+    typeof Worker === "function" &&
+    typeof canvas.transferControlToOffscreen === "function"
+  ) {
+    let worker: Worker | undefined;
+    try {
+      worker = new Worker(new URL("./livePainter.worker.ts", import.meta.url), {
+        type: "module",
+      });
+      const offscreen = canvas.transferControlToOffscreen();
+      const painter = worker;
+      const post = (message: PainterMessage, transfer: Transferable[] = []) =>
+        painter.postMessage(message, transfer);
+      post({ kind: "canvas", canvas: offscreen }, [offscreen]);
+      painter.onmessage = ({ data }: MessageEvent<Drawn>) => drawn(data);
+      return {
+        frame: (frame) =>
+          post({ kind: "frame", ...frame }, [frame.picture.buffer]),
+        scrollTo: (target) => post({ kind: "scroll", target }),
+        close: () => post({ kind: "close" }),
+      };
+    } catch {
+      // No worker, or the canvas could not be handed over: it is drawn here.
+      worker?.terminate();
+    }
+  }
+  return new LivePainter(canvas, drawn);
+}
+
+/** A ring where the user pressed, gone in a moment. */
+function pressRipple(stage: HTMLElement, x: number, y: number) {
+  const rect = stage.getBoundingClientRect();
+  const ring = document.createElement("span");
+  ring.setAttribute("aria-hidden", "true");
+  ring.className =
+    "pointer-events-none absolute size-7 rounded-full border-2 border-teal-500/70 bg-teal-400/15";
+  ring.style.left = `${x - rect.left - 14}px`;
+  ring.style.top = `${y - rect.top - 14}px`;
+  stage.appendChild(ring);
+  const done = () => ring.remove();
+  if (typeof ring.animate !== "function") {
+    window.setTimeout(done, 300);
+    return;
+  }
+  ring
+    .animate(
+      [
+        { transform: "scale(0.45)", opacity: 1 },
+        { transform: "scale(1)", opacity: 0 },
+      ],
+      { duration: 320, easing: "cubic-bezier(0.2, 0.7, 0.3, 1)" },
+    )
+    .finished.then(done, done);
+}
+
 /** The thread's tab as the browser module knows it now, while it is the thread's. */
 export function useLiveBrowserTab(
   sessionId: string,
@@ -273,7 +353,11 @@ export function BrowserLiveView({
 }) {
   const tab = useLiveBrowserTab(sessionId, tabId);
   const stage = useRef<HTMLDivElement>(null);
-  const picture = useRef<HTMLCanvasElement>(null);
+  /** Holds the canvas the pictures are drawn on, at the page's CSS size. */
+  const surface = useRef<HTMLDivElement>(null);
+  /** Moves the picture ahead of a wheel sent to the page. */
+  const ahead = useRef<((dx: number, dy: number) => void) | null>(null);
+  const forget = useRef<(() => void) | null>(null);
   const capture = useRef<HTMLTextAreaElement>(null);
   /** The picture on screen: its page size, for input coordinates. */
   const frame = useRef<Pick<BrowserLiveFrame, "width" | "height"> | null>(null);
@@ -295,21 +379,23 @@ export function BrowserLiveView({
   useEffect(() => {
     if (!visible || !open) return;
     const box = stage.current;
-    if (!box) return;
+    const host = surface.current;
+    if (!box || !host) return;
     let live = true;
     // This pane's own view: stopping it never stops a newer pane's.
     const view = crypto.randomUUID();
     let count = 0;
-    // The newest decoded picture not drawn yet, and the newest one received.
-    let pending: { bitmap: ImageBitmap; frame: BrowserLiveFrame } | null = null;
-    let newest = 0;
-    let painting = 0;
     let started = false;
     let ended = false;
     let resizeTimer = 0;
-    // One drawing surface for the pane's life: a canvas keeps the first
-    // context it is asked for, and an opaque one is cheaper to show.
-    let context: CanvasRenderingContext2D | null = null;
+    let settleTimer = 0;
+    let sized = "";
+    // A canvas of this view's own: one handed to a worker stays the worker's.
+    const canvas = document.createElement("canvas");
+    canvas.className = "block size-full";
+    host.replaceChildren(canvas);
+    const predictor = new ScrollPredictor();
+    let learnt = false;
     const meter = window.setInterval(() => {
       setFps(count);
       count = 0;
@@ -332,61 +418,50 @@ export function BrowserLiveView({
       }, 120);
     });
     observer.observe(box);
-    // Draw the newest picture once per screen refresh, one picture pixel
-    // per device pixel, and tell the browser it is on screen.
-    const paint = () => {
-      painting = 0;
-      const next = pending;
-      const canvas = picture.current;
-      pending = null;
-      if (!live || !next || !canvas) {
-        next?.bitmap.close();
-        return;
-      }
-      const { bitmap, frame: meta } = next;
-      const { width, height } = bitmap;
-      if (canvas.width !== width) canvas.width = width;
-      if (canvas.height !== height) canvas.height = height;
-      context ??= canvas.getContext("2d", { alpha: false });
-      context?.drawImage(bitmap, 0, 0);
-      bitmap.close();
+    // A picture is on screen: the surface takes the page's CSS size (one
+    // picture pixel per device pixel, never stretched to the pane, which
+    // blurs text), on whole device pixels.
+    const drawn = (shown: Drawn) => {
+      if (!live) return;
+      count += 1;
       const scale = window.devicePixelRatio || 1;
       const rect = box.getBoundingClientRect();
-      // The page's own CSS size, whatever pixels the picture has: a still
-      // and a moving picture can differ, and the page must not jump.
-      canvas.style.width = `${meta.width}px`;
-      canvas.style.height = `${meta.height}px`;
-      canvas.style.transform = `translate(${pixelSnap(rect.left, scale)}px, ${pixelSnap(rect.top, scale)}px)`;
-      count += 1;
-      frame.current = { width: meta.width, height: meta.height };
+      const place = `${shown.width}x${shown.height}@${rect.left},${rect.top},${scale}`;
+      if (place !== sized) {
+        sized = place;
+        host.style.width = `${shown.width}px`;
+        host.style.height = `${shown.height}px`;
+        host.style.transform = `translate(${pixelSnap(rect.left, scale)}px, ${pixelSnap(rect.top, scale)}px)`;
+      }
+      frame.current = { width: shown.width, height: shown.height };
+      if (!learnt) {
+        learnt = true;
+        predictor.learn(shown);
+      }
+      painter.scrollTo(predictor.seen(shown, performance.now()));
       setShown(true);
       setPhase((current) =>
         current.kind === "live" ? current : { kind: "live" },
       );
     };
-    const onFrame = (next: BrowserLiveFrame) => {
-      if (!live || next.seq <= newest) return;
-      newest = next.seq;
-      // Decoded off the main thread; a picture overtaken meanwhile is dropped.
-      void createImageBitmap(
-        new Blob([next.picture as Uint8Array<ArrayBuffer>], {
-          type: `image/${next.format}`,
-        }),
-      )
-        .then((bitmap) => {
-          if (
-            !live ||
-            next.seq < newest ||
-            (pending && pending.frame.seq > next.seq)
-          ) {
-            bitmap.close();
-            return;
-          }
-          pending?.bitmap.close();
-          pending = { bitmap, frame: next };
-          if (!painting) painting = requestAnimationFrame(paint);
-        })
-        .catch(() => {});
+    const painter = livePainter(canvas, drawn);
+    // The user's wheel moves the picture at once; the browser's pictures
+    // catch up with it.
+    ahead.current = (dx, dy) => {
+      painter.scrollTo(predictor.wheel(dx, dy, performance.now()));
+      window.clearTimeout(settleTimer);
+      // Looked at again until the picture is back with the page.
+      const settle = () => {
+        if (!live) return;
+        const target = predictor.settle(performance.now());
+        painter.scrollTo(target);
+        if (target) settleTimer = window.setTimeout(settle, 50);
+      };
+      settleTimer = window.setTimeout(settle, SETTLE_MS + 10);
+    };
+    forget.current = () => {
+      predictor.reset();
+      painter.scrollTo(null);
     };
     // Ask for the next picture as soon as the last one is in hand, so a
     // request always waits at the browser module while this one is decoded
@@ -396,15 +471,15 @@ export function BrowserLiveView({
       let after = 0;
       let empty = 0;
       while (live && !ended) {
-        let frame: BrowserLiveFrame | null = null;
+        let next: BrowserLiveFrame | null = null;
         try {
-          frame = await pullBrowserLiveFrame(view, after);
+          next = await pullBrowserLiveFrame(view, after);
         } catch {
           if (!live || ended) return;
           await new Promise((r) => setTimeout(r, 250));
           continue;
         }
-        if (!frame) {
+        if (!next) {
           // A view that is gone answers empty at once, until the start
           // call settles; a few quick empties in a row are not a loop.
           const now = performance.now();
@@ -412,8 +487,8 @@ export function BrowserLiveView({
           empty = now;
           continue;
         }
-        after = Math.max(after, frame.seq);
-        onFrame(frame);
+        after = Math.max(after, next.seq);
+        if (live) painter.frame(next);
       }
     };
     setPhase({ kind: "connecting" });
@@ -439,15 +514,22 @@ export function BrowserLiveView({
     }
     return () => {
       live = false;
+      ahead.current = null;
+      forget.current = null;
       observer.disconnect();
       window.clearTimeout(resizeTimer);
+      window.clearTimeout(settleTimer);
       window.clearInterval(meter);
-      if (painting) cancelAnimationFrame(painting);
-      pending?.bitmap.close();
-      pending = null;
+      painter.close();
       void stopBrowserLive(view).catch(() => {});
     };
   }, [sessionId, tabId, visible, open, attempt]);
+
+  // Another page knows nothing of how the last one scrolled.
+  const url = tab?.url;
+  useEffect(() => {
+    forget.current?.();
+  }, [url]);
 
   useEffect(() => {
     if (focused && phase.kind === "live") capture.current?.focus();
@@ -463,6 +545,8 @@ export function BrowserLiveView({
   const send = useCallback(
     (input: BrowserLiveInput) => {
       setError(null);
+      if (input.kind === "wheel" && !input.modifiers)
+        ahead.current?.(input.deltaX, input.deltaY);
       queueLiveInput(inputs.current, input);
       if (sending.current) return;
       sending.current = true;
@@ -487,7 +571,7 @@ export function BrowserLiveView({
     [sessionId, tabId, fail],
   );
   const point = (event: { clientX: number; clientY: number }) => {
-    const shown = picture.current?.getBoundingClientRect();
+    const shown = surface.current?.getBoundingClientRect();
     const current = frame.current;
     if (!shown || !current) return null;
     return livePoint({ x: event.clientX, y: event.clientY }, shown, current);
@@ -503,6 +587,9 @@ export function BrowserLiveView({
       event.preventDefault();
       capture.current?.focus();
     }
+    // The press shows at once; the page's own answer follows in a picture.
+    if (kind === "mousePressed" && stage.current)
+      pressRipple(stage.current, event.clientX, event.clientY);
     send({
       kind: "mouse",
       event: kind,
@@ -662,8 +749,8 @@ export function BrowserLiveView({
         />
         {/* At the picture's own pixels, one per device pixel, never
             stretched to the pane (that blurs text); sized as it is drawn. */}
-        <canvas
-          ref={picture}
+        <div
+          ref={surface}
           aria-hidden
           className={`absolute top-0 left-0 max-w-none select-none transition-opacity duration-150 ${
             shown ? "" : "invisible"

@@ -437,17 +437,21 @@ export type BrowserLiveFrame = {
   width: number;
   height: number;
   seq: number;
+  /** How far the page was scrolled, in CSS pixels. */
+  scrollX: number;
+  scrollY: number;
   /** The picture's own bytes, in `format`. */
   picture: Uint8Array;
 };
 
 /** Bytes in front of the picture (mirrors `live::PACKED_HEADER`). */
-const LIVE_HEADER = 24;
+export const LIVE_HEADER = 40;
 
 /**
  * A picture as `live::LiveFrame::packed` sends it: format byte, three zero
- * bytes, `seq` as u32, `width` and `height` as f64 (little endian), then
- * the picture. `null` for anything shorter than the header.
+ * bytes, `seq` as u32, `width`, `height`, `scrollX` and `scrollY` as f64
+ * (little endian), then the picture. `null` for anything shorter than the
+ * header.
  */
 export function parseBrowserLiveFrame(
   buffer: ArrayBuffer,
@@ -459,6 +463,8 @@ export function parseBrowserLiveFrame(
     seq: head.getUint32(4, true),
     width: head.getFloat64(8, true),
     height: head.getFloat64(16, true),
+    scrollX: head.getFloat64(24, true),
+    scrollY: head.getFloat64(32, true),
     picture: new Uint8Array(buffer, LIVE_HEADER),
   };
 }
