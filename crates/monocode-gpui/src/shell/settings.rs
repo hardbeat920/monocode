@@ -68,6 +68,7 @@ impl Shell {
             remote: Some(self.remote.clone()),
             mobile: self.mobile_status(),
             mobile_invite: self.mobile.invite.clone(),
+            mobile_terminals: self.mobile.terminals.list(),
             quick_error: self.quick.error.clone(),
             inbox_connections: self
                 .inbox
@@ -250,6 +251,11 @@ impl Shell {
                 SettingsEvent::MobilePair => this.pair_mobile(cx),
                 SettingsEvent::MobileCancelInvite => this.mobile_cancel_invite(cx),
                 SettingsEvent::MobileRevoke(id) => this.mobile_revoke(id, cx),
+                SettingsEvent::MobileTerminal(allowed) => this.mobile_set_terminal(*allowed, cx),
+                SettingsEvent::MobileKillTerminal(id) => {
+                    this.mobile.terminals.kill(id);
+                    this.sync_settings(cx);
+                }
             },
         ));
         // This dialog is painted at the window root, like React's portal.

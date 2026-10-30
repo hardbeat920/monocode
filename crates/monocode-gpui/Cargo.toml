@@ -22,7 +22,10 @@ base64 = "0.22"
 image = { version = "0.25", default-features = false }
 # The terminal dock: PTY, VT parser and grid (as Zed's terminal uses).
 alacritty_terminal = "0.26"
+# Shells a paired phone opens: raw PTY output, which the phone draws.
+portable-pty = { version = "0.9", path = "../../vendor/portable-pty" }
 libc = "0.2"
+uuid = { version = "1", features = ["v4"] }
 rquickjs = "0.14.0"
 # The file editor's native syntax: incremental parses, highlights, folds and
 # syntax errors. Languages without a grammar here use the QuickJS fallback.

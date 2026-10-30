@@ -1363,7 +1363,7 @@ fn default_title(cwd: &str) -> String {
 fn home() -> Option<std::path::PathBuf> {
     std::env::var_os("HOME").map(std::path::PathBuf::from)
 }
-fn working_dir(cwd: &str) -> std::path::PathBuf {
+pub(crate) fn working_dir(cwd: &str) -> std::path::PathBuf {
     let path = match cwd.strip_prefix("~") {
         Some(rest) => home().map_or_else(|| cwd.into(), |h| h.join(rest.trim_start_matches('/'))),
         None => std::path::PathBuf::from(cwd),
@@ -1374,7 +1374,7 @@ fn working_dir(cwd: &str) -> std::path::PathBuf {
         home().unwrap_or(path)
     }
 }
-fn default_shell() -> (String, Vec<String>) {
+pub(crate) fn default_shell() -> (String, Vec<String>) {
     let shell = std::env::var("SHELL")
         .ok()
         .filter(|s| !s.is_empty())

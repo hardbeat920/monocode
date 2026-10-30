@@ -44,6 +44,7 @@
     "react-native-screens": "~4.26.0",
     "react-native-svg": "15.15.4",
     "react-native-web": "~0.21.0",
+    "react-native-webview": "13.16.1",
     "react-native-worklets": "0.10.1"
   },
   "devDependencies": {
@@ -62,6 +63,7 @@
     "build:ios": "npx eas-cli@latest build --platform ios --profile production",
     "submit:ios": "npx eas-cli@latest submit --platform ios --profile production",
     "update:beta": "npx eas-cli@latest update --platform ios --channel beta --environment production",
+    "terminal:page": "node scripts/generate-terminal-page.mjs",
     "native:ios": "node scripts/build-native-link.mjs ios",
     "native:android": "node scripts/build-native-link.mjs android"
   },

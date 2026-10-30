@@ -39,10 +39,20 @@ const APP_METHODS: &[&str] = &[
     "session.delete",
     "session.archive",
 ];
+/// Methods on a shell the phone opened with `terminal.watch`. The host only
+/// forwards them while terminals are allowed; the app checks the shell is the
+/// device's own.
+const TERMINAL_METHODS: &[&str] = &[
+    "terminal.input",
+    "terminal.resize",
+    "terminal.close",
+    "terminal.actions.save",
+];
 /// Under the phone's own wait, so it hears why rather than timing out.
 const REPLY_WAIT: Duration = Duration::from_secs(25);
 const MAX_PENDING: usize = 16;
 const MAX_WATCHES_PER_DEVICE: usize = 4;
+const MAX_TERMINALS_PER_DEVICE: usize = 2;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -61,6 +71,12 @@ struct Config {
     remote_address: String,
     #[serde(default)]
     devices: Vec<Device>,
+    /// Paired phones may open a shell in a project. On unless turned off.
+    #[serde(default = "on")]
+    terminal: bool,
+}
+fn on() -> bool {
+    true
 }
 impl Default for Config {
     fn default() -> Self {
@@ -69,6 +85,7 @@ impl Default for Config {
             open_router: true,
             remote_address: String::new(),
             devices: Vec::new(),
+            terminal: true,
         }
     }
 }
@@ -85,6 +102,8 @@ pub struct Status {
     pub open_router: bool,
     pub remote_address: String,
     pub router_status: String,
+    /// Whether paired phones may open a shell in a project.
+    pub terminal: bool,
     /// Why the service could not start, when it could not.
     pub error: Option<String>,
 }
@@ -102,6 +121,8 @@ pub struct Request {
     pub command_id: String,
     pub method: String,
     pub params: Value,
+    /// The paired device asking, as in [`Device::id`].
+    pub device_id: String,
     reply: oneshot::Sender<Result<Value, String>>,
 }
 impl Request {
@@ -130,10 +151,40 @@ impl WatchStart {
     }
 }
 
+/// A phone opens a shell in a project. The app starts it (or, with `shell`,
+/// reattaches to one the device already has), accepts with
+/// [`TerminalStart::accept`], then sends output frames with
+/// [`MobileHost::push`] until [`Event::WatchStop`] or [`Push::Gone`]. A shell
+/// outlives its watch, so a phone that was backgrounded can come back to it.
+pub struct TerminalStart {
+    /// This watch's ID, for [`MobileHost::push`] and [`Event::WatchStop`].
+    pub id: String,
+    pub device_id: String,
+    pub project_id: String,
+    /// A linked worktree of the project, when the phone is in one.
+    pub worktree: Option<String>,
+    /// The shell to reattach to.
+    pub shell: Option<String>,
+    /// The last output sequence the phone has, to resume after.
+    pub after: Option<u64>,
+    pub cols: u16,
+    pub rows: u16,
+    accept: oneshot::Sender<Result<(), String>>,
+}
+impl TerminalStart {
+    pub fn accept(self, result: Result<(), String>) {
+        let _ = self.accept.send(result);
+    }
+}
+
 pub enum Event {
     Request(Request),
     Watch(WatchStart),
+    Terminal(TerminalStart),
     WatchStop(String),
+    /// Close the shells of one device, or of every device when `None`:
+    /// terminals were turned off, or a phone was revoked or left.
+    TerminalsClosed(Option<String>),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -150,6 +201,7 @@ struct Invitation {
 struct Watcher {
     peer: String,
     sink: WatchSink,
+    terminal: bool,
 }
 struct Inner {
     config: Config,
@@ -250,6 +302,7 @@ impl MobileHost {
             open_router: inner.config.open_router,
             remote_address: inner.config.remote_address.clone(),
             router_status: inner.router_status.clone(),
+            terminal: inner.config.terminal,
             error: inner.error.clone(),
         }
     }
@@ -276,6 +329,7 @@ impl MobileHost {
                 open_router,
                 remote_address: remote_address.into(),
                 devices: inner.config.devices.clone(),
+                terminal: inner.config.terminal,
             };
             self.save(&config)?;
             inner.config = config;
@@ -289,6 +343,7 @@ impl MobileHost {
                 }
                 inner.invitations.clear();
                 inner.watches.clear();
+                self.close_terminals(None);
             }
         }
         if enabled {
@@ -299,6 +354,28 @@ impl MobileHost {
         }
         super::router::restart(self);
         Ok(())
+    }
+
+    /// Allows or refuses shells for every paired phone. Turning terminals off
+    /// ends the open ones.
+    pub fn set_terminal(&self, allowed: bool) -> Result<(), String> {
+        let mut inner = self.inner.lock().map_err(unavailable)?;
+        let mut config = inner.config.clone();
+        config.terminal = allowed;
+        self.save(&config)?;
+        inner.config = config;
+        if !allowed {
+            inner.watches.retain(|_, watch| !watch.terminal);
+            self.close_terminals(None);
+        }
+        Ok(())
+    }
+
+    /// Tells the app to close the shells of a device, or all of them. The
+    /// host also refuses their requests, so a lost event leaves a shell no
+    /// phone can reach; the app ends it when it idles out.
+    fn close_terminals(&self, device_id: Option<String>) {
+        let _ = self.events.try_send(Event::TerminalsClosed(device_id));
     }
 
     /// One visible invitation at a time; a new one revokes the last.
@@ -342,6 +419,7 @@ impl MobileHost {
             self.gate.remove(&device.fingerprint);
             let peer = device.fingerprint.clone();
             inner.watches.retain(|_, watch| watch.peer != peer);
+            self.close_terminals(Some(device.id.clone()));
         }
         config.devices.retain(|device| device.id != device_id);
         self.save(&config)?;
@@ -567,18 +645,25 @@ impl MobileHost {
                     inner.config = config;
                     self.gate.remove(peer);
                     inner.watches.retain(|_, watch| watch.peer != peer);
+                    self.close_terminals(Some(device.id.clone()));
                     return Ok(Value::Null);
                 }
                 "workspace.list" => {
                     let mut catalog = inner.catalog.clone();
                     catalog["sessions"] = json!(recent_sessions(&catalog["sessions"]));
                     catalog["addresses"] = json!(addresses(&inner));
+                    // So the phone offers a terminal only where it will open.
+                    catalog["terminal"] = json!(inner.config.terminal);
                     return Ok(catalog);
                 }
                 "sessions.list" => return Ok(session_page(&inner.catalog["sessions"], &params)),
                 _ => {}
             }
-            if !APP_METHODS.contains(&method) {
+            if TERMINAL_METHODS.contains(&method) {
+                if !inner.config.terminal {
+                    return Err("Terminals are turned off on the desktop".into());
+                }
+            } else if !APP_METHODS.contains(&method) {
                 return Err("Unsupported mobile operation".into());
             }
             device
@@ -598,6 +683,7 @@ impl MobileHost {
                 command_id: format!("{}:{command_id}", device.id),
                 method: method.into(),
                 params,
+                device_id: device.id.clone(),
                 reply,
             }))
             .is_ok();
@@ -617,42 +703,58 @@ impl MobileHost {
         response
     }
 
-    /// A phone starts watching a conversation. The app sends its state, then
-    /// every change, until the phone goes or the watch is stopped.
+    /// A phone starts watching a conversation, or opens a terminal. The app
+    /// sends its state, then every change, until the phone goes or the watch
+    /// is stopped.
     async fn watch(&self, peer: &str, request: Value, sink: WatchSink) -> Result<(), String> {
         if request["version"] != VERSION {
             return Err("Update MonoCode on both devices".into());
         }
-        if request["method"] != "conversation.watch" {
-            return Err("Unsupported mobile operation".into());
-        }
+        let terminal = match request["method"].as_str() {
+            Some("conversation.watch") => false,
+            Some("terminal.watch") => true,
+            _ => return Err("Unsupported mobile operation".into()),
+        };
         let params = &request["params"];
-        let conversation = params["conversationId"]
-            .as_str()
-            .filter(|id| !id.is_empty() && id.len() <= 256)
-            .ok_or("Missing workspace item")?
-            .to_string();
+        let text = |key: &str| {
+            params[key]
+                .as_str()
+                .filter(|value| !value.is_empty() && value.len() <= 256)
+                .map(String::from)
+        };
+        let conversation = if terminal {
+            String::new()
+        } else {
+            text("conversationId").ok_or("Missing workspace item")?
+        };
+        let project = if terminal {
+            text("projectId").ok_or("Missing project")?
+        } else {
+            String::new()
+        };
         let id = uuid::Uuid::new_v4().to_string();
+        let device_id;
         {
             let mut inner = self.inner.lock().map_err(unavailable)?;
             if !inner.config.enabled {
                 return Err("Mobile access disabled".into());
             }
-            if !inner
+            if terminal && !inner.config.terminal {
+                return Err("Terminals are turned off on the desktop".into());
+            }
+            device_id = inner
                 .config
                 .devices
                 .iter()
-                .any(|device| device.fingerprint == peer)
-            {
-                return Err("Device revoked or not paired".into());
-            }
+                .find(|device| device.fingerprint == peer)
+                .ok_or("Device revoked or not paired")?
+                .id
+                .clone();
             inner.watches.retain(|_, watch| !watch.sink.is_closed());
-            if inner
-                .watches
-                .values()
-                .filter(|watch| watch.peer == peer)
-                .count()
-                >= MAX_WATCHES_PER_DEVICE
+            let own = || inner.watches.values().filter(|watch| watch.peer == peer);
+            if own().count() >= MAX_WATCHES_PER_DEVICE
+                || (terminal
+                    && own().filter(|watch| watch.terminal).count() >= MAX_TERMINALS_PER_DEVICE)
             {
                 return Err("Desktop is busy; try again".into());
             }
@@ -661,21 +763,36 @@ impl MobileHost {
                 Watcher {
                     peer: peer.into(),
                     sink: sink.clone(),
+                    terminal,
                 },
             );
         }
         let (accept, accepted) = oneshot::channel();
-        let start = Event::Watch(WatchStart {
-            id: id.clone(),
-            conversation_id: conversation,
-            tail: params["tail"].as_u64(),
-            from: params["from"]
-                .as_str()
-                .filter(|from| from.len() <= 256)
-                .map(Into::into),
-            incremental: params["incremental"] == true,
-            accept,
-        });
+        let start = if terminal {
+            Event::Terminal(TerminalStart {
+                id: id.clone(),
+                device_id,
+                project_id: project,
+                worktree: text("worktreePath"),
+                shell: text("shellId"),
+                after: params["after"].as_u64(),
+                cols: params["cols"].as_u64().unwrap_or(80).clamp(20, 400) as u16,
+                rows: params["rows"].as_u64().unwrap_or(24).clamp(5, 200) as u16,
+                accept,
+            })
+        } else {
+            Event::Watch(WatchStart {
+                id: id.clone(),
+                conversation_id: conversation,
+                tail: params["tail"].as_u64(),
+                from: params["from"]
+                    .as_str()
+                    .filter(|from| from.len() <= 256)
+                    .map(Into::into),
+                incremental: params["incremental"] == true,
+                accept,
+            })
+        };
         let accepted = if self.events.try_send(start).is_ok() {
             tokio::time::timeout(REPLY_WAIT, accepted)
                 .await
@@ -913,6 +1030,179 @@ mod tests {
             )
             .await
             .is_err());
+        std::fs::remove_dir_all(host.path.parent().unwrap()).unwrap();
+    }
+
+    fn terminal_watch(project: &str) -> Value {
+        json!({"version":VERSION,"id":"w","method":"terminal.watch","params":{"projectId":project,"cols":80,"rows":24}})
+    }
+
+    #[test]
+    fn terminals_are_on_unless_a_saved_setting_turns_them_off() {
+        assert!(Config::default().terminal);
+        let saved: Config = serde_json::from_str(r#"{"enabled":true,"devices":[]}"#).unwrap();
+        assert!(saved.terminal);
+        let off: Config = serde_json::from_str(r#"{"enabled":true,"terminal":false}"#).unwrap();
+        assert!(!off.terminal);
+    }
+
+    #[tokio::test]
+    async fn terminal_requests_name_the_device_and_stop_when_terminals_are_turned_off() {
+        let (host, events, peer) = paired();
+        let device_id = host.inner.lock().unwrap().config.devices[0].id.clone();
+        let answering = {
+            let events = events.clone();
+            tokio::spawn(async move {
+                let Ok(Event::Request(request)) = events.recv().await else {
+                    panic!("expected a request");
+                };
+                assert_eq!(request.method, "terminal.input");
+                let device = request.device_id.clone();
+                request.reply(Ok(json!({"seq": 1})));
+                device
+            })
+        };
+        let input = json!({"version":VERSION,"id":"i1","method":"terminal.input","params":{"shellId":"s","seq":1,"data":"bHMK"}});
+        host.handle(&peer, input.clone()).await.unwrap();
+        assert_eq!(answering.await.unwrap(), device_id);
+        assert!(host.status().terminal);
+        let catalog = host
+            .handle(
+                &peer,
+                json!({"version":VERSION,"id":"c","method":"workspace.list","params":{}}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(catalog["terminal"], true);
+
+        host.set_terminal(false).unwrap();
+        assert!(matches!(
+            events.recv().await,
+            Ok(Event::TerminalsClosed(None))
+        ));
+        assert!(host.handle(&peer, input).await.is_err());
+        let (sink, _updates) = tokio::sync::mpsc::channel(4);
+        assert!(host.watch(&peer, terminal_watch("p"), sink).await.is_err());
+        let catalog = host
+            .handle(
+                &peer,
+                json!({"version":VERSION,"id":"c2","method":"workspace.list","params":{}}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(catalog["terminal"], false);
+        // The setting is saved, so it holds across a restart.
+        let saved: Config = serde_json::from_slice(&std::fs::read(&host.path).unwrap()).unwrap();
+        assert!(!saved.terminal);
+        std::fs::remove_dir_all(host.path.parent().unwrap()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn actions_reach_the_phone_in_the_catalog_and_its_edits_reach_the_app() {
+        let (host, events, peer) = paired();
+        let device_id = host.inner.lock().unwrap().config.devices[0].id.clone();
+        let actions =
+            json!([{"id":"dev","name":"Run Dev","command":"npm run dev","icon":"rocket"}]);
+        host.publish(json!({
+            "projects": [{"id":"p","name":"monocode","actions": actions}],
+            "monos": [],
+            "sessions": [],
+        }))
+        .unwrap();
+        let list = json!({"version":VERSION,"id":"c","method":"workspace.list","params":{}});
+        let catalog = host.handle(&peer, list).await.unwrap();
+        assert_eq!(catalog["projects"][0]["actions"], actions);
+
+        // The phone's whole list goes to the app as sent, naming the device.
+        let edited = json!([{"id":"dev","name":"Run Dev","command":"npm run dev","icon":"rocket"},{"name":"Test","command":"cargo test","icon":"play"}]);
+        let answering = {
+            let events = events.clone();
+            tokio::spawn(async move {
+                let Ok(Event::Request(request)) = events.recv().await else {
+                    panic!("expected a request");
+                };
+                assert_eq!(request.method, "terminal.actions.save");
+                let seen = (request.device_id.clone(), request.params.clone());
+                request.reply(Ok(json!({"actions": seen.1["actions"]})));
+                seen
+            })
+        };
+        let save = json!({"version":VERSION,"id":"a1","method":"terminal.actions.save","params":{"projectId":"p","actions":edited}});
+        let reply = host.handle(&peer, save.clone()).await.unwrap();
+        assert_eq!(reply["actions"], edited);
+        let (device, params) = answering.await.unwrap();
+        assert_eq!(device, device_id);
+        assert_eq!(params, json!({"projectId":"p","actions":edited}));
+
+        // With terminals off, the phone can't change what they run.
+        host.set_terminal(false).unwrap();
+        assert!(matches!(
+            events.recv().await,
+            Ok(Event::TerminalsClosed(None))
+        ));
+        let mut again = save;
+        again["id"] = json!("a2");
+        assert!(host.handle(&peer, again).await.is_err());
+        std::fs::remove_dir_all(host.path.parent().unwrap()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_terminal_watch_reaches_the_app_and_each_device_has_two() {
+        let (host, events, peer) = paired();
+        let app = tokio::spawn(async move {
+            let mut starts = Vec::new();
+            while starts.len() < 2 {
+                let Ok(Event::Terminal(start)) = events.recv().await else {
+                    panic!("expected a terminal");
+                };
+                assert_eq!(start.project_id, "p");
+                assert_eq!((start.cols, start.rows), (80, 24));
+                start.accept(Ok(()));
+                starts.push(());
+            }
+            events
+        });
+        let mut sinks = Vec::new();
+        for _ in 0..2 {
+            let (sink, updates) = tokio::sync::mpsc::channel(4);
+            host.watch(&peer, terminal_watch("p"), sink).await.unwrap();
+            sinks.push(updates);
+        }
+        let events = app.await.unwrap();
+        let (sink, _updates) = tokio::sync::mpsc::channel(4);
+        let third = host.watch(&peer, terminal_watch("p"), sink).await;
+        assert_eq!(third.unwrap_err(), "Desktop is busy; try again");
+        // A conversation watch is a different budget.
+        assert!(events.is_empty());
+        // Missing project.
+        let (sink, _updates) = tokio::sync::mpsc::channel(4);
+        let bare = json!({"version":VERSION,"id":"w","method":"terminal.watch","params":{}});
+        assert!(host.watch(&peer, bare, sink).await.is_err());
+        std::fs::remove_dir_all(host.path.parent().unwrap()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn revoking_a_device_closes_its_shells_and_its_terminal_watches() {
+        let (host, events, peer) = paired();
+        let device_id = host.inner.lock().unwrap().config.devices[0].id.clone();
+        let app = tokio::spawn({
+            let events = events.clone();
+            async move {
+                let Ok(Event::Terminal(start)) = events.recv().await else {
+                    panic!("expected a terminal");
+                };
+                start.accept(Ok(()));
+            }
+        });
+        let (sink, _updates) = tokio::sync::mpsc::channel(4);
+        host.watch(&peer, terminal_watch("p"), sink).await.unwrap();
+        app.await.unwrap();
+        host.revoke(&device_id).unwrap();
+        assert!(host.inner.lock().unwrap().watches.is_empty());
+        let Ok(Event::TerminalsClosed(Some(closed))) = events.recv().await else {
+            panic!("expected the device's shells to close");
+        };
+        assert_eq!(closed, device_id);
         std::fs::remove_dir_all(host.path.parent().unwrap()).unwrap();
     }
 

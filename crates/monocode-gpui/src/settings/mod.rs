@@ -65,6 +65,8 @@ pub(crate) struct SettingsContext {
     pub mobile: Option<monocode_core::mobile::Status>,
     /// The pairing code on show.
     pub mobile_invite: Option<monocode_core::mobile::Invite>,
+    /// Shells paired phones have open on this desktop.
+    pub mobile_terminals: Vec<crate::shell::mobile_terminal::Open>,
 }
 impl PartialEq for SettingsContext {
     fn eq(&self, other: &Self) -> bool {
@@ -87,6 +89,7 @@ impl PartialEq for SettingsContext {
             && self.inbox_connections == other.inbox_connections
             && self.mobile == other.mobile
             && self.mobile_invite == other.mobile_invite
+            && self.mobile_terminals == other.mobile_terminals
     }
 }
 #[derive(Clone, Debug, PartialEq)]
@@ -134,6 +137,10 @@ pub(crate) enum SettingsEvent {
     MobilePair,
     MobileCancelInvite,
     MobileRevoke(String),
+    /// Allow or refuse a shell from any paired phone.
+    MobileTerminal(bool),
+    /// End one shell a phone has open.
+    MobileKillTerminal(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

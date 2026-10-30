@@ -43,6 +43,16 @@ vi.mock("@/features/workspace/WorkspaceProvider", () => ({
 vi.mock("@/features/sessions/useSessionActions", () => ({
   useSessionActions: () => ({ rename: vi.fn() }),
 }));
+vi.mock("@/features/terminal/terminalActions", () => ({
+  ACTION_SYMBOLS: {},
+  useTerminalActions: () => [
+    [
+      { id: "a", name: "Status", command: "git status", icon: "play" },
+      { id: "b", name: "Test", command: "cargo test", icon: "test-tube" },
+    ],
+    vi.fn(),
+  ],
+}));
 vi.mock("react-native-safe-area-context", () => ({
   useSafeAreaInsets: () => ({ bottom: 0 }),
 }));
@@ -134,18 +144,25 @@ vi.mock("@/ui/theme", () => {
 let container: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
 const settings = vi.fn();
+const openTerminal = vi.fn();
+const editActions = vi.fn();
 const session = {
   id: "session",
   title: "Prepare Mobile Upstream",
   branch: "android-fixes",
 } as SessionSummary;
-const render = (changed = 14, target: SessionSummary | undefined = session) =>
+const render = (
+  changed = 14,
+  target: SessionSummary | undefined = session,
+  terminal = false,
+) =>
   act(() =>
     root.render(
       <>
         <SessionTitle
           title={session.title}
           subtitle="monocode · android-fixes"
+          terminal={terminal}
         />
         <SessionToolbar
           projectId="project"
@@ -154,6 +171,9 @@ const render = (changed = 14, target: SessionSummary | undefined = session) =>
           changed={changed}
           worktreePath="/repo/worktree"
           harness="codex"
+          terminal={terminal}
+          onTerminal={openTerminal}
+          onEditActions={editActions}
           onSettings={settings}
         />
       </>,
@@ -266,4 +286,27 @@ it("keeps archive/delete confirmations and returns before removing the session",
     ).toHaveBeenCalledWith("session");
     vi.clearAllMocks();
   }
+});
+it("offers a terminal only when the desktop allows one", () => {
+  render();
+  expect(container.querySelector('[aria-label="Terminal"]')).toBeNull();
+  act(() => root.unmount());
+  root = createRoot(container);
+  render(14, session, true);
+  expect(button("Terminal")).toBeDefined();
+});
+it("opens the terminal sheet, with or without an action, and the actions editor", async () => {
+  render(14, session, true);
+  await click("Terminal");
+  for (const label of ["Open Terminal", "Status", "Test", "Edit Actions…"])
+    expect(button(label)).toBeDefined();
+  await click("Open Terminal");
+  expect(openTerminal).toHaveBeenLastCalledWith(undefined);
+  await click("Terminal");
+  await click("Test");
+  expect(openTerminal).toHaveBeenLastCalledWith("cargo test");
+  await click("Terminal");
+  await click("Edit Actions…");
+  expect(editActions).toHaveBeenCalledOnce();
+  expect(app.push).not.toHaveBeenCalled();
 });

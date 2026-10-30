@@ -35,6 +35,8 @@ export type Catalog = {
   monos: Mono[];
   sessions: SessionSummary[];
   addresses?: Desktop["addresses"];
+  /** Whether the desktop lets this phone open a terminal; missing on older desktops. */
+  terminal?: boolean;
 };
 const EMPTY: Catalog = { projects: [], monos: [], sessions: [] };
 const PAIRING = "monocode.mobile.pairing";

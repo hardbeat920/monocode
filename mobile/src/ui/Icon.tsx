@@ -6,6 +6,7 @@ import BotIcon from "@hugeicons/core-free-icons/BotIcon";
 import BubbleChatIcon from "@hugeicons/core-free-icons/BubbleChatIcon";
 import Cancel01Icon from "@hugeicons/core-free-icons/Cancel01Icon";
 import ChartBreakoutSquareIcon from "@hugeicons/core-free-icons/ChartBreakoutSquareIcon";
+import ClipboardPasteIcon from "@hugeicons/core-free-icons/ClipboardPasteIcon";
 import ComputerIcon from "@hugeicons/core-free-icons/ComputerIcon";
 import ComputerRemoveIcon from "@hugeicons/core-free-icons/ComputerRemoveIcon";
 import ComputerTerminal01Icon from "@hugeicons/core-free-icons/ComputerTerminal01Icon";
@@ -20,6 +21,7 @@ import Folder01Icon from "@hugeicons/core-free-icons/Folder01Icon";
 import GitBranchIcon from "@hugeicons/core-free-icons/GitBranchIcon";
 import Image01Icon from "@hugeicons/core-free-icons/Image01Icon";
 import InboxIcon from "@hugeicons/core-free-icons/InboxIcon";
+import KeyboardOffIcon from "@hugeicons/core-free-icons/KeyboardOffIcon";
 import LockIcon from "@hugeicons/core-free-icons/LockIcon";
 import LeftToRightListBulletIcon from "@hugeicons/core-free-icons/LeftToRightListBulletIcon";
 import Moon02Icon from "@hugeicons/core-free-icons/Moon02Icon";
@@ -30,6 +32,7 @@ import Note01Icon from "@hugeicons/core-free-icons/Note01Icon";
 import Notification01Icon from "@hugeicons/core-free-icons/Notification01Icon";
 import PencilEdit01Icon from "@hugeicons/core-free-icons/PencilEdit01Icon";
 import PencilEdit02Icon from "@hugeicons/core-free-icons/PencilEdit02Icon";
+import PlayIcon from "@hugeicons/core-free-icons/PlayIcon";
 import Robot01Icon from "@hugeicons/core-free-icons/Robot01Icon";
 import Refresh01Icon from "@hugeicons/core-free-icons/Refresh01Icon";
 import Search01Icon from "@hugeicons/core-free-icons/Search01Icon";
@@ -80,6 +83,9 @@ const icons = {
   wrench: Wrench01Icon,
   minus: MinusSignIcon,
   copy: Copy01Icon,
+  paste: ClipboardPasteIcon,
+  play: PlayIcon,
+  keyboardOff: KeyboardOffIcon,
   trash: Delete02Icon,
   check: Tick02Icon,
   refresh: Refresh01Icon,

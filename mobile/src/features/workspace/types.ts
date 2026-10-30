@@ -38,6 +38,17 @@ export type Project = {
   defaultModelName?: string;
   /** The permission mode a new desktop tab would start with. */
   defaultRuntimeMode?: RuntimeMode;
+  /** The desktop footer's saved commands, which the phone's terminal runs too. */
+  actions?: ProjectAction[];
+};
+
+/** A saved command, as the desktop's footer keeps it. */
+export type ProjectAction = {
+  id: string;
+  name: string;
+  command: string;
+  /** One of the desktop's action icons: play, test-tube, hammer, rocket, bug, package. */
+  icon: string;
 };
 
 // Trimmed from the desktop's GitChangedFile (src/platform/tauri/fs.ts) and
