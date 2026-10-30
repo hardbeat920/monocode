@@ -366,6 +366,7 @@ pub struct Transcript {
     busy: bool,
     /// What the agent waits on the user to answer, as the desktop sent it.
     question: Value,
+    usage_limit: Value,
     question_generation: u64,
     older: bool,
     error: Option<String>,
@@ -386,6 +387,7 @@ impl Transcript {
             pending: Value::Null,
             busy: false,
             question: Value::Null,
+            usage_limit: Value::Null,
             question_generation: 0,
             older: false,
             error: None,
@@ -417,6 +419,7 @@ impl Transcript {
                     .unwrap_or_else(|| from_messages(&command["messages"]));
                 self.busy = command["busy"].as_bool().unwrap_or(false);
                 self.set_question(&command["question"]);
+                self.usage_limit = command["usageLimit"].clone();
                 self.older = false;
                 self.error = None;
                 self.ready = true;
@@ -533,6 +536,9 @@ impl Transcript {
                     self.older = older;
                 }
                 // Sent when it changes; null once answered.
+                if let Some(limit) = frame.get("usageLimit") {
+                    self.usage_limit = limit.clone();
+                }
                 if let Some(question) = frame.get("question") {
                     self.set_question(question);
                 }
@@ -669,7 +675,7 @@ impl Transcript {
             "order": if order == self.order { None } else { Some(&order) },
             "status": { "busy":self.busy, "error":self.error, "hasTurns":!turns.is_empty(), "ready":self.ready, "lastUserId":self.last_user_id(),
                 "userCount":self.user_count(), "pendingId":self.pending["turn"]["id"], "notice":latest_error,
-                "question":self.question, "questionGeneration":self.question_generation },
+                "question":self.question, "questionGeneration":self.question_generation, "usageLimit":self.usage_limit },
             "older": self.history_older.unwrap_or(self.older),
             "firstTurnId": self.history.first().or(self.turns.first()).map(|t| string(t,"id")),
             "watchFrom": self.turns.first().map(|t| string(t,"id")),
@@ -1156,6 +1162,30 @@ mod tests {
         assert!(after["status"]["pendingId"].is_null());
         assert_eq!(after["status"]["lastUserId"], "4/u");
     }
+    #[test]
+    fn usage_limit_passes_through_reads_frames_preferences_and_clearing() {
+        let mut transcript = Transcript::new(Vec::new(), false);
+        let limit =
+            json!({"token":"a", "resetsAt":123456, "resumeAtReset":false, "canResume":false});
+        let read = transcript
+            .update(json!({"type":"replace", "turns":[], "usageLimit":limit}))
+            .unwrap();
+        assert_eq!(read["status"]["usageLimit"], limit);
+        let retained = transcript
+            .update(json!({"type":"frames", "frames":[{"busy":false}]}))
+            .unwrap();
+        assert_eq!(retained["status"]["usageLimit"], limit);
+        let armed = json!({"token":"b", "resetsAt":123456, "resumeAtReset":true});
+        let update = transcript
+            .update(json!({"type":"frames", "frames":[{"usageLimit":armed}]}))
+            .unwrap();
+        assert_eq!(update["status"]["usageLimit"], armed);
+        let cleared = transcript
+            .update(json!({"type":"frames", "frames":[{"usageLimit":null}]}))
+            .unwrap();
+        assert!(cleared["status"]["usageLimit"].is_null());
+    }
+
     #[test]
     fn question_generation_survives_coalesced_clears_and_snapshot_refreshes() {
         let mut transcript = Transcript::new(vec![], false);
