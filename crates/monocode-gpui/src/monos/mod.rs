@@ -1161,11 +1161,12 @@ impl Monos {
         })
         .detach();
     }
+    /// Every Mono, whichever project is open: hiding the ones that don't list
+    /// it lost existing Monos. A new Mono still starts on `project`.
     pub(crate) fn rail(&mut self, project: Option<String>, cx: &mut Context<Self>) -> AnyElement {
         self.rail_impl(project, false, false, cx)
     }
-    /// Original navigation lists every Mono, before the projects; the inset
-    /// layout continues to list only the current project's Monos.
+    /// Original navigation lists every Mono, before the projects.
     pub(crate) fn project_navigation_rail(
         &mut self,
         compact: bool,
@@ -1183,13 +1184,7 @@ impl Monos {
         if !self.prefs.monos {
             return div().into_any_element();
         }
-        let roster: Vec<_> = self
-            .roster
-            .monos
-            .iter()
-            .filter(|m| project.as_ref().is_none_or(|p| m.works_on(p)))
-            .cloned()
-            .collect();
+        let roster = self.roster.monos.clone();
         self.rail_ids = roster.iter().map(|m| m.id.clone()).collect();
         for mono in &roster {
             self.rail_bounds.entry(mono.id.clone()).or_default();

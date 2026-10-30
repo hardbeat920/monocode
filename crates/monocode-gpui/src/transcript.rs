@@ -5641,6 +5641,48 @@ impl TranscriptView {
     pub(crate) fn jump_bounds(&self) -> Option<gpui::Bounds<gpui::Pixels>> {
         self.show_jump.then(|| self.jump_anchor.get()).flatten()
     }
+    /// Scrolls to the heading a `#anchor` link names.
+    fn open_anchor(
+        &mut self,
+        anchor: &markdown::OpenAnchor,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let wanted = anchor.0.to_lowercase();
+        let mut seen = HashMap::<String, usize>::new();
+        let target = self.rows.iter().position(|row| {
+            let Body::Markdown(md) = &row.body else {
+                return false;
+            };
+            // A heading's wrapped lines continue it with no gap above.
+            let Part::Text { runs, heading } = &md.part else {
+                return false;
+            };
+            if *heading == 0 || md.gap == 0. {
+                return false;
+            }
+            let text: String = runs.iter().map(|run| run.text.as_str()).collect();
+            let base = markdown::heading_slug(&text);
+            let count = seen.entry(base.clone()).or_default();
+            let slug = match *count {
+                0 => base,
+                n => format!("{base}-{n}"),
+            };
+            *count += 1;
+            slug == wanted
+        });
+        let Some(ix) = target else {
+            return;
+        };
+        cx.stop_propagation();
+        self.follow = Follow::default();
+        self.list.pause_following_tail();
+        self.list.scroll_to(ListOffset {
+            item_ix: ix,
+            offset_in_item: px(0.),
+        });
+        cx.notify();
+    }
     fn jump_to_bottom(&mut self, cx: &mut Context<Self>) {
         self.follow = Follow::default();
         self.list.set_follow_mode(FollowMode::Tail);
@@ -5745,6 +5787,7 @@ impl Render for TranscriptView {
             .track_focus(self.selection_focus.as_ref().unwrap())
             .on_action(cx.listener(Self::copy_selection))
             .on_action(cx.listener(Self::open_link_menu))
+            .on_action(cx.listener(Self::open_anchor))
             .capture_any_mouse_down(cx.listener(
                 |this, event: &gpui::MouseDownEvent, window, cx| {
                     if event.button == gpui::MouseButton::Right && this.links.open.is_none() {
@@ -5948,6 +5991,76 @@ mod scroll_tests {
         view.prompt_rise = None;
         view.motions.clear();
         view.rebuild(0, cx);
+    }
+
+    #[gpui::test]
+    fn heading_links_scroll_a_document_to_their_section(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let filler = "Filler paragraph that pushes the section below the fold.\n\n".repeat(40);
+        let text = format!(
+            "[Jump to the second part](#second-part)\n\n## Notes\n\n{filler}## Notes\n\n{filler}## Second part\n\nThe target.\n\n{filler}"
+        );
+        let window = cx.update(|cx| {
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        point(px(0.), px(0.)),
+                        size(px(500.), px(500.)),
+                    ))),
+                    ..Default::default()
+                },
+                |_, cx| cx.new(|cx| TranscriptView::document(text, cx)),
+            )
+            .unwrap()
+        });
+        cx.refresh().unwrap();
+        cx.run_until_parked();
+        let heading = |view: &TranscriptView, label: &str, nth: usize| {
+            view.rows
+                .iter()
+                .enumerate()
+                .filter(|(_, row)| {
+                    matches!(&row.body, Body::Markdown(md) if matches!(&md.part,
+                        Part::Text { runs, heading } if *heading > 0
+                            && runs.iter().map(|r| r.text.as_str()).collect::<String>() == label))
+                })
+                .nth(nth)
+                .unwrap()
+                .0
+        };
+        // Pressing a link focuses the document, so its action reaches the view.
+        window
+            .update(cx, |view, window, cx| {
+                assert_eq!(view.list.logical_scroll_top().item_ix, 0);
+                window.focus(view.selection_focus.as_ref().unwrap(), cx);
+            })
+            .unwrap();
+        cx.refresh().unwrap();
+        let open = |anchor: &str, cx: &mut TestAppContext| {
+            window
+                .update(cx, |_, window, cx| {
+                    window.dispatch_action(Box::new(markdown::OpenAnchor(anchor.into())), cx)
+                })
+                .unwrap();
+            cx.run_until_parked();
+            window
+                .update(cx, |view, _, _| view.list.logical_scroll_top().item_ix)
+                .unwrap()
+        };
+        let second = window
+            .update(cx, |view, _, _| heading(view, "Second part", 0))
+            .unwrap();
+        assert_eq!(open("second-part", cx), second);
+        // Repeated headings number from their second use, as GitHub does.
+        let notes = window
+            .update(cx, |view, _, _| {
+                (heading(view, "Notes", 0), heading(view, "Notes", 1))
+            })
+            .unwrap();
+        assert_eq!(open("notes-1", cx), notes.1);
+        assert_eq!(open("Notes", cx), notes.0);
+        // An unknown anchor leaves the reader where they are.
+        assert_eq!(open("missing", cx), notes.0);
     }
 
     #[gpui::test]

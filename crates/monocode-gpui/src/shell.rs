@@ -2941,9 +2941,45 @@ impl Shell {
     }
     fn spawn_terminal(&mut self, cwd: String, cx: &mut Context<Self>) -> Entity<Terminal> {
         let terminal = cx.new(|cx| Terminal::new(cwd, cx));
-        self.observations
-            .push(cx.subscribe(&terminal, |_, _, _: &TerminalEvent, cx| cx.notify()));
+        self.observations.push(cx.subscribe(
+            &terminal,
+            |_, terminal, event: &TerminalEvent, cx| {
+                if matches!(event, TerminalEvent::ExitedCleanly) {
+                    // `exit` closes its tab, as in other terminals.
+                    cx.spawn(async move |this, cx| {
+                        let _ = this.update_in(cx, |this, window, cx| {
+                            this.close_exited_terminal(&terminal, window, cx)
+                        });
+                    })
+                    .detach();
+                }
+                cx.notify()
+            },
+        ));
         terminal
+    }
+    fn close_exited_terminal(
+        &mut self,
+        terminal: &Entity<Terminal>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((project, ix)) = self.terminals.iter().find_map(|(project, live)| {
+            live.iter()
+                .position(|t| t == terminal)
+                .map(|ix| (project.clone(), ix))
+        }) else {
+            return;
+        };
+        let last = self.terminals[&project].len() == 1;
+        let panel = project == self.workspace.project
+            && self.terminal_in_panel(cx)
+            && self.panel_terminal_shown(cx);
+        self.remove_terminal(&project, ix, window, cx);
+        // The panel makes a fresh shell when it opens again.
+        if panel && last {
+            self.set_right_panel_open(false, window, cx);
+        }
     }
     /// A restored dock reopens its tabs as fresh shells once it is shown.
     fn ensure_terminals(&mut self, project: &str, cx: &mut Context<Self>) {

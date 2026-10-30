@@ -90,6 +90,8 @@ impl Dimensions for GridSize {
 pub(crate) enum TerminalEvent {
     /// Title, foreground process or running state changed.
     Changed,
+    /// The shell exited with status 0, so its tab can close.
+    ExitedCleanly,
 }
 
 /// Where the grid was painted, for mapping the pointer to cells.
@@ -362,11 +364,22 @@ impl Terminal {
             TermEvent::ChildExit(status) => {
                 let code = status.code().map(|c| format!(" ({c})")).unwrap_or_default();
                 write_note(&self.term, &format!("\r\n[process exited{code}]"));
+                let clean = !self.exited && status.success();
                 self.finish(cx);
+                // A failed shell keeps its tab so the status stays readable.
+                if clean {
+                    cx.emit(TerminalEvent::ExitedCleanly);
+                }
             }
             TermEvent::Exit => self.finish(cx),
             TermEvent::Title(_) | TermEvent::ResetTitle | TermEvent::Bell => {}
         }
+    }
+    #[cfg(all(test, unix))]
+    pub(crate) fn simulate_exit(&mut self, code: i32, cx: &mut Context<Self>) {
+        use std::os::unix::process::ExitStatusExt;
+        let status = std::process::ExitStatus::from_raw(code << 8);
+        self.on_event(TermEvent::ChildExit(status), cx);
     }
     fn finish(&mut self, cx: &mut Context<Self>) {
         if !self.exited {

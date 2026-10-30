@@ -1186,6 +1186,61 @@ mod tests {
         assert!(visual.debug_bounds("footer-terminal").is_some());
     }
 
+    #[cfg(unix)]
+    #[gpui::test]
+    fn a_clean_shell_exit_closes_its_terminal_and_a_failure_keeps_it(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (window, _, _) = crate::shell::tests::window(cx);
+        let (project, first, second) = window
+            .update(cx, |shell, window, cx| {
+                cx.set_reduce_motion(true);
+                shell.new_terminal(window, cx);
+                shell.new_terminal(window, cx);
+                let project = shell.workspace.project.clone();
+                let live = &shell.terminals[&project];
+                (project, live[0].clone(), live[1].clone())
+            })
+            .unwrap();
+        // A non-zero status stays on screen.
+        second.update(cx, |t, cx| t.simulate_exit(1, cx));
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                assert_eq!(shell.terminals[&project], [first.clone(), second.clone()]);
+                assert_eq!(shell.workspace.docks[&project].terminals.len(), 2);
+            })
+            .unwrap();
+        first.update(cx, |t, cx| t.simulate_exit(0, cx));
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, window, cx| {
+                assert_eq!(shell.terminals[&project], std::slice::from_ref(&second));
+                assert_eq!(shell.workspace.docks[&project].terminals.len(), 1);
+                assert!(shell.workspace.docks[&project].open);
+                // The panel's only shell exiting hides the panel.
+                shell.remove_terminal(&project, 0, window, cx);
+                shell.workspace.classic_layout = false;
+                shell.workspace.new_layout_boxy = true;
+                shell.layout_changed(cx);
+                shell.workspace.preferences.terminal_in_panel = true;
+                shell.toggle_terminal(window, cx);
+                assert!(shell.workspace.right_panel_open);
+            })
+            .unwrap();
+        let panel = window
+            .update(cx, |shell, _, _| shell.terminals[&project][0].clone())
+            .unwrap();
+        panel.update(cx, |t, cx| t.simulate_exit(0, cx));
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                assert!(shell.terminals[&project].is_empty());
+                assert!(!shell.workspace.right_panel_open);
+            })
+            .unwrap();
+    }
+
     #[test]
     fn chip_labels_count_repeated_processes_in_order() {
         assert_eq!(chip_label(["vite"]), "vite");
