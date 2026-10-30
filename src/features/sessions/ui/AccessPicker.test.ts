@@ -121,6 +121,19 @@ const claude = (supportsAuto: boolean, id = "claude:m") => [
 ];
 
 describe("AccessPicker", () => {
+  it("offers only Copilot's supported modes and displays the saved Auto fallback", () => {
+    const onChange = vi.fn();
+    render("copilot", "copilot:auto", "auto", onChange);
+    expect(trigger().getAttribute("aria-label")).toBe("Auto-accept edits");
+    expect(onChange).not.toHaveBeenCalled();
+    open();
+    expect(options()).toEqual([
+      "Supervised",
+      "Auto-accept edits",
+      "Full access",
+    ]);
+  });
+
   it("lists Auto only for models that support it", () => {
     setHarnessModels("claude", claude(true, "claude:sonnet-5"));
     render("claude", "claude:sonnet-5", "supervised");

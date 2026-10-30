@@ -100,22 +100,25 @@ describe("harness registry", () => {
     await sending;
   });
 
-  it("sends the mode the model supports, not the saved one", async () => {
-    const sendTurn = vi.fn(async () => undefined);
-    registerHarness(stub("cursor", { sendTurn }));
-    await sendHarnessTurn({
-      harness: "cursor",
-      sessionId: "coerce",
-      cwd: "/tmp",
-      model: "cursor:default",
-      runtimeMode: "auto",
-      text: "Hello",
-      onEvent: vi.fn(),
-    });
-    expect(sendTurn).toHaveBeenCalledWith(
-      expect.objectContaining({ runtimeMode: "auto-accept-edits" }),
-    );
-  });
+  it.each(["cursor", "copilot"] as const)(
+    "sends %s the supported mode, not the saved one",
+    async (harness) => {
+      const sendTurn = vi.fn(async () => undefined);
+      registerHarness(stub(harness, { sendTurn }));
+      await sendHarnessTurn({
+        harness,
+        sessionId: "coerce",
+        cwd: "/tmp",
+        model: `${harness}:default`,
+        runtimeMode: "auto",
+        text: "Hello",
+        onEvent: vi.fn(),
+      });
+      expect(sendTurn).toHaveBeenCalledWith(
+        expect.objectContaining({ runtimeMode: "auto-accept-edits" }),
+      );
+    },
+  );
 
   it("normalizes the saved mode for rewind and compaction too", async () => {
     const rewindLastTurn = vi.fn(async () => ({ submitted: false }));

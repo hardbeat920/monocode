@@ -36,6 +36,7 @@ describe("runtimeModesFor", () => {
     expect(runtimeModesFor("devin", "devin:x")).toContain("auto");
     for (const harness of [
       "cursor",
+      "copilot",
       "opencode",
       "antigravity",
       "hermes",
@@ -78,6 +79,9 @@ describe("runtimeModesFor", () => {
   it("steps down to the previous mode when Auto isn't offered", () => {
     confirmAuto(true);
     expect(coerceRuntimeMode("cursor", "cursor:default", "auto")).toBe(
+      "auto-accept-edits",
+    );
+    expect(coerceRuntimeMode("copilot", "copilot:auto", "auto")).toBe(
       "auto-accept-edits",
     );
     expect(coerceRuntimeMode("claude", "claude:sonnet-5", "auto")).toBe("auto");

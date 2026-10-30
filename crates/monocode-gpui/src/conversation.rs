@@ -4057,6 +4057,22 @@ mod menu_tests {
                 assert_eq!(view.settings.access, AccessMode::Auto);
                 assert!(offered(view).contains(&("access:auto-accept-edits".into(), true)));
 
+                view.summary.provider = "copilot".into();
+                view.catalog.clear();
+                view.model = Some("auto".into());
+                assert_eq!(
+                    ids(view),
+                    [
+                        "access:read-only",
+                        "access:supervised",
+                        "access:auto-accept-edits",
+                        "access:full-access"
+                    ]
+                );
+                assert_eq!(view.supported_access(), AccessMode::AutoAcceptEdits);
+                assert_eq!(view.settings.access, AccessMode::Auto);
+                assert!(offered(view).contains(&("access:auto-accept-edits".into(), true)));
+
                 view.summary.provider = "pi".into();
                 view.catalog.clear();
                 view.model = None;

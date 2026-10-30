@@ -183,6 +183,24 @@ mod tests {
         assert!(p.copilot_settings(&setup).is_err());
     }
     #[test]
+    fn saved_auto_runs_with_edit_approval_but_still_asks_before_commands() {
+        let mut p = protocol();
+        p.request.settings.access = AccessMode::Auto;
+        let saved = p.request.clone();
+        p.request = crate::provider::with_supported_access(saved.clone());
+        assert_eq!(saved.settings.access, AccessMode::Auto);
+        assert_eq!(p.request.settings.access, AccessMode::AutoAcceptEdits);
+        p.acp.stage = Stage::Prompt;
+        let mut out = Vec::new();
+        let edit = p.frame(json!({"id":"edit","method":"session/request_permission","params":{"toolCall":{"kind":"edit"},"options":[{"kind":"allow_once","optionId":"yes"},{"kind":"reject_once","optionId":"no"}]}}), &mut out).unwrap();
+        assert!(!edit.iter().any(|event| matches!(event, Event::Approval(_))));
+        assert_eq!(last(&mut out)["result"]["outcome"]["optionId"], "yes");
+        let command = p.frame(json!({"id":"command","method":"session/request_permission","params":{"toolCall":{"kind":"execute"},"options":[{"kind":"allow_once","optionId":"yes"},{"kind":"reject_once","optionId":"no"}]}}), &mut out).unwrap();
+        assert!(matches!(command.as_slice(), [Event::Approval(_)]));
+        assert!(out.is_empty());
+    }
+
+    #[test]
     fn approval_policy_handles_opaque_options_and_unknown_tool_kinds() {
         for (access, plan, kind, expected) in [
             (AccessMode::ReadOnly, false, "edit", Some("no")),

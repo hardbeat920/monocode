@@ -219,7 +219,7 @@ fn provider_access_modes(kind: Kind) -> &'static [AccessMode] {
     ];
     match kind {
         Kind::Claude | Kind::Codex | Kind::Devin | Kind::Grok => APPROVAL_MODES,
-        Kind::Cursor | Kind::OpenCode | Kind::Antigravity | Kind::Hermes => EDITS,
+        Kind::Cursor | Kind::OpenCode | Kind::Antigravity | Kind::Hermes | Kind::Copilot => EDITS,
         Kind::Pi | Kind::Omp | Kind::Fx => &[],
     }
 }
@@ -1042,6 +1042,11 @@ mod tests {
             access_modes(Kind::Cursor, None),
             [Supervised, AutoAcceptEdits, FullAccess]
         );
+        assert_eq!(
+            access_modes(Kind::Copilot, None),
+            [Supervised, AutoAcceptEdits, FullAccess]
+        );
+        assert!(!access_modes(Kind::Copilot, Some(&auto)).contains(&Auto));
         for kind in [Kind::Pi, Kind::Omp, Kind::Fx] {
             assert!(access_modes(kind, None).is_empty());
         }
@@ -1062,6 +1067,12 @@ mod tests {
         assert_eq!(supported_access(Kind::Claude, None, Auto), AutoAcceptEdits);
         assert_eq!(supported_access(Kind::Codex, None, Auto), Auto);
         assert_eq!(supported_access(Kind::Hermes, None, Auto), AutoAcceptEdits);
+        assert_eq!(supported_access(Kind::Copilot, None, Auto), AutoAcceptEdits);
+        assert_eq!(
+            supported_access(Kind::Copilot, None, FullAccess),
+            FullAccess
+        );
+        assert_eq!(supported_access(Kind::Copilot, None, ReadOnly), ReadOnly);
         assert_eq!(supported_access(Kind::Pi, None, FullAccess), Supervised);
         assert_eq!(supported_access(Kind::Pi, None, ReadOnly), ReadOnly);
         assert_eq!(supported_access(Kind::Claude, None, ReadOnly), ReadOnly);
