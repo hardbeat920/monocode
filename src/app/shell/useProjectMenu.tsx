@@ -3,6 +3,7 @@ import {
   AppWindow,
   Archive,
   BellOff,
+  FolderEdit,
   FolderOpen,
   FolderTree,
   ImagePlus,
@@ -15,12 +16,15 @@ import {
   basename,
   listExternalEditors,
   openInExternalEditor,
+  pickFolder,
+  resolveProjectLocation,
   revealPath,
   type ExternalEditor,
 } from "../../platform/tauri/fs";
 import { IS_MAC, IS_WIN } from "../../platform/tauri/platform";
-import { projectKey, projectName } from "../../shared/lib/paths";
+import { parentPath, projectKey, projectName } from "../../shared/lib/paths";
 import {
+  isLocalProject,
   loadPinnedProjects,
   sameProjectPath,
   subscribeProjectPathsChanged,
@@ -92,6 +96,7 @@ function projectMenuExtraItems(
   projectGroups: ProjectGroup[],
   currentProjectGroupId: string | undefined,
   railOptions: boolean,
+  canRelocate: boolean,
 ): TabGroupMenuExtraItem[] {
   const groupSubmenu: ExplorerMenuItem[] = [
     { kind: "item", id: "project-group:new", label: "New group…" },
@@ -130,6 +135,9 @@ function projectMenuExtraItems(
         ]
       : []),
     { id: "reveal", label: REVEAL_LABEL, icon: FolderOpen },
+    ...(canRelocate
+      ? [{ id: "relocate", label: "Edit folder path…", icon: FolderEdit }]
+      : []),
     {
       id: "external-editor",
       label: "Open in editor",
@@ -189,6 +197,8 @@ type Point = { x: number; y: number };
 
 type Options = {
   onRemoveProject?: (path: string, options: { purgeData: boolean }) => void;
+  /** Points a project at another folder, e.g. after it moved on disk. */
+  onRelocateProject?: (from: string, to: string) => Promise<void>;
   onOpenNotificationSettings?: (projectPath?: string) => void;
   /** Called when a project or group menu opens, so hosts can close sibling menus. */
   onOpen?: () => void;
@@ -205,6 +215,7 @@ type Options = {
  */
 export function useProjectMenu({
   onRemoveProject,
+  onRelocateProject,
   onOpenNotificationSettings,
   onOpen,
   railOptions = true,
@@ -331,6 +342,52 @@ export function useProjectMenu({
 
   const groupLabels = projectMenu ? loadTabGroupLabels() : {};
 
+  /** Ask for the project's new folder; resolves to it, or null if cancelled. */
+  const relocate = async (path: string): Promise<string | null> => {
+    if (!onRelocateProject) return null;
+    const name = resolveTabGroupLabel(
+      projectKey(path),
+      loadTabGroupLabels(),
+      basename(path),
+    );
+    const next = await pickFolder(
+      `Choose the folder for ${name}`,
+      parentPath(path),
+    );
+    if (!next) return null;
+    await onRelocateProject(path, next);
+    return next;
+  };
+
+  const reveal = async (path: string) => {
+    try {
+      await revealPath(path);
+      return;
+    } catch (error) {
+      // A folder moved or renamed outside the app leaves nothing to reveal;
+      // offer to point the project at its new location instead. Any other
+      // failure is reported as is.
+      if (!onRelocateProject || !isLocalProject(path)) throw error;
+      const location = await resolveProjectLocation(path).catch(() => null);
+      if (location) throw error;
+    }
+    const next = await relocate(path);
+    if (next) await revealPath(next);
+  };
+
+  /** Keeps the menu open until `task` settles, so a failure shows in it. */
+  const runInMenu = (task: Promise<unknown>) => {
+    void task
+      .then(() => {
+        setProjectMenu(null);
+        restoreFocus();
+      })
+      .catch((error: unknown) => {
+        setMenuError(error instanceof Error ? error.message : String(error));
+      });
+    return false;
+  };
+
   const onPick = (action: string) => {
     if (!projectMenu) return;
     const { path, projectKey: key } = projectMenu;
@@ -386,8 +443,11 @@ export function useProjectMenu({
         project: key,
         name: resolveTabGroupLabel(key, groupLabels, basename(path)),
       });
-    } else if (action === "reveal") void revealPath(path);
-    else if (action === "archive") {
+    } else if (action === "reveal") {
+      return runInMenu(reveal(path));
+    } else if (action === "relocate") {
+      return runInMenu(relocate(path));
+    } else if (action === "archive") {
       onRemoveProject?.(path, { purgeData: false });
     } else if (action === "delete") {
       setRemoving({
@@ -459,6 +519,7 @@ export function useProjectMenu({
             loadProjectGroupAssignments(),
           ),
           railOptions,
+          Boolean(onRelocateProject) && isLocalProject(projectMenu.path),
         )}
         footer={
           menuError ? (

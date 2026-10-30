@@ -548,6 +548,20 @@ export async function pickFolders(title = "Open projects"): Promise<string[]> {
   return typeof selected === "string" && selected ? [slash(selected)] : [];
 }
 
+/** One folder chosen from the system picker, or null when it was cancelled. */
+export async function pickFolder(
+  title: string,
+  defaultPath?: string,
+): Promise<string | null> {
+  const selected = await open({
+    directory: true,
+    multiple: false,
+    title,
+    defaultPath,
+  });
+  return typeof selected === "string" && selected ? slash(selected) : null;
+}
+
 export async function pickFiles(title = "Attach files"): Promise<string[] | null> {
   const selected = await open({
     multiple: true,
