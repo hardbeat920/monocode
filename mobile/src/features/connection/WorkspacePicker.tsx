@@ -49,6 +49,7 @@ export function WorkspacePicker({
   const styles = useStyles();
   const connection = useConnection();
   const insets = useSafeAreaInsets();
+  const [base] = useState(() => connection.selection);
   const androidHeader = editing && Platform.OS === "android";
   const [draft, setDraft] = useState<MobileSelection>(
     () => connection.selection ?? { projectIds: [], monoIds: [] },
@@ -71,7 +72,7 @@ export function WorkspacePicker({
     setSaving(true);
     setError("");
     try {
-      await connection.select(draft);
+      await connection.select(draft, base);
       onDone?.();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
