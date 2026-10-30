@@ -518,6 +518,38 @@ impl Store {
         }
         Ok(out)
     }
+    /// What was left unsent in a thread's composer, restored when it reopens.
+    pub fn composer_draft(
+        &self,
+        session: i64,
+    ) -> Result<Option<crate::follow_up::Message>, String> {
+        self.setting(&format!("composer-draft:{session}"))?
+            .filter(|raw| !raw.is_empty())
+            .map(|raw| serde_json::from_str(&raw).map_err(|e| e.to_string()))
+            .transpose()
+    }
+    /// `None` clears it once the composer is empty again.
+    pub fn save_composer_draft(
+        &self,
+        session: i64,
+        draft: Option<&crate::follow_up::Message>,
+    ) -> Result<(), String> {
+        let value = draft
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|e| e.to_string())?
+            .unwrap_or_default();
+        self.save_setting(&format!("composer-draft:{session}"), &value)
+    }
+    /// Sessions with unsent composer text, for the sidebar's Draft mark.
+    pub fn composer_draft_sessions(&self) -> Result<std::collections::HashSet<i64>, String> {
+        Ok(self
+            .settings_with_prefix("composer-draft:")?
+            .into_iter()
+            .filter(|(_, raw)| !raw.is_empty())
+            .map(|(id, _)| id)
+            .collect())
+    }
     /// Sessions whose latest message is saved as a draft and not yet sent.
     pub fn draft_sessions(&self) -> Result<std::collections::HashSet<i64>, String> {
         if self.shared.is_some() {

@@ -28,7 +28,6 @@ impl Conversation {
     }
     pub(crate) fn enable_mode(&mut self, id: &str, cx: &mut Context<Self>) {
         let enabled = match id {
-            "draft" => self.follow_ups.draft_selected,
             "plan" => self.settings.plan,
             "operator" => self.settings.operator,
             "orchestrator" => self.settings.orchestrator,
@@ -40,7 +39,6 @@ impl Conversation {
     }
     pub(crate) fn clear_mode(&mut self, id: &str, cx: &mut Context<Self>) {
         let enabled = match id {
-            "draft" => &mut self.follow_ups.draft_selected,
             "plan" => &mut self.settings.plan,
             "operator" => &mut self.settings.operator,
             "orchestrator" => &mut self.settings.orchestrator,
@@ -71,16 +69,7 @@ impl Conversation {
             cx.notify();
             return;
         }
-        if id != "draft" {
-            self.follow_ups.draft_selected = false;
-        }
         match id {
-            "draft" => {
-                self.follow_ups.draft_selected = !self.follow_ups.draft_selected;
-                self.settings.plan = false;
-                self.settings.operator = false;
-                self.settings.orchestrator = false;
-            }
             "plan" => {
                 self.settings.plan = !self.settings.plan;
                 self.settings.orchestrator = false;
@@ -98,9 +87,7 @@ impl Conversation {
             }
             _ => return,
         }
-        let selected = if self.follow_ups.draft_selected {
-            Some("draft")
-        } else if self.settings.orchestrator {
+        let selected = if self.settings.orchestrator {
             Some("orchestrator")
         } else if self.settings.plan {
             Some("plan")
@@ -288,6 +275,7 @@ impl Conversation {
             }
             Err(error) => self.attachment_error = Some(error),
         }
+        self.queue_composer_draft(cx);
         let pending = std::mem::take(&mut self.pending_attachments);
         self.add_attachments(pending, cx);
         cx.notify();
@@ -359,6 +347,7 @@ impl Conversation {
                             cx.stop_propagation();
                             if ix < this.attachments.len() {
                                 this.attachments.remove(ix);
+                                this.queue_composer_draft(cx);
                                 cx.notify();
                             }
                         }));

@@ -303,7 +303,7 @@ impl Shell {
         let selected = self.selected_sessions.contains(&id);
         let active =
             self.workspace.active == Some(id) && !self.mono_active(cx) && !self.app_view_open();
-        let draft = session.has_saved_draft();
+        let draft = session.shows_draft();
         let approval = session.needs_approval();
         let orchestration = matches!(rail, Some((Rail::Agents(_), true)));
         let header = !compact || orchestration;
@@ -696,7 +696,7 @@ impl Shell {
                 .child(icon("check", 12.))
                 .child("Done")
                 .into_any_element()
-        } else if session.has_saved_draft() {
+        } else if session.shows_draft() {
             status
                 .text_color(content(0.55))
                 .child(icon("circle-dashed-hi", 12.))

@@ -8,6 +8,7 @@ pub struct SessionSidebarMetadata {
     pub worktrees: HashMap<i64, Option<String>>,
     pub details: HashMap<i64, MobileSessionMetadata>,
     pub drafts: HashSet<i64>,
+    pub composer_drafts: HashSet<i64>,
     pub sidebar_hidden: HashSet<i64>,
     pub started_by: HashMap<i64, i64>,
     pub orchestrations: HashMap<i64, orchestration::Summary>,
@@ -94,6 +95,7 @@ impl Store {
             worktrees: self.session_worktrees().unwrap_or_default(),
             details: self.mobile_session_metadata().unwrap_or_default(),
             drafts: self.draft_sessions().unwrap_or_default(),
+            composer_drafts: self.composer_draft_sessions().unwrap_or_default(),
             sidebar_hidden: if self.shared.is_some() {
                 self.shared_sidebar_hidden().unwrap_or_default()
             } else {
@@ -118,6 +120,32 @@ impl Store {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn unsent_composer_text_marks_its_thread_as_a_draft_in_both_stores() {
+        for shared in [false, true] {
+            let store = if shared {
+                Store::open_monocode(Path::new(":memory:"))
+            } else {
+                Store::open(Path::new(":memory:"))
+            }
+            .unwrap();
+            let typed = store.create("claude", "/project").unwrap();
+            let cleared = store.create("codex", "/project").unwrap();
+            let draft = crate::follow_up::Message {
+                text: "half a thought".into(),
+                attachments: vec!["/tmp/shot.png".into()],
+                ..Default::default()
+            };
+            store.save_composer_draft(typed.id, Some(&draft)).unwrap();
+            store.save_composer_draft(cleared.id, Some(&draft)).unwrap();
+            store.save_composer_draft(cleared.id, None).unwrap();
+            assert_eq!(store.composer_draft(typed.id).unwrap(), Some(draft));
+            assert_eq!(store.composer_draft(cleared.id).unwrap(), None);
+            let snapshot = store.session_sidebar_metadata(&[]);
+            assert_eq!(snapshot.composer_drafts, HashSet::from([typed.id]));
+        }
+    }
 
     #[test]
     fn mobile_metadata_keeps_saved_branches_worktrees_models_and_access_without_decoding_history() {

@@ -224,6 +224,7 @@ impl Conversation {
         self.follow_ups.state.draft = draft.clone();
         self.transcript
             .update(cx, |view, cx| view.set_saved_draft(draft, cx));
+        self.adopt_saved_draft(cx);
     }
     pub(super) fn remote_send_guard(&mut self, cx: &mut Context<Self>) -> bool {
         let error = if !self.loaded {
@@ -266,11 +267,6 @@ impl Conversation {
             cx.notify();
             return true;
         }
-        if self.draft_active(cx) && !self.remote_state.capabilities.contains("sessions.draft") {
-            self.status = "Update MonoCode Host in Connections settings to save drafts.".into();
-            cx.notify();
-            return true;
-        }
         let text = self.input.read(cx).content.trim();
         if text == "/compact" {
             self.input
@@ -278,13 +274,8 @@ impl Conversation {
             self.launch_prompt("/compact".into(), cx);
             return true;
         }
-        if text.starts_with('/')
-            && !["/plan", "/draft"]
-                .iter()
-                .any(|command| text == *command || text.starts_with(&format!("{command} ")))
-        {
-            self.status =
-                "Only /plan, /compact and saved drafts are supported by this remote host.".into();
+        if text.starts_with('/') && text != "/plan" && !text.starts_with("/plan ") {
+            self.status = "Only /plan and /compact are supported by this remote host.".into();
             cx.notify();
             return true;
         }
@@ -312,23 +303,6 @@ impl Conversation {
         } else {
             json!({"type":"removeDraft","draftBlockId":draft.id})
         });
-        self.launch_prompt(prompt, cx);
-    }
-    pub(super) fn remote_save_draft(&mut self, cx: &mut Context<Self>) {
-        if self.remote_send_guard(cx) {
-            return;
-        }
-        let raw = self.input.read(cx).content.to_string();
-        let prompt = monocode_core::composer::consume_command(&raw, "draft")
-            .unwrap_or(&raw)
-            .to_owned();
-        if prompt.trim().is_empty() && self.attachments.is_empty() {
-            return;
-        }
-        self.input
-            .update(cx, |input, cx| input.set_text(String::new(), cx));
-        self.follow_ups.draft_selected = false;
-        self.settings.remote_action = Some(json!({"type":"draft"}));
         self.launch_prompt(prompt, cx);
     }
     pub(super) fn remote_notice(&self, cx: &mut Context<Self>) -> Option<AnyElement> {

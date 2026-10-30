@@ -663,11 +663,6 @@ impl Completion {
             let mut choices = Vec::new();
             for (order, (id, label, detail)) in [
                 (
-                    "draft",
-                    "Draft",
-                    "Save this message without starting the agent",
-                ),
-                (
                     "orchestrator",
                     "Orchestrator",
                     "Plan and coordinate agent work",
@@ -796,7 +791,6 @@ impl Completion {
                         | "operator"
                         | "orchestrator"
                         | "add-to-folder"
-                        | "draft"
                         | "btw"
                         | "mono"
                         | "monocode"
@@ -1194,7 +1188,6 @@ mod tests {
                 assert_eq!(
                     commands,
                     [
-                        "/draft",
                         "/orchestrator",
                         "/operator",
                         "/plan",
