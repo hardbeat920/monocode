@@ -590,6 +590,7 @@ fn mono_turn(source: &Source, turn: &Turn, live: bool, name: &str) -> Value {
         user_items(rows, run, &mut items, &mut by_row);
         standalone &= items.len() == before;
         let run_live = live && run.end == rows.len();
+        let internal = run.key > run.prompt && rows[run.key - 1].role == "mono-system";
         for (at, end) in messages_in(rows, run.key, run.end) {
             let role = rows[at].role.as_str();
             let text = joined(&rows[at..end]);
@@ -612,9 +613,11 @@ fn mono_turn(source: &Source, turn: &Turn, live: bool, name: &str) -> Value {
                 // groupMonoTurnItems: prose said while working stays in the
                 // activity trail, as does all of it while the run is live.
                 let hidden = run_live
-                    || rows[at + 1..run.end]
-                        .iter()
-                        .any(|r| r.first && matches!(r.role.as_str(), "tool" | "reasoning"));
+                    || rows[at + 1..run.end].iter().any(|r| {
+                        r.first
+                            && (matches!(r.role.as_str(), "tool" | "reasoning")
+                                || (internal && r.role == "assistant"))
+                    });
                 if hidden {
                     continue;
                 }
@@ -1010,6 +1013,49 @@ mod tests {
         assert_eq!(items[0]["compact"], true);
         assert_eq!(items[1]["emojiOnly"], true);
         assert_eq!(items[1]["attachments"], 2);
+    }
+
+    #[test]
+    fn mono_notifications_keep_only_the_final_message() {
+        let rows = [
+            row("user", "Review the heartbeat"),
+            row("assistant", "Waiting for the review."),
+            row("mono-system", "The review session finished"),
+            row("assistant", "I'll verify the findings."),
+            row("assistant", "Verification is complete."),
+            row("assistant", "The review found three bugs."),
+            Row {
+                first: false,
+                ..row("assistant", " The report is in Documents.")
+            },
+        ];
+        let infos = HashMap::new();
+        let mut mono = source(&rows, &infos, true);
+        mono.mono = Some("Ada");
+        let text_items = |turn: &Value| {
+            turn["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|item| item["type"] == "text")
+                .map(|item| item["text"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(text_items(&all(&mono)[0]), ["Waiting for the review."]);
+        mono.busy = false;
+        let turns = all(&mono);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(
+            text_items(&turns[0]),
+            [
+                "Waiting for the review.",
+                "The review found three bugs. The report is in Documents.",
+            ]
+        );
+        assert_eq!(
+            turns[0]["copyText"],
+            "Waiting for the review.\n\nThe review found three bugs. The report is in Documents."
+        );
     }
 
     #[test]
