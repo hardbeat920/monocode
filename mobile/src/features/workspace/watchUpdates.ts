@@ -1,4 +1,4 @@
-import type { QuestionPrompt, Turn } from "./types";
+import type { ApprovalPrompt, QuestionPrompt, Turn } from "./types";
 
 /** A frame of a watched conversation, from the desktop's watchUpdate. */
 export type WatchFrame = {
@@ -10,6 +10,7 @@ export type WatchFrame = {
   patches?: { id: string; edits: WatchEdit[] }[];
   /** The pending question when it changes; null once it is answered. */
   question?: QuestionPrompt | null;
+  approvals?: ApprovalPrompt[];
   error?: string;
 };
 
@@ -82,11 +83,13 @@ export function applyFrames(
   older?: boolean;
   /** Ordered transitions: a clear allows a later question to reuse its ID. */
   questions: (QuestionPrompt | null)[];
+  approvals: ApprovalPrompt[][];
   error?: string;
 } | null {
   let turns = previous;
   let busy: boolean | undefined;
   const questions: (QuestionPrompt | null)[] = [];
+  const approvals: ApprovalPrompt[][] = [];
   let older: boolean | undefined;
   let error: string | undefined;
   for (const frame of frames) {
@@ -97,6 +100,7 @@ export function applyFrames(
     error = undefined;
     if (frame.busy !== undefined) busy = frame.busy;
     if (frame.older !== undefined) older = frame.older;
+    if (frame.approvals !== undefined) approvals.push(frame.approvals);
     if (frame.question !== undefined) questions.push(frame.question);
     if (!frame.order) continue;
     const known = new Map(turns.map((turn) => [turn.id, turn]));
@@ -124,5 +128,5 @@ export function applyFrames(
         ? turns
         : next;
   }
-  return { turns, busy, older, questions, error };
+  return { turns, busy, older, questions, approvals, error };
 }

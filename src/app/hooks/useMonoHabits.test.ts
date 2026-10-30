@@ -168,6 +168,7 @@ function makeHost(reply: string, approve?: { wait: Promise<void> }) {
           runId,
           requestId: block.approval!.requestId,
           blockId: "b",
+          approval: block.approval!,
         }),
     ),
     endApprovals: vi.fn(),

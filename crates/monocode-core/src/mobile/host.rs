@@ -24,6 +24,7 @@ const APP_METHODS: &[&str] = &[
     "models.list",
     "accounts.usage",
     "session.configure",
+    "session.respondApproval",
     "project.changes",
     "project.worktrees",
     "project.files",
@@ -880,6 +881,28 @@ mod tests {
         host.enroll(&mut host.inner.lock().unwrap(), &key, &params)
             .unwrap();
         (host, events, phone.fingerprint().unwrap())
+    }
+
+    #[tokio::test]
+    async fn approval_responses_require_pairing_and_reach_the_existing_command_channel() {
+        let (host, events, peer) = paired();
+        let request = json!({"version":VERSION,"id":"approval","method":"session.respondApproval", "params":{"conversationId":"mono:m","requestId":"7","token":"instance","decision":"session"}});
+        assert!(host.handle("stranger", request.clone()).await.is_err());
+        assert!(events.try_recv().is_err());
+        let answering = tokio::spawn(async move {
+            let Ok(Event::Request(request)) = events.recv().await else {
+                panic!("expected approval command")
+            };
+            assert_eq!(request.method, "session.respondApproval");
+            assert_eq!(request.params["conversationId"], "mono:m");
+            assert_eq!(request.params["token"], "instance");
+            request.reply(Ok(json!({"sessionId":"mono:m"})));
+        });
+        assert_eq!(
+            host.handle(&peer, request).await.unwrap()["sessionId"],
+            "mono:m"
+        );
+        answering.await.unwrap();
     }
 
     #[tokio::test]

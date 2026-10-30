@@ -14,6 +14,7 @@ const link = vi.hoisted(() => ({
   pairing: { desktop: { fingerprint: "desktop" } },
   command: vi.fn(),
   refresh: vi.fn(),
+  makeCommandId: vi.fn(() => "request-id"),
   openWatch: vi.fn(),
   nextUpdates: vi.fn(),
   closeWatch: vi.fn(),
@@ -41,7 +42,7 @@ vi.mock("@/features/connection/ConnectionProvider", () => ({
 }));
 vi.mock("@/features/connection/nativeLink", () => ({
   get hasNativeTranscript() { return link.nativeTranscript; },
-  makeCommandId: () => "request-id",
+  makeCommandId: link.makeCommandId,
   openWatch: link.openWatch,
   nextUpdates: link.nextUpdates,
   closeWatch: link.closeWatch,
@@ -251,6 +252,124 @@ describe("starting mobile sessions", () => {
     await act(async () => { render(null); });
     expect(JSON.parse(link.storage.get("monocode.mobile.desktop.turns.existing")!)).toEqual([latest]);
     expect(JSON.parse(link.storage.get("monocode.mobile.desktop.turns")!)).toEqual(["existing"]);
+  });
+
+  const approval = (token = "first") => ({ token, requestId: 7, title: "Run command?", detail: "git status",
+    decisions: [{ id: "allow" as const, label: "Allow once" }] });
+  it("responds once while in flight, keeps failures for retry, and suppresses pre-response frames", async () => {
+    link.command.mockResolvedValue({});
+    await render("existing");
+    await frame([{ approvals: [approval()] }]);
+    const response = deferred<object>();
+    link.command.mockReturnValueOnce(response.promise);
+    let sent!: Promise<void>;
+    act(() => {
+      sent = workspace.respondApproval("existing", approval(), "allow");
+      expect(workspace.respondApproval("existing", approval(), "deny")).toBe(sent);
+    });
+    expect(link.command.mock.calls.filter(([method]) => method === "session.respondApproval")).toHaveLength(1);
+    await act(async () => { response.resolve({}); await sent; });
+    expect(conversation.approvals).toEqual([]);
+    await frame([{ approvals: [approval()] }]);
+    expect(conversation.approvals).toEqual([]);
+    await frame([{ approvals: [approval("next")] }]);
+    link.command.mockRejectedValueOnce(new Error("Desktop disconnected"));
+    await act(async () => {
+      await expect(workspace.respondApproval("existing", approval("next"), "allow")).rejects.toThrow("Desktop disconnected");
+    });
+    expect(conversation.approvals).toEqual([approval("next")]);
+    link.command.mockResolvedValue({});
+    await act(async () => { await workspace.respondApproval("existing", approval("next"), "allow"); });
+    expect(conversation.approvals).toEqual([]);
+  });
+  it("keeps a newer approval with a reused ID when an old response finishes after batched updates", async () => {
+    link.command.mockResolvedValue({});
+    await render("existing");
+    await frame([{ approvals: [approval()] }]);
+    const response = deferred<object>();
+    link.command.mockReturnValueOnce(response.promise);
+    let sent!: Promise<void>;
+    act(() => { sent = workspace.respondApproval("existing", approval(), "allow"); });
+    await frame([{ approvals: [] }, { approvals: [approval("reused")] }]);
+    await act(async () => { response.resolve({}); await sent; });
+    expect(conversation.approvals).toEqual([approval("reused")]);
+    await frame([{ approvals: [] }]);
+    expect(conversation.approvals).toEqual([]);
+  });
+  it("accepts native transcript approval status, including replacements before a response completes", async () => {
+    link.nativeTranscript = true;
+    link.command.mockResolvedValue({});
+    await render("session");
+    const status = { busy: true, error: null, hasTurns: true, userCount: 1, pendingId: null };
+    act(() => workspace.nativeTranscriptStatus("session", { ...status, approvals: [approval()] }));
+    const response = deferred<object>();
+    link.command.mockReturnValueOnce(response.promise);
+    let sent!: Promise<void>;
+    act(() => { sent = workspace.respondApproval("session", approval(), "allow"); });
+    act(() => workspace.nativeTranscriptStatus("session", { ...status, approvals: [approval("new")] }));
+    await act(async () => { response.resolve({}); await sent; });
+    expect(conversation.approvals).toEqual([approval("new")]);
+    act(() => workspace.nativeTranscriptStatus("session", { ...status, approvals: [] }));
+    expect(conversation.approvals).toEqual([]);
+  });
+
+  it("withdraws the same approval from a Mono and its underlying session after a phone response", async () => {
+    link.nativeTranscript = true;
+    link.command.mockResolvedValue({});
+    await render("mono:one");
+    const status = { busy: true, error: null, hasTurns: true, userCount: 1, pendingId: null, approvals: [approval()] };
+    act(() => {
+      workspace.nativeTranscriptStatus("mono:one", status);
+      workspace.nativeTranscriptStatus("session", status);
+    });
+    await act(async () => { await workspace.respondApproval("mono:one", approval(), "allow"); });
+    expect(conversation.approvals).toEqual([]);
+    await render("session");
+    expect(conversation.approvals).toEqual([]);
+  });
+
+  it("retries a lost reply with the same receipt ID instead of delivering another decision", async () => {
+    link.nativeTranscript = true;
+    await render("session");
+    const status = { busy: true, error: null, hasTurns: true, userCount: 1, pendingId: null, approvals: [approval()] };
+    act(() => workspace.nativeTranscriptStatus("session", status));
+    // Model a desktop receipt: processing succeeded, but its first reply was lost.
+    let executions = 0;
+    const receipts = new Set<string>();
+    link.command.mockImplementation(async (_method, _params, id: string) => {
+      if (!receipts.has(id)) {
+        receipts.add(id);
+        executions++;
+        throw new Error("Reply lost");
+      }
+      return {};
+    });
+    await act(async () => {
+      await expect(workspace.respondApproval("session", approval(), "allow")).rejects.toThrow("Reply lost");
+    });
+    expect(conversation.approvals).toHaveLength(1);
+    await act(async () => { await workspace.respondApproval("session", approval(), "allow"); });
+    expect(executions).toBe(1);
+    expect(link.makeCommandId).toHaveBeenCalledTimes(1);
+    expect(conversation.approvals).toEqual([]);
+  });
+  it("ignores an old response after switching paired desktops", async () => {
+    link.nativeTranscript = true;
+    await render("session");
+    const status = { busy: true, error: null, hasTurns: true, userCount: 1, pendingId: null, approvals: [approval()] };
+    act(() => workspace.nativeTranscriptStatus("session", status));
+    const response = deferred<object>();
+    link.command.mockReturnValueOnce(response.promise);
+    let sent!: Promise<void>;
+    act(() => { sent = workspace.respondApproval("session", approval(), "allow"); });
+    const original = link.pairing;
+    link.pairing = { desktop: { fingerprint: "another-desktop" } };
+    try {
+      await render("session");
+      act(() => workspace.nativeTranscriptStatus("session", status));
+      await act(async () => { response.resolve({}); await sent; });
+      expect(conversation.approvals).toEqual([approval()]);
+    } finally { link.pairing = original; }
   });
 
   const question = (requestId: number) => ({

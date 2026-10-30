@@ -31,6 +31,7 @@ import { useModelCatalog } from "@/features/models/useModelCatalog";
 import { useOpenSessionAfterStarting } from "@/features/settings/newSessions";
 import type { Attachment } from "@/features/sessions/attachments";
 import { Composer } from "@/features/sessions/Composer";
+import { ApprovalCard } from "@/features/sessions/ApprovalCard";
 import { QuestionCard } from "@/features/sessions/QuestionCard";
 import { EmptySession } from "@/features/sessions/EmptySession";
 import {
@@ -346,6 +347,9 @@ export function ProjectScreen({
       dockStyle={sessionId ? undefined : pages.slide}
       composer={
         <>
+          {sessionId && conversation.approvals?.length ? (
+            <ApprovalCard conversationId={sessionId} prompts={conversation.approvals} />
+          ) : null}
           {sessionId && conversation.question ? (
             <QuestionCard conversationId={sessionId} prompt={conversation.question} />
           ) : null}

@@ -4,8 +4,8 @@
 //! phone's `Turn` JSON (mobile/src/features/workspace/types.ts) out.
 //!
 //! Known gaps against the React port, because native rows do not carry them:
-//! approvals are not persisted, so no "Waiting for approval on desktop" notice
-//! (the live header still says `waiting`); there are no Mono habits, operator
+//! saved rows do not retain pending approvals. Live snapshots supply approval
+//! notices and cards separately. There are no Mono habits, operator
 //! prompts or background-task labels; and assignment wrappers stay in user
 //! text, as the desktop shows them.
 use crate::transcript::{self as desk, attachments, dates, phases};

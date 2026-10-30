@@ -220,3 +220,14 @@ export type TurnMetrics = {
   cacheWriteTokens?: number;
   cacheHitPercent?: number;
 };
+
+/** Decisions are supplied by the desktop, which validates them again on delivery. */
+export type ApprovalDecision = "allow" | "deny" | "session";
+export type ApprovalPrompt = {
+  token: string;
+  requestId: string | number;
+  title: string;
+  detail: string;
+  decisions: { id: ApprovalDecision; label: string }[];
+  unsupported?: string | null;
+};

@@ -300,4 +300,211 @@ mod tests {
             .read_with(visual, |view, _| assert!(view.approvals.is_empty()))
             .unwrap();
     }
+    #[gpui::test]
+    fn mobile_approval_delivery_validates_instances_decisions_and_retries(cx: &mut TestAppContext) {
+        use serde_json::json;
+        let window = conversation(cx);
+        window
+            .update(cx, |view, _, cx| {
+                view.sync_approvals(vec![request("same", true), request("other", false)], vec![]);
+                let (send, receive) = std::sync::mpsc::channel();
+                view.controls = Some(send);
+                let old = view.mobile_approvals()[0].clone();
+                assert_eq!(old["detail"], "git status --short");
+                assert_eq!(old["decisions"].as_array().unwrap().len(), 3);
+                let mut params =
+                    json!({"requestId":"same", "token":old["token"], "decision":"bogus"});
+                assert!(view.mobile_respond_approval(&params, cx).is_err());
+                assert!(receive.try_recv().is_err());
+                params["decision"] = json!("session");
+                // The current instance, rather than just the provider's reusable ID.
+                view.sync_approvals(vec![request("same", true)], vec![]);
+                assert!(view.mobile_respond_approval(&params, cx).is_err());
+                let replacement = view.mobile_approvals()[0].clone();
+                assert_ne!(old["token"], replacement["token"]);
+                params["token"] = replacement["token"].clone();
+                assert!(view.mobile_respond_approval(&params, cx).is_ok());
+                let control = receive.try_recv().unwrap();
+                assert_eq!(control.id, "same");
+                assert!(matches!(control.decision, Decision::Session));
+                assert!(view.mobile_respond_approval(&params, cx).is_err());
+                assert!(receive.try_recv().is_err());
+                let remaining = view.mobile_approvals()[0].clone();
+                params =
+                    json!({"requestId":"other", "token":remaining["token"], "decision":"session"});
+                assert!(view.mobile_respond_approval(&params, cx).is_err());
+                params["decision"] = json!("allow");
+                drop(receive);
+                assert!(view.mobile_respond_approval(&params, cx).is_err());
+                assert_eq!(
+                    view.approvals.len(),
+                    1,
+                    "failed delivery retains the request"
+                );
+                let (send, receive) = std::sync::mpsc::channel();
+                view.controls = Some(send);
+                assert!(view.mobile_respond_approval(&params, cx).is_ok());
+                assert!(matches!(
+                    receive.try_recv().unwrap().decision,
+                    Decision::Allow
+                ));
+                assert_eq!(view.mobile_approvals(), json!([]));
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn desktop_resolution_withdraws_mobile_approval_and_remote_delivery_is_disabled(
+        cx: &mut TestAppContext,
+    ) {
+        use serde_json::json;
+        let window = conversation(cx);
+        window
+            .update(cx, |view, _, cx| {
+                let (send, receive) = std::sync::mpsc::channel();
+                view.controls = Some(send);
+                view.sync_approvals(vec![request("desktop", false)], vec![]);
+                let old = view.mobile_approvals()[0].clone();
+                assert!(view.decide_notification_request("desktop", Decision::Deny, cx));
+                assert!(matches!(
+                    receive.try_recv().unwrap().decision,
+                    Decision::Deny
+                ));
+                assert_eq!(view.mobile_approvals(), json!([]));
+                assert!(
+                    view.mobile_respond_approval(
+                        &json!({"requestId":"desktop", "token":old["token"], "decision":"allow"}),
+                        cx
+                    )
+                    .is_err()
+                );
+                view.sync_approvals(vec![request("remote", false)], vec![]);
+                view.summary.cwd = "remote://machine/project".into();
+                let remote = view.mobile_approvals()[0].clone();
+                assert_eq!(remote["decisions"], json!([]));
+                assert!(remote["unsupported"].is_string());
+                assert!(
+                    view.mobile_respond_approval(
+                        &json!({"requestId":"remote", "token":remote["token"], "decision":"allow"}),
+                        cx
+                    )
+                    .is_err()
+                );
+                assert!(receive.try_recv().is_err());
+            })
+            .unwrap();
+    }
+    #[gpui::test]
+    fn runtime_batches_reuse_ids_without_reordering_the_desktop_queue(cx: &mut TestAppContext) {
+        use crate::runtime::ApprovalUpdates;
+        use serde_json::json;
+        let window = conversation(cx);
+        window
+            .update(cx, |v, _, cx| {
+                let (send, receive) = std::sync::mpsc::channel();
+                v.controls = Some(send);
+                v.sync_approvals(vec![request("x", true), request("y", false)], vec![]);
+                let old = v.mobile_approvals()[0].clone();
+                // Repeated requests replace context in place, without moving the
+                // active shelf behind another pending request.
+                let mut replacement = request("x", false);
+                replacement.detail = "new command".into();
+                let mut batch = ApprovalUpdates::default();
+                batch.request(replacement.clone());
+                batch.resolve("x".into());
+                batch.request(replacement);
+                v.sync_approvals(batch.pending, batch.resolved);
+                assert_eq!(v.approvals[0].id, "x");
+                assert_eq!(v.approvals[0].detail, "new command");
+                assert!(
+                    v.mobile_respond_approval(
+                        &json!({"requestId":"x","token":old["token"],"decision":"allow"}),
+                        cx
+                    )
+                    .is_err()
+                );
+                let phone = v.mobile_approvals()[0].clone();
+                // A provider resolves the instance while a phone command is on
+                // the wire. This uses the same batch application as conversation.rs.
+                let mut batch = ApprovalUpdates::default();
+                batch.resolve("x".into());
+                v.sync_approvals(batch.pending, batch.resolved);
+                assert_eq!(v.approvals[0].id, "y");
+                assert!(
+                    v.mobile_respond_approval(
+                        &json!({"requestId":"x","token":phone["token"],"decision":"allow"}),
+                        cx
+                    )
+                    .is_err()
+                );
+                assert!(receive.try_recv().is_err());
+                let mut batch = ApprovalUpdates::default();
+                batch.resolve("x".into());
+                batch.request(request("x", true));
+                v.sync_approvals(batch.pending, batch.resolved);
+                assert_eq!(v.approvals[1].id, "x");
+                let current = v.mobile_approvals()[1].clone();
+                let params = json!({"requestId":"x","token":current["token"],"decision":"allow"});
+                assert!(v.mobile_respond_approval(&params, cx).is_ok());
+                assert!(
+                    v.mobile_respond_approval(&params, cx).is_err(),
+                    "a second phone cannot submit the same instance"
+                );
+                assert_eq!(receive.try_recv().unwrap().id, "x");
+                assert!(receive.try_recv().is_err());
+                let mut batch = ApprovalUpdates::default();
+                batch.request(request("y", false));
+                batch.resolve("y".into());
+                v.sync_approvals(batch.pending, batch.resolved);
+                assert!(v.approvals.is_empty());
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn incomplete_mobile_context_has_no_decisions_and_cannot_be_submitted(cx: &mut TestAppContext) {
+        use serde_json::json;
+        let window = conversation(cx);
+        window.update(cx, |v, _, cx| {
+            let (send, receive) = std::sync::mpsc::channel();
+            v.controls = Some(send);
+            let mut approval = request("large", true);
+            approval.detail = "👋\"\n".repeat(20_000);
+            v.sync_approvals(vec![approval], vec![]);
+            let prompts = v.mobile_approvals();
+            assert!(prompts.to_string().len() < 400_000);
+            assert_eq!(prompts[0]["decisions"], json!([]));
+            assert!(v.mobile_respond_approval(&json!({"requestId":"large","token":prompts[0]["token"],"decision":"allow"}), cx).unwrap_err().contains("too large"));
+            assert!(receive.try_recv().is_err());
+        }).unwrap();
+    }
+    #[gpui::test]
+    fn a_replaced_visible_desktop_shelf_updates_its_actions_without_moving_the_queue(
+        cx: &mut TestAppContext,
+    ) {
+        let window = conversation(cx);
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let (send, receive) = std::sync::mpsc::channel();
+        window
+            .update(cx, |v, _, cx| {
+                v.controls = Some(send);
+                v.sync_approvals(vec![request("x", true), request("y", false)], vec![]);
+                cx.notify();
+            })
+            .unwrap();
+        let visual = &mut VisualTestContext::from_window(window.into(), cx);
+        visual.refresh().unwrap();
+        assert!(visual.debug_bounds("approval-session").is_some());
+        window
+            .update(visual, |v, _, cx| {
+                v.sync_approvals(vec![request("x", false)], vec![]);
+                cx.notify();
+            })
+            .unwrap();
+        visual.refresh().unwrap();
+        assert!(visual.debug_bounds("approval-session").is_none());
+        let allow = visual.debug_bounds("approval-allow").unwrap();
+        visual.simulate_click(allow.center(), Default::default());
+        assert_eq!(receive.try_recv().unwrap().id, "x");
+    }
 }
