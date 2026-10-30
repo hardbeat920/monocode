@@ -25,15 +25,22 @@ import {
 } from "../../../shared/ui/icons";
 import type { GithubPrChecksView } from "../hooks/useGithubPrChecks";
 import {
+  bitbucketBuildId,
+  fetchBitbucketBuildDetails,
+} from "../model/bitbucket";
+import {
   CHECK_STATES,
   checkDuration,
   checkStateLabel,
   countChecks,
   describeCheckCounts,
+  checksTerms,
   fetchGithubCheckDetails,
   githubActionsJobId,
   isHttpUrl,
   sortChecks,
+  type ChecksProvider,
+  type ChecksTerms,
   type GithubPrCheck,
   type GithubPrChecksOverall,
   type GithubPrCheckState,
@@ -86,18 +93,21 @@ function checkMark(state: GithubPrCheckState): {
   }
 }
 
-/** The Checks tab: label plus an overall mark whose name spells out the counts. */
+/** The Checks (or Builds) tab: label plus an overall mark whose name spells out the counts. */
 export function PrChecksTab({
   overall,
   selected,
   onSelect,
+  provider,
 }: {
   overall: GithubPrChecksOverall;
   selected: boolean;
   onSelect: () => void;
+  provider?: ChecksProvider;
 }) {
   const mark = overallMark(overall);
-  const label = `Checks: ${overall.description}`;
+  const terms = checksTerms(provider);
+  const label = `${terms.tab}: ${overall.description}`;
   const failClass =
     mark.className.split(" ").find((entry) => entry.startsWith("text-")) ?? "";
   return (
@@ -110,7 +120,7 @@ export function PrChecksTab({
       onClick={onSelect}
       className={`${TAB} ${selected ? "text-content" : "text-content/50 hover:text-content"}`}
     >
-      <span className="leading-none">Checks</span>
+      <span className="leading-none">{terms.tab}</span>
       <mark.Icon
         className={`size-3.5 shrink-0 ${mark.className}`}
         strokeWidth={1.75}
@@ -164,7 +174,11 @@ function PrCheckRow({
   repairItem,
   wideStatus,
   revealToken,
+  provider,
+  terms,
 }: {
+  provider: ChecksProvider;
+  terms: ChecksTerms;
   check: GithubPrCheck;
   cwd: string;
   repo: string;
@@ -181,8 +195,12 @@ function PrCheckRow({
   const rowRef = useRef<HTMLLIElement>(null);
   const fixRef = useRef<HTMLButtonElement>(null);
   const fixOpen = Boolean(fixAnchor && fixAnchor === fixRef.current);
-  const jobId = githubActionsJobId(check.url, repo);
-  const expandable = Boolean(cwd && jobId);
+  const bitbucket = provider === "bitbucket";
+  const jobId = bitbucket
+    ? bitbucketBuildId(check.url, repo)
+    : githubActionsJobId(check.url, repo);
+  // GitHub job details run through the local checkout; Bitbucket's do not.
+  const expandable = Boolean(jobId && (bitbucket || cwd));
   const [expanded, setExpanded] = useState(autoExpand && expandable);
   useEffect(() => {
     if (!revealToken) return;
@@ -208,6 +226,7 @@ function PrCheckRow({
   const [retry, setRetry] = useState(0);
   const detailsId = useId();
   const detailsKey = JSON.stringify([
+    provider,
     cwd,
     repo,
     headOid,
@@ -223,12 +242,15 @@ function PrCheckRow({
     setDetails(null);
   }, [detailsKey]);
   useEffect(() => {
-    if (!expanded || !jobId || !cwd) return;
+    if (!expanded || !jobId || (!bitbucket && !cwd)) return;
     let active = true;
     setLoading(true);
     setError(null);
     // Routine polls keep evidence mounted while fetching updated job steps.
-    fetchGithubCheckDetails(cwd, repo, jobId)
+    (bitbucket
+      ? fetchBitbucketBuildDetails(repo, jobId)
+      : fetchGithubCheckDetails(cwd, repo, jobId)
+    )
       .then(
         (result) => {
           if (active) setDetails(result);
@@ -244,7 +266,7 @@ function PrCheckRow({
     return () => {
       active = false;
     };
-  }, [expanded, cwd, repo, jobId, detailsKey, refreshToken, retry]);
+  }, [expanded, cwd, repo, jobId, bitbucket, detailsKey, refreshToken, retry]);
   const mark = checkMark(check.state);
   const status = checkStateLabel(check.state);
   const duration = checkDuration(check.startedAt, check.completedAt);
@@ -335,7 +357,9 @@ function PrCheckRow({
             {body}
           </div>
         )}
-        <span className={`shrink-0 text-left ${wideStatus ? "w-24" : "w-14"}`}>
+        <span
+          className={`flex shrink-0 items-center text-left ${wideStatus ? "w-24" : "w-14"}`}
+        >
           {repairItem ? (
             <CheckRepairStatus item={repairItem} />
           ) : (
@@ -386,8 +410,8 @@ function PrCheckRow({
         {linked ? (
           <button
             type="button"
-            title="View full log on GitHub"
-            aria-label={`View ${check.name} on GitHub`}
+            title={`View full log on ${terms.host}`}
+            aria-label={`View ${check.name} on ${terms.host}`}
             onClick={() => void openUrl(url)}
             className={`${REFRESH_BUTTON} opacity-60 group-hover/check:opacity-100 focus-visible:opacity-100`}
           >
@@ -472,7 +496,7 @@ function PrCheckRow({
                     })}
                   </ol>
                 </details>
-              ) : (
+              ) : details.notice ? null : (
                 <p className="text-content/50">
                   No steps reported for this job.
                 </p>
@@ -481,11 +505,14 @@ function PrCheckRow({
               !details.annotations.length &&
               !details.notice ? (
                 <p className="mt-3 text-content/50">
-                  No error annotations reported. View the full log on GitHub.
+                  No error annotations reported. View the full log on{" "}
+                  {terms.host}.
                 </p>
               ) : null}
               {details.notice ? (
-                <p role="status" className="mt-3 text-content/50">
+                // The container's space-y-3 already separates it from steps; its
+                // own top margin would only unbalance a notice that stands alone.
+                <p role="status" className="text-content/50">
                   {details.notice}
                 </p>
               ) : null}
@@ -508,14 +535,17 @@ export function InboxPrChecks({
   cwd = "",
   repo = "",
   repair,
+  provider = "github",
 }: {
   view: GithubPrChecksView;
   onRefresh: () => void;
   cwd?: string;
   repo?: string;
   repair?: CheckRepair;
+  provider?: ChecksProvider;
 }) {
   const { checks, loading, refreshing, error, stale } = view;
+  const terms = checksTerms(provider);
   const repairGroups = useCheckRepairs(cwd, repo, repair?.number, view);
   const revealScope = JSON.stringify([
     cwd,
@@ -561,8 +591,8 @@ export function InboxPrChecks({
         </p>
         <button
           type="button"
-          title="Retry loading checks"
-          aria-label="Retry loading checks"
+          title={`Retry loading ${terms.nouns}`}
+          aria-label={`Retry loading ${terms.nouns}`}
           onClick={onRefresh}
           className="inline-flex h-7 items-center gap-1.5 rounded-md border border-content/15 px-3 text-[12px] text-content/80 hover:bg-content/5"
         >
@@ -586,19 +616,19 @@ export function InboxPrChecks({
       (state === "pass" || state === "skipping"),
   }));
   const headline = counts.fail
-    ? `${counts.fail} ${counts.fail === 1 ? "check needs" : "checks need"} a fix`
+    ? `${counts.fail} ${counts.fail === 1 ? `${terms.noun} needs` : `${terms.nouns} need`} a fix`
     : counts.pending
-      ? `${counts.pending} ${counts.pending === 1 ? "check is" : "checks are"} running`
+      ? `${counts.pending} ${counts.pending === 1 ? `${terms.noun} is` : `${terms.nouns} are`} running`
       : attention
-        ? `${attention} ${attention === 1 ? "check needs" : "checks need"} attention`
+        ? `${attention} ${attention === 1 ? `${terms.noun} needs` : `${terms.nouns} need`} attention`
         : counts.pass
-          ? "Checks passed"
-          : "No checks ran";
+          ? `${terms.tab} passed`
+          : `No ${terms.nouns} ran`;
   const summary = describeCheckCounts({ ...counts, fail: 0 });
   return (
     <section
       data-inbox-pr-checks
-      aria-label="Pull request checks"
+      aria-label={`Pull request ${terms.nouns}`}
       className="@container/checks flex min-w-0 flex-col gap-2"
     >
       <div className="mb-3 flex min-w-0 flex-wrap items-start justify-between gap-3 px-2">
@@ -649,8 +679,8 @@ export function InboxPrChecks({
           ) : null}
           <button
             type="button"
-            title="Refresh checks"
-            aria-label="Refresh checks"
+            title={`Refresh ${terms.nouns}`}
+            aria-label={`Refresh ${terms.nouns}`}
             disabled={refreshing}
             onClick={onRefresh}
             className={REFRESH_BUTTON}
@@ -706,12 +736,12 @@ export function InboxPrChecks({
         <div className="flex items-center justify-between gap-3 py-2">
           <div
             className="inline-flex gap-0.5 rounded-lg border border-stroke bg-content/[0.02] p-0.5"
-            aria-label="Filter checks"
+            aria-label={`Filter ${terms.nouns}`}
           >
             {(
               [
                 ["attention", "Needs attention", attention],
-                ["all", "All checks", rows.length],
+                ["all", `All ${terms.nouns}`, rows.length],
               ] as const
             ).map(([value, label, count]) => (
               <button
@@ -738,7 +768,9 @@ export function InboxPrChecks({
         </div>
       ) : null}
       {rows.length === 0 ? (
-        <p className="text-[13px] text-content/45">No checks reported</p>
+        <p className="text-[13px] text-content/45">
+          No {terms.nouns} reported
+        </p>
       ) : (
         <>
           {groups.map((group) =>
@@ -803,6 +835,8 @@ export function InboxPrChecks({
                       fixAnchor={selection?.anchor}
                       cwd={cwd}
                       repo={repo}
+                      provider={provider}
+                      terms={terms}
                       headOid={checks?.headOid ?? ""}
                       autoExpand={
                         repairGroups.length === 0 &&

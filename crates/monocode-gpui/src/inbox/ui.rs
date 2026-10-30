@@ -141,6 +141,18 @@ fn failed_check(state: &str) -> bool {
         "failure" | "failed" | "error" | "timed_out" | "cancelled" | "action_required"
     )
 }
+fn check_color(state: &str) -> Hsla {
+    if matches!(
+        state.to_lowercase().as_str(),
+        "success" | "neutral" | "skipped"
+    ) {
+        rgb(0x4ade80).into()
+    } else if failed_check(state) {
+        rgb(0xf87171).into()
+    } else {
+        rgb(0xfbbf24).into()
+    }
+}
 fn review_event(comment: &model::Comment) -> bool {
     comment.kind == "review" && comment.body.trim().is_empty() && comment.replies.is_empty()
 }
@@ -234,6 +246,7 @@ fn provider_mark(provider: &str) -> gpui::Svg {
     let (path, color) = match provider {
         "linear" => ("inbox-linear", content(0.8)),
         "jira" => ("inbox-jira", rgb(0x2684ff).into()),
+        "bitbucket" => ("inbox-bitbucket", rgb(0x2684ff).into()),
         "gitlab" => ("inbox-gitlab", rgb(0xfc6d26).into()),
         "azuredevops" => ("inbox-azuredevops", content(0.8)),
         _ => ("inbox-github", content(0.8)),
@@ -833,7 +846,7 @@ impl Inbox {
                                 item.assignees.is_empty()
                                     && matches!(
                                         item.provider.as_str(),
-                                        "github" | "gitlab" | "azuredevops"
+                                        "github" | "gitlab" | "azuredevops" | "bitbucket"
                                     ),
                                 |d| d.child("·").child("Unassigned"),
                             )
@@ -998,11 +1011,22 @@ impl Inbox {
                                     [
                                         (Tab::Summary, "Summary"),
                                         (Tab::Code, "Code"),
-                                        (Tab::Checks, "Checks"),
+                                        (
+                                            Tab::Checks,
+                                            if item.provider == "bitbucket" {
+                                                "Builds"
+                                            } else {
+                                                "Checks"
+                                            },
+                                        ),
                                     ]
                                     .into_iter()
                                     .filter(|(tab, _)| {
-                                        *tab != Tab::Checks || item.provider == "github"
+                                        *tab != Tab::Checks
+                                            || matches!(
+                                                item.provider.as_str(),
+                                                "github" | "bitbucket"
+                                            )
                                     })
                                     .map(|(tab, label)| {
                                         plain_action(format!("inbox-tab-{label}"), label)
@@ -2051,14 +2075,15 @@ impl Inbox {
     }
 
     fn checks_view(&self, cx: &mut Context<Self>) -> AnyElement {
+        let bitbucket = self.item().is_some_and(|item| item.provider == "bitbucket");
         div().id("inbox-checks-scroll").min_h_0().flex_1().overflow_y_scroll().px(px(12.)).py(px(20.))
-            .when(self.extra_loading, |d| d.child(message("Loading checks…")))
+            .when(self.extra_loading, |d| d.child(message(if bitbucket { "Loading builds…" } else { "Loading checks…" })))
             .when_some(self.extra_error.clone(), |d, text| d.child(error(text)))
             .when_some(self.checks.clone(), |d, checks| {
-                let failed = checks.checks.iter().filter(|c| matches!(c.state.to_lowercase().as_str(), "failure" | "failed" | "error" | "timed_out" | "cancelled" | "action_required")).cloned().collect::<Vec<_>>();
-                d.when(checks.checks.is_empty(), |d| d.child(message("No checks reported")))
+                let failed = checks.checks.iter().filter(|c| failed_check(&c.state)).cloned().collect::<Vec<_>>();
+                d.when(checks.checks.is_empty(), |d| d.child(message(if bitbucket { "No builds reported" } else { "No checks reported" })))
                     .when(!failed.is_empty(), |d| d.child(div().mb(px(12.)).flex().items_center().gap(px(8.))
-                        .child(div().flex_1().text_size(px(12.)).text_color(content(0.7)).child(format!("{} failing checks", failed.len())))
+                        .child(div().flex_1().text_size(px(12.)).text_color(content(0.7)).child(format!("{} failing {}", failed.len(), if bitbucket { "builds" } else { "checks" })))
                         .child(action("inbox-fix-checks", "Fix with agent").bg(content(0.1)).on_click(cx.listener(move |this, _, _, cx| {
                             if let Some(mut item) = this.item() {
                                 if item.project_path.is_empty() { item.project_path = this.start_project.to_string_lossy().into_owned(); }
@@ -2069,16 +2094,38 @@ impl Inbox {
                         })))))
                     .children(checks.checks.iter().enumerate().map(|(ix, check)| {
                         let state = check.state.to_lowercase();
-                        let color: Hsla = if matches!(state.as_str(), "success" | "neutral" | "skipped") { rgb(0x4ade80).into() }
-                            else if matches!(state.as_str(), "failure" | "failed" | "error" | "timed_out" | "cancelled" | "action_required") { rgb(0xf87171).into() }
-                            else { rgb(0xfbbf24).into() };
+                        let color = check_color(&state);
                         let url = check.url.clone();
-                        div().id(("inbox-check", ix)).py(px(12.)).border_b_1().border_color(content(0.07)).flex().items_center().gap(px(10.))
-                            .child(icon(if state == "success" { "check-circle" } else { "circle-dot" }, 15.).text_color(color))
-                            .child(div().flex_1().min_w_0().child(div().text_size(px(12.)).text_color(content(0.85)).child(check.name.clone()))
-                                .child(div().text_size(px(11.)).text_color(content(0.4)).child(check.workflow.clone())))
-                            .child(div().text_size(px(11.)).text_color(color).child(check.state.replace('_', " ").to_lowercase()))
-                            .when(url.is_some(), |d| d.child(action(format!("inbox-check-link-{ix}"), "Details ↗").on_click(move |_, _, cx| { if let Some(url) = &url { cx.open_url(url); } })))
+                        let expandable = bitbucket && self.item().is_some_and(|item| model::bitbucket::build_id(url.as_deref().unwrap_or(""), &item.repo).is_some());
+                        let expanded = url.as_ref().is_some_and(|url| self.expanded_builds.contains(url));
+                        let duration = match (check.started_at.as_deref(), check.completed_at.as_deref()) {
+                            (Some(start), Some(end)) => {
+                                let seconds = (model::timestamp_ms(end) - model::timestamp_ms(start)).max(0) / 1000;
+                                format!("{}m {}s", seconds / 60, seconds % 60)
+                            },
+                            _ => String::new(),
+                        };
+                        div().id(("inbox-check", ix)).py(px(12.)).border_b_1().border_color(content(0.07)).flex().flex_col().gap(px(8.))
+                            .child(div().flex().items_center().gap(px(10.))
+                                .child(icon(if state == "success" { "check-circle" } else { "circle-dot" }, 15.).text_color(color))
+                                .child(div().flex_1().min_w_0().child(div().text_size(px(12.)).text_color(content(0.85)).child(check.name.clone()))
+                                    .child(div().text_size(px(11.)).text_color(content(0.4)).child(check.workflow.clone())))
+                                .child(div().text_size(px(11.)).text_color(content(0.4)).child(duration))
+                                .child(div().text_size(px(11.)).text_color(color).child(check.state.replace('_', " ").to_lowercase()))
+                                .when(expandable, |d| {
+                                    let url = url.clone().unwrap_or_default();
+                                    d.child(action(format!("inbox-build-steps-{ix}"), if expanded { "Hide steps" } else { "Steps" }).on_click(cx.listener(move |this, _, _, cx| this.toggle_build(url.clone(), cx))))
+                                })
+                                .when(url.is_some(), |d| d.child(action(format!("inbox-check-link-{ix}"), "Details ↗").on_click({ let url = url.clone(); move |_, _, cx| { if let Some(url) = &url { cx.open_url(url); } } }))))
+                            .when(expanded, |d| {
+                                match url.as_ref().and_then(|url| self.build_details.get(url)) {
+                                    None => d.child(message("Loading steps…")),
+                                    Some(Err(text)) => d.child(error(text.clone())),
+                                    Some(Ok(details)) => d
+                                        .when_some(details.notice.clone(), |d, notice| d.child(message(notice)))
+                                        .children(details.steps.iter().map(|step| div().pl(px(25.)).text_size(px(12.)).text_color(content(0.7)).child(format!("{} · {}", step.name, step.state.replace('_', " "))))),
+                                }
+                            })
                     }))
             }).into_any_element()
     }
@@ -2117,7 +2164,10 @@ impl Inbox {
             caption("FILTER INBOX").into_any_element(),
             menu_row(
                 "inbox-assigned",
-                if matches!(self.state.source.as_str(), "gitlab" | "azuredevops") {
+                if matches!(
+                    self.state.source.as_str(),
+                    "gitlab" | "azuredevops" | "bitbucket"
+                ) {
                     "Needs my attention"
                 } else {
                     "Assigned to me"
@@ -2185,6 +2235,9 @@ impl Inbox {
                     },
                 ),
             ] {
+                if self.state.source == "bitbucket" && kind == "issue" {
+                    continue;
+                }
                 rows.push(
                     menu_row(
                         format!("inbox-kind-{kind}"),
@@ -2395,6 +2448,9 @@ impl Inbox {
             "github" => {
                 "Install GitHub CLI, then run gh auth login in a terminal. Check again when signed in."
             }
+            "bitbucket" => {
+                "Use your Atlassian email and a Bitbucket API token with read:user:bitbucket, read:repository:bitbucket, read:pullrequest:bitbucket and write:pullrequest:bitbucket. Add read:pipeline:bitbucket for build steps."
+            }
             "linear" => "Create a personal API key in Linear → Settings → Security & Access.",
             "jira" => "Connect your Jira Cloud site with your Atlassian email and an API token.",
             "gitlab" => {
@@ -2459,18 +2515,26 @@ impl Inbox {
                             .text_color(content(0.5))
                             .child(hint),
                     )
-                    .when(provider != "github" && provider != "linear", |d| {
-                        d.child(
-                            div()
-                                .px(px(10.))
-                                .py(px(8.))
-                                .rounded(px(6.))
-                                .border_1()
-                                .border_color(content(0.1))
-                                .child(self.connect_url.clone()),
-                        )
+                    .when(provider == "bitbucket", |d| {
+                        d.child(action("inbox-bitbucket-create-token", "Create API token ↗").on_click(|_, _, cx| {
+                            cx.open_url("https://id.atlassian.com/manage-profile/security/api-tokens");
+                        }))
                     })
-                    .when(provider == "jira", |d| {
+                    .when(
+                        provider != "github" && provider != "linear" && provider != "bitbucket",
+                        |d| {
+                            d.child(
+                                div()
+                                    .px(px(10.))
+                                    .py(px(8.))
+                                    .rounded(px(6.))
+                                    .border_1()
+                                    .border_color(content(0.1))
+                                    .child(self.connect_url.clone()),
+                            )
+                        },
+                    )
+                    .when(provider == "jira" || provider == "bitbucket", |d| {
                         d.child(
                             div()
                                 .px(px(10.))
@@ -2912,6 +2976,45 @@ mod tests {
         point, size,
     };
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn bitbucket_native_builds_classify_for_styling_and_failure_actions() {
+        use model::bitbucket::{BitbucketPrCheck, BitbucketPrChecks};
+
+        let native = model::Checks::from(BitbucketPrChecks {
+            head_oid: "commit-sha".into(),
+            checks: ["pass", "fail", "cancel", "pending", "unknown"]
+                .into_iter()
+                .map(|state| BitbucketPrCheck {
+                    name: state.into(),
+                    workflow: String::new(),
+                    state: state.into(),
+                    url: None,
+                    started_at: None,
+                    completed_at: None,
+                })
+                .collect(),
+        });
+        for (check, (state, color, failed)) in native.checks.iter().zip([
+            ("success", 0x4ade80, false),
+            ("failure", 0xf87171, true),
+            ("cancelled", 0xf87171, true),
+            ("pending", 0xfbbf24, false),
+            ("unknown", 0xfbbf24, false),
+        ]) {
+            assert_eq!(check.state, state);
+            assert_eq!(check_color(&check.state), Hsla::from(rgb(color)));
+            assert_eq!(failed_check(&check.state), failed);
+        }
+        // Both the summary and Builds' Fix with agent action use this predicate.
+        let failed = native
+            .checks
+            .iter()
+            .filter(|check| failed_check(&check.state))
+            .map(|check| check.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(failed, ["fail", "cancel"]);
+    }
 
     struct Fixture {
         inbox: Entity<Inbox>,

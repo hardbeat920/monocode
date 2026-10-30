@@ -5,6 +5,7 @@ mod media;
 pub use media::png as media_png;
 pub mod azure_devops;
 pub use avatar::png as avatar_png;
+pub mod bitbucket;
 mod github;
 pub mod gitlab;
 pub mod jira;
@@ -19,12 +20,20 @@ use std::{
     process::Command,
 };
 
-pub const PROVIDERS: [&str; 5] = ["github", "linear", "jira", "gitlab", "azuredevops"];
+pub const PROVIDERS: [&str; 6] = [
+    "github",
+    "linear",
+    "jira",
+    "gitlab",
+    "azuredevops",
+    "bitbucket",
+];
 pub fn provider_label(provider: &str) -> &'static str {
     match provider {
         "linear" => "Linear",
         "jira" => "Jira",
         "gitlab" => "GitLab",
+        "bitbucket" => "Bitbucket",
         "azuredevops" => "ADO",
         _ => "GitHub",
     }
@@ -256,6 +265,31 @@ pub struct Check {
 pub struct Checks {
     pub head_oid: String,
     pub checks: Vec<Check>,
+}
+// The provider payload retains React's states; native checks use GitHub's vocabulary.
+impl From<bitbucket::BitbucketPrChecks> for Checks {
+    fn from(value: bitbucket::BitbucketPrChecks) -> Self {
+        Self {
+            head_oid: value.head_oid,
+            checks: value
+                .checks
+                .into_iter()
+                .map(|check| Check {
+                    name: check.name,
+                    workflow: check.workflow,
+                    state: match check.state.as_str() {
+                        "pass" => "success".into(),
+                        "fail" => "failure".into(),
+                        "cancel" => "cancelled".into(),
+                        _ => check.state,
+                    },
+                    url: check.url,
+                    started_at: check.started_at,
+                    completed_at: check.completed_at,
+                })
+                .collect(),
+        }
+    }
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -612,6 +646,7 @@ fn convert<T: Serialize, U: DeserializeOwned>(value: T) -> Result<U, String> {
 impl Service {
     pub fn status(&self, provider: &str) -> Result<Status, String> {
         match provider {
+            "bitbucket" => convert(bitbucket::bitbucket_status(self.data_dir.clone())?),
             "linear" => convert(linear::linear_status(self.data_dir.clone())?),
             "jira" => convert(jira::jira_status(self.data_dir.clone())?),
             "gitlab" => convert(gitlab::gitlab_status(self.data_dir.clone())?),
@@ -642,6 +677,11 @@ impl Service {
         token: String,
     ) -> Result<Status, String> {
         match provider {
+            "bitbucket" => convert(bitbucket::bitbucket_set_config(
+                self.data_dir.clone(),
+                email,
+                token,
+            )?),
             "linear" => convert(linear::linear_set_token(self.data_dir.clone(), token)?),
             "jira" => convert(jira::jira_set_config(
                 self.data_dir.clone(),
@@ -730,7 +770,7 @@ impl Service {
                     )?);
                 }
                 let mut items = Vec::new();
-                if state.filters.assigned_to_me && provider != "github" {
+                if state.filters.assigned_to_me && matches!(provider, "gitlab" | "azuredevops") {
                     for kind in ["issue", "pr"] {
                         let rows: Vec<Item> = if provider == "gitlab" {
                             convert(gitlab::gitlab_list_todos(
@@ -754,6 +794,11 @@ impl Service {
                 }
                 let checkouts = repo_checkouts(projects, &self.cwd, |project| {
                     match provider {
+                        "bitbucket" => bitbucket::bitbucket_repo(
+                            self.data_dir.clone(),
+                            project.to_string_lossy().into_owned(),
+                        )
+                        .map(|r| vec![r]),
                         "github" => github::git_github_repositories_for(project),
                         "gitlab" => gitlab::gitlab_repo(
                             self.data_dir.clone(),
@@ -770,7 +815,18 @@ impl Service {
                 });
                 for (project, repo) in checkouts {
                     for kind in ["issue", "pr"] {
+                        if provider == "bitbucket" && kind != "pr" {
+                            continue;
+                        }
                         let rows: Vec<Item> = match provider {
+                            "bitbucket" => convert(bitbucket::bitbucket_list_work_items(
+                                self.data_dir.clone(),
+                                project.to_string_lossy().into_owned(),
+                                kind.into(),
+                                state.filters.assigned_to_me,
+                                state.filters.fetch_state().into(),
+                                Some(limit),
+                            )?)?,
                             "github" => convert(github::git_github_work_items_for(
                                 project,
                                 &repo,
@@ -824,6 +880,12 @@ impl Service {
     }
     pub fn details(&self, item: &Item) -> Result<Details, String> {
         match item.provider.as_str() {
+            "bitbucket" => convert(bitbucket::bitbucket_work_item_details(
+                self.data_dir.clone(),
+                item.repo.clone(),
+                item.kind.clone(),
+                item.number,
+            )?),
             "linear" => convert(linear::linear_issue_details(
                 self.data_dir.clone(),
                 item.id.clone(),
@@ -861,6 +923,12 @@ impl Service {
     }
     pub fn thread(&self, item: &Item) -> Result<Thread, String> {
         match item.provider.as_str() {
+            "bitbucket" => convert(bitbucket::bitbucket_work_item_thread(
+                self.data_dir.clone(),
+                item.repo.clone(),
+                item.kind.clone(),
+                item.number,
+            )?),
             "linear" => convert(linear::linear_issue_thread(
                 self.data_dir.clone(),
                 item.id.clone(),
@@ -891,6 +959,13 @@ impl Service {
     }
     pub fn comment(&self, item: &Item, body: String, reply_to: String) -> Result<String, String> {
         match item.provider.as_str() {
+            "bitbucket" => bitbucket::bitbucket_work_item_comment(
+                self.data_dir.clone(),
+                item.repo.clone(),
+                item.kind.clone(),
+                item.number,
+                body,
+            ),
             "linear" => {
                 linear::linear_issue_comment(self.data_dir.clone(), item.id.clone(), body, reply_to)
             }
@@ -926,6 +1001,11 @@ impl Service {
     }
     pub fn diff_context(&self, item: &Item, full_context: bool) -> Result<Diff, String> {
         match item.provider.as_str() {
+            "bitbucket" => convert(bitbucket::bitbucket_pr_diff(
+                self.data_dir.clone(),
+                item.repo.clone(),
+                item.number,
+            )?),
             "gitlab" => convert(gitlab::gitlab_mr_diff(
                 self.data_dir.clone(),
                 item.repo.clone(),
@@ -946,6 +1026,14 @@ impl Service {
         }
     }
     pub fn checks(&self, item: &Item) -> Result<Checks, String> {
+        if item.provider == "bitbucket" {
+            return Ok(bitbucket::bitbucket_pr_checks(
+                self.data_dir.clone(),
+                item.repo.clone(),
+                item.number,
+            )?
+            .into());
+        }
         convert(github::git_github_pr_checks_for(
             self.project(item),
             &item.repo,
@@ -1050,6 +1138,43 @@ fn run_command(
 mod notification_tests {
     use super::*;
 
+    #[test]
+    fn bitbucket_native_checks_normalize_states_and_preserve_metadata() {
+        for (state, expected) in [
+            ("pass", "success"),
+            ("fail", "failure"),
+            ("cancel", "cancelled"),
+            ("pending", "pending"),
+            ("unknown", "unknown"),
+        ] {
+            let source = bitbucket::BitbucketPrChecks {
+                head_oid: "commit-sha".into(),
+                checks: vec![bitbucket::BitbucketPrCheck {
+                    name: "Build".into(),
+                    workflow: "Pipeline".into(),
+                    state: state.into(),
+                    url: Some("https://bitbucket.org/acme/app/pipelines/results/7".into()),
+                    started_at: Some("2026-10-30T12:00:00Z".into()),
+                    completed_at: Some("2026-10-30T12:01:00Z".into()),
+                }],
+            };
+            let native = Checks::from(source.clone());
+            assert_eq!(native.head_oid, source.head_oid);
+            let check = &native.checks[0];
+            let original = &source.checks[0];
+            assert_eq!(check.state, expected);
+            assert_eq!(check.name, original.name);
+            assert_eq!(check.workflow, original.workflow);
+            assert_eq!(check.url, original.url);
+            assert_eq!(check.started_at, original.started_at);
+            assert_eq!(check.completed_at, original.completed_at);
+            assert_eq!(
+                serde_json::to_value(&source).unwrap()["checks"][0]["state"],
+                state
+            );
+        }
+    }
+
     fn item(number: i64, provider: &str) -> Item {
         Item {
             provider: provider.into(),
@@ -1066,6 +1191,65 @@ mod notification_tests {
             items,
             ..Snapshot::default()
         }
+    }
+
+    #[test]
+    fn bitbucket_native_connection_and_provider_state_round_trip() {
+        let directory = tempfile::tempdir().unwrap();
+        let service = Service {
+            data_dir: directory.path().into(),
+            cwd: directory.path().into(),
+        };
+        assert!(!service.status("bitbucket").unwrap().connected);
+        // Same format as the Tauri connector: existing credentials carry over.
+        let path = directory.path().join("bitbucket-config.json");
+        let saved = r#"{"email":"dev@example.com","token":"saved-token","account_id":"account"}"#;
+        std::fs::write(&path, saved).unwrap();
+        let status = service.status("bitbucket").unwrap();
+        assert!(status.connected);
+        assert_eq!(status.email, "dev@example.com");
+        assert!(service
+            .connect(
+                "bitbucket",
+                String::new(),
+                "bad email".into(),
+                "new-token".into()
+            )
+            .is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), saved);
+        assert!(service.status("bitbucket").unwrap().connected);
+        assert!(
+            !service
+                .connect("bitbucket", String::new(), String::new(), String::new())
+                .unwrap()
+                .connected
+        );
+        assert!(!path.exists());
+        let store = Store::open(&directory.path().join("state.sqlite")).unwrap();
+        let state = ViewState {
+            source: "bitbucket".into(),
+            ..ViewState::default()
+        };
+        state.save(&store).unwrap();
+        assert_eq!(ViewState::load(&store).source, "bitbucket");
+    }
+    #[test]
+    fn bitbucket_notifications_baseline_and_then_emit_new_prs() {
+        let mut tracker = NotificationTracker::default();
+        let mut first = item(1, "bitbucket");
+        first.kind = "pr".into();
+        let mut second = first.clone();
+        second.number = 2;
+        second.id = "2".into();
+        assert!(tracker
+            .observe(&snapshot(vec![first.clone()]), "scope".into())
+            .is_empty());
+        assert_eq!(
+            tracker
+                .observe(&snapshot(vec![first, second]), "scope".into())
+                .len(),
+            1
+        );
     }
 
     #[test]
