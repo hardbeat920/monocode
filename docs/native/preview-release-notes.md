@@ -1,21 +1,41 @@
-# Monocode Native 0.16.0-preview.9
+# Monocode Native 0.16.0-preview.10
 
 This experimental Monocode Native preview is built with Rust + GPUI. React/Tauri remains the production app.
 
-## Changes since preview 8
+## Changes since preview 9
 
-- Faster startup and fewer full-window redraws during animations, with GPU memory released when the app goes quiet.
-- Mermaid diagrams render natively in Markdown, resize with the panel and wrap sequence labels while preserving their controls.
-- Cmd/Ctrl+Enter sends a mid-turn message the opposite way from your usual follow-up preference: steering when you normally queue, or queueing when you normally steer. The send button reflects the selected action.
-- Composer file mentions show file icons and insert short names. Terminal links open on click, and terminal text prefers a Nerd Font.
-- The workspace picker includes All checkouts, while selecting a project folder keeps that folder as the session scope.
-- Per-project theme colours are available from the project menu. Buttons, tree rails and diff overlays follow the active theme more consistently, including the send button on light themes.
-- Windows gains an integrated title bar and glass backdrops. macOS bundles use the Liquid Glass app icon.
-- Pasted images are stored per conversation and cleaned up with that conversation; existing shared legacy attachments are preserved.
-- Plain-link prompts wrap inside their bubbles, and the Edit GitHub link dialog keeps its Update button inside the dialog.
-- Disabling mobile access or shutting down cancels pending mobile startup. Host packaging retries interrupted runtime downloads and reuses verified cached downloads.
+### Monos and background work
 
-Thanks to @Kaloyanes, @donnes, @ognjeeen and @404khai for their contributions in this preview.
+- A new **Overview** tab shows a Mono's current activity, a contribution calendar, today's merged pull requests, lines changed, sessions and habit runs, plus upcoming habits and new documents. The session list is now labeled **Sub-agents**, with cards showing the model, provider, checkout and current state.
+- Contributions are recovered from saved session history and recorded as agents commit code or open, merge and review pull requests through Git, the GitHub CLI or GitHub MCP tools. Repeated records are deduplicated, amended commits replace their earlier entry, and pull requests the Mono opened are checked for later merges. Read-only review lookups do not count. Commit line counts follow explicit tool working directories and `git -C`, including commands that commit in multiple checkouts. Contribution data is stored in the native sidecar database.
+- **Heartbeats** let an idle Mono review recent work, sessions left unattended, notes and inbox items in its assigned projects, then suggest up to two follow-ups. They are enabled by default after 30 minutes of quiet; the Mono's settings offer an off switch and 15-minute, 30-minute, 1-hour and 2-hour intervals. Quiet checks leave no chat report, avoid repeating recent suggestions and gradually back off to four hours. Checks keep the Mono's selected permissions, use its provider account and select a smaller triage model when one is available.
+- Monos are prompted to show a short opening reply while work continues and delegate longer tasks to background sessions. Completion reports retain the final answer while hiding routine notification commentary, and launched sessions stay in the background until opened.
+- Suggested replies appear as individual line cards. Choosing one sends that reply; the selected choice stays checked after answering, and the other choices become inactive.
+- Sent photos in Mono chats retain their full shape above the message bubble and open in the image viewer. The Mono composer and its toolbar controls use rounded styling, including a pill-shaped input for a single line.
+
+### Native visuals and commands
+
+- Use **`/visualize`** in an idle local desktop conversation to visualize the current topic, or **`/visualize <request>`** to specify what to show. The command asks the agent to read the visual reference, validate its program and publish an inline visual. Submitted requests have a dither animation; rejected requests preserve the draft and attachments.
+- Claude Code and Codex receive guidance on when a visual will help. Claude's session-scoped native visual tools are allowed without an extra permission prompt; the executable fallback remains available for providers without injected MCP tools.
+- Visuals published in a Mono chat also appear in **Documents** and open in the native visual reader. Publishing the same visual ID updates that document. **New HTML artifacts are no longer accepted** by the Mono app API: use `artifacts.write` with `kind: "document"` for Markdown, or `visual_show` for interactive native content.
+- Slash-command completions have distinct icons and colors that follow the active light or dark theme, including `/btw`, `/compact`, `/stage`, `/commit` and `/visualize`.
+
+### Transcript and workspace fixes
+
+- Fixed a transcript crash when updates merge messages while older rows are animating out.
+- Steering messages remain attached to their running turn after reopening a conversation. Once a Mono has replied in words, later steers and queued messages stay in chat order.
+- A Mono's opening sentence stays visible as its run finishes, without replaying its entrance animation. Transcript spacing and activity labels are more consistent, and the phone transcript retains final Mono reports.
+- Day separators appear when the local calendar day changes, rather than after an hour-long pause. Message timestamps retain the time of day.
+- Hermes Agent receives the reasoning effort selected in the model picker when its server advertises that option.
+- Mono conversations no longer crash when showing a usage-limit notice.
+- The terminal panel's **New Terminal** button sits directly after its tabs.
+
+### Documentation and checks
+
+- The main README links native preview downloads and explains shared-database backups and precautions when switching between the native and production apps.
+- Native preview formatting, a strict Clippy warning and an outdated Overview tab assertion are fixed. The complete native check and macOS development-profile build passed locally with Rust 1.99.1; see `docs/native/verification.md` for counts and remaining runtime checks.
+
+Thanks to @Juns-g for the transcript crash and Hermes reasoning-effort fixes in #1216 and #1217.
 
 ## Installation and testing
 
