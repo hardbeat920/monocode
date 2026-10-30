@@ -141,6 +141,18 @@ fn failed_check(state: &str) -> bool {
         "failure" | "failed" | "error" | "timed_out" | "cancelled" | "action_required"
     )
 }
+fn check_color(state: &str) -> Hsla {
+    if matches!(
+        state.to_lowercase().as_str(),
+        "success" | "neutral" | "skipped"
+    ) {
+        rgb(0x4ade80).into()
+    } else if failed_check(state) {
+        rgb(0xf87171).into()
+    } else {
+        rgb(0xfbbf24).into()
+    }
+}
 fn review_event(comment: &model::Comment) -> bool {
     comment.kind == "review" && comment.body.trim().is_empty() && comment.replies.is_empty()
 }
@@ -2068,7 +2080,7 @@ impl Inbox {
             .when(self.extra_loading, |d| d.child(message(if bitbucket { "Loading builds…" } else { "Loading checks…" })))
             .when_some(self.extra_error.clone(), |d, text| d.child(error(text)))
             .when_some(self.checks.clone(), |d, checks| {
-                let failed = checks.checks.iter().filter(|c| matches!(c.state.to_lowercase().as_str(), "failure" | "failed" | "error" | "timed_out" | "cancelled" | "action_required")).cloned().collect::<Vec<_>>();
+                let failed = checks.checks.iter().filter(|c| failed_check(&c.state)).cloned().collect::<Vec<_>>();
                 d.when(checks.checks.is_empty(), |d| d.child(message(if bitbucket { "No builds reported" } else { "No checks reported" })))
                     .when(!failed.is_empty(), |d| d.child(div().mb(px(12.)).flex().items_center().gap(px(8.))
                         .child(div().flex_1().text_size(px(12.)).text_color(content(0.7)).child(format!("{} failing {}", failed.len(), if bitbucket { "builds" } else { "checks" })))
@@ -2082,9 +2094,7 @@ impl Inbox {
                         })))))
                     .children(checks.checks.iter().enumerate().map(|(ix, check)| {
                         let state = check.state.to_lowercase();
-                        let color: Hsla = if matches!(state.as_str(), "success" | "neutral" | "skipped") { rgb(0x4ade80).into() }
-                            else if matches!(state.as_str(), "failure" | "failed" | "error" | "timed_out" | "cancelled" | "action_required") { rgb(0xf87171).into() }
-                            else { rgb(0xfbbf24).into() };
+                        let color = check_color(&state);
                         let url = check.url.clone();
                         let expandable = bitbucket && self.item().is_some_and(|item| model::bitbucket::build_id(url.as_deref().unwrap_or(""), &item.repo).is_some());
                         let expanded = url.as_ref().is_some_and(|url| self.expanded_builds.contains(url));
@@ -2966,6 +2976,45 @@ mod tests {
         point, size,
     };
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn bitbucket_native_builds_classify_for_styling_and_failure_actions() {
+        use model::bitbucket::{BitbucketPrCheck, BitbucketPrChecks};
+
+        let native = model::Checks::from(BitbucketPrChecks {
+            head_oid: "commit-sha".into(),
+            checks: ["pass", "fail", "cancel", "pending", "unknown"]
+                .into_iter()
+                .map(|state| BitbucketPrCheck {
+                    name: state.into(),
+                    workflow: String::new(),
+                    state: state.into(),
+                    url: None,
+                    started_at: None,
+                    completed_at: None,
+                })
+                .collect(),
+        });
+        for (check, (state, color, failed)) in native.checks.iter().zip([
+            ("success", 0x4ade80, false),
+            ("failure", 0xf87171, true),
+            ("cancelled", 0xf87171, true),
+            ("pending", 0xfbbf24, false),
+            ("unknown", 0xfbbf24, false),
+        ]) {
+            assert_eq!(check.state, state);
+            assert_eq!(check_color(&check.state), Hsla::from(rgb(color)));
+            assert_eq!(failed_check(&check.state), failed);
+        }
+        // Both the summary and Builds' Fix with agent action use this predicate.
+        let failed = native
+            .checks
+            .iter()
+            .filter(|check| failed_check(&check.state))
+            .map(|check| check.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(failed, ["fail", "cancel"]);
+    }
 
     struct Fixture {
         inbox: Entity<Inbox>,
