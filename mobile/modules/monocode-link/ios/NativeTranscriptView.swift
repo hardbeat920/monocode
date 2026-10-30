@@ -165,7 +165,7 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate {
     publishViewport()
   }
   func updateProps() {
-    guard bounds.width > 0, !configuration.isEmpty else { return }
+    guard scroll.bounds.width > 0, !configuration.isEmpty else { return }
     if startedConfiguration != configuration {
       session?.stop()
       frameData = nil
@@ -185,7 +185,7 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate {
       {
         input["pending"] = value
       }
-      style.width = bounds.width
+      style.width = scroll.bounds.width
       let created = TranscriptSession(configuration: input, style: style)
       let generation = UUID()
       relayLock.lock()
@@ -212,12 +212,24 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate {
 
   override func layoutSubviews() {
     super.layoutSubviews()
-    scroll.frame = bounds
-    spinner.center = CGPoint(x: bounds.midX, y: top + max(0, bounds.height - top - bottom) / 2)
-    style.width = bounds.width
+    // Navigation controls can occupy either side on Duo. Inset the transcript,
+    // not its background, and leave vertical positioning to the existing
+    // header/composer insets. Use this view's safe area, which includes the
+    // enclosing navigation controller's bars, rather than the window's.
+    scroll.frame = CGRect(
+      x: safeAreaInsets.left, y: 0,
+      width: max(0, bounds.width - safeAreaInsets.left - safeAreaInsets.right),
+      height: bounds.height)
+    spinner.center = CGPoint(x: scroll.frame.midX, y: top + max(0, bounds.height - top - bottom) / 2)
+    style.width = scroll.bounds.width
     updateProps()
     updateGeometry()
     displayRows()
+  }
+
+  override func safeAreaInsetsDidChange() {
+    super.safeAreaInsetsDidChange()
+    setNeedsLayout()
   }
 
   private func setForeground(_ value: Bool) {
@@ -367,7 +379,7 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate {
     if let block {
       let clip = UIView(
         frame: CGRect(
-          x: 0, y: block.y, width: bounds.width, height: block.opening ? 0 : block.height))
+          x: 0, y: block.y, width: scroll.bounds.width, height: block.opening ? 0 : block.height))
       clip.clipsToBounds = true
       clip.isUserInteractionEnabled = block.opening
       scroll.addSubview(clip)
@@ -432,7 +444,7 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate {
       // Keyboard and composer growth absorb into this space rather than moving rows.
       height = max(height, anchor + scroll.bounds.height)
     }
-    scroll.contentSize = CGSize(width: bounds.width, height: max(scroll.bounds.height, height))
+    scroll.contentSize = CGSize(width: scroll.bounds.width, height: max(scroll.bounds.height, height))
     scroll.verticalScrollIndicatorInsets = UIEdgeInsets(
       top: top, left: 0, bottom: bottomInset, right: 0)
     if initialized && following && !scroll.isDragging && !scroll.isDecelerating {
@@ -517,7 +529,7 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate {
       }
       let y = top + frame.offsets[index]
       row.frame = CGRect(
-        x: 0, y: row.superview === fold ? y - (fold?.frame.minY ?? 0) : y, width: bounds.width,
+        x: 0, y: row.superview === fold ? y - (fold?.frame.minY ?? 0) : y, width: scroll.bounds.width,
         height: model.height)
       row.configure(
         model, layout: prepared, animate: animate,
@@ -562,7 +574,7 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate {
       style: style,
       viewport: initialized
         ? CGRect(
-          x: 0, y: max(0, scroll.contentOffset.y - top), width: bounds.width, height: bounds.height)
+          x: 0, y: max(0, scroll.contentOffset.y - top), width: scroll.bounds.width, height: scroll.bounds.height)
         : .zero)
   }
   private func updateAway() {

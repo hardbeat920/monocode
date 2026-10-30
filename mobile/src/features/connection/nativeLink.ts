@@ -4,11 +4,15 @@ import { Platform } from "react-native";
 type NativeLink = {
   execute(input: string): Promise<string>;
   nativeTranscriptVersion?: number;
+  typingPostureVersion?: number;
 };
 const module = requireOptionalNativeModule<NativeLink>("MonocodeLink");
 // Older development builds and Android retain the existing transcript.
 export const hasNativeTranscript =
   Platform.OS === "ios" && module?.nativeTranscriptVersion === 1;
+
+export const hasTypingPosture =
+  Platform.OS === "ios" && module?.typingPostureVersion === 1;
 
 export type Identity = { certificate: string; privateKey: string };
 export type Address = { host: string; port: number };

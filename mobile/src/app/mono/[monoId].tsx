@@ -1,4 +1,4 @@
-import { Redirect, useLocalSearchParams } from "expo-router";
+import { Redirect, useIsFocused, useLocalSearchParams } from "expo-router";
 import { useMemo } from "react";
 import { ConnectionNotice } from "@/features/connection/ConnectionNotice";
 import { hasNativeTranscript } from "@/features/connection/nativeLink";
@@ -20,6 +20,7 @@ import {
 
 // A mono has one long-lived conversation, so its screen is that conversation.
 export default function MonoScreen() {
+  const focused = useIsFocused();
   const { monoId } = useLocalSearchParams<{ monoId: string }>();
   const { monos, sendMessage, stop } = useWorkspace();
   const mono = monos.find((m) => m.id === monoId);
@@ -45,6 +46,7 @@ export default function MonoScreen() {
           ) : null}
           <Composer
             key={mono.id}
+            active={focused}
             context={mono.name}
             branch=""
             model={mono.model ?? ""}

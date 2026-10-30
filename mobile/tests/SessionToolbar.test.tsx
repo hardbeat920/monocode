@@ -52,6 +52,7 @@ vi.mock("react-native-svg", () => ({
   Path: () => null,
 }));
 vi.mock("react-native", () => ({
+  StyleSheet: { create: (styles: unknown) => styles },
   Platform: {
     get OS() {
       return app.os;

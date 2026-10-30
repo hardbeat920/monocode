@@ -9,15 +9,16 @@ import {
   Pressable,
   Text,
   TextInput,
-  useWindowDimensions,
   View,
 } from "react-native";
 import Svg, { Circle, Path } from "react-native-svg";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import type { SessionSummary } from "@/features/workspace/types";
 import { useWorkspace } from "@/features/workspace/WorkspaceProvider";
 import { LiquidView } from "@/ui/LiquidView";
 import { ChoiceMenu } from "@/ui/ChoiceMenu";
+import { useContentWidth } from "@/ui/ContentPane";
 import { themedStyles, useColors } from "@/ui/theme";
 
 import { useSessionActions } from "./useSessionActions";
@@ -30,6 +31,9 @@ const failed = (title: string) => (reason: unknown) =>
  *  its button and takes none. Too little left for them and iOS drops a
  *  button rather than squeeze them. */
 const HEADER_ITEMS = 210;
+// A toolbar custom view cannot shrink when UIKit shares the bar with the
+// system status controls. Keep long titles bounded even in a wide pane.
+const MAX_TITLE_WIDTH = 280;
 
 /**
  * A session's title on the left of the stack's header, beside the back button
@@ -44,7 +48,17 @@ export function SessionTitle({
   subtitle: string;
 }) {
   const styles = useStyles();
-  const { width } = useWindowDimensions();
+  const width = useContentWidth();
+  const insets = useSafeAreaInsets();
+  const titleWidth = Math.max(
+    // Side controls already occupy the horizontal safe area. Reserve the
+    // larger of that inset and the top-bar budget, rather than adding both.
+    Math.min(
+      width - Math.max(insets.left + insets.right, HEADER_ITEMS),
+      MAX_TITLE_WIDTH,
+    ),
+    80,
+  );
   if (Platform.OS === "android")
     return (
       <View style={styles.androidTitle}>
@@ -59,9 +73,7 @@ export function SessionTitle({
   return (
     <Stack.Toolbar placement="left">
       <Stack.Toolbar.View hidesSharedBackground>
-        <View
-          style={[styles.title, { width: Math.max(width - HEADER_ITEMS, 80) }]}
-        >
+        <View style={[styles.title, { width: titleWidth }]}>
           <Text style={styles.name} numberOfLines={1}>
             {title}
           </Text>
