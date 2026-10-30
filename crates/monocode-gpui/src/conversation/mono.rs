@@ -44,13 +44,15 @@ impl Conversation {
         self.install_transfer(settings, None, cx);
         if send {
             self.draft_action(true, cx);
+        } else {
+            self.adopt_saved_draft(cx);
         }
         cx.emit(SessionChanged);
     }
     pub(crate) fn save_app_draft(&mut self, prompt: String, cx: &mut Context<Self>) {
         self.input
             .update(cx, |input, cx| input.set_text(prompt, cx));
-        self.save_message_draft(cx);
+        self.save_composer_draft(cx);
     }
     pub(crate) fn stop_app_session(&mut self, cx: &mut Context<Self>) {
         if self.needs_history_restore() {

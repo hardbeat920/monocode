@@ -12,8 +12,14 @@ pub(super) struct FollowUps {
     pub continuations: std::collections::VecDeque<String>,
     pub resuming: bool,
     pub ready: bool,
-    pub draft_selected: bool,
     pub edit: Option<QueueEdit>,
+}
+/// The last composer draft written to the store, and the save waiting on a
+/// pause in typing.
+#[derive(Default)]
+pub(super) struct ComposerDraft {
+    pub saved: Option<Message>,
+    pub pending: Option<gpui::Task<()>>,
 }
 pub(super) struct QueueEdit {
     id: String,
@@ -22,11 +28,6 @@ pub(super) struct QueueEdit {
 }
 
 impl Conversation {
-    pub(super) fn draft_active(&self, cx: &gpui::App) -> bool {
-        self.follow_ups.draft_selected
-            || monocode_core::composer::consume_command(&self.input.read(cx).content, "draft")
-                .is_some()
-    }
     pub(super) fn message(
         &mut self,
         text: String,
@@ -134,70 +135,109 @@ impl Conversation {
         self.follow_ups.state.messages.push(message);
         self.save_follow_ups(cx);
     }
-    pub(super) fn save_message_draft(&mut self, cx: &mut Context<Self>) {
-        if self.is_remote() {
-            self.remote_save_draft(cx);
-            return;
-        }
-        if self.needs_history_restore() {
-            self.defer_history_action(|this, cx| this.save_message_draft(cx), cx);
-            return;
-        }
-        if self.busy
-            || self.follow_ups.state.draft.is_some()
-            || !self.loaded
-            || self.attaching
-            || self.input.read(cx).is_composing()
+    /// The composer's unsent text and files: the thread's draft once it is left.
+    fn composer_draft(&self, cx: &gpui::App) -> Option<Message> {
+        let input = self.input.read(cx);
+        (input.has_message_text() || !self.attachments.is_empty()).then(|| Message {
+            text: input.content.to_string(),
+            attachments: self.attachments.clone(),
+            ..Default::default()
+        })
+    }
+    pub(crate) fn composer_has_draft(&self) -> bool {
+        self.draft_has_value || !self.attachments.is_empty()
+    }
+    /// A launch's saved prompt, as an Operator launch that sends right away
+    /// leaves it until the turn is accepted.
+    #[cfg(test)]
+    pub(crate) fn hold_saved_draft(&mut self, draft: Message) {
+        self.follow_ups.state.draft = Some(draft);
+    }
+    /// A saved draft or unsent composer text that an Operator must not overwrite.
+    pub(crate) fn has_unsent_draft(&self) -> bool {
+        self.has_saved_draft() || self.composer_has_draft()
+    }
+    /// Saved drafts, from an Operator draft launch, a remote host or from
+    /// before drafts lived in the composer, open in the composer so a thread
+    /// has one kind of draft. A launch waiting to send its draft keeps it.
+    pub(super) fn adopt_saved_draft(&mut self, cx: &mut Context<Self>) {
+        let remote = self.is_remote();
+        if !self.history_actions.is_empty()
+            || !self.input.read(cx).content.is_empty()
+            || !self.attachments.is_empty()
+            || (remote
+                && (self.busy
+                    || self.stopping
+                    || self.remote_state.pending
+                    || !self.remote_state.online))
         {
             return;
         }
-        let raw = self.input.read(cx).content.to_string();
-        let text = monocode_core::composer::consume_command(&raw, "draft")
-            .unwrap_or(&raw)
-            .to_owned();
-        if text.trim().is_empty() && self.attachments.is_empty() {
+        let Some(draft) = self.follow_ups.state.draft.clone() else {
+            return;
+        };
+        self.attachments = draft.attachments;
+        self.input
+            .update(cx, |input, cx| input.set_text(draft.text, cx));
+        // The composer's copy is written first, so a crash between the two
+        // writes cannot lose the draft.
+        self.save_composer_draft(cx);
+        if remote {
+            // Removing the host's copy leaves the composer's as the only one.
+            self.remote_draft_action(false, cx);
+            self.follow_ups.state.draft = None;
+        } else {
+            self.follow_ups.state.draft = None;
+            self.save_follow_ups(cx);
+        }
+        self.transcript
+            .update(cx, |view, cx| view.set_saved_draft(None, cx));
+    }
+    /// Reopens the thread with what was left in its composer. Files that are
+    /// gone, such as pasted images cleared from the temp folder, are dropped.
+    pub(crate) fn restore_composer_draft(&mut self, mut draft: Message, cx: &mut Context<Self>) {
+        self.composer_draft.saved = Some(draft.clone());
+        if !self.input.read(cx).content.is_empty() || !self.attachments.is_empty() {
             return;
         }
-        self.input.update(cx, |i, cx| i.set_text(String::new(), cx));
-        let attachments = std::mem::take(&mut self.attachments);
-        let mut message = self.message(text, attachments, None, cx);
-        message.at = self.transcript.read(cx).source_rows().len();
-        if self.summary.title.starts_with("New ") {
-            self.summary.title = message
-                .label()
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ")
-                .chars()
-                .take(42)
-                .collect();
-            let (store, id, title) = (
-                self.store.clone(),
-                self.summary.id,
-                self.summary.title.clone(),
-            );
+        draft.attachments.retain(|path| path.exists());
+        self.attachments = draft.attachments;
+        self.input
+            .update(cx, |input, cx| input.set_text(draft.text, cx));
+    }
+    /// Typing saves the draft once it pauses. Leaving the composer and quitting
+    /// save it at once, so only a crash mid-word can lose the last keystrokes.
+    pub(super) fn queue_composer_draft(&mut self, cx: &mut Context<Self>) {
+        // The input also notifies for caret and focus changes.
+        if self.composer_draft.pending.is_none()
+            && self.composer_draft(cx) == self.composer_draft.saved
+        {
+            return;
+        }
+        self.composer_draft.pending = Some(cx.spawn(async move |this, cx| {
             cx.background_executor()
-                .spawn(async move {
-                    let _ = locked(&store).and_then(|s| s.title(id, &title));
-                })
-                .detach();
+                .timer(std::time::Duration::from_millis(150))
+                .await;
+            let _ = this.update(cx, |this, cx| this.save_composer_draft(cx));
+        }));
+    }
+    /// Writes a save still waiting on the typing pause.
+    pub(crate) fn flush_composer_draft(&mut self, cx: &mut Context<Self>) {
+        if self.composer_draft.pending.is_some() {
+            self.save_composer_draft(cx);
         }
-        if !self.summary.has_messages {
-            self.composer_motion.capture(self.composer_anchor.get());
+    }
+    /// One small row, written in place so saves can never land out of order.
+    pub(super) fn save_composer_draft(&mut self, cx: &mut Context<Self>) {
+        self.composer_draft.pending = None;
+        let draft = self.composer_draft(cx);
+        if draft != self.composer_draft.saved
+            && locked(&self.store)
+                .and_then(|s| s.save_composer_draft(self.summary.id, draft.as_ref()))
+                .is_ok()
+        {
+            self.composer_draft.saved = draft;
         }
-        self.summary.has_messages = true;
-        self.follow_ups.draft_selected = false;
-        self.settings.plan = false;
-        self.settings.operator = false;
-        self.settings.orchestrator = false;
-        self.save_settings(cx);
-        self.follow_ups.state.draft = Some(message.clone());
-        self.transcript
-            .update(cx, |view, cx| view.introduce_saved_draft(message, cx));
-        self.completion
-            .update(cx, |completion, cx| completion.dismiss(cx));
-        self.save_follow_ups(cx);
-        cx.emit(SessionChanged);
     }
     pub(super) fn draft_action(&mut self, send: bool, cx: &mut Context<Self>) {
         if self.is_remote() {
@@ -1082,52 +1122,102 @@ mod tests {
     }
 
     #[gpui::test]
-    fn draft_commands_save_without_starting_an_agent_and_remove_restores_a_blank(
-        cx: &mut TestAppContext,
-    ) {
+    fn text_left_in_the_composer_becomes_the_threads_draft(cx: &mut TestAppContext) {
+        use std::time::Duration;
         let window = conversation(cx);
-        window
+        let saved = |cx: &mut TestAppContext| {
+            window
+                .update(cx, |view, _, _| {
+                    locked(&view.store)
+                        .unwrap()
+                        .composer_draft(view.summary.id)
+                        .unwrap()
+                })
+                .unwrap()
+        };
+        let type_text = |cx: &mut TestAppContext, text: &str| {
+            window
+                .update(cx, |view, _, cx| {
+                    view.input
+                        .update(cx, |input, cx| input.set_text(text.into(), cx))
+                })
+                .unwrap();
+            cx.run_until_parked();
+        };
+        type_text(cx, "half a thought");
+        assert_eq!(saved(cx), None, "it waits for a pause in typing");
+        cx.executor().advance_clock(Duration::from_millis(200));
+        cx.run_until_parked();
+        assert_eq!(saved(cx).unwrap().text, "half a thought");
+
+        let (store, summary) = window
+            .update(cx, |view, _, _| (view.store.clone(), view.summary.clone()))
+            .unwrap();
+        let reopened = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|cx| Conversation::new(summary, store, cx))
+            })
+            .unwrap()
+        });
+        reopened
             .update(cx, |view, _, cx| {
-                view.input.update(cx, |i, cx| {
-                    i.set_text(" /DRAFT Explore this later".into(), cx)
-                });
-                view.attachments.push("/tmp/note.txt".into());
-                view.send(cx);
-                assert!(!view.busy);
-                assert!(view.summary.has_messages);
-                assert!(
-                    view.transcript.read(cx).source_rows().is_empty(),
-                    "saved drafts must never enter provider history"
-                );
-                assert_eq!(
-                    view.follow_ups.state.draft.as_ref().unwrap().text,
-                    "Explore this later"
-                );
-                assert!(view.input.read(cx).content.is_empty());
+                let draft = locked(&view.store)
+                    .unwrap()
+                    .composer_draft(view.summary.id)
+                    .unwrap()
+                    .unwrap();
+                view.restore_composer_draft(draft, cx);
             })
             .unwrap();
         cx.run_until_parked();
+        reopened
+            .update(cx, |view, _, cx| {
+                assert_eq!(view.input.read(cx).content.as_ref(), "half a thought");
+                assert!(view.composer_has_draft());
+            })
+            .unwrap();
+
+        type_text(cx, "more");
+        window
+            .update(cx, |view, _, cx| view.flush_composer_draft(cx))
+            .unwrap();
+        assert_eq!(saved(cx).unwrap().text, "more", "leaving saves at once");
+        type_text(cx, "");
+        cx.executor().advance_clock(Duration::from_millis(200));
+        cx.run_until_parked();
+        assert_eq!(saved(cx), None, "an emptied composer clears the draft");
+    }
+
+    #[gpui::test]
+    fn a_saved_draft_opens_in_the_composer_instead_of_the_thread(cx: &mut TestAppContext) {
+        let window = conversation(cx);
         window
             .update(cx, |view, _, cx| {
-                let saved = locked(&view.store)
-                    .unwrap()
-                    .follow_ups(view.summary.id)
-                    .unwrap();
+                view.follow_ups.state.draft = Some(Message {
+                    id: "app-prompt".into(),
+                    text: "Review this project".into(),
+                    attachments: vec!["/tmp/note.txt".into()],
+                    ..Default::default()
+                });
+                view.adopt_saved_draft(cx);
+                assert_eq!(view.input.read(cx).content.as_ref(), "Review this project");
                 assert_eq!(
-                    saved.draft.unwrap().attachments,
+                    view.attachments,
                     [std::path::PathBuf::from("/tmp/note.txt")]
                 );
-                view.input
-                    .update(cx, |i, cx| i.set_text("my next message".into(), cx));
-                view.draft_action(false, cx);
-                assert!(!view.summary.has_messages);
-                assert_eq!(view.input.read(cx).content, "my next message");
+                assert!(view.follow_ups.state.draft.is_none());
+                assert!(view.has_unsent_draft());
             })
             .unwrap();
         cx.run_until_parked();
         window
             .update(cx, |view, _, _| {
-                assert!(!locked(&view.store).unwrap().sessions().unwrap()[0].has_messages);
+                let store = locked(&view.store).unwrap();
+                assert!(store.follow_ups(view.summary.id).unwrap().draft.is_none());
+                assert_eq!(
+                    store.composer_draft(view.summary.id).unwrap().unwrap().text,
+                    "Review this project"
+                );
             })
             .unwrap();
     }
@@ -1143,9 +1233,11 @@ mod tests {
         let (controls, received) = std::sync::mpsc::channel();
         window
             .update(cx, |view, _, cx| {
-                view.input
-                    .update(cx, |i, cx| i.set_text("/draft send later".into(), cx));
-                view.send(cx);
+                view.follow_ups.state.draft = Some(Message {
+                    id: "saved".into(),
+                    text: "send later".into(),
+                    ..Default::default()
+                });
                 view.busy = true;
                 view.follow_ups.ready = true;
                 view.controls = Some(controls);

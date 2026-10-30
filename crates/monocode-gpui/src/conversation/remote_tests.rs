@@ -74,10 +74,6 @@ fn remote_capability_and_command_guards_keep_composer_and_attachments(cx: &mut T
             assert!(view.remote_send_guard(cx));
             assert!(view.status.contains("Plan mode"));
             view.settings.plan = false;
-            view.follow_ups.draft_selected = true;
-            assert!(view.remote_send_guard(cx));
-            assert!(view.status.contains("save drafts"));
-            view.follow_ups.draft_selected = false;
             for command in [
                 "/operator delegate this",
                 "/orchestrate a task",
@@ -237,13 +233,15 @@ impl HostFixture {
         }
     }
     fn conversation(&self, cx: &mut TestAppContext) -> Entity<Conversation> {
+        self.conversation_typing(cx, "Keep this next message")
+    }
+    fn conversation_typing(&self, cx: &mut TestAppContext, typed: &str) -> Entity<Conversation> {
         cx.update(|cx| {
             cx.new(|cx| {
                 let mut view = Conversation::new(self.summary.clone(), self.store.clone(), cx);
                 view.remote_state.client = Some(self.client.clone());
-                view.input.update(cx, |input, cx| {
-                    input.set_text("Keep this next message".into(), cx)
-                });
+                view.input
+                    .update(cx, |input, cx| input.set_text(typed.into(), cx));
                 view.load_remote(cx);
                 view
             })
@@ -303,6 +301,23 @@ fn snapshot_load_restores_host_draft_without_replacing_unsent_composer(cx: &mut 
             .unwrap()
             .iter()
             .any(|r| r["method"] == "commands.dispatch")
+    );
+}
+
+#[gpui::test]
+fn a_host_draft_moves_into_an_empty_composer_and_off_the_host(cx: &mut TestAppContext) {
+    let host = HostFixture::new(false, true);
+    let view = host.conversation_typing(cx, "");
+    host.wait(&view, cx, true);
+    cx.update(|cx| {
+        assert_eq!(view.read(cx).input.read(cx).content, "Saved host draft");
+    });
+    assert!(
+        host.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r["method"] == "commands.dispatch" && r.to_string().contains("removeDraft"))
     );
 }
 

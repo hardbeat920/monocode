@@ -6,6 +6,9 @@ pub(super) struct Metadata<'a> {
     pub busy: bool,
     live: Option<&'a Conversation>,
     draft: bool,
+    /// Unsent composer text, saved or live.
+    composer_draft: bool,
+    open: bool,
     remote_waiting: bool,
 }
 impl Metadata<'_> {
@@ -22,6 +25,14 @@ impl Metadata<'_> {
     pub(super) fn has_saved_draft(&self) -> bool {
         self.live.map_or(self.draft, Conversation::has_saved_draft)
     }
+    pub(super) fn has_composer_draft(&self) -> bool {
+        self.composer_draft
+    }
+    /// The sidebar's Draft mark: a saved draft, or text left in the composer
+    /// of a thread other than the open one.
+    pub(super) fn shows_draft(&self) -> bool {
+        self.has_saved_draft() || (self.composer_draft && !self.open)
+    }
 }
 
 impl Shell {
@@ -33,6 +44,11 @@ impl Shell {
                 || self.remote_marks.get(&id).is_some_and(|state| state.0),
             live,
             draft: self.draft_sessions.contains(&id),
+            composer_draft: live.map_or(
+                self.composer_draft_sessions.contains(&id),
+                Conversation::composer_has_draft,
+            ),
+            open: self.workspace.active == Some(id),
             remote_waiting: self.remote_marks.get(&id).is_some_and(|state| state.1),
         }
     }

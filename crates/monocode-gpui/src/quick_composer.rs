@@ -35,7 +35,7 @@ const PICKER_RESIZE: f32 = 0.24;
 const PICKER_FADE_DELAY: f32 = 0.04;
 const PICKER_FADE: f32 = 0.18;
 /// Commands the floating composer offers after a leading `/`.
-const COMMANDS: [(Command, &str); 4] = [
+const COMMANDS: [(Command, &str); 3] = [
     (
         Command::Plan,
         "Create a reviewable implementation plan before changing files.",
@@ -45,10 +45,6 @@ const COMMANDS: [(Command, &str); 4] = [
         "Give this thread access to MonoCode sessions, folders, and notes.",
     ),
     (Command::Orchestrator, "Plan and coordinate agent work."),
-    (
-        Command::Draft,
-        "Save this message without starting the agent.",
-    ),
 ];
 /// RUNTIME_MODES, with their icons and hints.
 const PERMISSIONS: [(AccessMode, &str, &str); 4] = [
@@ -1189,7 +1185,6 @@ impl QuickComposer {
             &model_name(self.kind, self.model.as_deref()),
         );
         let can_submit = self.can_submit(cx);
-        let draft = self.leading(cx) == Some(Command::Draft);
         div()
             .flex_shrink_0()
             .flex()
@@ -1314,7 +1309,7 @@ impl QuickComposer {
                         div()
                             .id("quick-send")
                             .role(Role::Button)
-                            .aria_label(if draft { "Save draft" } else { "Start" })
+                            .aria_label("Start")
                             .px(px(10.))
                             .py_1()
                             .rounded(px(6.))
@@ -1324,7 +1319,7 @@ impl QuickComposer {
                             .text_color(white(1.))
                             .when(!can_submit, |d| d.opacity(0.4))
                             .when(can_submit, |d| d.cursor_pointer())
-                            .child(if draft { "Save draft" } else { "Start" })
+                            .child("Start")
                             .on_click(cx.listener(|this, _, _, cx| this.launch(false, cx))),
                     ),
             )
@@ -2237,7 +2232,7 @@ mod tests {
                 view.workspace.base = Some("main".into());
                 view.access = AccessMode::FullAccess;
                 view.input
-                    .update(cx, |i, cx| i.set_text("/draft fix the build".into(), cx));
+                    .update(cx, |i, cx| i.set_text("/plan fix the build".into(), cx));
             })
             .unwrap();
         cx.run_until_parked();
@@ -2249,7 +2244,7 @@ mod tests {
             })
             .unwrap();
         let launch = launched.borrow_mut().take().expect("launched");
-        assert_eq!(launch.prompt, "/draft fix the build");
+        assert_eq!(launch.prompt, "/plan fix the build");
         assert!(launch.new_worktree);
         assert_eq!(launch.worktree_base.as_deref(), Some("main"));
         assert_eq!(launch.worktree_cwd, None);
