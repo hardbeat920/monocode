@@ -440,6 +440,7 @@ mod tests {
             default: false,
             tiers: Vec::new(),
             controls: Vec::new(),
+            supports_auto: None,
         }
     }
 

@@ -9,9 +9,9 @@ use crate::{
     theme::*,
 };
 use gpui::{
-    AnyElement, ClipboardItem, Context, Div, Entity, FontWeight, HighlightStyle, MouseButton, Role,
-    SharedString, Stateful, StyledText, Subscription, Task, Window, canvas, div, prelude::*, px,
-    relative, rgb,
+    Animation, AnimationExt, AnyElement, ClipboardItem, Context, Div, Entity, FontWeight,
+    HighlightStyle, MouseButton, Role, SharedString, Stateful, StyledText, Subscription, Task,
+    Window, canvas, div, prelude::*, px, relative, rgb,
 };
 use monocode_core::mobile::Status;
 use std::{
@@ -909,7 +909,11 @@ impl SettingsView {
             .child(
                 pairing_icon_action(
                     "mobile-copy-link",
-                    "Copy pairing link",
+                    if self.mobile.copied {
+                        "Copied pairing link"
+                    } else {
+                        "Copy pairing link"
+                    },
                     if self.mobile.copied {
                         "check"
                     } else {
@@ -1063,17 +1067,25 @@ fn pairing_icon_action(
         .when(!disabled, |d| {
             d.cursor_pointer().hover(|s| s.bg(content(0.08)))
         })
-        .child(
+        .child(if copied {
+            // The tick grows in as the copy lands, like the Inbox's Copy link.
             icon(path, 14.)
-                .text_color(if copied {
-                    rgb(EMERALD).into()
-                } else {
-                    content(0.45)
-                })
-                .when(!disabled && !copied, |i| {
+                .text_color(rgb(EMERALD))
+                .with_animation(
+                    "mobile-copied-tick",
+                    Animation::new(Duration::from_millis(260))
+                        .with_easing(|t| 1. - (1. - t).powi(3)),
+                    |svg, t| svg.size(px(14. * (0.5 + 0.5 * t))).opacity(t),
+                )
+                .into_any_element()
+        } else {
+            icon(path, 14.)
+                .text_color(content(0.45))
+                .when(!disabled, |i| {
                     i.group_hover("pairing-icon-action", |s| s.text_color(content(1.)))
-                }),
-        )
+                })
+                .into_any_element()
+        })
 }
 
 /// Modal.tsx's stationary GlassBackdrop, below the scrolling content.

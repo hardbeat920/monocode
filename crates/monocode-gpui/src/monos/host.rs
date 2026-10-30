@@ -12,7 +12,6 @@ enum Effect {
         Box<Settings>,
         String,
         bool,
-        bool,
         Option<(i64, crate::pane_layout::Edge)>,
     ),
     Groups(String, Groups),
@@ -113,7 +112,7 @@ impl Monos {
                                 owner.mono_apply_groups(project, groups, cx)
                             });
                         }
-                        Effect::Start(summary, settings, _prompt, draft, reveal, placement) => {
+                        Effect::Start(summary, settings, _prompt, draft, placement) => {
                             let id = summary.id;
                             let caller = call.session;
                             let origin = this
@@ -145,16 +144,18 @@ impl Monos {
                             });
                             this.save(cx);
                             this.group_launch(&mono_id, id, cx);
+                            // Like Tauri, Mono launches stay in the background
+                            // even if the agent asks to reveal a tab. Only an
+                            // explicit split places a new session in the workspace.
                             if placement.is_some() {
                                 let _ = this.owner.update(cx, |owner, cx| {
                                     owner.app_place_launch(id, placement, true, window, cx)
                                 });
-                            } else if reveal {
-                                this.open_workspace(id, window, cx);
                             }
                         }
                     }
                     this.reload_files(&mono_id, cx);
+                    this.refresh_cards(cx);
                     this.changed(cx);
                     value
                 });
@@ -343,7 +344,6 @@ impl Monos {
                     }
                 };
                 let draft = flag(&input, "draft", false);
-                let reveal = flag(&input, "reveal", false);
                 let request = call.request_id.clone();
                 self.call_work(
                     call,
@@ -379,14 +379,7 @@ impl Monos {
                         summary.has_messages = true;
                         Ok((
                             json!({"sessionId":summary.id,"accepted":true,"project":project}),
-                            Effect::Start(
-                                summary,
-                                Box::new(settings),
-                                prompt,
-                                draft,
-                                reveal,
-                                placement,
-                            ),
+                            Effect::Start(summary, Box::new(settings), prompt, draft, placement),
                         ))
                     },
                     cx,

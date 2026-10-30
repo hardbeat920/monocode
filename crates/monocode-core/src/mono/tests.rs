@@ -160,3 +160,28 @@ fn delivery_receipt_is_saved_with_the_user_message() {
         Some("1")
     );
 }
+
+#[test]
+fn context_shows_how_to_delegate_without_running_help() {
+    let mono = Mono {
+        projects: vec!["/repo".into()],
+        ..Default::default()
+    };
+    let text = context(
+        &mono,
+        &files::AgentFiles {
+            id: mono.id.clone(),
+            dir: String::new(),
+            soul: Some(DEFAULT_SOUL.into()),
+            soul_hash: String::new(),
+            memory: String::new(),
+            memory_hash: String::new(),
+            memory_path: String::new(),
+            topics: Vec::new(),
+        },
+        std::path::Path::new("/Applications/Monocode.app/monocode"),
+    );
+    assert!(text.contains(
+        r#"/Applications/Monocode.app/monocode app sessions.start --json '{"project":"<assigned path>","title":"<short title>","prompt":"<complete instructions>","notifyOnComplete":true}'"#
+    ));
+}

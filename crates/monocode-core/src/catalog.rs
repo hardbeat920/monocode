@@ -1,6 +1,7 @@
 //! The same live model catalogs the React model picker queries. No inference.
 mod claude;
 use crate::{
+    agent::AccessMode,
     process,
     provider::{self, Kind},
 };
@@ -119,6 +120,7 @@ fn remote_catalog_response(value: &Value, providers: Vec<Kind>) -> Result<Remote
                     }
                     let mut model = model(id, row["name"].as_str().unwrap_or(id));
                     model.default = row["isDefault"] == true || rows.first() == Some(row);
+                    model.supports_auto = row["supportsAuto"].as_bool();
                     for setting in row["settings"].as_array().into_iter().flatten() {
                         let Some(id) = setting["id"].as_str() else {
                             continue;
@@ -188,6 +190,10 @@ pub struct Model {
     pub tiers: Vec<(String, String)>,
     #[serde(default)]
     pub controls: Vec<ModelControl>,
+    /// Whether Auto approval works with this model; unset means the provider
+    /// doesn't say.
+    #[serde(default)]
+    pub supports_auto: Option<bool>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ModelControl {
@@ -196,6 +202,77 @@ pub struct ModelControl {
     pub current: String,
     pub choices: Vec<(String, String)>,
 }
+/// Approval modes, least to most permissive. Read-only sits outside them.
+const APPROVAL_MODES: &[AccessMode] = &[
+    AccessMode::Supervised,
+    AccessMode::AutoAcceptEdits,
+    AccessMode::Auto,
+    AccessMode::FullAccess,
+];
+/// Approval modes each provider honors; its adapter treats the rest like
+/// another mode. Pi, omp and fx have no approval levels.
+fn provider_access_modes(kind: Kind) -> &'static [AccessMode] {
+    const EDITS: &[AccessMode] = &[
+        AccessMode::Supervised,
+        AccessMode::AutoAcceptEdits,
+        AccessMode::FullAccess,
+    ];
+    match kind {
+        Kind::Claude | Kind::Codex | Kind::Devin | Kind::Grok => APPROVAL_MODES,
+        Kind::Cursor | Kind::OpenCode | Kind::Antigravity | Kind::Hermes => EDITS,
+        Kind::Pi | Kind::Omp | Kind::Fx => &[],
+    }
+}
+
+/// The catalog entry a launch runs with: the named model (or the concrete
+/// model behind an alias), else the provider's default.
+pub fn launch_model<'a>(models: &'a [Model], id: Option<&str>) -> Option<&'a Model> {
+    match id {
+        Some(id) => models.iter().find(|m| m.id == id).or_else(|| {
+            models
+                .iter()
+                .find(|m| m.alias_target.as_deref() == Some(id))
+        }),
+        None => models.iter().find(|m| m.default).or_else(|| models.first()),
+    }
+}
+
+/// Approval modes offered for a model, in picker order. Auto also needs the
+/// model: Claude only reports `supportsAutoMode` when it is true, so an
+/// unconfirmed model (no catalog yet, or an older CLI) is treated as
+/// unsupported rather than risking a turn the CLI rejects. Other providers
+/// don't report per-model support, so they follow the provider.
+pub fn access_modes(kind: Kind, model: Option<&Model>) -> Vec<AccessMode> {
+    let supported = model.and_then(|m| m.supports_auto);
+    let auto = if kind == Kind::Claude {
+        supported == Some(true)
+    } else {
+        supported != Some(false)
+    };
+    provider_access_modes(kind)
+        .iter()
+        .copied()
+        .filter(|mode| *mode != AccessMode::Auto || auto)
+        .collect()
+}
+
+/// The mode a turn runs with. The saved mode stays the user's choice; when the
+/// model doesn't offer it, step down to the closest offered mode before it
+/// (Full access → Auto → Auto-accept edits → Supervised). Read-only always applies.
+pub fn supported_access(kind: Kind, model: Option<&Model>, access: AccessMode) -> AccessMode {
+    if access == AccessMode::ReadOnly {
+        return access;
+    }
+    let offered = access_modes(kind, model);
+    APPROVAL_MODES
+        .iter()
+        .rev()
+        .skip_while(|mode| **mode != access)
+        .find(|mode| offered.contains(mode))
+        .copied()
+        .unwrap_or_default()
+}
+
 #[derive(Default)]
 struct CatalogCache {
     entries: Vec<(Kind, crate::accounts::Profile, Vec<Model>, Instant)>,
@@ -335,6 +412,7 @@ pub fn models_for(kind: Kind, account: &crate::accounts::Profile) -> Result<Vec<
                     default: row["isDefault"] == true,
                     tiers,
                     controls: Vec::new(),
+                    supports_auto: None,
                 })
             })
             .collect()
@@ -381,6 +459,7 @@ fn model(id: &str, name: &str) -> Model {
         default: false,
         tiers: Vec::new(),
         controls: Vec::new(),
+        supports_auto: None,
     }
 }
 fn leaves<'a>(values: &'a Value, out: &mut Vec<&'a Value>) {
@@ -918,7 +997,7 @@ mod tests {
                 {"id":"serviceTier","kind":"select","value":"default","options":[{"value":"default","label":"Standard"},{"value":"fast","label":"Fast"}]},
                 {"id":"context","label":"Context window","kind":"select","value":"1m","options":[{"value":"1m","label":"1M"}]}]},
                 {"id":"codex:gpt-test","name":"Duplicate"}],
-            "claude":[{"id":"claude:opus","name":"Opus","settings":[{"id":"fast","kind":"toggle"},{"id":"thinking","kind":"toggle"}]}]
+            "claude":[{"id":"claude:opus","name":"Opus","supportsAuto":true,"settings":[{"id":"fast","kind":"toggle"},{"id":"thinking","kind":"toggle"}]}]
         },"errors":{"devin":"Sign in on the host"}}), vec![Kind::Codex,Kind::Claude,Kind::Devin]).unwrap();
         assert_eq!(catalog.models[&Kind::Codex].len(), 1);
         let model = &catalog.models[&Kind::Codex][0];
@@ -931,8 +1010,102 @@ mod tests {
         assert_eq!(model.controls[0].current, "1m");
         assert!(catalog.models[&Kind::Claude][0].fast);
         assert!(catalog.models[&Kind::Claude][0].thinking);
+        assert_eq!(catalog.models[&Kind::Claude][0].supports_auto, Some(true));
+        assert_eq!(model.supports_auto, None);
         assert_eq!(catalog.errors[&Kind::Devin], "Sign in on the host");
         assert!(!catalog.models.contains_key(&Kind::Cursor));
+    }
+    #[test]
+    fn access_modes_follow_the_provider_and_claude_models_that_confirm_auto() {
+        use AccessMode::*;
+        let mut auto = model("claude-opus-5-5", "Opus");
+        auto.supports_auto = Some(true);
+        let mut manual = model("claude-haiku-4-5", "Haiku");
+        manual.supports_auto = Some(false);
+        let unconfirmed = model("claude-sonnet-5", "Sonnet");
+        assert_eq!(
+            access_modes(Kind::Claude, Some(&auto)),
+            [Supervised, AutoAcceptEdits, Auto, FullAccess]
+        );
+        assert_eq!(
+            access_modes(Kind::Claude, Some(&manual)),
+            [Supervised, AutoAcceptEdits, FullAccess]
+        );
+        assert!(!access_modes(Kind::Claude, Some(&unconfirmed)).contains(&Auto));
+        assert!(!access_modes(Kind::Claude, None).contains(&Auto));
+        // Providers that don't report per-model support follow the provider.
+        assert!(access_modes(Kind::Codex, None).contains(&Auto));
+        assert!(access_modes(Kind::Devin, None).contains(&Auto));
+        assert!(access_modes(Kind::Grok, Some(&unconfirmed)).contains(&Auto));
+        assert!(!access_modes(Kind::Codex, Some(&manual)).contains(&Auto));
+        assert_eq!(
+            access_modes(Kind::Cursor, None),
+            [Supervised, AutoAcceptEdits, FullAccess]
+        );
+        for kind in [Kind::Pi, Kind::Omp, Kind::Fx] {
+            assert!(access_modes(kind, None).is_empty());
+        }
+    }
+    #[test]
+    fn unsupported_access_steps_down_to_the_closest_offered_mode() {
+        use AccessMode::*;
+        let mut manual = model("claude-haiku-4-5", "Haiku");
+        manual.supports_auto = Some(false);
+        assert_eq!(
+            supported_access(Kind::Claude, Some(&manual), Auto),
+            AutoAcceptEdits
+        );
+        assert_eq!(
+            supported_access(Kind::Claude, Some(&manual), FullAccess),
+            FullAccess
+        );
+        assert_eq!(supported_access(Kind::Claude, None, Auto), AutoAcceptEdits);
+        assert_eq!(supported_access(Kind::Codex, None, Auto), Auto);
+        assert_eq!(supported_access(Kind::Hermes, None, Auto), AutoAcceptEdits);
+        assert_eq!(supported_access(Kind::Pi, None, FullAccess), Supervised);
+        assert_eq!(supported_access(Kind::Pi, None, ReadOnly), ReadOnly);
+        assert_eq!(supported_access(Kind::Claude, None, ReadOnly), ReadOnly);
+    }
+    #[test]
+    fn saved_concrete_model_uses_explicit_claude_alias_capabilities() {
+        let mut models = claude::models(&json!([
+            {"value":"opus","resolvedModel":"claude-opus-5-5","supportsAutoMode":true}
+        ]));
+        let saved = crate::store::native_model("claude:opus-5-5", "claude").unwrap();
+        let effective = |models: &[Model], id: &str| {
+            supported_access(
+                Kind::Claude,
+                launch_model(models, Some(id)),
+                AccessMode::Auto,
+            )
+        };
+        assert_eq!(effective(&models, &saved), AccessMode::Auto);
+        assert_eq!(
+            effective(&models, "claude-opus-5"),
+            AccessMode::AutoAcceptEdits
+        );
+        // An exact entry wins even when the alias appears first and confirms Auto.
+        let mut exact = model(&saved, "Opus 5.5");
+        exact.supports_auto = Some(false);
+        models.push(exact);
+        assert_eq!(effective(&models, &saved), AccessMode::AutoAcceptEdits);
+        models[1].supports_auto = None;
+        assert_eq!(effective(&models, &saved), AccessMode::AutoAcceptEdits);
+    }
+    #[test]
+    fn launch_model_matches_aliases_and_falls_back_to_the_default() {
+        let mut alias = model("opus", "Opus");
+        alias.alias_target = Some("claude-opus-5-5".into());
+        let mut default = model("claude-sonnet-5", "Sonnet");
+        default.default = true;
+        let models = [alias, default];
+        assert_eq!(launch_model(&models, Some("opus")).unwrap().id, "opus");
+        assert_eq!(
+            launch_model(&models, Some("claude-opus-5-5")).unwrap().id,
+            "opus"
+        );
+        assert_eq!(launch_model(&models, None).unwrap().id, "claude-sonnet-5");
+        assert!(launch_model(&models, Some("claude-unknown")).is_none());
     }
     #[test]
     fn acp_catalogs_accept_grouped_options_and_legacy_models() {

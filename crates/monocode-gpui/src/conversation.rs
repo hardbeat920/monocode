@@ -19,6 +19,7 @@ mod response_menu;
 #[cfg(test)]
 mod submission_tests;
 mod title;
+mod worktree_naming;
 use crate::{
     composer_motion::ComposerMotion,
     git_picker::{GitPicker, Mode as GitMode, Picked as GitPicked},
@@ -59,6 +60,7 @@ use std::{
 // Keep empty and docked composers aligned with the transcript column. Below
 // this width the empty session drops its title.
 const COMPOSER_COLUMN: f32 = COLUMN;
+const COMPOSER_RADIUS: f32 = 12.;
 // RUNTIME_MODE_LABEL and RUNTIME_MODE_HINT from the React session model,
 // with AccessPicker's icons; Full access is amber.
 const ACCESS_MODES: &[(&str, &str, &str, &str)] = &[
@@ -228,6 +230,7 @@ pub(crate) struct Conversation {
     runner: Option<Entity<crate::composer_runner::Runner>>,
     cancel: Arc<AtomicBool>,
     title_cancel: Option<Arc<AtomicBool>>,
+    worktree_name_cancel: Option<Arc<AtomicBool>>,
     _submission: Subscription,
     _alternate_submission: Subscription,
     response_events: Option<Subscription>,
@@ -236,6 +239,9 @@ pub(crate) struct Conversation {
 }
 impl Drop for Conversation {
     fn drop(&mut self) {
+        if let Some(cancel) = self.worktree_name_cancel.take() {
+            cancel.store(true, Ordering::Relaxed);
+        }
         if !self.summary.cwd.starts_with("remote://") {
             self.cancel.store(true, Ordering::Relaxed);
         }
@@ -666,6 +672,7 @@ impl Conversation {
             runner: None,
             cancel: Arc::new(AtomicBool::new(false)),
             title_cancel: None,
+            worktree_name_cancel: None,
             _submission: submission,
             _alternate_submission: alternate_submission,
             response_events: None,
@@ -1052,7 +1059,22 @@ impl Conversation {
         }
         self.settings.usage_limit = None;
         self.attach_account(cx);
+        let worktree_message = if prompt.trim().is_empty() {
+            self.settings
+                .attachments
+                .iter()
+                .chain(&self.attachments)
+                .filter_map(|path| path.file_name())
+                .map(|name| name.to_string_lossy())
+                .collect::<Vec<_>>()
+                .join(", ")
+        } else {
+            prompt.clone()
+        };
         if !self.is_remote() {
+            if !self.summary.has_messages {
+                self.generate_worktree_branch(&worktree_message, cx);
+            }
             self.generate_title(&prompt, cx);
         }
         let model_label = self.model_label();
@@ -1197,6 +1219,7 @@ impl Conversation {
                             this.settings.worktree_cwd = Some(cwd);
                             this.settings.new_worktree = false;
                             this.save_settings(cx);
+                            this.generate_worktree_branch(&worktree_message, cx);
                             this.refresh_git(cx);
                         }
                         if let Some(commands) = update.commands.filter(|_| source_selected) {
@@ -2719,7 +2742,7 @@ impl Conversation {
         Some(runner)
     }
     fn composer(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
-        let radius = 12.;
+        let radius = COMPOSER_RADIUS;
         let command = if self.follow_ups.draft_selected {
             Some(input::Command::Draft)
         } else if self.settings.orchestrator {
@@ -2738,6 +2761,7 @@ impl Conversation {
             .try_global::<crate::settings::Preferences>()
             .is_some_and(|p| p.model_controls == "beside");
         let trigger_effort = (!beside).then(|| self.trigger_effort_label()).flatten();
+        let access = self.supported_access();
         let controls = if beside {
             self.model_controls(cx)
         } else {
@@ -2949,7 +2973,7 @@ impl Conversation {
                                         tool_pill("composer-access", "Access")
                                             .aria_label(format!(
                                                 "Access, {}",
-                                                self.settings.access.label()
+                                                access.label()
                                             ))
                                             .aria_expanded(self.menu_is(ComposerMenu::Access))
                                             .child(self.access_anchor.probe())
@@ -2958,7 +2982,7 @@ impl Conversation {
                                             }))
                                             .child(
                                                 icon(
-                                                    match self.settings.access {
+                                                    match access {
                                                         AccessMode::FullAccess => "shield-alert",
                                                         AccessMode::AutoAcceptEdits => {
                                                             "pencil-edit"
@@ -2969,8 +2993,7 @@ impl Conversation {
                                                     14.,
                                                 )
                                                 .text_color(
-                                                    if self.settings.access
-                                                        == AccessMode::FullAccess
+                                                    if access == AccessMode::FullAccess
                                                     {
                                                         tint(AMBER_400, 0.9)
                                                     } else {
@@ -2978,7 +3001,7 @@ impl Conversation {
                                                     },
                                                 ),
                                             )
-                                            .child(pill_label(self.settings.access.label()))
+                                            .child(pill_label(access.label()))
                                             .child(icon("chevron-down", 12.)),
                                     ),
                             )
@@ -3949,6 +3972,7 @@ mod menu_tests {
                     default: true,
                     tiers: Vec::new(),
                     controls: Vec::new(),
+                    supports_auto: None,
                 }];
                 cx.set_global(crate::settings::Preferences::default());
                 cx.notify();
@@ -3983,6 +4007,66 @@ mod menu_tests {
     }
 
     #[gpui::test]
+    fn access_menu_offers_auto_only_where_the_model_supports_it(cx: &mut TestAppContext) {
+        let window = conversation(cx);
+        window
+            .update(cx, |view, _, _| {
+                let offered = |view: &Conversation| {
+                    view.mono_access_options()
+                        .into_iter()
+                        .filter_map(|item| match item {
+                            MenuItem::Action(a) => Some((a.id.to_string(), a.checked)),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                };
+                let ids = |view: &Conversation| {
+                    offered(view)
+                        .into_iter()
+                        .map(|(id, _)| id)
+                        .collect::<Vec<_>>()
+                };
+                let model = |id: &str, supports_auto| Model {
+                    alias_target: None,
+                    id: id.into(),
+                    name: id.into(),
+                    efforts: Vec::new(),
+                    default_effort: None,
+                    fast: false,
+                    thinking: false,
+                    default: false,
+                    tiers: Vec::new(),
+                    controls: Vec::new(),
+                    supports_auto,
+                };
+                view.summary.provider = "claude".into();
+                view.catalog = vec![
+                    model("claude-opus-5-5", Some(true)),
+                    model("claude-haiku-4-5", Some(false)),
+                ];
+                view.model = Some("claude-opus-5-5".into());
+                view.settings.access = AccessMode::Auto;
+                assert!(ids(view).contains(&"access:auto".to_string()));
+                assert_eq!(view.supported_access(), AccessMode::Auto);
+
+                // The saved choice is kept; the model that can't do it shows
+                // and runs with the closest mode before it.
+                view.model = Some("claude-haiku-4-5".into());
+                assert!(!ids(view).contains(&"access:auto".to_string()));
+                assert_eq!(view.supported_access(), AccessMode::AutoAcceptEdits);
+                assert_eq!(view.settings.access, AccessMode::Auto);
+                assert!(offered(view).contains(&("access:auto-accept-edits".into(), true)));
+
+                view.summary.provider = "pi".into();
+                view.catalog.clear();
+                view.model = None;
+                assert_eq!(ids(view), ["access:read-only", "access:supervised"]);
+                assert_eq!(view.supported_access(), AccessMode::Supervised);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
     fn composer_labels_use_the_saved_model_effort_and_the_catalog_default(cx: &mut TestAppContext) {
         let window = conversation(cx);
         window
@@ -4004,6 +4088,7 @@ mod menu_tests {
                     default: true,
                     tiers: Vec::new(),
                     controls: Vec::new(),
+                    supports_auto: None,
                 });
                 assert_eq!(view.model_label(), "GPT-6.1 Sol");
                 assert_eq!(view.trigger_effort_label().as_deref(), Some("Extra High"));
@@ -4099,6 +4184,7 @@ mod menu_tests {
                         current: "1m".into(),
                         choices: vec![("1m".into(), "1M".into())],
                     }],
+                    supports_auto: None,
                 };
                 view.make_response_menu(
                     1,

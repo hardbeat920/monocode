@@ -351,6 +351,9 @@ impl Shell {
         monocode_core::provider::configure_idle_agents(
             self.workspace.preferences.idle_agents as usize,
         );
+        monocode_core::accounts::set_claude_entrypoint(
+            self.workspace.preferences.claude_entrypoint,
+        );
         if let Some(monos) = &self.monos {
             let prefs = self.workspace.preferences.clone();
             monos.update(cx, |m, cx| m.set_preferences(prefs, cx));

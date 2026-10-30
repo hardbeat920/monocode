@@ -161,14 +161,12 @@ pub fn command_action(command: &str) -> Option<String> {
     {
         parts = words(&parts[2])?;
     }
-    if parts
+    let executable = parts
         .first()?
         .rsplit(['/', '\\'])
         .next()?
-        .trim_end_matches(".exe")
-        != "monocode"
-        || parts.get(1)? != "app"
-    {
+        .trim_end_matches(".exe");
+    if !matches!(executable, "monocode" | "monocode-gpui") || parts.get(1)? != "app" {
         return None;
     }
     for flags in parts[3.min(parts.len())..].chunks(2) {
@@ -296,6 +294,29 @@ impl super::Mono {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_app_commands_recognize_the_packaged_executable() {
+        for command in [
+            "monocode-gpui app sessions.start --json '{}'",
+            r#"'/Applications/Monocode Native.app/Contents/MacOS/monocode-gpui' app sessions.start --json '{}'"#,
+            r#"/bin/zsh -lc 'monocode-gpui app sessions.start --json "{}"'"#,
+            "C:/Mono/monocode-gpui.exe app sessions.start --json '{}'",
+        ] {
+            assert_eq!(
+                command_action(command).as_deref(),
+                Some("sessions.start"),
+                "{command}"
+            );
+        }
+        for command in [
+            "echo monocode-gpui app sessions.start",
+            "other-app app sessions.start",
+            "monocode-gpui app sessions.start && echo done",
+        ] {
+            assert_eq!(command_action(command), None, "{command}");
+        }
+    }
+
     fn details(id: &str) -> Value {
         json!({"sessionId":id,"cwd":"/repo","title":"Review","harness":"codex","model":"gpt-6"})
     }

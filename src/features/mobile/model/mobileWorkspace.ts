@@ -66,6 +66,12 @@ import {
 import { isHarnessAvailable } from "../../../integrations/harness/core/availability";
 import { mobileTranscript } from "./mobileTranscript";
 import {
+  CUSTOM_OPTION_ID,
+  buildQuestionReply,
+  type UserQuestionPrompt,
+  type UserQuestionReply,
+} from "../../sessions/model/userQuestion";
+import {
   mobileAccountChoice,
   mobileProviderAccounts,
   mobileSessionAccountId,
@@ -274,6 +280,15 @@ export async function mobileConversation(
         })
       : [],
     busy: !!session?.busy,
+    // What the agent asks, for the phone to answer as the desktop's card does.
+    question: session?.pendingQuestion
+      ? {
+          requestId: session.pendingQuestion.requestId,
+          title: session.pendingQuestion.title,
+          questions: session.pendingQuestion.questions,
+          autoResolveAt: session.pendingQuestion.autoResolveAt,
+        }
+      : null,
   };
 }
 
@@ -367,6 +382,41 @@ export function mobileChoice(params: Record<string, unknown>): {
     ...(modelSettings ? { modelSettings } : {}),
     ...(runtimeMode ? { runtimeMode } : {}),
   };
+}
+
+/**
+ * The phone's answers to a question, keeping only the questions and options it
+ * asked, and rebuilt as the desktop's card builds them. Undefined when malformed,
+ * including answers that leave nothing answered: only an explicit skip skips.
+ */
+export function mobileQuestionReply(
+  value: unknown,
+  prompt: UserQuestionPrompt,
+): UserQuestionReply | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return;
+  const reply = value as Record<string, unknown>;
+  if (reply.kind === "skipped") return { kind: "skipped" };
+  if (reply.kind !== "answered") return;
+  const answers: Record<string, string[]> = {};
+  const custom: Record<string, string> = {};
+  const record = (field: unknown) =>
+    field && typeof field === "object" && !Array.isArray(field)
+      ? (field as Record<string, unknown>)
+      : {};
+  for (const question of prompt.questions) {
+    const selected = record(reply.answers)[question.id];
+    if (Array.isArray(selected))
+      answers[question.id] = selected.filter(
+        (id): id is string =>
+          (id === CUSTOM_OPTION_ID && question.allowCustom) ||
+          question.options.some((option) => option.id === id),
+      );
+    const text = record(reply.custom)[question.id];
+    if (typeof text === "string" && text.length <= 10_000)
+      custom[question.id] = text;
+  }
+  const rebuilt = buildQuestionReply(prompt.questions, answers, custom);
+  return rebuilt.kind === "answered" ? rebuilt : undefined;
 }
 
 /** A new session from the phone, set to the model sheet's choice if it made one. */

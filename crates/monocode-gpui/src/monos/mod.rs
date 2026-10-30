@@ -4,6 +4,7 @@ pub(crate) mod avatar;
 pub(crate) mod cards;
 mod changes;
 mod color_picker;
+mod dashboard;
 mod files;
 mod filters;
 mod floating;
@@ -95,6 +96,11 @@ pub(crate) struct Monos {
     original_chrome: bool,
     overview_tab: OverviewTab,
     overview_previous: OverviewTab,
+    /// When the Overview tab last appeared for a Mono, so its graph draws in.
+    dashboard_shown: Option<(String, std::time::Instant)>,
+    /// Each Mono's contributions as last loaded, and those loading now.
+    contributions: HashMap<String, dashboard::Loaded>,
+    contributions_loading: HashSet<String>,
     overview_reveal: Option<crate::project_tabs::TabReveal<OverviewTab>>,
     route: Option<Route>,
     settings: Option<SettingsSection>,
@@ -322,8 +328,11 @@ impl Monos {
             notice_region,
             details,
             original_chrome: false,
-            overview_tab: OverviewTab::Sessions,
-            overview_previous: OverviewTab::Sessions,
+            overview_tab: OverviewTab::Overview,
+            overview_previous: OverviewTab::Overview,
+            dashboard_shown: None,
+            contributions: HashMap::new(),
+            contributions_loading: HashSet::new(),
             overview_reveal: None,
             route: None,
             settings: None,
@@ -442,6 +451,13 @@ impl Monos {
         self.details
             .update(cx, |view, cx| view.set_original_chrome(original, cx));
         cx.notify();
+    }
+    /// The session the details panel shows as a page, if any.
+    pub(crate) fn routed_session(&self) -> Option<i64> {
+        match self.route {
+            Some(Route::Session(id)) => Some(id),
+            _ => None,
+        }
     }
     pub(crate) fn overview_chrome(&self) -> OverviewChrome {
         let counts = self.current().map_or((0, 0, 0, 0), |mono| {

@@ -104,6 +104,66 @@ unrelated files of the Windows build.
 
 Client-decorated Linux and the Windows 11 Snap Layouts flyout were not checked.
 
+## Preview 10 candidate — October 29, 2026
+
+The code at [`bc8c73da`](https://github.com/hardbeat920/monocode/commit/bc8c73daa3eeea03171a402ecdca5f1d1f7e89e7)
+passed the complete native check locally on macOS Apple Silicon with Rust
+1.99.1, matching the toolchain used by the native CI run. This covers the changes
+since `native-v0.16.0-preview.9`.
+
+All jobs in the [native preview workflow](https://github.com/hardbeat920/monocode/actions/runs/40900397284)
+and [main CI workflow](https://github.com/hardbeat920/monocode/actions/runs/40900397314)
+also passed for this commit. Native Core checks passed on macOS, Linux and
+Windows; the native desktop formatting, Clippy, tests and build passed on macOS.
+
+| Check | Result |
+| --- | --- |
+| Native script tests | 29 passed |
+| Native workspace formatting | Passed |
+| Strict Clippy for core and GPUI, all targets | Passed |
+| Native core tests | 640 passed, 2 ignored |
+| GPUI tests, run serially | 747 passed, 11 ignored |
+| Native macOS build, `native-dev` profile | Passed |
+
+The final checks used:
+
+```sh
+RUSTUP_TOOLCHAIN=1.99.1 npm run native:check
+cargo +1.99.1 build --manifest-path crates/monocode-gpui/Cargo.toml --locked -p monocode-gpui --profile native-dev
+```
+
+Local fixtures required permission to open loopback sockets and inspect
+processes.
+
+These results cover automated fixtures and a local development-profile build.
+Preview 10 installers, signing/notarization, packaged upgrades, live heartbeat
+and background delegation behavior, and live Hermes reasoning-effort behavior
+have not been validated by these checks. Linux and Windows runtime coverage
+remains as recorded above and in [preview limitations](parity.md).
+
+### Review fixes
+
+The pre-release review fixes retain a Mono's selected permissions for heartbeat
+runs, exclude read-only GitHub review lookups from contribution counts, and
+resolve commit IDs and line counts in the command's checkout. Regression cases
+cover all five permission modes, submitted versus pending reviews, quoted and
+repeated `git -C` options, explicit tool working directories and commits batched
+across multiple checkouts. The permission fixture also exposed and now covers
+a crash when rendering the Mono's usage-limit notice.
+
+Local revalidation with Rust 1.99.1 passed 29 native script tests, 644 core tests
+(2 ignored), and 748 GPUI tests (11 ignored). Native workspace formatting,
+strict Clippy for core and GPUI across all targets, and the macOS `native-dev`
+build passed.
+The linked CI runs above cover the `bc8c73da` baseline; these additional review
+fixes were checked locally.
+
+The first candidate CI run exposed a timing race in the existing split-pane
+animation test: keyboard simulation could finish the animation before the test
+froze its elapsed time. The fixture now creates and freezes the split in one
+update, retaining its mid-slide and settled-layout assertions. Keyboard split
+behavior remains covered by the separate split-and-drag interaction test.
+
 ## Local checks
 
 Run the complete native check from the repository root:
