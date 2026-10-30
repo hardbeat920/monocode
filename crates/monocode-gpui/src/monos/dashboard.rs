@@ -3,18 +3,16 @@
 //! what it made today.
 use super::*;
 use crate::right_panel::{DIFF_ADD, DIFF_DEL, format_integer, tabular};
+use crate::runtime::{Database, locked};
 use crate::visuals::dither::{
     Align, CELL, Grid, Label, Motion, glow, hoverable, inked, pointer, readout,
 };
-use crate::runtime::{Database, locked};
 use chrono::{DateTime, Datelike, Duration as Days, Local, NaiveDate};
+use gpui::{Bounds, Div, FontWeight, Hsla, canvas, point, size};
 use monocode_core::contributions::{self, Contribution, Kind};
+use monocode_core::time::{now_ms, relative};
 use std::collections::HashSet;
 use std::sync::Arc;
-use gpui::{
-    Bounds, Div, FontWeight, Hsla, canvas, point, size,
-};
-use monocode_core::time::{now_ms, relative};
 use std::time::Instant;
 
 /// One day of a Mono's code contributions.
@@ -191,9 +189,7 @@ fn check_landed(store: &Database, sessions: &[i64]) {
 
 /// The Sunday that opens the graph's first week.
 fn first_day(today: NaiveDate) -> NaiveDate {
-    today
-        - Days::days(today.weekday().num_days_from_sunday() as i64)
-        - Days::weeks(WEEKS - 1)
+    today - Days::days(today.weekday().num_days_from_sunday() as i64) - Days::weeks(WEEKS - 1)
 }
 
 /// Calendar intensity, 0 for an empty day and 1 to 4 by quartile of the
@@ -341,7 +337,13 @@ fn graph(days: Arc<Vec<Day>>, tint: Hsla, motion: Motion) -> AnyElement {
             let legend_y = grid.origin.y.as_f32() + 7. * pitch + LEGEND / 2. + 2.;
             let more = Label::mono(10., content(0.4));
             let edge = (grid.origin.x.as_f32() + fits as f32 * pitch - CELL).round();
-            more.paint("More", point(px(edge), px(legend_y)), Align::Right, window, cx);
+            more.paint(
+                "More",
+                point(px(edge), px(legend_y)),
+                Align::Right,
+                window,
+                cx,
+            );
             let right = edge - more.measure("More", window) - 6.;
             let swatches = (right - 5. * pitch + CELL).round();
             more.paint(
@@ -361,7 +363,11 @@ fn graph(days: Arc<Vec<Day>>, tint: Hsla, motion: Motion) -> AnyElement {
                 if x >= SQUARE || level > 4 {
                     return None;
                 }
-                Some(if inked(x, row, TONES[level]) { tint } else { track })
+                Some(if inked(x, row, TONES[level]) {
+                    tint
+                } else {
+                    track
+                })
             });
             if let Some((c, r, ix)) = hovered {
                 let d = &days[ix];
@@ -463,7 +469,12 @@ fn figure(text: String) -> Div {
 impl Monos {
     /// The Mono's contributions as last loaded, reloading them in the
     /// background once they are stale. Drawing never touches the store.
-    fn contributions_for(&mut self, mono: &Mono, today: NaiveDate, cx: &mut Context<Self>) -> (Arc<Vec<Day>>, usize) {
+    fn contributions_for(
+        &mut self,
+        mono: &Mono,
+        today: NaiveDate,
+        cx: &mut Context<Self>,
+    ) -> (Arc<Vec<Day>>, usize) {
         let loaded = self.contributions.get(&mono.id);
         let stale = loaded.is_none_or(|l| l.at.elapsed() > FRESH);
         if stale && self.contributions_loading.insert(mono.id.clone()) {
@@ -561,13 +572,17 @@ impl Monos {
         // Identity, with a live line about what it is doing right now.
         let (live, ticker) = match (state, busy.first()) {
             ("needs-you", _) => (true, "Waiting for your input".to_string()),
-            (_, Some(v)) if busy.len() > 1 => {
-                (true, format!("Working on {} +{} more", v.title, busy.len() - 1))
-            }
+            (_, Some(v)) if busy.len() > 1 => (
+                true,
+                format!("Working on {} +{} more", v.title, busy.len() - 1),
+            ),
             (_, Some(v)) => (true, format!("Working on {}", v.title)),
             ("working", None) => (true, "Thinking…".to_string()),
             _ => match mine.iter().map(|v| v.updated_at).max().filter(|t| *t > 0) {
-                Some(at) => (false, format!("Idle · last active {} ago", relative(at, now))),
+                Some(at) => (
+                    false,
+                    format!("Idle · last active {} ago", relative(at, now)),
+                ),
                 None => (false, "Idle".to_string()),
             },
         };
@@ -626,13 +641,13 @@ impl Monos {
                                 content(0.55)
                             })
                             .when(live, |d| {
-                                d.child(
-                                    div()
-                                        .size(px(6.))
-                                        .flex_shrink_0()
-                                        .rounded_full()
-                                        .bg(if state == "needs-you" { accent_color() } else { tint }),
-                                )
+                                d.child(div().size(px(6.)).flex_shrink_0().rounded_full().bg(
+                                    if state == "needs-you" {
+                                        accent_color()
+                                    } else {
+                                        tint
+                                    },
+                                ))
                             })
                             .child(div().min_w_0().truncate().child(ticker)),
                     ),
@@ -685,7 +700,12 @@ impl Monos {
         let ran_today: usize = self
             .habits
             .iter()
-            .map(|h| h.runs.iter().filter(|r| local_day(r.at) == Some(today)).count())
+            .map(|h| {
+                h.runs
+                    .iter()
+                    .filter(|r| local_day(r.at) == Some(today))
+                    .count()
+            })
             .sum();
         let still_today = self
             .habits
@@ -744,20 +764,18 @@ impl Monos {
             .map(|h| (self.habit_running_since(h), h))
             .collect();
         upcoming.sort_by_key(|(running, h)| (running.is_none(), h.next_run_at));
-        let up_next = section("Up next").children(
-            upcoming.is_empty().then(|| {
-                div()
-                    .px_1()
-                    .text_size(px(12.))
-                    .line_height(px(18.))
-                    .text_color(content(0.45))
-                    .child(format!(
-                        "Nothing scheduled. Ask {} to put recurring work on a habit.",
-                        mono.label()
-                    ))
-                    .into_any_element()
-            }),
-        );
+        let up_next = section("Up next").children(upcoming.is_empty().then(|| {
+            div()
+                .px_1()
+                .text_size(px(12.))
+                .line_height(px(18.))
+                .text_color(content(0.45))
+                .child(format!(
+                    "Nothing scheduled. Ask {} to put recurring work on a habit.",
+                    mono.label()
+                ))
+                .into_any_element()
+        }));
         let up_next = up_next.children(upcoming.into_iter().take(3).map(|(running, h)| {
             let id = h.id.clone();
             let at = local_day(h.next_run_at);
@@ -800,9 +818,15 @@ impl Monos {
                         .items_center()
                         .justify_center()
                         .child(if running.is_some() {
-                            div().size(px(8.)).rounded_full().bg(tint).into_any_element()
+                            div()
+                                .size(px(8.))
+                                .rounded_full()
+                                .bg(tint)
+                                .into_any_element()
                         } else {
-                            icon("clock", 14.).text_color(content(0.6)).into_any_element()
+                            icon("clock", 14.)
+                                .text_color(content(0.6))
+                                .into_any_element()
                         }),
                 )
                 .child(
@@ -831,7 +855,11 @@ impl Monos {
                         .flex_shrink_0()
                         .text_size(px(11.))
                         .font_features(tabular())
-                        .text_color(if running.is_some() { tint } else { content(0.4) })
+                        .text_color(if running.is_some() {
+                            tint
+                        } else {
+                            content(0.4)
+                        })
                         .child(when),
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {

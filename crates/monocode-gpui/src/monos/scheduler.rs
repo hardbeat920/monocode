@@ -53,21 +53,35 @@ fn prepare_heartbeat(
     }
     let (rows, sessions, notes) = {
         let db = locked(store)?;
-        let chat = mono.session_id.map(|id| db.mono_session(id)).transpose()?.flatten();
+        let chat = mono
+            .session_id
+            .map(|id| db.mono_session(id))
+            .transpose()?
+            .flatten();
         let activity = chat.as_ref().map_or(0, |s| s.updated_at);
         if !heartbeat::due(mono.heartbeat_minutes, &state, activity, now) {
             return Ok(None);
         }
-        let rows = chat.map(|s| db.load(s.id)).transpose()?.map(|t| t.rows).unwrap_or_default();
+        let rows = chat
+            .map(|s| db.load(s.id))
+            .transpose()?
+            .map(|t| t.rows)
+            .unwrap_or_default();
         if activity > state.last_run_at {
             heartbeat::update(root, &mono.id, |s| s.quiet_streak = 0)?;
         }
         let all = db.sessions()?;
         let since = state.last_run_at;
         let mut sessions = Vec::new();
-        for s in heartbeat::idle_sessions(&all, &mono.projects, |id| beat.skip.contains(&id), since, now)
-            .into_iter()
-            .take(5)
+        for s in heartbeat::idle_sessions(
+            &all,
+            &mono.projects,
+            |id| beat.skip.contains(&id),
+            since,
+            now,
+        )
+        .into_iter()
+        .take(5)
         {
             let (user, agent) = heartbeat::last_exchange(&db.load(s.id)?.rows);
             sessions.push(heartbeat::SessionLead {
@@ -85,7 +99,10 @@ fn prepare_heartbeat(
     heartbeat::update(root, &mono.id, |s| s.last_run_at = now)?;
     let inbox = heartbeat::changed_inbox(&inbox(store, mono), &mono.projects, since, now);
     let files = mono::load_files(root, mono)?;
-    let standing = files.soul.as_deref().and_then(heartbeat::standing_instructions);
+    let standing = files
+        .soul
+        .as_deref()
+        .and_then(heartbeat::standing_instructions);
     let digest = heartbeat::digest(sessions, notes, inbox);
     if digest.is_empty() && standing.is_none() {
         return Ok(None);
@@ -1468,11 +1485,21 @@ impl Monos {
         .detach();
     }
     fn start_habit(&mut self, id: &str, habit: Habit, cx: &mut Context<Self>) {
-        let text = format!("[Scheduled habit: {}]\n{}\n\nDo this scheduled work independently. Return a concise report; if nothing requires attention, reply exactly NOTHING_TO_REPORT. Any session you start belongs to this habit. Do not change the habit unless asked.",habit.name,habit.instructions);
+        let text = format!(
+            "[Scheduled habit: {}]\n{}\n\nDo this scheduled work independently. Return a concise report; if nothing requires attention, reply exactly NOTHING_TO_REPORT. Any session you start belongs to this habit. Do not change the habit unless asked.",
+            habit.name, habit.instructions
+        );
         self.start_run(id, habit.id, habit.name, text, false, cx);
     }
-    fn start_heartbeat(&mut self, id: &str, text: String, cx: &mut Context<Self>) {
-        self.start_run(id, heartbeat::RUN_ID.into(), "Heartbeat".into(), text, true, cx);
+    pub(super) fn start_heartbeat(&mut self, id: &str, text: String, cx: &mut Context<Self>) {
+        self.start_run(
+            id,
+            heartbeat::RUN_ID.into(),
+            "Heartbeat".into(),
+            text,
+            true,
+            cx,
+        );
     }
     /// Habits and heartbeats run alike: a hidden side session that reports
     /// back into the Mono's chat only when it has something to say.
@@ -1509,10 +1536,12 @@ impl Monos {
             s.title = format!("{} · {}", mono.label(), name);
             db.title(s.id, &s.title)?;
             drop(db);
-            if triage {
+            if triage && inherited.usage_limit.is_none() {
                 // The catalog is cached for a few minutes; a miss keeps the Mono's model.
                 let models = Kind::parse(&provider)
-                    .and_then(|kind| monocode_core::catalog::models_for(kind, &inherited.account).ok())
+                    .and_then(|kind| {
+                        monocode_core::catalog::models_for(kind, &inherited.account).ok()
+                    })
                     .unwrap_or_default();
                 if let Some((model, effort)) =
                     heartbeat::model(&provider, inherited.model.as_deref(), &models)
@@ -1526,20 +1555,73 @@ impl Monos {
             }
             Ok::<_, String>((s, mono, inherited))
         });
-        cx.spawn(async move|this,cx|{let result=work.await;let _=this.update(cx,|this,cx|{
-            match result{Err(e)=>{this.active_run=None;this.error=Some(e);},Ok((summary,mono,mut settings))=>{
-                let session=summary.id;let view=cx.new(|cx|Conversation::new(summary,this.store.clone(),cx));let root=this.root.clone();let env=this.bridge.as_ref().map(|b|b.environment(session)).unwrap_or_default();
-                settings.access=AccessMode::FullAccess;settings.internal_message=true;settings.mono=None;settings.environment.clear();
-                view.update(cx,|v,cx|{v.install_transfer(settings,None,cx);v.configure_mono(mono,root,env,cx);});
-                this.observations.push(cx.subscribe(&view,move|this,_,_:&SessionChanged,cx|this.habit_changed(session,cx)));
-                this.running.insert(session,RunningHabit{mono:target.clone(),habit:run_id,view:view.clone(),started:now_ms(),launched:now_ms(),failure:None,waiting_since:None,cards:Vec::new(),mailbox:Vec::new()});this.active_run=Some(session);
-                this.roster.hidden_sessions.push(session);
-                if let Some(m)=this.roster.get_mut(&target){m.habit_sessions.push(session);}
-                this.save(cx);
-                let message=Message{sent_at:Some(monocode_core::time::now_ms()),id:mono::new_id(),text,internal:true,error:None,attachments:Vec::new()};
-                view.update(cx,|v,cx|v.mono_dispatch(&message,cx));
-            }}this.changed(cx);
-        });}).detach();
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Err(e) => {
+                        this.active_run = None;
+                        this.error = Some(e);
+                    }
+                    Ok((summary, mono, mut settings)) => {
+                        let session = summary.id;
+                        let view = cx.new(|cx| Conversation::new(summary, this.store.clone(), cx));
+                        let root = this.root.clone();
+                        let env = this
+                            .bridge
+                            .as_ref()
+                            .map(|b| b.environment(session))
+                            .unwrap_or_default();
+                        if !triage {
+                            settings.access = AccessMode::FullAccess;
+                        }
+                        settings.internal_message = true;
+                        settings.mono = None;
+                        settings.environment.clear();
+                        view.update(cx, |v, cx| {
+                            v.install_transfer(settings, None, cx);
+                            v.configure_mono(mono, root, env, cx);
+                        });
+                        this.observations.push(
+                            cx.subscribe(&view, move |this, _, _: &SessionChanged, cx| {
+                                this.habit_changed(session, cx)
+                            }),
+                        );
+                        this.running.insert(
+                            session,
+                            RunningHabit {
+                                mono: target.clone(),
+                                habit: run_id,
+                                view: view.clone(),
+                                started: now_ms(),
+                                launched: now_ms(),
+                                failure: None,
+                                waiting_since: None,
+                                cards: Vec::new(),
+                                mailbox: Vec::new(),
+                            },
+                        );
+                        this.active_run = Some(session);
+                        this.roster.hidden_sessions.push(session);
+                        if let Some(m) = this.roster.get_mut(&target) {
+                            m.habit_sessions.push(session);
+                        }
+                        this.save(cx);
+                        let message = Message {
+                            sent_at: Some(monocode_core::time::now_ms()),
+                            id: mono::new_id(),
+                            text,
+                            internal: true,
+                            error: None,
+                            attachments: Vec::new(),
+                        };
+                        view.update(cx, |v, cx| v.mono_dispatch(&message, cx));
+                    }
+                }
+                this.changed(cx);
+            });
+        })
+        .detach();
     }
     pub(super) fn habit_changed(&mut self, session: i64, cx: &mut Context<Self>) {
         cx.emit(NotificationChanged);
@@ -1722,7 +1804,8 @@ mod tests {
         let prepare = |at| prepare_heartbeat(&store, &root, &beat, at, no_inbox).unwrap();
         assert_eq!(prepare(t), None, "the first sight only seeds the cursor");
         assert_eq!(prepare(t + 10 * min), None, "not quiet for long enough");
-        let text = prepare(t + 2 * heartbeat::IDLE_MS).expect("a left session is worth a heartbeat");
+        let text =
+            prepare(t + 2 * heartbeat::IDLE_MS).expect("a left session is worth a heartbeat");
         assert!(text.contains(&format!("\"Hermes effort\" (sessionId {left})")));
         assert!(text.contains("lets do option B"));
         assert!(text.contains("Want me to start?"));

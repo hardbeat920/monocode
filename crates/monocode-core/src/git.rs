@@ -1,5 +1,6 @@
 //! Working-copy operations used by the native composer. Git protects dirty files;
 //! these operations never force a checkout, stash, or discard changes.
+pub mod naming;
 mod remote;
 pub mod report;
 use serde::Deserialize;

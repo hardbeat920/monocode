@@ -7,6 +7,7 @@ import {
   mobileChoice,
   mobileNewSession,
   mobileProjectId,
+  mobileQuestionReply,
 } from "../features/mobile/model/mobileWorkspace";
 import { readMonoConversation } from "../features/monos/model/monoConversation";
 import {
@@ -9135,6 +9136,26 @@ function Workspace({
         }
         if (choice.runtimeMode) onRuntimeModeChange(session.id, choice.runtimeMode);
         return { sessionId: session.id };
+      }
+      if (method === "session.answerQuestion" || method === "session.keepQuestionOpen") {
+        // As the composer's question card; only the question still waiting,
+        // read as it is now since opening the session may have taken a while.
+        const live = sessionsRef.current.find((current) => current.id === session.id);
+        if (!live || live.worktreeRemoved) throw new Error("Session is no longer available");
+        const question = live.pendingQuestion;
+        if (!question || question.requestId !== params.requestId)
+          throw new Error("This question was already answered");
+        if (method === "session.keepQuestionOpen") {
+          onQuestionInteraction(live.id, question.requestId);
+          return { sessionId: live.id };
+        }
+        // A remote session answers through its open tab; without one it would be dropped.
+        if (remoteProjectFor(live.cwd) && !remoteSessionActions(live.id))
+          throw new Error("Open this session on the desktop to answer it");
+        const reply = mobileQuestionReply(params.reply, question);
+        if (!reply) throw new Error("Choose an answer or skip the question");
+        onQuestionReply(live.id, question.requestId, reply);
+        return { sessionId: live.id };
       }
       if (method !== "conversation.send") throw new Error("Unsupported mobile command");
       if (

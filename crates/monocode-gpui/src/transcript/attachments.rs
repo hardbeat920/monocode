@@ -166,16 +166,14 @@ impl Photo {
             } else {
                 monocode_core::composer::thumbnail_bgra(&bytes, THUMBNAIL_SIDE)
             };
-            Ok::<_, String>(
-                match decoded {
-                    Ok(pixels) => Ok((
-                        pixels.dimensions(),
-                        Arc::new(gpui::RenderImage::new(vec![image::Frame::new(pixels)])),
-                    )),
-                    // SVG and formats the decoder lacks still go through GPUI.
-                    Err(_) => Err(Arc::new(gpui::Image::from_bytes(format, bytes))),
-                },
-            )
+            Ok::<_, String>(match decoded {
+                Ok(pixels) => Ok((
+                    pixels.dimensions(),
+                    Arc::new(gpui::RenderImage::new(vec![image::Frame::new(pixels)])),
+                )),
+                // SVG and formats the decoder lacks still go through GPUI.
+                Err(_) => Err(Arc::new(gpui::Image::from_bytes(format, bytes))),
+            })
         });
         cx.spawn(async move |this, cx| {
             let (shape, source) = match work.await {

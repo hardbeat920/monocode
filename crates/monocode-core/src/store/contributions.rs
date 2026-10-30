@@ -132,7 +132,11 @@ impl Store {
         if sessions.is_empty() {
             return Ok(Vec::new());
         }
-        let ids = sessions.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
+        let ids = sessions
+            .iter()
+            .map(i64::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
         let mut query = conn
             .prepare(&format!(
                 "SELECT session_id,kind,reference,at,additions,deletions FROM contributions
@@ -215,7 +219,9 @@ mod tests {
                     ],
                 )
                 .unwrap();
-            assert!(store.session_mentions(id, &["gh pr", "git commit"]).unwrap());
+            assert!(store
+                .session_mentions(id, &["gh pr", "git commit"])
+                .unwrap());
             assert!(!store.session_mentions(id, &["gh pr"]).unwrap());
         }
     }
@@ -224,10 +230,18 @@ mod tests {
     fn contributions_record_once_and_amends_replace_the_latest_commit() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open_monocode(&dir.path().join("monocode.db")).unwrap();
-        store.record_contribution(&item(1, Kind::Commit, "aaa", 10), false).unwrap();
-        store.record_contribution(&item(1, Kind::Commit, "aaa", 10), false).unwrap();
-        store.record_contribution(&item(2, Kind::Review, "acme/app#1@c", 20), false).unwrap();
-        store.record_contribution(&item(1, Kind::Commit, "bbb", 30), true).unwrap();
+        store
+            .record_contribution(&item(1, Kind::Commit, "aaa", 10), false)
+            .unwrap();
+        store
+            .record_contribution(&item(1, Kind::Commit, "aaa", 10), false)
+            .unwrap();
+        store
+            .record_contribution(&item(2, Kind::Review, "acme/app#1@c", 20), false)
+            .unwrap();
+        store
+            .record_contribution(&item(1, Kind::Commit, "bbb", 30), true)
+            .unwrap();
         let all = store.contributions(&[1, 2], 0).unwrap();
         assert_eq!(
             all.iter().map(|c| c.reference.as_str()).collect::<Vec<_>>(),
@@ -239,7 +253,11 @@ mod tests {
         drop(store);
         let desktop = Connection::open(dir.path().join("monocode.db")).unwrap();
         let tables: i64 = desktop
-            .query_row("SELECT COUNT(*) FROM sqlite_master WHERE name='contributions'", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name='contributions'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(tables, 0);
     }

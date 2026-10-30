@@ -222,7 +222,9 @@ fn sub_agent_card(agent: SubAgent) -> Stateful<Div> {
         c.a = 0.45;
         d.border_color(c)
     })
-    .when(matches!(agent.state, AgentState::Unavailable), |d| d.opacity(0.5))
+    .when(matches!(agent.state, AgentState::Unavailable), |d| {
+        d.opacity(0.5)
+    })
     .flex_shrink_0()
     .px(px(10.))
     .py_2()
@@ -299,8 +301,15 @@ fn sub_agent_card(agent: SubAgent) -> Stateful<Div> {
                             .gap_1()
                             .text_color(content(0.4))
                             .child(
-                                icon(if agent.branch { "git-branch" } else { "folder-01" }, 11.)
-                                    .text_color(content(0.4)),
+                                icon(
+                                    if agent.branch {
+                                        "git-branch"
+                                    } else {
+                                        "folder-01"
+                                    },
+                                    11.,
+                                )
+                                .text_color(content(0.4)),
                             )
                             .child(div().min_w_0().truncate().child(agent.place)),
                     ),
@@ -1140,7 +1149,7 @@ impl Monos {
             .upgrade()
             .map(|owner| owner.read(cx).mono_session_views(cx))
             .unwrap_or_default();
-        let launches: Vec<_> = mono
+        let mut launches: Vec<_> = mono
             .launches
             .iter()
             .rev()
@@ -1166,6 +1175,16 @@ impl Monos {
             })
             .cloned()
             .collect();
+        // Most recent activity first: running or waiting sessions, then by
+        // last update. Launch order alone puts re-attached old sessions on top.
+        launches.sort_by_cached_key(|l| {
+            std::cmp::Reverse(
+                views
+                    .iter()
+                    .find(|v| v.id == l.session_id)
+                    .map(|v| (v.busy || v.needs_input, v.updated_at)),
+            )
+        });
         let search_bar = search_bar(filter).child(
             icon_button("mono-session-filter", "Filter sub-agents", "filter")
                 .relative()
@@ -1478,25 +1497,19 @@ impl Monos {
                     .size_full()
                     .flex()
                     .flex_col()
-                    .child(
-                        self.page_header(&document.title, cx).when(
-                            document.kind != "visual",
-                            |header| {
-                                header.child(
-                                    icon_button(
-                                        "mono-document-copy",
-                                        "Copy document",
-                                        "response-copy",
-                                    )
+                    .child(self.page_header(&document.title, cx).when(
+                        document.kind != "visual",
+                        |header| {
+                            header.child(
+                                icon_button("mono-document-copy", "Copy document", "response-copy")
                                     .on_click(move |_, _, cx| {
                                         cx.write_to_clipboard(gpui::ClipboardItem::new_string(
                                             document.body.clone(),
                                         ))
                                     }),
-                                )
-                            },
-                        ),
-                    )
+                            )
+                        },
+                    ))
                     .child(div().flex_1().min_h_0().child(view))
                     .into_any_element()
             }

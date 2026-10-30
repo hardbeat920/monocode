@@ -1,6 +1,6 @@
 //! Desktop work references belong to conversation blocks, not the Mono roster.
 //! Keep projection separate from persistence so opening a Mono never rewrites it.
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::HashMap;
 
 pub fn session_handle(value: &Value) -> Option<i64> {
@@ -349,13 +349,11 @@ mod tests {
             "echo monocode app sessions.start",
             json!({"id":"app-child"}),
         );
-        assert!(
-            block_launches(&[failed, truncated, echo, listing])
-                .into_iter()
-                .flatten()
-                .next()
-                .is_none()
-        );
+        assert!(block_launches(&[failed, truncated, echo, listing])
+            .into_iter()
+            .flatten()
+            .next()
+            .is_none());
         assert!(block_launches(&[send])[0].is_empty());
     }
     #[test]

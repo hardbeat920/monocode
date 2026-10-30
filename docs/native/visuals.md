@@ -2,7 +2,7 @@
 
 An agent can publish an interactive visual into an ordinary conversation. Ask for a chart, comparison, calculator, diagram, or 3D explanation. The visual stays in the transcript with the rest of the reply and remains usable after the turn ends. Monos use the same capability when running a conversation.
 
-Use `/visualize` in an idle desktop conversation to explicitly request a visual of the current topic, or `/visualize <request>` to specify what to show. Like `/stage` and `/commit`, this local command sends a dedicated agent prompt. It requires reading the visual reference, checking the program and publishing a native inline visual before replying, with the executable fallback available when MCP tools are unavailable.
+Use `/visualize` in an idle local desktop conversation to explicitly request a visual of the current topic, or `/visualize <request>` to specify what to show. Like `/stage` and `/commit`, this local command sends a dedicated agent prompt. It requires reading the visual reference, checking the program and publishing a native inline visual before replying, with the executable fallback available when MCP tools are unavailable. Wait for the current turn and queued messages to finish first. The command is unavailable in remote sessions and Mono chats; ask a Mono for a visual in ordinary language instead. A rejected command preserves the draft and attachments.
 
 Interactive rendering is a native desktop feature. The phone transcript shows the visual's title with an instruction to open it on desktop.
 
@@ -10,7 +10,7 @@ The app renders visual components directly through GPUI. Programs describe conte
 
 ## Agent workflow
 
-Active sessions offer `visual_docs`, `visual_check`, and `visual_show` through the session's MCP server where the provider supports injected tools. Tool descriptions are short capability summaries. The full component API, styling rules, examples, and limits are returned by `visual_docs` when the agent prepares a visual. Visual instructions are not added to ordinary MCP session messages or the MCP server's initialization instructions. No permanent provider configuration is changed.
+Active sessions offer `visual_docs`, `visual_check`, and `visual_show` through the session's MCP server where the provider supports injected tools. Tool descriptions are short capability summaries. The full component API, styling rules, examples, and limits are returned by `visual_docs` when the agent prepares a visual. Claude Code receives brief usage guidance in its appended system prompt, and Codex receives it in its developer instructions, when the session's visual bridge is configured. Claude's session-scoped `monocode_visual` tools are allowed without an extra permission prompt, including in read-only and planning turns. No permanent provider configuration is changed.
 
 1. Call `visual_docs` with `{}` to load the reference when creating a visual.
 2. Write a JavaScript function body that returns a synchronous render function.
@@ -18,7 +18,7 @@ Active sessions offer `visual_docs`, `visual_check`, and `visual_show` through t
 4. Call `visual_show` with `{ "title": "Short descriptive title", "source": "..." }` during the current turn. An optional `id` identifies a publication.
 5. Add supporting prose without repeating what the visual already explains.
 
-Pi, omp, and OpenCode use the executable fallback. Grok and fx also receive fallback discovery when resuming through a protocol that cannot refresh MCP tools. These paths get a compact, optional CLI reference once per provider conversation, including existing conversations on their first successful turn after the update. A saved receipt prevents repeating it; a new provider conversation, account, or executable receives a new reference. The SDK is loaded only through `visual docs` or `visual --help`. There is no general instruction to produce visuals on ordinary replies.
+Pi, omp, and OpenCode use the executable fallback. Grok and fx also receive fallback discovery when resuming through a protocol that cannot refresh MCP tools. These paths get a compact, optional CLI reference once per provider conversation, including existing conversations on their first successful turn after the update. A saved receipt prevents repeating it; a new provider conversation, account, or executable receives a new reference. The SDK is loaded only through `visual docs` or `visual --help`. Ordinary replies use visuals when useful; `/visualize` explicitly requests a publication during that turn.
 
 The check executes the program and validates its native component tree and representative controls. It does not produce a screenshot. Publishing validates again before saving the visual and acknowledging the request.
 
@@ -31,6 +31,16 @@ monocode-gpui visual show --input /path/to/explanation.js --title "Explanation"
 ```
 
 Reading the reference and checking also work outside a running app. Showing requires the capability inherited by the agent of a live session. CLI discovery supplies the executable path; it is also available to the agent through `MONOCODE_VISUAL_EXECUTABLE`.
+
+## Mono documents
+
+A visual published in a Mono chat also appears in that Mono's **Documents** tab.
+Opening it uses the same native interactive reader. Reusing the visual's `id`
+updates the existing document while preserving its original creation time.
+
+The Mono app API accepts `artifacts.write` with `kind: "document"` for Markdown
+documents. Creating an artifact with `kind: "html"` is rejected; publish
+interactive content through `visual_show` or the equivalent executable command.
 
 ## Programs and native controls
 

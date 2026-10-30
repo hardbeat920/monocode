@@ -350,6 +350,39 @@ fn setup(cx: &mut TestAppContext) -> Setup {
         store,
     }
 }
+
+#[gpui::test]
+fn heartbeat_runs_keep_the_monos_selected_permissions(cx: &mut TestAppContext) {
+    for mode in [
+        AccessMode::ReadOnly,
+        AccessMode::Supervised,
+        AccessMode::AutoAcceptEdits,
+        AccessMode::Auto,
+        AccessMode::FullAccess,
+    ] {
+        let s = setup(cx);
+        s.manager.update(cx, |m, cx| {
+            m.chats[&s.id].update(cx, |chat, _| {
+                // Avoid catalog probes or provider requests: exercise the actual
+                // background runner, stopping before it dispatches a prompt.
+                chat.settings.access = mode;
+                chat.settings.usage_limit = Some(Default::default());
+            });
+            m.start_heartbeat(&s.id, "Check for follow-ups".into(), cx);
+        });
+        cx.run_until_parked();
+        s.manager.read_with(cx, |m, cx| {
+            assert!(m.error.is_none(), "heartbeat failed: {:?}", m.error);
+            let run = &m.running[&m.active_run.expect("heartbeat session was created")];
+            assert_eq!(run.view.read(cx).settings.access, mode);
+            assert!(
+                !run.view.read(cx).busy,
+                "the fixture must not start a provider"
+            );
+        });
+    }
+}
+
 fn call(
     s: &Setup,
     request: &str,
@@ -1024,8 +1057,7 @@ fn chat_composer_keeps_attach_under_the_box_and_opens_the_model_list(cx: &mut Te
         ("".to_owned(), true),
     ] {
         chat.update(visual, |chat, cx| {
-            chat.input
-                .update(cx, |input, cx| input.set_text(draft.into(), cx));
+            chat.input.update(cx, |input, cx| input.set_text(draft, cx));
         });
         visual.run_until_parked();
         visual.refresh().unwrap();
@@ -1343,6 +1375,42 @@ fn opening_a_session_card_uses_the_shared_sidebar_state(cx: &mut TestAppContext)
         .unwrap();
     visual.run_until_parked();
     assert_eq!(visual.debug_bounds("right-panel-frame").unwrap(), details);
+}
+
+#[gpui::test]
+fn a_session_open_in_mono_details_keeps_its_history(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let session = s
+        .window
+        .update(cx, |shell, _, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.settings = None;
+                cx.notify();
+            });
+            shell.workspace.active.unwrap()
+        })
+        .unwrap();
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    visual.run_until_parked();
+    s.window
+        .update(visual, |_, _, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.card_action(&s.id, &json!({"type":"session", "sessionId":session}), cx);
+            })
+        })
+        .unwrap();
+    visual.run_until_parked();
+    // The details panel shows this session, so memory trimming must not
+    // release its transcript while the Mono view is active.
+    s.window
+        .update(visual, |shell, _, cx| {
+            assert!(shell.workspace.right_panel_open);
+            let chat = shell.mono_ensure_session(session, cx).unwrap();
+            assert!(chat.read(cx).history_loaded());
+            assert!(!chat.update(cx, |chat, cx| chat.unload_history(cx)));
+        })
+        .unwrap();
 }
 
 #[gpui::test]
