@@ -1896,11 +1896,8 @@ impl BrowserHost {
         outcome
     }
 
-    /// The window of `target` when the live view may give it the panel's
-    /// size: the MonoCode browser runs hidden (no one sees its windows) and
-    /// no other tab shares that window, so resizing it changes only this
-    /// tab's page.
-    fn own_window(&self, target: &TargetId) -> Option<i64> {
+    /// The MonoCode browser runs without a window anyone sees.
+    fn browser_hidden(&self) -> bool {
         let hidden = self
             .managed
             .lock()
@@ -1909,7 +1906,15 @@ impl BrowserHost {
             .is_some_and(|managed| !managed.show_window);
         #[cfg(test)]
         let hidden = hidden || self.hidden_for_tests.load(Ordering::Acquire);
-        if !hidden {
+        hidden
+    }
+
+    /// The window of `target` when the live view may give it the panel's
+    /// size: the MonoCode browser runs hidden (no one sees its windows) and
+    /// no other tab shares that window, so resizing it changes only this
+    /// tab's page.
+    fn own_window(&self, target: &TargetId) -> Option<i64> {
+        if !self.browser_hidden() {
             return None;
         }
         let window_of = |target: &str| {
@@ -2556,7 +2561,13 @@ impl BrowserHost {
                     Ok(params) => params,
                     Err(result) => return *result,
                 };
-                match targets::open_tab(&self.link, ctx, params.url.as_deref(), WaitUntil::Usable) {
+                match targets::open_tab(
+                    &self.link,
+                    ctx,
+                    params.url.as_deref(),
+                    WaitUntil::Usable,
+                    self.browser_hidden(),
+                ) {
                     Ok(opened) => {
                         self.close_startup_pages();
                         let tab = opened.handle.tab.clone();

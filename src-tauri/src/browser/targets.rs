@@ -293,12 +293,14 @@ impl Drop for Reservation<'_> {
 }
 
 /// `tabs.open`: create a background tab in the user's
-/// window, attach, set the session up, then navigate.
+/// window, attach, set the session up, then navigate. `hidden`: the
+/// MonoCode browser runs without a window anyone sees.
 pub fn open_tab(
     link: &Link,
     ctx: &RequestCtx,
     url: Option<&str>,
     wait_until: WaitUntil,
+    hidden: bool,
 ) -> Result<Opened, TabError> {
     let policy = link.policy();
     let (separate_window, foreground, target_url) = {
@@ -310,14 +312,14 @@ pub fn open_tab(
         state.reserve_tab(&ctx.session)?;
         // The MonoCode browser is ours: its window shows what the agent does.
         // In the user's browser the tab stays in the background. With agent
-        // tabs shown in MonoCode no window comes forward for them at all, and
-        // each gets a window of its own, which its panel can give its size
-        // ([`super::live`]).
+        // tabs shown in MonoCode no window comes forward for them at all;
+        // in the hidden MonoCode browser each gets a window of its own, which
+        // its panel can give its size ([`super::live`]).
         let managed = state.settings.mode.launches();
         let in_monocode = state.settings.tabs_in_monocode;
         (
             (state.settings.separate_window && !managed && !in_monocode)
-                || (managed && in_monocode),
+                || (managed && in_monocode && hidden),
             managed && !in_monocode,
             target_url,
         )
@@ -1375,6 +1377,7 @@ mod tests {
             &ctx,
             Some("https://example.com/a?b=1"),
             WaitUntil::Load,
+            false,
         )
         .unwrap();
         assert!(opened.navigation.is_ok());
@@ -1449,11 +1452,18 @@ mod tests {
             };
         }
         let ctx2 = admit(&policy, ActionKind::TabsOpen, None);
-        let err = open_tab(&link, &ctx2, None, WaitUntil::Load).unwrap_err();
+        let err = open_tab(&link, &ctx2, None, WaitUntil::Load, false).unwrap_err();
         assert!(matches!(err, TabError::Reason(Reason::TabLimit, _)));
         // Denied URL never reaches the socket.
         let before = server.received().len();
-        let err = open_tab(&link, &ctx2, Some("file:///etc/passwd"), WaitUntil::Load).unwrap_err();
+        let err = open_tab(
+            &link,
+            &ctx2,
+            Some("file:///etc/passwd"),
+            WaitUntil::Load,
+            false,
+        )
+        .unwrap_err();
         assert!(matches!(err, TabError::Reason(Reason::UrlDenied, _)));
         assert_eq!(server.received().len(), before);
         link.close(Vec::new(), Duration::from_millis(200));
@@ -1472,7 +1482,14 @@ mod tests {
         link.open(&server.url, Duration::from_secs(5)).unwrap();
         // Deliberately no pump.
         let ctx = admit(&policy, ActionKind::TabsOpen, None);
-        let opened = open_tab(&link, &ctx, Some("https://example.com/a"), WaitUntil::Load).unwrap();
+        let opened = open_tab(
+            &link,
+            &ctx,
+            Some("https://example.com/a"),
+            WaitUntil::Load,
+            false,
+        )
+        .unwrap();
         assert!(opened.navigation.is_ok());
         let tab = opened.handle.tab.clone();
         let version = {
@@ -1546,6 +1563,7 @@ mod tests {
             &ctx,
             Some("https://unreachable.invalid/"),
             WaitUntil::Load,
+            false,
         )
         .unwrap();
         let (reason, message) = opened.navigation.unwrap_err();
@@ -1597,7 +1615,7 @@ mod tests {
         let link = Link::new(policy.clone());
         link.open(&server.url, Duration::from_secs(5)).unwrap();
         let ctx = admit(&policy, ActionKind::TabsOpen, None);
-        let err = open_tab(&link, &ctx, None, WaitUntil::Load).unwrap_err();
+        let err = open_tab(&link, &ctx, None, WaitUntil::Load, false).unwrap_err();
         assert!(matches!(
             err,
             TabError::Reason(Reason::BrowserPolicyBlocked, Some(_))
@@ -1627,7 +1645,7 @@ mod tests {
         )
         .unwrap();
         let ctx = admit(&policy, ActionKind::TabsOpen, None);
-        let opened = open_tab(&link, &ctx, None, WaitUntil::Load).unwrap();
+        let opened = open_tab(&link, &ctx, None, WaitUntil::Load, false).unwrap();
         let tab = opened.handle.tab.clone();
         let main = opened.handle.session.0.clone();
         let sent_before = server.received().len();
@@ -1838,7 +1856,7 @@ mod tests {
         link.open(&server.url, Duration::from_secs(5)).unwrap();
         let _pump = spawn_pump(link.clone(), Arc::new(|_| {})).unwrap();
         let ctx = admit(&policy, ActionKind::TabsOpen, None);
-        let opened = open_tab(&link, &ctx, None, WaitUntil::Load).unwrap();
+        let opened = open_tab(&link, &ctx, None, WaitUntil::Load, false).unwrap();
         let main = opened.handle.session.0.clone();
         policy.write().revoke_session("s1");
         server.emit(
@@ -1883,7 +1901,7 @@ mod tests {
         let link = Link::new(policy.clone());
         link.open(&server.url, Duration::from_secs(5)).unwrap();
         let ctx = admit(&policy, ActionKind::TabsOpen, None);
-        let err = open_tab(&link, &ctx, None, WaitUntil::Load).unwrap_err();
+        let err = open_tab(&link, &ctx, None, WaitUntil::Load, false).unwrap_err();
         assert!(matches!(
             err,
             TabError::Reason(Reason::BrowserDisconnected, Some(_))
