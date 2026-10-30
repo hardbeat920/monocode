@@ -31,6 +31,7 @@ fn fetch_inbox(store: &Database, mono: &Mono) -> Vec<monocode_core::inbox::Item>
     let service = monocode_core::inbox::Service {
         data_dir,
         cwd: cwd.into(),
+        github_viewer: Default::default(),
     };
     let projects: Vec<std::path::PathBuf> = mono.projects.iter().map(Into::into).collect();
     service.list(&projects, &state).items

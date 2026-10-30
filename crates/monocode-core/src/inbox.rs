@@ -17,6 +17,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
     process::Command,
+    sync::{Arc, Mutex},
 };
 
 pub const PROVIDERS: [&str; 5] = ["github", "linear", "jira", "gitlab", "azuredevops"];
@@ -62,6 +63,7 @@ pub struct Item {
     pub updated_at: String,
     pub labels: Vec<Label>,
     pub assignees: Vec<Person>,
+    pub author: Person,
     pub draft: bool,
     pub repo: String,
     pub team_id: String,
@@ -283,10 +285,18 @@ pub struct StatusFilter {
     pub closed: bool,
     pub merged: bool,
 }
+/// The author filter's stand-in for the signed-in user, as in `gh --author @me`.
+pub const ME: &str = "@me";
+/// Sources whose list rows carry the author, so the author filter applies.
+pub fn has_authors(source: &str) -> bool {
+    source == "github"
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Filters {
     pub assigned_to_me: bool,
+    /// Author logins, or `ME`; empty shows everyone's items.
+    pub authors: Vec<String>,
     pub hidden_projects: Vec<String>,
     pub hidden_linear_projects: Vec<String>,
     pub hidden_kinds: Vec<String>,
@@ -297,6 +307,7 @@ impl Default for Filters {
     fn default() -> Self {
         Self {
             assigned_to_me: false,
+            authors: vec![],
             hidden_projects: vec![],
             hidden_linear_projects: vec![],
             hidden_kinds: vec![],
@@ -313,8 +324,30 @@ impl Filters {
             "open"
         }
     }
-    pub fn matches(&self, item: &Item, source: &str, search: &str) -> bool {
+    /// A single author is fetched with `--author` so a busy repository's
+    /// fetch limit doesn't hide their older items; several are filtered here.
+    pub fn fetch_author(&self) -> Option<&str> {
+        match self.authors.as_slice() {
+            [author] => Some(author),
+            _ => None,
+        }
+    }
+    /// `viewer` is the signed-in login; while it is unknown `ME` matches
+    /// everything rather than hiding the list.
+    pub fn matches(&self, item: &Item, source: &str, search: &str, viewer: &str) -> bool {
         if item.provider != source {
+            return false;
+        }
+        if has_authors(source)
+            && !self.authors.is_empty()
+            && !self.authors.iter().any(|author| {
+                if author == ME {
+                    viewer.is_empty() || item.author.login.eq_ignore_ascii_case(viewer)
+                } else {
+                    item.author.login.eq_ignore_ascii_case(author)
+                }
+            })
+        {
             return false;
         }
         let tracker = is_tracker(source);
@@ -367,12 +400,13 @@ impl Filters {
             return false;
         }
         let text = format!(
-            "{} {} {} {} {} {}",
+            "{} {} {} {} {} {} {}",
             item.title,
             item.reference(),
             item.number,
             item.repo,
             item.team_name,
+            item.author.login,
             item.labels
                 .iter()
                 .map(|l| l.name.as_str())
@@ -447,8 +481,9 @@ impl ViewState {
         let mut jira = self.hidden_jira_projects.clone();
         jira.sort();
         format!(
-            "{}:{}:{}:{}:{}",
+            "{}:{}:{}:{}:{}:{}",
             self.filters.assigned_to_me,
+            self.filters.fetch_author().unwrap_or_default(),
             self.filters.fetch_state(),
             paths.join("|"),
             teams.join(","),
@@ -511,6 +546,8 @@ pub struct Snapshot {
     pub connections: BTreeMap<String, Status>,
     pub linear_teams: Vec<OptionRow>,
     pub jira_projects: Vec<OptionRow>,
+    /// The signed-in login per provider, where it is known.
+    pub viewers: BTreeMap<String, String>,
 }
 
 /// The Tauri InboxNotificationTracker: provider baselines and revisions are
@@ -583,6 +620,8 @@ impl NotificationTracker {
 pub struct Service {
     pub data_dir: PathBuf,
     pub cwd: PathBuf,
+    /// The `gh` login, looked up once it succeeds.
+    pub github_viewer: Arc<Mutex<Option<String>>>,
 }
 /// Pairs each repository with one checkout to fetch it through. Several
 /// checkouts of the same repository share its rows, so the active checkout
@@ -610,6 +649,16 @@ fn convert<T: Serialize, U: DeserializeOwned>(value: T) -> Result<U, String> {
         .map_err(|e| e.to_string())
 }
 impl Service {
+    fn github_viewer(&self) -> Option<String> {
+        let mut cached = self.github_viewer.lock().ok()?;
+        if cached.is_none() {
+            *cached = run_gh(&self.cwd, &["api", "user", "--jq", ".login"], false)
+                .ok()
+                .map(|login| login.trim().to_owned())
+                .filter(|login| !login.is_empty());
+        }
+        cached.clone()
+    }
     pub fn status(&self, provider: &str) -> Result<Status, String> {
         match provider {
             "linear" => convert(linear::linear_status(self.data_dir.clone())?),
@@ -681,6 +730,11 @@ impl Service {
             snapshot.connections.insert(provider.into(), status);
             if !connected {
                 continue;
+            }
+            if provider == "github" {
+                if let Some(login) = self.github_viewer() {
+                    snapshot.viewers.insert(provider.into(), login);
+                }
             }
             let result: Result<Vec<Item>, String> = (|| {
                 if provider == "linear" {
@@ -776,8 +830,8 @@ impl Service {
                                 &repo,
                                 kind,
                                 state.filters.assigned_to_me,
+                                state.filters.fetch_author().unwrap_or_default(),
                                 state.filters.fetch_state(),
-                                "",
                                 limit,
                             )?)?,
                             "gitlab" => convert(gitlab::gitlab_list_work_items(
@@ -1160,5 +1214,75 @@ mod notification_tests {
                 "from {cwd:?}: {checkouts:?}"
             );
         }
+    }
+}
+#[cfg(test)]
+mod author_tests {
+    use super::*;
+
+    fn by(login: &str, provider: &str) -> Item {
+        Item {
+            provider: provider.into(),
+            kind: "pr".into(),
+            repo: "acme/app".into(),
+            author: Person {
+                login: login.into(),
+                ..Person::default()
+            },
+            ..Item::default()
+        }
+    }
+    fn authors(authors: &[&str]) -> Filters {
+        Filters {
+            authors: authors.iter().map(|a| a.to_string()).collect(),
+            ..Filters::default()
+        }
+    }
+
+    #[test]
+    fn author_filter_keeps_the_chosen_authors() {
+        let item = by("Octocat", "github");
+        assert!(authors(&[]).matches(&item, "github", "", "me"));
+        assert!(authors(&["octocat"]).matches(&item, "github", "", "me"));
+        assert!(authors(&["hubot", "octocat"]).matches(&item, "github", "", "me"));
+        assert!(!authors(&["hubot"]).matches(&item, "github", "", "me"));
+    }
+
+    #[test]
+    fn me_matches_the_viewer_and_everything_while_it_is_unknown() {
+        let item = by("octocat", "github");
+        assert!(authors(&[ME]).matches(&item, "github", "", "OctoCat"));
+        assert!(!authors(&[ME]).matches(&item, "github", "", "hubot"));
+        assert!(authors(&[ME]).matches(&item, "github", "", ""));
+        assert!(authors(&[ME, "octocat"]).matches(&item, "github", "", "hubot"));
+    }
+
+    #[test]
+    fn author_filter_combines_with_other_filters_and_search() {
+        let mut filters = authors(&["octocat"]);
+        filters.hidden_kinds = vec!["pr".into()];
+        assert!(!filters.matches(&by("octocat", "github"), "github", "", ""));
+        assert!(authors(&[]).matches(&by("octocat", "github"), "github", "octo", ""));
+    }
+
+    #[test]
+    fn sources_without_authors_ignore_the_filter() {
+        assert!(authors(&["octocat"]).matches(&by("", "gitlab"), "gitlab", "", ""));
+        assert!(authors(&[ME]).matches(&by("", "linear"), "linear", "", "octocat"));
+    }
+
+    #[test]
+    fn only_a_single_author_changes_the_fetch() {
+        let scope = |filters: Filters| {
+            ViewState {
+                filters,
+                ..ViewState::default()
+            }
+            .fetch_scope(&[])
+        };
+        assert_eq!(authors(&[ME]).fetch_author(), Some(ME));
+        assert_eq!(authors(&[ME, "octocat"]).fetch_author(), None);
+        assert_ne!(scope(authors(&[ME])), scope(authors(&[])));
+        assert_eq!(scope(authors(&[ME, "octocat"])), scope(authors(&[])));
     }
 }
