@@ -1,0 +1,72 @@
+<!doctype html>
+<!--
+Source for native-dmg-background.tiff, the Mac preview installer window.
+Finder anchors the image at the window's top-left. Newer macOS covers about
+68pt of the window with its title pill, so keep content in the top 400pt and
+let the bottom 40pt be plain texture. Icon centres are set in
+package-native.mjs (app 170,200; Applications 490,200).
+
+Finder always draws icon labels in black, so the background must stay light.
+
+Render with Geist installed, at 1x and 2x, then combine:
+  chrome --headless --hide-scrollbars --window-size=660,440 \
+    --force-device-scale-factor=1 --screenshot=bg.png native-dmg-background.html
+  chrome ... --force-device-scale-factor=2 --screenshot=bg@2x.png ...
+  tiffutil -cathidpicheck bg.png bg@2x.png -out native-dmg-background.tiff
+-->
+<meta charset="utf-8" />
+<style>
+  * { margin: 0; }
+  html, body { width: 660px; height: 440px; overflow: hidden; }
+  canvas { display: block; width: 660px; height: 440px; }
+</style>
+<canvas></canvas>
+<script>
+  const W = 660, H = 440, CELL = 4, dpr = window.devicePixelRatio || 1;
+  const c = document.querySelector("canvas");
+  c.width = W * dpr;
+  c.height = H * dpr;
+  const g = c.getContext("2d");
+  g.scale(dpr, dpr);
+
+  // Pixel-cell texture, a little brighter behind the title and icons.
+  g.fillStyle = "rgb(236,236,236)";
+  g.fillRect(0, 0, W, H);
+  for (let y = 0; y < H; y += CELL)
+    for (let x = 0; x < W; x += CELL) {
+      const d = Math.min(1, Math.hypot((x - W / 2) / (W * 0.7), (y - 180) / (H * 0.8)));
+      const v = Math.round(226 + 8 * (1 - d) - 6 * d);
+      g.fillStyle = `rgb(${v},${v},${v})`;
+      g.fillRect(x, y, CELL - 1, CELL - 1);
+    }
+
+  document.fonts.load("500 28px Geist").then(() => {
+    const pre = "Welcome to ", name = "Monocode";
+    g.font = "400 28px Geist";
+    const wp = g.measureText(pre).width;
+    g.font = "500 28px Geist";
+    const x0 = W / 2 - (wp + g.measureText(name).width) / 2;
+    g.fillStyle = "#85857f";
+    g.font = "400 28px Geist";
+    g.fillText(pre, x0, 92);
+    g.fillStyle = "#141414";
+    g.font = "500 28px Geist";
+    g.fillText(name, x0 + wp, 92);
+
+    g.strokeStyle = "#a2a29d";
+    g.lineWidth = 1.5;
+    g.lineCap = g.lineJoin = "round";
+    g.beginPath();
+    g.moveTo(266, 200);
+    g.lineTo(394, 200);
+    g.moveTo(387, 194);
+    g.lineTo(394, 200);
+    g.lineTo(387, 206);
+    g.stroke();
+
+    g.textAlign = "center";
+    g.fillStyle = "#85857f";
+    g.font = "12px Geist";
+    g.fillText("Drag Monocode Native into Applications to install", W / 2, 372);
+  });
+</script>

@@ -2,6 +2,7 @@
 // writes production release/update paths.
 import { spawnSync } from "node:child_process";
 import {
+  access,
   cp,
   mkdir,
   readFile,
@@ -127,6 +128,49 @@ async function linuxTree(directory, binary, kind) {
   return { app, desktop };
 }
 
+// Finder stores the installer window's background, size and icon positions in
+// the volume's .DS_Store. Icon centres match scripts/native-dmg-background.html.
+const dmgLayoutScript = `on run argv
+  set dmgVolume to POSIX file (item 1 of argv) as alias
+  tell application "Finder"
+    open dmgVolume
+    set win to container window of dmgVolume
+    set current view of win to icon view
+    set toolbar visible of win to false
+    set statusbar visible of win to false
+    set bounds of win to {200, 120, 860, 588}
+    set opts to icon view options of win
+    set arrangement of opts to not arranged
+    set icon size of opts to 112
+    set text size of opts to 13
+    set background picture of opts to file ".background:background.tiff" of dmgVolume
+    set position of item "Monocode Native.app" of dmgVolume to {170, 200}
+    set position of item "Applications" of dmgVolume to {490, 200}
+    -- Reopen so Finder saves the layout, then close the new window.
+    close win
+    open dmgVolume
+    delay 1
+    close container window of dmgVolume
+  end tell
+end run`;
+async function layOutDmgWindow(mount) {
+  run("osascript", ["-", mount], {
+    input: dmgLayoutScript,
+    stdio: ["pipe", "inherit", "inherit"],
+  });
+  // Finder writes .DS_Store asynchronously after the window closes. Without
+  // it the image would ship as a bare Finder window, so fail instead.
+  for (let attempt = 0; attempt < 20; attempt++) {
+    try {
+      await access(join(mount, ".DS_Store"));
+      return;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
+  throw new Error("Finder did not save the DMG window layout");
+}
+
 export async function packageNative({
   kind,
   binary,
@@ -226,12 +270,18 @@ export async function packageNative({
       env: { ...process.env, COPYFILE_DISABLE: "1" },
     });
     const imageRoot = join(work, "dmg");
-    await mkdir(imageRoot);
+    await mkdir(join(imageRoot, ".background"), { recursive: true });
+    await cp(
+      join(root, "scripts/native-dmg-background.tiff"),
+      join(imageRoot, ".background/background.tiff"),
+    );
     run("ditto", [app, join(imageRoot, "Monocode Native.app")]);
     run("ln", ["-s", "/Applications", join(imageRoot, "Applications")]);
     const dmg = add(`MonocodeNative_${version}_${name}.dmg`);
     const imageSizeMiB =
       Math.ceil((await logicalBytes(imageRoot)) / 1048576) + 64;
+    // Finder can only lay out a writable image; compress it once styled.
+    const writable = join(work, "layout.dmg");
     run("hdiutil", [
       "create",
       "-volname",
@@ -240,11 +290,35 @@ export async function packageNative({
       imageRoot,
       "-ov",
       "-format",
-      "UDZO",
+      "UDRW",
       "-fs",
       "HFS+",
       "-size",
       `${imageSizeMiB}m`,
+      writable,
+    ]);
+    const mount = join(work, "mount");
+    run("hdiutil", [
+      "attach",
+      writable,
+      "-readwrite",
+      "-noverify",
+      "-noautoopen",
+      "-mountpoint",
+      mount,
+    ]);
+    try {
+      await layOutDmgWindow(mount);
+    } finally {
+      run("hdiutil", ["detach", mount, "-force"]);
+    }
+    run("hdiutil", [
+      "convert",
+      writable,
+      "-ov",
+      "-format",
+      "UDZO",
+      "-o",
       dmg,
     ]);
     run("codesign", [

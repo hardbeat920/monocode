@@ -48,10 +48,14 @@ if (name === 'ditto') {
   }
 }
 if (name === 'tar') fs.writeFileSync(args[1], 'archive');
-if (name === 'hdiutil') {
-  fs.writeFileSync(process.env.NATIVE_TEST_HDIUTIL_ARGS, JSON.stringify(args));
-  fs.writeFileSync(args.at(-1), 'dmg');
+if (name === 'hdiutil' || name === 'osascript') {
+  const log = process.env.NATIVE_TEST_HDIUTIL_ARGS;
+  const calls = fs.existsSync(log) ? JSON.parse(fs.readFileSync(log, 'utf8')) : [];
+  fs.writeFileSync(log, JSON.stringify([...calls, [name, ...args]]));
 }
+if (name === 'hdiutil' && (args[0] === 'create' || args[0] === 'convert')) fs.writeFileSync(args.at(-1), 'dmg');
+if (name === 'hdiutil' && args[0] === 'attach') fs.mkdirSync(args[args.indexOf('-mountpoint') + 1]);
+if (name === 'osascript') fs.writeFileSync(path.join(args[1], '.DS_Store'), 'layout');
 if (name === 'xcrun' && args[0] === 'notarytool') console.log(JSON.stringify({ status: process.env.NATIVE_TEST_NOTARY_STATUS || 'Accepted' }));
 if (name === 'xcrun' && args[0] === 'stapler' && process.env.NATIVE_TEST_STAPLER_MODE) {
   const state = process.env.NATIVE_TEST_STAPLER_STATE;
@@ -70,6 +74,7 @@ if (name === 'xcrun' && args[0] === 'stapler' && process.env.NATIVE_TEST_STAPLER
       "ditto",
       "tar",
       "hdiutil",
+      "osascript",
       "xcrun",
     ]) {
       await writeFile(join(bin, name), fakeTool);
@@ -117,9 +122,25 @@ if (name === 'xcrun' && args[0] === 'stapler' && process.env.NATIVE_TEST_STAPLER
     assert.ok(artifacts.some((a) => !a.target && a.filename.endsWith(".dmg")));
     for (const artifact of artifacts)
       await access(join(out, artifact.filename));
-    const imageArgs = JSON.parse(
+    const imageCalls = JSON.parse(
       await readFile(process.env.NATIVE_TEST_HDIUTIL_ARGS, "utf8"),
     );
+    // Finder must lay out the writable image before it is compressed.
+    assert.deepEqual(
+      imageCalls.map((call) => call.slice(0, 2).join(" ")),
+      [
+        "hdiutil create",
+        "hdiutil attach",
+        "osascript -",
+        "hdiutil detach",
+        "hdiutil convert",
+      ],
+    );
+    const imageArgs = imageCalls[0];
+    assert.equal(imageArgs[imageArgs.indexOf("-format") + 1], "UDRW");
+    const converted = imageCalls.at(-1);
+    assert.equal(converted[converted.indexOf("-format") + 1], "UDZO");
+    await access(join(out, "work/dmg/.background/background.tiff"));
     assert.equal(imageArgs[imageArgs.indexOf("-fs") + 1], "HFS+");
     const imageSize = imageArgs[imageArgs.indexOf("-size") + 1];
     assert.match(imageSize, /^\d+m$/);
