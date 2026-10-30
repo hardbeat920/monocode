@@ -34,7 +34,7 @@ pub(crate) fn save(
     existing: &[PathBuf],
 ) -> Result<PreparedImages, String> {
     if existing.len() + images.len() > MAX_ATTACHMENTS {
-        return Err("Attach up to 20 files totalling 20 MB.".into());
+        return Err(format!("Attach up to {MAX_ATTACHMENTS} files at a time."));
     }
     validate_attachments(existing)?;
     let images = images
@@ -73,8 +73,15 @@ fn normalize(image: Image) -> Result<Image, String> {
     if image.format() != ImageFormat::Bmp {
         return Ok(image);
     }
-    let decoded = image::load_from_memory_with_format(image.bytes(), image::ImageFormat::Bmp)
+    let mut decoded = image::load_from_memory_with_format(image.bytes(), image::ImageFormat::Bmp)
         .map_err(|error| format!("Could not decode the pasted bitmap: {error}"))?;
+    // Windows-synthesized DIBV5 often declares an alpha mask over zeroed bytes.
+    if decoded
+        .as_rgba8()
+        .is_some_and(|rgba| rgba.pixels().all(|pixel| pixel[3] == 0))
+    {
+        decoded = image::DynamicImage::ImageRgb8(decoded.to_rgb8());
+    }
     let mut png = Cursor::new(Vec::new());
     decoded
         .write_to(&mut png, image::ImageFormat::Png)
@@ -109,6 +116,37 @@ mod tests {
             assert_eq!(output.format(), format);
             assert_eq!(output.bytes(), [1, 2, 3]);
         }
+    }
+
+    #[test]
+    fn bitmap_with_zeroed_alpha_becomes_opaque_but_real_alpha_survives() {
+        let bitmap = |alpha: [u8; 2]| {
+            let pixels = image::RgbaImage::from_raw(
+                2,
+                1,
+                vec![18, 52, 86, alpha[0], 171, 205, 239, alpha[1]],
+            )
+            .unwrap();
+            let mut bmp = Cursor::new(Vec::new());
+            image::DynamicImage::ImageRgba8(pixels)
+                .write_to(&mut bmp, image::ImageFormat::Bmp)
+                .unwrap();
+            Image::from_bytes(ImageFormat::Bmp, bmp.into_inner())
+        };
+        let decode = |image: Image| {
+            image::load_from_memory(normalize(image).unwrap().bytes())
+                .unwrap()
+                .to_rgba8()
+                .into_raw()
+        };
+        assert_eq!(
+            decode(bitmap([0, 0])),
+            [18, 52, 86, 255, 171, 205, 239, 255]
+        );
+        assert_eq!(
+            decode(bitmap([0, 128])),
+            [18, 52, 86, 0, 171, 205, 239, 128]
+        );
     }
 
     #[test]

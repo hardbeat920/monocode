@@ -202,8 +202,14 @@ impl Conversation {
         if images.is_empty() {
             return false;
         }
+        self.stage_images(images, cx);
+        true
+    }
+    fn stage_images(&mut self, images: Vec<gpui::Image>, cx: &mut Context<Self>) {
+        // Like file drops, a paste during another read waits its turn.
         if self.attaching {
-            return true;
+            self.pending_images.extend(images);
+            return;
         }
         self.attaching = true;
         let store = self.store.clone();
@@ -224,7 +230,6 @@ impl Conversation {
         })
         .detach();
         cx.notify();
-        true
     }
     pub(super) fn add_attachments(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
         for path in paths {
@@ -270,6 +275,10 @@ impl Conversation {
                 self.attachment_error = None;
             }
             Err(error) => self.attachment_error = Some(error),
+        }
+        let images = std::mem::take(&mut self.pending_images);
+        if !images.is_empty() {
+            self.stage_images(images, cx);
         }
         let pending = std::mem::take(&mut self.pending_attachments);
         self.add_attachments(pending, cx);
@@ -643,5 +652,39 @@ mod clipboard_tests {
             })
             .unwrap();
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[gpui::test]
+    fn a_paste_during_preparation_is_queued_rather_than_lost(cx: &mut TestAppContext) {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let summary = store.create("codex", "/missing/clipboard-test").unwrap();
+        let window =
+            cx.add_window(|_, cx| Conversation::new(summary, Arc::new(Mutex::new(store)), cx));
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, cx| {
+                for _ in 0..2 {
+                    cx.write_to_clipboard(gpui::ClipboardItem {
+                        entries: vec![gpui::ClipboardEntry::Image(
+                            crate::fixtures::clipboard_bitmap(),
+                        )],
+                    });
+                    assert!(view.paste_attachments(cx));
+                }
+                assert_eq!(view.pending_images.len(), 1);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let paths = window
+            .update(cx, |view, _, _| {
+                assert!(!view.attaching);
+                assert!(view.pending_images.is_empty());
+                assert_eq!(view.attachments.len(), 2);
+                view.attachments.clone()
+            })
+            .unwrap();
+        for path in paths {
+            std::fs::remove_file(path).unwrap();
+        }
     }
 }

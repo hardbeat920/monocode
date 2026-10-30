@@ -201,6 +201,8 @@ pub(crate) struct QuickComposer {
     git_epoch: usize,
     attachments: Vec<PathBuf>,
     staged_attachments: Vec<PathBuf>,
+    // Images pasted while another attachment is being prepared.
+    pending_images: Vec<gpui::Image>,
     photos: HashMap<PathBuf, Entity<crate::transcript::attachments::Photo>>,
     attaching: bool,
     dragging: bool,
@@ -270,6 +272,7 @@ impl QuickComposer {
             git_epoch: 0,
             attachments: Vec::new(),
             staged_attachments: Vec::new(),
+            pending_images: Vec::new(),
             photos: HashMap::new(),
             attaching: false,
             dragging: false,
@@ -747,8 +750,15 @@ impl QuickComposer {
         if !paths.is_empty() {
             self.add_attachments(paths, cx);
         }
-        if images.is_empty() || self.attaching {
-            return true;
+        if !images.is_empty() {
+            self.stage_images(images, cx);
+        }
+        true
+    }
+    fn stage_images(&mut self, images: Vec<gpui::Image>, cx: &mut Context<Self>) {
+        if self.attaching {
+            self.pending_images.extend(images);
+            return;
         }
         self.attaching = true;
         let existing = self.attachments.clone();
@@ -767,12 +777,18 @@ impl QuickComposer {
                     }
                     Err(error) => this.error = Some(format!("Could not paste the image: {error}")),
                 }
+                this.stage_pending_images(cx);
                 cx.notify();
             });
         })
         .detach();
         cx.notify();
-        true
+    }
+    fn stage_pending_images(&mut self, cx: &mut Context<Self>) {
+        let images = std::mem::take(&mut self.pending_images);
+        if !images.is_empty() {
+            self.stage_images(images, cx);
+        }
     }
     fn choose_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_picker(window, cx);
@@ -838,6 +854,7 @@ impl QuickComposer {
                     Ok(None) => {}
                     Err(error) => this.error = Some(error),
                 }
+                this.stage_pending_images(cx);
                 this.focus(window, cx);
                 cx.notify();
             });
@@ -2221,6 +2238,37 @@ mod tests {
             })
             .unwrap();
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[gpui::test]
+    fn a_paste_during_preparation_is_queued_rather_than_lost(cx: &mut TestAppContext) {
+        let window = open(cx);
+        window
+            .update(cx, |view, _, cx| {
+                for _ in 0..2 {
+                    cx.write_to_clipboard(gpui::ClipboardItem {
+                        entries: vec![gpui::ClipboardEntry::Image(
+                            crate::fixtures::clipboard_bitmap(),
+                        )],
+                    });
+                    assert!(view.paste(cx));
+                }
+                assert_eq!(view.pending_images.len(), 1);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let paths = window
+            .update(cx, |view, _, _| {
+                assert!(!view.attaching);
+                assert!(view.pending_images.is_empty());
+                assert_eq!(view.attachments.len(), 2);
+                assert_eq!(view.staged_attachments, view.attachments);
+                view.attachments.clone()
+            })
+            .unwrap();
+        for path in paths {
+            std::fs::remove_file(path).unwrap();
+        }
     }
 
     #[gpui::test]

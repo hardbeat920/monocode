@@ -151,6 +151,7 @@ pub(crate) struct Conversation {
     background: background_tasks::BackgroundTasks,
     attachments: Vec<std::path::PathBuf>,
     pending_attachments: Vec<std::path::PathBuf>,
+    pending_images: Vec<gpui::Image>,
     attachment_photos: std::collections::HashMap<
         std::path::PathBuf,
         Entity<crate::transcript::attachments::Photo>,
@@ -600,6 +601,7 @@ impl Conversation {
             background: Default::default(),
             attachments: Vec::new(),
             pending_attachments: Vec::new(),
+            pending_images: Vec::new(),
             attachment_photos: Default::default(),
             attaching: false,
             file_drag: false,
