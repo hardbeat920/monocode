@@ -334,10 +334,9 @@ impl Shell {
             .or(prefs.default_provider.as_deref())
             .and_then(Kind::parse)
             .unwrap_or(Kind::Codex);
-        let model = project
-            .and_then(|p| p.models.get(kind.id()))
-            .or(prefs.default_models.get(kind.id()))
-            .and_then(|model| monocode_core::store::native_model(model, kind.id()));
+        let model = prefs
+            .model_for_new_chat(kind.id(), cwd)
+            .and_then(|model| monocode_core::store::native_model(&model, kind.id()));
         (kind, model, crate::conversation::default_access(cx))
     }
 
@@ -1441,6 +1440,7 @@ impl Shell {
             Err(error) => return request.reply(Err(error)),
         };
         let hidden = self.workspace.preferences.hidden_providers.clone();
+        let hidden_models = self.workspace.preferences.hidden_models_for(&cwd);
         let center = crate::accounts::get(cx).map(|c| c.read(cx));
         let account_kinds = [Kind::Claude, Kind::Codex];
         let accounts: Vec<Value> = center
@@ -1493,10 +1493,12 @@ impl Shell {
                 .filter(|(k, _)| harnesses.contains(k))
                 .flat_map(|(k, profile)| {
                     let rows = monocode_core::catalog::models_for(*k, profile).unwrap_or_default();
-                    if *k == kind {
-                        current_model = mobile_catalog::current_model_id(kind, model.as_deref(), &rows);
+                    let current = (*k == kind)
+                        .then(|| mobile_catalog::current_model_id(kind, model.as_deref(), &rows));
+                    if let Some(id) = &current {
+                        current_model = id.clone();
                     }
-                    rows
+                    mobile_catalog::visible_models(*k, current.as_deref(), rows, &hidden_models)
                         .into_iter()
                         .map(move |m| catalog_model(*k, m))
                 })

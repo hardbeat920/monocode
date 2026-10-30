@@ -2633,23 +2633,30 @@ impl Conversation {
         }
     }
     /// recentMenuModels: up to six remembered choices, with the current model
-    /// added when it is not among them.
+    /// added when it is not among them. Hidden providers and models drop out,
+    /// except the current one.
     fn recent_model_items(&self, cx: &gpui::App) -> Vec<MenuItem> {
         let provider = Kind::from_id(&self.summary.provider);
         let current = (provider, self.model.clone());
-        let hidden = cx
-            .try_global::<crate::settings::Preferences>()
+        let prefs = cx.try_global::<crate::settings::Preferences>();
+        let hidden = prefs
             .map(|p| p.hidden_for(&self.summary.cwd))
             .unwrap_or_default();
-        let mut choices: Vec<(Kind, Option<String>)> = cx
-            .try_global::<crate::settings::Preferences>()
+        let hidden_models = prefs
+            .map(|p| p.hidden_models_for(&self.summary.cwd))
+            .unwrap_or_default();
+        let mut choices: Vec<(Kind, Option<String>)> = prefs
             .into_iter()
             .flat_map(|p| &p.recent_models)
             .filter_map(|choice| {
                 let kind = Kind::parse(&choice.provider)?;
                 choice.model.as_ref()?;
-                (kind == provider || !hidden.iter().any(|id| id == kind.id()))
-                    .then(|| (kind, choice.model.clone()))
+                let entry = (kind, choice.model.clone());
+                let shown = (kind == provider || !hidden.iter().any(|id| id == kind.id()))
+                    && !hidden_models
+                        .iter()
+                        .any(|c| c.provider == kind.id() && c.model == choice.model);
+                (shown || entry == current).then_some(entry)
             })
             .collect();
         choices.dedup();
@@ -4675,6 +4682,62 @@ mod menu_tests {
             .unwrap();
         window
             .update(visual, |c, _, _| assert!(c.menu.is_none()))
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn switch_model_leaves_out_hidden_recents_but_keeps_the_current_one(cx: &mut TestAppContext) {
+        let window = conversation(cx);
+        let choice = |provider: &str, model: &str| crate::settings::ModelChoice {
+            provider: provider.into(),
+            model: Some(model.into()),
+        };
+        window
+            .update(cx, |c, _, cx| {
+                c.model = Some("opus".into());
+                let mut prefs = crate::settings::Preferences {
+                    recent_models: vec![
+                        choice("codex", "gpt-6.1-sol"),
+                        choice("claude", "opus"),
+                        choice("claude", "sonnet"),
+                        choice("codex", "gpt-6-luna"),
+                    ],
+                    hidden_models: vec![choice("codex", "gpt-6.1-sol"), choice("claude", "opus")],
+                    ..Default::default()
+                };
+                prefs
+                    .project_providers
+                    .entry("/work/monocode".into())
+                    .or_default()
+                    .hidden_models = vec![choice("claude", "sonnet")];
+                cx.set_global(prefs);
+            })
+            .unwrap();
+        // App: Switch Model (Cmd+.) opens the recents.
+        window
+            .update(cx, |c, w, cx| c.toggle_recent_models(w, cx))
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |c, _, cx| {
+                assert!(c.menu_is(ComposerMenu::Recent));
+                let ids: Vec<_> = c
+                    .recent_model_items(cx)
+                    .iter()
+                    .filter_map(|item| match item {
+                        MenuItem::Action(a) => Some((a.id.to_string(), a.checked)),
+                        _ => None,
+                    })
+                    .collect();
+                // Hidden globally or for the project, except the chat's own.
+                assert_eq!(
+                    ids,
+                    [
+                        (r#"recent-model:["claude","opus"]"#.to_string(), true),
+                        (r#"recent-model:["codex","gpt-6-luna"]"#.to_string(), false),
+                    ]
+                );
+            })
             .unwrap();
     }
 

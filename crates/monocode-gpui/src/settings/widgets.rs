@@ -359,13 +359,14 @@ impl SettingsView {
     /// Toggle: a 36×20 switch with a 16px knob.
     pub(super) fn toggle(
         &self,
-        id: &'static str,
+        id: impl Into<SharedString>,
         label: impl Into<SharedString>,
         on: bool,
         disabled: bool,
         cx: &mut Context<Self>,
         change: impl Fn(&mut Self, bool, &mut Context<Self>) + 'static,
     ) -> AnyElement {
+        let id = id.into();
         div()
             .id(SharedString::from(format!("toggle-{id}")))
             .debug_selector(move || format!("settings-toggle-{id}"))

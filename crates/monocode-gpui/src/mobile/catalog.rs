@@ -1,6 +1,6 @@
 //! The same session cards and model IDs as mobileWorkspace.ts, independent of
 //! whether a conversation has been materialized on the native desktop.
-use crate::pickers;
+use crate::{pickers, settings::ModelChoice};
 use monocode_core::{
     provider::Kind,
     store::{MobileSessionMetadata, Session},
@@ -92,6 +92,30 @@ pub(crate) fn current_model_id(
     )
 }
 
+/// Hidden models leave the phone's sheet, except the row the session resolves
+/// to, which may be an implicit provider default. Compare wire IDs so native,
+/// provider-qualified and Tauri-style keys all match.
+pub(crate) fn visible_models(
+    kind: Kind,
+    current: Option<&str>,
+    rows: Vec<monocode_core::catalog::Model>,
+    hidden: &[ModelChoice],
+) -> Vec<monocode_core::catalog::Model> {
+    rows.into_iter()
+        .filter(|row| {
+            let id = model_id(kind, Some(&row.id));
+            current == Some(id.as_str())
+                || !hidden.iter().any(|choice| {
+                    choice.provider == kind.id()
+                        && choice
+                            .model
+                            .as_deref()
+                            .is_some_and(|model| model_id(kind, Some(model)) == id)
+                })
+        })
+        .collect()
+}
+
 pub(crate) fn metadata(
     saved: &MobileSessionMetadata,
     live: Option<&LiveSession>,
@@ -176,6 +200,47 @@ mod tests {
             monocode_core::store::native_model("claude:default", "claude"),
             None
         );
+    }
+
+    #[test]
+    fn a_hidden_implicit_default_stays_in_the_phone_model_list() {
+        let row = |id: &str, default: bool| monocode_core::catalog::Model {
+            id: id.into(),
+            name: id.into(),
+            alias_target: None,
+            efforts: Vec::new(),
+            default_effort: None,
+            fast: false,
+            thinking: false,
+            default,
+            tiers: Vec::new(),
+            controls: Vec::new(),
+        };
+        let rows = vec![
+            row("claude-opus-5-5", true),
+            row("claude-sonnet-5-5", false),
+            row("claude-haiku-4-5", false),
+        ];
+        let hide = |model: &str| ModelChoice {
+            provider: "claude".into(),
+            model: Some(model.into()),
+        };
+        let hidden = [hide("claude-opus-5-5"), hide("claude:haiku-4.5")];
+        let ids = |current: Option<&str>| {
+            visible_models(Kind::Claude, current, rows.clone(), &hidden)
+                .into_iter()
+                .map(|m| m.id)
+                .collect::<Vec<_>>()
+        };
+        // The chat has no explicit model, so it resolves to the default row.
+        let current = current_model_id(Kind::Claude, None, &rows);
+        assert_eq!(current, "claude:opus-5-5");
+        assert_eq!(
+            ids(Some(&current)),
+            ["claude-opus-5-5", "claude-sonnet-5-5"]
+        );
+        // Another provider's sheet keeps hiding it.
+        assert_eq!(ids(None), ["claude-sonnet-5-5"]);
     }
 
     #[test]

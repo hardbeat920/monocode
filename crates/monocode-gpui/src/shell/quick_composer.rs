@@ -36,11 +36,7 @@ impl Shell {
         let initial = crate::quick_composer::Launch::choice(
             cwd.clone(),
             kind,
-            p.project_providers
-                .get(&cwd)
-                .and_then(|p| p.models.get(kind.id()))
-                .or(p.default_models.get(kind.id()))
-                .cloned(),
+            p.model_for_new_chat(kind.id(), &cwd),
             crate::conversation::default_access(cx),
         );
         let mut choice = self
