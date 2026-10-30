@@ -436,6 +436,39 @@ impl QuickComposer {
             && !matches!(self.picker, Some(Picker::Workspace | Picker::Branch))
             && (self.attachments_supported() || self.attachments.is_empty())
     }
+    /// The catalog entry the launch checks access against: the open picker's,
+    /// else the account's cached catalog.
+    fn access_model(&self, cx: &gpui::App) -> Option<monocode_core::catalog::Model> {
+        if let Some(model) = self.models.as_ref().and_then(|list| {
+            list.read(cx)
+                .catalog_model(self.kind, self.model.as_deref())
+        }) {
+            return Some(model.clone());
+        }
+        let profile = crate::accounts::get(cx)
+            .map(|a| a.read(cx).selected(self.kind, &self.cwd))
+            .unwrap_or_default();
+        let models = monocode_core::catalog::cached_models_for(self.kind, &profile)?;
+        monocode_core::catalog::launch_model(&models, self.model.as_deref()).cloned()
+    }
+    /// PERMISSIONS the chosen model offers.
+    fn offered_permissions(&self, cx: &gpui::App) -> Vec<(AccessMode, &'static str, &'static str)> {
+        let offered =
+            monocode_core::catalog::access_modes(self.kind, self.access_model(cx).as_ref());
+        PERMISSIONS
+            .into_iter()
+            .filter(|(mode, ..)| offered.contains(mode))
+            .collect()
+    }
+    /// The saved choice stays; a model that can't do it shows (and runs with)
+    /// the closest preceding mode it supports.
+    fn shown_access(&self, cx: &gpui::App) -> AccessMode {
+        monocode_core::catalog::supported_access(
+            self.kind,
+            self.access_model(cx).as_ref(),
+            self.access,
+        )
+    }
     fn launch(&mut self, foreground: bool, cx: &mut Context<Self>) {
         if self.picker == Some(Picker::Commands) {
             self.choose_command(self.highlight, cx);
@@ -554,9 +587,11 @@ impl QuickComposer {
                 self.models = Some(list);
             }
             Picker::Permissions => {
-                self.highlight = PERMISSIONS
+                let access = self.shown_access(cx);
+                self.highlight = self
+                    .offered_permissions(cx)
                     .iter()
-                    .position(|(mode, ..)| *mode == self.access)
+                    .position(|(mode, ..)| *mode == access)
                     .unwrap_or(0);
                 window.focus(&self.permissions_focus, cx);
             }
@@ -667,7 +702,7 @@ impl QuickComposer {
         let count = match self.picker {
             Some(Picker::Commands) => self.command_options(cx).len(),
             Some(Picker::Project) => self.project_options(cx).len(),
-            Some(Picker::Permissions) => PERMISSIONS.len(),
+            Some(Picker::Permissions) => self.offered_permissions(cx).len(),
             _ => return,
         };
         if count > 0 {
@@ -683,7 +718,7 @@ impl QuickComposer {
         self.close_picker(window, cx);
     }
     fn choose_permission(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some((mode, ..)) = PERMISSIONS.get(ix) {
+        if let Some((mode, ..)) = self.offered_permissions(cx).get(ix) {
             self.access = *mode;
         }
         self.close_picker(window, cx);
@@ -1236,10 +1271,11 @@ impl QuickComposer {
                 .child(icon("chevron-down", 12.).text_color(content(0.4)))
                 .on_click(cx.listener(|this, _, window, cx| this.open(Picker::Model, window, cx))),
             )
-            .when(self.kind != Kind::Fx, |d| {
+            .when(self.offered_permissions(cx).len() > 1, |d| {
+                let access = self.shown_access(cx);
                 let permission = PERMISSIONS
                     .iter()
-                    .find(|(mode, ..)| *mode == self.access)
+                    .find(|(mode, ..)| *mode == access)
                     .map_or("lock", |(_, icon, _)| *icon);
                 d.child(
                     pill(
@@ -1250,14 +1286,14 @@ impl QuickComposer {
                     )
                     .px_2()
                     .py_1()
-                    .child(icon(permission, 14.).text_color(
-                        if self.access == AccessMode::FullAccess {
+                    .child(
+                        icon(permission, 14.).text_color(if access == AccessMode::FullAccess {
                             amber(0.9)
                         } else {
                             content(0.7)
-                        },
-                    ))
-                    .child(div().truncate().child(self.access.label()))
+                        }),
+                    )
+                    .child(div().truncate().child(access.label()))
                     .child(icon("chevron-down", 12.).text_color(content(0.4)))
                     .on_click(
                         cx.listener(|this, _, window, cx| {
@@ -1416,6 +1452,7 @@ impl QuickComposer {
             .into_any_element()
     }
     fn permissions(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let access = self.shown_access(cx);
         div()
             .id("quick-permissions-list")
             .role(Role::ListBox)
@@ -1434,53 +1471,50 @@ impl QuickComposer {
                 }
                 cx.stop_propagation();
             }))
-            .children(
-                PERMISSIONS
-                    .into_iter()
-                    .enumerate()
-                    .map(|(ix, (mode, glyph, hint))| {
-                        let selected = mode == self.access;
-                        self.option_row(("quick-permission", ix), ix == self.highlight, cx)
-                            .aria_label(mode.label())
-                            .aria_selected(selected)
-                            .px_3()
-                            .py_2()
-                            .flex()
-                            .items_center()
-                            .gap_3()
-                            .child(
-                                icon(glyph, 16.).text_color(if mode == AccessMode::FullAccess {
-                                    amber(0.9)
-                                } else {
-                                    content(0.75)
-                                }),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(
-                                        div()
-                                            .text_size(px(13.))
-                                            .font_weight(gpui::FontWeight::MEDIUM)
-                                            .child(mode.label()),
-                                    )
-                                    .child(
-                                        div()
-                                            .mt(px(2.))
-                                            .text_size(px(11.))
-                                            .text_color(content(0.45))
-                                            .child(hint),
-                                    ),
-                            )
-                            .when(selected, |d| {
-                                d.child(icon("check-2", 14.).text_color(accent_color()))
-                            })
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.choose_permission(ix, window, cx)
-                            }))
-                    }),
-            )
+            .children(self.offered_permissions(cx).into_iter().enumerate().map(
+                |(ix, (mode, glyph, hint))| {
+                    let selected = mode == access;
+                    self.option_row(("quick-permission", ix), ix == self.highlight, cx)
+                        .aria_label(mode.label())
+                        .aria_selected(selected)
+                        .px_3()
+                        .py_2()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .child(
+                            icon(glyph, 16.).text_color(if mode == AccessMode::FullAccess {
+                                amber(0.9)
+                            } else {
+                                content(0.75)
+                            }),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(
+                                    div()
+                                        .text_size(px(13.))
+                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                        .child(mode.label()),
+                                )
+                                .child(
+                                    div()
+                                        .mt(px(2.))
+                                        .text_size(px(11.))
+                                        .text_color(content(0.45))
+                                        .child(hint),
+                                ),
+                        )
+                        .when(selected, |d| {
+                            d.child(icon("check-2", 14.).text_color(accent_color()))
+                        })
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.choose_permission(ix, window, cx)
+                        }))
+                },
+            ))
             .into_any_element()
     }
     fn project_list(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {

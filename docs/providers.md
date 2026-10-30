@@ -13,6 +13,7 @@ Follow each provider’s linked installation guide for platform requirements and
 - [Pi](https://pi.dev/) - `npm install -g @earendil-works/pi-coding-agent`
 - [omp](https://omp.sh) - `curl -fsSL https://omp.sh/install | sh`
 - [fx](https://fx.sh) - `curl -fsSL https://fx.sh/setup.sh | bash` then `fx login`
+- [GitHub Copilot CLI](https://docs.github.com/en/copilot/get-started/cli-quickstart) - `npm install -g @github/copilot` (Node.js 22+), then `copilot login`
 - [Hermes Agent](https://github.com/NousResearch/hermes-agent) - macOS/Linux: `curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash`; Windows PowerShell: `iex (irm https://hermes-agent.nousresearch.com/install.ps1)`; then run `hermes model`
 - [Devin CLI](https://docs.devin.ai/cli) - macOS/Linux: `curl -fsSL https://cli.devin.ai/install.sh | bash` (or `brew install --cask devin-cli`); Windows PowerShell: `irm https://static.devin.ai/cli/setup.ps1 | iex`; then run `devin auth login` (MonoCode reuses that login)
 

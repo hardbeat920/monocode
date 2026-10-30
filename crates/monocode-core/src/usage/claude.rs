@@ -8,19 +8,19 @@ pub(super) fn fetch_for(profile: &crate::accounts::Profile) -> Result<Snapshot, 
         .map_err(FetchError::failed)?
         .or_else(config_dir);
     let credentials = credentials(config).ok_or_else(|| {
-        FetchError::unavailable("Sign in with claude auth login, then refresh usage.")
+        FetchError::authentication_required("Sign in with claude auth login, then refresh usage.")
     })?;
     let oauth = credentials.get("claudeAiOauth").unwrap_or(&credentials);
     let token = oauth["accessToken"]
         .as_str()
         .filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| FetchError::unavailable("Claude is not signed in."))?;
+        .ok_or_else(|| FetchError::authentication_required("Claude is not signed in."))?;
     let expiry = oauth["expiresAt"]
         .as_i64()
         .or_else(|| oauth["expiresAt"].as_str()?.parse::<i64>().ok());
     // The CLI owns its rotating refresh token. Never refresh or write it here.
     if expiry.is_some_and(|at| at <= now_ms()) {
-        return Err(FetchError::unavailable(
+        return Err(FetchError::authentication_required(
             "Claude sign-in expired. Run claude auth login, then refresh.",
         ));
     }
@@ -33,7 +33,7 @@ pub(super) fn fetch_for(profile: &crate::accounts::Profile) -> Result<Snapshot, 
         .set("User-Agent", "claude-code/2.1.0")
         .call()
         .map_err(|error| match error {
-            ureq::Error::Status(401, _) => FetchError::unavailable(
+            ureq::Error::Status(401, _) => FetchError::authentication_required(
                 "Claude sign-in expired. Run claude auth login, then refresh.",
             ),
             ureq::Error::Status(403, _) => {
