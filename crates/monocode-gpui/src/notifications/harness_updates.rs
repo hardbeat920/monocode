@@ -26,14 +26,14 @@ pub(crate) struct HarnessUpdates {
 }
 impl EventEmitter<HarnessUpdatesEvent> for HarnessUpdates {}
 impl HarnessUpdates {
-    pub(crate) fn new(hidden: Vec<String>, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(hidden: Vec<String>, check_on_launch: bool, cx: &mut Context<Self>) -> Self {
         let mut this = Self {
             updates: Vec::new(),
             rows: HashMap::new(),
             checking: false,
             generation: 0,
         };
-        if harness_updates::claim_launch_check() {
+        if check_on_launch && harness_updates::claim_launch_check() {
             this.check_now(hidden, cx);
         }
         this
@@ -301,5 +301,34 @@ impl Render for HarnessUpdates {
                 ),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::TestAppContext;
+
+    #[gpui::test]
+    fn disabled_launch_check_and_dismissed_results_stay_hidden(cx: &mut TestAppContext) {
+        let notice = cx.new(|cx| HarnessUpdates::new(Vec::new(), false, cx));
+        notice.update(cx, |notice, cx| {
+            assert!(!notice.checking);
+            assert_eq!(notice.generation, 0);
+            assert!(!notice.is_visible());
+
+            notice.updates.push(Update {
+                harness: Kind::Claude,
+                installed: "2.1.310".into(),
+                latest: "2.1.311".into(),
+            });
+            // A late worker result must not restore the dismissed notification.
+            notice.checking = true;
+            let generation = notice.generation;
+            notice.dismiss(cx);
+            assert_ne!(notice.generation, generation);
+            assert!(!notice.checking);
+            assert!(!notice.is_visible());
+        });
     }
 }
