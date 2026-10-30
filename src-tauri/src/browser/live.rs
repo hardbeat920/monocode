@@ -8,7 +8,11 @@
 //! background or its window is off-screen, so the panel works in every mode,
 //! a headless MonoCode browser included. While the panel is open the tab's
 //! viewport takes the panel's size, so the page fills it the way a built-in
-//! browser would.
+//! browser would. In the hidden MonoCode browser each agent tab has a window
+//! of its own, and that window is given the panel's size: the page then has
+//! the size for real, so a navigation or an agent's action never shows it at
+//! another size for a moment. A tab that shares its window with others (the
+//! user's browser) has the panel's size emulated instead.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Condvar, Mutex};
@@ -17,7 +21,9 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use super::link::{CdpSessionId, Command, EventFilter, Link, Method, Reply, SCREENCAST_FRAME};
+use super::link::{
+    CdpSessionId, Command, EventFilter, Link, Method, Reply, TargetId, SCREENCAST_FRAME,
+};
 use super::policy;
 use super::protocol::TabId;
 
@@ -44,7 +50,7 @@ const ACK_WAIT: Duration = Duration::from_millis(150);
 /// How often a held-back acknowledgement looks at what the panel has taken.
 const ACK_POLL: Duration = Duration::from_millis(4);
 /// Bytes in front of the picture in [`LiveFrame::packed`].
-pub const PACKED_HEADER: usize = 24;
+pub const PACKED_HEADER: usize = 40;
 /// JPEG quality of the pictures, 0 to 100.
 const QUALITY: u32 = 90;
 /// How often a development build prints where the pictures' time goes.
@@ -53,13 +59,26 @@ const METER_EVERY: Duration = Duration::from_secs(2);
 const MIN_SIDE: u32 = 200;
 const MAX_SIDE: u32 = 3840;
 const MAX_SCALE: f64 = 4.0;
+/// How many times the tab's window is resized until its page has the
+/// panel's size (the window's frame is learnt from the first try).
+const FIT_TRIES: usize = 3;
+/// How long a resized window may take before its page has the new size.
+const FIT_WAIT: Duration = Duration::from_millis(300);
+/// How far, in CSS pixels, the page may be from the panel's size and still
+/// count as having it (a display at 125 % has fractional CSS pixels).
+const FIT_SLACK: f64 = 1.5;
 
 /// The tab the panel shows.
 #[derive(Clone, Debug)]
 pub struct LiveTab {
     pub tab: TabId,
+    pub target: TargetId,
     /// Main-frame session.
     pub main: CdpSessionId,
+    /// The tab's own window in the hidden MonoCode browser, which may take
+    /// the panel's size; `None` for a tab whose window is not MonoCode's to
+    /// resize.
+    pub window: Option<i64>,
 }
 
 /// One picture of the tab.
@@ -78,12 +97,17 @@ pub struct LiveFrame {
     pub height: f64,
     /// Counts the pictures of one view, from 1.
     pub seq: u64,
+    /// How far the page was scrolled, in CSS pixels: the panel moves the
+    /// picture ahead of the next one while the user scrolls.
+    pub scroll_x: f64,
+    pub scroll_y: f64,
 }
 
 impl LiveFrame {
     /// The picture as the panel takes it: a fixed header (format byte, 3
-    /// zero bytes, `seq` as u32, `width` and `height` as f64, all little
-    /// endian) and then the picture's own bytes. Binary, so it reaches the
+    /// zero bytes, `seq` as u32, `width`, `height`, `scroll_x` and
+    /// `scroll_y` as f64, all little endian) and then the picture's own
+    /// bytes. Binary, so it reaches the
     /// panel without being turned into text and back.
     pub fn packed(&self) -> Option<Vec<u8>> {
         use base64::Engine as _;
@@ -96,6 +120,8 @@ impl LiveFrame {
         bytes.extend_from_slice(&(self.seq as u32).to_le_bytes());
         bytes.extend_from_slice(&self.width.to_le_bytes());
         bytes.extend_from_slice(&self.height.to_le_bytes());
+        bytes.extend_from_slice(&self.scroll_x.to_le_bytes());
+        bytes.extend_from_slice(&self.scroll_y.to_le_bytes());
         bytes.extend_from_slice(&picture);
         Some(bytes)
     }
@@ -214,16 +240,27 @@ impl PanelSize {
             },
         }
     }
+}
 
-    /// The largest picture to ask for: never under the page's own device
-    /// pixels, so the browser never scales a picture down (a pixel short
-    /// blurs the whole frame).
-    fn picture(self) -> (u32, u32) {
-        (
-            (f64::from(self.width) * self.scale).ceil() as u32 + 2,
-            (f64::from(self.height) * self.scale).ceil() as u32 + 2,
-        )
-    }
+/// The largest picture to ask for: never under the page's own device
+/// pixels, so the browser never scales a picture down (a pixel short blurs
+/// the whole frame).
+fn picture_for(width: f64, height: f64, scale: f64) -> (u32, u32) {
+    (
+        (width * scale).ceil() as u32 + 2,
+        (height * scale).ceil() as u32 + 2,
+    )
+}
+
+/// How the tab shows the panel's size, as [`show`] set it up.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Shown {
+    /// The page's viewport in CSS pixels: the panel's, give or take
+    /// [`FIT_SLACK`].
+    width: f64,
+    height: f64,
+    /// The tab's own window has that size; otherwise it is emulated.
+    window: bool,
 }
 
 /// One running view, named by the pane that asked for it: [`run`] watches
@@ -388,30 +425,185 @@ impl Drop for LiveHold {
     }
 }
 
-/// Give the tab the panel's viewport and start the pictures at that size.
-fn show(link: &Link, tab: &LiveTab, size: PanelSize) -> Result<(), String> {
-    send(
-        link,
-        &tab.main,
-        Method::EmulationSetDeviceMetricsOverride,
-        json!({
-            "width": size.width,
-            "height": size.height,
-            "deviceScaleFactor": size.scale,
-            "mobile": false,
-        }),
-    )?;
-    let (width, height) = size.picture();
+/// Give the tab the panel's viewport and start the pictures at that size:
+/// its own window takes that size when it has one ([`fit_window`]), the
+/// size is emulated otherwise, and when the window cannot get that small.
+fn show(link: &Link, tab: &LiveTab, size: PanelSize) -> Result<Shown, String> {
+    let fitted = tab
+        .window
+        .and_then(|window| match fit_window(link, tab, window, size) {
+            Ok((width, height))
+                if (width - f64::from(size.width)).abs() <= FIT_SLACK
+                    && (height - f64::from(size.height)).abs() <= FIT_SLACK =>
+            {
+                Some(Shown {
+                    width,
+                    height,
+                    window: true,
+                })
+            }
+            Ok((width, height)) => {
+                note(&format!(
+                    "the window gives the page {width}x{height}, not the panel's {}x{}: emulated",
+                    size.width, size.height
+                ));
+                None
+            }
+            Err(error) => {
+                note(&format!("window not sized: {error}"));
+                None
+            }
+        });
+    let shown = match fitted {
+        Some(shown) => shown,
+        None => {
+            send(
+                link,
+                &tab.main,
+                Method::EmulationSetDeviceMetricsOverride,
+                json!({
+                    "width": size.width,
+                    "height": size.height,
+                    "deviceScaleFactor": size.scale,
+                    "mobile": false,
+                }),
+            )?;
+            Shown {
+                width: f64::from(size.width),
+                height: f64::from(size.height),
+                window: false,
+            }
+        }
+    };
+    let (width, height) = picture_for(shown.width, shown.height, size.scale);
     send(
         link,
         &tab.main,
         Method::PageStartScreencast,
         json!({ "format": "jpeg", "quality": QUALITY, "maxWidth": width, "maxHeight": height }),
-    )
-    .map(|_| ())
+    )?;
+    Ok(shown)
 }
 
-/// Hand the tab back its window's viewport and scrollbars.
+/// Resize the tab's own window until its page has the panel's size, at the
+/// panel's pixel ratio. The window's frame (a title bar, borders) is not
+/// known up front, so each try corrects by what the page still lacks.
+/// Returns the page's viewport in CSS pixels.
+fn fit_window(
+    link: &Link,
+    tab: &LiveTab,
+    window: i64,
+    size: PanelSize,
+) -> Result<(f64, f64), String> {
+    let mut seen = viewport(link, tab)?;
+    // Only the pixel ratio is emulated, when the window's differs: the size
+    // stays the window's (0 keeps it).
+    if (seen.scale - size.scale).abs() > 0.01 {
+        send(
+            link,
+            &tab.main,
+            Method::EmulationSetDeviceMetricsOverride,
+            json!({ "width": 0, "height": 0, "deviceScaleFactor": size.scale, "mobile": false }),
+        )?;
+        seen = viewport(link, tab)?;
+    }
+    let bounds = send_browser(
+        link,
+        Method::BrowserGetWindowBounds,
+        json!({ "windowId": window }),
+    )?;
+    let bounds = &bounds["bounds"];
+    if matches!(
+        bounds["windowState"].as_str(),
+        Some("maximized" | "fullscreen")
+    ) {
+        send_browser(
+            link,
+            Method::BrowserSetWindowBounds,
+            json!({ "windowId": window, "bounds": { "windowState": "normal" } }),
+        )?;
+    }
+    let mut outer = (
+        bounds["width"].as_f64().unwrap_or(seen.width),
+        bounds["height"].as_f64().unwrap_or(seen.height),
+    );
+    for _ in 0..FIT_TRIES {
+        let lack = (
+            f64::from(size.width) - seen.width,
+            f64::from(size.height) - seen.height,
+        );
+        if lack.0.abs() < 1.0 && lack.1.abs() < 1.0 {
+            break;
+        }
+        outer = (
+            (outer.0 + lack.0.round()).max(1.0),
+            (outer.1 + lack.1.round()).max(1.0),
+        );
+        send_browser(
+            link,
+            Method::BrowserSetWindowBounds,
+            json!({ "windowId": window, "bounds": { "width": outer.0, "height": outer.1 } }),
+        )?;
+        let before = seen;
+        let deadline = Instant::now() + FIT_WAIT;
+        loop {
+            seen = viewport(link, tab)?;
+            if seen != before || Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if seen == before {
+            // The window would not change: it is as small as it gets.
+            break;
+        }
+    }
+    Ok((seen.width, seen.height))
+}
+
+/// The page's viewport as the browser lays it out.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Viewport {
+    width: f64,
+    height: f64,
+    /// Device pixels per CSS pixel.
+    scale: f64,
+}
+
+fn viewport(link: &Link, tab: &LiveTab) -> Result<Viewport, String> {
+    let metrics = send(link, &tab.main, Method::PageGetLayoutMetrics, json!({}))?;
+    viewport_of(&metrics).ok_or_else(|| "The browser gave no layout metrics.".to_string())
+}
+
+/// The viewport in `Page.getLayoutMetrics`' answer: CSS pixels from
+/// `cssVisualViewport`, the pixel ratio from the device-pixel
+/// `layoutViewport` next to its CSS twin.
+fn viewport_of(metrics: &Value) -> Option<Viewport> {
+    let css = &metrics["cssVisualViewport"];
+    let zoom = css["zoom"].as_f64().unwrap_or(1.0);
+    let width = css["clientWidth"].as_f64()? * zoom;
+    let height = css["clientHeight"].as_f64()? * zoom;
+    let device = metrics["layoutViewport"]["clientWidth"].as_f64();
+    let layout = metrics["cssLayoutViewport"]["clientWidth"].as_f64();
+    let scale = match (device, layout) {
+        (Some(device), Some(layout)) if layout > 0.0 => device / layout,
+        _ => 1.0,
+    };
+    Some(Viewport {
+        width,
+        height,
+        scale,
+    })
+}
+
+fn send_browser(link: &Link, method: Method, params: Value) -> Result<Value, String> {
+    link.send_system(Command::browser(method, params))
+        .map_err(|e| format!("The browser refused {}: {e:?}", method.name()))
+}
+
+/// Hand the tab back its window's viewport and scrollbars. A window that was
+/// given the panel's size keeps it: the agent goes on at the size the user
+/// last saw.
 fn restore(link: &Link, tab: &LiveTab) {
     let _ = send(link, &tab.main, Method::PageStopScreencast, json!({}));
     let _ = send(
@@ -452,19 +644,31 @@ pub fn run(
         Method::EmulationSetScrollbarsHidden,
         json!({ "hidden": true }),
     );
-    if let Err(error) = show(link, tab, size) {
-        note(&format!("view not started: {error}"));
-        restore(link, tab);
-        return Err(error);
-    }
+    let mut shown = match show(link, tab, size) {
+        Ok(shown) => shown,
+        Err(error) => {
+            note(&format!("view not started: {error}"));
+            restore(link, tab);
+            return Err(error);
+        }
+    };
     note(&format!(
-        "view started: panel {}x{} at {}",
-        size.width, size.height, size.scale
+        "view started: panel {}x{} at {}, page {}x{} {}",
+        size.width,
+        size.height,
+        size.scale,
+        shown.width,
+        shown.height,
+        if shown.window {
+            "in its own window"
+        } else {
+            "emulated"
+        }
     ));
     let mut current = size;
     let mut seq = 0;
     // The last JPEG, until the page has been still long enough for a PNG.
-    let mut moving: Option<(Instant, f64, f64)> = None;
+    let mut moving: Option<(Instant, Picture)> = None;
     // The lossless picture the browser is making; dropped when the page
     // moves again meanwhile, since it would show the page as it was.
     let mut still: Option<Still> = None;
@@ -523,18 +727,31 @@ pub fn run(
             misfit = None;
             last.clear();
             note("pictures resumed");
-            if let Err(error) = show(link, tab, current) {
-                restore(link, tab);
-                return Err(error);
+            match show(link, tab, current) {
+                Ok(again) => shown = again,
+                Err(error) => {
+                    restore(link, tab);
+                    return Err(error);
+                }
             }
         }
         if let Some(next) = control.take_resize().filter(|next| *next != current) {
             // A new size needs pictures of the new size, so the screencast
             // starts over at it.
             let _ = send(link, &tab.main, Method::PageStopScreencast, json!({}));
-            if let Err(error) = show(link, tab, next) {
-                restore(link, tab);
-                return Err(error);
+            // A window that could not take the old size may take this one.
+            let _ = send(
+                link,
+                &tab.main,
+                Method::EmulationClearDeviceMetricsOverride,
+                json!({}),
+            );
+            match show(link, tab, next) {
+                Ok(again) => shown = again,
+                Err(error) => {
+                    restore(link, tab);
+                    return Err(error);
+                }
             }
             current = next;
             last.clear();
@@ -542,7 +759,7 @@ pub fn run(
         if let Some(pending) = &still {
             match pending.answer.try_recv() {
                 Ok(answer) => {
-                    let Still { width, height, .. } = still.take().expect("checked");
+                    let Still { picture, .. } = still.take().expect("checked");
                     if let Some(data) = answer
                         .ok()
                         .and_then(|value| {
@@ -550,7 +767,7 @@ pub fn run(
                                 .as_str()
                                 .map(str::to_string)
                         })
-                        .filter(|data| fits(current, width, height, png_size(data)))
+                        .filter(|data| fits(shown, picture.width, picture.height, png_size(data)))
                     {
                         seq += 1;
                         offer(
@@ -560,9 +777,11 @@ pub fn run(
                                 tab: tab.tab.0.clone(),
                                 data,
                                 format: "png",
-                                width,
-                                height,
+                                width: picture.width,
+                                height: picture.height,
                                 seq,
+                                scroll_x: picture.scroll_x,
+                                scroll_y: picture.scroll_y,
                             },
                         );
                     }
@@ -571,22 +790,18 @@ pub fn run(
                 Err(mpsc::TryRecvError::Disconnected) => still = None,
             }
         }
-        if let Some((at, width, height)) = moving {
+        if let Some((at, picture)) = moving {
             if at.elapsed() >= STILL_AFTER {
                 // Asked for, not waited for: pictures and input keep flowing
                 // while the browser makes it.
                 moving = None;
-                still = request_still(link, tab).map(|answer| Still {
-                    answer,
-                    width,
-                    height,
-                });
+                still = request_still(link, tab).map(|answer| Still { answer, picture });
                 if still.is_none() {
                     note("lossless picture not asked for: the link refused");
                 }
             }
         }
-        let wait = moving.map_or(POLL, |(at, _, _)| {
+        let wait = moving.map_or(POLL, |(at, _)| {
             STILL_AFTER.saturating_sub(at.elapsed()).min(POLL)
         });
         let wait = if waiting.is_some() {
@@ -612,10 +827,9 @@ pub fn run(
                 note("picture dropped: the same as the last one");
                 break 'frame false;
             }
-            let metadata = &event.params["metadata"];
-            let width = metadata["deviceWidth"].as_f64().unwrap_or(0.0);
-            let height = metadata["deviceHeight"].as_f64().unwrap_or(0.0);
-            if fits(current, width, height, jpeg_size(data)) {
+            let picture = Picture::of(&event.params["metadata"]);
+            let (width, height) = (picture.width, picture.height);
+            if fits(shown, width, height, jpeg_size(data)) {
                 misfit = None;
             } else {
                 let since = *misfit.get_or_insert_with(Instant::now);
@@ -624,16 +838,17 @@ pub fn run(
                 if healed.is_none_or(|at: Instant| at.elapsed() >= HEAL_EVERY) {
                     healed = Some(Instant::now());
                     let _ = send(link, &tab.main, Method::PageStopScreencast, json!({}));
-                    if let Err(error) = show(link, tab, current) {
-                        note(&format!("viewport not put back: {error}"));
+                    match show(link, tab, current) {
+                        Ok(again) => shown = again,
+                        Err(error) => note(&format!("viewport not put back: {error}")),
                     }
                 }
                 if since.elapsed() < MISFIT_FOR {
                     note(&format!(
-                        "picture dropped: {width}x{height} css, {:?} px, panel {}x{} at {}",
+                        "picture dropped: {width}x{height} css, {:?} px, page {}x{} at {}",
                         jpeg_size(data),
-                        current.width,
-                        current.height,
+                        shown.width,
+                        shown.height,
                         current.scale
                     ));
                     break 'frame false;
@@ -641,7 +856,7 @@ pub fn run(
             }
             last = data.to_string();
             seq += 1;
-            moving = Some((Instant::now(), width, height));
+            moving = Some((Instant::now(), picture));
             // The page moved on: a lossless picture still being made would
             // show it as it was.
             still = None;
@@ -656,6 +871,8 @@ pub fn run(
                     width,
                     height,
                     seq,
+                    scroll_x: picture.scroll_x,
+                    scroll_y: picture.scroll_y,
                 },
             );
             meter.handed(seq, handing);
@@ -823,13 +1040,35 @@ fn ack(link: &Link, tab: &LiveTab, event: &super::link::CdpEvent) {
     }
 }
 
-/// Whether a picture shows the page at the panel's size: its viewport is
-/// the panel's, and its pixels have the panel's shape. While a page loads,
-/// Chrome can send pictures of the tab's own viewport; shown in the panel,
-/// each looks like a sudden zoom.
-fn fits(size: PanelSize, width: f64, height: f64, pixels: Option<(u32, u32)>) -> bool {
-    let (want_w, want_h) = (f64::from(size.width), f64::from(size.height));
-    if (width - want_w).abs() > 1.0 || (height - want_h).abs() > 1.0 {
+/// Where a picture shows the page: its viewport and scroll position, in CSS
+/// pixels, from a screencast picture's metadata.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Picture {
+    width: f64,
+    height: f64,
+    scroll_x: f64,
+    scroll_y: f64,
+}
+
+impl Picture {
+    fn of(metadata: &Value) -> Picture {
+        let number = |key: &str| metadata[key].as_f64().unwrap_or(0.0);
+        Picture {
+            width: number("deviceWidth"),
+            height: number("deviceHeight"),
+            scroll_x: number("scrollOffsetX"),
+            scroll_y: number("scrollOffsetY"),
+        }
+    }
+}
+
+/// Whether a picture shows the page at the size the view gave it: its
+/// viewport is that size, and its pixels have that shape. While a page
+/// loads with an emulated size, Chrome can send pictures of the tab's own
+/// viewport; shown in the panel, each looks like a sudden zoom.
+fn fits(shown: Shown, width: f64, height: f64, pixels: Option<(u32, u32)>) -> bool {
+    let (want_w, want_h) = (shown.width, shown.height);
+    if (width - want_w).abs() > FIT_SLACK || (height - want_h).abs() > FIT_SLACK {
         return false;
     }
     pixels.is_none_or(|(w, h)| {
@@ -890,8 +1129,9 @@ fn offer(control: &LiveControl, sink: &mut impl FnMut(LiveFrame), frame: LiveFra
 /// A lossless picture on its way from the browser.
 struct Still {
     answer: mpsc::Receiver<Reply>,
-    width: f64,
-    height: f64,
+    /// The page as the last moving picture showed it, which a still one
+    /// shows too.
+    picture: Picture,
 }
 
 /// Ask for a lossless picture of what the tab shows now. Encoded for speed
@@ -1081,6 +1321,8 @@ mod tests {
             width: 800.5,
             height: 600.0,
             seq: 7,
+            scroll_x: 3.0,
+            scroll_y: 1200.5,
         };
         let bytes = frame.packed().unwrap();
         assert_eq!(bytes[0], 1);
@@ -1088,6 +1330,11 @@ mod tests {
         assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 7);
         assert_eq!(f64::from_le_bytes(bytes[8..16].try_into().unwrap()), 800.5);
         assert_eq!(f64::from_le_bytes(bytes[16..24].try_into().unwrap()), 600.0);
+        assert_eq!(f64::from_le_bytes(bytes[24..32].try_into().unwrap()), 3.0);
+        assert_eq!(
+            f64::from_le_bytes(bytes[32..40].try_into().unwrap()),
+            1200.5
+        );
         assert_eq!(&bytes[PACKED_HEADER..], &[0xFF, 0xD8, 0xFF, 0x00]);
         let broken = LiveFrame {
             data: "not base64!".into(),
@@ -1193,13 +1440,43 @@ mod tests {
         png.extend_from_slice(&900u32.to_be_bytes());
         assert_eq!(png_size(&b64(&png)), Some((1350, 900)));
 
-        let panel = PanelSize::new(900, 600, 1.5);
+        let panel = Shown {
+            width: 900.0,
+            height: 600.0,
+            window: false,
+        };
         assert!(fits(panel, 900.0, 600.0, Some((900, 600))));
         assert!(fits(panel, 900.0, 600.0, Some((1350, 900))));
         assert!(fits(panel, 900.0, 600.0, None));
         // The tab's own window, or a picture of another shape.
         assert!(!fits(panel, 1200.0, 800.0, Some((900, 600))));
         assert!(!fits(panel, 900.0, 600.0, Some((900, 501))));
+        // A window at 125 % has fractional CSS pixels.
+        let window = Shown {
+            width: 803.2,
+            height: 559.2,
+            window: true,
+        };
+        assert!(fits(window, 803.2, 559.2, Some((1004, 699))));
+        assert!(!fits(window, 900.0, 600.0, None));
+        let picture = Picture::of(&json!({
+            "deviceWidth": 803.2, "deviceHeight": 559.2,
+            "scrollOffsetX": 0, "scrollOffsetY": 4210.5, "pageScaleFactor": 1
+        }));
+        assert_eq!((picture.width, picture.scroll_y), (803.2, 4210.5));
+    }
+
+    #[test]
+    fn layout_metrics_give_the_viewport_and_its_pixel_ratio() {
+        let metrics = json!({
+            "layoutViewport": { "clientWidth": 1004, "clientHeight": 699 },
+            "cssLayoutViewport": { "clientWidth": 803, "clientHeight": 559 },
+            "cssVisualViewport": { "clientWidth": 803.2, "clientHeight": 559.2, "scale": 1, "zoom": 1 }
+        });
+        let seen = viewport_of(&metrics).unwrap();
+        assert_eq!((seen.width, seen.height), (803.2, 559.2));
+        assert!((seen.scale - 1.25).abs() < 0.01, "{seen:?}");
+        assert_eq!(viewport_of(&json!({})), None);
     }
 
     #[test]
@@ -1209,8 +1486,8 @@ mod tests {
             (tiny.width, tiny.height, tiny.scale),
             (MIN_SIDE, MAX_SIDE, 1.0)
         );
-        assert_eq!(PanelSize::new(800, 600, 2.0).picture(), (1602, 1202));
-        assert_eq!(PanelSize::new(885, 600, 1.25).picture(), (1109, 752));
+        assert_eq!(picture_for(800.0, 600.0, 2.0), (1602, 1202));
+        assert_eq!(picture_for(885.0, 600.0, 1.25), (1109, 752));
         assert_eq!(PanelSize::new(800, 600, 9.0).scale, MAX_SCALE);
     }
 

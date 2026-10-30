@@ -135,6 +135,11 @@ pub enum Method {
     EmulationSetScrollbarsHidden,
     /// The user's Reload in that panel.
     PageReload,
+    /// The window of an agent tab in the hidden MonoCode browser takes the
+    /// panel's size ([`super::live`]); system only, never for an agent.
+    BrowserGetWindowForTarget,
+    BrowserGetWindowBounds,
+    BrowserSetWindowBounds,
 }
 
 impl Method {
@@ -195,6 +200,9 @@ impl Method {
             EmulationClearDeviceMetricsOverride => "Emulation.clearDeviceMetricsOverride",
             EmulationSetScrollbarsHidden => "Emulation.setScrollbarsHidden",
             PageReload => "Page.reload",
+            BrowserGetWindowForTarget => "Browser.getWindowForTarget",
+            BrowserGetWindowBounds => "Browser.getWindowBounds",
+            BrowserSetWindowBounds => "Browser.setWindowBounds",
         }
     }
 
@@ -210,6 +218,15 @@ impl Method {
                 | TargetAttachToTarget
                 | TargetDetachFromTarget
                 | TargetCloseTarget
+        )
+    }
+
+    /// Methods without a `sessionId` that only MonoCode itself may send.
+    pub fn system_browser_level(self) -> bool {
+        use Method::*;
+        matches!(
+            self,
+            BrowserGetWindowForTarget | BrowserGetWindowBounds | BrowserSetWindowBounds
         )
     }
 
@@ -641,6 +658,7 @@ impl Wire {
         } = request;
         let target = command.target_ref();
         let browser_ok = command.method.browser_level_allowed();
+        let system_ok = browser_ok || command.method.system_browser_level();
         let agent = matches!(ctx, SendCtx::Agent(_));
         let mut writer = self.lock_writer();
         if !writer.open {
@@ -659,7 +677,7 @@ impl Wire {
         let verdict = match &ctx {
             SendCtx::Agent(ctx) => policy.gate(ctx, &target, browser_ok).map_err(map_gate),
             SendCtx::System => {
-                if matches!(target, TargetRef::Browser) && !browser_ok {
+                if matches!(target, TargetRef::Browser) && !system_ok {
                     Err(CdpError::NotAllowed)
                 } else {
                     Ok(())
@@ -1807,6 +1825,9 @@ mod tests {
             TargetRef::Session(CdpSessionId("S1".into()))
         );
         assert!(!Method::TargetSetAutoAttach.browser_level_allowed());
+        // Window bounds are MonoCode's own business, never an agent's.
+        assert!(!Method::BrowserSetWindowBounds.browser_level_allowed());
+        assert!(Method::BrowserSetWindowBounds.system_browser_level());
         assert_eq!(Method::PageNavigate.timeout(), Duration::from_secs(30));
     }
 

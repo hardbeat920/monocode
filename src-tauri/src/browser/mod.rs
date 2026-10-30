@@ -299,6 +299,10 @@ pub struct BrowserHost {
     picking: Mutex<Option<Arc<AtomicBool>>>,
     /// Stops the live view running now, if any (one at a time).
     live: Mutex<Option<Arc<live::LiveControl>>>,
+    /// Tests: the browser counts as a hidden MonoCode browser, whose windows
+    /// the live view may resize.
+    #[cfg(test)]
+    hidden_for_tests: AtomicBool,
     /// Requests being handled now, by session and request id.
     inflight: Mutex<HashMap<(String, String), Arc<InFlight>>>,
     /// Serialises the Settings and thread-menu commands, which run off the
@@ -381,6 +385,8 @@ impl BrowserHost {
             profile: Mutex::new(None),
             managed: Mutex::new(None),
             force_window: AtomicBool::new(false),
+            #[cfg(test)]
+            hidden_for_tests: AtomicBool::new(false),
             startup_pages: Mutex::new(Vec::new()),
             picking: Mutex::new(None),
             live: Mutex::new(None),
@@ -1838,10 +1844,12 @@ impl BrowserHost {
         }
         Ok(live::LiveTab {
             tab: tab.clone(),
+            target: lease.target_id.clone(),
             main: lease
                 .cdp_session
                 .clone()
                 .ok_or("That tab is still opening.")?,
+            window: None,
         })
     }
 
@@ -1859,7 +1867,8 @@ impl BrowserHost {
         if !self.link.is_open() {
             return Err("MonoCode is not connected to the browser.".into());
         }
-        let target = self.held_tab(session, tab)?;
+        let mut target = self.held_tab(session, tab)?;
+        target.window = self.own_window(&target.target);
         let control = Arc::new(live::LiveControl::new(view.to_string(), tab.clone()));
         let previous = self
             .live
@@ -1885,6 +1894,45 @@ impl BrowserHost {
             }
         }
         outcome
+    }
+
+    /// The window of `target` when the live view may give it the panel's
+    /// size: the MonoCode browser runs hidden (no one sees its windows) and
+    /// no other tab shares that window, so resizing it changes only this
+    /// tab's page.
+    fn own_window(&self, target: &TargetId) -> Option<i64> {
+        let hidden = self
+            .managed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .is_some_and(|managed| !managed.show_window);
+        #[cfg(test)]
+        let hidden = hidden || self.hidden_for_tests.load(Ordering::Acquire);
+        if !hidden {
+            return None;
+        }
+        let window_of = |target: &str| {
+            self.link
+                .send_system(Command::browser(
+                    Method::BrowserGetWindowForTarget,
+                    json!({ "targetId": target }),
+                ))
+                .ok()?["windowId"]
+                .as_i64()
+        };
+        let own = window_of(&target.0)?;
+        let targets = self
+            .link
+            .send_system(Command::browser(Method::TargetGetTargets, json!({})))
+            .ok()?;
+        let shared = targets["targetInfos"]
+            .as_array()?
+            .iter()
+            .filter(|info| info["type"] == "page" && info["targetId"] != target.0.as_str())
+            .filter_map(|info| info["targetId"].as_str())
+            .any(|other| window_of(other) == Some(own));
+        (!shared).then_some(own)
     }
 
     /// Pause the live view of `tab`, if one runs, until the hold is dropped.
@@ -4667,6 +4715,102 @@ mod tests {
         // several times longer.
         eprintln!("full-page screenshot with the pane open: {took:?}");
         assert!(took < Duration::from_secs(6), "{took:?}");
+    }
+
+    /// Against a real Chrome: in a hidden MonoCode browser the tab's own
+    /// window takes the panel's size, so even a navigation to another site
+    /// (a new renderer) never shows the page at another size, and the size
+    /// stays the window's once the panel closes.
+    #[test]
+    fn the_live_view_gives_the_tabs_own_window_the_panels_size_in_a_real_chrome() {
+        let Some(exe) = std::env::var_os("MONOCODE_TEST_CHROME") else {
+            return;
+        };
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        thread::spawn(move || {
+            const PAGE: &str = "<!doctype html><title>page</title><body style='margin:0;font:20px sans-serif'>\
+                <div id=n>0</div><script>let k=0;(function f(){document.getElementById('n').textContent=++k;requestAnimationFrame(f)})()</script>";
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                thread::spawn(move || {
+                    let mut buffer = [0u8; 2048];
+                    let _ = stream.read(&mut buffer);
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{PAGE}",
+                        PAGE.len()
+                    );
+                });
+            }
+        });
+        let (mut chrome, dir) = start_real_chrome(&exe);
+        let host = BrowserHost::for_tests(BrowserSettings {
+            separate_window: true,
+            ..settings_for(&dir)
+        });
+        host.hidden_for_tests.store(true, Ordering::Release);
+        host.set_toggle(true);
+        assert!(wait_state(&host, ConnectionState::Connected));
+        host.turn_started("s1", "main", "/repo", Some(true));
+        let tab = opened_tab(&host, "s1", &format!("http://127.0.0.1:{port}/a"));
+        let frames = Arc::new(Mutex::new(Vec::new()));
+        let viewing = {
+            let (host, tab, frames) = (host.clone(), tab.clone(), frames.clone());
+            thread::spawn(move || {
+                host.live_view(
+                    "s1",
+                    &tab,
+                    "v1",
+                    live::PanelSize::new(900, 600, 1.0),
+                    |frame| frames.lock().unwrap().push((frame.width, frame.height)),
+                )
+            })
+        };
+        thread::sleep(Duration::from_millis(800));
+        // Another site: Chrome gives the page a new renderer.
+        host.live_navigate(
+            "s1",
+            &tab,
+            &live::LiveNav::Go {
+                url: format!("http://localhost:{port}/b"),
+            },
+        )
+        .unwrap();
+        thread::sleep(Duration::from_millis(1500));
+        host.stop_live(None);
+        let _ = viewing.join();
+        let target = host.held_tab("s1", &tab).unwrap();
+        let metrics = host
+            .link
+            .send_system(Command::in_session(
+                &target.main,
+                Method::PageGetLayoutMetrics,
+                json!({}),
+            ))
+            .unwrap();
+        host.set_toggle(false);
+        let _ = chrome.kill();
+        let _ = chrome.wait();
+        let _ = std::fs::remove_dir_all(&dir);
+        let frames = frames.lock().unwrap().clone();
+        assert!(frames.len() > 10, "{frames:?}");
+        assert!(
+            frames
+                .iter()
+                .all(|(w, h)| (w - 900.0).abs() <= 1.5 && (h - 600.0).abs() <= 1.5),
+            "{frames:?}"
+        );
+        let viewport = &metrics["cssVisualViewport"];
+        assert!(
+            (viewport["clientWidth"].as_f64().unwrap() - 900.0).abs() <= 1.5,
+            "{metrics}"
+        );
+        assert!(
+            (viewport["clientHeight"].as_f64().unwrap() - 600.0).abs() <= 1.5,
+            "{metrics}"
+        );
     }
 
     /// Against a real Chrome, when `MONOCODE_TEST_CHROME` names one: the
