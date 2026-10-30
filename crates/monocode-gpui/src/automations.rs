@@ -334,10 +334,7 @@ impl Automations {
             .map(Kind::from_id)
             .unwrap_or(Kind::Codex);
         let model = preferences
-            .and_then(|p| p.project_providers.get(&self.cwd))
-            .and_then(|p| p.models.get(kind.id()))
-            .or_else(|| preferences.and_then(|p| p.default_models.get(kind.id())))
-            .cloned()
+            .and_then(|p| p.stable_model(kind.id(), &self.cwd))
             .unwrap_or_default();
         let mut draft = AutomationUpsert::new(self.cwd.clone(), kind.id().into(), model);
         if let Some(template) = template {

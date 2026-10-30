@@ -9,6 +9,7 @@
 //! panel that Git changed after an action.
 #![allow(dead_code)]
 
+use crate::settings::{ModelChoice, TextTask};
 use std::{
     collections::{HashMap, VecDeque},
     path::{Path, PathBuf},
@@ -368,17 +369,39 @@ pub(crate) fn git(root: &Path) -> Result<Value, String> {
     }))
 }
 
+/// The models the Settings page chose for the text a phone action writes.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct TextModels {
+    pub commit: Option<ModelChoice>,
+    pub pr: Option<ModelChoice>,
+}
+
+impl TextModels {
+    pub(crate) fn from_preferences(prefs: Option<&crate::settings::Preferences>) -> Self {
+        let pick = |task| prefs.and_then(|p| p.text_model_for(task)).cloned();
+        Self {
+            commit: pick(TextTask::Commit),
+            pr: pick(TextTask::PullRequest),
+        }
+    }
+}
+
 /// A Changes page action from the phone, as the desktop's Changes panel runs
 /// it: staging, then committing what is staged, pushing and pull requests.
 /// Replies `{}`, `{ message }` or `{ url }`.
-pub(crate) fn git_action(root: &Path, params: &Value) -> Result<Value, String> {
+pub(crate) fn git_action(
+    root: &Path,
+    params: &Value,
+    models: &TextModels,
+) -> Result<Value, String> {
     // The harness picked in the phone's composer writes the commit message and
     // pull request, as the desktop's panel uses its session's.
     let preferred = params["harness"]
         .as_str()
         .and_then(Kind::parse)
         .unwrap_or(Kind::Claude);
-    let harness = || crate::changes::pick_text_harness(preferred);
+    let harness =
+        |choice: &Option<ModelChoice>| crate::changes::commit_harness(preferred, choice.as_ref());
     let paths = params["paths"]
         .as_array()
         .map(|paths| paths.iter().filter_map(Value::as_str).collect::<Vec<_>>())
@@ -401,12 +424,13 @@ pub(crate) fn git_action(root: &Path, params: &Value) -> Result<Value, String> {
         "stageAll" => scm::stage_all(root).map(|()| json!({})),
         "unstageAll" => scm::unstage_all(root).map(|()| json!({})),
         "generate" => {
-            let (kind, binary) =
-                harness().ok_or("No provider CLI is installed to write a commit message.")?;
+            let (kind, binary, model) = harness(&models.commit)
+                .ok_or("No provider CLI is installed to write a commit message.")?;
             let message = crate::changes::generate_commit_message(
                 kind,
                 binary,
                 root.to_path_buf(),
+                model,
                 Arc::new(AtomicBool::new(false)),
             )?;
             Ok(json!({ "message": message }))
@@ -420,7 +444,7 @@ pub(crate) fn git_action(root: &Path, params: &Value) -> Result<Value, String> {
             }
             scm::push(root)?;
             if create_pr {
-                Ok(json!({ "url": create_pr_url(root, harness())? }))
+                Ok(json!({ "url": create_pr_url(root, harness(&models.pr))? }))
             } else {
                 Ok(json!({}))
             }
@@ -430,7 +454,7 @@ pub(crate) fn git_action(root: &Path, params: &Value) -> Result<Value, String> {
             if scm::diff_index(root)?.ahead > 0 {
                 scm::push(root)?;
             }
-            Ok(json!({ "url": create_pr_url(root, harness())? }))
+            Ok(json!({ "url": create_pr_url(root, harness(&models.pr))? }))
         }
         _ => Err("Unsupported git action".into()),
     }
@@ -438,7 +462,10 @@ pub(crate) fn git_action(root: &Path, params: &Value) -> Result<Value, String> {
 
 /// createMobilePr: the Changes panel's generated title and body (or the
 /// commits, when no provider can write them), then `gh pr create`.
-fn create_pr_url(root: &Path, harness: Option<(Kind, PathBuf)>) -> Result<String, String> {
+fn create_pr_url(
+    root: &Path,
+    harness: Option<(Kind, PathBuf, Option<String>)>,
+) -> Result<String, String> {
     crate::changes::create_pr_blocking(harness, root).map(|url| url.trim().to_string())
 }
 
@@ -962,9 +989,14 @@ mod tests {
         assert_eq!(status["remote"], false);
         assert_eq!(status["canGenerate"], true);
 
-        git_action(root, &json!({ "action": "stageAll" })).unwrap();
+        git_action(
+            root,
+            &json!({ "action": "stageAll" }),
+            &TextModels::default(),
+        )
+        .unwrap();
         assert_eq!(changes(root, None).unwrap()["files"][0]["staged"], true);
-        assert!(git_action(root, &json!({ "action": "nope" })).is_err());
+        assert!(git_action(root, &json!({ "action": "nope" }), &TextModels::default()).is_err());
         assert!(resolve_root(root, Some("/not/a/worktree")).is_err());
         assert_eq!(worktrees(root).unwrap()["worktrees"], json!([]));
     }

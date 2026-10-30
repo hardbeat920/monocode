@@ -1,11 +1,11 @@
 use crate::{
     settings::{
-        SettingsView,
+        ModelChoice, Preferences, SettingsView,
         widgets::{note, secondary_button},
     },
     theme::*,
 };
-use gpui::{AnyElement, Context, SharedString, div, prelude::*, px};
+use gpui::{AnyElement, Context, Focusable, SharedString, div, prelude::*, px};
 use monocode_core::provider::Kind;
 impl SettingsView {
     pub(super) fn providers_page(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -77,9 +77,39 @@ impl SettingsView {
                 cx.notify();
             },
         );
+        let mode = p.new_chat_mode().to_owned();
+        // Global per-provider models only steer new chats in "pinned" mode;
+        // a project's model always does.
+        let model_selects = scope != "global" || mode == "pinned";
         let binaries = self.discovery.binaries.clone();
-        let mut clis = Vec::new();
-        for (index, kind) in Kind::ALL.into_iter().enumerate() {
+        let mut clis = vec![
+            self.row(
+                Some("new-chat-model"),
+                true,
+                "New chats start with",
+                Some(
+                    match mode.as_str() {
+                        "default" => "Each provider's own default model.",
+                        "pinned" => "The model chosen for each provider below.",
+                        _ => "The model you last picked for each provider.",
+                    }
+                    .into(),
+                ),
+                vec![self.segmented(
+                    "new-chat-model",
+                    "New chats start with",
+                    &mode,
+                    &[
+                        ("last", "Last used"),
+                        ("default", "Provider default"),
+                        ("pinned", "Chosen model"),
+                    ],
+                    cx,
+                    |this, mode, cx| this.update(cx, |p| p.new_chat_model = Some(mode.into())),
+                )],
+            ),
+        ];
+        for kind in Kind::ALL {
             let installed = binaries
                 .iter()
                 .find(|(k, _)| *k == kind)
@@ -101,6 +131,8 @@ impl SettingsView {
                 .ctx
                 .catalogs
                 .get(kind.id())
+                .filter(|models| !models.is_empty())
+                .or_else(|| self.model_catalogs.get(&kind))
                 .cloned()
                 .unwrap_or_default();
             let selected_model = project
@@ -189,7 +221,7 @@ impl SettingsView {
                 )
                 .into_any_element(),
             ];
-            if let Some(model) = &selected_model {
+            if let Some(model) = selected_model.as_ref().filter(|_| model_selects) {
                 controls.insert(
                     0,
                     self.select(
@@ -217,6 +249,45 @@ impl SettingsView {
                             });
                         },
                     ),
+                );
+            }
+            let hidden_models = if scope == "global" {
+                p.hidden_models.clone()
+            } else {
+                p.hidden_models_for(&scope)
+            }
+            .into_iter()
+            .filter(|c| {
+                c.provider == kind.id()
+                    && models.iter().any(|(id, _)| c.model.as_deref() == Some(id))
+            })
+            .count();
+            let open = self.models_open == Some(kind);
+            if installed.is_some() && !models.is_empty() {
+                controls.push(
+                    secondary_button(
+                        SharedString::from(format!("models-{}", kind.id())),
+                        format!("Choose which {} models the picker shows", kind.label()),
+                        false,
+                        false,
+                    )
+                    .aria_expanded(open)
+                    .gap_1()
+                    .child("Models")
+                    .child(icon(if open { "chevron-up" } else { "chevron-down" }, 12.))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        let open = this.models_open != Some(kind);
+                        this.models_open = open.then_some(kind);
+                        this.model_query.clear();
+                        this.model_filter.update(cx, |input, cx| {
+                            input.set_text(String::new(), cx);
+                            if open {
+                                window.focus(&input.focus_handle(cx), cx);
+                            }
+                        });
+                        cx.notify();
+                    }))
+                    .into_any_element(),
                 );
             }
             if installed.is_some() {
@@ -261,17 +332,24 @@ impl SettingsView {
             }
             let description = installed
                 .map(|_| {
-                    format!(
-                        "{} {} available.",
+                    let mut text = format!(
+                        "{} {} available",
                         models.len(),
                         if models.len() == 1 { "model" } else { "models" }
-                    )
+                    );
+                    if hidden_models > 0 {
+                        text.push_str(&format!(", {hidden_models} hidden"));
+                    }
+                    text + "."
                 })
                 .unwrap_or_else(|| kind.unavailable_hint());
-            clis.push(self.row(None, index == 0, label, Some(description.into()), controls));
+            clis.push(self.row(None, false, label, Some(description.into()), controls));
+            if open && installed.is_some() {
+                clis.push(self.model_visibility(kind, &scope, &models, cx));
+            }
         }
         if self.discovery_loading {
-            clis.insert(0, note("Checking installed CLIs…"));
+            clis.insert(1, note("Checking installed CLIs…"));
         }
         let advanced=vec![
             self.row(Some("idle-agents"),true,"Keep idle agents ready",Some("Keep up to this many idle agents running for faster follow-ups. Uses additional memory.".into()),vec![self.segmented("idle-agents","Keep idle agents ready",&p.idle_agents.to_string(),&[("0","None"),("1","1"),("2","2"),("3","3"),("5","5")],cx,|this,value,cx|if let Ok(value)=value.parse(){this.update(cx,|p|p.idle_agents=value)})]),
@@ -297,5 +375,200 @@ impl SettingsView {
             ),
             self.group(None, false, "Advanced", None, None, advanced),
         ]
+    }
+}
+impl SettingsView {
+    /// The open CLI's models, each with a switch for the model picker.
+    /// At project scope a model hidden globally stays off and locked.
+    fn model_visibility(
+        &mut self,
+        kind: Kind,
+        scope: &str,
+        models: &[(String, String)],
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let p = &self.prefs;
+        let choice = |id: &str| ModelChoice {
+            provider: kind.id().into(),
+            model: Some(id.into()),
+        };
+        let globally = |id: &str| p.hidden_models.contains(&choice(id));
+        let hidden_here = |id: &str| {
+            if scope == "global" {
+                globally(id)
+            } else {
+                p.project_providers
+                    .get(scope)
+                    .is_some_and(|s| s.hidden_models.contains(&choice(id)))
+            }
+        };
+        let query = self.model_query.trim().to_lowercase();
+        let shown: Vec<(String, SharedString)> = models
+            .iter()
+            .filter(|(id, _)| id != "default")
+            .map(|(id, name)| {
+                (
+                    id.clone(),
+                    crate::pickers::model_display_name(kind, id, name),
+                )
+            })
+            .filter(|(id, name)| {
+                query.is_empty()
+                    || name.to_lowercase().contains(&query)
+                    || id.to_lowercase().contains(&query)
+            })
+            .collect();
+        let editable: Vec<String> = shown
+            .iter()
+            .filter(|(id, _)| scope == "global" || !globally(id))
+            .map(|(id, _)| id.clone())
+            .collect();
+        let any_hidden = editable.iter().any(|id| hidden_here(id));
+        let any_shown = editable.iter().any(|id| !hidden_here(id));
+        let bulk = |label: &'static str, hide: bool, enabled: bool, cx: &mut Context<Self>| {
+            let ids = editable.clone();
+            secondary_button(
+                SharedString::from(format!("models-{}-{label}", kind.id())),
+                label,
+                false,
+                !enabled,
+            )
+            .child(label)
+            .when(enabled, |d| {
+                d.on_click(cx.listener(move |this, _, _, cx| {
+                    let ids = ids.clone();
+                    let scope = this.provider_scope.clone();
+                    this.update(cx, |p| {
+                        for id in &ids {
+                            set_hidden(p, &scope, kind, id, hide);
+                        }
+                    })
+                }))
+            })
+            .into_any_element()
+        };
+        let header = div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .px_4()
+            .py_2()
+            .child(
+                div()
+                    .h(px(28.))
+                    .max_w(px(240.))
+                    .min_w_0()
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(content(0.1))
+                    .px_2()
+                    .child(icon("search-01", 14.))
+                    .child(div().min_w_0().flex_1().child(self.model_filter.clone())),
+            )
+            .child(div().flex_1())
+            .child(bulk("Show all", false, any_hidden, cx))
+            .child(bulk("Hide all", true, any_shown, cx));
+        let rows: Vec<AnyElement> = shown
+            .iter()
+            .map(|(id, name)| {
+                let locked = scope != "global" && globally(id);
+                let visible = !locked && !hidden_here(id);
+                let model = id.clone();
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .px_4()
+                    .py(px(6.))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .flex()
+                            .items_baseline()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_size(px(13.))
+                                    .text_color(content(if visible { 1. } else { 0.5 }))
+                                    .child(name.clone()),
+                            )
+                            .when(name.as_ref() != id, |d| {
+                                d.child(
+                                    div()
+                                        .truncate()
+                                        .text_size(px(11.))
+                                        .text_color(content(0.35))
+                                        .child(id.clone()),
+                                )
+                            }),
+                    )
+                    .when(locked, |d| {
+                        d.child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(content(0.5))
+                                .child("Hidden globally"),
+                        )
+                    })
+                    .child(self.toggle(
+                        format!("model-{}-{id}", kind.id()),
+                        format!("Show {name} in the model picker"),
+                        visible,
+                        locked,
+                        cx,
+                        move |this, on, cx| {
+                            let scope = this.provider_scope.clone();
+                            this.update(cx, |p| set_hidden(p, &scope, kind, &model, !on))
+                        },
+                    ))
+                    .into_any_element()
+            })
+            .collect();
+        div()
+            .debug_selector(move || format!("settings-models-{}", kind.id()))
+            .mx_4()
+            .mb_3()
+            .rounded_md()
+            .border_1()
+            .border_color(content(0.07))
+            .bg(content(0.02))
+            .child(header)
+            .when(rows.is_empty(), |d| d.child(note("No matching models.")))
+            .child(
+                div()
+                    .id(SharedString::from(format!("models-list-{}", kind.id())))
+                    .max_h(px(320.))
+                    .overflow_y_scroll()
+                    .pb_1()
+                    .children(rows),
+            )
+            .into_any_element()
+    }
+}
+
+/// Hide or show a model at one scope: "global" or a project path.
+fn set_hidden(p: &mut Preferences, scope: &str, kind: Kind, model: &str, hide: bool) {
+    let choice = ModelChoice {
+        provider: kind.id().into(),
+        model: Some(model.into()),
+    };
+    let hidden = if scope == "global" {
+        &mut p.hidden_models
+    } else {
+        &mut p
+            .project_providers
+            .entry(scope.into())
+            .or_default()
+            .hidden_models
+    };
+    hidden.retain(|old| old != &choice);
+    if hide {
+        hidden.push(choice);
     }
 }
