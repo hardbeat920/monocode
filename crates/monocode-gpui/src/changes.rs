@@ -1383,7 +1383,11 @@ impl Changes {
                         } else {
                             "View PR".into()
                         }))
-                        .when(enabled, |d| d.on_click(move |_, _, cx| cx.open_url(&url))),
+                        .when(enabled, |d| {
+                            d.on_click(move |event, window, cx| {
+                                crate::inbox::follow_link(&url, event, window, cx)
+                            })
+                        }),
                 )
             })
             .into_any_element()

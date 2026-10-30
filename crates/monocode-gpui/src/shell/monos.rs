@@ -122,6 +122,15 @@ impl Shell {
     pub(crate) fn mono_session_entity(&self, id: i64) -> Option<Entity<Conversation>> {
         self.sessions.get(&id).cloned()
     }
+    /// A session started from a work item a Mono is showing.
+    pub(crate) fn mono_start_work_item_session(
+        &mut self,
+        item: monocode_core::inbox::Item,
+        prompt: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.start_inbox_session(item, prompt, cx);
+    }
     pub(crate) fn mono_ensure_session(
         &mut self,
         id: i64,

@@ -2,7 +2,7 @@
 //! ported from src/features/sessions/ui/UserLinkPreview.tsx.
 use super::*;
 use crate::popover::Align;
-use gpui::{AnyElement, HighlightStyle, Hsla, StyledText, Task};
+use gpui::{AnyElement, ClickEvent, HighlightStyle, Hsla, StyledText, Task};
 use monocode_core::inbox::{Details, Item};
 use monocode_core::user_links::{GithubWorkItemLink, plain_text_summary};
 use std::{
@@ -181,9 +181,9 @@ impl TranscriptView {
                 }
             }))
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(cx.listener(move |this, _, _, cx| {
+            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                 this.hide_work_item_card(cx);
-                cx.open_url(&open_url);
+                crate::inbox::follow_link(&open_url, event, window, cx);
             }))
             .into_any_element()
     }

@@ -2,7 +2,7 @@
 //! folders and deletion, and the grouped list they shape.
 use super::*;
 use chrono::{Local, NaiveDateTime, TimeZone};
-use gpui::EventEmitter;
+use gpui::{ClickEvent, EventEmitter};
 use monocode_core::{
     session_groups::{
         Entry, Groups, build_list, format_reminder, navigation_ids, parse_github_work_item,
@@ -1071,8 +1071,9 @@ impl Shell {
         )
     }
 
-    /// SessionCard's linked issue or PR, opened on GitHub. Hover underlines
-    /// it as a link; with no number shown, the line runs under the icon.
+    /// SessionCard's linked issue or PR, shown in the Inbox when it can be and
+    /// otherwise opened in the browser. Hover underlines it as a link; with no
+    /// number shown, the line runs under the icon.
     pub(super) fn work_item_badge(
         &self,
         id: i64,
@@ -1123,10 +1124,14 @@ impl Shell {
                         cx.open_url(&url);
                     }
                 })
-                .on_click(move |_, _, cx| {
+                .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                     cx.stop_propagation();
-                    cx.open_url(&url);
-                })
+                    if event.modifiers().secondary() {
+                        cx.open_url(&url);
+                    } else {
+                        this.open_work_link(&url, window, cx);
+                    }
+                }))
                 .into_any(),
         )
     }

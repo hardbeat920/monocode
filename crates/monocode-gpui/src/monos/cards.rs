@@ -599,15 +599,19 @@ impl Monos {
                 }
             }
             "pr" => {
-                if let Some(url) = value["url"]
+                let url = value["url"]
                     .as_str()
                     .filter(|s| s.starts_with("https://github.com/"))
+                    .map(str::to_owned)
+                    .or_else(|| {
+                        let repo = value["repo"].as_str()?;
+                        let number = value["number"].as_u64()?;
+                        Some(format!("https://github.com/{repo}/pull/{number}"))
+                    });
+                if let Some(url) = url
+                    && !self.open_work_item(&url, cx)
                 {
-                    cx.open_url(url);
-                } else if let (Some(repo), Some(number)) =
-                    (value["repo"].as_str(), value["number"].as_u64())
-                {
-                    cx.open_url(&format!("https://github.com/{repo}/pull/{number}"));
+                    cx.open_url(&url);
                 }
             }
             _ => (),
