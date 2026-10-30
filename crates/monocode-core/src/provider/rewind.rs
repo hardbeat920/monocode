@@ -48,6 +48,7 @@ pub fn rewind_last_turn(
     if !supports_rewind(request.kind) || request.settings.text_only {
         return Err("This provider does not support editing the last turn".into());
     }
+    let request = super::with_supported_access(request);
     if request.kind == Kind::OpenCode {
         return super::opencode::rewind(&request, before_turn);
     }

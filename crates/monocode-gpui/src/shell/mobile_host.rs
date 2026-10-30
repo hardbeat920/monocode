@@ -1741,12 +1741,16 @@ fn catalog_model(kind: Kind, model: monocode_core::catalog::Model) -> Value {
             "options": control.choices.iter().map(|(value, label)| json!({"value": value, "label": label})).collect::<Vec<_>>(),
         }));
     }
-    json!({
+    let mut row = json!({
         "id": mobile_catalog::model_id(kind, Some(&model.id)),
         "harness": kind.id(),
         "name": pickers::model_display_name(kind, &model.id, &model.name).to_string(),
         "settings": settings,
-    })
+    });
+    if let Some(supports) = model.supports_auto {
+        row["supportsAuto"] = supports.into();
+    }
+    row
 }
 
 #[cfg(test)]
@@ -1810,6 +1814,7 @@ mod tests {
             default: true,
             tiers: vec![],
             controls: vec![],
+            supports_auto: None,
         };
         assert_eq!(
             mobile_catalog::current_model_id(Kind::Claude, None, std::slice::from_ref(&model)),
