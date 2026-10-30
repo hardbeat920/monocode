@@ -4499,8 +4499,14 @@ fn gh_run_raw(root: &Path, args: &[&str], allow_empty: bool) -> Result<String, S
     let program = crate::harness::resolve_gui_binary("gh")
         .ok_or_else(|| "GitHub CLI (`gh`) is not installed.".to_string())?;
     let mut cmd = Command::new(&program);
-    cmd.current_dir(root)
-        .args(args)
+    let root_exists = root.exists() && root.is_dir();
+    let has_repo_arg = args.contains(&"--repo");
+    if root_exists {
+        cmd.current_dir(root);
+    } else if !has_repo_arg {
+        return Err(format!("Working directory not found: {}", root.display()));
+    }
+    cmd.args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GH_PROMPT_DISABLED", "1")
         .env("GH_PAGER", "cat")
