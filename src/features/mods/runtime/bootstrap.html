@@ -1,0 +1,37 @@
+<!doctype html>
+<meta charset="utf-8">
+<script>
+// Served by monomod:// into a hidden sandboxed frame. Starts the mod's worker
+// from the bundle the host posts, then relays messages both ways. A worker
+// error is reported as `crash`, which the host shows in Settings.
+(function () {
+  var worker = null;
+  function up(message) {
+    parent.postMessage(message, "*");
+  }
+  window.addEventListener("message", function (e) {
+    var d = e.data;
+    if (e.source !== parent || !d || typeof d !== "object") return;
+    if (d.kind === "load") {
+      if (worker) return;
+      var url = URL.createObjectURL(new Blob([d.code], { type: "text/javascript" }));
+      worker = new Worker(url);
+      worker.onmessage = function (m) {
+        up(m.data);
+      };
+      worker.onerror = function (ev) {
+        ev.preventDefault();
+        up({ kind: "crash", message: String(ev.message || "Worker error") });
+      };
+      worker.postMessage({ kind: "load", apiVersion: d.apiVersion, code: "", config: d.config });
+      return;
+    }
+    if (!worker) return;
+    worker.postMessage(d);
+    if (d.kind === "unload") {
+      worker.terminate();
+      worker = null;
+    }
+  });
+})();
+</script>

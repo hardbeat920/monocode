@@ -12,6 +12,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { Composer } from "./Composer";
+import { ModPromptBands } from "../../mods/ui/ModSurface";
 import type { Worktree } from "../../source-control/model/worktrees";
 import {
   orchestrationCheckoutCwd,
@@ -794,7 +795,9 @@ const LocalSessionPane = memo(function LocalSessionPane({
         recallLastTurnRef.current = recall;
       }}
       onEditingLastTurnChange={setEditingLastTurn}
-    />
+    >
+      <ModPromptBands sessionId={session.id} />
+    </Composer>
   );
 
   return (
@@ -1187,6 +1190,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                       }
                     />
                   ) : null}
+                  <ModPromptBands sessionId={session.id} />
                   <MonoComposer
                     key={session.id}
                     sessionId={session.id}
