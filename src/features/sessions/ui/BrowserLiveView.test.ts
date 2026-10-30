@@ -8,6 +8,7 @@ import {
   liveKeyInput,
   liveModifiers,
   livePoint,
+  glideStep,
   pixelSnap,
   queueLiveInput,
   wheelPixels,
@@ -139,6 +140,21 @@ describe("live view input", () => {
       "mouse",
     ]);
     expect(queue[2]).toEqual(move(2));
+  });
+
+  it("glides a wheel notch out over a few frames and ends exactly", () => {
+    let left = 100;
+    const steps: number[] = [];
+    while (left !== 0 && steps.length < 50) {
+      const step = glideStep(left);
+      steps.push(step);
+      left -= step;
+    }
+    expect(steps.length).toBeGreaterThan(3);
+    expect(steps.length).toBeLessThan(15);
+    expect(steps[0]).toBeGreaterThan(steps[1]);
+    expect(steps.reduce((a, b) => a + b, 0)).toBeCloseTo(100);
+    expect(glideStep(-1.5)).toBe(-1.5);
   });
 
   it("counts wheel lines and pages in pixels", () => {

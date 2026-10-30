@@ -173,6 +173,17 @@ export function wheelPixels(delta: number, mode: number, page: number): number {
   return delta;
 }
 
+/** A wheel step this long or longer glides, the way a browser animates it. */
+export const GLIDE_FROM = 40;
+
+/**
+ * The part of a gliding scroll to send this frame: about a third of what is
+ * left, so it eases out, and all of it once only a pixel or two is left.
+ */
+export function glideStep(remaining: number): number {
+  return Math.abs(remaining) <= 2 ? remaining : remaining * 0.35;
+}
+
 /**
  * Where to put the picture so its pixels land on the screen's: a pane that
  * starts between two device pixels would have every picture resampled,
@@ -331,8 +342,10 @@ export function BrowserLiveView({
       bitmap.close();
       const scale = window.devicePixelRatio || 1;
       const rect = box.getBoundingClientRect();
-      canvas.style.width = `${width / scale}px`;
-      canvas.style.height = `${height / scale}px`;
+      // The page's own CSS size, whatever pixels the picture has: a still
+      // and a moving picture can differ, and the page must not jump.
+      canvas.style.width = `${meta.width}px`;
+      canvas.style.height = `${meta.height}px`;
       canvas.style.transform = `translate(${pixelSnap(rect.left, scale)}px, ${pixelSnap(rect.top, scale)}px)`;
       count += 1;
       frame.current = { width: meta.width, height: meta.height };
@@ -461,24 +474,66 @@ export function BrowserLiveView({
       modifiers: liveModifiers(event),
     });
   };
+  // A wheel notch scrolls the page in one jump when sent as is; spread over
+  // a few frames it glides like a browser's own scrolling. Small steps (a
+  // trackpad) go straight through.
+  const glide = useRef<{
+    x: number;
+    y: number;
+    dx: number;
+    dy: number;
+    frame: number;
+  } | null>(null);
+  useEffect(
+    () => () => {
+      if (glide.current) cancelAnimationFrame(glide.current.frame);
+    },
+    [],
+  );
   const wheel = (event: WheelEvent) => {
     const at = point(event);
     if (!at) return;
-    send({
-      kind: "wheel",
-      ...at,
-      deltaX: wheelPixels(
-        event.deltaX,
-        event.deltaMode,
-        frame.current?.width ?? 0,
-      ),
-      deltaY: wheelPixels(
-        event.deltaY,
-        event.deltaMode,
-        frame.current?.height ?? 0,
-      ),
-      modifiers: liveModifiers(event),
-    });
+    const dx = wheelPixels(
+      event.deltaX,
+      event.deltaMode,
+      frame.current?.width ?? 0,
+    );
+    const dy = wheelPixels(
+      event.deltaY,
+      event.deltaMode,
+      frame.current?.height ?? 0,
+    );
+    const modifiers = liveModifiers(event);
+    const small = Math.abs(dx) < GLIDE_FROM && Math.abs(dy) < GLIDE_FROM;
+    if (modifiers || (small && !glide.current)) {
+      send({ kind: "wheel", ...at, deltaX: dx, deltaY: dy, modifiers });
+      return;
+    }
+    if (glide.current) {
+      Object.assign(glide.current, at);
+      glide.current.dx += dx;
+      glide.current.dy += dy;
+      return;
+    }
+    const step = () => {
+      const current = glide.current;
+      if (!current) return;
+      const deltaX = glideStep(current.dx);
+      const deltaY = glideStep(current.dy);
+      current.dx -= deltaX;
+      current.dy -= deltaY;
+      send({
+        kind: "wheel",
+        x: current.x,
+        y: current.y,
+        deltaX,
+        deltaY,
+        modifiers: 0,
+      });
+      if (current.dx === 0 && current.dy === 0) glide.current = null;
+      else current.frame = requestAnimationFrame(step);
+    };
+    glide.current = { ...at, dx, dy, frame: requestAnimationFrame(step) };
   };
   const key = (phase: "down" | "up", event: KeyboardEvent) => {
     if (picking && event.key === "Escape") {

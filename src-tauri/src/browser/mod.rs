@@ -1140,17 +1140,18 @@ impl BrowserHost {
                         return;
                     }
                     let raced = slot.take();
-                    let started = launch::start(&exe, &profile, show_window).map(|child| {
-                        let pid = child.id();
-                        *slot = Some(ManagedBrowser {
-                            child,
-                            show_window,
-                            user_opened,
-                            profile: profile.clone(),
-                            ephemeral: private,
+                    let started = launch::start(&exe, &profile, show_window, self.display_scale())
+                        .map(|child| {
+                            let pid = child.id();
+                            *slot = Some(ManagedBrowser {
+                                child,
+                                show_window,
+                                user_opened,
+                                profile: profile.clone(),
+                                ephemeral: private,
+                            });
+                            pid
                         });
-                        pid
-                    });
                     drop(slot);
                     // Only a stale attempt can have registered one since.
                     if let Some(raced) = raced {
@@ -1810,6 +1811,19 @@ impl BrowserHost {
         if let Some(cancel) = running {
             cancel.store(true, Ordering::Release);
         }
+    }
+
+    /// The pixel ratio of the display MonoCode's main window is on.
+    fn display_scale(&self) -> Option<f64> {
+        let app = self.app.as_ref()?;
+        app.get_webview_window("main")
+            .and_then(|window| window.scale_factor().ok())
+            .or_else(|| {
+                app.primary_monitor()
+                    .ok()
+                    .flatten()
+                    .map(|monitor| monitor.scale_factor())
+            })
     }
 
     /// The main-frame session of `tab` when `session` holds it open.

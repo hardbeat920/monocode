@@ -248,8 +248,11 @@ pub fn find_executable(choice: &BrowserChoice) -> Option<Executable> {
     })
 }
 
-/// Command-line switches for the MonoCode browser.
-pub fn arguments(profile: &Path, show_window: bool) -> Vec<String> {
+/// Command-line switches for the MonoCode browser. `scale` is the
+/// display's pixel ratio: a headless browser has no screen of its own and
+/// would paint at 1, so pictures of it shown in MonoCode at 125 % or 150 %
+/// would be stretched and soft; it paints at MonoCode's ratio instead.
+pub fn arguments(profile: &Path, show_window: bool, scale: Option<f64>) -> Vec<String> {
     let mut args = vec![
         format!("--user-data-dir={}", profile.display()),
         "--remote-debugging-port=0".into(),
@@ -258,6 +261,9 @@ pub fn arguments(profile: &Path, show_window: bool) -> Vec<String> {
     ];
     if !show_window {
         args.push("--headless=new".into());
+        if let Some(scale) = scale.filter(|s| s.is_finite() && *s > 1.0 && *s <= 4.0) {
+            args.push(format!("--force-device-scale-factor={scale}"));
+        }
     }
     args.push("about:blank".into());
     args
@@ -265,12 +271,17 @@ pub fn arguments(profile: &Path, show_window: bool) -> Vec<String> {
 
 /// Start the browser. A leftover `DevToolsActivePort` from an earlier run
 /// goes first, so [`wait_for_endpoint`] only sees the new one.
-pub fn start(exe: &Executable, profile: &Path, show_window: bool) -> std::io::Result<Child> {
+pub fn start(
+    exe: &Executable,
+    profile: &Path,
+    show_window: bool,
+    scale: Option<f64>,
+) -> std::io::Result<Child> {
     std::fs::create_dir_all(profile)?;
     let _ = std::fs::remove_file(profile.join(ACTIVE_PORT_FILE));
     let mut command = Command::new(&exe.path);
     command
-        .args(arguments(profile, show_window))
+        .args(arguments(profile, show_window, scale))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -492,12 +503,21 @@ mod tests {
     #[test]
     fn arguments_use_the_own_profile_and_a_free_port() {
         let profile = Path::new("/data/browser-profile");
-        let args = arguments(profile, true);
+        let args = arguments(profile, true, Some(1.5));
         assert_eq!(args[0], "--user-data-dir=/data/browser-profile");
         assert!(args.contains(&"--remote-debugging-port=0".to_string()));
         assert!(!args.iter().any(|a| a.starts_with("--headless")));
         assert!(!args.iter().any(|a| a == "--enable-automation"));
-        assert!(arguments(profile, false).contains(&"--headless=new".to_string()));
+        assert!(arguments(profile, false, None).contains(&"--headless=new".to_string()));
+        // A window has the screen's ratio; a headless browser gets MonoCode's.
+        assert!(!args
+            .iter()
+            .any(|a| a.starts_with("--force-device-scale-factor")));
+        assert!(arguments(profile, false, Some(1.25))
+            .contains(&"--force-device-scale-factor=1.25".to_string()));
+        assert!(!arguments(profile, false, Some(1.0))
+            .iter()
+            .any(|a| a.starts_with("--force-device-scale-factor")));
         assert_eq!(profile_dir(Path::new("/data")), profile);
     }
 }
