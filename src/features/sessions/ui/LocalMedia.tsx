@@ -1,6 +1,7 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { readBinaryFile, REMOTE_PATH_PREFIX } from "../../../platform/tauri/fs";
+import { DownloadButton } from "../../../shared/ui/DownloadButton";
 import {
   isImagePath,
   sniffImageMime,
@@ -92,36 +93,48 @@ export function LocalMedia({
     };
   }, [near, path]);
 
-  if (failed) return <>{fallback}</>;
+  const download = media ? (
+    <DownloadButton name={path.replace(/.*[/\\]/, "")} source={{ path }} />
+  ) : null;
+  if (failed)
+    return (
+      <>
+        {fallback}
+        {download}
+      </>
+    );
   // One fixed 16:9 box from placeholder to playback, so loading never moves
   // the chat; media fits inside it, letterboxed.
   return (
-    <span
-      ref={boxRef}
-      data-local-media={path}
-      className="my-2 block aspect-video w-80 max-w-full overflow-hidden rounded-xl border border-content/10 bg-content/5"
-    >
-      {!media ? null : media.kind === "video" ? (
-        <video
-          src={media.url}
-          controls
-          playsInline
-          preload="metadata"
-          aria-label={label}
-          className="block size-full bg-black object-contain"
-          onError={() => setFailed(true)}
-        />
-      ) : (
-        <img
-          src={media.url}
-          alt={label}
-          title={onOpen ? "Open image" : undefined}
-          draggable={false}
-          onClick={onOpen}
-          onError={() => setFailed(true)}
-          className={`block size-full object-contain ${onOpen ? "cursor-zoom-in" : ""}`}
-        />
-      )}
+    <span className="my-2 block max-w-full">
+      <span
+        ref={boxRef}
+        data-local-media={path}
+        className="block aspect-video w-80 max-w-full overflow-hidden rounded-xl border border-content/10 bg-content/5"
+      >
+        {!media ? null : media.kind === "video" ? (
+          <video
+            src={media.url}
+            controls
+            playsInline
+            preload="metadata"
+            aria-label={label}
+            className="block size-full bg-black object-contain"
+            onError={() => setFailed(true)}
+          />
+        ) : (
+          <img
+            src={media.url}
+            alt={label}
+            title={onOpen ? "Open image" : undefined}
+            draggable={false}
+            onClick={onOpen}
+            onError={() => setFailed(true)}
+            className={`block size-full object-contain ${onOpen ? "cursor-zoom-in" : ""}`}
+          />
+        )}
+      </span>
+      {download}
     </span>
   );
 }

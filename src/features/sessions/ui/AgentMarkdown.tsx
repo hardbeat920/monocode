@@ -56,6 +56,7 @@ import {
 import { isNoteImagePath } from "../../notes";
 import { IS_MAC, IS_WIN } from "../../../platform/tauri/platform";
 import { InboxMedia } from "../../inbox/ui/InboxMedia";
+import { DownloadButton } from "../../../shared/ui/DownloadButton";
 import { DocumentImage, ImageAltText } from "./DocumentImage";
 import { isLocalMediaPath, LocalMedia } from "./LocalMedia";
 import {
@@ -340,7 +341,15 @@ function MarkdownLink({
       />
     );
   }
-  return link;
+  return localMedia && file ? (
+    <>
+      {link}{" "}
+      <DownloadButton
+        name={file.path.replace(/.*[/\\]/, "")}
+        source={{ path: file.path }}
+      />
+    </>
+  ) : link;
 }
 
 type MarkdownCodeProps = ComponentProps<"code"> & { node?: unknown };
