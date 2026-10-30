@@ -34,82 +34,77 @@ fn choices(
         .collect();
     let picked = chosen.and_then(|reply| options.iter().position(|o| o.trim() == reply.trim()));
     let answered = chosen.is_some();
-    // The row shrink-wraps the column, so the cards share the widest
-    // option's width instead of stretching to the cap.
+    // Each card hugs its own label (items_start stops the stretch) and
+    // wraps once it reaches 80% of the transcript's width.
     div()
         .flex()
-        .child(
+        .flex_col()
+        .items_start()
+        .gap_1p5()
+        .children(options.into_iter().enumerate().map(|(ix, label)| {
+            let checked = picked == Some(ix);
+            let mark = if checked {
+                div()
+                    .size(px(16.))
+                    .flex_shrink_0()
+                    .rounded_full()
+                    .bg(rgb(0x34d399))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(icon("check", 11.).text_color(rgb(0x062e22)))
+            } else {
+                div()
+                    .size(px(16.))
+                    .flex_shrink_0()
+                    .rounded_full()
+                    .border(px(1.5))
+                    .border_color(content(0.35))
+                    .when(!answered, |d| {
+                        d.group_hover("mono-choice", |s| s.border_color(content(0.7)))
+                    })
+            };
+            let answer = label.clone();
             div()
+                .id(("mono-choice", ix))
+                .debug_selector(move || format!("mono-choice-{ix}"))
+                .group("mono-choice")
+                .role(Role::Button)
+                .aria_label(label.clone())
+                .aria_toggled(if checked {
+                    gpui::Toggled::True
+                } else {
+                    gpui::Toggled::False
+                })
                 .flex()
-                .flex_col()
+                .max_w(gpui::relative(0.8))
                 .min_w_0()
-                .max_w(px(384.))
-                .gap_1p5()
-                .children(options.into_iter().enumerate().map(|(ix, label)| {
-                    let checked = picked == Some(ix);
-                    let mark = if checked {
-                        div()
-                            .size(px(16.))
-                            .flex_shrink_0()
-                            .rounded_full()
-                            .bg(rgb(0x34d399))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(icon("check", 11.).text_color(rgb(0x062e22)))
-                    } else {
-                        div()
-                            .size(px(16.))
-                            .flex_shrink_0()
-                            .rounded_full()
-                            .border(px(1.5))
-                            .border_color(content(0.35))
-                            .when(!answered, |d| {
-                                d.group_hover("mono-choice", |s| s.border_color(content(0.7)))
-                            })
-                    };
-                    let answer = label.clone();
+                .items_center()
+                .gap_2p5()
+                .rounded_xl()
+                .border_1()
+                .border_color(content(if checked { 0.2 } else { 0.1 }))
+                .line_height(px(20.))
+                .py(px(6.))
+                .pl(px(10.))
+                .pr_3()
+                .when(answered && !checked, |d| d.opacity(0.45))
+                .when(!answered, |d| {
+                    d.cursor_pointer()
+                        .hover(|s| s.border_color(content(0.2)).bg(content(0.05)))
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            cx.emit(CardAction(json!({"type":"choice","text":answer})))
+                        }))
+                })
+                .child(mark)
+                .child(
                     div()
-                        .id(("mono-choice", ix))
-                        .debug_selector(move || format!("mono-choice-{ix}"))
-                        .group("mono-choice")
-                        .role(Role::Button)
-                        .aria_label(label.clone())
-                        .aria_toggled(if checked {
-                            gpui::Toggled::True
-                        } else {
-                            gpui::Toggled::False
-                        })
-                        .flex()
-                        .max_w(px(384.))
                         .min_w_0()
-                        .items_center()
-                        .gap_2p5()
-                        .rounded_xl()
-                        .border_1()
-                        .border_color(content(if checked { 0.2 } else { 0.1 }))
-                        .line_height(px(20.))
-                        .py(px(6.))
-                        .pl(px(10.))
-                        .pr_3()
-                        .when(answered && !checked, |d| d.opacity(0.45))
-                        .when(!answered, |d| {
-                            d.cursor_pointer()
-                                .hover(|s| s.border_color(content(0.2)).bg(content(0.05)))
-                                .on_click(cx.listener(move |_, _, _, cx| {
-                                    cx.emit(CardAction(json!({"type":"choice","text":answer})))
-                                }))
-                        })
-                        .child(mark)
-                        .child(
-                            div()
-                                .min_w_0()
-                                .text_size(px(13.))
-                                .text_color(content(1.))
-                                .child(label),
-                        )
-                })),
-        )
+                        .text_size(px(13.))
+                        .text_color(content(1.))
+                        .child(label),
+                )
+        }))
         .into_any_element()
 }
 /// ArtifactCard: the document's icon and title, opening it in the reader.

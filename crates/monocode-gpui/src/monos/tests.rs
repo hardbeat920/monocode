@@ -1378,6 +1378,42 @@ fn opening_a_session_card_uses_the_shared_sidebar_state(cx: &mut TestAppContext)
 }
 
 #[gpui::test]
+fn a_session_open_in_mono_details_keeps_its_history(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let session = s
+        .window
+        .update(cx, |shell, _, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.settings = None;
+                cx.notify();
+            });
+            shell.workspace.active.unwrap()
+        })
+        .unwrap();
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    visual.run_until_parked();
+    s.window
+        .update(visual, |_, _, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.card_action(&s.id, &json!({"type":"session", "sessionId":session}), cx);
+            })
+        })
+        .unwrap();
+    visual.run_until_parked();
+    // The details panel shows this session, so memory trimming must not
+    // release its transcript while the Mono view is active.
+    s.window
+        .update(visual, |shell, _, cx| {
+            assert!(shell.workspace.right_panel_open);
+            let chat = shell.mono_ensure_session(session, cx).unwrap();
+            assert!(chat.read(cx).history_loaded());
+            assert!(!chat.update(cx, |chat, cx| chat.unload_history(cx)));
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn long_habit_draft_keeps_fields_and_schedule_inside_the_scrolling_page(cx: &mut TestAppContext) {
     let s = setup(cx);
     cx.update(|cx| {
