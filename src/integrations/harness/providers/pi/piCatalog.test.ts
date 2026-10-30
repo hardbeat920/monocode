@@ -4,7 +4,7 @@ const mocks = vi.hoisted(() => ({
   killChild: vi.fn(async (_id: string) => {}),
   resolveBinary: vi.fn(async () => ({ path: "/fake/pi" })),
   setHarnessModels: vi.fn(),
-  spawnChild: vi.fn(async () => {}),
+  spawnChild: vi.fn(async (_id: string, ..._args: unknown[]) => {}),
   unwatchChild: vi.fn(),
   watchChild: vi.fn(),
   writeChild: vi.fn(async (_id: string, _line: string) => {}),
@@ -55,6 +55,78 @@ function reply(probeId: string, line: string, models: unknown[]) {
       data: { models },
     }),
   );
+}
+
+const MAX_FRAME_BYTES = 1024 * 1024;
+const CHUNK_BYTES = 256 * 1024;
+
+/**
+ * Answer like omp 18.11: announce `ready` on spawn, accept protocol v2, and
+ * send a reply over the 1 MiB line limit as `rpc_chunk` lines only after the
+ * negotiation response; under protocol v1 omp replies with an overflow error.
+ */
+function serveOmp(models: unknown[]) {
+  let negotiated = false;
+  mocks.spawnChild.mockImplementation(async (id: string) => {
+    const onLine = mocks.watchChild.mock.calls.find(
+      ([probe]) => probe === id,
+    )![1];
+    onLine(
+      JSON.stringify({
+        type: "ready",
+        protocolVersion: 1,
+        supportedProtocolVersions: [1, 2],
+        maxFrameBytes: MAX_FRAME_BYTES,
+        maxReassembledFrameBytes: 64 * MAX_FRAME_BYTES,
+      }),
+    );
+  });
+  mocks.writeChild.mockImplementation(async (id, line) => {
+    const request = JSON.parse(line);
+    const onLine = mocks.watchChild.mock.calls.find(
+      ([probe]) => probe === id,
+    )![1];
+    const response = {
+      type: "response",
+      id: request.id,
+      command: request.type,
+      success: true,
+      data:
+        request.type === "negotiate_protocol"
+          ? { protocolVersion: 2 }
+          : { models },
+    };
+    const bytes = Buffer.from(JSON.stringify(response));
+    if (bytes.byteLength < MAX_FRAME_BYTES) {
+      onLine(bytes.toString());
+    } else if (!negotiated) {
+      onLine(
+        JSON.stringify({
+          ...response,
+          success: false,
+          data: undefined,
+          error: "RPC response exceeded the transport limit",
+        }),
+      );
+    } else {
+      const count = Math.ceil(bytes.byteLength / CHUNK_BYTES);
+      for (let index = 0; index < count; index++) {
+        onLine(
+          JSON.stringify({
+            type: "rpc_chunk",
+            chunkId: "catalog",
+            index,
+            count,
+            byteLength: bytes.byteLength,
+            data: bytes
+              .subarray(index * CHUNK_BYTES, (index + 1) * CHUNK_BYTES)
+              .toString("base64"),
+          }),
+        );
+      }
+    }
+    if (request.type === "negotiate_protocol") negotiated = true;
+  });
 }
 
 /**
@@ -123,6 +195,7 @@ it("includes models registered three seconds after RPC starts answering", async 
 });
 
 it("loads extensions and preserves immediate discovery for omp", async () => {
+  serveOmp([builtin]);
   const models = await discoverOmpModels("/workspace");
   expect(models.map((model) => model.id)).toEqual(["omp:meta/shared-id"]);
   expect(mocks.spawnChild).toHaveBeenCalledWith(
@@ -133,7 +206,25 @@ it("loads extensions and preserves immediate discovery for omp", async () => {
     undefined,
     "omp",
   );
-  expect(mocks.writeChild).toHaveBeenCalledTimes(1);
+  expect(
+    mocks.writeChild.mock.calls.map(([, line]) => JSON.parse(line).type),
+  ).toEqual(["negotiate_protocol", "get_available_models"]);
+  expect(Date.now()).toBe(0);
+  expectStopped();
+});
+
+it("loads an omp catalog larger than one RPC line through protocol v2", async () => {
+  const catalog = Array.from({ length: 1_500 }, (_, index) => ({
+    provider: "synthetic",
+    id: `model-${String(index).padStart(4, "0")}`,
+    name: `Synthetic model ${String(index).padStart(4, "0")}`,
+    description: "z".repeat(800),
+  }));
+  serveOmp(catalog);
+  const models = await discoverOmpModels("/workspace");
+  expect(models).toHaveLength(1_500);
+  expect(models[0].id).toBe("omp:synthetic/model-0000");
+  expect(models[1_499].id).toBe("omp:synthetic/model-1499");
   expect(Date.now()).toBe(0);
   expectStopped();
 });

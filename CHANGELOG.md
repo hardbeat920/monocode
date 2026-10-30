@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The model picker lists omp models when omp's catalog is larger than 1 MiB, instead of showing "No matching models"; MonoCode now negotiates omp's RPC protocol v2, which delivers large replies in chunks.
+
 ## [0.16.0] - 2026-10-19
 
 ### Added
