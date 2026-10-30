@@ -3,6 +3,7 @@ import {
   cancelTurn,
   compactContext,
   forgetSession,
+  hasBackgroundWork,
   respondApproval,
   rewindLastTurn,
   sendTurn,
@@ -54,6 +55,10 @@ export function respondOmpApproval(
 
 export function cancelOmpTurn(sessionId: string): Promise<void> {
   return cancelTurn(OMP_FLAVOR, sessionId);
+}
+
+export function ompHasBackgroundWork(sessionId: string): boolean {
+  return hasBackgroundWork(OMP_FLAVOR, sessionId);
 }
 
 export function stopOmpSession(sessionId: string): Promise<void> {
