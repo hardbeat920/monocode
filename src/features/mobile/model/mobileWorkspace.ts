@@ -38,6 +38,7 @@ import {
   sameProjectPath,
 } from "../../projects/model/recents";
 import { listMonos, monoLook, monoState } from "../../monos/model/mono";
+import { mobileRequest } from "./mobileRequest";
 import { displayPath, pathKey, projectName } from "../../../shared/lib/paths";
 import {
   getSession,
@@ -50,7 +51,6 @@ import {
   RUNTIME_MODES,
   RUNTIME_MODE_HINT,
   RUNTIME_MODE_LABEL,
-  hasPendingApproval,
   newDefaultSession,
   sessionDisplayTitle,
   type HarnessId,
@@ -157,12 +157,8 @@ export async function mobileCatalog(
           [...session.blocks].reverse().find((block) => block.startedAt)
             ?.startedAt ?? 0,
         busy: !!session.busy,
-        // What it waits on the user for, so the phone can notify of it.
-        ...(hasPendingApproval(session.blocks)
-          ? { waiting: "approval" as const }
-          : session.pendingQuestion
-            ? { waiting: "question" as const }
-            : {}),
+        // What it waits on the user for, so the phone can notify of it and answer it.
+        ...mobileRequest(session),
         live: true,
       });
   }
@@ -274,6 +270,8 @@ export async function mobileConversation(
         })
       : [],
     busy: !!session?.busy,
+    // Null when nothing waits, so a watch can say a request went away.
+    request: (session && mobileRequest(session).request) ?? null,
   };
 }
 
