@@ -1036,6 +1036,32 @@ mod tests {
         assert_eq!(supported_access(Kind::Claude, None, ReadOnly), ReadOnly);
     }
     #[test]
+    fn saved_concrete_model_uses_explicit_claude_alias_capabilities() {
+        let mut models = claude::models(&json!([
+            {"value":"opus","resolvedModel":"claude-opus-5-5","supportsAutoMode":true}
+        ]));
+        let saved = crate::store::native_model("claude:opus-5-5", "claude").unwrap();
+        let effective = |models: &[Model], id: &str| {
+            supported_access(
+                Kind::Claude,
+                launch_model(models, Some(id)),
+                AccessMode::Auto,
+            )
+        };
+        assert_eq!(effective(&models, &saved), AccessMode::Auto);
+        assert_eq!(
+            effective(&models, "claude-opus-5"),
+            AccessMode::AutoAcceptEdits
+        );
+        // An exact entry wins even when the alias appears first and confirms Auto.
+        let mut exact = model(&saved, "Opus 5.5");
+        exact.supports_auto = Some(false);
+        models.push(exact);
+        assert_eq!(effective(&models, &saved), AccessMode::AutoAcceptEdits);
+        models[1].supports_auto = None;
+        assert_eq!(effective(&models, &saved), AccessMode::AutoAcceptEdits);
+    }
+    #[test]
     fn launch_model_matches_aliases_and_falls_back_to_the_default() {
         let mut alias = model("opus", "Opus");
         alias.alias_target = Some("claude-opus-5-5".into());

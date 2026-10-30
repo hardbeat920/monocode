@@ -396,8 +396,9 @@ const LOCAL_CATALOG: ModelCatalog = {
 
 /**
  * The catalog entry whose capabilities apply to a saved model: the exact
- * picker id first, then the same native model within the provider. Saved ids
- * can differ from discovered ones (`claude:opus-4.7` and `claude:opus-4-7`
+ * picker id first, then the same native model or an explicit alias target
+ * within the provider. Saved ids can differ from discovered ones
+ * (`claude:opus-4.7` and `claude:opus-4-7`
  * both launch `claude-opus-4-7`), and an exact-only match would lose what the
  * discovered entry confirms.
  */
@@ -412,7 +413,13 @@ function capabilityModel(
   if (!native) return undefined;
   return catalog
     .modelsFor(harness)
-    .find((model) => nativeModelId(model) === native);
+    .find(
+      (model) =>
+        model.harness === harness &&
+        (nativeModelId(model) === native ||
+          (model.aliasTarget != null &&
+            claudeNativeId(harness, model.aliasTarget) === native)),
+    );
 }
 
 /**

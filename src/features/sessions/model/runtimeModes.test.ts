@@ -4,6 +4,8 @@ import {
   resetHarnessModelOverlays,
   runtimeModesFor,
   setHarnessModels,
+  type AgentModel,
+  type ModelCatalog,
 } from "./models";
 
 afterEach(() => resetHarnessModelOverlays());
@@ -86,6 +88,69 @@ describe("runtimeModesFor", () => {
 });
 
 describe("saved model ids that differ from discovered ones", () => {
+  const alias: AgentModel = {
+    id: "claude:opus",
+    harness: "claude",
+    name: "Opus 5.5",
+    nativeId: "opus",
+    aliasTarget: "claude-opus-5-5",
+    supportsAuto: true,
+  };
+
+  it("keeps Auto for a saved concrete model advertised through an alias", () => {
+    setHarnessModels("claude", [alias]);
+    expect(runtimeModesFor("claude", "claude:opus-5-5")).toContain("auto");
+    expect(coerceRuntimeMode("claude", "claude:opus-5-5", "auto")).toBe("auto");
+  });
+
+  it.each([false, undefined])(
+    "prefers exact support %s over an alias target",
+    (supportsAuto) => {
+      setHarnessModels("claude", [
+        alias,
+        {
+          id: "claude:opus-5-5",
+          harness: "claude",
+          name: "Opus 5.5",
+          nativeId: "claude-opus-5-5",
+          supportsAuto,
+        },
+      ]);
+      expect(runtimeModesFor("claude", "claude:opus-5-5")).not.toContain(
+        "auto",
+      );
+      expect(coerceRuntimeMode("claude", "claude:opus-5-5", "auto")).toBe(
+        "auto-accept-edits",
+      );
+    },
+  );
+
+  it("does not borrow alias support from another version", () => {
+    setHarnessModels("claude", [alias]);
+    expect(runtimeModesFor("claude", "claude:opus-5")).not.toContain("auto");
+    expect(coerceRuntimeMode("claude", "claude:opus-5", "auto")).toBe(
+      "auto-accept-edits",
+    );
+  });
+
+  it("uses the supplied catalog and keeps alias matches within the harness", () => {
+    const catalog = (entries: AgentModel[]): ModelCatalog => ({
+      find: (id) => entries.find((model) => model.id === id),
+      modelsFor: () => entries,
+    });
+    expect(
+      coerceRuntimeMode("claude", "claude:opus-5-5", "auto", catalog([alias])),
+    ).toBe("auto");
+    expect(
+      coerceRuntimeMode(
+        "claude",
+        "claude:opus-5-5",
+        "auto",
+        catalog([{ ...alias, id: "codex:opus", harness: "codex" }]),
+      ),
+    ).toBe("auto-accept-edits");
+  });
+
   const discover = (id: string, supportsAuto: boolean) =>
     setHarnessModels("claude", [
       {
