@@ -339,11 +339,19 @@ impl gpui::Render for Floating {
             .bg(shell_fill())
             .text_color(content(1.))
             .font_family(crate::fonts::UI)
+            .key_context("MonoFloating")
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                 if event.keystroke.key == "escape" {
                     this.stop(cx);
                 }
             }))
+            .on_action(
+                cx.listener(|this, _: &crate::shell::ChangeEffort, window, cx| {
+                    if let Some(chat) = this.owner.read(cx).chats.get(&this.selected).cloned() {
+                        chat.update(cx, |chat, cx| chat.toggle_effort_menu(window, cx));
+                    }
+                }),
+            )
             .child(
                 // The card's spread shadow: it shades the rail and the gaps
                 // around the chat, never the chat itself.
@@ -432,6 +440,15 @@ impl Monos {
                 .and_then(|w| w.read(cx).ok())
                 .is_some_and(|v| v.shown && v.selected == id)
         })
+    }
+    /// The open Mono's chat as the workspace window draws it: none while a
+    /// floating panel owns it.
+    pub(crate) fn workspace_chat(&self, cx: &App) -> Option<Entity<Conversation>> {
+        let id = self.active.as_deref()?;
+        if self.floating_shows(id, cx) {
+            return None;
+        }
+        self.chats.get(id).cloned()
     }
     /// Stands in for a chat that a floating panel is showing.
     pub(super) fn floating_placeholder(&self, mono: &Mono, cx: &mut Context<Self>) -> AnyElement {

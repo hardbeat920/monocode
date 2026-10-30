@@ -79,6 +79,12 @@ pub(crate) const BINDINGS: &[Binding] = &[
         fixed: false,
     },
     Binding {
+        command: "App: Change Effort",
+        keys: "⌘/",
+        when: "Always",
+        fixed: false,
+    },
+    Binding {
         command: "App: Toggle Mono",
         keys: "⌘I",
         when: "Project with a mono",
@@ -673,4 +679,32 @@ fn default_shortcuts(row: &Binding) -> Vec<String> {
         .into_iter()
         .filter_map(|s| gpui::Keystroke::parse(&s).ok().map(|s| s.unparse()))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[gpui::test]
+    fn every_rebindable_shell_shortcut_has_a_settings_row(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            crate::shell::bind_keys(cx);
+            for binding in cx.key_bindings().borrow().bindings() {
+                let Some(command) = crate::settings::keymap::command(binding) else {
+                    continue;
+                };
+                let row = BINDINGS
+                    .iter()
+                    .find(|row| row.command == command)
+                    .unwrap_or_else(|| panic!("{command} is missing from the keybindings page"));
+                if command == "App: Change Effort" {
+                    let keys = binding.keystrokes()[0].unparse();
+                    assert!(
+                        default_shortcuts(row).contains(&keys),
+                        "{command} row shows {} but binds {keys}",
+                        row.keys
+                    );
+                }
+            }
+        });
+    }
 }

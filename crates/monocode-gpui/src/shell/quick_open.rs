@@ -48,6 +48,7 @@ impl Shell {
                     Command::New => window.dispatch_action(Box::new(NewCodex), cx),
                     Command::Project => window.dispatch_action(Box::new(OpenProject), cx),
                     Command::Model => window.dispatch_action(Box::new(SwitchModel), cx),
+                    Command::Effort => window.dispatch_action(Box::new(ChangeEffort), cx),
                     Command::Settings => window.dispatch_action(Box::new(OpenSettings), cx),
                     Command::Sidebar => window.dispatch_action(Box::new(ToggleSidebar), cx),
                     Command::Panel => window.dispatch_action(Box::new(ToggleRightPanel), cx),

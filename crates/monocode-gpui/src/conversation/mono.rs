@@ -691,6 +691,12 @@ impl Conversation {
             .into_any_element()
     }
 
+    /// Selects a catalog model, as discovery would.
+    #[cfg(test)]
+    pub(crate) fn use_catalog_model(&mut self, model: Model) {
+        self.model = Some(model.id.clone());
+        self.catalog = vec![model];
+    }
     /// Whether the model list and a composer menu are open.
     #[cfg(test)]
     pub(crate) fn mono_menus_open(&self) -> (bool, bool) {
