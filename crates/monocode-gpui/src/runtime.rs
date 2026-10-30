@@ -147,6 +147,15 @@ fn run_turn_using(
         .ok()
         .and_then(|s| s.context_usage(summary.id).ok().flatten())
         .unwrap_or_default();
+    // Context usage does not persist the running cost total, so the last
+    // recorded turn supplies the baseline for the next turn's delta.
+    if context.cost_total_usd.is_none() {
+        context.cost_total_usd = settings
+            .turns
+            .iter()
+            .max_by_key(|(turn, _)| **turn)
+            .and_then(|(_, info)| info.metrics?.total_cost_usd);
+    }
     let mut usage_limit = None;
     let result = (|| {
         if let Some(reason) = locked(&store)?.edit_recovery_reason(summary.id)? {
@@ -791,11 +800,25 @@ fn run_turn_using(
                             pending.changed(at);
                             boundary = true;
                         }
-                        Event::Metrics(reading) => {
+                        Event::Metrics(mut reading) => {
+                            let spent = turn_receipt
+                                .as_ref()
+                                .and_then(|(_, info)| info.metrics?.cost_usd)
+                                .unwrap_or(0.);
+                            context.apply_cost(&mut reading, spent);
+                            if reading.cost_usd.is_some() {
+                                context_changed = true;
+                                pending.context_changed();
+                            }
                             if let Some((_, info)) = &mut turn_receipt {
                                 info.metrics = Some(reading);
                             }
                             metrics = Some(reading);
+                        }
+                        Event::CacheTtl(ttl) => {
+                            context.merge_cache_ttl(ttl);
+                            context_changed = true;
+                            pending.context_changed();
                         }
                         Event::Context { used, window } => {
                             context.merge(used, window);
