@@ -42,6 +42,8 @@ const ACK_POLL: Duration = Duration::from_millis(4);
 pub const PACKED_HEADER: usize = 24;
 /// JPEG quality of the pictures, 0 to 100.
 const QUALITY: u32 = 90;
+/// How often a development build prints where the pictures' time goes.
+const METER_EVERY: Duration = Duration::from_secs(2);
 /// Bounds for the panel size, in CSS pixels.
 const MIN_SIDE: u32 = 200;
 const MAX_SIDE: u32 = 3840;
@@ -407,7 +409,10 @@ pub fn run(
     // A picture sent to the panel whose acknowledgement waits until the
     // panel has drawn the one before it.
     let mut waiting: Option<(super::link::CdpEvent, std::time::Instant)> = None;
+    let mut meter = Meter::new();
     let end = loop {
+        meter.drawn(control.drawn.load(Ordering::Acquire));
+        meter.report();
         if let Some((event, at)) = &waiting {
             if !control.behind(seq) || at.elapsed() >= ACK_WAIT || control.held() {
                 ack(link, tab, event);
@@ -494,6 +499,7 @@ pub fn run(
         if event.method != FRAME {
             continue;
         }
+        meter.arrived(event.params["metadata"]["timestamp"].as_f64());
         let sent = 'frame: {
             let Some(data) = event.params["data"].as_str() else {
                 break 'frame false;
@@ -523,6 +529,7 @@ pub fn run(
             last = data.to_string();
             seq += 1;
             moving = Some((std::time::Instant::now(), width, height));
+            let handing = std::time::Instant::now();
             sink(LiveFrame {
                 tab: tab.tab.0.clone(),
                 data: last.clone(),
@@ -531,6 +538,7 @@ pub fn run(
                 height,
                 seq,
             });
+            meter.handed(seq, handing);
             true
         };
         if sent && control.behind(seq) {
@@ -546,6 +554,132 @@ pub fn run(
     }
     restore(link, tab);
     Ok(end)
+}
+
+/// Inputs handed to tabs since the meter last printed: count, total and
+/// longest round trip in microseconds.
+static INPUTS: [AtomicU64; 3] = [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+
+/// Durations in milliseconds: how many, their sum and the longest.
+#[derive(Default)]
+struct Span {
+    count: u64,
+    sum: f64,
+    max: f64,
+}
+
+impl Span {
+    fn add(&mut self, ms: f64) {
+        self.count += 1;
+        self.sum += ms;
+        self.max = self.max.max(ms);
+    }
+
+    fn show(&self) -> String {
+        if self.count == 0 {
+            return "-".into();
+        }
+        format!(
+            "avg {:.0} ms, max {:.0}",
+            self.sum / self.count as f64,
+            self.max
+        )
+    }
+}
+
+/// Where a view's time goes, printed every [`METER_EVERY`] by development
+/// builds while pictures flow: how many the browser sent, how old they
+/// were when they got here, how long handing one to the panel took, how
+/// long until the panel had it on screen, and how long inputs took.
+struct Meter {
+    since: std::time::Instant,
+    from_browser: u64,
+    age: Span,
+    hand_over: Span,
+    on_screen: Span,
+    /// Pictures sent and not yet drawn: seq and when.
+    sent: std::collections::VecDeque<(u64, std::time::Instant)>,
+    skipped: u64,
+}
+
+impl Meter {
+    fn new() -> Meter {
+        Meter {
+            since: std::time::Instant::now(),
+            from_browser: 0,
+            age: Span::default(),
+            hand_over: Span::default(),
+            on_screen: Span::default(),
+            sent: std::collections::VecDeque::new(),
+            skipped: 0,
+        }
+    }
+
+    /// A picture from the browser, taken at `timestamp` (seconds since the
+    /// epoch, the browser's clock).
+    fn arrived(&mut self, timestamp: Option<f64>) {
+        self.from_browser += 1;
+        if let (Some(at), Ok(now)) = (
+            timestamp,
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH),
+        ) {
+            self.age.add((now.as_secs_f64() - at) * 1000.0);
+        }
+    }
+
+    fn handed(&mut self, seq: u64, started: std::time::Instant) {
+        self.hand_over.add(started.elapsed().as_secs_f64() * 1000.0);
+        self.sent.push_back((seq, std::time::Instant::now()));
+        while self.sent.len() > 240 {
+            self.sent.pop_front();
+        }
+    }
+
+    fn drawn(&mut self, drawn: u64) {
+        while let Some(&(seq, at)) = self.sent.front() {
+            if seq > drawn {
+                break;
+            }
+            self.sent.pop_front();
+            if seq == drawn {
+                self.on_screen.add(at.elapsed().as_secs_f64() * 1000.0);
+            } else {
+                self.skipped += 1;
+            }
+        }
+    }
+
+    fn report(&mut self) {
+        if !cfg!(debug_assertions) || self.since.elapsed() < METER_EVERY {
+            return;
+        }
+        let secs = self.since.elapsed().as_secs_f64();
+        let inputs: Vec<u64> = INPUTS.iter().map(|n| n.swap(0, Ordering::AcqRel)).collect();
+        if self.from_browser > 0 || inputs[0] > 0 {
+            eprintln!(
+                "[live] browser {:.0}/s, age on arrival {} | hand-over {} | on screen after {} ({:.0}/s, {} skipped) | inputs {} ({})",
+                self.from_browser as f64 / secs,
+                self.age.show(),
+                self.hand_over.show(),
+                self.on_screen.show(),
+                self.on_screen.count as f64 / secs,
+                self.skipped,
+                inputs[0],
+                if inputs[0] == 0 {
+                    "-".to_string()
+                } else {
+                    format!(
+                        "avg {:.0} ms, max {:.0}",
+                        inputs[1] as f64 / inputs[0] as f64 / 1000.0,
+                        inputs[2] as f64 / 1000.0
+                    )
+                },
+            );
+        }
+        let sent = std::mem::take(&mut self.sent);
+        *self = Meter::new();
+        self.sent = sent;
+    }
 }
 
 /// Let Chrome send the next picture.
@@ -689,7 +823,29 @@ fn address(typed: &str) -> String {
 /// Hand one input event to the tab.
 pub fn input(link: &Link, tab: &LiveTab, input: &LiveInput) -> Result<(), String> {
     let (method, params) = command_for(input);
-    send(link, &tab.main, method, params).map(|_| ())
+    let started = std::time::Instant::now();
+    // Scrolling and moving don't wait for the page: one wheel after another
+    // would each wait a round trip, which caps scrolling at about 30 steps a
+    // second. They still reach the page in order, behind what came before.
+    let flowing = matches!(
+        input,
+        LiveInput::Wheel { .. }
+            | LiveInput::Mouse {
+                event: MouseEvent::Moved,
+                ..
+            }
+    );
+    let sent = if flowing {
+        link.post_system(Command::in_session(&tab.main, method, params))
+            .map_err(|e| format!("The browser refused {}: {e:?}", method.name()))
+    } else {
+        send(link, &tab.main, method, params).map(|_| ())
+    };
+    let took = started.elapsed().as_micros() as u64;
+    INPUTS[0].fetch_add(1, Ordering::AcqRel);
+    INPUTS[1].fetch_add(took, Ordering::AcqRel);
+    INPUTS[2].fetch_max(took, Ordering::AcqRel);
+    sent
 }
 
 fn command_for(input: &LiveInput) -> (Method, Value) {

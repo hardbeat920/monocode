@@ -941,6 +941,33 @@ impl Link {
         read_reply(&self.dispatch(SendCtx::System, command, timeout)?)
     }
 
+    /// [`Self::send_system`] without waiting for the answer: the command
+    /// is queued behind the ones sent before it and goes out in that order.
+    /// For input that comes faster than the page answers (scrolling, the
+    /// pointer moving), where waiting for each answer would hold the next
+    /// one back by a whole round trip.
+    pub fn post_system(&self, command: Command) -> Result<(), CdpError> {
+        let timeout = command.method.timeout();
+        let wire = self
+            .inner
+            .wire
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .ok_or(CdpError::NotConnected)?;
+        let (reply, _answer) = mpsc::channel();
+        wire.send(
+            &self.inner,
+            SendRequest {
+                ctx: SendCtx::System,
+                command,
+                timeout,
+                reply,
+            },
+        );
+        Ok(())
+    }
+
     fn dispatch(&self, ctx: SendCtx, command: Command, timeout: Duration) -> Reply {
         let wire = self
             .inner
