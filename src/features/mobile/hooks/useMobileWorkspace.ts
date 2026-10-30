@@ -116,6 +116,7 @@ export function useMobileWorkspace(options: Options) {
               busy: conversation.busy,
               older,
               turns: conversation.turns,
+              question: conversation.question,
             },
             watch.incremental,
           );
@@ -132,6 +133,7 @@ export function useMobileWorkspace(options: Options) {
             baseline: watch.baseline ?? {
               busy: false,
               older: false,
+              question: "null",
               order: [],
               turns: new Map(),
             },

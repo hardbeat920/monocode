@@ -275,7 +275,8 @@ impl SettingsView {
         }
         let advanced=vec![
             self.row(Some("idle-agents"),true,"Keep idle agents ready",Some("Keep up to this many idle agents running for faster follow-ups. Uses additional memory.".into()),vec![self.segmented("idle-agents","Keep idle agents ready",&p.idle_agents.to_string(),&[("0","None"),("1","1"),("2","2"),("3","3"),("5","5")],cx,|this,value,cx|if let Ok(value)=value.parse(){this.update(cx,|p|p.idle_agents=value)})]),
-            self.row(Some("claude-hooks"),false,"Claude Code hooks",Some("Run your configured Claude Code hooks. Changes apply on the next turn.".into()),vec![self.toggle("claude-hooks","Claude Code hooks",p.claude_hooks,false,cx,|this,on,cx|this.update(cx,|p|p.claude_hooks=on))])];
+            self.row(Some("claude-hooks"),false,"Claude Code hooks",Some("Run your configured Claude Code hooks. Changes apply on the next turn.".into()),vec![self.toggle("claude-hooks","Claude Code hooks",p.claude_hooks,false,cx,|this,on,cx|this.update(cx,|p|p.claude_hooks=on))]),
+            self.row(Some("claude-entrypoint"),false,"Identify as Monocode to Claude (experimental)",Some("Report Monocode as the client instead of the default sdk-cli, which community tests show uses the 5-hour limit up to ~2x faster. Anthropic hasn't confirmed this or whether relabeling is allowed. Applies to new sessions.".into()),vec![self.toggle("claude-entrypoint","Identify as Monocode to Claude",p.claude_entrypoint,false,cx,|this,on,cx|this.update(cx,|p|p.claude_entrypoint=on))])];
         vec![
             self.group(
                 Some("provider-accounts"),
