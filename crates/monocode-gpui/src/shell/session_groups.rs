@@ -1080,13 +1080,23 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let item = self.session_metadata(id, cx).summary.work_item.clone()?;
-        let noun = if item.kind == "pr" { "PR" } else { "issue" };
+        let noun = if item.kind == "sonar" {
+            "Sonar finding"
+        } else if item.kind == "pr" {
+            "PR"
+        } else {
+            "issue"
+        };
         let url = item.url.clone();
         Some(
             div()
                 .id(("work-item", id as usize))
                 .role(Role::Link)
-                .aria_label(format!("Open {noun} #{}", item.number))
+                .aria_label(if item.kind == "sonar" {
+                    "Open Sonar finding".into()
+                } else {
+                    format!("Open {noun} #{}", item.number)
+                })
                 .flex_shrink_0()
                 .flex()
                 .items_center()
@@ -1106,7 +1116,13 @@ impl Shell {
                     )
                     .text_color(rgb(ACCENT)),
                 )
-                .when(!compact, |d| d.child(format!("#{}", item.number)))
+                .when(!compact, |d| {
+                    d.child(if item.kind == "sonar" {
+                        "Sonar".into()
+                    } else {
+                        format!("#{}", item.number)
+                    })
+                })
                 .cursor_pointer()
                 .when(compact, |d| {
                     d.border_b_1()
