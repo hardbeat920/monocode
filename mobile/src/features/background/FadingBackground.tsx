@@ -1,10 +1,7 @@
 import { Image, type ImageSourcePropType, StyleSheet } from "react-native";
 
-// The desktop's "Haze" chat background: the image darkens toward the bottom
-// and fades out into the background behind the composer. The fade is baked
-// into the render (see fadeOut), so this is one plain image, cheap
-// to composite as the screen slides with the drawer; a mask and gradients here
-// would be drawn off screen every frame it moves.
+// Static cached artwork with its effect and empty/session fade baked into
+// pixels. No animation loop, masks, or per-frame blur on either platform.
 export function FadingBackground({
   source,
   opacity,

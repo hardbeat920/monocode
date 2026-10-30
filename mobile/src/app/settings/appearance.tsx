@@ -1,27 +1,11 @@
-import { Host, Picker, Slider, Text as NativeText } from "@expo/ui/swift-ui";
-import {
-  accessibilityLabel,
-  pickerStyle,
-  tag,
-  tint,
-} from "@expo/ui/swift-ui/modifiers";
+import { Host, Picker, Text as NativeText } from "@expo/ui/swift-ui";
+import { pickerStyle, tag } from "@expo/ui/swift-ui/modifiers";
 import * as Haptics from "expo-haptics";
 import { useLocalSearchParams } from "expo-router";
 import { Fragment, useState } from "react";
-import {
-  ActivityIndicator,
-  Image,
-  Pressable,
-  StyleSheet,
-  Switch,
-  Text,
-  View,
-} from "react-native";
+import { StyleSheet, Switch, Text, View } from "react-native";
 
-import {
-  OPACITY_RANGE,
-  useEmptyBackground,
-} from "@/features/background/useEmptyBackground";
+import { BackgroundSection } from "@/features/background/BackgroundSettings";
 import {
   useAppearancePreference,
   type AppearancePreference,
@@ -190,81 +174,6 @@ function Swatch({ name }: { name: ThemeName }) {
   );
 }
 
-/** The project's empty-session background: the photo as the session shows
- *  it, picked, changed or removed here, and how strongly it shows. */
-function BackgroundSection({ projectId }: { projectId: string }) {
-  const colors = useColors();
-  const styles = useStyles();
-  const controls = useEmptyBackground(projectId);
-  const { settings, background, busy } = controls;
-  return (
-    <View style={[styles.card, styles.backgroundCard]}>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={settings.image ? "Change photo" : "Choose photo"}
-        onPress={() => void controls.pickImage()}
-        style={[styles.preview, { backgroundColor: colors.background }]}
-      >
-        {background ? (
-          <Image
-            source={background.source}
-            resizeMode="cover"
-            style={[StyleSheet.absoluteFill, { opacity: background.opacity }]}
-          />
-        ) : null}
-        {busy ? (
-          <ActivityIndicator color={colors.muted} />
-        ) : settings.image ? null : (
-          <View style={styles.previewEmpty}>
-            <Icon name="image" size={26} color={colors.muted} />
-            <Text style={styles.previewHint}>Choose a photo</Text>
-          </View>
-        )}
-      </Pressable>
-
-      <View style={styles.backgroundRows}>
-        {settings.image ? (
-          <>
-            <View style={styles.visibility}>
-              <Host style={styles.slider}>
-                <Slider
-                  value={settings.opacity}
-                  min={OPACITY_RANGE.min}
-                  max={OPACITY_RANGE.max}
-                  step={0.01}
-                  onValueChange={controls.setOpacity}
-                  modifiers={[
-                    tint(colors.accent),
-                    accessibilityLabel("Background visibility"),
-                  ]}
-                />
-              </Host>
-            </View>
-            <View style={styles.divider} />
-          </>
-        ) : null}
-        <SettingsRow
-          icon="image"
-          label={settings.image ? "Change photo" : "Choose photo"}
-          onPress={() => void controls.pickImage()}
-        />
-        {settings.image ? (
-          <>
-            <View style={styles.divider} />
-            <SettingsRow
-              icon="trash"
-              label="Remove photo"
-              showChevron={false}
-              destructive
-              onPress={controls.removeImage}
-            />
-          </>
-        ) : null}
-      </View>
-    </View>
-  );
-}
-
 const useStyles = themedStyles((colors) => ({
   heading: {
     color: colors.muted,
@@ -299,33 +208,6 @@ const useStyles = themedStyles((colors) => ({
   pressed: {
     opacity: 0.7,
   },
-  backgroundCard: {
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    gap: 4,
-  },
-  preview: {
-    height: 220,
-    borderRadius: radii.card - 8,
-    overflow: "hidden",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.stroke,
-  },
-  previewEmpty: {
-    alignItems: "center",
-    gap: 8,
-  },
-  previewHint: {
-    color: colors.muted,
-    fontSize: 15,
-  },
-  // Under the preview, in line with the other cards' rows.
-  backgroundRows: {
-    marginTop: 6,
-    marginHorizontal: -2,
-  },
   swatch: {
     width: 24,
     height: 24,
@@ -346,12 +228,5 @@ const useStyles = themedStyles((colors) => ({
     width: 10,
     height: 10,
     borderRadius: 5,
-  },
-  visibility: {
-    paddingVertical: 4,
-    paddingHorizontal: 6,
-  },
-  slider: {
-    height: 44,
   },
 }));

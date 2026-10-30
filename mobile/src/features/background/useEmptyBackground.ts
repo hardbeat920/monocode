@@ -4,19 +4,21 @@ import Storage from "expo-sqlite/kv-store";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ImageSourcePropType } from "react-native";
 
-import { BACKGROUNDS, forgetRenders, prepareImage, renderDither } from "./render";
+import {
+  BACKGROUNDS,
+  forgetRenders,
+  prepareImage,
+  renderEffect,
+} from "./render";
 
-/** A project's empty-session background, as set on this phone. */
-export type BackgroundSettings = {
-  /** The picked photo's file name in BACKGROUNDS; none until one is picked. */
-  image: string | null;
-  /** 0.05–0.65, the desktop's range. */
-  opacity: number;
-};
-
-export const OPACITY_RANGE = { min: 0.05, max: 0.65 } as const;
-
-const DEFAULTS: BackgroundSettings = { image: null, opacity: 0.45 };
+import { useScheme } from "@/ui/theme";
+import {
+  backgroundOpacity,
+  normalizeBackground,
+  type BackgroundSettings,
+} from "./settings";
+export { OPACITY_RANGE, type BackgroundSettings } from "./settings";
+const DEFAULTS = normalizeBackground(null);
 
 /** How the empty session shows it. */
 export type EmptyBackground = {
@@ -30,14 +32,14 @@ const storageKey = (projectId: string) => `background:${projectId}`;
  *  elsewhere: in settings, say, for the empty session under it. */
 const watchers = new Map<string, Set<() => void>>();
 /** Names a photo's render, so a new photo never reuses an old one's. */
-const renderKey = (projectId: string, image: string) => `${encodeURIComponent(projectId)}.${image}`;
+const renderKey = (projectId: string, image: string) =>
+  `${encodeURIComponent(projectId)}.${image}`;
 
 function load(projectId: string): BackgroundSettings {
   try {
     const raw = Storage.getItemSync(storageKey(projectId));
     if (!raw) return DEFAULTS;
-    const { image, opacity } = { ...DEFAULTS, ...JSON.parse(raw) };
-    return { image, opacity };
+    return normalizeBackground(JSON.parse(raw));
   } catch {
     return DEFAULTS;
   }
@@ -45,14 +47,19 @@ function load(projectId: string): BackgroundSettings {
 
 /**
  * A project's empty-session background: its settings, which persist on this
- * phone, the photo to show, dithered as the desktop's effect draws it, and
+ * phone, the photo to show with the desktop effects, and
  * the controls the background sheet changes them with.
  */
-export function useEmptyBackground(projectId: string) {
+export function useEmptyBackground(projectId: string, empty = true) {
+  const light = useScheme() === "light";
   const [settings, setSettings] = useState(() => load(projectId));
-  // The last photo drawn; a new one replaces it once ready.
-  // Faded out to clear, so the one render suits every scheme and theme.
-  const [drawn, setDrawn] = useState<{ image: string; uri: string | null } | null>(null);
+  // Identity includes project, effect, scheme and conversation state: a late
+  // render must never display artwork or a treatment from another screen.
+  const [drawn, setDrawn] = useState<{
+    image: string;
+    variant: string;
+    uri: string | null;
+  } | null>(null);
   // Another project's screen, without remounting: its own settings.
   const [shownProject, setShownProject] = useState(projectId);
   if (shownProject !== projectId) {
@@ -74,45 +81,49 @@ export function useEmptyBackground(projectId: string) {
 
   const update = useCallback(
     (patch: Partial<BackgroundSettings>) => {
-      setSettings((current) => {
-        const next = { ...current, ...patch };
-        void Storage.setItem(storageKey(projectId), JSON.stringify(next)).then(() =>
-          watchers.get(projectId)?.forEach(
-            (reload) => reload !== listener.current && reload(),
-          ),
-        );
-        return next;
-      });
+      // Merge against the latest persisted settings so two mounted screens and
+      // rapid slider events cannot overwrite one another with stale state.
+      const next = normalizeBackground({ ...load(projectId), ...patch });
+      Storage.setItemSync(storageKey(projectId), JSON.stringify(next));
+      setSettings(next);
+      watchers
+        .get(projectId)
+        ?.forEach((reload) => reload !== listener.current && reload());
     },
     [projectId],
   );
 
-  const { image, opacity } = settings;
+  const { image, effect } = settings;
+  const opacity = backgroundOpacity(settings, empty);
+  const variant = `${projectId}.${image}.${effect}.${light}.${empty}`;
   useEffect(() => {
     if (!image) return;
     let cancelled = false;
     const source = new File(BACKGROUNDS, image).uri;
     const key = renderKey(projectId, image);
     (async () => {
-      // Lets the spinner show before the dither takes the JS thread for a moment.
+      // Let the settings spinner paint before preparing the cached raster.
       await new Promise((resolve) => setTimeout(resolve, 16));
-      return renderDither(source, key);
+      return renderEffect(source, key, effect, light, empty);
     })().then(
       (uri) => {
-        if (!cancelled) setDrawn({ image, uri });
+        if (!cancelled) setDrawn({ image, variant, uri });
       },
       () => {
-        if (!cancelled) setDrawn({ image, uri: null });
+        if (!cancelled) setDrawn({ image, variant, uri: null });
       },
     );
     return () => {
       cancelled = true;
     };
-  }, [projectId, image]);
+  }, [projectId, image, effect, light, empty, variant]);
 
   /** Lets the user pick a photo, then uses it. False if they cancelled. */
   const pickImage = useCallback(async () => {
-    const result = await launchImageLibraryAsync({ mediaTypes: "images", quality: 1 });
+    const result = await launchImageLibraryAsync({
+      mediaTypes: "images",
+      quality: 1,
+    });
     const picked = result.assets?.[0];
     if (result.canceled || !picked) return false;
     setPicking(true);
@@ -132,17 +143,18 @@ export function useEmptyBackground(projectId: string) {
     update({ image: null });
   }, [projectId, image, update]);
 
-  // The last photo's render stays up until this one's is ready.
-  const shown = !!image && drawn?.image === image;
+  // Hide stale artwork while a different variant is being prepared.
+  const shown = !!image && drawn?.variant === variant;
   const uri = shown ? drawn.uri : null;
   return {
     settings,
-    background: uri ? { source: { uri }, opacity } : null,
+    background: uri && opacity > 0 ? { source: { uri }, opacity } : null,
     /** While a photo is prepared or dithered, for the sheet's spinner. */
     busy: picking || (!!image && !shown),
     pickImage,
     removeImage,
     setOpacity: (next: number) => update({ opacity: next }),
+    update,
   };
 }
 
