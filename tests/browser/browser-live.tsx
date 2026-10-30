@@ -1,6 +1,7 @@
 // "Show in MonoCode" prototype: the real workspace, with the browser module's
 // commands answered by the Playwright test, which drives a real Chrome over
-// CDP (`window.liveBridge`). Events reach `listen` through `__emitTauri`.
+// CDP (`window.liveBridge`). Events reach `listen` through `__emitTauri`,
+// pictures reach the view's channel through `__emitChannel`.
 import {
   browserState,
   browserTab,
@@ -82,6 +83,31 @@ Object.assign(window, {
   __emitTauri(event: string, payload: unknown) {
     for (const id of listeners.get(event) ?? [])
       callbacks.get(id)?.({ event, id, payload });
+  },
+  // A picture on a channel (`__CHANNEL__:id`), packed as `live::LiveFrame::packed`.
+  __emitChannel(
+    channel: string | { id: number },
+    index: number,
+    frame: {
+      format: string;
+      seq: number;
+      width: number;
+      height: number;
+      data: string;
+    },
+  ) {
+    const picture = Uint8Array.from(atob(frame.data), (c) => c.charCodeAt(0));
+    const buffer = new ArrayBuffer(24 + picture.length);
+    const head = new DataView(buffer);
+    head.setUint8(0, frame.format === "png" ? 1 : 0);
+    head.setUint32(4, frame.seq, true);
+    head.setFloat64(8, frame.width, true);
+    head.setFloat64(16, frame.height, true);
+    new Uint8Array(buffer, 24).set(picture);
+    // The bridge hands the channel over as its JSON or as its fields.
+    const id =
+      typeof channel === "string" ? Number(channel.split(":")[1]) : channel.id;
+    callbacks.get(id)?.({ message: buffer, index });
   },
 });
 

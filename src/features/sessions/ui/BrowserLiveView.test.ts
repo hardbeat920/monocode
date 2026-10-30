@@ -1,9 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+  type BrowserLiveInput,
+  parseBrowserLiveFrame,
+} from "../../settings/model/browser";
+import {
   liveAddress,
   liveKeyInput,
   liveModifiers,
   livePoint,
+  pixelSnap,
+  queueLiveInput,
+  wheelPixels,
 } from "./BrowserLiveView";
 
 const key = (
@@ -94,5 +101,80 @@ describe("live view input", () => {
       rest: "",
     });
     expect(liveAddress("about:blank").host).toBe("about:blank");
+  });
+
+  it("merges moves and scrolls that wait, keeping everything else in order", () => {
+    const queue: BrowserLiveInput[] = [];
+    const wheel = (deltaY: number, modifiers = 0): BrowserLiveInput => ({
+      kind: "wheel",
+      x: 10,
+      y: deltaY,
+      deltaX: 0,
+      deltaY,
+      modifiers,
+    });
+    const move = (x: number): BrowserLiveInput => ({
+      kind: "mouse",
+      event: "mouseMoved",
+      x,
+      y: 0,
+      buttons: 0,
+      modifiers: 0,
+    });
+    queueLiveInput(queue, wheel(40));
+    queueLiveInput(queue, wheel(60));
+    queueLiveInput(queue, wheel(-30));
+    expect(queue).toEqual([{ ...wheel(-30), deltaY: 70 }]);
+    // Ctrl+wheel zooms: never folded into a plain scroll.
+    queueLiveInput(queue, wheel(10, 2));
+    queueLiveInput(queue, move(1));
+    queueLiveInput(queue, move(2));
+    queueLiveInput(queue, { kind: "text", text: "a" });
+    queueLiveInput(queue, move(3));
+    expect(queue.map((input) => input.kind)).toEqual([
+      "wheel",
+      "wheel",
+      "mouse",
+      "text",
+      "mouse",
+    ]);
+    expect(queue[2]).toEqual(move(2));
+  });
+
+  it("counts wheel lines and pages in pixels", () => {
+    expect(wheelPixels(120, 0, 900)).toBe(120);
+    expect(wheelPixels(3, 1, 900)).toBe(120);
+    expect(wheelPixels(1, 2, 900)).toBe(900);
+  });
+
+  it("moves the picture onto whole device pixels", () => {
+    expect(pixelSnap(100, 1)).toBe(0);
+    // 100.5 CSS px at 150% is 150.75 device px: a quarter pixel on.
+    expect(pixelSnap(100.5, 1.5) * 1.5 + 100.5 * 1.5).toBeCloseTo(151);
+    expect(Math.abs(pixelSnap(33.3, 1.25))).toBeLessThan(0.5);
+  });
+});
+
+describe("live view pictures", () => {
+  it("reads a picture the way the browser module packs it", () => {
+    const picture = [0xff, 0xd8, 0xff, 0x00];
+    const buffer = new ArrayBuffer(24 + picture.length);
+    const view = new DataView(buffer);
+    view.setUint8(0, 1);
+    view.setUint32(4, 42, true);
+    view.setFloat64(8, 800.5, true);
+    view.setFloat64(16, 600, true);
+    new Uint8Array(buffer, 24).set(picture);
+    const frame = parseBrowserLiveFrame(buffer)!;
+    expect(frame).toMatchObject({
+      format: "png",
+      seq: 42,
+      width: 800.5,
+      height: 600,
+    });
+    expect([...frame.picture]).toEqual(picture);
+    view.setUint8(0, 0);
+    expect(parseBrowserLiveFrame(buffer)!.format).toBe("jpeg");
+    expect(parseBrowserLiveFrame(new ArrayBuffer(24))).toBeNull();
   });
 });

@@ -371,6 +371,7 @@ pub fn run() {
             browser::browser_live_stop,
             browser::browser_live_input,
             browser::browser_live_resize,
+            browser::browser_live_drawn,
             browser::browser_live_navigate,
             browser::browser_close_tab,
             browser::browser_close_all_tabs,

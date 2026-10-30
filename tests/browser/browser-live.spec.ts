@@ -222,6 +222,7 @@ test("a background tab of the thread shows live in MonoCode and takes clicks and
       }
     | undefined;
   let frames = 0;
+  let drawn = 0;
   const frameTimes: number[] = [];
   const inputs: string[] = [];
   const navigations: string[] = [];
@@ -231,6 +232,10 @@ test("a background tab of the thread shows live in MonoCode and takes clicks and
     async (command: string, args: any) => {
       if (command === "browser_live_stop") {
         if (!args.view || running?.view === args.view) await running?.stop();
+        return null;
+      }
+      if (command === "browser_live_drawn") {
+        drawn += 1;
         return null;
       }
       if (command === "browser_live_resize") {
@@ -276,6 +281,7 @@ test("a background tab of the thread shows live in MonoCode and takes clicks and
       // browser_live_start: stream until stopped, each picture acknowledged.
       return new Promise((resolve) => {
         let seq = 0;
+        let index = 0;
         let latest: object | null = null;
         let delivering = false;
         const deliver = async () => {
@@ -285,12 +291,9 @@ test("a background tab of the thread shows live in MonoCode and takes clicks and
             latest = null;
             await page
               .evaluate(
-                (frame) =>
-                  (window as any).__emitTauri(
-                    "monocode-browser-live-frame",
-                    frame,
-                  ),
-                frame,
+                ([channel, index, frame]) =>
+                  (window as any).__emitChannel(channel, index, frame),
+                [args.frames, index++, frame] as const,
               )
               .catch(() => {});
           }
@@ -313,7 +316,7 @@ test("a background tab of the thread shows live in MonoCode and takes clicks and
           // One picture in flight to the page at a time, the newest one, the
           // way a webview keeps up with events it cannot draw in time.
           latest = {
-            tab: args.tab,
+            format: "jpeg",
             data: message.params.data,
             seq,
             width: message.params.metadata.deviceWidth,
@@ -402,7 +405,7 @@ test("a background tab of the thread shows live in MonoCode and takes clicks and
   await page.getByRole("button", { name: "Show in MonoCode" }).click();
 
   const panel = page.locator("[data-browser-live]");
-  const picture = panel.locator("img");
+  const picture = panel.locator("canvas");
   await picture.waitFor();
   // The spinner in the page's header animates, so pictures keep coming.
   const before = frames;
@@ -467,7 +470,7 @@ test("a background tab of the thread shows live in MonoCode and takes clicks and
   }
   delays.sort((a, b) => a - b);
   console.log(
-    `live panel: ${perSecond.toFixed(1)} pictures/s while the page animates; key to picture median ${delays[5]} ms, max ${delays[9]} ms; ${inputs.length} inputs`,
+    `live panel: ${perSecond.toFixed(1)} pictures/s while the page animates; key to picture median ${delays[5]} ms, max ${delays[9]} ms; ${inputs.length} inputs; ${drawn} pictures drawn`,
   );
 
   // The address field and Back, as in a browser.
@@ -485,10 +488,15 @@ test("a background tab of the thread shows live in MonoCode and takes clicks and
   await expect
     .poll(() => pageValue("innerWidth").then(Number))
     .toBeLessThan(before2);
-  const shown = await picture.boundingBox();
+  // The picture follows once the first one at the new size is drawn.
   await expect
-    .poll(() => pageValue("innerWidth").then(Number))
-    .toBe(Math.round(shown!.width));
+    .poll(async () =>
+      Math.abs(
+        Number(await pageValue("innerWidth")) -
+          Math.round((await picture.boundingBox())!.width),
+      ),
+    )
+    .toBeLessThanOrEqual(1);
   await page.waitForTimeout(400);
   await page.screenshot({ path: `${SHOTS}/live-5-resized.png` });
 
@@ -614,4 +622,6 @@ test("a background tab of the thread shows live in MonoCode and takes clicks and
 
   expect(navigations).toEqual(["go", "back"]);
   expect(perSecond).toBeGreaterThan(5);
+  // The panel reports each picture it draws, which paces the browser.
+  expect(drawn).toBeGreaterThan(0);
 });

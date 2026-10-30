@@ -1,4 +1,4 @@
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { Channel, invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useSyncExternalStore } from "react";
 
@@ -429,21 +429,39 @@ export function cancelBrowserPick(): Promise<void> {
   return invoke<void>("browser_cancel_pick");
 }
 
-/** Tauri event with each picture of the tab shown live in MonoCode. */
-export const BROWSER_LIVE_FRAME_EVENT = "monocode-browser-live-frame";
-
 /** One picture of the live view (mirrors `live::LiveFrame`). */
 export type BrowserLiveFrame = {
-  tab: string;
-  /** The picture, base64, in `format`. */
-  data: string;
   /** JPEG while the page moves, a lossless PNG once it is still. */
   format: "jpeg" | "png";
   /** The page's viewport in CSS pixels; input coordinates use this space. */
   width: number;
   height: number;
   seq: number;
+  /** The picture's own bytes, in `format`. */
+  picture: Uint8Array;
 };
+
+/** Bytes in front of the picture (mirrors `live::PACKED_HEADER`). */
+const LIVE_HEADER = 24;
+
+/**
+ * A picture as `live::LiveFrame::packed` sends it: format byte, three zero
+ * bytes, `seq` as u32, `width` and `height` as f64 (little endian), then
+ * the picture. `null` for anything shorter than the header.
+ */
+export function parseBrowserLiveFrame(
+  buffer: ArrayBuffer,
+): BrowserLiveFrame | null {
+  if (buffer.byteLength <= LIVE_HEADER) return null;
+  const head = new DataView(buffer, 0, LIVE_HEADER);
+  return {
+    format: head.getUint8(0) === 1 ? "png" : "jpeg",
+    seq: head.getUint32(4, true),
+    width: head.getFloat64(8, true),
+    height: head.getFloat64(16, true),
+    picture: new Uint8Array(buffer, LIVE_HEADER),
+  };
+}
 
 /** What the user does in the live view (mirrors `live::LiveInput`). */
 export type BrowserLiveInput =
@@ -477,10 +495,12 @@ export type BrowserLiveInput =
   | { kind: "text"; text: string };
 
 /**
- * "Show in MonoCode": pictures of `tab` arrive as
- * {@link BROWSER_LIVE_FRAME_EVENT} until {@link stopBrowserLive}, another
- * view, or the tab is gone; the promise settles then. Meanwhile the tab's
- * viewport is `width` × `height` CSS pixels at `scale`, the panel's size.
+ * "Show in MonoCode": pictures of `tab` reach `onFrame`, as bytes over a
+ * channel of their own, until {@link stopBrowserLive}, another view, or the
+ * tab is gone; the promise settles then. Meanwhile the tab's viewport is
+ * `width` × `height` CSS pixels at `scale`, the panel's size. Tell the
+ * browser each picture drawn with {@link browserLiveDrawn}: it sends a new
+ * one only while the panel keeps up.
  */
 export function startBrowserLive(
   sessionId: string,
@@ -489,8 +509,14 @@ export function startBrowserLive(
   width: number,
   height: number,
   scale: number,
+  onFrame: (frame: BrowserLiveFrame) => void,
 ): Promise<"stopped" | "tab_gone"> {
+  const frames = new Channel<ArrayBuffer>((buffer) => {
+    const frame = parseBrowserLiveFrame(buffer);
+    if (frame) onFrame(frame);
+  });
   return invoke("browser_live_start", {
+    frames,
     sessionId,
     tab,
     view,
@@ -498,6 +524,11 @@ export function startBrowserLive(
     height,
     scale,
   });
+}
+
+/** The pane of `view` has drawn picture `seq`. */
+export function browserLiveDrawn(view: string, seq: number): Promise<void> {
+  return invoke<void>("browser_live_drawn", { view, seq });
 }
 
 /** Stop `view`, the one a pane started (a newer pane's view keeps running). */
@@ -536,14 +567,6 @@ export function navigateBrowserLive(
   nav: BrowserLiveNav,
 ): Promise<void> {
   return invoke<void>("browser_live_navigate", { sessionId, tab, nav });
-}
-
-export function listenBrowserLiveFrames(
-  onFrame: (frame: BrowserLiveFrame) => void,
-): Promise<() => void> {
-  return listen<BrowserLiveFrame>(BROWSER_LIVE_FRAME_EVENT, (event) =>
-    onFrame(event.payload),
-  );
 }
 
 export const saveBrowserSettings = (settings: BrowserSettings) =>

@@ -21,8 +21,8 @@ import {
   type BrowserLiveInput,
   type BrowserLiveNav,
   type BrowserTab,
+  browserLiveDrawn,
   cancelBrowserPick,
-  listenBrowserLiveFrames,
   navigateBrowserLive,
   resizeBrowserLive,
   sendBrowserLiveInput,
@@ -129,6 +129,60 @@ export function livePoint(
   };
 }
 
+/**
+ * Add `input` to the inputs still waiting to go to the tab. Moves and
+ * scrolls that follow one another become one: the pointer's latest place,
+ * and the scroll distances added up, so a fast wheel or trackpad never
+ * builds a backlog the page works through long after the hand has stopped.
+ */
+export function queueLiveInput(
+  queue: BrowserLiveInput[],
+  input: BrowserLiveInput,
+): void {
+  const last = queue[queue.length - 1];
+  if (
+    last?.kind === "wheel" &&
+    input.kind === "wheel" &&
+    (last.modifiers ?? 0) === (input.modifiers ?? 0)
+  ) {
+    queue[queue.length - 1] = {
+      ...input,
+      deltaX: last.deltaX + input.deltaX,
+      deltaY: last.deltaY + input.deltaY,
+    };
+    return;
+  }
+  if (
+    last?.kind === "mouse" &&
+    last.event === "mouseMoved" &&
+    input.kind === "mouse" &&
+    input.event === "mouseMoved" &&
+    last.buttons === input.buttons &&
+    last.modifiers === input.modifiers
+  ) {
+    queue[queue.length - 1] = input;
+    return;
+  }
+  queue.push(input);
+}
+
+/** A wheel's distance in CSS pixels, whatever unit the event counts in. */
+export function wheelPixels(delta: number, mode: number, page: number): number {
+  if (mode === 1) return delta * 40;
+  if (mode === 2) return delta * page;
+  return delta;
+}
+
+/**
+ * Where to put the picture so its pixels land on the screen's: a pane that
+ * starts between two device pixels would have every picture resampled,
+ * which softens text. The CSS offset that moves `edge` onto the next one.
+ */
+export function pixelSnap(edge: number, scale: number): number {
+  const device = edge * scale;
+  return (Math.round(device) - device) / scale;
+}
+
 /** The address split the way the address field shows it: host strong, the rest quiet. */
 export function liveAddress(url: string): {
   secure: boolean;
@@ -203,10 +257,11 @@ export function BrowserLiveView({
 }) {
   const tab = useLiveBrowserTab(sessionId, tabId);
   const stage = useRef<HTMLDivElement>(null);
-  const picture = useRef<HTMLImageElement>(null);
+  const picture = useRef<HTMLCanvasElement>(null);
   const capture = useRef<HTMLTextAreaElement>(null);
-  const frame = useRef<BrowserLiveFrame | null>(null);
-  const [src, setSrc] = useState<string | null>(null);
+  /** The picture on screen: its page size, for input coordinates. */
+  const frame = useRef<Pick<BrowserLiveFrame, "width" | "height"> | null>(null);
+  const [shown, setShown] = useState(false);
   const [fps, setFps] = useState(0);
   const [phase, setPhase] = useState<Phase>({ kind: "connecting" });
   const [error, setError] = useState<string | null>(null);
@@ -228,8 +283,11 @@ export function BrowserLiveView({
     let live = true;
     // This pane's own view: stopping it never stops a newer pane's.
     const view = crypto.randomUUID();
-    let unlisten: (() => void) | null = null;
     let count = 0;
+    // The newest decoded picture not drawn yet, and the newest one asked for.
+    let pending: { bitmap: ImageBitmap; frame: BrowserLiveFrame } | null = null;
+    let newest = 0;
+    let painting = 0;
     let started = false;
     let resizeTimer = 0;
     const meter = window.setInterval(() => {
@@ -254,24 +312,65 @@ export function BrowserLiveView({
       }, 120);
     });
     observer.observe(box);
-    setPhase({ kind: "connecting" });
-    void listenBrowserLiveFrames((next) => {
-      if (!live || next.tab !== tabId) return;
+    // Draw the newest picture once per screen refresh, one picture pixel
+    // per device pixel, and tell the browser it is on screen.
+    const paint = () => {
+      painting = 0;
+      const next = pending;
+      const canvas = picture.current;
+      pending = null;
+      if (!live || !next || !canvas) {
+        next?.bitmap.close();
+        return;
+      }
+      const { bitmap, frame: meta } = next;
+      const { width, height } = bitmap;
+      if (canvas.width !== width) canvas.width = width;
+      if (canvas.height !== height) canvas.height = height;
+      canvas.getContext("2d")?.drawImage(bitmap, 0, 0);
+      bitmap.close();
+      const scale = window.devicePixelRatio || 1;
+      const rect = box.getBoundingClientRect();
+      canvas.style.width = `${width / scale}px`;
+      canvas.style.height = `${height / scale}px`;
+      canvas.style.transform = `translate(${pixelSnap(rect.left, scale)}px, ${pixelSnap(rect.top, scale)}px)`;
       count += 1;
-      frame.current = next;
-      setSrc(`data:image/${next.format ?? "jpeg"};base64,${next.data}`);
+      frame.current = { width: meta.width, height: meta.height };
+      setShown(true);
       setPhase((current) =>
         current.kind === "live" ? current : { kind: "live" },
       );
-    }).then((stop) => {
-      if (!live) {
-        stop();
-        return;
-      }
-      unlisten = stop;
+      void browserLiveDrawn(view, meta.seq).catch(() => {});
+    };
+    const onFrame = (next: BrowserLiveFrame) => {
+      if (!live || next.seq <= newest) return;
+      newest = next.seq;
+      // Decoded off the main thread; a picture overtaken meanwhile is dropped.
+      void createImageBitmap(
+        new Blob([next.picture as Uint8Array<ArrayBuffer>], {
+          type: `image/${next.format}`,
+        }),
+      )
+        .then((bitmap) => {
+          if (
+            !live ||
+            next.seq < newest ||
+            (pending && pending.frame.seq > next.seq)
+          ) {
+            bitmap.close();
+            return;
+          }
+          pending?.bitmap.close();
+          pending = { bitmap, frame: next };
+          if (!painting) painting = requestAnimationFrame(paint);
+        })
+        .catch(() => {});
+    };
+    setPhase({ kind: "connecting" });
+    {
       const { width, height, scale } = size();
       started = true;
-      startBrowserLive(sessionId, tabId, view, width, height, scale)
+      startBrowserLive(sessionId, tabId, view, width, height, scale, onFrame)
         .then((end) => {
           if (!live) return;
           // Stopped while this pane still shows: another pane took over.
@@ -284,13 +383,15 @@ export function BrowserLiveView({
               message: err instanceof Error ? err.message : String(err),
             });
         });
-    });
+    }
     return () => {
       live = false;
       observer.disconnect();
       window.clearTimeout(resizeTimer);
       window.clearInterval(meter);
-      unlisten?.();
+      if (painting) cancelAnimationFrame(painting);
+      pending?.bitmap.close();
+      pending = null;
       void stopBrowserLive(view).catch(() => {});
     };
   }, [sessionId, tabId, visible, open, attempt]);
@@ -302,10 +403,26 @@ export function BrowserLiveView({
   const fail = useCallback((err: unknown) => {
     setError(err instanceof Error ? err.message : String(err));
   }, []);
+  // One input at a time, in the order given: each waits for the tab to
+  // take the one before it, and what piles up meanwhile is merged.
+  const inputs = useRef<BrowserLiveInput[]>([]);
+  const sending = useRef(false);
   const send = useCallback(
     (input: BrowserLiveInput) => {
       setError(null);
-      void sendBrowserLiveInput(sessionId, tabId, input).catch(fail);
+      queueLiveInput(inputs.current, input);
+      if (sending.current) return;
+      sending.current = true;
+      void (async () => {
+        for (
+          let next = inputs.current.shift();
+          next;
+          next = inputs.current.shift()
+        ) {
+          await sendBrowserLiveInput(sessionId, tabId, next).catch(fail);
+        }
+        sending.current = false;
+      })();
     },
     [sessionId, tabId, fail],
   );
@@ -322,18 +439,13 @@ export function BrowserLiveView({
     if (!shown || !current) return null;
     return livePoint({ x: event.clientX, y: event.clientY }, shown, current);
   };
-  const lastMove = useRef(0);
   const mouse = (
     kind: "mousePressed" | "mouseReleased" | "mouseMoved",
     event: MouseEvent,
   ) => {
     const at = point(event);
     if (!at) return;
-    if (kind === "mouseMoved") {
-      const now = performance.now();
-      if (now - lastMove.current < 30) return;
-      lastMove.current = now;
-    } else {
+    if (kind !== "mouseMoved") {
       // Keyboard input keeps going to the tab.
       event.preventDefault();
       capture.current?.focus();
@@ -355,8 +467,16 @@ export function BrowserLiveView({
     send({
       kind: "wheel",
       ...at,
-      deltaX: event.deltaX,
-      deltaY: event.deltaY,
+      deltaX: wheelPixels(
+        event.deltaX,
+        event.deltaMode,
+        frame.current?.width ?? 0,
+      ),
+      deltaY: wheelPixels(
+        event.deltaY,
+        event.deltaMode,
+        frame.current?.height ?? 0,
+      ),
       modifiers: liveModifiers(event),
     });
   };
@@ -445,27 +565,15 @@ export function BrowserLiveView({
           }}
           className="pointer-events-none absolute top-0 left-0 size-px resize-none opacity-0"
         />
-        {src ? (
-          <img
-            ref={picture}
-            src={src}
-            alt=""
-            draggable={false}
-            // At the page's own CSS size: one picture pixel per screen
-            // pixel, never stretched to the pane (that blurs text).
-            style={
-              frame.current
-                ? {
-                    width: `${frame.current.width}px`,
-                    height: `${frame.current.height}px`,
-                  }
-                : undefined
-            }
-            className={`absolute top-0 left-0 max-w-none select-none transition-opacity duration-150 ${
-              phase.kind === "live" && !notice ? "" : "opacity-40"
-            }`}
-          />
-        ) : null}
+        {/* At the picture's own pixels, one per device pixel, never
+            stretched to the pane (that blurs text); sized as it is drawn. */}
+        <canvas
+          ref={picture}
+          aria-hidden
+          className={`absolute top-0 left-0 max-w-none select-none transition-opacity duration-150 ${
+            shown ? "" : "invisible"
+          } ${phase.kind === "live" && !notice ? "" : "opacity-40"}`}
+        />
         {notice || phase.kind === "elsewhere" ? (
           <div className="absolute inset-0 grid place-items-center p-6">
             <div className="flex max-w-xs flex-col items-center gap-3 rounded-xl border border-content/10 bg-background-base/95 px-5 py-4 text-center text-[12px] text-content/65 shadow-sm">
@@ -482,7 +590,7 @@ export function BrowserLiveView({
               ) : null}
             </div>
           </div>
-        ) : !src ? (
+        ) : !shown ? (
           <div className="absolute inset-0 grid place-items-center">
             <p className="flex items-center gap-2 text-[12px] text-content/45">
               <span className="size-1.5 animate-pulse rounded-full bg-teal-500" />

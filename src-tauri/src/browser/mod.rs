@@ -1898,6 +1898,14 @@ impl BrowserHost {
         }
     }
 
+    /// The pane of `view` has drawn picture `seq`.
+    pub fn live_drawn(&self, view: &str, seq: u64) {
+        let running = self.live.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(control) = running.as_ref().filter(|c| c.view == view) {
+            control.drawn(seq);
+        }
+    }
+
     /// The pane of `view` changed size: its view follows it.
     pub fn resize_live(&self, view: &str, size: live::PanelSize) {
         let running = self.live.lock().unwrap_or_else(|e| e.into_inner());
@@ -3083,7 +3091,7 @@ pub fn browser_cancel_pick() -> Result<(), String> {
 
 #[tauri::command]
 pub async fn browser_live_start(
-    window: WebviewWindow,
+    frames: tauri::ipc::Channel,
     session_id: String,
     tab: String,
     view: String,
@@ -3095,7 +3103,9 @@ pub async fn browser_live_start(
     let size = live::PanelSize::new(width, height, scale.unwrap_or(1.0));
     tauri::async_runtime::spawn_blocking(move || {
         host.live_view(&session_id, &TabId(tab), &view, size, |frame| {
-            let _ = window.emit(live::FRAME_EVENT, frame);
+            if let Some(bytes) = frame.packed() {
+                let _ = frames.send(tauri::ipc::InvokeResponseBody::Raw(bytes));
+            }
         })
     })
     .await
@@ -3105,6 +3115,12 @@ pub async fn browser_live_start(
 #[tauri::command]
 pub fn browser_live_stop(view: Option<String>) -> Result<(), String> {
     require_host()?.stop_live(view.as_deref());
+    Ok(())
+}
+
+#[tauri::command]
+pub fn browser_live_drawn(view: String, seq: u64) -> Result<(), String> {
+    require_host()?.live_drawn(&view, seq);
     Ok(())
 }
 

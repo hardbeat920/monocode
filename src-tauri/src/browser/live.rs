@@ -10,7 +10,7 @@
 //! viewport takes the panel's size, so the page fills it the way a built-in
 //! browser would.
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -21,8 +21,6 @@ use super::link::{CdpSessionId, Command, EventFilter, Link, Method};
 use super::policy;
 use super::protocol::TabId;
 
-/// Tauri event that carries each picture to the panel.
-pub const FRAME_EVENT: &str = "monocode-browser-live-frame";
 const FRAME: &str = "Page.screencastFrame";
 const POLL: Duration = Duration::from_millis(100);
 /// A page this long without a new picture gets a lossless one: moving
@@ -35,6 +33,13 @@ const MISFIT_FOR: Duration = Duration::from_secs(1);
 const HOLD_WAIT: Duration = Duration::from_millis(500);
 /// How often the panel's viewport is put back while pictures don't fit.
 const HEAL_EVERY: Duration = Duration::from_millis(300);
+/// How long a picture waits for the panel to draw the one before it before
+/// the browser may send the next one anyway.
+const ACK_WAIT: Duration = Duration::from_millis(150);
+/// How often a held-back acknowledgement looks at what the panel has drawn.
+const ACK_POLL: Duration = Duration::from_millis(4);
+/// Bytes in front of the picture in [`LiveFrame::packed`].
+pub const PACKED_HEADER: usize = 24;
 /// JPEG quality of the pictures, 0 to 100.
 const QUALITY: u32 = 90;
 /// Bounds for the panel size, in CSS pixels.
@@ -66,6 +71,27 @@ pub struct LiveFrame {
     pub height: f64,
     /// Counts the pictures of one view, from 1.
     pub seq: u64,
+}
+
+impl LiveFrame {
+    /// The picture as the panel takes it: a fixed header (format byte, 3
+    /// zero bytes, `seq` as u32, `width` and `height` as f64, all little
+    /// endian) and then the picture's own bytes. Binary, so it reaches the
+    /// panel without being turned into text and back.
+    pub fn packed(&self) -> Option<Vec<u8>> {
+        use base64::Engine as _;
+        let picture = base64::engine::general_purpose::STANDARD
+            .decode(&self.data)
+            .ok()?;
+        let mut bytes = Vec::with_capacity(PACKED_HEADER + picture.len());
+        bytes.push(u8::from(self.format == "png"));
+        bytes.extend_from_slice(&[0; 3]);
+        bytes.extend_from_slice(&(self.seq as u32).to_le_bytes());
+        bytes.extend_from_slice(&self.width.to_le_bytes());
+        bytes.extend_from_slice(&self.height.to_le_bytes());
+        bytes.extend_from_slice(&picture);
+        Some(bytes)
+    }
 }
 
 /// Why a view ended.
@@ -205,6 +231,8 @@ pub struct LiveControl {
     held: AtomicUsize,
     /// The view has stopped its pictures for a hold.
     paused: AtomicBool,
+    /// The last picture the panel has drawn, 0 until it says.
+    drawn: AtomicU64,
 }
 
 impl LiveControl {
@@ -217,6 +245,7 @@ impl LiveControl {
             resize: Mutex::new(None),
             held: AtomicUsize::new(0),
             paused: AtomicBool::new(false),
+            drawn: AtomicU64::new(0),
         }
     }
 
@@ -258,6 +287,20 @@ impl LiveControl {
         while !self.finished.load(Ordering::Acquire) && std::time::Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    /// The panel has drawn picture `seq`. Once it says so, the browser
+    /// sends a new picture only while the panel keeps up, so pictures never
+    /// queue up in front of it and what it shows stays current.
+    pub fn drawn(&self, seq: u64) {
+        self.drawn.fetch_max(seq, Ordering::AcqRel);
+    }
+
+    /// Whether picture `seq` waits for the panel: it has not drawn the one
+    /// before it yet.
+    fn behind(&self, seq: u64) -> bool {
+        let drawn = self.drawn.load(Ordering::Acquire);
+        drawn > 0 && seq > drawn + 1
     }
 
     pub fn resize(&self, size: PanelSize) {
@@ -361,7 +404,16 @@ pub fn run(
     let mut misfit: Option<std::time::Instant> = None;
     let mut healed: Option<std::time::Instant> = None;
     let mut paused = false;
+    // A picture sent to the panel whose acknowledgement waits until the
+    // panel has drawn the one before it.
+    let mut waiting: Option<(super::link::CdpEvent, std::time::Instant)> = None;
     let end = loop {
+        if let Some((event, at)) = &waiting {
+            if !control.behind(seq) || at.elapsed() >= ACK_WAIT || control.held() {
+                ack(link, tab, event);
+                waiting = None;
+            }
+        }
         if control.stopped() {
             break LiveEnd::Stopped;
         }
@@ -413,6 +465,11 @@ pub fn run(
         let wait = moving.map_or(POLL, |(at, _, _)| {
             STILL_AFTER.saturating_sub(at.elapsed()).min(POLL)
         });
+        let wait = if waiting.is_some() {
+            wait.min(ACK_POLL)
+        } else {
+            wait
+        };
         let Some(event) = events.recv_timeout(wait) else {
             if let Some((at, width, height)) = moving {
                 if at.elapsed() >= STILL_AFTER {
@@ -437,44 +494,56 @@ pub fn run(
         if event.method != FRAME {
             continue;
         }
-        ack(link, tab, &event);
-        let Some(data) = event.params["data"].as_str() else {
-            continue;
+        let sent = 'frame: {
+            let Some(data) = event.params["data"].as_str() else {
+                break 'frame false;
+            };
+            // The same picture again: nothing moved.
+            if data == last {
+                break 'frame false;
+            }
+            let metadata = &event.params["metadata"];
+            let width = metadata["deviceWidth"].as_f64().unwrap_or(0.0);
+            let height = metadata["deviceHeight"].as_f64().unwrap_or(0.0);
+            if fits(current, width, height, jpeg_size(data)) {
+                misfit = None;
+            } else {
+                let since = *misfit.get_or_insert_with(std::time::Instant::now);
+                // Something else changed the tab's viewport (a full-page
+                // screenshot does): the panel's is put back.
+                if healed.is_none_or(|at: std::time::Instant| at.elapsed() >= HEAL_EVERY) {
+                    healed = Some(std::time::Instant::now());
+                    let _ = send(link, &tab.main, Method::PageStopScreencast, json!({}));
+                    let _ = show(link, tab, current);
+                }
+                if since.elapsed() < MISFIT_FOR {
+                    break 'frame false;
+                }
+            }
+            last = data.to_string();
+            seq += 1;
+            moving = Some((std::time::Instant::now(), width, height));
+            sink(LiveFrame {
+                tab: tab.tab.0.clone(),
+                data: last.clone(),
+                format: "jpeg",
+                width,
+                height,
+                seq,
+            });
+            true
         };
-        // The same picture again: nothing moved.
-        if data == last {
-            continue;
-        }
-        let metadata = &event.params["metadata"];
-        let width = metadata["deviceWidth"].as_f64().unwrap_or(0.0);
-        let height = metadata["deviceHeight"].as_f64().unwrap_or(0.0);
-        if fits(current, width, height, jpeg_size(data)) {
-            misfit = None;
+        if sent && control.behind(seq) {
+            if let Some((older, _)) = waiting.replace((event, std::time::Instant::now())) {
+                ack(link, tab, &older);
+            }
         } else {
-            let since = *misfit.get_or_insert_with(std::time::Instant::now);
-            // Something else changed the tab's viewport (a full-page
-            // screenshot does): the panel's is put back.
-            if healed.is_none_or(|at: std::time::Instant| at.elapsed() >= HEAL_EVERY) {
-                healed = Some(std::time::Instant::now());
-                let _ = send(link, &tab.main, Method::PageStopScreencast, json!({}));
-                let _ = show(link, tab, current);
-            }
-            if since.elapsed() < MISFIT_FOR {
-                continue;
-            }
+            ack(link, tab, &event);
         }
-        last = data.to_string();
-        seq += 1;
-        moving = Some((std::time::Instant::now(), width, height));
-        sink(LiveFrame {
-            tab: tab.tab.0.clone(),
-            data: last.clone(),
-            format: "jpeg",
-            width,
-            height,
-            seq,
-        });
     };
+    if let Some((event, _)) = waiting {
+        ack(link, tab, &event);
+    }
     restore(link, tab);
     Ok(end)
 }
@@ -704,6 +773,45 @@ fn command_for(input: &LiveInput) -> (Method, Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_packed_picture_carries_its_header_and_bytes() {
+        let frame = LiveFrame {
+            tab: "t_1".into(),
+            data: "/9j/AA==".into(),
+            format: "png",
+            width: 800.5,
+            height: 600.0,
+            seq: 7,
+        };
+        let bytes = frame.packed().unwrap();
+        assert_eq!(bytes[0], 1);
+        assert_eq!(&bytes[1..4], &[0, 0, 0]);
+        assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 7);
+        assert_eq!(f64::from_le_bytes(bytes[8..16].try_into().unwrap()), 800.5);
+        assert_eq!(f64::from_le_bytes(bytes[16..24].try_into().unwrap()), 600.0);
+        assert_eq!(&bytes[PACKED_HEADER..], &[0xFF, 0xD8, 0xFF, 0x00]);
+        let broken = LiveFrame {
+            data: "not base64!".into(),
+            ..frame
+        };
+        assert_eq!(broken.packed(), None);
+    }
+
+    #[test]
+    fn pictures_wait_only_once_the_panel_reports_what_it_drew() {
+        let control = LiveControl::new("v".into(), TabId("t".into()));
+        // Before the panel says anything, nothing waits.
+        assert!(!control.behind(10));
+        control.drawn(3);
+        assert!(!control.behind(4));
+        assert!(control.behind(5));
+        // An older report never moves it back.
+        control.drawn(2);
+        assert!(control.behind(5));
+        control.drawn(4);
+        assert!(!control.behind(5));
+    }
 
     #[test]
     fn panel_input_maps_to_cdp_input() {
