@@ -14,6 +14,12 @@ import {
 
 type FileDropState = { attachmentsSupported: boolean; remote: boolean };
 
+/** A waiting follow-up being edited takes drops instead of the composer. */
+export type QueuedDropSink = {
+  ingestFiles: (files: File[]) => void;
+  ingestPaths: (paths: string[]) => void;
+};
+
 /**
  * Files dropped anywhere on the session pane around `anchor` attach to its
  * composer: from the OS (native and DOM drops) and from the file explorer.
@@ -25,6 +31,7 @@ export function useFileDrop({
   state,
   read,
   onError,
+  queuedSinkRef,
 }: {
   anchor: RefObject<HTMLElement | null>;
   enabled: boolean;
@@ -32,6 +39,8 @@ export function useFileDrop({
   state: RefObject<FileDropState>;
   read: (read: () => Promise<Attachment[]>) => void;
   onError: (message: string) => void;
+  /** Set while a queued follow-up is being edited. */
+  queuedSinkRef?: RefObject<QueuedDropSink | null>;
 }): boolean {
   const [fileDrag, setFileDrag] = useState(false);
   const supported = state.current.attachmentsSupported;
@@ -46,18 +55,21 @@ export function useFileDrop({
     let nativeDropAt = 0;
     let cancelled = false;
 
-    const overTarget = (x: number, y: number) => {
+    const dropHit = (x: number, y: number) => {
       const root = dropRoot();
-      if (!root) return false;
-      const rect = root.getBoundingClientRect();
-      return (
-        x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
-      );
+      if (!root) return null;
+      return sessionDropHit(root, { x, y });
     };
 
     const onDragOver = (event: DragEvent) => {
       const data = event.dataTransfer;
       if (!hasFiles(data)) return;
+      if (isQueuedMessageEditTarget(event.target)) {
+        event.preventDefault();
+        data.dropEffect = state.current.attachmentsSupported ? "copy" : "none";
+        setFileDrag(false);
+        return;
+      }
       event.preventDefault();
       const supported = state.current.attachmentsSupported;
       data.dropEffect = supported ? "copy" : "none";
@@ -73,6 +85,17 @@ export function useFileDrop({
     const onDrop = (event: DragEvent) => {
       const data = event.dataTransfer;
       if (!hasFiles(data)) return;
+      if (isQueuedMessageEditTarget(event.target)) {
+        event.preventDefault();
+        event.stopPropagation();
+        setFileDrag(false);
+        if (!state.current.attachmentsSupported) return;
+        if (Date.now() - nativeDropAt < 250) return;
+        const files = filesFromClipboard(data);
+        if (files.length === 0) return;
+        queuedSinkRef?.current?.ingestFiles(files);
+        return;
+      }
       event.preventDefault();
       setFileDrag(false);
       if (!state.current.attachmentsSupported) return;
@@ -90,14 +113,18 @@ export function useFileDrop({
         setFileDrag(false);
         return;
       }
-      const over = overTarget(detail.x, detail.y);
+      const hit = dropHit(detail.x, detail.y);
       const supported = state.current.attachmentsSupported;
       if (detail.type === "move") {
-        setFileDrag(over && supported);
+        setFileDrag(hit === "composer" && supported);
         return;
       }
       setFileDrag(false);
-      if (!over || !supported) return;
+      if (!hit || !supported) return;
+      if (hit === "queued") {
+        queuedSinkRef?.current?.ingestPaths([detail.path]);
+        return;
+      }
       read(() => attachmentsFromPaths([detail.path]));
     };
 
@@ -120,15 +147,15 @@ export function useFileDrop({
         }
         const { x, y } = event.payload.position;
         const point = dragPointToClient(x, y);
-        const over = overTarget(point.x, point.y);
+        const hit = dropHit(point.x, point.y);
         const supported = state.current.attachmentsSupported;
         if (event.payload.type === "enter" || event.payload.type === "over") {
-          setFileDrag(over && supported);
+          setFileDrag(hit === "composer" && supported);
           return;
         }
         if (event.payload.type !== "drop") return;
         setFileDrag(false);
-        if (!over || !supported) return;
+        if (!hit || !supported) return;
         if (event.payload.paths.length === 0) {
           onError(
             "This drag did not provide a file. Save the image, then drag the saved file here.",
@@ -137,6 +164,10 @@ export function useFileDrop({
         }
         nativeDropAt = Date.now();
         const paths = event.payload.paths;
+        if (hit === "queued") {
+          queuedSinkRef?.current?.ingestPaths(paths);
+          return;
+        }
         read(() => attachmentsFromPaths(paths));
       })
       .then((fn) => {
@@ -156,13 +187,42 @@ export function useFileDrop({
       );
       unlisten?.();
     };
-  }, [anchor, enabled, state, read, onError]);
+  }, [anchor, enabled, state, read, onError, queuedSinkRef]);
 
   useEffect(() => {
     if (!supported) setFileDrag(false);
   }, [supported]);
 
   return fileDrag;
+}
+
+function pointInRect(rect: DOMRect, point: { x: number; y: number }): boolean {
+  return (
+    point.x >= rect.left &&
+    point.x <= rect.right &&
+    point.y >= rect.top &&
+    point.y <= rect.bottom
+  );
+}
+
+function isQueuedMessageEditTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof Element &&
+    Boolean(target.closest("[data-queued-message-edit]"))
+  );
+}
+
+/** Which part of the session pane a drop lands on. */
+function sessionDropHit(
+  root: Element,
+  point: { x: number; y: number },
+): "queued" | "composer" | null {
+  if (!pointInRect(root.getBoundingClientRect(), point)) return null;
+  const queued = root.querySelector("[data-queued-message-edit]");
+  if (queued && pointInRect(queued.getBoundingClientRect(), point)) {
+    return "queued";
+  }
+  return "composer";
 }
 
 function hasFiles(data: DataTransfer | null): data is DataTransfer {

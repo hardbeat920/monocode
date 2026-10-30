@@ -1,7 +1,16 @@
-import { useEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ClipboardEvent,
+  type DragEvent as ReactDragEvent,
+} from "react";
 import {
   Check,
   CornerDownRight,
+  FilePlus,
   ListEnd,
   Pause,
   Pencil,
@@ -10,14 +19,38 @@ import {
   X,
 } from "../../../shared/ui/icons";
 import { isImeComposition } from "../../../shared/lib/keyboard";
-import type { MessageQueueStatus, QueuedMessage } from "../model/session";
+import { useAnimatedReorder } from "../../../shared/hooks/useAnimatedReorder";
+import {
+  isFileReferenceText,
+  messageFilesFromClipboard,
+  nativeClipboardAttachments,
+} from "../../../platform/tauri/clipboard";
+import {
+  attachmentsFromFiles,
+  attachmentsFromPaths,
+  filesFromClipboard,
+  mergeAttachments,
+  pickAttachments,
+  revokeAttachment,
+} from "../model/attachments";
+import { resizeComposer } from "../model/composerResize";
+import type { QueuedDropSink } from "../hooks/useFileDrop";
+import type {
+  Attachment,
+  MessageQueueStatus,
+  QueuedMessage,
+} from "../model/session";
+import { AttachmentChip } from "./AttachmentChip";
 
 export function MessageQueue({
   messages,
   status,
+  attachmentsSupported = true,
+  dropSinkRef,
   onDelete,
   onEdit,
   onEditingChange,
+  onReorder,
   onSteer,
   onResume,
   variant = "queue",
@@ -25,9 +58,16 @@ export function MessageQueue({
 }: {
   messages: QueuedMessage[];
   status?: MessageQueueStatus;
+  attachmentsSupported?: boolean;
+  dropSinkRef?: { current: QueuedDropSink | null };
   onDelete?: (messageId: string) => void;
-  onEdit?: (messageId: string, text: string) => void;
+  onEdit?: (
+    messageId: string,
+    text: string,
+    attachments: Attachment[],
+  ) => void;
   onEditingChange?: (messageId?: string) => void;
+  onReorder?: (orderedIds: string[]) => void;
   onSteer?: (messageId: string) => void;
   onResume?: () => void;
   variant?: "queue" | "messages";
@@ -35,35 +75,189 @@ export function MessageQueue({
 }) {
   const [editingId, setEditingId] = useState<string>();
   const [editDraft, setEditDraft] = useState("");
+  const [editAttachments, setEditAttachments] = useState<Attachment[]>([]);
+  const editRef = useRef<HTMLTextAreaElement>(null);
   const onEditingChangeRef = useRef(onEditingChange);
   onEditingChangeRef.current = onEditingChange;
   const editingIdRef = useRef(editingId);
   editingIdRef.current = editingId;
+  const editGenerationRef = useRef(0);
+  const editAttachmentsRef = useRef(editAttachments);
+  editAttachmentsRef.current = editAttachments;
+  const editOriginalIdsRef = useRef<Set<string>>(new Set());
+  const beginEditSession = () => {
+    editGenerationRef.current += 1;
+  };
   useEffect(() => {
     return () => {
+      beginEditSession();
       if (editingIdRef.current) onEditingChangeRef.current?.();
+      for (const file of editAttachmentsRef.current) {
+        if (!editOriginalIdsRef.current.has(file.id)) revokeAttachment(file);
+      }
     };
   }, []);
-  if (messages.length === 0) return null;
-  const paused = status === "paused";
-  const failed = messages.some((message) => message.error);
-
+  useLayoutEffect(() => {
+    if (editRef.current) resizeComposer(editRef.current);
+  }, [editingId, editDraft]);
+  const messageIds = useMemo(
+    () => messages.map((message) => message.id),
+    [messages],
+  );
+  const sortable = useAnimatedReorder(
+    messageIds,
+    (ids) => onReorder?.(ids),
+    "y",
+  );
+  const discardAddedAttachments = (files: Attachment[]) => {
+    for (const file of files) {
+      if (!editOriginalIdsRef.current.has(file.id)) revokeAttachment(file);
+    }
+  };
+  const clearEdit = () => {
+    beginEditSession();
+    setEditingId(undefined);
+    setEditDraft("");
+    setEditAttachments([]);
+    editOriginalIdsRef.current = new Set();
+    onEditingChange?.();
+  };
   const startEdit = (message: QueuedMessage) => {
+    if (editingId && editingId !== message.id) {
+      discardAddedAttachments(editAttachments);
+    }
+    beginEditSession();
     setEditingId(message.id);
     setEditDraft(message.text);
+    setEditAttachments(message.attachments);
+    editOriginalIdsRef.current = new Set(
+      message.attachments.map((file) => file.id),
+    );
     onEditingChange?.(message.id);
   };
   const cancelEdit = () => {
-    setEditingId(undefined);
-    setEditDraft("");
-    onEditingChange?.();
+    discardAddedAttachments(editAttachments);
+    clearEdit();
   };
   const saveEdit = (message: QueuedMessage) => {
-    if (!editDraft.trim() && message.attachments.length === 0) return;
-    onEdit?.(message.id, editDraft);
-    setEditingId(undefined);
-    setEditDraft("");
+    if (!editDraft.trim() && editAttachments.length === 0) return;
+    const kept = new Set(editAttachments.map((file) => file.id));
+    for (const file of message.attachments) {
+      if (!kept.has(file.id)) revokeAttachment(file);
+    }
+    onEdit?.(message.id, editDraft, editAttachments);
+    clearEdit();
   };
+  const addEditAttachments = (incoming: Attachment[]) => {
+    if (incoming.length === 0) return;
+    setEditAttachments((prev) => mergeAttachments(prev, incoming));
+  };
+  const acceptQueuedAttachments = (
+    messageId: string,
+    generation: number,
+    files: Attachment[],
+  ) => {
+    if (
+      editingIdRef.current === messageId &&
+      editGenerationRef.current === generation
+    ) {
+      addEditAttachments(files);
+      return true;
+    }
+    files.forEach(revokeAttachment);
+    return false;
+  };
+  const removeEditAttachment = (id: string) => {
+    const removed = editAttachments.find((file) => file.id === id);
+    if (removed && !editOriginalIdsRef.current.has(removed.id)) {
+      revokeAttachment(removed);
+    }
+    setEditAttachments((prev) => prev.filter((file) => file.id !== id));
+  };
+  const attachToQueued = (messageId: string) => {
+    if (!attachmentsSupported) return;
+    const generation = editGenerationRef.current;
+    void pickAttachments().then((files) => {
+      if (!acceptQueuedAttachments(messageId, generation, files)) return;
+      editRef.current?.focus();
+    });
+  };
+  const ingestQueuedFiles = (messageId: string, files: File[]) => {
+    if (!attachmentsSupported || files.length === 0) return;
+    const generation = editGenerationRef.current;
+    void attachmentsFromFiles(files).then((pasted) => {
+      acceptQueuedAttachments(messageId, generation, pasted);
+    });
+  };
+  const ingestQueuedPaths = (messageId: string, paths: string[]) => {
+    if (!attachmentsSupported || paths.length === 0) return;
+    const generation = editGenerationRef.current;
+    void attachmentsFromPaths(paths).then((pasted) => {
+      acceptQueuedAttachments(messageId, generation, pasted);
+    });
+  };
+  useEffect(() => {
+    if (!dropSinkRef) return;
+    if (!editingId || !attachmentsSupported) {
+      dropSinkRef.current = null;
+      return;
+    }
+    const messageId = editingId;
+    dropSinkRef.current = {
+      ingestFiles: (files) => ingestQueuedFiles(messageId, files),
+      ingestPaths: (paths) => ingestQueuedPaths(messageId, paths),
+    };
+    return () => {
+      dropSinkRef.current = null;
+    };
+  }, [attachmentsSupported, dropSinkRef, editingId]);
+  const onQueuedPaste = (
+    messageId: string,
+    event: ClipboardEvent<HTMLTextAreaElement>,
+  ) => {
+    if (!attachmentsSupported) return;
+    const messageFiles = messageFilesFromClipboard(event.clipboardData);
+    if (messageFiles) {
+      event.preventDefault();
+      ingestQueuedFiles(messageId, messageFiles);
+      return;
+    }
+    const files = filesFromClipboard(event.clipboardData);
+    if (files.length > 0) {
+      event.preventDefault();
+      ingestQueuedFiles(messageId, files);
+      return;
+    }
+    const text = event.clipboardData.getData("text/plain");
+    if (text && !isFileReferenceText(text)) return;
+    event.preventDefault();
+    const generation = editGenerationRef.current;
+    void nativeClipboardAttachments(text)
+      .then(({ files: pasted }) => {
+        acceptQueuedAttachments(messageId, generation, pasted);
+      })
+      .catch(() => undefined);
+  };
+  const onQueuedDragOver = (event: ReactDragEvent<HTMLDivElement>) => {
+    if (!attachmentsSupported || !hasFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "copy";
+  };
+  const onQueuedDrop = (
+    messageId: string,
+    event: ReactDragEvent<HTMLDivElement>,
+  ) => {
+    if (!hasFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!attachmentsSupported) return;
+    ingestQueuedFiles(messageId, [...event.dataTransfer.files]);
+  };
+
+  if (messages.length === 0) return null;
+  const paused = status === "paused";
+  const failed = messages.some((message) => message.error);
 
   return (
     <div className="px-2 text-content/55" data-message-queue>
@@ -99,6 +293,8 @@ export function MessageQueue({
         {messages.map((message, index) => {
           const sending = sendingId === message.id;
           const editing = editingId === message.id;
+          const reorderable = messages.length > 1 && !!onReorder;
+          const canDrag = reorderable && !editing;
           const label =
             (message.monoSessionCompletion
               ? message.monoSessionCompletion.sessionCount
@@ -111,38 +307,93 @@ export function MessageQueue({
           return (
             <div
               key={message.id}
-              className={`flex min-h-8 items-center gap-2.5 text-[12px] ${
-                index > 0 ? "border-t border-content/5" : ""
-              }`}
+              ref={(el) => sortable.setItemRef(message.id, el)}
+              data-message-queue-row={message.id}
+              className={`flex min-h-8 gap-2.5 text-[12px] ${
+                editing ? "items-start py-1" : "items-center"
+              } ${index > 0 ? "border-t border-content/5" : ""} ${
+                reorderable ? "queue-reorder-item reorder-item relative" : ""
+              } ${canDrag ? "cursor-grab touch-none active:cursor-grabbing" : ""}`}
+              onPointerDown={(event) => {
+                if (!canDrag) return;
+                if (
+                  (event.target as HTMLElement | null)?.closest("[data-no-drag]")
+                ) {
+                  return;
+                }
+                sortable.onItemPointerDown(message.id, event);
+              }}
+              onClick={(event) => {
+                if (!sortable.consumeClick()) return;
+                event.preventDefault();
+                event.stopPropagation();
+              }}
             >
-              <ListEnd className="size-3.5 shrink-0 text-content/35" />
+              <ListEnd
+                className={`size-3.5 shrink-0 text-content/35 ${
+                  editing ? "mt-1.5" : ""
+                }`}
+              />
               {editing ? (
                 <>
-                  <textarea
-                    autoFocus
-                    aria-label="Edit queued message"
-                    value={editDraft}
-                    rows={1}
-                    onChange={(event) => setEditDraft(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (isImeComposition(event.nativeEvent)) return;
-                      if (event.key === "Escape") {
-                        event.preventDefault();
-                        cancelEdit();
-                      } else if (event.key === "Enter" && !event.shiftKey) {
-                        event.preventDefault();
-                        saveEdit(message);
-                      }
-                    }}
-                    className="min-h-6 min-w-0 flex-1 resize-none rounded-md border border-content/15 bg-content/5 px-1.5 py-0.5 text-[12px] text-content outline-none focus:border-content/30"
-                  />
+                  <div
+                    data-no-drag
+                    data-queued-message-edit
+                    className="flex min-w-0 flex-1 flex-col gap-1"
+                    onDragOver={onQueuedDragOver}
+                    onDrop={(event) => onQueuedDrop(message.id, event)}
+                  >
+                    <textarea
+                      ref={editRef}
+                      autoFocus
+                      aria-label="Edit queued message"
+                      value={editDraft}
+                      rows={1}
+                      onChange={(event) => {
+                        const field = event.currentTarget;
+                        setEditDraft(field.value);
+                        resizeComposer(field);
+                      }}
+                      onPaste={(event) => onQueuedPaste(message.id, event)}
+                      onKeyDown={(event) => {
+                        if (isImeComposition(event.nativeEvent)) return;
+                        if (event.key === "Escape") {
+                          event.preventDefault();
+                          cancelEdit();
+                        } else if (event.key === "Enter" && !event.shiftKey) {
+                          event.preventDefault();
+                          saveEdit(message);
+                        }
+                      }}
+                      className="min-h-6 max-h-40 w-full resize-none overflow-y-auto rounded-md border border-content/15 bg-content/5 px-1.5 py-0.5 text-[12px] leading-4 text-content outline-none focus:border-content/30"
+                    />
+                    <div className="flex flex-wrap items-center gap-1">
+                      {editAttachments.map((file) => (
+                        <AttachmentChip
+                          key={file.id}
+                          attachment={file}
+                          onRemove={() => removeEditAttachment(file.id)}
+                        />
+                      ))}
+                      {attachmentsSupported ? (
+                        <button
+                          type="button"
+                          title="Attach files or images"
+                          aria-label="Attach files to queued message"
+                          onClick={() => attachToQueued(message.id)}
+                          className="grid size-6 shrink-0 place-items-center rounded-md hover:bg-content/10 hover:text-content"
+                        >
+                          <FilePlus className="size-3.5" />
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
                   <button
                     type="button"
+                    data-no-drag
                     title="Save queued message"
                     aria-label="Save queued message"
-                    disabled={
-                      !editDraft.trim() && message.attachments.length === 0
-                    }
+                    disabled={!editDraft.trim() && editAttachments.length === 0}
                     onClick={() => saveEdit(message)}
                     className="grid size-6 shrink-0 place-items-center rounded-md hover:bg-content/10 hover:text-content disabled:opacity-30"
                   >
@@ -150,6 +401,7 @@ export function MessageQueue({
                   </button>
                   <button
                     type="button"
+                    data-no-drag
                     title="Cancel queued message edit"
                     aria-label="Cancel queued message edit"
                     onClick={cancelEdit}
@@ -173,6 +425,7 @@ export function MessageQueue({
                   {onSteer && !message.monoSessionCompletion ? (
                     <button
                       type="button"
+                      data-no-drag
                       disabled={sending}
                       onClick={() => onSteer?.(message.id)}
                       className="flex h-6 shrink-0 items-center gap-1.5 rounded-md px-2 text-content/50 transition-colors hover:bg-content/8 hover:text-content/90 disabled:opacity-40"
@@ -183,6 +436,7 @@ export function MessageQueue({
                   ) : null}
                   <button
                     type="button"
+                    data-no-drag
                     title="Edit queued message"
                     aria-label="Edit queued message"
                     disabled={sending || !!message.monoSessionCompletion}
@@ -193,6 +447,7 @@ export function MessageQueue({
                   </button>
                   <button
                     type="button"
+                    data-no-drag
                     title="Remove queued message"
                     aria-label="Remove queued message"
                     disabled={sending}
@@ -208,5 +463,16 @@ export function MessageQueue({
         })}
       </div>
     </div>
+  );
+}
+
+function hasFiles(data: DataTransfer | null): data is DataTransfer {
+  if (!data) return false;
+  return (
+    data.files.length > 0 ||
+    [...data.types].some(
+      (type) => type === "Files" || type === "application/x-moz-file",
+    ) ||
+    Array.from(data.items ?? []).some((item) => item.kind === "file")
   );
 }
