@@ -343,10 +343,28 @@ impl Shell {
             .and_then(Kind::parse)
             .unwrap_or(Kind::Codex)
     }
+    /// Learn which provider CLIs are installed before a model picker opens,
+    /// and again whenever binary paths may have changed.
+    fn probe_installed_providers(&mut self, cx: &mut Context<Self>) {
+        if cfg!(test) {
+            return;
+        }
+        let work = cx
+            .background_executor()
+            .spawn(async { crate::pickers::missing_providers() });
+        cx.spawn(async move |this, cx| {
+            let missing = work.await;
+            let _ = this.update(cx, |_, cx| {
+                crate::pickers::remember_missing_providers(missing, cx)
+            });
+        })
+        .detach();
+    }
     pub(super) fn apply_preferences(&mut self, cx: &mut Context<Self>) {
         self.refresh_notification_permission();
         self.configure_quick_composer(cx);
         monocode_core::cli::initialize(&self.workspace.preferences.binary_paths);
+        self.probe_installed_providers(cx);
         self.keep_visible_idle_agents(cx);
         monocode_core::provider::configure_idle_agents(
             self.workspace.preferences.idle_agents as usize,

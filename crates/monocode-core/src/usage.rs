@@ -4,6 +4,7 @@ pub(crate) mod claude;
 mod devin;
 mod opencode;
 mod pi;
+pub(crate) use pi::configured_agent_dir as pi_agent_dir;
 
 use crate::{catalog, provider::Kind};
 use serde_json::Value;

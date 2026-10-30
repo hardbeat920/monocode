@@ -639,6 +639,8 @@ impl SettingsView {
                         } else {
                             this.select_open = Some(id);
                             this.select_active = selected.unwrap_or(0);
+                            this.select_scroll = gpui::ScrollHandle::new();
+                            this.select_reveal.set(true);
                             window.focus(&this.select_focus, cx);
                         }
                         cx.notify();
@@ -646,6 +648,17 @@ impl SettingsView {
             )
             .when(open, |d| {
                 let active = self.select_active;
+                if self.select_reveal.get() {
+                    self.select_scroll.scroll_to_item(active);
+                    // The list's bounds arrive with its first layout, too late
+                    // to reveal a row in that frame, so ask again in the next.
+                    if self.select_scroll.bounds().size.height > px(0.) {
+                        self.select_reveal.set(false);
+                    } else {
+                        let view = cx.entity();
+                        cx.defer(move |cx| view.update(cx, |_, cx| cx.notify()));
+                    }
+                }
                 let rows = options
                     .into_iter()
                     .enumerate()
@@ -660,6 +673,7 @@ impl SettingsView {
                             .aria_label(text.clone())
                             .aria_selected(is_selected)
                             .w_full()
+                            .flex_shrink_0()
                             .flex()
                             .items_center()
                             .gap_2()
@@ -731,6 +745,10 @@ impl SettingsView {
                             .role(Role::ListBox)
                             .aria_label(label)
                             .track_focus(&self.select_focus)
+                            // The popover caps its height; the rest scrolls.
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.select_scroll)
                             .flex()
                             .flex_col()
                             .on_key_down(cx.listener(
@@ -760,6 +778,7 @@ impl SettingsView {
                                         }
                                         _ => return,
                                     }
+                                    this.select_scroll.scroll_to_item(this.select_active);
                                     cx.stop_propagation();
                                     cx.notify();
                                 },
