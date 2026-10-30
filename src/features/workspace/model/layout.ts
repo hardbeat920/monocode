@@ -1009,6 +1009,16 @@ export function setSplitRatio(
   return { ...node, sizes: splitSizesAtBoundary(node.sizes, index, boundary) };
 }
 
+/** Give every pane in each split an equal share, nested splits included. */
+export function equalizeSplits(node: LayoutNode): LayoutNode {
+  if (node.type === "leaf") return node;
+  return {
+    ...node,
+    children: node.children.map(equalizeSplits),
+    sizes: equalSizes(node.children.length),
+  };
+}
+
 export function splitSizesAtBoundary(
   current: number[],
   index: number,
