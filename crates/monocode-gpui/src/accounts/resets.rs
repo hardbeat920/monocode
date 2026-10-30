@@ -332,6 +332,7 @@ mod tests {
                         Err(FetchError {
                             message: "Refresh failed".into(),
                             unavailable: false,
+                            authentication_required: false,
                         }),
                     )
                 },
