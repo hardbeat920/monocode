@@ -62,7 +62,7 @@ export function InboxDiscussionPanel({
     <aside
       ref={resize.setPaneRef}
       aria-label={`Ask about ${inboxItemRef(item)}`}
-      className="relative flex min-h-0 shrink-0 flex-col border-l border-stroke max-[1100px]:absolute max-[1100px]:inset-0 max-[1100px]:z-10 max-[1100px]:!w-auto"
+      className="relative flex min-h-0 shrink-0 flex-col border-l border-stroke max-[1100px]:absolute max-[1100px]:inset-0 max-[1100px]:z-10 max-[1100px]:!w-auto max-[1100px]:bg-background-base"
     >
       <div
         role="separator"
