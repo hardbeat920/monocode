@@ -1098,6 +1098,7 @@ pub(crate) struct PrepaintStateIndex {
 #[derive(Clone, Default)]
 pub(crate) struct PaintIndex {
     scene_index: usize,
+    window_control_hitboxes_index: usize,
     #[cfg(any(test, feature = "test-support"))]
     debug_bounds_index: usize,
     mouse_listeners_index: usize,
@@ -2085,14 +2086,7 @@ impl Window {
             let mut cx = cx.to_async();
             Box::new(move || {
                 handle
-                    .update(&mut cx, |_, window, _cx| {
-                        for (area, hitbox) in &window.rendered_frame.window_control_hitboxes {
-                            if window.mouse_hit_test.ids.contains(&hitbox.id) {
-                                return Some(*area);
-                            }
-                        }
-                        None
-                    })
+                    .update(&mut cx, |_, window, _cx| window.hit_test_window_control())
                     .log_err()
                     .unwrap_or(None)
             })
@@ -4130,6 +4124,7 @@ impl Window {
     pub(crate) fn paint_index(&self) -> PaintIndex {
         PaintIndex {
             scene_index: self.next_frame.scene.len(),
+            window_control_hitboxes_index: self.next_frame.window_control_hitboxes.len(),
             #[cfg(any(test, feature = "test-support"))]
             debug_bounds_index: self.next_frame.debug_bounds_records.len(),
             mouse_listeners_index: self.next_frame.mouse_listeners.len(),
@@ -4142,6 +4137,12 @@ impl Window {
     }
 
     pub(crate) fn reuse_paint(&mut self, range: Range<PaintIndex>) {
+        self.next_frame.window_control_hitboxes.extend(
+            self.rendered_frame.window_control_hitboxes
+                [range.start.window_control_hitboxes_index..range.end.window_control_hitboxes_index]
+                .iter()
+                .cloned(),
+        );
         // Cached elements still exist in the frame even when their paint methods don't run.
         #[cfg(any(test, feature = "test-support"))]
         for (selector, bounds) in &self.rendered_frame.debug_bounds_records
@@ -5397,6 +5398,14 @@ impl Window {
     pub fn insert_window_control_hitbox(&mut self, area: WindowControlArea, hitbox: Hitbox) {
         self.invalidator.debug_assert_paint();
         self.next_frame.window_control_hitboxes.push((area, hitbox));
+    }
+
+    pub(crate) fn hit_test_window_control(&self) -> Option<WindowControlArea> {
+        self.rendered_frame
+            .window_control_hitboxes
+            .iter()
+            .find(|(_, hitbox)| self.mouse_hit_test.ids.contains(&hitbox.id))
+            .map(|(area, _)| *area)
     }
 
     /// Sets the key context for the current element. This context will be used to translate

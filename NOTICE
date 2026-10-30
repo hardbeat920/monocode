@@ -36,6 +36,7 @@ gpui-pre 0.3.9 components from the same Zed snapshot, copyright Zed Industries,
 licensed under Apache-2.0 (LICENSE-APACHE included in each directory).
 The GPUI SVG renderer also exposes an image-free parsing mode for untrusted
 generated Mermaid diagrams, preserving normal image resolution for other SVGs.
+Cached GPUI frames retain native window-control hitboxes, including drag areas.
 Monocode removes the unused zed-scap dependency and its feature links from their
 manifests, and rejects screen-capture builds in gpui-pre/build.rs pending license
 review. The retained framework code remains Apache-2.0.

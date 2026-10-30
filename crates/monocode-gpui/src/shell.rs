@@ -10204,6 +10204,71 @@ mod tests {
     }
 
     #[gpui::test]
+    fn cached_titlebar_keeps_blank_space_draggable(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let (window, _, _) = window(cx);
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        for classic in [false, true] {
+            for (count, width) in [(1, 1200.), (8, 2400.), (8, 1000.), (24, 6000.), (24, 1000.)] {
+                window
+                    .update(visual, |shell, _, cx| {
+                        shell.workspace.classic_layout = classic;
+                        shell.workspace.sidebar_visible = false;
+                        shell.workspace.right_panel_open = false;
+                        shell.workspace.tabs.clear();
+                        shell.workspace.title_order.clear();
+                        for _ in 0..count {
+                            let summary = locked(&shell.store)
+                                .unwrap()
+                                .create("codex", "/work/monocode")
+                                .unwrap();
+                            let id = summary.id;
+                            shell.add(summary, cx);
+                            shell.workspace.open(id);
+                        }
+                        shell.invalidate_chrome(cx);
+                        cx.notify();
+                    })
+                    .unwrap();
+                visual.simulate_window_resize(window.into(), gpui::size(px(width), px(800.)));
+                visual.run_until_parked();
+                let strip = visual.debug_bounds("title-tab-strip").unwrap();
+                let new_tab = visual.debug_bounds("new-tab").unwrap();
+                let blank = gpui::point((new_tab.right() + strip.right()) / 2., strip.center().y);
+                let has_blank_space = strip.right() - new_tab.right() > px(STRIP_TRAIL);
+                visual.simulate_mouse_move(blank, None, Default::default());
+                let renders = window
+                    .update(visual, |shell, _, cx| shell.tabs_frame.read(cx).renders)
+                    .unwrap();
+                for frame in 0..3 {
+                    visual.update(|window, cx| {
+                        window.simulate_next_frame(cx);
+                        window.draw(cx).clear(cx);
+                    });
+                    if has_blank_space {
+                        assert_eq!(
+                            visual.window_control_area(),
+                            Some(WindowControlArea::Drag),
+                            "classic={classic}, tabs={count}, width={width}, frame={frame}"
+                        );
+                    }
+                }
+                window
+                    .update(visual, |shell, _, cx| {
+                        assert_eq!(
+                            shell.tabs_frame.read(cx).renders,
+                            renders,
+                            "checks must exercise the cached title bar"
+                        );
+                    })
+                    .unwrap();
+                visual.simulate_mouse_move(new_tab.center(), None, Default::default());
+                assert_eq!(visual.window_control_area(), None);
+            }
+        }
+    }
+
+    #[gpui::test]
     fn titlebar_panel_buttons_keep_window_bounds_for_single_and_double_clicks(
         cx: &mut TestAppContext,
     ) {
