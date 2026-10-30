@@ -1,3 +1,6 @@
+import { useWorkspaceSidebar } from "@/features/workspace/WorkspaceSidebarContext";
+import { CircleButton } from "@/ui/CircleButton";
+import { usePaneWidth } from "@/ui/PaneWidth";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { router, Stack } from "expo-router";
@@ -9,7 +12,6 @@ import {
   Pressable,
   Text,
   TextInput,
-  useWindowDimensions,
   View,
 } from "react-native";
 import Svg, { Circle, Path } from "react-native-svg";
@@ -44,7 +46,9 @@ export function SessionTitle({
   subtitle: string;
 }) {
   const styles = useStyles();
-  const { width } = useWindowDimensions();
+  const width = usePaneWidth();
+  const sidebar = useWorkspaceSidebar();
+  const collapsed = sidebar.wide && !sidebar.open;
   if (Platform.OS === "android")
     return (
       <View style={styles.androidTitle}>
@@ -58,9 +62,30 @@ export function SessionTitle({
     );
   return (
     <Stack.Toolbar placement="left">
+      {collapsed ? (
+        <Stack.Toolbar.View hidesSharedBackground>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+            <CircleButton
+              icon="panel"
+              label="Show sidebar"
+              onPress={sidebar.toggle}
+            />
+            <CircleButton
+              icon="chevronLeft"
+              label="Back"
+              onPress={() => router.back()}
+            />
+          </View>
+        </Stack.Toolbar.View>
+      ) : null}
       <Stack.Toolbar.View hidesSharedBackground>
         <View
-          style={[styles.title, { width: Math.max(width - HEADER_ITEMS, 80) }]}
+          style={[
+            styles.title,
+            {
+              width: Math.max(width - HEADER_ITEMS - (collapsed ? 56 : 0), 80),
+            },
+          ]}
         >
           <Text style={styles.name} numberOfLines={1}>
             {title}

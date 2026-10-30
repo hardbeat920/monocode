@@ -9,10 +9,18 @@ import {
 } from "react";
 import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
-import Animated, { FadeIn, FadeOut, LinearTransition } from "react-native-reanimated";
+import Animated, {
+  FadeIn,
+  FadeOut,
+  LinearTransition,
+} from "react-native-reanimated";
 
 import { FileSearchBar, SEARCH_BAR } from "@/features/files/FileSearchBar";
-import type { Harness, SessionSummary, Worktree } from "@/features/workspace/types";
+import type {
+  Harness,
+  SessionSummary,
+  Worktree,
+} from "@/features/workspace/types";
 import { useWorkspace } from "@/features/workspace/WorkspaceProvider";
 import { GradualBlur } from "@/ui/GradualBlur";
 import { themedStyles, useColors } from "@/ui/theme";
@@ -43,7 +51,11 @@ export function SessionsPage({
   active,
   worktree,
   onOpen,
+  selectedId,
+  compact = false,
 }: {
+  selectedId?: string;
+  compact?: boolean;
   projectId: string;
   active: boolean;
   worktree?: Worktree;
@@ -60,15 +72,24 @@ export function SessionsPage({
   const needle = query.trim().toLowerCase();
   const recent = sessions.filter((session) => session.projectId === projectId);
   const pages = useSessionPages(projectId, needle, active);
-  const listed = visibleSessions(pages, recent, needle, edited).filter((session) =>
-    inWorktree(session, worktree),
+  const listed = visibleSessions(pages, recent, needle, edited).filter(
+    (session) => inWorktree(session, worktree),
   );
   const visible = filterSessions(listed, filter);
-  const scope = JSON.stringify([projectId, needle, filter, worktree?.path, !!pages]);
+  const scope = JSON.stringify([
+    projectId,
+    needle,
+    filter,
+    worktree?.path,
+    !!pages,
+  ]);
   const arrivals = useArrivals(visible, scope, active);
   // The agents to filter by: those in the list, in the order first seen.
-  const harnesses = [...new Set<Harness>(listed.map((session) => session.harness))];
-  if (filter.harness && !harnesses.includes(filter.harness)) harnesses.push(filter.harness);
+  const harnesses = [
+    ...new Set<Harness>(listed.map((session) => session.harness)),
+  ];
+  if (filter.harness && !harnesses.includes(filter.harness))
+    harnesses.push(filter.harness);
   const narrowed = !!needle || filter !== NO_FILTER || !!worktree;
 
   const actions = useSessionActions(() => {});
@@ -103,12 +124,14 @@ export function SessionsPage({
     ({ item }: { item: SessionSummary }) => (
       <SessionRow
         session={item}
+        selected={item.id === selectedId}
+        compact={compact}
         removing={removingId === item.id}
         arriving={arriving.has(item.id)}
         handlers={handlers}
       />
     ),
-    [removingId, arriving, handlers],
+    [removingId, arriving, handlers, selectedId, compact],
   );
 
   return (
@@ -136,7 +159,9 @@ export function SessionsPage({
             ) : null
           }
           ListFooterComponent={
-            pages?.loadingMore ? <ActivityIndicator style={styles.more} color={colors.muted} /> : null
+            pages?.loadingMore ? (
+              <ActivityIndicator style={styles.more} color={colors.muted} />
+            ) : null
           }
           onScrollBeginDrag={closeOpenRow}
           onEndReached={pages?.loadMore}
@@ -145,7 +170,10 @@ export function SessionsPage({
           windowSize={7}
           keyboardDismissMode="interactive"
           keyboardShouldPersistTaps="handled"
-          contentContainerStyle={[styles.list, { paddingTop: pageTop, paddingBottom: bottom }]}
+          contentContainerStyle={[
+            styles.list,
+            { paddingTop: pageTop, paddingBottom: bottom },
+          ]}
           scrollIndicatorInsets={{ top: pageTop, bottom }}
           showsVerticalScrollIndicator={false}
         />
@@ -155,7 +183,11 @@ export function SessionsPage({
           onChange={setQuery}
           placeholder="Search sessions"
           accessory={
-            <SessionFilterMenu value={filter} onChange={setFilter} harnesses={harnesses} />
+            <SessionFilterMenu
+              value={filter}
+              onChange={setFilter}
+              harnesses={harnesses}
+            />
           }
         />
       </View>
@@ -170,7 +202,8 @@ export function SessionsPage({
  */
 function inWorktree(session: SessionSummary, worktree: Worktree | undefined) {
   if (!worktree) return true;
-  if (session.worktreePath) return samePath(session.worktreePath, worktree.path);
+  if (session.worktreePath)
+    return samePath(session.worktreePath, worktree.path);
   return session.branch === worktree.name;
 }
 
@@ -195,11 +228,15 @@ type RowHandlers = {
 /** A session in the list, re-rendered only when it changes. */
 const SessionRow = memo(function SessionRow({
   session,
+  selected,
+  compact,
   removing,
   arriving,
   handlers,
 }: {
   session: SessionSummary;
+  selected: boolean;
+  compact: boolean;
   removing: boolean;
   arriving: boolean;
   handlers: RowHandlers;
@@ -207,13 +244,16 @@ const SessionRow = memo(function SessionRow({
   return (
     <SessionCard
       session={session}
-      detailed
+      detailed={!compact}
+      active={selected}
       onPress={() => handlers.open(session)}
       onLongPress={() => handlers.showActions(session)}
       onRename={() => handlers.rename(session)}
       onDelete={() => handlers.remove(session)}
       onSwipeOpen={handlers.swipeOpened}
-      entering={arriving ? FadeIn.duration(ARRIVE_MS).delay(ARRIVE_MS * 0.3) : undefined}
+      entering={
+        arriving ? FadeIn.duration(ARRIVE_MS).delay(ARRIVE_MS * 0.3) : undefined
+      }
       exiting={removing ? FadeOut.duration(REMOVE_MS * 0.6) : undefined}
     />
   );

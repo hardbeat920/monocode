@@ -9,6 +9,7 @@ let ios: {
     NSMicrophoneUsageDescription?: string;
     NSCameraUsageDescription?: string;
     UIBackgroundModes?: string[];
+    UISupportedInterfaceOrientations?: string[];
   };
   entitlements: Record<string, unknown>;
 };
@@ -81,4 +82,10 @@ it("removes unused Android microphone, storage and audio foreground-service perm
     "expo.modules.audio.service.AudioControlsService",
   );
   expect(ios.infoPlist.UIBackgroundModes ?? []).not.toContain("audio");
+});
+
+it("supports portrait and both landscape orientations on iPad", () => {
+  expect(ios.infoPlist.UISupportedInterfaceOrientations).toEqual(expect.arrayContaining([
+    "UIInterfaceOrientationPortrait", "UIInterfaceOrientationLandscapeLeft", "UIInterfaceOrientationLandscapeRight",
+  ]));
 });

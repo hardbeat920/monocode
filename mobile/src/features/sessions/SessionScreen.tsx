@@ -1,3 +1,4 @@
+import { COMPOSER_COLUMN } from "@/ui/conversationLayout";
 import { router, useGlobalSearchParams, useIsFocused, usePathname } from "expo-router";
 import { BlurTargetView } from "expo-blur";
 import {
@@ -650,7 +651,7 @@ export function SessionFrame({
                   color={colors.background}
                 />
                 <View style={{ paddingBottom: composerBottom }}>
-                  <View onLayout={onComposerLayout}>
+                  <View onLayout={onComposerLayout} style={COMPOSER_COLUMN}>
                     <GlassBlurTarget
                       value={androidBlur && blurTargetReady ? blurTarget : undefined}
                     >

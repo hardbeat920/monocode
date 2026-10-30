@@ -1,5 +1,6 @@
+import { usePaneWidth } from "@/ui/PaneWidth";
 import { useState, type ReactNode } from "react";
-import { StyleSheet, useWindowDimensions, View } from "react-native";
+import { StyleSheet, View } from "react-native";
 import Animated, { useAnimatedStyle } from "react-native-reanimated";
 
 import { useScenePager } from "@/ui/ScenePager";
@@ -17,7 +18,7 @@ export function useProjectPages(key: string, active = true) {
   const view: ProjectView = viewFor?.key === key ? viewFor.view : "chat";
   const setView = (next: ProjectView) => setViewFor({ key, view: next });
 
-  const { width } = useWindowDimensions();
+  const width = usePaneWidth();
   const progress = useScenePager(
     PROJECT_VIEWS.indexOf(view),
     (page) => setView(PROJECT_VIEWS[page] ?? "chat"),
@@ -56,7 +57,7 @@ export function ProjectPages({
   /** The second. */
   sessions: ReactNode;
 }) {
-  const { width } = useWindowDimensions();
+  const width = usePaneWidth();
   return (
     <Animated.View
       style={[styles.pages, { width: width * PROJECT_VIEWS.length }, pages.slide]}

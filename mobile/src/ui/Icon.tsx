@@ -1,4 +1,5 @@
 import Add01Icon from "@hugeicons/core-free-icons/Add01Icon";
+import ArrowLeft01Icon from "@hugeicons/core-free-icons/ArrowLeft01Icon";
 import ArrowDown01Icon from "@hugeicons/core-free-icons/ArrowDown01Icon";
 import ArrowRight01Icon from "@hugeicons/core-free-icons/ArrowRight01Icon";
 import ArrowUp02Icon from "@hugeicons/core-free-icons/ArrowUp02Icon";
@@ -24,6 +25,7 @@ import LockIcon from "@hugeicons/core-free-icons/LockIcon";
 import LeftToRightListBulletIcon from "@hugeicons/core-free-icons/LeftToRightListBulletIcon";
 import Moon02Icon from "@hugeicons/core-free-icons/Moon02Icon";
 import MinusSignIcon from "@hugeicons/core-free-icons/MinusSignIcon";
+import PanelLeftIcon from "@hugeicons/core-free-icons/PanelLeftIcon";
 import Menu01Icon from "@hugeicons/core-free-icons/Menu01Icon";
 import Mic01Icon from "@hugeicons/core-free-icons/Mic01Icon";
 import Note01Icon from "@hugeicons/core-free-icons/Note01Icon";
@@ -52,6 +54,7 @@ import { useColors } from "./theme";
 // Deep imports keep the full catalog out of the bundle.
 const icons = {
   menu: Menu01Icon,
+  panel: PanelLeftIcon,
   search: Search01Icon,
   close: Cancel01Icon,
   add: Add01Icon,
@@ -65,6 +68,7 @@ const icons = {
   chevronDown: ArrowDown01Icon,
   chevronUpDown: UnfoldMoreIcon,
   chevronRight: ArrowRight01Icon,
+  chevronLeft: ArrowLeft01Icon,
   branch: GitBranchIcon,
   computer: ComputerIcon,
   computerOff: ComputerRemoveIcon,

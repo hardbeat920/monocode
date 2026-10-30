@@ -1,3 +1,4 @@
+import { COMPOSER_COLUMN } from "@/ui/conversationLayout";
 import type { ReactNode } from "react";
 import { Image, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
@@ -115,7 +116,7 @@ export function EmptySession({
             lift,
           ]}
         >
-          {accessory}
+          <View style={COMPOSER_COLUMN}>{accessory}</View>
         </Animated.View>
       ) : null}
     </View>
