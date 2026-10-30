@@ -768,6 +768,20 @@ impl Protocol {
                             },
                             stdin,
                         )?;
+                        if self.request.kind == Kind::Copilot && planning && !read && !self.probe {
+                            let mode = if access == AccessMode::ReadOnly {
+                                "Read-only mode"
+                            } else {
+                                "Plan mode"
+                            };
+                            events.push(Event::Interjection {
+                                text: format!(
+                                    "{mode} blocked a tool request. Switch to Supervised to review and approve tools, then send your request again."
+                                ),
+                                custom_type: "custom".into(),
+                                severity: None,
+                            });
+                        }
                     } else {
                         events.push(Event::Approval(Approval {
                             id,
@@ -1672,6 +1686,32 @@ mod tests {
         let events = p.frame(json!({"id":"permission","method":"session/request_permission","params":{"toolCall":{"kind":"execute"},"options":[{"kind":"allow_once","optionId":"yes"},{"kind":"reject_once","optionId":"no"}]}}),&mut out).unwrap();
         assert!(events.is_empty());
         assert_eq!(last(&mut out)["result"]["outcome"]["optionId"], "no");
+    }
+    #[test]
+    fn copilot_read_only_reports_blocked_tools_without_allowing_them() {
+        for kind in ["execute", "edit", "other"] {
+            let mut p = protocol(Kind::Copilot);
+            p.acp.stage = Stage::Prompt;
+            p.request.settings.access = AccessMode::ReadOnly;
+            let mut out = Vec::new();
+            let events = p.frame(json!({"id":"permission","method":"session/request_permission","params":{"toolCall":{"kind":kind},"options":[{"kind":"allow_once","optionId":"yes"},{"kind":"reject_once","optionId":"no"}]}}), &mut out).unwrap();
+            assert_eq!(last(&mut out)["result"]["outcome"]["optionId"], "no");
+            assert!(
+                matches!(events.as_slice(), [Event::Interjection { text, custom_type, severity }]
+                if text.contains("Read-only mode blocked") && text.contains("Supervised")
+                && custom_type == "custom" && severity.is_none())
+            );
+            assert!(p.approvals.is_empty());
+        }
+        for kind in ["read", "search"] {
+            let mut p = protocol(Kind::Copilot);
+            p.acp.stage = Stage::Prompt;
+            p.request.settings.access = AccessMode::ReadOnly;
+            let mut out = Vec::new();
+            let events = p.frame(json!({"id":"permission","method":"session/request_permission","params":{"toolCall":{"kind":kind},"options":[{"kind":"allow_once","optionId":"yes"},{"kind":"reject_once","optionId":"no"}]}}), &mut out).unwrap();
+            assert_eq!(last(&mut out)["result"]["outcome"]["optionId"], "yes");
+            assert!(events.is_empty());
+        }
     }
     #[test]
     fn sparse_permission_requests_keep_the_tool_preview() {
