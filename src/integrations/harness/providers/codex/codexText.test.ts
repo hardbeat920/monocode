@@ -12,6 +12,7 @@ let output = "Generated text";
 let threadCount = 0;
 let failTurn = false;
 let missingResume = false;
+let delayCompletionMs = 0;
 const spawnChild = vi.hoisted(() =>
   vi.fn(async (..._args: unknown[]) => undefined),
 );
@@ -71,7 +72,7 @@ vi.mock("../../core/child", () => ({
             },
           },
         });
-      }, 0);
+      }, delayCompletionMs);
     } else {
       receive({ id: request.id, result: {} });
     }
@@ -113,6 +114,7 @@ beforeEach(() => {
   threadCount = 0;
   failTurn = false;
   missingResume = false;
+  delayCompletionMs = 0;
   spawnChild.mockClear();
   prepareCodexMonoContext.mockClear();
 });
@@ -301,4 +303,42 @@ it("reports private side-question resume failures without replacing saved contex
     }),
   ).rejects.toThrow("thread not found");
   expect(threadStarts()).toHaveLength(0);
+});
+
+it("does not force a 45s generation timeout when an AbortSignal is provided for interactive side questions", async () => {
+  vi.useFakeTimers();
+  delayCompletionMs = 50_000;
+  const controller = new AbortController();
+  const runPromise = runCodexTextPrompt({
+    cwd: "/repo",
+    prompt: "Interactive side question",
+    signal: controller.signal,
+  });
+
+  // Advance past the 45s default threshold without error
+  await vi.advanceTimersByTimeAsync(46_000);
+
+  // Advance to completion time (51s total)
+  await vi.advanceTimersByTimeAsync(5_000);
+
+  await expect(runPromise).resolves.toBe(output);
+  vi.useRealTimers();
+});
+
+it("still rejects with a timeout after 45s for unmonitored background tasks without an AbortSignal", async () => {
+  vi.useFakeTimers();
+  delayCompletionMs = 50_000;
+  const runPromise = runCodexTextPrompt({
+    cwd: "/repo",
+    prompt: "Background task",
+  });
+  const assertion = expect(runPromise).rejects.toThrow(
+    "Codex text generation timed out",
+  );
+
+  // Advance past 45s
+  await vi.advanceTimersByTimeAsync(46_000);
+
+  await assertion;
+  vi.useRealTimers();
 });

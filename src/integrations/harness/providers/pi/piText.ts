@@ -130,7 +130,8 @@ async function promptOnLive(
     input.model,
     input.modelSettings,
   );
-  const timeoutMs = input.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  const timeoutMs =
+    input.timeoutMs ?? (input.signal ? undefined : REQUEST_TIMEOUT_MS);
   try {
     await session.rpc.request({ type: "new_session" }).catch(() => undefined);
     const thinking = input.modelSettings?.thinking;
@@ -143,7 +144,8 @@ async function promptOnLive(
     const fast = input.modelSettings?.fast;
     if (flavor.id === "omp" && (fast === "true" || fast === "false")) {
       await session.rpc
-        .request({ type: "set_fast_mode", enabled: fast === "true" })
+        .request({ type: "set_fast_mode", enabled: fast === "true" }
+        )
         .catch(() => undefined);
     }
     session.output = "";
@@ -161,22 +163,30 @@ async function promptOnLive(
       void session.rpc.request({ type: "abort" }).catch(() => undefined);
     });
 
-    await session.rpc.request(buildPiPrompt({ text: input.prompt }), timeoutMs);
+    await session.rpc.request(
+      buildPiPrompt({ text: input.prompt }),
+      typeof timeoutMs === "number" && timeoutMs > 0
+        ? timeoutMs
+        : REQUEST_TIMEOUT_MS,
+    );
     if (session.turnEndPending) finishTurn(session);
 
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      await Promise.race([
-        turnPromise,
-        new Promise<void>((_, reject) => {
-          timer = setTimeout(
-            () =>
-              reject(new Error(`${flavor.label} text generation timed out`)),
-            timeoutMs,
-          );
-        }),
-        ...(abort.promise ? [abort.promise] : []),
-      ]);
+      const racePromises: Promise<void>[] = [turnPromise];
+      if (abort.promise) racePromises.push(abort.promise);
+      if (typeof timeoutMs === "number" && timeoutMs > 0) {
+        racePromises.push(
+          new Promise<void>((_, reject) => {
+            timer = setTimeout(
+              () =>
+                reject(new Error(`${flavor.label} text generation timed out`)),
+              timeoutMs,
+            );
+          }),
+        );
+      }
+      await Promise.race(racePromises);
     } finally {
       abort.detach();
       if (timer) clearTimeout(timer);
