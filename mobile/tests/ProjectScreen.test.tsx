@@ -11,6 +11,8 @@ const desktop = vi.hoisted(() => ({
   startSession: vi.fn(),
   sendMessage: vi.fn(),
   offline: false,
+  sessionBranch: "main",
+  pushedIn: true,
   os: "ios",
   headerTarget: undefined as unknown,
   header: {} as {
@@ -131,7 +133,7 @@ vi.mock("@/features/mascots/ProjectMascot", () => ({
 }));
 vi.mock("@/features/models/sessionChoice", () => ({
   useSessionChoice: (_project: Project, sessionId?: string) => ({
-    session: sessionId ? { id: sessionId, branch: "main" } : undefined,
+    session: sessionId ? { id: sessionId, branch: desktop.sessionBranch } : undefined,
     accounts: {},
   }),
   useForgetChoiceOnLeave: () => {},
@@ -145,12 +147,16 @@ vi.mock("@/features/settings/newSessions", () => ({
 vi.mock("@/features/sessions/Composer", () => ({
   Composer: ({
     workspace,
+    projectId,
+    worktreePath,
     onSend,
   }: {
     workspace?: ReactNode;
+    projectId?: string;
+    worktreePath?: string;
     onSend: (text: string, attachments: never[]) => Promise<void>;
   }) => (
-    <section data-composer>
+    <section data-composer data-project={projectId} data-worktree={worktreePath}>
       {workspace}
       <button onClick={() => void onSend("Build the app", [])}>Send</button>
     </section>
@@ -286,7 +292,7 @@ vi.mock("@/ui/theme", () => {
   };
 });
 vi.mock("@/ui/usePushedIn", () => ({
-  usePushedIn: () => true,
+  usePushedIn: () => desktop.pushedIn,
   usePushStarted: () => true,
 }));
 
@@ -331,12 +337,37 @@ describe("new session composer workspace", () => {
     desktop.startSession.mockReset().mockResolvedValue("started-session");
     desktop.sendMessage.mockReset().mockResolvedValue(undefined);
     desktop.offline = false;
+    desktop.sessionBranch = "main";
+    desktop.pushedIn = true;
     desktop.os = "ios";
     container = document.createElement("div");
     root = createRoot(container);
   });
   afterEach(() => act(() => root.unmount()));
 
+  it("defers root preloading until an existing session finishes pushing in", () => {
+    desktop.pushedIn = false;
+    render("existing-session");
+    expect(container.querySelector("[data-composer]")!.hasAttribute("data-project")).toBe(false);
+    desktop.pushedIn = true;
+    render("existing-session");
+    expect(container.querySelector("[data-composer]")!.getAttribute("data-project")).toBe(project.id);
+  });
+  it("preloads roots on the empty-session page without waiting for a session push", () => {
+    desktop.pushedIn = false;
+    render();
+    expect(container.querySelector("[data-composer]")!.getAttribute("data-project")).toBe(project.id);
+  });
+  it("keeps session mentions enabled when a saved branch no longer matches the checkout", () => {
+    desktop.sessionBranch = "old-feature-branch";
+    render("existing-session");
+    expect(container.querySelector("[data-composer]")!.getAttribute("data-project")).toBe(project.id);
+  });
+  it("scopes session mentions to the matching worktree when present", () => {
+    desktop.sessionBranch = desktop.existing.name;
+    render("existing-session");
+    expect(container.querySelector("[data-composer]")!.getAttribute("data-worktree")).toBe(desktop.existing.path);
+  });
   it("keeps circular Android project/settings controls after switching projects", () => {
     desktop.os = "android";
     render();

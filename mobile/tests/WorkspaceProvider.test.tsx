@@ -100,6 +100,31 @@ describe("starting mobile sessions", () => {
     vi.useRealTimers();
   });
 
+  it("preserves desktop mention tokens for both session start and follow-up", async () => {
+    link.command.mockResolvedValue({ sessionId: "session" });
+    render();
+    const text = "Review @docs/read-me.md and @src and @mobile/tests/file.ts";
+    await act(async () => {
+      await workspace.startSession("project", text, {
+        harness: "codex",
+        model: "codex:gpt",
+      });
+    });
+    expect(link.command).toHaveBeenCalledWith(
+      "session.start",
+      expect.objectContaining({ text, harness: "codex" }),
+      "request-id",
+    );
+    await act(async () => {
+      await workspace.sendMessage("session", text);
+    });
+    expect(link.command).toHaveBeenCalledWith(
+      "conversation.send",
+      expect.objectContaining({ text }),
+      "request-id",
+    );
+  });
+
   it("passes the chosen account and model to the desktop when starting a session", async () => {
     link.command.mockResolvedValue({ sessionId: "session" });
     render();

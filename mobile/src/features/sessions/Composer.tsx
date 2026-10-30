@@ -1,8 +1,23 @@
 import { ChoiceMenu } from "@/ui/ChoiceMenu";
 import { Button, Host, HStack, Menu, Spacer } from "@expo/ui/swift-ui";
-import { accessibilityLabel, contentShape, frame, shapes } from "@expo/ui/swift-ui/modifiers";
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Alert, Platform, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import {
+  accessibilityLabel,
+  contentShape,
+  frame,
+  shapes,
+} from "@expo/ui/swift-ui/modifiers";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  Alert,
+  Platform,
+  Image,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 import Animated, {
   Easing,
   FadeIn,
@@ -32,6 +47,25 @@ import { DictationBar } from "./DictationBar";
 import { canDictate, insertDictation } from "./dictation";
 import { ProviderLogo } from "./ProviderLogo";
 import { COMPOSER_INPUT_ID } from "./SessionScreen";
+
+import {
+  useMentionSearch,
+  type MentionFile,
+} from "@/features/connection/useMentionSearch";
+import {
+  ComposerMentionText,
+  ComposerTextRuns,
+  COMPOSER_TEXT_METRICS,
+} from "./ComposerMentionText";
+import {
+  TAG_ICON_SLOT,
+  composerMentionParts,
+  updateComposerMentions,
+  prepareComposerMentions,
+  type ComposerMention,
+} from "./composerMentions";
+import { FileMentionPicker } from "./FileMentionPicker";
+import { mentionTokenAt, replaceMentionToken } from "./mentionToken";
 
 export const COMPOSER_PLACEHOLDER = "Plan, ask, build…";
 /** Mid-turn the desktop steers with the message or queues it, as its setting says. */
@@ -79,9 +113,14 @@ export function Composer({
   onModelPress,
   workspace,
   notice,
+  projectId,
+  worktreePath,
 }: {
   /** Where this runs: the project, or the mono. */
   context: string;
+  /** Scope on the paired desktop, shared with Files and Changes. */
+  projectId?: string;
+  worktreePath?: string;
   branch: string;
   model: string;
   /** The model's effort, shown dimmer after its name as on desktop. */
@@ -104,13 +143,90 @@ export function Composer({
   const blocked = offline ? "offline" : notice ? "error" : null;
   const input = useRef<TextInput>(null);
   const [text, setText] = useState("");
+  const [taggedFiles, setTaggedFiles] = useState<ComposerMention[]>([]);
+  const mentionParts = useMemo(
+    () => composerMentionParts(text, taggedFiles),
+    [text, taggedFiles],
+  );
+  const hasMentions = mentionParts.some((part) => part.file);
   const [sending, setSending] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [inputHeight, setInputHeight] = useState(INPUT_MIN);
   const [dictating, setDictating] = useState(false);
   // Where dictated words go: the cursor, or the selection they replace.
   const selection = useRef({ start: 0, end: 0 });
-  const canSend = (text.trim().length > 0 || attachments.length > 0) && !sending;
+  const [cursor, setCursor] = useState(0);
+  const [rangeSelected, setRangeSelected] = useState(false);
+  const [inputSelection, setInputSelection] = useState<{
+    start: number;
+    end: number;
+  }>();
+  const [mentionFocused, setMentionFocused] = useState(false);
+  const [dismissedMention, setDismissedMention] = useState<string | null>(null);
+  const [activeChoice, setActiveChoice] = useState({ key: "", index: 0 });
+  const editingTag = taggedFiles.find(
+    (file) =>
+      file.start <= cursor &&
+      cursor <= file.end &&
+      text.slice(file.start + 1, file.end) === file.label,
+  );
+  const token = rangeSelected
+    ? null
+    : editingTag
+      ? {
+          start: editingTag.start,
+          end: editingTag.end,
+          query: text.slice(editingTag.start + 1, cursor),
+        }
+      : mentionTokenAt(text, cursor);
+  const mentionKey = JSON.stringify([projectId, worktreePath, token, cursor]);
+  const showMentions =
+    !!projectId &&
+    !!token &&
+    mentionFocused &&
+    !blocked &&
+    !dictating &&
+    dismissedMention !== mentionKey;
+  const mentionSearch = useMentionSearch(
+    projectId,
+    showMentions ? token!.query : null,
+    worktreePath,
+  );
+  const activeMention =
+    activeChoice.key === mentionKey ? activeChoice.index : 0;
+  const pickMention = (file: MentionFile) => {
+    if (!showMentions || !token || !mentionSearch.results.includes(file))
+      return;
+    const label = file.name;
+    const replaced = replaceMentionToken(text, token, label);
+    const next =
+      replaced.slice(0, token.start) +
+      TAG_ICON_SLOT +
+      replaced.slice(token.start + 1);
+    setTaggedFiles((current) => [
+      ...updateComposerMentions(text, next, current, {
+        start: token.start,
+        end: token.end,
+      }),
+      {
+        ...file,
+        label,
+        canonicalLabel: file.label,
+        start: token.start,
+        end: token.start + 1 + label.length,
+      },
+    ]);
+    let position = token.start + 1 + label.length;
+    if (next[position] === " ") position += 1;
+    selection.current = { start: position, end: position };
+    setInputSelection(selection.current);
+    setCursor(position);
+    setRangeSelected(false);
+    setText(next);
+    input.current?.focus();
+  };
+  const canSend =
+    (text.trim().length > 0 || attachments.length > 0) && !sending;
   // A draft, in words or files, keeps the card open.
   const hasText = text.length > 0 || attachments.length > 0;
 
@@ -122,7 +238,8 @@ export function Composer({
   // keyboard-controller KeyboardStickyView docs.
   const focused = useSharedValue(false);
   const progress = useSharedValue(0);
-  const morph = (expand: boolean) => progress.set(withTiming(expand ? 1 : 0, MORPH));
+  const morph = (expand: boolean) =>
+    progress.set(withTiming(expand ? 1 : 0, MORPH));
   useEffect(() => {
     if (hasText) progress.set(withTiming(1, MORPH));
     else if (!focused.get()) progress.set(withTiming(0, MORPH));
@@ -138,7 +255,11 @@ export function Composer({
 
   const containerStyle = useAnimatedStyle(() => ({
     height: interpolate(progress.get(), [0, 1], [COLLAPSED, expandedHeight]),
-    marginHorizontal: interpolate(progress.get(), [0, 1], [MARGIN_COLLAPSED, MARGIN_EXPANDED]),
+    marginHorizontal: interpolate(
+      progress.get(),
+      [0, 1],
+      [MARGIN_COLLAPSED, MARGIN_EXPANDED],
+    ),
   }));
   // The field slides from between the pill's buttons to its own band in the card.
   const inputStyle = useAnimatedStyle(() => {
@@ -158,25 +279,36 @@ export function Composer({
   // state/React commit that would interrupt the iOS keyboard animation).
   const expandedOnly = useAnimatedStyle(() => ({
     opacity:
-      interpolate(progress.get(), [0.35, 1], [0, 1], "clamp") * (1 - dictation.get()),
-    ...(Platform.OS === "android" ? {
-      pointerEvents: progress.get() === 1 && dictation.get() === 0
-        ? "box-none" as const
-        : "none" as const,
-    } : {}),
+      interpolate(progress.get(), [0.35, 1], [0, 1], "clamp") *
+      (1 - dictation.get()),
+    ...(Platform.OS === "android"
+      ? {
+          pointerEvents:
+            progress.get() === 1 && dictation.get() === 0
+              ? ("box-none" as const)
+              : ("none" as const),
+        }
+      : {}),
   }));
   useEffect(() => {
     dictation.set(withTiming(dictating ? 1 : 0, DICTATION_FADE));
   }, [dictating, dictation]);
   const undictated = useAnimatedStyle(() => ({
     opacity: 1 - dictation.get(),
-    ...(Platform.OS === "android" ? {
-      pointerEvents: dictation.get() === 0 && !blocked ? "auto" as const : "none" as const,
-    } : {}),
+    ...(Platform.OS === "android"
+      ? {
+          pointerEvents:
+            dictation.get() === 0 && !blocked
+              ? ("auto" as const)
+              : ("none" as const),
+        }
+      : {}),
   }));
   const fieldShown = useAnimatedStyle(() => ({
     opacity: 1 - dictation.get() * (1 - progress.get()),
   }));
+
+  const inputScroll = useSharedValue({ x: 0, y: 0 });
 
   const dictate = () => {
     if (!canDictate()) {
@@ -190,17 +322,22 @@ export function Composer({
   const endDictation = (words: string | null) => {
     setDictating(false);
     if (!words) return;
-    setText((current) => {
-      const next = insertDictation(current, words, selection.current);
-      selection.current = { start: next.cursor, end: next.cursor };
-      return next.text;
-    });
+    const next = insertDictation(text, words, selection.current);
+    setTaggedFiles((current) =>
+      updateComposerMentions(text, next.text, current),
+    );
+    selection.current = { start: next.cursor, end: next.cursor };
+    setCursor(next.cursor);
+    setText(next.text);
   };
 
   const attach = async (pick: (room: number) => Promise<Attachment[]>) => {
     const room = MAX_ATTACHMENTS - attachments.length;
     if (room <= 0) {
-      Alert.alert("Attachment limit", `A message can carry up to ${MAX_ATTACHMENTS} files.`);
+      Alert.alert(
+        "Attachment limit",
+        `A message can carry up to ${MAX_ATTACHMENTS} files.`,
+      );
       return;
     }
     try {
@@ -211,7 +348,10 @@ export function Composer({
       // Ready to say what they're for.
       input.current?.focus();
     } catch (reason) {
-      Alert.alert("Could not attach", reason instanceof Error ? reason.message : String(reason));
+      Alert.alert(
+        "Could not attach",
+        reason instanceof Error ? reason.message : String(reason),
+      );
     }
   };
 
@@ -220,10 +360,19 @@ export function Composer({
   const send = async () => {
     // The draft stays put until the desktop can take it.
     if (!canSend || blocked) return;
-    const message = text.trim();
+    const draft = text;
+    const message = prepareComposerMentions(text, taggedFiles).trim();
+    const tags = taggedFiles;
+    setTaggedFiles([]);
+    inputScroll.set({ x: 0, y: 0 });
     const files = attachments;
     setSending(true);
     setText("");
+    selection.current = { start: 0, end: 0 };
+    setCursor(0);
+    setInputSelection(undefined);
+    setRangeSelected(false);
+    setMentionFocused(false);
     setAttachments([]);
     focused.set(false);
     morph(false);
@@ -231,175 +380,344 @@ export function Composer({
     try {
       await onSend(message, files);
     } catch (reason) {
-      setText((current) => current || message);
+      setTaggedFiles((current) => [...tags, ...current]);
+      setText((current) => current || draft);
       setAttachments((current) => (current.length ? current : files));
-      Alert.alert("Message not sent", reason instanceof Error ? reason.message : String(reason));
+      Alert.alert(
+        "Message not sent",
+        reason instanceof Error ? reason.message : String(reason),
+      );
     } finally {
       setSending(false);
     }
   };
 
   return (
-    <Animated.View style={containerStyle}>
-      <LiquidView fill row={false} borderRadius={RADIUS} style={StyleSheet.absoluteFill}>
-        <View />
-      </LiquidView>
-
-      <Animated.View style={[styles.contextRow, expandedOnly]}>
-        <View style={styles.picker}>
-          {workspace ?? (
-            <Text style={styles.context} numberOfLines={1}>
-              {context} <Text style={styles.branch}>{branch}</Text>
-            </Text>
-          )}
-        </View>
-      </Animated.View>
-
-      {attachments.length > 0 ? (
-        <Animated.View style={[styles.strip, expandedOnly]}>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            keyboardShouldPersistTaps="handled"
-            contentContainerStyle={styles.stripContent}
-          >
-            {attachments.map((attachment) => (
-              <AttachmentChip
-                key={attachment.id}
-                attachment={attachment}
-                onRemove={() =>
-                  setAttachments((current) => current.filter((item) => item.id !== attachment.id))
-                }
-              />
-            ))}
-          </ScrollView>
-        </Animated.View>
-      ) : null}
-
-      <Animated.View style={[styles.inputSlot, inputStyle, fieldShown]}>
-        <TextInput
-          ref={input}
-          nativeID={COMPOSER_INPUT_ID}
-          value={text}
-          editable={!dictating && !blocked}
-          onChangeText={setText}
-          onSelectionChange={(event) => {
-            selection.current = event.nativeEvent.selection;
-          }}
-          onFocus={() => {
-            focused.set(true);
-            morph(true);
-          }}
-          onBlur={() => {
-            focused.set(false);
-            if (!hasText) morph(false);
-          }}
-          onContentSizeChange={(event) =>
-            setInputHeight(
-              Math.min(INPUT_MAX, Math.max(INPUT_MIN, event.nativeEvent.contentSize.height + 12)),
-            )
-          }
-          placeholder={busy ? BUSY_PLACEHOLDER : COMPOSER_PLACEHOLDER}
-          placeholderTextColor={colors.muted}
-          multiline
-          keyboardAppearance={scheme}
-          cursorColor={colors.accent}
-          selectionColor={colors.accent}
-          style={[styles.input, blocked && styles.hidden]}
+    <View pointerEvents="box-none">
+      {showMentions ? (
+        <FileMentionPicker
+          files={mentionSearch.results}
+          composerHeight={expandedHeight}
+          active={activeMention}
+          searching={mentionSearch.searching}
+          error={mentionSearch.error}
+          onPick={pickMention}
+          onDismiss={() => setDismissedMention(mentionKey)}
         />
-        {blocked === "offline" ? (
-          <Animated.View
-            key="offline"
-            entering={FadeIn.duration(DICTATION_FADE.duration)}
-            exiting={FadeOut.duration(DICTATION_FADE.duration)}
-            accessibilityRole="text"
-            accessibilityLabel="Reconnecting to your desktop. Messages can't be sent until it's back."
-            style={styles.status}
-          >
-            <PulsingDot />
-            <Text style={styles.statusLabel} numberOfLines={1}>
-              Reconnecting to desktop
-            </Text>
-          </Animated.View>
-        ) : blocked === "error" && notice ? (
-          <Animated.View
-            key="error"
-            entering={FadeIn.duration(DICTATION_FADE.duration)}
-            exiting={FadeOut.duration(DICTATION_FADE.duration)}
-            style={StyleSheet.absoluteFill}
-          >
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={`Couldn't continue: ${notice.text}`}
-              accessibilityHint="Dismisses the error so you can write again"
-              onPress={notice.dismiss}
-              style={({ pressed }) => [styles.status, pressed && styles.pressed]}
-            >
-              <Text style={[styles.statusLabel, styles.errorLabel]} numberOfLines={1}>
-                {notice.text}
+      ) : null}
+      <Animated.View style={containerStyle}>
+        <LiquidView
+          fill
+          row={false}
+          borderRadius={RADIUS}
+          tintColor={
+            Platform.OS === "android" && scheme === "light"
+              ? "rgba(255,255,255,0.88)"
+              : undefined
+          }
+          style={StyleSheet.absoluteFill}
+        >
+          <View />
+        </LiquidView>
+
+        <Animated.View style={[styles.contextRow, expandedOnly]}>
+          <View style={styles.picker}>
+            {workspace ?? (
+              <Text style={styles.context} numberOfLines={1}>
+                {context} <Text style={styles.branch}>{branch}</Text>
               </Text>
-              <Icon name="close" size={14} color={colors.muted} />
-            </Pressable>
+            )}
+          </View>
+        </Animated.View>
+
+        {attachments.length > 0 ? (
+          <Animated.View style={[styles.strip, expandedOnly]}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={styles.stripContent}
+            >
+              {attachments.map((attachment) => (
+                <AttachmentChip
+                  key={attachment.id}
+                  attachment={attachment}
+                  onRemove={() =>
+                    setAttachments((current) =>
+                      current.filter((item) => item.id !== attachment.id),
+                    )
+                  }
+                />
+              ))}
+            </ScrollView>
+          </Animated.View>
+        ) : null}
+
+        <Animated.View style={[styles.inputSlot, inputStyle, fieldShown]}>
+          {hasMentions && !blocked ? (
+            <ComposerMentionText
+              text={text}
+              parts={mentionParts}
+              scroll={inputScroll}
+              iconsOnly={Platform.OS === "android"}
+            />
+          ) : null}
+          <TextInput
+            ref={input}
+            nativeID={COMPOSER_INPUT_ID}
+            value={Platform.OS === "android" ? undefined : text}
+            editable={!dictating && !blocked}
+            selection={inputSelection}
+            onChangeText={(value) => {
+              // Native key events cannot cancel a text edit. Accept a hardware
+              // Tab from the text change itself so it cannot leave a stray tab.
+              const range = selection.current;
+              if (
+                showMentions &&
+                mentionSearch.results[activeMention] &&
+                value ===
+                  `${text.slice(0, range.start)}\t${text.slice(range.end)}`
+              ) {
+                pickMention(mentionSearch.results[activeMention]);
+                return;
+              }
+              // Native selection follows text; predict it for this render.
+              const position = Math.max(
+                0,
+                Math.min(
+                  value.length,
+                  selection.current.end + value.length - text.length,
+                ),
+              );
+              selection.current = { start: position, end: position };
+              setCursor(position);
+              setRangeSelected(false);
+              setInputSelection(undefined);
+              setTaggedFiles((current) =>
+                updateComposerMentions(text, value, current, range),
+              );
+              setText(value);
+              setMentionFocused(true);
+            }}
+            onSelectionChange={(event) => {
+              selection.current = event.nativeEvent.selection;
+              setCursor(selection.current.end);
+              setRangeSelected(
+                selection.current.start !== selection.current.end,
+              );
+              setInputSelection(undefined);
+              if (
+                focused.get() &&
+                (mentionTokenAt(text, selection.current.end) ||
+                  taggedFiles.some(
+                    (file) =>
+                      file.start <= selection.current.end &&
+                      selection.current.end <= file.end,
+                  ))
+              )
+                setMentionFocused(true);
+            }}
+            onKeyPress={(event) => {
+              if (!showMentions) return;
+              const key = event.nativeEvent.key;
+              if (key === "Escape") {
+                event.preventDefault();
+                setDismissedMention(mentionKey);
+              } else if (key === "ArrowDown" || key === "ArrowUp") {
+                event.preventDefault();
+                const count = mentionSearch.results.length;
+                if (count)
+                  setActiveChoice({
+                    key: mentionKey,
+                    index:
+                      (activeMention + (key === "ArrowDown" ? 1 : count - 1)) %
+                      count,
+                  });
+              } else if (
+                Platform.OS === "web" &&
+                key === "Tab" &&
+                mentionSearch.results[activeMention]
+              ) {
+                event.preventDefault();
+                pickMention(mentionSearch.results[activeMention]);
+              }
+            }}
+            onFocus={() => {
+              // Keep the UI-thread-only focus animation for an empty field.
+              if (token) setMentionFocused(true);
+              focused.set(true);
+              morph(true);
+            }}
+            onBlur={() => {
+              setMentionFocused(false);
+              focused.set(false);
+              if (!hasText) morph(false);
+            }}
+            onContentSizeChange={(event) =>
+              setInputHeight(
+                Math.min(
+                  INPUT_MAX,
+                  Math.max(
+                    INPUT_MIN,
+                    event.nativeEvent.contentSize.height + 12,
+                  ),
+                ),
+              )
+            }
+            onScroll={(event) =>
+              inputScroll.set(event.nativeEvent.contentOffset)
+            }
+            textBreakStrategy="simple"
+            lineBreakStrategyIOS="none"
+            underlineColorAndroid="transparent"
+            placeholder={busy ? BUSY_PLACEHOLDER : COMPOSER_PLACEHOLDER}
+            placeholderTextColor={colors.muted}
+            multiline
+            keyboardAppearance={scheme}
+            cursorColor={colors.accent}
+            selectionColor={colors.accent}
+            style={[
+              styles.input,
+              Platform.OS !== "android" &&
+                hasMentions &&
+                styles.transparentInput,
+              blocked && styles.hidden,
+            ]}
+          >
+            {Platform.OS === "android" ? (
+              <ComposerTextRuns parts={mentionParts} />
+            ) : null}
+          </TextInput>
+          {blocked === "offline" ? (
+            <Animated.View
+              key="offline"
+              entering={FadeIn.duration(DICTATION_FADE.duration)}
+              exiting={FadeOut.duration(DICTATION_FADE.duration)}
+              accessibilityRole="text"
+              accessibilityLabel="Reconnecting to your desktop. Messages can't be sent until it's back."
+              style={styles.status}
+            >
+              <PulsingDot />
+              <Text style={styles.statusLabel} numberOfLines={1}>
+                Reconnecting to desktop
+              </Text>
+            </Animated.View>
+          ) : blocked === "error" && notice ? (
+            <Animated.View
+              key="error"
+              entering={FadeIn.duration(DICTATION_FADE.duration)}
+              exiting={FadeOut.duration(DICTATION_FADE.duration)}
+              style={StyleSheet.absoluteFill}
+            >
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Couldn't continue: ${notice.text}`}
+                accessibilityHint="Dismisses the error so you can write again"
+                onPress={notice.dismiss}
+                style={({ pressed }) => [
+                  styles.status,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text
+                  style={[styles.statusLabel, styles.errorLabel]}
+                  numberOfLines={1}
+                >
+                  {notice.text}
+                </Text>
+                <Icon name="close" size={14} color={colors.muted} />
+              </Pressable>
+            </Animated.View>
+          ) : null}
+        </Animated.View>
+
+        {/* Bottom row, shared by both layouts: the buttons stay put as the card grows. */}
+        <Animated.View
+          pointerEvents={blocked ? "none" : "auto"}
+          style={[
+            styles.button,
+            styles.leading,
+            undictated,
+            blocked && styles.disabled,
+          ]}
+        >
+          <AddMenu
+            onPhotos={() => void attach(pickPhotos)}
+            onFiles={() => void attach(pickFiles)}
+          />
+        </Animated.View>
+
+        <Animated.View style={[styles.modelChip, expandedOnly]}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Model: ${model || "Desktop default"}${effort ? `, ${effort} effort` : ""}`}
+            accessibilityHint="Choose the model, account, effort and permissions"
+            onPress={onModelPress}
+            style={({ pressed }) => [
+              styles.modelPill,
+              pressed && styles.pressed,
+            ]}
+          >
+            {harness ? (
+              <ProviderLogo
+                harness={harness}
+                size={16}
+                color={colors.content}
+              />
+            ) : null}
+            <Text style={styles.model} numberOfLines={1}>
+              {model || "Desktop default"}
+              {effort ? <Text style={styles.effort}> {effort}</Text> : null}
+            </Text>
+            <Icon name="chevronDown" size={14} color={colors.muted} />
+          </Pressable>
+        </Animated.View>
+
+        <Animated.View
+          pointerEvents={blocked ? "none" : "auto"}
+          style={[
+            styles.button,
+            styles.trailing,
+            undictated,
+            blocked && styles.disabled,
+          ]}
+        >
+          {/* A draft mid-turn sends; without one the button stops the turn. */}
+          {canSend ? (
+            <RoundButton
+              icon="send"
+              label="Send"
+              onPress={() => void send()}
+              primary
+            />
+          ) : busy && onStop ? (
+            <RoundButton
+              label="Stop"
+              onPress={() => {
+                void onStop().catch((reason) =>
+                  Alert.alert("Could not stop", String(reason)),
+                );
+              }}
+              primary
+            >
+              <View style={styles.stop} />
+            </RoundButton>
+          ) : (
+            <RoundButton icon="mic" label="Dictate" onPress={dictate} />
+          )}
+        </Animated.View>
+
+        {dictating ? (
+          <Animated.View
+            entering={FadeIn.duration(DICTATION_FADE.duration)}
+            exiting={FadeOut.duration(DICTATION_FADE.duration)}
+            style={styles.dictation}
+          >
+            <DictationBar onClose={endDictation} />
           </Animated.View>
         ) : null}
       </Animated.View>
-
-      {/* Bottom row, shared by both layouts: the buttons stay put as the card grows. */}
-      <Animated.View
-        pointerEvents={blocked ? "none" : "auto"}
-        style={[styles.button, styles.leading, undictated, blocked && styles.disabled]}
-      >
-        <AddMenu
-          onPhotos={() => void attach(pickPhotos)}
-          onFiles={() => void attach(pickFiles)}
-        />
-      </Animated.View>
-
-      <Animated.View
-        style={[styles.modelChip, expandedOnly]}
-      >
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Model: ${model || "Desktop default"}${effort ? `, ${effort} effort` : ""}`}
-          accessibilityHint="Choose the model, account, effort and permissions"
-          onPress={onModelPress}
-          style={({ pressed }) => [styles.modelPill, pressed && styles.pressed]}
-        >
-          {harness ? <ProviderLogo harness={harness} size={16} color={colors.content} /> : null}
-          <Text style={styles.model} numberOfLines={1}>
-            {model || "Desktop default"}
-            {effort ? <Text style={styles.effort}> {effort}</Text> : null}
-          </Text>
-          <Icon name="chevronDown" size={14} color={colors.muted} />
-        </Pressable>
-      </Animated.View>
-
-      <Animated.View
-        pointerEvents={blocked ? "none" : "auto"}
-        style={[styles.button, styles.trailing, undictated, blocked && styles.disabled]}
-      >
-        {/* A draft mid-turn sends; without one the button stops the turn. */}
-        {canSend ? (
-          <RoundButton icon="send" label="Send" onPress={() => void send()} primary />
-        ) : busy && onStop ? (
-          <RoundButton label="Stop" onPress={() => { void onStop().catch(reason => Alert.alert("Could not stop", String(reason))); }} primary>
-            <View style={styles.stop} />
-          </RoundButton>
-        ) : (
-          <RoundButton icon="mic" label="Dictate" onPress={dictate} />
-        )}
-      </Animated.View>
-
-      {dictating ? (
-        <Animated.View
-          entering={FadeIn.duration(DICTATION_FADE.duration)}
-          exiting={FadeOut.duration(DICTATION_FADE.duration)}
-          style={styles.dictation}
-        >
-          <DictationBar onClose={endDictation} />
-        </Animated.View>
-      ) : null}
-    </Animated.View>
+    </View>
   );
 }
 
@@ -607,10 +925,11 @@ const useStyles = themedStyles((colors) => ({
     paddingTop: 8,
     paddingBottom: 8,
     color: colors.content,
-    fontSize: 17,
-    lineHeight: 22,
+    backgroundColor: "transparent",
+    ...COMPOSER_TEXT_METRICS,
     textAlignVertical: "top",
   },
+  transparentInput: { color: "transparent" },
   button: {
     position: "absolute",
     bottom: EDGE,

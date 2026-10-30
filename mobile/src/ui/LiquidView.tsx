@@ -13,9 +13,9 @@ import {
 } from "react";
 import {
   Pressable,
+  View,
   Platform,
   StyleSheet,
-  type View,
   type StyleProp,
   type ViewStyle,
 } from "react-native";
@@ -175,6 +175,11 @@ export function LiquidView({
   const scheme = useScheme();
   const blurTarget = use(GlassBlurTarget);
   const androidBlur = Platform.OS === "android" && !!blurTarget;
+  const surfaceTint =
+    tintColor ??
+    (Platform.OS === "android" && scheme === "light"
+      ? "rgba(255,255,255,0.88)"
+      : undefined);
 
   const surface: StyleProp<ViewStyle> = [
     styles.surface,
@@ -195,7 +200,7 @@ export function LiquidView({
           : "regular"
       }
       isInteractive={interactive}
-      tintColor={tintColor}
+      tintColor={surfaceTint}
       style={surface}
     >
       {children}
@@ -214,9 +219,19 @@ export function LiquidView({
           surface,
           styles.fallback,
           androidBlur && styles.androidBlur,
-          tintColor ? { backgroundColor: tintColor } : null,
+          Platform.OS !== "android" && surfaceTint
+            ? { backgroundColor: surfaceTint }
+            : null,
         ]}
       >
+        {/* BlurView renders its native blur above its background. Tint must
+            sit above that layer, while leaving controls and touches intact. */}
+        {Platform.OS === "android" && surfaceTint ? (
+          <View
+            pointerEvents="none"
+            style={[StyleSheet.absoluteFill, { backgroundColor: surfaceTint }]}
+          />
+        ) : null}
         {children}
       </BlurView>
     </LinearGradient>
