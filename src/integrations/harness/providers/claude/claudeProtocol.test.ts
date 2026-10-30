@@ -12,12 +12,14 @@ import {
   contextFromResult,
   contextUsedFromAssistant,
   extractExitPlanModePlan,
+  formatClaudeTurnBoundary,
   isClaudeInitMessage,
   isSubagentMessage,
   isTodoTool,
   listModelsFromControlResponse,
   normalizeClaudeCliEffort,
   parseBackgroundTasks,
+  parseClaudeTurnBoundary,
   parseClaudeVersion,
   parseControlRequest,
   parseControlResponse,
@@ -163,6 +165,30 @@ describe("buildClaudeSpawnArgs", () => {
     });
     expect(args).toEqual(
       expect.arrayContaining(["--permission-mode", "plan", "--max-turns", "1"]),
+    );
+  });
+
+  it("replays prompts in interactive sessions only", () => {
+    expect(buildClaudeSpawnArgs({})).toContain("--replay-user-messages");
+    expect(buildClaudeSpawnArgs({ isolated: true })).not.toContain(
+      "--replay-user-messages",
+    );
+  });
+
+  it("resumes truncated at a rewind boundary", () => {
+    const rewind = { resumeAt: "a1", prompt: "p2" };
+    expect(buildClaudeSpawnArgs({ resume: "sess-1", rewind })).toEqual(
+      expect.arrayContaining([
+        "--resume",
+        "sess-1",
+        "--resume-session-at",
+        "a1",
+        "--resume-drops-turn",
+        "p2",
+      ]),
+    );
+    expect(buildClaudeSpawnArgs({ sessionId: "sess-1", rewind })).not.toContain(
+      "--resume-session-at",
     );
   });
 
@@ -1032,5 +1058,26 @@ describe("isReplayedTaskNotificationResult", () => {
     expect(
       isReplayedTaskNotificationResult({ type: "result", num_turns: 0 }),
     ).toBe(false);
+  });
+});
+
+describe("Claude turn boundaries", () => {
+  it("round-trips uuids, including a conversation's first turn", () => {
+    for (const boundary of [
+      {
+        resumeAt: "8e232498-1f4c-4f2b-9a0e-5d8a4c3b2a10",
+        prompt: "197b5ed0-082f-4f62-b9a1-40014adedd27",
+      },
+      { resumeAt: "", prompt: "197b5ed0-082f-4f62-b9a1-40014adedd27" },
+    ]) {
+      expect(
+        parseClaudeTurnBoundary(formatClaudeTurnBoundary(boundary)),
+      ).toEqual(boundary);
+    }
+  });
+
+  it("rejects turn ids from other harnesses", () => {
+    expect(parseClaudeTurnBoundary("turn-1")).toBeNull();
+    expect(parseClaudeTurnBoundary("a1_")).toBeNull();
   });
 });

@@ -190,6 +190,17 @@ export function applyHarnessEvent(
       blocks[index] = { ...block, providerTurnId: event.providerTurnId };
       return { ...session, blocks };
     }
+    case "turns.sealed": {
+      if (!session.blocks.some((block) => block.providerTurnId)) return session;
+      return {
+        ...session,
+        blocks: session.blocks.map((block) => {
+          if (!block.providerTurnId) return block;
+          const { providerTurnId: _sealed, ...rest } = block;
+          return rest;
+        }),
+      };
+    }
     case "turn.ready":
       return session.busy ? { ...session, turnReady: true } : session;
     case "session.configChanged":
