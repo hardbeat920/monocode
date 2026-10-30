@@ -211,8 +211,18 @@ pub fn decode_image_data(data: &str) -> Result<Vec<u8>, String> {
 /// chip never holds a full screenshot in memory. BGRA, as GPU sprites expect.
 pub fn thumbnail_bgra(bytes: &[u8], side: u32) -> Result<image::RgbaImage, String> {
     let image = image::load_from_memory(bytes).map_err(|error| error.to_string())?;
+    let short = image.width().min(image.height()).max(1);
+    Ok(scaled_bgra(image, f64::from(side) / f64::from(short)))
+}
+/// Shrink an image until its longer side fits `side` pixels, keeping its
+/// shape, for photos shown whole rather than cropped into a chip. BGRA.
+pub fn fit_bgra(bytes: &[u8], side: u32) -> Result<image::RgbaImage, String> {
+    let image = image::load_from_memory(bytes).map_err(|error| error.to_string())?;
+    let long = image.width().max(image.height()).max(1);
+    Ok(scaled_bgra(image, f64::from(side) / f64::from(long)))
+}
+fn scaled_bgra(image: image::DynamicImage, scale: f64) -> image::RgbaImage {
     let (width, height) = (image.width(), image.height());
-    let scale = (f64::from(side) / f64::from(width.min(height).max(1))).min(1.);
     let mut image = if scale < 1. {
         image.thumbnail_exact(
             ((f64::from(width) * scale).round() as u32).max(1),
@@ -225,7 +235,7 @@ pub fn thumbnail_bgra(bytes: &[u8], side: u32) -> Result<image::RgbaImage, Strin
     for pixel in image.pixels_mut() {
         pixel.0.swap(0, 2);
     }
-    Ok(image)
+    image
 }
 /// Resolve only exact, boundary-delimited known skill invocations. The original
 /// draft remains the visible user message; these instructions travel on the wire.

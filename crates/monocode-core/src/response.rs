@@ -74,6 +74,14 @@ pub fn prose(rows: &[Row]) -> String {
         .collect::<Vec<_>>()
         .join("\n\n")
 }
+/// The final assistant message, including its virtualized continuation rows.
+pub fn final_prose(rows: &[Row]) -> String {
+    let start = rows
+        .iter()
+        .rposition(|row| row.first && row.role == "assistant")
+        .unwrap_or(rows.len());
+    prose(&rows[start..])
+}
 pub fn request(rows: &[Row]) -> String {
     rows.iter()
         .take_while(|r| r.role == "user")
@@ -234,6 +242,37 @@ pub fn strip_goal_sections(markdown: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn final_prose_keeps_the_whole_last_message_without_opening_commentary() {
+        let mut transcript = crate::transcript::Transcript::default();
+        transcript.begin("mono-system");
+        transcript.append("Run the scheduled check");
+        assert_eq!(final_prose(&transcript.rows), "");
+        transcript.begin("assistant");
+        transcript.append("I'll check for updates.");
+        transcript.begin("tool");
+        transcript.append("{}");
+        let report = format!("**Results**\r\n\r\n{}", "A useful finding.\n".repeat(200));
+        transcript.begin("assistant");
+        transcript.append(&report);
+        transcript.begin("mono-document");
+        transcript.append("{}");
+        assert_eq!(
+            final_prose(&transcript.rows),
+            report.replace("\r\n", "\n").trim()
+        );
+
+        transcript.begin("assistant");
+        transcript.append("`NOTHING_TO_REPORT`");
+        assert!(
+            crate::mono::habits::report(&final_prose(&transcript.rows)).is_none(),
+            "a quiet final message must not post the opening commentary"
+        );
+        transcript.begin("assistant");
+        assert_eq!(final_prose(&transcript.rows), "");
+    }
+
     #[test]
     fn copied_prose_and_transfer_recaps_keep_message_boundaries() {
         let rows = vec![

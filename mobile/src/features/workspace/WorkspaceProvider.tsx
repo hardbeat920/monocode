@@ -25,7 +25,7 @@ import {
 import { selectedWorkspace } from "@/features/connection/selection";
 import type { ModelCatalog, ModelChoice } from "@/features/models/types";
 import { toWire, type Attachment } from "@/features/sessions/attachments";
-import type { Message, Mono, Project, SessionSummary, Turn, TurnItem } from "./types";
+import type { DisplayedQuestionPrompt, Message, Mono, Project, QuestionPrompt, QuestionReply, SessionSummary, Turn, TurnItem } from "./types";
 import { applyFrames, type WatchFrame } from "./watchUpdates";
 /**
  * The workspace: what the desktop has and what can be done with it. Changes
@@ -49,6 +49,14 @@ type Workspace = {
   ) => Promise<string>;
   sendMessage: (conversationId: string, text: string, attachments?: Attachment[]) => Promise<void>;
   stop: (conversationId: string) => Promise<void>;
+  /** Answers, or skips, the question an agent waits on, as the desktop's card does. */
+  answerQuestion: (
+    conversationId: string,
+    requestId: number,
+    reply: QuestionReply,
+  ) => Promise<void>;
+  /** Stops a timed question skipping itself while it is being answered, as on desktop. */
+  keepQuestionOpen: (conversationId: string, requestId: number) => Promise<void>;
   /** A page of a project's sessions, newest first, beyond the recent ones the poll carries. */
   listSessions: (
     projectId: string,
@@ -90,6 +98,8 @@ type Live = {
 type Status = {
   busy: Record<string, boolean>;
   errors: Record<string, string>;
+  /** What each conversation's agent waits on the user to answer. */
+  questions: Record<string, DisplayedQuestionPrompt>;
 };
 export type SessionPage = { sessions: SessionSummary[]; hasMore: boolean };
 /** Narrows a page to sessions active since a time, and without some providers.
@@ -115,6 +125,10 @@ export type NativeTranscriptStatus = {
   ready?: boolean;
   lastUserId?: string | null;
   notice?: Extract<TurnItem, { type: "notice" }> | null;
+  /** Absent from a native build that predates questions. */
+  question?: QuestionPrompt | null;
+  /** Persistent across coalesced snapshots; absent from older native builds. */
+  questionGeneration?: number;
 };
 const WorkspaceContext = createContext<Workspace | null>(null);
 const LiveContext = createContext<Live | null>(null);
@@ -168,6 +182,39 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     turnsRef.current = turns;
   }, [turns]);
   const [busy, setBusy] = useState<Record<string, boolean>>({});
+  const [questions, setQuestions] = useState<Record<string, DisplayedQuestionPrompt>>({});
+  // The question each conversation answered here last. A frame sent before
+  // the desktop took the answer must not bring its card back.
+  const answered = useRef(new Map<string, number>());
+  // A token for each question as it appears, so an answer hides only the
+  // showing it answered, not a later one that reuses its ID.
+  const displayed = useRef(new Map<string, { requestId: number; token: number; generation?: number }>());
+  const nextToken = useRef(0);
+  const showQuestion = useCallback((id: string, question: QuestionPrompt | null | undefined, generation?: number) => {
+    const previous = displayed.current.get(id);
+    const replaced = generation !== undefined && previous?.generation !== undefined && generation > previous.generation;
+    // Gone on the desktop too: a later question may reuse the ID.
+    if (!question) {
+      answered.current.delete(id);
+      displayed.current.delete(id);
+    } else if (previous?.requestId !== question.requestId || replaced) {
+      if (replaced) answered.current.delete(id);
+      displayed.current.set(id, { requestId: question.requestId, token: ++nextToken.current, generation });
+    } else if (generation !== undefined) {
+      // Adopt an unversioned baseline or a recreated transcript's lower counter.
+      previous.generation = generation;
+    }
+    const shown = question && answered.current.get(id) !== question.requestId
+      ? { ...question, displayId: displayed.current.get(id)!.token }
+      : null;
+    setQuestions((previous) =>
+      shown
+        ? JSON.stringify(previous[id]) === JSON.stringify(shown)
+          ? previous
+          : withValue(previous, id, shown)
+        : withoutKey(previous, id),
+    );
+  }, []);
   const [pending, setPending] = useState<Record<string, PendingSend>>({});
   const nativeUserCounts = useRef<Record<string, number>>({});
   const nativeLastUsers = useRef<Record<string, string | null>>({});
@@ -208,6 +255,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       setPending((previous) => withoutConfirmedPending(previous, id, received));
       if (countUserItems(received) > 0) starting.current.delete(id);
       setBusy((previous) => withValue(previous, id, result.busy));
+      showQuestion(id, result.question);
       // A read carries the whole conversation.
       setWindowOlder((previous) => withValue(previous, id, false));
       setErrors((previous) => withoutKey(previous, id));
@@ -216,7 +264,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       if (current.current.pairing === paired && !startupCatalogError(starting.current, id, message))
         setErrors((previous) => withValue(previous, id, message));
     }
-  }, []);
+  }, [showQuestion]);
   // The open conversation streams from the desktop: one watch, whose frames
   // land as the desktop sends them. A desktop that cannot watch, or a dropped
   // link, falls back to reading once a second until a watch opens again.
@@ -254,6 +302,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       setPending((previous) => withoutConfirmedPending(previous, id, applied.turns));
       if (countUserItems(applied.turns) > 0) starting.current.delete(id);
       if (applied.busy !== undefined) setBusy((previous) => withValue(previous, id, applied.busy!));
+      for (const question of applied.questions) showQuestion(id, question);
       if (applied.older !== undefined)
         setWindowOlder((previous) => withValue(previous, id, applied.older!));
       const error = applied.error && !startupCatalogError(starting.current, id, applied.error)
@@ -328,7 +377,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       save();
       if (watchId !== null) void closeWatch(watchId);
     };
-  }, [watching, desktop, read]);
+  }, [watching, desktop, read, showQuestion]);
   const mutationIds = useRef(new Map<string, string>());
   const { command, refresh } = connection;
   const mutate = useCallback(async <T,>(method: string, params: object): Promise<T> => {
@@ -465,6 +514,28 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     },
     [mutate, read],
   );
+  const answerQuestion = useCallback(
+    async (conversationId: string, requestId: number, reply: QuestionReply) => {
+      const shown = displayed.current.get(conversationId);
+      const token = shown?.requestId === requestId ? shown.token : undefined;
+      await mutate("session.answerQuestion", { conversationId, requestId, reply });
+      // Only while it still shows: the desktop's clear may have come first.
+      if (token === undefined || displayed.current.get(conversationId)?.token !== token) return;
+      answered.current.set(conversationId, requestId);
+      setQuestions((previous) =>
+        previous[conversationId]?.requestId === requestId
+          ? withoutKey(previous, conversationId)
+          : previous,
+      );
+    },
+    [mutate],
+  );
+  const keepQuestionOpen = useCallback(
+    async (conversationId: string, requestId: number) => {
+      await mutate("session.keepQuestionOpen", { conversationId, requestId });
+    },
+    [mutate],
+  );
   const renameSession = useCallback(
     async (session: SessionSummary, title: string) => {
       await mutate("session.rename", { conversationId: session.id, title });
@@ -533,6 +604,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     setErrors((previous) => error ? withValue(previous, id, error) : withoutKey(previous, id));
     if (status.ready === false) return;
     setBusy((previous) => withValue(previous, id, status.busy));
+    showQuestion(id, status.question, status.questionGeneration);
     if (status.userCount > 0) starting.current.delete(id);
     if (!status.pendingId) {
       setPending((previous) => {
@@ -543,7 +615,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         return confirmed ? withoutKey(previous, id) : previous;
       });
     }
-  }, []);
+  }, [showQuestion]);
   const workspace = useMemo<Workspace>(() => {
     const selected = selectedWorkspace(catalog, selection);
     const known = new Set(selected.sessions.map((session) => session.id));
@@ -564,6 +636,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       startSession,
       sendMessage,
       stop,
+      answerQuestion,
+      keepQuestionOpen,
       listSessions,
       rememberSession,
       loadOlder,
@@ -584,6 +658,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     startSession,
     sendMessage,
     stop,
+    answerQuestion,
+    keepQuestionOpen,
     listSessions,
     rememberSession,
     loadOlder,
@@ -598,7 +674,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     () => ({ messages, turns, pending, history, windowOlder }),
     [messages, turns, pending, history, windowOlder],
   );
-  const status = useMemo<Status>(() => ({ busy, errors }), [busy, errors]);
+  const status = useMemo<Status>(
+    () => ({ busy, errors, questions }),
+    [busy, errors, questions],
+  );
   return (
     <WorkspaceContext value={workspace}>
       <StatusContext value={status}>
@@ -637,6 +716,7 @@ export function useConversation(id: string | null, watching = true) {
   return {
     busy: id ? !!status.busy[id] : false,
     error: id ? (status.errors[id] ?? null) : null,
+    question: id ? (status.questions[id] ?? null) : null,
   };
 }
 /** A conversation's turns as they stream in. Re-renders with every frame. */

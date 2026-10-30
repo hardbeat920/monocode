@@ -296,6 +296,12 @@ impl Conversation {
             return Err("Wait for the current turn before posting a report".into());
         }
         let mut posted = monocode_core::transcript::Transcript::default();
+        if role == "assistant" {
+            // A posted report is its own completed run. Its boundary keeps a
+            // later report from hiding the previous notification's final reply.
+            posted.begin("mono-system");
+            posted.append("[Scheduled Mono report]");
+        }
         posted.begin(role);
         if role == "mono-card" {
             // Card JSON is one metadata row, including large summaries.
@@ -547,9 +553,14 @@ impl Conversation {
                 .into_any_element()
         } else {
             div()
+                .relative()
                 .flex_1()
                 .min_h_0()
-                .child(self.transcript.clone())
+                .child(
+                    self.transcript
+                        .clone()
+                        .cached(StyleRefinement::default().size_full()),
+                )
                 .into_any_element()
         };
         self.attachment_drop_target("mono-chat", cx)
@@ -578,7 +589,7 @@ impl Conversation {
                     .w_full()
                     .max_w(px(COMPOSER_COLUMN))
                     .mx_auto()
-                    .px_1p5()
+                    .px(px(10.))
                     .pb_1p5()
                     .flex()
                     .flex_col()
@@ -586,12 +597,13 @@ impl Conversation {
                         self.mono_ui
                             .pending
                             .iter()
-                            .filter(|m| m.internal)
+                            .filter(|m| m.internal && m.error.is_some())
                             .map(|message| {
                                 let retry = message.id.clone();
                                 let remove = retry.clone();
                                 div()
                                     .id(SharedString::from(format!("mono-queued-{}", message.id)))
+                                    .debug_selector(|| "mono-internal-queue".into())
                                     .mb_1()
                                     .flex()
                                     .justify_end()
@@ -820,22 +832,45 @@ impl Conversation {
         let ready = self.loaded
             && !self.attaching
             && (!self.input.read(cx).content.trim().is_empty() || !self.attachments.is_empty());
+        let border = if self.file_drag {
+            accent_color().opacity(0.6)
+        } else {
+            content(if focused { 0.2 } else { 0.1 })
+        };
         div()
             .id("mono-composer")
             .debug_selector(|| "mono-composer".into())
             .relative()
-            .rounded_lg()
-            .border_1()
-            .border_color(content(if focused { 0.2 } else { 0.1 }))
-            .when(self.file_drag, |d| {
-                d.border_color(accent_color().opacity(0.6))
-            })
-            .bg(content(0.03))
+            .p(px(1.))
             .flex()
             .flex_col()
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| window.focus(&this.input.focus_handle(cx), cx)),
+            )
+            .child(
+                canvas(
+                    |_, _, _| {},
+                    move |bounds, _, window, _| {
+                        // One line is 18px plus 8px field padding, 10px row
+                        // padding and 2px border. Decide after text wraps.
+                        let radius = if bounds.size.height <= px(38.) {
+                            bounds.size.height / 2.
+                        } else {
+                            px(COMPOSER_RADIUS)
+                        };
+                        window.paint_quad(
+                            gpui::fill(bounds, content(0.03))
+                                .corner_radii(radius)
+                                .border_widths(px(1.))
+                                .border_color(border),
+                        );
+                    },
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full(),
             )
             .child(self.composer_anchor.probe())
             .children(runner)
@@ -865,7 +900,7 @@ impl Conversation {
                             .aria_label("Send")
                             .flex_shrink_0()
                             .size(px(26.))
-                            .rounded_md()
+                            .rounded_full()
                             .flex()
                             .items_center()
                             .justify_center()
@@ -895,9 +930,9 @@ impl Conversation {
                 .flex_shrink_0()
                 .h(px(26.))
                 .min_w_0()
-                .px_1p5()
+                .px(px(10.))
                 .gap_1p5()
-                .rounded_md()
+                .rounded_full()
                 .flex()
                 .items_center()
                 .text_size(px(12.))
@@ -1031,7 +1066,7 @@ impl Conversation {
                 .group(id)
                 .flex_shrink_0()
                 .size(px(26.))
-                .rounded_md()
+                .rounded_full()
                 .flex()
                 .items_center()
                 .justify_center()
@@ -1044,9 +1079,9 @@ impl Conversation {
                 .flex_shrink_0()
                 .h(px(26.))
                 .min_w_0()
-                .px_1p5()
+                .px(px(10.))
                 .gap_1p5()
-                .rounded_md()
+                .rounded_full()
                 .flex()
                 .items_center()
                 .text_size(px(12.))
@@ -1170,7 +1205,7 @@ impl Conversation {
                             ))
                             .flex_shrink_0()
                             .size(px(26.))
-                            .rounded_md()
+                            .rounded_full()
                             .flex()
                             .items_center()
                             .justify_center()
@@ -1259,9 +1294,11 @@ mod tests {
 
                 let rows = chat.mono_rows(cx);
                 assert_eq!(&rows[..history.rows.len()], history.rows);
+                assert_eq!(rows[history.rows.len()].role, "mono-system");
                 assert_eq!(
                     rows[history.rows.len()..card_index]
                         .iter()
+                        .filter(|row| row.role == "assistant")
                         .map(|row| row.text.as_str())
                         .collect::<String>(),
                     report,

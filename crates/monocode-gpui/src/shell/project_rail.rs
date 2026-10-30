@@ -1533,15 +1533,10 @@ impl Shell {
                 })
                 .collect()
         } else {
-            let pinned = self.workspace.project_rail_pinned.contains(&id);
-            let section = self.workspace.project_rail_assignments.get(&id);
             self.workspace
                 .projects
                 .iter()
-                .filter(|path| {
-                    self.workspace.project_rail_pinned.contains(*path) == pinned
-                        && (pinned || self.workspace.project_rail_assignments.get(*path) == section)
-                })
+                .filter(|path| self.workspace.project_rail_peers(path, &id))
                 .filter_map(|path| {
                     let mut bounds = self.project_rail_list.bounds.get(path)?.get()?;
                     bounds.origin.y -= px(self.project_rail_project_offset(path));

@@ -31,6 +31,47 @@ describe("mobile watch frames", () => {
     }
   });
 
+  it("sends the pending question first and when it changes, null once answered", () => {
+    const question = {
+      requestId: 3,
+      questions: [
+        {
+          id: "q",
+          prompt: "Which?",
+          multiSelect: false,
+          allowCustom: true,
+          options: [{ id: "a", label: "A" }],
+        },
+      ],
+    };
+    const turns = [turn("a", "text")];
+    const first = watchUpdate(null, { busy: true, older: false, turns });
+    expect(first!.update).toMatchObject({ question: null });
+    const asked = watchUpdate(first!.baseline, {
+      busy: true,
+      older: false,
+      turns,
+      question,
+    });
+    expect(asked!.update).toEqual({
+      busy: true,
+      older: false,
+      order: ["a"],
+      turns: [],
+      question,
+    });
+    expect(
+      watchUpdate(asked!.baseline, { busy: true, older: false, turns, question }),
+    ).toBeNull();
+    const answered = watchUpdate(asked!.baseline, {
+      busy: true,
+      older: false,
+      turns,
+      question: null,
+    });
+    expect(answered!.update).toMatchObject({ question: null });
+  });
+
   it("sends everything first, then only the turn that changed", () => {
     const first = watchUpdate(null, {
       busy: true,

@@ -29,6 +29,7 @@ impl DesktopPreferences {
             ("show_remaining_usage", "showRemainingUsage", false),
             ("mask_emails", "maskEmails", true),
             ("claude_hooks", "claudeHooks", true),
+            ("claude_entrypoint", "claudeEntrypoint", false),
             ("monos", "monosEnabled", true),
             ("rail_monos_pinned", "railMonosPinned", false),
             ("mono_menu_bar_icon", "monoMenuBarIcon", true),
