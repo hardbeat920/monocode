@@ -64,6 +64,7 @@ pub(in crate::settings) struct MobileState {
     qr: Option<(String, Arc<Qr>)>,
     poll: Option<Task<()>>,
     _remote_events: Vec<Subscription>,
+    pub(super) push_key: super::mobile_push::PushKeyState,
 }
 
 /// A QR code's modules, row by row, without the quiet zone.
@@ -367,6 +368,7 @@ impl SettingsView {
             );
         }
         page.extend(self.mobile_away(&status, cx));
+        page.extend(self.mobile_push_key(&status, cx));
         page
     }
 

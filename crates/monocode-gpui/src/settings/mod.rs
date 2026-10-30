@@ -134,6 +134,8 @@ pub(crate) enum SettingsEvent {
     MobilePair,
     MobileCancelInvite,
     MobileRevoke(String),
+    /// Use this APNs key for Live Activity pushes, or stop.
+    MobilePushKey(Option<monocode_core::mobile::ApnsKey>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

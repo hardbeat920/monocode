@@ -15,6 +15,7 @@ import {
 } from "@/features/connection/ConnectionProvider";
 import { WorkspaceGate } from "@/features/connection/WorkspaceGate";
 
+import { SessionLiveActivity } from "@/features/liveActivity/SessionLiveActivity";
 import { SessionNotifications } from "@/features/notifications/SessionNotifications";
 import { SessionActivity } from "@/features/sessions/SessionActivity";
 import { SessionFrame } from "@/features/sessions/SessionScreen";
@@ -139,6 +140,7 @@ function LinkedWorkspace() {
   return (
     <WorkspaceProvider key={connection.pairing?.desktop.deviceId}>
       <SessionNotifications />
+      <SessionLiveActivity />
       <SessionActivity />
       <ScenePagerHost>
         <SessionFrame>

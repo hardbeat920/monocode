@@ -52,8 +52,12 @@ it("keeps a microphone purpose string after all Expo plugins run", () => {
   expect(description?.trim().length).toBeGreaterThan(0);
 });
 
-it("keeps local session notifications compatible with signing profiles without APNs", () => {
-  expect(ios.entitlements).not.toHaveProperty("aps-environment");
+it("can receive session alerts pushed by the desktop, past Focus when urgent", () => {
+  expect(ios.entitlements).toHaveProperty("aps-environment");
+  expect(ios.entitlements).toHaveProperty(
+    "com.apple.developer.usernotifications.time-sensitive",
+    true,
+  );
 });
 
 it("keeps camera access for pairing after the image-picker plugin runs", () => {

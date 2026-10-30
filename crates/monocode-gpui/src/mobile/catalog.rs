@@ -54,6 +54,16 @@ pub(crate) struct LiveSession {
     pub metadata: MobileSessionMetadata,
     pub busy: bool,
     pub waiting: Option<&'static str>,
+    /// What it waits on, so a phone can show and answer it without the
+    /// transcript: the first approval (or question), and how many there are.
+    pub request: Option<Request>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Request {
+    pub id: String,
+    pub label: String,
+    pub count: usize,
 }
 
 /// The phone keeps model choices across desktop versions. Keep Tauri's
@@ -142,6 +152,10 @@ pub(crate) fn session(
     if let Some(waiting) = live.and_then(|live| live.waiting) {
         value["waiting"] = json!(waiting);
     }
+    if let Some(request) = live.and_then(|live| live.request.as_ref()) {
+        value["request"] =
+            json!({"id": request.id, "label": request.label, "count": request.count});
+    }
     value
 }
 
@@ -209,6 +223,7 @@ mod tests {
             metadata: Default::default(),
             busy: false,
             waiting: None,
+            request: None,
         };
         let mut opening = session(
             &summary,

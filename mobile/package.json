@@ -1,6 +1,6 @@
 {
   "name": "monocode-mobile",
-  "main": "expo-router/entry",
+  "main": "index.ts",
   "version": "1.0.0",
   "dependencies": {
     "@expo/ui": "~57.0.25",
@@ -30,6 +30,7 @@
     "expo-splash-screen": "~57.0.10",
     "expo-sqlite": "~57.0.4",
     "expo-status-bar": "~57.0.1",
+    "expo-task-manager": "~57.0.21",
     "expo-updates": "~57.0.26",
     "fflate": "^0.8.3",
     "jpeg-js": "^0.4.4",
@@ -63,7 +64,8 @@
     "submit:ios": "npx eas-cli@latest submit --platform ios --profile production",
     "update:beta": "npx eas-cli@latest update --platform ios --channel beta --environment production",
     "native:ios": "node scripts/build-native-link.mjs ios",
-    "native:android": "node scripts/build-native-link.mjs android"
+    "native:android": "node scripts/build-native-link.mjs android",
+    "push:sim": "node scripts/sim-push.mjs"
   },
   "private": true,
   "expo": {

@@ -8,6 +8,7 @@ mod inbox;
 mod keybindings;
 mod mcp;
 mod mobile;
+mod mobile_push;
 mod monos;
 mod providers;
 mod skills;

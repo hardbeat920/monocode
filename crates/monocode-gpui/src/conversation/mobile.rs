@@ -130,6 +130,24 @@ impl Conversation {
             .collect()
     }
 
+    /// The first approval it waits on, or else the first question, with how
+    /// many of that kind there are.
+    pub(crate) fn mobile_request(&self, cx: &gpui::App) -> Option<crate::mobile::catalog::Request> {
+        let inputs = self.pending_notification_inputs(cx);
+        let kind = if inputs.iter().any(|input| input.kind == InputKind::Approval) {
+            InputKind::Approval
+        } else {
+            InputKind::Question
+        };
+        let mut matching = inputs.into_iter().filter(|input| input.kind == kind);
+        let first = matching.next()?;
+        Some(crate::mobile::catalog::Request {
+            id: first.request_id,
+            label: first.label,
+            count: 1 + matching.count(),
+        })
+    }
+
     pub(crate) fn mobile_waiting(&self, cx: &gpui::App) -> Option<Waiting> {
         let inputs = self.pending_notification_inputs(cx);
         if inputs.iter().any(|input| input.kind == InputKind::Approval) {

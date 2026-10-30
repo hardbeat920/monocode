@@ -28,13 +28,21 @@ public class MonocodeLinkModule: Module {
       AsyncFunction("scrollToEnd") { (view: NativeTranscriptView) in view.jumpToEnd() }
     }
     AsyncFunction("execute") { (input: String) -> String in
-      return input.withCString { pointer in
-        guard let output = monocode_link_call(pointer) else {
-          return "{\"ok\":false,\"error\":\"Native connection failed\"}"
-        }
-        defer { monocode_link_free(output) }
-        return String(cString: output)
-      }
+      MonocodeLinkCall.execute(input)
     }.runOnQueue(.global(qos: .userInitiated))
+  }
+}
+
+/// The link's one entry point, for native callers such as the Live
+/// Activity's approval buttons. Blocks until the desktop answers.
+public enum MonocodeLinkCall {
+  public static func execute(_ input: String) -> String {
+    input.withCString { pointer in
+      guard let output = monocode_link_call(pointer) else {
+        return "{\"ok\":false,\"error\":\"Native connection failed\"}"
+      }
+      defer { monocode_link_free(output) }
+      return String(cString: output)
+    }
   }
 }

@@ -16,7 +16,12 @@
       "bundleIdentifier": "com.hardbeat920.monocode-mobile",
       "infoPlist": {
         "CFBundleDisplayName": "Monocode",
-        "NSLocalNetworkUsageDescription": "Connect securely to your paired Monocode desktop."
+        "NSLocalNetworkUsageDescription": "Connect securely to your paired Monocode desktop.",
+        "NSSupportsLiveActivities": true,
+        "NSSupportsLiveActivitiesFrequentUpdates": true
+      },
+      "entitlements": {
+        "com.apple.developer.usernotifications.time-sensitive": true
       }
     },
     "android": {
@@ -40,7 +45,12 @@
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
-      "./plugins/with-local-notifications",
+      [
+        "expo-notifications",
+        {
+          "enableBackgroundRemoteNotifications": true
+        }
+      ],
       "./plugins/with-scene-lifecycle",
       "expo-router",
       [
@@ -83,7 +93,8 @@
           "enableBackgroundPlayback": false
         }
       ],
-      "expo-asset"
+      "expo-asset",
+      "./plugins/with-live-activity"
     ],
     "experiments": {
       "typedRoutes": true,
