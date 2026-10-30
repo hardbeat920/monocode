@@ -810,7 +810,11 @@ impl QuickComposer {
     }
     /// User-initiated region or window capture. The panel steps aside while
     /// the system overlay is up; cancelling leaves the draft intact.
+    /// Ignore stale menu actions while another attachment is being prepared.
     fn take_screenshot(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.attaching {
+            return;
+        }
         self.close_picker_state(cx);
         self.attaching = true;
         #[cfg(all(target_os = "macos", not(test)))]
@@ -2263,6 +2267,45 @@ mod tests {
                 assert!(view.pending_images.is_empty());
                 assert_eq!(view.attachments.len(), 2);
                 assert_eq!(view.staged_attachments, view.attachments);
+                view.attachments.clone()
+            })
+            .unwrap();
+        for path in paths {
+            std::fs::remove_file(path).unwrap();
+        }
+    }
+
+    #[gpui::test]
+    fn screenshot_cannot_start_while_pasted_images_are_being_prepared(cx: &mut TestAppContext) {
+        let window = open(cx);
+        window
+            .update(cx, |view, window, cx| {
+                view.open(Picker::Attachments, window, cx);
+                for _ in 0..2 {
+                    cx.write_to_clipboard(gpui::ClipboardItem {
+                        entries: vec![gpui::ClipboardEntry::Image(
+                            crate::fixtures::clipboard_bitmap(),
+                        )],
+                    });
+                    assert!(view.paste(cx));
+                }
+                view.take_screenshot(window, cx);
+                assert!(
+                    view.picker == Some(Picker::Attachments),
+                    "A screenshot request during preparation must be ignored without starting capture"
+                );
+                assert!(!view.can_submit(cx));
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let paths = window
+            .update(cx, |view, _, cx| {
+                assert!(!view.attaching);
+                assert!(view.pending_images.is_empty());
+                assert!(view.error.is_none());
+                assert_eq!(view.attachments.len(), 2);
+                assert_eq!(view.staged_attachments, view.attachments);
+                assert!(view.can_submit(cx));
                 view.attachments.clone()
             })
             .unwrap();
