@@ -594,6 +594,8 @@ import {
   adjacentItemId,
   deferUnhandledEscape,
   focusedBusyAgentSessionId,
+  hasBlockingProjectNavigationSurface,
+  hasBlockingListNavigationSurface,
   shouldHandleListNavigation,
   shouldStopFocusedTurnOnEscape,
   tabCommand,
@@ -12959,21 +12961,25 @@ function Workspace({
           return;
         }
         const target = e.target instanceof Element ? e.target : null;
+        const projectNavigation =
+          cmd === "prev-project" || cmd === "next-project";
         const listNavigation =
           cmd === "prev-session" ||
           cmd === "next-session" ||
           cmd === "prev-session-in-tab" ||
           cmd === "next-session-in-tab" ||
-          cmd === "prev-project" ||
-          cmd === "next-project";
+          projectNavigation;
         if (listNavigation) {
           const blockedTarget = Boolean(
             target?.closest(
-              'input, textarea, select, [contenteditable="true"], .cm-editor, .monocode-terminal, [role="dialog"], [data-model-picker], [data-file-picker], [data-branch-picker], [data-skill-picker], [data-mention-picker], [data-app-search]',
+              'input, textarea, select, [contenteditable="true"], .cm-editor, .monocode-terminal',
             ),
           );
           const emptyComposerTarget = Boolean(
             target?.matches('textarea[data-composer-empty="true"]'),
+          );
+          const monoComposerEmptyTarget = Boolean(
+            target?.matches('textarea[data-mono-composer-empty="true"]'),
           );
           const surfaceOpen =
             searchViewOpenRef.current ||
@@ -12982,11 +12988,17 @@ function Workspace({
             automationsViewOpenRef.current ||
             settingsOpenRef.current ||
             filePickerOpenRef.current ||
-            Boolean(whatsNewVersionRef.current);
+            Boolean(whatsNewVersionRef.current) ||
+            hasBlockingListNavigationSurface(target);
           if (
             !shouldHandleListNavigation({
               blockedTarget,
               emptyComposerTarget,
+              monoComposerEmptyTarget,
+              projectNavigation,
+              projectNavigationSurfaceOpen:
+                projectNavigation &&
+                hasBlockingProjectNavigationSurface(target),
               surfaceOpen,
             })
           ) {
@@ -13431,6 +13443,7 @@ function Workspace({
     },
     openFile: onOpenFile,
     resume: onUsageLimitResume,
+    navigateProject: onNavigateProjectList,
     create: () => createMono().id,
   });
 

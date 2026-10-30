@@ -186,10 +186,38 @@ export function adjacentItemId(
 export function shouldHandleListNavigation(input: {
   blockedTarget: boolean;
   emptyComposerTarget: boolean;
+  monoComposerEmptyTarget?: boolean;
+  projectNavigation?: boolean;
+  projectNavigationSurfaceOpen?: boolean;
   surfaceOpen: boolean;
 }): boolean {
   return (
-    !input.surfaceOpen && (!input.blockedTarget || input.emptyComposerTarget)
+    !(input.projectNavigation && input.projectNavigationSurfaceOpen) &&
+    !input.surfaceOpen &&
+    (!input.blockedTarget ||
+      input.emptyComposerTarget ||
+      (input.projectNavigation === true &&
+        input.monoComposerEmptyTarget === true))
+  );
+}
+
+export function hasBlockingProjectNavigationSurface(
+  target: Element | null,
+): boolean {
+  return Boolean(
+    target?.closest('[data-mono-composer-pending="true"]') ||
+    document.querySelector('[data-mono-composer-pending="true"]') ||
+    document.querySelector("[data-emoji-picker]"),
+  );
+}
+
+export function hasBlockingListNavigationSurface(
+  target: Element | null,
+): boolean {
+  return Boolean(
+    target?.closest(
+      '[role="dialog"], [data-model-picker], [data-file-picker], [data-branch-picker], [data-skill-picker], [data-mention-picker], [data-app-search], [data-emoji-picker]',
+    ),
   );
 }
 
