@@ -4735,8 +4735,35 @@ mod tests {
                 )
             })
         };
+        // The panel's own path meanwhile: pull pictures the way the pane does.
+        let pulled = {
+            let host = host.clone();
+            thread::spawn(move || {
+                let mut got = Vec::new();
+                let mut after = 0;
+                let deadline = Instant::now() + Duration::from_secs(3);
+                while Instant::now() < deadline {
+                    let packed = host.live_take("v1", after);
+                    if packed.is_empty() {
+                        continue;
+                    }
+                    let seq = u64::from(u32::from_le_bytes(packed[4..8].try_into().unwrap()));
+                    assert!(seq > after);
+                    assert_eq!(packed[live::PACKED_HEADER..][..2], [0xFF, 0xD8], "a JPEG");
+                    after = seq;
+                    got.push(seq);
+                }
+                got
+            })
+        };
         thread::sleep(Duration::from_secs(3));
         let count = frames.lock().unwrap().len();
+        let pulled = pulled.join().unwrap();
+        assert!(
+            pulled.len() > 10,
+            "the panel took {} pictures",
+            pulled.len()
+        );
 
         let send = |input: Value| {
             let input: live::LiveInput = serde_json::from_value(input).unwrap();

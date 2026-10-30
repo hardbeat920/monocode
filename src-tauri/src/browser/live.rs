@@ -453,9 +453,14 @@ pub fn run(
         json!({ "hidden": true }),
     );
     if let Err(error) = show(link, tab, size) {
+        note(&format!("view not started: {error}"));
         restore(link, tab);
         return Err(error);
     }
+    note(&format!(
+        "view started: panel {}x{} at {}",
+        size.width, size.height, size.scale
+    ));
     let mut current = size;
     let mut seq = 0;
     // The last JPEG, until the page has been still long enough for a PNG.
@@ -668,6 +673,7 @@ pub fn run(
         ack(link, tab, &event);
     }
     restore(link, tab);
+    note(&format!("view ended: {end:?} after {seq} pictures"));
     Ok(end)
 }
 
