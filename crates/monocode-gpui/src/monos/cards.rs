@@ -19,6 +19,99 @@ fn line_card(id: impl Into<ElementId>) -> Stateful<Div> {
         .line_height(px(20.))
         .hover(|s| s.border_color(content(0.2)).bg(content(0.05)))
 }
+/// Suggested replies, one line card each. Picking one sends it; once any
+/// reply follows, the picked one is checked and the rest step back.
+fn choices(
+    value: &Value,
+    chosen: Option<&str>,
+    cx: &mut Context<crate::transcript::TranscriptView>,
+) -> AnyElement {
+    let options: Vec<String> = value["options"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_str().map(str::to_owned))
+        .collect();
+    let picked = chosen.and_then(|reply| options.iter().position(|o| o.trim() == reply.trim()));
+    let answered = chosen.is_some();
+    // The row shrink-wraps the column, so the cards share the widest
+    // option's width instead of stretching to the cap.
+    div()
+        .flex()
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .min_w_0()
+                .max_w(px(384.))
+                .gap_1p5()
+                .children(options.into_iter().enumerate().map(|(ix, label)| {
+                    let checked = picked == Some(ix);
+                    let mark = if checked {
+                        div()
+                            .size(px(16.))
+                            .flex_shrink_0()
+                            .rounded_full()
+                            .bg(rgb(0x34d399))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(icon("check", 11.).text_color(rgb(0x062e22)))
+                    } else {
+                        div()
+                            .size(px(16.))
+                            .flex_shrink_0()
+                            .rounded_full()
+                            .border(px(1.5))
+                            .border_color(content(0.35))
+                            .when(!answered, |d| {
+                                d.group_hover("mono-choice", |s| s.border_color(content(0.7)))
+                            })
+                    };
+                    let answer = label.clone();
+                    div()
+                        .id(("mono-choice", ix))
+                        .debug_selector(move || format!("mono-choice-{ix}"))
+                        .group("mono-choice")
+                        .role(Role::Button)
+                        .aria_label(label.clone())
+                        .aria_toggled(if checked {
+                            gpui::Toggled::True
+                        } else {
+                            gpui::Toggled::False
+                        })
+                        .flex()
+                        .max_w(px(384.))
+                        .min_w_0()
+                        .items_center()
+                        .gap_2p5()
+                        .rounded_xl()
+                        .border_1()
+                        .border_color(content(if checked { 0.2 } else { 0.1 }))
+                        .line_height(px(20.))
+                        .py(px(6.))
+                        .pl(px(10.))
+                        .pr_3()
+                        .when(answered && !checked, |d| d.opacity(0.45))
+                        .when(!answered, |d| {
+                            d.cursor_pointer()
+                                .hover(|s| s.border_color(content(0.2)).bg(content(0.05)))
+                                .on_click(cx.listener(move |_, _, _, cx| {
+                                    cx.emit(CardAction(json!({"type":"choice","text":answer})))
+                                }))
+                        })
+                        .child(mark)
+                        .child(
+                            div()
+                                .min_w_0()
+                                .text_size(px(13.))
+                                .text_color(content(1.))
+                                .child(label),
+                        )
+                })),
+        )
+        .into_any_element()
+}
 /// ArtifactCard: the document's icon and title, opening it in the reader.
 fn artifact(value: &Value, cx: &mut Context<crate::transcript::TranscriptView>) -> AnyElement {
     let html = value["kind"] == "html";
@@ -147,13 +240,16 @@ pub(crate) fn launch(
         )
         .into_any_element()
 }
+/// `chosen` is the reply sent after the card, if any, which answers it.
 pub(crate) fn render(
     value: &Value,
+    chosen: Option<&str>,
     cx: &mut Context<crate::transcript::TranscriptView>,
 ) -> AnyElement {
     let kind = value["type"].as_str().unwrap_or_default();
     match kind {
         "document" => return artifact(value, cx),
+        "choices" => return choices(value, chosen, cx),
         "session" => {
             let id = value["sessionId"].as_i64().unwrap_or_default();
             let view = value["state"]
@@ -202,18 +298,16 @@ pub(crate) fn render(
         .flex()
         .flex_col()
         .gap_2()
-        .when(kind != "choices", |d| {
-            d.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .text_size(px(13.))
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .child(icon(glyph, 16.))
-                    .child(title),
-            )
-        })
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .text_size(px(13.))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .child(icon(glyph, 16.))
+                .child(title),
+        )
         .when_some(
             value["note"].as_str().or_else(|| value["summary"].as_str()),
             |d, n| {
@@ -255,40 +349,18 @@ pub(crate) fn render(
                 ),
             )
         })
-        .when(kind == "choices", |d| {
-            d.children(
-                value["options"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .enumerate()
-                    .filter_map(|(ix, v)| {
-                        v.as_str().map(|label| {
-                            let label = label.to_string();
-                            let answer = label.clone();
-                            panels::button(("mono-choice", ix), label)
-                                .bg(content(0.06))
-                                .on_click(cx.listener(move |_, _, _, cx| {
-                                    cx.emit(CardAction(json!({"type":"choice","text":answer})))
-                                }))
-                        })
-                    }),
+        .child(
+            panels::button(
+                "mono-card-open",
+                if kind == "habit" && value["started"] != true {
+                    "Start habit"
+                } else {
+                    "Open"
+                },
             )
-        })
-        .when(kind != "choices", |d| {
-            d.child(
-                panels::button(
-                    "mono-card-open",
-                    if kind == "habit" && value["started"] != true {
-                        "Start habit"
-                    } else {
-                        "Open"
-                    },
-                )
-                .bg(content(0.08))
-                .on_click(cx.listener(move |_, _, _, cx| cx.emit(CardAction(card.clone())))),
-            )
-        })
+            .bg(content(0.08))
+            .on_click(cx.listener(move |_, _, _, cx| cx.emit(CardAction(card.clone())))),
+        )
         .into_any_element()
 }
 /// launchedSessionState: where a session the Mono started stands.

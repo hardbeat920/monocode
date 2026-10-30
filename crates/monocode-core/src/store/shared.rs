@@ -138,6 +138,17 @@ pub(super) fn has_table(conn: &Connection, table: &str) -> Result<bool, String> 
         |r| r.get(0),
     ))
 }
+/// Clock slack between a prompt's send time and its run's start.
+const START_SLACK_MS: u64 = 1_000;
+/// A prompt's run start. No run starts before its prompt was sent: an earlier
+/// start was copied from another turn and marks a steer, not a new turn.
+fn turn_start(block: &Value) -> Option<u64> {
+    block["startedAt"].as_u64().filter(|at| {
+        block["sentAt"]
+            .as_u64()
+            .is_none_or(|sent| at.saturating_add(START_SLACK_MS) >= sent)
+    })
+}
 /// Turn keys are row offsets, including invisible document/card metadata rows.
 /// Never substitute the session's current model for missing historical provenance.
 pub(super) fn project_turns(
@@ -151,7 +162,7 @@ pub(super) fn project_turns(
         if let Some(prompt) = rows.iter().rposition(Row::is_prompt) {
             let model = &block["turnModel"];
             let duration = block["durationMs"].as_u64();
-            let started_at = block["startedAt"].as_u64();
+            let started_at = turn_start(block);
             let turn = offset + prompt + 1;
             if started_at.is_some() {
                 root_turn = Some(turn);
@@ -300,6 +311,14 @@ impl Store {
     }
     pub fn uses_monocode_schema(&self) -> bool {
         self.shared.is_some()
+    }
+    /// Where native-only tables live: the sidecar beside a desktop database,
+    /// which the desktop schema never sees, or a prototype database itself.
+    pub(super) fn native_db(&self) -> Option<&Connection> {
+        match &self.shared {
+            Some(shared) => shared.extras_db.as_ref(),
+            None => Some(&self.conn),
+        }
     }
     /// A read-only snapshot of desktop preferences, shared by this store's
     /// consumers. Reopening the store refreshes it without per-message WebKit I/O.
@@ -884,10 +903,14 @@ impl Store {
             if let Some(at) = info.started_at {
                 // A native root prompt is written with its send time before
                 // its turn receipt arrives; the desktop schema calls it startedAt.
+                // A message sent after that start is a steer, never its root.
                 if block["id"]
                     .as_str()
                     .is_some_and(|id| id.starts_with("gpui-"))
                     && block["startedAt"].is_null()
+                    && block["sentAt"]
+                        .as_u64()
+                        .is_none_or(|sent| at.saturating_add(START_SLACK_MS) >= sent)
                 {
                     block["startedAt"] = json!(at);
                     if block["sentAt"].as_u64() == Some(at) {
