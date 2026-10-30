@@ -49,6 +49,7 @@ export function useComposerSkills(input: {
   harness: HarnessId;
   executionCwd: string;
   sessionId?: string;
+  accountId?: string;
   pickerOpen: boolean;
 }) {
   const context = useMemo<SkillCatalogContext>(
@@ -56,8 +57,9 @@ export function useComposerSkills(input: {
       harness: input.harness,
       cwd: input.executionCwd,
       sessionId: input.sessionId,
+      ...(input.accountId ? { accountId: input.accountId } : {}),
     }),
-    [input.executionCwd, input.harness, input.sessionId],
+    [input.accountId, input.executionCwd, input.harness, input.sessionId],
   );
   const contextKey = skillCatalogKey(context);
   const fallback = useMemo<Skill[]>(
