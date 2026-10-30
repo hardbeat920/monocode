@@ -19,6 +19,7 @@ mod response_menu;
 #[cfg(test)]
 mod submission_tests;
 mod title;
+mod worktree_naming;
 use crate::{
     composer_motion::ComposerMotion,
     git_picker::{GitPicker, Mode as GitMode, Picked as GitPicked},
@@ -59,6 +60,7 @@ use std::{
 // Keep empty and docked composers aligned with the transcript column. Below
 // this width the empty session drops its title.
 const COMPOSER_COLUMN: f32 = COLUMN;
+const COMPOSER_RADIUS: f32 = 12.;
 // RUNTIME_MODE_LABEL and RUNTIME_MODE_HINT from the React session model,
 // with AccessPicker's icons; Full access is amber.
 const ACCESS_MODES: &[(&str, &str, &str, &str)] = &[
@@ -228,6 +230,7 @@ pub(crate) struct Conversation {
     runner: Option<Entity<crate::composer_runner::Runner>>,
     cancel: Arc<AtomicBool>,
     title_cancel: Option<Arc<AtomicBool>>,
+    worktree_name_cancel: Option<Arc<AtomicBool>>,
     _submission: Subscription,
     _alternate_submission: Subscription,
     response_events: Option<Subscription>,
@@ -236,6 +239,9 @@ pub(crate) struct Conversation {
 }
 impl Drop for Conversation {
     fn drop(&mut self) {
+        if let Some(cancel) = self.worktree_name_cancel.take() {
+            cancel.store(true, Ordering::Relaxed);
+        }
         if !self.summary.cwd.starts_with("remote://") {
             self.cancel.store(true, Ordering::Relaxed);
         }
@@ -666,6 +672,7 @@ impl Conversation {
             runner: None,
             cancel: Arc::new(AtomicBool::new(false)),
             title_cancel: None,
+            worktree_name_cancel: None,
             _submission: submission,
             _alternate_submission: alternate_submission,
             response_events: None,
@@ -1052,7 +1059,22 @@ impl Conversation {
         }
         self.settings.usage_limit = None;
         self.attach_account(cx);
+        let worktree_message = if prompt.trim().is_empty() {
+            self.settings
+                .attachments
+                .iter()
+                .chain(&self.attachments)
+                .filter_map(|path| path.file_name())
+                .map(|name| name.to_string_lossy())
+                .collect::<Vec<_>>()
+                .join(", ")
+        } else {
+            prompt.clone()
+        };
         if !self.is_remote() {
+            if !self.summary.has_messages {
+                self.generate_worktree_branch(&worktree_message, cx);
+            }
             self.generate_title(&prompt, cx);
         }
         let model_label = self.model_label();
@@ -1197,6 +1219,7 @@ impl Conversation {
                             this.settings.worktree_cwd = Some(cwd);
                             this.settings.new_worktree = false;
                             this.save_settings(cx);
+                            this.generate_worktree_branch(&worktree_message, cx);
                             this.refresh_git(cx);
                         }
                         if let Some(commands) = update.commands.filter(|_| source_selected) {
@@ -2719,7 +2742,7 @@ impl Conversation {
         Some(runner)
     }
     fn composer(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
-        let radius = 12.;
+        let radius = COMPOSER_RADIUS;
         let command = if self.follow_ups.draft_selected {
             Some(input::Command::Draft)
         } else if self.settings.orchestrator {

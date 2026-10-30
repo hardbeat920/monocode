@@ -17,6 +17,7 @@ import type {
   Mono,
   SessionSummary,
   Message,
+  QuestionPrompt,
   Turn,
 } from "@/features/workspace/types";
 import {
@@ -320,6 +321,8 @@ export type Conversation = {
   /** Missing from desktops that predate turn-shaped transcripts. */
   turns?: Turn[];
   busy: boolean;
+  /** What the agent waits on the user to answer; absent from an older desktop. */
+  question?: QuestionPrompt | null;
 };
 
 /** What the desktop lists this phone as, e.g. "Nick's iPhone". */
