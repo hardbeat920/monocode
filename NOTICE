@@ -42,6 +42,8 @@ review. The retained framework code remains Apache-2.0.
 Unused upstream examples and their demo assets are omitted, together with four
 upstream SVG tests requiring font fixtures absent from the published crate.
 The small EXIF image regression fixture is retained under tests/assets.
+The Windows clipboard reader prefers PNG and supports DIB/DIBV5 images; the
+native app converts pasted bitmaps to PNG on a background worker.
 
 Native chat file icons and the Dark+ token palette reuse the React UI's
 react-material-icon-theme 1.2.0 and @shikijs/themes assets. Their MIT license

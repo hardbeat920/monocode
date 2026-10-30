@@ -1,3 +1,4 @@
+// Monocode: prefer PNG and support DIBV5 without decoding on the UI thread.
 use std::{borrow::Cow, sync::LazyLock};
 
 use anyhow::Result;
@@ -12,7 +13,7 @@ use windows::Win32::{
             SetClipboardData,
         },
         Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock},
-        Ole::{CF_DIB, CF_HDROP, CF_UNICODETEXT},
+        Ole::{CF_DIB, CF_DIBV5, CF_HDROP, CF_UNICODETEXT},
     },
     UI::Shell::{DragQueryFileW, HDROP},
 };
@@ -94,7 +95,7 @@ pub(crate) fn read_from_clipboard() -> Option<ClipboardItem> {
 
     let mut entries = Vec::new();
     let mut have_text = false;
-    let mut have_image = false;
+    let mut image_formats = Vec::new();
     let mut have_files = false;
 
     let count = unsafe { CountClipboardFormats() };
@@ -107,11 +108,8 @@ pub(crate) fn read_from_clipboard() -> Option<ClipboardItem> {
                 entries.push(entry);
                 have_text = true;
             }
-        } else if !have_image && is_image_format(format) {
-            if let Some(entry) = read_image(format) {
-                entries.push(entry);
-                have_image = true;
-            }
+        } else if is_image_format(format) {
+            image_formats.push(format);
         } else if !have_files && format == CF_HDROP.0 as u32 {
             if let Some(entry) = read_files() {
                 entries.push(entry);
@@ -120,11 +118,32 @@ pub(crate) fn read_from_clipboard() -> Option<ClipboardItem> {
         }
     }
 
+    if let Some(image) = read_preferred_image(image_formats, read_image) {
+        entries.push(image);
+    }
+
     if entries.is_empty() {
         log_unsupported_clipboard_formats();
         return None;
     }
     Some(ClipboardItem { entries })
+}
+
+fn read_preferred_image(
+    mut formats: Vec<u32>,
+    read: impl FnMut(u32) -> Option<ClipboardEntry>,
+) -> Option<ClipboardEntry> {
+    // Clipboard enumeration order reflects the source app, not our preferred encoding.
+    formats.sort_by_key(|format| {
+        if *format == *CLIPBOARD_PNG_FORMAT {
+            0
+        } else if *format == CF_DIB.0 as u32 {
+            2
+        } else {
+            1
+        }
+    });
+    formats.into_iter().find_map(read)
 }
 
 pub(crate) fn with_file_names<F>(hdrop: HDROP, mut f: F)
@@ -174,7 +193,9 @@ fn get_clipboard_string(format: u32) -> Option<String> {
 }
 
 fn is_image_format(format: u32) -> bool {
-    IMAGE_FORMATS_MAP.contains_key(&format) || format == CF_DIB.0 as u32
+    IMAGE_FORMATS_MAP.contains_key(&format)
+        || format == CF_DIB.0 as u32
+        || format == CF_DIBV5.0 as u32
 }
 
 fn write_string(item: &ClipboardString) -> Result<()> {
@@ -250,11 +271,15 @@ fn read_clipboard_metadata(text: &str) -> Option<String> {
 
 fn read_image(format: u32) -> Option<ClipboardEntry> {
     let locked = get_clipboard_data(format)?;
-    let (bytes, image_format) = if format == CF_DIB.0 as u32 {
-        (convert_dib_to_bmp(locked.as_bytes())?, ImageFormat::Bmp)
+    decode_clipboard_image(format, locked.as_bytes())
+}
+
+fn decode_clipboard_image(format: u32, data: &[u8]) -> Option<ClipboardEntry> {
+    let (bytes, image_format) = if format == CF_DIB.0 as u32 || format == CF_DIBV5.0 as u32 {
+        (convert_dib_to_bmp(data)?, ImageFormat::Bmp)
     } else {
         let image_format = *IMAGE_FORMATS_MAP.get(&format)?;
-        (locked.as_bytes().to_vec(), image_format)
+        (data.to_vec(), image_format)
     };
     let id = hash(&bytes);
     Some(ClipboardEntry::Image(Image {
@@ -281,6 +306,9 @@ fn convert_dib_to_bmp(dib: &[u8]) -> Option<Vec<u8>> {
     }
 
     let header_size = u32::from_le_bytes(dib[0..4].try_into().ok()?);
+    if header_size < 40 || header_size as usize > dib.len() {
+        return None;
+    }
     let bit_count = u16::from_le_bytes(dib[14..16].try_into().ok()?);
     let compression = u32::from_le_bytes(dib[16..20].try_into().ok()?);
 
@@ -290,15 +318,24 @@ fn convert_dib_to_bmp(dib: &[u8]) -> Option<Vec<u8>> {
             1u32 << bit_count
         } else {
             colors_used
-        }) * 4
-    } else if compression == 3 {
+        })
+        .checked_mul(4)?
+    } else if header_size == 40 && compression == 3 {
         12 // BI_BITFIELDS
+    } else if header_size == 40 && compression == 6 {
+        16 // BI_ALPHABITFIELDS
     } else {
         0
     };
 
-    let pixel_offset = 14 + header_size + color_table_size;
-    let file_size = 14 + dib.len() as u32;
+    // V4/V5 headers already contain their channel masks.
+    let pixel_offset = 14u32
+        .checked_add(header_size)?
+        .checked_add(color_table_size)?;
+    let file_size = 14u32.checked_add(dib.len().try_into().ok()?)?;
+    if pixel_offset >= file_size {
+        return None;
+    }
 
     let mut bmp = Vec::with_capacity(file_size as usize);
     bmp.extend_from_slice(b"BM");
@@ -390,5 +427,132 @@ impl LockedGlobal {
 impl Drop for LockedGlobal {
     fn drop(&mut self) {
         unsafe { GlobalUnlock(self.global).ok() };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::{DynamicImage, ImageFormat as EncodedFormat, RgbImage};
+    use std::io::Cursor;
+
+    fn pixels() -> RgbImage {
+        RgbImage::from_raw(2, 1, vec![0x12, 0x34, 0x56, 0xab, 0xcd, 0xef]).unwrap()
+    }
+
+    fn encoded(format: EncodedFormat) -> Vec<u8> {
+        let mut data = Cursor::new(Vec::new());
+        DynamicImage::ImageRgb8(pixels())
+            .write_to(&mut data, format)
+            .unwrap();
+        data.into_inner()
+    }
+
+    fn image(entry: ClipboardEntry) -> Image {
+        let ClipboardEntry::Image(image) = entry else {
+            panic!("Expected a clipboard image");
+        };
+        image
+    }
+
+    #[test]
+    fn bitmap_clipboard_is_copied_without_pixel_conversion() {
+        let bmp = encoded(EncodedFormat::Bmp);
+        let image = image(decode_clipboard_image(CF_DIB.0.into(), &bmp[14..]).unwrap());
+        assert_eq!(image.format(), ImageFormat::Bmp);
+        assert_eq!(
+            image::guess_format(image.bytes()).unwrap(),
+            EncodedFormat::Bmp
+        );
+        assert_eq!(image.bytes(), bmp);
+        assert_eq!(
+            image::load_from_memory(image.bytes()).unwrap().to_rgb8(),
+            pixels()
+        );
+    }
+
+    #[test]
+    fn png_is_preferred_even_when_dib_is_listed_first() {
+        let png = encoded(EncodedFormat::Png);
+        let bmp = encoded(EncodedFormat::Bmp);
+        let mut reads = Vec::new();
+        let entry = read_preferred_image(vec![CF_DIB.0.into(), *CLIPBOARD_PNG_FORMAT], |format| {
+            reads.push(format);
+            let data = if format == *CLIPBOARD_PNG_FORMAT {
+                png.as_slice()
+            } else {
+                &bmp[14..]
+            };
+            decode_clipboard_image(format, data)
+        })
+        .unwrap();
+        assert_eq!(reads, vec![*CLIPBOARD_PNG_FORMAT]);
+        assert_eq!(image(entry).bytes(), png);
+    }
+
+    #[test]
+    fn unavailable_png_falls_back_to_bitmap() {
+        let bmp = encoded(EncodedFormat::Bmp);
+        let entry = read_preferred_image(vec![*CLIPBOARD_PNG_FORMAT, CF_DIB.0.into()], |format| {
+            if format == *CLIPBOARD_PNG_FORMAT {
+                None
+            } else {
+                decode_clipboard_image(format, &bmp[14..])
+            }
+        })
+        .unwrap();
+        assert_eq!(image(entry).format(), ImageFormat::Bmp);
+    }
+
+    #[test]
+    fn png_clipboard_bytes_are_preserved() {
+        let png = encoded(EncodedFormat::Png);
+        let image = image(decode_clipboard_image(*CLIPBOARD_PNG_FORMAT, &png).unwrap());
+        assert_eq!(image.format(), ImageFormat::Png);
+        assert_eq!(image.bytes(), png);
+    }
+
+    #[test]
+    fn dibv5_preserves_transparency_for_worker_conversion() {
+        let mut dib = vec![0u8; 124];
+        dib[0..4].copy_from_slice(&124u32.to_le_bytes());
+        dib[4..8].copy_from_slice(&1i32.to_le_bytes());
+        dib[8..12].copy_from_slice(&1i32.to_le_bytes());
+        dib[12..14].copy_from_slice(&1u16.to_le_bytes());
+        dib[14..16].copy_from_slice(&32u16.to_le_bytes());
+        dib[16..20].copy_from_slice(&3u32.to_le_bytes());
+        dib[20..24].copy_from_slice(&4u32.to_le_bytes());
+        for (offset, mask) in [
+            (40, 0x00ff0000u32),
+            (44, 0x0000ff00),
+            (48, 0x000000ff),
+            (52, 0xff000000),
+            (56, 0x73524742),
+        ] {
+            dib[offset..offset + 4].copy_from_slice(&mask.to_le_bytes());
+        }
+        dib.extend_from_slice(&[0x56, 0x34, 0x12, 0x80]);
+        assert!(is_image_format(CF_DIBV5.0.into()));
+        let image = image(decode_clipboard_image(CF_DIBV5.0.into(), &dib).unwrap());
+        assert_eq!(image.format(), ImageFormat::Bmp);
+        assert_eq!(
+            image::load_from_memory(image.bytes())
+                .unwrap()
+                .to_rgba8()
+                .get_pixel(0, 0)
+                .0,
+            [0x12, 0x34, 0x56, 0x80]
+        );
+    }
+
+    #[test]
+    fn malformed_bitmap_is_not_exposed_as_an_image() {
+        for data in [
+            b"not a bitmap".as_slice(),
+            &[0u8; 40],
+            &u32::MAX.to_le_bytes().repeat(10),
+        ] {
+            assert!(decode_clipboard_image(CF_DIB.0.into(), data).is_none());
+        }
     }
 }
