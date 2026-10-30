@@ -1922,6 +1922,9 @@ impl BrowserHost {
             .unwrap_or_else(|e| e.into_inner())
             .clone()
             .filter(|c| c.view == view);
+        if control.is_none() && cfg!(debug_assertions) {
+            eprintln!("[live] the panel asked for a picture of a view that is not running");
+        }
         control
             .and_then(|control| control.take(after, live::PULL_WAIT))
             .unwrap_or_default()
@@ -4081,8 +4084,12 @@ mod tests {
             let viewport = viewport.clone();
             move || *viewport.lock().unwrap()
         };
-        let frame =
-            move |n: i64, session: Option<&str>| picture(format!("frame{n}"), n, size(), session);
+        // Valid base64 (of `frame<n>`), so a picture packs for the panel.
+        let frame = move |n: i64, session: Option<&str>| {
+            use base64::Engine as _;
+            let data = base64::engine::general_purpose::STANDARD.encode(format!("frame{n}"));
+            picture(data, n, size(), session)
+        };
         FakeCdp::start_with(move |received| {
             let session = received.session.as_deref();
             match received.method.as_str() {
@@ -4130,13 +4137,17 @@ mod tests {
                 // Chrome on Windows sends the last picture again right after
                 // a screenshot.
                 "Page.captureScreenshot" => Response::ResultThen(
-                    json!({ "data": "still" }),
-                    vec![picture(
-                        format!("frame{}", frames.max(1)),
-                        1000,
-                        *viewport.lock().unwrap(),
-                        session,
-                    )],
+                    json!({ "data": "c3RpbGw=" }),
+                    vec![{
+                        use base64::Engine as _;
+                        picture(
+                            base64::engine::general_purpose::STANDARD
+                                .encode(format!("frame{}", frames.max(1))),
+                            1000,
+                            *viewport.lock().unwrap(),
+                            session,
+                        )
+                    }],
                 ),
                 "Page.screencastFrameAck" => {
                     let n = received.params["sessionId"].as_i64().unwrap_or(0);
@@ -4192,13 +4203,30 @@ mod tests {
                 )
             })
         };
+        // The panel's own path: it asks for the next picture and gets the
+        // newest one, packed, with the page's size in front.
         let deadline = Instant::now() + Duration::from_secs(5);
-        while frames.lock().unwrap().len() < 3 {
+        let mut taken = Vec::new();
+        while taken.len() < 3 {
             assert!(Instant::now() < deadline, "pictures never came");
-            thread::sleep(Duration::from_millis(5));
+            let after = taken.last().copied().unwrap_or(0);
+            let packed = host.live_take("v1", after);
+            if packed.is_empty() {
+                continue;
+            }
+            assert!(packed.len() > live::PACKED_HEADER);
+            let seq = u64::from(u32::from_le_bytes(packed[4..8].try_into().unwrap()));
+            assert!(seq > after);
+            assert_eq!(f64::from_le_bytes(packed[8..16].try_into().unwrap()), 640.0);
+            taken.push(seq);
         }
+        assert_eq!(taken, vec![1, 2, 3]);
+        // The pane of another view gets nothing.
+        assert!(host.live_take("v2", 0).is_empty());
         host.stop_live(None);
         assert_eq!(viewing.join().unwrap(), Ok(live::LiveEnd::Stopped));
+        // Once the view is over, the pane's request comes back empty at once.
+        assert!(host.live_take("v1", 3).is_empty());
 
         // A slow run may end on the still picture too; the moving ones come first.
         let frames: Vec<_> = frames
@@ -4212,7 +4240,7 @@ mod tests {
             frames.iter().map(|f| f.seq).collect::<Vec<_>>(),
             vec![1, 2, 3]
         );
-        assert_eq!(frames[0].data, "frame1");
+        assert_eq!(frames[0].data, "ZnJhbWUx");
         assert_eq!((frames[0].width, frames[0].height), (640.0, 480.0));
         assert_eq!(frames[0].tab, tab.0);
 
@@ -4278,7 +4306,11 @@ mod tests {
         let formats: Vec<_> = frames.iter().map(|f| (f.format, f.data.as_str())).collect();
         assert_eq!(
             formats,
-            vec![("jpeg", "frame1"), ("jpeg", "frame2"), ("png", "still")]
+            vec![
+                ("jpeg", "ZnJhbWUx"),
+                ("jpeg", "ZnJhbWUy"),
+                ("png", "c3RpbGw=")
+            ]
         );
         assert_eq!((frames[2].width, frames[2].height), (640.0, 480.0));
     }
@@ -4312,7 +4344,7 @@ mod tests {
                 thread::sleep(Duration::from_millis(5));
             }
         };
-        shown("frame1");
+        shown("ZnJhbWUx");
         host.live_navigate("s1", &tab, &live::LiveNav::Reload)
             .unwrap();
         shown("loaded");

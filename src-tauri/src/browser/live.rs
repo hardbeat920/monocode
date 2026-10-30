@@ -494,6 +494,7 @@ pub fn run(
                 paused = true;
                 moving = None;
                 still = None;
+                note("pictures paused: the agent needs the tab's viewport");
                 let _ = send(link, &tab.main, Method::PageStopScreencast, json!({}));
                 // The capture is as fast as with no pane only on the tab's
                 // own viewport; the pane's comes back on resume.
@@ -516,6 +517,7 @@ pub fn run(
             control.paused.store(false, Ordering::Release);
             misfit = None;
             last.clear();
+            note("pictures resumed");
             if let Err(error) = show(link, tab, current) {
                 restore(link, tab);
                 return Err(error);
@@ -574,6 +576,9 @@ pub fn run(
                     width,
                     height,
                 });
+                if still.is_none() {
+                    note("lossless picture not asked for: the link refused");
+                }
             }
         }
         let wait = moving.map_or(POLL, |(at, _, _)| {
@@ -599,6 +604,7 @@ pub fn run(
             };
             // The same picture again: nothing moved.
             if data == last {
+                note("picture dropped: the same as the last one");
                 break 'frame false;
             }
             let metadata = &event.params["metadata"];
@@ -613,9 +619,18 @@ pub fn run(
                 if healed.is_none_or(|at: Instant| at.elapsed() >= HEAL_EVERY) {
                     healed = Some(Instant::now());
                     let _ = send(link, &tab.main, Method::PageStopScreencast, json!({}));
-                    let _ = show(link, tab, current);
+                    if let Err(error) = show(link, tab, current) {
+                        note(&format!("viewport not put back: {error}"));
+                    }
                 }
                 if since.elapsed() < MISFIT_FOR {
+                    note(&format!(
+                        "picture dropped: {width}x{height} css, {:?} px, panel {}x{} at {}",
+                        jpeg_size(data),
+                        current.width,
+                        current.height,
+                        current.scale
+                    ));
                     break 'frame false;
                 }
             }
@@ -779,6 +794,14 @@ impl Meter {
         let sent = std::mem::take(&mut self.sent);
         *self = Meter::new();
         self.sent = sent;
+    }
+}
+
+/// A line in a development build's log about what the view did, next to
+/// the meter's.
+fn note(what: &str) {
+    if cfg!(debug_assertions) {
+        eprintln!("[live] {what}");
     }
 }
 
