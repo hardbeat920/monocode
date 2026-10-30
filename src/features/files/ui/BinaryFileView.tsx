@@ -31,7 +31,7 @@ import {
   REMOTE_PATH_PREFIX,
   revealPath,
 } from "../../../platform/tauri/fs";
-import { displayPath } from "../../../shared/lib/paths";
+import { displayPath, parentPath } from "../../../shared/lib/paths";
 import { IS_MAC } from "../../../platform/tauri/platform";
 import { claimTrackpadMagnify } from "../../../platform/tauri/trackpadZoom";
 import { resolveZoomKeybinding } from "../../settings/model/zoomKeybinding";
@@ -55,7 +55,7 @@ type LoadState =
   | { status: "loading" }
   | { status: "ready"; url: string; mime: string; size: number }
   | { status: "unsupported"; size: number }
-  | { status: "error"; message: string };
+  | { status: "error"; message: string; retried: boolean };
 
 /**
  * Read-only image and video previews, with a card for unreadable media.
@@ -63,6 +63,7 @@ type LoadState =
 export function BinaryFileView({ path, cwd, visible = true }: Props) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [reloadKey, setReloadKey] = useState(0);
+  const retrying = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -72,6 +73,7 @@ export function BinaryFileView({ path, cwd, visible = true }: Props) {
     readBinaryFile(path).then(
       (bytes) => {
         if (cancelled) return;
+        retrying.current = false;
         // Images are sniffed; videos receive only an explicit video MIME and
         // are validated by the media decoder. Neither can become a document.
         const mime = videoMimeForPath(path) ?? sniffImageMime(bytes);
@@ -92,7 +94,9 @@ export function BinaryFileView({ path, cwd, visible = true }: Props) {
         setState({
           status: "error",
           message: cause instanceof Error ? cause.message : String(cause),
+          retried: retrying.current,
         });
+        retrying.current = false;
       },
     );
 
@@ -103,6 +107,10 @@ export function BinaryFileView({ path, cwd, visible = true }: Props) {
   }, [path, reloadKey]);
 
   const reload = useCallback(() => setReloadKey((value) => value + 1), []);
+  const retry = useCallback(() => {
+    retrying.current = true;
+    reload();
+  }, [reload]);
 
   useEffect(() => {
     let timer = 0;
@@ -132,7 +140,8 @@ export function BinaryFileView({ path, cwd, visible = true }: Props) {
         title={`Couldn’t open ${basename(path)}`}
         detail={state.message}
         icon={<AlertCircle className="mx-auto mb-3 size-5 text-red-400" />}
-        onRetry={reload}
+        onRetry={retry}
+        retried={state.retried}
         offerOpen={videoMimeForPath(path) !== null}
       />
     );
@@ -597,6 +606,7 @@ function FileCard({
   detail,
   icon,
   onRetry,
+  retried = false,
   offerOpen = false,
 }: {
   path: string;
@@ -605,8 +615,57 @@ function FileCard({
   detail: string;
   icon: React.ReactNode;
   onRetry?: () => void;
+  /** The last Retry read the file and failed again. */
+  retried?: boolean;
   offerOpen?: boolean;
 }) {
+  const [copied, setCopied] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const copiedTimer = useRef<number | null>(null);
+
+  useEffect(
+    () => () => {
+      if (copiedTimer.current != null) window.clearTimeout(copiedTimer.current);
+    },
+    [],
+  );
+
+  const openExternally = () => {
+    setNotice(null);
+    void openPathWithDefaultApp(path).catch((error: unknown) =>
+      setNotice(`Couldn’t open it externally: ${errorText(error)}`),
+    );
+  };
+
+  const reveal = () => {
+    setNotice(null);
+    void revealClosest(path).then(
+      (shown) => {
+        if (shown !== path) {
+          setNotice(
+            `The file is no longer there. Revealed ${displayPath(shown, cwd)} instead.`,
+          );
+        }
+      },
+      (error: unknown) => setNotice(`Couldn’t reveal it: ${errorText(error)}`),
+    );
+  };
+
+  const copyPath = () => {
+    setNotice(null);
+    void copyText(path).then(
+      () => {
+        setCopied(true);
+        if (copiedTimer.current != null) {
+          window.clearTimeout(copiedTimer.current);
+        }
+        copiedTimer.current = window.setTimeout(() => setCopied(false), 1500);
+      },
+      (error: unknown) =>
+        setNotice(`Couldn’t copy the path: ${errorText(error)}`),
+    );
+  };
+
   return (
     <div className="grid h-full place-items-center p-6">
       <div className="max-w-md text-center">
@@ -624,23 +683,58 @@ function FileCard({
             </CardButton>
           ) : null}
           {offerOpen && !path.startsWith(REMOTE_PATH_PREFIX) ? (
-            <CardButton
-              onClick={() => void openPathWithDefaultApp(path).catch(() => {})}
-            >
-              Open externally
-            </CardButton>
+            <CardButton onClick={openExternally}>Open externally</CardButton>
           ) : null}
-          <CardButton onClick={() => void revealPath(path).catch(() => {})}>
+          <CardButton onClick={reveal}>
             <Folder className="size-3" strokeWidth={1.75} />
             Reveal
           </CardButton>
-          <CardButton onClick={() => void copyText(path).catch(() => {})}>
-            Copy path
+          <CardButton onClick={copyPath}>
+            {copied ? <Check className="size-3" strokeWidth={2} /> : null}
+            {copied ? "Copied" : "Copy path"}
           </CardButton>
         </div>
+        {/* Every action reports back here; a silent click reads as broken. */}
+        <p
+          role="status"
+          className="mt-3 min-h-5 text-[12px] leading-5 text-content/50"
+        >
+          {notice ?? (retried ? "Still couldn’t open it." : null)}
+        </p>
       </div>
     </div>
   );
+}
+
+/**
+ * Reveals a file, or the closest folder still on disk once the file has been
+ * moved or deleted. Resolves with the path that was revealed.
+ */
+async function revealClosest(path: string): Promise<string> {
+  try {
+    await revealPath(path);
+    return path;
+  } catch (error) {
+    if (path.startsWith(REMOTE_PATH_PREFIX)) throw error;
+    let current = path;
+    for (
+      let parent = parentPath(current);
+      parent !== current;
+      current = parent, parent = parentPath(current)
+    ) {
+      try {
+        await revealPath(parent);
+        return parent;
+      } catch {
+        // That folder is gone as well; keep climbing.
+      }
+    }
+    throw error;
+  }
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function CardButton({
