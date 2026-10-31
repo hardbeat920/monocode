@@ -690,10 +690,14 @@ import {
 import {
   getArtifact,
   saveArtifact,
+  listArtifacts,
   artifactCards,
   recordArtifactCard,
   removeArtifactCard,
+  ARTIFACTS_CHANGED_EVENT,
   ARTIFACT_DELETED_EVENT,
+  type Artifact,
+  type ArtifactCard,
 } from "../features/artifacts/artifacts";
 import type { MonoChangesRequest } from "../features/monos/ui/MonoChangesView";
 import {
@@ -13547,10 +13551,59 @@ function Workspace({
     () => (monoViewBlocks ? monoSpawnedSessions(monoViewBlocks) : []),
     [monoViewBlocks],
   );
-  const monoDocuments = useMemo(
-    () => (monoViewBlocks ? artifactCards(monoViewBlocks) : []),
-    [monoViewBlocks],
-  );
+  const [persistedArtifacts, setPersistedArtifacts] = useState<
+    readonly Artifact[]
+  >([]);
+  useEffect(() => {
+    let active = true;
+    let sequence = 0;
+    const deletedIds = new Set<string>();
+    const refresh = () => {
+      const requestSeq = ++sequence;
+      void listArtifacts()
+        .then((items) => {
+          if (!active || requestSeq !== sequence) return;
+          setPersistedArtifacts(
+            items.filter((item) => !deletedIds.has(item.id)),
+          );
+        })
+        .catch(() => {});
+    };
+    refresh();
+    window.addEventListener(ARTIFACTS_CHANGED_EVENT, refresh);
+    const listening = listen<string>(ARTIFACT_DELETED_EVENT, ({ payload: id }) => {
+      if (!active) return;
+      deletedIds.add(id);
+      setPersistedArtifacts((current) => current.filter((c) => c.id !== id));
+    });
+    return () => {
+      active = false;
+      window.removeEventListener(ARTIFACTS_CHANGED_EVENT, refresh);
+      void listening.then((unlisten) => unlisten());
+    };
+  }, []);
+  const monoDocuments = useMemo(() => {
+    const cards = new Map<string, ArtifactCard>();
+    const currentMonoId = monoViewMono?.id;
+    for (const artifact of persistedArtifacts) {
+      if (!currentMonoId) continue;
+      const ownerMonoId = artifact.sourceSessionId
+        ? monoForSession(artifact.sourceSessionId)?.id ??
+          findMono(habitRunMono(artifact.sourceSessionId) ?? "")?.id
+        : undefined;
+      if (ownerMonoId === currentMonoId) {
+        cards.set(artifact.id, {
+          id: artifact.id,
+          kind: artifact.kind,
+          title: artifact.title,
+        });
+      }
+    }
+    if (monoViewBlocks) {
+      for (const card of artifactCards(monoViewBlocks)) cards.set(card.id, card);
+    }
+    return [...cards.values()];
+  }, [persistedArtifacts, monoViewMono?.id, monoViewBlocks]);
   const monoActivityView =
     monoViewSession && selectedMonoActivity ? (
       <MonoActivityView
