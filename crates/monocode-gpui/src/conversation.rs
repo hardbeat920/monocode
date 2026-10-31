@@ -227,6 +227,7 @@ pub(crate) struct Conversation {
     // pane rest the composer where it docks.
     beside_pane: bool,
     arcade: Option<Entity<crate::arcade::Arcade>>,
+    ink: Option<Entity<crate::ink_field::InkField>>,
     runner: Option<Entity<crate::composer_runner::Runner>>,
     cancel: Arc<AtomicBool>,
     title_cancel: Option<Arc<AtomicBool>>,
@@ -669,6 +670,7 @@ impl Conversation {
             narrow: false,
             beside_pane: false,
             arcade: None,
+            ink: None,
             runner: None,
             cancel: Arc::new(AtomicBool::new(false)),
             title_cancel: None,
@@ -3271,20 +3273,30 @@ impl Conversation {
     // where it will dock once a neighbouring pane squeezes it narrower than
     // the column. A narrow window alone keeps it centred.
     fn empty(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
-        let games = cx
+        // A chat background replaces the canvas; the ink only lives in motion.
+        let fill = cx
             .try_global::<crate::settings::Preferences>()
-            .is_none_or(|p| p.empty_session_games)
-            && cx
-                .try_global::<crate::settings::Preferences>()
-                .is_none_or(|p| p.chat_background.is_none());
-        let arcade = if games {
-            Some(
+            .map_or("ink", |p| {
+                if p.chat_background.is_some() {
+                    "none"
+                } else {
+                    p.empty_session.as_str()
+                }
+            });
+        let canvas_fill: Option<AnyElement> = match fill {
+            "games" => Some(
                 self.arcade
                     .get_or_insert_with(|| cx.new(crate::arcade::Arcade::new))
-                    .clone(),
-            )
-        } else {
-            None
+                    .clone()
+                    .into_any_element(),
+            ),
+            "ink" if !cx.reduce_motion() => Some(
+                self.ink
+                    .get_or_insert_with(|| cx.new(crate::ink_field::InkField::new))
+                    .clone()
+                    .into_any_element(),
+            ),
+            _ => None,
         };
         let this = cx.entity().downgrade();
         let narrow = self.narrow;
@@ -3294,7 +3306,7 @@ impl Conversation {
             .size_full()
             .flex()
             .justify_center()
-            .children(arcade)
+            .children(canvas_fill)
             .child(
                 canvas(
                     move |bounds, _, cx| {

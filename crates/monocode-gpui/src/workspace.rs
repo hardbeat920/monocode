@@ -415,11 +415,19 @@ impl Workspace {
             .unwrap_or_default();
         // Before the project rail returned, "classic" meant the boxy version
         // of the single-sidebar layout. Keep that appearance for existing users.
-        if let Some(saved) = saved.and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-            && saved.get("new_layout_boxy").is_none()
-        {
-            state.new_layout_boxy = state.classic_layout;
-            state.classic_layout = false;
+        if let Some(saved) = saved.and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()) {
+            if saved.get("new_layout_boxy").is_none() {
+                state.new_layout_boxy = state.classic_layout;
+                state.classic_layout = false;
+            }
+            // Keep the native empty-session choice when upgrading from the
+            // old games toggle. An explicitly saved new choice always wins.
+            let preferences = &saved["preferences"];
+            if preferences.get("empty_session").is_none()
+                && let Some(games) = preferences["empty_session_games"].as_bool()
+            {
+                state.preferences.empty_session = if games { "games" } else { "none" }.into();
+            }
         }
         let has_rail_state = saved
             .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
@@ -1131,6 +1139,33 @@ pub(crate) fn project_name(path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn legacy_empty_session_choices_survive_upgrade_and_new_choices_take_precedence() {
+        for (preferences, expected) in [
+            (serde_json::json!({}), "ink"),
+            (serde_json::json!({"empty_session_games": false}), "none"),
+            (serde_json::json!({"empty_session_games": true}), "games"),
+            (
+                serde_json::json!({"empty_session_games": false, "empty_session": "games"}),
+                "games",
+            ),
+            (
+                serde_json::json!({"empty_session_games": true, "empty_session": "none"}),
+                "none",
+            ),
+        ] {
+            let saved =
+                serde_json::json!({"preferences": preferences, "sidebar_width": 280.}).to_string();
+            let state = super::Workspace::restore(Some(&saved), &[], "/project");
+            assert_eq!(state.preferences.empty_session, expected);
+            assert_eq!(state.sidebar_width, 280.);
+            let saved = serde_json::to_string(&state).unwrap();
+            assert!(!saved.contains("empty_session_games"));
+            let reopened = super::Workspace::restore(Some(&saved), &[], "/project");
+            assert_eq!(reopened.preferences.empty_session, expected);
+        }
+    }
+
     #[test]
     fn rail_moves_stay_inside_their_section_and_follow_the_drawn_order() {
         let mut state = super::Workspace {
