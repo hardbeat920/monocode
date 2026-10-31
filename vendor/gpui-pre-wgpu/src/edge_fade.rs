@@ -113,30 +113,13 @@ impl EdgeFades {
         encoder: &mut wgpu::CommandEncoder,
     ) {
         let clipped = quad.bounds.intersect(&quad.content_mask.bounds);
-        let left = clipped
-            .left()
-            .0
-            .ceil()
-            .max(0.)
-            .min(self.frame.width() as f32) as u32;
-        let top = clipped
-            .top()
-            .0
-            .ceil()
-            .max(0.)
-            .min(self.frame.height() as f32) as u32;
-        let right = clipped
-            .right()
-            .0
-            .floor()
-            .max(0.)
-            .min(self.frame.width() as f32) as u32;
-        let bottom = clipped
-            .bottom()
-            .0
-            .floor()
-            .max(0.)
-            .min(self.frame.height() as f32) as u32;
+        // Include pixels whose centers lie inside the clipped bounds.
+        let pixel_edge =
+            |bound: f32, limit: u32| (bound - 0.5).ceil().clamp(0., limit as f32) as u32;
+        let left = pixel_edge(clipped.left().0, self.frame.width());
+        let top = pixel_edge(clipped.top().0, self.frame.height());
+        let right = pixel_edge(clipped.right().0, self.frame.width());
+        let bottom = pixel_edge(clipped.bottom().0, self.frame.height());
         let region = [
             left,
             top,

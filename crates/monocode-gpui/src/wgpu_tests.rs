@@ -328,3 +328,49 @@ fn edge_fade_anchors_ramps_to_original_bounds_when_clipped()
     });
     Ok(())
 }
+
+#[test]
+#[ignore = "requires a Vulkan or GLES device"]
+fn edge_fade_captures_pixel_centers_inside_fractional_bounds()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut renderer = WgpuHeadlessRenderer::new()?;
+    let size = device_size(32, 32);
+    let marker = solid_quad(4.3, 4.3, 23.4, 23.4, gpui::black());
+    let mut content = solid_quad(0., 0., 32., 32., gpui::red());
+    content.content_mask = marker.content_mask;
+
+    let mut before = Scene::default();
+    before.insert_primitive(solid_quad(0., 0., 32., 32., gpui::blue()));
+    before.finish();
+    let before = renderer.render_scene_to_image(&before, size)?;
+
+    let mut after = Scene::default();
+    after.insert_primitive(solid_quad(0., 0., 32., 32., gpui::blue()));
+    after.insert_primitive(content);
+    after.finish();
+    let after = renderer.render_scene_to_image(&after, size)?;
+
+    let mut scene = Scene::default();
+    scene.insert_primitive(solid_quad(0., 0., 32., 32., gpui::blue()));
+    scene.insert_primitive(fade_marker(
+        marker,
+        EdgeFade::Begin {
+            top: 8.,
+            bottom: 8.,
+        },
+    ));
+    scene.insert_primitive(content);
+    scene.insert_primitive(fade_marker(
+        marker,
+        EdgeFade::End {
+            top: 8.,
+            bottom: 8.,
+        },
+    ));
+    scene.finish();
+    let masked = renderer.render_scene_to_image(&scene, size)?;
+    assert_masked_pixels(&before, &after, &masked, |_, y| {
+        edge_coverage(y as f32 + 0.5 - 4.3, 23.4, 8., 8.)
+    });
+    Ok(())
+}
