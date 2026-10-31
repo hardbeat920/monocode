@@ -183,7 +183,7 @@ pub(crate) fn app_active(cx: &mut App) -> bool {
 }
 
 /// Whether any window is on screen: an inactive window can still be in view.
-fn app_visible(cx: &mut App) -> bool {
+pub(crate) fn app_visible(cx: &mut App) -> bool {
     cx.windows().into_iter().any(|window| {
         window
             .update(cx, |_, window, _| window.is_visible())

@@ -94,8 +94,10 @@ impl UsageFooter {
                     .await;
                 if this
                     .update(cx, |this, cx| {
-                        this.refresh(false, cx);
-                        cx.notify();
+                        if crate::pulse::app_visible(cx) {
+                            this.refresh(false, cx);
+                            cx.notify();
+                        }
                     })
                     .is_err()
                 {

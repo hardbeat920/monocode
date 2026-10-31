@@ -1,0 +1,84 @@
+{
+  "profile": "native-dev, perf-trace enabled",
+  "fixture": {
+    "sessions": 3000,
+    "transcript_rows": 2000,
+    "files": 20000,
+    "changed_files": 2000,
+    "added_lines": 500000
+  },
+  "first_present_ms": 951.994375,
+  "windows": {
+    "startup": {
+      "start_ms": 0,
+      "end_ms": 5000,
+      "draw_count": 13,
+      "draw_p95_ms": 64.14025,
+      "draw_max_ms": 64.14025,
+      "task_max_ms": 6.669208,
+      "input_max_ms": null,
+      "cpu_samples": 4,
+      "cpu_mean_percent": 16.526526336109356,
+      "cpu_median_percent": 14.146792425344843
+    },
+    "diff-load": {
+      "start_ms": 201100,
+      "end_ms": 209000,
+      "draw_count": 29,
+      "draw_p95_ms": 32.62975,
+      "draw_max_ms": 45.926958,
+      "task_max_ms": 14.059459,
+      "input_max_ms": 0.12354099999999998,
+      "cpu_samples": 8,
+      "cpu_mean_percent": 100.87029120211625,
+      "cpu_median_percent": 112.99112092673718
+    },
+    "scroll-sample": {
+      "start_ms": 309700,
+      "end_ms": 313000,
+      "draw_count": 5,
+      "draw_p95_ms": 22.399708,
+      "draw_max_ms": 22.399708,
+      "task_max_ms": null,
+      "input_max_ms": 0.199333,
+      "cpu_samples": 3,
+      "cpu_mean_percent": 6.623700250091794,
+      "cpu_median_percent": 6.2432878570862105
+    },
+    "quickopen-query": {
+      "start_ms": 376150,
+      "end_ms": 378000,
+      "draw_count": 12,
+      "draw_p95_ms": 10.545458,
+      "draw_max_ms": 10.545458,
+      "task_max_ms": null,
+      "input_max_ms": 10.437541999999999,
+      "cpu_samples": 2,
+      "cpu_mean_percent": 10.706825962655223,
+      "cpu_median_percent": 10.706825962655223
+    },
+    "idle": {
+      "start_ms": 397549.560917,
+      "end_ms": 517549.560917,
+      "draw_count": 20,
+      "draw_p95_ms": 32.085459,
+      "draw_max_ms": 33.25025,
+      "task_max_ms": 9.739832999999999,
+      "input_max_ms": null,
+      "cpu_samples": 116,
+      "cpu_mean_percent": 2.0958989506676664,
+      "cpu_median_percent": 1.7180889926064293
+    }
+  },
+  "lost_journal_entries": 0,
+  "limitations": [
+    "One instrumented development-build run; no live before baseline.",
+    "Draw durations exclude platform presentation and do not measure display hitch duration.",
+    "Foreground journal retains task polls above its internal threshold, not every task.",
+    "Scroll sample does not traverse the full transcript or prove session-list navigation.",
+    "Existing application databases remained unopened.",
+    "Five-minute single-agent and four-agent streams were not run.",
+    "Idle CPU is process CPU, with one fully occupied core equal to 100%; concurrent compilation affected machine load.",
+    "View durations in this capture include nested view work."
+  ]
+}

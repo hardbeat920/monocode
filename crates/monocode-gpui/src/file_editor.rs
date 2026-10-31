@@ -606,19 +606,24 @@ impl FileEditor {
         }));
     }
     fn schedule_analysis(&mut self, cx: &mut Context<Self>) {
-        let text = self.input.read(cx).content.clone();
-        let original = self.git_original.clone();
         let path = self.path.clone();
         let syntax = crate::editor_syntax::supports(&path).then(|| self.syntax.clone());
         self.analysis = Some(cx.spawn(async move |this, cx| {
-            // An incremental parse costs about a frame, so native analysis
-            // runs per edit. The QuickJS fallback reparses everything, so it
-            // waits for a pause in typing.
-            if syntax.is_none() {
-                cx.background_executor()
-                    .timer(Duration::from_millis(150))
-                    .await;
-            }
+            cx.background_executor()
+                .timer(Duration::from_millis(if syntax.is_some() {
+                    40
+                } else {
+                    150
+                }))
+                .await;
+            let Ok((text, original)) = this.update(cx, |this, cx| {
+                (
+                    Arc::<str>::from(this.input.read(cx).content.as_str()),
+                    this.git_original.as_deref().map(Arc::<str>::from),
+                )
+            }) else {
+                return;
+            };
             let source = text.clone();
             let base = original.clone();
             let work = cx.background_executor().spawn(async move {
@@ -631,7 +636,9 @@ impl FileEditor {
             });
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
-                if this.input.read(cx).content == text && this.git_original == original {
+                if this.input.read(cx).content.as_str() == text.as_ref()
+                    && this.git_original.as_deref() == original.as_deref()
+                {
                     match result {
                         Ok(analysis) => this
                             .input

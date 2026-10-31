@@ -18,7 +18,7 @@ pub(crate) fn checkout_branch(cwd: &str, branches: &mut HashMap<String, String>)
         return branch.clone();
     }
     let branch = head_branch(std::path::Path::new(cwd))
-        .or_else(|| crate::git_cache::get(cwd).and_then(|state| state.current))
+        .or_else(|| crate::git_cache::get(cwd).and_then(|state| state.current.clone()))
         .unwrap_or_default();
     branches.insert(key, branch.clone());
     branch

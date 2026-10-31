@@ -47,7 +47,10 @@ pub(crate) struct SearchView {
     logos: HashMap<String, String>,
     classic: bool,
     original_header: Option<f32>,
-    files: Vec<monocode_core::files::ProjectFile>,
+    files: Arc<search::FilenameIndex>,
+    filename_hits: Vec<Hit>,
+    filename_task: Option<Task<()>>,
+    filename_revision: u64,
     scope: Scope,
     query: String,
     hits: Vec<Hit>,
@@ -98,13 +101,14 @@ impl SearchView {
         let root = cwd.clone();
         let work = cx.background_executor().spawn(async move {
             monocode_core::files::list_project_files_sync_cancellable(&root, Some(&flag))
+                .map(search::FilenameIndex::new)
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
                 if let Ok(files) = result {
-                    this.files = files;
-                    this.rank(cx);
+                    this.files = Arc::new(files);
+                    this.rank_filenames(cx);
                 }
             });
         })
@@ -120,7 +124,10 @@ impl SearchView {
             logos: sources.logos,
             classic: sources.classic,
             original_header: None,
-            files: vec![],
+            files: Arc::default(),
+            filename_hits: vec![],
+            filename_task: None,
+            filename_revision: 0,
             scope: Scope::All,
             query: String::new(),
             hits: vec![],
@@ -230,6 +237,31 @@ impl SearchView {
             });
         }));
     }
+    fn rank_filenames(&mut self, cx: &mut Context<Self>) {
+        self.filename_revision = self.filename_revision.wrapping_add(1);
+        let revision = self.filename_revision;
+        self.filename_task = None;
+        self.filename_hits.clear();
+        self.rank(cx);
+        if self.query.is_empty() {
+            return;
+        }
+        let (files, query, recent) = (self.files.clone(), self.query.clone(), self.recent.clone());
+        let work = cx
+            .background_executor()
+            .spawn(async move { files.rank(&query, &recent) });
+        self.filename_task = Some(cx.spawn(async move |this, cx| {
+            let hits = work.await;
+            let _ = this.update(cx, |this, cx| {
+                if this.filename_revision == revision {
+                    this.filename_hits = hits;
+                    this.filename_task = None;
+                    this.rank(cx);
+                }
+            });
+        }));
+    }
+
     fn rank(&mut self, cx: &mut Context<Self>) {
         self.hits = if self.query.is_empty() {
             vec![]
@@ -239,7 +271,7 @@ impl SearchView {
                     .into_iter()
                     .chain(self.local.clone())
                     .chain(self.remote.clone())
-                    .chain(search::filenames(&self.files, &self.query, &self.recent))
+                    .chain(self.filename_hits.clone())
                     .chain(self.content.clone())
                     .chain(search::projects(&self.projects, &self.query)),
                 self.scope,
@@ -263,7 +295,7 @@ impl SearchView {
         self.truncated = (false, false);
         self.sessions_loading = !self.query.is_empty() && self.scope.sessions();
         self.files_loading = !self.query.is_empty() && self.scope.files();
-        self.rank(cx);
+        self.rank_filenames(cx);
         self.scroll.set_offset(point(px(0.), px(0.)));
         if self.query.is_empty() {
             return;

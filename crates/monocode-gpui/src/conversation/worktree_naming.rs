@@ -67,7 +67,7 @@ impl Conversation {
                 if let Some(git) = named {
                     crate::git_cache::remember(&cwd, &git);
                     this.branch = git.current.clone();
-                    this.git = Some(git);
+                    this.git = Some(Arc::new(git));
                     this.refresh_git(cx);
                     cx.emit(SessionChanged);
                     cx.notify();
