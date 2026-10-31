@@ -3,6 +3,7 @@
 //! CommitDiff.tsx load their files four at a time off the UI thread and
 //! build each diff there too; the view only lays out rows.
 use crate::{
+    browser_pane::{BrowserPane, ClosePane},
     diff_view::{DiffEvent, DiffFile, DiffView},
     file_editor::{FileEditor, FileEvent},
     file_icons::file_type_icon,
@@ -18,6 +19,7 @@ use gpui::{
     SharedString, Subscription, Task, Window, div, prelude::*, px, rgb,
 };
 use monocode_core::{
+    browser::protocol::TabId,
     diff,
     scm::{self, ChangedFile, FileDiff, FileDiffVersion},
 };
@@ -61,6 +63,12 @@ pub(crate) enum ReviewTab {
         session: i64,
         path: Option<String>,
     },
+    /// "Show in MonoCode": one of the session's browser tabs, live. It
+    /// lasts this run only: the tabs are gone when MonoCode restarts.
+    Browser {
+        session: i64,
+        tab: String,
+    },
 }
 impl ReviewTab {
     /// SurfaceTabs's `surfaceTabPresentation`.
@@ -92,6 +100,7 @@ impl ReviewTab {
                 }
             }
             Self::Session { .. } => "Session Changes".into(),
+            Self::Browser { .. } => "Browser".into(),
         }
     }
     /// `editorTabKey`: one Changes tab per checkout and side, one per commit.
@@ -121,6 +130,7 @@ impl ReviewTab {
                     cwd: b, session: y, ..
                 },
             ) => a == b && x == y,
+            (Self::Browser { tab: a, .. }, Self::Browser { tab: b, .. }) => a == b,
             _ => false,
         }
     }
@@ -159,6 +169,9 @@ struct Loaded {
 /// One tab's files and diffs.
 struct Source {
     tab: ReviewTab,
+    /// A browser tab's live pane.
+    browser: Option<Entity<BrowserPane>>,
+    _browser_events: Vec<Subscription>,
     view: Entity<DiffView>,
     editor: Option<Entity<FileEditor>>,
     editor_mode: bool,
@@ -404,6 +417,18 @@ impl ReviewPane {
             menu: None,
             _subscriptions: subscriptions,
         };
+        // Browser tabs belong to the run that showed them.
+        if this
+            .state
+            .tabs
+            .iter()
+            .any(|tab| matches!(tab, ReviewTab::Browser { .. }))
+        {
+            this.state
+                .tabs
+                .retain(|tab| !matches!(tab, ReviewTab::Browser { .. }));
+            this.state.active = 0;
+        }
         let tabs = this.state.tabs.clone();
         for tab in tabs {
             let source = this.source(tab, cx);
@@ -413,6 +438,30 @@ impl ReviewPane {
         this
     }
     fn source(&mut self, tab: ReviewTab, cx: &mut Context<Self>) -> Source {
+        let browser = match &tab {
+            ReviewTab::Browser { session, tab } => {
+                let (session, tab) = (*session, TabId(tab.clone()));
+                Some(cx.new(|cx| BrowserPane::new(session, tab, cx)))
+            }
+            _ => None,
+        };
+        let browser_events = browser
+            .iter()
+            .flat_map(|pane| {
+                [
+                    cx.subscribe(pane, |this, pane, _: &ClosePane, cx| {
+                        if let Some(ix) = this
+                            .sources
+                            .iter()
+                            .position(|s| s.browser.as_ref() == Some(&pane))
+                        {
+                            this.close_tab(ix, cx);
+                        }
+                    }),
+                    cx.observe(pane, |_, _, cx| cx.notify()),
+                ]
+            })
+            .collect();
         let cached = self.git.update(cx, |git, _| git.review_cache.take(&tab));
         let view = cached
             .as_ref()
@@ -475,6 +524,8 @@ impl ReviewPane {
             })
         });
         Source {
+            browser,
+            _browser_events: browser_events,
             editor_mode,
             editor,
             _editor_events: editor_events,
@@ -953,7 +1004,7 @@ impl ReviewPane {
         let Some(source) = self.sources.get_mut(ix) else {
             return;
         };
-        if source.editor_mode && source.editor.is_some() {
+        if source.editor_mode && source.editor.is_some() || source.browser.is_some() {
             return;
         }
         if source.complete && matches!(source.tab, ReviewTab::Commit { .. }) {
@@ -977,7 +1028,7 @@ impl ReviewPane {
             let tab = tab.clone();
             async move {
                 match &tab {
-                    ReviewTab::File { .. } => unreachable!(),
+                    ReviewTab::File { .. } | ReviewTab::Browser { .. } => unreachable!(),
                     ReviewTab::Changes { cwd, .. } => {
                         let root = PathBuf::from(cwd);
                         let index = scm::review_index(&root, known_index.as_ref())?;
@@ -1005,7 +1056,7 @@ impl ReviewPane {
                     Ok((files, versions)) => {
                         source.error = None;
                         let order: Vec<(String, Option<bool>, ChangedFile)> = match &tab {
-                            ReviewTab::File { .. } => unreachable!(),
+                            ReviewTab::File { .. } | ReviewTab::Browser { .. } => unreachable!(),
                             ReviewTab::Changes { path, staged, .. } => {
                                 let mut entries: Vec<_> = entries(&files, *staged)
                                     .into_iter()
@@ -1103,7 +1154,9 @@ impl ReviewPane {
                             .background_executor()
                             .spawn(async move {
                                 let diff = match &tab {
-                                    ReviewTab::File { .. } => unreachable!(),
+                                    ReviewTab::File { .. } | ReviewTab::Browser { .. } => {
+                                        unreachable!()
+                                    }
                                     ReviewTab::Changes { cwd, .. } => scm::file_diff(
                                         &PathBuf::from(cwd),
                                         &relative,
@@ -1214,7 +1267,7 @@ impl ReviewPane {
             return;
         };
         let models: Vec<DiffFile> = match &source.tab {
-            ReviewTab::File { .. } => return,
+            ReviewTab::File { .. } | ReviewTab::Browser { .. } => return,
             ReviewTab::Changes { staged, .. } => entries(files, *staged)
                 .into_iter()
                 .map(|(id, kind, file)| {
@@ -1333,7 +1386,7 @@ impl ReviewPane {
             .iter()
             .fold((0, 0), |(a, d), f| (a + f.additions, d + f.deletions));
         let (focus, file_count) = match &source.tab {
-            ReviewTab::File { .. } => return,
+            ReviewTab::File { .. } | ReviewTab::Browser { .. } => return,
             ReviewTab::Changes { path, staged, .. } => (
                 path.as_ref().and_then(|p| {
                     entries(files, *staged)
@@ -1620,7 +1673,10 @@ impl ReviewPane {
                 let active = ix == self.state.active;
                 let hovered = self.hovered_tab == Some(ix);
                 let preview = matches!(&source.tab, ReviewTab::File { path, .. } if self.preview_path.as_ref() == Some(path));
-                let label: SharedString = source.tab.label().into();
+                let label: SharedString = match &source.browser {
+                    Some(pane) => pane.read(cx).title().into(),
+                    None => source.tab.label().into(),
+                };
                 div()
                     .id(("review-tab", ix))
                     .relative()
@@ -1692,7 +1748,14 @@ impl ReviewPane {
                             .child(if let ReviewTab::File { .. } = &source.tab {
                                 file_type_icon(label.as_ref(), false, false, 14.)
                             } else {
-                                icon("git-compare", 14.)
+                                icon(
+                                    if source.browser.is_some() {
+                                        "globe"
+                                    } else {
+                                        "git-compare"
+                                    },
+                                    14.,
+                                )
                                     .text_color(if active || hovered {
                                         content(1.)
                                     } else {
@@ -1799,6 +1862,13 @@ impl Render for ReviewPane {
         let body: AnyElement = match self.sources.get(self.state.active) {
             None => div().into_any_element(),
             Some(_) if self.deferred => div().into_any_element(),
+            Some(source) if source.browser.is_some() => {
+                let pane = source.browser.as_ref().unwrap();
+                if self.focus.is_focused(window) {
+                    window.focus(&pane.focus_handle(cx), cx);
+                }
+                pane.clone().into_any_element()
+            }
             Some(source) if source.editor_mode && source.editor.is_some() => {
                 let editor = source.editor.as_ref().unwrap();
                 if self.focus.is_focused(window) {
@@ -1812,6 +1882,7 @@ impl Render for ReviewPane {
                     | ReviewTab::Changes { cwd, .. }
                     | ReviewTab::Commit { cwd, .. }
                     | ReviewTab::Session { cwd, .. } => cwd,
+                    ReviewTab::Browser { .. } => unreachable!("drawn by its pane"),
                 };
                 if cwd.is_empty() || cwd == "~" {
                     centered()
@@ -1832,6 +1903,7 @@ impl Render for ReviewPane {
                                     "Couldn’t load changes"
                                 }
                                 ReviewTab::Commit { .. } => "Couldn’t load commit",
+                                ReviewTab::Browser { .. } => "Couldn’t show the tab",
                             },
                         ))
                         .child(

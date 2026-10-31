@@ -9,6 +9,8 @@ mod app_menu;
 mod arcade;
 mod assets;
 mod automations;
+mod browser;
+mod browser_pane;
 mod changes;
 mod composer_completion;
 mod composer_motion;
@@ -322,6 +324,11 @@ fn main() {
             .unwrap_or(std::path::Path::new("."))
             .join("checkpoints"),
     );
+    // The browser module is the process's: its database and the MonoCode
+    // browser's profiles sit next to the app's database.
+    if let Err(error) = monocode_core::browser::start(database.parent()) {
+        eprintln!("Browser module unavailable: {error}");
+    }
     let saved = db.ui_state().unwrap_or_else(|e| {
         eprintln!("Cannot read workspace settings: {e}");
         None
@@ -495,6 +502,12 @@ fn main() {
                             })
                             .detach();
                     });
+                    browser::install(cx);
+                    cx.on_app_quit(|cx| {
+                        cx.background_executor()
+                            .spawn(async { monocode_core::browser::shutdown() })
+                    })
+                    .detach();
                     let shell = cx.new(|cx| {
                         shell::Shell::new_with_metadata(
                             db,

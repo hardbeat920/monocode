@@ -13,6 +13,7 @@ pub(crate) enum Section {
     Chat,
     Providers,
     Mcp,
+    Browser,
     Skills,
     Monos,
     Inbox,
@@ -36,6 +37,7 @@ pub(crate) const GROUPS: [(&str, &[Section]); 3] = [
             Section::Chat,
             Section::Providers,
             Section::Mcp,
+            Section::Browser,
             Section::Skills,
             Section::Monos,
         ],
@@ -47,7 +49,7 @@ pub(crate) const GROUPS: [(&str, &[Section]); 3] = [
 ];
 
 impl Section {
-    pub(crate) const ALL: [Section; 12] = [
+    pub(crate) const ALL: [Section; 13] = [
         Section::General,
         Section::Connections,
         Section::Appearance,
@@ -55,6 +57,7 @@ impl Section {
         Section::Chat,
         Section::Providers,
         Section::Mcp,
+        Section::Browser,
         Section::Skills,
         Section::Monos,
         Section::Inbox,
@@ -70,6 +73,7 @@ impl Section {
             Section::Chat => "chat",
             Section::Providers => "providers",
             Section::Mcp => "mcp",
+            Section::Browser => "browser",
             Section::Skills => "skills",
             Section::Monos => "monos",
             Section::Inbox => "inbox",
@@ -86,6 +90,7 @@ impl Section {
             Section::Chat => "Chat",
             Section::Providers => "Providers",
             Section::Mcp => "MCP",
+            Section::Browser => "Browser",
             Section::Skills => "Skills",
             Section::Monos => "Monos",
             Section::Inbox => "Inbox",
@@ -112,6 +117,9 @@ impl Section {
                 "Provider accounts, agent CLIs MonoCode can drive, and the model new sessions start with."
             }
             Section::Mcp => "Find MCP servers across providers and manage their connections.",
+            Section::Browser => {
+                "Let agents open their own tabs in a Chromium browser, ask before they do, and see what they opened."
+            }
             Section::Skills => {
                 "Discover and manage file skills from project, personal, and harness folders."
             }
@@ -140,6 +148,9 @@ impl Section {
             Section::Mcp => {
                 "tools servers connections oauth authenticate login claude codex cursor opencode"
             }
+            Section::Browser => {
+                "browser chrome edge brave vivaldi opera arc tabs web page agent access allow ask private profile cdp"
+            }
             Section::Skills => "skill instructions prompt",
             Section::Monos => "mono resident agent mascot claim project title bar",
             Section::Inbox => {
@@ -159,6 +170,7 @@ impl Section {
             Section::Chat => "message-square",
             Section::Providers => "bot",
             Section::Mcp => "globe",
+            Section::Browser => "internet",
             Section::Skills => "sparkles",
             Section::Monos => "ghost",
             Section::Inbox => "inbox-hi",

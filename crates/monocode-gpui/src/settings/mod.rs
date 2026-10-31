@@ -58,6 +58,9 @@ pub(crate) struct SettingsContext {
     /// Projects the Worktrees, Providers and Inbox pages offer.
     pub projects: Vec<(String, String)>,
     pub sessions: Vec<(i64, String, bool)>,
+    /// The threads and Mono chats Settings → Browser names, by the browser
+    /// module's session key, in the rail's order.
+    pub browser_names: Vec<(String, String)>,
     pub quick_error: Option<String>,
     pub catalogs: HashMap<String, Vec<(String, String)>>,
     pub inbox_connections: HashMap<String, (bool, String)>,
@@ -82,6 +85,7 @@ impl PartialEq for SettingsContext {
             && self.archived_projects == other.archived_projects
             && self.projects == other.projects
             && self.sessions == other.sessions
+            && self.browser_names == other.browser_names
             && self.quick_error == other.quick_error
             && self.catalogs == other.catalogs
             && self.inbox_connections == other.inbox_connections
@@ -253,6 +257,7 @@ pub(crate) struct SettingsView {
     accent_custom_open: bool,
     accent_anchor: AnchorSlot,
     mobile: pages::MobileState,
+    browser: pages::BrowserPageState,
     _subscriptions: Vec<Subscription>,
 }
 impl EventEmitter<SettingsEvent> for SettingsView {}
@@ -322,6 +327,9 @@ impl SettingsView {
         if let Some(center) = crate::accounts::get(cx) {
             subscriptions.push(cx.observe(&center, |_, _, cx| cx.notify()));
         }
+        if let Some(browser) = crate::browser::get(cx) {
+            subscriptions.push(cx.observe(&browser, |_, _, cx| cx.notify()));
+        }
         let recorder = cx.weak_entity();
         subscriptions.push(cx.intercept_keystrokes(move |event, window, cx| {
             let _ = recorder.update(cx, |this, cx| {
@@ -388,6 +396,7 @@ impl SettingsView {
             accent_custom_open: false,
             accent_anchor: AnchorSlot::default(),
             mobile: pages::MobileState::default(),
+            browser: pages::BrowserPageState::default(),
             _subscriptions: subscriptions,
         };
         this.watch_mobile(cx);

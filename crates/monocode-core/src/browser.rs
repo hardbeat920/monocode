@@ -20,16 +20,20 @@ use monocode_browser::agent::register::{self, Tools};
 use monocode_browser::agent::server_binary;
 use monocode_browser::protocol::{ENV_ENDPOINT, ENV_TOKEN};
 use monocode_browser::turn::TurnAccess;
-use monocode_browser::{BrowserHost, Embedder};
+pub use monocode_browser::BrowserHost;
+use monocode_browser::Embedder;
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
 use crate::provider::Kind;
 
+mod live_pane;
+pub use live_pane::{queue_input, Ended, LivePane};
+
 pub use monocode_browser::protocol::{
     AccessMode, BrowserMode, BrowserSettings, BrowserState, ConnectionState, TabOverview,
 };
-pub use monocode_browser::{devservers, live, pick, protocol, targets, turn};
+pub use monocode_browser::{devservers, live, pick, protocol, targets, turn, view};
 
 /// The window grants and requests belong to: Native has one main window.
 pub const WINDOW: &str = "main";
@@ -328,8 +332,70 @@ pub fn run_subcommand(args: &[String]) -> Option<i32> {
     }
 }
 
+/// One picture of a tab shown live, decoded for drawing.
+pub struct LivePicture {
+    /// Counts the pictures of one view, from 1.
+    pub seq: u64,
+    /// The page's viewport in CSS pixels: input coordinates are in this
+    /// space, whatever the picture's own size.
+    pub width: f64,
+    pub height: f64,
+    /// The picture, BGRA as GPUI draws it.
+    pub pixels: image::RgbaImage,
+}
+
+/// Decode a picture [`BrowserHost::live_take`] handed over
+/// ([`live::LiveFrame::packed`]).
+pub fn unpack_live(packed: &[u8]) -> Result<LivePicture, String> {
+    if packed.len() <= live::PACKED_HEADER {
+        return Err("The picture is empty.".into());
+    }
+    let word = |at: usize| -> [u8; 8] { packed[at..at + 8].try_into().unwrap_or_default() };
+    let seq = u32::from_le_bytes(packed[4..8].try_into().unwrap_or_default());
+    let format = if packed[0] == 1 {
+        image::ImageFormat::Png
+    } else {
+        image::ImageFormat::Jpeg
+    };
+    let mut pixels = image::load_from_memory_with_format(&packed[live::PACKED_HEADER..], format)
+        .map_err(|error| error.to_string())?
+        .into_rgba8();
+    for pixel in pixels.pixels_mut() {
+        pixel.0.swap(0, 2);
+    }
+    Ok(LivePicture {
+        seq: u64::from(seq),
+        width: f64::from_le_bytes(word(8)),
+        height: f64::from_le_bytes(word(16)),
+        pixels,
+    })
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_live_picture_unpacks_to_bgra_with_its_viewport() {
+        use base64::Engine as _;
+        let mut png = Vec::new();
+        image::RgbaImage::from_pixel(3, 2, image::Rgba([10, 20, 30, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let frame = live::LiveFrame {
+            tab: "t1".into(),
+            data: base64::engine::general_purpose::STANDARD.encode(&png),
+            format: "png",
+            width: 1.5,
+            height: 1.0,
+            seq: 7,
+        };
+        let picture = unpack_live(&frame.packed().unwrap()).unwrap();
+        assert_eq!(picture.seq, 7);
+        assert_eq!((picture.width, picture.height), (1.5, 1.0));
+        assert_eq!(picture.pixels.dimensions(), (3, 2));
+        assert_eq!(picture.pixels.get_pixel(0, 0).0, [30, 20, 10, 255]);
+        assert!(unpack_live(&[0; 4]).is_err());
+    }
+
     use super::*;
 
     fn environment() -> HashMap<String, String> {

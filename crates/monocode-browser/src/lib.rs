@@ -90,6 +90,7 @@ pub(crate) mod testing;
 pub mod transport;
 pub mod turn;
 mod util;
+pub mod view;
 
 pub use embedder::Embedder;
 

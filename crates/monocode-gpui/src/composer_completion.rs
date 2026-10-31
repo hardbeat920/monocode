@@ -1211,6 +1211,7 @@ mod tests {
                         "/stage",
                         "/commit",
                         "/visualize",
+                        "/browser",
                         "/alpha",
                         "/zebra",
                     ]
