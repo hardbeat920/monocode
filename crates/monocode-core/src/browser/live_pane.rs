@@ -334,7 +334,28 @@ fn send_inputs(shared: &Shared) {
         if shared.stopping.load(Ordering::Acquire) {
             return;
         }
-        if let Err(error) = shared.host.live_input(&shared.session, &shared.tab, &input) {
+        let started = Instant::now();
+        let sent = shared.host.live_input(&shared.session, &shared.tab, &input);
+        // A development build notes each press and release: where it went,
+        // and whether the page took it.
+        if let LiveInput::Mouse {
+            event: event @ (MouseEvent::Pressed | MouseEvent::Released),
+            x,
+            y,
+            buttons,
+            click_count,
+            ..
+        } = &input
+        {
+            if cfg!(debug_assertions) {
+                eprintln!(
+                    "[live] pane {event:?} at {x},{y} buttons {buttons} clicks {click_count}: {} in {} ms",
+                    sent.as_ref().map_or_else(|e| e.as_str(), |_| "taken"),
+                    started.elapsed().as_millis()
+                );
+            }
+        }
+        if let Err(error) = sent {
             *shared.input_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(error);
         }
     }

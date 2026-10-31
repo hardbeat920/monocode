@@ -52,6 +52,9 @@ pub(crate) struct BrowserPane {
     url: String,
     /// A blank tab the user just opened: the address field takes the keys.
     focus_address: bool,
+    /// Out of sight (another tab of the pane shows): the view stops, and
+    /// starts again by itself when the pane shows, from the last picture.
+    paused: bool,
     _pull: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -269,6 +272,7 @@ impl BrowserPane {
             title: String::new(),
             url: String::new(),
             focus_address: blank,
+            paused: false,
             _pull: None,
             _subscriptions: subscriptions,
         };
@@ -309,6 +313,14 @@ impl BrowserPane {
     }
 
     /// Start the view once the pane has a size; follow later sizes.
+    /// The pane went out of sight: stop its view until it shows again.
+    pub(crate) fn pause(&mut self) {
+        if self.live.take().is_some() {
+            self._pull = None;
+            self.paused = true;
+        }
+    }
+
     fn sync_size(&mut self, window: &Window, cx: &mut Context<Self>) {
         let Some(bounds) = self.stage.get() else {
             return;
@@ -318,6 +330,11 @@ impl BrowserPane {
             bounds.size.height.as_f32().round() as u32,
             f64::from(window.scale_factor()),
         );
+        if std::mem::take(&mut self.paused) && self.ended.is_none() {
+            self.size = Some(size);
+            self.start(size, cx);
+            return;
+        }
         if self.size == Some(size) {
             return;
         }

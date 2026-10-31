@@ -626,6 +626,17 @@ impl ReviewPane {
         })
         .detach();
     }
+    /// Browser tabs out of sight stop their live view; each starts again by
+    /// itself when its tab shows.
+    fn pause_hidden_browsers(&self, cx: &mut Context<Self>) {
+        for (ix, source) in self.sources.iter().enumerate() {
+            if let Some(pane) = &source.browser
+                && (ix != self.state.active || !self.visible)
+            {
+                pane.update(cx, |pane, _| pane.pause());
+            }
+        }
+    }
     /// The thread whose browser tab the + beside the tabs opens a new one
     /// for: the active tab's, else the last browser tab's.
     fn browser_session(&self) -> Option<i64> {
@@ -1003,6 +1014,7 @@ impl ReviewPane {
                 source.cancel();
             }
         }
+        self.pause_hidden_browsers(cx);
         for (ix, source) in self.sources.iter_mut().enumerate() {
             if ix != self.state.active && source.loading {
                 source.cancel();
@@ -1920,6 +1932,7 @@ async fn futures_join_all(workers: Vec<impl std::future::Future<Output = ()>>) {
 
 impl Render for ReviewPane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.pause_hidden_browsers(cx);
         if std::mem::take(&mut self.retiring_focus)
             .iter()
             .any(|handle| handle.contains_focused(window, cx))

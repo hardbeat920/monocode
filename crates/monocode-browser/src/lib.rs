@@ -310,7 +310,8 @@ pub struct BrowserHost {
     /// Cancels the element pick running now, if any (one at a time).
     picking: Mutex<Option<Arc<AtomicBool>>>,
     /// Stops the live view running now, if any (one at a time).
-    live: Mutex<Option<Arc<live::LiveControl>>>,
+    /// The live views running now, at most one per tab.
+    live: Mutex<Vec<Arc<live::LiveControl>>>,
     /// Tests: the browser counts as a hidden MonoCode browser, whose windows
     /// the live view may resize.
     #[cfg(test)]
@@ -398,7 +399,7 @@ impl BrowserHost {
             hidden_for_tests: AtomicBool::new(false),
             startup_pages: Mutex::new(Vec::new()),
             picking: Mutex::new(None),
-            live: Mutex::new(None),
+            live: Mutex::new(Vec::new()),
             inflight: Mutex::new(HashMap::new()),
             commands: Mutex::new(()),
             #[cfg(test)]
@@ -1897,8 +1898,9 @@ impl BrowserHost {
     }
 
     /// "Show in MonoCode": stream pictures of `tab`, one of `session`'s tabs,
-    /// to `sink` until [`Self::stop_live`], another view, or the tab is gone.
-    /// Blocks while the view runs.
+    /// to `sink` until [`Self::stop_live`], another view of the same tab, or
+    /// the tab is gone. Views of different tabs run side by side. Blocks
+    /// while the view runs.
     pub fn live_view(
         &self,
         session: &str,
@@ -1913,11 +1915,15 @@ impl BrowserHost {
         let mut target = self.held_tab(session, tab)?;
         target.window = self.own_window(&target.target);
         let control = Arc::new(live::LiveControl::new(view.to_string(), tab.clone()));
-        let previous = self
-            .live
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .replace(control.clone());
+        let previous = {
+            let mut running = self.live.lock().unwrap_or_else(|e| e.into_inner());
+            let previous = running
+                .iter()
+                .position(|c| c.tab == *tab || c.view == view)
+                .map(|ix| running.remove(ix));
+            running.push(control.clone());
+            previous
+        };
         if let Some(previous) = previous {
             previous.stop();
             previous.wait_finished(Duration::from_secs(2));
@@ -1932,9 +1938,7 @@ impl BrowserHost {
         control.finish();
         {
             let mut running = self.live.lock().unwrap_or_else(|e| e.into_inner());
-            if running.as_ref().is_some_and(|c| Arc::ptr_eq(c, &control)) {
-                *running = None;
-            }
+            running.retain(|c| !Arc::ptr_eq(c, &control));
         }
         outcome
     }
@@ -1989,35 +1993,49 @@ impl BrowserHost {
             .live
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .clone()
-            .filter(|control| control.tab == *tab)?;
+            .iter()
+            .find(|control| control.tab == *tab)
+            .cloned()?;
         Some(control.hold())
     }
 
-    /// Stop the live view running now, if it is `view` (any view without
-    /// one). A pane that goes away stops only its own view, never the one a
-    /// newer pane started, even for the same tab (a pane moved in the
-    /// layout is a new pane while the old one animates out).
+    /// Stop the live view `view`, if it runs (every view without one). A
+    /// pane that goes away stops only its own view, never the one a newer
+    /// pane started, even for the same tab (a pane moved in the layout is a
+    /// new pane while the old one animates out).
     pub fn stop_live(&self, view: Option<&str>) {
-        let mut running = self.live.lock().unwrap_or_else(|e| e.into_inner());
-        if view.is_some_and(|view| running.as_ref().is_some_and(|c| c.view != view)) {
-            return;
-        }
-        if let Some(control) = running.take() {
+        let stopped: Vec<_> = {
+            let mut running = self.live.lock().unwrap_or_else(|e| e.into_inner());
+            match view {
+                Some(view) => running
+                    .iter()
+                    .position(|c| c.view == view)
+                    .map(|ix| running.remove(ix))
+                    .into_iter()
+                    .collect(),
+                None => running.drain(..).collect(),
+            }
+        };
+        for control in stopped {
             control.stop();
         }
+    }
+
+    /// The running view named `view`.
+    fn live_control(&self, view: &str) -> Option<Arc<live::LiveControl>> {
+        self.live
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .find(|c| c.view == view)
+            .cloned()
     }
 
     /// The next picture for the pane of `view`: the newest one after
     /// `after`, waiting up to [`live::PULL_WAIT`] for it. Empty when none
     /// came in time or the view is over; the pane asks again while it shows.
     pub fn live_take(&self, view: &str, after: u64) -> Vec<u8> {
-        let control = self
-            .live
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-            .filter(|c| c.view == view);
+        let control = self.live_control(view);
         if control.is_none() && cfg!(debug_assertions) {
             eprintln!("[live] the panel asked for a picture of a view that is not running");
         }
@@ -2028,8 +2046,7 @@ impl BrowserHost {
 
     /// The pane of `view` changed size: its view follows it.
     pub fn resize_live(&self, view: &str, size: live::PanelSize) {
-        let running = self.live.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(control) = running.as_ref().filter(|c| c.view == view) {
+        if let Some(control) = self.live_control(view) {
             control.resize(size);
         }
     }
@@ -2057,8 +2074,8 @@ impl BrowserHost {
             .live
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .as_ref()
-            .filter(|control| control.tab == *tab)
+            .iter()
+            .find(|control| control.tab == *tab)
         {
             control.touch();
         }
@@ -4001,7 +4018,7 @@ mod tests {
         let opened = host.handle_request(
             session,
             request(
-                "open",
+                &format!("open {url}"),
                 "tabs.open",
                 json!({ "url": url, "snapshot": false }),
             ),
@@ -4280,6 +4297,60 @@ mod tests {
             .position(|r| r.method == "Emulation.setDeviceMetricsOverride")
             .expect("the pane's viewport again");
         assert_eq!(resumed[metrics].params["width"], 640);
+    }
+
+    #[test]
+    fn views_of_two_tabs_run_side_by_side() {
+        let server = screencast_fake(0);
+        let dir = profile_for(&server);
+        let host = BrowserHost::for_tests(settings_for(&dir));
+        host.set_toggle(true);
+        assert!(wait_state(&host, ConnectionState::Connected));
+        host.turn_started("s1", "main", "/repo", Some(true));
+        let first = opened_tab(&host, "s1", "https://example.com/a");
+        let second = opened_tab(&host, "s1", "https://example.com/b");
+        assert_ne!(first, second);
+        let view = |name: &'static str, tab: &TabId| {
+            let (host, tab) = (host.clone(), tab.clone());
+            thread::spawn(move || {
+                host.live_view(
+                    "s1",
+                    &tab,
+                    name,
+                    live::PanelSize::new(640, 480, 1.0),
+                    |_| {},
+                )
+            })
+        };
+        let started = |count: usize| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while server
+                .received()
+                .iter()
+                .filter(|r| r.method == "Page.startScreencast")
+                .count()
+                < count
+            {
+                assert!(Instant::now() < deadline, "a view never started");
+                thread::sleep(Duration::from_millis(5));
+            }
+        };
+        let a = view("a", &first);
+        started(1);
+        let b = view("b", &second);
+        started(2);
+        thread::sleep(Duration::from_millis(250));
+        assert!(
+            !a.is_finished(),
+            "another tab's view leaves this one running"
+        );
+        host.stop_live(Some("b"));
+        assert_eq!(b.join().unwrap(), Ok(live::LiveEnd::Stopped));
+        thread::sleep(Duration::from_millis(100));
+        assert!(!a.is_finished());
+        host.stop_live(None);
+        assert_eq!(a.join().unwrap(), Ok(live::LiveEnd::Stopped));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -5496,6 +5567,131 @@ mod tests {
         assert!(eventually(|| launch::running(&dir).is_none()));
         let _ = std::fs::remove_dir_all(&dir);
         assert!(pictures > 20, "the view fell behind the wheel");
+    }
+
+    /// A link clicked through the live view, as the pane clicks it: once
+    /// still, once with the hand moving 5 px while pressed (which Edge on
+    /// Windows can take for a link drag). Prints what each opened.
+    /// `cargo test -- --ignored live_clicks_open_links --nocapture`.
+    #[test]
+    #[ignore = "starts the Chrome or Edge installed on this machine"]
+    fn live_clicks_open_links() {
+        use std::io::{Read as _, Write as _};
+        let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = server.local_addr().unwrap().port();
+        let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+        {
+            let asked = asked.clone();
+            thread::spawn(move || {
+                for mut stream in server.incoming().flatten() {
+                    let mut buf = [0u8; 2048];
+                    let n = stream.read(&mut buf).unwrap_or(0);
+                    let line = String::from_utf8_lossy(&buf[..n]);
+                    let path = line.split_whitespace().nth(1).unwrap_or("/").to_string();
+                    asked.lock().unwrap().push(path.clone());
+                    let body = if path == "/" {
+                        "<!doctype html><title>start</title><body style='margin:0'>\
+                         <a id=one href='/one' style='position:absolute;left:100px;top:100px;font:40px sans-serif'>One</a>\
+                         <a id=two href='/two' style='position:absolute;left:100px;top:300px;font:40px sans-serif'>Two</a>"
+                            .to_string()
+                    } else {
+                        format!("<!doctype html><title>{path}</title><a href='/'>back</a>")
+                    };
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                }
+            });
+        }
+        let dir = std::env::temp_dir().join(format!("monocode-click-{}", uuid::Uuid::new_v4()));
+        let host = BrowserHost::for_tests(BrowserSettings {
+            access: AccessMode::Always,
+            show_window: false,
+            ..BrowserSettings::default()
+        });
+        host.set_profile_dir(dir.clone());
+        host.set_toggle(true);
+        host.turn_started("s1", "main", "/repo", Some(true));
+        let start = format!("http://127.0.0.1:{port}/");
+        let opened = host.handle_request("s1", request("c1", "tabs.open", json!({ "url": start })));
+        assert_eq!(opened.outcome, Outcome::Done, "{opened:?}");
+        let tab = TabId(opened.data.unwrap()["tab"].as_str().unwrap().to_string());
+        let viewer = {
+            let (host, tab) = (host.clone(), tab.clone());
+            thread::spawn(move || {
+                host.live_view(
+                    "s1",
+                    &tab,
+                    "click",
+                    live::PanelSize::new(800, 600, 1.0),
+                    |_| {},
+                )
+            })
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while host.live_take("click", 0).is_empty() {
+            assert!(Instant::now() < deadline, "no first picture");
+        }
+        let mouse = |event, x: f64, y: f64, button, buttons| live::LiveInput::Mouse {
+            event,
+            x,
+            y,
+            button,
+            buttons,
+            click_count: u32::from(event != live::MouseEvent::Moved),
+            modifiers: 0,
+        };
+        let click = |name: &str, x: f64, y: f64, shake: f64| {
+            use live::{MouseButton as B, MouseEvent as E};
+            let send = |input| host.live_input("s1", &tab, &input).unwrap();
+            for step in 0..5 {
+                send(mouse(
+                    E::Moved,
+                    x - 20.0 + 4.0 * f64::from(step),
+                    y,
+                    B::None,
+                    0,
+                ));
+                thread::sleep(Duration::from_millis(16));
+            }
+            send(mouse(E::Moved, x, y, B::None, 0));
+            send(mouse(E::Pressed, x, y, B::Left, 1));
+            if shake > 0.0 {
+                for step in 1..=5 {
+                    let d = shake * f64::from(step) / 5.0;
+                    send(mouse(E::Moved, x + d, y + d / 2.0, B::None, 1));
+                    thread::sleep(Duration::from_millis(16));
+                }
+            }
+            thread::sleep(Duration::from_millis(60));
+            send(mouse(E::Released, x + shake, y + shake / 2.0, B::Left, 0));
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let path = format!("/{name}");
+            while Instant::now() < deadline && !asked.lock().unwrap().contains(&path) {
+                thread::sleep(Duration::from_millis(20));
+            }
+            let opened = asked.lock().unwrap().contains(&path);
+            println!(
+                "[click] {name} (moved {shake} px while pressed): {}",
+                if opened { "opened" } else { "DID NOT open" }
+            );
+            opened
+        };
+        let still = click("one", 130.0, 125.0, 0.0);
+        // Back to the start page for the second link.
+        host.live_navigate("s1", &tab, &live::LiveNav::Go { url: start.clone() })
+            .unwrap();
+        thread::sleep(Duration::from_millis(800));
+        let shaking = click("two", 130.0, 325.0, 5.0);
+        host.stop_live(Some("click"));
+        let _ = viewer.join();
+        host.set_toggle(false);
+        assert!(eventually(|| launch::running(&dir).is_none()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(still, "a still click opens a link");
+        let _ = shaking;
     }
 
     /// Private mode against the installed browser: every start gets a fresh
