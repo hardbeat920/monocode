@@ -1,5 +1,6 @@
 //! Port of src/features/settings/ui/BrowserSettings.tsx: the switch, which
 //! browser agents use, the connection, and the threads holding tabs.
+use crate::input::{self, Input};
 use crate::{
     settings::{
         SettingsView,
@@ -7,11 +8,11 @@ use crate::{
     },
     theme::*,
 };
-use gpui::{AnyElement, Context, FontWeight, SharedString, Task, div, prelude::*, px, rgb};
+use gpui::{AnyElement, Context, Entity, FontWeight, SharedString, Task, div, prelude::*, px, rgb};
 use monocode_core::browser::{
     protocol::{
-        AccessMode, BrowserChoice, BrowserKind, BrowserMode, BrowserSettings, BrowserState,
-        ConnectionState, TabId, TabOverview, TabState,
+        AccessMode, AuditEntry, BrowserChoice, BrowserKind, BrowserMode, BrowserSettings,
+        BrowserState, ConnectionState, Limits, Outcome, TabId, TabOverview, TabState,
     },
     targets::FreeTab,
     view::{self, Action, Tone, tab_host},
@@ -32,6 +33,62 @@ pub(in crate::settings) struct BrowserPageState {
     give_to: String,
     error: Option<String>,
     _load: Option<Task<()>>,
+    /// Activity: the last actions, the thread and outcome shown, and
+    /// whether Clear waits for its confirmation.
+    audit: Option<Vec<AuditEntry>>,
+    audit_session: String,
+    audit_outcome: String,
+    confirm_clear: bool,
+    _audit: Option<Task<()>>,
+    /// Advanced → Limits: the fields, and the save a pause in typing makes.
+    limits: Vec<(&'static str, Entity<Input>)>,
+    _limit_save: Option<Task<()>>,
+}
+
+/// The limits Advanced edits: key, label and largest value.
+const LIMIT_FIELDS: [(&str, &str, u32); 3] = [
+    ("tabs_per_session", "Tabs per thread", 64),
+    ("tabs_total", "Tabs in total", 128),
+    ("concurrent_actions", "Actions at once", 16),
+];
+
+fn limit(limits: &Limits, key: &str) -> u32 {
+    match key {
+        "tabs_per_session" => limits.tabs_per_session,
+        "tabs_total" => limits.tabs_total,
+        _ => limits.concurrent_actions,
+    }
+}
+
+fn set_limit(limits: &mut Limits, key: &str, value: u32) {
+    match key {
+        "tabs_per_session" => limits.tabs_per_session = value,
+        "tabs_total" => limits.tabs_total = value,
+        _ => limits.concurrent_actions = value,
+    }
+}
+
+/// A typed limit within 1 and `max`, or `None` when it is not a number.
+fn clamp_limit(raw: &str, max: u32) -> Option<u32> {
+    raw.trim()
+        .parse::<i64>()
+        .ok()
+        .map(|v| v.clamp(1, i64::from(max)) as u32)
+}
+
+fn outcome_label(outcome: Outcome) -> &'static str {
+    match outcome {
+        Outcome::Done => "done",
+        Outcome::Blocked => "blocked",
+        Outcome::Failed => "failed",
+        Outcome::Unknown => "unknown",
+    }
+}
+
+fn clock_time(ms: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(ms)
+        .map(|at| at.with_timezone(&chrono::Local).format("%H:%M").to_string())
+        .unwrap_or_default()
 }
 
 /// Where the user turns remote debugging on for the found or chosen browser.
@@ -173,6 +230,8 @@ impl SettingsView {
         page.push(self.browser_access_group(&state, cx));
         page.push(self.browser_connection_group(&state, cx));
         page.push(self.browser_sessions_group(&state, cx));
+        page.push(self.browser_audit_group(&state, cx));
+        page.push(self.browser_advanced_group(&state, cx));
         page
     }
 
@@ -991,5 +1050,481 @@ impl SettingsView {
                 cx.notify();
             });
         }));
+    }
+}
+
+impl SettingsView {
+    fn load_browser_audit(&mut self, cx: &mut Context<Self>) {
+        let session =
+            (!self.browser.audit_session.is_empty()).then(|| self.browser.audit_session.clone());
+        let Some(task) = crate::browser::query(cx, move |host| {
+            Ok(host.audit_list(
+                session.as_deref(),
+                monocode_core::browser::audit::DEFAULT_LIST_LIMIT,
+            ))
+        }) else {
+            return;
+        };
+        self.browser._audit = Some(cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(entries) => this.browser.audit = Some(entries),
+                    Err(error) => this.browser.error = Some(error),
+                }
+                cx.notify();
+            });
+        }));
+    }
+
+    fn browser_audit_group(&mut self, state: &BrowserState, cx: &mut Context<Self>) -> AnyElement {
+        if self.browser.audit.is_none() && self.browser._audit.is_none() {
+            self.load_browser_audit(cx);
+        }
+        let entries = self.browser.audit.clone().unwrap_or_default();
+        let outcome = self.browser.audit_outcome.clone();
+        let shown: Vec<&AuditEntry> = entries
+            .iter()
+            .filter(|entry| outcome.is_empty() || outcome_label(entry.outcome) == outcome)
+            .collect();
+        let mut sessions: Vec<String> = state
+            .sessions
+            .iter()
+            .map(|s| s.session_id.clone())
+            .collect();
+        for entry in &entries {
+            if !sessions.contains(&entry.session_id) {
+                sessions.push(entry.session_id.clone());
+            }
+        }
+        let mut thread_options: Vec<(String, SharedString, Option<AnyElement>)> =
+            vec![(String::new(), "All threads".into(), None)];
+        thread_options.extend(
+            sessions
+                .iter()
+                .map(|key| (key.clone(), self.browser_session_name(key).into(), None)),
+        );
+        let mut outcome_options: Vec<(String, SharedString, Option<AnyElement>)> =
+            vec![(String::new(), "All outcomes".into(), None)];
+        outcome_options.extend(
+            ["done", "blocked", "failed", "unknown"]
+                .into_iter()
+                .map(|o| (o.to_owned(), o.into(), None)),
+        );
+        let actions = if self.browser.confirm_clear {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .child(
+                    secondary_button(
+                        "browser-audit-clear-yes",
+                        "Delete the activity log",
+                        true,
+                        false,
+                    )
+                    .child("Delete the activity log")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.browser.confirm_clear = false;
+                        let Some(task) = crate::browser::query(cx, |host| {
+                            host.audit_clear();
+                            Ok(())
+                        }) else {
+                            return;
+                        };
+                        this.browser._audit = Some(cx.spawn(async move |this, cx| {
+                            let _ = task.await;
+                            let _ = this.update(cx, |this, cx| {
+                                this.browser.audit = None;
+                                this.browser._audit = None;
+                                cx.notify();
+                            });
+                        }));
+                    })),
+                )
+                .child(
+                    secondary_button("browser-audit-clear-no", "Cancel", false, false)
+                        .child("Cancel")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.browser.confirm_clear = false;
+                            cx.notify();
+                        })),
+                )
+        } else {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .child(
+                    secondary_button("browser-audit-refresh", "Refresh", false, false)
+                        .child(icon("refresh-cw", 14.))
+                        .child("Refresh")
+                        .on_click(cx.listener(|this, _, _, cx| this.load_browser_audit(cx))),
+                )
+                .child(
+                    secondary_button("browser-audit-clear", "Clear", true, entries.is_empty())
+                        .child("Clear")
+                        .when(!entries.is_empty(), |d| {
+                            d.on_click(cx.listener(|this, _, _, cx| {
+                                this.browser.confirm_clear = true;
+                                cx.notify();
+                            }))
+                        }),
+                )
+        };
+        let filters = div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap_2()
+            .px_4()
+            .py(px(10.))
+            .child(self.select(
+                "browser-audit-thread",
+                "Thread",
+                &self.browser.audit_session.clone(),
+                thread_options,
+                Some(200.),
+                cx,
+                |this, key, cx| {
+                    this.browser.audit_session = key;
+                    this.load_browser_audit(cx);
+                },
+            ))
+            .child(self.select(
+                "browser-audit-outcome",
+                "Outcome",
+                &outcome,
+                outcome_options,
+                Some(140.),
+                cx,
+                |this, outcome, cx| {
+                    this.browser.audit_outcome = outcome;
+                    cx.notify();
+                },
+            ))
+            .into_any_element();
+        let all_threads = self.browser.audit_session.is_empty();
+        let list = if shown.is_empty() {
+            note(if self.browser.audit.is_none() {
+                "Loading…"
+            } else {
+                "No browser actions yet."
+            })
+        } else {
+            div()
+                .id("browser-audit-list")
+                .max_h(px(320.))
+                .overflow_y_scroll()
+                .border_t_1()
+                .border_color(content(0.05))
+                .children(shown.into_iter().map(|entry| {
+                    let place = match (&entry.url, all_threads) {
+                        (Some(url), true) => {
+                            format!(
+                                "{} · {}",
+                                tab_host(url),
+                                self.browser_session_name(&entry.session_id)
+                            )
+                        }
+                        (Some(url), false) => tab_host(url),
+                        (None, true) => self.browser_session_name(&entry.session_id),
+                        (None, false) => String::new(),
+                    };
+                    let result = match entry.reason {
+                        Some(reason) => {
+                            format!("{}: {}", outcome_label(entry.outcome), reason.as_str())
+                        }
+                        None => outcome_label(entry.outcome).to_owned(),
+                    };
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .px_4()
+                        .py(px(6.))
+                        .text_size(px(12.))
+                        .border_b_1()
+                        .border_color(content(0.05))
+                        .child(
+                            div()
+                                .w(px(48.))
+                                .flex_shrink_0()
+                                .text_color(content(0.45))
+                                .child(clock_time(entry.ts_ms)),
+                        )
+                        .child(
+                            div()
+                                .w(px(96.))
+                                .flex_shrink_0()
+                                .truncate()
+                                .font_family(crate::fonts::mono())
+                                .text_size(px(11.))
+                                .text_color(content(1.))
+                                .child(entry.action.clone()),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .flex_1()
+                                .truncate()
+                                .text_color(content(0.55))
+                                .child(place),
+                        )
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .text_color(match entry.outcome {
+                                    Outcome::Done => content(0.55),
+                                    Outcome::Blocked => rgb(AMBER).into(),
+                                    _ => red(1.),
+                                })
+                                .child(result),
+                        )
+                        .child(
+                            div()
+                                .w(px(56.))
+                                .flex_shrink_0()
+                                .text_right()
+                                .text_color(content(0.4))
+                                .child(format!("{} ms", entry.duration_ms)),
+                        )
+                }))
+                .into_any_element()
+        };
+        self.group(
+            Some("browser-audit"),
+            false,
+            "Activity",
+            Some("The last 50 browser actions, kept for 30 days. Typed text and page content are never stored, and addresses are kept without their query.".into()),
+            Some(actions.into_any_element()),
+            vec![filters, list],
+        )
+    }
+
+    fn browser_limit_fields(&mut self, limits: &Limits, cx: &mut Context<Self>) {
+        if !self.browser.limits.is_empty() {
+            return;
+        }
+        for (key, label, max) in LIMIT_FIELDS {
+            let value = limit(limits, key);
+            let input = cx.new(|cx| {
+                let mut input = Input::field(label, "", content(0.35), cx);
+                input.set_font_size(12.);
+                input.set_text(value.to_string(), cx);
+                input
+            });
+            self._subscriptions.push(cx.subscribe(
+                &input,
+                move |this, input, _: &input::Changed, cx| {
+                    let raw = input.read(cx).content.to_string();
+                    let Some(value) = clamp_limit(&raw, max) else {
+                        return;
+                    };
+                    // Saved once typing pauses, not on every key.
+                    this.browser._limit_save = Some(cx.spawn(async move |this, cx| {
+                        cx.background_executor()
+                            .timer(std::time::Duration::from_millis(600))
+                            .await;
+                        let _ = this.update(cx, |this, cx| {
+                            this.save_browser(cx, |settings| {
+                                set_limit(&mut settings.limits, key, value)
+                            });
+                        });
+                    }));
+                },
+            ));
+            self.browser.limits.push((key, input));
+        }
+    }
+
+    fn pick_upload_roots(&mut self, cx: &mut Context<Self>) {
+        let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: true,
+            prompt: Some("Folders agents may upload from".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = picked.await else {
+                return;
+            };
+            let _ = this.update(cx, |this, cx| {
+                this.save_browser(cx, |settings| {
+                    for path in paths {
+                        let path = path.to_string_lossy().into_owned();
+                        if !settings.upload_roots.contains(&path) {
+                            settings.upload_roots.push(path);
+                        }
+                    }
+                })
+            });
+        })
+        .detach();
+    }
+
+    fn browser_advanced_group(
+        &mut self,
+        state: &BrowserState,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let settings = &state.settings;
+        self.browser_limit_fields(&settings.limits, cx);
+        let restore =
+            secondary_button("browser-restore-defaults", "Restore defaults", false, false)
+                .child(icon("rotate-ccw", 14.))
+                .child("Restore defaults")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    // The main switch is not a default to restore; it stays.
+                    this.save_browser(cx, |settings| {
+                        *settings = BrowserSettings {
+                            enabled: settings.enabled,
+                            ..BrowserSettings::default()
+                        };
+                    });
+                    let defaults = Limits::default();
+                    for (key, input) in this.browser.limits.clone() {
+                        let value = limit(&defaults, key);
+                        input.update(cx, |input, cx| input.set_text(value.to_string(), cx));
+                    }
+                }))
+                .into_any_element();
+        let mut rows = vec![self.row(
+            Some("browser-upload-roots"),
+            true,
+            "Upload folders",
+            Some("Agents can upload files from the thread's project folder and from these folders.".into()),
+            vec![secondary_button("browser-add-roots", "Add folder…", false, false)
+                .child("Add folder…")
+                .on_click(cx.listener(|this, _, _, cx| this.pick_upload_roots(cx)))
+                .into_any_element()],
+        )];
+        if !settings.upload_roots.is_empty() {
+            rows.push(
+                div()
+                    .px_4()
+                    .pb_3()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .children(settings.upload_roots.iter().map(|root| {
+                        let remove = root.clone();
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .flex_1()
+                                    .truncate()
+                                    .font_family(crate::fonts::mono())
+                                    .text_size(px(11.))
+                                    .text_color(content(0.65))
+                                    .child(root.clone()),
+                            )
+                            .child(
+                                secondary_button(
+                                    SharedString::from(format!("browser-remove-root-{root}")),
+                                    format!("Remove {root}"),
+                                    false,
+                                    false,
+                                )
+                                .child(icon("x", 12.))
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        let remove = remove.clone();
+                                        this.save_browser(cx, move |settings| {
+                                            settings.upload_roots.retain(|entry| *entry != remove)
+                                        });
+                                    },
+                                )),
+                            )
+                    }))
+                    .into_any_element(),
+            );
+        }
+        rows.push(self.row(
+            Some("browser-dotfiles"),
+            false,
+            "Allow hidden files in uploads",
+            Some("Files and folders whose name starts with a dot. SSH, cloud and Docker credentials stay blocked either way.".into()),
+            vec![self.toggle(
+                "browser-dotfiles",
+                "Allow hidden files in uploads",
+                settings.allow_dotfiles,
+                false,
+                cx,
+                |this, allow, cx| this.save_browser(cx, |settings| settings.allow_dotfiles = allow),
+            )],
+        ));
+        rows.push(self.row(
+            Some("browser-mcp"),
+            false,
+            "Browser tools in providers",
+            Some("Each agent gets the browser tools when it starts: as an MCP server for Claude, Codex and the ACP providers, and as a command line for the others. Nothing is written to their settings.".into()),
+            Vec::new(),
+        ));
+        let limit_fields: Vec<AnyElement> = self
+            .browser
+            .limits
+            .iter()
+            .zip(LIMIT_FIELDS)
+            .map(|((_, input), (_, label, _))| {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .text_size(px(12.))
+                    .text_color(content(0.55))
+                    .child(label)
+                    .child(
+                        div()
+                            .w(px(56.))
+                            .h(px(26.))
+                            .flex()
+                            .items_center()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(content(0.1))
+                            .bg(content(0.05))
+                            .px(px(6.))
+                            .child(input.clone()),
+                    )
+                    .into_any_element()
+            })
+            .collect();
+        rows.push(self.row(
+            Some("browser-limits"),
+            false,
+            "Limits",
+            Some("Over a tab limit the agent is asked to close a tab it no longer needs.".into()),
+            limit_fields,
+        ));
+        self.group(
+            Some("browser-advanced"),
+            false,
+            "Advanced",
+            None,
+            Some(restore),
+            rows,
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn limits_stay_between_one_and_their_largest_value() {
+        assert_eq!(clamp_limit(" 12 ", 64), Some(12));
+        assert_eq!(clamp_limit("0", 64), Some(1));
+        assert_eq!(clamp_limit("500", 16), Some(16));
+        assert_eq!(clamp_limit("-3", 16), Some(1));
+        assert_eq!(clamp_limit("ten", 16), None);
+        let mut limits = Limits::default();
+        set_limit(&mut limits, "tabs_total", 30);
+        assert_eq!(limit(&limits, "tabs_total"), 30);
     }
 }

@@ -33,7 +33,7 @@ pub use live_pane::{queue_input, Ended, LivePane};
 pub use monocode_browser::protocol::{
     AccessMode, BrowserMode, BrowserSettings, BrowserState, ConnectionState, TabOverview,
 };
-pub use monocode_browser::{devservers, live, pick, protocol, targets, turn, view};
+pub use monocode_browser::{audit, devservers, live, pick, protocol, targets, turn, view};
 
 /// The window grants and requests belong to: Native has one main window.
 pub const WINDOW: &str = "main";

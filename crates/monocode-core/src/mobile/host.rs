@@ -35,6 +35,7 @@ const APP_METHODS: &[&str] = &[
     "session.start",
     "conversation.send",
     "session.cancel",
+    "browser.answer",
     "session.rename",
     "session.delete",
     "session.archive",
