@@ -259,10 +259,11 @@ async function openSession(
     .catch(() => undefined);
   await session.acp
     .request(
-      "session/set_mode",
+      "session/set_config_option",
       {
         sessionId: acpSessionId,
-        modeId: grokEffort(modelSettings) ?? "low",
+        configId: "reasoning_effort",
+        value: grokEffort(modelSettings) ?? "low",
       },
       REQUEST_TIMEOUT_MS,
     )
