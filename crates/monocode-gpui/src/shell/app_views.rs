@@ -359,15 +359,11 @@ impl Shell {
             .clone()
             .filter(|path| !path.is_empty())
             .unwrap_or_else(|| self.workspace.project.clone());
-        let kind = self.default_kind();
+        let choice = self.new_chat_choice(&cwd);
+        let kind = choice.kind;
         let store = self.store.clone();
         let settings = monocode_core::agent::Settings {
-            model: self
-                .workspace
-                .preferences
-                .default_models
-                .get(kind.id())
-                .cloned(),
+            model: choice.model,
             effort: crate::conversation::preferred_effort(kind.id(), cx),
             access: self
                 .workspace
@@ -433,16 +429,10 @@ impl Shell {
         } else {
             item.project_path.clone()
         };
-        let kind = self.default_kind();
+        let choice = self.new_chat_choice(&cwd);
+        let kind = choice.kind;
         let settings = monocode_core::agent::Settings {
-            model: self
-                .workspace
-                .preferences
-                .project_providers
-                .get(&cwd)
-                .and_then(|preferences| preferences.models.get(kind.id()))
-                .or(self.workspace.preferences.default_models.get(kind.id()))
-                .cloned(),
+            model: choice.model,
             effort: crate::conversation::preferred_effort(kind.id(), cx),
             access: self
                 .workspace
