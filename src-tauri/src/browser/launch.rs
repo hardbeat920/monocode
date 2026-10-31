@@ -261,6 +261,10 @@ pub fn arguments(profile: &Path, show_window: bool, scale: Option<f64>) -> Vec<S
     ];
     if !show_window {
         args.push("--headless=new".into());
+        // No scrollbars at all, rather than hidden ones that still take
+        // their width: the page's layout viewport is then the picture's,
+        // which the live pane sizes the tab's window by.
+        args.push("--hide-scrollbars".into());
         if let Some(scale) = scale.filter(|s| s.is_finite() && *s > 1.0 && *s <= 4.0) {
             args.push(format!("--force-device-scale-factor={scale}"));
         }
@@ -524,6 +528,8 @@ mod tests {
         assert!(!args.iter().any(|a| a.starts_with("--headless")));
         assert!(!args.iter().any(|a| a == "--enable-automation"));
         assert!(arguments(profile, false, None).contains(&"--headless=new".to_string()));
+        assert!(arguments(profile, false, None).contains(&"--hide-scrollbars".to_string()));
+        assert!(!args.iter().any(|a| a == "--hide-scrollbars"));
         // A window has the screen's ratio; a headless browser gets MonoCode's.
         assert!(!args
             .iter()

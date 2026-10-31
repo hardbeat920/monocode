@@ -859,7 +859,7 @@ pub fn run(
                     note("picture dropped: the same as the last one");
                     break 'frame false;
                 }
-                let picture = Picture::of(&event.params["metadata"]);
+                let picture = Picture::of(&event.params["metadata"]).in_css(shown, current.scale);
                 let (width, height) = (picture.width, picture.height);
                 if fits(shown, width, height, jpeg_size(data)) {
                     misfit = None;
@@ -1098,6 +1098,31 @@ impl Picture {
             height: number("deviceHeight"),
             scroll_x: number("scrollOffsetX"),
             scroll_y: number("scrollOffsetY"),
+        }
+    }
+
+    /// The picture in CSS pixels. Edge on Windows at a display scale other
+    /// than 100 % sends some pictures' viewport and scroll in device pixels
+    /// (a 1254 px page as 1379): taken as CSS pixels, the panel would draw
+    /// them zoomed in and treat them as a page of another size.
+    fn in_css(self, shown: Shown, scale: f64) -> Picture {
+        let near = |a: f64, b: f64| (a - b).abs() <= FIT_SLACK;
+        let at = |picture: &Picture| {
+            near(picture.width, shown.width) && near(picture.height, shown.height)
+        };
+        if scale <= 1.0 || at(&self) {
+            return self;
+        }
+        let css = Picture {
+            width: self.width / scale,
+            height: self.height / scale,
+            scroll_x: self.scroll_x / scale,
+            scroll_y: self.scroll_y / scale,
+        };
+        if at(&css) {
+            css
+        } else {
+            self
         }
     }
 }
@@ -1504,6 +1529,32 @@ mod tests {
             "scrollOffsetX": 0, "scrollOffsetY": 4210.5, "pageScaleFactor": 1
         }));
         assert_eq!((picture.width, picture.scroll_y), (803.2, 4210.5));
+    }
+
+    #[test]
+    fn a_picture_in_device_pixels_is_read_in_css_pixels() {
+        let page = Shown {
+            width: 1254.0,
+            height: 1125.0,
+            window: true,
+        };
+        let of = |width: f64, height: f64, scroll: f64| Picture {
+            width,
+            height,
+            scroll_x: 0.0,
+            scroll_y: scroll,
+        };
+        // Edge at 110 %: the same page, once in CSS and once in device pixels.
+        let css = of(1254.0, 1125.0, 800.0);
+        assert_eq!(css.in_css(page, 1.1), css);
+        let device = of(1379.4, 1237.5, 880.0).in_css(page, 1.1);
+        assert!((device.width - 1254.0).abs() < 0.01, "{device:?}");
+        assert!((device.height - 1125.0).abs() < 0.01, "{device:?}");
+        assert!((device.scroll_y - 800.0).abs() < 0.01, "{device:?}");
+        // A page of another size stays what it is, and so does all at 100 %.
+        let other = of(1600.0, 900.0, 0.0);
+        assert_eq!(other.in_css(page, 1.1), other);
+        assert_eq!(of(1379.4, 1237.5, 0.0).in_css(page, 1.0).width, 1379.4);
     }
 
     #[test]
