@@ -204,6 +204,10 @@ fn main() {
         }
         return;
     }
+    // `browser ACTION …` and `browser-mcp`: how agents reach the browser.
+    if let Some(code) = monocode_core::browser::run_subcommand(&cli_args) {
+        std::process::exit(code);
+    }
     if cli_args.first().is_some_and(|a| a == "app") {
         match monocode_core::mono::bridge::client(&cli_args[1..]) {
             Ok(value) => {

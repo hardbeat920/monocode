@@ -844,6 +844,19 @@ impl Shell {
             .unwrap_or_else(|| {
                 std::env::temp_dir().join(format!("monocode-remote-{}", std::process::id()))
             });
+        // The browser module keeps its database and the MonoCode browser's
+        // profiles next to the app's database.
+        let browser_dir = locked(&store)
+            .ok()
+            .and_then(|store| store.data_dir().map(std::path::Path::to_path_buf));
+        if let Err(error) = monocode_core::browser::start(browser_dir.as_deref()) {
+            eprintln!("Browser module unavailable: {error}");
+        }
+        cx.on_app_quit(|_, cx| {
+            cx.background_executor()
+                .spawn(async { monocode_core::browser::shutdown() })
+        })
+        .detach();
         let remote = Arc::new(monocode_core::remote::Connections::new(remote_dir));
         monocode_core::remote::set_default_connections(remote.clone());
         let quit_remote = remote.clone();

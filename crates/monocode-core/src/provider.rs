@@ -1390,6 +1390,7 @@ fn run_operation(
         Kind::Codex => {
             command.arg("app-server");
             crate::visual_bridge::configure_codex(&mut command, &request.settings.environment);
+            crate::browser::configure_codex(&mut command, &request.settings.environment);
             if let Some(mono) = &request.settings.mono {
                 if let Some(home) =
                     crate::mono::codex_home(&mono.root, &request.settings.account.id)?
@@ -1440,11 +1441,23 @@ fn run_operation(
                 command.args(["--tools", "Read,Glob,Grep,Bash"]);
                 allowed.push("Read,Glob,Grep,Bash(git status *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(pwd),Bash(ls *),Bash(rg *)");
             }
-            if let Some(server) = visual_server {
+            let browser_server = (!settings.text_only)
+                .then(|| crate::browser::mcp_server(&settings.environment))
+                .flatten();
+            let mut servers = serde_json::Map::new();
+            if let Some(server) = &visual_server {
+                servers.insert("monocode_visual".into(), server.clone());
+            }
+            if let Some(server) = browser_server {
+                servers.insert(crate::browser::SERVER_NAME.into(), server);
+            }
+            if !servers.is_empty() {
                 command.args([
                     "--mcp-config",
-                    &json!({"mcpServers":{"monocode_visual":server}}).to_string(),
+                    &json!({ "mcpServers": servers }).to_string(),
                 ]);
+            }
+            if visual_server.is_some() {
                 allowed.push(crate::visual_bridge::CLAUDE_ALLOWED_TOOLS);
                 if let Some(instructions) =
                     crate::visual_bridge::instructions(&settings.environment, true)

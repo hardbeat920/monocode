@@ -1104,6 +1104,9 @@ impl Conversation {
             || self.settings.orchestrator
             || self.settings.access == AccessMode::ReadOnly;
         let mut settings = self.settings.clone();
+        // Only the turn an agent sent counts as agent-sent; the user's next
+        // turn in the same thread is the user's again.
+        self.settings.agent_sent = false;
         if let Some(model) = self.model_info() {
             for control in &model.controls {
                 settings

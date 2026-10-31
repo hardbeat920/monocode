@@ -103,6 +103,7 @@ impl Shell {
                                 .insert(id, settings.worktree_cwd.clone());
                             this.add(summary, cx);
                             this.started_by.insert(id, call.session);
+                            this.inherit_mono_browser(call.session, id, cx);
                             if let Some(view) = this.sessions.get(&id) {
                                 view.update(cx, |v, cx| v.install_app_launch(settings, !draft, cx));
                             }
@@ -312,6 +313,18 @@ impl Shell {
         }
         self.persist(cx);
     }
+    /// A session a Mono starts, or hands work to, takes the Mono's browser
+    /// grant (never one the user turned off there).
+    fn inherit_mono_browser(&self, caller: i64, session: i64, cx: &App) {
+        if self
+            .sessions
+            .get(&caller)
+            .is_some_and(|view| view.read(cx).settings.mono.is_some())
+        {
+            monocode_core::browser::inherit_mono_grant(caller, session);
+        }
+    }
+
     fn dispatch_app_call(&mut self, call: Call, window: &mut Window, cx: &mut Context<Self>) {
         if let Err(error) = self.authorize_app_call(&call, cx) {
             self.finish_app_call(call, Err(error), cx);
@@ -383,6 +396,7 @@ impl Shell {
                     }else{monocode_core::catalog::cached_models_for(kind,&settings.account).unwrap_or_default()};
                     let mut settings=app::launch_settings(&input,&provider,settings,kind,&models)?;
                     settings.revision=0;
+                    settings.agent_sent=true;
                     let title=app::optional_text(&input,"title",160)?.unwrap_or_else(||prompt.chars().take(160).collect());
                     let mut store=locked(&store)?;
                     let (mut summary,fresh)=store.create_app_session(caller,&request,&fingerprint,kind.id(),&project)?;
@@ -498,13 +512,14 @@ impl Shell {
                                             if action == "sessions.draft" {
                                                 v.save_app_draft(prompt, cx)
                                             } else {
-                                                v.install_transfer(
-                                                    v.settings.clone(),
-                                                    Some(prompt),
-                                                    cx,
-                                                )
+                                                let mut settings = v.settings.clone();
+                                                settings.agent_sent = true;
+                                                v.install_transfer(settings, Some(prompt), cx)
                                             }
                                         });
+                                        if action == "sessions.send" {
+                                            self.inherit_mono_browser(call.session, id, cx);
+                                        }
                                         Ok(
                                             json!({"sessionId":id,"submitted":action=="sessions.send","saved":action=="sessions.draft"}),
                                         )

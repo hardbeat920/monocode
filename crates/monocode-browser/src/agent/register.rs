@@ -611,12 +611,34 @@ pub fn agent_instructions(
 }
 
 pub fn instructions_for(provider: &str, opencode_major: Option<u32>, app: Option<&str>) -> String {
-    let body = if let Some(reason) = unsupported_reason(provider, opencode_major) {
-        format!("The user enabled browser access in this thread, but MonoCode's browser tools do not work with this provider: {reason} Do not try the browser tools or the MonoCode browser CLI; tell the user if the task needs a browser.")
+    let tools = if let Some(reason) = unsupported_reason(provider, opencode_major) {
+        Tools::Unsupported(reason)
     } else if MCP_PROVIDERS.contains(&provider) {
-        "Browser access is enabled in this thread. Use the browser_* tools (MonoCode browser); start with browser_tabs to open your own tab, and act on the refs in the snapshot each result brings. If the tools are missing, the provider has not loaded MonoCode's browser server yet; tell the user it appears after the session restarts.".to_string()
+        Tools::Mcp
     } else {
-        super::cli::instructions()
+        Tools::Cli
+    };
+    instructions_block(tools, app)
+}
+
+/// How an agent reaches the browser.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tools<'a> {
+    /// The `browser_*` tools of the MCP server.
+    Mcp,
+    /// The `monocode browser` CLI, through the agent's shell.
+    Cli,
+    /// Neither works with this provider, and why.
+    Unsupported(&'a str),
+}
+
+/// The `<monocode_browser>` block for an agent that reaches the browser
+/// through `tools`; `app` names where the thread's branch serves its app.
+pub fn instructions_block(tools: Tools<'_>, app: Option<&str>) -> String {
+    let body = match tools {
+        Tools::Unsupported(reason) => format!("The user enabled browser access in this thread, but MonoCode's browser tools do not work with this provider: {reason} Do not try the browser tools or the MonoCode browser CLI; tell the user if the task needs a browser."),
+        Tools::Mcp => "Browser access is enabled in this thread. Use the browser_* tools (MonoCode browser); start with browser_tabs to open your own tab, and act on the refs in the snapshot each result brings. If the tools are missing, the provider has not loaded MonoCode's browser server yet; tell the user it appears after the session restarts.".to_string(),
+        Tools::Cli => super::cli::instructions(),
     };
     match app {
         Some(app) => format!("<monocode_browser>\n{body}\n{app}\n</monocode_browser>"),

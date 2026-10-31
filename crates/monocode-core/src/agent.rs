@@ -96,6 +96,11 @@ pub struct Settings {
     /// Isolated background text jobs; never persisted as conversation settings.
     #[serde(skip)]
     pub text_only: bool,
+    /// The next turn was sent by an agent through the app (`sessions.start`
+    /// or `sessions.send`), not by the user: it uses the browser only with a
+    /// grant the thread already holds. Cleared once the turn starts.
+    #[serde(skip)]
+    pub agent_sent: bool,
     /// Transport-only context (for example selected MCP servers). The raw user
     /// message remains the transcript and queue label.
     #[serde(skip)]
