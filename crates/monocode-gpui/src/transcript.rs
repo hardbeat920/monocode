@@ -4029,15 +4029,20 @@ impl TranscriptView {
         pinned_answers: &HashMap<usize, usize>,
         replaced_work: Option<std::ops::Range<usize>>,
     ) -> Vec<UiRow> {
-        // Exit rows outlive a source patch, but message ordinals do not.
-        let owners: HashMap<_, _> = self
-            .messages
-            .iter()
-            .enumerate()
-            .map(|(index, message)| (message.start, index))
-            .collect();
+        // Exit rows outlive a source patch, but message ordinals do not. A
+        // row whose message merged into an earlier one exits from that owner,
+        // unless the owner would draw it with another role.
         old.retain_mut(|row| {
-            if let Some(&message) = owners.get(&row.key.0) {
+            let owner = self
+                .messages
+                .partition_point(|m| m.start <= row.key.0)
+                .checked_sub(1)
+                .filter(|&ix| {
+                    self.source
+                        .get(row.key.0)
+                        .is_some_and(|r| r.role == self.messages[ix].role)
+                });
+            if let Some(message) = owner {
                 row.message = message;
                 true
             } else {
@@ -6133,6 +6138,9 @@ mod scroll_tests {
                 continuation.first = false;
                 view.patch(0, vec![row("assistant", "Answer"), continuation], cx);
                 assert_eq!(view.messages.len(), 1);
+                let outgoing = view.rows.iter().find(|r| r.key.0 == 1).unwrap();
+                assert_eq!(outgoing.message, 0);
+                assert!(view.motions.get(&outgoing.key).is_some_and(|m| !m.opening));
             })
             .unwrap();
         cx.refresh().unwrap();
