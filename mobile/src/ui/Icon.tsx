@@ -25,6 +25,7 @@ import LockIcon from "@hugeicons/core-free-icons/LockIcon";
 import LeftToRightListBulletIcon from "@hugeicons/core-free-icons/LeftToRightListBulletIcon";
 import Moon02Icon from "@hugeicons/core-free-icons/Moon02Icon";
 import MinusSignIcon from "@hugeicons/core-free-icons/MinusSignIcon";
+import MoreHorizontalIcon from "@hugeicons/core-free-icons/MoreHorizontalIcon";
 import Menu01Icon from "@hugeicons/core-free-icons/Menu01Icon";
 import Mic01Icon from "@hugeicons/core-free-icons/Mic01Icon";
 import Note01Icon from "@hugeicons/core-free-icons/Note01Icon";
@@ -53,6 +54,7 @@ import { useColors } from "./theme";
 // Deep imports keep the full catalog out of the bundle.
 const icons = {
   menu: Menu01Icon,
+  more: MoreHorizontalIcon,
   search: Search01Icon,
   close: Cancel01Icon,
   add: Add01Icon,

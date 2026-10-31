@@ -2,7 +2,6 @@ import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { createContext, memo, use, useEffect, useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import Svg, { Path } from "react-native-svg";
 
 import { PixelMascot } from "@/features/mascots/PixelMascot";
 import { useCollapsedToolCalls } from "@/features/settings/toolCalls";
@@ -17,6 +16,8 @@ import { Icon, type IconName } from "@/ui/Icon";
 import { Shimmer } from "@/ui/Shimmer";
 import { withAlpha, themedStyles, useColors } from "@/ui/theme";
 
+import { LaunchedSessions } from "./LaunchedSessionCard";
+import { DocumentCard, MonoChoices } from "./MonoCards";
 import { Markdown } from "./Markdown";
 import { ProviderLogo } from "./ProviderLogo";
 import { sessionErrorContent, type SessionErrorNotice } from "./sessionError";
@@ -51,11 +52,7 @@ const CONTENT_X = GUTTER + FOLD_MARK + 6;
 /** The desktop's `text-content/45` icons. */
 /** The desktop footer's `text-content/40` buttons. */
 /** The desktop's rail: content at 14% over the background, opaque so lines meet cleanly. */
-/** The desktop's `bg-content/10` over the background, opaque so the tail can overlap. */
 /** The desktop's `bg-content/[0.07]` pills: day stamps and a Mono's signature. */
-// The desktop's bubble tail (src/styles/index.css), drawn against an 18px corner.
-const TAIL =
-  "M9 15.6C9.05 16.3 9.05 17.4 9.05 18.6C9.05 20 8.3 21.4 7.4 22.6Q6.9 23.4 7.8 23.5C9.6 23.3 11.6 22.3 13.2 21.5C15 20.5 16.2 19.6 17.2 18.8C17.9 18.25 18.6 18 19.6 18L18 18A18 18 0 0 1 9 15.6Z";
 
 /**
  * One turn, laid out as AgentTranscript does: the prompt in a bubble on the
@@ -80,7 +77,7 @@ export const TranscriptTurn = memo(function TranscriptTurn({
         const previous = turn.items[index - 1];
         switch (item.type) {
           case "user":
-            return <UserMessage key={item.id} item={item} tail={!!agent} />;
+            return <UserMessage key={item.id} item={item} mono={!!agent} />;
           case "header":
             return agent ? (
               <MonoHeader key={item.id} item={item} agent={agent} />
@@ -107,6 +104,12 @@ export const TranscriptTurn = memo(function TranscriptTurn({
                 <Reply text={item.text} streaming={!!item.streaming} />
               </View>
             );
+          case "sessions":
+            return <LaunchedSessions key={item.id} sessions={item.sessions} />;
+          case "choices":
+            return <MonoChoices key={item.id} options={item.options} chosen={item.chosen} />;
+          case "document":
+            return <DocumentCard key={item.id} document={item} />;
           case "notice":
             return item.error ? (
               <ErrorNotice key={item.id} item={item} onPress={() => onError(item)} />
@@ -253,10 +256,10 @@ function DaySeparator({ at }: { at: number }) {
 
 function UserMessage({
   item,
-  tail,
+  mono,
 }: {
   item: Extract<TurnItem, { type: "user" }>;
-  tail: boolean;
+  mono: boolean;
 }) {
   const styles = useStyles();
   const [singleLine, setSingleLine] = useState(false);
@@ -264,7 +267,7 @@ function UserMessage({
   const [expanded, setExpanded] = useState(false);
 
   // In a Mono's chat a few emoji stand alone, like a reaction: no bubble.
-  if (tail && item.emojiOnly) {
+  if (mono && item.emojiOnly) {
     return (
       <View style={[styles.userRow, item.compact && styles.userRowCompact]}>
         <View>
@@ -275,7 +278,6 @@ function UserMessage({
     );
   }
 
-  const withTail = tail && !item.compact;
   return (
     <View style={[styles.userRow, item.compact && styles.userRowCompact]}>
       <View
@@ -308,7 +310,6 @@ function UserMessage({
             <Text style={styles.showMore}>{expanded ? "Show less" : "Show more"}</Text>
           </Pressable>
         ) : null}
-        {withTail ? <BubbleTail radius={singleLine ? 18 : 14} /> : null}
         {item.reaction ? <Reaction emoji={item.reaction} /> : null}
       </View>
       {!item.compact && item.at != null ? (
@@ -321,25 +322,6 @@ function UserMessage({
 /** Whether a 4-line clamp cut the message short. */
 function isClamped(lines: { text: string }[], text: string) {
   return lines.map((line) => line.text).join("").length < text.replace(/\n/g, "").length;
-}
-
-function BubbleTail({ radius }: { radius: number }) {
-  const colors = useColors();
-  const styles = useStyles();
-  const size = (radius * 4) / 3;
-  return (
-    <View
-      pointerEvents="none"
-      style={[
-        styles.tail,
-        { width: size, height: size, bottom: -radius / 3, transform: [{ scaleX: -1 }] },
-      ]}
-    >
-      <Svg width={size} height={size} viewBox="0 0 24 24">
-        <Path d={TAIL} fill={colors.bubble} />
-      </Svg>
-    </View>
-  );
 }
 
 /** A Mono's emoji answer, on the corner of the message it answers. */
@@ -601,10 +583,6 @@ const useStyles = themedStyles((colors) => ({
   emoji: {
     fontSize: 56,
     lineHeight: 64,
-  },
-  tail: {
-    position: "absolute",
-    right: 0,
   },
   reaction: {
     position: "absolute",

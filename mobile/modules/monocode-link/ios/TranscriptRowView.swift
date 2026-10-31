@@ -98,6 +98,19 @@ private final class TranscriptDecorationCanvas: UIView {
     guard let model, let context = UIGraphicsGetCurrentContext() else { return }
     let p = model.presentation
     let rail = UIColor.transcriptHex(model.style.rail)
+    for paint in model.visualPaints {
+      context.addPath(paint.path)
+      if let width = paint.stroke {
+        context.setStrokeColor(paint.color.cgColor)
+        context.setLineWidth(width)
+        context.setLineCap(.round)
+        context.setLineJoin(.round)
+        context.strokePath()
+      } else {
+        context.setFillColor(paint.color.cgColor)
+        context.fillPath()
+      }
+    }
     if model.kind == "code" {
       var corners: UIRectCorner = []
       if model.isFirst { corners.formUnion([.topLeft, .topRight]) }
@@ -148,41 +161,10 @@ private final class TranscriptDecorationCanvas: UIView {
       for index in 0..<quoteDepth {
         context.fill(
           CGRect(
-            x: (model.folded ? 42 : 20) + CGFloat(p["listDepth"] as? Int ?? 0) * 22 + CGFloat(index)
+            x: model.contentBase + CGFloat(p["listDepth"] as? Int ?? 0) * 22 + CGFloat(index)
               * 14,
             y: top, width: 2, height: model.height - top - (p["bottom"] as? CGFloat ?? 0)))
       }
-    }
-    if model.tailRadius > 0 {
-      let r = model.tailRadius
-      let size = r * 4 / 3
-      context.saveGState()
-      context.translateBy(x: model.cardRect.maxX, y: model.cardRect.maxY + r / 3 - size)
-      context.scaleBy(x: -size / 24, y: size / 24)
-      let path = UIBezierPath()
-      path.move(to: CGPoint(x: 9, y: 15.6))
-      path.addCurve(
-        to: CGPoint(x: 9.05, y: 18.6), controlPoint1: CGPoint(x: 9.05, y: 16.3),
-        controlPoint2: CGPoint(x: 9.05, y: 17.4))
-      path.addCurve(
-        to: CGPoint(x: 7.4, y: 22.6), controlPoint1: CGPoint(x: 9.05, y: 20),
-        controlPoint2: CGPoint(x: 8.3, y: 21.4))
-      path.addQuadCurve(to: CGPoint(x: 7.8, y: 23.5), controlPoint: CGPoint(x: 6.9, y: 23.4))
-      path.addCurve(
-        to: CGPoint(x: 13.2, y: 21.5), controlPoint1: CGPoint(x: 9.6, y: 23.3),
-        controlPoint2: CGPoint(x: 11.6, y: 22.3))
-      path.addCurve(
-        to: CGPoint(x: 17.2, y: 18.8), controlPoint1: CGPoint(x: 15, y: 20.5),
-        controlPoint2: CGPoint(x: 16.2, y: 19.6))
-      path.addCurve(
-        to: CGPoint(x: 19.6, y: 18), controlPoint1: CGPoint(x: 17.9, y: 18.25),
-        controlPoint2: CGPoint(x: 18.6, y: 18))
-      path.addLine(to: CGPoint(x: 18, y: 18))
-      path.addQuadCurve(to: CGPoint(x: 9, y: 15.6), controlPoint: CGPoint(x: 13.1, y: 18))
-      path.close()
-      UIColor.transcriptHex(model.style.bubble).setFill()
-      path.fill()
-      context.restoreGState()
     }
     if model.kind == "table" {
       let rect = model.horizontalRect
@@ -285,6 +267,31 @@ final class TranscriptRowView: UIView, UIScrollViewDelegate {
   private let decoration = TranscriptDecorationCanvas()
   private let horizontal = UIScrollView()
   private var surfaces: [UIView] = []
+
+  /// Shows Liquid Glass inside a surface's view where the surface asks for it
+  /// and the system has it, else hides any left from a reused row. True when
+  /// glass is shown, so the view drops its own fill.
+  private func glass(_ surface: TranscriptSurface, in view: UIView) -> Bool {
+    let existing = view.subviews.first { $0 is UIVisualEffectView } as? UIVisualEffectView
+    guard surface.glass, #available(iOS 26.0, *) else {
+      existing?.isHidden = true
+      return false
+    }
+    let effect =
+      existing
+      ?? {
+        let effect = UIVisualEffectView(effect: UIGlassEffect())
+        effect.isUserInteractionEnabled = false
+        effect.clipsToBounds = true
+        effect.layer.cornerCurve = .continuous
+        view.addSubview(effect)
+        return effect
+      }()
+    effect.isHidden = false
+    effect.frame = view.bounds
+    effect.layer.cornerRadius = surface.radius
+    return true
+  }
   private let label = UILabel()
   /// Shimmer.tsx: a band of light slides through the text, masked by it.
   private let shimmer = CALayer()
@@ -368,7 +375,7 @@ final class TranscriptRowView: UIView, UIScrollViewDelegate {
       let view = surfaces[index]
       view.isHidden = false
       view.frame = surface.rect
-      view.backgroundColor = surface.color
+      view.backgroundColor = glass(surface, in: view) ? .clear : surface.color
       view.layer.cornerRadius = surface.radius
       view.layer.maskedCorners = surface.corners
       view.layer.borderColor = surface.border?.cgColor
