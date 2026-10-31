@@ -3787,7 +3787,7 @@ impl Render for Conversation {
 }
 
 // The composer's `h-6.5` toolbar pills share `bg-selection` and its hover.
-fn tool_pill(id: &'static str, label: &'static str) -> gpui::Stateful<gpui::Div> {
+pub(crate) fn tool_pill(id: &'static str, label: &'static str) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id)
         .role(Role::Button)
@@ -3906,7 +3906,7 @@ fn bar_trigger(
         )
         .child(div().min_w_0().truncate().child(label))
 }
-fn pill_label(label: impl Into<SharedString>) -> impl IntoElement {
+pub(crate) fn pill_label(label: impl Into<SharedString>) -> impl IntoElement {
     div()
         .min_w_0()
         .truncate()

@@ -12,13 +12,14 @@ mod pages;
 mod palettes;
 mod preferences;
 mod skill_document;
+mod text_model;
 pub(crate) use palettes::{PALETTES, palette};
 pub(crate) mod widgets;
 
 pub(crate) use keymap::apply as apply_keybindings;
 pub(crate) use model::Section;
 pub(crate) use pages::{ACCENTS, command_shortcut, swatch};
-pub(crate) use preferences::{ModelChoice, Preferences, UI_SCALE_PERCENTS};
+pub(crate) use preferences::{ModelChoice, Preferences, TextTask, UI_SCALE_PERCENTS};
 
 use crate::{
     input::{self, Input},
@@ -213,6 +214,8 @@ pub(crate) struct SettingsView {
     slider_drag: Option<SliderKind>,
     select_open: Option<&'static str>,
     select_active: usize,
+    /// The model picker open from a text-model row.
+    text_picker: Option<(Entity<crate::pickers::ModelList>, Subscription)>,
     select_focus: FocusHandle,
     select_anchors: RefCell<HashMap<&'static str, AnchorSlot>>,
     search: Entity<Input>,
@@ -249,6 +252,13 @@ pub(crate) struct SettingsView {
     skill_surface: AnchorSlot,
     skill_filter: Entity<Input>,
     skill_query: String,
+    /// The Agent CLI whose models are listed for hiding.
+    models_open: Option<monocode_core::provider::Kind>,
+    /// Catalogs for installed CLIs without an open session to borrow from.
+    model_catalogs: HashMap<monocode_core::provider::Kind, Vec<(String, String)>>,
+    catalog_tasks: Vec<Task<()>>,
+    model_filter: Entity<Input>,
+    model_query: String,
     accent_custom: Entity<Input>,
     accent_custom_open: bool,
     accent_anchor: AnchorSlot,
@@ -292,7 +302,16 @@ impl SettingsView {
             input.set_font_size(12.);
             input
         });
+        let model_filter = cx.new(|cx| {
+            let mut input = Input::field("Filter models", "Filter models", content(0.35), cx);
+            input.set_font_size(12.);
+            input
+        });
         let mut subscriptions = vec![
+            cx.subscribe(&model_filter, |this, input, _: &input::Changed, cx| {
+                this.model_query = input.read(cx).content.to_string();
+                cx.notify();
+            }),
             cx.subscribe(&skill_filter, |this, input, _: &input::Changed, cx| {
                 this.skill_query = input.read(cx).content.to_string();
                 cx.notify();
@@ -349,6 +368,7 @@ impl SettingsView {
             slider_drag: None,
             select_open: None,
             select_active: 0,
+            text_picker: None,
             select_focus: cx.focus_handle(),
             select_anchors: Default::default(),
             search,
@@ -384,6 +404,11 @@ impl SettingsView {
             skill_surface: AnchorSlot::default(),
             skill_filter,
             skill_query: String::new(),
+            models_open: None,
+            model_catalogs: HashMap::new(),
+            catalog_tasks: Vec::new(),
+            model_filter,
+            model_query: String::new(),
             accent_custom,
             accent_custom_open: false,
             accent_anchor: AnchorSlot::default(),
@@ -420,6 +445,7 @@ impl SettingsView {
                 this.skill_documents.clear();
                 this.discovery = data;
                 this.discovery_loading = false;
+                this.discover_catalogs(cx);
                 if this.section == Section::Mcp {
                     this.refresh_mcp_health(cx);
                 }
@@ -427,6 +453,39 @@ impl SettingsView {
             });
         }));
         cx.notify();
+    }
+    /// Ask each installed CLI for its models, as the model picker does.
+    fn discover_catalogs(&mut self, cx: &mut Context<Self>) {
+        if cfg!(test) {
+            return;
+        }
+        let center = crate::accounts::get(cx);
+        self.catalog_tasks = self
+            .discovery
+            .binaries
+            .iter()
+            .filter(|(_, path)| path.is_some())
+            .map(|(kind, _)| {
+                let kind = *kind;
+                let profile = center
+                    .as_ref()
+                    .map(|center| center.read(cx).selected(kind, &self.ctx.cwd))
+                    .unwrap_or_default();
+                let work = cx
+                    .background_executor()
+                    .spawn(async move { monocode_core::catalog::models_for(kind, &profile) });
+                cx.spawn(async move |this, cx| {
+                    let Ok(models) = work.await else {
+                        return;
+                    };
+                    let _ = this.update(cx, |this, cx| {
+                        this.model_catalogs
+                            .insert(kind, models.into_iter().map(|m| (m.id, m.name)).collect());
+                        cx.notify();
+                    });
+                })
+            })
+            .collect();
     }
     pub(crate) fn set_context(&mut self, ctx: SettingsContext, cx: &mut Context<Self>) {
         if self.ctx != ctx {

@@ -72,10 +72,12 @@ pub(crate) fn cached_model_name(kind: Kind, id: Option<&str>) -> SharedString {
     id.and_then(|id| catalog::cached_name(kind, id).map(|name| model_display_name(kind, id, &name)))
         .unwrap_or_else(|| model_name(kind, id))
 }
-/// saveRecentModelChoice: the pick moves to the front of the six recents.
+/// saveRecentModelChoice: the pick moves to the front of the six recents,
+/// and becomes the provider's last used model for new chats.
 pub(crate) fn remember_model(kind: Kind, model: Option<String>, cx: &mut gpui::App) {
     if cx.has_global::<crate::settings::Preferences>() {
         cx.update_global::<crate::settings::Preferences, _>(|prefs, _| {
+            prefs.last_models.insert(kind.id().into(), model.clone());
             let choice = crate::settings::ModelChoice {
                 provider: kind.id().into(),
                 model,
@@ -85,6 +87,19 @@ pub(crate) fn remember_model(kind: Kind, model: Option<String>, cx: &mut gpui::A
             prefs.recent_models.truncate(6);
         });
     }
+}
+/// The provider and model that write `task`'s text: the chosen one, else
+/// `fallback`'s default.
+pub(crate) fn text_task_choice(
+    task: crate::settings::TextTask,
+    fallback: Kind,
+    cx: &gpui::App,
+) -> (Kind, Option<String>) {
+    cx.try_global::<crate::settings::Preferences>()
+        .and_then(|prefs| prefs.text_model_for(task))
+        .map_or((fallback, None), |choice| {
+            (Kind::from_id(&choice.provider), choice.model.clone())
+        })
 }
 fn contains_account_id(value: &str) -> bool {
     value.match_indices("account-").any(|(offset, _)| {
@@ -136,6 +151,133 @@ mod model_label_tests {
                 assert_eq!(entries.len(), 1);
                 assert_eq!(entries[0].id, None);
             });
+        });
+    }
+
+    #[gpui::test]
+    fn the_text_model_picker_opens_on_the_chosen_model(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(crate::settings::Preferences {
+                commit_model: Some(crate::settings::ModelChoice {
+                    provider: "codex".into(),
+                    model: Some("gpt-mini".into()),
+                }),
+                ..Default::default()
+            });
+            let commit = cx.new(|cx| {
+                ModelList::for_text_task(
+                    crate::settings::TextTask::Commit,
+                    Kind::Claude,
+                    "/work",
+                    cx,
+                )
+            });
+            assert_eq!(commit.read(cx).provider, Kind::Codex);
+            assert_eq!(commit.read(cx).current.as_deref(), Some("gpt-mini"));
+            // Other tasks are unaffected and open on the fallback's default.
+            let title = cx.new(|cx| {
+                ModelList::for_text_task(
+                    crate::settings::TextTask::Title,
+                    Kind::Claude,
+                    "/work",
+                    cx,
+                )
+            });
+            assert_eq!(title.read(cx).provider, Kind::Claude);
+            assert_eq!(title.read(cx).current, None);
+        });
+    }
+
+    #[gpui::test]
+    fn a_pick_becomes_the_providers_last_model(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(crate::settings::Preferences::default());
+            remember_model(Kind::Claude, Some("sonnet".into()), cx);
+            remember_model(Kind::Codex, Some("gpt-mini".into()), cx);
+            remember_model(Kind::Claude, None, cx);
+            let prefs = cx.global::<crate::settings::Preferences>();
+            assert_eq!(prefs.last_models.get("claude"), Some(&None));
+            assert_eq!(
+                prefs.model_for_new_chat("codex", "/work").as_deref(),
+                Some("gpt-mini")
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn hidden_models_leave_the_picker_until_searched(cx: &mut gpui::TestAppContext) {
+        let model = |id: &str| Model {
+            id: id.into(),
+            name: id.into(),
+            alias_target: None,
+            efforts: Vec::new(),
+            default_effort: None,
+            fast: false,
+            thinking: false,
+            default: false,
+            tiers: Vec::new(),
+            controls: Vec::new(),
+        };
+        let choice = |id: &str| crate::settings::ModelChoice {
+            provider: "codex".into(),
+            model: Some(id.into()),
+        };
+        cx.update(|cx| {
+            let mut prefs = crate::settings::Preferences {
+                hidden_models: vec![choice("gpt-global"), choice("gpt-current")],
+                ..Default::default()
+            };
+            prefs
+                .project_providers
+                .entry("/work".into())
+                .or_default()
+                .hidden_models = vec![choice("gpt-project")];
+            cx.set_global(prefs);
+            let list = cx.new(|cx| {
+                ModelList::new_for(
+                    Kind::Codex,
+                    Some("gpt-current".into()),
+                    "/work",
+                    Default::default(),
+                    cx,
+                )
+            });
+            list.update(cx, |list, _| {
+                list.catalogs = vec![(
+                    Kind::Codex,
+                    ["gpt-global", "gpt-project", "gpt-shown", "gpt-current"]
+                        .map(model)
+                        .to_vec(),
+                )];
+            });
+            let ids = |list: &Entity<ModelList>, cx: &gpui::App| {
+                list.read(cx)
+                    .entries(cx)
+                    .into_iter()
+                    .map(|e| (e.id, e.hidden))
+                    .collect::<Vec<_>>()
+            };
+            // The session's own model stays even though it is hidden.
+            assert_eq!(
+                ids(&list, cx),
+                [
+                    (None, false),
+                    (Some("gpt-shown".into()), false),
+                    (Some("gpt-current".into()), true),
+                ]
+            );
+            // A search reveals hidden matches after the visible ones.
+            let search = list.read(cx).search.clone();
+            search.update(cx, |input, cx| input.set_text("gpt".into(), cx));
+            assert_eq!(
+                ids(&list, cx),
+                [
+                    (Some("gpt-shown".into()), false),
+                    (Some("gpt-current".into()), true),
+                    (Some("gpt-global".into()), true),
+                    (Some("gpt-project".into()), true),
+                ]
+            );
         });
     }
 
@@ -235,6 +377,8 @@ struct ModelEntry {
     id: Option<String>,
     name: SharedString,
     enabled: bool,
+    /// Hidden in Settings; listed only while a search names it.
+    hidden: bool,
 }
 
 /// The model the next turn uses; `None` is the provider's default.
@@ -245,6 +389,7 @@ pub(crate) struct ModelPicked(pub Kind, pub Option<String>);
 /// between turns.
 pub(crate) struct ModelList {
     provider: Kind,
+    project: String,
     remote_project: Option<String>,
     remote_providers: Option<Vec<Kind>>,
     current: Option<String>,
@@ -287,6 +432,7 @@ impl ModelList {
         });
         let mut list = Self {
             provider,
+            project: project.to_owned(),
             remote_project: monocode_core::remote::parse_remote_path(project)
                 .map(|_| project.to_owned()),
             remote_providers: None,
@@ -324,6 +470,47 @@ impl ModelList {
             cx,
         );
         list
+    }
+    /// The normal model picker, opened on the model that writes `task`'s
+    /// text, or on `fallback`'s default while none is chosen.
+    pub(crate) fn for_text_task(
+        task: crate::settings::TextTask,
+        fallback: Kind,
+        project: &str,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let choice = cx
+            .try_global::<crate::settings::Preferences>()
+            .and_then(|prefs| prefs.text_model_for(task))
+            .cloned();
+        Self::for_choice(choice.as_ref(), fallback, project, cx)
+    }
+    /// The normal model picker, opened on `choice`, or on `fallback`'s default.
+    pub(crate) fn for_choice(
+        choice: Option<&crate::settings::ModelChoice>,
+        fallback: Kind,
+        project: &str,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let (kind, model) = choice.map_or((fallback, None), |c| {
+            (Kind::from_id(&c.provider), c.model.clone())
+        });
+        let profile = crate::accounts::get(cx)
+            .map(|center| center.read(cx).selected(kind, project))
+            .unwrap_or_default();
+        let hidden = cx
+            .try_global::<crate::settings::Preferences>()
+            .map(|prefs| prefs.hidden_for(project))
+            .unwrap_or_default();
+        Self::new_for(kind, model, project, profile, cx)
+            .hide_providers(hidden)
+            .allow_provider_switch(true)
+    }
+    /// Hides `more` providers on top of the ones already hidden.
+    pub(crate) fn also_hide_providers(mut self, more: impl IntoIterator<Item = String>) -> Self {
+        let mut hidden = std::mem::take(&mut self.hidden);
+        hidden.extend(more);
+        self.hide_providers(hidden)
     }
     pub(crate) fn hide_providers(mut self, hidden: Vec<String>) -> Self {
         if self.remote_project.is_some() {
@@ -518,7 +705,7 @@ impl ModelList {
     fn entries(&self, cx: &gpui::App) -> Vec<ModelEntry> {
         let ModelTab::Harness(kind) = self.tab else {
             let query = self.query(cx);
-            return cx
+            let entries = cx
                 .try_global::<crate::settings::Preferences>()
                 .into_iter()
                 .flat_map(|prefs| &prefs.favorite_models)
@@ -537,9 +724,11 @@ impl ModelList {
                         id: choice.model.clone(),
                         name,
                         enabled: self.enabled(kind),
+                        hidden: false,
                     })
                 })
                 .collect();
+            return self.without_hidden(entries, &query, cx);
         };
         let enabled = self.enabled(kind);
         let mut entries = vec![ModelEntry {
@@ -547,6 +736,7 @@ impl ModelList {
             id: None,
             name: "Default".into(),
             enabled,
+            hidden: false,
         }];
         if let Some(prefs) = cx.try_global::<crate::settings::Preferences>() {
             for choice in &prefs.recent_models {
@@ -559,6 +749,7 @@ impl ModelList {
                         id: choice.model.clone(),
                         name: self.saved_model_name(kind, choice.model.as_deref()),
                         enabled,
+                        hidden: false,
                     });
                 }
             }
@@ -577,6 +768,7 @@ impl ModelList {
                     id: Some(model.id.clone()),
                     name: model_display_name(kind, &model.id, &model.name),
                     enabled,
+                    hidden: false,
                 })
                 .collect();
             entries.extend(additional);
@@ -590,6 +782,7 @@ impl ModelList {
                     id: Some(id.into()),
                     name: name.into(),
                     enabled,
+                    hidden: false,
                 })
                 .collect();
             entries.extend(additional);
@@ -604,10 +797,11 @@ impl ModelList {
                 id: Some(id.clone()),
                 name: model_name(kind, Some(id)),
                 enabled,
+                hidden: false,
             });
         }
         let query = self.query(cx);
-        entries
+        let entries = entries
             .into_iter()
             .filter(|e| {
                 query.is_empty()
@@ -615,7 +809,39 @@ impl ModelList {
                         .to_lowercase()
                         .contains(&query)
             })
-            .collect()
+            .collect();
+        self.without_hidden(entries, &query, cx)
+    }
+    /// Leave hidden models out, except the session's own and, while
+    /// searching, the matches, which follow the visible ones.
+    fn without_hidden(
+        &self,
+        entries: Vec<ModelEntry>,
+        query: &str,
+        cx: &gpui::App,
+    ) -> Vec<ModelEntry> {
+        let Some(prefs) = cx.try_global::<crate::settings::Preferences>() else {
+            return entries;
+        };
+        let hidden = prefs.hidden_models_for(&self.project);
+        if hidden.is_empty() {
+            return entries;
+        }
+        let (mut visible, mut found) = (Vec::new(), Vec::new());
+        for mut entry in entries {
+            entry.hidden = entry.id.is_some()
+                && hidden
+                    .iter()
+                    .any(|c| c.provider == entry.kind.id() && c.model == entry.id);
+            let current = entry.kind == self.provider && entry.id == self.current;
+            if !entry.hidden || current {
+                visible.push(entry);
+            } else if !query.is_empty() {
+                found.push(entry);
+            }
+        }
+        visible.extend(found);
+        visible
     }
     fn enabled(&self, kind: Kind) -> bool {
         (kind == self.provider || self.switch_allowed)
@@ -780,7 +1006,11 @@ impl Render for ModelList {
                     .flex()
                     .items_center()
                     .text_size(px(13.))
-                    .text_color(content(if entry.enabled { 1. } else { 0.3 }))
+                    .text_color(content(match (entry.enabled, entry.hidden) {
+                        (false, _) => 0.3,
+                        (true, true) => 0.5,
+                        (true, false) => 1.,
+                    }))
                     .when(highlighted, |d| d.bg(content(0.1)))
                     .when(!highlighted && entry.enabled, |d| {
                         d.hover(|s| s.bg(content(0.05)))
@@ -793,6 +1023,16 @@ impl Render for ModelList {
                             .truncate()
                             .child(entry.name),
                     )
+                    .when(entry.hidden, |d| {
+                        d.child(
+                            div()
+                                .flex_shrink_0()
+                                .px_1()
+                                .text_size(px(11.))
+                                .text_color(content(0.4))
+                                .child("Hidden"),
+                        )
+                    })
                     .when(current, |d| {
                         d.child(
                             div()
@@ -1011,6 +1251,7 @@ impl ModelList {
                             .text_size(px(13.))
                             .text_color(content(1.))
                             .when(!entry.enabled, |d| d.opacity(0.35))
+                            .when(entry.enabled && entry.hidden, |d| d.opacity(0.5))
                             .when(entry.enabled, |d| d.cursor_pointer())
                             .when(favorites, |d| d.child(provider_icon(entry.kind.id(), 14.)))
                             .child(div().min_w_0().truncate().child(entry.name.clone()))

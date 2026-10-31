@@ -287,8 +287,18 @@ impl Conversation {
         let from = self.response_provider(turn, cx);
         let transcript = self.transcript.read(cx);
         let source = transcript.turns.get(&turn);
+        let hidden = cx
+            .try_global::<crate::settings::Preferences>()
+            .map(|prefs| prefs.hidden_models_for(&self.summary.cwd))
+            .unwrap_or_default();
         let mut options = Vec::new();
         for model in models {
+            if hidden
+                .iter()
+                .any(|c| c.provider == provider.id() && c.model.as_deref() == Some(&model.id))
+            {
+                continue;
+            }
             if kind == TransferKind::SecondOpinion
                 && provider.id() == from
                 && source.is_some_and(|source| {

@@ -135,7 +135,7 @@ impl Section {
                 "transcript composer prompt message diff review layout format save editor"
             }
             Section::Providers => {
-                "account sign in login model harness claude codex gemini cli default hooks"
+                "account sign in login model harness claude codex gemini cli default hooks hide hidden picker"
             }
             Section::Mcp => {
                 "tools servers connections oauth authenticate login claude codex cursor opencode"
@@ -400,6 +400,30 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         "effort thinking reasoning fast service tier model picker composer",
     ),
     (
+        "text-model",
+        Section::Chat,
+        "Text generation model",
+        "commit message pull request title session name cheap haiku mini",
+    ),
+    (
+        "commit-model",
+        Section::Chat,
+        "Commit messages",
+        "commit message model generate git",
+    ),
+    (
+        "pr-model",
+        Section::Chat,
+        "Pull requests",
+        "pull request title description model generate git",
+    ),
+    (
+        "title-model",
+        Section::Chat,
+        "Session titles",
+        "session name title model generate rename",
+    ),
+    (
         "composer-autocorrect",
         Section::Chat,
         "Autocorrect",
@@ -434,6 +458,12 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         Section::Providers,
         "Agent CLIs",
         "codex opencode cursor grok pi omp fx hermes antigravity devin binary path",
+    ),
+    (
+        "new-chat-model",
+        Section::Providers,
+        "New chats start with",
+        "default model last used remember previous pinned new conversation session",
     ),
     (
         "provider-accounts",

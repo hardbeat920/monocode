@@ -45,14 +45,26 @@ impl Conversation {
         self.summary.title = seed.clone();
         let cancel = Arc::new(AtomicBool::new(false));
         self.title_cancel = Some(cancel.clone());
-        let kind = Kind::from_id(&self.summary.provider);
+        let mut kind = Kind::from_id(&self.summary.provider);
+        let mut model = None;
+        let mut account = self.settings.account.clone();
+        if let Some(choice) = cx
+            .try_global::<crate::settings::Preferences>()
+            .and_then(|p| p.text_model_for(crate::settings::TextTask::Title))
+        {
+            let chosen = Kind::from_id(&choice.provider);
+            if chosen != kind {
+                account = Default::default();
+            }
+            kind = chosen;
+            model = choice.model.clone();
+        }
         let cwd = self
             .settings
             .worktree_cwd
             .clone()
             .unwrap_or_else(|| self.summary.cwd.clone());
         let message = message.to_owned();
-        let account = self.settings.account.clone();
         let id = self.summary.id;
         let store = self.store.clone();
         let expected = seed.clone();
@@ -70,6 +82,7 @@ impl Conversation {
             } else {
                 monocode_core::session_title::generate_for(
                     kind,
+                    model,
                     Path::new(&cwd),
                     &message,
                     account,

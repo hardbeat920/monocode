@@ -6,8 +6,10 @@ use crate::{
     file_icons::file_type_icon,
     git_status::{GitChanged, ProjectGit},
     input::{self, Input},
+    pickers::{ModelList, ModelPicked, cached_model_name},
     popover::{
-        Align, Anchor, AnchorSlot, Menu, MenuAction, MenuEvent, MenuItem, MenuStyle, menu_popover,
+        Align, Anchor, AnchorSlot, Flyout, Menu, MenuAction, MenuEvent, MenuItem, MenuStyle, Side,
+        menu_popover, popover,
     },
     right_panel::*,
     theme::*,
@@ -208,7 +210,7 @@ enum MenuKind {
 struct OpenMenu {
     kind: MenuKind,
     menu: Entity<Menu>,
-    _events: Subscription,
+    _events: Vec<Subscription>,
 }
 
 pub(crate) struct Changes {
@@ -237,6 +239,9 @@ pub(crate) struct Changes {
     menu: Option<OpenMenu>,
     branch_anchor: AnchorSlot,
     commit_anchor: AnchorSlot,
+    /// The model picker open from the commit box's model chip.
+    text_picker: Option<(Entity<ModelList>, Subscription)>,
+    text_model_anchor: AnchorSlot,
     _subscriptions: Vec<Subscription>,
 }
 impl EventEmitter<ChangesEvent> for Changes {}
@@ -273,6 +278,8 @@ impl Changes {
             menu: None,
             branch_anchor: AnchorSlot::default(),
             commit_anchor: AnchorSlot::default(),
+            text_picker: None,
+            text_model_anchor: AnchorSlot::default(),
             _subscriptions: subscriptions,
         };
         this.rebuild(cx);
@@ -642,17 +649,26 @@ impl Changes {
             }
         }
     }
-    /// pickTextHarness: the conversation's provider when installed, else
-    /// Claude Code, then Codex.
-    fn text_harness(&self) -> Option<(Kind, PathBuf)> {
-        pick_text_harness(self.text_provider)
+    /// The model chosen for `task`, else pickTextHarness: the conversation's
+    /// provider when installed, then Claude Code, then Codex.
+    fn text_harness(
+        &self,
+        task: crate::settings::TextTask,
+        cx: &App,
+    ) -> Option<(Kind, PathBuf, Option<String>)> {
+        let prefs = cx.try_global::<crate::settings::Preferences>();
+        commit_harness(
+            self.text_provider,
+            prefs.and_then(|p| p.text_model_for(task)),
+        )
     }
     fn generate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let has_files = self.index(cx).is_some_and(|i| !i.files.is_empty());
         if !has_files || self.busy.is_some() || self.generate_cancel.is_some() {
             return;
         }
-        let Some((kind, binary)) = self.text_harness() else {
+        let Some((kind, binary, model)) = self.text_harness(crate::settings::TextTask::Commit, cx)
+        else {
             Self::fail(
                 "No provider CLI is installed to write a commit message.".into(),
                 window,
@@ -668,7 +684,7 @@ impl Changes {
         let flag = cancel.clone();
         let work = cx
             .background_executor()
-            .spawn(async move { generate_commit_message(kind, binary, cwd, flag) });
+            .spawn(async move { generate_commit_message(kind, binary, cwd, model, flag) });
         cx.spawn_in(window, async move |this, cx| {
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| {
@@ -777,7 +793,7 @@ impl Changes {
     ) {
         let message = self.message.read(cx).content.to_string();
         let amend = self.amend.is_some();
-        let pr = create_pr.then(|| self.text_harness());
+        let pr = create_pr.then(|| self.text_harness(crate::settings::TextTask::PullRequest, cx));
         self.run_git(
             if create_pr { "pr" } else { "commit" }.into(),
             move |path| {
@@ -802,7 +818,7 @@ impl Changes {
     /// generatePrContent, `gh pr create`, then the browser.
     fn open_created_pr(
         &mut self,
-        harness: Option<(Kind, PathBuf)>,
+        harness: Option<(Kind, PathBuf, Option<String>)>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -848,7 +864,7 @@ impl Changes {
                     .unwrap_or_default()
             )
         });
-        let harness = self.text_harness();
+        let harness = self.text_harness(crate::settings::TextTask::PullRequest, cx);
         cx.spawn_in(window, async move |this, cx| {
             if let Some(question) = question {
                 let Ok(ask) = this.update_in(cx, |_, window, cx| {
@@ -885,6 +901,7 @@ impl Changes {
         }
         self.menu = None;
         let index = self.index(cx);
+        let mut subscriptions = Vec::new();
         let items: Vec<MenuItem> = match kind {
             MenuKind::Branch => {
                 let can_pull = index
@@ -900,6 +917,31 @@ impl Changes {
             }
             MenuKind::Commit => {
                 let (can_push, can_push_pr) = self.push_options(cx);
+                // The model that writes the pull request, chosen with the
+                // composer's own model picker.
+                let list = cx.new(|cx| {
+                    ModelList::for_text_task(
+                        crate::settings::TextTask::PullRequest,
+                        self.text_provider,
+                        &self.cwd,
+                        cx,
+                    )
+                });
+                subscriptions.push(cx.subscribe_in(
+                    &list,
+                    window,
+                    |this, _, picked: &ModelPicked, _, cx| {
+                        this.menu = None;
+                        Self::choose_text_model(crate::settings::TextTask::PullRequest, picked, cx);
+                        cx.notify();
+                    },
+                ));
+                let focus = list.read(cx).search_focus(cx);
+                let (pr_kind, pr_model) = crate::pickers::text_task_choice(
+                    crate::settings::TextTask::PullRequest,
+                    self.text_provider,
+                    cx,
+                );
                 vec![
                     MenuAction::new("push", "Commit & Push")
                         .disabled(!can_push)
@@ -911,19 +953,33 @@ impl Changes {
                     MenuAction::new("amend", "Amend Last Commit")
                         .checked(self.amend.is_some())
                         .into(),
+                    MenuItem::Separator,
+                    MenuAction::new("pr-model", "PR text model")
+                        .value_image(pr_kind.id())
+                        .value(cached_model_name(pr_kind, pr_model.as_deref()))
+                        .flyout(Flyout {
+                            view: list.into(),
+                            width: 310.,
+                            padding: 0.,
+                            height: Some(442.),
+                            max_height: None,
+                            focus: Some(focus),
+                            surface: None,
+                        })
+                        .into(),
                 ]
             }
         };
         let (label, width) = match kind {
             MenuKind::Branch => ("Branch actions", 144.),
-            MenuKind::Commit => ("Commit options", 192.),
+            MenuKind::Commit => ("Commit options", 220.),
         };
         let menu = cx.new(|cx| {
             Menu::new(label, items, window, cx)
                 .width(width)
                 .style(MenuStyle::Git)
         });
-        let events = cx.subscribe_in(
+        subscriptions.push(cx.subscribe_in(
             &menu,
             window,
             move |this, _, event: &MenuEvent, window, cx| {
@@ -939,12 +995,48 @@ impl Changes {
                 }
                 cx.notify();
             },
-        );
+        ));
         self.menu = Some(OpenMenu {
             kind,
             menu,
-            _events: events,
+            _events: subscriptions,
         });
+        cx.notify();
+    }
+    /// Store a pick from the model picker as the model that writes `task`.
+    fn choose_text_model(task: crate::settings::TextTask, picked: &ModelPicked, cx: &mut App) {
+        if cx.has_global::<crate::settings::Preferences>() {
+            let choice = crate::settings::ModelChoice {
+                provider: picked.0.id().into(),
+                model: picked.1.clone(),
+            };
+            cx.update_global::<crate::settings::Preferences, _>(|prefs, _| {
+                prefs.set_text_model(task, Some(choice));
+            });
+        }
+    }
+    fn toggle_text_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.text_picker.take().is_some() {
+            cx.notify();
+            return;
+        }
+        self.menu = None;
+        let list = cx.new(|cx| {
+            ModelList::for_text_task(
+                crate::settings::TextTask::Commit,
+                self.text_provider,
+                &self.cwd,
+                cx,
+            )
+        });
+        let subscription =
+            cx.subscribe_in(&list, window, |this, _, picked: &ModelPicked, _, cx| {
+                this.text_picker = None;
+                Self::choose_text_model(crate::settings::TextTask::Commit, picked, cx);
+                cx.notify();
+            });
+        window.focus(&list.read(cx).search_focus(cx), cx);
+        self.text_picker = Some((list, subscription));
         cx.notify();
     }
     fn push_options(&self, cx: &App) -> (bool, bool) {
@@ -1053,6 +1145,36 @@ impl Changes {
             })
     }
 
+    /// The model that writes the commit message, as the composer's model
+    /// chip shows it; it opens the same picker.
+    fn text_model_chip(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let (kind, model) = crate::pickers::text_task_choice(
+            crate::settings::TextTask::Commit,
+            self.text_provider,
+            cx,
+        );
+        let name = cached_model_name(kind, model.as_deref());
+        let open = self.text_picker.is_some();
+        div().mt(px(6.)).flex().child(
+            crate::conversation::tool_pill("commit-text-model", "Commit message model")
+                .min_w_0()
+                .max_w(px(220.))
+                .flex_shrink(1.)
+                .aria_label(format!("Commit message model, {name}"))
+                .aria_expanded(open)
+                .when(self.busy.is_some(), |d| d.opacity(0.4))
+                .child(self.text_model_anchor.probe())
+                .child(provider_icon(kind.id(), 16.))
+                .child(crate::conversation::pill_label(name))
+                .child(icon("chevron-down", 12.))
+                .when(self.busy.is_none(), |d| {
+                    d.on_click(
+                        cx.listener(|this, _, window, cx| this.toggle_text_picker(window, cx)),
+                    )
+                }),
+        )
+    }
+
     fn commit_box(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let index = self.git.read(cx).index.clone();
         let has_files = index.as_ref().is_some_and(|i| !i.files.is_empty());
@@ -1156,6 +1278,7 @@ impl Changes {
                             }),
                     ),
             )
+            .child(self.text_model_chip(cx))
             .child(
                 div()
                     .relative()
@@ -1808,18 +1931,33 @@ pub(crate) fn pick_text_harness(preferred: Kind) -> Option<(Kind, PathBuf)> {
         .find_map(|kind| provider::resolve(kind).map(|binary| (kind, binary)))
 }
 
+/// The harness and model that write commit text: the chosen commit model when
+/// its CLI is installed, else `pick_text_harness` with the CLI's own default.
+pub(crate) fn commit_harness(
+    preferred: Kind,
+    choice: Option<&crate::settings::ModelChoice>,
+) -> Option<(Kind, PathBuf, Option<String>)> {
+    choice
+        .and_then(|c| {
+            let kind = Kind::from_id(&c.provider);
+            provider::resolve(kind).map(|binary| (kind, binary, c.model.clone()))
+        })
+        .or_else(|| pick_text_harness(preferred).map(|(kind, binary)| (kind, binary, None)))
+}
+
 /// generateCommitMessage: a message for the staged changes, written by a
 /// read-only turn of `kind`. Blocking.
 pub(crate) fn generate_commit_message(
     kind: Kind,
     binary: PathBuf,
     cwd: PathBuf,
+    model: Option<String>,
     cancel: Arc<AtomicBool>,
 ) -> Result<String, String> {
     let context = scm::staged_context(&cwd)?;
     let prompt =
         scm::commit_message_prompt(context.branch.as_deref(), &context.summary, &context.patch);
-    let output = text_prompt(kind, binary, cwd, prompt, cancel)?;
+    let output = text_prompt(kind, binary, cwd, prompt, model, cancel)?;
     scm::parse_commit_message(&output).ok_or_else(|| {
         let snippet: String = output
             .split_whitespace()
@@ -1842,16 +1980,17 @@ pub(crate) fn generate_commit_message(
 /// generatePrContent, falling back to the commits, then `gh pr create`; the
 /// new pull request's URL. Blocking.
 pub(crate) fn create_pr_blocking(
-    harness: Option<(Kind, PathBuf)>,
+    harness: Option<(Kind, PathBuf, Option<String>)>,
     cwd: &std::path::Path,
 ) -> Result<String, String> {
     let range = scm::range_context(cwd)?;
-    let parsed = harness.and_then(|(kind, binary)| {
+    let parsed = harness.and_then(|(kind, binary, model)| {
         let output = text_prompt(
             kind,
             binary,
             cwd.to_path_buf(),
             scm::pr_content_prompt(&range),
+            model,
             Arc::new(AtomicBool::new(false)),
         )
         .ok()?;
@@ -1878,6 +2017,7 @@ fn text_prompt(
     binary: PathBuf,
     cwd: PathBuf,
     prompt: String,
+    model: Option<String>,
     cancel: Arc<AtomicBool>,
 ) -> Result<String, String> {
     let request = Request {
@@ -1886,7 +2026,7 @@ fn text_prompt(
         cwd,
         prompt,
         provider_id: None,
-        model: None,
+        model,
         settings: Settings {
             access: AccessMode::ReadOnly,
             ..Default::default()
@@ -1974,6 +2114,25 @@ impl Render for Changes {
                 ),
             })
             .children(menu)
+            .children(self.text_picker.as_ref().map(|(list, _)| {
+                let weak = cx.weak_entity();
+                popover(
+                    "commit-text-model-picker",
+                    Anchor::Slot(self.text_model_anchor.clone()),
+                )
+                .side(Side::Bottom)
+                .align(Align::Start)
+                .width(310.)
+                .height(442.)
+                .padding(0.)
+                .on_dismiss(move |_, cx| {
+                    let _ = weak.update(cx, |this, cx| {
+                        this.text_picker = None;
+                        cx.notify();
+                    });
+                })
+                .child(list.clone())
+            }))
             .into_any_element()
     }
 }
@@ -2001,6 +2160,33 @@ mod tests {
                 assert_eq!(request, changes.pr_request);
             })
             .unwrap();
+    }
+    #[gpui::test]
+    fn a_picker_pick_chooses_the_model_that_writes_the_text(cx: &mut gpui::TestAppContext) {
+        use crate::settings::{Preferences, TextTask};
+        cx.update(|cx| {
+            cx.set_global(Preferences::default());
+            assert_eq!(
+                crate::pickers::text_task_choice(TextTask::PullRequest, Kind::Claude, cx),
+                (Kind::Claude, None)
+            );
+            Changes::choose_text_model(
+                TextTask::PullRequest,
+                &ModelPicked(Kind::Codex, Some("gpt-mini".into())),
+                cx,
+            );
+            assert_eq!(
+                crate::pickers::text_task_choice(TextTask::PullRequest, Kind::Claude, cx),
+                (Kind::Codex, Some("gpt-mini".into()))
+            );
+            // Commit text is untouched, and with no choice the harness keeps
+            // the CLI's own default model.
+            assert_eq!(
+                crate::pickers::text_task_choice(TextTask::Commit, Kind::Claude, cx),
+                (Kind::Claude, None)
+            );
+            assert!(commit_harness(Kind::Claude, None).is_none_or(|(_, _, model)| model.is_none()));
+        });
     }
     fn f(relative: &str, status: &str) -> ChangedFile {
         ChangedFile {

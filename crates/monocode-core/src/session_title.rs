@@ -138,10 +138,12 @@ pub fn generate(
     message: &str,
     cancel: Arc<AtomicBool>,
 ) -> Option<GeneratedTitle> {
-    generate_for(kind, cwd, message, Default::default(), cancel)
+    generate_for(kind, None, cwd, message, Default::default(), cancel)
 }
+/// `model` overrides the provider's cheap default.
 pub fn generate_for(
     kind: Kind,
+    model: Option<String>,
     cwd: &Path,
     message: &str,
     account: crate::accounts::Profile,
@@ -151,11 +153,11 @@ pub fn generate_for(
         return None;
     }
     let binary = provider::resolve(kind)?;
-    let model = match kind {
+    let model = model.or_else(|| match kind {
         Kind::Codex => Some("gpt-5.6-luna".into()),
         Kind::Claude => Some("claude-haiku-4-5".into()),
         _ => None,
-    };
+    });
     let output = provider::run_text(
         Request {
             kind,

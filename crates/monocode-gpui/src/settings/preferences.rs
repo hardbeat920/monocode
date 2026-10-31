@@ -62,6 +62,12 @@ pub(crate) struct Preferences {
     pub empty_session: String,
     // Providers
     pub show_remaining_usage: bool,
+    /// Writes commit messages, pull requests and session titles with this model instead of the session's.
+    pub text_model: Option<ModelChoice>,
+    /// Per-action overrides of `text_model`.
+    pub commit_model: Option<ModelChoice>,
+    pub pr_model: Option<ModelChoice>,
+    pub title_model: Option<ModelChoice>,
     pub mask_emails: bool,
     pub idle_agents: u32,
     pub claude_hooks: bool,
@@ -73,9 +79,16 @@ pub(crate) struct Preferences {
     pub default_provider: Option<String>,
     pub default_models: HashMap<String, String>,
     pub hidden_providers: Vec<String>,
+    /// Models left out of the model picker unless a search names them.
+    pub hidden_models: Vec<ModelChoice>,
     pub project_providers: HashMap<String, ProviderDefaults>,
     pub favorite_models: Vec<ModelChoice>,
     pub recent_models: Vec<ModelChoice>,
+    /// How new chats pick a model when the project names none: "last",
+    /// "default" or "pinned". `None` predates the setting; see `new_chat_mode`.
+    pub new_chat_model: Option<String>,
+    /// The last model picked for each provider, `None` for its default.
+    pub last_models: HashMap<String, Option<String>>,
     pub model_picker_tab: Option<String>,
     /// The last access mode picked in a composer; new chats start with it.
     pub default_access: Option<String>,
@@ -144,6 +157,10 @@ impl Default for Preferences {
             composer_mascot: true,
             empty_session: "ink".into(),
             show_remaining_usage: false,
+            text_model: None,
+            commit_model: None,
+            pr_model: None,
+            title_model: None,
             mask_emails: true,
             idle_agents: 3,
             claude_hooks: true,
@@ -154,9 +171,12 @@ impl Default for Preferences {
             default_provider: None,
             default_models: HashMap::new(),
             hidden_providers: Vec::new(),
+            hidden_models: Vec::new(),
             project_providers: HashMap::new(),
             favorite_models: Vec::new(),
             recent_models: Vec::new(),
+            new_chat_model: None,
+            last_models: HashMap::new(),
             model_picker_tab: None,
             default_access: None,
             provider_efforts: HashMap::new(),
@@ -169,7 +189,41 @@ impl Default for Preferences {
     }
 }
 
+/// An action that has the CLI write text for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TextTask {
+    Commit,
+    PullRequest,
+    Title,
+}
+
 impl Preferences {
+    /// The model chosen for `task`, else the general text model; `None` leaves
+    /// the choice to the caller's default. Titles skip providers that cannot
+    /// write them, so a Hermes or Fx choice keeps the session's own provider.
+    pub(crate) fn text_model_for(&self, task: TextTask) -> Option<&ModelChoice> {
+        use monocode_core::{provider::Kind, session_title::supports};
+        let usable = |choice: &&ModelChoice| {
+            task != TextTask::Title || supports(Kind::from_id(&choice.provider))
+        };
+        match task {
+            TextTask::Commit => &self.commit_model,
+            TextTask::PullRequest => &self.pr_model,
+            TextTask::Title => &self.title_model,
+        }
+        .as_ref()
+        .filter(usable)
+        .or(self.text_model.as_ref().filter(usable))
+    }
+    /// Choose the model that writes `task`'s text.
+    pub(crate) fn set_text_model(&mut self, task: TextTask, choice: Option<ModelChoice>) {
+        match task {
+            TextTask::Commit => self.commit_model = choice,
+            TextTask::PullRequest => self.pr_model = choice,
+            TextTask::Title => self.title_model = choice,
+        }
+    }
+
     pub(crate) fn apply_workspace_theme(&mut self, id: String) {
         let color: gpui::Hsla = gpui::rgb(super::palette(&id, false).surface).into();
         self.theme_hue = (color.h * 360.).round() as u32;
@@ -229,6 +283,7 @@ pub(crate) struct ProviderDefaults {
     pub provider: Option<String>,
     pub models: HashMap<String, String>,
     pub hidden: Vec<String>,
+    pub hidden_models: Vec<ModelChoice>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -247,6 +302,181 @@ impl Preferences {
         hidden.sort();
         hidden.dedup();
         hidden
+    }
+    /// The models hidden globally and for this project.
+    pub(crate) fn hidden_models_for(&self, project: &str) -> Vec<ModelChoice> {
+        let mut hidden = self.hidden_models.clone();
+        if let Some(settings) = self.project_providers.get(project) {
+            for choice in &settings.hidden_models {
+                if !hidden.contains(choice) {
+                    hidden.push(choice.clone());
+                }
+            }
+        }
+        hidden
+    }
+    /// Before the setting existed a chosen default model was the only way to
+    /// steer new chats, so keep honoring it for anyone who set one.
+    pub(crate) fn new_chat_mode(&self) -> &str {
+        match self.new_chat_model.as_deref() {
+            Some(mode @ ("last" | "default" | "pinned")) => mode,
+            _ if !self.default_models.is_empty() => "pinned",
+            _ => "last",
+        }
+    }
+    /// The model a new chat starts on; `None` leaves it to the provider.
+    /// The project's model wins, then the mode's choice. Last used skips a
+    /// model hidden since, and with no history falls back to the first favorite.
+    pub(crate) fn model_for_new_chat(&self, provider: &str, project: &str) -> Option<String> {
+        if let Some(model) = self.project_model(provider, project) {
+            return Some(model);
+        }
+        match self.new_chat_mode() {
+            "pinned" => self.default_models.get(provider).cloned(),
+            "default" => None,
+            _ => {
+                let hidden = self.hidden_models_for(project);
+                let shown = |model: &Option<String>| {
+                    !hidden
+                        .iter()
+                        .any(|c| c.provider == provider && &c.model == model)
+                };
+                // Recents seed the choice for picks made before `last_models`.
+                let last = self.last_models.get(provider).or_else(|| {
+                    self.recent_models
+                        .iter()
+                        .find(|c| c.provider == provider)
+                        .map(|c| &c.model)
+                });
+                match last.filter(|model| shown(model)) {
+                    Some(model) => model.clone(),
+                    None => self
+                        .favorite_models
+                        .iter()
+                        .find(|c| c.provider == provider && c.model.is_some() && shown(&c.model))
+                        .and_then(|c| c.model.clone()),
+                }
+            }
+        }
+    }
+    /// The model for unattended runs (automations, Monos), which should not
+    /// drift with whatever was last tried in a chat.
+    pub(crate) fn stable_model(&self, provider: &str, project: &str) -> Option<String> {
+        self.project_model(provider, project).or_else(|| {
+            (self.new_chat_mode() == "pinned")
+                .then(|| self.default_models.get(provider).cloned())
+                .flatten()
+        })
+    }
+    fn project_model(&self, provider: &str, project: &str) -> Option<String> {
+        self.project_providers
+            .get(project)
+            .and_then(|p| p.models.get(provider))
+            .cloned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn choice(provider: &str, model: &str) -> ModelChoice {
+        ModelChoice {
+            provider: provider.into(),
+            model: Some(model.into()),
+        }
+    }
+
+    #[test]
+    fn a_default_model_set_before_the_setting_keeps_new_chats_pinned() {
+        let mut prefs = Preferences::default();
+        assert_eq!(prefs.new_chat_mode(), "last");
+        prefs
+            .default_models
+            .insert("claude".into(), "sonnet".into());
+        assert_eq!(prefs.new_chat_mode(), "pinned");
+        assert_eq!(
+            prefs.model_for_new_chat("claude", "/work").as_deref(),
+            Some("sonnet")
+        );
+        prefs.new_chat_model = Some("last".into());
+        assert_eq!(prefs.new_chat_mode(), "last");
+    }
+
+    #[test]
+    fn last_used_is_per_provider_and_the_project_model_wins() {
+        let mut prefs = Preferences {
+            recent_models: vec![choice("codex", "gpt-mini"), choice("claude", "opus")],
+            ..Default::default()
+        };
+        // Recents answer until a pick records the provider's last model.
+        assert_eq!(
+            prefs.model_for_new_chat("claude", "/work").as_deref(),
+            Some("opus")
+        );
+        prefs
+            .last_models
+            .insert("claude".into(), Some("sonnet".into()));
+        prefs.last_models.insert("codex".into(), None);
+        assert_eq!(
+            prefs.model_for_new_chat("claude", "/work").as_deref(),
+            Some("sonnet")
+        );
+        assert_eq!(prefs.model_for_new_chat("codex", "/work"), None);
+        prefs
+            .project_providers
+            .entry("/work".into())
+            .or_default()
+            .models
+            .insert("claude".into(), "haiku".into());
+        assert_eq!(
+            prefs.model_for_new_chat("claude", "/work").as_deref(),
+            Some("haiku")
+        );
+        assert_eq!(
+            prefs.model_for_new_chat("claude", "/other").as_deref(),
+            Some("sonnet")
+        );
+    }
+
+    #[test]
+    fn a_hidden_or_missing_last_model_falls_back_to_a_favorite() {
+        let mut prefs = Preferences {
+            favorite_models: vec![choice("codex", "gpt-big"), choice("claude", "sonnet")],
+            ..Default::default()
+        };
+        assert_eq!(
+            prefs.model_for_new_chat("claude", "/work").as_deref(),
+            Some("sonnet")
+        );
+        assert_eq!(prefs.model_for_new_chat("grok", "/work"), None);
+        prefs
+            .last_models
+            .insert("claude".into(), Some("opus".into()));
+        prefs.hidden_models.push(choice("claude", "opus"));
+        assert_eq!(
+            prefs.model_for_new_chat("claude", "/work").as_deref(),
+            Some("sonnet")
+        );
+    }
+
+    #[test]
+    fn provider_default_and_unattended_runs_ignore_the_last_pick() {
+        let mut prefs = Preferences {
+            new_chat_model: Some("default".into()),
+            default_models: HashMap::from([("claude".into(), "sonnet".into())]),
+            last_models: HashMap::from([("claude".into(), Some("opus".into()))]),
+            ..Default::default()
+        };
+        assert_eq!(prefs.model_for_new_chat("claude", "/work"), None);
+        assert_eq!(prefs.stable_model("claude", "/work"), None);
+        prefs.new_chat_model = Some("last".into());
+        assert_eq!(prefs.stable_model("claude", "/work"), None);
+        prefs.new_chat_model = Some("pinned".into());
+        assert_eq!(
+            prefs.stable_model("claude", "/work").as_deref(),
+            Some("sonnet")
+        );
     }
 }
 
@@ -285,5 +515,66 @@ mod decoration_tests {
         assert!(!restored.wayland_window_decorations);
         restored.restore_appearance();
         assert!(restored.wayland_window_decorations);
+    }
+}
+
+#[cfg(test)]
+mod text_model_tests {
+    use super::*;
+
+    fn choice(provider: &str, model: &str) -> ModelChoice {
+        ModelChoice {
+            provider: provider.into(),
+            model: Some(model.into()),
+        }
+    }
+
+    #[test]
+    fn a_task_model_wins_over_the_general_text_model() {
+        let mut prefs = Preferences::default();
+        assert_eq!(prefs.text_model_for(TextTask::Commit), None);
+        prefs.text_model = Some(choice("claude", "haiku"));
+        for task in [TextTask::Commit, TextTask::PullRequest, TextTask::Title] {
+            assert_eq!(prefs.text_model_for(task), Some(&choice("claude", "haiku")));
+        }
+        prefs.set_text_model(TextTask::Commit, Some(choice("codex", "gpt-mini")));
+        assert_eq!(
+            prefs.text_model_for(TextTask::Commit),
+            Some(&choice("codex", "gpt-mini"))
+        );
+        assert_eq!(
+            prefs.text_model_for(TextTask::PullRequest),
+            Some(&choice("claude", "haiku"))
+        );
+        prefs.set_text_model(TextTask::Commit, None);
+        assert_eq!(
+            prefs.text_model_for(TextTask::Commit),
+            Some(&choice("claude", "haiku"))
+        );
+    }
+
+    #[test]
+    fn titles_skip_providers_that_cannot_write_them() {
+        let mut prefs = Preferences {
+            text_model: Some(choice("hermes", "h1")),
+            ..Default::default()
+        };
+        // An unsupported general model leaves titles to the session's provider.
+        assert_eq!(prefs.text_model_for(TextTask::Title), None);
+        assert_eq!(
+            prefs.text_model_for(TextTask::Commit),
+            Some(&choice("hermes", "h1"))
+        );
+        prefs.text_model = Some(choice("claude", "haiku"));
+        prefs.set_text_model(TextTask::Title, Some(choice("fx", "f1")));
+        assert_eq!(
+            prefs.text_model_for(TextTask::Title),
+            Some(&choice("claude", "haiku"))
+        );
+        prefs.set_text_model(TextTask::Title, Some(choice("codex", "gpt-mini")));
+        assert_eq!(
+            prefs.text_model_for(TextTask::Title),
+            Some(&choice("codex", "gpt-mini"))
+        );
     }
 }

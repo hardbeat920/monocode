@@ -1,5 +1,5 @@
 //! ChatPage.
-use crate::settings::SettingsView;
+use crate::settings::{SettingsView, TextTask};
 use gpui::{AnyElement, Context};
 
 impl SettingsView {
@@ -93,6 +93,64 @@ impl SettingsView {
                 )],
             ),
         ];
+        let generated = vec![
+            self.row(
+                Some("text-model"),
+                true,
+                "Text generation model",
+                Some("Write commit messages, pull request text and session titles with this model instead of the session's.".into()),
+                vec![self.text_model_picker(
+                    "text-model",
+                    "Text generation model",
+                    &p.text_model,
+                    "Session's model",
+                    cx,
+                    |p, choice| p.text_model = choice,
+                )],
+            ),
+            self.row(
+                Some("commit-model"),
+                false,
+                "Commit messages",
+                Some("Use a different model for commit messages.".into()),
+                vec![self.text_model_picker(
+                    "commit-model",
+                    "Commit message model",
+                    &p.commit_model,
+                    "Same as above",
+                    cx,
+                    |p, choice| p.set_text_model(TextTask::Commit, choice),
+                )],
+            ),
+            self.row(
+                Some("pr-model"),
+                false,
+                "Pull requests",
+                Some("Use a different model for pull request titles and descriptions.".into()),
+                vec![self.text_model_picker(
+                    "pr-model",
+                    "Pull request model",
+                    &p.pr_model,
+                    "Same as above",
+                    cx,
+                    |p, choice| p.set_text_model(TextTask::PullRequest, choice),
+                )],
+            ),
+            self.row(
+                Some("title-model"),
+                false,
+                "Session titles",
+                Some("Use a different model for naming sessions.".into()),
+                vec![self.text_model_picker(
+                    "title-model",
+                    "Session title model",
+                    &p.title_model,
+                    "Same as above",
+                    cx,
+                    |p, choice| p.set_text_model(TextTask::Title, choice),
+                )],
+            ),
+        ];
         let editor = vec![self.row(
             Some("format-on-save"),
             true,
@@ -154,6 +212,7 @@ impl SettingsView {
         vec![
             self.group(None, true, "Transcript", None, None, transcript),
             self.group(None, false, "Composer", None, None, composer),
+            self.group(None, false, "Generated text", None, None, generated),
             self.group(None, false, "Editor", None, None, editor),
             self.group(None, false, "Code review", None, None, review),
             self.group(None, false, "Extras", None, None, extras),
