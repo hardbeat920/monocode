@@ -21,6 +21,7 @@ export function WorktreePicker({
   cwd,
   executionCwd,
   enabled = true,
+  hotkeys = false,
   opensNewSession = false,
   worktreeRemoved = false,
   onSelect,
@@ -31,6 +32,7 @@ export function WorktreePicker({
   cwd: string;
   executionCwd: string;
   enabled?: boolean;
+  hotkeys?: boolean;
   opensNewSession?: boolean;
   worktreeRemoved?: boolean;
   onSelect: (tree: Worktree) => Promise<void>;
@@ -48,6 +50,15 @@ export function WorktreePicker({
   const anchor = useRef<HTMLDivElement>(null);
   const search = useRef<HTMLInputElement>(null);
   const activeOption = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!hotkeys) return;
+    const onOpen = () => {
+      if (!enabled) return;
+      setBranchPicker(true);
+    };
+    window.addEventListener("open_branch_picker", onOpen);
+    return () => window.removeEventListener("open_branch_picker", onOpen);
+  }, [enabled, hotkeys]);
   const { branches, settled } = useProjectBranchesState(
     worktreeRemoved ? cwd : executionCwd,
     !!cwd && cwd !== "~",
@@ -115,6 +126,7 @@ export function WorktreePicker({
       <BranchPicker
         cwd={executionCwd}
         enabled={enabled}
+        hotkeys={hotkeys}
         worktree={inWorktree}
         initialOpen
         onDismiss={() => setBranchPicker(false)}
