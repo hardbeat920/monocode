@@ -275,6 +275,8 @@ pub struct LiveControl {
     held: AtomicUsize,
     /// The view has stopped its pictures for a hold.
     paused: AtomicBool,
+    /// The user gave the tab input since the view last looked.
+    touched: AtomicBool,
     /// The newest picture for the panel, and what it took so far.
     mail: Mutex<Mailbox>,
     ready: Condvar,
@@ -302,6 +304,7 @@ impl LiveControl {
             resize: Mutex::new(None),
             held: AtomicUsize::new(0),
             paused: AtomicBool::new(false),
+            touched: AtomicBool::new(false),
             mail: Mutex::new(Mailbox::default()),
             ready: Condvar::new(),
         }
@@ -401,6 +404,13 @@ impl LiveControl {
     /// panel keeps up, so it never makes pictures nobody will see.
     fn behind(&self, seq: u64) -> bool {
         self.taken() + 1 < seq
+    }
+
+    /// The user scrolled, clicked or typed in the tab: a lossless picture
+    /// asked for before may already show the page moved, under the scroll
+    /// position of the picture before it.
+    pub fn touch(&self) {
+        self.touched.store(true, Ordering::Release);
     }
 
     pub fn resize(&self, size: PanelSize) {
@@ -735,6 +745,14 @@ pub fn run(
                 }
             }
         }
+        if control.touched.swap(false, Ordering::AcqRel) {
+            if still.take().is_some() {
+                note("lossless picture let go: the user moved the page");
+            }
+            if let Some((at, _)) = &mut moving {
+                *at = Instant::now();
+            }
+        }
         if let Some(next) = control.take_resize().filter(|next| *next != current) {
             // A new size needs pictures of the new size, so the screencast
             // starts over at it.
@@ -753,6 +771,19 @@ pub fn run(
                     return Err(error);
                 }
             }
+            note(&format!(
+                "panel resized to {}x{} at {}: page {}x{} {}",
+                next.width,
+                next.height,
+                next.scale,
+                shown.width,
+                shown.height,
+                if shown.window {
+                    "in its own window"
+                } else {
+                    "emulated"
+                }
+            ));
             current = next;
             last.clear();
         }
@@ -818,66 +849,75 @@ pub fn run(
             continue;
         }
         meter.arrived(event.params["metadata"]["timestamp"].as_f64());
-        let sent = 'frame: {
-            let Some(data) = event.params["data"].as_str() else {
-                break 'frame false;
-            };
-            // The same picture again: nothing moved.
-            if data == last {
-                note("picture dropped: the same as the last one");
-                break 'frame false;
-            }
-            let picture = Picture::of(&event.params["metadata"]);
-            let (width, height) = (picture.width, picture.height);
-            if fits(shown, width, height, jpeg_size(data)) {
-                misfit = None;
-            } else {
-                let since = *misfit.get_or_insert_with(Instant::now);
-                // Something else changed the tab's viewport (a full-page
-                // screenshot does): the panel's is put back.
-                if healed.is_none_or(|at: Instant| at.elapsed() >= HEAL_EVERY) {
-                    healed = Some(Instant::now());
-                    let _ = send(link, &tab.main, Method::PageStopScreencast, json!({}));
-                    match show(link, tab, current) {
-                        Ok(again) => shown = again,
-                        Err(error) => note(&format!("viewport not put back: {error}")),
-                    }
-                }
-                if since.elapsed() < MISFIT_FOR {
-                    note(&format!(
-                        "picture dropped: {width}x{height} css, {:?} px, page {}x{} at {}",
-                        jpeg_size(data),
-                        shown.width,
-                        shown.height,
-                        current.scale
-                    ));
+        let sent =
+            'frame: {
+                let Some(data) = event.params["data"].as_str() else {
+                    break 'frame false;
+                };
+                // The same picture again: nothing moved.
+                if data == last {
+                    note("picture dropped: the same as the last one");
                     break 'frame false;
                 }
-            }
-            last = data.to_string();
-            seq += 1;
-            moving = Some((Instant::now(), picture));
-            // The page moved on: a lossless picture still being made would
-            // show it as it was.
-            still = None;
-            let handing = Instant::now();
-            offer(
-                control,
-                &mut sink,
-                LiveFrame {
-                    tab: tab.tab.0.clone(),
-                    data: last.clone(),
-                    format: "jpeg",
-                    width,
-                    height,
-                    seq,
-                    scroll_x: picture.scroll_x,
-                    scroll_y: picture.scroll_y,
-                },
-            );
-            meter.handed(seq, handing);
-            true
-        };
+                let picture = Picture::of(&event.params["metadata"]);
+                let (width, height) = (picture.width, picture.height);
+                if fits(shown, width, height, jpeg_size(data)) {
+                    misfit = None;
+                } else {
+                    let since = *misfit.get_or_insert_with(Instant::now);
+                    // Something else changed the tab's viewport (a full-page
+                    // screenshot does): the panel's is put back.
+                    if healed.is_none_or(|at: Instant| at.elapsed() >= HEAL_EVERY) {
+                        healed = Some(Instant::now());
+                        let _ = send(link, &tab.main, Method::PageStopScreencast, json!({}));
+                        match show(link, tab, current) {
+                            Ok(again) => {
+                                shown = again;
+                                note(&format!(
+                                "viewport put back after a {width}x{height} picture: page {}x{} {}",
+                                shown.width,
+                                shown.height,
+                                if shown.window { "in its own window" } else { "emulated" }
+                            ));
+                            }
+                            Err(error) => note(&format!("viewport not put back: {error}")),
+                        }
+                    }
+                    if since.elapsed() < MISFIT_FOR {
+                        note(&format!(
+                            "picture dropped: {width}x{height} css, {:?} px, page {}x{} at {}",
+                            jpeg_size(data),
+                            shown.width,
+                            shown.height,
+                            current.scale
+                        ));
+                        break 'frame false;
+                    }
+                }
+                last = data.to_string();
+                seq += 1;
+                moving = Some((Instant::now(), picture));
+                // The page moved on: a lossless picture still being made would
+                // show it as it was.
+                still = None;
+                let handing = Instant::now();
+                offer(
+                    control,
+                    &mut sink,
+                    LiveFrame {
+                        tab: tab.tab.0.clone(),
+                        data: last.clone(),
+                        format: "jpeg",
+                        width,
+                        height,
+                        seq,
+                        scroll_x: picture.scroll_x,
+                        scroll_y: picture.scroll_y,
+                    },
+                );
+                meter.handed(seq, handing);
+                true
+            };
         if sent && control.behind(seq) {
             if let Some((older, _)) = waiting.replace((event, Instant::now())) {
                 ack(link, tab, &older);

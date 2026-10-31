@@ -2010,6 +2010,15 @@ impl BrowserHost {
         input: &live::LiveInput,
     ) -> Result<(), String> {
         let target = self.held_tab(session, tab)?;
+        if let Some(control) = self
+            .live
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .filter(|control| control.tab == *tab)
+        {
+            control.touch();
+        }
         live::input(&self.link, &target, input)
     }
 
