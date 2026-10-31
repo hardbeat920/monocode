@@ -31,8 +31,10 @@ pub struct Row {
     pub sent_at: Option<u64>,
 }
 impl Row {
+    /// Opens a turn's prompt block. A composer `!command` belongs to the
+    /// message it precedes, not to the previous turn's response.
     pub fn is_prompt(&self) -> bool {
-        matches!(self.role.as_str(), "user" | "mono-system")
+        matches!(self.role.as_str(), "user" | "mono-system" | "shell")
     }
 }
 

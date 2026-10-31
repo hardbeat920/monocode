@@ -388,7 +388,8 @@ impl Completion {
         cx.notify();
     }
     fn sync(&mut self, cx: &mut Context<Self>) {
-        if self.cwd.starts_with("remote://") {
+        // A `!command` is passed to the shell as typed.
+        if self.cwd.starts_with("remote://") || self.input.read(cx).shell_mode() {
             self.choices.clear();
             self.token = None;
             self.input.update(cx, |input, cx| {

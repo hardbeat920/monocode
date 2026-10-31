@@ -293,6 +293,13 @@ impl Conversation {
             // The load completion pumps the durable queue after restoring rows.
             return;
         }
+        // Queued messages carry the output of commands queued before them.
+        if self.shell_busy() {
+            if !self.busy {
+                self.pump_shell(cx);
+            }
+            return;
+        }
         if self.settings.usage_limit.is_some()
             || self.settings.worktree_removed
             || self.account_switching

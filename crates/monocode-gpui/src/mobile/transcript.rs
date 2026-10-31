@@ -205,6 +205,17 @@ fn put(map: &mut Map<String, Value>, key: &str, value: Option<impl Into<Value>>)
 /// The user bubbles of a prompt block; `mono-system` prompts are the app's.
 fn user_items(rows: &[Row], run: Run, out: &mut Vec<Value>, by_row: &mut HashMap<usize, usize>) {
     for (at, end) in messages_in(rows, run.prompt, run.key) {
+        if rows[at].role == monocode_core::shell_run::ROLE {
+            if let Some(shell) = monocode_core::shell_run::ShellRun::parse(&rows[at].text) {
+                by_row.insert(at, out.len());
+                let mut item = object(
+                    json!({"type": "user", "id": format!("r{at}"), "text": format!("$ {}", shell.command), "shell": true}),
+                );
+                put(&mut item, "at", rows[at].sent_at);
+                out.push(Value::Object(item));
+            }
+            continue;
+        }
         if rows[at].role != "user" {
             continue;
         }
