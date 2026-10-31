@@ -1,0 +1,20 @@
+<svg width="29" height="29" viewBox="0 0 29 29" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <g fill="#E8590C">
+    <!-- Claws: notched circles read as pincers at 16px; no hairline strokes
+         (the old 1.8px legs smeared into an "orange flame" at picker size). -->
+    <path d="M6.6 10.2L5.99 6.75A3.5 3.5 0 1 0 9.28 7.95Z"/>
+    <path d="M22.4 10.2L23.01 6.75A3.5 3.5 0 1 1 19.72 7.95Z"/>
+    <!-- Claw arms -->
+    <ellipse cx="9.9" cy="13.6" rx="3.2" ry="1.5" transform="rotate(38 9.9 13.6)"/>
+    <ellipse cx="19.1" cy="13.6" rx="3.2" ry="1.5" transform="rotate(-38 19.1 13.6)"/>
+    <!-- Body -->
+    <ellipse cx="14.5" cy="17.5" rx="6.8" ry="5"/>
+    <!-- Legs: three stubby capsules per side -->
+    <ellipse cx="6.9" cy="19.2" rx="3.1" ry="1.3" transform="rotate(28 6.9 19.2)"/>
+    <ellipse cx="6.3" cy="21.8" rx="3.1" ry="1.3" transform="rotate(8 6.3 21.8)"/>
+    <ellipse cx="7.0" cy="24.2" rx="3.1" ry="1.3" transform="rotate(-16 7.0 24.2)"/>
+    <ellipse cx="22.1" cy="19.2" rx="3.1" ry="1.3" transform="rotate(-28 22.1 19.2)"/>
+    <ellipse cx="22.7" cy="21.8" rx="3.1" ry="1.3" transform="rotate(-8 22.7 21.8)"/>
+    <ellipse cx="22.0" cy="24.2" rx="3.1" ry="1.3" transform="rotate(16 22.0 24.2)"/>
+  </g>
+</svg>
