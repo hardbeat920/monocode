@@ -56,6 +56,8 @@ mod quote_tests {
 pub enum Trigger {
     Skill,
     Mention,
+    /// `$` only finds skills; picking one still inserts its `/name`.
+    SkillSearch,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Token {
@@ -79,11 +81,15 @@ pub fn token_at(text: &str, cursor: usize) -> Option<Token> {
     let trigger = match fragment.chars().next()? {
         '/' => Trigger::Skill,
         '@' => Trigger::Mention,
+        '$' => Trigger::SkillSearch,
         _ => return None,
     };
     let query = &fragment[1..];
+    // Prices and shell variables ($5, $HOME/x) are ordinary text.
     if query.contains(['@', '\n', '\r'])
-        || (trigger == Trigger::Skill && query.contains(['/', '.', '\\']))
+        || (trigger != Trigger::Mention && query.contains(['/', '.', '\\']))
+        || (trigger == Trigger::SkillSearch
+            && (query.contains('$') || query.starts_with(|c: char| !c.is_ascii_alphabetic())))
     {
         return None;
     }
@@ -411,6 +417,17 @@ mod tests {
         assert!(token_at("> /review", 9).is_none());
         assert!(token_at("/tmp/file", 9).is_none());
         assert_eq!(token_at("@src/ma", 7).unwrap().trigger, Trigger::Mention);
+    }
+    #[test]
+    fn dollar_finds_skills_but_not_prices_or_variables() {
+        let token = token_at("use $rev", 8).unwrap();
+        assert_eq!(token.trigger, Trigger::SkillSearch);
+        assert_eq!((token.range, token.query.as_str()), (4..8, "rev"));
+        assert_eq!(token_at("$", 1).unwrap().query, "");
+        assert_eq!(token_at("$figma:use", 10).unwrap().query, "figma:use");
+        for text in ["costs $5", "$1.99", "a$b", "$HOME/bin", "$$", "> $rev"] {
+            assert!(token_at(text, text.len()).is_none(), "{text}");
+        }
     }
     #[test]
     fn replacement_and_commands_have_exact_boundaries() {
