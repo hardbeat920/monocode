@@ -199,9 +199,15 @@ impl Source {
         let (Some(host), tab) = (monocode_core::browser::host(), TabId(tab.clone())) else {
             return;
         };
-        // Off the UI thread: closing waits for the browser.
+        // Off the UI thread: closing waits for the browser. A tab already
+        // gone (the page closed itself, or the browser with its last tab)
+        // has nothing left to close.
         std::thread::spawn(move || {
-            if let Err(error) = host.serialized(|| host.close_tab_by_user(&tab)) {
+            let open = host.state().tabs.iter().any(|entry| {
+                entry.tab.tab == tab
+                    && entry.tab.state != monocode_core::browser::protocol::TabState::Closed
+            });
+            if open && let Err(error) = host.serialized(|| host.close_tab_by_user(&tab)) {
                 log_error(&error);
             }
         });
