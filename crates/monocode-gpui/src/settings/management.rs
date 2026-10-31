@@ -168,6 +168,7 @@ impl SettingsView {
                                     }
                                 });
                                 this.management = None;
+                                this.refresh(cx);
                             }
                         }
                         Err(e) => editor.error = Some(e),
