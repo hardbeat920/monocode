@@ -11,9 +11,13 @@ pub(super) struct Cache {
 }
 impl Monos {
     pub(super) fn open_document(&mut self, id: &str, cx: &mut Context<Self>) {
+        // Visual documents carry their whole body from the chat projection.
         if self.current().is_some_and(|mono| {
-            mono.documents.iter().any(|d| d.id == id)
-                && !mono.desktop_document_ids.iter().any(|source| source == id)
+            mono.documents.iter().any(|d| {
+                d.id == id
+                    && (d.kind == "visual"
+                        || !mono.desktop_document_ids.iter().any(|source| source == id))
+            })
         }) {
             return;
         }
@@ -114,6 +118,7 @@ impl Monos {
                     {
                         this.documents.remove(id);
                         this.html_documents.remove(id);
+                        this.visual_documents.remove(id);
                         this.work.documents.remove(id);
                     }
                     if this.active.as_deref() == Some(&id)

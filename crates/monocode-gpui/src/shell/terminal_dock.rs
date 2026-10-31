@@ -49,7 +49,10 @@ impl LiveMark {
                 cx.background_executor()
                     .timer(Duration::from_secs_f32(LIVE_CYCLE / 4.))
                     .await;
-                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                // Each step redraws the whole window; hold the mark while
+                // nobody is looking at it or motion is reduced.
+                let still = cx.update(|cx| cx.reduce_motion() || !crate::pulse::app_active(cx));
+                if !still && this.update(cx, |_, cx| cx.notify()).is_err() {
                     break;
                 }
             }
@@ -269,7 +272,9 @@ impl Shell {
                     self.terminals
                         .get(&project)
                         .and_then(|t| t.get(dock.active))
-                        .cloned(),
+                        // The grid shapes every line; redraw it only when the
+                        // terminal itself changes.
+                        .map(|t| t.clone().cached(StyleRefinement::default().size_full())),
                 ),
             )
             .into_any_element()
@@ -850,22 +855,53 @@ impl Shell {
                                 ),
                             })
                             .collect::<Vec<_>>()
+                    })
+                    // In the panel, New follows the tabs as the title bar's does.
+                    .when(in_panel, |d| {
+                        d.child(
+                            div()
+                                .id("new-terminal")
+                                .debug_selector(|| "new-terminal".into())
+                                .group("new-terminal")
+                                .role(Role::Button)
+                                .aria_label(NEW_TERMINAL_LABEL)
+                                .cursor_pointer()
+                                .size(px(TAB_PLATE_HEIGHT))
+                                .flex_shrink_0()
+                                .ml(px(2.))
+                                .rounded_md()
+                                .bg(content(0.04))
+                                .opacity(0.65)
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .hover(|s| s.opacity(1.).bg(content(0.07)))
+                                .child(
+                                    icon("plus", 14.)
+                                        .group_hover("new-terminal", |s| s.text_color(content(1.))),
+                                )
+                                .on_click(
+                                    cx.listener(|this, _, window, cx| {
+                                        this.new_terminal(window, cx)
+                                    }),
+                                ),
+                        )
                     }),
             )
-            .child(
-                div()
-                    .flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .gap(px(2.))
-                    .pr(px(6.))
-                    .child(
-                        icon_button("new-terminal", NEW_TERMINAL_LABEL, "plus").on_click(
-                            cx.listener(|this, _, window, cx| this.new_terminal(window, cx)),
-                        ),
-                    )
-                    .when(!in_panel, |d| {
-                        d.child(
+            .when(!in_panel, |d| {
+                d.child(
+                    div()
+                        .flex()
+                        .flex_shrink_0()
+                        .items_center()
+                        .gap(px(2.))
+                        .pr(px(6.))
+                        .child(
+                            icon_button("new-terminal", NEW_TERMINAL_LABEL, "plus").on_click(
+                                cx.listener(|this, _, window, cx| this.new_terminal(window, cx)),
+                            ),
+                        )
+                        .child(
                             icon_button("move-terminal", "Move Terminal", side)
                                 .child(move_anchor.probe())
                                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -883,15 +919,13 @@ impl Shell {
                                     );
                                 })),
                         )
-                    })
-                    .when(!in_panel, |d| {
-                        d.child(
+                        .child(
                             icon_button("hide-terminal", HIDE_TERMINAL_LABEL, hide).on_click(
                                 cx.listener(|this, _, window, cx| this.toggle_terminal(window, cx)),
                             ),
-                        )
-                    }),
-            )
+                        ),
+                )
+            })
             .into_any_element()
     }
     /// UsageFooter's right side: the running-terminal chip, else the

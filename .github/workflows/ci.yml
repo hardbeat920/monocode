@@ -87,6 +87,12 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run test:host
+      - run: node --test host/runtime-download.test.mjs
+      - name: Cache pinned host runtimes
+        uses: actions/cache@v4
+        with:
+          path: build/host-runtime-cache
+          key: host-runtime-v1-${{ runner.os }}-${{ runner.arch }}-native-${{ hashFiles('host/package.mjs') }}
       - run: npm run host:package
 
   check:

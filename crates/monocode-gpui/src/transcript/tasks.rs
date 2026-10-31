@@ -17,7 +17,9 @@ use monocode_core::tool::{
     tasks::{AgentRun, AgentStep, Panel, TaskList, TaskStatus},
 };
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet},
+    hash::{Hash, Hasher},
     time::{Duration, Instant},
 };
 
@@ -552,6 +554,43 @@ struct AgentPhase<'a> {
     kind: &'static str,
     counts: [usize; 5],
 }
+/// The phase kind a tool step counts toward, as an index into the kinds
+/// `agent_phases` names. Classifying builds the step's full tool call and runs
+/// its presentation, and agent rows group their steps on every frame, so a
+/// finished step, which no longer changes, keeps its answer.
+fn step_kind(run: &AgentRun, step: &AgentStep) -> usize {
+    thread_local! {
+        static SETTLED: RefCell<HashMap<u64, usize>> = RefCell::default();
+    }
+    let settled = matches!(
+        step.state,
+        Some(ToolState::Completed | ToolState::Failed | ToolState::Cancelled)
+    );
+    let key = {
+        let mut hasher = std::hash::DefaultHasher::new();
+        (&run.ids, &step.id, &step.text).hash(&mut hasher);
+        hasher.finish()
+    };
+    if settled && let Some(kind) = SETTLED.with_borrow(|cache| cache.get(&key).copied()) {
+        return kind;
+    }
+    let kind = match step.to_tool_call().summary().0.as_str() {
+        "Edit" | "Write" => 0,
+        "Run" => 1,
+        "Agent" => 2,
+        "Read" | "List" | "Search" | "Find" => 3,
+        _ => 4,
+    };
+    if settled {
+        SETTLED.with_borrow_mut(|cache| {
+            if cache.len() >= 4096 {
+                cache.clear();
+            }
+            cache.insert(key, kind);
+        });
+    }
+    kind
+}
 fn agent_phases(run: &AgentRun) -> Vec<AgentPhase<'_>> {
     let mut phases: Vec<AgentPhase<'_>> = Vec::new();
     for step in &run.steps {
@@ -579,15 +618,7 @@ fn agent_phases(run: &AgentRun) -> Vec<AgentPhase<'_>> {
         }
         current.steps.push(step);
         if step.kind == "tool" {
-            let call = step.to_tool_call();
-            let kind = match call.summary().0.as_str() {
-                "Edit" | "Write" => 0,
-                "Run" => 1,
-                "Agent" => 2,
-                "Read" | "List" | "Search" | "Find" => 3,
-                _ => 4,
-            };
-            current.counts[kind] += 1;
+            current.counts[step_kind(run, step)] += 1;
             let dominant = (0..5)
                 .max_by_key(|&kind| (current.counts[kind], 5 - kind))
                 .unwrap();

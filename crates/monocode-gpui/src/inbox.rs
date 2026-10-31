@@ -60,6 +60,8 @@ pub(crate) struct Inbox {
     summary_rows: std::cell::RefCell<ui::SummaryRows>,
     focus_comment: bool,
     selected: Option<String>,
+    /// The address last copied and the press that copied it, until the tick fades.
+    copied_link: Option<(String, u64)>,
     details: Option<Details>,
     thread: Option<Thread>,
     document: Option<Entity<document::InboxDocument>>,
@@ -128,6 +130,25 @@ impl Focusable for Inbox {
 }
 
 impl Inbox {
+    fn copy_link(&mut self, url: String, cx: &mut Context<Self>) {
+        if url.is_empty() {
+            return;
+        }
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(url.clone()));
+        let press = self.copied_link.as_ref().map_or(0, |(_, press)| press + 1);
+        self.copied_link = Some((url, press));
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_secs(2)).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.copied_link.as_ref().is_some_and(|(_, p)| *p == press) {
+                    this.copied_link = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
     pub(crate) fn new(
         store: Database,
         projects: Vec<PathBuf>,
@@ -244,6 +265,7 @@ impl Inbox {
             summary_rows: Default::default(),
             focus_comment: false,
             selected: None,
+            copied_link: None,
             details: None,
             thread: None,
             document: None,
@@ -513,6 +535,9 @@ impl Inbox {
             .items
             .iter()
             .filter(|item| self.state.filters.matches(item, &self.state.source, search))
+            .filter(|item| {
+                item.provider != "linear" || !self.state.hidden_linear_teams.contains(&item.team_id)
+            })
             .cloned()
             .collect()
     }

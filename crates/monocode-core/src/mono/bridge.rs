@@ -30,7 +30,7 @@ worktrees.create {branch,base?,existing?,project?}
 folders.list {project?}
 folders.move {sessionId,folderId?,newFolderName?,project?}
 notes.list {limit?,offset?}; notes.read {id}; notes.write {id?,title?,body?,tags?}
-artifacts.list {kind?,limit?,offset?}; artifacts.read {id}; artifacts.write {id?,kind,title,body,summary?}
+artifacts.list {kind?,limit?,offset?}; artifacts.read {id}; artifacts.write {id?,kind:"document",title,body,summary?}
 soul.read {}; soul.update {text,expectedHash}
 memory.read {topic?}; memory.search {query,since?}; memory.add {fact,topic?,until?}; memory.replace {find,fact,topic?,until?}; memory.remove {find,topic?}
 habits.list {}; habits.add {name,instructions,schedule:{kind,time?,minute?,dayOfWeek?}}; habits.update {id,name?,instructions?,schedule?,enabled?}; habits.run {id}; habits.remove {id}
@@ -65,12 +65,13 @@ pub struct Server {
 impl Drop for Server {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+        // Wake the blocking accept so its thread sees the stop flag.
+        let _ = TcpStream::connect(&self.endpoint);
     }
 }
 impl Server {
     pub fn start() -> Result<(Self, async_channel::Receiver<Call>), String> {
         let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
-        listener.set_nonblocking(true).map_err(|e| e.to_string())?;
         let endpoint = listener
             .local_addr()
             .map_err(|e| e.to_string())?
@@ -84,6 +85,7 @@ impl Server {
         std::thread::spawn(move || {
             while !owner.load(Ordering::Relaxed) && !tx.is_closed() {
                 match listener.accept() {
+                    Ok(_) if owner.load(Ordering::Relaxed) => break,
                     Ok((stream, _)) => {
                         if connections.fetch_add(1, Ordering::Relaxed) >= 16 {
                             connections.fetch_sub(1, Ordering::Relaxed);
@@ -97,9 +99,7 @@ impl Server {
                             connections.fetch_sub(1, Ordering::Relaxed);
                         });
                     }
-                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        std::thread::sleep(Duration::from_millis(20))
-                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
                     Err(_) => break,
                 }
             }

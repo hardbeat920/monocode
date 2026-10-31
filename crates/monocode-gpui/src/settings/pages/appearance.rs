@@ -11,7 +11,7 @@ use gpui::{
 };
 
 /// ACCENT_COLOR_PRESETS, after the Default swatch.
-const ACCENTS: [(u32, &str); 6] = [
+pub(crate) const ACCENTS: [(u32, &str); 6] = [
     (0x4da3f5, "Blue"),
     (0x8b5cf6, "Violet"),
     (0xec4899, "Pink"),
@@ -47,7 +47,7 @@ pub(crate) fn parse_hex(text: &str) -> Option<u32> {
 }
 
 /// Preview the palette's neutral tones and accent at a menu icon's 16px.
-fn swatch(surface: u32, panel: u32, solid: u32, accent: u32) -> AnyElement {
+pub(crate) fn swatch(surface: u32, panel: u32, solid: u32, accent: u32) -> AnyElement {
     div()
         .relative()
         .size_4()

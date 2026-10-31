@@ -264,7 +264,8 @@ pub(super) fn key(request: &Request) -> String {
             .mono
             .as_ref()
             .map(|mono| (&mono.root, &mono.mono.id)),
-        request.settings.disable_claude_hooks
+        request.settings.disable_claude_hooks,
+        crate::accounts::claude_entrypoint()
     ])
     .to_string()
 }

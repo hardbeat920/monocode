@@ -350,6 +350,39 @@ fn setup(cx: &mut TestAppContext) -> Setup {
         store,
     }
 }
+
+#[gpui::test]
+fn heartbeat_runs_keep_the_monos_selected_permissions(cx: &mut TestAppContext) {
+    for mode in [
+        AccessMode::ReadOnly,
+        AccessMode::Supervised,
+        AccessMode::AutoAcceptEdits,
+        AccessMode::Auto,
+        AccessMode::FullAccess,
+    ] {
+        let s = setup(cx);
+        s.manager.update(cx, |m, cx| {
+            m.chats[&s.id].update(cx, |chat, _| {
+                // Avoid catalog probes or provider requests: exercise the actual
+                // background runner, stopping before it dispatches a prompt.
+                chat.settings.access = mode;
+                chat.settings.usage_limit = Some(Default::default());
+            });
+            m.start_heartbeat(&s.id, "Check for follow-ups".into(), cx);
+        });
+        cx.run_until_parked();
+        s.manager.read_with(cx, |m, cx| {
+            assert!(m.error.is_none(), "heartbeat failed: {:?}", m.error);
+            let run = &m.running[&m.active_run.expect("heartbeat session was created")];
+            assert_eq!(run.view.read(cx).settings.access, mode);
+            assert!(
+                !run.view.read(cx).busy,
+                "the fixture must not start a provider"
+            );
+        });
+    }
+}
+
 fn call(
     s: &Setup,
     request: &str,
@@ -791,6 +824,90 @@ fn app_actions_are_project_scoped_and_mutation_retries_are_idempotent(cx: &mut T
     });
 }
 #[gpui::test]
+fn mono_launches_ignore_tab_reveal_and_keep_the_current_chat(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let before = s
+        .window
+        .update(cx, |shell, _, _| shell.workspace.open_sessions())
+        .unwrap();
+    for show in [false, true] {
+        s.manager
+            .update(cx, |m, cx| m.sidebar_preferences(&s.id, show, false, cx));
+        let started = call(
+            &s,
+            if show {
+                "listed-reveal"
+            } else {
+                "hidden-reveal"
+            },
+            "sessions.start",
+            json!({"project":s.project,"prompt":"Test quietly","draft":true,"reveal":true}),
+            cx,
+        )
+        .try_recv()
+        .unwrap()
+        .unwrap();
+        let child = started["sessionId"].as_i64().unwrap();
+        s.window
+            .update(cx, |shell, _, cx| {
+                assert_eq!(
+                    shell.workspace.open_sessions(),
+                    before,
+                    "a Mono launch must not create or select a tab"
+                );
+                assert!(
+                    shell.mono_session_entity(child).is_some(),
+                    "the background session still exists"
+                );
+                let m = s.manager.read(cx);
+                assert_eq!(m.active.as_deref(), Some(s.id.as_str()));
+                assert_eq!(m.hidden_session(child), !show);
+            })
+            .unwrap();
+    }
+}
+
+#[gpui::test]
+fn internal_completion_queue_stays_hidden_until_delivery_fails(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    let handle: gpui::AnyWindowHandle = s.window.into();
+    handle
+        .update(cx, |_, window, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.dismiss_settings(window, cx);
+                m.roster.get_mut(&s.id).unwrap().outbox.push(Message {
+                    id: "completion".into(),
+                    text: "[Delegated work completed]".into(),
+                    internal: true,
+                    sent_at: None,
+                    error: None,
+                    attachments: Vec::new(),
+                });
+                // Keep the notification queued without starting a provider.
+                m.configure_chat(&s.id, cx);
+            });
+        })
+        .unwrap();
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    assert!(
+        visual.debug_bounds("mono-internal-queue").is_none(),
+        "a routine completion must not flash a Pending card in the composer"
+    );
+    s.manager.update(visual, |m, cx| {
+        m.roster.get_mut(&s.id).unwrap().outbox[0].error = Some("Delivery failed".into());
+        m.configure_chat(&s.id, cx);
+    });
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    assert!(
+        visual.debug_bounds("mono-internal-queue").is_some(),
+        "a failed notification keeps its retry and discard controls"
+    );
+}
+
+#[gpui::test]
 fn sidebar_hidden_launches_still_list_in_the_mono_panel_after_a_restart(cx: &mut TestAppContext) {
     let s = setup(cx);
     let started = call(
@@ -931,6 +1048,61 @@ fn chat_composer_keeps_attach_under_the_box_and_opens_the_model_list(cx: &mut Te
     assert_eq!(send.size, gpui::size(px(26.), px(26.)));
     assert_eq!(attach.size, gpui::size(px(26.), px(26.)));
     let chat = visual.update(|_, cx| s.manager.read(cx).chat().unwrap());
+    for (draft, single_line) in [
+        ("".to_owned(), true),
+        ("A short message".to_owned(), true),
+        ("First line\nSecond line".to_owned(), false),
+        ("A message that wraps automatically. ".repeat(40), false),
+        ("Short again".to_owned(), true),
+        ("".to_owned(), true),
+    ] {
+        chat.update(visual, |chat, cx| {
+            chat.input.update(cx, |input, cx| input.set_text(draft, cx));
+        });
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        let field = visual.debug_bounds("mono-composer").unwrap();
+        let send = visual.debug_bounds("mono-send").unwrap();
+        s.window
+            .update(visual, |_, window, _| {
+                let scale = window.scale_factor();
+                let quads = window.painted_quads();
+                for (bounds, radius) in [
+                    (
+                        field,
+                        if single_line {
+                            f32::from(field.size.height) / 2.
+                        } else {
+                            12.
+                        },
+                    ),
+                    (send, 13.),
+                ] {
+                    let quad = quads
+                        .iter()
+                        .find(|quad| {
+                            (quad.bounds.left().0 / scale - f32::from(bounds.left())).abs() < 0.1
+                                && (quad.bounds.top().0 / scale - f32::from(bounds.top())).abs()
+                                    < 0.1
+                                && (quad.bounds.size.width.0 / scale - f32::from(bounds.size.width))
+                                    .abs()
+                                    < 0.1
+                                && (quad.bounds.size.height.0 / scale
+                                    - f32::from(bounds.size.height))
+                                .abs()
+                                    < 0.1
+                        })
+                        .expect("the composer and send button paint their surfaces");
+                    assert!(
+                        (quad.corner_radii.top_left.0 / scale - radius).abs() < 0.1,
+                        "expected a {radius}px corner radius, got {:?}",
+                        quad.corner_radii
+                    );
+                }
+                assert_eq!(field.size.height <= px(38.), single_line);
+            })
+            .unwrap();
+    }
     handle
         .update(visual, |_, w, cx| {
             chat.update(cx, |c, cx| c.toggle_model_menu(w, cx))
@@ -987,7 +1159,7 @@ fn details_tabs_share_the_session_titlebar_in_both_layouts(cx: &mut TestAppConte
         assert_eq!(toggle.left() - search.right(), px(4.));
         assert!(tabs.bottom() <= panel.top() + px(if classic { TITLE_BAR_HEIGHT } else { 0. }));
         assert_eq!(
-            visual.debug_bounds("mono-session-list").unwrap().top(),
+            visual.debug_bounds("mono-dashboard").unwrap().top(),
             panel.top() + px(if classic { TITLE_BAR_HEIGHT } else { 0. })
         );
         assert!(
@@ -1203,6 +1375,42 @@ fn opening_a_session_card_uses_the_shared_sidebar_state(cx: &mut TestAppContext)
         .unwrap();
     visual.run_until_parked();
     assert_eq!(visual.debug_bounds("right-panel-frame").unwrap(), details);
+}
+
+#[gpui::test]
+fn a_session_open_in_mono_details_keeps_its_history(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let session = s
+        .window
+        .update(cx, |shell, _, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.settings = None;
+                cx.notify();
+            });
+            shell.workspace.active.unwrap()
+        })
+        .unwrap();
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    visual.run_until_parked();
+    s.window
+        .update(visual, |_, _, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.card_action(&s.id, &json!({"type":"session", "sessionId":session}), cx);
+            })
+        })
+        .unwrap();
+    visual.run_until_parked();
+    // The details panel shows this session, so memory trimming must not
+    // release its transcript while the Mono view is active.
+    s.window
+        .update(visual, |shell, _, cx| {
+            assert!(shell.workspace.right_panel_open);
+            let chat = shell.mono_ensure_session(session, cx).unwrap();
+            assert!(chat.read(cx).history_loaded());
+            assert!(!chat.update(cx, |chat, cx| chat.unload_history(cx)));
+        })
+        .unwrap();
 }
 
 #[gpui::test]

@@ -1,5 +1,5 @@
-//! MonocodeSparkles, PlanStepsBurst and OrchestratorConstellation: the one-shot
-//! burst inside a freshly sent /operator, Plan or Orchestrator prompt bubble.
+//! One-shot graphics inside freshly sent Operator, Plan, Orchestrator and
+//! Visualize prompt bubbles. Visualize shares the charts' ordered dither grid.
 //! Timings, colors and keyframes follow index.css; CSS's radial gradient and
 //! rounded `overflow: hidden` are approximated with masked linear gradients and
 //! a coverage fade at the bubble's corners.
@@ -14,11 +14,17 @@ pub(super) enum Kind {
     Operator,
     Plan,
     Orchestrator,
+    Visualize,
 }
 
 impl Kind {
-    pub(super) fn from_settings(settings: &monocode_core::agent::Settings) -> Option<Self> {
-        if settings.orchestrator {
+    pub(super) fn from_prompt(
+        prompt: &str,
+        settings: &monocode_core::agent::Settings,
+    ) -> Option<Self> {
+        if monocode_core::composer::consume_command(prompt, "visualize").is_some() {
+            Some(Self::Visualize)
+        } else if settings.orchestrator {
             Some(Self::Orchestrator)
         } else if settings.plan {
             Some(Self::Plan)
@@ -33,6 +39,7 @@ impl Kind {
         match self {
             Self::Orchestrator => 3100.,
             Self::Operator | Self::Plan => 3200.,
+            Self::Visualize => 2800.,
         }
     }
 }
@@ -60,6 +67,11 @@ impl Burst {
         now.saturating_duration_since(self.born).as_secs_f32() * 1000. < self.kind.duration_ms()
     }
 
+    /// The dither washes the bubble's surface, keeping the message ink on top.
+    pub(super) fn behind_text(&self) -> bool {
+        self.kind == Kind::Visualize
+    }
+
     pub(super) fn paint(
         &self,
         bounds: Bounds<Pixels>,
@@ -69,8 +81,14 @@ impl Burst {
         cx: &mut App,
     ) {
         let t = now.saturating_duration_since(self.born).as_secs_f32() * 1000.;
-        let colors = Palette::new(self.kind, crate::theme::is_light());
         let bubble = Bubble { bounds, corners };
+        if self.kind == Kind::Visualize {
+            window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                paint_visualize(&bubble, t, window);
+            });
+            return;
+        }
+        let colors = Palette::new(self.kind, crate::theme::is_light());
         paint_halo(&bubble, t, colors.halo_ring, colors.halo_glow, window);
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
             paint_sheen(&bubble, t, &colors.sheen, window);
@@ -88,9 +106,46 @@ impl Burst {
                     paint_network(&bubble, t, &colors, &mut rng, window);
                     paint_ember_glow(&bubble, t, colors.ember_glow, window);
                 }
+                Kind::Visualize => unreachable!(),
             }
         });
     }
+}
+
+/// A diagonal wave of accent ink resolves into Bayer cells, then dissolves.
+/// Its grid and thresholds are the same ones used for inline charts.
+fn paint_visualize(bubble: &Bubble, t: f32, window: &mut Window) {
+    use crate::visuals::dither::{CELL, Grid, inked};
+
+    let p = progress(t, 0., 2800.);
+    let fade = frames(
+        p,
+        &[(0., 0.), (0.12, 1.), (0.65, 1.), (1., 0.)],
+        EASE_IN_OUT,
+    );
+    if fade <= 0. {
+        return;
+    }
+    let w = bubble.width();
+    let h = bubble.height();
+    let front = ease(progress(t, 80., 2100.), SHEEN) * 1.5 - 0.25;
+    let color = mix(
+        crate::theme::accent_color(),
+        fade * if crate::theme::is_light() { 0.24 } else { 0.38 },
+    );
+    let grid = Grid::new(bubble.bounds.origin, w, h);
+    grid.paint(window, |col, row| {
+        let (x, y) = Grid::center(col, row);
+        // Keep each entire square inside the bubble's rounded corners.
+        if bubble.coverage(x, y, CELL * std::f32::consts::FRAC_1_SQRT_2) < 1. {
+            return None;
+        }
+        let along = (x + y * 0.4) / (w + h * 0.4).max(1.);
+        let crest = (1. - ((along - front) / 0.22).abs()).max(0.);
+        let ripple = ((along * 2.5 - p * 1.8) * std::f32::consts::TAU).sin() * 0.5 + 0.5;
+        let tone = fade * (0.06 + crest * 0.68 + ripple * 0.13);
+        inked(col, row, tone).then_some(color)
+    });
 }
 
 pub(crate) struct Bubble {

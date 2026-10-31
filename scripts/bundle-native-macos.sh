@@ -33,11 +33,13 @@ mkdir -p "$native_bundle/Contents/MacOS" "$native_bundle/Contents/Resources"
 cp "$native_binary" "$native_bundle/Contents/MacOS/monocode-gpui.next"
 mv -f "$native_bundle/Contents/MacOS/monocode-gpui.next" "$native_bundle/Contents/MacOS/monocode-gpui"
 cp src-tauri/icons/icon.icns "$native_bundle/Contents/Resources/monocode.icns"
+# macOS 26 draws the Liquid Glass icon from Assets.car; the .icns covers older releases.
+cp src-tauri/macos/Assets.car "$native_bundle/Contents/Resources/Assets.car"
 # Ship the app's attribution and the license texts for GPUI and embedded assets.
 # Add these before signing so the signature covers the notices too.
 native_licenses="$native_bundle/Contents/Resources/licenses"
 mkdir -p "$native_licenses"
-cp LICENSE NOTICE docs/native/LICENSE-GPUI-APACHE "$native_licenses/"
+cp LICENSE NOTICE docs/native/LICENSE-GPUI-APACHE docs/native/LICENSE-MERMAID-MIT "$native_licenses/"
 cp crates/monocode-gpui/assets/hugeicons.LICENSE \
   crates/monocode-gpui/assets/dark-plus.LICENSE \
   crates/monocode-gpui/assets/native-editor.LICENSE.txt "$native_licenses/"
@@ -66,6 +68,7 @@ cat > "$native_bundle/Contents/Info.plist" <<PLIST
 <key>CFBundleVersion</key><string>$native_build_version</string>
 <key>MonocodeNativeVersion</key><string>$native_version</string>
 <key>CFBundleIconFile</key><string>monocode.icns</string>
+<key>CFBundleIconName</key><string>AppIcon</string>
 <key>NSPrincipalClass</key><string>NSApplication</string>
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>

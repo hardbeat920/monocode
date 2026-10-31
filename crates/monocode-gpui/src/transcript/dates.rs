@@ -1,4 +1,5 @@
 //! AgentTranscript's DaySeparator and opensNewStretch, in the reader's local time.
+//! Like a messaging app, a badge marks each new day; times stay on messages.
 use super::*;
 use chrono::{DateTime, Datelike, Local, NaiveDate};
 
@@ -19,9 +20,7 @@ pub(crate) fn opens_stretch(at: Option<u64>, previous: Option<u64>) -> bool {
     let Some(at) = at.filter(|at| local_day(*at).is_some()) else {
         return false;
     };
-    previous.is_none_or(|previous| {
-        at.saturating_sub(previous) > 60 * 60 * 1000 || local_day(at) != local_day(previous)
-    })
+    previous.is_none_or(|previous| local_day(at) != local_day(previous))
 }
 
 fn day_label(date: NaiveDate, today: NaiveDate) -> String {
@@ -38,13 +37,12 @@ fn day_label(date: NaiveDate, today: NaiveDate) -> String {
 
 fn separator(at: u64) -> Option<gpui::AnyElement> {
     let day = day_label(local_day(at)?, Local::now().date_naive());
-    let time = monocode_core::response::local_clock(at);
     Some(
         div()
             .id(SharedString::from(format!("mono-day-separator-{at}")))
             .debug_selector(|| "mono-day-separator".into())
             .role(Role::Label)
-            .aria_label(format!("{day} {time}"))
+            .aria_label(day.clone())
             .w_full()
             .flex()
             .justify_center()
@@ -62,13 +60,9 @@ fn separator(at: u64) -> Option<gpui::AnyElement> {
                     .bg(content(0.07))
                     .px_3()
                     .py_1()
-                    .child(
-                        div()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_color(content(0.75))
-                            .child(day),
-                    )
-                    .child(div().text_color(content(0.45)).child(time)),
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(content(0.75))
+                    .child(day),
             )
             .into_any_element(),
     )
@@ -231,7 +225,10 @@ mod tests {
         assert!(!opens_stretch(None, None));
         assert!(opens_stretch(Some(at(5, 9, 0)), None));
         assert!(!opens_stretch(Some(at(5, 10, 0)), Some(at(5, 9, 0))));
-        assert!(opens_stretch(Some(at(5, 10, 1)), Some(at(5, 9, 0))));
+        assert!(
+            !opens_stretch(Some(at(5, 22, 30)), Some(at(5, 7, 54))),
+            "a long pause within one day is not a new day"
+        );
         assert!(opens_stretch(Some(at(6, 0, 1)), Some(at(5, 23, 59))));
         let today = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
         assert_eq!(day_label(today, today), "Today");
@@ -285,7 +282,11 @@ mod tests {
                 None,
                 "nearby completion continues the same stretch"
             );
-            assert_eq!(view.mono_stamp(7), Some(at(5, 4, 0)));
+            assert_eq!(
+                view.mono_stamp(7),
+                None,
+                "a later run on the same day has no badge of its own"
+            );
             assert!(
                 !view.stacks_on_next(0),
                 "a new day breaks reaction stacking"
@@ -293,8 +294,8 @@ mod tests {
             assert_eq!(view.mono_group_start(5), 3);
             assert_eq!(
                 view.mono_group_start(7),
-                7,
-                "a long break starts a new group"
+                3,
+                "a same-day run continues the turn, however long the break"
             );
             view.streaming(true, cx);
             view.patch(8, vec![row("user", "Still today", Some(at(5, 4, 10)))], cx);

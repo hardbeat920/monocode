@@ -3,18 +3,20 @@
 use gpui::{
     App, AvailableSpace, Bounds, ClipboardItem, ContentMask, Context, CursorStyle, Element,
     ElementId, ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle,
-    Focusable, GlobalElementId, Hsla, InspectorElementId, KeyBinding, LayoutId, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Role, SharedString, Style,
-    TextAlign, TextRun, UTF16Selection, UnderlineStyle, Window, WrappedLine, actions, div, fill,
-    point, prelude::*, px, relative, rgb, size,
+    Focusable, GlobalElementId, Hsla, ImgResourceLoader, InspectorElementId, KeyBinding, LayoutId,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Resource, Role,
+    SharedString, Style, TextAlign, TextRun, UTF16Selection, UnderlineStyle, Window, WrappedLine,
+    actions, div, fill, point, prelude::*, px, relative, rgb, size,
 };
 use std::{borrow::Cow, ops::Range};
 use unicode_segmentation::UnicodeSegmentation;
 
 mod code;
 mod command;
+mod mention;
 mod spelling;
 pub(crate) use command::{Command, CommandRemoved};
+use mention::{DisplayLayout, MentionIcon};
 
 const MAX_BYTES: usize = 64 * 1024;
 const LINE_HEIGHT: f32 = 22.;
@@ -72,6 +74,9 @@ actions!(
     ]
 );
 pub struct Submitted;
+/// Cmd/Ctrl+Enter in a composer that sends either way, asking for the
+/// opposite of its usual follow-up behavior.
+pub struct AlternateSubmitted;
 pub struct Changed;
 pub(crate) enum CodeAction {
     Stage(usize),
@@ -212,6 +217,8 @@ pub struct Input {
     max_height: f32,
     /// A textarea that takes Enter as a newline and submits on Cmd/Ctrl+Enter.
     secondary_submit: bool,
+    /// Emit [`AlternateSubmitted`] on Cmd/Ctrl+Enter instead of ignoring it.
+    alternate_submit: bool,
     pub content: SharedString,
     selection: Range<usize>,
     reversed: bool,
@@ -231,6 +238,7 @@ pub struct Input {
     autoscroll: Option<gpui::Task<()>>,
 }
 impl EventEmitter<Submitted> for Input {}
+impl EventEmitter<AlternateSubmitted> for Input {}
 impl EventEmitter<Changed> for Input {}
 impl EventEmitter<Rejected> for Input {}
 impl EventEmitter<CodeAction> for Input {}
@@ -262,6 +270,7 @@ impl Input {
             min_height: MIN_HEIGHT,
             max_height: MAX_HEIGHT,
             secondary_submit: false,
+            alternate_submit: false,
             content: "".into(),
             selection: 0..0,
             reversed: false,
@@ -421,6 +430,9 @@ impl Input {
             self.placeholder = text;
             cx.notify();
         }
+    }
+    pub(crate) fn set_alternate_submit(&mut self, value: bool) {
+        self.alternate_submit = value;
     }
     pub(crate) fn set_read_only(&mut self, value: bool) {
         self.read_only = value;
@@ -765,9 +777,7 @@ impl Input {
         if self.code.is_some() {
             return self.code_position(at);
         }
-        let at = self
-            .command_layout()
-            .map_or(at, |command| command.to_display(at));
+        let at = self.display_layout().to_display(at);
         let mut base = 0;
         let mut y = px(0.);
         for line in &self.lines {
@@ -799,9 +809,7 @@ impl Input {
                     + line
                         .closest_index_for_position(point(p.x, y.max(px(0.))), self.line_height())
                         .unwrap_or_else(|ix| ix);
-                let at = self
-                    .command_layout()
-                    .map_or(at, |command| command.to_source(at));
+                let at = self.display_layout().to_source(at);
                 return self.clip_offset(at);
             }
             y -= h;
@@ -1001,10 +1009,16 @@ impl Input {
         }
     }
     fn submit_secondary(&mut self, _: &SubmitSecondary, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.secondary_submit {
+        if self.secondary_submit {
+            if self.marked.is_none() {
+                cx.emit(Submitted);
+            }
+        } else if self.alternate_submit {
+            if self.marked.is_none() {
+                cx.emit(AlternateSubmitted);
+            }
+        } else {
             cx.propagate();
-        } else if self.marked.is_none() {
-            cx.emit(Submitted);
         }
     }
     fn paste(&mut self, _: &Paste, w: &mut Window, cx: &mut Context<Self>) {
@@ -1408,7 +1422,7 @@ struct InputElement {
 struct PaintState {
     lines: Vec<WrappedLine>,
     scroll: Point<Pixels>,
-    command: Option<command::CommandLayout>,
+    layout: DisplayLayout,
 }
 impl IntoElement for InputElement {
     type Element = Self;
@@ -1486,7 +1500,8 @@ impl Element for InputElement {
         let i = self.input.read(cx);
         let style = w.text_style();
         let placeholder = i.content.is_empty();
-        let (text, command) = i.display_text();
+        let (text, layout) = i.display_text();
+        let command = layout.command;
         let run = TextRun {
             len: text.len(),
             font: style.font(),
@@ -1502,7 +1517,8 @@ impl Element for InputElement {
             underline: None,
             strikethrough: None,
         };
-        let to_display = |at| command.map_or(at, |command| command.to_display(at));
+        let to_display = |at| layout.to_display(at);
+        // Mentions read as plain ink beside their icon; other tokens take the accent.
         let highlights: Vec<_> = if placeholder {
             Vec::new()
         } else {
@@ -1513,7 +1529,10 @@ impl Element for InputElement {
                         && i.content.is_char_boundary(range.start)
                         && i.content.is_char_boundary(range.end)
                 })
-                .map(|range| to_display(range.start)..to_display(range.end))
+                .map(|range| {
+                    let mention = layout.mentions.iter().any(|(at, _)| *at == range.start);
+                    (to_display(range.start)..to_display(range.end), mention)
+                })
                 .collect()
         };
         let marked = i
@@ -1521,7 +1540,11 @@ impl Element for InputElement {
             .as_ref()
             .map(|range| to_display(range.start)..to_display(range.end));
         let mut boundaries = vec![0, text.len()];
-        for range in highlights.iter().chain(marked.iter()) {
+        for range in highlights
+            .iter()
+            .map(|(range, _)| range)
+            .chain(marked.iter())
+        {
             boundaries.extend([range.start, range.end]);
         }
         if let Some(command) = command {
@@ -1538,8 +1561,14 @@ impl Element for InputElement {
                     crate::theme::content(0.)
                 } else if let Some(command) = command.filter(|c| c.name_range().contains(&at)) {
                     command.mode.color()
-                } else if highlights.iter().any(|range| range.contains(&at)) {
-                    crate::theme::accent_color()
+                } else if let Some((_, mention)) =
+                    highlights.iter().find(|(range, _)| range.contains(&at))
+                {
+                    if *mention {
+                        crate::theme::content(1.)
+                    } else {
+                        crate::theme::accent_color()
+                    }
                 } else {
                     run.color
                 };
@@ -1625,7 +1654,7 @@ impl Element for InputElement {
         PaintState {
             lines,
             scroll: point(scroll_x, scroll_y),
-            command,
+            layout,
         }
     }
     fn paint(
@@ -1641,7 +1670,7 @@ impl Element for InputElement {
         paint_drag_listener(&self.input, w, cx);
         let i = self.input.read(cx);
         let focus = i.focus.clone();
-        let to_display = |at| state.command.map_or(at, |command| command.to_display(at));
+        let to_display = |at| state.layout.to_display(at);
         let selection = to_display(i.selection.start)..to_display(i.selection.end);
         let cursor = to_display(i.cursor());
         let line_height = i.line_height();
@@ -1693,6 +1722,54 @@ impl Element for InputElement {
                         }
                     }
                     let _ = line.paint(point(x, y), line_height, TextAlign::Left, None, w, cx);
+                    for (source, icon) in &state.layout.mentions {
+                        let at = to_display(*source);
+                        if at < base || at >= base + line.len() {
+                            continue;
+                        }
+                        // Centered in the em blank; the thin blank after it is the gap.
+                        let (Some(a), Some(b)) = (
+                            line.position_for_index(at - base, line_height),
+                            line.position_for_index(at + mention::ICON_LEN - base, line_height),
+                        ) else {
+                            continue;
+                        };
+                        let side = px(mention::ICON_SIDE);
+                        let icon_bounds = Bounds::new(
+                            point(
+                                x + (a.x + b.x.max(a.x)) / 2. - side / 2.,
+                                y + a.y + (line_height - side) / 2.,
+                            ),
+                            size(side, side),
+                        );
+                        match icon {
+                            MentionIcon::File(asset) => {
+                                if let Some(Ok(image)) = w.use_asset::<ImgResourceLoader>(
+                                    &Resource::Embedded(asset.clone()),
+                                    cx,
+                                ) {
+                                    let _ = w.paint_image(
+                                        bounds,
+                                        icon_bounds,
+                                        Default::default(),
+                                        image,
+                                        0,
+                                        false,
+                                    );
+                                }
+                            }
+                            MentionIcon::Note => {
+                                let _ = w.paint_svg(
+                                    icon_bounds,
+                                    "note".into(),
+                                    None,
+                                    Default::default(),
+                                    crate::theme::accent_color(),
+                                    cx,
+                                );
+                            }
+                        }
+                    }
                     if focus.is_focused(w)
                         && selection.is_empty()
                         && cursor >= base
@@ -1710,7 +1787,7 @@ impl Element for InputElement {
                 base += line.len() + 1;
                 y += height;
             }
-            if let Some(command) = state.command {
+            if let Some(command) = state.layout.command {
                 let icon_bounds = Bounds::new(
                     bounds.origin
                         + point(
@@ -1835,6 +1912,37 @@ impl Render for Input {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[::core::prelude::v1::test]
+    fn mention_tokens_pick_their_file_icon() {
+        let asset = |token| match MentionIcon::of(token) {
+            Some(MentionIcon::File(asset)) => asset.to_string(),
+            Some(MentionIcon::Note) => "note".into(),
+            None => String::new(),
+        };
+        assert_eq!(asset("@src/main.rs"), "mi/rust.svg");
+        assert_eq!(asset("@\"docs/My Notes.md\""), "mi/markdown.svg");
+        assert_eq!(asset("@note/todo"), "note");
+        assert_eq!(asset("/plan"), "");
+    }
+    #[::core::prelude::v1::test]
+    fn mention_slots_map_offsets_both_ways() {
+        let source = "see @a.rs and @b.md";
+        let layout = DisplayLayout {
+            command: None,
+            mentions: vec![(4, MentionIcon::Note), (14, MentionIcon::Note)],
+        };
+        let display = layout.apply(source.into());
+        assert_eq!(
+            display.as_ref(),
+            "see \u{2003}\u{2009}a.rs and \u{2003}\u{2009}b.md"
+        );
+        for at in 0..=source.len() {
+            assert_eq!(layout.to_source(layout.to_display(at)), at);
+        }
+        // Clicking inside a blank lands on the nearer side of its `@`.
+        assert_eq!(layout.to_source(4 + 3), 4);
+        assert_eq!(layout.to_source(4 + 6), 5);
+    }
     #[::core::prelude::v1::test]
     fn utf16_and_bounded_paste_respect_unicode() {
         assert_eq!(from16("a🙂漢", 1), 1);

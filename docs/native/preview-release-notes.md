@@ -1,26 +1,35 @@
-# Monocode Native 0.16.0-preview.8
+# Monocode Native 0.16.0-preview.11
 
 This experimental Monocode Native preview is built with Rust + GPUI. React/Tauri remains the production app.
 
-## Changes since preview 7
+## Changes since preview 10
 
-- Native charts and dashboard components can appear inline in assistant replies.
-- Mono tabs can join session splits as panes. The terminal panel hides when its last terminal closes, and the sidebar adjusts as the surrounding layout changes.
-- New `/stage` and `/commit` commands handle session Git actions, with compact summaries of Git turns.
-- GitHub issue and pull request links in prompts appear as chips with hover cards and can be linked to the session.
-- The Inbox opens scoped to the active project, uses configured project names, and clears stale selection and detail requests when switching projects.
-- Window size, fullscreen and maximized state survive relaunches. Wayland users gain a decoration setting, window controls, title-bar dragging and edge resizing.
-- Expanded user messages keep a consistent bubble width. Windows and Linux builds resolve a real monospace font and show the app icon.
-- Idle conversations switch accounts in place, stored floating-point values reload accurately, and composer autocorrect is off by default.
-- Missing-provider hints name the runtime actually needed, including the Antigravity ACP server.
+### Projects and conversations
 
-Thanks to @parkgogogo, @knot2006, @Kaloyanes and @Hazem-Samak for their contributions in this preview.
+- Projects can be reordered by dragging their spaces, using the project menu's **Move** actions, or the **Project: Move Back / Forward** shortcuts. The order survives restarts, and Previous / Next follows the order shown in the project rail.
+- New worktree branches receive descriptive names from the first message. Naming stays with the selected provider and account; unsupported or unavailable providers leave the temporary name in place. Manual branch names and existing destination branches are preserved.
+- Empty sessions offer **Ink**, **Games**, and **Off**. The ink canvas responds to pointer movement and presses, starts its animation on first display, and stops repainting when quiet. Existing empty-session choices survive the upgrade and desktop preference syncing. Reduced motion and chat backgrounds suppress the canvas.
+- Sessions opened in a Mono's details panel keep their history visible. Sub-agent lists put running and waiting sessions first, followed by recent activity. Choice cards fit their labels and wrap longer text.
+
+### Inbox and phones
+
+- Hiding a Linear team immediately removes its cached Inbox issues and clears the selection when no visible issue remains.
+- Inbox details have **Copy link** with a copied confirmation. **Send to agent** is now labeled **Open in new session**. Pairing-link copies also show a confirmation.
+
+### Provider options and security
+
+- An experimental **Identify as Monocode to Claude** setting controls Claude's client label. It is off by default.
+- Native dependencies are updated for known timer, TLS certificate validation, cryptographic timing, compression, and Markdown parsing advisories. Phone identity and enrollment-proof compatibility is covered by a fixture from the previous signing library.
+
+Thanks to @nwoolls and @Kaloyanes for their contributions in #1175, #1193, #1206, and #1226.
 
 ## Installation and testing
 
 Choose the download for your platform: macOS Apple Silicon or Intel, Windows x64, or Linux x64 (AppImage, Debian/Ubuntu `.deb`, or Fedora/Enterprise Linux `.rpm`). Install it alongside your existing Monocode application.
 
-**Testing status:** macOS is the primary tested platform. A Linux ARM64 source build was launched and exercised in an Ubuntu VM with a graphics workaround; the downloadable Linux x64 packages and Windows app still need runtime testing. Native system notifications currently support macOS only. HTML panels and media support remain limited on Linux and Windows.
+**Testing status:** macOS is the primary tested platform. A Linux ARM64 source build was exercised in an Ubuntu VM with a graphics workaround, and a Windows 10 source build passed manual title-bar checks. The downloadable Linux x64 and Windows packages still need broader runtime testing. Native system notifications currently support macOS only. HTML panels and media support remain limited on Linux and Windows.
+
+Local automated checks, the native dependency audit, and the long-history CPU comparison are recorded in [verification](verification.md).
 
 **Data:** this preview uses your existing Monocode database and saves changes there. Back up your Monocode data with the app closed before testing. Native preferences are stored separately. Avoid editing the same conversations in both apps at once.
 
