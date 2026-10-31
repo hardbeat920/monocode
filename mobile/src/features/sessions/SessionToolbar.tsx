@@ -43,9 +43,12 @@ const MAX_TITLE_WIDTH = 280;
 export function SessionTitle({
   title,
   subtitle,
+  onClose,
 }: {
   title: string;
   subtitle: string;
+  /** Presented as a sheet: a close button before the title, in place of back. */
+  onClose?: () => void;
 }) {
   const styles = useStyles();
   const width = useContentWidth();
@@ -72,6 +75,13 @@ export function SessionTitle({
     );
   return (
     <Stack.Toolbar placement="left">
+      {onClose ? (
+        <Stack.Toolbar.Button
+          icon="xmark"
+          accessibilityLabel="Close"
+          onPress={onClose}
+        />
+      ) : null}
       <Stack.Toolbar.View hidesSharedBackground>
         <View style={[styles.title, { width: titleWidth }]}>
           <Text style={styles.name} numberOfLines={1}>

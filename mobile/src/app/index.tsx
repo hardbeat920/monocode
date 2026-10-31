@@ -1,4 +1,6 @@
 import { Redirect, router } from "expo-router";
+import { useConnection } from "@/features/connection/ConnectionProvider";
+import { readLastPlace } from "@/features/workspace/lastPlace";
 import { Pressable, Text, View } from "react-native";
 import { useWorkspace } from "@/features/workspace/WorkspaceProvider";
 import { SessionScreen } from "@/features/sessions/SessionScreen";
@@ -6,6 +8,14 @@ import { useConnectionStyles } from "@/features/connection/ConnectScreen";
 export default function Index() {
   const styles = useConnectionStyles();
   const { projects, monos } = useWorkspace();
+  // Back where the user last was, while it is still on the phone.
+  const last = readLastPlace(useConnection().pairing?.desktop.fingerprint);
+  if (last?.kind === "project" && projects.some((project) => project.id === last.id))
+    return (
+      <Redirect href={{ pathname: "/project/[projectId]", params: { projectId: last.id } }} />
+    );
+  if (last?.kind === "mono" && monos.some((mono) => mono.id === last.id))
+    return <Redirect href={{ pathname: "/mono/[monoId]", params: { monoId: last.id } }} />;
   if (projects[0])
     return (
       <Redirect

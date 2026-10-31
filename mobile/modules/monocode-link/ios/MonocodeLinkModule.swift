@@ -27,6 +27,9 @@ public class MonocodeLinkModule: Module {
       }
       OnViewDidUpdateProps { (view: NativeTranscriptView) in view.updateProps() }
       AsyncFunction("scrollToEnd") { (view: NativeTranscriptView) in view.jumpToEnd() }
+      AsyncFunction("selectText") { (view: NativeTranscriptView, text: String) in
+        view.selectText(text)
+      }
     }
     View(TypingPostureView.self) {
       Events("onEnterTypingPosture")

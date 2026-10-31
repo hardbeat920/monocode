@@ -1,12 +1,11 @@
-import { createContext, use, useSyncExternalStore } from "react";
+import { use, useSyncExternalStore } from "react";
 import { Text, type StyleProp, type TextStyle } from "react-native";
+
+import { AnimationsPaused } from "@/ui/AnimationsPaused";
 
 // Same frames and speed as the desktop TerminalSpinner.
 const FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 const FRAME_MS = 80;
-
-/** Holds the spinners under it still, say in a drawer that is shut. */
-export const SpinnersPaused = createContext(false);
 
 // One clock for every spinner on screen, so they step in one render rather
 // than each on its own timer, and none runs while none is shown.
@@ -32,7 +31,7 @@ const still = () => () => {};
 const current = () => frame;
 
 export function TerminalSpinner({ style }: { style?: StyleProp<TextStyle> }) {
-  const paused = use(SpinnersPaused);
+  const paused = use(AnimationsPaused);
   const shown = useSyncExternalStore(paused ? still : subscribe, current);
 
   return (

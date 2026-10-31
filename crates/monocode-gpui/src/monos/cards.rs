@@ -374,6 +374,58 @@ fn launched_state(session: &Conversation, cx: &App) -> &'static str {
         }
     }
 }
+/// LaunchedSessionCard: how each session `mono` started stands, for its cards
+/// in the chat and on the phone.
+pub(crate) fn launch_views(
+    mono: &monocode_core::mono::Mono,
+    owner: &crate::shell::Shell,
+    cx: &App,
+) -> HashMap<i64, crate::transcript::LaunchView> {
+    // Saved summaries keep cards current without opening their providers.
+    let summaries = owner.mono_session_views(cx);
+    // LaunchedSessionCard: each launch's live state, for the chat's cards.
+    mono.launches
+        .iter()
+        .map(|launch| {
+            let session = owner.mono_session_entity(launch.session_id);
+            let view = match session {
+                Some(session) => {
+                    let session = session.read(cx);
+                    crate::transcript::LaunchView {
+                        title: session.summary.title.clone(),
+                        state: launched_state(session, cx),
+                        harness: session.summary.provider.clone(),
+                        cwd: session.summary.cwd.clone(),
+                    }
+                }
+                None => {
+                    let summary = summaries.iter().find(|s| s.id == launch.session_id);
+                    crate::transcript::LaunchView {
+                        title: summary
+                            .map(|s| s.title.clone())
+                            .unwrap_or_else(|| launch.title.clone()),
+                        state: summary.map_or("unavailable", |s| {
+                            if s.needs_input {
+                                "input"
+                            } else if s.busy {
+                                "working"
+                            } else if !s.has_messages {
+                                "draft"
+                            } else {
+                                "done"
+                            }
+                        }),
+                        harness: launch.harness.clone(),
+                        cwd: summary
+                            .map(|s| s.cwd.clone())
+                            .unwrap_or_else(|| launch.cwd.clone()),
+                    }
+                }
+            };
+            (launch.session_id, view)
+        })
+        .collect()
+}
 impl Monos {
     pub(super) fn refresh_cards(&mut self, cx: &mut Context<Self>) {
         let Some(mono) = self.current().cloned() else {
@@ -383,58 +435,11 @@ impl Monos {
             return;
         };
         let now = monocode_core::time::now_ms();
-        // Saved summaries keep cards current without opening their providers.
-        let summaries = self
+        let launches = self
             .owner
             .upgrade()
-            .map(|owner| owner.read(cx).mono_session_views(cx))
+            .map(|owner| launch_views(&mono, owner.read(cx), cx))
             .unwrap_or_default();
-        // LaunchedSessionCard: each launch's live state, for the chat's cards.
-        let launches = mono
-            .launches
-            .iter()
-            .map(|launch| {
-                let session = self
-                    .owner
-                    .upgrade()
-                    .and_then(|o| o.read(cx).mono_session_entity(launch.session_id));
-                let view = match session {
-                    Some(session) => {
-                        let session = session.read(cx);
-                        crate::transcript::LaunchView {
-                            title: session.summary.title.clone(),
-                            state: launched_state(session, cx),
-                            harness: session.summary.provider.clone(),
-                            cwd: session.summary.cwd.clone(),
-                        }
-                    }
-                    None => {
-                        let summary = summaries.iter().find(|s| s.id == launch.session_id);
-                        crate::transcript::LaunchView {
-                            title: summary
-                                .map(|s| s.title.clone())
-                                .unwrap_or_else(|| launch.title.clone()),
-                            state: summary.map_or("unavailable", |s| {
-                                if s.needs_input {
-                                    "input"
-                                } else if s.busy {
-                                    "working"
-                                } else if !s.has_messages {
-                                    "draft"
-                                } else {
-                                    "done"
-                                }
-                            }),
-                            harness: launch.harness.clone(),
-                            cwd: summary
-                                .map(|s| s.cwd.clone())
-                                .unwrap_or_else(|| launch.cwd.clone()),
-                        }
-                    }
-                };
-                (launch.session_id, view)
-            })
-            .collect();
         let transcript = chat.read(cx).transcript.clone();
         transcript.update(cx, |t, cx| t.set_launches(launches, cx));
         // Only mutable cards need a snapshot; never clone the conversation's

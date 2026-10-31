@@ -1,27 +1,25 @@
-# Monocode Native 0.16.0-preview.11
+# Monocode Native 0.16.0-preview.12
 
 This experimental Monocode Native preview is built with Rust + GPUI. React/Tauri remains the production app.
 
-## Changes since preview 10
+## Changes since preview 11
 
-### Projects and conversations
+### Phones
 
-- Projects can be reordered by dragging their spaces, using the project menu's **Move** actions, or the **Project: Move Back / Forward** shortcuts. The order survives restarts, and Previous / Next follows the order shown in the project rail.
-- New worktree branches receive descriptive names from the first message. Naming stays with the selected provider and account; unsupported or unavailable providers leave the temporary name in place. Manual branch names and existing destination branches are preserved.
-- Empty sessions offer **Ink**, **Games**, and **Off**. The ink canvas responds to pointer movement and presses, starts its animation on first display, and stops repainting when quiet. Existing empty-session choices survive the upgrade and desktop preference syncing. Reduced motion and chat backgrounds suppress the canvas.
-- Sessions opened in a Mono's details panel keep their history visible. Sub-agent lists put running and waiting sessions first, followed by recent activity. Choice cards fit their labels and wrap longer text.
+- Paired phones get push notifications while the Monocode app is closed. Sessions started or messaged from the phone notify on approvals, questions, and finishing; Monos notify on their replies and on the reports their habits post. Nothing is sent for a session open in front of you on the desktop. The phone chooses which kinds it receives in its Settings. The desktop sends notifications through Expo's push service; Android phones keep their in-app alerts for now.
+- Phones can answer an agent's pending questions, page back through the full history of long conversations, and reopen the last project or Mono on launch.
+- Monos can be browsed from the phone's side drawer alongside projects, with search, filters, and unread replies marked. Phones can create Monos, edit a Mono's name, mascot, color, model, projects, and its soul and memory files, and reset or delete a Mono. Saving a soul or memory file is refused if it changed on the desktop since it was opened.
+- Mono chats on the phone show reply bubbles, reactions as tapbacks, suggested replies, document cards, and the sessions a Mono launched.
 
-### Inbox and phones
+### Background tasks
 
-- Hiding a Linear team immediately removes its cached Inbox issues and clears the selection when no visible issue remains.
-- Inbox details have **Copy link** with a copied confirmation. **Send to agent** is now labeled **Open in new session**. Pairing-link copies also show a confirmation.
+- A **Background model** setting (Settings → Providers → Background tasks) chooses the model that writes session titles, worktree branch names, commit messages, and pull request text, on the desktop and for phone git actions. **Automatic** keeps using each session's provider and its quick model.
 
-### Provider options and security
+### Editor
 
-- An experimental **Identify as Monocode to Claude** setting controls Claude's client label. It is off by default.
-- Native dependencies are updated for known timer, TLS certificate validation, cryptographic timing, compression, and Markdown parsing advisories. Phone identity and enrollment-proof compatibility is covered by a fixture from the previous signing library.
+- Zig files get syntax highlighting and fold their struct, enum, union, error-set, and switch blocks. ZON files are not supported.
 
-Thanks to @nwoolls and @Kaloyanes for their contributions in #1175, #1193, #1206, and #1226.
+Thanks to @404khai for their contribution in #1246.
 
 ## Installation and testing
 

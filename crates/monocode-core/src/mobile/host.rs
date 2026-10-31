@@ -34,10 +34,20 @@ const APP_METHODS: &[&str] = &[
     "project.gitAction",
     "session.start",
     "conversation.send",
+    "session.answerQuestion",
+    "session.keepQuestionOpen",
     "session.cancel",
     "session.rename",
     "session.delete",
     "session.archive",
+    "mono.document",
+    "mono.profile",
+    "mono.update",
+    "mono.reset",
+    "mono.delete",
+    "mono.create",
+    "mono.file",
+    "mono.saveFile",
 ];
 /// Under the phone's own wait, so it hears why rather than timing out.
 const REPLY_WAIT: Duration = Duration::from_secs(25);
@@ -50,6 +60,18 @@ pub struct Device {
     pub id: String,
     pub name: String,
     pub fingerprint: String,
+    /// Where the phone is notified while its app is closed, once it asks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub push: Option<PushRegistration>,
+}
+
+/// A phone's Expo push token and the notification categories it turned off.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PushRegistration {
+    pub token: String,
+    #[serde(default)]
+    pub disabled: Vec<String>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -179,6 +201,38 @@ pub struct MobileHost {
 
 fn unavailable<T>(_: T) -> String {
     "Mobile service unavailable".into()
+}
+
+/// `{"token": "ExponentPushToken[…]", "disabled": [category…]}`, or a null
+/// token to stop notifying the phone.
+fn push_registration(params: &Value) -> Result<Option<PushRegistration>, String> {
+    let token = match &params["token"] {
+        Value::Null => return Ok(None),
+        Value::String(token) => token,
+        _ => return Err("Invalid push token".into()),
+    };
+    let valid = token.len() <= 256
+        && token.ends_with(']')
+        && (token.starts_with("ExponentPushToken[") || token.starts_with("ExpoPushToken["));
+    if !valid {
+        return Err("Invalid push token".into());
+    }
+    let disabled = params["disabled"]
+        .as_array()
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|value| value.len() <= 64)
+                .take(16)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(Some(PushRegistration {
+        token: token.clone(),
+        disabled,
+    }))
 }
 
 impl MobileHost {
@@ -361,6 +415,47 @@ impl MobileHost {
         Ok(())
     }
 
+    /// The push tokens of paired phones that take `category`.
+    pub fn push_tokens(&self, category: &str) -> Vec<String> {
+        let Ok(inner) = self.inner.lock() else {
+            return Vec::new();
+        };
+        if !inner.config.enabled {
+            return Vec::new();
+        }
+        inner
+            .config
+            .devices
+            .iter()
+            .filter_map(|device| device.push.as_ref())
+            .filter(|push| !push.disabled.iter().any(|off| off == category))
+            .map(|push| push.token.clone())
+            .collect()
+    }
+
+    /// Drops tokens Expo says no longer reach a phone, as when the app was
+    /// removed; the phone registers again the next time it connects.
+    pub fn forget_push_tokens(&self, tokens: &[String]) -> Result<(), String> {
+        let mut inner = self.inner.lock().map_err(unavailable)?;
+        let mut config = inner.config.clone();
+        let mut changed = false;
+        for device in &mut config.devices {
+            if device
+                .push
+                .as_ref()
+                .is_some_and(|push| tokens.contains(&push.token))
+            {
+                device.push = None;
+                changed = true;
+            }
+        }
+        if changed {
+            self.save(&config)?;
+            inner.config = config;
+        }
+        Ok(())
+    }
+
     /// The watch's next frame.
     pub fn push(&self, id: &str, update: Value) -> Result<(), Push> {
         let mut inner = self.inner.lock().map_err(|_| Push::Gone)?;
@@ -519,6 +614,7 @@ impl MobileHost {
             id: id.clone(),
             name,
             fingerprint: fingerprint.clone(),
+            push: None,
         });
         self.save(&config)?;
         inner.config = config;
@@ -576,6 +672,16 @@ impl MobileHost {
                     return Ok(catalog);
                 }
                 "sessions.list" => return Ok(session_page(&inner.catalog["sessions"], &params)),
+                "device.push" => {
+                    let push = push_registration(&params)?;
+                    let mut config = inner.config.clone();
+                    if let Some(entry) = config.devices.iter_mut().find(|v| v.id == device.id) {
+                        entry.push = push;
+                    }
+                    self.save(&config)?;
+                    inner.config = config;
+                    return Ok(Value::Null);
+                }
                 _ => {}
             }
             if !APP_METHODS.contains(&method) {
@@ -933,6 +1039,31 @@ mod tests {
         assert_eq!(catalog["sessions"][0]["id"], "s");
         assert!(catalog["addresses"].is_array());
         assert!(host.publish(json!({"projects":[]})).is_err());
+        std::fs::remove_dir_all(host.path.parent().unwrap()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_phone_registers_its_push_token_and_turns_categories_off() {
+        let (host, _events, peer) = paired();
+        let register = |params: Value| {
+            host.handle(
+                &peer,
+                json!({"version":VERSION,"id":"p","method":"device.push","params":params}),
+            )
+        };
+        assert!(register(json!({"token":"https://example.com"}))
+            .await
+            .is_err());
+        register(json!({"token":"ExponentPushToken[abc]","disabled":["agentFinished"]}))
+            .await
+            .unwrap();
+        assert_eq!(host.push_tokens("agentInput"), ["ExponentPushToken[abc]"]);
+        assert!(host.push_tokens("agentFinished").is_empty());
+        let saved = std::fs::read_to_string(&host.path).unwrap();
+        assert!(saved.contains("ExponentPushToken[abc]"));
+        host.forget_push_tokens(&["ExponentPushToken[abc]".into()])
+            .unwrap();
+        assert!(host.push_tokens("agentInput").is_empty());
         std::fs::remove_dir_all(host.path.parent().unwrap()).unwrap();
     }
 }

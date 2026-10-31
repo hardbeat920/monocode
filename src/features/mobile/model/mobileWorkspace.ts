@@ -54,9 +54,11 @@ import {
   newDefaultSession,
   sessionDisplayTitle,
   type HarnessId,
+  type MonoSpawnedSession,
   type RuntimeMode,
   type Session,
 } from "../../sessions/model/session";
+import { launchedSessionState } from "../../monos/model/monoSpawnedSessions";
 import {
   isPickerProviderVisible,
   mergeModelSettings,
@@ -247,6 +249,21 @@ export function mobileMessages(session: Session) {
     .map((block) => ({ id: block.id, role: block.role, text: block.text }));
 }
 /**
+ * A session a Mono started, as its card shows it. One the desktop no longer
+ * has open cannot be running, so it reads as done, as on the desktop.
+ */
+function mobileLaunch(launch: MonoSpawnedSession, live: readonly Session[]) {
+  const session = live.find((entry) => entry.id === launch.sessionId);
+  return {
+    id: launch.sessionId,
+    projectId: mobileProjectId(launch.cwd),
+    project: projectName(launch.cwd),
+    title: sessionDisplayTitle(session?.title ?? launch.title, launch.harness),
+    harness: launch.harness,
+    state: session ? launchedSessionState(session) : ("done" as const),
+  };
+}
+/**
  * A conversation as the phone shows it. A session the desktop does not have
  * open is read from disk once into `saved` and reused from there: it cannot
  * change until it opens, and then the live copy wins.
@@ -276,6 +293,9 @@ export async function mobileConversation(
           mono: mono ? { name: monoLook(mono).name } : undefined,
           pendingQuestion: !!session.pendingQuestion,
           backgroundTasks: session.backgroundTasks,
+          ...(mono
+            ? { launch: (launch: MonoSpawnedSession) => mobileLaunch(launch, live) }
+            : {}),
           range,
         })
       : [],

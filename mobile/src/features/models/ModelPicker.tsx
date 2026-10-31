@@ -67,7 +67,9 @@ function useModelPicker(
 ) {
   const { projects } = useWorkspace();
   const project = projectForRoute(projects, projectId);
-  const { catalog, error } = useModelCatalog(project?.id, sessionId);
+  // A Mono's conversation needs no project: the desktop answers for it alone.
+  const mono = sessionId?.startsWith("mono:") ? sessionId.slice("mono:".length) : undefined;
+  const { catalog, error } = useModelCatalog(project?.id ?? (mono && sessionId), sessionId);
   const { chosen, access, accounts, pickModel, pickAccess, pickAccount } =
     useSessionChoice(project, sessionId);
 
@@ -90,10 +92,11 @@ function useModelPicker(
       "default")
     : "default";
   const selectAccount = (id: string) => {
-    if (!choice || !project || id === accountId) return;
+    if (!choice || (!project && !mono) || id === accountId) return;
     const name = model?.name ?? choice.model;
     pickAccount(choice, name, id);
-    if (sessionId)
+    if (mono) router.dismissTo({ pathname: "/mono/[monoId]", params: { monoId: mono } });
+    else if (sessionId && project)
       router.dismissTo({
         pathname: "/project/[projectId]",
         params: { projectId: project.id },

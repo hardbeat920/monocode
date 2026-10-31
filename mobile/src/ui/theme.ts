@@ -1,5 +1,5 @@
 import Storage from "expo-sqlite/kv-store";
-import { useSyncExternalStore } from "react";
+import { createContext, use, useSyncExternalStore } from "react";
 import { StyleSheet, useColorScheme } from "react-native";
 
 export type Scheme = "light" | "dark";
@@ -200,9 +200,67 @@ export function useTheme(): ThemeName {
   return useSyncExternalStore(subscribeTheme, () => theme);
 }
 
-/** A theme's palette in a scheme. */
-export function paletteFor(scheme: Scheme, name: ThemeName = theme): Palette {
-  return THEMES[name].palettes[scheme];
+/**
+ * Accents the app can be drawn in over any theme, each in both schemes:
+ * light's deeper, so it holds its contrast on a pale background. "theme"
+ * keeps the theme's own.
+ */
+export const ACCENTS = {
+  blue: { label: "Blue", dark: "#4c9ef5", light: "#1f7ae0" },
+  teal: { label: "Teal", dark: "#3cc4c4", light: "#0f7f86" },
+  green: { label: "Green", dark: "#4cc38a", light: "#13804f" },
+  orange: { label: "Orange", dark: "#f0884a", light: "#c2531a" },
+  red: { label: "Red", dark: "#f06a6a", light: "#c9302c" },
+  pink: { label: "Pink", dark: "#ec6fa3", light: "#c42a6c" },
+  violet: { label: "Violet", dark: "#9d87f5", light: "#6a4fd6" },
+} satisfies Record<string, { label: string } & Record<Scheme, string>>;
+
+export type AccentName = keyof typeof ACCENTS | "theme";
+
+const ACCENT_KEY = "accent";
+
+function loadAccent(): AccentName {
+  try {
+    const stored = Storage.getItemSync(ACCENT_KEY);
+    return stored && stored in ACCENTS ? (stored as AccentName) : "theme";
+  } catch {
+    return "theme";
+  }
+}
+
+let accent = loadAccent();
+
+/** Draws the app's accent in `next` whatever the theme, and remembers it. */
+export function setAccent(next: AccentName) {
+  if (next === accent) return;
+  accent = next;
+  void Storage.setItem(ACCENT_KEY, next);
+  themeListeners.forEach((listener) => listener());
+}
+
+/** The accent picked over the theme's, or "theme" for its own. */
+export function useAccent(): AccentName {
+  return useSyncExternalStore(subscribeTheme, () => accent);
+}
+
+// One object per scheme, theme and accent, so memos keyed on a palette hold.
+const accented = new Map<string, Palette>();
+
+/** A theme's palette in a scheme, with the accent picked over its own. */
+export function paletteFor(
+  scheme: Scheme,
+  name: ThemeName = theme,
+  over: AccentName = accent,
+): Palette {
+  const base = THEMES[name].palettes[scheme];
+  if (over === "theme") return base;
+  const key = `${name}.${scheme}.${over}`;
+  let palette = accented.get(key);
+  if (!palette) {
+    palette = { ...base, accent: ACCENTS[over][scheme] };
+    accented.set(key, palette);
+  }
+  return palette;
 }
 
 export const radii = {
@@ -216,10 +274,25 @@ export function useScheme(): Scheme {
   return useColorScheme() === "light" ? "light" : "dark";
 }
 
-/** The palette of the scheme and theme the app is drawn in. */
+/** The palette of the scheme, theme and accent the app is drawn in. */
 export function useColors() {
-  return paletteFor(useScheme(), useTheme());
+  const palette = paletteFor(useScheme(), useTheme(), useAccent());
+  const over = use(AccentOverride);
+  if (!over || over === palette.accent) return palette;
+  // One object per palette and accent, so memos keyed on it hold.
+  let byAccent = overridden.get(palette);
+  if (!byAccent) overridden.set(palette, (byAccent = new Map()));
+  let shown = byAccent.get(over);
+  if (!shown) byAccent.set(over, (shown = { ...palette, accent: over }));
+  return shown;
 }
+
+/**
+ * An accent for everything inside, over the app's: a Mono's chat drawn in
+ * the colour picked for it. `#rrggbb`, or null for the app's own.
+ */
+export const AccentOverride = createContext<string | null>(null);
+const overridden = new WeakMap<Palette, Map<string, Palette>>();
 
 /**
  * A style sheet for each scheme and theme, built from its palette, as a hook
@@ -233,14 +306,28 @@ export function themedStyles<T extends StyleSheet.NamedStyles<T>>(
   return function useStyles() {
     const scheme = useScheme();
     const name = useTheme();
-    const key = `${name}.${scheme}`;
+    const over = useAccent();
+    const key = `${name}.${scheme}.${over}`;
     let sheet = sheets.get(key);
     if (!sheet) {
-      sheet = StyleSheet.create(build(paletteFor(scheme, name)));
+      sheet = StyleSheet.create(build(paletteFor(scheme, name, over)));
       sheets.set(key, sheet);
     }
     return sheet;
   };
+}
+
+/** `#rrggbb` blended `amount` of the way towards `to`, as `#rrggbb`. */
+export function mix(hex: string, to: string, amount: number) {
+  const a = parseInt(hex.slice(1), 16);
+  const b = parseInt(to.slice(1), 16);
+  const channel = (shift: number) => {
+    const from = (a >> shift) & 255;
+    return Math.round(from + (((b >> shift) & 255) - from) * amount)
+      .toString(16)
+      .padStart(2, "0");
+  };
+  return `#${channel(16)}${channel(8)}${channel(0)}`;
 }
 
 /** `#rrggbb` to `rgba()` at the given alpha. */
