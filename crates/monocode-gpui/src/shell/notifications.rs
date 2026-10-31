@@ -1341,7 +1341,7 @@ impl Shell {
 }
 
 #[cfg(test)]
-mod error_tests {
+mod tests {
     use super::*;
     use gpui::{TestAppContext, VisualTestContext};
 
@@ -1400,6 +1400,32 @@ mod error_tests {
             .update(visual, |shell, _, cx| {
                 assert!(shell.error.is_none());
                 assert!(!shell.notification_state.file_error.read(cx).is_visible());
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn dismissing_installed_update_does_not_open_whats_new(cx: &mut TestAppContext) {
+        let (window, _, _) = crate::shell::tests::window(cx);
+        let visual = &mut VisualTestContext::from_window(window.into(), cx);
+        window
+            .update(visual, |shell, _, cx| {
+                shell.notification_state.installed.update(cx, |notice, cx| {
+                    notice.set_version(Some("1.2.3".into()), cx)
+                });
+                shell.invalidate_chrome(cx);
+                cx.notify();
+            })
+            .unwrap();
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        let close = visual.debug_bounds("dismiss-installed-update").unwrap();
+        visual.simulate_click(close.center(), Default::default());
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, _, cx| {
+                assert!(!shell.notification_state.installed.read(cx).is_visible());
+                assert!(shell.notification_state.whats_new.is_none());
             })
             .unwrap();
     }
