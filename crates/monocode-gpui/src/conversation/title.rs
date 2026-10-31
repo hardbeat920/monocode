@@ -114,6 +114,30 @@ impl Conversation {
         if self.summary.work_item.is_some() {
             return;
         }
+        self.set_work_item(item, cx);
+    }
+    /// A pull request the agent opened outranks an issue link but never
+    /// another pull request: the first one stays.
+    pub(super) fn link_opened_pull_request(
+        &mut self,
+        item: monocode_core::session_groups::WorkItem,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .summary
+            .work_item
+            .as_ref()
+            .is_some_and(|linked| linked.kind == "pr")
+        {
+            return;
+        }
+        self.set_work_item(item, cx);
+    }
+    fn set_work_item(
+        &mut self,
+        item: monocode_core::session_groups::WorkItem,
+        cx: &mut Context<Self>,
+    ) {
         self.summary.work_item = Some(item.clone());
         let store = self.store.clone();
         let id = self.summary.id;
@@ -248,5 +272,35 @@ mod tests {
             view.read_with(cx, |v, _| v.summary.work_item.clone()),
             manual
         );
+    }
+    #[gpui::test]
+    fn an_opened_pull_request_replaces_an_issue_link_but_not_an_earlier_pull_request(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let store = Arc::new(std::sync::Mutex::new(
+            monocode_core::store::Store::open(Path::new(":memory:")).unwrap(),
+        ));
+        let summary = locked(&store).unwrap().create("claude", "/tmp").unwrap();
+        let id = summary.id;
+        let view = cx.new(|cx| Conversation::new(summary, store.clone(), cx));
+        let item = |url: &str| monocode_core::session_groups::parse_github_work_item(url).unwrap();
+        let (issue, first, second) = (
+            item("https://github.com/acme/app/issues/7"),
+            item("https://github.com/acme/app/pull/12"),
+            item("https://github.com/acme/app/pull/13"),
+        );
+        view.update(cx, |v, cx| {
+            v.summary.work_item = Some(issue);
+            v.link_opened_pull_request(first.clone(), cx);
+            v.link_opened_pull_request(second, cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            view.read_with(cx, |v, _| v.summary.work_item.clone()),
+            Some(first.clone())
+        );
+        let saved = locked(&store).unwrap().sessions().unwrap();
+        let saved = saved.into_iter().find(|s| s.id == id).unwrap();
+        assert_eq!(saved.work_item, Some(first));
     }
 }
