@@ -2,6 +2,7 @@ mod accounts;
 mod approvals;
 mod attachment_drop;
 mod background_tasks;
+mod browser;
 mod btw;
 mod commands;
 pub(crate) mod composer_features;
@@ -191,6 +192,8 @@ pub(crate) struct Conversation {
     account_switching: bool,
     _usage_clock: gpui::Task<()>,
     _account_usage: Option<Subscription>,
+    _browser_observation: Option<Subscription>,
+    browser: browser::State,
     approvals: std::collections::VecDeque<Approval>,
     approval_ui: approvals::State,
     questions:
@@ -569,6 +572,8 @@ impl Conversation {
                 }
             }
         });
+        let browser_observation = Self::observe_browser(cx);
+        let browser = browser::State::new(summary.id, cx);
         let account_usage = crate::accounts::get(cx).map(|center| {
             cx.observe(&center, |this, _, cx| {
                 if this.settings.usage_limit.is_some() {
@@ -640,6 +645,8 @@ impl Conversation {
             account_switching: false,
             _usage_clock: usage_clock,
             _account_usage: account_usage,
+            _browser_observation: browser_observation,
+            browser,
             approvals: Default::default(),
             approval_ui: Default::default(),
             questions: Default::default(),
@@ -1104,6 +1111,9 @@ impl Conversation {
             || self.settings.orchestrator
             || self.settings.access == AccessMode::ReadOnly;
         let mut settings = self.settings.clone();
+        // Only the turn an agent sent counts as agent-sent; the user's next
+        // turn in the same thread is the user's again.
+        self.settings.agent_sent = false;
         if let Some(model) = self.model_info() {
             for control in &model.controls {
                 settings
@@ -2860,6 +2870,8 @@ impl Conversation {
                 )
             })
             .child(self.approval_shelf(window, cx))
+            .child(self.browser_shelf(cx))
+            .children(self.browser_menu(cx))
             .child(
                 div()
                     .id("composer-box")
@@ -3005,7 +3017,8 @@ impl Conversation {
                                             )
                                             .child(pill_label(self.settings.access.label()))
                                             .child(icon("chevron-down", 12.)),
-                                    ),
+                                    )
+                                    .children(self.browser_pill(cx)),
                             )
                             .child(self.action(has_value, window, cx)),
                     )

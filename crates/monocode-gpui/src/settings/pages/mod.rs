@@ -1,6 +1,7 @@
 //! One file per Settings page, each a port of its SettingsView.tsx function.
 mod appearance;
 mod archive;
+mod browser;
 mod chat;
 mod connections;
 mod general;
@@ -15,6 +16,7 @@ mod worktrees;
 
 pub(super) use appearance::parse_hex;
 pub(crate) use appearance::{ACCENTS, swatch};
+pub(super) use browser::BrowserPageState;
 pub(super) use connections::ConnectionsState;
 pub(crate) use keybindings::command_shortcut;
 pub(super) use mobile::MobileState;
@@ -38,6 +40,7 @@ impl SettingsView {
             Section::Chat => self.chat_page(cx),
             Section::Providers => self.providers_page(cx),
             Section::Mcp => self.mcp_page(cx),
+            Section::Browser => self.browser_page(cx),
             Section::Skills => self.skills_page(cx),
             Section::Monos => self.monos_page(cx),
             Section::Inbox => self.inbox_page(cx),
