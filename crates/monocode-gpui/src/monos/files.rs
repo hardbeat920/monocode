@@ -247,6 +247,59 @@ impl Monos {
         })
         .detach();
     }
+    /// Copies a Mono to `project` with its look, soul, habits and model, but
+    /// a fresh chat and memory. The copy joins the rail only once its files
+    /// exist, so opening it never seeds a default soul over the copied one.
+    pub(crate) fn duplicate(
+        &mut self,
+        id: &str,
+        project: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(source) = self.roster.get(id).cloned() else {
+            return;
+        };
+        let mut copy = source.duplicate(&project);
+        let (root, store, prefs) = (self.root.clone(), self.store.clone(), self.prefs.clone());
+        let work = cx.background_executor().spawn(async move {
+            mono::copy_identity(&root, &source, &copy, monocode_core::time::now_ms())?;
+            let db = locked(&store)?;
+            let saved = match source.session_id {
+                Some(session) => db
+                    .mono_session(session)?
+                    .zip(db.agent_settings(session)?)
+                    .map(|(summary, settings)| (summary.provider, copied_chat(settings))),
+                None => None,
+            };
+            let (provider, settings) = saved.unwrap_or_else(|| {
+                let (provider, settings) = default_chat(&prefs);
+                (provider.id().to_string(), settings)
+            });
+            let summary = start_chat(&db, &copy, &provider, &settings)?;
+            copy.session_id = Some(summary.id);
+            Ok::<_, String>((source.id, copy))
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = work.await;
+            let _ = this.update_in(cx, |this, window, cx| match result {
+                Ok((source, copy)) => {
+                    let id = copy.id.clone();
+                    if let Some(session) = copy.session_id {
+                        this.roster.hidden_sessions.push(session);
+                    }
+                    this.roster.insert_after(&source, copy);
+                    this.save(cx);
+                    this.open(&id, window, cx);
+                }
+                Err(error) => {
+                    this.error = Some(error);
+                    this.changed(cx);
+                }
+            });
+        })
+        .detach();
+    }
     pub(super) fn delete_mono(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let prompt = window.prompt(
             gpui::PromptLevel::Warning,
@@ -275,5 +328,21 @@ impl Monos {
             });
         })
         .detach();
+    }
+}
+
+/// The model choices a copy keeps; turn history, worktrees and pending
+/// switches belong to the source's own chat.
+fn copied_chat(source: Settings) -> Settings {
+    Settings {
+        account: source.account,
+        model: source.model,
+        effort: source.effort,
+        access: source.access,
+        fast: source.fast,
+        service_tier: source.service_tier,
+        thinking: source.thinking,
+        model_settings: source.model_settings,
+        ..Default::default()
     }
 }

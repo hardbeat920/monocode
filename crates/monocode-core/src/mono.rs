@@ -150,6 +150,28 @@ impl Mono {
         self.projects
             .retain(|p| !p.trim().is_empty() && seen.insert(crate::files::path_key(p)));
     }
+    /// The same look and preferences working on `project` alone, with its own
+    /// id, chat and memory. Named after the project so the two stay apart.
+    pub fn duplicate(&self, project: &str) -> Mono {
+        let base = Path::new(project)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| project.into());
+        let suffix = format!(" · {base}");
+        let room = 40usize.saturating_sub(suffix.chars().count());
+        let mut copy = Mono {
+            name: self.label().chars().take(room).collect::<String>() + &suffix,
+            mascot: self.mascot.clone(),
+            color: self.color,
+            projects: vec![project.into()],
+            show_started_sessions_in_sidebar: self.show_started_sessions_in_sidebar,
+            use_sidebar_folders: self.use_sidebar_folders,
+            background: self.background.clone(),
+            ..Default::default()
+        };
+        copy.normalize();
+        copy
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -251,6 +273,15 @@ impl Roster {
         self.monos.push(mono);
         self.monos.last().unwrap()
     }
+    /// Places `mono` right after `source` in the rail, or last without it.
+    pub fn insert_after(&mut self, source: &str, mono: Mono) {
+        let at = self
+            .monos
+            .iter()
+            .position(|m| m.id == source)
+            .map_or(self.monos.len(), |ix| ix + 1);
+        self.monos.insert(at, mono);
+    }
     pub fn get(&self, id: &str) -> Option<&Mono> {
         self.monos.iter().find(|m| m.id == id)
     }
@@ -304,6 +335,25 @@ pub fn load_files(root: &Path, mono: &Mono) -> Result<files::AgentFiles, String>
         }
     }
     Ok(files)
+}
+
+/// Gives a duplicate its source's soul and habits before it first opens, so
+/// it never seeds the default soul. Memory stays behind: it is mostly about
+/// the source's projects.
+pub fn copy_identity(root: &Path, source: &Mono, copy: &Mono, now: u64) -> Result<(), String> {
+    if let Some(soul) = files::read(root, &source.id, None, "SOUL.md")?.text {
+        files::save(root, &copy.id, None, "SOUL.md", &soul, None)?;
+    }
+    let moved = match (source.projects.as_slice(), copy.projects.as_slice()) {
+        ([from], [to]) => Some((from.as_str(), to.as_str())),
+        _ => None,
+    };
+    let habits = habits::for_copy(habits::load(root, &source.id)?, moved, now);
+    if !habits.is_empty() {
+        let text = serde_json::to_string_pretty(&habits).map_err(|e| e.to_string())? + "\n";
+        files::save(root, &copy.id, None, "habits.json", &text, None)?;
+    }
+    Ok(())
 }
 
 pub fn context(mono: &Mono, files: &files::AgentFiles, executable: &Path) -> String {

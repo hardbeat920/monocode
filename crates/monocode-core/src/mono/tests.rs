@@ -185,3 +185,70 @@ fn context_shows_how_to_delegate_without_running_help() {
         r#"/Applications/Monocode.app/monocode app sessions.start --json '{"project":"<assigned path>","title":"<short title>","prompt":"<complete instructions>","notifyOnComplete":true}'"#
     ));
 }
+#[test]
+fn a_duplicate_keeps_its_identity_but_not_its_chat_memory_or_history() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let now = 1_792_411_200_000;
+    let mut roster = Roster::default();
+    let source_id = roster.create(vec!["/code/app".into()]).id.clone();
+    let after = roster.create(vec!["/else".into()]).id.clone();
+    let source = roster.get_mut(&source_id).unwrap();
+    source.name = "Scout".into();
+    source.session_id = Some(9);
+    source.seen_rows = 4;
+    source.habit_sessions = vec![3];
+    let source = source.clone();
+
+    let copy = source.duplicate("/code/web");
+    assert_ne!(copy.id, source.id);
+    assert_eq!(copy.name, "Scout · web");
+    assert_eq!((&copy.mascot, copy.color), (&source.mascot, source.color));
+    assert_eq!(copy.projects, vec!["/code/web".to_string()]);
+    assert_eq!(copy.session_id, None);
+    assert_eq!(copy.seen_rows, 0);
+    assert!(copy.habit_sessions.is_empty());
+    let long = Mono {
+        name: "x".repeat(40),
+        ..source.clone()
+    }
+    .duplicate("/code/web");
+    assert_eq!(long.name.chars().count(), 40);
+    assert!(long.name.ends_with(" · web"));
+
+    files::save(root, &source.id, None, "SOUL.md", "# Soul\nBe brief.", None).unwrap();
+    files::save(root, &source.id, None, "MEMORY.md", "- private fact", None).unwrap();
+    let mut habit = Habit::new(
+        "Digest".into(),
+        "Summarise /code/app, not /code/app-web.".into(),
+        Schedule::default(),
+        now - 86_400_000,
+    )
+    .unwrap();
+    habit.enabled = false;
+    habit.last_outcome = Some("posted".into());
+    habit.running_since = Some(now);
+    habits::update(root, &source.id, |all| {
+        all.push(habit.clone());
+        Ok(())
+    })
+    .unwrap();
+    copy_identity(root, &source, &copy, now).unwrap();
+    let files = load_files(root, &copy).unwrap();
+    assert_eq!(files.soul.as_deref(), Some("# Soul\nBe brief."));
+    assert_eq!(files.memory, "");
+    let copied = habits::load(root, &copy.id).unwrap();
+    assert_eq!(copied.len(), 1);
+    let h = &copied[0];
+    assert_ne!(h.id, habit.id);
+    assert!(!h.enabled);
+    assert_eq!(h.instructions, "Summarise /code/web, not /code/app-web.");
+    assert_eq!((h.last_outcome.as_ref(), h.running_since), (None, None));
+    assert!(h.next_run_at > now);
+
+    roster.insert_after(&source.id, copy.clone());
+    assert_eq!(
+        roster.monos.iter().map(|m| &m.id).collect::<Vec<_>>(),
+        vec![&source.id, &copy.id, &after]
+    );
+}

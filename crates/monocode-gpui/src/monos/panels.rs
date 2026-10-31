@@ -2028,6 +2028,9 @@ impl Monos {
                     MenuAction::new("background", "Background image")
                         .icon("image-add")
                         .into(),
+                    MenuAction::new("duplicate", "Duplicate to project…")
+                        .icon("copy")
+                        .into(),
                     MenuAction::new("delete", "Delete mono…")
                         .icon("trash")
                         .danger()
@@ -2045,6 +2048,7 @@ impl Monos {
             if let MenuEvent::Picked(action, _) = event {
                 match action.as_ref() {
                     "background" => this.open_background(&target, w, cx),
+                    "duplicate" => cx.emit(DuplicateRequested(target.clone())),
                     "delete" => this.delete_mono(&target, w, cx),
                     _ => {}
                 }

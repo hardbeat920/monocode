@@ -19,6 +19,7 @@ pub(crate) mod monos;
 mod notifications;
 mod orchestration;
 mod picker_preferences;
+mod project_picker;
 mod project_rail;
 mod project_removal;
 mod project_settings;
@@ -586,6 +587,7 @@ struct SessionPreview {
 pub(crate) struct Shell {
     monos: Option<Entity<crate::monos::Monos>>,
     quick_open: Option<quick_open::Open>,
+    project_picker: Option<project_picker::Open>,
     image_lightbox: Option<(Entity<crate::image_lightbox::ImageLightbox>, Subscription)>,
     app_bridge: Option<monocode_core::mono::bridge::Server>,
     mobile: mobile_host::Mobile,
@@ -963,6 +965,7 @@ impl Shell {
         let mut this = Self {
             monos: None,
             quick_open: None,
+            project_picker: None,
             image_lightbox: None,
             app_bridge: None,
             mobile: mobile_host::Mobile::default(),
@@ -1185,6 +1188,18 @@ impl Shell {
             &monos,
             |this, _, opened: &crate::monos::TabOpened, cx| {
                 this.mono_opened(opened.0.clone(), cx);
+            },
+        ));
+        this.observations.push(cx.subscribe(
+            &monos,
+            |_, _, request: &crate::monos::DuplicateRequested, cx| {
+                let id = request.0.clone();
+                cx.spawn(async move |this, cx| {
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        this.open_mono_duplicate(id, window, cx)
+                    });
+                })
+                .detach();
             },
         ));
         this.observations.push(cx.subscribe(
@@ -8603,6 +8618,10 @@ impl Render for Shell {
                     this.close_quick_open(window, cx);
                     return;
                 }
+                if this.project_picker.is_some() {
+                    this.close_project_picker(window, cx);
+                    return;
+                }
                 if this.app_search.is_some() {
                     this.close_app_search(window, cx);
                     return;
@@ -8824,6 +8843,7 @@ impl Render for Shell {
             .children(self.action_modal(window, cx))
             .children(self.resource_modal(window, cx))
             .children(self.quick_open_modal(window, cx))
+            .children(self.project_picker_modal(window, cx))
             .children(self.remote_project_modal(window, cx))
             .children(self.notice_modals(window, cx))
             .children(self.folder_picker_popover(window, cx))

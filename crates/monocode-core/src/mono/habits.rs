@@ -187,6 +187,46 @@ impl Habit {
         Ok(())
     }
 }
+/// A duplicate Mono's habits: new ids, no history and a fresh schedule. With
+/// `moved`, instructions naming the source's only project name the new one.
+pub fn for_copy(habits: Vec<Habit>, moved: Option<(&str, &str)>, now: u64) -> Vec<Habit> {
+    habits
+        .into_iter()
+        .filter_map(|habit| {
+            let instructions = match moved {
+                Some((from, to)) => replace_path(&habit.instructions, from, to),
+                None => habit.instructions,
+            };
+            let mut copy = Habit::new(habit.name, instructions, habit.schedule, now).ok()?;
+            copy.enabled = habit.enabled;
+            Some(copy)
+        })
+        .collect()
+}
+/// Replaces whole paths only, so `/code/app` leaves `/code/app-web` alone.
+fn replace_path(text: &str, from: &str, to: &str) -> String {
+    let from = from.trim_end_matches('/');
+    if from.is_empty() {
+        return text.into();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(from) {
+        let end = at + from.len();
+        let whole = !rest[end..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.'));
+        out.push_str(&rest[..at]);
+        out.push_str(if whole {
+            to.trim_end_matches('/')
+        } else {
+            from
+        });
+        rest = &rest[end..];
+    }
+    out + rest
+}
 pub fn load(root: &Path, id: &str) -> Result<Vec<Habit>, String> {
     let file = files::read(root, id, None, "habits.json")?;
     parse(file.text.as_deref())

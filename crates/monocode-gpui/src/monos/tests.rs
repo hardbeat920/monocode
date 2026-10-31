@@ -1956,3 +1956,80 @@ fn habits_and_documents_search_like_sessions(cx: &mut TestAppContext) {
     assert!(visual.debug_bounds("mono-document-plan").is_none());
     assert!(visual.debug_bounds("mono-document-summary").is_some());
 }
+#[gpui::test]
+fn duplicating_to_a_project_copies_identity_and_model_into_a_fresh_mono(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        input::bind(cx);
+        crate::popover::bind(cx);
+    });
+    let s = setup(cx);
+    let web = std::path::Path::new(&s.project).join("web");
+    std::fs::create_dir_all(&web).unwrap();
+    let web = web.to_string_lossy().to_string();
+    {
+        let db = s.store.lock().unwrap();
+        let mut settings = db.agent_settings(s.session).unwrap().unwrap_or_default();
+        settings.model = Some("gpt-test".into());
+        settings.access = AccessMode::ReadOnly;
+        settings.revision += 1;
+        db.configure_agent(s.session, "claude", &settings).unwrap();
+    }
+    mono::files::save(&s.root, &s.id, None, "SOUL.md", "# Soul\nBe brief.", None).unwrap();
+    mono::files::save(&s.root, &s.id, None, "MEMORY.md", "- source only", None).unwrap();
+    s.window
+        .update(cx, |shell, _, _| shell.workspace.add_project(&web))
+        .unwrap();
+    let handle: gpui::AnyWindowHandle = s.window.into();
+    handle
+        .update(cx, |_, w, cx| {
+            s.manager.update(cx, |m, cx| {
+                m.roster.get_mut(&s.id).unwrap().name = "Scout".into();
+                m.open_options(&s.id, None, w, cx);
+                let menu = m.menu.as_ref().unwrap().1.clone();
+                menu.update(cx, |_, cx| {
+                    cx.emit(MenuEvent::Picked("duplicate".into(), None))
+                });
+            });
+        })
+        .unwrap();
+    cx.run_until_parked();
+    s.window
+        .update(cx, |shell, _, _| assert!(shell.project_picker_open()))
+        .unwrap();
+    // The source's own project is listed but cannot be picked, so Enter
+    // lands on the other one even when the search matches both.
+    cx.simulate_keystrokes(handle, "enter");
+    cx.run_until_parked();
+    let (copy, active, project) = s
+        .window
+        .update(cx, |shell, _, cx| {
+            assert!(!shell.project_picker_open());
+            let m = s.manager.read(cx);
+            assert_eq!(m.roster.monos.len(), 2);
+            assert_eq!(m.roster.monos[0].id, s.id);
+            (
+                m.roster.monos[1].clone(),
+                m.active.clone(),
+                shell.workspace.project.clone(),
+            )
+        })
+        .unwrap();
+    assert_eq!(copy.projects, vec![web.clone()]);
+    assert_eq!(copy.name, "Scout · web");
+    assert_eq!(active.as_deref(), Some(copy.id.as_str()));
+    assert_eq!(project, web);
+    let session = copy.session_id.expect("the copy has its own chat");
+    assert_ne!(session, s.session);
+    let db = s.store.lock().unwrap();
+    let settings = db.agent_settings(session).unwrap().unwrap();
+    assert_eq!(settings.model.as_deref(), Some("gpt-test"));
+    assert_eq!(settings.access, AccessMode::ReadOnly);
+    assert_eq!(
+        db.mono_session(session).unwrap().unwrap().provider,
+        "claude"
+    );
+    drop(db);
+    let copied = mono::files::load(&s.root, &copy.id, None).unwrap();
+    assert_eq!(copied.soul.as_deref(), Some("# Soul\nBe brief."));
+    assert_eq!(copied.memory, "");
+}
