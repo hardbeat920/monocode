@@ -1,3 +1,4 @@
+use crate::tooltip::Tip;
 use crate::{popover::AnchorSlot, theme::*};
 use gpui::{Role, SharedString, div, prelude::*, px};
 use monocode_core::{
@@ -50,10 +51,12 @@ pub(crate) fn button(
     glyph: &'static str,
     active: bool,
 ) -> gpui::Stateful<gpui::Div> {
+    let label = label.into();
     div()
         .id((action, turn))
         .role(Role::Button)
-        .aria_label(label.into())
+        .aria_label(label.clone())
+        .tip(label)
         .group("response-action")
         .flex_shrink_0()
         .size(px(22.))

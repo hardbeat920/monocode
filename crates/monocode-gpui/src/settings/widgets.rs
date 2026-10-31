@@ -1,6 +1,7 @@
 //! SettingsView.tsx's building blocks: PageHeader, Group, Row, Toggle,
 //! Segmented, Slider, Select and SecondaryButton, at their Tailwind metrics.
 use super::{SettingsView, SliderKind};
+use crate::tooltip::Tip;
 use crate::{
     popover::{Align, Anchor, AnchorSlot, Side, popover},
     theme::*,
@@ -117,10 +118,12 @@ pub(super) fn icon_action(
     alpha: f32,
     disabled: bool,
 ) -> Stateful<Div> {
+    let label = label.into();
     div()
         .id(id)
         .role(Role::Button)
-        .aria_label(label.into())
+        .aria_label(label.clone())
+        .tip(label)
         .group("settings-icon-action")
         .size(px(side))
         .flex_shrink_0()

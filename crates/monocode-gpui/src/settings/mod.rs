@@ -20,6 +20,7 @@ pub(crate) use model::Section;
 pub(crate) use pages::{ACCENTS, command_shortcut, swatch};
 pub(crate) use preferences::{ModelChoice, Preferences, UI_SCALE_PERCENTS};
 
+use crate::tooltip::Tip;
 use crate::{
     input::{self, Input},
     popover::{Align, Anchor, AnchorSlot, Side, popover},
@@ -675,6 +676,7 @@ impl SettingsView {
                                                 .id("clear-settings-search")
                                                 .role(Role::Button)
                                                 .aria_label("Clear settings search")
+                                                .tip("Clear settings search")
                                                 .size_4()
                                                 .flex_shrink_0()
                                                 .flex()

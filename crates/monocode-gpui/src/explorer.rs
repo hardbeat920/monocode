@@ -2,6 +2,7 @@
 //! tree with Git colours, inline create/rename, clipboard, context menu,
 //! dropped files and VS Code-style keyboard navigation. Directory reads and
 //! every file operation run off the UI thread.
+use crate::tooltip::Tip;
 use crate::{
     file_icons::file_type_icon,
     git_status::{GitChanged, ProjectGit},
@@ -1665,6 +1666,7 @@ impl Render for Explorer {
                             .id("explorer-root")
                             .role(Role::TreeItem)
                             .aria_label(SharedString::from(cwd.clone()))
+                            .tip(SharedString::from(cwd.clone()))
                             .aria_expanded(root_open)
                             .h_full()
                             .min_w_0()

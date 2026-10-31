@@ -1,6 +1,7 @@
 //! Original project navigation. Its list and shared image cache stay independent
 //! from streamed conversations; Git counters use one visible-project batch.
 use super::*;
+use crate::tooltip::Tip;
 use crate::{
     right_panel::{DIFF_ADD, DIFF_DEL, format_integer, tabular},
     workspace,
@@ -127,21 +128,6 @@ impl ProjectRailDrag {
 }
 fn rail_shift_key(id: &str, group: bool) -> String {
     format!("{}:{id}", if group { "group" } else { "project" })
-}
-struct ProjectTooltip(String);
-impl Render for ProjectTooltip {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .px_2()
-            .py_1()
-            .rounded_md()
-            .bg(pane_fill())
-            .border_1()
-            .border_color(content(0.15))
-            .text_size(px(12.))
-            .text_color(content(1.))
-            .child(self.0.clone())
-    }
 }
 impl Shell {
     pub(super) fn project_rail_drawn_width(&self) -> f32 {
@@ -737,7 +723,8 @@ impl Shell {
                     .id("rail-current-project")
                     .debug_selector(|| "rail-current-project".into())
                     .role(Role::Button)
-                    .aria_label(picker_label)
+                    .aria_label(picker_label.clone())
+                    .tip(picker_label.clone())
                     .aria_expanded(self.menu_open(&MenuTarget::CompactProjectPicker))
                     .size(px(32.))
                     .rounded_md()
@@ -1335,7 +1322,7 @@ impl Shell {
                         )
                     })
                     .child(bounds.probe())
-                    .tooltip(move |_, cx| cx.new(|_| ProjectTooltip(tooltip.clone())).into())
+                    .tip(tooltip)
                     .on_click(cx.listener(move |this, _, window, cx| {
                         if std::mem::take(&mut this.project_rail_list.skip_click) {
                             return;

@@ -3,6 +3,7 @@
 //! lanes that scroll horizontally together, hunk navigation, per-file and
 //! per-hunk staging, and line comments for the chat. Highlighting runs off
 //! the UI thread, one file at a time, only for files that are on screen.
+use crate::tooltip::Tip;
 use crate::{
     file_icons::file_type_icon,
     input::{self, Input},
@@ -1243,6 +1244,7 @@ impl DiffView {
                                             .id(("diff-stage-hunk", ix))
                                             .role(Role::Button)
                                             .aria_label("Stage hunk")
+                                            .tip("Stage hunk")
                                             .absolute()
                                             .top_0()
                                             .bottom_0()
@@ -1435,6 +1437,7 @@ fn tool_button(
         .id(id)
         .role(Role::Button)
         .aria_label(label)
+        .tip(label)
         .group(group.clone())
         .size(px(24.))
         .flex_shrink_0()

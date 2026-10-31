@@ -20,6 +20,7 @@ mod response_menu;
 mod submission_tests;
 mod title;
 mod worktree_naming;
+use crate::tooltip::Tip;
 use crate::{
     composer_motion::ComposerMotion,
     git_picker::{GitPicker, Mode as GitMode, Picked as GitPicked},
@@ -3851,6 +3852,7 @@ fn send_button(
         .debug_selector(|| id.into())
         .role(Role::Button)
         .aria_label(label)
+        .tip(label)
         .cursor_pointer()
         .flex_shrink_0()
         .size(px(26.))

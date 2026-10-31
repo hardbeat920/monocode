@@ -1,3 +1,4 @@
+use crate::tooltip::Tip;
 use gpui::{Div, Hsla, Role, Stateful, Svg, div, img, prelude::*, px, rgb, rgba, svg};
 // Shared appearance tokens. Interaction fills use translucent content ink
 // rather than opaque replacement greys.
@@ -497,6 +498,7 @@ fn chrome_button(
         .id(id)
         .role(Role::Button)
         .aria_label(label)
+        .tip(label)
         .group("chrome-button")
         .cursor_pointer()
         .flex()

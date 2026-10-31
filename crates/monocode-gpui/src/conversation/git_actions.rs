@@ -5,6 +5,7 @@
 //! Once a step lands the pill moves on: staged work offers Commit, and an
 //! unpushed commit offers Push.
 use super::*;
+use crate::tooltip::Tip;
 
 /// Read older pages without installing their transcript payload in the UI.
 pub(super) fn restored_session_edits(
@@ -358,6 +359,7 @@ impl Conversation {
         };
         let main = segment("git-action-run")
             .aria_label(SharedString::from(current.message()))
+            .tip(SharedString::from(current.message()))
             .pl(px(10.))
             .pr(px(if has_menu { 8. } else { 10. }))
             .gap(px(6.))

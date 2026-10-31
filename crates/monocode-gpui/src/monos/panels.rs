@@ -1,4 +1,5 @@
 use super::*;
+use crate::tooltip::Tip;
 use crate::{
     pickers::{ModelList, ModelPicked},
     popover::{MenuAction, MenuItem, MenuStyle, Side},
@@ -767,6 +768,7 @@ impl LookEditor {
                                     .id("settings-custom-color")
                                     .role(Role::Button)
                                     .aria_label("Custom color")
+                                    .tip("Custom color")
                                     .size(px(36.))
                                     .flex()
                                     .items_center()
@@ -982,6 +984,7 @@ impl Monos {
                     .debug_selector(|| "original-hide-mono-overview".into())
                     .role(Role::Button)
                     .aria_label("Hide overview")
+                    .tip("Hide overview")
                     .aria_toggled(gpui::Toggled::True)
                     .size(px(24.))
                     .flex_shrink_0()

@@ -2,6 +2,7 @@
 // footer's terminal controls (UsageFooter.tsx's Terminal button and
 // RunningTerminalChip).
 use super::{MenuTarget, Shell, TabShift};
+use crate::tooltip::Tip;
 use crate::{
     popover::{Anchor, MenuAction, MenuItem, MenuStyle},
     terminal::Terminal,
@@ -756,6 +757,7 @@ impl Shell {
                                             .aria_label(SharedString::from(format!(
                                                 "Close {label}"
                                             )))
+                                            .tip(SharedString::from(format!("Close {label}")))
                                             .group("terminal-tab-close")
                                             .absolute()
                                             .right_1()

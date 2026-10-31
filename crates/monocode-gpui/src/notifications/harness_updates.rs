@@ -1,6 +1,7 @@
 //! Native counterpart of HarnessUpdateNotice.tsx. The parent positions this
 //! entity in the shared top-right notification stack.
 use crate::theme::*;
+use crate::tooltip::Tip;
 use gpui::{Context, EventEmitter, Render, Role, Window, div, prelude::*, px};
 use monocode_core::{
     harness_updates::{self, Update},
@@ -176,6 +177,7 @@ impl Render for HarnessUpdates {
                 .id("dismiss-harness-updates")
                 .role(Role::Button)
                 .aria_label("Dismiss harness updates")
+                .tip("Dismiss harness updates")
                 .size(px(24.))
                 .flex()
                 .items_center()

@@ -1,5 +1,6 @@
 //! Native port of `src/shared/ui/ImageLightbox.tsx`.
 use crate::theme::{black, icon, white};
+use crate::tooltip::Tip;
 use gpui::{
     App, Bounds, BoxShadow, Context, CursorStyle, Entity, EventEmitter, FocusHandle, Image,
     ImageFormat, ImgResourceLoader, KeyBinding, MouseButton, Pixels, Point, RenderImage, Role,
@@ -421,6 +422,7 @@ impl Render for ImageLightbox {
                     .debug_selector(|| "close-image-preview".into())
                     .role(Role::Button)
                     .aria_label("Close image preview")
+                    .tip("Close image preview")
                     .track_focus(&self.focus)
                     .absolute()
                     .top(px(16.))

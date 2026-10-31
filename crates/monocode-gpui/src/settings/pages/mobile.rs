@@ -1,5 +1,6 @@
 //! Port of src/features/mobile/ui/MobileSettings.tsx and PairPhoneDialog.tsx:
 //! the phones paired with this desktop, and the one-use code a new one scans.
+use crate::tooltip::Tip;
 use crate::{
     input::{self, Input},
     settings::{
@@ -1056,6 +1057,7 @@ fn pairing_icon_action(
         .debug_selector(move || id.into())
         .role(Role::Button)
         .aria_label(label)
+        .tip(label)
         .group("pairing-icon-action")
         .size(px(28.))
         .flex_shrink_0()

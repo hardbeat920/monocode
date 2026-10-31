@@ -28,6 +28,7 @@ use crate::markdown_model::MarkdownParser;
 use crate::popover::{Anchor, AnchorSlot, Side, popover};
 use crate::response_actions::{self, Request as ResponseRequest};
 use crate::syntax::{HighlightRequest, HighlightedDocument};
+use crate::tooltip::Tip;
 use crate::{
     markdown::{self, Fence, MarkdownRow, Part},
     reveal::{Disclosure, Motion, PacedText},
@@ -5866,6 +5867,7 @@ impl Render for TranscriptView {
                                         .child(self.jump_anchor.probe())
                                         .role(Role::Button)
                                         .aria_label("Scroll to bottom")
+                                        .tip("Scroll to bottom")
                                         .relative()
                                         .flex()
                                         .items_center()

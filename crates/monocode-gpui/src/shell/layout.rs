@@ -2,6 +2,7 @@
 // project rail beside the sessions sidebar. The new layout keeps one sidebar
 // and offers either an inset rounded card or the existing full-height boxy frame.
 use super::{CORNER_BUTTONS_WIDTH, CORNER_CONTROL_GAP, Shell, titlebar_drag_area};
+use crate::tooltip::Tip;
 use crate::{
     popover::{Anchor, popover},
     project_tabs::{TabReveal, tab_button},
@@ -112,6 +113,7 @@ fn panel_button(enabled: bool, dot: bool) -> gpui::Stateful<gpui::Div> {
         .debug_selector(move || id.into())
         .role(Role::Button)
         .aria_label(super::TOGGLE_RIGHT_PANEL_LABEL)
+        .tip(super::TOGGLE_RIGHT_PANEL_LABEL)
         .group(id)
         .cursor_pointer()
         .size(px(24.))
