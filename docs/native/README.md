@@ -99,6 +99,20 @@ under `crates/monocode-gpui/target/release/`. `CARGO_TARGET_DIR` and
 The **Monocode Native Preview** GitHub Actions workflow runs checks and build
 verification.
 
+### AppImage desktop integration
+
+Move the AppImage to a permanent location and make it executable, then opt in
+to a per-user application menu entry and Wayland icon registration:
+
+```sh
+./MonocodeNative.AppImage --install-desktop
+```
+
+This installs `dev.usemono.gpui.desktop` and the app icon under
+`$XDG_DATA_HOME` (default: `~/.local/share`). The launcher points to the AppImage,
+not its temporary mount. Normal launches do not install anything. Run the
+command again after moving or renaming the AppImage.
+
 ## Data and configuration
 
 Development stores `monocode.db` under:
