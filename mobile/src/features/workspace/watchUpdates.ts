@@ -1,4 +1,4 @@
-import type { Turn } from "./types";
+import type { QuestionPrompt, Turn } from "./types";
 
 /** A frame of a watched conversation, from the desktop's watchUpdate. */
 export type WatchFrame = {
@@ -8,6 +8,8 @@ export type WatchFrame = {
   order?: string[];
   turns?: Turn[];
   patches?: { id: string; edits: WatchEdit[] }[];
+  /** The pending question when it changes; null once it is answered. */
+  question?: QuestionPrompt | null;
   error?: string;
 };
 
@@ -74,9 +76,17 @@ function editValue(value: unknown, edit: WatchEdit, depth = 0): unknown {
 export function applyFrames(
   previous: Turn[],
   frames: WatchFrame[],
-): { turns: Turn[]; busy?: boolean; older?: boolean; error?: string } | null {
+): {
+  turns: Turn[];
+  busy?: boolean;
+  older?: boolean;
+  /** Ordered transitions: a clear allows a later question to reuse its ID. */
+  questions: (QuestionPrompt | null)[];
+  error?: string;
+} | null {
   let turns = previous;
   let busy: boolean | undefined;
+  const questions: (QuestionPrompt | null)[] = [];
   let older: boolean | undefined;
   let error: string | undefined;
   for (const frame of frames) {
@@ -87,6 +97,7 @@ export function applyFrames(
     error = undefined;
     if (frame.busy !== undefined) busy = frame.busy;
     if (frame.older !== undefined) older = frame.older;
+    if (frame.question !== undefined) questions.push(frame.question);
     if (!frame.order) continue;
     const known = new Map(turns.map((turn) => [turn.id, turn]));
     for (const turn of frame.turns ?? []) known.set(turn.id, turn);
@@ -113,5 +124,5 @@ export function applyFrames(
         ? turns
         : next;
   }
-  return { turns, busy, older, error };
+  return { turns, busy, older, questions, error };
 }

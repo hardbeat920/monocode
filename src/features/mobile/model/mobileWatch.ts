@@ -1,9 +1,12 @@
+import type { UserQuestionPrompt } from "../../sessions/model/userQuestion";
 import type { MobileTurn } from "./mobileTranscript";
 
 /** What the phone last received for a watch, to send only what changed since. */
 export type WatchBaseline = {
   busy: boolean;
   older: boolean;
+  /** The pending question as last sent, as JSON; "null" for none. */
+  question: string;
   order: string[];
   turns: Map<string, string>;
 };
@@ -64,13 +67,21 @@ function editsBetween(
  * The next frame for a watched conversation: every turn's ID in order, plus
  * the turns that changed. While a reply streams that is the one live turn,
  * not the whole transcript. Capable phones opt into field edits and text
- * suffixes instead of retransmitting a growing turn. Null when nothing changed.
+ * suffixes instead of retransmitting a growing turn. The pending question
+ * comes with the first frame and again whenever it changes, null once it is
+ * answered. Null when nothing changed.
  */
 export function watchUpdate(
   baseline: WatchBaseline | null,
-  conversation: { busy: boolean; older: boolean; turns: MobileTurn[] },
+  conversation: {
+    busy: boolean;
+    older: boolean;
+    turns: MobileTurn[];
+    question?: UserQuestionPrompt | null;
+  },
   incremental = false,
 ): { update: object; baseline: WatchBaseline } | null {
+  const question = JSON.stringify(conversation.question ?? null);
   const turns = new Map(
     conversation.turns.map((turn) => [turn.id, JSON.stringify(turn)]),
   );
@@ -82,6 +93,7 @@ export function watchUpdate(
     baseline &&
     baseline.busy === conversation.busy &&
     baseline.older === conversation.older &&
+    baseline.question === question &&
     changed.length === 0 &&
     baseline.order.length === order.length &&
     baseline.order.every((id, index) => id === order[index])
@@ -114,8 +126,11 @@ export function watchUpdate(
       order,
       turns: replaced,
       ...(patches.length ? { patches } : {}),
+      ...(baseline?.question !== question
+        ? { question: conversation.question ?? null }
+        : {}),
     },
-    baseline: { busy, older, order, turns },
+    baseline: { busy, older, question, order, turns },
   };
 }
 

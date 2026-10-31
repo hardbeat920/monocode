@@ -6,6 +6,7 @@ import { hasNativeTranscript } from "@/features/connection/nativeLink";
 import { PixelMascot } from "@/features/mascots/PixelMascot";
 import { useBrowserRequest } from "@/features/sessions/browserRequest";
 import { Composer } from "@/features/sessions/Composer";
+import { QuestionCard } from "@/features/sessions/QuestionCard";
 import { EmptySession } from "@/features/sessions/EmptySession";
 import { SessionScreen } from "@/features/sessions/SessionScreen";
 import { Transcript } from "@/features/sessions/Transcript";
@@ -40,17 +41,22 @@ export default function MonoScreen() {
         label: mono.name,
       }}
       composer={
-        <Composer
-          key={mono.id}
-          context={mono.name}
-          branch=""
-          model={mono.model ?? ""}
-          harness={mono.harness}
-          busy={conversation.busy}
-          onStop={() => stop(conversationId)}
-          onSend={(text, attachments) => sendMessage(conversationId, text, attachments)}
-          browserRequest={browserRequest}
-        />
+        <>
+          {conversation.question ? (
+            <QuestionCard conversationId={conversationId} prompt={conversation.question} />
+          ) : null}
+          <Composer
+            key={mono.id}
+            context={mono.name}
+            branch=""
+            model={mono.model ?? ""}
+            harness={mono.harness}
+            busy={conversation.busy}
+            onStop={() => stop(conversationId)}
+            onSend={(text, attachments) => sendMessage(conversationId, text, attachments)}
+            browserRequest={browserRequest}
+          />
+        </>
       }
     >
       <ConnectionNotice error={conversation.error} />

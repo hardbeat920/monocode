@@ -3,3 +3,6 @@
 
 # Embedded with include_str! and split on "\n## " headings (browser agent tools).
 docs/browser-instructions.md text eol=lf
+
+# Signature verification requires identical package bytes on every platform.
+crates/monocode-core/src/app_update/fixtures/package.txt text eol=lf
