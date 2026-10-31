@@ -120,22 +120,34 @@ mod tests {
 
     #[test]
     fn scheduling_policy_reaches_child_and_descendant() {
-        let mut child = Command::new(std::env::current_exe().unwrap());
-        child
-            .args([
-                "--exact",
-                "background_work::tests::child_policy_probe",
-                "--nocapture",
-            ])
-            .env("MONOCODE_PRIORITY_PROBE", "1");
-        configure_child(&mut child);
-        let output = child.output().unwrap();
-        assert!(
-            output.status.success(),
-            "{} {}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
+        let exe = std::env::current_exe().unwrap();
+        let mut configured = Command::new(&exe);
+        configure_child(&mut configured);
+        // Background git gets the same policy from `nice` / `taskpolicy`.
+        let wrapped = crate::harness::background_command_on_path(
+            exe.file_name().unwrap().to_str().unwrap(),
+            format!(
+                "{}:{}",
+                exe.parent().unwrap().display(),
+                crate::harness::cached_gui_search_path()
+            ),
         );
+        for mut child in [configured, wrapped] {
+            child
+                .args([
+                    "--exact",
+                    "background_work::tests::child_policy_probe",
+                    "--nocapture",
+                ])
+                .env("MONOCODE_PRIORITY_PROBE", "1");
+            let output = child.output().unwrap();
+            assert!(
+                output.status.success(),
+                "{} {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
     }
 
     #[test]
