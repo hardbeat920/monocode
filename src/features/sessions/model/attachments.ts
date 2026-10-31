@@ -167,6 +167,19 @@ export function attachmentPreviewSrc(file: Attachment): string | undefined {
   return undefined;
 }
 
+/** A PNG MonoCode made itself (an element picked in the browser). */
+export function pngAttachment(name: string, base64: string): Attachment {
+  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+  return {
+    id: crypto.randomUUID(),
+    name,
+    mimeType: "image/png",
+    kind: "image",
+    size: Math.floor((base64.length * 3) / 4) - padding,
+    data: base64,
+  };
+}
+
 export function revokeAttachment(file: Attachment) {
   if (file.previewUrl) URL.revokeObjectURL(file.previewUrl);
 }

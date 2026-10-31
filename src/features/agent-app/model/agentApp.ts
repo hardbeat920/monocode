@@ -41,6 +41,7 @@ import type { Worktree, Worktrees } from "../../source-control/model/worktrees";
 import { pathKey, projectName } from "../../../shared/lib/paths";
 import type { SplitDir } from "../../workspace/model/layout";
 import { consumeOperatorCommand } from "../../sessions/model/operatorCommand";
+import { consumeBrowserCommand } from "../../sessions/model/browserCommand";
 import { sessionConversationPage, type SessionReadOptions } from "./sessionConversation";
 import {
   CARD_FIELDS,
@@ -242,6 +243,8 @@ function agentPrompt(value: unknown): string {
   const prompt = requiredString(value, "prompt", 240_000);
   if (consumeOperatorCommand(prompt).matched)
     throw new Error("App calls cannot enable /operator in another session");
+  if (consumeBrowserCommand(prompt).matched)
+    throw new Error("App calls cannot enable /browser in another session");
   return prompt;
 }
 

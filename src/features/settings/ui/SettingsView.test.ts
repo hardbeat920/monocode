@@ -33,6 +33,8 @@ import {
   monoLook,
   updateMono,
 } from "../../monos/model/mono";
+import { resetBrowserStore } from "../model/browser";
+import { browserState } from "../model/browser.fixtures";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async () => undefined),
@@ -113,6 +115,7 @@ beforeEach(() => {
     enabled: false, listening: false, name: "Desktop", fingerprint: null,
     openRouter: true, remoteAddress: "", routerStatus: "Off", addresses: [], devices: [],
   } : undefined);
+  resetBrowserStore(browserState());
 });
 
 afterEach(async () => {
@@ -649,6 +652,15 @@ describe("settings pages", () => {
     expect(document.activeElement).toBe(project.closest("fieldset"));
   });
 
+  it("marks the browser section as beta in its header", async () => {
+    await render("browser");
+    const badge = container.querySelector("h1 [title]");
+    expect(badge?.textContent).toBe("Beta");
+    expect(badge?.getAttribute("title")).toContain("in development");
+    await render("general");
+    expect(container.querySelector("h1 [title]")).toBeNull();
+  });
+
   it("gives every section a rail group", () => {
     const groups = new Set(SETTINGS_SECTIONS.map((section) => section.group));
     expect([...groups]).toEqual(["app", "agents", "workspace"]);
@@ -772,10 +784,23 @@ describe("settings pages", () => {
       const hidden = loadInsetLayout()
         ? INSET_LAYOUT_HIDDEN_SETTINGS
         : CLASSIC_LAYOUT_HIDDEN_SETTINGS;
+      const rendered = new Set(renderedSettingIds());
+      // Some browser rows belong to one browser mode only.
+      if (section === "browser") {
+        const state = browserState();
+        await act(async () =>
+          resetBrowserStore({
+            ...state,
+            settings: { ...state.settings, mode: "attach" },
+          }),
+        );
+        await render(section);
+        for (const id of renderedSettingIds()) rendered.add(id);
+      }
       const expected = SETTINGS_INDEX.filter(
         (entry) => entry.section === section && !hidden.has(entry.id),
       ).map((entry) => entry.id);
-      expect(renderedSettingIds().sort()).toEqual(expected.sort());
+      expect([...rendered].sort()).toEqual(expected.sort());
     },
   );
 

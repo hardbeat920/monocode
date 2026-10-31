@@ -5,6 +5,7 @@ mod artifacts;
 mod automations;
 mod azure_devops;
 mod background_work;
+mod browser;
 mod chat_background;
 mod checkpoint;
 mod codex_mono_store;
@@ -13,6 +14,7 @@ pub mod control_cli;
 mod cursor_store;
 mod devin_config;
 mod devin_usage;
+mod devservers;
 mod external_editor;
 mod fs;
 mod gitlab;
@@ -235,6 +237,16 @@ fn should_request_quit(code: Option<i32>) -> bool {
     code.is_some() || cfg!(any(target_os = "linux", target_os = "windows"))
 }
 
+/// `monocode browser ACTION ...`: the agent-facing browser CLI.
+pub fn browser_cli(args: Vec<String>) -> i32 {
+    browser::agent::cli::run(args)
+}
+
+/// `monocode browser-mcp`: the browser tools as an MCP stdio server.
+pub fn browser_mcp() -> i32 {
+    browser::agent::mcp::run()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let context = tauri::generate_context!();
@@ -283,6 +295,7 @@ pub fn run() {
             harness::reap_orphaned_harness_processes();
             session_store::init(app.handle())?;
             control::init(app.handle())?;
+            browser::init(app.handle())?;
             mobile_access::init(app.handle())?;
             reminders::init(app.handle());
             checkpoint::init(app.handle())?;
@@ -338,6 +351,40 @@ pub fn run() {
             control::control_attach_worker,
             control::control_authorize_turn,
             control::control_turn_finished,
+            browser::browser_toggle,
+            browser::browser_status,
+            browser::browser_tabs,
+            browser::browser_revoke,
+            browser::browser_transfer,
+            browser::browser_connect,
+            browser::browser_disconnect,
+            browser::browser_set_session_grant,
+            browser::browser_answer_request,
+            browser::browser_open_window,
+            browser::browser_user_tabs,
+            browser::browser_give_tab,
+            browser::browser_close_free_tab,
+            browser::browser_open_app,
+            browser::browser_new_tab,
+            devservers::dev_servers,
+            browser::browser_pick_element,
+            browser::browser_cancel_pick,
+            browser::browser_live_start,
+            browser::browser_live_stop,
+            browser::browser_live_input,
+            browser::browser_live_resize,
+            browser::browser_live_frame,
+            browser::browser_live_navigate,
+            browser::browser_close_tab,
+            browser::browser_close_all_tabs,
+            browser::browser_release_tab,
+            browser::browser_audit_list,
+            browser::browser_events_list,
+            browser::browser_audit_clear,
+            browser::browser_set_settings,
+            browser::register::browser_mcp_status,
+            browser::register::browser_mcp_register,
+            browser::register::browser_agent_instructions,
             control::app_cli_path,
             default_cwd,
             home_dir,
@@ -708,6 +755,7 @@ pub fn run() {
         }
         tauri::RunEvent::Exit => {
             handle.state::<remote::RemoteConnections>().shutdown();
+            browser::shutdown();
             reap_harness_children(handle);
         }
         _ => {}

@@ -17,6 +17,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 monocode-mobile-link = { path = "../crates/mobile-link" }
+monocode-browser = { path = "../crates/monocode-browser" }
 quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
 tokio = { version = "1", features = ["sync", "time"] }
 if-addrs = "0.15"
@@ -42,6 +43,8 @@ time = { version = "0.3", features = ["parsing"] }
 tauri-plugin-process = "2"
 arboard = { version = "3.6", features = ["wayland-data-control"] }
 png = "0.18"
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+log = "0.4"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -52,7 +55,7 @@ keyring = { version = "3.6", default-features = false, features = ["windows-nati
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-single-instance = "2"
 portable-pty = { version = "0.9", path = "../vendor/portable-pty" }
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_System_LibraryLoader", "Win32_System_Diagnostics_ToolHelp"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_System_LibraryLoader", "Win32_System_Diagnostics_ToolHelp", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock"] }
 tauri-winrt-notification = "0.8"
 # WinRT toast settings (Windows.UI.Notifications) to read the per-app block.
 windows = { version = "0.62", features = ["UI_Notifications"] }

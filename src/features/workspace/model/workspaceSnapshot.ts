@@ -4,7 +4,7 @@ import {
 } from "../../sessions/model/inFlight";
 import {
   closeLeaf,
-  isAgentTab,
+  isLiveOnlyTab,
   isTerminalTab,
   leafIds,
   newTab,
@@ -91,7 +91,7 @@ export function collectWorkspaceSnapshot(
       .filter((id) => !keptIds.has(id)),
   );
   const snapshot = withoutInboxSessions({
-    tabs: withoutAgentTabs(kept)
+    tabs: withoutLiveOnlyTabs(kept)
       .map(sanitizeTab)
       .filter((tab): tab is WorkspaceTab => tab != null),
     sessions: sessions
@@ -147,17 +147,17 @@ function parseProjectReturnTargets(raw: unknown): ProjectReturnMemory {
 
 /**
  * Agent tabs watch a live worker, and a run does not outlive the window that
- * started it. Dropping them in `sanitizeFile` would strand an empty pane and
+ * started it; a browser pane watches a tab the same way. Dropping them in `sanitizeFile` would strand an empty pane and
  * cost the whole workspace tab on restore, so the pane is closed here instead.
  */
-function withoutAgentTabs(tabs: WorkspaceTab[]): WorkspaceTab[] {
+function withoutLiveOnlyTabs(tabs: WorkspaceTab[]): WorkspaceTab[] {
   return tabs.flatMap((tab) => {
-    if (!tab.editorPanes.some((pane) => pane.files.some(isAgentTab)))
+    if (!tab.editorPanes.some((pane) => pane.files.some(isLiveOnlyTab)))
       return [tab];
     let remaining: WorkspaceTab | null = tab;
     const panes: EditorPane[] = [];
     for (const pane of tab.editorPanes) {
-      const files = pane.files.filter((file) => !isAgentTab(file));
+      const files = pane.files.filter((file) => !isLiveOnlyTab(file));
       if (files.length === pane.files.length) {
         panes.push(pane);
       } else if (files.length === 0) {

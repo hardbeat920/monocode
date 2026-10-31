@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { filesFromClipboard, mergeAttachments } from "./attachments";
+import {
+  filesFromClipboard,
+  mergeAttachments,
+  pngAttachment,
+} from "./attachments";
 import type { Attachment } from "./session";
 
 function file(name: string, type: string, body = "x") {
@@ -86,5 +90,21 @@ describe("filesFromClipboard", () => {
         items: [item(png), item(tiff)],
       }),
     ).toEqual([png, tiff]);
+  });
+});
+
+describe("pngAttachment", () => {
+  it("embeds the image and counts its decoded bytes", () => {
+    const file = pngAttachment("picked-element.png", "iVBORw0KGgo=");
+    expect(file).toMatchObject({
+      name: "picked-element.png",
+      mimeType: "image/png",
+      kind: "image",
+      size: 8,
+      data: "iVBORw0KGgo=",
+    });
+    expect(file.id).not.toBe(
+      pngAttachment("picked-element.png", "iVBORw0KGgo=").id,
+    );
   });
 });

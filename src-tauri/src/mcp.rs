@@ -148,7 +148,7 @@ pub async fn mcp_add(
     .map_err(|e| e.to_string())?
 }
 
-fn opencode_config_path(
+pub(crate) fn opencode_config_path(
     home: &Path,
     project: &Path,
     scope: &str,
@@ -305,6 +305,17 @@ fn is_opencode_timeout_settings(value: &Value) -> bool {
 }
 
 fn write_opencode_server(path: &Path, name: &str, server: Value, major: u32) -> Result<(), String> {
+    put_opencode_server(path, name, server, major, false)
+}
+
+/// Add `name`, or with `replace` overwrite an existing entry of that name.
+pub(crate) fn put_opencode_server(
+    path: &Path,
+    name: &str,
+    server: Value,
+    major: u32,
+    replace: bool,
+) -> Result<(), String> {
     let server = normalize_opencode_server(server, major)?;
     write_json_config(path, |root| {
         let object = root
@@ -336,7 +347,7 @@ fn write_opencode_server(path: &Path, name: &str, server: Value, major: u32) -> 
                 .as_object_mut()
                 .ok_or("Existing mcp.servers must be an object")?
         };
-        if servers.contains_key(name) {
+        if !replace && servers.contains_key(name) {
             return Err(format!("{name} is already configured in this file"));
         }
         servers.insert(name.to_owned(), server);
@@ -345,6 +356,16 @@ fn write_opencode_server(path: &Path, name: &str, server: Value, major: u32) -> 
 }
 
 fn write_json_server(path: &Path, name: &str, server: Value) -> Result<(), String> {
+    put_json_server(path, name, server, false)
+}
+
+/// Add `name` to `mcpServers`, or with `replace` overwrite an existing entry.
+pub(crate) fn put_json_server(
+    path: &Path,
+    name: &str,
+    server: Value,
+    replace: bool,
+) -> Result<(), String> {
     write_json_config(path, |root| {
         let object = root
             .as_object_mut()
@@ -355,7 +376,7 @@ fn write_json_server(path: &Path, name: &str, server: Value) -> Result<(), Strin
         let servers = servers
             .as_object_mut()
             .ok_or("Existing mcpServers must be an object")?;
-        if servers.contains_key(name) {
+        if !replace && servers.contains_key(name) {
             return Err(format!("{name} is already configured in this file"));
         }
         servers.insert(name.to_owned(), server);
@@ -668,7 +689,7 @@ fn read_json(path: &Path) -> Option<Value> {
 }
 
 /// Remove JSONC comments and trailing commas without touching quoted text.
-fn strip_jsonc(raw: &str) -> String {
+pub(crate) fn strip_jsonc(raw: &str) -> String {
     let bytes = raw.as_bytes();
     let mut clean = Vec::with_capacity(bytes.len());
     let mut index = 0;
