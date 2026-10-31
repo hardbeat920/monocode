@@ -218,12 +218,14 @@ pub struct Approval {
     pub title: String,
     pub detail: String,
     pub can_remember: bool,
+    pub remember_scope: Option<String>,
 }
 #[derive(Clone, Debug)]
 pub enum Decision {
     Steer(crate::follow_up::Message),
     Allow,
     Session,
+    Always,
     Deny,
     Answer(Vec<Vec<String>>),
     KeepOpen,

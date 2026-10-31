@@ -32,6 +32,7 @@ fn update(status: impl Into<String>, finished: bool) -> Update {
         background: None,
         approvals: vec![],
         approvals_resolved: vec![],
+        approvals_save_failed: vec![],
         questions: vec![],
         questions_resolved: vec![],
         handoff: None,
@@ -440,6 +441,7 @@ pub(crate) fn approvals(snapshot: &Value) -> Vec<Approval> {
                     .unwrap_or("")
                     .into(),
                 can_remember: false,
+                remember_scope: None,
             })
         })
         .collect()
@@ -756,6 +758,9 @@ pub(crate) fn run_with_client(
                         next["reply"] = reply(question, answers);
                     }
                     Decision::KeepOpen => continue,
+                    Decision::Always => {
+                        return Err("This remote host cannot remember permissions".into());
+                    }
                     Decision::Steer(_) => {
                         return Err("Steering is not supported by this remote host".into());
                     }

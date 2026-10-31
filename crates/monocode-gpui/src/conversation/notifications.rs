@@ -53,8 +53,11 @@ impl Conversation {
         };
         if !matches!(
             decision,
-            Decision::Allow | Decision::Session | Decision::Deny
+            Decision::Allow | Decision::Session | Decision::Always | Decision::Deny
         ) || (matches!(decision, Decision::Session) && !self.approvals[index].can_remember)
+            || (matches!(decision, Decision::Always)
+                && self.approvals[index].remember_scope.is_none())
+            || self.approval_ui.saving.contains(request_id)
         {
             return false;
         }
@@ -63,6 +66,7 @@ impl Conversation {
             cx.notify();
             return false;
         };
+        let remembering = matches!(decision, Decision::Always);
         if controls
             .send(Control {
                 id: request_id.to_owned(),
@@ -74,8 +78,15 @@ impl Conversation {
             cx.notify();
             return false;
         }
-        self.approvals.remove(index);
-        self.status = if !self.approvals.is_empty() {
+        if remembering {
+            self.approval_ui.saving.insert(request_id.to_owned());
+        } else {
+            self.approvals.remove(index);
+        }
+        self.approval_ui.errors.remove(request_id);
+        self.status = if remembering {
+            "Saving permission…"
+        } else if !self.approvals.is_empty() {
             "Waiting for approval"
         } else if !self.questions.is_empty() {
             "Waiting for your answer"
