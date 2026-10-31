@@ -3801,6 +3801,7 @@ dependencies = [
  "uuid",
  "webpki-roots 0.26.11",
  "zstd",
+ "zune-jpeg",
 ]
 
 [[package]]

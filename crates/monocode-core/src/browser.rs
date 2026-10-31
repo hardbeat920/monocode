@@ -352,17 +352,28 @@ pub fn unpack_live(packed: &[u8]) -> Result<LivePicture, String> {
     }
     let word = |at: usize| -> [u8; 8] { packed[at..at + 8].try_into().unwrap_or_default() };
     let seq = u32::from_le_bytes(packed[4..8].try_into().unwrap_or_default());
-    let format = if packed[0] == 1 {
-        image::ImageFormat::Png
+    let picture = &packed[live::PACKED_HEADER..];
+    let pixels = if packed[0] == 1 {
+        let mut pixels = image::load_from_memory_with_format(picture, image::ImageFormat::Png)
+            .map_err(|error| error.to_string())?
+            .into_rgba8();
+        for pixel in pixels.pixels_mut() {
+            pixel.0.swap(0, 2);
+        }
+        pixels
     } else {
-        image::ImageFormat::Jpeg
+        // Straight into BGRA: one pass over the picture, where decoding to
+        // RGB, widening to RGBA and swapping red and blue took three.
+        use zune_jpeg::zune_core::{
+            bytestream::ZCursor, colorspace::ColorSpace, options::DecoderOptions,
+        };
+        let options = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::BGRA);
+        let mut decoder = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(picture), options);
+        let bytes = decoder.decode().map_err(|error| error.to_string())?;
+        let (width, height) = decoder.dimensions().ok_or("The picture has no size.")?;
+        image::RgbaImage::from_raw(width as u32, height as u32, bytes)
+            .ok_or("The picture is cut short.")?
     };
-    let mut pixels = image::load_from_memory_with_format(&packed[live::PACKED_HEADER..], format)
-        .map_err(|error| error.to_string())?
-        .into_rgba8();
-    for pixel in pixels.pixels_mut() {
-        pixel.0.swap(0, 2);
-    }
     Ok(LivePicture {
         seq: u64::from(seq),
         width: f64::from_le_bytes(word(8)),
@@ -394,6 +405,34 @@ mod tests {
         assert_eq!(picture.pixels.dimensions(), (3, 2));
         assert_eq!(picture.pixels.get_pixel(0, 0).0, [30, 20, 10, 255]);
         assert!(unpack_live(&[0; 4]).is_err());
+    }
+
+    #[test]
+    fn a_live_jpeg_unpacks_to_bgra() {
+        use base64::Engine as _;
+        let mut jpeg = Vec::new();
+        image::RgbImage::from_pixel(16, 8, image::Rgb([200, 100, 20]))
+            .write_to(
+                &mut std::io::Cursor::new(&mut jpeg),
+                image::ImageFormat::Jpeg,
+            )
+            .unwrap();
+        let frame = live::LiveFrame {
+            tab: "t1".into(),
+            data: base64::engine::general_purpose::STANDARD.encode(&jpeg),
+            format: "jpeg",
+            width: 16.0,
+            height: 8.0,
+            seq: 3,
+        };
+        let picture = unpack_live(&frame.packed().unwrap()).unwrap();
+        assert_eq!(picture.pixels.dimensions(), (16, 8));
+        let [b, g, r, a] = picture.pixels.get_pixel(5, 5).0;
+        assert!(
+            b.abs_diff(20) < 8 && g.abs_diff(100) < 8 && r.abs_diff(200) < 8,
+            "{b} {g} {r}"
+        );
+        assert_eq!(a, 255);
     }
 
     use super::*;

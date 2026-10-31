@@ -1,10 +1,12 @@
 //! A thread's tab shown live in a pane: the view that streams its pictures,
-//! the pictures as the pane takes them, and the user's input, sent one at a
-//! time in the order given.
+//! the pictures decoded on their own thread as they come (the pane draws
+//! one while the next decodes), and the user's input, sent one at a time
+//! in the order given.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 use monocode_browser::live::{LiveEnd, LiveInput, LiveNav, MouseEvent, PanelSize};
 use monocode_browser::protocol::TabId;
@@ -40,6 +42,74 @@ struct Shared {
     input_ready: Condvar,
     /// The last input that failed, for the pane to show.
     input_error: Mutex<Option<String>>,
+    /// The newest decoded picture the pane has not taken yet.
+    latest: Mutex<Option<Result<LivePicture, String>>>,
+    fresh: Condvar,
+    meter: Mutex<Meter>,
+}
+
+impl Shared {
+    fn over(&self) -> bool {
+        self.stopping.load(Ordering::Acquire)
+            || self
+                .ended
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_some()
+    }
+
+    /// Wake a pane waiting for a picture.
+    fn wake(&self) {
+        let _latest = self.latest.lock().unwrap_or_else(|e| e.into_inner());
+        self.fresh.notify_all();
+    }
+}
+
+/// What a development build notes about the pane's side of the view every
+/// two seconds, next to the browser's own `[live]` line.
+struct Meter {
+    since: Instant,
+    decoded: u32,
+    decoding: Duration,
+    slowest: Duration,
+    /// Decoded, then replaced by a newer one before the pane took it.
+    passed_over: u32,
+    taken: u32,
+    drawn: u32,
+}
+
+impl Meter {
+    fn new() -> Meter {
+        Meter {
+            since: Instant::now(),
+            decoded: 0,
+            decoding: Duration::ZERO,
+            slowest: Duration::ZERO,
+            passed_over: 0,
+            taken: 0,
+            drawn: 0,
+        }
+    }
+
+    fn maybe_note(&mut self) {
+        let elapsed = self.since.elapsed();
+        if !cfg!(debug_assertions) || elapsed < Duration::from_secs(2) {
+            return;
+        }
+        if self.decoded > 0 || self.drawn > 0 {
+            let rate = |n: u32| f64::from(n) / elapsed.as_secs_f64();
+            eprintln!(
+                "[live] pane: decoded {:.0}/s (avg {} ms, max {} ms), {} passed over | taken {:.0}/s | drawn {:.0}/s",
+                rate(self.decoded),
+                (self.decoding / self.decoded.max(1)).as_millis(),
+                self.slowest.as_millis(),
+                self.passed_over,
+                rate(self.taken),
+                rate(self.drawn),
+            );
+        }
+        *self = Meter::new();
+    }
 }
 
 /// One live view of a tab. Dropping it stops the view.
@@ -67,6 +137,9 @@ impl LivePane {
             inputs: Mutex::new(Inputs::default()),
             input_ready: Condvar::new(),
             input_error: Mutex::new(None),
+            latest: Mutex::new(None),
+            fresh: Condvar::new(),
+            meter: Mutex::new(Meter::new()),
         });
         let view = shared.clone();
         std::thread::Builder::new()
@@ -81,7 +154,13 @@ impl LivePane {
                     Err(error) => Ended::Failed(error),
                 };
                 *view.ended.lock().unwrap_or_else(|e| e.into_inner()) = Some(ended);
+                view.wake();
             })
+            .map_err(|error| error.to_string())?;
+        let decoder = shared.clone();
+        std::thread::Builder::new()
+            .name("browser-live-decode".into())
+            .spawn(move || decode_pictures(&decoder))
             .map_err(|error| error.to_string())?;
         let sender = shared.clone();
         std::thread::Builder::new()
@@ -91,12 +170,36 @@ impl LivePane {
         Ok(LivePane { shared })
     }
 
-    /// The next picture after `after`, waiting up to a second for it; `None`
-    /// when none came, or the view is over ([`Self::ended`]). Blocks: call
-    /// it off the UI thread.
-    pub fn take(&self, after: u64) -> Option<Result<LivePicture, String>> {
-        let packed = self.shared.host.live_take(&self.shared.view, after);
-        (!packed.is_empty()).then(|| unpack_live(&packed))
+    /// The newest picture the pane has not drawn yet, waiting up to a
+    /// second for one; `None` when none came, or the view is over
+    /// ([`Self::ended`]). Blocks: call it off the UI thread.
+    pub fn take(&self) -> Option<Result<LivePicture, String>> {
+        let shared = &self.shared;
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let mut latest = shared.latest.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            if let Some(picture) = latest.take() {
+                drop(latest);
+                shared.meter.lock().unwrap_or_else(|e| e.into_inner()).taken += 1;
+                return Some(picture);
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() || shared.over() {
+                return None;
+            }
+            latest = shared
+                .fresh
+                .wait_timeout(latest, left)
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
+        }
+    }
+
+    /// The pane drew a picture: counted for a development build's notes.
+    pub fn drawn(&self) {
+        let mut meter = self.shared.meter.lock().unwrap_or_else(|e| e.into_inner());
+        meter.drawn += 1;
+        meter.maybe_note();
     }
 
     /// How the view ended, once it has.
@@ -152,6 +255,37 @@ impl Drop for LivePane {
             .closed = true;
         self.shared.input_ready.notify_all();
         self.shared.host.stop_live(Some(&self.shared.view));
+        self.shared.wake();
+    }
+}
+
+/// Take each picture the browser sends and decode it, keeping only the
+/// newest for the pane, until the view is over.
+fn decode_pictures(shared: &Shared) {
+    let mut after = 0;
+    while !shared.over() {
+        let packed = shared.host.live_take(&shared.view, after);
+        if packed.len() < 8 {
+            continue;
+        }
+        after = u64::from(u32::from_le_bytes(
+            packed[4..8].try_into().unwrap_or_default(),
+        ));
+        let started = Instant::now();
+        let picture = unpack_live(&packed);
+        let took = started.elapsed();
+        let passed_over = {
+            let mut latest = shared.latest.lock().unwrap_or_else(|e| e.into_inner());
+            let passed_over = latest.replace(picture).is_some();
+            shared.fresh.notify_all();
+            passed_over
+        };
+        let mut meter = shared.meter.lock().unwrap_or_else(|e| e.into_inner());
+        meter.decoded += 1;
+        meter.decoding += took;
+        meter.slowest = meter.slowest.max(took);
+        meter.passed_over += u32::from(passed_over);
+        meter.maybe_note();
     }
 }
 

@@ -34,6 +34,8 @@ hostname = "0.4"
 igd-next = "0.18"
 natpmp = "0.5"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico"] }
+# A tab shown live: its JPEG pictures decode straight into the BGRA GPUI draws.
+zune-jpeg = "0.5"
 rquickjs = "0.14.0"
 semver = { version = "1", features = ["serde"] }
 minisign-verify = "0.2.5"

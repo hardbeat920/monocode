@@ -28,6 +28,8 @@ struct Shown {
     image: Arc<RenderImage>,
     width: f64,
     height: f64,
+    /// Drawn at least once (counted for a development build's notes).
+    drawn: bool,
 }
 
 pub(crate) struct BrowserPane {
@@ -278,12 +280,11 @@ impl BrowserPane {
         self.live = Some(live.clone());
         self.ended = None;
         self._pull = Some(cx.spawn(async move |this, cx| {
-            let mut after = 0;
             loop {
                 let pane = live.clone();
                 let taken = cx
                     .background_executor()
-                    .spawn(async move { (pane.take(after), pane.ended(), pane.take_input_error()) })
+                    .spawn(async move { (pane.take(), pane.ended(), pane.take_input_error()) })
                     .await;
                 let (picture, ended, input_error) = taken;
                 let keep = this.update(cx, |this, cx| {
@@ -293,13 +294,13 @@ impl BrowserPane {
                     }
                     match picture {
                         Some(Ok(picture)) => {
-                            after = picture.seq;
                             let image =
                                 Arc::new(RenderImage::new(vec![image::Frame::new(picture.pixels)]));
                             let old = this.picture.replace(Shown {
                                 image,
                                 width: picture.width,
                                 height: picture.height,
+                                drawn: false,
                             });
                             if let Some(old) = old {
                                 cx.drop_image(old.image, None);
@@ -457,6 +458,12 @@ impl BrowserPane {
                     )
                 })
                 .into_any_element();
+        }
+        if let (Some(shown), Some(live)) = (&mut self.picture, &self.live)
+            && !shown.drawn
+        {
+            shown.drawn = true;
+            live.drawn();
         }
         let Some(shown) = &self.picture else {
             return div()

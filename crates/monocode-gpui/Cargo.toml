@@ -107,3 +107,8 @@ opt-level = 1
 
 [profile.native-dev.package.monocode-gpui]
 opt-level = 1
+
+# A tab shown live decodes every picture the browser sends: at the level
+# above, decoding alone takes longer than the time between two pictures.
+[profile.native-dev.package.zune-jpeg]
+opt-level = 3
