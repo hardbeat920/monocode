@@ -361,6 +361,7 @@ impl Shell {
                         Ok((summary, settings, prompt)) => {
                             let id = summary.id;
                             this.add(summary, cx);
+                            this.sessions[&id].update(cx, |view, _| view.managed = true);
                             let start = this.orchestrations.get(&lead).is_some_and(|run| {
                                 !run.stopped && run.tasks[ix].state == State::Starting
                             });

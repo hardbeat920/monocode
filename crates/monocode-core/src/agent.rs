@@ -117,6 +117,13 @@ pub struct Settings {
     pub internal_message: bool,
     #[serde(skip)]
     pub attachments: Vec<std::path::PathBuf>,
+    /// A relaunch may continue this turn if MonoCode stops while it runs.
+    #[serde(skip)]
+    pub resume_after_restart: bool,
+    /// This turn continues one a restart cut short. It must keep the saved
+    /// provider context rather than start a fresh session without it.
+    #[serde(skip)]
+    pub restart_continuation: bool,
     pub revision: u64,
     pub model: Option<String>,
     pub effort: Option<String>,

@@ -14,6 +14,8 @@ pub use session_metadata::{MobileSessionMetadata, SessionSidebarMetadata};
 mod session_preview;
 pub use session_preview::SessionPreviewData;
 mod edit;
+mod in_flight;
+pub use in_flight::{InFlight, Interrupted, TURN_INTERRUPTED};
 mod shared;
 mod side_threads;
 mod thread_files;
