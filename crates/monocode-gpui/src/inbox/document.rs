@@ -7,7 +7,7 @@ use crate::{
 use gpui::{
     AnyElement, App, AvailableSpace, Bounds, Context, Element, ElementId, Entity, GlobalElementId,
     Image, ImageCacheError, ImageFormat, InspectorElementId, LayoutId, Pixels, RenderImage, Role,
-    SharedString, Style, TextStyle, Window, div, img, point, prelude::*, px, size,
+    SharedString, Style, TextStyle, WeakEntity, Window, div, img, point, prelude::*, px, size,
 };
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use std::{path::PathBuf, sync::Arc, time::Instant};
@@ -19,6 +19,8 @@ enum Row {
 
 pub(super) struct InboxDocument {
     rows: Vec<Row>,
+    /// GitHub work-item links in this text open inside this inbox.
+    inbox: Option<WeakEntity<super::Inbox>>,
     layout: Option<Measurements>,
     #[cfg(test)]
     measured: usize,
@@ -29,7 +31,27 @@ pub(super) struct InboxDocument {
 }
 
 impl InboxDocument {
-    pub(super) fn new(text: String, cwd: PathBuf, _: &mut Context<Self>) -> Self {
+    #[cfg(test)]
+    pub(super) fn new(text: String, cwd: PathBuf, cx: &mut Context<Self>) -> Self {
+        Self::build(text, cwd, None, cx)
+    }
+
+    pub(super) fn linked(
+        text: String,
+        cwd: PathBuf,
+        inbox: WeakEntity<super::Inbox>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::build(text, cwd, Some(inbox), cx)
+    }
+
+    fn build(
+        text: String,
+        cwd: PathBuf,
+        inbox: Option<WeakEntity<super::Inbox>>,
+        _: &mut Context<Self>,
+    ) -> Self {
+        let text = link_bare_urls(&text);
         let mut spans = Vec::new();
         let mut open: Option<(usize, String, String)> = None;
         for (event, range) in Parser::new_ext(&text, Options::all()).into_offset_iter() {
@@ -61,6 +83,7 @@ impl InboxDocument {
         append_markdown(&mut rows, &text[at..], &cwd);
         Self {
             rows,
+            inbox,
             layout: None,
             #[cfg(test)]
             measured: 0,
@@ -70,6 +93,112 @@ impl InboxDocument {
             code_rendered: Default::default(),
         }
     }
+}
+
+/// GitHub turns bare URLs into links and CommonMark does not, but issue and PR
+/// text is written for GitHub. Wrap them as autolinks before parsing. Code,
+/// existing links and images are left alone.
+fn link_bare_urls(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut copied = 0;
+    let mut wrap = |range: std::ops::Range<usize>, out: &mut String| {
+        for (start, end) in bare_urls(&text[range.clone()]) {
+            let (start, end) = (range.start + start, range.start + end);
+            out.push_str(&text[copied..start]);
+            out.push('<');
+            out.push_str(&text[start..end]);
+            out.push('>');
+            copied = end;
+        }
+    };
+    let mut skipping = 0usize;
+    // Text may arrive in pieces around `_` or `*`; a URL must be scanned whole.
+    let mut pending: Option<std::ops::Range<usize>> = None;
+    for (event, range) in Parser::new_ext(text, Options::all()).into_offset_iter() {
+        if let (Event::Text(_), 0) = (&event, skipping) {
+            pending = match pending.take() {
+                Some(run) if run.end == range.start => Some(run.start..range.end),
+                Some(run) => {
+                    wrap(run, &mut out);
+                    Some(range)
+                }
+                None => Some(range),
+            };
+            continue;
+        }
+        if let Some(run) = pending.take() {
+            wrap(run, &mut out);
+        }
+        match event {
+            Event::Start(Tag::Link { .. } | Tag::Image { .. } | Tag::CodeBlock(_)) => skipping += 1,
+            Event::End(TagEnd::Link | TagEnd::Image | TagEnd::CodeBlock) => {
+                skipping = skipping.saturating_sub(1)
+            }
+            _ => {}
+        }
+    }
+    if let Some(run) = pending {
+        wrap(run, &mut out);
+    }
+    out.push_str(&text[copied..]);
+    out
+}
+
+/// Byte ranges of the `http(s)://` URLs in `text`, without the punctuation
+/// that closes the sentence or bracket around them.
+fn bare_urls(text: &str) -> Vec<(usize, usize)> {
+    let mut found = Vec::new();
+    let mut from = 0;
+    while from < text.len() {
+        let rest = &text[from..];
+        let lower = rest.to_ascii_lowercase();
+        let Some(offset) = ["https://", "http://"]
+            .iter()
+            .filter_map(|scheme| lower.find(scheme).map(|at| (at, scheme.len())))
+            .min()
+        else {
+            break;
+        };
+        let (at, scheme) = offset;
+        let start = from + at;
+        let attached = text[..start]
+            .chars()
+            .next_back()
+            .is_some_and(char::is_alphanumeric);
+        let mut end = start
+            + text[start..]
+                .find(|c: char| c.is_whitespace() || matches!(c, '<' | '>'))
+                .unwrap_or(text.len() - start);
+        loop {
+            let url = &text[start..end];
+            let Some(last) = url.chars().next_back() else {
+                break;
+            };
+            let opener = match last {
+                ')' => Some('('),
+                ']' => Some('['),
+                '}' => Some('{'),
+                _ => None,
+            };
+            let trim = match opener {
+                Some(open) => url.matches(open).count() < url.matches(last).count(),
+                None => matches!(
+                    last,
+                    '.' | ',' | ';' | ':' | '!' | '?' | '\'' | '"' | '*' | '_'
+                ),
+            };
+            if !trim {
+                break;
+            }
+            end -= last.len_utf8();
+        }
+        let host = text[start + scheme..end].chars().next();
+        if !attached && host.is_some_and(char::is_alphanumeric) {
+            found.push((start, end));
+        }
+        from = end.max(start + scheme);
+    }
+    found
 }
 
 fn append_markdown(rows: &mut Vec<Row>, text: &str, cwd: &std::path::Path) {
@@ -157,6 +286,16 @@ impl InboxDocument {
         self.measured
     }
 
+    fn link_intercept(&self) -> Option<markdown::LinkIntercept> {
+        let inbox = self.inbox.clone()?;
+        Some(std::rc::Rc::new(move |url, _, cx| {
+            let url = url.to_owned();
+            inbox
+                .update(cx, |inbox, cx| inbox.open_url(&url, cx))
+                .unwrap_or(false)
+        }))
+    }
+
     fn row(&self, ix: usize, width: Pixels, window: &mut Window, cx: &mut App) -> AnyElement {
         let row = &self.rows[ix];
         match row {
@@ -234,7 +373,9 @@ impl InboxDocument {
                             ),
                         })
                         .into_any_element(),
-                    _ => markdown::body(row, id, Tone::Normal, None, Instant::now()),
+                    _ => markdown::with_link_intercept(self.link_intercept(), || {
+                        markdown::body(row, id, Tone::Normal, None, Instant::now())
+                    }),
                 };
                 div()
                     .w_full()
@@ -557,6 +698,50 @@ impl Element for CodeLines {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bare_urls_become_links_without_touching_code_links_or_punctuation() {
+        let wrap = |text: &str| link_bare_urls(text);
+        assert_eq!(
+            wrap("Depends on https://github.com/a/b/pull/9, and (https://x.dev/a_b_c)."),
+            "Depends on <https://github.com/a/b/pull/9>, and (<https://x.dev/a_b_c>)."
+        );
+        assert_eq!(
+            wrap("see https://en.wikipedia.org/wiki/Rust_(language) now"),
+            "see <https://en.wikipedia.org/wiki/Rust_(language)> now"
+        );
+        for untouched in [
+            "[docs](https://x.dev) and <https://y.dev>",
+            "`https://x.dev` inline",
+            "```\nhttps://x.dev\n```",
+            "![shot](https://x.dev/a.png)",
+            "ahttps://x.dev and https:// alone",
+        ] {
+            assert_eq!(wrap(untouched), untouched);
+        }
+        assert_eq!(
+            wrap("line one\nhttps://a.dev\n"),
+            "line one\n<https://a.dev>\n"
+        );
+    }
+
+    #[test]
+    fn a_bare_url_in_prose_becomes_a_link_run() {
+        let doc = link_bare_urls("Depends on https://github.com/acme/app/pull/9 today");
+        let model = markdown_model::parse_full(&doc);
+        let links: Vec<_> = model
+            .blocks
+            .iter()
+            .flat_map(|block| markdown::rows(&block.block))
+            .filter_map(|row| match row.part {
+                Part::Text { runs, .. } => Some(runs),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|run| run.style.link)
+            .collect();
+        assert_eq!(links, ["https://github.com/acme/app/pull/9"]);
+    }
     use gpui::{Render, ScrollHandle, TestAppContext, WindowBounds, WindowHandle, WindowOptions};
 
     struct Fixture {

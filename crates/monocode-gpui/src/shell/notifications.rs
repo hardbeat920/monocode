@@ -1241,6 +1241,13 @@ impl Shell {
         Some(notice)
     }
 
+    fn open_work_link_later(&mut self, url: String, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let _ = this.update_in(cx, |this, window, cx| this.open_work_link(&url, window, cx));
+        })
+        .detach();
+    }
+
     fn handle_linked_activity(&mut self, event: LinkedActivityEvent, cx: &mut Context<Self>) {
         match event {
             LinkedActivityEvent::Acknowledge(id) | LinkedActivityEvent::Dismiss(id) => {
@@ -1248,7 +1255,7 @@ impl Shell {
                     .github
                     .update(cx, |feed, cx| feed.acknowledge(id, cx));
             }
-            LinkedActivityEvent::OpenUrl(url) => cx.open_url(&url),
+            LinkedActivityEvent::OpenUrl(url) => self.open_work_link_later(url, cx),
             LinkedActivityEvent::OpenDiscussion(id) => {
                 // A native threaded discussion pane is not implemented yet.
                 if let Some(item) = self
@@ -1256,7 +1263,8 @@ impl Shell {
                     .get(&id)
                     .and_then(|s| s.work_item.as_ref())
                 {
-                    cx.open_url(&item.url);
+                    let url = item.url.clone();
+                    self.open_work_link_later(url, cx);
                 }
             }
             LinkedActivityEvent::AddToChat(id, prompt) => {

@@ -603,11 +603,14 @@ impl Monos {
                     .as_str()
                     .filter(|s| s.starts_with("https://github.com/"))
                 {
-                    cx.open_url(url);
+                    crate::inbox::open_link_later(url, cx);
                 } else if let (Some(repo), Some(number)) =
                     (value["repo"].as_str(), value["number"].as_u64())
                 {
-                    cx.open_url(&format!("https://github.com/{repo}/pull/{number}"));
+                    crate::inbox::open_link_later(
+                        &format!("https://github.com/{repo}/pull/{number}"),
+                        cx,
+                    );
                 }
             }
             _ => (),
