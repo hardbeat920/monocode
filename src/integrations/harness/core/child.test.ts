@@ -64,6 +64,45 @@ describe("isCurrentChildExit", () => {
 });
 
 describe("child bridge", () => {
+  it("keeps OpenCode environment overrides separate from Devin edit approvals", async () => {
+    installResolvedListeners();
+    mocks.invoke.mockResolvedValue(42);
+    const child = await loadChild();
+    const env = { OPENCODE_CONFIG_CONTENT: '{"permission":"ask"}' };
+    await child.spawnChild(
+      "opencode",
+      "opencode",
+      ["serve"],
+      "/tmp",
+      undefined,
+      "opencode",
+      undefined,
+      env,
+    );
+    expect(mocks.invoke).toHaveBeenLastCalledWith(
+      "harness_spawn",
+      expect.objectContaining({ env }),
+    );
+    expect(mocks.invoke.mock.calls.at(-1)?.[1]).not.toHaveProperty(
+      "devinAskEdits",
+    );
+    await child.spawnChild(
+      "devin",
+      "devin",
+      ["acp"],
+      "/tmp",
+      undefined,
+      "devin",
+      undefined,
+      undefined,
+      true,
+    );
+    expect(mocks.invoke).toHaveBeenLastCalledWith(
+      "harness_spawn",
+      expect.objectContaining({ env: undefined, devinAskEdits: true }),
+    );
+  });
+
   it("waits until every listener is installed", async () => {
     const pending = deferred<UnlistenFn>();
     mocks.listen.mockImplementation(

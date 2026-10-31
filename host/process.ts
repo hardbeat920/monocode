@@ -8,6 +8,7 @@ import type { RemoteProvider } from "../src/features/connections/model/protocol"
 const npmEntries: Record<string, string> = {
   codex: "node_modules/@openai/codex/bin/codex.js",
   claude: "node_modules/@anthropic-ai/claude-code/cli.js",
+  opencode: "node_modules/opencode-ai/bin/opencode",
 };
 
 const binaryNames: Record<RemoteProvider, string[]> = {
