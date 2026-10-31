@@ -1224,6 +1224,13 @@ impl Conversation {
                             this.generate_worktree_branch(&worktree_message, cx);
                             this.refresh_git(cx);
                         }
+                        // The host renamed the conversation; it is not sent back.
+                        if let Some(title) = update.title
+                            && this.summary.title != title
+                        {
+                            this.summary.title = title;
+                            cx.emit(SessionChanged);
+                        }
                         if let Some(commands) = update.commands.filter(|_| source_selected) {
                             this.completion.update(cx, |completion, cx| {
                                 completion.set_native_commands(commands, cx)
