@@ -369,6 +369,13 @@ export function listUserBrowserTabs(): Promise<FreeBrowserTab[]> {
  */
 export const giveBrowserTab = (free: string, sessionId: string) =>
   command("browser_give_tab", { free, sessionId });
+
+/**
+ * Close a page no thread holds. With the last page gone the MonoCode
+ * browser closes too.
+ */
+export const closeFreeBrowserTab = (free: string) =>
+  command("browser_close_free_tab", { free });
 /** A local dev server of a thread's checkout (`devservers::DevServer`). */
 export type BranchApp = {
   port: number;
@@ -742,6 +749,9 @@ export function sessionBrowserIndicator(
   sessionId: string | undefined,
 ): SessionBrowserIndicator | null {
   if (!sessionBrowserGranted(state, sessionId)) return null;
+  // Once the MonoCode browser closed (its last tab went), nothing of it
+  // shows until an agent or the user starts it again.
+  if (state?.connection.state !== "connected") return null;
   const tabs = sessionBrowserTabs(state, sessionId);
   if (tabs.some((tab) => tab.dialog_pending)) return "dialog";
   if (tabs.some((tab) => tab.busy)) return "busy";

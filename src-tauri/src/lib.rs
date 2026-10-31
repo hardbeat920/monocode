@@ -363,6 +363,7 @@ pub fn run() {
             browser::browser_open_window,
             browser::browser_user_tabs,
             browser::browser_give_tab,
+            browser::browser_close_free_tab,
             browser::browser_open_app,
             browser::browser_new_tab,
             devservers::dev_servers,

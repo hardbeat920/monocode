@@ -23,6 +23,7 @@ import {
   connectionView,
   DEFAULT_BROWSER_SETTINGS,
   disconnectBrowser,
+  closeFreeBrowserTab,
   giveBrowserTab,
   inspectPages,
   listBrowserAudit,
@@ -679,13 +680,13 @@ function useFreeTabs(run: (action: () => Promise<unknown>) => void) {
         .finally(() => setLoading(false)),
     );
   };
+  const gone = (free: string) =>
+    setTabs((list) => list?.filter((tab) => tab.id !== free) ?? null);
   const give = (free: string, sessionId: string) =>
-    run(() =>
-      giveBrowserTab(free, sessionId).then(() =>
-        setTabs((list) => list?.filter((tab) => tab.id !== free) ?? null),
-      ),
-    );
-  return { tabs, loading, load, give };
+    run(() => giveBrowserTab(free, sessionId).then(() => gone(free)));
+  const close = (free: string) =>
+    run(() => closeFreeBrowserTab(free).then(() => gone(free)));
+  return { tabs, loading, load, give, close };
 }
 
 const NO_FREE_TABS =
@@ -794,7 +795,7 @@ export function AddFreeTab({
   sessionId: string;
   run: (action: () => Promise<unknown>) => void;
 }) {
-  const { tabs, loading, load, give } = useFreeTabs(run);
+  const { tabs, loading, load, give, close } = useFreeTabs(run);
   return (
     <div className="px-1 pt-2">
       <SecondaryButton disabled={loading} onClick={load}>
@@ -812,6 +813,15 @@ export function AddFreeTab({
                 <SecondaryButton onClick={() => give(tab.id, sessionId)}>
                   Add
                 </SecondaryButton>
+                <button
+                  type="button"
+                  title="Close tab"
+                  aria-label={`Close ${tab.title || "tab"}`}
+                  onClick={() => close(tab.id)}
+                  className="grid size-7 shrink-0 place-items-center rounded-md text-content/40 hover:bg-content/10 hover:text-content"
+                >
+                  <X className="size-3.5" strokeWidth={1.75} />
+                </button>
               </li>
             ))}
           </ul>

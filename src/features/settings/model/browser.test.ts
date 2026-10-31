@@ -31,6 +31,7 @@ import {
   revokeBrowserSession,
   sessionBrowserGranted,
   sessionBrowserIndicator,
+  closeFreeBrowserTab,
   setBrowserToggle,
   setSessionBrowserGrant,
   subscribeBrowserState,
@@ -298,6 +299,13 @@ describe("browser state views", () => {
       ),
     ).toBe("dialog");
     expect(sessionBrowserIndicator(state, "s2")).toBeNull();
+    // The MonoCode browser closed (its last tab went): no globe.
+    expect(
+      sessionBrowserIndicator(
+        { ...state, connection: { ...state.connection, state: "idle" } },
+        "s1",
+      ),
+    ).toBeNull();
     // A grant means nothing while the main switch is off.
     expect(sessionBrowserGranted({ ...state, toggle_on: false }, "s1")).toBe(
       false,
@@ -441,7 +449,9 @@ describe("browser store", () => {
     );
     expect(invoke).not.toHaveBeenCalled();
     resetBrowserStore(asking);
-    vi.mocked(invoke).mockResolvedValue(browserState({ sessions: [granted()] }));
+    vi.mocked(invoke).mockResolvedValue(
+      browserState({ sessions: [granted()] }),
+    );
     await answerPendingBrowserRequest("s1", true);
     expect(invoke).toHaveBeenCalledWith("browser_answer_request", {
       sessionId: "s1",
@@ -464,7 +474,9 @@ describe("browser store", () => {
     await revokeBrowserSession("s1");
     expect(invoke).toHaveBeenCalledWith("browser_revoke", { sessionId: "s1" });
     expect(browserAccessTurnedOff(browserStateSnapshot(), "s1")).toBe(true);
-    vi.mocked(invoke).mockResolvedValue(browserState({ sessions: [granted()] }));
+    vi.mocked(invoke).mockResolvedValue(
+      browserState({ sessions: [granted()] }),
+    );
     await setSessionBrowserGrant("s1", true);
     expect(browserAccessTurnedOff(browserStateSnapshot(), "s1")).toBe(false);
   });
@@ -509,6 +521,11 @@ describe("browser store", () => {
       sessionId: "s2",
     });
     expect(browserStateSnapshot()?.tabs).toHaveLength(1);
+
+    await closeFreeBrowserTab("f_0000000b");
+    expect(invoke).toHaveBeenCalledWith("browser_close_free_tab", {
+      free: "f_0000000b",
+    });
   });
 
   it("does not toast after the user disconnects", async () => {

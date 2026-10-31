@@ -214,6 +214,17 @@ pub async fn browser_give_tab(
     .await
 }
 
+/// The X beside "Add" in a thread's browser menu: close a page no thread
+/// holds. With the last page gone, the MonoCode browser closes too.
+#[tauri::command]
+pub async fn browser_close_free_tab(free: String) -> Result<BrowserState, String> {
+    on_host(move |host| {
+        host.close_free_tab(&free)?;
+        Ok(host.state())
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn browser_open_app(
     window: WebviewWindow,
