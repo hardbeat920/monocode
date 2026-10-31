@@ -160,6 +160,8 @@ export function pictureShift(
 
 /** How long after the last wheel a page that has not followed it is let be. */
 export const SETTLE_MS = 160;
+/** How far ahead of the page the picture goes, as a share of the viewport. */
+export const LEAD = 1 / 6;
 /** How close, in CSS pixels, the page counts as where the wheel sent it. */
 const NEAR = 1.5;
 
@@ -207,10 +209,11 @@ export class ScrollPredictor {
       return null;
     }
     const base = this.target ?? this.page;
-    // At most half a viewport ahead: the band a page that stops shows.
+    // At most a sixth of the viewport ahead: what the move uncovers has
+    // no picture yet, and a wide band of it reads as the page vanishing.
     const limit = (value: number, from: number, size: number) =>
       size > 0
-        ? Math.max(from - size / 2, Math.min(from + size / 2, value))
+        ? Math.max(from - size * LEAD, Math.min(from + size * LEAD, value))
         : value;
     if (!this.target) this.aheadSince = now;
     this.target = {

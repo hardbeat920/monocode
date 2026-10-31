@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   type Drawn,
+  LEAD,
   SETTLE_MS,
   ScrollPredictor,
   pictureShift,
@@ -22,20 +23,20 @@ describe("scroll prediction", () => {
     expect(predict.wheel(0, 100, 10)).toBeNull();
     // The page itself moved: from now on the picture goes ahead.
     expect(predict.seen(at(40), 40)).toBeNull();
-    expect(predict.wheel(0, 100, 50)).toEqual({ x: 0, y: 140 });
-    expect(predict.wheel(0, 60, 60)).toEqual({ x: 0, y: 200 });
+    expect(predict.wheel(0, 60, 50)).toEqual({ x: 0, y: 100 });
+    expect(predict.wheel(0, 40, 60)).toEqual({ x: 0, y: 140 });
     // Pictures on the way there keep the target; the last one reaches it.
-    expect(predict.seen(at(120), 80)).toEqual({ x: 0, y: 200 });
-    expect(predict.seen(at(200), 100)).toBeNull();
+    expect(predict.seen(at(120), 80)).toEqual({ x: 0, y: 140 });
+    expect(predict.seen(at(140), 100)).toBeNull();
   });
 
-  it("never goes above the top or more than half a viewport ahead", () => {
+  it("never goes above the top or far ahead of the page", () => {
     const predict = new ScrollPredictor();
     predict.learn(at(50));
     predict.seen(at(50), 0);
     expect(predict.wheel(0, -500, 10)).toEqual({ x: 0, y: 0 });
     const far = predict.wheel(0, 5000, 20)!;
-    expect(far.y).toBe(50 + 300);
+    expect(far.y).toBe(50 + 600 * LEAD);
   });
 
   it("stops going ahead while the wheel keeps going at the page's end", () => {
@@ -68,11 +69,11 @@ describe("scroll prediction", () => {
     const predict = new ScrollPredictor();
     predict.learn(at(100));
     predict.seen(at(100), 0);
-    expect(predict.wheel(0, 274.8, 10)).toEqual({ x: 0, y: 374.8 });
+    expect(predict.wheel(0, 74.8, 10)).toEqual({ x: 0, y: 174.8 });
     // The browser rounds the scroll to a device pixel.
-    expect(predict.seen(at(374), 60)).toBeNull();
+    expect(predict.seen(at(174), 60)).toBeNull();
     expect(predict.settle(400)).toBeNull();
-    expect(predict.wheel(0, -100, 1000)).toEqual({ x: 0, y: 274 });
+    expect(predict.wheel(0, -100, 1000)).toEqual({ x: 0, y: 74 });
   });
 
   it("starts over on another page", () => {
