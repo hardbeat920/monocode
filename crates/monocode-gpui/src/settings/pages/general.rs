@@ -180,6 +180,7 @@ impl SettingsView {
                 )],
             ));
         }
+        let keep_awake = self.keep_awake_rows(&p, cx);
         let version = crate::notifications::updater::version();
         let about = vec![
             self.row(
@@ -235,14 +236,204 @@ impl SettingsView {
                 ],
             ),
         ];
-        vec![
+        let mut groups = vec![
             self.group(None, true, "Alerts", None, None, alerts),
             self.group(None, false, "Workspace", None, None, workspace),
-            self.group(None, false, "About", None, None, about),
-        ]
+        ];
+        if !keep_awake.is_empty() {
+            groups.push(self.group(None, false, "Keep awake", None, None, keep_awake));
+        }
+        groups.extend(self.hotspot_group(cx));
+        groups.push(self.group(None, false, "About", None, None, about));
+        groups
     }
 }
 impl SettingsView {
+    /// The footer pill's defaults (macOS only).
+    fn keep_awake_rows(
+        &mut self,
+        p: &crate::settings::Preferences,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        if !crate::keep_awake::KeepAwake::supported() {
+            return Vec::new();
+        }
+        let k = p.keep_awake.clone();
+        let minutes = |options: &[u32], current: u32| {
+            let mut values: Vec<u32> = options.to_vec();
+            if !values.contains(&current) {
+                values.push(current);
+                values.sort_unstable();
+            }
+            values
+                .into_iter()
+                .map(|m| {
+                    let label = if m == 0 {
+                        "None".to_string()
+                    } else {
+                        monocode_core::keep_awake::length(std::time::Duration::from_secs(
+                            u64::from(m) * 60,
+                        ))
+                    };
+                    (m.to_string(), label.into(), None)
+                })
+                .collect::<Vec<_>>()
+        };
+        vec![
+            self.row(
+                Some("keep-awake-auto"),
+                true,
+                "Keep Mac awake while agents work",
+                Some("Same as the switch in the footer's coffee pill. Off, the Mac sleeps as usual.".into()),
+                vec![self.toggle("keep-awake-auto", "Keep Mac awake while agents work", k.enabled, false, cx, |this, on, cx| {
+                    this.update(cx, |p| p.keep_awake.enabled = on)
+                })],
+            ),
+            self.row(
+                Some("keep-awake-grace"),
+                false,
+                "Wait after agents finish",
+                Some("Room for a follow-up before the Mac can sleep.".into()),
+                vec![self.select(
+                    "keep-awake-grace",
+                    "Wait after agents finish",
+                    &k.grace_minutes.to_string(),
+                    minutes(&[0, 5, 15, 30, 60], k.grace_minutes),
+                    Some(120.),
+                    cx,
+                    |this, v, cx| {
+                        if let Ok(v) = v.parse() {
+                            this.update(cx, |p| p.keep_awake.grace_minutes = v)
+                        }
+                    },
+                )],
+            ),
+            self.row(
+                Some("keep-awake-length"),
+                false,
+                "Default length",
+                Some("Used for \"For a time\".".into()),
+                vec![self.select(
+                    "keep-awake-length",
+                    "Default length",
+                    &k.timer_minutes.to_string(),
+                    minutes(&[30, 60, 120, 240, 480], k.timer_minutes),
+                    Some(120.),
+                    cx,
+                    |this, v, cx| {
+                        if let Ok(v) = v.parse() {
+                            this.update(cx, |p| p.keep_awake.timer_minutes = v)
+                        }
+                    },
+                )],
+            ),
+            self.row(
+                Some("keep-awake-display"),
+                false,
+                "Keep the display on",
+                Some("Off, the screen still dims and sleeps on its usual schedule.".into()),
+                vec![self.toggle("keep-awake-display", "Keep the display on", k.display, false, cx, |this, on, cx| {
+                    this.update(cx, |p| p.keep_awake.display = on)
+                })],
+            ),
+            self.row(
+                Some("keep-awake-lid"),
+                false,
+                "Even with the lid closed",
+                Some("Turns off lid-close sleep while it holds and back on when done. Asks for your admin password once.".into()),
+                vec![self.toggle("keep-awake-lid", "Even with the lid closed", k.lid, false, cx, |_, on, cx| {
+                    cx.emit(crate::settings::SettingsEvent::KeepAwakeLid(on))
+                })],
+            ),
+            self.row(
+                Some("keep-awake-lid-screen"),
+                false,
+                "When the lid closes",
+                Some("The built-in screen can stay lit under a closed lid.".into()),
+                vec![self.segmented(
+                    "keep-awake-lid-screen",
+                    "When the lid closes",
+                    &k.lid_screen,
+                    &[("off", "Screen off"), ("dim", "Dim"), ("leave", "Leave on")],
+                    cx,
+                    |this, v, cx| this.update(cx, |p| p.keep_awake.lid_screen = v.into()),
+                )],
+            ),
+            self.row(
+                Some("keep-awake-lid-battery"),
+                false,
+                "Lid closed on battery too",
+                Some("Off, a closed lid only stays awake while plugged in.".into()),
+                vec![self.toggle("keep-awake-lid-battery", "Lid closed on battery too", k.lid_on_battery, false, cx, |this, on, cx| {
+                    this.update(cx, |p| p.keep_awake.lid_on_battery = on)
+                })],
+            ),
+            self.row(
+                Some("keep-awake-lock"),
+                false,
+                "Lock when the lid closes",
+                Some("Staying awake skips the lock that sleep would do.".into()),
+                vec![self.toggle("keep-awake-lock", "Lock when the lid closes", k.lock, false, cx, |this, on, cx| {
+                    this.update(cx, |p| p.keep_awake.lock = on)
+                })],
+            ),
+            self.row(
+                Some("keep-awake-lid-sound"),
+                false,
+                "Sound when the lid closes",
+                Some("Mute turns it back on when you open the lid. Pause doesn't resume.".into()),
+                vec![self.segmented(
+                    "keep-awake-lid-sound",
+                    "Sound when the lid closes",
+                    &k.lid_sound,
+                    &[("leave", "Leave"), ("mute", "Mute"), ("pause", "Pause media")],
+                    cx,
+                    |this, v, cx| this.update(cx, |p| p.keep_awake.lid_sound = v.into()),
+                )],
+            ),
+            self.row(
+                Some("keep-awake-low-power"),
+                false,
+                "Low Power Mode on battery",
+                Some("While a closed lid stays awake on battery; your usual mode comes back after.".into()),
+                vec![self.toggle("keep-awake-low-power", "Low Power Mode on battery", k.low_power, false, cx, |_, on, cx| {
+                    cx.emit(crate::settings::SettingsEvent::KeepAwakeLowPower(on))
+                })],
+            ),
+            self.row(
+                Some("keep-awake-heat"),
+                false,
+                "Let it sleep if it gets hot",
+                Some("With the lid closed, as in a bag. It picks up again once you wake the Mac.".into()),
+                vec![self.toggle("keep-awake-heat", "Let it sleep if it gets hot", k.heat_guard, false, cx, |this, on, cx| {
+                    this.update(cx, |p| p.keep_awake.heat_guard = on)
+                })],
+            ),
+            self.row(
+                Some("keep-awake-battery"),
+                false,
+                "Stop below battery",
+                Some("On battery, lets the Mac sleep when charge drops to this.".into()),
+                vec![self.select(
+                    "keep-awake-battery",
+                    "Stop below battery",
+                    &k.stop_below.to_string(),
+                    [(0, "Never"), (10, "10%"), (20, "20%"), (30, "30%")]
+                        .into_iter()
+                        .map(|(v, l)| (v.to_string(), l.into(), None))
+                        .collect(),
+                    Some(120.),
+                    cx,
+                    |this, v, cx| {
+                        if let Ok(v) = v.parse() {
+                            this.update(cx, |p| p.keep_awake.stop_below = v)
+                        }
+                    },
+                )],
+            ),
+        ]
+    }
+    /// Check for updates, or once one is found, install it in place.
     /// Check for updates, or once one is found, install it in place.
     fn app_update_button(&self, cx: &mut Context<Self>) -> AnyElement {
         let updater = cx

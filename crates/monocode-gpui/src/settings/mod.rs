@@ -18,7 +18,7 @@ pub(crate) mod widgets;
 pub(crate) use keymap::apply as apply_keybindings;
 pub(crate) use model::Section;
 pub(crate) use pages::{ACCENTS, command_shortcut, swatch};
-pub(crate) use preferences::{ModelChoice, Preferences, UI_SCALE_PERCENTS};
+pub(crate) use preferences::{KeepAwakePrefs, ModelChoice, Preferences, UI_SCALE_PERCENTS};
 
 use crate::{
     input::{self, Input},
@@ -106,6 +106,10 @@ pub(crate) enum SettingsEvent {
     CheckHarnessUpdates,
     ManageInboxProvider(String),
     Changed(Box<Preferences>),
+    /// "Even with the lid closed" needs a one-time admin rule first.
+    KeepAwakeLid(bool),
+    /// So does Low Power Mode, for rules from before it.
+    KeepAwakeLowPower(bool),
     /// The Appearance page's Layout picker: true for Focused, false for Classic.
     NewLayout(bool),
     NewLayoutBoxy(bool),
@@ -241,6 +245,7 @@ pub(crate) struct SettingsView {
     mcp_filter: String,
     fields: HashMap<&'static str, Entity<Input>>,
     connections: pages::ConnectionsState,
+    hotspot: pages::HotspotState,
     skill_preview: Option<std::path::PathBuf>,
     skill_preview_text: Option<Result<std::sync::Arc<skill_document::DocumentData>, String>>,
     skill_preview_generation: u64,
@@ -376,6 +381,7 @@ impl SettingsView {
             mcp_filter: "all".into(),
             fields: HashMap::new(),
             connections: pages::ConnectionsState::default(),
+            hotspot: pages::HotspotState::default(),
             skill_preview: None,
             skill_preview_text: None,
             skill_preview_generation: 0,
@@ -551,6 +557,15 @@ impl SettingsView {
                 cx.notify();
             });
         }));
+        cx.notify();
+    }
+    /// Scrolls to a row, as a search result does, for screenshot tests.
+    #[cfg(test)]
+    pub(crate) fn reveal(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.revealed = Some(id.to_owned());
+        // Headless windows get no next frame, so scroll now; a row without a
+        // layout yet waits for the caller's second reveal.
+        self.scroll_to_revealed();
         cx.notify();
     }
     /// Centre the revealed row in the page once it has been laid out.

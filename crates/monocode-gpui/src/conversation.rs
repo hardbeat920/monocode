@@ -12,6 +12,7 @@ pub(crate) mod git_actions;
 mod history;
 mod mobile;
 mod mono;
+mod network_drop;
 mod notifications;
 mod remote;
 pub(crate) mod remote_plans;
@@ -189,6 +190,7 @@ pub(crate) struct Conversation {
     catalog: Vec<Model>,
     catalog_epoch: u64,
     account_switching: bool,
+    network_drop: network_drop::NetworkDrop,
     _usage_clock: gpui::Task<()>,
     _account_usage: Option<Subscription>,
     approvals: std::collections::VecDeque<Approval>,
@@ -638,6 +640,7 @@ impl Conversation {
             catalog: Vec::new(),
             catalog_epoch: 0,
             account_switching: false,
+            network_drop: Default::default(),
             _usage_clock: usage_clock,
             _account_usage: account_usage,
             approvals: Default::default(),
@@ -1490,6 +1493,7 @@ impl Conversation {
                             this.settings.turns = this.transcript.read(cx).window_turns();
                             this.save_settings(cx);
                             this.refresh_git(cx);
+                            this.after_turn_for_network(stopping, cx);
                             this.run_history_actions(cx);
                             this.mono_flush_external(cx);
                             cx.emit(SessionChanged);

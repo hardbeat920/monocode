@@ -179,6 +179,18 @@ impl Monos {
             })
             .collect()
     }
+    /// The Monos' chats and habits working now, for keep-awake.
+    pub(crate) fn busy_sessions(&self, cx: &App) -> Vec<(i64, gpui::SharedString)> {
+        self.chats
+            .values()
+            .chain(self.running.values().map(|r| &r.view))
+            .filter(|v| v.read(cx).responding())
+            .map(|v| {
+                let s = &v.read(cx).summary;
+                (s.id, s.title.clone().into())
+            })
+            .collect()
+    }
     pub(crate) fn stop_session(&mut self, id: i64, cx: &mut Context<Self>) {
         if let Some(view) = self
             .chats

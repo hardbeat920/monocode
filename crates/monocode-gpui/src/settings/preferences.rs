@@ -23,6 +23,8 @@ pub(crate) struct Preferences {
     pub action_opens_terminal: bool,
     /// The new layout opens the terminal as a right panel tab, not a dock.
     pub terminal_in_panel: bool,
+    /// Keeping the Mac awake while agents work.
+    pub keep_awake: KeepAwakePrefs,
     // Appearance
     pub theme: String,
     pub wayland_window_decorations: bool,
@@ -112,6 +114,7 @@ impl Default for Preferences {
             close_to_tray: true,
             action_opens_terminal: true,
             terminal_in_panel: false,
+            keep_awake: KeepAwakePrefs::default(),
             theme: "dark".into(),
             wayland_window_decorations: true,
             workspace_theme: "default".into(),
@@ -165,6 +168,85 @@ impl Default for Preferences {
             mono_menu_bar_icon: true,
             show_archived: false,
             keybindings: HashMap::new(),
+        }
+    }
+}
+
+/// The footer's keep-awake control. Minutes, so the rulers' steps round-trip.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct KeepAwakePrefs {
+    /// The popover's switch. On, working agents keep the Mac awake.
+    #[serde(alias = "auto")]
+    pub enabled: bool,
+    pub grace_minutes: u32,
+    pub timer_minutes: u32,
+    pub display: bool,
+    pub lid: bool,
+    /// The lid hold on battery too, not just plugged in.
+    pub lid_on_battery: bool,
+    /// "off", "dim" or "leave".
+    pub lid_screen: String,
+    /// Lock the screen when a held lid closes.
+    pub lock: bool,
+    /// "leave", "mute" or "pause".
+    pub lid_sound: String,
+    pub low_power: bool,
+    pub heat_guard: bool,
+    /// 0 never stops for the battery.
+    pub stop_below: u32,
+    /// Join `hotspot_ssid` when Wi-Fi drops while agents work. Its password,
+    /// if any, is in the Keychain.
+    pub hotspot: bool,
+    pub hotspot_ssid: String,
+    /// Send "continue" once the internet is back to a reply a dropped
+    /// connection cut off.
+    pub continue_after_drop: bool,
+}
+
+impl Default for KeepAwakePrefs {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            grace_minutes: 5,
+            timer_minutes: 120,
+            display: false,
+            lid: false,
+            lid_on_battery: false,
+            lid_screen: "off".into(),
+            lock: true,
+            lid_sound: "mute".into(),
+            low_power: false,
+            heat_guard: true,
+            stop_below: 20,
+            hotspot: false,
+            hotspot_ssid: String::new(),
+            continue_after_drop: true,
+        }
+    }
+}
+
+impl KeepAwakePrefs {
+    /// A hotspot is chosen and switched on.
+    pub(crate) fn hotspot_ready(&self) -> bool {
+        self.hotspot && !self.hotspot_ssid.trim().is_empty()
+    }
+    pub(crate) fn settings(&self) -> monocode_core::keep_awake::Settings {
+        use monocode_core::keep_awake::{LidScreen, LidSound, Settings};
+        use std::time::Duration;
+        Settings {
+            enabled: self.enabled,
+            grace: Duration::from_secs(u64::from(self.grace_minutes) * 60),
+            length: Duration::from_secs(u64::from(self.timer_minutes.max(5)) * 60),
+            display: self.display,
+            lid: self.lid,
+            lid_on_battery: self.lid_on_battery,
+            lid_screen: LidScreen::from_key(&self.lid_screen),
+            lock: self.lock,
+            lid_sound: LidSound::from_key(&self.lid_sound),
+            low_power: self.low_power,
+            heat_guard: self.heat_guard,
+            stop_below: (self.stop_below > 0).then(|| self.stop_below.min(100) as u8),
         }
     }
 }

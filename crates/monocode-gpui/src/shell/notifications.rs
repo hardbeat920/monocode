@@ -1087,7 +1087,9 @@ impl Shell {
     }
 
     fn poll_linked_activity(&mut self, cx: &mut Context<Self>) {
+        // On a hotspot keep-awake joined, the data is better left to agents.
         if self.notification_state.linked_seen_ready
+            && !crate::keep_awake::on_hotspot()
             && self
                 .notification_state
                 .linked_last_poll

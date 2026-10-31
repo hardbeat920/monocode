@@ -11,6 +11,8 @@ mod file_panes;
 mod idle_agents;
 #[cfg(test)]
 mod image_lightbox_tests;
+#[cfg(all(test, target_os = "macos"))]
+mod keep_awake_shots;
 mod layout;
 mod live_agents;
 mod mobile_host;
@@ -601,6 +603,8 @@ pub(crate) struct Shell {
     usage_footer: Entity<UsageFooter>,
     /// The footer's high-usage chip and its running-work dialog.
     resources: Entity<ResourceMonitor>,
+    /// The footer's keep-awake pill: holds the Mac awake for running agents.
+    keep_awake: Entity<crate::keep_awake::KeepAwake>,
     sidebar_frame: Entity<Chrome>,
     projects_frame: Entity<Chrome>,
     project_rail_list: project_rail::ProjectRailList,
@@ -949,6 +953,18 @@ impl Shell {
                 m.update(cx, |m, cx| m.stop_session(*id, cx));
             }
         });
+        let keep_awake_prefs = workspace.preferences.keep_awake.clone();
+        let keep_awake =
+            cx.new(|cx| crate::keep_awake::KeepAwake::new(keep_awake_prefs, crate::data_dir(), cx));
+        let keep_awake_changes = cx.subscribe(
+            &keep_awake,
+            |this, _, crate::keep_awake::PrefsChanged(prefs), cx| {
+                this.workspace.preferences.keep_awake = prefs.clone();
+                cx.set_global(this.workspace.preferences.clone());
+                this.persist(cx);
+                this.sync_settings(cx);
+            },
+        );
         let worktree_focus = workspace.worktree_focus.clone();
         let session_worktrees = sidebar_metadata.worktrees;
         let notification_state = notifications::State::new(&workspace, store.clone(), cx);
@@ -974,6 +990,7 @@ impl Shell {
             rails: Default::default(),
             usage_footer: cx.new(|cx| UsageFooter::new(active_kind, cx)),
             resources,
+            keep_awake,
             sidebar_frame,
             projects_frame,
             project_rail_list: project_rail::ProjectRailList::new(cx),
@@ -1143,6 +1160,7 @@ impl Shell {
                 git_observation,
                 resource_observation,
                 resource_stops,
+                keep_awake_changes,
                 classic_search_subscription,
             ],
             generation: Arc::new(AtomicU64::new(0)),
@@ -1226,8 +1244,24 @@ impl Shell {
                     mono_error = error.clone();
                     cx.notify();
                 }
+                this.sync_keep_awake(cx);
             }));
         this.monos = Some(monos);
+        // A backstop for turns that start or end without a mark refresh.
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(2))
+                    .await;
+                if this
+                    .update(cx, |this, cx| this.sync_keep_awake(cx))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
         this.bind_notices(cx);
         this.init_app_bridge(cx);
         for summary in summaries {
@@ -1427,6 +1461,7 @@ impl Shell {
         };
         let session = view.read(cx);
         let busy = session.responding();
+        let was_busy = self.busy_sessions.contains(&id);
         let focused = !self.app_view_open() && self.workspace.active == Some(id);
         if busy {
             self.busy_sessions.insert(id);
@@ -1459,6 +1494,27 @@ impl Shell {
         let provider = session.summary.provider.clone();
         self.session_marks[&id].update(cx, |mark, cx| mark.set(&provider, state, cx));
         self.tab_marks[&id].update(cx, |mark, cx| mark.set(&provider, tab_state, cx));
+        if was_busy != self.busy_sessions.contains(&id) {
+            self.sync_keep_awake(cx);
+        }
+    }
+    /// Every working agent, chats and Monos alike, keeps the Mac awake. Reads
+    /// the views themselves: `busy_sessions` misses some transitions.
+    fn sync_keep_awake(&mut self, cx: &mut Context<Self>) {
+        let mut agents: Vec<(i64, SharedString)> = self
+            .sessions
+            .iter()
+            .filter(|(_, view)| view.read(cx).responding())
+            .map(|(id, view)| (*id, view.read(cx).display_title().into()))
+            .collect();
+        if let Some(monos) = &self.monos {
+            agents.extend(monos.read(cx).busy_sessions(cx));
+        }
+        agents.sort_by_key(|(id, _)| *id);
+        agents.dedup_by_key(|(id, _)| *id);
+        let titles = agents.into_iter().map(|(_, title)| title).collect();
+        self.keep_awake
+            .update(cx, |keep, cx| keep.set_agents(titles, cx));
     }
     fn toggle_archive(&mut self, id: i64, cx: &mut Context<Self>) {
         if !self.archiving.insert(id) {
