@@ -117,6 +117,7 @@ impl Input {
 
     pub(crate) fn enable_inline_commands(&mut self, cx: &mut Context<Self>) {
         self.inline_commands = true;
+        self.markdown = true;
         cx.notify();
     }
     pub(crate) fn selected_command(&mut self, mode: Option<Command>, cx: &mut Context<Self>) {

@@ -981,7 +981,14 @@ fn markdown_text(
             markdown::resolve_file_links(&mut row, base);
         }
         let rendered = if let markdown::Part::Code { fence, lines } = &row.part {
-            view.code(fence.clone(), lines.clone(), fence.key as usize, cx)
+            let ix = fence.key as usize;
+            let selection = view.text_selection(
+                view.rows[ix].key,
+                view.messages[view.rows[ix].message].start,
+                view.messages[view.rows[ix].message].role == "assistant",
+                cx,
+            );
+            view.code(fence.clone(), lines.clone(), ix, selection, cx)
         } else {
             markdown::body(
                 &row,

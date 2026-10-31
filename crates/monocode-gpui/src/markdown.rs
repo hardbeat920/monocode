@@ -182,6 +182,37 @@ pub(crate) struct MarkdownRow {
     pub word_start: usize,
 }
 
+/// Whether a sent message carries markdown worth rendering. Plain prose keeps
+/// its verbatim text layout.
+pub(crate) fn looks_like_markdown(text: &str) -> bool {
+    let block = text.lines().any(|line| {
+        let line = line.trim_start();
+        let digits = line.bytes().take_while(u8::is_ascii_digit).count();
+        line.starts_with("```")
+            || line.starts_with("~~~")
+            || line.starts_with("> ")
+            || line.starts_with("---")
+            || line.starts_with("| ")
+            || ["- ", "* ", "+ ", "- [ ] ", "- [x] "]
+                .iter()
+                .any(|marker| line.starts_with(marker))
+            || (1..=9).contains(&digits)
+                && (line[digits..].starts_with(". ") || line[digits..].starts_with(") "))
+            || line.trim_start_matches('#').len() < line.len()
+                && line.len() - line.trim_start_matches('#').len() <= 6
+                && line.trim_start_matches('#').starts_with(' ')
+    });
+    block
+        || text.contains("**")
+        || text.contains("__")
+        || text.contains("~~")
+        || text.contains("](")
+        || text.matches('`').count() >= 2
+        || text
+            .split_whitespace()
+            .any(|word| word.len() > 2 && word.starts_with('*') && word.ends_with('*'))
+}
+
 pub(crate) fn rows(block: &Block) -> Vec<MarkdownRow> {
     let mut rows = Vec::new();
     flatten(block, 0, 0, None, &mut rows);
@@ -729,10 +760,12 @@ pub(crate) fn body_selected(
     // Share one logical row across its styled fragments. Selection boundaries
     // then span inline code and formatting without scanning transcript history.
     let selection = selection.map(|selection| {
-        selection.with_text(prepared.map_or_else(
-            || selection_text(row).into(),
-            |prepared| prepared.selection.clone(),
-        ))
+        selection.or_text(|| {
+            prepared.map_or_else(
+                || selection_text(row).into(),
+                |prepared| prepared.selection.clone(),
+            )
+        })
     });
     let mut body = div()
         .w_full()
@@ -897,14 +930,14 @@ pub(crate) fn code_lines_selected(
     selection: Option<TextSelection>,
 ) -> Div {
     let selection = selection.map(|selection| {
-        selection.with_text(
+        selection.or_text(|| {
             range
                 .clone()
                 .map(|ix| fence.code[fence.lines[ix].clone()].to_owned())
                 .collect::<Vec<_>>()
                 .join("\n")
-                .into(),
-        )
+                .into()
+        })
     });
     let start = range.start;
     let longest = fence
@@ -1072,5 +1105,35 @@ mod file_link_tests {
             Some("/project/docs/src/lib.rs")
         );
         assert_eq!(runs[2].style.link.as_deref(), Some("https://example.com"));
+    }
+}
+
+#[cfg(test)]
+mod sent_message_tests {
+    use super::looks_like_markdown;
+    #[test]
+    fn detects_markdown_and_leaves_prose_alone() {
+        for text in [
+            "# Plan",
+            "- one\n- two",
+            "1. first",
+            "> quoted",
+            "```rs\nfn main() {}\n```",
+            "make this **bold**",
+            "call `foo` and `bar`",
+            "see [docs](https://example.com)",
+            "so *this* works",
+        ] {
+            assert!(looks_like_markdown(text), "{text}");
+        }
+        for text in [
+            "fix the build please",
+            "what is 2 * 3?",
+            "#hashtag and a-b",
+            "one `tick only",
+            "version 1.2 shipped",
+        ] {
+            assert!(!looks_like_markdown(text), "{text}");
+        }
     }
 }
