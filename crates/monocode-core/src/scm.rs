@@ -370,6 +370,127 @@ pub fn github_repo(cwd: &Path) -> Result<String, String> {
     github_repo_for(&expand_home(cwd))
 }
 
+/// An issue or pull request offered by the session link picker.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GithubWorkItem {
+    pub item: crate::session_groups::WorkItem,
+    pub title: String,
+    /// "open", "closed", "merged" or "draft".
+    pub state: String,
+}
+
+/// `repo`'s issues and pull requests for `query`: recently updated open ones
+/// when empty, the item with that number for `123` or `#123`, otherwise a
+/// GitHub search. A number with no item is an empty list, not an error.
+pub fn github_work_items(
+    cwd: &Path,
+    repo: &str,
+    query: &str,
+) -> Result<Vec<GithubWorkItem>, String> {
+    if remote_workspace::is_remote(cwd) {
+        return Err("GitHub lookup is local only".into());
+    }
+    let root = expand_home(cwd);
+    let (owner, name) = split_github_repo(repo)?;
+    let query = query.trim();
+    let number = query
+        .strip_prefix('#')
+        .unwrap_or(query)
+        .parse::<u64>()
+        .ok()
+        .filter(|&n| n > 0);
+    const FIELDS: &str = "fragment P on PullRequest{number title state isDraft updatedAt} \
+                          fragment I on Issue{number title state updatedAt}";
+    let mut args = vec![
+        "api".to_string(),
+        "graphql".into(),
+        "-f".into(),
+        format!("owner={owner}"),
+        "-f".into(),
+        format!("name={name}"),
+    ];
+    let graphql = if let Some(number) = number {
+        args.extend(["-F".into(), format!("number={number}")]);
+        "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){\
+         issueOrPullRequest(number:$number){__typename ...P ...I}}}"
+    } else if query.is_empty() {
+        "query($owner:String!,$name:String!){repository(owner:$owner,name:$name){\
+         pullRequests(first:30,states:OPEN,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{__typename ...P}} \
+         issues(first:30,states:OPEN,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{__typename ...I}}}}"
+    } else {
+        args.extend([
+            "-f".into(),
+            format!("search=repo:{owner}/{name} sort:updated-desc {query}"),
+        ]);
+        "query($search:String!){search(query:$search,type:ISSUE,first:30){nodes{__typename ...P ...I}}}"
+    };
+    args.extend(["-f".into(), format!("query={graphql} {FIELDS}")]);
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let json = match gh_run(&root, &args) {
+        Ok(json) => json,
+        // GraphQL reports a missing number as an error alongside null data.
+        Err(error) if number.is_some() && error.contains("Could not resolve") => {
+            return Ok(Vec::new());
+        }
+        Err(error) => return Err(error),
+    };
+    let value: serde_json::Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+    Ok(parse_github_work_items(&value, &format!("{owner}/{name}")))
+}
+
+fn parse_github_work_items(value: &serde_json::Value, repo: &str) -> Vec<GithubWorkItem> {
+    let data = &value["data"];
+    let repository = &data["repository"];
+    let mut nodes: Vec<&serde_json::Value> = Vec::new();
+    for list in [
+        &repository["pullRequests"]["nodes"],
+        &repository["issues"]["nodes"],
+        &data["search"]["nodes"],
+    ] {
+        nodes.extend(list.as_array().into_iter().flatten());
+    }
+    if repository["issueOrPullRequest"].is_object() {
+        nodes.push(&repository["issueOrPullRequest"]);
+    }
+    let mut items: Vec<(&str, GithubWorkItem)> = nodes
+        .into_iter()
+        .filter_map(|node| {
+            let kind = match node["__typename"].as_str()? {
+                "PullRequest" => "pr",
+                "Issue" => "issue",
+                _ => return None,
+            };
+            let number = node["number"].as_u64().filter(|&n| n > 0)?;
+            let state = node["state"].as_str().unwrap_or("OPEN").to_lowercase();
+            let state = if state == "open" && node["isDraft"].as_bool() == Some(true) {
+                "draft".into()
+            } else {
+                state
+            };
+            let url = format!(
+                "https://github.com/{repo}/{}/{number}",
+                if kind == "pr" { "pull" } else { "issues" }
+            );
+            Some((
+                node["updatedAt"].as_str().unwrap_or(""),
+                GithubWorkItem {
+                    item: crate::session_groups::WorkItem {
+                        kind: kind.into(),
+                        repo: repo.into(),
+                        number,
+                        url,
+                    },
+                    title: node["title"].as_str().unwrap_or("").into(),
+                    state,
+                },
+            ))
+        })
+        .collect();
+    // RFC 3339 timestamps in UTC sort as text.
+    items.sort_by(|a, b| b.0.cmp(a.0));
+    items.into_iter().map(|(_, item)| item).collect()
+}
+
 /// Create a GitHub pull request with `gh` and return its URL.
 pub fn pr_create(
     cwd: &Path,

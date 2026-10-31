@@ -877,6 +877,46 @@ fn split_github_repo_reads_owner_and_name() {
 }
 
 #[test]
+fn github_work_items_merge_issues_and_prs_newest_first() {
+    let value = json!({"data": {"repository": {
+        "pullRequests": {"nodes": [
+            {"__typename": "PullRequest", "number": 7, "title": "Draft", "state": "OPEN",
+             "isDraft": true, "updatedAt": "2026-10-02T00:00:00Z"},
+            {"__typename": "PullRequest", "number": 5, "title": "Done", "state": "MERGED",
+             "isDraft": false, "updatedAt": "2026-09-01T00:00:00Z"}
+        ]},
+        "issues": {"nodes": [
+            {"__typename": "Issue", "number": 9, "title": "Bug", "state": "OPEN",
+             "updatedAt": "2026-10-03T00:00:00Z"}
+        ]}
+    }}});
+    let items = parse_github_work_items(&value, "acme/app");
+    let summary: Vec<_> = items
+        .iter()
+        .map(|i| (i.item.kind.as_str(), i.item.number, i.state.as_str()))
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            ("issue", 9, "open"),
+            ("pr", 7, "draft"),
+            ("pr", 5, "merged")
+        ]
+    );
+    assert_eq!(items[1].item.url, "https://github.com/acme/app/pull/7");
+    assert_eq!(items[0].item.url, "https://github.com/acme/app/issues/9");
+
+    let single = json!({"data": {"repository": {"issueOrPullRequest":
+        {"__typename": "Issue", "number": 3, "title": "One", "state": "CLOSED"}}}});
+    assert_eq!(
+        parse_github_work_items(&single, "acme/app")[0].state,
+        "closed"
+    );
+    let missing = json!({"data": {"repository": {"issueOrPullRequest": null}}});
+    assert!(parse_github_work_items(&missing, "acme/app").is_empty());
+}
+
+#[test]
 fn pr_create_rejects_empty_title() {
     let dir = tmp();
     assert_eq!(

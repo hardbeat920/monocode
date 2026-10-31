@@ -1,12 +1,13 @@
 //! Sidebar.tsx's session actions: pins, renames, GitHub links, reminders,
 //! folders and deletion, and the grouped list they shape.
 use super::*;
+use crate::work_item_picker::{Picked, WorkItemPicker};
 use chrono::{Local, NaiveDateTime, TimeZone};
 use gpui::EventEmitter;
 use monocode_core::{
     session_groups::{
-        Entry, Groups, build_list, format_reminder, navigation_ids, parse_github_work_item,
-        reminder_at, reminder_presets,
+        Entry, Groups, WorkItem, build_list, format_reminder, navigation_ids, reminder_at,
+        reminder_presets,
     },
     store::Reminder,
 };
@@ -104,10 +105,8 @@ pub(super) struct Renaming {
 }
 pub(super) struct LinkDialog {
     id: i64,
-    input: Entity<input::Input>,
-    error: Option<SharedString>,
-    editing: bool,
-    _events: Vec<Subscription>,
+    picker: Entity<WorkItemPicker>,
+    _events: Subscription,
 }
 
 /// FolderColorSwatches: the folder menu's palette row.
@@ -1637,39 +1636,22 @@ impl Shell {
 
     fn open_link_dialog(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
         self.close_preview(cx);
-        let initial = self.session_metadata(id, cx).summary.work_item.clone();
-        let input = cx.new(|cx| {
-            input::Input::field(
-                "GitHub issue or pull request URL",
-                "https://github.com/owner/repo/pull/123",
-                content(0.3),
-                cx,
-            )
-        });
-        if let Some(item) = &initial {
-            let url = item.url.clone();
-            input.update(cx, |i, cx| i.set_text(url, cx));
-        }
-        let events = vec![
-            cx.subscribe_in(
-                &input,
-                window,
-                |this, _, _: &input::Submitted, window, cx| this.save_link(true, window, cx),
-            ),
-            cx.subscribe(&input, |this, _, _: &input::Changed, cx| {
-                if let Some(dialog) = &mut this.link_dialog
-                    && dialog.error.take().is_some()
-                {
-                    cx.notify();
-                }
-            }),
-        ];
-        window.focus(&input.read(cx).focus_handle(cx), cx);
+        let summary = self.session_metadata(id, cx).summary;
+        let (cwd, current) = (summary.cwd.clone(), summary.work_item.clone());
+        let picker = cx.new(|cx| WorkItemPicker::new(cwd.into(), current, cx));
+        let events = cx.subscribe_in(
+            &picker,
+            window,
+            move |this, _, event, window, cx| match event {
+                Picked::Item(item) => this.save_link(Some(item.clone()), window, cx),
+                Picked::Remove => this.save_link(None, window, cx),
+                Picked::Dismissed => this.close_link_dialog(window, cx),
+            },
+        );
+        window.focus(&picker.read(cx).focus(cx), cx);
         self.link_dialog = Some(LinkDialog {
             id,
-            input,
-            error: None,
-            editing: initial.is_some(),
+            picker,
             _events: events,
         });
         cx.notify();
@@ -1680,24 +1662,12 @@ impl Shell {
             cx.notify();
         }
     }
-    /// Saves the parsed link, or with `keep` false, removes it.
-    fn save_link(&mut self, keep: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(dialog) = &mut self.link_dialog else {
+    /// Links the session to `item`, or with None, removes its link.
+    fn save_link(&mut self, item: Option<WorkItem>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(dialog) = &self.link_dialog else {
             return;
         };
         let id = dialog.id;
-        let item = if keep {
-            match parse_github_work_item(dialog.input.read(cx).content.trim()) {
-                Some(item) => Some(item),
-                None => {
-                    dialog.error = Some("Enter a valid GitHub issue or pull request URL.".into());
-                    cx.notify();
-                    return;
-                }
-            }
-        } else {
-            None
-        };
         if let Some(summary) = self.session_summaries.get_mut(&id) {
             summary.work_item = item.clone();
         }
@@ -1710,48 +1680,18 @@ impl Shell {
         self.invalidate_chrome(cx);
         self.close_link_dialog(window, cx);
     }
-    /// LinkSessionWorkItemDialog, centred over the window.
+    /// LinkSessionWorkItemDialog as a searchable picker, centred over the window.
     pub(super) fn link_modal(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let dialog = self.link_dialog.as_ref()?;
-        let title = self.session_metadata(dialog.id, cx).display_title();
-        let viewport = window.viewport_size();
-        let width = 384f32.min(viewport.width.as_f32() - 24.);
-        let anchor = Anchor::Center;
+        let width = 440f32.min(window.viewport_size().width.as_f32() - 24.);
         let weak = cx.weak_entity();
-        let button = |id: &'static str, label: &'static str| {
-            div()
-                .id(id)
-                .role(Role::Button)
-                .cursor_pointer()
-                .px_3()
-                .py_1p5()
-                .rounded_md()
-                .text_size(px(12.))
-                .child(label)
-        };
-        let field = div()
-            .h(px(36.))
-            .px(px(10.))
-            .flex()
-            .items_center()
-            .rounded_md()
-            .border_1()
-            .border_color(if dialog.error.is_some() {
-                rgba(0xf8717199).into()
-            } else {
-                content(0.1)
-            })
-            .bg(content(0.05))
-            .text_size(px(13.))
-            .text_color(content(1.))
-            .child(dialog.input.clone());
         Some(
             div()
                 .absolute()
                 .size_full()
                 .child(crate::modal::scrim("link-work-item-scrim"))
                 .child(
-                    popover("link-work-item-modal", anchor)
+                    popover("link-work-item-modal", Anchor::Center)
                         .modal_surface(self.workspace.boxy_layout())
                         .width(width)
                         .gap(0.)
@@ -1759,117 +1699,7 @@ impl Shell {
                         .on_dismiss(move |window, cx| {
                             let _ = weak.update(cx, |this, cx| this.close_link_dialog(window, cx));
                         })
-                        .child(
-                            div()
-                                .id("link-work-item-dialog")
-                                .debug_selector(|| "link-work-item-dialog".into())
-                                .role(Role::Dialog)
-                                .aria_label(if dialog.editing {
-                                    "Edit GitHub link"
-                                } else {
-                                    "Link GitHub issue or PR"
-                                })
-                                .flex()
-                                .flex_col()
-                                .child(
-                                    div()
-                                        .px_4()
-                                        .pt_4()
-                                        .flex()
-                                        .flex_col()
-                                        .gap_1()
-                                        .child(
-                                            div()
-                                                .text_size(px(14.))
-                                                .font_weight(FontWeight::SEMIBOLD)
-                                                .text_color(content(1.))
-                                                .child(if dialog.editing {
-                                                    "Edit GitHub link"
-                                                } else {
-                                                    "Link GitHub issue or PR"
-                                                }),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_size(px(12.))
-                                                .text_color(content(0.5))
-                                                .truncate()
-                                                .child(title),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .p_4()
-                                        .flex()
-                                        .flex_col()
-                                        .gap_4()
-                                        .text_size(px(12.))
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .flex_col()
-                                                .gap_1p5()
-                                                .child(
-                                                    div()
-                                                        .font_weight(FontWeight::MEDIUM)
-                                                        .text_color(content(0.8))
-                                                        .child("Issue or pull request URL"),
-                                                )
-                                                .child(field)
-                                                .child(match &dialog.error {
-                                                    Some(error) => div()
-                                                            .id("link-error")
-                                                        .role(Role::Alert)
-                                                        .text_size(px(11.))
-                                                        .text_color(rgb(0xf87171))
-                                                        .child(error.clone()),
-                                                    None => div()
-                                                            .id("link-help")
-                                                        .text_size(px(11.))
-                                                        .text_color(content(0.45))
-                                                        .child(
-                                                            "Paste the full github.com URL. The linked item will appear on the session card.",
-                                                        ),
-                                                }),
-                                        )
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .items_center()
-                                                .justify_end()
-                                                .gap_2()
-                                                .when(dialog.editing, |d| {
-                                                    d.child(
-                                                        button("link-remove", "Remove link")
-                                                            .text_color(rgb(0xf87171))
-                                                            .hover(|s| s.bg(rgba(0xf871711a)))
-                                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                                this.save_link(false, window, cx)
-                                                            })),
-                                                    )
-                                                    .child(div().flex_1())
-                                                })
-                                                .child(
-                                                    crate::modal::ghost_button("link-cancel", "Cancel")
-                                                        .cursor_pointer()
-                                                        .on_click(cx.listener(|this, _, window, cx| {
-                                                            this.close_link_dialog(window, cx)
-                                                        })),
-                                                )
-                                                .child(
-                                                    crate::modal::primary_button(
-                                                        "link-save",
-                                                        if dialog.editing { "Update link" } else { "Link" },
-                                                    )
-                                                    .debug_selector(|| "link-save".into())
-                                                    .cursor_pointer()
-                                                    .on_click(cx.listener(|this, _, window, cx| {
-                                                        this.save_link(true, window, cx)
-                                                    })),
-                                                ),
-                                        ),
-                                ),
-                        ),
+                        .child(dialog.picker.clone()),
                 )
                 .into_any_element(),
         )
@@ -2243,32 +2073,30 @@ mod tests {
     }
 
     #[gpui::test]
-    fn editing_a_link_keeps_the_update_button_inside_the_dialog(cx: &mut TestAppContext) {
+    fn editing_a_link_keeps_remove_link_inside_the_dialog(cx: &mut TestAppContext) {
         let (window, a, _) = setup(cx);
-        window
-            .update(cx, |shell, w, cx| {
-                shell.run_menu(MenuTarget::Session(a), "link-work-item", None, w, cx);
-                shell
-                    .link_dialog
-                    .as_ref()
-                    .unwrap()
-                    .input
-                    .update(cx, |i, cx| {
-                        i.set_text("https://github.com/acme/app/pull/42".into(), cx)
-                    });
-                shell.save_link(true, w, cx);
-                shell.run_menu(MenuTarget::Session(a), "link-work-item", None, w, cx);
-                assert!(shell.link_dialog.as_ref().unwrap().editing);
-            })
-            .unwrap();
+        let open_picker = |cx: &mut TestAppContext| {
+            window
+                .update(cx, |shell, w, cx| {
+                    shell.run_menu(MenuTarget::Session(a), "link-work-item", None, w, cx);
+                    shell.link_dialog.as_ref().unwrap().picker.clone()
+                })
+                .unwrap()
+        };
+        open_picker(cx).update(cx, |p, cx| {
+            p.search_for("https://github.com/acme/app/pull/42", cx);
+            p.pick(0, cx);
+        });
+        cx.run_until_parked();
+        open_picker(cx);
         cx.run_until_parked();
         let visual = &mut VisualTestContext::from_window(window.into(), cx);
         visual.refresh().unwrap();
-        let dialog = visual.debug_bounds("link-work-item-dialog").unwrap();
-        let save = visual.debug_bounds("link-save").unwrap();
+        let dialog = visual.debug_bounds("work-item-picker").unwrap();
+        let remove = visual.debug_bounds("work-item-remove").unwrap();
         assert!(
-            save.right() <= dialog.right() - px(16.),
-            "Update link at {save:?} overflows the dialog at {dialog:?}"
+            remove.right() <= dialog.right(),
+            "Remove link at {remove:?} overflows the dialog at {dialog:?}"
         );
     }
 
@@ -2280,23 +2108,27 @@ mod tests {
         window
             .update(cx, |shell, w, cx| {
                 shell.run_menu(MenuTarget::Session(a), "link-work-item", None, w, cx);
-                shell
-                    .link_dialog
-                    .as_ref()
-                    .unwrap()
-                    .input
-                    .update(cx, |i, cx| i.set_text("invalid".into(), cx));
-                shell.save_link(true, w, cx);
-                assert!(shell.link_dialog.as_ref().unwrap().error.is_some());
-                shell
-                    .link_dialog
-                    .as_ref()
-                    .unwrap()
-                    .input
-                    .update(cx, |i, cx| {
-                        i.set_text("https://github.com/acme/app/pull/42".into(), cx)
-                    });
-                shell.save_link(true, w, cx);
+            })
+            .unwrap();
+        let picker = window
+            .read_with(cx, |shell, _| {
+                shell.link_dialog.as_ref().unwrap().picker.clone()
+            })
+            .unwrap();
+        let pick = |cx: &mut TestAppContext, text: &str| {
+            picker.update(cx, |p, cx| {
+                p.search_for(text, cx);
+                p.pick(0, cx);
+            });
+            cx.run_until_parked();
+        };
+        pick(cx, "invalid");
+        window
+            .read_with(cx, |shell, _| assert!(shell.link_dialog.is_some()))
+            .unwrap();
+        pick(cx, "https://github.com/acme/app/pull/42");
+        window
+            .update(cx, |shell, w, cx| {
                 shell.run_menu(MenuTarget::Session(a), "reminder:tomorrow", None, w, cx);
                 shell.run_menu(MenuTarget::Session(a), "reminder:1h", None, w, cx);
             })
