@@ -55,10 +55,10 @@ pub const PACKED_HEADER: usize = 24;
 const QUALITY: u32 = 90;
 /// The pictures' size while the user scrolls, against the full one. The
 /// browser makes a picture in about the time its pixels take: on Edge a
-/// fast scroll went from 15-22 to 26-39 pictures a second at three
-/// quarters. A scrolling page is not read, and once it stops the pictures
-/// are full size again.
-const SCROLL_PICTURE: f64 = 0.75;
+/// fast scroll went from 12-23 pictures a second at full size to 19-30 at
+/// 90 % (26-39 at 75 %, where text was too soft). Once the page stops the
+/// pictures are full size again.
+const SCROLL_PICTURE: f64 = 0.9;
 /// How long after the last wheel the page counts as still scrolling.
 const SCROLL_SETTLE: Duration = Duration::from_millis(250);
 /// How often a development build prints where the pictures' time goes.
