@@ -2054,9 +2054,6 @@ impl BrowserHost {
             .filter(|control| control.tab == *tab)
         {
             control.touch();
-            if matches!(input, live::LiveInput::Wheel { .. }) {
-                control.scroll();
-            }
         }
         live::input(&self.link, &target, input)
     }

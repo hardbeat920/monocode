@@ -53,14 +53,6 @@ const ACK_POLL: Duration = Duration::from_millis(4);
 pub const PACKED_HEADER: usize = 24;
 /// JPEG quality of the pictures, 0 to 100.
 const QUALITY: u32 = 90;
-/// The pictures' size while the user scrolls, against the full one. The
-/// browser makes a picture in about the time its pixels take: on Edge a
-/// fast scroll went from 12-23 pictures a second at full size to 19-30 at
-/// 90 % (26-39 at 75 %, where text was too soft). Once the page stops the
-/// pictures are full size again.
-const SCROLL_PICTURE: f64 = 0.9;
-/// How long after the last wheel the page counts as still scrolling.
-const SCROLL_SETTLE: Duration = Duration::from_millis(250);
 /// How often a development build prints where the pictures' time goes.
 const METER_EVERY: Duration = Duration::from_secs(2);
 /// Bounds for the panel size, in CSS pixels.
@@ -278,9 +270,6 @@ pub struct LiveControl {
     paused: AtomicBool,
     /// The user gave the tab input since the view last looked.
     touched: AtomicBool,
-    /// When the user last scrolled the tab, in milliseconds since `born`.
-    scrolled: AtomicU64,
-    born: Instant,
     /// The newest picture for the panel, and what it took so far.
     mail: Mutex<Mailbox>,
     ready: Condvar,
@@ -309,8 +298,6 @@ impl LiveControl {
             held: AtomicUsize::new(0),
             paused: AtomicBool::new(false),
             touched: AtomicBool::new(false),
-            scrolled: AtomicU64::new(0),
-            born: Instant::now(),
             mail: Mutex::new(Mailbox::default()),
             ready: Condvar::new(),
         }
@@ -417,18 +404,6 @@ impl LiveControl {
     /// position of the picture before it.
     pub fn touch(&self) {
         self.touched.store(true, Ordering::Release);
-    }
-
-    /// The user scrolled the tab: see [`SCROLL_PICTURE`].
-    pub fn scroll(&self) {
-        let now = self.born.elapsed().as_millis() as u64;
-        self.scrolled.store(now.max(1), Ordering::Release);
-    }
-
-    /// Whether the user is scrolling the tab now.
-    fn scrolling(&self) -> bool {
-        let at = self.scrolled.load(Ordering::Acquire);
-        at > 0 && self.born.elapsed().as_millis() as u64 <= at + SCROLL_SETTLE.as_millis() as u64
     }
 
     pub fn resize(&self, size: PanelSize) {
@@ -714,8 +689,6 @@ pub fn run(
     let mut misfit: Option<Instant> = None;
     let mut healed: Option<Instant> = None;
     let mut paused = false;
-    // The pictures are at the scrolling size ([`SCROLL_PICTURE`]).
-    let mut small = false;
     // A picture offered to the panel whose acknowledgement waits until the
     // panel has taken the one before it.
     let mut waiting: Option<(super::link::CdpEvent, Instant)> = None;
@@ -771,7 +744,6 @@ pub fn run(
                     return Err(error);
                 }
             }
-            small = false;
         }
         if control.touched.swap(false, Ordering::AcqRel) {
             if still.take().is_some() {
@@ -799,7 +771,6 @@ pub fn run(
                     return Err(error);
                 }
             }
-            small = false;
             note(&format!(
                 "panel resized to {}x{} at {}: page {}x{} {}",
                 next.width,
@@ -814,21 +785,6 @@ pub fn run(
                 }
             ));
             current = next;
-            last.clear();
-        }
-        if control.scrolling() != small {
-            // Smaller pictures while the user scrolls, full ones once the
-            // page stops: the screencast starts over at the other size.
-            small = !small;
-            let scale = if small {
-                current.scale * SCROLL_PICTURE
-            } else {
-                current.scale
-            };
-            let _ = send(link, &tab.main, Method::PageStopScreencast, json!({}));
-            if let Err(error) = start_pictures(link, tab, shown, scale) {
-                note(&format!("pictures not started again: {error}"));
-            }
             last.clear();
         }
         if let Some(pending) = &still {
@@ -912,7 +868,6 @@ pub fn run(
                     if healed.is_none_or(|at: Instant| at.elapsed() >= HEAL_EVERY) {
                         healed = Some(Instant::now());
                         let _ = send(link, &tab.main, Method::PageStopScreencast, json!({}));
-                        small = false;
                         match show(link, tab, current) {
                             Ok(again) => {
                                 shown = again;
@@ -1423,16 +1378,6 @@ mod tests {
             ..frame
         };
         assert_eq!(broken.packed(), None);
-    }
-
-    #[test]
-    fn the_page_counts_as_scrolling_for_a_moment_after_each_wheel() {
-        let control = LiveControl::new("v".into(), TabId("t".into()));
-        assert!(!control.scrolling());
-        control.scroll();
-        assert!(control.scrolling());
-        std::thread::sleep(SCROLL_SETTLE + Duration::from_millis(30));
-        assert!(!control.scrolling());
     }
 
     #[test]
