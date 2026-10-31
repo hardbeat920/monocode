@@ -1032,3 +1032,14 @@ fn commit_files_and_diffs_include_the_root_commit() {
     assert_eq!(commit_files(dir.path(), &root).unwrap().len(), 1);
     assert!(commit_files(dir.path(), "not-a-sha").is_err());
 }
+
+#[test]
+fn an_untracked_files_line_count_is_kept_until_it_changes() {
+    let dir = tmp();
+    let path = dir.path().join("notes.txt");
+    std::fs::write(&path, "one\ntwo\n").unwrap();
+    assert_eq!(cached_line_count(&path), 2);
+    assert_eq!(cached_line_count(&path), 2);
+    std::fs::write(&path, "one\ntwo\nthree\n").unwrap();
+    assert_eq!(cached_line_count(&path), 3);
+}

@@ -6,6 +6,7 @@
     "@expo/ui": "~57.0.25",
     "@hugeicons/core-free-icons": "^4.3.5",
     "@hugeicons/react-native": "^1.0.16",
+    "@legendapp/list": "^3.7.0",
     "@react-native-ai/apple": "^0.12.0",
     "@react-native-masked-view/masked-view": "0.3.2",
     "expo": "~57.0.30",

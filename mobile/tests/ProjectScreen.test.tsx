@@ -118,8 +118,10 @@ vi.mock("@/features/connection/useProjectChanges", () => ({
   useProjectChanges: (_project: string, _enabled: boolean, path?: string) => ({
     result: { branch: path ? desktop.existing.name : "main", files: [] },
     error: null,
+    summary: { files: 0, staged: 0, additions: 0, deletions: 0 },
   }),
 }));
+vi.mock("@/features/changes/ShipCard", () => ({ ShipCard: () => null }));
 vi.mock("@/features/connection/useProjectWorktrees", () => ({
   useProjectWorktrees: () => ({ worktrees: [desktop.existing], loaded: true }),
 }));

@@ -53,6 +53,16 @@ export type DiffLine = {
   runs?: [string, number][];
 };
 
+/** A working copy's changes counted, all of them even when only a page of
+ *  files was read. */
+export type ChangeSummary = {
+  files: number;
+  /** Files staged in full. */
+  staged: number;
+  additions: number;
+  deletions: number;
+};
+
 export type ChangedFile = {
   /** Path relative to the project root. */
   relative: string;

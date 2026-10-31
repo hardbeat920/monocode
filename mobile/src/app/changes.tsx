@@ -1,5 +1,6 @@
 import { Redirect, router, Stack, useLocalSearchParams } from "expo-router";
 import { useHeaderHeight } from "expo-router/react-navigation";
+import { useState } from "react";
 import { StyleSheet } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 
@@ -18,6 +19,9 @@ import { useColors } from "@/ui/theme";
 
 // A session's working copy, staged and committed from a native modal over it,
 // as the desktop's Changes panel (see the root layout).
+
+/** Files read at a time; more are read as the list nears its end. */
+const PAGE = 300;
 export default function ChangesRoute() {
   const { projectId, worktreePath, harness } = useLocalSearchParams<{
     projectId: string;
@@ -45,7 +49,9 @@ function ProjectChanges({
   worktreePath?: string;
   harness?: string;
 }) {
-  const changes = useProjectChanges(project.id, true, worktreePath);
+  const [limit, setLimit] = useState(PAGE);
+  const changes = useProjectChanges(project.id, true, worktreePath, limit);
+  const files = changes.result?.files ?? [];
   const headerHeight = useHeaderHeight();
   const colors = useColors();
   return (
@@ -68,7 +74,11 @@ function ProjectChanges({
           projectId={project.id}
           worktreePath={worktreePath}
           active
-          files={changes.result?.files ?? []}
+          files={files}
+          summary={changes.summary}
+          hasMore={files.length < changes.summary.files}
+          // Once the page asked for has come in, the next one.
+          onEndReached={() => setLimit((current) => (files.length >= current ? current + PAGE : current))}
           loading={!changes.result && !changes.error}
           error={changes.error}
           onChanged={changes.reload}

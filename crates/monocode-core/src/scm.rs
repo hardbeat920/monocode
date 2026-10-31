@@ -6,8 +6,9 @@ pub(crate) mod text;
 
 use std::collections::HashMap;
 use std::io::ErrorKind;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{LazyLock, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::files::remote as remote_workspace;
@@ -29,7 +30,10 @@ pub fn terminal_search_path() -> String {
 pub fn resolve_gui_binary(name: &str) -> Option<std::path::PathBuf> {
     shell::resolve_gui_binary(name)
 }
-pub use text::{commit_message_prompt, parse_commit_message, parse_pr_content, pr_content_prompt};
+pub use text::{
+    commit_message_prompt, commit_plan_prompt, parse_commit_message, parse_commit_plan,
+    parse_pr_content, pr_content_prompt, PlannedCommit,
+};
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -243,6 +247,85 @@ pub fn commit(cwd: &Path, message: &str, amend: bool) -> Result<(), String> {
     commit_args(&expand_home(cwd), message, extra)
 }
 
+/// One commit of a plan: its message and the files it takes, whole.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlanStep {
+    pub message: String,
+    pub paths: Vec<String>,
+}
+
+/// Makes a plan's commits one after another, each from the working copy of
+/// only its own files; whatever else is staged stays staged and out of them.
+/// The whole plan is checked before anything changes. When a commit fails,
+/// its files go back to how they were staged, so a plan that made nothing
+/// leaves the index as it found it. Errors carry how many commits were made.
+pub fn commit_plan(cwd: &Path, steps: &[PlanStep]) -> Result<usize, (usize, String)> {
+    if remote_workspace::is_remote(cwd) {
+        return Err((0, "A commit plan needs a local project.".into()));
+    }
+    let root = expand_home(cwd);
+    let steps = checked_plan(&root, steps).map_err(|reason| (0, reason))?;
+    let original = git_stdout(&root, &["write-tree"]).ok_or((
+        0,
+        "Resolve the conflicted files before committing.".to_string(),
+    ))?;
+    for (made, (message, paths)) in steps.iter().enumerate() {
+        let mut add = vec!["--literal-pathspecs", "add", "-A", "--"];
+        add.extend(paths.iter().map(String::as_str));
+        let mut commit = vec![
+            "--literal-pathspecs",
+            "commit",
+            "--cleanup=strip",
+            "-m",
+            message,
+            "--only",
+            "--",
+        ];
+        commit.extend(paths.iter().map(String::as_str));
+        let step = git_checked(&root, &add)
+            .and_then(|()| git_checked(&root, &commit).map_err(with_signing_hint));
+        if let Err(reason) = step {
+            if made == 0 {
+                let _ = git_checked(&root, &["read-tree", &original]);
+            } else {
+                let source = format!("--source={original}");
+                for path in paths {
+                    let restore = ["--literal-pathspecs", "restore", "--staged", &source, "--"];
+                    let _ = git_checked(&root, &[&restore[..], &[path.as_str()]].concat());
+                }
+            }
+            return Err((made, reason));
+        }
+    }
+    Ok(steps.len())
+}
+
+/// The plan's messages trimmed and paths made repo-relative, or why it can't run.
+fn checked_plan(root: &Path, steps: &[PlanStep]) -> Result<Vec<(String, Vec<String>)>, String> {
+    if steps.is_empty() {
+        return Err("There are no commits to make.".into());
+    }
+    let mut seen = std::collections::HashSet::new();
+    steps
+        .iter()
+        .map(|step| {
+            let message = step.message.trim();
+            if message.is_empty() || step.paths.is_empty() {
+                return Err("Every commit needs a message and files.".to_string());
+            }
+            let paths = step
+                .paths
+                .iter()
+                .map(|path| resolve_repo_path(root, path))
+                .collect::<Result<Vec<_>, _>>()?;
+            if let Some(path) = paths.iter().find(|path| !seen.insert((*path).clone())) {
+                return Err(format!("{path} is in more than one commit."));
+            }
+            Ok((message.to_string(), paths))
+        })
+        .collect()
+}
+
 /// Full message (subject and body) of the commit at HEAD.
 pub fn head_message(cwd: &Path) -> Result<String, String> {
     if remote_workspace::is_remote(cwd) {
@@ -316,6 +399,15 @@ pub fn staged_context(cwd: &Path) -> Result<StagedContext, String> {
         summary,
         patch,
     })
+}
+
+/// Everything uncommitted, staged or not, against HEAD, for splitting it into commits.
+pub fn working_patch(cwd: &Path) -> Result<String, String> {
+    if remote_workspace::is_remote(cwd) {
+        return Err("A commit plan needs a local project.".into());
+    }
+    let root = expand_home(cwd);
+    Ok(git_run(&root, &["diff", "HEAD", "--no-ext-diff", "--", "."]).unwrap_or_default())
 }
 
 /// Commits and diff between the default branch and HEAD, for PR text generation.
@@ -731,9 +823,41 @@ fn add_untracked_map(root: &Path, files: &mut HashMap<String, FileAcc>) {
         let entry = files.entry(relative.clone()).or_default();
         entry.untracked = true;
         if entry.additions == 0 {
-            entry.additions = text_line_count(&root.join(rel));
+            entry.additions = cached_line_count(&root.join(rel));
         }
     }
+}
+
+/// A file's size and modified time, and the lines it had then.
+type CountedLines = (u64, SystemTime, i64);
+
+/// Untracked files' line counts by path, with the size and modified time they
+/// were counted at. A build folder nobody ignored can hold tens of thousands of
+/// files and gigabytes; each refresh then only reads their metadata.
+static UNTRACKED_LINES: LazyLock<Mutex<HashMap<PathBuf, CountedLines>>> =
+    LazyLock::new(Default::default);
+/// Past this many entries the cache starts over, rather than grow for good.
+const UNTRACKED_LINES_CAP: usize = 200_000;
+
+fn cached_line_count(path: &Path) -> i64 {
+    let Some(stamp) = std::fs::metadata(path)
+        .ok()
+        .and_then(|meta| Some((meta.len(), meta.modified().ok()?)))
+    else {
+        return text_line_count(path);
+    };
+    if let Some(&(len, modified, lines)) = UNTRACKED_LINES.lock().unwrap().get(path) {
+        if (len, modified) == stamp {
+            return lines;
+        }
+    }
+    let lines = text_line_count(path);
+    let mut cache = UNTRACKED_LINES.lock().unwrap();
+    if cache.len() >= UNTRACKED_LINES_CAP {
+        cache.clear();
+    }
+    cache.insert(path.to_path_buf(), (stamp.0, stamp.1, lines));
+    lines
 }
 
 fn text_line_count(path: &Path) -> i64 {

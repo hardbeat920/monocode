@@ -607,9 +607,12 @@ impl Shell {
             let path = string(&params, "path").unwrap_or_default();
             match method.as_str() {
                 "project.worktrees" => project::worktrees(&cwd),
-                "project.changes" => {
-                    project::changes(&project::resolve_root(&cwd, worktree)?, worktree)
-                }
+                "project.changes" => project::changes(
+                    &project::resolve_root(&cwd, worktree)?,
+                    worktree,
+                    params["since"].as_str(),
+                    params["limit"].as_u64().map(|limit| limit as usize),
+                ),
                 "project.files" => project::files(&project::resolve_root(&cwd, worktree)?, &path),
                 "project.file" => project::file(&project::resolve_root(&cwd, worktree)?, &path),
                 "project.search" => project::search(

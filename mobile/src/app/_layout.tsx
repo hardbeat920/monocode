@@ -162,6 +162,7 @@ function LinkedWorkspace() {
             <Stack.Screen name="settings" options={screens.modal} />
             <Stack.Screen name="models" options={screens.modal} />
             <Stack.Screen name="changes" options={screens.changes} />
+            <Stack.Screen name="commit-plan" options={screens.changes} />
           </Stack>
         </SessionFrame>
       </ScenePagerHost>

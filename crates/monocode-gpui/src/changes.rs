@@ -1839,6 +1839,41 @@ pub(crate) fn generate_commit_message(
     })
 }
 
+/// A plan splitting every uncommitted file into commits, written by a
+/// read-only turn of `kind`. Blocking.
+pub(crate) fn generate_commit_plan(
+    kind: Kind,
+    binary: PathBuf,
+    cwd: PathBuf,
+    index: &scm::DiffIndex,
+) -> Result<Vec<scm::PlannedCommit>, String> {
+    let files = index
+        .files
+        .iter()
+        .map(|file| {
+            format!(
+                "{} | {} | +{} -{}",
+                file.relative, file.status, file.additions, file.deletions
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let prompt =
+        scm::commit_plan_prompt(index.branch.as_deref(), &files, &scm::working_patch(&cwd)?);
+    let output = text_prompt(kind, binary, cwd, prompt, Arc::new(AtomicBool::new(false)))?;
+    let known = index
+        .files
+        .iter()
+        .map(|file| file.relative.clone())
+        .collect::<Vec<_>>();
+    scm::parse_commit_plan(&output, &known).ok_or_else(|| {
+        format!(
+            "Could not plan the commits. {} did not return a usable plan.",
+            kind.label()
+        )
+    })
+}
+
 /// generatePrContent, falling back to the commits, then `gh pr create`; the
 /// new pull request's URL. Blocking.
 pub(crate) fn create_pr_blocking(

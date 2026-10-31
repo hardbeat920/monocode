@@ -19,11 +19,21 @@ export type GitStatus = {
   pr: { number: number; url: string } | null;
 };
 
+/** One commit of a plan the desktop wrote: its message and the files it takes. */
+export type PlannedCommit = {
+  message: string;
+  paths: string[];
+  additions: number;
+  deletions: number;
+};
+
 export type GitAction =
   | { action: "stage" | "unstage"; paths: string[] }
   | { action: "stageAll" | "unstageAll" }
   | { action: "generate" }
   | { action: "commit"; message: string }
+  | { action: "plan" }
+  | { action: "commitPlan"; commits: { message: string; paths: string[] }[] }
   | { action: "sync" }
   | { action: "pr" };
 
@@ -91,7 +101,12 @@ export function useProjectGit(
     const id = makeCommandId();
     const params = { ...scope, ...(harness ? { harness } : {}), ...action };
     for (;;) {
-      const result = await command<{ pending?: boolean; message?: string; url?: string }>(
+      const result = await command<{
+        pending?: boolean;
+        message?: string;
+        url?: string;
+        commits?: PlannedCommit[];
+      }>(
         "project.gitAction",
         params,
         id,

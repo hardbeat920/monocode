@@ -63,11 +63,15 @@ pub fn pr_content_prompt(range: &RangeContext) -> String {
 
 /// The model's commit message formatted as `subject\n\nbody`, or the subject alone.
 pub fn parse_commit_message(raw: &str) -> Option<String> {
-    let rec = parse_json_object(raw)?;
+    message_from(&parse_json_object(raw)?)
+}
+
+/// A commit message, subject then body, from a record's text keys.
+fn message_from(rec: &Record) -> Option<String> {
     let subject = [
-        string_field(&rec, "subject"),
-        string_field(&rec, "title"),
-        string_field(&rec, "message"),
+        string_field(rec, "subject"),
+        string_field(rec, "title"),
+        string_field(rec, "message"),
     ]
     .into_iter()
     .find(|value| !value.is_empty())
@@ -76,12 +80,102 @@ pub fn parse_commit_message(raw: &str) -> Option<String> {
     if subject.is_empty() {
         return None;
     }
-    let body = commit_body(&rec);
+    let body = commit_body(rec);
     Some(if body.is_empty() {
         subject
     } else {
         format!("{subject}\n\n{body}")
     })
+}
+
+/// One commit of a plan: its message and the changed files it takes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlannedCommit {
+    pub message: String,
+    pub paths: Vec<String>,
+}
+
+/// Prompt asking a model to split every changed file into commits that each
+/// make one change, as `{commits: [{subject, body, paths}]}`.
+pub fn commit_plan_prompt(branch: Option<&str>, files_summary: &str, patch: &str) -> String {
+    [
+        "You split a working copy's uncommitted changes into a few focused git commits.",
+        "Return a JSON object with one key, commits: an array of objects with keys subject, body, paths.",
+        "Do not call tools. Reply with JSON only.",
+        "Rules:",
+        "- every changed file below appears in exactly one commit's paths, written exactly as listed",
+        "- group files that belong to one change; put renames, generated files and lockfiles with the change that caused them",
+        "- order commits so each builds on the ones before it",
+        "- use as few commits as keep each one coherent; one commit is fine for a small change",
+        "- subject must be imperative, <= 72 chars, and no trailing period",
+        "- body can be empty string or short bullet points",
+        "",
+        &format!("Branch: {}", branch.unwrap_or("(detached)")),
+        "",
+        "Changed files (path | status | lines added, removed):",
+        &limit_section(files_summary, 12_000),
+        "",
+        "Patch:",
+        &limit_section(patch, 30_000),
+    ]
+    .join("\n")
+}
+
+/// The model's plan, reconciled with the files that really changed: unknown and
+/// repeated paths are dropped, empty commits go, and files the model left out
+/// gather in a last commit, so every changed file lands in exactly one. `None`
+/// without a usable commit.
+pub fn parse_commit_plan(raw: &str, known: &[String]) -> Option<Vec<PlannedCommit>> {
+    let commits = plan_commits(raw)?;
+    let mut left: Vec<&String> = known.iter().collect();
+    let mut plan = Vec::new();
+    for commit in &commits {
+        let Value::Object(rec) = commit else { continue };
+        let Some(message) = message_from(rec) else {
+            continue;
+        };
+        let paths: Vec<String> = match rec.get("paths") {
+            Some(Value::Array(paths)) => paths.iter().filter_map(Value::as_str).collect(),
+            _ => Vec::new(),
+        }
+        .into_iter()
+        .filter_map(|path| {
+            let at = left.iter().position(|known| known.as_str() == path)?;
+            Some(left.remove(at).clone())
+        })
+        .collect();
+        if !paths.is_empty() {
+            plan.push(PlannedCommit { message, paths });
+        }
+    }
+    if plan.is_empty() {
+        return None;
+    }
+    if !left.is_empty() {
+        plan.push(PlannedCommit {
+            message: "Update remaining files".into(),
+            paths: left.into_iter().cloned().collect(),
+        });
+    }
+    Some(plan)
+}
+
+/// The first JSON object in `raw` that has a `commits` array, past any
+/// preamble that mentions braces.
+fn plan_commits(raw: &str) -> Option<Vec<Value>> {
+    let trimmed = js_trim(raw);
+    let mut from = 0;
+    while let Some(offset) = trimmed[from..].find('{') {
+        let start = from + offset;
+        let json = extract_json_object(&trimmed[start..])?;
+        from = start + 1;
+        if let Ok(Value::Object(mut rec)) = serde_json::from_str::<Value>(json) {
+            if let Some(Value::Array(commits)) = rec.remove("commits") {
+                return Some(commits);
+            }
+        }
+    }
+    None
 }
 
 /// The model's PR `(title, body)`; `None` without a usable title.
@@ -317,5 +411,42 @@ mod tests {
             Some(("Add X".into(), "## Summary\n- x".into()))
         );
         assert_eq!(parse_pr_content(r#"{"body":"x"}"#), None);
+    }
+
+    #[test]
+    fn commit_plan_covers_every_changed_file_once() {
+        let known: Vec<String> = ["a.rs", "b.rs", "c.rs", "d.rs"].map(String::from).into();
+        let raw = r#"Here {you go}:
+{"commits":[
+ {"subject":"Add a","body":"- one","paths":["a.rs","ghost.rs","b.rs"]},
+ {"subject":"Add b again","paths":["b.rs"]},
+ {"subject":"","paths":["c.rs"]},
+ {"subject":"Nothing","paths":["ghost.rs"]}
+]}"#;
+        let plan = parse_commit_plan(raw, &known).unwrap();
+        assert_eq!(
+            plan,
+            vec![
+                PlannedCommit {
+                    message: "Add a\n\n- one".into(),
+                    paths: vec!["a.rs".into(), "b.rs".into()],
+                },
+                PlannedCommit {
+                    message: "Update remaining files".into(),
+                    paths: vec!["c.rs".into(), "d.rs".into()],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn commit_plan_needs_a_usable_commit() {
+        let known = vec!["a.rs".to_string()];
+        assert_eq!(parse_commit_plan("no json", &known), None);
+        assert_eq!(parse_commit_plan(r#"{"commits":[]}"#, &known), None);
+        assert_eq!(
+            parse_commit_plan(r#"{"commits":[{"subject":"x","paths":["z"]}]}"#, &known),
+            None
+        );
     }
 }

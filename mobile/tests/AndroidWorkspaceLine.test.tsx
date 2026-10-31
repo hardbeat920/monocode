@@ -5,7 +5,7 @@ import {
   WorkspaceLine,
   WorkspaceMenu,
 } from "@/features/workspace/WorkspaceMenu.android";
-import type { ChangedFile } from "@/features/workspace/types";
+import type { ChangeSummary } from "@/features/workspace/types";
 
 vi.mock("react-native", () => ({
   Modal: ({ visible, children }: { visible: boolean; children?: ReactNode }) =>
@@ -78,15 +78,7 @@ it("bounds long branch labels in empty-session and chat workspace lines while pr
   const container = document.createElement("div");
   const root = createRoot(container);
   const branch = "feat/dispatch_and_benchmarks_and_a_very_long_branch_suffix";
-  const files: ChangedFile[] = [
-    {
-      relative: "app.tsx",
-      status: "modified",
-      additions: 12,
-      deletions: 3,
-      lines: [],
-    },
-  ];
+  const summary: ChangeSummary = { files: 1, staged: 0, additions: 12, deletions: 3 };
   try {
     for (const empty of [true, false]) {
       act(() =>
@@ -97,12 +89,12 @@ it("bounds long branch labels in empty-session and chat workspace lines while pr
               worktrees={[]}
               onChange={() => {}}
               branch={branch}
-              files={files}
+              summary={summary}
               loading={false}
               onOpenChanges={() => {}}
             />
           ) : (
-            <WorkspaceLine current branch={branch} files={files} />
+            <WorkspaceLine current branch={branch} summary={summary} />
           ),
         ),
       );
@@ -139,7 +131,7 @@ it("keeps worktree selection available while changes load and replaces the pendi
           worktrees={[]}
           onChange={onChange}
           branch="main"
-          files={[]}
+          summary={{ files: 0, staged: 0, additions: 0, deletions: 0 }}
           loading={loading}
           onOpenChanges={() => {}}
         />,

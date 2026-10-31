@@ -7,7 +7,7 @@ import {
 import { hasNativeTranscript } from "@/features/connection/nativeLink";
 import { useProjectChanges } from "@/features/connection/useProjectChanges";
 import { useProjectWorktrees } from "@/features/connection/useProjectWorktrees";
-import type { Project, SessionSummary } from "@/features/workspace/types";
+import type { ChangeSummary, Project, SessionSummary } from "@/features/workspace/types";
 import { use, useCallback, useEffect, useState, type ReactNode } from "react";
 import { Platform, Pressable, StyleSheet } from "react-native";
 import Animated, {
@@ -51,6 +51,7 @@ import {
   SessionTitle,
   SessionToolbar,
 } from "@/features/sessions/SessionToolbar";
+import { ShipCard } from "@/features/changes/ShipCard";
 import { Transcript, TranscriptLoading } from "@/features/sessions/Transcript";
 import {
   ProjectPages,
@@ -84,6 +85,8 @@ import { usePushedIn, usePushStarted } from "@/ui/usePushedIn";
  * one just started, is pushed over it as a screen of its own: its chat under
  * the stack's native header (see the session route).
  */
+const NO_CHANGES: ChangeSummary = { files: 0, staged: 0, additions: 0, deletions: 0 };
+
 export function ProjectScreen({
   project,
   sessionId,
@@ -156,12 +159,16 @@ export function ProjectScreen({
   // Read while the screen is up so the switch can mark that there are some,
   // as the desktop's Changes tab does. Guessing from its branch, a session's
   // wait for the worktree list rather than read the checkout's and throw them away.
+  // Not while a page over it, such as Changes, reads the same changes itself.
+  const focused = useIsFocused();
   const changesState = useProjectChanges(
     project.id,
-    sessionId ? pushedIn && (loaded || !offCheckout) : !fresh,
+    focused && (sessionId ? pushedIn && (loaded || !offCheckout) : !fresh),
     worktreePath,
+    // Only counted here; the Changes page reads the files themselves.
+    0,
   );
-  const changes = fresh ? [] : (changesState.result?.files ?? []);
+  const changes = fresh ? NO_CHANGES : changesState.summary;
   const branch = sessionId
     ? changesState.result?.branch || sessionBranch
     : fresh
@@ -194,7 +201,6 @@ export function ProjectScreen({
   // that session is closed again.
   const emptyOpacity = useSharedValue(1);
   const emptyStyle = useAnimatedStyle(() => ({ opacity: emptyOpacity.get() }));
-  const focused = useIsFocused();
   useEffect(() => {
     if (focused) emptyOpacity.set(1);
   }, [focused, emptyOpacity]);
@@ -305,7 +311,7 @@ export function ProjectScreen({
       session={session}
       worktreePath={worktreePath}
       harness={harness}
-      changed={changes.length}
+      changed={changes.files}
       onSettings={openSettings}
     />
   ) : null;
@@ -325,7 +331,7 @@ export function ProjectScreen({
             onChange={setWorkspace}
             branch={branch}
             checkoutBranch={project.branch}
-            files={changes}
+            summary={changes}
             onOpenChanges={() =>
               router.push({
                 pathname: "/changes",
@@ -346,6 +352,15 @@ export function ProjectScreen({
       dockStyle={sessionId ? undefined : pages.slide}
       composer={
         <>
+          {sessionId ? (
+            <ShipCard
+              projectId={project.id}
+              worktreePath={worktreePath}
+              harness={harness}
+              summary={changes}
+              enabled={!conversation.busy && !offline}
+            />
+          ) : null}
           {sessionId && conversation.question ? (
             <QuestionCard conversationId={sessionId} prompt={conversation.question} />
           ) : null}
@@ -378,7 +393,7 @@ export function ProjectScreen({
                     <WorkspaceLine
                       current={!worktreePath}
                       branch={branch}
-                      files={changes}
+                      summary={changes}
                     />
                   ),
                 }
@@ -482,6 +497,7 @@ export function ProjectScreen({
       {/* After the content: iOS blurs under the header the scroll view it
           finds first, down each view's first child. */}
       <ConnectionNotice error={conversation.error} />
+
     </SessionScreen>
   );
 }

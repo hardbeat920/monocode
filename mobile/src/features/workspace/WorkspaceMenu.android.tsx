@@ -3,7 +3,7 @@ import { formatCount, useDiffTheme } from "@/features/changes/diffTheme";
 import { ChoiceMenu } from "@/ui/ChoiceMenu";
 import { Icon } from "@/ui/Icon";
 import { useColors } from "@/ui/theme";
-import type { ChangedFile, Worktree } from "./types";
+import type { ChangeSummary, Worktree } from "./types";
 import type { Workspace } from "./WorkspaceMenu";
 export type { Workspace } from "./WorkspaceMenu";
 
@@ -13,7 +13,7 @@ export function WorkspaceMenu({
   onChange,
   branch,
   checkoutBranch,
-  files,
+  summary,
   loading,
   onOpenChanges,
 }: {
@@ -22,7 +22,7 @@ export function WorkspaceMenu({
   onChange: (value: Workspace) => void;
   branch: string;
   checkoutBranch?: string;
-  files: ChangedFile[];
+  summary: ChangeSummary;
   loading: boolean;
   onOpenChanges: () => void;
 }) {
@@ -58,7 +58,7 @@ export function WorkspaceMenu({
         <WorkspaceLine
           current={value.mode === "current"}
           branch={branch}
-          files={files}
+          summary={summary}
           loading={loading}
         />
       </View>
@@ -68,12 +68,12 @@ export function WorkspaceMenu({
 export function WorkspaceLine({
   current,
   branch,
-  files,
+  summary,
   loading = false,
 }: {
   current: boolean;
   branch: string;
-  files: ChangedFile[];
+  summary: ChangeSummary;
   loading?: boolean;
 }) {
   const colors = useColors();
@@ -110,15 +110,15 @@ export function WorkspaceLine({
       <Text numberOfLines={1} style={{ color: colors.muted, flexShrink: 0 }}>
         {loading
           ? "· Loading changes…"
-          : `· ${formatCount(files.length)} files`}
+          : `· ${formatCount(summary.files)} files`}
       </Text>
       {!loading ? (
         <>
           <Text numberOfLines={1} style={{ color: diff.add.fg, flexShrink: 0 }}>
-            +{formatCount(files.reduce((n, f) => n + f.additions, 0))}
+            +{formatCount(summary.additions)}
           </Text>
           <Text numberOfLines={1} style={{ color: diff.del.fg, flexShrink: 0 }}>
-            -{formatCount(files.reduce((n, f) => n + f.deletions, 0))}
+            -{formatCount(summary.deletions)}
           </Text>
         </>
       ) : null}

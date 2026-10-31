@@ -42,7 +42,7 @@ import { formatCount, useDiffTheme } from "@/features/changes/diffTheme";
 import { Icon } from "@/ui/Icon";
 import { themedStyles, useColors } from "@/ui/theme";
 
-import type { ChangedFile, Worktree } from "./types";
+import type { ChangeSummary, Worktree } from "./types";
 
 /** Where a new session works, as the desktop composer's workspace picker offers. */
 export type Workspace =
@@ -72,7 +72,7 @@ export function WorkspaceMenu({
   onChange,
   branch,
   checkoutBranch,
-  files,
+  summary,
   loading,
   onOpenChanges,
 }: {
@@ -82,7 +82,7 @@ export function WorkspaceMenu({
   branch: string;
   /** The project checkout's own branch, to name it in the sheet. */
   checkoutBranch?: string;
-  files: ChangedFile[];
+  summary: ChangeSummary;
   /** The picked working copy's branch and changes are still being read. */
   loading: boolean;
   onOpenChanges: () => void;
@@ -115,7 +115,7 @@ export function WorkspaceMenu({
         <BranchLine
           current={value.mode === "current"}
           branch={branch}
-          files={files}
+          summary={summary}
           compact
         />
         <Icon name="chevronDown" size={12} color={colors.muted} />
@@ -127,7 +127,7 @@ export function WorkspaceMenu({
         pending={loading ? pending : null}
         worktrees={worktrees}
         checkoutBranch={checkoutBranch}
-        files={files}
+        summary={summary}
         onOpenChanges={onOpenChanges}
         onChange={(next) => {
           if (keyOf(next) === keyOf(value)) return dismiss();
@@ -151,7 +151,7 @@ function WorkspaceSheet({
   pending,
   worktrees,
   checkoutBranch,
-  files,
+  summary,
   onChange,
   onOpenChanges,
 }: {
@@ -162,12 +162,12 @@ function WorkspaceSheet({
   pending: string | null;
   worktrees: Worktree[];
   checkoutBranch?: string;
-  files: ChangedFile[];
+  summary: ChangeSummary;
   onChange: (value: Workspace) => void;
   onOpenChanges: () => void;
 }) {
   const diff = useDiffTheme();
-  const { additions, deletions } = totals(files);
+  const { additions, deletions } = summary;
   // Controlled so a reopened sheet starts at the top level, not the page it closed on.
   const [path, setPath] = useState<string[]>([]);
   // Present the route only after the native picker has finished dismissing.
@@ -265,7 +265,7 @@ function WorkspaceSheet({
                 <VStack alignment="leading" spacing={2}>
                   <Text>View changes</Text>
                   <Text modifiers={[font({ textStyle: "footnote" }), SECONDARY]}>
-                    {`${formatCount(files.length)} ${files.length === 1 ? "file" : "files"} changed`}
+                    {`${formatCount(summary.files)} ${summary.files === 1 ? "file" : "files"} changed`}
                   </Text>
                 </VStack>
                 <Spacer />
@@ -420,7 +420,7 @@ export function WorkspaceLine(props: {
   /** Working in the project's checkout rather than a worktree. */
   current: boolean;
   branch: string;
-  files: ChangedFile[];
+  summary: ChangeSummary;
 }) {
   return <BranchLine {...props} />;
 }
@@ -430,18 +430,18 @@ export function WorkspaceLine(props: {
 function BranchLine({
   current,
   branch,
-  files,
+  summary,
   compact = false,
 }: {
   current: boolean;
   branch: string;
-  files: ChangedFile[];
+  summary: ChangeSummary;
   compact?: boolean;
 }) {
   const colors = useColors();
   const styles = useStyles();
   const diff = useDiffTheme();
-  const { additions, deletions } = totals(files);
+  const { additions, deletions } = summary;
   const count = [styles.count, compact && styles.compact];
   return (
     <View style={styles.line}>
@@ -454,19 +454,12 @@ function BranchLine({
         {branch}
       </RNText>
       <RNText style={count} numberOfLines={1}>
-        {`·  ${formatCount(files.length)} ${files.length === 1 ? "file" : "files"}`}
+        {`·  ${formatCount(summary.files)} ${summary.files === 1 ? "file" : "files"}`}
       </RNText>
       <RNText style={[count, { color: diff.add.fg }]}>{`+${formatCount(additions)}`}</RNText>
       <RNText style={[count, { color: diff.del.fg }]}>{`-${formatCount(deletions)}`}</RNText>
     </View>
   );
-}
-
-function totals(files: ChangedFile[]) {
-  return {
-    additions: files.reduce((sum, f) => sum + f.additions, 0),
-    deletions: files.reduce((sum, f) => sum + f.deletions, 0),
-  };
 }
 
 const useStyles = themedStyles((colors) => ({
