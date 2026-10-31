@@ -34,7 +34,7 @@ h2{font-size:15px;margin:32px 0 8px}
 .row{display:flex;justify-content:space-between;padding:12px 0;border-bottom:1px solid #f0f0f2;font-size:14px}
 .row span:last-child{color:#71717a}
 </style>
-<nav><span class=logo></span>Demo shop<span class=links><span>Products</span><span>Orders</span><span>Account</span></span><span class=live></span></nav>
+<nav><span class=logo></span>Demo shop<span class=links><span>Products</span><a id=orders href="#opened" style="color:inherit">Orders</a><span>Account</span></span><span class=live></span></nav>
 <main><h1>Checkout</h1><div class=sub>The agent is filling this in.</div>
 <form class=card id=f onsubmit="document.getElementById('status').textContent='Order placed for '+document.getElementById('name').value;return false">
 <div class=field><label for=name>Full name</label><input id=name autocomplete=off></div>
@@ -477,6 +477,19 @@ test("a background tab of the thread shows live in MonoCode and takes clicks and
     .poll(() => frames, { timeout: 5000 })
     .toBeGreaterThan(typedAt + 20);
   await page.screenshot({ path: `${SHOTS}/live-3-typed.png` });
+  // A link clicked by a hand that moves a few pixels while pressed: a
+  // click, not the start of a drag (Chromium drags a link from 4 px).
+  const link = JSON.parse(
+    await pageValue(
+      "JSON.stringify(document.getElementById('orders').getBoundingClientRect())",
+    ),
+  );
+  const onLink = at(link.x + link.width / 2, link.y + link.height / 2);
+  await page.mouse.move(onLink.x, onLink.y);
+  await page.mouse.down();
+  await page.mouse.move(onLink.x + 5, onLink.y + 2, { steps: 3 });
+  await page.mouse.up();
+  await expect.poll(() => pageValue("location.hash")).toBe("#opened");
   // Scroll the page from the panel.
   await page.mouse.move(target.x, target.y + 200);
   await page.mouse.wheel(0, 600);

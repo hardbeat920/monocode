@@ -4,6 +4,7 @@ import {
   parseBrowserLiveFrame,
 } from "../../settings/model/browser";
 import {
+  CLICK_SLOP,
   isNewTabKey,
   liveAddress,
   liveKeyInput,
@@ -12,6 +13,7 @@ import {
   pixelSnap,
   queueLiveInput,
   wheelPixels,
+  withinClickSlop,
 } from "./BrowserLiveView";
 
 const key = (
@@ -140,6 +142,16 @@ describe("live view input", () => {
       "mouse",
     ]);
     expect(queue[2]).toEqual(move(2));
+  });
+
+  it("keeps a shaking click a click, and a longer move a drag", () => {
+    const pressed = { x: 100, y: 100 };
+    // Chromium drags a link from 4 px: a hand moves that much clicking.
+    expect(withinClickSlop(pressed, { x: 104, y: 103 })).toBe(true);
+    expect(withinClickSlop(pressed, { x: 100 + CLICK_SLOP, y: 100 })).toBe(
+      false,
+    );
+    expect(withinClickSlop(pressed, { x: 80, y: 130 })).toBe(false);
   });
 
   it("takes Ctrl+T and Cmd+T for a new tab, and nothing else", () => {

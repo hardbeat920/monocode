@@ -186,6 +186,21 @@ export function isNewTabKey(
   );
 }
 
+/**
+ * How far, in CSS pixels, the pointer may move while pressed and still
+ * click. Chromium starts dragging a link from 4 pixels, which a hand easily
+ * moves while clicking in the pane; a drag that goes further is a drag.
+ */
+export const CLICK_SLOP = 8;
+
+/** Whether the pointer at `now` is still where it was pressed, for a click. */
+export function withinClickSlop(
+  pressed: { x: number; y: number },
+  now: { x: number; y: number },
+): boolean {
+  return Math.hypot(now.x - pressed.x, now.y - pressed.y) < CLICK_SLOP;
+}
+
 /** A wheel's distance in CSS pixels, whatever unit the event counts in. */
 export function wheelPixels(delta: number, mode: number, page: number): number {
   if (mode === 1) return delta * 40;
@@ -545,12 +560,31 @@ export function BrowserLiveView({
     if (!shown || !current) return null;
     return livePoint({ x: event.clientX, y: event.clientY }, shown, current);
   };
+  // Where the button went down, until the pointer leaves the click's slop.
+  const press = useRef<{
+    x: number;
+    y: number;
+    at: { x: number; y: number };
+  } | null>(null);
   const mouse = (
     kind: "mousePressed" | "mouseReleased" | "mouseMoved",
     event: MouseEvent,
   ) => {
-    const at = point(event);
+    let at = point(event);
     if (!at) return;
+    const client = { x: event.clientX, y: event.clientY };
+    if (kind === "mousePressed") press.current = { ...client, at };
+    else if (press.current) {
+      if (withinClickSlop(press.current, client)) {
+        // A hand that shakes while clicking: the page gets a click, not the
+        // start of a drag (a link dragged a few pixels never opens).
+        if (kind === "mouseMoved") return;
+        at = press.current.at;
+      } else if (kind === "mouseMoved") {
+        press.current = null;
+      }
+      if (kind === "mouseReleased") press.current = null;
+    }
     if (kind !== "mouseMoved") {
       // Keyboard input keeps going to the tab.
       event.preventDefault();
