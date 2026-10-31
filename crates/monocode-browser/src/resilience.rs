@@ -1437,7 +1437,7 @@ fn control_for(world: &World, session: &str) -> Credentials {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = listener.local_addr().unwrap().to_string();
     let host = world.host.clone();
-    thread::spawn(move || crate::control::serve_browser_for_tests(listener, host));
+    thread::spawn(move || crate::transport::serve(listener, host));
     Credentials::new(&endpoint, &world.host.token_for(session).unwrap()).unwrap()
 }
 
@@ -1950,7 +1950,7 @@ fn browser_process() -> std::process::Child {
     std::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
-            "browser::resilience::stand_in_browser_process",
+            "resilience::stand_in_browser_process",
             "--ignored",
             "--test-threads=1",
         ])

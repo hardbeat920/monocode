@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 
 use super::client::{self, Credentials, MissingCredentials};
 use super::tools;
-use crate::browser::protocol::{ActionKind, ActionResult, Outcome, Reason};
+use crate::protocol::{ActionKind, ActionResult, Outcome, Reason};
 
 /// Newest first; an unknown client version gets the first entry.
 pub const PROTOCOL_VERSIONS: [&str; 4] = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
@@ -328,8 +328,8 @@ fn compact(result: &ActionResult) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::browser::agent::client::tests::fake_control;
-    use crate::browser::protocol::{LoadState, Observed};
+    use crate::agent::client::tests::fake_control;
+    use crate::protocol::{LoadState, Observed};
 
     #[derive(Clone, Default)]
     struct Sink(Arc<Mutex<Vec<u8>>>);

@@ -14,7 +14,7 @@ use base64::Engine;
 use serde_json::{json, Map, Value};
 
 use super::client::{self, Credentials, MissingCredentials};
-use crate::browser::protocol::{ActionKind, ActionResult, Outcome};
+use crate::protocol::{ActionKind, ActionResult, Outcome};
 
 const USAGE: &str = r#"MonoCode browser — use your own tabs in the browser MonoCode is connected to.
 
@@ -126,7 +126,7 @@ pub fn help() -> String {
 
 fn exe() -> String {
     std::env::current_exe()
-        .map(|path| crate::control_cli::quoted(&path.to_string_lossy()))
+        .map(|path| crate::util::quoted(&path.to_string_lossy()))
         .unwrap_or_else(|_| "monocode".into())
 }
 
@@ -461,7 +461,7 @@ pub fn instructions() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::browser::protocol::{Reason, ScreenshotParams, WaitParams};
+    use crate::protocol::{Reason, ScreenshotParams, WaitParams};
 
     fn args(values: &[&str]) -> Vec<String> {
         values.iter().map(|s| s.to_string()).collect()

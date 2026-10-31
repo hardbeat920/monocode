@@ -19,7 +19,7 @@
 //!   `frames`, `main_execution_context`, `pending_dialog`, `popups_blocked`),
 //!   `settings` (upload roots, dotfiles) and `check_upload_path`.
 //! - [`targets::navigate_and_wait`] and [`targets::wait_for_load`].
-//! - Scripts under `browser/injected/` are embedded with `include_str!` and
+//! - Scripts under `injected/` are embedded with `include_str!` and
 //!   called with `Runtime.callFunctionOn` in the `__monocode` isolated world
 //!   (`Page.createIsolatedWorld`); never `Runtime.evaluate`, and nothing the
 //!   agent sends is ever executed as script.
@@ -43,7 +43,7 @@
 //! - [`actions`]: `navigate`, `back`, `forward`, `select`, `upload`, `dialog`,
 //!   `wait`, `screenshot`, `read`.
 //! - [`devtools`]: `console` and `network`, read from the link's record of
-//!   the tab ([`crate::browser::diagnostics`]).
+//!   the tab ([`crate::diagnostics`]).
 //!
 //! Result payloads (`ActionResult::data`), for the CLI/MCP adapters:
 //!
@@ -278,7 +278,7 @@ pub fn forget_refs(link: &Link, tab: &TabId) {
     });
 }
 
-/// The user pointed at `backend` in `tab` ([`crate::browser::pick`]): the
+/// The user pointed at `backend` in `tab` ([`crate::pick`]): the
 /// tab's next snapshot marks it. Returns its ref when a snapshot of this
 /// document already gave it one.
 pub fn mark_picked(

@@ -61,7 +61,7 @@ static SCAN: LazyLock<Mutex<Scan>> = LazyLock::new(|| Mutex::new(None));
 
 /// Record a process MonoCode started in `dir`: a thread's agent (`session`)
 /// or a terminal (`None`).
-pub(crate) fn note_spawn(pid: u32, dir: &Path, session: Option<&str>) {
+pub fn note_spawn(pid: u32, dir: &Path, session: Option<&str>) {
     if pid == 0 {
         return;
     }
@@ -86,7 +86,7 @@ pub(crate) fn note_spawn(pid: u32, dir: &Path, session: Option<&str>) {
 }
 
 /// The checkout of the thread's agent, if MonoCode started one this run.
-pub(crate) fn session_checkout(session: &str) -> Option<String> {
+pub fn session_checkout(session: &str) -> Option<String> {
     ROOTS
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -97,13 +97,13 @@ pub(crate) fn session_checkout(session: &str) -> Option<String> {
 }
 
 /// Dev servers of the checkout that holds `dir`.
-pub(crate) fn for_dir(dir: &Path) -> Vec<DevServer> {
+pub fn for_dir(dir: &Path) -> Vec<DevServer> {
     of_checkout(&checkout_key(dir))
 }
 
 /// Dev servers of the checkout the thread's agent runs in; empty for a
 /// session MonoCode did not start, without scanning.
-pub(crate) fn for_session(session: &str) -> Vec<DevServer> {
+pub fn for_session(session: &str) -> Vec<DevServer> {
     session_checkout(session)
         .map(|checkout| of_checkout(&checkout))
         .unwrap_or_default()
@@ -118,7 +118,7 @@ fn of_checkout(checkout: &str) -> Vec<DevServer> {
 
 /// The lines a turn's `<monocode_browser>` block carries about the thread's
 /// app; `dir` is the thread's working directory.
-pub(crate) fn agent_note(dir: &Path, servers: &[DevServer]) -> String {
+pub fn agent_note(dir: &Path, servers: &[DevServer]) -> String {
     let here = dir.display();
     if servers.is_empty() {
         return format!(
@@ -356,7 +356,7 @@ fn classify(head: &[u8]) -> Option<bool> {
 /// The checkout that holds `dir`: the nearest directory with a `.git`
 /// entry (a worktree has a `.git` file), else `dir` itself. Canonical, and
 /// lowercase on Windows, so it compares as a key.
-pub(crate) fn checkout_key(dir: &Path) -> String {
+pub fn checkout_key(dir: &Path) -> String {
     let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
     let root = dir
         .ancestors()
@@ -367,25 +367,18 @@ pub(crate) fn checkout_key(dir: &Path) -> String {
 }
 
 fn key(path: &Path) -> String {
-    let text = crate::fs::path_to_js(path);
+    let text = path.to_string_lossy();
+    let text = if cfg!(windows) {
+        text.replace('\\', "/")
+    } else {
+        text.into_owned()
+    };
     let text = text.strip_prefix("//?/").unwrap_or(&text).to_string();
     if cfg!(windows) {
         text.to_lowercase()
     } else {
         text
     }
-}
-
-/// Dev servers of the checkout holding `cwd` (a thread's working directory),
-/// for the thread's browser menu.
-#[tauri::command]
-pub async fn dev_servers(cwd: String) -> Result<Vec<DevServer>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let dir = crate::fs::expand_home(&cwd);
-        for_dir(&dir)
-    })
-    .await
-    .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

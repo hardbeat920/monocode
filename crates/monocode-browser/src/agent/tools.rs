@@ -9,7 +9,7 @@
 
 use serde_json::{json, Map, Value};
 
-use crate::browser::protocol::ActionKind;
+use crate::protocol::ActionKind;
 
 /// Shared agent instructions; see the file header for its layout.
 pub const INSTRUCTIONS: &str = include_str!("../../../../docs/browser-instructions.md");
@@ -656,7 +656,7 @@ fn take_str(args: &mut Map<String, Value>, key: &str) -> Result<Option<String>, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::browser::protocol::*;
+    use crate::protocol::*;
     use serde::de::DeserializeOwned;
     use std::collections::BTreeSet;
 

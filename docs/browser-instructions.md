@@ -7,7 +7,7 @@ tool's name; the text injected into providers without MCP is the CLI
 section followed by the overview. Keep the sections short: models read every
 word on every turn. Section names (`## name`) are looked up by code; do not
 rename them. Which providers get the MCP server, the CLI or neither is
-decided in `src-tauri/src/browser/agent/register.rs`.
+decided in `crates/monocode-browser/src/agent/register.rs`.
 
 ## overview
 

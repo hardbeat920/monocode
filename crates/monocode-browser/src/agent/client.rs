@@ -13,11 +13,11 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::browser::protocol::{
+use crate::protocol::{
     ActionKind, ActionResult, CommonInput, Outcome, Reason, ENV_ENDPOINT, ENV_TOKEN, NAMESPACE,
 };
-use crate::browser::HOST_WAIT;
-use crate::control::MAX_REQUEST_LINE;
+use crate::transport::MAX_REQUEST_LINE;
+use crate::HOST_WAIT;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -223,10 +223,10 @@ fn decode(request_id: &str, raw: &str) -> ActionResult {
         }) => {
             let detail = error.unwrap_or_else(|| "request refused".into());
             match detail.as_str() {
-                crate::control::UNAUTHORIZED => ActionResult::from_reason(request_id, Reason::Revoked).with_message(format!(
+                crate::transport::UNAUTHORIZED => ActionResult::from_reason(request_id, Reason::Revoked).with_message(format!(
                     "MonoCode refused this session's browser credential ({detail}). Nothing was sent to the browser. The app may have restarted since this session started; ask the user to restart the session from MonoCode."
                 )),
-                crate::control::BUSY => {
+                crate::transport::BUSY => {
                     ActionResult::from_reason(request_id, Reason::Busy).with_message(detail)
                 }
                 _ => not_sent(
@@ -462,16 +462,15 @@ pub(crate) mod tests {
         // answers before the client gives up.
         assert!(
             reply_timeout("click", &json!({}))
-                > crate::browser::ASK_WAIT
-                    + crate::browser::MANAGED_START_WAIT
-                    + Duration::from_secs(10)
+                > crate::ASK_WAIT + crate::MANAGED_START_WAIT + Duration::from_secs(10)
         );
     }
 
     #[test]
     fn only_unknown_tokens_count_as_revoked() {
-        let (creds, _) =
-            fake_control(|_| Some(json!({"ok": false, "error": crate::control::BUSY}).to_string()));
+        let (creds, _) = fake_control(|_| {
+            Some(json!({"ok": false, "error": crate::transport::BUSY}).to_string())
+        });
         let busy = call(&creds, "click", &json!({}), "req_8");
         assert_eq!(busy.outcome, Outcome::Blocked);
         assert_eq!(busy.reason, Some(Reason::Busy));

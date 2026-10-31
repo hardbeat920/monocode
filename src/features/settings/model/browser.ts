@@ -4,7 +4,7 @@ import { useSyncExternalStore } from "react";
 
 /**
  * Frontend side of the browser module. Every shape here mirrors
- * `src-tauri/src/browser/protocol.rs` (serde field names, snake_case), and
+ * `crates/monocode-browser/src/protocol.rs` (serde field names, snake_case), and
  * all state comes from one event carrying the whole `BrowserState`, so the
  * UI keeps no rules of its own about grants, leases or the connection.
  */

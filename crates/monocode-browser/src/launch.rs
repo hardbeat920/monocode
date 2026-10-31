@@ -289,7 +289,9 @@ fn extra_arguments(value: Option<&str>) -> Vec<String> {
 }
 
 /// Start the browser. A leftover `DevToolsActivePort` from an earlier run
-/// goes first, so [`wait_for_endpoint`] only sees the new one.
+/// goes first, so [`wait_for_endpoint`] only sees the new one. The host
+/// hands the process to [`crate::Embedder::browser_started`] (on Windows the
+/// app puts it in its job, so it ends with the app even after a crash).
 pub fn start(
     exe: &Executable,
     profile: &Path,
@@ -305,13 +307,6 @@ pub fn start(
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     let child = command.spawn()?;
-    // Windows: the browser ends with the app even after a crash. Best
-    // effort; without the job, OFF and app exit still stop it.
-    #[cfg(windows)]
-    {
-        use std::os::windows::io::AsRawHandle;
-        let _ = crate::windows::assign_child(child.as_raw_handle());
-    }
     let _ = std::fs::write(profile.join(PID_FILE), child.id().to_string());
     Ok(child)
 }

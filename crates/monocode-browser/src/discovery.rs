@@ -424,7 +424,7 @@ pub fn policy_blocks_debugging(kind: BrowserKind) -> Option<String> {
                     "/v",
                     "RemoteDebuggingAllowed",
                 ]);
-                crate::hide_window_console(&mut command);
+                crate::util::hide_window_console(&mut command);
                 let output = command.output().ok()?;
                 let text = String::from_utf8_lossy(&output.stdout);
                 if output.status.success() && text.contains("0x0") {

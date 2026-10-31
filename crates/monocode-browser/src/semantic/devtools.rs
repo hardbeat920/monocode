@@ -1,13 +1,13 @@
 //! `console` and `network`: the developer signals of the agent's own tab,
-//! read from the record the link keeps ([`crate::browser::diagnostics`]).
+//! read from the record the link keeps ([`crate::diagnostics`]).
 
 use serde_json::{json, Value};
 
 use super::{Fail, Run};
-use crate::browser::diagnostics::{self, ConsoleEntry, RequestEntry, Source, BODY_MAX};
-use crate::browser::link::Method;
-use crate::browser::protocol::{ActionResult, ConsoleLevel, ConsoleParams, NetworkParams};
-use crate::browser::targets::Sender;
+use crate::diagnostics::{self, ConsoleEntry, RequestEntry, Source, BODY_MAX};
+use crate::link::Method;
+use crate::protocol::{ActionResult, ConsoleLevel, ConsoleParams, NetworkParams};
+use crate::targets::Sender;
 
 const DEFAULT_LIMIT: u32 = 50;
 const MAX_LIMIT: u32 = 200;
