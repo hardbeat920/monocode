@@ -50,7 +50,7 @@ const ACK_WAIT: Duration = Duration::from_millis(150);
 /// How often a held-back acknowledgement looks at what the panel has taken.
 const ACK_POLL: Duration = Duration::from_millis(4);
 /// Bytes in front of the picture in [`LiveFrame::packed`].
-pub const PACKED_HEADER: usize = 40;
+pub const PACKED_HEADER: usize = 24;
 /// JPEG quality of the pictures, 0 to 100.
 const QUALITY: u32 = 90;
 /// How often a development build prints where the pictures' time goes.
@@ -97,17 +97,12 @@ pub struct LiveFrame {
     pub height: f64,
     /// Counts the pictures of one view, from 1.
     pub seq: u64,
-    /// How far the page was scrolled, in CSS pixels: the panel moves the
-    /// picture ahead of the next one while the user scrolls.
-    pub scroll_x: f64,
-    pub scroll_y: f64,
 }
 
 impl LiveFrame {
     /// The picture as the panel takes it: a fixed header (format byte, 3
-    /// zero bytes, `seq` as u32, `width`, `height`, `scroll_x` and
-    /// `scroll_y` as f64, all little endian) and then the picture's own
-    /// bytes. Binary, so it reaches the
+    /// zero bytes, `seq` as u32, `width` and `height` as f64, all little
+    /// endian) and then the picture's own bytes. Binary, so it reaches the
     /// panel without being turned into text and back.
     pub fn packed(&self) -> Option<Vec<u8>> {
         use base64::Engine as _;
@@ -120,8 +115,6 @@ impl LiveFrame {
         bytes.extend_from_slice(&(self.seq as u32).to_le_bytes());
         bytes.extend_from_slice(&self.width.to_le_bytes());
         bytes.extend_from_slice(&self.height.to_le_bytes());
-        bytes.extend_from_slice(&self.scroll_x.to_le_bytes());
-        bytes.extend_from_slice(&self.scroll_y.to_le_bytes());
         bytes.extend_from_slice(&picture);
         Some(bytes)
     }
@@ -811,8 +804,6 @@ pub fn run(
                                 width: picture.width,
                                 height: picture.height,
                                 seq,
-                                scroll_x: picture.scroll_x,
-                                scroll_y: picture.scroll_y,
                             },
                         );
                     }
@@ -911,8 +902,6 @@ pub fn run(
                         width,
                         height,
                         seq,
-                        scroll_x: picture.scroll_x,
-                        scroll_y: picture.scroll_y,
                     },
                 );
                 meter.handed(seq, handing);
@@ -1080,14 +1069,12 @@ fn ack(link: &Link, tab: &LiveTab, event: &super::link::CdpEvent) {
     }
 }
 
-/// Where a picture shows the page: its viewport and scroll position, in CSS
-/// pixels, from a screencast picture's metadata.
+/// The page's viewport in a picture, in CSS pixels, from a screencast
+/// picture's metadata.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct Picture {
     width: f64,
     height: f64,
-    scroll_x: f64,
-    scroll_y: f64,
 }
 
 impl Picture {
@@ -1096,13 +1083,11 @@ impl Picture {
         Picture {
             width: number("deviceWidth"),
             height: number("deviceHeight"),
-            scroll_x: number("scrollOffsetX"),
-            scroll_y: number("scrollOffsetY"),
         }
     }
 
     /// The picture in CSS pixels. Edge on Windows at a display scale other
-    /// than 100 % sends some pictures' viewport and scroll in device pixels
+    /// than 100 % sends some pictures' viewport in device pixels
     /// (a 1254 px page as 1379): taken as CSS pixels, the panel would draw
     /// them zoomed in and treat them as a page of another size.
     fn in_css(self, shown: Shown, scale: f64) -> Picture {
@@ -1116,8 +1101,6 @@ impl Picture {
         let css = Picture {
             width: self.width / scale,
             height: self.height / scale,
-            scroll_x: self.scroll_x / scale,
-            scroll_y: self.scroll_y / scale,
         };
         if at(&css) {
             css
@@ -1386,8 +1369,6 @@ mod tests {
             width: 800.5,
             height: 600.0,
             seq: 7,
-            scroll_x: 3.0,
-            scroll_y: 1200.5,
         };
         let bytes = frame.packed().unwrap();
         assert_eq!(bytes[0], 1);
@@ -1395,11 +1376,6 @@ mod tests {
         assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 7);
         assert_eq!(f64::from_le_bytes(bytes[8..16].try_into().unwrap()), 800.5);
         assert_eq!(f64::from_le_bytes(bytes[16..24].try_into().unwrap()), 600.0);
-        assert_eq!(f64::from_le_bytes(bytes[24..32].try_into().unwrap()), 3.0);
-        assert_eq!(
-            f64::from_le_bytes(bytes[32..40].try_into().unwrap()),
-            1200.5
-        );
         assert_eq!(&bytes[PACKED_HEADER..], &[0xFF, 0xD8, 0xFF, 0x00]);
         let broken = LiveFrame {
             data: "not base64!".into(),
@@ -1528,7 +1504,7 @@ mod tests {
             "deviceWidth": 803.2, "deviceHeight": 559.2,
             "scrollOffsetX": 0, "scrollOffsetY": 4210.5, "pageScaleFactor": 1
         }));
-        assert_eq!((picture.width, picture.scroll_y), (803.2, 4210.5));
+        assert_eq!((picture.width, picture.height), (803.2, 559.2));
     }
 
     #[test]
@@ -1538,23 +1514,17 @@ mod tests {
             height: 1125.0,
             window: true,
         };
-        let of = |width: f64, height: f64, scroll: f64| Picture {
-            width,
-            height,
-            scroll_x: 0.0,
-            scroll_y: scroll,
-        };
+        let of = |width: f64, height: f64| Picture { width, height };
         // Edge at 110 %: the same page, once in CSS and once in device pixels.
-        let css = of(1254.0, 1125.0, 800.0);
+        let css = of(1254.0, 1125.0);
         assert_eq!(css.in_css(page, 1.1), css);
-        let device = of(1379.4, 1237.5, 880.0).in_css(page, 1.1);
+        let device = of(1379.4, 1237.5).in_css(page, 1.1);
         assert!((device.width - 1254.0).abs() < 0.01, "{device:?}");
         assert!((device.height - 1125.0).abs() < 0.01, "{device:?}");
-        assert!((device.scroll_y - 800.0).abs() < 0.01, "{device:?}");
         // A page of another size stays what it is, and so does all at 100 %.
-        let other = of(1600.0, 900.0, 0.0);
+        let other = of(1600.0, 900.0);
         assert_eq!(other.in_css(page, 1.1), other);
-        assert_eq!(of(1379.4, 1237.5, 0.0).in_css(page, 1.0).width, 1379.4);
+        assert_eq!(of(1379.4, 1237.5).in_css(page, 1.0).width, 1379.4);
     }
 
     #[test]

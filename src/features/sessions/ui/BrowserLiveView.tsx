@@ -36,14 +36,7 @@ import {
   markBrowserTabShown,
   subscribeBrowserPick,
 } from "../model/browserPane";
-import {
-  type Drawn,
-  LivePainter,
-  type PaintFrame,
-  SETTLE_MS,
-  ScrollPredictor,
-  type ScrollTarget,
-} from "./livePainter";
+import { type Drawn, LivePainter, type PaintFrame } from "./livePainter";
 import type { PainterMessage } from "./livePainter.worker";
 
 /** CDP modifier bits: Alt 1, Ctrl 2, Meta 4, Shift 8. */
@@ -182,17 +175,6 @@ export function wheelPixels(delta: number, mode: number, page: number): number {
   return delta;
 }
 
-/** A wheel step this long or longer glides, the way a browser animates it. */
-export const GLIDE_FROM = 40;
-
-/**
- * The part of a gliding scroll to send this frame: about a third of what is
- * left, so it eases out, and all of it once only a pixel or two is left.
- */
-export function glideStep(remaining: number): number {
-  return Math.abs(remaining) <= 2 ? remaining : remaining * 0.35;
-}
-
 /**
  * Where to put the picture so its pixels land on the screen's: a pane that
  * starts between two device pixels would have every picture resampled,
@@ -226,7 +208,6 @@ const BUTTONS = ["left", "middle", "right"] as const;
 /** The live view's painter, wherever it runs. */
 type Painter = {
   frame(frame: PaintFrame): void;
-  scrollTo(target: ScrollTarget | null): void;
   close(): void;
 };
 
@@ -257,7 +238,6 @@ function livePainter(
       return {
         frame: (frame) =>
           post({ kind: "frame", ...frame }, [frame.picture.buffer]),
-        scrollTo: (target) => post({ kind: "scroll", target }),
         close: () => post({ kind: "close" }),
       };
     } catch {
@@ -355,9 +335,6 @@ export function BrowserLiveView({
   const stage = useRef<HTMLDivElement>(null);
   /** Holds the canvas the pictures are drawn on, at the page's CSS size. */
   const surface = useRef<HTMLDivElement>(null);
-  /** Moves the picture ahead of a wheel sent to the page. */
-  const ahead = useRef<((dx: number, dy: number) => void) | null>(null);
-  const forget = useRef<(() => void) | null>(null);
   const capture = useRef<HTMLTextAreaElement>(null);
   /** The picture on screen: its page size, for input coordinates. */
   const frame = useRef<Pick<BrowserLiveFrame, "width" | "height"> | null>(null);
@@ -388,14 +365,11 @@ export function BrowserLiveView({
     let started = false;
     let ended = false;
     let resizeTimer = 0;
-    let settleTimer = 0;
     let sized = "";
     // A canvas of this view's own: one handed to a worker stays the worker's.
     const canvas = document.createElement("canvas");
     canvas.className = "block size-full";
     host.replaceChildren(canvas);
-    const predictor = new ScrollPredictor();
-    let learnt = false;
     const meter = window.setInterval(() => {
       setFps(count);
       count = 0;
@@ -434,35 +408,12 @@ export function BrowserLiveView({
         host.style.transform = `translate(${pixelSnap(rect.left, scale)}px, ${pixelSnap(rect.top, scale)}px)`;
       }
       frame.current = { width: shown.width, height: shown.height };
-      if (!learnt) {
-        learnt = true;
-        predictor.learn(shown);
-      }
-      painter.scrollTo(predictor.seen(shown, performance.now()));
       setShown(true);
       setPhase((current) =>
         current.kind === "live" ? current : { kind: "live" },
       );
     };
     const painter = livePainter(canvas, drawn);
-    // The user's wheel moves the picture at once; the browser's pictures
-    // catch up with it.
-    ahead.current = (dx, dy) => {
-      painter.scrollTo(predictor.wheel(dx, dy, performance.now()));
-      window.clearTimeout(settleTimer);
-      // Looked at again until the picture is back with the page.
-      const settle = () => {
-        if (!live) return;
-        const target = predictor.settle(performance.now());
-        painter.scrollTo(target);
-        if (target) settleTimer = window.setTimeout(settle, 50);
-      };
-      settleTimer = window.setTimeout(settle, SETTLE_MS + 10);
-    };
-    forget.current = () => {
-      predictor.reset();
-      painter.scrollTo(null);
-    };
     // Ask for the next picture as soon as the last one is in hand, so a
     // request always waits at the browser module while this one is decoded
     // and drawn. An empty answer (nothing new for a second) is asked again;
@@ -514,22 +465,13 @@ export function BrowserLiveView({
     }
     return () => {
       live = false;
-      ahead.current = null;
-      forget.current = null;
       observer.disconnect();
       window.clearTimeout(resizeTimer);
-      window.clearTimeout(settleTimer);
       window.clearInterval(meter);
       painter.close();
       void stopBrowserLive(view).catch(() => {});
     };
   }, [sessionId, tabId, visible, open, attempt]);
-
-  // Another page knows nothing of how the last one scrolled.
-  const url = tab?.url;
-  useEffect(() => {
-    forget.current?.();
-  }, [url]);
 
   useEffect(() => {
     if (focused && phase.kind === "live") capture.current?.focus();
@@ -545,8 +487,6 @@ export function BrowserLiveView({
   const send = useCallback(
     (input: BrowserLiveInput) => {
       setError(null);
-      if (input.kind === "wheel" && !input.modifiers)
-        ahead.current?.(input.deltaX, input.deltaY);
       queueLiveInput(inputs.current, input);
       if (sending.current) return;
       sending.current = true;
@@ -601,22 +541,6 @@ export function BrowserLiveView({
       modifiers: liveModifiers(event),
     });
   };
-  // A wheel notch scrolls the page in one jump when sent as is; spread over
-  // a few frames it glides like a browser's own scrolling. Small steps (a
-  // trackpad) go straight through.
-  const glide = useRef<{
-    x: number;
-    y: number;
-    dx: number;
-    dy: number;
-    frame: number;
-  } | null>(null);
-  useEffect(
-    () => () => {
-      if (glide.current) cancelAnimationFrame(glide.current.frame);
-    },
-    [],
-  );
   const wheel = (event: WheelEvent) => {
     const at = point(event);
     if (!at) return;
@@ -630,37 +554,15 @@ export function BrowserLiveView({
       event.deltaMode,
       frame.current?.height ?? 0,
     );
-    const modifiers = liveModifiers(event);
-    const small = Math.abs(dx) < GLIDE_FROM && Math.abs(dy) < GLIDE_FROM;
-    if (modifiers || (small && !glide.current)) {
-      send({ kind: "wheel", ...at, deltaX: dx, deltaY: dy, modifiers });
-      return;
-    }
-    if (glide.current) {
-      Object.assign(glide.current, at);
-      glide.current.dx += dx;
-      glide.current.dy += dy;
-      return;
-    }
-    const step = () => {
-      const current = glide.current;
-      if (!current) return;
-      const deltaX = glideStep(current.dx);
-      const deltaY = glideStep(current.dy);
-      current.dx -= deltaX;
-      current.dy -= deltaY;
-      send({
-        kind: "wheel",
-        x: current.x,
-        y: current.y,
-        deltaX,
-        deltaY,
-        modifiers: 0,
-      });
-      if (current.dx === 0 && current.dy === 0) glide.current = null;
-      else current.frame = requestAnimationFrame(step);
-    };
-    glide.current = { ...at, dx, dy, frame: requestAnimationFrame(step) };
+    // As is: spreading a notch over frames, or moving the picture ahead
+    // of the page, only put the pane further behind the browser.
+    send({
+      kind: "wheel",
+      ...at,
+      deltaX: dx,
+      deltaY: dy,
+      modifiers: liveModifiers(event),
+    });
   };
   const key = (phase: "down" | "up", event: KeyboardEvent) => {
     if (picking && event.key === "Escape") {

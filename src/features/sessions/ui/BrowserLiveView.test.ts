@@ -8,7 +8,6 @@ import {
   liveKeyInput,
   liveModifiers,
   livePoint,
-  glideStep,
   pixelSnap,
   queueLiveInput,
   wheelPixels,
@@ -142,21 +141,6 @@ describe("live view input", () => {
     expect(queue[2]).toEqual(move(2));
   });
 
-  it("glides a wheel notch out over a few frames and ends exactly", () => {
-    let left = 100;
-    const steps: number[] = [];
-    while (left !== 0 && steps.length < 50) {
-      const step = glideStep(left);
-      steps.push(step);
-      left -= step;
-    }
-    expect(steps.length).toBeGreaterThan(3);
-    expect(steps.length).toBeLessThan(15);
-    expect(steps[0]).toBeGreaterThan(steps[1]);
-    expect(steps.reduce((a, b) => a + b, 0)).toBeCloseTo(100);
-    expect(glideStep(-1.5)).toBe(-1.5);
-  });
-
   it("counts wheel lines and pages in pixels", () => {
     expect(wheelPixels(120, 0, 900)).toBe(120);
     expect(wheelPixels(3, 1, 900)).toBe(120);
@@ -174,27 +158,23 @@ describe("live view input", () => {
 describe("live view pictures", () => {
   it("reads a picture the way the browser module packs it", () => {
     const picture = [0xff, 0xd8, 0xff, 0x00];
-    const buffer = new ArrayBuffer(40 + picture.length);
+    const buffer = new ArrayBuffer(24 + picture.length);
     const view = new DataView(buffer);
     view.setUint8(0, 1);
     view.setUint32(4, 42, true);
     view.setFloat64(8, 800.5, true);
     view.setFloat64(16, 600, true);
-    view.setFloat64(24, 0, true);
-    view.setFloat64(32, 1250.5, true);
-    new Uint8Array(buffer, 40).set(picture);
+    new Uint8Array(buffer, 24).set(picture);
     const frame = parseBrowserLiveFrame(buffer)!;
     expect(frame).toMatchObject({
       format: "png",
       seq: 42,
       width: 800.5,
       height: 600,
-      scrollX: 0,
-      scrollY: 1250.5,
     });
     expect([...frame.picture]).toEqual(picture);
     view.setUint8(0, 0);
     expect(parseBrowserLiveFrame(buffer)!.format).toBe("jpeg");
-    expect(parseBrowserLiveFrame(new ArrayBuffer(40))).toBeNull();
+    expect(parseBrowserLiveFrame(new ArrayBuffer(24))).toBeNull();
   });
 });
