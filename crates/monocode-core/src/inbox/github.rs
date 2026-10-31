@@ -32,6 +32,7 @@ pub struct GitHubWorkItem {
     pub updated_at: String,
     pub labels: Vec<GitHubLabel>,
     pub assignees: Vec<GitHubAssignee>,
+    pub author: GitHubAssignee,
     pub draft: bool,
     pub repo: String,
 }
@@ -181,9 +182,9 @@ pub(super) fn git_github_work_items_for(
     };
     let limit = limit.clamp(1, 100).to_string();
     let fields = if kind == "pr" {
-        "number,title,url,state,createdAt,updatedAt,labels,assignees,isDraft"
+        "number,title,url,state,createdAt,updatedAt,labels,assignees,author,isDraft"
     } else {
-        "number,title,url,state,stateReason,createdAt,updatedAt,labels,assignees"
+        "number,title,url,state,stateReason,createdAt,updatedAt,labels,assignees,author"
     };
     let mut args = vec![
         kind.to_string(),
@@ -228,9 +229,9 @@ pub(super) fn git_github_work_item_for(
     let repo = format!("{owner}/{name}");
     let number = number.to_string();
     let fields = if kind == "pr" {
-        "number,title,url,state,createdAt,updatedAt,labels,assignees,isDraft"
+        "number,title,url,state,createdAt,updatedAt,labels,assignees,author,isDraft"
     } else {
-        "number,title,url,state,stateReason,createdAt,updatedAt,labels,assignees"
+        "number,title,url,state,stateReason,createdAt,updatedAt,labels,assignees,author"
     };
     let json = gh_checked(
         root,
@@ -1282,6 +1283,8 @@ fn parse_github_work_items(
         #[serde(default)]
         assignees: Vec<RowAssignee>,
         #[serde(default)]
+        author: Option<RowAssignee>,
+        #[serde(default)]
         is_draft: bool,
     }
     let rows: Vec<Row> = serde_json::from_str(json).map_err(|error| error.to_string())?;
@@ -1312,6 +1315,16 @@ fn parse_github_work_items(
                     login: assignee.login,
                 })
                 .collect(),
+            author: row
+                .author
+                .map(|author| GitHubAssignee {
+                    avatar_url: github_avatar_url(&author.login),
+                    login: author.login,
+                })
+                .unwrap_or_else(|| GitHubAssignee {
+                    login: String::new(),
+                    avatar_url: String::new(),
+                }),
             draft: row.is_draft,
             repo: repo.to_string(),
         })
