@@ -486,6 +486,10 @@ fn show(link: &Link, tab: &LiveTab, size: PanelSize) -> Result<Shown, String> {
 /// pixel.
 fn start_pictures(link: &Link, tab: &LiveTab, shown: Shown, scale: f64) -> Result<(), String> {
     let (width, height) = picture_for(shown.width, shown.height, scale);
+    // A tab has one screencast. One a view before this left running (it
+    // ended while starting) would refuse this one ("Screencast is already
+    // active"); this view shows the tab now, so it starts over.
+    let _ = send(link, &tab.main, Method::PageStopScreencast, json!({}));
     send(
         link,
         &tab.main,
