@@ -88,6 +88,8 @@ mod traffic_lights;
 mod transcript;
 mod usage_footer;
 mod visuals;
+#[cfg(all(test, target_os = "linux"))]
+mod wgpu_tests;
 mod window_state;
 mod workspace;
 mod worktree_switcher;

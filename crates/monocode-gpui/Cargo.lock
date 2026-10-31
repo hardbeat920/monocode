@@ -2646,8 +2646,6 @@ dependencies = [
 [[package]]
 name = "gpui-pre-wgpu"
 version = "0.3.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b1cdb26c1503bf9662ee8fbc5ab0b44b2deeee4b5c12dc67491ba6fb5fc544b"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -2656,6 +2654,7 @@ dependencies = [
  "gpui-pre",
  "gpui-pre-collections",
  "gpui-pre-util",
+ "image",
  "itertools",
  "log",
  "parking_lot",
@@ -3791,6 +3790,7 @@ dependencies = [
  "gpui-pre",
  "gpui-pre-apple",
  "gpui-pre-platform",
+ "gpui-pre-wgpu",
  "image",
  "libc",
  "mermaid-rs-renderer",
