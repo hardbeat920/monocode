@@ -365,9 +365,7 @@ impl Shell {
             model: self
                 .workspace
                 .preferences
-                .default_models
-                .get(kind.id())
-                .cloned(),
+                .model_for_new_chat(kind.id(), &cwd),
             effort: crate::conversation::preferred_effort(kind.id(), cx),
             access: self
                 .workspace
@@ -438,11 +436,7 @@ impl Shell {
             model: self
                 .workspace
                 .preferences
-                .project_providers
-                .get(&cwd)
-                .and_then(|preferences| preferences.models.get(kind.id()))
-                .or(self.workspace.preferences.default_models.get(kind.id()))
-                .cloned(),
+                .model_for_new_chat(kind.id(), &cwd),
             effort: crate::conversation::preferred_effort(kind.id(), cx),
             access: self
                 .workspace

@@ -4402,11 +4402,7 @@ impl Shell {
         let model = self
             .workspace
             .preferences
-            .project_providers
-            .get(&cwd)
-            .and_then(|p| p.models.get(kind.id()))
-            .or(self.workspace.preferences.default_models.get(kind.id()))
-            .cloned();
+            .model_for_new_chat(kind.id(), &cwd);
         let navigation_revision = self.navigation_revision;
         let account = crate::accounts::get(cx)
             .map(|center| center.read(cx).selected(kind, &cwd))

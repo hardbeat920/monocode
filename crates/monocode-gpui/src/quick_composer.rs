@@ -359,12 +359,7 @@ impl QuickComposer {
             .or(p.default_provider.as_deref())
             .map(Kind::from_id)
             .unwrap_or(self.kind);
-        let model = p
-            .project_providers
-            .get(&self.cwd)
-            .and_then(|v| v.models.get(kind.id()))
-            .or(p.default_models.get(kind.id()))
-            .cloned();
+        let model = p.model_for_new_chat(kind.id(), &self.cwd);
         self.set_model(kind, model, cx);
         self.load_git(cx);
         self.update_placeholder(cx);
