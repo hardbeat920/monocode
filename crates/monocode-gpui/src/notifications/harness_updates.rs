@@ -23,6 +23,7 @@ pub(crate) struct HarnessUpdates {
     rows: HashMap<Kind, RowState>,
     checking: bool,
     generation: u64,
+    hidden: bool,
 }
 impl EventEmitter<HarnessUpdatesEvent> for HarnessUpdates {}
 impl HarnessUpdates {
@@ -32,6 +33,7 @@ impl HarnessUpdates {
             rows: HashMap::new(),
             checking: false,
             generation: 0,
+            hidden: false,
         };
         if check_on_launch && harness_updates::claim_launch_check() {
             this.check_now(hidden, cx);
@@ -39,7 +41,7 @@ impl HarnessUpdates {
         this
     }
     pub(crate) fn is_visible(&self) -> bool {
-        !self.updates.is_empty()
+        !self.hidden && !self.updates.is_empty()
     }
     fn busy(&self) -> bool {
         self.rows.values().any(|s| matches!(s, RowState::Updating))
@@ -49,6 +51,7 @@ impl HarnessUpdates {
         if self.checking || self.busy() {
             return;
         }
+        self.hidden = false;
         self.checking = true;
         self.generation += 1;
         let generation = self.generation;
@@ -69,6 +72,11 @@ impl HarnessUpdates {
             });
         })
         .detach();
+    }
+    pub(crate) fn hide(&mut self, cx: &mut Context<Self>) {
+        self.hidden = true;
+        cx.emit(HarnessUpdatesEvent::Changed);
+        cx.notify();
     }
     pub(crate) fn dismiss(&mut self, cx: &mut Context<Self>) {
         if self.busy() {
@@ -308,6 +316,48 @@ impl Render for HarnessUpdates {
 mod tests {
     use super::*;
     use gpui::TestAppContext;
+
+    #[gpui::test]
+    fn hiding_a_busy_notice_preserves_the_update(cx: &mut TestAppContext) {
+        let notice = cx.new(|cx| HarnessUpdates::new(Vec::new(), false, cx));
+        notice.update(cx, |notice, cx| {
+            notice.updates.push(Update {
+                harness: Kind::Claude,
+                installed: "2.1.310".into(),
+                latest: "2.1.311".into(),
+            });
+            notice.rows.insert(Kind::Claude, RowState::Updating);
+            notice.dismiss(cx);
+            assert!(
+                notice.is_visible(),
+                "the close button stays disabled while busy"
+            );
+
+            notice.hide(cx);
+            assert!(
+                !notice.is_visible(),
+                "the preference hides even a busy notice"
+            );
+            assert!(
+                notice.busy(),
+                "hiding must retain the in-progress update state"
+            );
+            assert_eq!(notice.updates.len(), 1, "hiding must retain update details");
+
+            notice
+                .rows
+                .insert(Kind::Claude, RowState::Updated("2.1.311".into()));
+            assert!(
+                !notice.is_visible(),
+                "completion must not reveal the notice"
+            );
+            notice.check_now(
+                Kind::ALL.into_iter().map(|kind| kind.id().into()).collect(),
+                cx,
+            );
+            assert!(!notice.hidden, "a manual check can show notices again");
+        });
+    }
 
     #[gpui::test]
     fn disabled_launch_check_and_dismissed_results_stay_hidden(cx: &mut TestAppContext) {

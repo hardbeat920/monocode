@@ -173,7 +173,7 @@ impl Shell {
                     {
                         this.notification_state
                             .harness
-                            .update(cx, |notice, cx| notice.dismiss(cx));
+                            .update(cx, |notice, cx| notice.hide(cx));
                     }
                     #[cfg(target_os = "linux")]
                     if this.workspace.preferences.wayland_window_decorations
