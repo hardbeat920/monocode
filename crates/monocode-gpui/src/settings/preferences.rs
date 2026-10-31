@@ -1,5 +1,6 @@
 //! App-wide preferences the Settings pages edit. Defaults are the React
 //! app's (`settings.ts`, `appearance.ts`, `displayPrefs.ts`, `sounds.ts`).
+use monocode_core::provider::Kind;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -58,7 +59,8 @@ pub(crate) struct Preferences {
     pub autosave: bool,
     pub diff_view: String,
     pub composer_mascot: bool,
-    pub empty_session_games: bool,
+    /// What fills an empty session: "ink", "games" or "none".
+    pub empty_session: String,
     // Providers
     pub show_remaining_usage: bool,
     pub mask_emails: bool,
@@ -80,6 +82,9 @@ pub(crate) struct Preferences {
     pub default_access: Option<String>,
     /// Last explicit effort choice for each provider, shared across projects.
     pub provider_efforts: HashMap<String, String>,
+    /// The model for session titles, branch names, commit messages and pull
+    /// requests; `None` lets each use its own harness's quick model.
+    pub background_model: Option<ModelChoice>,
     // Monos
     pub monos: bool,
     pub rail_monos_pinned: bool,
@@ -141,7 +146,7 @@ impl Default for Preferences {
             autosave: false,
             diff_view: "editor".into(),
             composer_mascot: true,
-            empty_session_games: true,
+            empty_session: "ink".into(),
             show_remaining_usage: false,
             mask_emails: true,
             idle_agents: 3,
@@ -159,6 +164,7 @@ impl Default for Preferences {
             model_picker_tab: None,
             default_access: None,
             provider_efforts: HashMap::new(),
+            background_model: None,
             monos: true,
             rail_monos_pinned: false,
             mono_menu_bar_icon: true,
@@ -238,6 +244,11 @@ pub(crate) struct ModelChoice {
 
 impl gpui::Global for Preferences {}
 impl Preferences {
+    /// The background model picked in Settings, if any.
+    pub(crate) fn background_text_model(&self) -> Option<(Kind, Option<String>)> {
+        let choice = self.background_model.as_ref()?;
+        Some((Kind::parse(&choice.provider)?, choice.model.clone()))
+    }
     pub(crate) fn hidden_for(&self, project: &str) -> Vec<String> {
         let mut hidden = self.hidden_providers.clone();
         if let Some(settings) = self.project_providers.get(project) {

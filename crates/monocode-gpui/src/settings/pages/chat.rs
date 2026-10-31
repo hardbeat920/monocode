@@ -137,17 +137,17 @@ impl SettingsView {
                 )],
             ),
             self.row(
-                Some("empty-session-games"),
+                Some("empty-session"),
                 false,
-                "Empty session games",
-                Some("Show playable games in empty sessions.".into()),
-                vec![self.toggle(
-                    "empty-session-games",
-                    "Empty session games",
-                    p.empty_session_games,
-                    false,
+                "Empty session",
+                Some("Stir dithered ink, play a game, or leave it blank.".into()),
+                vec![self.segmented(
+                    "empty-session",
+                    "Empty session",
+                    &p.empty_session,
+                    &[("ink", "Ink"), ("games", "Games"), ("none", "Off")],
                     cx,
-                    |this, on, cx| this.update(cx, |p| p.empty_session_games = on),
+                    |this, v, cx| this.update(cx, |p| p.empty_session = v.into()),
                 )],
             ),
         ];

@@ -6,7 +6,7 @@ private final class TranscriptDisplayTarget: NSObject {
   @objc func tick(_ link: CADisplayLink) { view?.advanceFollow(link) }
 }
 
-final class NativeTranscriptView: ExpoView, UIScrollViewDelegate {
+final class NativeTranscriptView: ExpoView, UIScrollViewDelegate, UIGestureRecognizerDelegate {
   /// How far above the top inset the anchored message rests, as Transcript.tsx.
   private static let anchorLift: CGFloat = 36
   let onStatus = EventDispatcher()
@@ -52,6 +52,23 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate {
   private var displayLink: CADisplayLink?
   private let displayTarget = TranscriptDisplayTarget()
   private var lastTick: CFTimeInterval = 0
+  /// The follow's speed, kept as its target moves (a message sent, a line
+  /// streamed in) so the transcript glides on rather than lurching again.
+  private var followVelocity: CGFloat = 0
+  /// How far a leftward drag has slid a Mono chat aside to show its times, as
+  /// Messages does: the whole transcript moves, the times come in with it and
+  /// then hold at the edge.
+  private var reveal: CGFloat = 0
+  private static let revealWidth: CGFloat = 64
+  private let slide = UIPanGestureRecognizer()
+  private var times: [String: UILabel] = [:]
+  /// The row last long-pressed, its kind and ID, until its text comes back.
+  private var held: (kind: String, id: String)?
+  #if DEBUG
+    /// When the last message was sent, for the dev-only scroll trace.
+    private var traceSent: CFTimeInterval = 0
+    private var traceInset: CGFloat = 0
+  #endif
   // Newest complete worker frame wins if the main thread is occupied.
   private let relayLock = NSLock()
   private var relayFrame: TranscriptLayoutFrame?
@@ -70,6 +87,9 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate {
     let tap = UITapGestureRecognizer(target: self, action: #selector(tappedOutside(_:)))
     tap.cancelsTouchesInView = false
     scroll.addGestureRecognizer(tap)
+    slide.addTarget(self, action: #selector(slid(_:)))
+    slide.delegate = self
+    scroll.addGestureRecognizer(slide)
     addSubview(scroll)
     spinner.hidesWhenStopped = true
     addSubview(spinner)
@@ -111,6 +131,83 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate {
     window?.endEditing(true)
   }
 
+  override func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
+    guard recognizer === slide else { return super.gestureRecognizerShouldBegin(recognizer) }
+    let velocity = slide.velocity(in: scroll)
+    guard !style.agent.isEmpty, velocity.x < 0, abs(velocity.x) > abs(velocity.y) * 1.5 else {
+      return false
+    }
+    // A code block or table that scrolls sideways keeps its own swipe.
+    var hit = scroll.hitTest(slide.location(in: scroll), with: nil)
+    while let view = hit, view !== scroll {
+      if let inner = view as? UIScrollView, inner.isScrollEnabled { return false }
+      hit = view.superview
+    }
+    return true
+  }
+  func gestureRecognizer(
+    _ recognizer: UIGestureRecognizer,
+    shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+  ) -> Bool {
+    recognizer === slide && other === scroll.panGestureRecognizer
+  }
+  @objc private func slid(_ pan: UIPanGestureRecognizer) {
+    switch pan.state {
+    case .began:
+      // Sideways now: the transcript stops scrolling under the finger.
+      scroll.panGestureRecognizer.isEnabled = false
+      scroll.panGestureRecognizer.isEnabled = true
+    case .changed:
+      let drag = max(0, -pan.translation(in: scroll).x)
+      let limit = Self.revealWidth
+      // Past the times it gives like a rubber band, and only so far.
+      let over = drag - limit
+      reveal = over <= 0 ? drag : limit + 24 * (1 - 1 / (over / 60 + 1))
+      layoutReveal()
+    default:
+      reveal = 0
+      UIView.animate(
+        withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.9, initialSpringVelocity: 0,
+        options: [.allowUserInteraction, .beginFromCurrentState]
+      ) { self.layoutReveal() } completion: { _ in
+        guard self.reveal == 0 else { return }
+        for label in self.times.values { label.removeFromSuperview() }
+        self.times.removeAll()
+      }
+    }
+  }
+  /// Slides every row by `reveal` and lays each visible time at the edge: it
+  /// comes in with the rows, then holds once fully out.
+  private func layoutReveal() {
+    for (id, row) in visible {
+      guard let model = row.model else { continue }
+      row.frame.origin.x = -reveal
+      guard let time = model.time, row.superview === scroll else { continue }
+      let label =
+        times[id]
+        ?? {
+          let label = UILabel()
+          label.font = .systemFont(ofSize: 12 * style.scale)
+          label.textColor = .transcriptHex(style.muted)
+          label.text = time.text
+          label.sizeToFit()
+          label.frame.origin = CGPoint(x: bounds.width + 8, y: row.frame.minY + time.y - label.bounds.height / 2)
+          label.alpha = 0
+          scroll.addSubview(label)
+          times[id] = label
+          return label
+        }()
+      label.frame.origin = CGPoint(
+        x: bounds.width - min(reveal, Self.revealWidth) + 8,
+        y: row.frame.minY + time.y - label.bounds.height / 2)
+      label.alpha = min(1, reveal / Self.revealWidth)
+    }
+    for (id, label) in times where visible[id] == nil {
+      label.removeFromSuperview()
+      times[id] = nil
+    }
+  }
+
   func setConfiguration(_ value: String) { configuration = value }
   func setPending(_ value: String) { pending = value }
   func setActive(_ value: Bool) {
@@ -139,18 +236,22 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate {
     style.fileLinks = input["fileLinks"] as? Bool ?? false
     style.stroke = input["stroke"] as? String ?? style.stroke
     style.surfaceRaised = input["surfaceRaised"] as? String ?? style.surfaceRaised
+    style.reactions = input["reactions"] as? [String: String] ?? [:]
     if let rects = input["agentRects"],
       let data = try? JSONSerialization.data(withJSONObject: rects)
     {
       style.agentRects = (try? JSONDecoder().decode([TranscriptPixel].self, from: data)) ?? []
     }
-    for key in ["content", "muted", "accent", "bubble", "surface", "error", "rail", "agent"] {
+    for key in [
+      "content", "muted", "accent", "bubble", "bubbleText", "surface", "error", "rail", "agent",
+    ] {
       guard let value = input[key] as? String else { continue }
       switch key {
       case "content": style.content = value
       case "muted": style.muted = value
       case "accent": style.accent = value
       case "bubble": style.bubble = value
+      case "bubbleText": style.bubbleText = value
       case "surface": style.surface = value
       case "error": style.error = value
       case "rail": style.rail = value
@@ -262,7 +363,10 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate {
       frameData = frame
       updateGeometry()
       displayRows()
-      if frame.status["error"] is String { spinner.stopAnimating() }
+      // Loaded with nothing in it, or failed: there's nothing left to wait on.
+      if frame.status["error"] is String || frame.status["ready"] as? Bool == true {
+        spinner.stopAnimating()
+      }
       return
     }
     spinner.stopAnimating()
@@ -272,7 +376,15 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate {
     let delta =
       old.map { scroll.contentOffset.y - top - $0.offsets[min(oldIndex, $0.rows.count)] } ?? 0
     let newPrompt = frame.lastUserID != old?.lastUserID && frame.lastUserID != nil
+    #if DEBUG
+      if newPrompt && frame.lastUserID?.hasPrefix("pending:") == true { traceSent = CACurrentMediaTime() }
+      if changed || newPrompt {
+        trace("frame\(newPrompt ? " prompt" : "") following=\(following) \(traceRows(old, frame))")
+      }
+    #endif
     let firstLive = frame.status["ready"] as? Bool == true && old?.status["ready"] as? Bool != true
+    // Older turns came in above: what's on screen keeps its place exactly.
+    let olderArrived = old != nil && frame.firstTurnID != old?.firstTurnID
     frameData = frame
     if changed { horizontalOffsets = horizontalOffsets.filter { frame.groupWidths[$0.key] != nil } }
     if loadingOlder,
@@ -312,9 +424,8 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate {
       scroll.alpha = 0
       UIView.animate(withDuration: 0.25) { self.scroll.alpha = 1 }
     } else if newPrompt {
-      stopFollowingAnimation()
       startFollowingAnimation()
-    } else if changed && !following, let anchorID,
+    } else if changed && (!following || olderArrived), let anchorID,
       let index = frame.rows.firstIndex(where: { $0.id == anchorID })
     {
       // Bounds preserves UIKit's deceleration while content above moves.
@@ -328,9 +439,77 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate {
       foldRows(from: old)
     } else {
       displayRows(animate: wasInitialized && changed && !loadingOlder)
+      if wasInitialized && changed && !olderArrived, let old {
+        for id in entering(from: old, to: frame) { visible[id].map(enter) }
+      }
     }
     publishViewport()
     updateAway()
+    // A chat that doesn't fill the screen yet reads further back on its own,
+    // so opening one never waits on a scroll to show the rest.
+    if initialized && frame.older && !loadingOlder && frame.height < bounds.height * 1.5 {
+      loadingOlder = true
+      session?.command(["type": "older"])
+    }
+  }
+
+  /// A Mono chat's rows that are new in `frame`: not ones taking over what
+  /// left with the same look, as a sent message over its local echo or the
+  /// desktop's status line over the phone's.
+  private func entering(from old: TranscriptLayoutFrame, to frame: TranscriptLayoutFrame) -> [String] {
+    guard !style.agent.isEmpty else { return [] }
+    let look = { (row: TranscriptRowModel) in
+      row.kind == "fold" ? "fold" : row.kind + "\u{0}" + row.text.string
+    }
+    let now = Set(frame.rows.map(\.id))
+    let before = Set(old.rows.map(\.id))
+    var gone: [String: Int] = [:]
+    for row in old.rows where !now.contains(row.id) { gone[look(row), default: 0] += 1 }
+    var entering: [String] = []
+    for row in frame.rows where !before.contains(row.id) && row.height > 0 {
+      if let left = gone[look(row)], left > 0 {
+        gone[look(row)] = left - 1
+      } else {
+        entering.append(row.id)
+      }
+    }
+    return entering
+  }
+  /// A new message comes in as Messages' do: it rises a little and grows from
+  /// its bubble's tail corner on a spring as it fades in. Only on the layer,
+  /// so rows keep being laid out by frame meanwhile.
+  private func enter(_ row: TranscriptRowView) {
+    guard let model = row.model, !UIAccessibility.isReduceMotionEnabled else { return }
+    let bubble = model.kind == "user" ? model.cardRect : model.surfaces.first?.rect
+    let corner =
+      bubble.map { model.kind == "user" ? CGPoint(x: $0.maxX, y: $0.maxY) : CGPoint(x: $0.minX, y: $0.maxY) }
+      ?? CGPoint(x: 20, y: row.bounds.maxY)
+    let dx = corner.x - row.bounds.midX
+    let dy = corner.y - row.bounds.midY
+    // A reply over several rows is one bubble in pieces: they rise together
+    // without growing, so no seam opens between them.
+    let p = model.presentation
+    let piece = p["reply"] as? Bool == true
+      && !(p["replyFirst"] as? Bool == true && p["replyLast"] as? Bool == true)
+    let scale: CGFloat = piece ? 1 : 0.9
+    var from = CATransform3DMakeTranslation(0, 14, 0)
+    from = CATransform3DTranslate(from, dx, dy, 0)
+    from = CATransform3DScale(from, scale, scale, 1)
+    from = CATransform3DTranslate(from, -dx, -dy, 0)
+    let grow = CASpringAnimation(keyPath: "transform")
+    grow.fromValue = from
+    grow.toValue = CATransform3DIdentity
+    grow.mass = 1
+    grow.stiffness = 300
+    grow.damping = 28
+    grow.duration = grow.settlingDuration
+    let fade = CABasicAnimation(keyPath: "opacity")
+    fade.fromValue = 0
+    fade.toValue = 1
+    fade.duration = 0.18
+    fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+    row.layer.add(grow, forKey: "enter")
+    row.layer.add(fade, forKey: "enterFade")
   }
 
   /// Rows under a fold slide while what it holds is clipped open or shut, and
@@ -424,15 +603,58 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate {
     displayRows()
   }
 
+  /// Dev-only: what a Mono's chat does around a send, logged to Metro as
+  /// `[transcript]`, so its scroll can be measured rather than guessed.
+  private func trace(_ message: @autoclosure () -> String) {
+    #if DEBUG
+      guard !style.agent.isEmpty else { return }
+      let ms = traceSent == 0 ? 0 : Int((CACurrentMediaTime() - traceSent) * 1000)
+      let y = Int(scroll.contentOffset.y)
+      let end = Int(scroll.contentSize.height - scroll.bounds.height)
+      onScrollState(["log": "+\(ms)ms y=\(y) end=\(end) \(message())"])
+    #endif
+  }
+  #if DEBUG
+    private func traceRows(_ old: TranscriptLayoutFrame?, _ frame: TranscriptLayoutFrame) -> String {
+      guard !style.agent.isEmpty else { return "" }
+      var before: [String: CGFloat] = [:]
+      for row in old?.rows ?? [] { before[row.id] = row.height }
+      var changes: [String] = []
+      for row in frame.rows {
+        let name = "\(row.kind)#\(row.id.suffix(6))"
+        if let height = before.removeValue(forKey: row.id) {
+          if abs(height - row.height) > 0.1 { changes.append("~\(name) \(Int(height))→\(Int(row.height))") }
+        } else {
+          changes.append("+\(name) \(Int(row.height))")
+        }
+      }
+      for (id, height) in before { changes.append("-#\(id.suffix(6)) \(Int(height))") }
+      return "h \(Int(old?.height ?? 0))→\(Int(frame.height)) " + changes.prefix(8).joined(separator: ", ")
+    }
+  #endif
+
   private func updateGeometry() {
     guard let frame = frameData else { return }
     let bottomInset = bottom + extra + max(0, keyboard - keyboardOffset)
+    #if DEBUG
+      if abs(bottomInset - traceInset) > 0.5 {
+        trace("inset \(Int(traceInset))→\(Int(bottomInset)) bottom=\(Int(bottom)) extra=\(Int(extra)) keyboard=\(Int(keyboard))")
+        traceInset = bottomInset
+      }
+    #endif
     var height = top + frame.height + bottomInset
     if let anchor = anchorOffset(frame) {
       // Keyboard and composer growth absorb into this space rather than moving rows.
       height = max(height, anchor + scroll.bounds.height)
     }
-    scroll.contentSize = CGSize(width: bounds.width, height: max(scroll.bounds.height, height))
+    // A Mono's chat rests a short conversation on the composer, as a messaging
+    // app's, and grows it upward: the room above is an inset, so the follow
+    // slides the rows up as messages come or the keyboard opens.
+    let lead =
+      style.agent.isEmpty ? 0 : max(0, scroll.bounds.height - top - frame.height - bottomInset)
+    if abs(scroll.contentInset.top - lead) > 0.5 { scroll.contentInset.top = lead }
+    scroll.contentSize = CGSize(
+      width: bounds.width, height: lead > 0 ? height : max(scroll.bounds.height, height))
     scroll.verticalScrollIndicatorInsets = UIEdgeInsets(
       top: top, left: 0, bottom: bottomInset, right: 0)
     if initialized && following && !scroll.isDragging && !scroll.isDecelerating {
@@ -448,7 +670,7 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate {
     return frame.offsets[index] + Self.anchorLift
   }
   private func targetOffset() -> CGFloat {
-    let end = max(0, scroll.contentSize.height - scroll.bounds.height)
+    let end = max(-scroll.contentInset.top, scroll.contentSize.height - scroll.bounds.height)
     if pinned, let frame = frameData, let anchor = anchorOffset(frame) { return min(anchor, end) }
     return end
   }
@@ -469,6 +691,7 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate {
     link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
     link.add(to: .main, forMode: .common)
     displayLink = link
+    trace("follow start → \(Int(targetOffset()))")
     lastTick = 0
   }
   fileprivate func advanceFollow(_ link: CADisplayLink) {
@@ -479,18 +702,27 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate {
     let target = targetOffset()
     let dt = min(0.05, lastTick == 0 ? link.duration : link.timestamp - lastTick)
     lastTick = link.timestamp
-    let distance = target - scroll.contentOffset.y
-    if abs(distance) < 0.5 {
+    // A critically damped spring, stepped exactly: it eases in from rest,
+    // settles without overshoot, and keeps its speed when the target moves.
+    let omega: CGFloat = 18
+    let x = scroll.contentOffset.y - target
+    let v = followVelocity
+    let decay = exp(-omega * dt)
+    let next = (x + (v + omega * x) * dt) * decay
+    followVelocity = (v - omega * (v + omega * x) * dt) * decay
+    if abs(next) < 0.5 && abs(followVelocity) < 20 {
       scroll.contentOffset.y = target
+      trace("follow done")
       stopFollowingAnimation()
       return
     }
-    scroll.contentOffset.y += distance * (1 - exp(-20 * dt))
+    scroll.contentOffset.y = target + next
   }
   private func stopFollowingAnimation() {
     displayLink?.invalidate()
     displayLink = nil
     lastTick = 0
+    followVelocity = 0
   }
 
   /// Returns, rather than reuses, rows that left the screen when `holding`.
@@ -505,6 +737,10 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate {
     }
     let from = frame.index(at: max(0, scroll.contentOffset.y - top - 120))
     let to = frame.index(at: scroll.contentOffset.y + bounds.height - top + 120)
+    // Only the answer under the latest message writes itself in; anything
+    // above it was shown already and comes back as it was.
+    let answer =
+      frame.lastUserID.flatMap { id in frame.rows.lastIndex { $0.id == id } }.map { $0 + 1 } ?? 0
     var keep = Set<String>()
     for index in from...max(from, to) {
       let model = frame.rows[index]
@@ -517,10 +753,11 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate {
       }
       let y = top + frame.offsets[index]
       row.frame = CGRect(
-        x: 0, y: row.superview === fold ? y - (fold?.frame.minY ?? 0) : y, width: bounds.width,
+        x: -reveal,
+        y: row.superview === fold ? y - (fold?.frame.minY ?? 0) : y, width: bounds.width,
         height: model.height)
       row.configure(
-        model, layout: prepared, animate: animate,
+        model, layout: prepared, animate: animate && index >= answer,
         horizontalWidth: model.group.flatMap { frame.groupWidths[$0] } ?? 0,
         horizontalOffset: model.group.flatMap { horizontalOffsets[$0] } ?? 0)
       row.cadence = cadence
@@ -542,10 +779,20 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate {
           self?.onAction(action)
         }
       }
-      row.onSelection = { [weak self] id in self?.session?.command(["type": "selection", "id": id])
+      row.onSelection = { [weak self] id in
+        guard let self else { return }
+        // A reply over several rows answers to its first, where a reaction sits.
+        let rows = self.frameData?.rows ?? []
+        var at = rows.firstIndex { $0.id == id }
+        while let index = at, index > 0, rows[index].presentation["reply"] as? Bool == true,
+          rows[index].presentation["replyFirst"] as? Bool != true
+        { at = index - 1 }
+        self.held = at.map { (rows[$0].kind, rows[$0].id) }
+        self.session?.command(["type": "selection", "id": id])
       }
     }
     var held: [String: TranscriptRowView] = [:]
+    defer { if !times.isEmpty { layoutReveal() } }
     for id in Array(visible.keys) where !keep.contains(id) {
       guard let row = visible.removeValue(forKey: id) else { continue }
       if holding {
@@ -584,22 +831,27 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate {
     displayRows()
     publishViewport()
     updateAway()
-    // Only a Mono's chat follows its reply down, as Transcript.tsx.
-    if initialized && scroll.isDragging && !style.agent.isEmpty
-      && scroll.contentSize.height - bounds.height - scroll.contentOffset.y < 70
-    {
-      following = true
-    }
     if initialized && scroll.contentOffset.y < top + 120, frameData?.older == true, !loadingOlder {
       loadingOlder = true
       session?.command(["type": "older"])
     }
   }
-  func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+  /// Only a Mono's chat follows its reply down, as Transcript.tsx, and only
+  /// once the reader comes to rest at the end. A drag that merely starts
+  /// there is reading up, so older turns landing above keep its place.
+  private func settled() {
+    if !style.agent.isEmpty
+      && scroll.contentSize.height - bounds.height - scroll.contentOffset.y < 70
+    {
+      following = true
+    }
     if following { startFollowingAnimation() }
   }
+  func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+    settled()
+  }
   func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
-    if following && !decelerate { startFollowingAnimation() }
+    if !decelerate { settled() }
   }
 
   private func keyboardChanged(_ notification: Notification) {
@@ -610,6 +862,7 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate {
     let atEnd = scroll.contentSize.height - scroll.bounds.height - scroll.contentOffset.y < 70
     keyboard = rect.maxY >= bounds.maxY ? max(0, bounds.maxY - rect.minY) : 0
     let duration = info[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0.25
+    trace("keyboard \(Int(keyboard)) atEnd=\(atEnd) following=\(following)")
     let curve = info[UIResponder.keyboardAnimationCurveUserInfoKey] as? UInt ?? 7
     UIView.animate(
       withDuration: duration, delay: 0,
@@ -620,7 +873,24 @@ final class NativeTranscriptView: ExpoView, UIScrollViewDelegate {
       if self.following || atEnd { self.scroll.contentOffset.y = self.targetOffset() }
     }
   }
+  /// A long-pressed message's text: a Mono's chat offers what to do with it
+  /// in a sheet, as Messages does; elsewhere it opens to be selected.
   private func select(_ text: String) {
+    guard !text.isEmpty, active else { return }
+    let kind = held
+    held = nil
+    if !style.agent.isEmpty {
+      UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+      onAction([
+        "type": "message", "text": text, "role": kind?.kind == "user" ? "user" : "agent",
+        "id": kind?.id ?? "",
+      ])
+      return
+    }
+    selectText(text)
+  }
+  /// The text in a sheet to select from.
+  func selectText(_ text: String) {
     guard !text.isEmpty, active else { return }
     var responder: UIResponder? = self
     while let current = responder, !(current is UIViewController) { responder = current.next }

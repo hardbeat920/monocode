@@ -39,9 +39,12 @@ const HEADER_ITEMS = 210;
 export function SessionTitle({
   title,
   subtitle,
+  onClose,
 }: {
   title: string;
   subtitle: string;
+  /** Presented as a sheet: a close button before the title, in place of back. */
+  onClose?: () => void;
 }) {
   const styles = useStyles();
   const { width } = useWindowDimensions();
@@ -58,6 +61,13 @@ export function SessionTitle({
     );
   return (
     <Stack.Toolbar placement="left">
+      {onClose ? (
+        <Stack.Toolbar.Button
+          icon="xmark"
+          accessibilityLabel="Close"
+          onPress={onClose}
+        />
+      ) : null}
       <Stack.Toolbar.View hidesSharedBackground>
         <View
           style={[styles.title, { width: Math.max(width - HEADER_ITEMS, 80) }]}

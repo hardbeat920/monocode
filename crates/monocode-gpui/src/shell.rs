@@ -11840,18 +11840,26 @@ mod tests {
         })
         .unwrap();
         let mut frames = Vec::new();
+        let mut settling_passes = 0;
         for opening in [true, false] {
             window
-                .update(cx, |shell, w, cx| shell.toggle_right_panel(w, cx))
+                .update(cx, |shell, w, cx| {
+                    shell.toggle_right_panel(w, cx);
+                    if let Some(slide) = &shell.right_slide {
+                        slide.freeze_elapsed(Duration::ZERO);
+                    }
+                })
                 .unwrap();
             for frame in 1..=40 {
                 let root = window.root(cx).unwrap();
-                let before = root.read_with(cx, |shell, _| shell.render_passes);
+                let (before, sliding) = root.read_with(cx, |shell, _| {
+                    (shell.render_passes, shell.right_slide.is_some())
+                });
                 let start = Instant::now();
                 window
                     .update(cx, |shell, _, cx| {
                         if let Some(slide) = &shell.right_slide {
-                            slide.elapsed(Duration::from_secs_f32(frame as f32 / 120.));
+                            slide.freeze_elapsed(Duration::from_secs_f32(frame as f32 / 120.));
                         }
                         cx.notify();
                     })
@@ -11863,11 +11871,18 @@ mod tests {
                     })
                     .unwrap();
                 }
-                assert_eq!(
-                    root.read_with(cx, |shell, _| shell.render_passes),
-                    before + 1,
-                    "measure one rendered frame per sample"
+                let (after, settled) = root.read_with(cx, |shell, _| {
+                    (shell.render_passes, shell.right_slide.is_none())
+                });
+                let passes = after - before;
+                // Finishing the slide installs the settled panel layout and
+                // can notify the shell once more. Include that work in this
+                // sample; every other frame must still render exactly once.
+                assert!(
+                    passes == 1 || (passes == 2 && sliding && settled),
+                    "expected one render, or two at settling; got {passes}"
                 );
+                settling_passes += passes - 1;
                 frames.push(start.elapsed().as_secs_f64() * 1000.);
                 let rendered = transcript.read_with(cx, |view, _| view.rendered);
                 assert!(
@@ -11883,7 +11898,7 @@ mod tests {
         }
         frames.sort_by(f64::total_cmp);
         eprintln!(
-            "CoreText, 10,000 messages, {} simulated 120Hz frames: CPU p50={:.2}ms p95={:.2}ms max={:.2}ms (excludes presentation/GPU)",
+            "CoreText, 10,000 messages, {} simulated 120Hz frames: CPU p50={:.2}ms p95={:.2}ms max={:.2}ms ({settling_passes} extra settling passes included; excludes presentation/GPU)",
             frames.len(),
             frames[frames.len() / 2],
             frames[frames.len() * 95 / 100],

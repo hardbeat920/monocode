@@ -1,13 +1,13 @@
 //! Descriptive names for worktrees created on a session's first send.
 use super::{git, valid_branch, worktrees, Snapshot};
+use crate::session_title::TextModel;
 use crate::{
-    accounts::Profile,
     agent::Settings,
     provider::{self, Kind, Request},
     scm::text::{limit_section, parse_json_object, string_field},
 };
 use std::{
-    path::Path,
+    path::{Path, PathBuf},
     sync::{atomic::AtomicBool, Arc},
 };
 
@@ -72,52 +72,42 @@ pub fn parse(raw: &str) -> Option<String> {
     (!fragment.is_empty()).then(|| format!("mc/{fragment}"))
 }
 
-/// Uses an isolated text request, preserving the selected provider account.
+/// Uses an isolated text request on the given provider account.
 pub fn generate(
-    kind: Kind,
+    text: TextModel,
     cwd: &Path,
     message: &str,
-    account: Profile,
     cancel: Arc<AtomicBool>,
 ) -> Option<String> {
-    let preferred = kind;
-    let (kind, binary) = [
-        kind,
-        Kind::Claude,
-        Kind::Cursor,
-        Kind::Codex,
-        Kind::Grok,
-        Kind::OpenCode,
-    ]
-    .into_iter()
-    .filter(|kind| crate::session_title::supports(*kind))
-    .find_map(|kind| provider::resolve(kind).map(|binary| (kind, binary)))?;
-    let account = if kind == preferred {
-        account
-    } else {
-        Profile::default()
-    };
-    let output = provider::run_text(
-        Request {
-            kind,
-            binary,
-            cwd: cwd.into(),
-            prompt: prompt(message),
-            provider_id: None,
-            model: match kind {
-                Kind::Codex => Some("gpt-5.6-luna".into()),
-                Kind::Claude => Some("claude-haiku-4-5".into()),
-                _ => None,
-            },
-            settings: Settings {
-                account,
-                ..Default::default()
-            },
-        },
-        cancel,
-    )
-    .ok()?;
+    let request = request(text, cwd, message, provider::resolve)?;
+    let output = provider::run_text(request, cancel).ok()?;
     parse(&output)
+}
+
+fn request(
+    text: TextModel,
+    cwd: &Path,
+    message: &str,
+    resolve: impl FnOnce(Kind) -> Option<PathBuf>,
+) -> Option<Request> {
+    // Branch naming must never disclose a message to a provider or account
+    // other than the one given. Unsupported/unavailable providers keep the
+    // temporary name.
+    if !crate::session_title::supports(text.kind) {
+        return None;
+    }
+    Some(Request {
+        kind: text.kind,
+        binary: resolve(text.kind)?,
+        cwd: cwd.into(),
+        prompt: prompt(message),
+        provider_id: None,
+        model: text.model,
+        settings: Settings {
+            account: text.account,
+            ..Default::default()
+        },
+    })
 }
 
 /// A late name may replace only the original temporary branch, never a manual
@@ -142,6 +132,45 @@ pub fn rename(cwd: &Path, path: &Path, expected: &str, branch: &str) -> Result<S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::accounts::Profile;
+
+    #[test]
+    fn naming_only_resolves_the_selected_provider_and_keeps_its_account() {
+        let cwd = Path::new("/project");
+        let account = Profile::new("work", Path::new("/accounts"));
+        assert!(request(
+            TextModel::automatic(Kind::Hermes, account.clone()),
+            cwd,
+            "private message",
+            |_| { panic!("an unsupported provider must not resolve a fallback") }
+        )
+        .is_none());
+        assert!(request(
+            TextModel::automatic(Kind::Codex, account.clone()),
+            cwd,
+            "private message",
+            |kind| {
+                assert_eq!(kind, Kind::Codex);
+                None
+            }
+        )
+        .is_none());
+        let request = request(
+            TextModel::automatic(Kind::Codex, account.clone()),
+            cwd,
+            "private message",
+            |kind| {
+                assert_eq!(kind, Kind::Codex);
+                Some("selected-provider".into())
+            },
+        )
+        .unwrap();
+        assert_eq!(request.kind, Kind::Codex);
+        assert_eq!(request.settings.account, account);
+        assert_eq!(request.model.as_deref(), Some("gpt-5.6-luna"));
+        assert_eq!(request.binary, Path::new("selected-provider"));
+        assert!(request.prompt.contains("private message"));
+    }
 
     #[test]
     fn generated_names_are_bounded_and_prefixed_once() {

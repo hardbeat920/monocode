@@ -3,8 +3,11 @@
 //! app answers [`host::Event`]s from its own state.
 pub mod catalog;
 pub mod host;
+pub mod notify;
 mod router;
 pub mod watch;
 
-pub use host::{Device, Event, Invite, MobileHost, Push, Request, Status, WatchStart};
+pub use host::{
+    Device, Event, Invite, MobileHost, Push, PushRegistration, Request, Status, WatchStart,
+};
 pub use monocode_mobile_link::Address;
