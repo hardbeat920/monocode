@@ -37,6 +37,7 @@ vi.mock("expo-sqlite/kv-store", () => ({
   },
 }));
 vi.mock("@/features/connection/ConnectionProvider", () => ({
+  useMonoTools: () => false,
   useConnection: () => ({
     pairing: link.pairing,
     catalog: { projects: [{ id: "project" }], monos: [{ id: "one", name: "Mono", mascot: "cat", color: "blue" }], sessions: [] },
@@ -69,7 +70,17 @@ function deferred<T>() {
 // The Mono route is currently hidden by a rollout flag. Enable its catalog
 // selection here without replacing the provider, approval card, or actions.
 vi.mock("@/features/connection/selection", () => ({ selectedWorkspace: (catalog: unknown) => catalog }));
-vi.mock("expo-router", () => ({ useLocalSearchParams: () => ({ monoId: "one" }), Redirect: () => null }));
+vi.mock("expo-router", () => ({ useLocalSearchParams: () => ({ monoId: "one" }), useIsFocused: () => true, Redirect: () => null }));
+vi.mock("expo-haptics", () => ({}));
+vi.mock("@/features/models/useMonoModel", () => ({ useMonoModel: () => ({}) }));
+vi.mock("@/features/workspace/monoAccent", () => ({ useMonoAccent: () => "theme" }));
+vi.mock("@/ui/ScenePager", () => ({ useDrawerSwipe: () => {}, useDrawerActions: () => ({ open: vi.fn() }) }));
+vi.mock("@/ui/Timed", () => ({ Timed: ({ children }: { children: ReactNode }) => children }));
+vi.mock("@/features/sessions/MonoCards", () => ({
+  MonoChoose: ({ children }: { children: ReactNode }) => children,
+  MonoMessageActions: ({ children }: { children: ReactNode }) => children,
+}));
+vi.mock("@/features/sessions/MonoMenu", () => ({ MonoMenu: () => null }));
 vi.mock("@/features/connection/ConnectionNotice", () => ({ ConnectionNotice: () => null }));
 vi.mock("@/features/mascots/PixelMascot", () => ({ PixelMascot: () => null }));
 vi.mock("@/features/sessions/Composer", () => ({ Composer: () => null }));
@@ -79,7 +90,13 @@ vi.mock("@/features/sessions/SessionScreen", () => ({ SessionScreen: ({ children
 vi.mock("@/features/sessions/Transcript", () => ({ Transcript: () => null }));
 vi.mock("@/features/sessions/NativeTranscript", () => ({ NativeTranscript: () => null }));
 vi.mock("@/ui/LiquidView", () => ({ LiquidView: () => null }));
-vi.mock("@/ui/theme", () => ({ radii: { card: 22 }, themedStyles: () => () => new Proxy({}, { get: () => ({}) }) }));
+vi.mock("@/ui/theme", () => ({
+  radii: { card: 22 },
+  themedStyles: () => () => new Proxy({}, { get: () => ({}) }),
+  AccentOverride: ({ children }: { children: ReactNode }) => children,
+  ACCENTS: {},
+  useScheme: () => "dark",
+}));
 
 describe("Mono approvals through the real workspace provider and card", () => {
   it.each([false, true])("sends the routed command and keeps a replacement after a delayed reply (native: %s)", async (native) => {

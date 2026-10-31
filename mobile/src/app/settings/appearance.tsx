@@ -32,20 +32,25 @@ import { projectForRoute } from "@/features/workspace/routing";
 import { useWorkspace } from "@/features/workspace/WorkspaceProvider";
 import { Icon } from "@/ui/Icon";
 import {
+  ACCENTS,
   paletteFor,
   radii,
+  setAccent,
   setTheme,
   themedStyles,
   THEMES,
+  useAccent,
   useColors,
+  useScheme,
   useTheme,
+  type AccentName,
   type ThemeName,
 } from "@/ui/theme";
 
 // Appearance: the open project's empty-session background first, shown as it
 // will look, then light, dark or the phone's own as a native segmented
 // control, the theme both are drawn in as a list, and how the transcript
-// shows tool calls.
+// shows tool calls. An accent can be picked over any theme's own.
 export default function AppearanceScreen() {
   const styles = useStyles();
   const { projectId } = useLocalSearchParams<{ projectId?: string }>();
@@ -65,6 +70,7 @@ export default function AppearanceScreen() {
       </Text>
       <SchemeControl />
       <ThemeList />
+      <AccentPicker />
       <TranscriptSection />
     </SettingsPage>
   );
@@ -145,6 +151,71 @@ function ThemeList() {
   );
 }
 
+const ACCENT_NAMES: AccentName[] = ["theme", ...(Object.keys(ACCENTS) as AccentName[])];
+
+/** The accent over whatever theme is picked: the theme's own first, then a
+ *  row of colours, each in the scheme in use. */
+function AccentPicker() {
+  const styles = useStyles();
+  const scheme = useScheme();
+  const theme = useTheme();
+  const accent = useAccent();
+  // As the theme list: the tap answers before the app redraws.
+  const [tapped, setTapped] = useState<AccentName | null>(null);
+  const shown = tapped ?? accent;
+  const pick = (name: AccentName) => {
+    if (name === shown) return;
+    void Haptics.selectionAsync();
+    setTapped(name);
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        setAccent(name);
+        setTapped(null);
+      }),
+    );
+  };
+  return (
+    <>
+      <Text style={styles.heading}>Accent color</Text>
+      <View style={[styles.card, styles.accents]}>
+        {ACCENT_NAMES.map((name) => {
+          const fill =
+            name === "theme"
+              ? paletteFor(scheme, theme, "theme").accent
+              : ACCENTS[name][scheme];
+          const label = name === "theme" ? `${THEMES[theme].label} (theme)` : ACCENTS[name].label;
+          const selected = name === shown;
+          return (
+            <Pressable
+              key={name}
+              accessibilityRole="radio"
+              accessibilityLabel={label}
+              accessibilityState={{ checked: selected }}
+              hitSlop={4}
+              onPress={() => pick(name)}
+              style={[styles.accentRing, selected && { borderColor: fill }]}
+            >
+              <View style={[styles.accentDot, { backgroundColor: fill }]}>
+                {name === "theme" ? (
+                  <View style={styles.accentThemeMark} />
+                ) : selected ? (
+                  <Icon name="check" size={14} color="#ffffff" />
+                ) : null}
+              </View>
+            </Pressable>
+          );
+        })}
+      </View>
+      <Text style={styles.note}>
+        {shown === "theme"
+          ? `Using ${THEMES[theme].label}'s own accent.`
+          : `${ACCENTS[shown].label} over every theme.`}{" "}
+        Buttons, links and your messages in a Mono chat take it.
+      </Text>
+    </>
+  );
+}
+
 /** Tool calls folded to their phase's label until tapped, on by default. */
 function TranscriptSection() {
   const colors = useColors();
@@ -179,8 +250,9 @@ function TranscriptSection() {
  *  across a circle, its accent at the centre. */
 function Swatch({ name }: { name: ThemeName }) {
   const styles = useStyles();
-  const light = paletteFor("light", name);
-  const dark = paletteFor("dark", name);
+  // The theme as it comes, before any accent picked over it.
+  const light = paletteFor("light", name, "theme");
+  const dark = paletteFor("dark", name, "theme");
   return (
     <View style={styles.swatch}>
       <View style={[styles.swatchHalf, { backgroundColor: light.surface }]} />
@@ -346,6 +418,39 @@ const useStyles = themedStyles((colors) => ({
     width: 10,
     height: 10,
     borderRadius: 5,
+  },
+  accents: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    rowGap: 10,
+  },
+  // A ring that takes the accent's colour once it is the one picked.
+  accentRing: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    borderWidth: 2,
+    borderColor: "transparent",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  accentDot: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  // The theme's own: a small hollow centre, so it reads as "default".
+  accentThemeMark: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    borderWidth: 2,
+    borderColor: "#ffffff",
   },
   visibility: {
     paddingVertical: 4,

@@ -164,6 +164,79 @@ froze its elapsed time. The fixture now creates and freezes the split in one
 update, retaining its mid-slide and settled-layout assertions. Keyboard split
 behavior remains covered by the separate split-and-drag interaction test.
 
+## Preview 11 candidate — October 30, 2026
+
+The release-review fixes based on `dbec0c5f` passed locally on macOS Apple
+Silicon with Rust 1.97.1. Branch naming now uses only the selected provider
+and account. The ink canvas leases its animation clock after painting has
+initialized its state, and releases it when quiet. Legacy empty-session
+choices survive both isolated workspace restoration and desktop preference
+reconciliation. Changes to the desktop toggle during an upgrade still apply.
+
+Native dependencies were updated to Tokio 1.54.1, rustls-webpki 0.103.16,
+webpki-roots 1.0.11, p256 0.14.0 / crypto-bigint 0.7.10, zstd 0.14.3 /
+zstd-safe 8.2.0, and pulldown-cmark 0.13.6. The production lockfile was also
+updated for the shared mobile-link requirements and TLS patches.
+
+| Check | Result |
+| --- | --- |
+| Complete native check, including formatting and strict Clippy for all targets | Passed |
+| Native script tests | 29 passed |
+| Native core tests | 650 passed, 2 ignored |
+| GPUI tests, run serially | 761 passed, 11 ignored |
+| Shared phone-link tests in the native workspace | 25 passed |
+| Shared phone-link tests in the production workspace | 25 passed |
+| Native macOS executable build, `native-dev` profile | Passed |
+| Native RustSec vulnerability matches | 0; no advisory IDs ignored |
+| Long-history CPU benchmark | Passed for preview 10 and this candidate |
+
+Regression coverage includes unsupported/unavailable branch-name providers,
+preserving the selected account, first-paint animation startup, settling to
+sleep, waking by pointer interaction, reduced motion, and preference
+migration with explicit new choices and subsequent desktop edits. A synthetic
+identity and enrollment proof generated with p256 0.13.2 verifies that the new
+signing library imports the same saved key, preserves its certificate
+fingerprint, verifies the old proof, and produces the same proof bytes. The
+fixture is public test data, not a real paired device's credentials.
+
+The RustSec database was refreshed to
+`2295466c4e9df26647fd67d8fa1c705ac2fc7f81` before the final scan. Eleven
+unmaintained-package entries and one informational Rand logger-soundness
+warning remain. Rand 0.7.3 comes through the legacy LevelDB reader; its `log`
+feature, required to trigger that advisory, is absent from the resolved
+all-platform core feature graph. These warnings were not suppressed. This
+native result does not clear the separate React/Tauri and npm dependency
+graphs: the production Rust lockfile still has seven vulnerability matches
+in zip/zstd dependencies, and the npm findings from the review are unchanged.
+
+### Long-history CPU comparison
+
+The ignored `pane_motion_frame_cost_with_long_history` fixture now freezes the
+requested animation position. It continues to require one shell render per
+sample, allowing a second only when the slide installs its settled layout.
+That settling work remains in the measured time; slow samples are not dropped.
+
+An isolated tracked-source copy of preview 10 used the identical measurement
+fix, unchanged vendored dependencies, the same compiler, and the same
+`native-dev` profile. After one warm-up per revision, three alternating runs
+were measured with no compiler jobs active. Each run sampled 80 positions in
+a conversation with 10,000 messages and checked that fewer than 100 visible
+rows were rendered.
+
+| CPU measurement | Preview 10 | Candidate |
+| --- | --- | --- |
+| Median of run p50 values | 12.27 ms | 11.87 ms |
+| Median of run p95 values | 13.20 ms | 12.72 ms |
+| Range of run p95 values | 12.41–13.28 ms | 12.56–13.65 ms |
+
+The overlapping ranges show no material regression in this benchmark; they do
+not establish a speedup. These are CPU measurements at simulated 120 Hz
+animation positions, not evidence of 120 fps presentation. GPU costs, live
+provider contention, canvas power use in a real window, and packaged upgrades
+still need runtime checks. The executable was built without launching it or
+opening the installed database. Cross-platform CI and signed installers remain
+release-pipeline checks.
+
 ## Local checks
 
 Run the complete native check from the repository root:

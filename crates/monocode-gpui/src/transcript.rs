@@ -360,6 +360,74 @@ impl Follow {
     }
 }
 
+/// monoSpawnedSessions: sessions the run at `turn..end` started with
+/// `sessions.start`, and those `known` to be launched that it followed up with
+/// `sessions.send`.
+pub(crate) fn run_launches(
+    source: &[Row],
+    turn: usize,
+    end: usize,
+    known: impl Fn(i64) -> bool,
+) -> Vec<i64> {
+    let mut found = Vec::new();
+    let mut at = turn;
+    while at < end {
+        let next = (at + 1..end).find(|&i| source[i].first).unwrap_or(end);
+        if source[at].role == "mono-launch" {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&source[at].text)
+                && let Some(id) = value["sessionId"].as_i64()
+                && !found.contains(&id)
+            {
+                found.push(id);
+            }
+        } else if source[at].role == "tool" {
+            let text: String = source[at..next].iter().map(|r| r.text.as_str()).collect();
+            if let Ok(tool) = serde_json::from_str::<ToolCall>(&text)
+                && tool.state == ToolState::Completed
+                && let Ok(input) = serde_json::from_str::<serde_json::Value>(&tool.input)
+                && let Some(action) = input["command"]
+                    .as_str()
+                    .or_else(|| input["cmd"].as_str())
+                    .and_then(monocode_core::mono::work::command_action)
+                && matches!(action.as_str(), "sessions.start" | "sessions.send")
+            {
+                let receipts = serde_json::from_str::<serde_json::Value>(&tool.output)
+                    .map(|v| vec![v])
+                    .unwrap_or_else(|_| {
+                        tool.output
+                            .lines()
+                            .filter_map(|line| serde_json::from_str(line.trim()).ok())
+                            .collect()
+                    });
+                for value in receipts {
+                    if value["ok"] == true
+                        && let Some(id) = value["result"]["sessionId"]
+                            .as_i64()
+                            .or_else(|| {
+                                monocode_core::mono::work::session_handle(&value["result"]["id"])
+                            })
+                            .or_else(|| {
+                                (value["result"]["submitted"] == true)
+                                    .then(|| {
+                                        monocode_core::mono::work::session_handle(
+                                            &value["result"]["sessionId"],
+                                        )
+                                    })
+                                    .flatten()
+                            })
+                        && (action == "sessions.start" || known(id))
+                        && !found.contains(&id)
+                    {
+                        found.push(id);
+                    }
+                }
+            }
+        }
+        at = next;
+    }
+    found
+}
+
 /// Whether the Mono has said something the user can read in `from..to`: the
 /// opening sentence of any run there. A message the user sends after it reads
 /// as the next line of the chat, not as part of the prompt above.
@@ -530,6 +598,9 @@ pub(crate) struct TranscriptView {
     base: usize,
     /// The store cursor for the turns above the loaded rows, if any.
     history_before: Option<i64>,
+    /// The store cursor for the turns just above the window, which older
+    /// pages loaded here don't move: a paired phone pages from the window.
+    window_before: Option<i64>,
     history_pager: Option<history::HistoryPager>,
     /// The last page read failed; only a scroll retries it.
     history_failed: bool,
@@ -1719,68 +1790,9 @@ impl TranscriptView {
     }
     /// monoSpawnedSessions: sessions a run's `sessions.start` calls accepted.
     fn run_launches(&self, turn: usize, end: usize) -> Vec<i64> {
-        let mut found = Vec::new();
-        let mut at = turn;
-        while at < end {
-            let next = (at + 1..end).find(|&i| self.source[i].first).unwrap_or(end);
-            if self.source[at].role == "mono-launch" {
-                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&self.source[at].text)
-                    && let Some(id) = value["sessionId"].as_i64()
-                    && !found.contains(&id)
-                {
-                    found.push(id);
-                }
-            } else if self.source[at].role == "tool" {
-                let text: String = self.source[at..next]
-                    .iter()
-                    .map(|r| r.text.as_str())
-                    .collect();
-                if let Ok(tool) = serde_json::from_str::<ToolCall>(&text)
-                    && tool.state == ToolState::Completed
-                    && let Ok(input) = serde_json::from_str::<serde_json::Value>(&tool.input)
-                    && let Some(action) = input["command"]
-                        .as_str()
-                        .or_else(|| input["cmd"].as_str())
-                        .and_then(monocode_core::mono::work::command_action)
-                    && matches!(action.as_str(), "sessions.start" | "sessions.send")
-                {
-                    let receipts = serde_json::from_str::<serde_json::Value>(&tool.output)
-                        .map(|v| vec![v])
-                        .unwrap_or_else(|_| {
-                            tool.output
-                                .lines()
-                                .filter_map(|line| serde_json::from_str(line.trim()).ok())
-                                .collect()
-                        });
-                    for value in receipts {
-                        if value["ok"] == true
-                            && let Some(id) = value["result"]["sessionId"]
-                                .as_i64()
-                                .or_else(|| {
-                                    monocode_core::mono::work::session_handle(
-                                        &value["result"]["id"],
-                                    )
-                                })
-                                .or_else(|| {
-                                    (value["result"]["submitted"] == true)
-                                        .then(|| {
-                                            monocode_core::mono::work::session_handle(
-                                                &value["result"]["sessionId"],
-                                            )
-                                        })
-                                        .flatten()
-                                })
-                            && (action == "sessions.start" || self.launches.contains_key(&id))
-                            && !found.contains(&id)
-                        {
-                            found.push(id);
-                        }
-                    }
-                }
-            }
-            at = next;
-        }
-        found
+        run_launches(&self.source, turn, end, |id| {
+            self.launches.contains_key(&id)
+        })
     }
     /// The live state of the sessions this Mono launched, for their cards.
     pub(crate) fn set_launches(
@@ -2436,6 +2448,7 @@ impl TranscriptView {
             history_requested: false,
             base: 0,
             history_before: None,
+            window_before: None,
             history_pager: None,
             history_failed: false,
             history_search: None,

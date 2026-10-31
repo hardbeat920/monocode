@@ -197,7 +197,27 @@ export type TurnItem =
       entries: FoldEntry[];
     }
   | { type: "work"; id: string; live: boolean; phases: WorkPhase[] }
-  | { type: "notice"; id: string; text: string; error?: boolean };
+  | { type: "notice"; id: string; text: string; error?: boolean }
+  /** Sessions a Mono started, as cards under the reply after the launch. */
+  | { type: "sessions"; id: string; sessions: LaunchedSession[] }
+  /** A Mono's suggested replies; `chosen` is the reply sent after them. */
+  | { type: "choices"; id: string; options: string[]; chosen?: string }
+  /** A document a Mono wrote, opened in the reader. */
+  | { type: "document"; id: string; documentId: string; title: string; kind: string };
+
+// The desktop's LaunchedSessionState (src/features/monos/model/monoSpawnedSessions.ts).
+export type LaunchedSessionState = "working" | "input" | "draft" | "failed" | "stopped" | "done";
+
+/** A session a Mono started, as its card in the Mono's chat. */
+export type LaunchedSession = {
+  id: string;
+  projectId: string;
+  /** The project's name, for the card's pill. */
+  project: string;
+  title: string;
+  harness: Harness;
+  state: LaunchedSessionState;
+};
 
 export type Turn = {
   id: string;
