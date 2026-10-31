@@ -49,7 +49,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         fixed: false,
     },
     Binding {
-        command: "App: New Window",
+        command: "App: New Conversation in Project",
         keys: "⌘⇧N",
         when: "Always",
         fixed: false,
