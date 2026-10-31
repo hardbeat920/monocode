@@ -37,6 +37,8 @@ struct Shared {
     tab: TabId,
     view: String,
     ended: Mutex<Option<Ended>>,
+    /// The view runs: the browser sent its first picture.
+    started: AtomicBool,
     stopping: AtomicBool,
     inputs: Mutex<Inputs>,
     input_ready: Condvar,
@@ -133,6 +135,7 @@ impl LivePane {
                 NEXT_VIEW.fetch_add(1, Ordering::Relaxed)
             ),
             ended: Mutex::new(None),
+            started: AtomicBool::new(false),
             stopping: AtomicBool::new(false),
             inputs: Mutex::new(Inputs::default()),
             input_ready: Condvar::new(),
@@ -147,7 +150,11 @@ impl LivePane {
             .spawn(move || {
                 let outcome =
                     view.host
-                        .live_view(&view.session, &view.tab, &view.view, size, |_| {});
+                        .live_view(&view.session, &view.tab, &view.view, size, |_| {
+                            if !view.started.swap(true, Ordering::AcqRel) {
+                                view.wake();
+                            }
+                        });
                 let ended = match outcome {
                     Ok(LiveEnd::Stopped) => Ended::Stopped,
                     Ok(LiveEnd::TabGone) => Ended::TabGone,
@@ -260,12 +267,27 @@ impl Drop for LivePane {
 }
 
 /// Take each picture the browser sends and decode it, keeping only the
-/// newest for the pane, until the view is over.
+/// newest for the pane, from the view's first picture until it is over.
 fn decode_pictures(shared: &Shared) {
+    // Asking before the view runs, or after it ended, gets nothing at once:
+    // wait for its start, and between empty answers, instead of spinning.
+    let pause = |wait: Duration| {
+        let latest = shared.latest.lock().unwrap_or_else(|e| e.into_inner());
+        if !shared.over() {
+            let _ = shared.fresh.wait_timeout(latest, wait);
+        }
+    };
+    while !shared.started.load(Ordering::Acquire) {
+        if shared.over() {
+            return;
+        }
+        pause(Duration::from_millis(250));
+    }
     let mut after = 0;
     while !shared.over() {
         let packed = shared.host.live_take(&shared.view, after);
         if packed.len() < 8 {
+            pause(Duration::from_millis(50));
             continue;
         }
         after = u64::from(u32::from_le_bytes(

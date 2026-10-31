@@ -19,8 +19,8 @@ use monocode_core::browser::{
 };
 use std::sync::Arc;
 
-/// The pane asks the shell to close it.
-pub(crate) struct ClosePane;
+/// Ctrl+T (Cmd+T) in the pane: the user wants a new tab of the thread.
+pub(crate) struct NewTab;
 
 /// A picture on screen: its image and the page viewport it shows, in CSS
 /// pixels.
@@ -45,13 +45,18 @@ pub(crate) struct BrowserPane {
     size: Option<PanelSize>,
     /// Buttons held down over the picture, CDP's bit mask.
     buttons: u32,
+    /// Where the button went down, until the pointer leaves the click's
+    /// slop ([`CLICK_SLOP`]).
+    press: Option<Press>,
     title: String,
     url: String,
+    /// A blank tab the user just opened: the address field takes the keys.
+    focus_address: bool,
     _pull: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
 
-impl EventEmitter<ClosePane> for BrowserPane {}
+impl EventEmitter<NewTab> for BrowserPane {}
 impl Focusable for BrowserPane {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus.clone()
@@ -152,6 +157,64 @@ pub(crate) fn key_input(keystroke: &gpui::Keystroke, down: bool) -> Option<LiveI
         .map(|text| LiveInput::Text { text })
 }
 
+/// How far the pointer may move while pressed and still click. Chromium
+/// starts dragging a link from 4 pixels, which a hand easily moves while
+/// clicking in the pane (Edge on Windows then sends the link no click); a
+/// drag that goes further is a drag.
+const CLICK_SLOP: f32 = 8.;
+
+/// A button that went down over the picture.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Press {
+    /// In the window.
+    at: Point<Pixels>,
+    /// In the page.
+    page: (f64, f64),
+}
+
+/// What the pane sends for a mouse event while a button may be held.
+#[derive(Debug, PartialEq)]
+enum Pointer {
+    /// Send it at this point of the page.
+    Send((f64, f64)),
+    /// Hold it back: a hand that shakes while clicking.
+    Hold,
+}
+
+/// Keep a shaking click a click: moves within [`CLICK_SLOP`] of the press
+/// stay with MonoCode and the release lands where the button went down, so
+/// the page sees a click and never the start of a drag. `press` is updated
+/// for the next event.
+fn through_slop(
+    press: &mut Option<Press>,
+    event: MouseEvent,
+    at: Point<Pixels>,
+    page: (f64, f64),
+) -> Pointer {
+    if event == MouseEvent::Pressed {
+        *press = Some(Press { at, page });
+        return Pointer::Send(page);
+    }
+    let Some(down) = *press else {
+        return Pointer::Send(page);
+    };
+    let moved = (at.x - down.at.x)
+        .as_f32()
+        .hypot((at.y - down.at.y).as_f32());
+    let within = moved < CLICK_SLOP;
+    match event {
+        MouseEvent::Moved if within => Pointer::Hold,
+        MouseEvent::Moved => {
+            *press = None;
+            Pointer::Send(page)
+        }
+        _ => {
+            *press = None;
+            Pointer::Send(if within { down.page } else { page })
+        }
+    }
+}
+
 /// A point on the shown picture, in the page's CSS pixels.
 fn page_point(at: Point<Pixels>, rect: Bounds<Pixels>, width: f64, height: f64) -> (f64, f64) {
     let fraction = |offset: Pixels, side: Pixels| {
@@ -165,7 +228,8 @@ fn page_point(at: Point<Pixels>, rect: Bounds<Pixels>, width: f64, height: f64) 
 }
 
 impl BrowserPane {
-    pub(crate) fn new(session: i64, tab: TabId, cx: &mut Context<Self>) -> Self {
+    /// `blank`: the user opened the tab here; they type its address.
+    pub(crate) fn new(session: i64, tab: TabId, blank: bool, cx: &mut Context<Self>) -> Self {
         let address = cx.new(|cx| {
             let mut input = Input::field("Address", "Enter an address", content(0.35), cx);
             input.set_font_size(12.);
@@ -201,8 +265,10 @@ impl BrowserPane {
             stage: AnchorSlot::default(),
             size: None,
             buttons: 0,
+            press: None,
             title: String::new(),
             url: String::new(),
+            focus_address: blank,
             _pull: None,
             _subscriptions: subscriptions,
         };
@@ -390,7 +456,10 @@ impl BrowserPane {
         let Some((rect, width, height)) = self.picture_rect() else {
             return;
         };
-        let (x, y) = page_point(at, rect, width, height);
+        let page = page_point(at, rect, width, height);
+        let Pointer::Send((x, y)) = through_slop(&mut self.press, event, at, page) else {
+            return;
+        };
         self.send(LiveInput::Mouse {
             event,
             x,
@@ -498,6 +567,9 @@ impl BrowserPane {
 impl Render for BrowserPane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_size(window, cx);
+        if std::mem::take(&mut self.focus_address) {
+            window.focus(&self.address.focus_handle(cx), cx);
+        }
         let toolbar = div()
             .h(px(36.))
             .flex_shrink_0()
@@ -539,14 +611,7 @@ impl Render for BrowserPane {
                     .bg(content(0.05))
                     .px_2()
                     .child(self.address.clone()),
-            )
-            .child(Self::toolbar_button(
-                "browser-pane-close",
-                "Close this pane",
-                "x",
-                cx,
-                |_, cx| cx.emit(ClosePane),
-            ));
+            );
         let error = self.error.clone();
         div()
             .id("browser-pane")
@@ -685,6 +750,13 @@ impl BrowserPane {
     /// A key in the pane; `true` when the tab took it.
     fn key(&mut self, keystroke: &gpui::Keystroke, down: bool, cx: &mut Context<Self>) -> bool {
         let command = keystroke.modifiers.control || keystroke.modifiers.platform;
+        if command && !keystroke.modifiers.alt && !keystroke.modifiers.shift && keystroke.key == "t"
+        {
+            if down {
+                cx.emit(NewTab);
+            }
+            return true;
+        }
         if command && !keystroke.modifiers.alt && keystroke.key == "v" {
             if down
                 && let Some(text) = cx.read_from_clipboard().and_then(|item| item.text())
@@ -764,5 +836,41 @@ mod tests {
             page_point(gpui::point(px(0.), px(500.)), rect, 1000., 500.),
             (0., 500.)
         );
+    }
+
+    #[test]
+    fn a_shaking_click_stays_a_click_and_a_longer_move_drags() {
+        let at = |x: f32, y: f32| gpui::point(px(x), px(y));
+        let mut press = None;
+        let down = through_slop(&mut press, MouseEvent::Pressed, at(100., 100.), (50., 50.));
+        assert_eq!(down, Pointer::Send((50., 50.)));
+        // Chromium drags a link from 4 px: a hand moves that much clicking.
+        let shake = through_slop(&mut press, MouseEvent::Moved, at(104., 103.), (52., 51.));
+        assert_eq!(shake, Pointer::Hold);
+        let up = through_slop(&mut press, MouseEvent::Released, at(105., 103.), (52., 51.));
+        assert_eq!(up, Pointer::Send((50., 50.)), "released where it pressed");
+        assert!(press.is_none());
+
+        through_slop(&mut press, MouseEvent::Pressed, at(100., 100.), (50., 50.));
+        let drag = through_slop(
+            &mut press,
+            MouseEvent::Moved,
+            at(100. + CLICK_SLOP, 100.),
+            (54., 50.),
+        );
+        assert_eq!(drag, Pointer::Send((54., 50.)));
+        // Once a drag, the rest of it goes as it is, back near the start too.
+        let back = through_slop(&mut press, MouseEvent::Moved, at(101., 100.), (50.5, 50.));
+        assert_eq!(back, Pointer::Send((50.5, 50.)));
+        let up = through_slop(
+            &mut press,
+            MouseEvent::Released,
+            at(101., 100.),
+            (50.5, 50.),
+        );
+        assert_eq!(up, Pointer::Send((50.5, 50.)));
+        // A hover with no button is never held.
+        let hover = through_slop(&mut press, MouseEvent::Moved, at(1., 1.), (0.5, 0.5));
+        assert_eq!(hover, Pointer::Send((0.5, 0.5)));
     }
 }

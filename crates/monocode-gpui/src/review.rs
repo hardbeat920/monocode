@@ -3,7 +3,7 @@
 //! CommitDiff.tsx load their files four at a time off the UI thread and
 //! build each diff there too; the view only lays out rows.
 use crate::{
-    browser_pane::{BrowserPane, ClosePane},
+    browser_pane::{BrowserPane, NewTab},
     diff_view::{DiffEvent, DiffFile, DiffView},
     file_editor::{FileEditor, FileEvent},
     file_icons::file_type_icon,
@@ -68,6 +68,10 @@ pub(crate) enum ReviewTab {
     Browser {
         session: i64,
         tab: String,
+        /// The user opened it here (the + beside the tabs, Ctrl+T): it
+        /// closes with its pane tab, as in a browser. Agent tabs only leave.
+        #[serde(default)]
+        own: bool,
     },
 }
 impl ReviewTab {
@@ -187,6 +191,21 @@ struct Source {
     _events: Subscription,
 }
 impl Source {
+    /// A browser tab the user opened here closes with its pane tab.
+    fn close_own_browser_tab(&self) {
+        let ReviewTab::Browser { tab, own: true, .. } = &self.tab else {
+            return;
+        };
+        let (Some(host), tab) = (monocode_core::browser::host(), TabId(tab.clone())) else {
+            return;
+        };
+        // Off the UI thread: closing waits for the browser.
+        std::thread::spawn(move || {
+            if let Err(error) = host.serialized(|| host.close_tab_by_user(&tab)) {
+                log_error(&error);
+            }
+        });
+    }
     fn cancel(&mut self) {
         self.generation.fetch_add(1, Ordering::SeqCst);
         self._tasks.clear();
@@ -312,6 +331,7 @@ impl Drop for ReviewPane {
     fn drop(&mut self) {
         for source in &mut self.sources {
             source.cancel();
+            source.close_own_browser_tab();
         }
     }
 }
@@ -439,9 +459,9 @@ impl ReviewPane {
     }
     fn source(&mut self, tab: ReviewTab, cx: &mut Context<Self>) -> Source {
         let browser = match &tab {
-            ReviewTab::Browser { session, tab } => {
-                let (session, tab) = (*session, TabId(tab.clone()));
-                Some(cx.new(|cx| BrowserPane::new(session, tab, cx)))
+            ReviewTab::Browser { session, tab, own } => {
+                let (session, tab, blank) = (*session, TabId(tab.clone()), *own);
+                Some(cx.new(|cx| BrowserPane::new(session, tab, blank, cx)))
             }
             _ => None,
         };
@@ -449,14 +469,9 @@ impl ReviewPane {
             .iter()
             .flat_map(|pane| {
                 [
-                    cx.subscribe(pane, |this, pane, _: &ClosePane, cx| {
-                        if let Some(ix) = this
-                            .sources
-                            .iter()
-                            .position(|s| s.browser.as_ref() == Some(&pane))
-                        {
-                            this.close_tab(ix, cx);
-                        }
+                    cx.subscribe(pane, |this, pane, _: &NewTab, cx| {
+                        let session = pane.read(cx).session;
+                        this.new_browser_tab(session, cx);
                     }),
                     cx.observe(pane, |_, _, cx| cx.notify()),
                 ]
@@ -560,6 +575,13 @@ impl ReviewPane {
                     ReviewTab::Changes { staged: b, .. }
                 ) if a == b
             ) && matches!(tab, ReviewTab::Changes { .. } | ReviewTab::Session { .. });
+            let mut tab = tab;
+            // "Show in MonoCode" for a tab the user opened here keeps it theirs.
+            if let (ReviewTab::Browser { own: was, .. }, ReviewTab::Browser { own, .. }) =
+                (&self.sources[ix].tab, &mut tab)
+            {
+                *own |= *was;
+            }
             self.sources[ix].tab = tab;
             if reload {
                 self.sources[ix].cancel();
@@ -577,6 +599,44 @@ impl ReviewPane {
         self.load_active(cx);
         cx.emit(ReviewEvent::Changed);
         cx.notify();
+    }
+    /// The + beside the tabs, or Ctrl+T in a browser pane: a blank tab of
+    /// `session` in the browser, shown here with its address field waiting.
+    fn new_browser_tab(&mut self, session: i64, cx: &mut Context<Self>) {
+        let key = crate::browser::session_key(session);
+        let Some(task) = crate::browser::query(cx, move |host| {
+            host.new_tab(&key, crate::browser::WINDOW, None)
+        }) else {
+            return;
+        };
+        cx.spawn(async move |this, cx| match task.await {
+            Ok(tab) => {
+                let _ = this.update(cx, |this, cx| {
+                    this.open(
+                        ReviewTab::Browser {
+                            session,
+                            tab: tab.0,
+                            own: true,
+                        },
+                        cx,
+                    );
+                });
+            }
+            Err(error) => log_error(&error),
+        })
+        .detach();
+    }
+    /// The thread whose browser tab the + beside the tabs opens a new one
+    /// for: the active tab's, else the last browser tab's.
+    fn browser_session(&self) -> Option<i64> {
+        let session = |source: &Source| match &source.tab {
+            ReviewTab::Browser { session, .. } => Some(*session),
+            _ => None,
+        };
+        self.sources
+            .get(self.state.active)
+            .and_then(session)
+            .or_else(|| self.sources.iter().rev().find_map(session))
     }
     /// Single-clicked search matches reuse a clean preview; explicit opens pin it.
     pub(crate) fn open_file(&mut self, tab: ReviewTab, pin: bool, cx: &mut Context<Self>) {
@@ -652,6 +712,7 @@ impl ReviewPane {
         }
         let mut removed = self.sources.remove(ix);
         removed.cancel();
+        removed.close_own_browser_tab();
         self.git
             .update(cx, |git, _| git.review_cache.remember(&removed));
         if self.state.active >= ix && self.state.active > 0 {
@@ -684,6 +745,7 @@ impl ReviewPane {
         let source = self.sources.remove(keep);
         for mut removed in self.sources.drain(..) {
             removed.cancel();
+            removed.close_own_browser_tab();
             self.git
                 .update(cx, |git, _| git.review_cache.remember(&removed));
         }
@@ -1662,7 +1724,29 @@ impl ReviewPane {
                     // Every tab fits, sharing the strip however many there are.
                     .overflow_hidden()
                     .track_scroll(&self.tab_scroll)
-                    .children(elements),
+                    .children(elements)
+                    .children(self.browser_session().map(|session| {
+                        div()
+                            .id("review-new-browser-tab")
+                            .debug_selector(|| "review-new-browser-tab".into())
+                            .role(Role::Button)
+                            .aria_label("New tab")
+                            .size(px(24.))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_md()
+                            .text_color(content(0.5))
+                            .hover(|s| s.bg(content(0.05)).text_color(content(1.)))
+                            .child(icon("plus", 14.))
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .on_click(
+                                cx.listener(move |this, _, _, cx| {
+                                    this.new_browser_tab(session, cx)
+                                }),
+                            )
+                    })),
             )
     }
     fn tab_elements(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {

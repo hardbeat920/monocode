@@ -336,6 +336,7 @@ impl Conversation {
         cx.emit(OpenSessionChanges(crate::review::ReviewTab::Browser {
             session: self.summary.id,
             tab,
+            own: false,
         }));
     }
 
