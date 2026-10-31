@@ -777,13 +777,6 @@ export function browserTabHost(url: string): string {
   }
 }
 
-export function browserChannelLabel(channel: string): string {
-  return (
-    BROWSER_CHANNELS.find((entry) => entry.channel === channel)?.label ??
-    channel
-  );
-}
-
 /**
  * Where the user turns remote debugging on for the chosen or found browser.
  * Attach mode only; the MonoCode browser needs no setup.

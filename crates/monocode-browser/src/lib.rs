@@ -2092,11 +2092,7 @@ impl BrowserHost {
     /// `after`, waiting up to [`live::PULL_WAIT`] for it. Empty when none
     /// came in time or the view is over; the pane asks again while it shows.
     pub fn live_take(&self, view: &str, after: u64) -> Vec<u8> {
-        let control = self.live_control(view);
-        if control.is_none() && cfg!(debug_assertions) {
-            eprintln!("[live] the panel asked for a picture of a view that is not running");
-        }
-        control
+        self.live_control(view)
             .and_then(|control| control.take(after, live::PULL_WAIT))
             .unwrap_or_default()
     }
@@ -5525,122 +5521,6 @@ mod tests {
         host.set_toggle(false);
         assert!(eventually(|| launch::running(&dir).is_none()));
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// How many pictures a live view gives while the wheel scrolls a tall
-    /// page, and how long each `live_take` waits. Writes one packed picture
-    /// to `MONOCODE_LIVE_SAMPLE` when set.
-    /// `cargo test -- --ignored live_view_keeps_up --nocapture`.
-    #[test]
-    #[ignore = "starts the Chrome or Edge installed on this machine"]
-    fn live_view_keeps_up_with_the_wheel() {
-        use std::io::{Read as _, Write as _};
-        let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = server.local_addr().unwrap().port();
-        thread::spawn(move || {
-            let rows: String = (0..2000)
-                .map(|i| format!("<p style='font:16px sans-serif;background:hsl({},60%,85%)'>Row {i} lorem ipsum dolor sit amet</p>", i % 360))
-                .collect();
-            let body = format!("<!doctype html><title>tall</title><body>{rows}</body>");
-            for stream in server.incoming().flatten() {
-                let mut stream = stream;
-                let mut buf = [0u8; 2048];
-                let _ = stream.read(&mut buf);
-                let _ = write!(
-                    stream,
-                    "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-            }
-        });
-        let dir = std::env::temp_dir().join(format!("monocode-live-{}", uuid::Uuid::new_v4()));
-        let host = BrowserHost::for_tests(BrowserSettings {
-            access: AccessMode::Always,
-            show_window: false,
-            ..BrowserSettings::default()
-        });
-        host.set_profile_dir(dir.clone());
-        host.set_toggle(true);
-        host.turn_started("s1", "main", "/repo", Some(true));
-        let url = format!("http://127.0.0.1:{port}/");
-        let opened = host.handle_request("s1", request("l1", "tabs.open", json!({ "url": url })));
-        assert_eq!(opened.outcome, Outcome::Done, "{opened:?}");
-        let tab = TabId(opened.data.unwrap()["tab"].as_str().unwrap().to_string());
-        let size = live::PanelSize::new(900, 700, 1.0);
-        let viewer = {
-            let host = host.clone();
-            let tab = tab.clone();
-            thread::spawn(move || host.live_view("s1", &tab, "bench", size, |_| {}))
-        };
-        let mut after = 0;
-        let started = Instant::now();
-        while after == 0 && started.elapsed() < Duration::from_secs(10) {
-            let packed = host.live_take("bench", after);
-            if packed.len() > 8 {
-                after = u64::from(u32::from_le_bytes(packed[4..8].try_into().unwrap()));
-            }
-        }
-        assert!(after > 0, "no first picture");
-        let scrolling = Arc::new(AtomicBool::new(true));
-        let wheel = {
-            let host = host.clone();
-            let tab = tab.clone();
-            let scrolling = scrolling.clone();
-            thread::spawn(move || {
-                let mut sent = 0;
-                let mut waited = Duration::ZERO;
-                while scrolling.load(Ordering::Acquire) {
-                    let at = Instant::now();
-                    host.live_input(
-                        "s1",
-                        &tab,
-                        &live::LiveInput::Wheel {
-                            x: 400.0,
-                            y: 300.0,
-                            delta_x: 0.0,
-                            delta_y: 40.0,
-                            modifiers: 0,
-                        },
-                    )
-                    .unwrap();
-                    waited += at.elapsed();
-                    sent += 1;
-                    thread::sleep(Duration::from_millis(16));
-                }
-                (sent, waited)
-            })
-        };
-        let window = Duration::from_secs(4);
-        let started = Instant::now();
-        let (mut pictures, mut bytes, mut longest) = (0u32, 0usize, Duration::ZERO);
-        while started.elapsed() < window {
-            let at = Instant::now();
-            let packed = host.live_take("bench", after);
-            longest = longest.max(at.elapsed());
-            if packed.len() > 8 {
-                after = u64::from(u32::from_le_bytes(packed[4..8].try_into().unwrap()));
-                pictures += 1;
-                bytes += packed.len();
-                if let Some(path) = std::env::var_os("MONOCODE_LIVE_SAMPLE") {
-                    std::fs::write(path, &packed).unwrap();
-                }
-            }
-        }
-        scrolling.store(false, Ordering::Release);
-        let (sent, waited) = wheel.join().unwrap();
-        println!(
-            "[bench] {pictures} pictures in {:?} = {:.1}/s, {} KB each, longest take {longest:?}; {sent} wheels, {:?} each",
-            window,
-            f64::from(pictures) / window.as_secs_f64(),
-            bytes / pictures.max(1) as usize / 1024,
-            waited / sent.max(1),
-        );
-        host.stop_live(Some("bench"));
-        let _ = viewer.join();
-        host.set_toggle(false);
-        assert!(eventually(|| launch::running(&dir).is_none()));
-        let _ = std::fs::remove_dir_all(&dir);
-        assert!(pictures > 20, "the view fell behind the wheel");
     }
 
     /// A link clicked through the live view, as the pane clicks it: once

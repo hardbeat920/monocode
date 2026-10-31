@@ -14,8 +14,6 @@ Open Settings → Browser and switch on **Let agents use my browser**. MonoCode 
 - **Private MonoCode browser**: the same with a fresh profile every time it starts, deleted when it closes. No sign-ins, cookies or history are kept.
 - **Your own browser**: MonoCode connects to the Chrome, Edge, Brave, Vivaldi, Opera or Arc you run, signed in as you. Once, turn on remote debugging at `chrome://inspect/#remote-debugging` (Chrome, Vivaldi, Opera, Arc), `brave://inspect/#remote-debugging` (Brave) or `edge://inspect` (Edge). The browser asks you to allow every new connection. While MonoCode is connected, the browser shows a bar saying it is controlled by automated software; MonoCode cannot hide it.
 
-The MonoCode browser starts with switches of its own. To try others without a new build, set `MONOCODE_BROWSER_ARGS` in MonoCode's environment to the switches, separated by spaces (for instance `--enable-gpu --use-angle=d3d11`); they apply the next time the browser starts.
-
 ## Give a thread access
 
 **Thread access** in Settings → Browser decides how a thread gets the browser.

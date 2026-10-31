@@ -47,7 +47,6 @@ struct Shared {
     /// The newest decoded picture the pane has not taken yet.
     latest: Mutex<Option<Result<LivePicture, String>>>,
     fresh: Condvar,
-    meter: Mutex<Meter>,
 }
 
 impl Shared {
@@ -64,53 +63,6 @@ impl Shared {
     fn wake(&self) {
         let _latest = self.latest.lock().unwrap_or_else(|e| e.into_inner());
         self.fresh.notify_all();
-    }
-}
-
-/// What a development build notes about the pane's side of the view every
-/// two seconds, next to the browser's own `[live]` line.
-struct Meter {
-    since: Instant,
-    decoded: u32,
-    decoding: Duration,
-    slowest: Duration,
-    /// Decoded, then replaced by a newer one before the pane took it.
-    passed_over: u32,
-    taken: u32,
-    drawn: u32,
-}
-
-impl Meter {
-    fn new() -> Meter {
-        Meter {
-            since: Instant::now(),
-            decoded: 0,
-            decoding: Duration::ZERO,
-            slowest: Duration::ZERO,
-            passed_over: 0,
-            taken: 0,
-            drawn: 0,
-        }
-    }
-
-    fn maybe_note(&mut self) {
-        let elapsed = self.since.elapsed();
-        if !cfg!(debug_assertions) || elapsed < Duration::from_secs(2) {
-            return;
-        }
-        if self.decoded > 0 || self.drawn > 0 {
-            let rate = |n: u32| f64::from(n) / elapsed.as_secs_f64();
-            eprintln!(
-                "[live] pane: decoded {:.0}/s (avg {} ms, max {} ms), {} passed over | taken {:.0}/s | drawn {:.0}/s",
-                rate(self.decoded),
-                (self.decoding / self.decoded.max(1)).as_millis(),
-                self.slowest.as_millis(),
-                self.passed_over,
-                rate(self.taken),
-                rate(self.drawn),
-            );
-        }
-        *self = Meter::new();
     }
 }
 
@@ -142,7 +94,6 @@ impl LivePane {
             input_error: Mutex::new(None),
             latest: Mutex::new(None),
             fresh: Condvar::new(),
-            meter: Mutex::new(Meter::new()),
         });
         let view = shared.clone();
         std::thread::Builder::new()
@@ -186,8 +137,6 @@ impl LivePane {
         let mut latest = shared.latest.lock().unwrap_or_else(|e| e.into_inner());
         loop {
             if let Some(picture) = latest.take() {
-                drop(latest);
-                shared.meter.lock().unwrap_or_else(|e| e.into_inner()).taken += 1;
                 return Some(picture);
             }
             let left = deadline.saturating_duration_since(Instant::now());
@@ -200,13 +149,6 @@ impl LivePane {
                 .unwrap_or_else(|e| e.into_inner())
                 .0;
         }
-    }
-
-    /// The pane drew a picture: counted for a development build's notes.
-    pub fn drawn(&self) {
-        let mut meter = self.shared.meter.lock().unwrap_or_else(|e| e.into_inner());
-        meter.drawn += 1;
-        meter.maybe_note();
     }
 
     /// How the view ended, once it has.
@@ -293,21 +235,9 @@ fn decode_pictures(shared: &Shared) {
         after = u64::from(u32::from_le_bytes(
             packed[4..8].try_into().unwrap_or_default(),
         ));
-        let started = Instant::now();
         let picture = unpack_live(&packed);
-        let took = started.elapsed();
-        let passed_over = {
-            let mut latest = shared.latest.lock().unwrap_or_else(|e| e.into_inner());
-            let passed_over = latest.replace(picture).is_some();
-            shared.fresh.notify_all();
-            passed_over
-        };
-        let mut meter = shared.meter.lock().unwrap_or_else(|e| e.into_inner());
-        meter.decoded += 1;
-        meter.decoding += took;
-        meter.slowest = meter.slowest.max(took);
-        meter.passed_over += u32::from(passed_over);
-        meter.maybe_note();
+        *shared.latest.lock().unwrap_or_else(|e| e.into_inner()) = Some(picture);
+        shared.fresh.notify_all();
     }
 }
 
@@ -334,27 +264,7 @@ fn send_inputs(shared: &Shared) {
         if shared.stopping.load(Ordering::Acquire) {
             return;
         }
-        let started = Instant::now();
         let sent = shared.host.live_input(&shared.session, &shared.tab, &input);
-        // A development build notes each press and release: where it went,
-        // and whether the page took it.
-        if let LiveInput::Mouse {
-            event: event @ (MouseEvent::Pressed | MouseEvent::Released),
-            x,
-            y,
-            buttons,
-            click_count,
-            ..
-        } = &input
-        {
-            if cfg!(debug_assertions) {
-                eprintln!(
-                    "[live] pane {event:?} at {x},{y} buttons {buttons} clicks {click_count}: {} in {} ms",
-                    sent.as_ref().map_or_else(|e| e.as_str(), |_| "taken"),
-                    started.elapsed().as_millis()
-                );
-            }
-        }
         if let Err(error) = sent {
             *shared.input_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(error);
         }

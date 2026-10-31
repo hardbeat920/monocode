@@ -28,8 +28,6 @@ struct Shown {
     image: Arc<RenderImage>,
     width: f64,
     height: f64,
-    /// Drawn at least once (counted for a development build's notes).
-    drawn: bool,
 }
 
 pub(crate) struct BrowserPane {
@@ -383,7 +381,6 @@ impl BrowserPane {
                                 image,
                                 width: picture.width,
                                 height: picture.height,
-                                drawn: false,
                             });
                             if let Some(old) = old {
                                 cx.drop_image(old.image, None);
@@ -544,12 +541,6 @@ impl BrowserPane {
                     )
                 })
                 .into_any_element();
-        }
-        if let (Some(shown), Some(live)) = (&mut self.picture, &self.live)
-            && !shown.drawn
-        {
-            shown.drawn = true;
-            live.drawn();
         }
         let Some(shown) = &self.picture else {
             return div()
