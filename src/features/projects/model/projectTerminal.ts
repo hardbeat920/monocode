@@ -19,12 +19,16 @@ import { workspaceTabCwd } from "../../workspace/model/workspaceTabGroups";
 
 export type DockSide = "top" | "bottom" | "left" | "right";
 
-export type ProjectTerminalDock = {
-  projectPath: string;
+/** What every dock tracks: one pane of tabs, where it sits, and whether it shows. */
+export type DockState = {
   pane: EditorPane;
   side: DockSide;
   size: number;
   open: boolean;
+};
+
+export type ProjectTerminalDock = DockState & {
+  projectPath: string;
 };
 
 export const DOCK_SIZE_DEFAULT = {
@@ -91,10 +95,10 @@ export function createProjectTerminal(
   };
 }
 
-export function addTerminalToDock(
-  dock: ProjectTerminalDock,
+export function addTerminalToDock<T extends DockState>(
+  dock: T,
   file: FilePaneTab,
-): ProjectTerminalDock {
+): T {
   return {
     ...dock,
     open: true,
@@ -113,10 +117,10 @@ export function nextDockTerminalTitle(
   return nextTerminalTitleFromFiles(dock.pane.files, cwd);
 }
 
-export function closeTerminalInDock(
-  dock: ProjectTerminalDock,
+export function closeTerminalInDock<T extends DockState>(
+  dock: T,
   fileId: string,
-): ProjectTerminalDock | null {
+): T | null {
   const index = dock.pane.files.findIndex((file) => file.id === fileId);
   if (index < 0) return dock;
   const files = dock.pane.files.filter((file) => file.id !== fileId);
@@ -138,10 +142,10 @@ export function focusedDockTerminalId(
   return files.some((file) => file.id === activeFileId) ? activeFileId : null;
 }
 
-export function selectDockTerminal(
-  dock: ProjectTerminalDock,
+export function selectDockTerminal<T extends DockState>(
+  dock: T,
   fileId: string,
-): ProjectTerminalDock {
+): T {
   if (
     !dock.pane.files.some((file) => file.id === fileId) ||
     dock.pane.activeFileId === fileId
@@ -151,10 +155,10 @@ export function selectDockTerminal(
   return { ...dock, pane: { ...dock.pane, activeFileId: fileId } };
 }
 
-export function reorderDockTerminals(
-  dock: ProjectTerminalDock,
+export function reorderDockTerminals<T extends DockState>(
+  dock: T,
   files: FilePaneTab[],
-): ProjectTerminalDock {
+): T {
   return { ...dock, pane: { ...dock.pane, files } };
 }
 
@@ -207,18 +211,18 @@ export function mapProjectTerminal(
   return found ? next : docks;
 }
 
-export function withDockOpen(
-  dock: ProjectTerminalDock,
+export function withDockOpen<T extends DockState>(
+  dock: T,
   open: boolean,
-): ProjectTerminalDock {
+): T {
   return dock.open === open ? dock : { ...dock, open };
 }
 
-export function withDockSide(
-  dock: ProjectTerminalDock,
+export function withDockSide<T extends DockState>(
+  dock: T,
   side: DockSide,
   viewport?: { width: number; height: number },
-): ProjectTerminalDock {
+): T {
   if (dock.side === side) return dock;
   return {
     ...dock,
@@ -227,11 +231,11 @@ export function withDockSide(
   };
 }
 
-export function withDockSize(
-  dock: ProjectTerminalDock,
+export function withDockSize<T extends DockState>(
+  dock: T,
   size: number,
   viewport?: { width: number; height: number },
-): ProjectTerminalDock {
+): T {
   const next = clampDockSize(dock.side, size, viewport);
   return next === dock.size ? dock : { ...dock, size: next };
 }

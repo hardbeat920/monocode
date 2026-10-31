@@ -7,6 +7,10 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
   openUrl: vi.fn(async () => undefined),
 }));
 
+vi.mock("../../browser/model/openLink", () => ({
+  openLink: vi.fn(async () => undefined),
+}));
+
 vi.mock("../../inbox/model/githubTasks", () => ({
   formatRelativeTime: () => "2 hours ago",
   githubWorkItem: vi.fn(async () => ({
@@ -34,7 +38,7 @@ vi.mock("../../inbox/model/githubTasks", () => ({
   peekGithubWorkItemDetails: () => null,
 }));
 
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openLink } from "../../browser/model/openLink";
 import { githubWorkItem, githubWorkItemDetails } from "../../inbox/model/githubTasks";
 import type { UserLink } from "../model/linkPreview";
 import { UserLinkPreview } from "./UserLinkPreview";
@@ -148,7 +152,10 @@ describe("GitHub work item link preview", () => {
 
     act(() => chip.click());
 
-    expect(openUrl).toHaveBeenCalledWith(link.url);
+    expect(openLink).toHaveBeenCalledWith(
+      link.url,
+      expect.objectContaining({ type: "click" }),
+    );
   });
 
   it("uses a compact treatment centered with inline message text", () => {
