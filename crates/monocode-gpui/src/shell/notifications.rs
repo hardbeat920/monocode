@@ -916,6 +916,7 @@ impl Shell {
     }
 
     pub(super) fn notices_overlay(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let archive_undo = self.archive_undo_toast(cx);
         let state = &self.notification_state;
         let mono_error = self.monos.as_ref().and_then(|monos| {
             monos
@@ -948,6 +949,7 @@ impl Shell {
                         })),
                 ))
             })
+            .children(archive_undo)
             .when_some(mono_error, |stack, (monos, message)| {
                 stack.child(errors::card(
                     "mono-error",
