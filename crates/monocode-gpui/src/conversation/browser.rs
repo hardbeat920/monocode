@@ -461,6 +461,16 @@ impl Conversation {
         .detach();
     }
 
+    /// The X beside "Add": close that page in the browser. With the last
+    /// page gone, the MonoCode browser closes too.
+    fn close_free_browser_tab(&mut self, free: String, cx: &mut Context<Self>) {
+        let closed = free.clone();
+        if let Some(tabs) = &mut self.browser.free {
+            tabs.retain(|tab| tab.id != closed);
+        }
+        self.browser_action(cx, false, move |host| host.close_free_tab(&free));
+    }
+
     fn add_free_browser_tab(&mut self, free: String, cx: &mut Context<Self>) {
         let key = self.browser_key();
         let given = free.clone();
@@ -521,21 +531,7 @@ impl Conversation {
                     tab.id.clone(),
                     tab.id.clone(),
                 );
-                let icon_button = |id: String, label: &'static str, path: &'static str| {
-                    div()
-                        .id(SharedString::from(id))
-                        .role(Role::Button)
-                        .aria_label(label)
-                        .size(px(24.))
-                        .flex_shrink_0()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded_md()
-                        .cursor_pointer()
-                        .hover(|s| s.bg(content(0.1)))
-                        .child(icon(path, 14.).text_color(content(0.6)))
-                };
+                let icon_button = menu_icon_button;
                 div()
                     .flex()
                     .items_center()
@@ -791,11 +787,22 @@ impl Conversation {
                                                         .child(host),
                                                 ),
                                         )
-                                        .child(
+                                        .child({
+                                            let id = id.clone();
                                             small(format!("browser-add-{}", tab.id).into(), "Add")
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     this.add_free_browser_tab(id.clone(), cx)
-                                                })),
+                                                }))
+                                        })
+                                        .child(
+                                            menu_icon_button(
+                                                format!("browser-close-free-{}", tab.id),
+                                                "Close tab",
+                                                "x",
+                                            )
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.close_free_browser_tab(id.clone(), cx)
+                                            })),
                                         )
                                 }),
                             ))
@@ -832,4 +839,25 @@ impl Conversation {
             .into_any_element(),
         )
     }
+}
+
+/// A small icon button in the browser menu's rows.
+fn menu_icon_button(
+    id: String,
+    label: &'static str,
+    path: &'static str,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(SharedString::from(id))
+        .role(Role::Button)
+        .aria_label(label)
+        .size(px(24.))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_md()
+        .cursor_pointer()
+        .hover(|s| s.bg(content(0.1)))
+        .child(icon(path, 14.).text_color(content(0.6)))
 }

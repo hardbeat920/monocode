@@ -138,7 +138,8 @@ pub fn tab_host(url: &str) -> String {
         .unwrap_or_else(|| url.to_owned())
 }
 
-/// The thread's browser indicator, shown while the thread has access.
+/// The thread's browser indicator, shown while the thread has access and
+/// the browser runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Indicator {
     Granted,
@@ -169,9 +170,12 @@ pub fn session_tabs<'a>(
         .filter(move |tab| tab.session_id == session)
 }
 
-/// The indicator for `session`, or `None` while it has no access.
+/// The indicator for `session`, or `None` while it has no access or no
+/// browser runs: once the MonoCode browser closed (its last tab went),
+/// nothing of it shows until an agent or the user starts it again.
 pub fn indicator(state: &BrowserState, session: &str) -> Option<Indicator> {
-    if !crate::turn::granted(state, session) {
+    if !crate::turn::granted(state, session) || state.connection.state != ConnectionState::Connected
+    {
         return None;
     }
     let tabs: Vec<_> = session_tabs(state, session).collect();
@@ -350,13 +354,34 @@ pub fn connection_detail(state: &BrowserState) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::BrowserSettings;
+    use crate::protocol::{BrowserSettings, SessionAccess};
 
     fn state(mode: BrowserMode, connection: ConnectionState) -> BrowserState {
         let mut state = crate::BrowserHost::for_tests(BrowserSettings::default()).state();
         state.settings.mode = mode;
         state.connection.state = connection;
         state
+    }
+
+    #[test]
+    fn the_globe_shows_only_while_a_browser_runs() {
+        let mut idle = state(BrowserMode::Managed, ConnectionState::Idle);
+        idle.toggle_on = true;
+        idle.sessions.push(SessionAccess {
+            session_id: "s1".into(),
+            window: "main".into(),
+            granted: true,
+            turn_active: false,
+            granted_since_ms: None,
+            tabs: 0,
+            requested: false,
+            turned_off: false,
+        });
+        assert_eq!(indicator(&idle, "s1"), None, "the browser closed");
+        let mut running = idle.clone();
+        running.connection.state = ConnectionState::Connected;
+        assert_eq!(indicator(&running, "s1"), Some(Indicator::Granted));
+        assert_eq!(indicator(&running, "s2"), None, "no access");
     }
 
     #[test]

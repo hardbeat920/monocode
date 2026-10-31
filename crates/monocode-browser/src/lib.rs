@@ -139,6 +139,9 @@ const MANAGED_CLOSE_WAIT: Duration = Duration::from_secs(3);
 /// How long the MonoCode browser stays up after an access request was
 /// declined or expired while no thread may use it.
 pub const UNUSED_CLOSE_GRACE: Duration = Duration::from_secs(10);
+/// How long the MonoCode browser stays up once its last tab closed, so an
+/// agent that closes one tab and opens the next does not restart it.
+pub const EMPTY_CLOSE_GRACE: Duration = Duration::from_secs(2);
 
 /// The MonoCode browser process this run started.
 struct ManagedBrowser {
@@ -794,6 +797,67 @@ impl BrowserHost {
             });
     }
 
+    /// A tab closed: once [`EMPTY_CLOSE_GRACE`] has passed with no tab
+    /// open, no thread's and none of the user's, the MonoCode browser
+    /// closes. Nothing of the browser runs then; the next agent action or
+    /// "Open browser" starts it again.
+    fn close_when_empty(self: &Arc<Self>) {
+        if !self.mode().launches() {
+            return;
+        }
+        let ticket = self.unused_close.fetch_add(1, Ordering::AcqRel) + 1;
+        let grace = Duration::from_millis(
+            self.unused_grace_ms
+                .load(Ordering::Acquire)
+                .min(EMPTY_CLOSE_GRACE.as_millis() as u64),
+        );
+        let host = self.clone();
+        let _ = thread::Builder::new()
+            .name("browser-empty".into())
+            .spawn(move || {
+                thread::sleep(grace);
+                if host.unused_close.load(Ordering::Acquire) == ticket
+                    && host.connecting.load(Ordering::Acquire) == 0
+                {
+                    host.close_if_empty();
+                }
+            });
+    }
+
+    fn close_if_empty(self: &Arc<Self>) {
+        {
+            let policy = self.policy.read();
+            if !policy.toggle_on || !policy.settings.mode.launches() {
+                return;
+            }
+            if policy
+                .leases()
+                .any(|lease| matches!(lease.state, TabState::Open | TabState::Attaching))
+            {
+                return;
+            }
+        }
+        if !self.link.is_open() || !self.user_tabs().is_ok_and(|tabs| tabs.is_empty()) {
+            return;
+        }
+        self.event("managed_closed_empty", Actor::System, None, None);
+        self.close_managed_now();
+    }
+
+    /// Close the MonoCode browser that [`Self::close_if_unused`] or
+    /// [`Self::close_if_empty`] found nothing left in.
+    fn close_managed_now(self: &Arc<Self>) {
+        self.close_managed_pages();
+        if self.link.status() != LinkStatus::Closed {
+            self.link.close(Vec::new(), OFF_DETACH_BUDGET);
+        }
+        self.close_managed_browser_later();
+        if self.policy.read().toggle_on {
+            self.set_idle();
+        }
+        self.emit_state();
+    }
+
     fn close_if_unused(self: &Arc<Self>) {
         {
             let policy = self.policy.read();
@@ -817,15 +881,7 @@ impl BrowserHost {
             return;
         }
         self.event("managed_closed_unused", Actor::System, None, None);
-        self.close_managed_pages();
-        if self.link.status() != LinkStatus::Closed {
-            self.link.close(Vec::new(), OFF_DETACH_BUDGET);
-        }
-        self.close_managed_browser_later();
-        if self.policy.read().toggle_on {
-            self.set_idle();
-        }
-        self.emit_state();
+        self.close_managed_now();
     }
 
     /// The link to the MonoCode browser dropped: when the window was closed
@@ -1461,7 +1517,7 @@ impl BrowserHost {
         }
     }
 
-    fn on_tab_event(&self, event: TabEvent) {
+    fn on_tab_event(self: &Arc<Self>, event: TabEvent) {
         match &event {
             TabEvent::PopupOpened { tab, owner, opener } => {
                 let lease = self.policy.read().lease(tab).cloned();
@@ -1489,6 +1545,7 @@ impl BrowserHost {
             }
             TabEvent::Closed(tab) | TabEvent::Crashed(tab) => {
                 self.db.with(|conn| audit::lease_closed(conn, tab));
+                self.close_when_empty();
             }
             TabEvent::Navigated(_) | TabEvent::DialogOpened(_) | TabEvent::DialogClosed(_) => {}
         }
@@ -2083,7 +2140,7 @@ impl BrowserHost {
     }
 
     /// Settings "Close tab" for any agent tab, whoever owns it.
-    pub fn close_tab_by_user(&self, tab: &TabId) -> Result<(), String> {
+    pub fn close_tab_by_user(self: &Arc<Self>, tab: &TabId) -> Result<(), String> {
         let target = {
             let state = self.policy.read();
             let lease = state.lease(tab).ok_or("Unknown tab")?;
@@ -2100,16 +2157,33 @@ impl BrowserHost {
         self.db.with(|conn| audit::lease_closed(conn, tab));
         self.event("tab_closed", Actor::User, None, Some(&tab.0));
         self.emit_state();
+        self.close_when_empty();
+        Ok(())
+    }
+
+    /// The user closes one of the browser's tabs no thread holds (the X
+    /// beside "Add" in a thread's browser menu).
+    pub fn close_free_tab(self: &Arc<Self>, free_id: &str) -> Result<(), String> {
+        let free = self
+            .user_tabs()?
+            .into_iter()
+            .find(|tab| tab.id == free_id)
+            .ok_or("That tab is already gone or a thread holds it now.")?;
+        targets::close_targets(&self.link, &[free.target]);
+        self.event("free_tab_closed", Actor::User, None, None);
+        self.emit_state();
+        self.close_when_empty();
         Ok(())
     }
 
     /// Settings "Close all agent tabs". Tabs the user handed over are given
     /// back, not closed.
-    pub fn close_all_tabs(&self) {
+    pub fn close_all_tabs(self: &Arc<Self>) {
         let ended = self.policy.write().close_all();
         self.end_leases(&ended);
         self.event("tabs_closed_all", Actor::User, None, None);
         self.emit_state();
+        self.close_when_empty();
     }
 
     /// Close or give back the tabs of ended leases, and close their rows.

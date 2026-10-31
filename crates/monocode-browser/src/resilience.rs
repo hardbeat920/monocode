@@ -2097,3 +2097,37 @@ fn an_expired_request_closes_the_browser_only_when_no_thread_has_access() {
     assert_eq!(listed.outcome, Outcome::Done, "{listed:?}");
     assert_eq!(world.server.connections(), 2);
 }
+
+#[test]
+fn the_browser_closes_once_its_last_tab_closed_and_starts_again_when_asked() {
+    let world = Arc::new(World::managed(AccessMode::Always));
+    world.host.set_unused_grace(Duration::from_millis(300));
+    world.grant("s1");
+    let first = world.act("s1", "tabs.open", json!({}));
+    assert_eq!(first.outcome, Outcome::Done, "{first:?}");
+    let first = first.data.unwrap()["tab"].as_str().unwrap().to_string();
+    let second = world.act("s1", "tabs.open", json!({}));
+    let second = second.data.unwrap()["tab"].as_str().unwrap().to_string();
+
+    // One of two closed: the other keeps the browser up.
+    let closed = world.act("s1", "tabs.close", json!({ "tab": first }));
+    assert_eq!(closed.outcome, Outcome::Done, "{closed:?}");
+    thread::sleep(Duration::from_millis(900));
+    assert_eq!(world.host.connection().state, ConnectionState::Connected);
+    assert_eq!(world.event_count("managed_closed_empty"), 0);
+
+    // The last one closed: nothing of the browser runs any more.
+    world
+        .host
+        .close_tab_by_user(&TabId(second))
+        .expect("the user closes the last tab");
+    world.wait_state(ConnectionState::Idle);
+    assert_eq!(world.event_count("managed_closed_empty"), 1);
+    world.assert_idle();
+    assert!(world.host.policy().read().granted("s1"), "access stays");
+
+    // The thread's next action starts it again.
+    let again = world.act("s1", "tabs.open", json!({}));
+    assert_eq!(again.outcome, Outcome::Done, "{again:?}");
+    assert_eq!(world.server.connections(), 2);
+}
