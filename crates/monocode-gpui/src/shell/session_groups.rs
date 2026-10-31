@@ -822,6 +822,7 @@ impl Shell {
         self.sessions.remove(&id);
         self.session_summaries.remove(&id);
         self.draft_sessions.remove(&id);
+        self.usage_limits.remove(&id);
         self.history_recency.remove(&id);
         self.session_marks.remove(&id);
         self.tab_marks.remove(&id);

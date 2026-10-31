@@ -170,6 +170,12 @@ impl UsageFooter {
             used
         }
     }
+    /// " · even pace N%", flipped like the fill; empty without a reset time.
+    fn pace_label(&self, w: &usage::Window, now: i64) -> String {
+        w.pace(now)
+            .map(|p| format!(" · even pace {:.0}%", self.display_percent(p)))
+            .unwrap_or_default()
+    }
     fn percent_label(&self, used: f64) -> String {
         format!(
             "{:.0}% {}",
@@ -689,6 +695,7 @@ impl UsageFooter {
             )
             .child(
                 div()
+                    .relative()
                     .mt_2()
                     .h(px(6.))
                     .w_full()
@@ -701,7 +708,8 @@ impl UsageFooter {
                             .w(gpui::relative(shown as f32 / 100.))
                             .rounded_full()
                             .bg(usage_color(used)),
-                    ),
+                    )
+                    .children(pace_marker(w, now, self.show_remaining)),
             )
             .child(
                 div()
@@ -713,13 +721,14 @@ impl UsageFooter {
                     .line_height(px(16.))
                     .text_color(content(0.4))
                     .child(format!(
-                        "{:.0}% {}",
+                        "{:.0}% {}{}",
                         100. - shown,
                         if self.show_remaining {
                             "used"
                         } else {
                             "remaining"
-                        }
+                        },
+                        self.pace_label(w, now)
                     ))
                     .child(div().truncate().child(w.reset_label(now))),
             )
@@ -810,7 +819,7 @@ impl UsageFooter {
         )
     }
 }
-use crate::accounts::ui::bar_color as usage_color;
+use crate::accounts::ui::{bar_color as usage_color, pace_marker};
 impl Render for UsageFooter {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let state = &self.cache[index(self.kind)];
@@ -843,9 +852,10 @@ impl Render for UsageFooter {
                     .iter()
                     .map(|w| {
                         format!(
-                            "{} · {}",
+                            "{} · {}{}",
                             self.percent_label(w.used_percent),
-                            w.reset_label(now)
+                            w.reset_label(now),
+                            self.pace_label(w, now)
                         )
                     })
                     .collect::<Vec<_>>()

@@ -87,6 +87,7 @@ mod theme;
 mod traffic_lights;
 mod transcript;
 mod usage_footer;
+mod usage_limit;
 mod visuals;
 mod window_state;
 mod workspace;

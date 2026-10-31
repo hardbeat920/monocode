@@ -7,8 +7,12 @@ pub(super) struct Metadata<'a> {
     live: Option<&'a Conversation>,
     draft: bool,
     remote_waiting: bool,
+    usage_limit: Option<&'a monocode_core::usage::Limit>,
 }
 impl Metadata<'_> {
+    pub(super) fn usage_limit(&self) -> Option<&monocode_core::usage::Limit> {
+        self.usage_limit
+    }
     pub(super) fn display_title(&self) -> String {
         monocode_core::session_title::display_title(&self.summary.title, &self.summary.provider)
             .replace('\n', " ")
@@ -31,9 +35,27 @@ impl Shell {
             summary: live.map_or_else(|| &self.session_summaries[&id], |v| &v.summary),
             busy: live.is_some_and(|v| v.busy)
                 || self.remote_marks.get(&id).is_some_and(|state| state.0),
+            usage_limit: live.map_or_else(
+                || self.usage_limits.get(&id),
+                |view| view.settings.usage_limit.as_ref(),
+            ),
             live,
             draft: self.draft_sessions.contains(&id),
             remote_waiting: self.remote_marks.get(&id).is_some_and(|state| state.1),
+        }
+    }
+    pub(super) fn restore_usage_continuations(&mut self, cx: &mut Context<Self>) {
+        let armed: Vec<_> = self
+            .usage_limits
+            .iter()
+            .filter_map(|(&id, limit)| limit.resume_at_reset.then_some(id))
+            .collect();
+        for id in armed {
+            if let Some(view) = self.ensure_session(id, cx) {
+                view.update(cx, |view, cx| {
+                    view.defer_history_action(|view, cx| view.tick_usage(cx), cx);
+                });
+            }
         }
     }
     /// Opening and explicit previews materialize chats; enumerating or scrolling
@@ -115,6 +137,155 @@ mod tests {
     use super::*;
     use gpui::TestAppContext;
     use monocode_core::{agent::Settings, store::Store};
+    use std::path::Path;
+
+    #[gpui::test]
+    fn continuation_restores_only_armed_background_threads(cx: &mut TestAppContext) {
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        let active = store.create("codex", "/fixture").unwrap();
+        let mut armed = store.create("claude", "/fixture").unwrap();
+        armed.has_messages = true;
+        let mut blocked = store.create("claude", "/fixture").unwrap();
+        blocked.has_messages = true;
+        let idle = store.create("codex", "/fixture").unwrap();
+        for (id, resume_at_reset) in [(armed.id, true), (blocked.id, false)] {
+            store
+                .save_agent_settings(
+                    id,
+                    &Settings {
+                        usage_limit: Some(monocode_core::usage::Limit {
+                            resets_at: Some(monocode_core::usage::now_ms() + 3_600_000),
+                            resume_at_reset,
+                        }),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+        }
+        let (armed_id, blocked_id, idle_id) = (armed.id, blocked.id, idle.id);
+        let workspace = Workspace {
+            project: "/fixture".into(),
+            active: Some(active.id),
+            tabs: vec![active.id],
+            ..Default::default()
+        };
+        let saved = serde_json::to_string(&workspace).unwrap();
+        let store = Arc::new(Mutex::new(store));
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|cx| {
+                    Shell::new(
+                        store,
+                        vec![active, armed, blocked, idle],
+                        "/fixture".into(),
+                        Some(saved),
+                        cx,
+                    )
+                })
+            })
+            .unwrap()
+        });
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, cx| {
+                assert!(shell.sessions[&armed_id].read(cx).history_loaded());
+                assert!(
+                    shell
+                        .session_metadata(armed_id, cx)
+                        .usage_limit()
+                        .unwrap()
+                        .resume_at_reset
+                );
+                assert!(!shell.sessions.contains_key(&blocked_id));
+                assert!(!shell.sessions.contains_key(&idle_id));
+                assert!(
+                    !shell
+                        .session_metadata(blocked_id, cx)
+                        .usage_limit()
+                        .unwrap()
+                        .resume_at_reset
+                );
+                shell.unseen_finished.insert(armed_id);
+                shell.refresh_session_mark(armed_id, cx);
+                assert!(!shell.unseen_finished.contains(&armed_id));
+                shell.sessions[&armed_id].update(cx, |view, cx| view.cancel_usage_resume(cx));
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, cx| {
+                assert!(
+                    !shell
+                        .session_metadata(armed_id, cx)
+                        .usage_limit()
+                        .unwrap()
+                        .resume_at_reset
+                );
+                assert!(!shell.usage_limits[&armed_id].resume_at_reset);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn continuation_status_fits_both_sidebar_layouts_and_themes(cx: &mut TestAppContext) {
+        let (window, _, id) = crate::shell::tests::window(cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.sessions[&id].update(cx, |view, cx| {
+                    view.summary.has_messages = true;
+                    view.settings.usage_limit = Some(monocode_core::usage::Limit {
+                        resets_at: Some(monocode_core::usage::now_ms() + 1_800_000),
+                        resume_at_reset: true,
+                    });
+                    cx.emit(SessionChanged);
+                });
+            })
+            .unwrap();
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        let row_selector: &'static str =
+            Box::leak(format!("sidebar-session-{id}").into_boxed_str());
+        let status_selector: &'static str =
+            Box::leak(format!("session-usage-limit-{id}").into_boxed_str());
+        let title_selector: &'static str =
+            Box::leak(format!("session-title-{id}").into_boxed_str());
+        for classic in [false, true] {
+            for theme in ["light", "dark"] {
+                for width in [200., 320.] {
+                    window
+                        .update(visual, |shell, _, cx| {
+                            shell.workspace.classic_layout = classic;
+                            shell.workspace.sidebar_width = width;
+                            shell.workspace.preferences.theme = theme.into();
+                            shell.invalidate_chrome(cx);
+                            cx.notify();
+                        })
+                        .unwrap();
+                    visual.refresh().unwrap();
+                    let row = visual.debug_bounds(row_selector).unwrap();
+                    let status = visual.debug_bounds(status_selector).unwrap();
+                    let title = visual.debug_bounds(title_selector).unwrap();
+                    assert!(status.left() >= row.left() && status.right() <= row.right());
+                    assert!(title.size.width >= px(20.));
+                    assert!(
+                        title.right() <= status.left()
+                            || title.bottom() <= status.top()
+                            || status.bottom() <= title.top()
+                    );
+                }
+            }
+        }
+        window
+            .update(visual, |shell, _, cx| shell.toggle_archive(id, cx))
+            .unwrap();
+        visual.run_until_parked();
+        window
+            .update(visual, |shell, _, cx| {
+                let view = shell.sessions[&id].read(cx);
+                assert!(view.summary.archived);
+                assert!(!view.settings.usage_limit.as_ref().unwrap().resume_at_reset);
+            })
+            .unwrap();
+    }
 
     #[gpui::test]
     fn whole_project_sidebar_keeps_seven_today_sessions_across_worktrees_lazy(

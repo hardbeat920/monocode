@@ -69,7 +69,7 @@ mod tests {
             p.claude_usage_limit.as_ref().unwrap().resets_at,
             Some(1_792_600_200_000)
         );
-        assert!(!p.claude_usage_limit.unwrap().resume_at_reset);
+        assert!(p.claude_usage_limit.unwrap().resume_at_reset);
     }
 
     #[test]
@@ -153,7 +153,7 @@ printf '%s\n' '{"type":"rate_limit_event","rate_limit_info":{"status":"rejected"
             limited,
             vec![Limit {
                 resets_at: Some(1_792_600_200_000),
-                resume_at_reset: false
+                resume_at_reset: true
             }]
         );
     }

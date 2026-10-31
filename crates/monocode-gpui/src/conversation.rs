@@ -1443,6 +1443,7 @@ impl Conversation {
                             }
                             if !this.is_remote() {
                                 this.detect_usage_limit(cx);
+                                this.refresh_usage_after_turn(cx);
                             }
                             this.review
                                 .update(cx, |review, cx| review.set_busy(false, cx));
@@ -2210,6 +2211,12 @@ impl Conversation {
             return false;
         }
         let changed_model = self.summary.provider != picked.0.id() || self.model != picked.1;
+        let restoring_provider = self.summary.provider != picked.0.id()
+            && self
+                .settings
+                .pending_provider_switch
+                .as_ref()
+                .is_some_and(|pending| pending.from == picked.0.id());
         if std::env::var_os("MONOCODE_NATIVE_TRACE").is_some() {
             eprintln!(
                 "native model session={} provider={} model={:?}",
@@ -2219,12 +2226,7 @@ impl Conversation {
             );
         }
         if self.summary.provider != picked.0.id() {
-            let reverting = self
-                .settings
-                .pending_provider_switch
-                .as_ref()
-                .is_some_and(|pending| pending.from == picked.0.id());
-            let restored = reverting
+            let restored = restoring_provider
                 .then(|| self.settings.pending_provider_switch.clone())
                 .flatten();
             let changed = locked(&self.store).and_then(|store| {
@@ -2244,6 +2246,11 @@ impl Conversation {
             }
             if let Some(pending) = restored {
                 self.settings.account = pending.account;
+                self.settings.usage_limit = pending.usage_limit;
+                if self.settings.usage_limit.is_some() {
+                    self.follow_ups.state.paused = true;
+                    self.save_follow_ups(cx);
+                }
                 self.summary.provider_id = pending.provider_id;
                 self.settings.pending_provider_switch = None;
                 self.settings.handoff = None;
@@ -2268,6 +2275,7 @@ impl Conversation {
                             service_tier: self.settings.service_tier.clone(),
                             thinking: self.settings.thinking,
                             skip_outgoing_recap: self.settings.usage_limit.is_some(),
+                            usage_limit: self.settings.usage_limit.clone(),
                             account: self.settings.account.clone(),
                             provider_id: self.summary.provider_id.clone(),
                         });
@@ -2314,7 +2322,8 @@ impl Conversation {
         self.settings.thinking = None;
         self.settings.service_tier = None;
         self.settings.model_settings.clear();
-        if changed_model && self.settings.usage_limit.is_some() && !self.busy {
+        if changed_model && self.settings.usage_limit.is_some() && !self.busy && !restoring_provider
+        {
             self.recover_usage_after_model_change(cx);
         }
         self.refresh_catalog(cx);
