@@ -431,10 +431,10 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         "unified editor review changes working tree",
     ),
     (
-        "empty-session-games",
+        "empty-session",
         Section::Chat,
-        "Empty session games",
-        "pacman snake arcade grid fun",
+        "Empty session",
+        "ink dither trails ripple games pacman snake arcade fun",
     ),
     (
         "agent-clis",
@@ -465,6 +465,12 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         Section::Providers,
         "Claude Code hooks",
         "pretooluse settings.json block command notification",
+    ),
+    (
+        "claude-entrypoint",
+        Section::Providers,
+        "Identify as Monocode to Claude",
+        "entrypoint sdk-cli label usage limit 5-hour window rate experimental",
     ),
     (
         "idle-agents",

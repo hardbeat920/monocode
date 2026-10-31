@@ -16,6 +16,43 @@ macOS is the primary preview target. A Linux ARM64 source build has been
 smoke-tested in a VM; Linux x64 packages and Windows GUI interaction still need
 runtime testing. See [preview limitations](parity.md).
 
+Fenced `mermaid` blocks render as native diagrams in Markdown previews and
+conversations. See [Mermaid diagrams](mermaid.md) for examples and limitations.
+For interactive visuals, use `/visualize` in an idle local desktop conversation
+or ask a Mono directly. See [session visuals](visuals.md) and the
+[preview release notes](preview-release-notes.md).
+
+## Monos
+
+A Mono's **Overview** tab brings together its current activity, a contribution
+calendar, today's work, upcoming habits and new documents. **Sub-agents** lists
+the sessions it launched, with their model, provider, checkout and state. Monos
+are prompted to delegate longer tasks to background sessions, whose final
+reports return to the Mono chat.
+
+Contribution counts come from the Mono's sessions, including saved history:
+commits and pull requests opened, merged or reviewed through supported agent
+tools. Opened pull requests are checked for later merges through the GitHub CLI.
+Records are stored in `monocode.db.gpui.sqlite3` alongside native preferences
+when using the installed desktop database.
+
+In the Mono's **Settings → General → Heartbeat** section, **Check in on its own**
+controls inactivity checks. They are enabled by default with a 30-minute quiet
+interval; choose 15 minutes, 30 minutes, 1 hour or 2 hours, or turn them off.
+While the native app is running, an idle Mono with an existing conversation can
+review sessions, notes and inbox changes in its assigned projects and suggest
+up to two follow-ups. It can also perform recurring checks already described
+in its soul's standing instructions. New work is proposed for the user to accept.
+
+Heartbeats keep the Mono's selected permission mode and use its provider account,
+with a smaller model when its catalog offers one. Quiet checks leave no report
+or retained side session, and repeated quiet results extend the interval up to
+four hours. Recent suggestions and the last check time are saved in the Mono's
+`heartbeat.json` file to avoid repeating
+the same follow-ups after a restart. Scheduled habits take priority over
+heartbeats. Live scheduler and provider behavior still need broader testing;
+see [verification](verification.md).
+
 ## Develop
 
 From the repository root:

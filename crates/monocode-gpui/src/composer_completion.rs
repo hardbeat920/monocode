@@ -1,6 +1,7 @@
 //! The slash/@ layer lives beside Input, so typing never rebuilds the transcript
 //! or shell. Its popover keeps native text/IME focus in the composer.
 use crate::{
+    conversation::git_actions::GitAction,
     input,
     popover::{Anchor, AnchorSlot, Side, popover},
     theme::*,
@@ -35,9 +36,40 @@ struct Choice {
     label: String,
     detail: String,
     insertion: String,
+    builtin: Option<&'static str>,
     mode: Option<&'static str>,
     file: bool,
     server: Option<monocode_core::mcp::McpConnection>,
+}
+impl Choice {
+    fn icon(&self) -> (&'static str, gpui::Hsla) {
+        if let Some(command) = self.builtin.and_then(input::Command::from_name) {
+            return (command.icon(), command.color());
+        }
+        let (path, dark, light) = match self.builtin {
+            Some("btw") => ("command-btw", 0x99f6e4, 0x0f766e),
+            Some("compact") => ("command-compact", 0xc4b5fd, 0x6d28d9),
+            Some("stage") => (GitAction::Stage.icon(), 0xbbf7d0, 0x15803d),
+            Some("commit") => (GitAction::Commit.icon(), 0xfed7aa, 0xc2410c),
+            Some("visualize") => return ("command-visualize", accent_color()),
+            _ => {
+                return (
+                    if self.insertion.starts_with("@note/") {
+                        "note"
+                    } else {
+                        "sparkles"
+                    },
+                    accent_color(),
+                );
+            }
+        };
+        let dark_theme = content(1.).l > 0.5;
+        let mut color: gpui::Hsla = gpui::rgb(if dark_theme { dark } else { light }).into();
+        if dark_theme {
+            color.a = 0.9;
+        }
+        (path, color)
+    }
 }
 pub(crate) struct Completion {
     input: Entity<input::Input>,
@@ -57,6 +89,9 @@ pub(crate) struct Completion {
     disabled_paths: Vec<String>,
     known: std::collections::HashSet<String>,
     files: Vec<ProjectFile>,
+    /// `@name` → `@relative/path` for file names unique in the project; the
+    /// picker writes the short label and sending expands it back.
+    short_mentions: std::collections::HashMap<String, String>,
     choices: Vec<Choice>,
     active: usize,
     scroll: gpui::ScrollHandle,
@@ -72,6 +107,28 @@ pub(crate) struct Completion {
     _observe: Subscription,
 }
 impl EventEmitter<ModePicked> for Completion {}
+/// Composer.tsx's `buildMentionIndex`: a name is a label only when it is
+/// unique and needs no quoting.
+fn short_mentions(files: &[ProjectFile]) -> std::collections::HashMap<String, String> {
+    let mut counts = std::collections::HashMap::<&str, usize>::new();
+    for file in files {
+        *counts.entry(file.name.as_str()).or_default() += 1;
+    }
+    files
+        .iter()
+        .filter(|file| {
+            file.name != file.relative
+                && counts[file.name.as_str()] == 1
+                && !file.name.chars().any(char::is_whitespace)
+        })
+        .map(|file| {
+            (
+                composer::mention_text(&file.name),
+                composer::mention_text(&file.relative),
+            )
+        })
+        .collect()
+}
 impl Drop for Completion {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Relaxed);
@@ -106,11 +163,13 @@ impl Completion {
                 "/btw",
                 "/stage",
                 "/commit",
+                "/visualize",
             ]
             .map(str::to_owned)
             .into_iter()
             .collect(),
             files: Vec::new(),
+            short_mentions: Default::default(),
             choices: Vec::new(),
             active: 0,
             scroll: gpui::ScrollHandle::new(),
@@ -162,6 +221,7 @@ impl Completion {
         self.selected_mcp.clear();
         self.mcp_open = false;
         self.files.clear();
+        self.short_mentions.clear();
         self.notes.clear();
         self.known = [
             "/plan",
@@ -172,6 +232,7 @@ impl Completion {
             "/btw",
             "/stage",
             "/commit",
+            "/visualize",
         ]
         .map(str::to_owned)
         .into_iter()
@@ -250,7 +311,8 @@ impl Completion {
         if self.cwd.starts_with("remote://") {
             return text.to_owned();
         }
-        let text = monocode_core::provider::native_prompt(self.provider, text);
+        let text = self.expand_mentions(text);
+        let text = monocode_core::provider::native_prompt(self.provider, &text);
         let text = self
             .store
             .as_ref()
@@ -295,6 +357,30 @@ impl Completion {
                 servers.join(", ")
             )
         }
+    }
+    /// The bare file name when no other project file shares it.
+    fn mention_label(&self, file: &ProjectFile) -> String {
+        let full = composer::mention_text(&file.relative);
+        let short = composer::mention_text(&file.name);
+        if self.short_mentions.get(&short) == Some(&full) {
+            short
+        } else {
+            full
+        }
+    }
+    /// Short `@name` labels back to the project-relative paths the prompt
+    /// resolves.
+    pub(crate) fn expand_mentions(&self, text: &str) -> String {
+        if self.short_mentions.is_empty() {
+            return text.to_owned();
+        }
+        let labels = self.short_mentions.keys().cloned().collect();
+        let mut text = text.to_owned();
+        for range in composer::highlight_ranges(&text, &labels).into_iter().rev() {
+            let full = self.short_mentions[&text[range.clone()]].clone();
+            text.replace_range(range, &full);
+        }
+        text
     }
     pub(crate) fn dismiss(&mut self, cx: &mut Context<Self>) {
         self.mcp_open = false;
@@ -446,6 +532,7 @@ impl Completion {
                     Ok(files) => this.files = files,
                     Err(error) => this.error = Some(error),
                 }
+                this.short_mentions = short_mentions(&this.files);
                 this.known = [
                     "/plan",
                     "/operator",
@@ -455,6 +542,7 @@ impl Completion {
                     "/btw",
                     "/stage",
                     "/commit",
+                    "/visualize",
                 ]
                 .map(str::to_owned)
                 .into_iter()
@@ -470,6 +558,7 @@ impl Completion {
                         .iter()
                         .map(|f| composer::mention_text(&f.relative)),
                 )
+                .chain(this.short_mentions.keys().cloned())
                 .chain(this.notes.iter().map(|n| format!("@note/{}", n.slug)))
                 .collect();
                 this.highlight(cx);
@@ -515,6 +604,7 @@ impl Completion {
                         }
                     ),
                     insertion: String::new(),
+                    builtin: None,
                     mode: None,
                     file: false,
                     server: Some(server),
@@ -526,7 +616,8 @@ impl Completion {
                 .map(|file| Choice {
                     label: file.name.clone(),
                     detail: file.relative.clone(),
-                    insertion: composer::mention_text(&file.relative),
+                    insertion: self.mention_label(file),
+                    builtin: None,
                     mode: None,
                     file: true,
                     server: None,
@@ -563,6 +654,7 @@ impl Completion {
                     label: note.title.clone(),
                     detail: format!("note/{}", note.slug),
                     insertion: format!("@note/{}", note.slug),
+                    builtin: None,
                     mode: None,
                     file: false,
                     server: None,
@@ -608,6 +700,11 @@ impl Completion {
                     "Commit",
                     "Stage and commit this session's changes",
                 ),
+                (
+                    "visualize",
+                    "Visualize",
+                    "Create an inline visual of this topic or a specific request",
+                ),
             ]
             .into_iter()
             .enumerate()
@@ -638,8 +735,12 @@ impl Completion {
                             label: label.into(),
                             detail: detail.into(),
                             insertion: format!("/{id}"),
-                            mode: (!matches!(id, "compact" | "btw" | "stage" | "commit"))
-                                .then_some(id),
+                            builtin: Some(id),
+                            mode: (!matches!(
+                                id,
+                                "compact" | "btw" | "stage" | "commit" | "visualize"
+                            ))
+                            .then_some(id),
                             file: false,
                             server: None,
                         },
@@ -678,6 +779,7 @@ impl Completion {
                                     .join(" · ")
                             },
                             insertion: format!("/{}", command.invocation),
+                            builtin: None,
                             mode: None,
                             file: false,
                             server: None,
@@ -715,6 +817,7 @@ impl Completion {
                                 skill.description.clone()
                             },
                             insertion: format!("/{}", skill.name),
+                            builtin: None,
                             mode: None,
                             file: false,
                             server: None,
@@ -856,7 +959,7 @@ impl Render for Completion {
                 .iter()
                 .enumerate()
                 .map(|(ix, choice)| {
-                    let command = choice.mode.and_then(input::Command::from_name);
+                    let (icon_path, icon_color) = choice.icon();
                     div()
                         .id(("completion-row", ix))
                         .role(Role::ListItem)
@@ -890,20 +993,9 @@ impl Render for Completion {
                                         16.,
                                     )
                                 } else {
-                                    icon(
-                                        command.map(input::Command::icon).unwrap_or_else(|| {
-                                            if choice.insertion.starts_with("@note/") {
-                                                "note"
-                                            } else {
-                                                "sparkles"
-                                            }
-                                        }),
-                                        16.,
-                                    )
-                                    .text_color(
-                                        command.map_or_else(accent_color, input::Command::color),
-                                    )
-                                    .into_any_element()
+                                    icon(icon_path, 16.)
+                                        .text_color(icon_color)
+                                        .into_any_element()
                                 }),
                         )
                         .child(
@@ -1112,6 +1204,7 @@ mod tests {
                         "/mcp",
                         "/stage",
                         "/commit",
+                        "/visualize",
                         "/alpha",
                         "/zebra",
                     ]
@@ -1201,6 +1294,30 @@ mod tests {
             })
             .unwrap();
         assert_eq!(submitted.get(), 0);
+    }
+    #[gpui::test]
+    fn visualize_completion_inserts_a_command_without_selecting_a_mode(cx: &mut TestAppContext) {
+        let window = window(cx);
+        window
+            .update(cx, |view, _, cx| {
+                view.input
+                    .update(cx, |input, cx| input.set_text("/vis".into(), cx));
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, _| {
+                assert_eq!(view.choices[0].insertion, "/visualize");
+                assert_eq!(view.choices[0].mode, None);
+            })
+            .unwrap();
+        cx.simulate_keystrokes(window.into(), "enter");
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, cx| {
+                assert_eq!(view.input.read(cx).content, "/visualize ");
+            })
+            .unwrap();
     }
     #[gpui::test]
     fn compact_completion_inserts_a_local_command_without_mode_selection(cx: &mut TestAppContext) {
@@ -1312,6 +1429,42 @@ mod tests {
             .update(cx, |v, _, cx| {
                 assert_eq!(v.input.read(cx).content, "@my");
                 assert!(v.token.is_none());
+            })
+            .unwrap();
+    }
+    #[gpui::test]
+    fn unique_file_names_insert_short_and_expand_on_send(cx: &mut TestAppContext) {
+        let window = window(cx);
+        let file = |relative: &str| ProjectFile {
+            name: relative.rsplit('/').next().unwrap().into(),
+            relative: relative.into(),
+            path: format!("/repo/{relative}"),
+        };
+        window
+            .update(cx, |v, _, cx| {
+                v.files = vec![
+                    file("app/apps/README.md"),
+                    file("src/mod.rs"),
+                    file("lib/mod.rs"),
+                ];
+                v.short_mentions = short_mentions(&v.files);
+                v.input.update(cx, |i, cx| {
+                    i.set_text("@READ".into(), cx);
+                    i.select_range(5..5, cx);
+                });
+            })
+            .unwrap();
+        cx.run_until_parked();
+        cx.simulate_keystrokes(window.into(), "tab");
+        cx.run_until_parked();
+        window
+            .update(cx, |v, _, cx| {
+                assert_eq!(v.input.read(cx).content.trim_end(), "@README.md");
+                assert_eq!(v.mention_label(&v.files[1]), "@src/mod.rs");
+                assert_eq!(
+                    v.expand_mentions("see @README.md and @src/mod.rs\n> @README.md"),
+                    "see @app/apps/README.md and @src/mod.rs\n> @README.md"
+                );
             })
             .unwrap();
     }

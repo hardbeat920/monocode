@@ -347,7 +347,7 @@ fn original_app_surfaces_mono_overview_and_rail_back_use_original_controls(
     assert_eq!(header.top(), px(0.));
     assert_eq!(header.size.height, px(40.));
     assert!(visual.debug_bounds("mono-overview-tabs").is_some());
-    let first_tab = visual.debug_bounds("mono-overview-Sessions").unwrap();
+    let first_tab = visual.debug_bounds("mono-overview-Overview").unwrap();
     assert_eq!(first_tab.left() - header.left(), px(8.));
     assert!((first_tab.center().y - header.center().y).abs() <= px(0.5));
     assert!(visual.debug_bounds("sidebar-content").is_none());
@@ -948,4 +948,52 @@ fn new_layout_app_tabs_survive_frame_changes_and_close_like_session_tabs(cx: &mu
             })
             .unwrap();
     }
+}
+
+fn assert_settings_navigation(classic: bool, cx: &mut TestAppContext) {
+    let (window, session) = setup(cx, classic, false);
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    window
+        .update(visual, |shell, window, cx| {
+            shell.open_settings(crate::settings::Section::General, window, cx)
+        })
+        .unwrap();
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+
+    // The toggle steps aside but keeps its slot, so the title bar holds
+    // still, and the shortcut can't hide what Settings put in the sidebar's
+    // place.
+    let toggle = visual.debug_bounds("toggle-sidebar").unwrap();
+    assert_eq!(toggle.size.width, px(24.));
+    visual.dispatch_action(ToggleSidebar);
+    visual.run_until_parked();
+    window
+        .read_with(visual, |shell, _| {
+            assert!(shell.settings.is_some());
+            assert!(shell.workspace.sidebar_visible);
+            assert!(shell.workspace.project_rail_open);
+        })
+        .unwrap();
+
+    visual.refresh().unwrap();
+    let back = visual.debug_bounds("visit-back").unwrap();
+    visual.simulate_click(back.center(), Default::default());
+    visual.run_until_parked();
+    window
+        .read_with(visual, |shell, _| {
+            assert!(shell.settings.is_none(), "Back leaves Settings");
+            assert_eq!(shell.workspace.active, Some(session));
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn settings_back_and_sidebar_toggle_in_new_layout(cx: &mut TestAppContext) {
+    assert_settings_navigation(false, cx);
+}
+
+#[gpui::test]
+fn settings_back_and_sidebar_toggle_in_original_layout(cx: &mut TestAppContext) {
+    assert_settings_navigation(true, cx);
 }

@@ -12,12 +12,12 @@ mod pages;
 mod palettes;
 mod preferences;
 mod skill_document;
-pub(crate) use palettes::palette;
+pub(crate) use palettes::{PALETTES, palette};
 pub(crate) mod widgets;
 
 pub(crate) use keymap::apply as apply_keybindings;
 pub(crate) use model::Section;
-pub(crate) use pages::command_shortcut;
+pub(crate) use pages::{ACCENTS, command_shortcut, swatch};
 pub(crate) use preferences::{ModelChoice, Preferences, UI_SCALE_PERCENTS};
 
 use crate::{

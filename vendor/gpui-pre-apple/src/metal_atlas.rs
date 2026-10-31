@@ -7,7 +7,55 @@ use gpui::{
 };
 use metal::Device;
 use parking_lot::Mutex;
-use std::borrow::Cow;
+use std::{
+    borrow::Cow,
+    sync::atomic::{AtomicU64, Ordering},
+};
+
+/// Bytes of atlas textures alive, monochrome then polychrome, for diagnostics.
+static TEXTURE_BYTES: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
+static TEXTURE_COUNT: AtomicU64 = AtomicU64::new(0);
+/// Bytes of live tiles by key: glyphs, SVGs, images.
+static TILE_BYTES: [AtomicU64; 3] = [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+
+/// Sprite atlas memory across every window, for diagnostics.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AtlasMemory {
+    pub monochrome: u64,
+    pub polychrome: u64,
+    pub textures: u64,
+    pub glyph_tiles: u64,
+    pub svg_tiles: u64,
+    pub image_tiles: u64,
+}
+
+pub fn atlas_memory() -> AtlasMemory {
+    AtlasMemory {
+        monochrome: TEXTURE_BYTES[0].load(Ordering::Relaxed),
+        polychrome: TEXTURE_BYTES[1].load(Ordering::Relaxed),
+        textures: TEXTURE_COUNT.load(Ordering::Relaxed),
+        glyph_tiles: TILE_BYTES[0].load(Ordering::Relaxed),
+        svg_tiles: TILE_BYTES[1].load(Ordering::Relaxed),
+        image_tiles: TILE_BYTES[2].load(Ordering::Relaxed),
+    }
+}
+
+fn tile_bytes(key: &AtlasKey, tile: &AtlasTile) -> (usize, u64) {
+    let bucket = match key {
+        AtlasKey::Glyph(_) => 0,
+        AtlasKey::Svg(_) => 1,
+        AtlasKey::Image(_) => 2,
+    };
+    let bpp = match key.texture_kind() {
+        AtlasTextureKind::Polychrome => 4,
+        _ => 1,
+    };
+    let size = tile.bounds.size;
+    (
+        bucket,
+        (size.width.0.max(0) as u64) * (size.height.0.max(0) as u64) * bpp,
+    )
+}
 
 pub struct MetalAtlas(Mutex<AtlasState<MetalAtlasTextures>>);
 
@@ -43,11 +91,39 @@ impl PlatformAtlas for MetalAtlas {
         key: AtlasKey,
         build: &mut dyn FnMut() -> Result<Option<(Size<DevicePixels>, Cow<'a, [u8]>)>>,
     ) -> Result<Option<AtlasTile>> {
-        self.0.lock().get_or_insert_with(key, build)
+        let mut state = self.0.lock();
+        if state.contains(&key) {
+            return state.get_or_insert_with(key, build);
+        }
+        let counted = key.clone();
+        let tile = state.get_or_insert_with(key, build)?;
+        if let Some(tile) = &tile {
+            let (bucket, bytes) = tile_bytes(&counted, tile);
+            TILE_BYTES[bucket].fetch_add(bytes, Ordering::Relaxed);
+        }
+        Ok(tile)
+    }
+
+    fn clear(&self) {
+        let mut state = self.0.lock();
+        for (key, tile) in state.tiles() {
+            let (bucket, bytes) = tile_bytes(key, tile);
+            TILE_BYTES[bucket].fetch_sub(bytes, Ordering::Relaxed);
+        }
+        // Frames still on the GPU hold their own texture references.
+        state.clear(|textures| {
+            drop(textures.monochrome_textures.drain());
+            drop(textures.polychrome_textures.drain());
+        });
     }
 
     fn remove(&self, key: &AtlasKey) {
-        self.0.lock().remove(key);
+        let mut state = self.0.lock();
+        if let Some(tile) = state.tile(key) {
+            let (bucket, bytes) = tile_bytes(key, tile);
+            TILE_BYTES[bucket].fetch_sub(bytes, Ordering::Relaxed);
+        }
+        state.remove(key);
     }
 }
 
@@ -162,6 +238,13 @@ impl MetalAtlasTextures {
             metal::MTLStorageMode::Managed
         });
         let metal_texture = self.device.new_texture(&texture_descriptor);
+        let bytes = (size.width.0 as u64)
+            * (size.height.0 as u64)
+            * if kind == AtlasTextureKind::Polychrome {
+                4
+            } else {
+                1
+            };
 
         let texture_list = match kind {
             AtlasTextureKind::Monochrome => &mut self.monochrome_textures,
@@ -179,7 +262,11 @@ impl MetalAtlasTextures {
             allocator: etagere::BucketedAtlasAllocator::new(size_to_etagere(size)),
             metal_texture: AssertSend(metal_texture),
             live_atlas_keys: 0,
+            bytes,
         };
+        TEXTURE_BYTES[(kind == AtlasTextureKind::Polychrome) as usize]
+            .fetch_add(bytes, Ordering::Relaxed);
+        TEXTURE_COUNT.fetch_add(1, Ordering::Relaxed);
 
         if let Some(ix) = index {
             texture_list.textures[ix] = Some(atlas_texture);
@@ -208,6 +295,15 @@ struct MetalAtlasTexture {
     allocator: BucketedAtlasAllocator,
     metal_texture: AssertSend<metal::Texture>,
     live_atlas_keys: u32,
+    bytes: u64,
+}
+
+impl Drop for MetalAtlasTexture {
+    fn drop(&mut self) {
+        TEXTURE_BYTES[(self.id.kind == AtlasTextureKind::Polychrome) as usize]
+            .fetch_sub(self.bytes, Ordering::Relaxed);
+        TEXTURE_COUNT.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 impl MetalAtlasTexture {

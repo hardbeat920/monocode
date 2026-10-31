@@ -51,7 +51,17 @@ fn card_corner_mask(begin: bool) -> impl IntoElement {
                 // window's unwashed glass here leaves dark square corners.
                 #[cfg(target_os = "macos")]
                 let outside = inset_chrome_wash();
-                #[cfg(not(target_os = "macos"))]
+                // Without the mask an opaque fill covers whatever the card
+                // painted past its curve. Over Windows' glass the root's
+                // translucent fill is already there, and a second one darkens
+                // the corners.
+                #[cfg(target_os = "windows")]
+                let outside = if shell_fill().a < 1. {
+                    inset_chrome_wash()
+                } else {
+                    shell_fill().blend(inset_chrome_wash())
+                };
+                #[cfg(not(any(target_os = "macos", target_os = "windows")))]
                 let outside = shell_fill().blend(inset_chrome_wash());
                 let vertices = [
                     (
@@ -473,11 +483,14 @@ impl Shell {
             .when(!spans_window, |d| {
                 d.child(
                     // The right panel toggle holds the window's corner too, above
-                    // the strip or an open panel's tab row.
+                    // the strip or an open panel's tab row. Its padding keeps
+                    // clear of Windows' controls; Linux's sit beside it.
                     div()
                         .absolute()
                         .top_0()
-                        .right(px(super::client_controls_width(window)))
+                        .right(px(
+                            super::client_controls_width(window) - self.window_controls
+                        ))
                         .h(px(TITLE_BAR_HEIGHT))
                         .children(corner),
                 )
@@ -496,23 +509,25 @@ impl Shell {
     }
     /// Classic: the corner's buttons, `pr-3` from the edge.
     pub(super) fn corner_room(&self, cx: &gpui::App) -> f32 {
+        // Client-drawn window controls hold the corner's right end.
+        let controls = self.window_controls;
         if self.workspace.classic_layout && !self.mono_active(cx) {
-            return 0.;
+            return controls;
         }
         if self.mono_active(cx) {
             return if self.corner_tabs_shown() {
-                let minimum = if self.workspace.right_panel_width >= 312. {
+                let minimum = if self.right_panel_width() >= 312. + controls {
                     312.
                 } else {
                     252.
                 };
-                self.right_drawn.max(minimum)
+                self.right_drawn.max(minimum + controls)
             } else {
-                6. + CORNER_BUTTONS_WIDTH + 12.
+                6. + CORNER_BUTTONS_WIDTH + 12. + controls
             };
         }
         if !self.git.read(cx).available() {
-            return 6. + 24. + 12.;
+            return 6. + 24. + 12. + controls;
         }
         // The toggle and the compact tool tabs, including the open label's padding.
         let tabs = if self.corner_tabs_shown() {
@@ -520,7 +535,7 @@ impl Shell {
         } else {
             0.
         };
-        6. + tabs + self.diff_stat_room(cx) + CORNER_BUTTONS_WIDTH + 12.
+        6. + tabs + self.diff_stat_room(cx) + CORNER_BUTTONS_WIDTH + 12. + controls
     }
     fn corner_tabs_shown(&self) -> bool {
         self.workspace.right_panel_open
@@ -540,7 +555,7 @@ impl Shell {
         if !self.git.read(cx).available() {
             return row
                 .pl_1p5()
-                .pr_3()
+                .pr(px(12. + self.window_controls))
                 .child(self.file_search_button(cx))
                 .into_any_element();
         }
@@ -578,7 +593,7 @@ impl Shell {
         }
         let count = tabs.len();
         row.pl_1p5()
-            .pr_3()
+            .pr(px(12. + self.window_controls))
             .when(open, |d| {
                 // Follow the panel's leading edge, reserving enough room for
                 // the controls while the panel is still sliding open.

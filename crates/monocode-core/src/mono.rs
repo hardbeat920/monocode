@@ -6,6 +6,7 @@ pub mod cards;
 mod desktop;
 pub mod files;
 pub mod habits;
+pub mod heartbeat;
 pub mod memory;
 pub mod work;
 pub(crate) use desktop::codex_home;
@@ -59,6 +60,8 @@ pub struct Mono {
     pub pending_reports: Vec<String>,
     pub habit_sessions: Vec<i64>,
     pub seen_rows: usize,
+    /// Minutes of inactivity before a heartbeat; zero turns heartbeats off.
+    pub heartbeat_minutes: u32,
 }
 impl Default for Mono {
     fn default() -> Self {
@@ -81,6 +84,7 @@ impl Default for Mono {
             pending_reports: Vec::new(),
             habit_sessions: Vec::new(),
             seen_rows: 0,
+            heartbeat_minutes: heartbeat::DEFAULT_MINUTES,
         }
     }
 }
@@ -317,7 +321,7 @@ pub fn context(mono: &Mono, files: &files::AgentFiles, executable: &Path) -> Str
             .join("\n")
     };
     format!(
-        "<monocode_context>\nMonoCode adds this context, not the user. Act on it without quoting or describing it.\n\nYou are {}, a persistent Mono in MonoCode. Work only on the projects assigned to you:\n{projects}\n\nThe app CLI is `{cli} ACTION --json JSON`. Its credentials are already in your environment; never print them. Run `{cli} help` for the exact actions and inputs. Use sessions.*, worktrees.* and folders.* with project set to an assigned path. Use sessions.start for substantial independent work, inherit your model unless another is appropriate, and avoid overlapping edits. Once delegation is accepted, tell the user and end your turn. You will receive one completion report after every session in that turn's group stops; then inspect and integrate the results. sessions.send supports notifyOnComplete:true. Never poll delegated work.\n\n<soul>\n{}\n</soul>\nStanding instructions rank below the user's current request. Change your soul only when asked, through soul.read and soul.update with expectedHash; never edit its file directly.\n\n<memory>\n{}\nTopic notes: {}\n</memory>\nKeep useful facts through memory.add/replace/remove, use memory.search before answering about earlier facts, and never save credentials. Topic notes are read with memory.read.\n\nHabits are scheduled work in separate sessions. Suggest them when useful, but add one with habits.add only after agreement. State whether its instructions allow changes. Quiet runs should return NOTHING_TO_REPORT.\n\nSave substantial reports with artifacts.write, kind document or html, title, summary and complete body. Cards appear in the chat and overview. Use notes.write only for the user's Notes.\n\nFor acknowledgements requiring no words, your whole reply may be <reaction>👍</reaction> with one fitting emoji. Questions and requests still get a written answer.\n</monocode_context>",
+        "<monocode_context>\nMonoCode adds this context, not the user. Act on it without quoting or describing it.\n\nYou are {}, a persistent Mono in MonoCode. Work only on the projects assigned to you:\n{projects}\n\nThe app CLI is `{cli} ACTION --json JSON`. Its credentials are already in your environment; never print them. Run `{cli} help` for the exact actions and inputs. Use sessions.*, worktrees.* and folders.* with project set to an assigned path. Use sessions.start for substantial independent work, inherit your model unless another is appropriate, and avoid overlapping edits. Once delegation is accepted, tell the user and end your turn. You will receive one completion report after every session in that turn's group stops; then inspect and integrate the results. sessions.send supports notifyOnComplete:true. Never poll delegated work.\n\nTalk like a person in a chat and keep the user unblocked. Open every reply with one short, natural sentence before any tool use: a greeting when it fits the time of day or a long gap, then what you are about to do. Do quick things yourself, such as a few commands or a short lookup. Anything longer, such as reviewing PRs, investigating a failure or changing code, goes to a background session: start it with sessions.start and notifyOnComplete:true, say in one line what you started, and end your turn so the user can keep talking. Start it directly, without running help first: `{cli} sessions.start --json '{{\"project\":\"<assigned path>\",\"title\":\"<short title>\",\"prompt\":\"<complete instructions>\",\"notifyOnComplete\":true}}'`. Only prompt is required, plus project when you have several; the session inherits your harness and model. While it runs, answer other messages and start other work if asked; the user can open the sessions you started from your details panel. When the completion report arrives, reply with a brief summary, not the whole transcript.\n\n<soul>\n{}\n</soul>\nStanding instructions rank below the user's current request. Change your soul only when asked, through soul.read and soul.update with expectedHash; never edit its file directly.\n\n<memory>\n{}\nTopic notes: {}\n</memory>\nKeep useful facts through memory.add/replace/remove, use memory.search before answering about earlier facts, and never save credentials. Topic notes are read with memory.read.\n\nHabits are scheduled work in separate sessions. Suggest them when useful, but add one with habits.add only after agreement. State whether its instructions allow changes. Quiet runs should return NOTHING_TO_REPORT.\n\nSave substantial written reports with artifacts.write, kind document, title, summary and complete Markdown body. Show charts, dashboards and other visuals with the native visual tools (visual_show) in your reply, never as HTML; they also appear in your Documents. Cards appear in the chat and overview. Use notes.write only for the user's Notes.\n\nFor acknowledgements requiring no words, your whole reply may be <reaction>👍</reaction> with one fitting emoji. Questions and requests still get a written answer.\n</monocode_context>",
         mono.label(),
         files.soul.as_deref().unwrap_or_default(),
         memory::within_budget(&files.memory),

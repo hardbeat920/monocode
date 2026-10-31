@@ -59,12 +59,15 @@ pub(crate) struct Preferences {
     pub autosave: bool,
     pub diff_view: String,
     pub composer_mascot: bool,
-    pub empty_session_games: bool,
+    /// What fills an empty session: "ink", "games" or "none".
+    pub empty_session: String,
     // Providers
     pub show_remaining_usage: bool,
     pub mask_emails: bool,
     pub idle_agents: u32,
     pub claude_hooks: bool,
+    /// Experimental: report Monocode instead of `sdk-cli` as Claude's entrypoint.
+    pub claude_entrypoint: bool,
     pub binary_paths: HashMap<String, String>,
     pub disabled_skill_paths: Vec<String>,
     pub skill_source_paths: Vec<String>,
@@ -141,11 +144,12 @@ impl Default for Preferences {
             autosave: false,
             diff_view: "editor".into(),
             composer_mascot: true,
-            empty_session_games: true,
+            empty_session: "ink".into(),
             show_remaining_usage: false,
             mask_emails: true,
             idle_agents: 3,
             claude_hooks: true,
+            claude_entrypoint: false,
             binary_paths: HashMap::new(),
             disabled_skill_paths: Vec::new(),
             skill_source_paths: Vec::new(),
@@ -174,6 +178,17 @@ impl Preferences {
         self.theme_saturation = (color.s * 100.).round() as u32;
         self.theme_dark_lightness = ((color.l * 100.).round() as u32).min(30);
         self.workspace_theme = id;
+    }
+
+    /// The color settings a project copies when it gets its own theme.
+    pub(crate) fn project_theme(&self) -> monocode_core::project_appearance::ProjectTheme {
+        monocode_core::project_appearance::ProjectTheme {
+            workspace_theme: self.workspace_theme.clone(),
+            accent_color: self.accent_color.clone(),
+            hue: self.theme_hue,
+            saturation: self.theme_saturation,
+            dark_lightness: self.theme_dark_lightness,
+        }
     }
 
     pub(crate) fn wayland_decorations(&self, compositor: &str) -> Option<gpui::WindowDecorations> {

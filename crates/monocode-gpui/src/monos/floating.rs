@@ -565,11 +565,7 @@ impl Monos {
             kind: WindowKind::PopUp,
             is_minimizable: false,
             display_id: display.map(|d| d.id()),
-            window_background: if cfg!(target_os = "macos") && !is_light() {
-                gpui::WindowBackgroundAppearance::Blurred
-            } else {
-                gpui::WindowBackgroundAppearance::Opaque
-            },
+            window_background: crate::theme::window_backdrop(!is_light()),
             app_id: Some("dev.usemono.mono-chat".into()),
             ..Default::default()
         };

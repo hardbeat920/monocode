@@ -60,6 +60,8 @@ pub(crate) struct Inbox {
     summary_rows: std::cell::RefCell<ui::SummaryRows>,
     focus_comment: bool,
     selected: Option<String>,
+    /// The address last copied and the press that copied it, until the tick fades.
+    copied_link: Option<(String, u64)>,
     details: Option<Details>,
     thread: Option<Thread>,
     document: Option<Entity<document::InboxDocument>>,
@@ -111,6 +113,15 @@ pub(crate) struct Inbox {
     _subscriptions: Vec<Subscription>,
 }
 
+/// The inbox opens scoped to the project it was opened from.
+fn other_projects(projects: &[PathBuf], cwd: &PathBuf) -> Vec<String> {
+    projects
+        .iter()
+        .filter(|project| *project != cwd)
+        .map(|project| project.to_string_lossy().into_owned())
+        .collect()
+}
+
 impl EventEmitter<Event> for Inbox {}
 impl Focusable for Inbox {
     fn focus_handle(&self, _: &App) -> FocusHandle {
@@ -119,6 +130,25 @@ impl Focusable for Inbox {
 }
 
 impl Inbox {
+    fn copy_link(&mut self, url: String, cx: &mut Context<Self>) {
+        if url.is_empty() {
+            return;
+        }
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(url.clone()));
+        let press = self.copied_link.as_ref().map_or(0, |(_, press)| press + 1);
+        self.copied_link = Some((url, press));
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_secs(2)).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.copied_link.as_ref().is_some_and(|(_, p)| *p == press) {
+                    this.copied_link = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
     pub(crate) fn new(
         store: Database,
         projects: Vec<PathBuf>,
@@ -138,7 +168,7 @@ impl Inbox {
         if !projects.contains(&cwd) {
             projects.push(cwd.clone());
         }
-        let (state, data_dir) = locked(&store)
+        let (mut state, data_dir) = locked(&store)
             .map(|db| {
                 (
                     ViewState::load(&db),
@@ -148,6 +178,7 @@ impl Inbox {
                 )
             })
             .unwrap_or_else(|_| (ViewState::default(), cwd.clone()));
+        state.filters.hidden_projects = other_projects(&projects, &cwd);
         let search = cx.new(|cx| Input::field("Filter inbox", "Filter inbox", content(0.4), cx));
         let comment = cx.new(Input::inbox_comment);
         let connect_url = cx.new(|cx| Input::field("Instance URL", "https://", content(0.4), cx));
@@ -234,6 +265,7 @@ impl Inbox {
             summary_rows: Default::default(),
             focus_comment: false,
             selected: None,
+            copied_link: None,
             details: None,
             thread: None,
             document: None,
@@ -296,9 +328,29 @@ impl Inbox {
             projects.push(cwd.clone());
         }
         if self.projects != projects || self.service.cwd != cwd {
+            let switched = self.service.cwd != cwd;
+            if switched {
+                self.state.filters.hidden_projects = other_projects(&projects, &cwd);
+                self.save();
+            }
             self.projects = projects;
             self.service.cwd = cwd.clone();
             self.start_project = cwd;
+            if switched {
+                let visible = self.visible_items(cx);
+                if self
+                    .selected
+                    .as_ref()
+                    .is_some_and(|key| !visible.iter().any(|item| &item.key() == key))
+                {
+                    self.deselect(cx);
+                    if self.active
+                        && let Some(item) = visible.first()
+                    {
+                        self.select(item.key(), cx);
+                    }
+                }
+            }
             self.refresh(cx);
         }
     }
@@ -381,7 +433,7 @@ impl Inbox {
         let service = self.service.clone();
         let state = self.state.clone();
         let projects = self.projects.clone();
-        let scope = state.fetch_scope(&projects);
+        let scope = self.fetch_scope();
         let store = self.store.clone();
         let task = cx.background_executor().spawn(async move {
             let snapshot = service.list(&projects, &state);
@@ -397,7 +449,7 @@ impl Inbox {
                     return;
                 }
                 this.loading = false;
-                if scope != this.state.fetch_scope(&this.projects) {
+                if scope != this.fetch_scope() {
                     this.refresh_queued = false;
                     this.refresh(cx);
                     return;
@@ -440,14 +492,12 @@ impl Inbox {
                 }
                 this.save();
                 cx.emit(Event::ItemsChanged(appeared));
-                if this
-                    .item()
-                    .is_none_or(|item| item.provider != this.state.source)
+                if this.selected.is_some()
+                    && this
+                        .item()
+                        .is_none_or(|item| item.provider != this.state.source)
                 {
-                    this.selected = None;
-                    this.details = None;
-                    this.document = None;
-                    this.comments.clear();
+                    this.deselect(cx);
                 }
                 if this.active
                     && this.selected.is_none()
@@ -465,6 +515,15 @@ impl Inbox {
         cx.notify();
     }
 
+    /// Rows are assigned to the active checkout, so a fetch made for another
+    /// one is stale even when the project list is the same.
+    fn fetch_scope(&self) -> String {
+        format!(
+            "{}:{}",
+            self.state.fetch_scope(&self.projects),
+            monocode_core::files::path_key(&self.service.cwd.to_string_lossy())
+        )
+    }
     fn save(&mut self) {
         if let Err(error) = locked(&self.store).and_then(|db| self.state.save(&db)) {
             self.error = Some(error);
@@ -476,6 +535,9 @@ impl Inbox {
             .items
             .iter()
             .filter(|item| self.state.filters.matches(item, &self.state.source, search))
+            .filter(|item| {
+                item.provider != "linear" || !self.state.hidden_linear_teams.contains(&item.team_id)
+            })
             .cloned()
             .collect()
     }
@@ -491,6 +553,29 @@ impl Inbox {
             return;
         }
         self.selected = Some(key);
+        self.reset_detail(cx);
+        if let Some(item) = self.item() {
+            if self.active {
+                self.state.seen.mark(&item);
+                self.save();
+            }
+            if !item.project_path.is_empty() {
+                self.start_project = PathBuf::from(&item.project_path);
+            }
+        }
+        self.load_detail(true, cx);
+        cx.notify();
+    }
+    fn deselect(&mut self, cx: &mut Context<Self>) {
+        self.selected = None;
+        self.reset_detail(cx);
+        cx.notify();
+    }
+    /// Drops the detail pane's state and invalidates its in-flight requests.
+    fn reset_detail(&mut self, cx: &mut Context<Self>) {
+        self.detail_generation += 1;
+        self.detail_loading = false;
+        self.detail_error = None;
         self.summary_scroll = ListState::new(0, ListAlignment::Top, px(200.));
         self.activity.clear();
         self.activity_revision += 1;
@@ -519,17 +604,6 @@ impl Inbox {
         self.action_menu = false;
         self.comment
             .update(cx, |input, cx| input.set_text(String::new(), cx));
-        if let Some(item) = self.item() {
-            if self.active {
-                self.state.seen.mark(&item);
-                self.save();
-            }
-            if !item.project_path.is_empty() {
-                self.start_project = PathBuf::from(&item.project_path);
-            }
-        }
-        self.load_detail(true, cx);
-        cx.notify();
     }
     fn change_source(&mut self, source: String, cx: &mut Context<Self>) {
         self.state.source = source;

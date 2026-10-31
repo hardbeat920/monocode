@@ -7,7 +7,7 @@ use gpui::{
     Subscription, Window, div, prelude::*, px,
 };
 use monocode_core::catalog::{self, Model};
-use monocode_core::provider::Kind;
+use monocode_core::provider::{self, Kind};
 
 /// Friendly names used before a provider's live catalog arrives.
 pub(crate) const CLAUDE_MODELS: &[(&str, &str)] = &[
@@ -478,10 +478,16 @@ impl ModelList {
         self.errors.retain(|(k, _)| *k != kind);
         let work = cx.background_executor().spawn({
             let profile = self.profiles.get(&kind).cloned().unwrap_or_default();
-            async move { catalog::models_for(kind, &profile) }
+            async move {
+                let result = catalog::models_for(kind, &profile);
+                // Missing is a fact about the binary, not about the message it
+                // produced. Resolve on the worker so the UI never probes paths.
+                let missing = result.is_err() && provider::resolve(kind).is_none();
+                (result, missing)
+            }
         });
         cx.spawn(async move |this, cx| {
-            let result = work.await;
+            let (result, missing) = work.await;
             let _ = this.update(cx, |this, cx| {
                 this.loading.retain(|k| *k != kind);
                 match result {
@@ -492,11 +498,7 @@ impl ModelList {
                     Err(error) => this.errors.push((kind, error)),
                 }
                 this.missing.retain(|k| *k != kind);
-                if this
-                    .errors
-                    .iter()
-                    .any(|(k, error)| *k == kind && error.contains("CLI not installed"))
-                {
+                if missing {
                     this.missing.push(kind);
                 }
                 if this.query(cx).is_empty() {
@@ -765,7 +767,7 @@ impl Render for ModelList {
                     .aria_selected(current)
                     .when(!entry.enabled, |d| {
                         d.aria_description(if self.missing.contains(&entry.kind) {
-                            if self.remote_project.is_some() { "Install this provider's CLI and sign in on the connected machine, then retry model discovery" } else { "Install this provider's CLI and sign in, then retry model discovery" }
+                            if self.remote_project.is_some() { "This provider is not installed on the connected machine. Install it there, then retry model discovery" } else { "This provider is not installed. Install it, then retry model discovery" }
                         } else {
                             "Wait for the current turn to finish before switching providers"
                         })

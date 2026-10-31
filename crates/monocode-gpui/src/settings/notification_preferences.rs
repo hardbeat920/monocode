@@ -119,6 +119,25 @@ impl Preferences {
         let rule = ProjectRule::from_preferences(&self.project_notifications, id, category);
         rule.allows(occurred_at.unwrap_or(now), now)
     }
+    /// How many of the times notification rules switch at (mutes ending,
+    /// resumes, categories enabled) are at or before `now`. A change means
+    /// some rule now answers differently.
+    pub(crate) fn notification_times_passed(&self, now: u64) -> usize {
+        let passed = |value: &Value| value.as_f64().is_some_and(|at| at <= now as f64);
+        self.project_notifications
+            .as_object()
+            .into_iter()
+            .flat_map(|map| map.values())
+            .map(|p| {
+                let enabled = p["enabledAfter"]
+                    .as_object()
+                    .map_or(0, |map| map.values().filter(|at| passed(at)).count());
+                usize::from(passed(&p["mutedUntil"]))
+                    + usize::from(passed(&p["resumedAt"]))
+                    + enabled
+            })
+            .sum()
+    }
     fn project_muted(&self, id: &str, now: u64) -> bool {
         let p = &self.project_notifications[id];
         p.get("mutedUntil") == Some(&Value::Null)

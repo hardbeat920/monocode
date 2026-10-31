@@ -502,6 +502,16 @@ impl Protocol {
                         let (policy, sandbox, sandbox_policy, reviewer) = self.codex_access();
                         let mut params = json!({"cwd":self.request.cwd,"approvalPolicy":policy,"sandbox":sandbox,"sandboxPolicy":sandbox_policy,"approvalsReviewer":reviewer,
                             "developerInstructions":format!("You are the coding agent in Monocode. Use the available tools to inspect and work in the supplied cwd. Do not ask the user to paste files or git output you can inspect yourself. Respect the selected access policy and request approval when required. {}", if self.request.settings.plan { "This is a planning turn: inspect and propose a plan without changing files." } else { "" })});
+                        if let Some(instructions) = crate::visual_bridge::instructions(
+                            &self.request.settings.environment,
+                            false,
+                        ) {
+                            params["developerInstructions"] = format!(
+                                "{}\n\n{instructions}",
+                                params["developerInstructions"].as_str().unwrap_or_default()
+                            )
+                            .into();
+                        }
                         if self.request.settings.text_only {
                             params["ephemeral"] = true.into();
                             params["developerInstructions"] = "Answer the supplied text request directly. Do not call tools or inspect the workspace.".into();
@@ -1305,13 +1315,7 @@ pub fn run_text(mut request: Request, cancel: Arc<AtomicBool>) -> Result<String,
 }
 
 pub(crate) fn catalog_for(kind: Kind, account: crate::accounts::Profile) -> Result<Value, String> {
-    let binary = resolve(kind).ok_or_else(|| {
-        format!(
-            "{} CLI not installed. Sign in with {}.",
-            kind.label(),
-            kind.login_hint()
-        )
-    })?;
+    let binary = resolve(kind).ok_or_else(|| kind.unavailable_hint())?;
     let cwd = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
@@ -1427,16 +1431,29 @@ fn run_operation(
                     "--mcp-config",
                     "{\"mcpServers\":{}}",
                 ]);
-            } else if settings.access == AccessMode::ReadOnly {
-                command.args(["--tools", "Read,Glob,Grep,Bash", "--allowedTools", "Read,Glob,Grep,Bash(git status *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(pwd),Bash(ls *),Bash(rg *)"]);
             }
-            if !settings.text_only {
-                if let Some(server) = crate::visual_bridge::mcp_server(&settings.environment) {
-                    command.args([
-                        "--mcp-config",
-                        &json!({"mcpServers":{"monocode_visual":server}}).to_string(),
-                    ]);
+            let visual_server = (!settings.text_only)
+                .then(|| crate::visual_bridge::mcp_server(&settings.environment))
+                .flatten();
+            let mut allowed = Vec::new();
+            if !settings.text_only && settings.access == AccessMode::ReadOnly {
+                command.args(["--tools", "Read,Glob,Grep,Bash"]);
+                allowed.push("Read,Glob,Grep,Bash(git status *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(pwd),Bash(ls *),Bash(rg *)");
+            }
+            if let Some(server) = visual_server {
+                command.args([
+                    "--mcp-config",
+                    &json!({"mcpServers":{"monocode_visual":server}}).to_string(),
+                ]);
+                allowed.push(crate::visual_bridge::CLAUDE_ALLOWED_TOOLS);
+                if let Some(instructions) =
+                    crate::visual_bridge::instructions(&settings.environment, true)
+                {
+                    command.args(["--append-system-prompt", &instructions]);
                 }
+            }
+            if !allowed.is_empty() {
+                command.args(["--allowedTools", &allowed.join(",")]);
             }
             if mode == "bypassPermissions" {
                 command.arg("--allow-dangerously-skip-permissions");

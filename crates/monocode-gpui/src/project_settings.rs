@@ -140,7 +140,7 @@ pub(crate) fn header_project_icon(appearance: &ProjectAppearance, project: &str)
             .into_any_element(),
     }
 }
-fn button(
+pub(crate) fn button(
     id: impl Into<gpui::ElementId>,
     label: impl Into<SharedString>,
 ) -> gpui::Stateful<gpui::Div> {

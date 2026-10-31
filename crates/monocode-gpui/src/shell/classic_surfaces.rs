@@ -35,7 +35,7 @@ impl Shell {
             .flex()
             .items_center()
             .pl(px(inset))
-            .pr_3()
+            .pr(px(12. + self.window_controls))
             .gap_2()
             .child(
                 icon(
@@ -79,6 +79,7 @@ impl Shell {
             .flex()
             .items_center()
             .when(compact, |d| d.pl(px(self.strip_lead(cx))))
+            .pr(px(self.window_controls))
             .child(titlebar_drag_area().flex_1().min_w_0().child(title))
             .child(
                 div()
@@ -127,7 +128,9 @@ impl Shell {
     }
 
     pub(super) fn classic_rail_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.mono_active(cx) {
+        if self.settings.is_some() {
+            self.close_settings(window, cx);
+        } else if self.mono_active(cx) {
             if let Some(monos) = &self.monos {
                 monos.update(cx, |monos, cx| monos.close(cx));
             }

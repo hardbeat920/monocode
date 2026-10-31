@@ -1762,6 +1762,7 @@ impl Shell {
                         .child(
                             div()
                                 .id("link-work-item-dialog")
+                                .debug_selector(|| "link-work-item-dialog".into())
                                 .role(Role::Dialog)
                                 .aria_label(if dialog.editing {
                                     "Edit GitHub link"
@@ -1840,13 +1841,13 @@ impl Shell {
                                                 .when(dialog.editing, |d| {
                                                     d.child(
                                                         button("link-remove", "Remove link")
-                                                            .mr_auto()
                                                             .text_color(rgb(0xf87171))
                                                             .hover(|s| s.bg(rgba(0xf871711a)))
                                                             .on_click(cx.listener(|this, _, window, cx| {
                                                                 this.save_link(false, window, cx)
                                                             })),
                                                     )
+                                                    .child(div().flex_1())
                                                 })
                                                 .child(
                                                     crate::modal::ghost_button("link-cancel", "Cancel")
@@ -1860,6 +1861,7 @@ impl Shell {
                                                         "link-save",
                                                         if dialog.editing { "Update link" } else { "Link" },
                                                     )
+                                                    .debug_selector(|| "link-save".into())
                                                     .cursor_pointer()
                                                     .on_click(cx.listener(|this, _, window, cx| {
                                                         this.save_link(true, window, cx)
@@ -1995,7 +1997,7 @@ mod tests {
                             && quad
                                 .background
                                 .as_solid()
-                                .is_some_and(|color| color == gpui::Hsla::from(rgb(0x323232)))
+                                .is_some_and(|color| color == crate::theme::rail_color())
                     }),
                     "the same spine as Operator rows connects folder members"
                 );
@@ -2238,6 +2240,36 @@ mod tests {
                 assert_eq!(shell.sessions[&a].read(cx).summary.title, "First name");
             })
             .unwrap();
+    }
+
+    #[gpui::test]
+    fn editing_a_link_keeps_the_update_button_inside_the_dialog(cx: &mut TestAppContext) {
+        let (window, a, _) = setup(cx);
+        window
+            .update(cx, |shell, w, cx| {
+                shell.run_menu(MenuTarget::Session(a), "link-work-item", None, w, cx);
+                shell
+                    .link_dialog
+                    .as_ref()
+                    .unwrap()
+                    .input
+                    .update(cx, |i, cx| {
+                        i.set_text("https://github.com/acme/app/pull/42".into(), cx)
+                    });
+                shell.save_link(true, w, cx);
+                shell.run_menu(MenuTarget::Session(a), "link-work-item", None, w, cx);
+                assert!(shell.link_dialog.as_ref().unwrap().editing);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let visual = &mut VisualTestContext::from_window(window.into(), cx);
+        visual.refresh().unwrap();
+        let dialog = visual.debug_bounds("link-work-item-dialog").unwrap();
+        let save = visual.debug_bounds("link-save").unwrap();
+        assert!(
+            save.right() <= dialog.right() - px(16.),
+            "Update link at {save:?} overflows the dialog at {dialog:?}"
+        );
     }
 
     #[gpui::test]

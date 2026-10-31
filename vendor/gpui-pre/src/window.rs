@@ -126,6 +126,9 @@ struct WindowInvalidatorInner {
     pub dirty: bool,
     pub draw_phase: DrawPhase,
     pub dirty_views: FxHashSet<EntityId>,
+    /// Views invalidated by a change that may affect layout, as opposed to
+    /// [`WindowInvalidator::invalidate_view_paint`]'s animation steps.
+    pub layout_views: FxHashSet<EntityId>,
     pub update_count: usize,
     #[cfg(feature = "profiler")]
     pub frame_dirty: FrameDirtyAccumulator,
@@ -167,6 +170,7 @@ impl WindowInvalidator {
                 dirty: true,
                 draw_phase: DrawPhase::None,
                 dirty_views: FxHashSet::default(),
+                layout_views: FxHashSet::default(),
                 update_count: 0,
                 #[cfg(feature = "profiler")]
                 frame_dirty: FrameDirtyAccumulator::default(),
@@ -176,9 +180,23 @@ impl WindowInvalidator {
     }
 
     pub fn invalidate_view(&self, entity: EntityId, cx: &mut App) -> bool {
+        self.invalidate(entity, true, cx)
+    }
+
+    /// Like [`Self::invalidate_view`], for a change that keeps every element's
+    /// size, such as an animation step. Views can skip re-measuring on frames
+    /// with only these, see [`Window::view_layout_dirty`].
+    pub fn invalidate_view_paint(&self, entity: EntityId, cx: &mut App) -> bool {
+        self.invalidate(entity, false, cx)
+    }
+
+    fn invalidate(&self, entity: EntityId, layout: bool, cx: &mut App) -> bool {
         let mut inner = self.inner.borrow_mut();
         inner.update_count += 1;
         inner.dirty_views.insert(entity);
+        if layout {
+            inner.layout_views.insert(entity);
+        }
         if inner.draw_phase == DrawPhase::None {
             #[cfg(feature = "profiler")]
             let dirty_at = Self::record_frame_dirty(&mut inner);
@@ -274,6 +292,14 @@ impl WindowInvalidator {
 
     pub fn replace_views(&self, views: FxHashSet<EntityId>) {
         self.inner.borrow_mut().dirty_views = views;
+    }
+
+    pub fn take_layout_views(&self) -> FxHashSet<EntityId> {
+        mem::take(&mut self.inner.borrow_mut().layout_views)
+    }
+
+    pub fn replace_layout_views(&self, views: FxHashSet<EntityId>) {
+        self.inner.borrow_mut().layout_views = views;
     }
 
     pub fn not_drawing(&self) -> bool {
@@ -1222,7 +1248,7 @@ pub struct Window {
     pub(crate) display_observers: SubscriberSet<(), AnyObserver>,
     is_resizable: bool,
     is_minimizable: bool,
-    sprite_atlas: Arc<dyn PlatformAtlas>,
+    pub(crate) sprite_atlas: Arc<dyn PlatformAtlas>,
     text_system: Arc<WindowTextSystem>,
     text_rendering_mode: Rc<Cell<TextRenderingMode>>,
     rem_size: Pixels,
@@ -1254,6 +1280,8 @@ pub struct Window {
     pub(crate) tooltip_bounds: Option<TooltipBounds>,
     pub(crate) next_frame_callbacks: Rc<RefCell<Vec<FrameCallback>>>,
     pub(crate) dirty_views: FxHashSet<EntityId>,
+    /// The dirty views, and their ancestors, whose change may affect layout.
+    pub(crate) layout_dirty_views: FxHashSet<EntityId>,
     focus_listeners: SubscriberSet<(), AnyWindowFocusListener>,
     pub(crate) focus_lost_listeners: SubscriberSet<(), AnyObserver>,
     focus_lost_path: SmallVec<[FocusId; 8]>,
@@ -2160,6 +2188,7 @@ impl Window {
             next_tooltip_id: TooltipId::default(),
             tooltip_bounds: None,
             dirty_views: FxHashSet::default(),
+            layout_dirty_views: FxHashSet::default(),
             focus_listeners: SubscriberSet::new(),
             focus_lost_listeners: SubscriberSet::new(),
             focus_lost_path: SmallVec::new(),
@@ -2256,6 +2285,26 @@ impl ContentMask<Pixels> {
 }
 
 impl Window {
+    fn mark_view_layout_dirty(&mut self, view_id: EntityId) {
+        for view_id in self
+            .rendered_frame
+            .dispatch_tree
+            .view_path_reversed(view_id)
+        {
+            if !self.layout_dirty_views.insert(view_id) {
+                break;
+            }
+        }
+    }
+
+    /// Whether this frame may change the size of something `view` draws: it,
+    /// or a view inside it, was invalidated by anything but an animation step,
+    /// or the window is redrawing everything. While false, sizes a view
+    /// measured on an earlier frame for unchanged content still hold.
+    pub fn view_layout_dirty(&self, view: EntityId) -> bool {
+        self.refreshing || self.layout_dirty_views.contains(&view)
+    }
+
     fn mark_view_dirty(&mut self, view_id: EntityId) {
         // Mark ancestor views as dirty. If already in the `dirty_views` set, then all its ancestors
         // should already be dirty.
@@ -3500,6 +3549,7 @@ impl Window {
             }
         }
         self.dirty_views.clear();
+        self.layout_dirty_views.clear();
         self.next_frame.window_active = self.active.get();
 
         // Register requested input handler with the platform window.
@@ -3626,6 +3676,11 @@ impl Window {
             self.mark_view_dirty(entity);
         }
         self.invalidator.replace_views(views);
+        let mut views = self.invalidator.take_layout_views();
+        for entity in views.drain() {
+            self.mark_view_layout_dirty(entity);
+        }
+        self.invalidator.replace_layout_views(views);
     }
 
     #[profiling::function]

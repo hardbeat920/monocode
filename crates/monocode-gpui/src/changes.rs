@@ -1076,7 +1076,7 @@ impl Changes {
         // `bg-content` buttons with `text-background-base`, 40% when unavailable.
         let solid: Hsla = content(1.);
         let face = if can_commit { solid } else { content(0.4) };
-        let ink: Hsla = rgb(BACKGROUND_BASE).into();
+        let ink = crate::theme::background_base();
         let generate_label = if generating {
             "Cancel commit message generation"
         } else {
@@ -1200,7 +1200,7 @@ impl Changes {
                             .justify_center()
                             .rounded_r_md()
                             .border_l_1()
-                            .border_color(rgb(BACKGROUND_BASE).opacity(0.1))
+                            .border_color(ink.opacity(0.1))
                             .bg(if menu_open { solid } else { face })
                             .when(can_open_menu && !menu_open, |d| {
                                 d.hover(move |s| {

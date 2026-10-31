@@ -489,7 +489,11 @@ impl Automations {
         let editor = self.editor.as_ref()?;
         let mut draft = editor.draft.clone();
         draft.name = editor.name.read(cx).content.trim().to_string();
-        draft.prompt = editor.prompt.read(cx).content.to_string();
+        // Runs later without the picker's index, so save full mention paths.
+        draft.prompt = editor
+            .completion
+            .read(cx)
+            .expand_mentions(&editor.prompt.read(cx).content);
         for trigger in draft.triggers.get_or_insert_with(Vec::new) {
             if let Some(fields) = editor.fields.iter().find(|f| f.id == trigger.id) {
                 trigger.time = fields.time.read(cx).content.trim().to_string();

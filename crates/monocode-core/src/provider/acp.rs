@@ -448,9 +448,6 @@ impl Protocol {
     fn acp_settings(&mut self, setup: &Value) {
         let kind = self.request.kind;
         let settings = &self.request.settings;
-        if kind == Kind::Hermes {
-            return;
-        }
         let mut selected = settings.model_settings.clone();
         if let Some(effort) = &settings.effort {
             selected
@@ -464,6 +461,9 @@ impl Protocol {
             selected
                 .entry("thinking".into())
                 .or_insert_with(|| thinking.to_string());
+        }
+        if kind == Kind::Hermes {
+            selected.retain(|id, _| id == "effort");
         }
         if kind == Kind::Grok {
             if let Some(effort) = selected
@@ -1450,6 +1450,27 @@ mod tests {
             }
             assert!(p.done);
         }
+    }
+    #[test]
+    fn hermes_sends_only_an_advertised_reasoning_effort() {
+        let mut p = protocol(Kind::Hermes);
+        p.request.settings.effort = Some("high".into());
+        p.request.settings.fast = true;
+        let setup = json!({"configOptions":[
+            {"id":"reasoning_effort","category":"thought_level","currentValue":"default","options":[{"value":"low"},{"value":"high"}]},
+            {"id":"fast","currentValue":"false","options":[{"value":"false"},{"value":"true"}]}
+        ]});
+        p.acp_settings(&setup);
+        assert_eq!(p.acp.options.len(), 1);
+        assert_eq!(p.acp.options[0].0, "session/set_config_option");
+        assert_eq!(p.acp.options[0].1["configId"], "reasoning_effort");
+        assert_eq!(p.acp.options[0].1["value"], "high");
+        p.acp.options.clear();
+        p.acp_settings(&json!({}));
+        assert!(p.acp.options.is_empty());
+        p.request.settings.effort = None;
+        p.acp_settings(&setup);
+        assert!(p.acp.options.is_empty());
     }
     #[test]
     fn resuming_mutes_replay_and_replaces_missing_sessions_like_the_desktop() {

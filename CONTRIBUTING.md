@@ -4,6 +4,16 @@ MonoCode is early and I’m the only maintainer, so small and focused lands much
 
 Please don’t open PRs that add a new provider right now. The existing harnesses still need to agree on a few patterns, and a new adapter would copy whatever is there today. See [New providers](#new-providers).
 
+## PR policy during the GPUI preview
+
+The Rust + GPUI preview is developed on `main` alongside the production React/Tauri app. Development is focused on the native preview while the production app remains supported.
+
+- Bug fixes, security fixes, documentation improvements, and changes useful to both apps are still welcome on `main`.
+- Larger Tauri-specific features and refactors are temporarily deferred during the migration.
+- Target GPUI contributions at `main`. See [the native guide](docs/native/README.md) for setup and checks.
+
+Before starting a larger change, open an issue so we can agree on the scope and target branch and avoid duplicated work. Existing PRs will be reviewed individually.
+
 ## Get it running
 
 You need Node.js 20+, a current stable Rust toolchain, and at least one provider CLI installed and logged in. See [provider setup](docs/providers.md) for installation and login instructions.

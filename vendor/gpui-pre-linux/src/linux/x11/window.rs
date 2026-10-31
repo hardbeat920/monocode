@@ -280,6 +280,8 @@ pub struct X11WindowState {
     maximized_horizontal: bool,
     hidden: bool,
     active: bool,
+    /// Initial state hints must be properties until the first MapWindow request.
+    map_requested: bool,
     /// Owned by the client's `WindowRef`, which combines the mapped state with
     /// `VisibilityNotify`; this is the last value it reported.
     visibility: WindowVisibility,
@@ -840,6 +842,7 @@ impl X11WindowState {
                 atoms: *atoms,
                 input_handler: None,
                 active: false,
+                map_requested: false,
                 // The window is not mapped until the client sees `MapNotify`.
                 visibility: WindowVisibility::Hidden,
                 hovered: false,
@@ -974,6 +977,40 @@ impl X11Window {
         prop2: u32,
     ) -> anyhow::Result<()> {
         let state = self.0.state.borrow();
+        if !state.map_requested {
+            // EWMH: an unmapped window supplies its initial state as a property.
+            let reply = get_reply(
+                || "X11 GetProperty for initial _NET_WM_STATE failed.",
+                self.0.xcb.get_property(
+                    false,
+                    self.0.x_window,
+                    state.atoms._NET_WM_STATE,
+                    xproto::AtomEnum::ATOM,
+                    0,
+                    u32::MAX,
+                ),
+            )?;
+            let mut properties: Vec<u32> = reply.value32().into_iter().flatten().collect();
+            for property in [prop1, prop2].into_iter().filter(|property| *property != 0) {
+                if properties.contains(&property) {
+                    properties.retain(|existing| *existing != property);
+                } else {
+                    properties.push(property);
+                }
+            }
+            check_reply(
+                failure_context,
+                self.0.xcb.change_property32(
+                    xproto::PropMode::REPLACE,
+                    self.0.x_window,
+                    state.atoms._NET_WM_STATE,
+                    xproto::AtomEnum::ATOM,
+                    &properties,
+                ),
+            )?;
+            xcb_flush(&self.0.xcb);
+            return Ok(());
+        }
         let message = ClientMessageEvent::new(
             32,
             self.0.x_window,
@@ -1619,6 +1656,7 @@ impl PlatformWindow for X11Window {
             || "X11 MapWindow failed.",
             self.0.xcb.map_window(self.0.x_window),
         )?;
+        self.0.state.borrow_mut().map_requested = true;
         Ok(())
     }
 

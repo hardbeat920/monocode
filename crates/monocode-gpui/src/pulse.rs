@@ -166,10 +166,20 @@ fn tick(cx: &mut App) -> bool {
         if let Some(callback) = callback {
             callback(cx);
         } else {
-            cx.notify(view);
+            // A loop's frames keep its size; views can keep their measurements.
+            cx.notify_paint(view);
         }
     }
     true
+}
+
+/// Whether one of the app's windows has focus.
+pub(crate) fn app_active(cx: &mut App) -> bool {
+    cx.windows().into_iter().any(|window| {
+        window
+            .update(cx, |_, window, _| window.is_window_active())
+            .unwrap_or(false)
+    })
 }
 
 /// Whether any window is on screen: an inactive window can still be in view.

@@ -584,6 +584,27 @@ pub struct Service {
     pub data_dir: PathBuf,
     pub cwd: PathBuf,
 }
+/// Pairs each repository with one checkout to fetch it through. Several
+/// checkouts of the same repository share its rows, so the active checkout
+/// goes first and keeps them when the inbox is scoped to it.
+fn repo_checkouts<'a>(
+    projects: &'a [PathBuf],
+    cwd: &Path,
+    mut repos: impl FnMut(&Path) -> Option<Vec<String>>,
+) -> Vec<(&'a PathBuf, String)> {
+    let mut ordered = projects.iter().collect::<Vec<_>>();
+    ordered.sort_by_key(|project| project.as_path() != cwd);
+    let mut visited = HashSet::new();
+    let mut checkouts = vec![];
+    for project in ordered {
+        for repo in repos(project).unwrap_or_default() {
+            if visited.insert(repo.to_lowercase()) {
+                checkouts.push((project, repo));
+            }
+        }
+    }
+    checkouts
+}
 fn convert<T: Serialize, U: DeserializeOwned>(value: T) -> Result<U, String> {
     serde_json::from_value(serde_json::to_value(value).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())
@@ -709,7 +730,6 @@ impl Service {
                     )?);
                 }
                 let mut items = Vec::new();
-                let mut visited = HashSet::new();
                 if state.filters.assigned_to_me && provider != "github" {
                     for kind in ["issue", "pr"] {
                         let rows: Vec<Item> = if provider == "gitlab" {
@@ -732,8 +752,8 @@ impl Service {
                     }
                     return Ok(items);
                 }
-                for project in projects {
-                    let repos = match provider {
+                let checkouts = repo_checkouts(projects, &self.cwd, |project| {
+                    match provider {
                         "github" => github::git_github_repositories_for(project),
                         "gitlab" => gitlab::gitlab_repo(
                             self.data_dir.clone(),
@@ -745,48 +765,43 @@ impl Service {
                             project.to_string_lossy().into_owned(),
                         )
                         .map(|r| vec![r]),
-                    };
-                    let Ok(repos) = repos else {
-                        continue;
-                    };
-                    for repo in repos {
-                        if !visited.insert(repo.to_lowercase()) {
-                            continue;
-                        }
-                        for kind in ["issue", "pr"] {
-                            let rows: Vec<Item> = match provider {
-                                "github" => convert(github::git_github_work_items_for(
-                                    project,
-                                    &repo,
-                                    kind,
-                                    state.filters.assigned_to_me,
-                                    state.filters.fetch_state(),
-                                    "",
-                                    limit,
-                                )?)?,
-                                "gitlab" => convert(gitlab::gitlab_list_work_items(
-                                    self.data_dir.clone(),
-                                    project.to_string_lossy().into_owned(),
-                                    kind.into(),
-                                    false,
-                                    state.filters.fetch_state().into(),
-                                    Some(limit),
-                                )?)?,
-                                _ => convert(azure_devops::azure_devops_list_work_items(
-                                    self.data_dir.clone(),
-                                    project.to_string_lossy().into_owned(),
-                                    kind.into(),
-                                    false,
-                                    state.filters.fetch_state().into(),
-                                    Some(limit),
-                                )?)?,
-                            };
-                            items.extend(rows.into_iter().map(|mut item| {
-                                item.provider = provider.into();
-                                item.project_path = project.to_string_lossy().into_owned();
-                                item
-                            }));
-                        }
+                    }
+                    .ok()
+                });
+                for (project, repo) in checkouts {
+                    for kind in ["issue", "pr"] {
+                        let rows: Vec<Item> = match provider {
+                            "github" => convert(github::git_github_work_items_for(
+                                project,
+                                &repo,
+                                kind,
+                                state.filters.assigned_to_me,
+                                state.filters.fetch_state(),
+                                "",
+                                limit,
+                            )?)?,
+                            "gitlab" => convert(gitlab::gitlab_list_work_items(
+                                self.data_dir.clone(),
+                                project.to_string_lossy().into_owned(),
+                                kind.into(),
+                                false,
+                                state.filters.fetch_state().into(),
+                                Some(limit),
+                            )?)?,
+                            _ => convert(azure_devops::azure_devops_list_work_items(
+                                self.data_dir.clone(),
+                                project.to_string_lossy().into_owned(),
+                                kind.into(),
+                                false,
+                                state.filters.fetch_state().into(),
+                                Some(limit),
+                            )?)?,
+                        };
+                        items.extend(rows.into_iter().map(|mut item| {
+                            item.provider = provider.into();
+                            item.project_path = project.to_string_lossy().into_owned();
+                            item
+                        }));
                     }
                 }
                 Ok(items)
@@ -1120,5 +1135,30 @@ mod notification_tests {
         linear.id = "stable-id".into();
         linear.identifier = "MON-7".into();
         assert_eq!(linear.key(), "linear:mon-7");
+    }
+
+    #[test]
+    fn two_checkouts_of_one_repository_fetch_it_through_the_active_one() {
+        let first = PathBuf::from("/work/app");
+        let second = PathBuf::from("/work/app-review");
+        let other = PathBuf::from("/work/site");
+        let projects = [first.clone(), second.clone(), other.clone()];
+        let repos = |project: &Path| {
+            Some(vec![if project == other {
+                "acme/site".to_string()
+            } else {
+                "Acme/App".to_string()
+            }])
+        };
+        for (cwd, owner) in [(&first, &first), (&second, &second), (&other, &first)] {
+            let checkouts = repo_checkouts(&projects, cwd, repos);
+            assert_eq!(checkouts.len(), 2, "each repository is fetched once");
+            assert!(
+                checkouts
+                    .iter()
+                    .any(|(project, repo)| *project == owner && repo == "Acme/App"),
+                "from {cwd:?}: {checkouts:?}"
+            );
+        }
     }
 }

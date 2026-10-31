@@ -5,23 +5,31 @@ use alacritty_terminal::{
     event::{Event as TermEvent, EventListener, WindowSize},
     event_loop::{EventLoop, EventLoopSender, Msg},
     grid::{Dimensions, Scroll},
-    index::{Column, Point as GridPoint, Side},
+    index::{Boundary, Column, Direction, Point as GridPoint, Side},
     selection::{Selection, SelectionType},
     sync::FairMutex,
     term::{
-        Config, Term, TermMode, cell::Flags, color::Colors, point_to_viewport, viewport_to_point,
+        Config, Term, TermMode,
+        cell::Flags,
+        color::Colors,
+        point_to_viewport,
+        search::{RegexIter, RegexSearch},
+        viewport_to_point,
     },
     tty,
     vte::ansi::{Color as AnsiColor, CursorShape, CursorStyle as TermCursorStyle, NamedColor, Rgb},
 };
 use gpui::{
     App, Bounds, ClipboardItem, Context, Element, ElementId, Entity, EventEmitter, FocusHandle,
-    Focusable, Font, FontStyle, FontWeight, GlobalElementId, Hsla, InspectorElementId, KeyBinding,
+    Focusable, FontStyle, FontWeight, GlobalElementId, Hsla, InspectorElementId, KeyBinding,
     KeyDownEvent, Keystroke, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, ScrollDelta,
     ScrollWheelEvent, ShapedLine, SharedString, Size, StrikethroughStyle, Style, Task, TextAlign,
     TextRun, UnderlineStyle, Window, actions, div, point, prelude::*, px, rgb, size,
 };
-use std::{borrow::Cow, cell::Cell, collections::HashMap, rc::Rc, sync::Arc, time::Duration};
+use std::{
+    borrow::Cow, cell::Cell, collections::HashMap, ops::RangeInclusive, rc::Rc, sync::Arc,
+    time::Duration,
+};
 
 actions!(
     terminal,
@@ -50,6 +58,8 @@ const FONT_SIZE: f32 = 13.;
 /// TerminalView's `scrollback`, retained for every open terminal.
 const SCROLLBACK: usize = 2000;
 const PADDING: f32 = 8.;
+/// The web build's WebLinksAddon URL pattern.
+const URL_PATTERN: &str = r#"(https?|HTTPS?)://[^\s"'!*(){}|\\^<>`]*[^\s"':,.!?{}|\\^~\[\]`()<>]"#;
 
 /// Wakeups, titles and replies from the PTY thread.
 #[derive(Clone)]
@@ -89,6 +99,13 @@ struct Geometry {
     cell: Size<gpui::Pixels>,
 }
 
+/// An HTTP(S) link in the grid: an OSC 8 hyperlink or a plain URL.
+#[derive(Clone, PartialEq, Debug)]
+struct Link {
+    range: RangeInclusive<GridPoint>,
+    uri: String,
+}
+
 pub(crate) struct Terminal {
     term: Arc<FairMutex<Term<Listener>>>,
     sender: Option<EventLoopSender>,
@@ -107,6 +124,11 @@ pub(crate) struct Terminal {
     selection_pointer: Option<gpui::Point<gpui::Pixels>>,
     selection_scroll: Option<Task<()>>,
     scroll_remainder: f32,
+    url_regex: Option<RegexSearch>,
+    /// The pointer over the grid, for underlining the link beneath it.
+    hover: Option<gpui::Point<gpui::Pixels>>,
+    /// The link a plain click pressed; releasing on it opens it.
+    pressed_link: Option<Link>,
     pub(crate) visible: bool,
     _events: Task<()>,
     _poll: Task<()>,
@@ -295,6 +317,9 @@ impl Terminal {
             selection_pointer: None,
             selection_scroll: None,
             scroll_remainder: 0.,
+            url_regex: RegexSearch::new(URL_PATTERN).ok(),
+            hover: None,
+            pressed_link: None,
             visible: true,
             _events: events,
             _poll: poll,
@@ -494,8 +519,26 @@ impl Terminal {
             side,
         ))
     }
+    /// The HTTP(S) link under a window position, if the pointer is on a cell.
+    fn link_at(&mut self, position: gpui::Point<gpui::Pixels>) -> Option<Link> {
+        let g = self.geometry.get()?;
+        let x = (position.x - g.origin.x) / g.cell.width;
+        let y = (position.y - g.origin.y) / g.cell.height;
+        if x < 0. || y < 0. || x >= self.size.columns as f32 || y >= self.size.lines as f32 {
+            return None;
+        }
+        let term = self.term.lock();
+        let at = viewport_to_point(
+            term.grid().display_offset(),
+            GridPoint::new(y as usize, Column(x as usize)),
+        );
+        link_at(&term, self.url_regex.as_mut()?, at)
+    }
     fn mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus, cx);
+        self.pressed_link = (event.click_count == 1 && !event.modifiers.shift)
+            .then(|| self.link_at(event.position))
+            .flatten();
         let Some((at, side)) = self.grid_point(event.position) else {
             return;
         };
@@ -535,6 +578,23 @@ impl Terminal {
             }
         }));
         cx.notify();
+    }
+    /// A click that pressed and released on the same link, without
+    /// dragging out a selection, opens it as the web build's xterm does.
+    fn mouse_up(&mut self, event: &gpui::MouseUpEvent, cx: &mut Context<Self>) {
+        self.stop_selection();
+        let Some(link) = self.pressed_link.take() else {
+            return;
+        };
+        let selected = self
+            .term
+            .lock()
+            .selection
+            .as_ref()
+            .is_some_and(|selection| !selection.is_empty());
+        if !selected && self.link_at(event.position).as_ref() == Some(&link) {
+            cx.open_url(&link.uri);
+        }
     }
     fn stop_selection(&mut self) {
         self.selecting = false;
@@ -657,6 +717,17 @@ impl Render for Terminal {
             .track_focus(&self.focus)
             .size_full()
             .cursor(gpui::CursorStyle::IBeam)
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                if this.hover != Some(event.position) {
+                    this.hover = Some(event.position);
+                    cx.notify();
+                }
+            }))
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                if !hovered && this.hover.take().is_some() {
+                    cx.notify();
+                }
+            }))
             .on_key_down(cx.listener(|this, event, _, cx| this.key_down(event, cx)))
             .on_action(cx.listener(|this, _: &SendTab, _, cx| this.input(b"\t".to_vec(), cx)))
             .on_action(
@@ -684,6 +755,8 @@ struct Painted {
     rects: Vec<(Bounds<gpui::Pixels>, Hsla)>,
     cursor: Option<(Bounds<gpui::Pixels>, Hsla, bool)>,
     line_height: gpui::Pixels,
+    /// Set while the pointer is over a link, for the pointing hand.
+    link_hitbox: Option<gpui::Hitbox>,
 }
 
 struct Grid {
@@ -737,7 +810,7 @@ impl Element for Grid {
         cx: &mut App,
     ) -> Painted {
         let font_size = px(FONT_SIZE);
-        let base = mono_font();
+        let base = crate::fonts::terminal(cx);
         let text_system = window.text_system().clone();
         let font_id = text_system.resolve_font(&base);
         let cell_width = text_system
@@ -752,11 +825,12 @@ impl Element for Grid {
             (((bounds.size.width - px(PADDING * 2.)) / cell_width).floor() as usize).max(2);
         let lines = (((bounds.size.height - px(PADDING)) / line_height).floor() as usize).max(1);
         let cell = size(cell_width, line_height);
-        let (term, geometry) = self.terminal.update(cx, |t, _| {
+        let (term, link) = self.terminal.update(cx, |t, _| {
             t.resize(columns, lines, cell);
-            (t.term.clone(), t.geometry.clone())
+            t.geometry.set(Some(Geometry { origin, cell }));
+            let link = t.hover.and_then(|position| t.link_at(position));
+            (t.term.clone(), link)
         });
-        geometry.set(Some(Geometry { origin, cell }));
 
         let term = term.lock();
         let content = term.renderable_content();
@@ -803,7 +877,10 @@ impl Element for Grid {
                     fg,
                     bold: cell.flags.contains(Flags::BOLD),
                     italic: cell.flags.contains(Flags::ITALIC),
-                    underline: cell.flags.intersects(Flags::ALL_UNDERLINES),
+                    underline: cell.flags.intersects(Flags::ALL_UNDERLINES)
+                        || link
+                            .as_ref()
+                            .is_some_and(|link| link.range.contains(&indexed.point)),
                     strike: cell.flags.contains(Flags::STRIKEOUT),
                 },
                 bg,
@@ -820,6 +897,7 @@ impl Element for Grid {
             rects: Vec::new(),
             cursor: None,
             line_height,
+            link_hitbox: link.map(|_| window.insert_hitbox(bounds, gpui::HitboxBehavior::Normal)),
         };
         for (line, cells) in rows.iter().enumerate() {
             let y = origin.y + line_height * line as f32;
@@ -953,9 +1031,12 @@ impl Element for Grid {
         let terminal = self.terminal.downgrade();
         window.on_mouse_event(move |event: &gpui::MouseUpEvent, phase, _, cx| {
             if phase == gpui::DispatchPhase::Capture && event.button == MouseButton::Left {
-                let _ = terminal.update(cx, |terminal, _| terminal.stop_selection());
+                let _ = terminal.update(cx, |terminal, cx| terminal.mouse_up(event, cx));
             }
         });
+        if let Some(hitbox) = &painted.link_hitbox {
+            window.set_cursor_style(gpui::CursorStyle::PointingHand, hitbox);
+        }
         window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
             for (rect, fill) in &painted.rects {
                 window.paint_quad(gpui::fill(*rect, *fill));
@@ -997,8 +1078,50 @@ fn cell_rect(
     )
 }
 
-fn mono_font() -> Font {
-    gpui::font(crate::fonts::mono())
+/// The HTTP(S) link covering `at`: the OSC 8 hyperlink on its cells, else
+/// a plain URL on its logical line.
+fn link_at<T>(term: &Term<T>, regex: &mut RegexSearch, at: GridPoint) -> Option<Link> {
+    let start = term.line_search_left(at);
+    let end = term.line_search_right(at);
+    if let Some(hyperlink) = term.grid()[at].hyperlink() {
+        let same = |point: GridPoint| term.grid()[point].hyperlink().as_ref() == Some(&hyperlink);
+        let mut first = at;
+        while first > start && same(first.sub(term, Boundary::None, 1)) {
+            first = first.sub(term, Boundary::None, 1);
+        }
+        let mut last = at;
+        while last < end && same(last.add(term, Boundary::None, 1)) {
+            last = last.add(term, Boundary::None, 1);
+        }
+        let uri = hyperlink.uri();
+        return is_web_link(uri).then(|| Link {
+            range: first..=last,
+            uri: uri.to_owned(),
+        });
+    }
+    RegexIter::new(start, end, Direction::Right, term, regex)
+        .find(|found| found.contains(&at))
+        .map(|range| {
+            let mut uri = String::new();
+            let mut point = *range.start();
+            loop {
+                let cell = &term.grid()[point];
+                if !cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                    uri.push(cell.c);
+                }
+                if point >= *range.end() {
+                    break;
+                }
+                point = point.add(term, Boundary::None, 1);
+            }
+            Link { range, uri }
+        })
+        .filter(|link| is_web_link(&link.uri))
+}
+/// Only HTTP(S) opens, as TerminalView's `openTerminalLink` allows.
+fn is_web_link(uri: &str) -> bool {
+    let lower = uri.get(..8).unwrap_or(uri).to_ascii_lowercase();
+    lower.starts_with("http://") || lower.starts_with("https://")
 }
 fn selection_fill() -> Hsla {
     crate::theme::text_selection()
@@ -1380,6 +1503,48 @@ mod tests {
     }
     fn bytes(spec: &str) -> Option<Vec<u8>> {
         key_bytes(&key(spec), TermMode::empty())
+    }
+
+    #[gpui::test]
+    fn links_cover_plain_urls_and_osc8_hyperlinks(cx: &mut gpui::TestAppContext) {
+        let view = cx.new(|cx| Terminal::new("/tmp".into(), cx));
+        view.update(cx, |terminal, _| {
+            let cell = size(px(8.), px(16.));
+            terminal.resize(20, 4, cell);
+            terminal.geometry.set(Some(Geometry {
+                origin: point(px(0.), px(0.)),
+                cell,
+            }));
+            // A URL wrapping onto the next row, trailing punctuation
+            // excluded; then an OSC 8 link and a file:// one.
+            write_note(
+                &terminal.term,
+                "see https://example.com/a/b. ok\r\n\x1b]8;;https://x.dev\x1b\\docs\x1b]8;;\x1b\\ \
+                 \x1b]8;;file:///tmp\x1b\\tmp\x1b]8;;\x1b\\ ftp://a.b",
+            );
+            let at = |line: usize, column: usize| {
+                point(px(column as f32 * 8. + 1.), px(line as f32 * 16. + 1.))
+            };
+            let url = terminal.link_at(at(1, 2)).expect("wrapped URL");
+            assert_eq!(url.uri, "https://example.com/a/b");
+            assert_eq!(
+                url.range,
+                GridPoint::new(Line(0), Column(4))..=GridPoint::new(Line(1), Column(6))
+            );
+            assert_eq!(terminal.link_at(at(0, 4)), Some(url));
+            assert_eq!(terminal.link_at(at(0, 1)), None);
+            assert_eq!(terminal.link_at(at(1, 7)), None);
+
+            let docs = terminal.link_at(at(2, 1)).expect("OSC 8 link");
+            assert_eq!(docs.uri, "https://x.dev");
+            assert_eq!(
+                docs.range,
+                GridPoint::new(Line(2), Column(0))..=GridPoint::new(Line(2), Column(3))
+            );
+            assert_eq!(terminal.link_at(at(2, 6)), None, "file:// stays inert");
+            assert_eq!(terminal.link_at(at(2, 10)), None, "ftp:// stays inert");
+            assert_eq!(terminal.link_at(point(px(-4.), px(1.))), None);
+        });
     }
 
     #[gpui::test]

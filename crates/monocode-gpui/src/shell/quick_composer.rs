@@ -95,11 +95,7 @@ impl Shell {
                 titlebar: None,
                 is_resizable: false,
                 is_minimizable: false,
-                window_background: if cfg!(target_os = "macos") {
-                    gpui::WindowBackgroundAppearance::Blurred
-                } else {
-                    gpui::WindowBackgroundAppearance::Opaque
-                },
+                window_background: crate::theme::window_backdrop(true),
                 app_id: Some("dev.usemono.quick-composer".into()),
                 ..Default::default()
             },
@@ -123,6 +119,7 @@ impl Shell {
                         this.quick.last = Some(crate::quick_composer::Launch {
                             prompt: String::new(),
                             attachments: Vec::new(),
+                            staged_attachments: Vec::new(),
                             ..launch.clone()
                         });
                         let _ = handle.update(cx, |view, window, cx| view.dismiss(window, cx));
@@ -141,7 +138,8 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         let store = self.store.clone();
-        let choice = launch.clone();
+        let mut choice = launch.clone();
+        let attachments = std::mem::take(&mut choice.attachments);
         crate::conversation::remember_access(choice.access, cx);
         crate::pickers::remember_model(choice.kind, choice.model.clone(), cx);
         let account = crate::accounts::get(cx)
@@ -162,19 +160,25 @@ impl Shell {
                 ..Default::default()
             };
             store.save_agent_settings(summary.id, &settings)?;
-            Ok::<_, String>((summary, settings))
+            let attachments = store.adopt_attachments(
+                summary.id,
+                &crate::quick_composer::paste_staging_dir(),
+                attachments,
+                &choice.staged_attachments,
+            )?;
+            Ok::<_, String>((summary, settings, attachments))
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| match result {
-                Ok((summary, settings)) => {
+                Ok((summary, settings, attachments)) => {
                     let id = summary.id;
                     if !this.workspace.projects.contains(&launch.cwd) {
                         this.workspace.projects.push(launch.cwd.clone());
                     }
                     this.add(summary, cx);
                     this.sessions[&id].update(cx, |v, cx| {
-                        v.quick_attach(launch.attachments, cx);
+                        v.quick_attach(attachments, cx);
                         v.quick_submit(launch.prompt, settings, cx)
                     });
                     this.order.retain(|i| *i != id);
