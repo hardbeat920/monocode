@@ -5400,11 +5400,12 @@ impl Window {
         self.next_frame.window_control_hitboxes.push((area, hitbox));
     }
 
+    /// Resolve native controls without reaching through mouse-blocking overlays.
     pub(crate) fn hit_test_window_control(&self) -> Option<WindowControlArea> {
         self.rendered_frame
             .window_control_hitboxes
             .iter()
-            .find(|(_, hitbox)| self.mouse_hit_test.ids.contains(&hitbox.id))
+            .find(|(_, hitbox)| hitbox.id.hit_test(self))
             .map(|(area, _)| *area)
     }
 
