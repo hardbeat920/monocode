@@ -128,6 +128,56 @@ describe("projectRailItems", () => {
   });
 });
 
+describe("rememberProject", () => {
+  beforeEach(() => {
+    mockLocalStorage();
+  });
+
+  it("keeps older projects and their rail state after opening more than 20 projects", () => {
+    rememberProject("/tmp/pinned");
+    rememberProject("/tmp/grouped");
+    savePinnedProjects(["/tmp/pinned"]);
+    saveProjectRailOrder(["/tmp/pinned", "/tmp/grouped"]);
+    localStorage.setItem(
+      "monocode.projectGroupAssignments",
+      JSON.stringify({ "/tmp/grouped": "work" }),
+    );
+
+    for (let i = 0; i < 25; i++) rememberProject(`/tmp/project-${i}`);
+
+    const recents = loadRecents();
+    expect(recents).toHaveLength(27);
+    const sections = projectRailSections(
+      recents,
+      "/tmp/project-24",
+      loadProjectRailOrder(),
+      loadPinnedProjects(),
+    );
+    expect(sections.pinned.map((item) => item.path)).toEqual(["/tmp/pinned"]);
+    expect(sections.projects.map((item) => item.path)).toContain(
+      "/tmp/grouped",
+    );
+    expect(
+      syncProjectRailOrder(
+        loadProjectRailOrder(),
+        new Map(recents.map((item) => [item.path, item])),
+      ).slice(0, 2),
+    ).toEqual(["/tmp/pinned", "/tmp/grouped"]);
+    expect(
+      JSON.parse(localStorage.getItem("monocode.projectGroupAssignments")!),
+    ).toEqual({ "/tmp/grouped": "work" });
+  });
+
+  it("reopening an older project moves it first without losing or duplicating projects", () => {
+    for (let i = 0; i < 25; i++) rememberProject(`/tmp/project-${i}`);
+    const recents = rememberProject("/tmp/project-0/");
+    expect(recents).toHaveLength(25);
+    expect(recents[0].path).toBe("/tmp/project-0");
+    expect(new Set(recents.map((item) => item.path)).size).toBe(25);
+    expect(loadRecents()).toEqual(recents);
+  });
+});
+
 describe("forgetProject", () => {
   beforeEach(() => {
     mockLocalStorage();
