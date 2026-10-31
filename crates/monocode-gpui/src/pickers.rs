@@ -86,6 +86,14 @@ pub(crate) fn remember_model(kind: Kind, model: Option<String>, cx: &mut gpui::A
         });
     }
 }
+/// The accessible name of a row's favorite star.
+fn favorite_label(starred: bool, name: &str) -> String {
+    if starred {
+        format!("Remove {name} from favorites")
+    } else {
+        format!("Add {name} to favorites")
+    }
+}
 fn contains_account_id(value: &str) -> bool {
     value.match_indices("account-").any(|(offset, _)| {
         let tail = &value[offset + "account-".len()..];
@@ -212,6 +220,210 @@ mod model_label_tests {
             assert_eq!(rows[2].id.as_deref(), Some("gpt-saved"));
             assert_eq!(list.read(cx).current_index(cx), 2);
         });
+    }
+
+    type Picks = std::rc::Rc<std::cell::RefCell<Vec<(&'static str, Option<String>)>>>;
+
+    /// A rendered picker over `project`, with `models` as `kind`'s live catalog.
+    fn rendered_picker(
+        cx: &mut gpui::TestAppContext,
+        kind: Kind,
+        project: &str,
+        models: &[&str],
+    ) -> (gpui::WindowHandle<ModelList>, Picks, Subscription) {
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|cx| ModelList::new_for(kind, None, project, Default::default(), cx))
+            })
+            .unwrap()
+        });
+        let picks = Picks::default();
+        let output = picks.clone();
+        let events = window
+            .update(cx, |list, _, cx| {
+                list.catalogs = vec![(
+                    kind,
+                    models
+                        .iter()
+                        .map(|id| Model {
+                            id: (*id).into(),
+                            name: (*id).into(),
+                            alias_target: None,
+                            efforts: Vec::new(),
+                            default_effort: None,
+                            fast: false,
+                            thinking: false,
+                            default: false,
+                            tiers: Vec::new(),
+                            controls: Vec::new(),
+                        })
+                        .collect(),
+                )];
+                list.remote_providers = list.remote_project.is_some().then(|| vec![kind]);
+                cx.notify();
+                cx.subscribe(&cx.entity(), move |_, _, picked: &ModelPicked, _| {
+                    output.borrow_mut().push((picked.0.id(), picked.1.clone()))
+                })
+            })
+            .unwrap();
+        (window, picks, events)
+    }
+    /// Debug selectors are `'static`; leaking a few test strings is fine.
+    fn star(ix: usize) -> &'static str {
+        Box::leak(format!("model-star-{ix}").into_boxed_str())
+    }
+    fn click_star(visual: &mut gpui::VisualTestContext, ix: usize) {
+        visual.refresh().unwrap();
+        let bounds = visual
+            .debug_bounds(star(ix))
+            .unwrap_or_else(|| panic!("{} is rendered", star(ix)));
+        visual.simulate_click(bounds.center(), Default::default());
+        visual.refresh().unwrap();
+    }
+    fn favorites(cx: &gpui::App) -> Vec<(String, Option<String>)> {
+        cx.global::<crate::settings::Preferences>()
+            .favorite_models
+            .iter()
+            .map(|choice| (choice.provider.clone(), choice.model.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn favorite_star_names_say_what_the_click_does() {
+        assert_eq!(favorite_label(false, "Fast"), "Add Fast to favorites");
+        assert_eq!(favorite_label(true, "Fast"), "Remove Fast from favorites");
+    }
+
+    #[gpui::test]
+    fn star_toggles_a_favorite_without_picking_the_row(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| cx.set_global(crate::settings::Preferences::default()));
+        let (window, picks, _events) =
+            rendered_picker(cx, Kind::Codex, "/work", &["example-model"]);
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        // Default (0) and the catalog's model (1) both get a star.
+        visual.refresh().unwrap();
+        assert!(visual.debug_bounds("model-star-0").is_some());
+        click_star(visual, 1);
+        visual.update(|_, cx| {
+            assert_eq!(
+                favorites(cx),
+                vec![("codex".into(), Some("example-model".into()))]
+            )
+        });
+        assert!(picks.borrow().is_empty(), "the star never picks the row");
+        window
+            .update(visual, |list, _, cx| {
+                assert_eq!(list.current, None);
+                assert!(list.favorite(Kind::Codex, Some("example-model"), cx));
+                assert!(
+                    !cx.global::<crate::settings::Preferences>()
+                        .recent_models
+                        .iter()
+                        .any(|c| c.model.is_some())
+                );
+                // The Favorites tab now lists it.
+                list.tab = ModelTab::Favorites;
+                let entries = list.entries(cx);
+                assert_eq!(entries.len(), 1);
+                assert_eq!(entries[0].id.as_deref(), Some("example-model"));
+                assert_eq!(entries[0].kind, Kind::Codex);
+                cx.notify();
+            })
+            .unwrap();
+        // Un-starring from the Favorites tab removes it again.
+        click_star(visual, 0);
+        visual.update(|_, cx| assert!(favorites(cx).is_empty()));
+        assert!(picks.borrow().is_empty());
+        window
+            .update(visual, |list, _, cx| assert!(list.entries(cx).is_empty()))
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn picking_the_option_still_picks_and_leaves_favorites_alone(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| cx.set_global(crate::settings::Preferences::default()));
+        let (window, picks, _events) =
+            rendered_picker(cx, Kind::Codex, "/work", &["example-model"]);
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.refresh().unwrap();
+        // The option sits left of its star, so aim at the row's left edge.
+        let star = visual.debug_bounds("model-star-1").unwrap();
+        visual.simulate_click(
+            gpui::point(star.left() - gpui::px(80.), star.center().y),
+            Default::default(),
+        );
+        assert_eq!(
+            *picks.borrow(),
+            vec![("codex", Some("example-model".to_owned()))]
+        );
+        visual.update(|_, cx| assert!(favorites(cx).is_empty()));
+    }
+
+    #[gpui::test]
+    fn every_favorite_row_has_a_star(cx: &mut gpui::TestAppContext) {
+        let prefs = crate::settings::Preferences {
+            favorite_models: vec![
+                crate::settings::ModelChoice {
+                    provider: "codex".into(),
+                    model: Some("example-model".into()),
+                },
+                crate::settings::ModelChoice {
+                    provider: "claude".into(),
+                    model: None,
+                },
+            ],
+            ..Default::default()
+        };
+        cx.update(|cx| cx.set_global(prefs));
+        let (window, _picks, _events) = rendered_picker(cx, Kind::Codex, "/work", &[]);
+        window
+            .update(cx, |list, _, cx| {
+                list.tab = ModelTab::Favorites;
+                assert_eq!(list.entries(cx).len(), 2);
+                cx.notify();
+            })
+            .unwrap();
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.refresh().unwrap();
+        assert!(visual.debug_bounds(star(0)).is_some());
+        assert!(visual.debug_bounds(star(1)).is_some());
+        assert!(visual.debug_bounds(star(2)).is_none());
+    }
+
+    #[gpui::test]
+    fn remote_prefixed_model_is_favorited_and_picked_by_its_full_id(cx: &mut gpui::TestAppContext) {
+        const REMOTE: &str = "hermes:example-vendor:example-model";
+        cx.update(|cx| cx.set_global(crate::settings::Preferences::default()));
+        let (window, picks, _events) =
+            rendered_picker(cx, Kind::Hermes, "remote://env/home/code", &[REMOTE]);
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        // Default (0), then the host's model (1).
+        click_star(visual, 1);
+        visual.update(|_, cx| {
+            assert_eq!(favorites(cx), vec![("hermes".into(), Some(REMOTE.into()))])
+        });
+        window
+            .update(visual, |list, _, cx| {
+                list.tab = ModelTab::Favorites;
+                let entries = list.entries(cx);
+                assert_eq!(entries.len(), 1);
+                assert_eq!(entries[0].kind, Kind::Hermes);
+                assert_eq!(entries[0].id.as_deref(), Some(REMOTE));
+                assert!(entries[0].enabled);
+                list.pick(0, cx);
+                cx.notify();
+            })
+            .unwrap();
+        assert_eq!(*picks.borrow(), vec![("hermes", Some(REMOTE.to_owned()))]);
+        // Toggling again from the Favorites row removes it.
+        click_star(visual, 0);
+        visual.update(|_, cx| assert!(favorites(cx).is_empty()));
+        window
+            .update(visual, |list, _, cx| {
+                assert!(list.entries(cx).is_empty());
+                assert!(!list.favorite(Kind::Hermes, Some(REMOTE), cx));
+            })
+            .unwrap();
     }
 }
 
@@ -760,22 +972,14 @@ impl Render for ModelList {
             .map(|(ix, entry)| {
                 let highlighted = self.highlighted == ix && entry.enabled;
                 let current = entry.kind == self.provider && entry.id == self.current;
+                let starred = self.favorite(entry.kind, entry.id.as_deref(), cx);
+                let (star_kind, star_id) = (entry.kind, entry.id.clone());
+                let row_group: SharedString = format!("model-row-{ix}").into();
                 div()
-                    .id(("model-option", ix))
-                    .role(Role::ListBoxOption)
-                    .aria_label(entry.name.clone())
-                    .aria_selected(current)
-                    .when(!entry.enabled, |d| {
-                        d.aria_description(if self.missing.contains(&entry.kind) {
-                            if self.remote_project.is_some() { "This provider is not installed on the connected machine. Install it there, then retry model discovery" } else { "This provider is not installed. Install it, then retry model discovery" }
-                        } else {
-                            "Wait for the current turn to finish before switching providers"
-                        })
-                    })
-                    .cursor_pointer()
+                    .id(("model-row", ix))
+                    .group(row_group.clone())
                     .flex_shrink_0()
                     .h(px(32.))
-                    .px_1()
                     .rounded(px(8.))
                     .flex()
                     .items_center()
@@ -785,13 +989,66 @@ impl Render for ModelList {
                     .when(!highlighted && entry.enabled, |d| {
                         d.hover(|s| s.bg(content(0.05)))
                     })
+                    .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                        if *hovered {
+                            this.highlighted = ix;
+                            cx.notify();
+                        }
+                    }))
                     .child(
                         div()
+                            .id(("model-option", ix))
+                            .role(Role::ListBoxOption)
+                            .aria_label(entry.name.clone())
+                            .aria_selected(current)
+                            .when(!entry.enabled, |d| {
+                                d.aria_description(if self.missing.contains(&entry.kind) {
+                                    if self.remote_project.is_some() { "This provider is not installed on the connected machine. Install it there, then retry model discovery" } else { "This provider is not installed. Install it, then retry model discovery" }
+                                } else {
+                                    "Wait for the current turn to finish before switching providers"
+                                })
+                            })
+                            .cursor_pointer()
                             .flex_1()
                             .min_w_0()
-                            .px(px(6.))
-                            .truncate()
-                            .child(entry.name),
+                            .h_full()
+                            .px_1()
+                            .flex()
+                            .items_center()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .px(px(6.))
+                                    .truncate()
+                                    .child(entry.name.clone()),
+                            )
+                            .on_click(cx.listener(move |this, _, _, cx| this.pick(ix, cx))),
+                    )
+                    .child(
+                        div()
+                            .id(("model-star", ix))
+                            .debug_selector(move || format!("model-star-{ix}"))
+                            .role(Role::Button)
+                            .aria_label(favorite_label(starred, &entry.name))
+                            .cursor_pointer()
+                            .size(px(24.))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            // Revealed by hovering the row until it is a favorite.
+                            .when(!starred, |d| {
+                                d.opacity(0.)
+                                    .group_hover(row_group.clone(), |s| s.opacity(1.))
+                            })
+                            .child(
+                                icon(if starred { "star-filled" } else { "star" }, 14.)
+                                    .text_color(content(if starred { 0.6 } else { 0.35 })),
+                            )
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.toggle_favorite(star_kind, star_id.clone(), cx)
+                            })),
                     )
                     .when(current, |d| {
                         d.child(
@@ -804,13 +1061,6 @@ impl Render for ModelList {
                                 .child(icon("check-2", 14.).text_color(content(0.55))),
                         )
                     })
-                    .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                        if *hovered {
-                            this.highlighted = ix;
-                            cx.notify();
-                        }
-                    }))
-                    .on_click(cx.listener(move |this, _, _, cx| this.pick(ix, cx)))
                     .into_any()
             })
             .collect();
@@ -1023,12 +1273,7 @@ impl ModelList {
                         div()
                             .id(("quick-model-star", ix))
                             .role(Role::Button)
-                            .aria_label(format!(
-                                "{} {} {} favorites",
-                                if starred { "Remove" } else { "Add" },
-                                entry.name,
-                                if starred { "from" } else { "to" }
-                            ))
+                            .aria_label(favorite_label(starred, &entry.name))
                             .group("quick-model-star")
                             .cursor_pointer()
                             .size(px(32.))
