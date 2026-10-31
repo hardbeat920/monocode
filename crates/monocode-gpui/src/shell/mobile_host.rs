@@ -175,6 +175,15 @@ impl Snapshot<'_> {
     }
 }
 
+/// An agent of `session` waits for the user's browser Allow.
+fn browser_request(session: i64, cx: &App) -> bool {
+    crate::browser::get(cx).is_some_and(|browser| {
+        browser.read(cx).state.as_ref().is_some_and(|state| {
+            crate::browser::turn::request_pending(state, &crate::browser::session_key(session))
+        })
+    })
+}
+
 /// `encodeURIComponent`, as paired phones already know projects by it.
 /// A visual document's component tree, as its first render draws it.
 fn visual_tree(body: &str) -> Result<Value, String> {
@@ -433,8 +442,10 @@ impl Shell {
                         waiting: match view.mobile_waiting(cx) {
                             Some(crate::conversation::MobileWaiting::Approval) => Some("approval"),
                             Some(crate::conversation::MobileWaiting::Question) => Some("question"),
+                            None if browser_request(id, cx) => Some("browser"),
                             None => None,
                         },
+                        browser_request: browser_request(id, cx),
                     }
                 });
                 Some(CatalogEntry {
@@ -500,6 +511,7 @@ impl Shell {
                             json!({
                                 "status": chat.mono_status(),
                                 "busy": chat.busy,
+                                "browserRequest": browser_request(chat.summary.id, cx).then_some(true),
                                 "harness": chat.summary.provider,
                                 "model": mobile_catalog::model_id(Kind::from_id(&chat.summary.provider), chat.mobile_model()),
                                 "lastMessage": last.map(|m| m["text"].clone()).unwrap_or(json!("")),
@@ -1303,6 +1315,35 @@ impl Shell {
         let target = self.mobile_target(&conversation, cx)?;
         let reply = json!({"sessionId": conversation});
         match (request.method.as_str(), &target) {
+            ("browser.answer", target) => {
+                // The thread's Allow bar, answered from the phone.
+                let session = match target {
+                    Target::Session(id) => Some(*id),
+                    Target::Mono(mono) => self
+                        .monos
+                        .as_ref()
+                        .and_then(|m| m.read(cx).open_chat(mono))
+                        .map(|chat| chat.read(cx).summary.id),
+                };
+                let session = session
+                    .filter(|id| browser_request(*id, cx))
+                    .ok_or("The agent is no longer waiting for the browser")?;
+                let host =
+                    monocode_core::browser::host().ok_or("Browser access is not available")?;
+                let allow = params["allow"].as_bool() == Some(true);
+                cx.background_executor()
+                    .spawn(async move {
+                        host.serialized(|| {
+                            host.answer_request(
+                                &crate::browser::session_key(session),
+                                crate::browser::WINDOW,
+                                allow,
+                            )
+                        })
+                    })
+                    .detach();
+                Ok(reply)
+            }
             ("session.cancel", Target::Session(id)) => {
                 if let Some(view) = self.sessions.get(id) {
                     view.update(cx, |v, cx| v.stop_if_busy(cx));

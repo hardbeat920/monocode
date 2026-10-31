@@ -469,6 +469,7 @@ function MiniPill({
 function statusLabel(session: SessionSummary) {
   if (session.waiting === "approval") return "Needs your approval";
   if (session.waiting === "question") return "Has a question for you";
+  if (session.waiting === "browser") return "Wants to use the browser";
   return "Working";
 }
 

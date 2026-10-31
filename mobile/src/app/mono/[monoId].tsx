@@ -6,6 +6,7 @@ import { ConnectionNotice } from "@/features/connection/ConnectionNotice";
 import { hasNativeTranscript } from "@/features/connection/nativeLink";
 
 import { PixelMascot } from "@/features/mascots/PixelMascot";
+import { useBrowserRequest } from "@/features/sessions/browserRequest";
 import { useMonoModel } from "@/features/models/useMonoModel";
 import { useDrawerActions, useDrawerSwipe } from "@/ui/ScenePager";
 import { Timed } from "@/ui/Timed";
@@ -38,6 +39,7 @@ export default function MonoScreen() {
   const mono = monos.find((m) => m.id === monoId);
   const conversationId = mono ? monoConversationId(mono.id) : null;
   const conversation = useConversation(conversationId);
+  const browserRequest = useBrowserRequest(conversationId, mono?.browserRequest);
   // Where the app opens next time.
   const { command, refresh } = useConnection();
   // The older desktop app has no profile, reset or delete for a Mono.
@@ -183,6 +185,7 @@ export default function MonoScreen() {
                 attachments,
               );
             }}
+            browserRequest={browserRequest}
           />
         </AccentOverride>
       }

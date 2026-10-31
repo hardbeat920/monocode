@@ -18,6 +18,7 @@ import FileScriptIcon from "@hugeicons/core-free-icons/FileScriptIcon";
 import FlashIcon from "@hugeicons/core-free-icons/FlashIcon";
 import Folder01Icon from "@hugeicons/core-free-icons/Folder01Icon";
 import GitBranchIcon from "@hugeicons/core-free-icons/GitBranchIcon";
+import GlobeIcon from "@hugeicons/core-free-icons/GlobeIcon";
 import Image01Icon from "@hugeicons/core-free-icons/Image01Icon";
 import InboxIcon from "@hugeicons/core-free-icons/InboxIcon";
 import LockIcon from "@hugeicons/core-free-icons/LockIcon";
@@ -68,6 +69,7 @@ const icons = {
   chevronUpDown: UnfoldMoreIcon,
   chevronRight: ArrowRight01Icon,
   branch: GitBranchIcon,
+  globe: GlobeIcon,
   computer: ComputerIcon,
   computerOff: ComputerRemoveIcon,
   sparkle: SparklesIcon,

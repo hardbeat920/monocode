@@ -190,7 +190,9 @@ export function SessionNotifications() {
               ? "Finished"
               : session.waiting === "approval"
                 ? "Needs your approval"
-                : "Has a question for you",
+                : session.waiting === "browser"
+                  ? "Wants to use the browser"
+                  : "Has a question for you",
           data: {
             projectId: session.projectId,
             sessionId: session.id,
