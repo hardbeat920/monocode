@@ -14,6 +14,7 @@ import {
   ChevronRight,
   Globe,
   Lock,
+  Plus,
   RefreshCw,
 } from "../../../shared/ui/icons";
 import {
@@ -23,6 +24,7 @@ import {
   type BrowserTab,
   cancelBrowserPick,
   navigateBrowserLive,
+  newBrowserTab,
   pullBrowserLiveFrame,
   resizeBrowserLive,
   sendBrowserLiveInput,
@@ -34,6 +36,7 @@ import { TabLabel } from "../../../shared/ui/TabLabel";
 import {
   browserPickTab,
   markBrowserTabShown,
+  requestBrowserPane,
   subscribeBrowserPick,
 } from "../model/browserPane";
 import { type Drawn, LivePainter, type PaintFrame } from "./livePainter";
@@ -166,6 +169,21 @@ export function queueLiveInput(
     return;
   }
   queue.push(input);
+}
+
+/** Ctrl+T (Cmd+T on a Mac): a new tab, as in a browser. */
+export function isNewTabKey(
+  event: Pick<
+    globalThis.KeyboardEvent,
+    "key" | "altKey" | "ctrlKey" | "metaKey" | "shiftKey"
+  >,
+): boolean {
+  return (
+    (event.ctrlKey || event.metaKey) &&
+    !event.altKey &&
+    !event.shiftKey &&
+    event.key.toLowerCase() === "t"
+  );
 }
 
 /** A wheel's distance in CSS pixels, whatever unit the event counts in. */
@@ -473,9 +491,11 @@ export function BrowserLiveView({
     };
   }, [sessionId, tabId, visible, open, attempt]);
 
+  // A blank tab waits for an address; any other takes the keys.
+  const blank = tab?.url === "about:blank";
   useEffect(() => {
-    if (focused && phase.kind === "live") capture.current?.focus();
-  }, [focused, phase.kind]);
+    if (focused && phase.kind === "live" && !blank) capture.current?.focus();
+  }, [focused, phase.kind, blank]);
 
   const fail = useCallback((err: unknown) => {
     setError(err instanceof Error ? err.message : String(err));
@@ -510,6 +530,15 @@ export function BrowserLiveView({
     },
     [sessionId, tabId, fail],
   );
+  // "New tab": a blank tab of the same thread, in this pane.
+  const openTab = useCallback(() => {
+    setError(null);
+    void newBrowserTab(sessionId)
+      .then((tab) =>
+        requestBrowserPane({ sessionId, tab, title: "New tab", own: true }),
+      )
+      .catch(fail);
+  }, [sessionId, fail]);
   const point = (event: { clientX: number; clientY: number }) => {
     const shown = surface.current?.getBoundingClientRect();
     const current = frame.current;
@@ -570,6 +599,11 @@ export function BrowserLiveView({
       if (phase === "down") void cancelBrowserPick().catch(() => {});
       return;
     }
+    if (isNewTabKey(event)) {
+      event.preventDefault();
+      if (phase === "down" && !event.repeat) openTab();
+      return;
+    }
     const input = liveKeyInput(event.nativeEvent, phase);
     if (!input) return;
     event.preventDefault();
@@ -605,7 +639,9 @@ export function BrowserLiveView({
         url={tab?.url ?? ""}
         busy={!!tab?.busy}
         disabled={!open}
+        focusAddress={!!focused && blank}
         onNavigate={navigate}
+        onNewTab={openTab}
       />
       {picking ? (
         <div className="flex h-8 shrink-0 items-center gap-2 border-b border-teal-500/20 bg-teal-400/10 px-3 text-[12px] text-teal-700 dark:text-teal-200">
@@ -703,15 +739,23 @@ function BrowserToolbar({
   url,
   busy,
   disabled,
+  focusAddress,
   onNavigate,
+  onNewTab,
 }: {
   url: string;
   busy: boolean;
   disabled: boolean;
+  /** The address field takes the keys (a blank tab, waiting for one). */
+  focusAddress: boolean;
   onNavigate: (nav: BrowserLiveNav) => void;
+  onNewTab: () => void;
 }) {
   const [editing, setEditing] = useState<string | null>(null);
   const field = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (focusAddress && !disabled) field.current?.focus();
+  }, [focusAddress, disabled]);
   const address = liveAddress(url);
   return (
     <div className="flex h-10 shrink-0 items-center gap-0.5 border-b border-content/8 px-1.5">
@@ -808,6 +852,15 @@ function BrowserToolbar({
           Agent
         </span>
       ) : null}
+      <button
+        type="button"
+        title="New tab (Ctrl+T)"
+        aria-label="New tab"
+        onClick={onNewTab}
+        className={TOOL}
+      >
+        <Plus className="size-4" strokeWidth={1.75} />
+      </button>
     </div>
   );
 }

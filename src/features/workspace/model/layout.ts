@@ -55,6 +55,8 @@ export type AgentTabSource = {
 export type BrowserPaneSource = {
   sessionId: string;
   tab: string;
+  /** The user opened it in the pane ("New tab"): closing it closes the tab. */
+  own?: boolean;
 };
 
 export type SessionChangesSource = {
@@ -1510,6 +1512,31 @@ function findSplit(node: LayoutNode, id: string): SplitNode | null {
     if (found) return found;
   }
   return null;
+}
+
+/**
+ * `tab` with the pane tab that shows `file`'s browser tab marked as the
+ * user's own ([`BrowserPaneSource.own`]), when one shows it already.
+ */
+export function ownBrowserPaneTab(
+  tab: WorkspaceTab,
+  file: FilePaneTab,
+): WorkspaceTab {
+  const key = editorTabKey(file);
+  let changed = false;
+  const editorPanes = tab.editorPanes.map((pane) => {
+    if (!pane.files.some((entry) => editorTabKey(entry) === key)) return pane;
+    changed = true;
+    return {
+      ...pane,
+      files: pane.files.map((entry) =>
+        editorTabKey(entry) === key && entry.browser
+          ? { ...entry, browser: { ...entry.browser, own: true } }
+          : entry,
+      ),
+    };
+  });
+  return changed ? { ...tab, editorPanes } : tab;
 }
 
 /**

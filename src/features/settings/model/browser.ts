@@ -392,6 +392,12 @@ export function listBranchApps(cwd: string): Promise<BranchApp[]> {
  */
 export const openBranchApp = (sessionId: string, url: string) =>
   command("browser_open_app", { sessionId, url });
+/**
+ * "New tab" in a thread's browser pane: a blank tab (or one at `url`) the
+ * thread holds. Resolves to the tab's id.
+ */
+export const newBrowserTab = (sessionId: string, url?: string) =>
+  invoke<string>("browser_new_tab", { sessionId, url: url ?? null });
 /** An element the user picked in a thread's tab (`pick::PickedElement`). */
 export type PickedBrowserElement = {
   tab: string;

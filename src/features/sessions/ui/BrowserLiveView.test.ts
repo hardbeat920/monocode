@@ -4,6 +4,7 @@ import {
   parseBrowserLiveFrame,
 } from "../../settings/model/browser";
 import {
+  isNewTabKey,
   liveAddress,
   liveKeyInput,
   liveModifiers,
@@ -139,6 +140,23 @@ describe("live view input", () => {
       "mouse",
     ]);
     expect(queue[2]).toEqual(move(2));
+  });
+
+  it("takes Ctrl+T and Cmd+T for a new tab, and nothing else", () => {
+    const keys = {
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+    };
+    expect(isNewTabKey({ ...keys, key: "t", ctrlKey: true })).toBe(true);
+    expect(isNewTabKey({ ...keys, key: "T", metaKey: true })).toBe(true);
+    expect(isNewTabKey({ ...keys, key: "t" })).toBe(false);
+    // Ctrl+Shift+T reopens a closed tab in a browser; not here.
+    expect(
+      isNewTabKey({ ...keys, key: "T", ctrlKey: true, shiftKey: true }),
+    ).toBe(false);
+    expect(isNewTabKey({ ...keys, key: "r", ctrlKey: true })).toBe(false);
   });
 
   it("counts wheel lines and pages in pixels", () => {

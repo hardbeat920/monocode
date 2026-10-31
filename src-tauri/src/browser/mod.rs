@@ -1618,6 +1618,34 @@ impl BrowserHost {
         if !diagnostics::is_local_url(&url) {
             return Err("Only an app on this computer can be opened from here.".into());
         }
+        self.open_for_thread(session, window, &url)
+    }
+
+    /// "New tab" in a thread's browser pane: a tab at `url`, or a blank one
+    /// for the user to type an address into, held by `session` like any tab
+    /// MonoCode opened for it. The user's click is the thread's access.
+    pub fn new_tab(
+        self: &Arc<Self>,
+        session: &str,
+        window: &str,
+        url: Option<&str>,
+    ) -> Result<TabId, String> {
+        let url = match url.map(str::trim).filter(|url| !url.is_empty()) {
+            Some(url) => policy::check_url(url).map_err(|reason| reason.message().to_string())?,
+            None => "about:blank".to_string(),
+        };
+        self.open_for_thread(session, window, &url)
+    }
+
+    /// A tab at `url` (already checked) that `session` holds, opened by the
+    /// user. Waits for the MonoCode browser to start when it is not running.
+    fn open_for_thread(
+        self: &Arc<Self>,
+        session: &str,
+        window: &str,
+        url: &str,
+    ) -> Result<TabId, String> {
+        let url = url.to_string();
         if !self.policy.read().toggle_on {
             return Err("Turn on browser access first.".into());
         }
@@ -1637,11 +1665,17 @@ impl BrowserHost {
         // app's first script runs; then the app.
         let managed = self.mode().launches();
         let in_monocode = self.policy.read().settings.tabs_in_monocode;
+        // In the hidden MonoCode browser each tab gets a window of its own,
+        // which the pane sizes to itself (as agent tabs, see `open_tab`).
         let created = self
             .link
             .send_system(Command::browser(
                 Method::TargetCreateTarget,
-                json!({ "url": "about:blank", "background": !managed || in_monocode }),
+                json!({
+                    "url": "about:blank",
+                    "background": !managed || in_monocode,
+                    "newWindow": managed && in_monocode && self.browser_hidden(),
+                }),
             ))
             .map_err(|error| format!("{error:?}"))?;
         let target = created["targetId"]
@@ -1670,13 +1704,15 @@ impl BrowserHost {
         }
         self.adopted(&handle, session, &free, Actor::User);
         self.close_startup_pages();
-        self.link
-            .send_system(Command::in_session(
-                &handle.session,
-                Method::PageNavigate,
-                json!({ "url": url }),
-            ))
-            .map_err(|error| format!("The tab opened, but not the app: {error:?}"))?;
+        if url != "about:blank" {
+            self.link
+                .send_system(Command::in_session(
+                    &handle.session,
+                    Method::PageNavigate,
+                    json!({ "url": url }),
+                ))
+                .map_err(|error| format!("The tab opened, but not the page: {error:?}"))?;
+        }
         Ok(handle.tab)
     }
 
@@ -3164,6 +3200,23 @@ pub async fn browser_open_app(
     Ok(state.state())
 }
 
+/// "New tab" in a thread's browser pane. Returns the tab's id.
+#[tauri::command]
+pub async fn browser_new_tab(
+    window: WebviewWindow,
+    session_id: String,
+    url: Option<String>,
+) -> Result<String, String> {
+    let host = require_host()?;
+    let label = window.label().to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        host.new_tab(&session_id, &label, url.as_deref())
+            .map(|tab| tab.0)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub async fn browser_pick_element(
     session_id: String,
@@ -3663,6 +3716,41 @@ mod tests {
         assert!(created < marker && marker < navigate);
         assert_eq!(received[navigate].params["url"], "http://localhost:5174/");
         assert!(received[navigate].session.is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_new_tab_from_the_pane_is_the_threads_and_blank_or_at_its_address() {
+        let server = FakeCdp::start();
+        let dir = profile_for(&server);
+        let host = BrowserHost::for_tests(settings_for(&dir));
+        host.set_toggle(true);
+        assert!(wait_state(&host, ConnectionState::Connected));
+
+        let blank = host.new_tab("s1", "main", None).unwrap();
+        // The click is the thread's access, and the tab is its own.
+        assert!(host.policy().read().granted("s1"));
+        assert_eq!(host.policy().read().tabs_for("s1")[0].tab, blank);
+        // Blank: nothing to load, the user types the address.
+        assert!(!server
+            .received()
+            .iter()
+            .any(|r| r.method == "Page.navigate"));
+
+        let page = host
+            .new_tab("s1", "main", Some(" https://example.com/ "))
+            .unwrap();
+        assert_ne!(page, blank);
+        assert_eq!(host.policy().read().tabs_for("s1").len(), 2);
+        let received = server.received();
+        let navigate = received
+            .iter()
+            .find(|r| r.method == "Page.navigate")
+            .unwrap();
+        assert_eq!(navigate.params["url"], "https://example.com/");
+        assert!(host
+            .new_tab("s1", "main", Some("file:///etc/passwd"))
+            .is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

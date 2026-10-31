@@ -8,12 +8,31 @@ import {
   openBrowserPane,
   openEditorTab,
   movePane,
+  ownBrowserPaneTab,
 } from "./layout";
 
 const browser = (tab: string) =>
   newBrowserPaneTab("Checkout", "/repo", { sessionId: "s1", tab });
 
 describe("browser panes", () => {
+  it("mark a tab the user opened as theirs, also when it shows already", () => {
+    const shown = openBrowserPane(newTab("s1"), browser("t1"), "s1");
+    const own = newBrowserPaneTab("New tab", "/repo", {
+      sessionId: "s1",
+      tab: "t1",
+      own: true,
+    });
+    const marked = ownBrowserPaneTab(shown, own);
+    expect(marked.editorPanes[0].files[0].browser).toEqual({
+      sessionId: "s1",
+      tab: "t1",
+      own: true,
+    });
+    // Nothing shows it yet: the tab is left as it is.
+    const other = browser("t2");
+    expect(ownBrowserPaneTab(shown, other)).toBe(shown);
+  });
+
   it("open in a pane of their own on the right the first time", () => {
     const tab = openBrowserPane(newTab("s1"), browser("t1"), "s1");
     const [left, right] = layoutLeaves(tab.layout);

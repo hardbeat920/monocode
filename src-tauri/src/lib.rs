@@ -364,6 +364,7 @@ pub fn run() {
             browser::browser_user_tabs,
             browser::browser_give_tab,
             browser::browser_open_app,
+            browser::browser_new_tab,
             devservers::dev_servers,
             browser::browser_pick_element,
             browser::browser_cancel_pick,

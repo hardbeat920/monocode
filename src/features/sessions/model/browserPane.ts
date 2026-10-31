@@ -15,6 +15,8 @@ export type BrowserPaneRequest = {
    * beside the thread where it is open, and without taking focus.
    */
   auto?: boolean;
+  /** Opened by the user in a pane ("New tab"); see `BrowserPaneSource.own`. */
+  own?: boolean;
 };
 
 let pending: BrowserPaneRequest[] = [];

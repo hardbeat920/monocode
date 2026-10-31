@@ -262,6 +262,7 @@ import {
   newAgentTab,
   newBrowserPaneTab,
   openBrowserPane,
+  ownBrowserPaneTab,
   browserPanePlacement,
   isBrowserPaneTab,
   openEditorTab,
@@ -638,6 +639,7 @@ import {
   answerPendingBrowserRequest,
   browserRequestsToDecline,
   browserStateSnapshot,
+  closeBrowserTab,
   ensureBrowserMcp,
   sessionBrowserGranted,
   setSessionBrowserGrant,
@@ -3751,10 +3753,14 @@ function Workspace({
       const index = pane.files.findIndex((file) => file.id === fileId);
       if (index < 0) return;
       const file = pane.files[index];
+      // A tab the user opened in the pane closes with it, as in a browser.
+      const closesBrowserTab = file.browser?.own ? file.browser.tab : null;
       const needsUnsavedConfirm =
         isFilesystemTab(file) && dirtyFilesRef.current.has(fileId);
 
       const finishClose = () => {
+        if (closesBrowserTab)
+          void closeBrowserTab(closesBrowserTab).catch(() => {});
         const files = pane.files.filter((entry) => entry.id !== fileId);
         let nextFocus = tab.focusedId;
         let nextLayout = tab.layout;
@@ -11993,12 +11999,16 @@ function Workspace({
         const file = newBrowserPaneTab(request.title, cwd, {
           sessionId,
           tab: request.tab,
+          ...(request.own ? { own: true } : {}),
         });
         const placement = loadBrowserPanePlacement();
         setTabs((prev) =>
           prev.map((entry) => {
             if (entry.id !== tab.id) return entry;
-            const opened = openBrowserPane(entry, file, sessionId, placement);
+            // The tab may already show on its own ("Show agent tabs: In
+            // MonoCode") by the time the user's request arrives.
+            const marked = request.own ? ownBrowserPaneTab(entry, file) : entry;
+            const opened = openBrowserPane(marked, file, sessionId, placement);
             return request.auto
               ? { ...opened, focusedId: entry.focusedId }
               : opened;
