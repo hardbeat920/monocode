@@ -72,6 +72,10 @@ impl SpaceReorder {
 impl Shell {
     pub(super) fn start_space_drag(&mut self, path: &str, event: &MouseDownEvent) {
         self.space_reorder.skip_click = false;
+        // A named workspace's spaces are its members, kept in their own order.
+        if self.named_workspace_mode() {
+            return;
+        }
         let projects = &self.workspace.projects;
         let (Some(from), Some(strip)) = (
             projects.iter().position(|p| p == path),

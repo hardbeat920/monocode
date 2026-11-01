@@ -13,9 +13,14 @@ const ICON_RAIL_WIDTH: f32 = 48.;
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ProjectRailRow {
     Monos,
+    /// A named workspace; the picked one's projects follow it.
+    Workspace(String),
     Heading(&'static str),
     Group(String),
-    Project { path: String, grouped: bool },
+    Project {
+        path: String,
+        grouped: bool,
+    },
     Gap,
     Empty,
 }
@@ -334,7 +339,39 @@ impl Shell {
         if self.workspace.preferences.monos {
             rows.push(ProjectRailRow::Monos);
         }
-        let projects = &self.workspace.projects;
+        // A workspace's members come first, once, and leave the sections below.
+        let members = self
+            .workspace
+            .named_workspace()
+            .map(|w| w.projects.clone())
+            .unwrap_or_default();
+        if !compact && !self.workspace.named_workspaces.is_empty() {
+            rows.push(ProjectRailRow::Heading("Workspaces"));
+            for workspace in &self.workspace.named_workspaces {
+                rows.push(ProjectRailRow::Workspace(workspace.id.clone()));
+                if self.workspace.active_named_workspace.as_ref() == Some(&workspace.id) {
+                    rows.extend(members.iter().map(|path| ProjectRailRow::Project {
+                        path: path.clone(),
+                        grouped: true,
+                    }));
+                }
+            }
+            rows.push(ProjectRailRow::Gap);
+        } else if !members.is_empty() {
+            rows.extend(members.iter().map(|path| ProjectRailRow::Project {
+                path: path.clone(),
+                grouped: false,
+            }));
+            rows.push(ProjectRailRow::Gap);
+        }
+        let projects: Vec<_> = self
+            .workspace
+            .projects
+            .iter()
+            .filter(|p| !members.contains(p))
+            .cloned()
+            .collect();
+        let projects = &projects;
         let pinned: Vec<_> = projects
             .iter()
             .filter(|p| self.workspace.project_rail_pinned.contains(*p))
@@ -422,6 +459,7 @@ impl Shell {
                 .map(|m| m.update(cx, |m, cx| m.project_navigation_rail(compact, cx)))
                 .unwrap_or_else(|| div().into_any()),
             ProjectRailRow::Heading(label) => self.project_rail_heading(label, compact, cx),
+            ProjectRailRow::Workspace(id) => self.rail_workspace_row(&id, cx),
             ProjectRailRow::Project { path, grouped } => {
                 self.project_rail_row(ix, path, compact, grouped, row_gap, cx)
             }
@@ -465,6 +503,15 @@ impl Shell {
                         .line_height(px(20.))
                         .text_color(content(0.5))
                         .child(label),
+                )
+            })
+            .when(label == "Workspaces", |d| {
+                d.child(
+                    icon_button("rail-new-workspace", "New workspace", "plus")
+                        .size(px(20.))
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.new_named_workspace(window, cx)),
+                        ),
                 )
             })
             .when(label == "Groups", |d| {

@@ -122,6 +122,8 @@ struct OpenMenu {
 use response_menu::ResponseMenu;
 pub(crate) struct SessionChanged;
 pub(crate) struct ChooseFolder(pub(crate) AnchorSlot);
+/// A blank session's title asked which workspace project to start in.
+pub(crate) struct ChooseProject(pub(crate) AnchorSlot);
 /// The review card asked to open the session's recorded changes.
 pub(crate) struct OpenSessionChanges(pub(crate) crate::review::ReviewTab);
 pub(crate) struct Conversation {
@@ -185,6 +187,10 @@ pub(crate) struct Conversation {
     pub(crate) submission_generation: u64,
     mono_ui: mono::ChatState,
     project_appearance: monocode_core::project_appearance::ProjectAppearance,
+    /// A blank session in a workspace of several projects can start in
+    /// another one from its title.
+    project_choice: bool,
+    project_choice_anchor: AnchorSlot,
     classic_layout: bool,
     catalog: Vec<Model>,
     catalog_epoch: u64,
@@ -299,6 +305,15 @@ impl Conversation {
     pub(crate) fn set_beside_pane(&mut self, beside: bool, cx: &mut Context<Self>) {
         if self.beside_pane != beside {
             self.beside_pane = beside;
+            cx.notify();
+        }
+    }
+    pub(crate) fn project_choice(&self) -> bool {
+        self.project_choice
+    }
+    pub(crate) fn set_project_choice(&mut self, choice: bool, cx: &mut Context<Self>) {
+        if self.project_choice != choice {
+            self.project_choice = choice;
             cx.notify();
         }
     }
@@ -634,6 +649,8 @@ impl Conversation {
                 ..Default::default()
             },
             project_appearance: Default::default(),
+            project_choice: false,
+            project_choice_anchor: AnchorSlot::default(),
             classic_layout: false,
             catalog: Vec::new(),
             catalog_epoch: 0,
@@ -1542,6 +1559,7 @@ impl Conversation {
 
 impl EventEmitter<SessionChanged> for Conversation {}
 impl EventEmitter<ChooseFolder> for Conversation {}
+impl EventEmitter<ChooseProject> for Conversation {}
 impl EventEmitter<OpenSessionChanges> for Conversation {}
 impl EventEmitter<Transfer> for Conversation {}
 impl EventEmitter<composer_features::StartOrchestration> for Conversation {}
@@ -3354,10 +3372,11 @@ impl Conversation {
                                 .line_height(px(28.))
                                 .text_color(content(1.))
                                 .truncate()
-                                .child(format!(
-                                    "What should we work on in {}?",
-                                    self.project_appearance.label(&self.summary.cwd)
-                                )),
+                                .flex()
+                                .items_center()
+                                .child("What should we work on in\u{a0}")
+                                .child(self.empty_title_project(cx))
+                                .child("?"),
                         )
                     })
                     .child(self.composer(window, cx))
@@ -3365,6 +3384,39 @@ impl Conversation {
                         d.child(div().flex_grow(1.).flex_shrink(1.).flex_basis(px(18.)))
                     }),
             )
+            .into_any()
+    }
+}
+
+impl Conversation {
+    /// The project in a blank session's title. In a workspace of several
+    /// projects it opens a choice of where this new session starts.
+    fn empty_title_project(&self, cx: &mut Context<Self>) -> AnyElement {
+        let label = self.project_appearance.label(&self.summary.cwd);
+        if !self.project_choice {
+            return div().min_w_0().truncate().child(label).into_any();
+        }
+        div()
+            .id("empty-session-project")
+            .debug_selector(|| "empty-session-project".into())
+            .relative()
+            .role(Role::Button)
+            .aria_label(format!("Start in another project, now {label}"))
+            .cursor_pointer()
+            .min_w_0()
+            .flex()
+            .items_center()
+            .gap_1()
+            .px_1()
+            .mx(px(-4.))
+            .rounded_md()
+            .hover(|s| s.bg(content(0.08)))
+            .child(div().min_w_0().truncate().child(label))
+            .child(icon("chevron-down", 16.).text_color(content(0.5)))
+            .child(self.project_choice_anchor.probe())
+            .on_click(cx.listener(|this, _, _, cx| {
+                cx.emit(ChooseProject(this.project_choice_anchor.clone()))
+            }))
             .into_any()
     }
 }

@@ -63,6 +63,19 @@ pub(crate) struct ProjectRailGroup {
     pub mascot: Option<String>,
 }
 
+/// A saved set of projects shown together when project workspaces are on.
+/// Membership is independent of the project list, rail groups and Git
+/// worktrees, and sessions keep their own execution directories.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct NamedWorkspace {
+    pub id: String,
+    pub name: String,
+    pub projects: Vec<String>,
+    /// Member projects whose session group is folded in the sidebar.
+    pub collapsed: HashSet<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct Workspace {
@@ -130,6 +143,11 @@ pub(crate) struct Workspace {
     pub project_rail_pinned: HashSet<String>,
     pub project_rail_groups: Vec<ProjectRailGroup>,
     pub project_rail_assignments: HashMap<String, String>,
+    pub named_workspaces: Vec<NamedWorkspace>,
+    pub active_named_workspace: Option<String>,
+    /// The named workspace each open pane belongs to. A tab is shown only in
+    /// the workspace that owns its panes, so layouts are never shared.
+    pub pane_owners: HashMap<i64, String>,
     pub classic_sidebar_tabs: HashMap<String, String>,
     pub classic_sidebar_tab_order: Vec<String>,
     pub new_layout_prompt_dismissed: bool,
@@ -332,6 +350,9 @@ impl Default for Workspace {
             project_rail_pinned: HashSet::new(),
             project_rail_groups: Vec::new(),
             project_rail_assignments: HashMap::new(),
+            named_workspaces: Vec::new(),
+            active_named_workspace: None,
+            pane_owners: HashMap::new(),
             classic_sidebar_tabs: HashMap::new(),
             classic_sidebar_tab_order: Vec::new(),
             new_layout_prompt_dismissed: false,
@@ -493,6 +514,7 @@ impl Workspace {
         }
         state.settle_mono_panes();
         state.normalize_title_order();
+        state.normalize_named_workspaces();
         if state
             .desktop_project_preferences
             .as_ref()
@@ -674,6 +696,145 @@ impl Workspace {
             return false;
         };
         self.move_project(path, to)
+    }
+    /// The named workspace picked in place of a single project, if any.
+    pub fn named_workspace(&self) -> Option<&NamedWorkspace> {
+        let id = self.active_named_workspace.as_deref()?;
+        self.named_workspaces.iter().find(|w| w.id == id)
+    }
+    pub fn named_workspace_mut(&mut self) -> Option<&mut NamedWorkspace> {
+        let id = self.active_named_workspace.clone()?;
+        self.named_workspaces.iter_mut().find(|w| w.id == id)
+    }
+    /// Add a workspace holding `projects` and make it current.
+    pub fn create_named_workspace(&mut self, name: &str, projects: Vec<String>) -> String {
+        let id = (1..)
+            .map(|n| format!("workspace-{n}"))
+            .find(|id| self.named_workspaces.iter().all(|w| w.id != *id))
+            .unwrap();
+        let mut members = Vec::new();
+        for project in projects {
+            if !project.is_empty() && !members.contains(&project) {
+                members.push(project);
+            }
+        }
+        self.named_workspaces.push(NamedWorkspace {
+            id: id.clone(),
+            name: name.trim().to_owned(),
+            projects: members,
+            collapsed: HashSet::new(),
+        });
+        self.active_named_workspace = Some(id.clone());
+        id
+    }
+    pub fn rename_named_workspace(&mut self, id: &str, name: &str) {
+        let name = name.trim();
+        if let Some(workspace) = self
+            .named_workspaces
+            .iter_mut()
+            .find(|w| w.id == id)
+            .filter(|_| !name.is_empty())
+        {
+            workspace.name = name.into();
+        }
+    }
+    /// Forget a workspace. Its tabs stay open for their projects.
+    pub fn delete_named_workspace(&mut self, id: &str) {
+        self.named_workspaces.retain(|w| w.id != id);
+        self.pane_owners.retain(|_, owner| owner != id);
+        if self.active_named_workspace.as_deref() == Some(id) {
+            self.active_named_workspace = None;
+        }
+    }
+    /// Add a project to the current workspace. Opening a project adds it.
+    pub fn add_workspace_member(&mut self, path: &str) {
+        if let Some(workspace) = self.named_workspace_mut()
+            && !path.is_empty()
+            && !workspace.projects.iter().any(|p| p == path)
+        {
+            workspace.projects.push(path.into());
+        }
+    }
+    /// Take a project out of the current workspace. Only membership changes;
+    /// the last member stays because a workspace needs at least one project.
+    pub fn remove_workspace_member(&mut self, path: &str) -> bool {
+        let Some(workspace) = self.named_workspace_mut() else {
+            return false;
+        };
+        if workspace.projects.len() < 2 || !workspace.projects.iter().any(|p| p == path) {
+            return false;
+        }
+        workspace.projects.retain(|p| p != path);
+        workspace.collapsed.remove(path);
+        true
+    }
+    pub fn is_workspace_member(&self, path: &str) -> bool {
+        self.named_workspace()
+            .is_some_and(|w| w.projects.iter().any(|p| p == path))
+    }
+    /// The named workspace whose panes a tab holds.
+    pub fn tab_owner(&self, tab: i64) -> Option<&str> {
+        let layout = self.layout(tab);
+        std::iter::once(self.tab_focus(tab))
+            .chain(layout.leaf_ids())
+            .find_map(|id| self.pane_owners.get(&id))
+            .map(String::as_str)
+    }
+    /// Whether a tab belongs on the current title strip: the picked
+    /// workspace's own tabs, or the tabs no workspace owns for a project.
+    pub fn tab_in_named_workspace(&self, tab: i64) -> bool {
+        self.tab_owner(tab) == self.named_workspace().map(|w| w.id.as_str())
+    }
+    /// Keep every tab's panes under one owner. The active tab is the one in
+    /// use, so it joins whatever is picked, a workspace or a single project,
+    /// which moves a tab there when it is opened from elsewhere.
+    pub fn sync_pane_owners(&mut self) {
+        let open: HashSet<_> = self.open_sessions().into_iter().collect();
+        self.pane_owners.retain(|id, _| open.contains(id));
+        let current = self.named_workspace().map(|w| w.id.clone());
+        let active = self.active_tab();
+        for tab in self.tabs.clone() {
+            let owner = if Some(tab) == active {
+                current.clone()
+            } else {
+                self.tab_owner(tab).map(str::to_owned)
+            };
+            for id in self.layout(tab).leaf_ids() {
+                match &owner {
+                    Some(owner) => self.pane_owners.insert(id, owner.clone()),
+                    None => self.pane_owners.remove(&id),
+                };
+            }
+        }
+    }
+    /// Drop stale references after a restore or a desktop reconcile.
+    fn normalize_named_workspaces(&mut self) {
+        let mut ids = HashSet::new();
+        self.named_workspaces
+            .retain(|w| !w.id.is_empty() && ids.insert(w.id.clone()));
+        for workspace in &mut self.named_workspaces {
+            let mut seen = HashSet::new();
+            workspace
+                .projects
+                .retain(|p| !p.is_empty() && seen.insert(p.clone()));
+            let projects = &workspace.projects;
+            workspace.collapsed.retain(|p| projects.contains(p));
+            if workspace.name.trim().is_empty() {
+                workspace.name = "Workspace".into();
+            }
+        }
+        self.named_workspaces.retain(|w| !w.projects.is_empty());
+        if self
+            .active_named_workspace
+            .as_ref()
+            .is_some_and(|id| self.named_workspaces.iter().all(|w| w.id != *id))
+        {
+            self.active_named_workspace = None;
+        }
+        let known: HashSet<_> = self.named_workspaces.iter().map(|w| w.id.clone()).collect();
+        let open: HashSet<_> = self.open_sessions().into_iter().collect();
+        self.pane_owners
+            .retain(|id, owner| open.contains(id) && known.contains(owner));
     }
     pub fn session_for_pane(&self, id: i64) -> i64 {
         self.review_owners.get(&id).copied().unwrap_or(id)
@@ -1584,5 +1745,120 @@ mod tests {
         assert_eq!(restored.docks["/work"].terminals, ["/work/sub"]);
         assert!(!restored.docks["/work"].open);
         assert_eq!(restored.desktop_workspace_snapshot.as_ref(), Some(&source));
+    }
+
+    fn two_projects() -> super::Workspace {
+        let mut state = super::Workspace::default();
+        state.create_named_workspace(" Product ", vec!["/a".into(), "/b".into(), "/a".into()]);
+        state
+    }
+
+    #[test]
+    fn workspace_membership_only_changes_its_own_list() {
+        let mut state = two_projects();
+        state.add_project("/a");
+        state.add_project("/b");
+        let first = state.active_named_workspace.clone().unwrap();
+        assert_eq!(state.named_workspace().unwrap().name, "Product");
+        assert_eq!(state.named_workspace().unwrap().projects, ["/a", "/b"]);
+        state.add_workspace_member("/c");
+        assert!(state.remove_workspace_member("/a"));
+        assert!(state.remove_workspace_member("/b"));
+        // A workspace keeps at least one project.
+        assert!(!state.remove_workspace_member("/c"));
+        assert_eq!(state.named_workspace().unwrap().projects, ["/c"]);
+        // The project list, and other workspaces, are untouched.
+        assert_eq!(state.projects, ["/a", "/b"]);
+        state.create_named_workspace("Personal", vec!["/a".into()]);
+        assert!(state.is_workspace_member("/a"));
+        state.rename_named_workspace(&first, "  ");
+        state.rename_named_workspace(&first, "Work");
+        assert_eq!(state.named_workspaces[0].name, "Work");
+        // Back on a single project, nothing is a member and the model stays.
+        state.active_named_workspace = None;
+        assert!(state.named_workspace().is_none());
+        assert!(!state.remove_workspace_member("/a"));
+        assert_eq!(state.named_workspaces.len(), 2);
+    }
+
+    #[test]
+    fn panes_belong_to_one_workspace_and_the_active_tab_joins_the_current_one() {
+        let mut state = two_projects();
+        let first = state.active_named_workspace.clone().unwrap();
+        state.open(1);
+        state.split(2, super::SplitDir::Right);
+        state.sync_pane_owners();
+        let tab = state.tab_of(1).unwrap();
+        assert_eq!(state.tab_owner(tab), Some(first.as_str()));
+        let second = state.create_named_workspace("Other", vec!["/b".into()]);
+        state.active = None;
+        state.open(3);
+        state.sync_pane_owners();
+        assert!(!state.tab_in_named_workspace(tab));
+        assert!(state.tab_in_named_workspace(3));
+        // Opening a pane of the first workspace's tab here moves the tab.
+        state.open(2);
+        state.sync_pane_owners();
+        assert_eq!(state.tab_owner(tab), Some(second.as_str()));
+        assert_eq!(state.pane_owners[&1], second);
+    }
+
+    #[test]
+    fn single_project_tabs_and_workspace_tabs_stay_apart() {
+        let mut state = two_projects();
+        let id = state.active_named_workspace.clone().unwrap();
+        state.open(1);
+        state.sync_pane_owners();
+        // Back on one project, the workspace's tab is not shown there.
+        state.active_named_workspace = None;
+        state.active = None;
+        state.open(2);
+        state.sync_pane_owners();
+        assert!(state.tab_in_named_workspace(2));
+        assert!(!state.tab_in_named_workspace(1));
+        assert_eq!(state.tab_owner(1), Some(id.as_str()));
+        // Opening the workspace's session here brings its tab to the project.
+        state.open(1);
+        state.sync_pane_owners();
+        assert_eq!(state.tab_owner(1), None);
+        // Deleting a workspace leaves its tabs to their projects.
+        state.active_named_workspace = Some(id.clone());
+        state.open(1);
+        state.sync_pane_owners();
+        state.delete_named_workspace(&id);
+        assert!(state.named_workspaces.is_empty());
+        assert!(state.pane_owners.is_empty());
+        assert!(state.named_workspace().is_none());
+    }
+
+    #[test]
+    fn restore_keeps_workspaces_and_prunes_stale_references() {
+        let mut state = two_projects();
+        let id = state.active_named_workspace.clone().unwrap();
+        // The shell syncs owners after every open.
+        state.open(1);
+        state.sync_pane_owners();
+        state.open(2);
+        state.sync_pane_owners();
+        state.pane_owners.insert(99, id.clone());
+        state.named_workspaces.push(super::NamedWorkspace {
+            id: "empty".into(),
+            ..Default::default()
+        });
+        let saved = serde_json::to_string(&state).unwrap();
+        let restored =
+            super::Workspace::restore(Some(&saved), &[(1, "/a".into()), (2, "/b".into())], "/a");
+        assert_eq!(restored.named_workspaces.len(), 1);
+        assert_eq!(
+            restored.active_named_workspace.as_deref(),
+            Some(id.as_str())
+        );
+        assert_eq!(restored.pane_owners.len(), 2);
+        assert!(restored.tab_in_named_workspace(1) && restored.tab_in_named_workspace(2));
+        // An older blob without workspaces still restores everything else.
+        let old = super::Workspace::restore(Some(r#"{"sidebar_width":300}"#), &[], "/a");
+        assert!(old.named_workspaces.is_empty());
+        assert_eq!(old.sidebar_width, 300.);
+        assert!(old.active_named_workspace.is_none());
     }
 }

@@ -17,6 +17,11 @@ enum Row {
         first: bool,
     },
     Session(i64),
+    /// A member project's heading in a named workspace's session list.
+    ProjectGroup {
+        path: String,
+        count: usize,
+    },
     GroupedSession {
         id: i64,
         first: bool,
@@ -242,6 +247,7 @@ impl Shell {
                 self.sidebar_list.structural_rebuilds += 1;
             }
             let ids = self.sidebar_session_ids(cx);
+            let listed_ids = ids.clone();
             self.sync_rails(&ids, cx);
             let entries = self.session_entries(&ids, cx);
             let listed: HashSet<_> = ids.iter().copied().collect();
@@ -260,15 +266,28 @@ impl Shell {
             for id in folders {
                 self.folder_bounds.entry(id).or_default();
             }
-            self.prepare_sidebar_list(&entries, cx);
+            if self.named_workspace_mode() {
+                self.prepare_named_workspace_list(&listed_ids);
+            } else {
+                self.prepare_sidebar_list(&entries, cx);
+            }
         }
         self.sync_sidebar_list_visibility();
         self.sidebar_list.clear_bounds();
     }
 
     fn sidebar_scope(&self) -> String {
+        let named = self
+            .workspace
+            .named_workspace()
+            .map_or_else(String::new, |w| {
+                let mut collapsed: Vec<_> = w.collapsed.iter().cloned().collect();
+                collapsed.sort();
+                format!("{}\0{:?}\0{:?}", w.id, w.projects, collapsed)
+            });
         format!(
-            "{}\0{}\0{}\0{:?}\0{}\0{}\0{}",
+            "{}\0{}\0{}\0{}\0{:?}\0{}\0{}\0{}",
+            named,
             self.workspace.project,
             self.working_copy(),
             self.query,
@@ -367,6 +386,53 @@ impl Shell {
             if entries.is_empty() {
                 rows.push(Row::Empty);
             }
+        }
+        self.sidebar_list.update(self.sidebar_scope(), rows);
+    }
+
+    /// A workspace lists each member project's sessions under its own
+    /// heading, newest first. Searching opens every group.
+    fn prepare_named_workspace_list(&mut self, ids: &[i64]) {
+        let Some(workspace) = self.workspace.named_workspace() else {
+            return;
+        };
+        let classic = self.workspace.classic_layout;
+        let mut rows = if classic {
+            vec![Row::ClassicGap(6)]
+        } else {
+            vec![Row::Navigation, Row::Monos]
+        };
+        let searching = !self.query.is_empty();
+        let mut listed = 0;
+        for path in &workspace.projects {
+            let sessions: Vec<_> = ids
+                .iter()
+                .copied()
+                .filter(|id| {
+                    !self.rails.children.contains(id)
+                        && self
+                            .session_summaries
+                            .get(id)
+                            .is_some_and(|s| s.cwd == *path)
+                })
+                .collect();
+            if searching && sessions.is_empty() {
+                continue;
+            }
+            listed += sessions.len();
+            rows.push(Row::ProjectGroup {
+                path: path.clone(),
+                count: sessions.len(),
+            });
+            if searching || !workspace.collapsed.contains(path) {
+                rows.extend(sessions.into_iter().map(Row::Session));
+            }
+        }
+        if listed == 0 && (searching || workspace.projects.is_empty()) {
+            rows.push(Row::Empty);
+        }
+        if classic {
+            rows.push(Row::ClassicGap(40));
         }
         self.sidebar_list.update(self.sidebar_scope(), rows);
     }
@@ -507,6 +573,7 @@ impl Shell {
                 .when(first, |d| d.child(self.sidebar_filter_button(cx)))
                 .into_any(),
             Row::Session(id) => self.session_card(id, cx),
+            Row::ProjectGroup { path, count } => self.named_workspace_group(&path, count, cx),
             Row::GroupedSession { id, first, last } => {
                 return div()
                     .px_2()

@@ -40,6 +40,10 @@ impl Shell {
         self.open_title_tab(&self.mono_tab(id.into()), window, cx);
     }
     pub(super) fn tab_scope(&self) -> String {
+        // A workspace returns to one tab, whichever project it shows.
+        if let Some(workspace) = self.workspace.named_workspace() {
+            return format!("workspace\0{}", workspace.id);
+        }
         format!(
             "{}\0{}",
             path_key(&self.workspace.project),
@@ -65,18 +69,31 @@ impl Shell {
                     !self.workspace.classic_layout
                         && (*view != app_views::AppView::Notes || self.workspace.preferences.notes)
                 }
+                // A workspace shows the tabs it owns, mixed projects included.
+                TitleTab::Session(tab) if self.named_workspace_mode() => {
+                    self.workspace.tabs.contains(tab)
+                        && self.workspace.tab_in_named_workspace(*tab)
+                        && self.session_summaries.contains_key(
+                            &self
+                                .workspace
+                                .session_for_pane(self.workspace.tab_focus(*tab)),
+                        )
+                }
+                // A single project shows the tabs no workspace owns.
                 TitleTab::Session(tab) => {
-                    self.workspace.tabs.contains(tab) && {
-                        let id = self.workspace.scope_pane(*tab);
-                        self.session_summaries
-                            .contains_key(&self.workspace.session_for_pane(id))
-                            && self
-                                .session_metadata(self.workspace.session_for_pane(id), cx)
-                                .summary
-                                .cwd
-                                == self.workspace.project
-                            && self.in_worktree_scope(id, cx)
-                    }
+                    self.workspace.tabs.contains(tab)
+                        && self.workspace.tab_owner(*tab).is_none()
+                        && {
+                            let id = self.workspace.scope_pane(*tab);
+                            self.session_summaries
+                                .contains_key(&self.workspace.session_for_pane(id))
+                                && self
+                                    .session_metadata(self.workspace.session_for_pane(id), cx)
+                                    .summary
+                                    .cwd
+                                    == self.workspace.project
+                                && self.in_worktree_scope(id, cx)
+                        }
                 }
                 TitleTab::Mono {
                     id,

@@ -277,6 +277,9 @@ impl Shell {
             self.classic_worktree_picker = None;
         }
         let sessions = self.classic_sidebar_tab == ClassicSidebarTab::Sessions;
+        let workspace_button = self
+            .named_workspace_mode()
+            .then(|| self.named_workspace_button(cx));
         let live_agents = if self.workspace.project_rail_open {
             None
         } else {
@@ -355,6 +358,19 @@ impl Shell {
                             ),
                     ),
             )
+            .children(workspace_button.map(|button| {
+                div()
+                    .debug_selector(|| "classic-named-workspace".into())
+                    .h(px(36.))
+                    .flex_shrink_0()
+                    .pl_3()
+                    .pr_1p5()
+                    .flex()
+                    .items_center()
+                    .border_b_1()
+                    .border_color(content(0.07))
+                    .child(button)
+            }))
             .when(self.workspace.project_rail_open, |d| {
                 d.child(self.classic_workspace_tabs(cx))
             })
