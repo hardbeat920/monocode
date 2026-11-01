@@ -202,6 +202,12 @@ pub struct TurnMetrics {
     pub cache_write_tokens: u64,
     #[serde(alias = "cacheHitPercent")]
     pub cache_hit_percent: Option<f64>,
+    /// API list-price cost of this turn, from the provider's running total.
+    #[serde(alias = "costUsd")]
+    pub cost_usd: Option<f64>,
+    /// Provider's running session total after this turn; `cost_usd` is its delta.
+    #[serde(alias = "totalCostUsd")]
+    pub total_cost_usd: Option<f64>,
 }
 impl TurnMetrics {
     pub fn reported(self) -> bool {

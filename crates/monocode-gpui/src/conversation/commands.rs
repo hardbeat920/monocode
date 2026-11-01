@@ -70,9 +70,74 @@ impl Conversation {
     }
 
     pub(super) fn compact_context(&mut self, cx: &mut Context<Self>) {
+        self.compact_context_then(None, cx);
+    }
+
+    /// Starts a turn, summarising a large thread first when Claude's prompt
+    /// cache has lapsed and would otherwise bill the whole history again.
+    pub(super) fn launch_prompt(&mut self, prompt: String, cx: &mut Context<Self>) {
+        if !self.keep_full_history && self.cache_compaction_due(&prompt) {
+            self.compact_context_then(Some(prompt), cx);
+        } else {
+            self.start_prompt(prompt, cx);
+        }
+    }
+
+    fn cache_compaction_due(&self, prompt: &str) -> bool {
+        !prompt.trim().is_empty()
+            && !prompt.trim_start().starts_with('/')
+            && !self.stopping
+            && !self.account_switching
+            && self.history_ready()
+            && self.cache_compaction_pending()
+    }
+
+    /// Whether this thread can auto-compact at all, so the button beside the
+    /// cache timer is worth showing. Claude Code's own switch turns it off.
+    pub(super) fn cache_compaction_available(&self) -> bool {
+        Kind::from_id(&self.summary.provider) == Kind::Claude
+            && !self.is_remote()
+            && self.summary.provider_id.is_some()
+            && monocode_core::accounts::home().is_some_and(|home| {
+                monocode_core::context::ClaudeAutoCompact::cached(&home, self.model.as_deref())
+                    .enabled
+            })
+    }
+
+    /// True when the next message will summarise the thread first. Also drives
+    /// the "Compacts next" state of the button beside the cache timer.
+    pub(super) fn cache_compaction_pending(&self) -> bool {
+        if self.busy || !self.cache_compaction_available() {
+            return false;
+        }
+        let (Some(context), Some(home)) = (self.context, monocode_core::accounts::home()) else {
+            return false;
+        };
+        monocode_core::context::compact_before_send(
+            monocode_core::context::ClaudeAutoCompact::cached(&home, self.model.as_deref()),
+            context.used,
+            context.cache_ttl_ms,
+            self.summary.updated_at,
+            monocode_core::time::now_ms(),
+        )
+    }
+
+    /// `then` is the prompt to send once compaction settles. Whatever happens
+    /// to compaction, the message is never dropped.
+    fn compact_context_then(&mut self, then: Option<String>, cx: &mut Context<Self>) {
+        let fallback = then.clone();
+        if !self.try_compact(then, cx)
+            && let Some(prompt) = fallback
+        {
+            self.start_prompt(prompt, cx);
+        }
+    }
+
+    /// Returns false when compaction did not start.
+    fn try_compact(&mut self, then: Option<String>, cx: &mut Context<Self>) -> bool {
         if !self.history_ready() {
-            self.defer_history_action(|this, cx| this.compact_context(cx), cx);
-            return;
+            self.defer_history_action(move |this, cx| this.compact_context_then(then, cx), cx);
+            return true;
         }
         if self.editing_last_turn.pending()
             || self.stopping
@@ -83,13 +148,13 @@ impl Conversation {
             || self.needs_approval()
             || !self.questions.is_empty()
         {
-            return;
+            return false;
         }
         if self.busy || !self.follow_ups.state.messages.is_empty() {
             self.status =
                 "Wait for the current turn and queued messages before compacting context.".into();
             cx.notify();
-            return;
+            return false;
         }
         let kind = Kind::from_id(&self.summary.provider);
         if !provider::supports_compact(kind) {
@@ -98,26 +163,26 @@ impl Conversation {
                 kind.label()
             );
             cx.notify();
-            return;
+            return false;
         }
         if self.summary.provider_id.is_none() {
             self.status = "Send a message before compacting this chat.".into();
             cx.notify();
-            return;
+            return false;
         }
         if self.settings.worktree_removed || self.preparing_worktree || !self.loaded {
-            return;
+            return false;
         }
         match locked(&self.store).and_then(|store| store.edit_recovery_reason(self.summary.id)) {
             Ok(Some(reason)) => {
                 self.status = reason;
                 cx.notify();
-                return;
+                return false;
             }
             Err(error) => {
                 self.status = error;
                 cx.notify();
-                return;
+                return false;
             }
             Ok(None) => {}
         }
@@ -183,6 +248,7 @@ impl Conversation {
                     for event in events {
                         match event {
                             Event::Context { used, window } => context.merge(used, window),
+                            Event::CacheTtl(ttl) => context.merge_cache_ttl(ttl),
                             Event::Commands(discovered) => commands = Some(discovered),
                             _ => {}
                         }
@@ -236,6 +302,7 @@ impl Conversation {
                 if source_selected {
                     this.context = Some(context);
                 }
+                let stopped = matches!(&result, Err(error) if error == "Stopped");
                 this.status = match result {
                     Ok(()) => {
                         if clear_command && this.input.read(cx).content == compact_draft {
@@ -248,6 +315,13 @@ impl Conversation {
                     Err(error) if error == "Stopped" => "Ready".into(),
                     Err(error) => error,
                 };
+                if let Some(prompt) = then.filter(|_| !stopped) {
+                    // A failed summary still sends the message, with full history.
+                    this.start_prompt(prompt, cx);
+                    cx.emit(SessionChanged);
+                    cx.notify();
+                    return;
+                }
                 if this.status == "Ready" {
                     this.run_history_actions(cx);
                     this.pump_follow_ups(cx);
@@ -258,6 +332,7 @@ impl Conversation {
         })
         .detach();
         cx.notify();
+        true
     }
 }
 

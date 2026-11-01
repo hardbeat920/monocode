@@ -1320,6 +1320,7 @@ fn usage_events(update: &Value, events: &mut Vec<Event>) {
             cache_write_tokens: write.unwrap_or(0),
             cache_hit_percent: ((read.is_some() || write.is_some()) && total > 0)
                 .then(|| read.unwrap_or(0) as f64 / total as f64 * 100.),
+            ..Default::default()
         }));
     }
 }

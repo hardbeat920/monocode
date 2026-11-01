@@ -302,13 +302,19 @@ impl Store {
     }
     pub fn save_context_usage(&self, id: i64, usage: &crate::context::Usage) -> Result<(), String> {
         if self.shared.is_some() {
-            return self.shared_patch(
+            self.shared_patch(
                 id,
                 &[
                     ("context_used", serde_json::json!(usage.used)),
                     ("context_window", serde_json::json!(usage.window)),
                 ],
-            );
+            )?;
+            // The desktop schema has no column for the cache lifetime; keep it
+            // in native metadata so a reopened chat keeps its countdown.
+            return match usage.cache_ttl_ms {
+                Some(ttl) => self.shared_save_setting(&format!("cache-ttl:{id}"), &ttl.to_string()),
+                None => Ok(()),
+            };
         }
 
         self.conn.execute("INSERT INTO native_settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![format!("context:{id}"), serde_json::to_string(usage).map_err(|e| e.to_string())?]).map_err(|e| e.to_string())?;

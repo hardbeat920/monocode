@@ -87,6 +87,7 @@ pub enum Event {
         used: Option<u64>,
         window: Option<u64>,
     },
+    CacheTtl(u64),
     Metrics(TurnMetrics),
     Approval(Approval),
     ApprovalResolved(String),
@@ -908,6 +909,8 @@ impl Protocol {
                                 || usage.get("cache_creation_input_tokens").is_some())
                                 && input + read + write > 0)
                                 .then(|| read as f64 / (input + read + write) as f64 * 100.),
+                            total_cost_usd: v["total_cost_usd"].as_f64(),
+                            ..Default::default()
                         };
                         if metrics.reported() {
                             events.push(Event::Metrics(metrics));
@@ -926,6 +929,11 @@ impl Protocol {
                             .max();
                         if used.is_some() || window.is_some() {
                             events.push(Event::Context { used, window });
+                        }
+                        if let Some(ttl) = crate::context::claude_cache_ttl_ms(last)
+                            .or_else(|| crate::context::claude_cache_ttl_ms(&v["usage"]))
+                        {
+                            events.push(Event::CacheTtl(ttl));
                         }
                         if v["is_error"] == true {
                             let error = v["result"]
