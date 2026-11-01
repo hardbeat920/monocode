@@ -315,6 +315,7 @@ export type TurnMetrics = {
 
 export type Block = {
   id: string;
+  providerPartId?: string;
   role: BlockRole;
   text: string;
   image?: GeneratedImageMeta;
@@ -578,7 +579,11 @@ export function newSession(
   runtimeMode: RuntimeMode = DEFAULT_RUNTIME_MODE,
   modelSettings?: Record<string, string>,
 ): Session {
-  const resolved = resolveModel(harness, model ?? preferredModelId(harness));
+  const resolved = resolveModel(
+    harness,
+    model ?? preferredModelId(harness),
+    cwd,
+  );
   return {
     id: crypto.randomUUID(),
     harness,
@@ -656,7 +661,11 @@ export function retargetSessionToProject(
   cwd: string,
 ): Session {
   const { harness, model } = projectSessionChoice(session, cwd);
-  const resolved = resolveModel(harness, model ?? preferredModelId(harness));
+  const resolved = resolveModel(
+    harness,
+    model ?? preferredModelId(harness),
+    cwd,
+  );
   const carriesSeed =
     model != null && model === session.model && harness === session.harness;
   return {
