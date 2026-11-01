@@ -154,6 +154,12 @@ describe("buildClaudeSpawnArgs", () => {
     expect(args).not.toContain("--permission-prompt-tool");
   });
 
+  it("passes an empty tool list as --tools \"\" to disable every tool", () => {
+    const args = buildClaudeSpawnArgs({ isolated: true, tools: [] });
+    expect(args[args.indexOf("--tools") + 1]).toBe("");
+    expect(buildClaudeSpawnArgs({ isolated: true })).not.toContain("--tools");
+  });
+
   it("locks isolated read-only prompts to plan mode", () => {
     const args = buildClaudeSpawnArgs({
       isolated: true,
