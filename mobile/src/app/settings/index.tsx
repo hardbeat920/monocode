@@ -26,6 +26,7 @@ import { radii, themedStyles, THEMES, useColors, useTheme } from "@/ui/theme";
 const CATEGORY_ICONS: Record<NotificationCategory, IconName> = {
   agentInput: "lock",
   agentFinished: "check",
+  monoMessages: "chat",
 };
 
 export default function SettingsScreen() {

@@ -5,7 +5,7 @@ export type MobileSelection = { projectIds: string[]; monoIds: string[] };
  * phone has no good way to talk to them yet; monos picked before are kept in
  * the selection, so they come back when this is turned on.
  */
-export const MONOS_ENABLED = false;
+export const MONOS_ENABLED = true;
 export function normalizeSelection(value: unknown): MobileSelection | null {
   if (!value || typeof value !== "object") return null;
   const item = value as Record<string, unknown>;

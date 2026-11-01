@@ -65,6 +65,8 @@ mod pulse;
 mod questions;
 mod quick_composer;
 mod quick_open;
+#[cfg(test)]
+mod wheel_glide_tests;
 mod reflow_motion;
 mod resource_pressure;
 mod response_actions;

@@ -11,6 +11,7 @@ mod floating;
 mod host;
 mod html;
 mod memory_ui;
+mod mobile;
 mod notifications;
 mod overview;
 mod panel_stack;
@@ -53,7 +54,7 @@ use std::{
 pub(crate) struct Changed;
 pub(crate) struct TabOpened(pub String);
 pub(crate) struct ShowDetails(pub String);
-pub(crate) use notifications::{NotificationChanged, NotificationFinished};
+pub(crate) use notifications::{NotificationChanged, NotificationFinished, NotificationPosted};
 #[derive(Clone, PartialEq)]
 pub(crate) struct OverviewChrome {
     active: Option<String>,
@@ -975,10 +976,19 @@ impl Monos {
                         .strip_prefix("mono-card:")
                         .map(|s| ("mono-card", s.to_string()))
                         .unwrap_or_else(|| ("assistant", report.clone()));
+                    let body = (role == "assistant").then(|| {
+                        text.strip_prefix("**Habit report**")
+                            .unwrap_or(&text)
+                            .trim()
+                            .to_owned()
+                    });
                     if let Err(error) = view.update(cx, |v, cx| v.mono_post(role, text, cx)) {
                         self.error = Some(error);
                         self.failed_reports.insert(id.into());
                         failed.push(report);
+                    } else if let Some(body) = body {
+                        let session = view.read(cx).summary.id;
+                        cx.emit(NotificationPosted { session, body });
                     }
                 }
                 if let Some(mono) = self.roster.get_mut(id) {

@@ -36,6 +36,19 @@ import { applyFrames, type WatchFrame } from "./watchUpdates";
  *  project's checkout: a new worktree off HEAD, or an existing one. */
 type StartChoice = Partial<ModelChoice> & { workspaceMode?: "worktree"; worktreePath?: string };
 
+export type MonoChange = {
+  name?: string;
+  mascot?: string;
+  color?: string;
+  addProject?: string;
+  removeProject?: string;
+};
+type MonoField = "name" | "mascot" | "color" | "projectIds";
+/** A field changed here, with what the desktop had then: it shows only while
+ *  the catalog still has that, so the desktop's own copy takes over. */
+type MonoEdits = Record<string, Partial<Record<MonoField, { value: unknown; from: unknown }>>>;
+const sameValue = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+
 type Workspace = {
   projects: Project[];
   monos: Mono[];
@@ -73,6 +86,13 @@ type Workspace = {
   configureSession: (conversationId: string, choice: Partial<ModelChoice>) => Promise<void>;
   /** Renames a session as the desktop sidebar does; the new title shows at once. */
   renameSession: (session: SessionSummary, title: string) => Promise<void>;
+  /** Every project on the desktop, chosen for this phone or not, as a Mono can work in any. */
+  allProjects: Project[];
+  /**
+   * Changes a Mono's look or projects. Shown at once, as the desktop's catalog
+   * will have it; undone if the desktop refuses.
+   */
+  editMono: (mono: Mono, change: MonoChange) => Promise<void>;
   /** Deletes a session on the desktop. It leaves every list at once, and comes
    *  back if the desktop refuses. */
   deleteSession: (conversationId: string) => Promise<void>;
@@ -230,6 +250,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   // Renames and deletes made here, until the desktop's catalog catches up. A
   // rename holds only while the desktop still has the title it replaced.
   const [renamed, setRenamed] = useState<Record<string, { title: string; from: string }>>({});
+  const [monoEdits, setMonoEdits] = useState<MonoEdits>({});
   const [deleted, setDeleted] = useState<ReadonlySet<string>>(new Set());
   const [watching, watch] = useState<string | null>(null);
   // Conversations showing turns from the disk cache, until the desktop's arrive.
@@ -441,7 +462,17 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     setPending((previous) => ({
       ...previous,
       [conversationId]: {
-        turn: { id, items: [userItem(id, text, at, attachments)] },
+        turn: {
+          id,
+          items: [
+            userItem(id, text, at, attachments),
+            // A Mono's chat shows it thinking at once, as the desktop's turn
+            // will, so taking that turn over moves nothing on screen.
+            ...(conversationId.startsWith("mono:")
+              ? [{ type: "header" as const, id: `${id}:header`, live: true, label: "Thinking…", entries: [] }]
+              : []),
+          ],
+        },
         userCount,
         ...(hasNativeTranscript && nativeLastUsers.current[conversationId]
           ? { afterUserId: nativeLastUsers.current[conversationId]! } : {}),
@@ -544,6 +575,40 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     },
     [mutate, refresh],
   );
+  const editMono = useCallback(
+    async (mono: Mono, change: MonoChange) => {
+      const next: Partial<Record<MonoField, unknown>> = {};
+      if (change.name !== undefined) next.name = change.name.trim();
+      if (change.mascot !== undefined) next.mascot = change.mascot;
+      if (change.color !== undefined) next.color = change.color;
+      if (change.addProject || change.removeProject)
+        next.projectIds = [
+          ...mono.projectIds.filter((id) => id !== change.removeProject),
+          ...(change.addProject && !mono.projectIds.includes(change.addProject) ? [change.addProject] : []),
+        ];
+      const fields = Object.keys(next) as MonoField[];
+      setMonoEdits((previous) => {
+        const edits = { ...previous[mono.id] };
+        for (const field of fields)
+          edits[field] = { value: next[field], from: edits[field]?.from ?? mono[field] };
+        return { ...previous, [mono.id]: edits };
+      });
+      try {
+        await command("mono.update", { monoId: mono.id, ...change });
+      } catch (reason) {
+        // Undone, unless a later change has replaced it meanwhile.
+        setMonoEdits((previous) => {
+          const edits = { ...previous[mono.id] };
+          for (const field of fields)
+            if (sameValue(edits[field]?.value, next[field])) delete edits[field];
+          return { ...previous, [mono.id]: edits };
+        });
+        throw reason;
+      }
+      void refresh();
+    },
+    [command, refresh],
+  );
   const removeSession = useCallback(
     async (method: "session.delete" | "session.archive", conversationId: string) => {
       setDeleted((previous) => new Set(previous).add(conversationId));
@@ -627,7 +692,15 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           : session;
     return {
       projects: selected.projects,
-      monos: selected.monos,
+      allProjects: catalog.projects,
+      monos: selected.monos.map((mono) => {
+        const edits = monoEdits[mono.id];
+        if (!edits) return mono;
+        const shown = { ...mono };
+        for (const [field, edit] of Object.entries(edits) as [MonoField, { value: unknown; from: unknown }][])
+          if (sameValue(mono[field], edit.from)) Object.assign(shown, { [field]: edit.value });
+        return shown;
+      }),
       sessions: [
         ...selected.sessions,
         ...Object.values(remembered).filter((session) => !known.has(session.id)),
@@ -644,6 +717,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       listModels,
       configureSession,
       renameSession,
+      editMono,
       deleteSession,
       archiveSession,
       edited,
@@ -651,6 +725,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     };
   }, [
     renamed,
+    monoEdits,
+    editMono,
     deleted,
     catalog,
     selection,

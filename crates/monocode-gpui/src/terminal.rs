@@ -31,6 +31,8 @@ use std::{
     time::Duration,
 };
 
+mod context_menu;
+
 actions!(
     terminal,
     [SendTab, SendBackTab, SendEscape, Copy, Paste, SelectAll]
@@ -107,6 +109,7 @@ struct Link {
 }
 
 pub(crate) struct Terminal {
+    context_menu: Option<context_menu::EditingMenu>,
     term: Arc<FairMutex<Term<Listener>>>,
     sender: Option<EventLoopSender>,
     focus: FocusHandle,
@@ -302,6 +305,7 @@ impl Terminal {
             }
         });
         Self {
+            context_menu: None,
             term,
             sender,
             focus: cx.focus_handle(),
@@ -739,13 +743,21 @@ impl Render for Terminal {
             .on_action(cx.listener(|this, _: &SelectAll, _, cx| this.select_all(cx)))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, event, window, cx| this.mouse_down(event, window, cx)),
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    if cfg!(target_os = "macos") && event.modifiers.control {
+                        this.open_context_menu(event, window, cx);
+                    } else {
+                        this.mouse_down(event, window, cx);
+                    }
+                }),
             )
+            .on_mouse_down(MouseButton::Right, cx.listener(Self::open_context_menu))
             .on_scroll_wheel(cx.listener(|this, event, _, cx| this.scroll(event, cx)))
             .child(Grid {
                 terminal: cx.entity(),
                 focused,
             })
+            .children(self.editing_menu(cx))
     }
 }
 

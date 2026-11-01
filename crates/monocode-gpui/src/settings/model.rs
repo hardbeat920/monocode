@@ -436,6 +436,12 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         "codex opencode cursor grok pi omp fx hermes antigravity devin binary path",
     ),
     (
+        "background-model",
+        Section::Providers,
+        "Background model",
+        "title generation commit message branch worktree name pull request haiku fast small",
+    ),
+    (
         "provider-accounts",
         Section::Providers,
         "Provider accounts",

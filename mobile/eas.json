@@ -15,6 +15,11 @@
       },
       "channel": "development-simulator"
     },
+    "preview": {
+      "distribution": "internal",
+      "channel": "preview",
+      "node": "22.23.3"
+    },
     "production": {
       "distribution": "store",
       "channel": "beta",

@@ -214,6 +214,10 @@ pub(crate) struct SettingsView {
     select_open: Option<&'static str>,
     select_active: usize,
     select_focus: FocusHandle,
+    /// Filter field atop long selects, and the open select's list scroll.
+    select_filter: Entity<Input>,
+    select_query: String,
+    select_scroll: ScrollHandle,
     select_anchors: RefCell<HashMap<&'static str, AnchorSlot>>,
     search: Entity<Input>,
     search_query: String,
@@ -292,7 +296,18 @@ impl SettingsView {
             input.set_font_size(12.);
             input
         });
+        let select_filter = cx.new(|cx| {
+            let mut input = Input::field("Filter options", "Search", content(0.35), cx);
+            input.set_font_size(12.);
+            input
+        });
         let mut subscriptions = vec![
+            cx.subscribe(&select_filter, |this, input, _: &input::Changed, cx| {
+                this.select_query = input.read(cx).content.to_string();
+                this.select_active = 0;
+                this.select_scroll.scroll_to_item(0);
+                cx.notify();
+            }),
             cx.subscribe(&skill_filter, |this, input, _: &input::Changed, cx| {
                 this.skill_query = input.read(cx).content.to_string();
                 cx.notify();
@@ -350,6 +365,9 @@ impl SettingsView {
             select_open: None,
             select_active: 0,
             select_focus: cx.focus_handle(),
+            select_filter,
+            select_query: String::new(),
+            select_scroll: ScrollHandle::new(),
             select_anchors: Default::default(),
             search,
             search_query: String::new(),

@@ -62,6 +62,24 @@ vi.mock("react-native-safe-area-context", () => ({
 }));
 vi.mock("@/ui/CircleButton", () => ({ CircleButton: () => null }));
 vi.mock("@/ui/GradualBlur", () => ({ GradualBlur: () => null }));
+// The drawer's pager and its loading cover reach native modules; here the
+// drawer is shut and no screen switch is under way.
+vi.mock("@/ui/ScenePager", () => ({
+  useDrawerActions: () => ({
+    open: vi.fn(),
+    close: vi.fn(),
+    closeThen: (change: () => void) => change(),
+    allowSwipe: () => () => {},
+  }),
+  useDrawerSwipe: vi.fn(),
+  useSceneSwapping: () => false,
+  useSceneSwitching: () => false,
+}));
+vi.mock("@/ui/DitherLoading", () => ({ DitherLoading: () => null }));
+vi.mock("@/features/workspace/UnreadDot", () => ({
+  UnreadDot: () => null,
+  useAnyUnreadMono: () => false,
+}));
 vi.mock("@/ui/Icon", () => ({ Icon: () => null }));
 vi.mock("@/ui/LiquidView", async () => ({
   GlassBlurTarget: (await import("react")).createContext<unknown>(undefined),
@@ -182,15 +200,15 @@ describe("persistent session frame", () => {
     try {
       render("Settings", false);
       expect(container.textContent).toContain("Settings");
-      expect(container.querySelector("output")?.textContent).toBe("114:12");
+      expect(container.querySelector("output")?.textContent).toBe("108:12");
       render("Project", true);
       expect(container.textContent).toContain("Project");
       expect(container.textContent).toContain("Composer");
-      expect(container.querySelector("output")?.textContent).toBe("114:28");
+      expect(container.querySelector("output")?.textContent).toBe("108:28");
       render("Settings", false);
       expect(container.textContent).toContain("Settings");
       expect(container.textContent).not.toContain("Composer");
-      expect(container.querySelector("output")?.textContent).toBe("114:12");
+      expect(container.querySelector("output")?.textContent).toBe("108:12");
       expect(renders).toBeLessThan(20);
     } finally {
       act(() => root.unmount());

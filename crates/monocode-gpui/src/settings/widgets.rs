@@ -571,6 +571,16 @@ impl SettingsView {
             }
             None => (SharedString::from(value.to_owned()), None),
         };
+        // Long lists get a filter field; the list shows only matching rows.
+        let searchable = options.len() > SEARCHABLE_SELECT;
+        let query = if open && searchable {
+            self.select_query.trim().to_lowercase()
+        } else {
+            String::new()
+        };
+        if !query.is_empty() {
+            options.retain(|(_, text, _)| text.to_lowercase().contains(&query));
+        }
         let values: Vec<String> = options.iter().map(|(v, _, _)| v.clone()).collect();
         let weak = cx.weak_entity();
         div()
@@ -639,7 +649,18 @@ impl SettingsView {
                         } else {
                             this.select_open = Some(id);
                             this.select_active = selected.unwrap_or(0);
-                            window.focus(&this.select_focus, cx);
+                            this.select_scroll.scroll_to_item(this.select_active);
+                            this.select_query.clear();
+                            if searchable {
+                                this.select_filter
+                                    .update(cx, |i, cx| i.set_text(String::new(), cx));
+                                window.focus(
+                                    &gpui::Focusable::focus_handle(&this.select_filter, cx),
+                                    cx,
+                                );
+                            } else {
+                                window.focus(&this.select_focus, cx);
+                            }
                         }
                         cx.notify();
                     })),
@@ -650,7 +671,7 @@ impl SettingsView {
                     .into_iter()
                     .enumerate()
                     .map(|(ix, (option, text, icon_el))| {
-                        let is_selected = Some(ix) == selected;
+                        let is_selected = option == value;
                         let highlighted = ix == active;
                         let change = change.clone();
                         div()
@@ -660,6 +681,7 @@ impl SettingsView {
                             .aria_label(text.clone())
                             .aria_selected(is_selected)
                             .w_full()
+                            .flex_shrink_0()
                             .flex()
                             .items_center()
                             .gap_2()
@@ -707,6 +729,21 @@ impl SettingsView {
                     })
                     .collect::<Vec<_>>();
                 let count = rows.len();
+                let filter = searchable.then(|| {
+                    div()
+                        .flex_shrink_0()
+                        .h(px(28.))
+                        .mb_1()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(content(0.1))
+                        .px_2()
+                        .child(icon("search-01", 14.).text_color(content(0.45)))
+                        .child(div().min_w_0().flex_1().child(self.select_filter.clone()))
+                });
                 let keys_change = change.clone();
                 d.child(
                     popover(
@@ -727,12 +764,36 @@ impl SettingsView {
                     })
                     .child(
                         div()
-                            .id(SharedString::from(format!("select-list-{id}")))
-                            .role(Role::ListBox)
-                            .aria_label(label)
-                            .track_focus(&self.select_focus)
+                            .flex_1()
+                            .min_h_0()
                             .flex()
                             .flex_col()
+                            .children(filter)
+                            .child(
+                                div()
+                                    .id(SharedString::from(format!("select-list-{id}")))
+                                    .role(Role::ListBox)
+                                    .aria_label(label)
+                                    .track_focus(&self.select_focus)
+                                    .track_scroll(&self.select_scroll)
+                                    .flex_1()
+                                    .min_h_0()
+                                    .overflow_y_scroll()
+                                    .flex()
+                                    .flex_col()
+                                    .children(rows)
+                                    .when(count == 0, |d| {
+                                        d.child(
+                                            div()
+                                                .px_2()
+                                                .py(px(6.))
+                                                .text_size(px(12.))
+                                                .line_height(px(16.))
+                                                .text_color(content(0.5))
+                                                .child("No matches"),
+                                        )
+                                    }),
+                            )
                             .on_key_down(cx.listener(
                                 move |this, event: &gpui::KeyDownEvent, window, cx| {
                                     let key = event.keystroke.key.as_str();
@@ -760,17 +821,20 @@ impl SettingsView {
                                         }
                                         _ => return,
                                     }
+                                    this.select_scroll.scroll_to_item(this.select_active);
                                     cx.stop_propagation();
                                     cx.notify();
                                 },
-                            ))
-                            .children(rows),
+                            )),
                     ),
                 )
             })
             .into_any_element()
     }
 }
+
+/// Selects with more options than this get a filter field.
+const SEARCHABLE_SELECT: usize = 8;
 
 impl SettingsView {
     pub(super) fn project_picker(&mut self, cx: &mut Context<Self>) -> AnyElement {
