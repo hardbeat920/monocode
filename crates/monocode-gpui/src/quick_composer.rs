@@ -201,6 +201,8 @@ pub(crate) struct QuickComposer {
     git_epoch: usize,
     attachments: Vec<PathBuf>,
     staged_attachments: Vec<PathBuf>,
+    // Images pasted while another attachment is being prepared.
+    pending_images: Vec<gpui::Image>,
     photos: HashMap<PathBuf, Entity<crate::transcript::attachments::Photo>>,
     attaching: bool,
     dragging: bool,
@@ -270,6 +272,7 @@ impl QuickComposer {
             git_epoch: 0,
             attachments: Vec::new(),
             staged_attachments: Vec::new(),
+            pending_images: Vec::new(),
             photos: HashMap::new(),
             attaching: false,
             dragging: false,
@@ -699,11 +702,11 @@ impl QuickComposer {
     }
 
     // useQuickAttachments: files, pasted images and screenshots.
-    fn add_attachments(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+    fn add_attachments(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) -> bool {
         if !self.attachments_supported() {
             self.error = Some("This provider does not support attachments".into());
             cx.notify();
-            return;
+            return false;
         }
         let mut all = self.attachments.clone();
         for path in paths {
@@ -711,14 +714,19 @@ impl QuickComposer {
                 all.push(path);
             }
         }
-        match monocode_core::composer::validate_attachments(&all) {
+        let accepted = match monocode_core::composer::validate_attachments(&all) {
             Ok(()) => {
                 self.attachments = all;
                 self.error = None;
+                true
             }
-            Err(error) => self.error = Some(error),
-        }
+            Err(error) => {
+                self.error = Some(error);
+                false
+            }
+        };
         cx.notify();
+        accepted
     }
     fn paste(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(clipboard) = cx.read_from_clipboard() else {
@@ -739,25 +747,48 @@ impl QuickComposer {
         if !self.attachments_supported() {
             return false;
         }
-        for image in images {
-            let dir = paste_staging_dir();
-            let path = dir.join(format!(
-                "pasted-{}.{}",
-                monocode_core::mono::new_id(),
-                image.format().extension()
-            ));
-            match std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&path, image.bytes())) {
-                Ok(()) => {
-                    self.staged_attachments.push(path.clone());
-                    paths.push(path);
-                }
-                Err(error) => self.error = Some(format!("Could not paste the image: {error}")),
-            }
+        if !paths.is_empty() {
+            self.add_attachments(paths, cx);
         }
-        self.add_attachments(paths, cx);
-        self.staged_attachments
-            .retain(|path| self.attachments.contains(path));
+        if !images.is_empty() {
+            self.stage_images(images, cx);
+        }
         true
+    }
+    fn stage_images(&mut self, images: Vec<gpui::Image>, cx: &mut Context<Self>) {
+        if self.attaching {
+            self.pending_images.extend(images);
+            return;
+        }
+        self.attaching = true;
+        let existing = self.attachments.clone();
+        let work = cx.background_executor().spawn(async move {
+            crate::pasted_images::save(images, &paste_staging_dir(), &existing)
+        });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let _ = this.update(cx, |this, cx| {
+                this.attaching = false;
+                match result {
+                    Ok(prepared) => {
+                        if this.add_attachments(prepared.paths().to_vec(), cx) {
+                            this.staged_attachments.extend(prepared.keep());
+                        }
+                    }
+                    Err(error) => this.error = Some(format!("Could not paste the image: {error}")),
+                }
+                this.stage_pending_images(cx);
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+    fn stage_pending_images(&mut self, cx: &mut Context<Self>) {
+        let images = std::mem::take(&mut self.pending_images);
+        if !images.is_empty() {
+            self.stage_images(images, cx);
+        }
     }
     fn choose_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_picker(window, cx);
@@ -779,7 +810,11 @@ impl QuickComposer {
     }
     /// User-initiated region or window capture. The panel steps aside while
     /// the system overlay is up; cancelling leaves the draft intact.
+    /// Ignore stale menu actions while another attachment is being prepared.
     fn take_screenshot(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.attaching {
+            return;
+        }
         self.close_picker_state(cx);
         self.attaching = true;
         #[cfg(all(target_os = "macos", not(test)))]
@@ -823,6 +858,7 @@ impl QuickComposer {
                     Ok(None) => {}
                     Err(error) => this.error = Some(error),
                 }
+                this.stage_pending_images(cx);
                 this.focus(window, cx);
                 cx.notify();
             });
@@ -2170,6 +2206,142 @@ mod tests {
         });
         cx.run_until_parked();
         window
+    }
+
+    #[gpui::test]
+    fn pasted_bitmap_is_staged_in_background_as_png(cx: &mut TestAppContext) {
+        let window = open(cx);
+        window
+            .update(cx, |view, _, cx| {
+                cx.write_to_clipboard(gpui::ClipboardItem {
+                    entries: vec![gpui::ClipboardEntry::Image(
+                        crate::fixtures::clipboard_bitmap(),
+                    )],
+                });
+                assert!(view.paste(cx));
+                assert!(
+                    view.attaching,
+                    "Pasting must defer image preparation to the background executor"
+                );
+                assert!(view.attachments.is_empty());
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let path = window
+            .update(cx, |view, _, _| {
+                assert!(!view.attaching);
+                assert_eq!(view.attachments.len(), 1);
+                assert_eq!(view.staged_attachments, view.attachments);
+                let path = view.attachments[0].clone();
+                assert_eq!(path.extension().unwrap(), "png");
+                assert_eq!(
+                    image::guess_format(&std::fs::read(&path).unwrap()).unwrap(),
+                    image::ImageFormat::Png
+                );
+                path
+            })
+            .unwrap();
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[gpui::test]
+    fn a_paste_during_preparation_is_queued_rather_than_lost(cx: &mut TestAppContext) {
+        let window = open(cx);
+        window
+            .update(cx, |view, _, cx| {
+                for _ in 0..2 {
+                    cx.write_to_clipboard(gpui::ClipboardItem {
+                        entries: vec![gpui::ClipboardEntry::Image(
+                            crate::fixtures::clipboard_bitmap(),
+                        )],
+                    });
+                    assert!(view.paste(cx));
+                }
+                assert_eq!(view.pending_images.len(), 1);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let paths = window
+            .update(cx, |view, _, _| {
+                assert!(!view.attaching);
+                assert!(view.pending_images.is_empty());
+                assert_eq!(view.attachments.len(), 2);
+                assert_eq!(view.staged_attachments, view.attachments);
+                view.attachments.clone()
+            })
+            .unwrap();
+        for path in paths {
+            std::fs::remove_file(path).unwrap();
+        }
+    }
+
+    #[gpui::test]
+    fn screenshot_cannot_start_while_pasted_images_are_being_prepared(cx: &mut TestAppContext) {
+        let window = open(cx);
+        window
+            .update(cx, |view, window, cx| {
+                view.open(Picker::Attachments, window, cx);
+                for _ in 0..2 {
+                    cx.write_to_clipboard(gpui::ClipboardItem {
+                        entries: vec![gpui::ClipboardEntry::Image(
+                            crate::fixtures::clipboard_bitmap(),
+                        )],
+                    });
+                    assert!(view.paste(cx));
+                }
+                view.take_screenshot(window, cx);
+                assert!(
+                    view.picker == Some(Picker::Attachments),
+                    "A screenshot request during preparation must be ignored without starting capture"
+                );
+                assert!(!view.can_submit(cx));
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let paths = window
+            .update(cx, |view, _, cx| {
+                assert!(!view.attaching);
+                assert!(view.pending_images.is_empty());
+                assert!(view.error.is_none());
+                assert_eq!(view.attachments.len(), 2);
+                assert_eq!(view.staged_attachments, view.attachments);
+                assert!(view.can_submit(cx));
+                view.attachments.clone()
+            })
+            .unwrap();
+        for path in paths {
+            std::fs::remove_file(path).unwrap();
+        }
+    }
+
+    #[gpui::test]
+    fn pasted_bitmap_is_rejected_if_the_provider_changes_during_preparation(
+        cx: &mut TestAppContext,
+    ) {
+        let window = open(cx);
+        window
+            .update(cx, |view, _, cx| {
+                cx.write_to_clipboard(gpui::ClipboardItem {
+                    entries: vec![gpui::ClipboardEntry::Image(
+                        crate::fixtures::clipboard_bitmap(),
+                    )],
+                });
+                assert!(view.paste(cx));
+                view.kind = Kind::Fx;
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, _| {
+                assert!(!view.attaching);
+                assert!(view.attachments.is_empty());
+                assert!(view.staged_attachments.is_empty());
+                assert_eq!(
+                    view.error.as_deref(),
+                    Some("This provider does not support attachments")
+                );
+            })
+            .unwrap();
     }
 
     #[gpui::test]

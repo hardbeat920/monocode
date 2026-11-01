@@ -1,4 +1,14 @@
 //! Local reference layout for the chat presentation.
+#[cfg(test)]
+pub(crate) fn clipboard_bitmap() -> gpui::Image {
+    let pixels = image::RgbImage::from_raw(2, 1, vec![18, 52, 86, 171, 205, 239]).unwrap();
+    let mut bmp = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgb8(pixels)
+        .write_to(&mut bmp, image::ImageFormat::Bmp)
+        .unwrap();
+    gpui::Image::from_bytes(gpui::ImageFormat::Bmp, bmp.into_inner())
+}
+
 use monocode_core::{
     tool::{ToolCall, ToolState},
     transcript::Transcript,

@@ -54,6 +54,7 @@ mod notifications;
 mod pane_layout;
 mod pane_motion;
 mod particle_text;
+mod pasted_images;
 mod pickers;
 mod popover;
 mod project_background;

@@ -1,5 +1,6 @@
 use super::*;
 use std::path::PathBuf;
+
 pub(crate) struct StartOrchestration(pub monocode_core::orchestration::Plan);
 pub(crate) struct StopOrchestration;
 
@@ -201,47 +202,34 @@ impl Conversation {
         if images.is_empty() {
             return false;
         }
+        self.stage_images(images, cx);
+        true
+    }
+    fn stage_images(&mut self, images: Vec<gpui::Image>, cx: &mut Context<Self>) {
+        // Like file drops, a paste during another read waits its turn.
         if self.attaching {
-            return true;
+            self.pending_images.extend(images);
+            return;
         }
         self.attaching = true;
         let store = self.store.clone();
         let id = self.summary.id;
-        let mut all = self.attachments.clone();
-        let existing = all.len();
+        let existing = self.attachments.clone();
         let work = cx.background_executor().spawn(async move {
-            if all.len() + images.len() > monocode_core::composer::MAX_ATTACHMENTS
-                || images.iter().map(|i| i.bytes().len() as u64).sum::<u64>()
-                    > monocode_core::composer::MAX_EMBED_BYTES
-            {
-                return Err("Attach up to 20 files totalling 20 MB.".to_owned());
-            }
             // Kept with the conversation so deleting it removes them.
             let root = locked(&store)?
                 .thread_attachments_dir(id)?
                 .unwrap_or_else(|| std::env::temp_dir().join("monocode-attachments"));
-            std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
-            for image in images {
-                let path = root.join(format!(
-                    "pasted-{}.{}",
-                    monocode_core::mono::new_id(),
-                    image.format().extension()
-                ));
-                std::fs::write(&path, image.bytes()).map_err(|e| e.to_string())?;
-                all.push(path);
-            }
-            monocode_core::composer::validate_attachments(&all)?;
-            Ok(all.split_off(existing))
+            crate::pasted_images::save(images, &root, &existing)
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
-                this.finish_attachment_read(result, cx);
+                this.finish_attachment_read(result.map(|prepared| prepared.keep()), cx);
             });
         })
         .detach();
         cx.notify();
-        true
     }
     pub(super) fn add_attachments(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
         for path in paths {
@@ -287,6 +275,10 @@ impl Conversation {
                 self.attachment_error = None;
             }
             Err(error) => self.attachment_error = Some(error),
+        }
+        let images = std::mem::take(&mut self.pending_images);
+        if !images.is_empty() {
+            self.stage_images(images, cx);
         }
         let pending = std::mem::take(&mut self.pending_attachments);
         self.add_attachments(pending, cx);
@@ -615,5 +607,84 @@ impl Conversation {
                 );
         }
         Some(card.into_any_element())
+    }
+}
+
+#[cfg(test)]
+mod clipboard_tests {
+    use super::*;
+    use gpui::TestAppContext;
+    use monocode_core::store::Store;
+    use std::sync::{Arc, Mutex};
+
+    #[gpui::test]
+    fn pasted_bitmap_is_prepared_in_background_and_has_a_preview(cx: &mut TestAppContext) {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let summary = store.create("codex", "/missing/clipboard-test").unwrap();
+        let window =
+            cx.add_window(|_, cx| Conversation::new(summary, Arc::new(Mutex::new(store)), cx));
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, cx| {
+                cx.write_to_clipboard(gpui::ClipboardItem {
+                    entries: vec![gpui::ClipboardEntry::Image(
+                        crate::fixtures::clipboard_bitmap(),
+                    )],
+                });
+                assert!(view.paste_attachments(cx));
+                assert!(view.attaching);
+                assert!(view.attachments.is_empty());
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let path = window
+            .update(cx, |view, _, cx| {
+                assert!(!view.attaching);
+                assert_eq!(view.attachments.len(), 1);
+                let path = view.attachments[0].clone();
+                assert_eq!(path.extension().unwrap(), "png");
+                assert_eq!(
+                    image::guess_format(&std::fs::read(&path).unwrap()).unwrap(),
+                    image::ImageFormat::Png
+                );
+                assert!(view.attachment_chips(cx).is_some());
+                path
+            })
+            .unwrap();
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[gpui::test]
+    fn a_paste_during_preparation_is_queued_rather_than_lost(cx: &mut TestAppContext) {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let summary = store.create("codex", "/missing/clipboard-test").unwrap();
+        let window =
+            cx.add_window(|_, cx| Conversation::new(summary, Arc::new(Mutex::new(store)), cx));
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, cx| {
+                for _ in 0..2 {
+                    cx.write_to_clipboard(gpui::ClipboardItem {
+                        entries: vec![gpui::ClipboardEntry::Image(
+                            crate::fixtures::clipboard_bitmap(),
+                        )],
+                    });
+                    assert!(view.paste_attachments(cx));
+                }
+                assert_eq!(view.pending_images.len(), 1);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let paths = window
+            .update(cx, |view, _, _| {
+                assert!(!view.attaching);
+                assert!(view.pending_images.is_empty());
+                assert_eq!(view.attachments.len(), 2);
+                view.attachments.clone()
+            })
+            .unwrap();
+        for path in paths {
+            std::fs::remove_file(path).unwrap();
+        }
     }
 }
