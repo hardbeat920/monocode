@@ -1,6 +1,8 @@
 //! A paired phone browses and drives this workspace. The core host pairs and
 //! serves devices; the shell answers their requests from its own state, through
 //! the same paths as the sidebar, composer and Changes panel.
+mod inbox;
+
 use super::*;
 use crate::{
     accounts::Tone,
@@ -60,6 +62,8 @@ pub(super) struct Mobile {
     /// session, with the update time it was read at: read again only once
     /// the conversation has changed.
     mono_previews: HashMap<i64, MonoPreview>,
+    /// Avatar addresses handed to phones as opaque keys.
+    inbox_avatars: monocode_core::mobile::inbox::AvatarBook,
 }
 
 #[derive(Clone)]
@@ -347,7 +351,7 @@ impl Shell {
     // MARK: catalog
 
     /// Projects on the rail and those Monos work in.
-    fn mobile_projects(&self, cx: &App) -> Vec<String> {
+    pub(in crate::shell) fn mobile_projects(&self, cx: &App) -> Vec<String> {
         let mut paths: Vec<String> = Vec::new();
         let monos = self
             .monos
@@ -609,7 +613,8 @@ impl Shell {
                 // and its phones hide them. `push`: it notifies phones through
                 // Expo, so they no longer post their own alerts. `monoFiles`:
                 // it reads and saves a Mono's soul and memory for the phone.
-                json!({"projects": projects, "monos": monos, "sessions": sessions, "monoTools": true, "push": true, "monoFiles": true}),
+                // `inbox`: it answers the phone's `inbox.*` requests.
+                json!({"projects": projects, "monos": monos, "sessions": sessions, "monoTools": true, "push": true, "monoFiles": true, "inbox": true}),
                 ids,
                 previews,
             ))
@@ -742,6 +747,9 @@ impl Shell {
                 request.reply(Ok(project::file_highlight(&job, from)));
             }
             "project.gitAction" => self.mobile_git_action(request, cx),
+            method if method.starts_with("inbox.") && method != "inbox.start" => {
+                self.mobile_inbox(request, window, cx)
+            }
             method if method.starts_with("project.") => self.mobile_project(request, cx),
             _ => self.mobile_command(request, window, cx),
         }
@@ -1285,6 +1293,7 @@ impl Shell {
         match request.method.as_str() {
             "session.start" => self.mobile_start(request, finish, cx),
             "conversation.send" => self.mobile_send(request, finish, cx),
+            "inbox.start" => self.mobile_inbox_start(request, finish, cx),
             _ => {
                 let result = self.mobile_session_command(&request, window, cx);
                 finish(self, request, result);

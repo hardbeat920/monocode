@@ -68,6 +68,8 @@ import {
 } from "@/features/workspace/WorkspaceMenu";
 import { ComposerWorkspace } from "@/features/workspace/ComposerWorkspace";
 import { UnreadDot, useAnyUnreadMono } from "@/features/workspace/UnreadDot";
+import { InboxPage } from "@/features/inbox/InboxPage";
+import { useInboxSupported } from "@/features/inbox/InboxProvider";
 import { Icon } from "@/ui/Icon";
 import { androidBackHeader } from "@/ui/AndroidHeader";
 import { GlassBlurTarget, LiquidView } from "@/ui/LiquidView";
@@ -141,7 +143,8 @@ export function ProjectScreen({
     sessionId,
   );
   // Only a new session has pages; a session is the chat alone.
-  const pages = useProjectPages(project.id, !sessionId);
+  const inboxOn = useInboxSupported();
+  const pages = useProjectPages(project.id, !sessionId, inboxOn);
   // Between pages, mid-swipe or springing to one.
   const swiping = useDerivedValue(() => {
     const at = pages.progress.get();
@@ -422,7 +425,7 @@ export function ProjectScreen({
                 }
               : { headerTitle: "", headerBackVisible: !sheet }
             : {
-                headerTitle: () => <ProjectSwitch pages={pages} />,
+                headerTitle: () => <ProjectSwitch pages={pages} projectId={project.id} />,
                 ...(Platform.OS === "android"
                   ? {
                       headerTitleAlign: "center" as const,
@@ -489,6 +492,17 @@ export function ProjectScreen({
                   onOpen={(session) => openSession(session.id)}
                 />
               </Timed>
+            }
+            inbox={
+              inboxOn ? (
+                <Timed id="project inbox page">
+                  <InboxPage
+                    projectId={project.id}
+                    projectName={project.name}
+                    active={focused && pages.view === "inbox"}
+                  />
+                </Timed>
+              ) : undefined
             }
           />
         )}

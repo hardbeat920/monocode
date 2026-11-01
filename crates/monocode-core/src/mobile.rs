@@ -3,6 +3,7 @@
 //! app answers [`host::Event`]s from its own state.
 pub mod catalog;
 pub mod host;
+pub mod inbox;
 pub mod notify;
 mod router;
 pub mod watch;

@@ -43,6 +43,9 @@ export type Catalog = {
   push?: boolean;
   /** The desktop reads and saves a Mono's soul and memory for the phone. */
   monoFiles?: boolean;
+  /** The desktop serves the Inbox (`inbox.*`); the older desktop app doesn't,
+   *  and the phone leaves the Inbox out. */
+  inbox?: boolean;
 };
 const EMPTY: Catalog = { projects: [], monos: [], sessions: [] };
 const PAIRING = "monocode.mobile.pairing";

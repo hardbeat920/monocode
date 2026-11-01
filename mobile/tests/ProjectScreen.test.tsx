@@ -204,6 +204,9 @@ vi.mock("@/features/sessions/Transcript", () => ({
   Transcript: () => null,
   TranscriptLoading: () => null,
 }));
+vi.mock("@/features/workspace/useCreateMono", () => ({ useCreateMono: () => undefined }));
+vi.mock("@/features/inbox/InboxPage", () => ({ InboxPage: () => null }));
+vi.mock("@/features/inbox/InboxProvider", () => ({ useInboxSupported: () => false }));
 vi.mock("@/features/workspace/ProjectPages", () => ({
   useProjectPages: () => ({ progress: { get: () => 0 }, view: "chat" }),
   ProjectPages: () => null,

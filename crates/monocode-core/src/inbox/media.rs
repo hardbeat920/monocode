@@ -255,6 +255,67 @@ fn github_auth_token() -> Option<String> {
     super::run_gh(&home, &["auth", "token"], false).ok()
 }
 
+fn image_mime(bytes: &[u8]) -> Option<&'static str> {
+    match image::guess_format(bytes) {
+        Ok(image::ImageFormat::Png) => Some("image/png"),
+        Ok(image::ImageFormat::Jpeg) => Some("image/jpeg"),
+        Ok(image::ImageFormat::Gif) => Some("image/gif"),
+        Ok(image::ImageFormat::WebP) => Some("image/webp"),
+        Ok(image::ImageFormat::Bmp) => Some("image/bmp"),
+        _ => {
+            let head = String::from_utf8_lossy(&bytes[..bytes.len().min(512)]).to_ascii_lowercase();
+            (head.contains("<svg") || head.trim_start().starts_with("<?xml"))
+                .then_some("image/svg+xml")
+        }
+    }
+}
+
+/// The longest side of an image sent to a phone, in pixels.
+const PHONE_IMAGE_SIDE: u32 = 1600;
+/// Images at or under this size and side are sent as they are.
+const PHONE_IMAGE_KEEP_BYTES: usize = 1_500_000;
+
+/// An image from an allowed host sized for a phone: sent as it is when small,
+/// else shrunk and re-encoded (JPEG stays JPEG, the rest becomes PNG). SVG is
+/// refused since a phone cannot draw it as an image.
+pub fn phone_image(url: &str) -> Result<(Vec<u8>, &'static str), String> {
+    let bytes = fetch(url)?;
+    let mime = image_mime(&bytes).filter(|mime| *mime != "image/svg+xml");
+    let Some(mime) = mime else {
+        return Err("That URL is not an image this phone can show".into());
+    };
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(&bytes))
+        .with_guessed_format()
+        .map_err(|_| "Unsupported image".to_string())?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(16_384);
+    limits.max_image_height = Some(16_384);
+    limits.max_alloc = Some(128 * 1024 * 1024);
+    reader.limits(limits);
+    let image = reader
+        .decode()
+        .map_err(|_| "Unsupported image".to_string())?;
+    if bytes.len() <= PHONE_IMAGE_KEEP_BYTES
+        && image.width().max(image.height()) <= PHONE_IMAGE_SIDE
+        && mime != "image/bmp"
+    {
+        return Ok((bytes, mime));
+    }
+    let image = image.thumbnail(PHONE_IMAGE_SIDE, PHONE_IMAGE_SIDE);
+    if mime == "image/jpeg" {
+        let mut out = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 82)
+            .encode_image(&image.to_rgb8())
+            .map_err(|e| e.to_string())?;
+        Ok((out, "image/jpeg"))
+    } else {
+        Ok((
+            crate::project_appearance::png_bytes(image.into_rgba8())?,
+            "image/png",
+        ))
+    }
+}
+
 /// Decode bounded image bytes before handing them to the native image cache.
 pub fn png(url: &str) -> Result<Vec<u8>, String> {
     let bytes = fetch(url)?;
