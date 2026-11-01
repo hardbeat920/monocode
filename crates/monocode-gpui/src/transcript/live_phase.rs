@@ -183,17 +183,18 @@ fn edge_mask(scroll: &LiveScroll, begin: bool, enabled: bool) -> AnyElement {
 }
 
 fn paint_mask(bounds: Bounds<Pixels>, begin: bool, top: f32, bottom: f32, window: &mut Window) {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     window.paint_layer(bounds, |window| {
-        window.paint_quad(gpui::fill(bounds, gpui::black()).border_color(
-            gpui_apple::metal_renderer::edge_fade_marker(
-                begin,
-                top * window.scale_factor(),
-                bottom * window.scale_factor(),
-            ),
-        ));
+        let top = top * window.scale_factor();
+        let bottom = bottom * window.scale_factor();
+        let fade = if begin {
+            gpui::EdgeFade::Begin { top, bottom }
+        } else {
+            gpui::EdgeFade::End { top, bottom }
+        };
+        window.paint_quad(gpui::fill(bounds, gpui::black()).border_color(fade.marker()));
     });
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     if !begin {
         // Other backends have an opaque chat surface. Match the transcript's
         // fallback while retaining the phase's conditional edge lengths.
@@ -300,12 +301,40 @@ mod tests {
             .unwrap();
         visual.run_until_parked();
         let (position, outer) = window
-            .update(visual, |view, _, _| {
+            .update(visual, |view, window, _| {
+                #[cfg(not(target_os = "windows"))]
+                let _ = window;
                 let scroll = &view.phase_scrolls[&1];
                 assert_eq!(scroll.handle.bounds().size.height, px(280.));
                 assert!(scroll.handle.max_offset().y > px(300.));
                 assert_eq!(scroll.handle.offset().y, -scroll.handle.max_offset().y);
                 assert_eq!(scroll.edges.borrow().frame, (24., 0.));
+                #[cfg(target_os = "windows")]
+                {
+                    let top = 24. * window.scale_factor();
+                    let masks: Vec<_> = window
+                        .painted_quads()
+                        .iter()
+                        .filter_map(gpui::EdgeFade::from_quad)
+                        .collect();
+                    assert_eq!(
+                        masks,
+                        [
+                            gpui::EdgeFade::Begin { top, bottom: 0. },
+                            gpui::EdgeFade::End { top, bottom: 0. }
+                        ],
+                        "the live window must bracket its content with a real alpha mask"
+                    );
+                }
+                #[cfg(target_os = "windows")]
+                assert!(
+                    !window.painted_quads().iter().any(|quad| {
+                        quad.bounds.size.width.0
+                            == scroll.handle.bounds().size.width.as_f32() * window.scale_factor()
+                            && quad.bounds.size.height.0 <= window.scale_factor()
+                    }),
+                    "scroll edges must not paint colored strips over the Windows backdrop"
+                );
                 let header = view
                     .rows
                     .iter()

@@ -92,6 +92,7 @@ struct DirectXResources {
 }
 
 struct DirectXRenderPipelines {
+    edge_fades: crate::edge_fade::EdgeFades,
     shadow_pipeline: PipelineState<Shadow>,
     quad_pipeline: PipelineState<Quad>,
     path_rasterization_pipeline: PipelineState<PathRasterizationSprite>,
@@ -398,6 +399,7 @@ impl DirectXRenderer {
         {
             backdrop.scratch = None;
         }
+        self.pipelines.edge_fades.prepare();
 
         let annotation = self
             .devices
@@ -654,8 +656,8 @@ impl DirectXRenderer {
         )
     }
 
-    /// Monocode: a quad marked with [`backdrop_blur_marker`] first frosts
-    /// what is already drawn behind it, so the batch splits around each one.
+    /// Split batches at group fade markers and frosted backdrop quads.
+    /// Both effects must observe the pixels drawn before their own boundary.
     fn draw_quads_over_backdrops(
         &mut self,
         scene: &Scene,
@@ -664,6 +666,27 @@ impl DirectXRenderer {
         let mut start = range.start;
         for ix in range.clone() {
             let quad = &scene.quads[ix];
+            if let Some(fade) = EdgeFade::from_quad(quad) {
+                self.draw_quads(start, ix - start)?;
+                let devices = self.devices.as_ref().context("devices missing")?;
+                let resources = self.resources.as_ref().context("resources missing")?;
+                self.pipelines.edge_fades.paint(
+                    crate::edge_fade::FadeTarget {
+                        device: &devices.device,
+                        context: &devices.device_context,
+                        texture: resources
+                            .render_target
+                            .as_ref()
+                            .context("render target missing")?,
+                        view: &resources.render_target_view,
+                        viewport: [resources.viewport.Width, resources.viewport.Height],
+                    },
+                    quad,
+                    fade,
+                )?;
+                start = ix + 1;
+                continue;
+            }
             let Some(sigma) = backdrop_blur_sigma(quad) else {
                 continue;
             };
@@ -1208,6 +1231,7 @@ impl DirectXRenderPipelines {
 
         Ok(Self {
             shadow_pipeline,
+            edge_fades: crate::edge_fade::EdgeFades::new(device)?,
             quad_pipeline,
             path_rasterization_pipeline,
             path_sprite_pipeline,
@@ -1802,7 +1826,10 @@ fn create_path_intermediate_msaa_texture_and_view(
 }
 
 #[inline]
-fn set_rasterizer_state(device: &ID3D11Device, device_context: &ID3D11DeviceContext) -> Result<()> {
+pub(super) fn set_rasterizer_state(
+    device: &ID3D11Device,
+    device_context: &ID3D11DeviceContext,
+) -> Result<()> {
     let desc = D3D11_RASTERIZER_DESC {
         FillMode: D3D11_FILL_SOLID,
         CullMode: D3D11_CULL_NONE,
@@ -1905,7 +1932,10 @@ fn create_blend_state_for_path_sprite(device: &ID3D11Device) -> Result<ID3D11Ble
 }
 
 #[inline]
-fn create_vertex_shader(device: &ID3D11Device, bytes: &[u8]) -> Result<ID3D11VertexShader> {
+pub(super) fn create_vertex_shader(
+    device: &ID3D11Device,
+    bytes: &[u8],
+) -> Result<ID3D11VertexShader> {
     unsafe {
         let mut shader = None;
         device.CreateVertexShader(bytes, None, Some(&mut shader))?;
@@ -1914,7 +1944,10 @@ fn create_vertex_shader(device: &ID3D11Device, bytes: &[u8]) -> Result<ID3D11Ver
 }
 
 #[inline]
-fn create_fragment_shader(device: &ID3D11Device, bytes: &[u8]) -> Result<ID3D11PixelShader> {
+pub(super) fn create_fragment_shader(
+    device: &ID3D11Device,
+    bytes: &[u8],
+) -> Result<ID3D11PixelShader> {
     unsafe {
         let mut shader = None;
         device.CreatePixelShader(bytes, None, Some(&mut shader))?;
@@ -1923,7 +1956,7 @@ fn create_fragment_shader(device: &ID3D11Device, bytes: &[u8]) -> Result<ID3D11P
 }
 
 #[inline]
-fn create_constant_buffer<T>(device: &ID3D11Device) -> Result<Option<ID3D11Buffer>> {
+pub(super) fn create_constant_buffer<T>(device: &ID3D11Device) -> Result<Option<ID3D11Buffer>> {
     const { assert!(std::mem::size_of::<T>() != 0 && std::mem::size_of::<T>().is_multiple_of(16)) };
     let desc = D3D11_BUFFER_DESC {
         ByteWidth: std::mem::size_of::<T>() as u32,
@@ -1968,7 +2001,7 @@ fn create_buffer_view(
 }
 
 #[inline]
-fn update_buffer<T>(
+pub(super) fn update_buffer<T>(
     device_context: &ID3D11DeviceContext,
     buffer: &ID3D11Buffer,
     data: &[T],
@@ -2042,6 +2075,7 @@ pub(crate) mod shader_resources {
 
     #[derive(Copy, Clone, Debug, Eq, PartialEq)]
     pub(crate) enum ShaderModule {
+        EdgeFade,
         Quad,
         Shadow,
         Underline,
@@ -2094,6 +2128,10 @@ pub(crate) mod shader_resources {
         #[cfg(not(debug_assertions))]
         fn from_bytes(module: ShaderModule, target: ShaderTarget) -> Self {
             let bytes = match module {
+                ShaderModule::EdgeFade => match target {
+                    ShaderTarget::Vertex => EDGE_FADE_VERTEX_BYTES,
+                    ShaderTarget::Fragment => EDGE_FADE_FRAGMENT_BYTES,
+                },
                 ShaderModule::Quad => match target {
                     ShaderTarget::Vertex => QUAD_VERTEX_BYTES,
                     ShaderTarget::Fragment => QUAD_FRAGMENT_BYTES,
@@ -2216,6 +2254,7 @@ pub(crate) mod shader_resources {
     impl ShaderModule {
         pub fn as_str(self) -> &'static str {
             match self {
+                ShaderModule::EdgeFade => "edge_fade",
                 ShaderModule::Quad => "quad",
                 ShaderModule::Shadow => "shadow",
                 ShaderModule::Underline => "underline",

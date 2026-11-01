@@ -1,5 +1,33 @@
 #include "alpha_correction.hlsl"
 
+// Group masks interpolate two already-composited, premultiplied snapshots.
+// Using the captured backdrop avoids tinting glass, artwork, and pane colors.
+cbuffer EdgeFadeParams: register(b2) {
+    float4 edge_region;
+    float4 edge_bounds;
+    float2 edge_viewport;
+    float2 edge_ramps;
+};
+Texture2D<float4> edge_before: register(t2);
+Texture2D<float4> edge_after: register(t3);
+
+float4 edge_fade_vertex(uint index: SV_VertexID): SV_Position {
+    const float2 vertices[6] = {
+        float2(0,0), float2(1,0), float2(0,1),
+        float2(0,1), float2(1,0), float2(1,1)
+    };
+    float2 pixel = edge_region.xy + vertices[index] * edge_region.zw;
+    return float4(pixel / edge_viewport * float2(2,-2) + float2(-1,1), 0, 1);
+}
+
+float4 edge_fade_fragment(float4 position: SV_Position): SV_Target {
+    int3 pixel = int3(int2(position.xy - edge_region.xy), 0);
+    float y = position.y - edge_bounds.y;
+    float top = edge_ramps.x > 0 ? saturate(y / edge_ramps.x) : 1;
+    float bottom = edge_ramps.y > 0 ? saturate((edge_bounds.w - y) / edge_ramps.y) : 1;
+    return lerp(edge_before.Load(pixel), edge_after.Load(pixel), min(top, bottom));
+}
+
 cbuffer GlobalParams: register(b0) {
     float4 gamma_ratios;
     float2 global_viewport_size;
