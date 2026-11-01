@@ -1,8 +1,11 @@
+import { translate } from "../../shared/i18n/locale";
+import { useLanguage } from "../../shared/i18n/useTranslation";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Copy, Minus, Square, X } from "../../shared/ui/icons";
 import { useEffect, useState } from "react";
 
 export function WindowControls() {
+  useLanguage();
   const [isMaximized, setIsMaximized] = useState(false);
 
   useEffect(() => {
@@ -58,8 +61,8 @@ export function WindowControls() {
     >
       <button
         type="button"
-        title="Minimize"
-        aria-label="Minimize window"
+        title={translate("Minimize")}
+        aria-label={translate("Minimize window")}
         data-tauri-drag-region="false"
         onClick={handleMinimize}
         className="flex w-10 items-center justify-center text-content/60 transition-colors hover:bg-content/10 hover:text-content"
@@ -68,8 +71,8 @@ export function WindowControls() {
       </button>
       <button
         type="button"
-        title={isMaximized ? "Restore" : "Maximize"}
-        aria-label={isMaximized ? "Restore window" : "Maximize window"}
+        title={isMaximized ? translate("Restore") : translate("Maximize")}
+        aria-label={isMaximized ? translate("Restore window") : translate("Maximize window")}
         data-tauri-drag-region="false"
         onClick={handleToggleMaximize}
         className="flex w-10 items-center justify-center text-content/60 transition-colors hover:bg-content/10 hover:text-content"
@@ -82,8 +85,8 @@ export function WindowControls() {
       </button>
       <button
         type="button"
-        title="Close"
-        aria-label="Close window"
+        title={translate("Close")}
+        aria-label={translate("Close window")}
         data-tauri-drag-region="false"
         onClick={handleClose}
         className="flex w-10 items-center justify-center text-content/60 transition-colors hover:bg-red-600 hover:text-white"

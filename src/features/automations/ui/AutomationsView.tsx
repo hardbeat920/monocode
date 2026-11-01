@@ -9,6 +9,8 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
+import { translate } from "../../../shared/i18n/locale";
+import { useLanguage } from "../../../shared/i18n/useTranslation";
 import { AccessPicker } from "../../sessions/ui/AccessPicker";
 import { HarnessIcon } from "../../sessions/ui/HarnessIcon";
 import {
@@ -147,10 +149,11 @@ export function AutomationsView({
   onLaunch,
   onOpenSession,
 }: Props) {
+  useLanguage();
   return (
     <div
       role="region"
-      aria-label="Automations"
+      aria-label={translate("Automations")}
       data-app-automations
       className="flex min-h-0 min-w-0 flex-1 flex-col text-content"
     >
@@ -170,7 +173,7 @@ export function AutomationsView({
               className="size-3.5 shrink-0 text-content/45"
               strokeWidth={1.75}
             />
-            <span className="min-w-0 truncate text-content">Automations</span>
+            <span className="min-w-0 truncate text-content">{translate("Automations")}</span>
           </div>
           {IS_MAC ? null : <WindowControls />}
         </div>
@@ -196,6 +199,7 @@ function AutomationsContent({
   Props,
   "cwd" | "scopeProject" | "recents" | "onLaunch" | "onOpenSession"
 >) {
+  useLanguage();
   const [automations, setAutomations] = useState<Automation[]>(
     () => peekAutomations() ?? [],
   );
@@ -388,11 +392,11 @@ function AutomationsContent({
         <div className="flex h-9 shrink-0 items-center gap-1 border-b border-stroke px-2">
           <label className="relative flex h-7 min-w-0 flex-1 items-center">
             <Search className="pointer-events-none absolute left-2 size-3 shrink-0 text-content/40" />
-            <span className="sr-only">Filter automations</span>
+            <span className="sr-only">{translate("Filter automations")}</span>
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Filter automations"
+              placeholder={translate("Filter automations")}
               spellCheck={false}
               autoComplete="off"
               className="h-7 w-full rounded-md bg-transparent pl-7 pr-2 text-[12px] outline-none placeholder:text-content/40"
@@ -400,8 +404,8 @@ function AutomationsContent({
           </label>
           <button
             type="button"
-            title="New automation"
-            aria-label="New automation"
+            title={translate("New automation")}
+            aria-label={translate("New automation")}
             onClick={beginCreate}
             className="grid size-6 shrink-0 place-items-center rounded-md text-content/45 hover:bg-content/10 hover:text-content"
           >
@@ -1007,10 +1011,10 @@ function AutomationEditor({
             <div className="flex items-start gap-6">
               <input
                 autoFocus
-                aria-label="Automation name"
+                aria-label={translate("Automation name")}
                 value={draft.name}
                 onChange={(event) => update("name", event.target.value)}
-                placeholder="Untitled"
+                placeholder={translate("Untitled")}
                 className="min-w-0 flex-1 bg-transparent text-[20px] font-semibold leading-tight text-content outline-none placeholder:text-content/35"
               />
               <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
@@ -1081,7 +1085,7 @@ function AutomationEditor({
                     ref={menuButton}
                     type="button"
                     title="Automation actions"
-                    aria-label="Automation actions"
+                    aria-label={translate("Automation actions")}
                     aria-haspopup="menu"
                     aria-expanded={menuOpen}
                     onClick={() => setMenuOpen((open) => !open)}
@@ -1102,7 +1106,7 @@ function AutomationEditor({
                       width={200}
                       constrainHeight={false}
                       role="menu"
-                      aria-label="Automation actions"
+                      aria-label={translate("Automation actions")}
                       onDismiss={() => setMenuOpen(false)}
                       className="p-1"
                     >
@@ -1127,7 +1131,7 @@ function AutomationEditor({
           {historyAvailable ? (
             <div
               role="tablist"
-              aria-label="Automation view"
+              aria-label={translate("Automation view")}
               className="flex h-9 items-stretch gap-4"
             >
               <PageTab
@@ -1167,7 +1171,7 @@ function AutomationEditor({
         {!showingHistory ? (
           <div className="mx-auto w-full max-w-5xl space-y-8 px-8 py-5 pb-10">
             <section>
-              <SectionTitle>Triggers</SectionTitle>
+              <SectionTitle>{translate("Triggers")}</SectionTitle>
               <div className="mt-3 rounded-md border border-content/10">
                 {draft.triggers.length > 0 ? (
                   <ul className="px-3 py-1.5">
@@ -1219,7 +1223,7 @@ function AutomationEditor({
                   gap={4}
                   width={250}
                   role="menu"
-                  aria-label="Choose automation trigger"
+                  aria-label={translate("Choose automation trigger")}
                   layer={LAYER.popover}
                   ignore="[data-trigger-submenu]"
                   onDismiss={() => {
@@ -1230,12 +1234,12 @@ function AutomationEditor({
                 >
                   <label className="flex h-11 items-center gap-2.5 border-b border-stroke px-3 text-content/45 focus-within:text-content/70">
                     <Search className="size-3.5 shrink-0" strokeWidth={1.75} />
-                    <span className="sr-only">Search triggers</span>
+                    <span className="sr-only">{translate("Search triggers")}</span>
                     <input
                       autoFocus
                       value={triggerQuery}
                       onChange={(event) => setTriggerQuery(event.target.value)}
-                      placeholder="Search triggers"
+                      placeholder={translate("Search triggers")}
                       className="min-w-0 flex-1 bg-transparent text-[13px] text-content outline-none placeholder:text-content/35"
                     />
                   </label>
@@ -1262,7 +1266,9 @@ function AutomationEditor({
                           title={
                             ready
                               ? undefined
-                              : `Connect ${option.label} in Settings`
+                              : translate("Connect {label} in Settings", {
+                                  label: option.label,
+                                })
                           }
                           onMouseEnter={() =>
                             setTriggerCategory(ready ? option.value : null)
@@ -1287,13 +1293,13 @@ function AutomationEditor({
                             className="size-3.5 shrink-0"
                           />
                           <span className="min-w-0 flex-1 truncate">
-                            {option.label}
+                            {translate(option.label)}
                           </span>
                           {ready ? (
                             <ChevronRight className="size-3.5 text-content/45" />
                           ) : (
                             <span className="shrink-0 text-[11px] text-content/35">
-                              Not connected
+                              {translate("Not connected")}
                             </span>
                           )}
                         </button>
@@ -1301,7 +1307,7 @@ function AutomationEditor({
                     })}
                     {triggerCategories.length === 0 ? (
                       <p className="px-2 py-5 text-center text-[12px] text-content/40">
-                        No matching triggers
+                        {translate("No matching triggers")}
                       </p>
                     ) : null}
                   </div>
@@ -1339,7 +1345,7 @@ function AutomationEditor({
                       onClick={() => selectTrigger(triggerCategory, event)}
                       className="flex h-9 w-full items-center rounded-lg px-2 text-left text-[13px] text-content/75 hover:bg-content/5 hover:text-content"
                     >
-                      {event.label}
+                      {translate(event.label)}
                     </button>
                   ))}
                 </Popover>
@@ -1347,7 +1353,7 @@ function AutomationEditor({
             </section>
 
             <section>
-              <SectionTitle>Instructions</SectionTitle>
+              <SectionTitle>{translate("Instructions")}</SectionTitle>
               <div className="relative mt-3 rounded-md border border-content/10 bg-content/3 backdrop-blur-sm has-focus:border-content/20">
                 <PromptField
                   value={draft.prompt}
@@ -1399,20 +1405,23 @@ function AutomationEditor({
             </section>
 
             <section>
-              <SectionTitle>Session</SectionTitle>
+              <SectionTitle>{translate("Sessions")}</SectionTitle>
               <div className="mt-3 divide-y divide-content/7 rounded-md border border-content/10">
                 <SettingsRow
-                  label="Working copy"
-                  hint="This repo, or a fresh worktree"
+                  label={translate("Working copy")}
+                  hint={translate("This repo, or a fresh worktree")}
                 >
                   <SettingsSelect
-                    label="Working copy"
+                    label={translate("Working copy")}
                     value={
                       draft.workspaceMode === "worktree"
                         ? "worktree"
                         : "current"
                     }
-                    options={WORKSPACE_OPTIONS}
+                    options={WORKSPACE_OPTIONS.map((option) => ({
+                      ...option,
+                      label: translate(option.label),
+                    }))}
                     onChange={(value) =>
                       onChange({
                         ...draft,
@@ -1424,28 +1433,31 @@ function AutomationEditor({
                   />
                 </SettingsRow>
                 <SettingsRow
-                  label="Conversation"
-                  hint="New chat, or continue the last run"
+                  label={translate("Conversation")}
+                  hint={translate("New chat, or continue the last run")}
                 >
                   <SettingsSelect
-                    label="Conversation"
+                    label={translate("Conversation")}
                     value={draft.reuseSession ? "reuse" : "fresh"}
                     disabled={draft.workspaceMode === "worktree"}
-                    options={CONVERSATION_OPTIONS}
+                    options={CONVERSATION_OPTIONS.map((option) => ({
+                      ...option,
+                      label: translate(option.label),
+                    }))}
                     onChange={(value) =>
                       update("reuseSession", value === "reuse")
                     }
                   />
                 </SettingsRow>
                 <SettingsRow
-                  label="Session folder"
-                  hint="Where runs appear in the sidebar"
+                  label={translate("Session folder")}
+                  hint={translate("Where runs appear in the sidebar")}
                 >
                   <SearchableSelect
                     variant="pill"
                     searchable={folderOptions.length > 6}
                     align="end"
-                    label="Session folder"
+                    label={translate("Session folder")}
                     value={draft.sessionFolderId}
                     options={folderOptions}
                     onChange={(value) => update("sessionFolderId", value)}
@@ -1458,23 +1470,26 @@ function AutomationEditor({
               <summary className="flex min-h-14 cursor-default list-none items-center justify-between gap-3 px-4 active:opacity-75">
                 <span>
                   <span className="block text-[13px] font-medium text-content/75">
-                    Advanced
+                    {translate("Advanced")}
                   </span>
                   <span className="mt-0.5 block text-[11px] text-content/40">
-                    Catch-up window for missed runs
+                    {translate("Catch-up window for missed runs")}
                   </span>
                 </span>
                 <ChevronDown className="size-3.5 text-content/40" />
               </summary>
               <div className="divide-y divide-content/7 border-t border-content/8">
                 <SettingsRow
-                  label="Missed-run grace"
-                  hint="Catch up if a scheduled run was missed"
+                  label={translate("Missed-run grace")}
+                  hint={translate("Catch up if a scheduled run was missed")}
                 >
                   <SettingsSelect
-                    label="Missed-run grace"
+                    label={translate("Missed-run grace")}
                     value={String(draft.missedRunGraceMinutes)}
-                    options={GRACE_OPTIONS}
+                    options={GRACE_OPTIONS.map((option) => ({
+                      ...option,
+                      label: translate(option.label),
+                    }))}
                     onChange={(value) =>
                       update("missedRunGraceMinutes", Number(value))
                     }
@@ -1485,14 +1500,14 @@ function AutomationEditor({
           </div>
         ) : (
           <section className="mx-auto w-full max-w-5xl px-8 py-5 pb-10">
-            <SectionTitle>Run history</SectionTitle>
+            <SectionTitle>{translate("Run history")}</SectionTitle>
             {runs.length > 0 ? (
               <div className="mt-3 overflow-hidden rounded-md border border-content/10">
                 <div className={`${RUN_GRID} h-10 text-[11px] text-content/40`}>
-                  <span>Trigger</span>
-                  <span>Triggered</span>
-                  <span>Status</span>
-                  <span className="text-right">Duration</span>
+                  <span>{translate("Trigger")}</span>
+                  <span>{translate("Triggered")}</span>
+                  <span>{translate("Status")}</span>
+                  <span className="text-right">{translate("Duration")}</span>
                 </div>
                 <ul className="divide-y divide-content/8 border-t border-content/8">
                   {runs.slice(0, 100).map((run) => (
@@ -1747,9 +1762,9 @@ function TriggerMark({
 }
 
 function triggerName(kind: AutomationTriggerKind): string {
-  return (
-    TRIGGER_CATEGORIES.find((option) => option.value === kind)?.label ?? kind
-  );
+  const label =
+    TRIGGER_CATEGORIES.find((option) => option.value === kind)?.label ?? kind;
+  return translate(label);
 }
 
 function findTriggerEvent(
@@ -1836,7 +1851,7 @@ function TriggerRow({
       </div>
       <button
         type="button"
-        aria-label="Remove trigger"
+        aria-label={translate("Remove trigger")}
         onClick={onRemove}
         className="grid size-7 shrink-0 place-items-center rounded-md text-content/35 opacity-0 transition-opacity duration-150 ease-out group-hover:opacity-100 group-focus-within:opacity-100 hover:bg-content/8 hover:text-content focus-visible:opacity-100"
       >
@@ -1934,7 +1949,7 @@ function EventTriggerSentence({
             label="Branch"
             value={trigger.branch}
             options={branchOptions}
-            placeholder="Select a branch"
+            placeholder={translate("Select a branch")}
             disabled={!projectChosen}
             emptyLabel={
               projectChosen ? "No branches found" : "Choose a project first"
@@ -1947,7 +1962,7 @@ function EventTriggerSentence({
       <TriggerPill
         label="Actor"
         value={trigger.actor || "anyone"}
-        options={[{ value: "anyone", label: "Anyone" }]}
+        options={[{ value: "anyone", label: translate("Anyone") }]}
         onChange={(value) => onChange({ ...trigger, actor: value })}
       />
     </>

@@ -18,6 +18,7 @@ import {
   seedInboxSeenIfNeeded,
 } from "../model/inboxSeen";
 import { useInboxActivity } from "../hooks/useInboxUnseen";
+import { translate } from "../../../shared/i18n/locale";
 
 vi.mock("../model/githubTasks", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../model/githubTasks")>()),
@@ -58,8 +59,8 @@ afterEach(() => {
 
 function button(label: string) {
   const result = [...document.querySelectorAll("button")].find(
-    (item) => item.textContent === label
-      || (/^\d+ hours?$/.test(label) && item.textContent?.startsWith(`${label} (`)),
+    (item) =>
+      item.textContent === label || item.textContent?.startsWith(`${label} (`),
   );
   expect(result, label).toBeDefined();
   return result!;
@@ -78,7 +79,7 @@ async function openInboxMenu() {
     ),
   );
   const inbox = container.querySelector<HTMLElement>(
-    'button[aria-label="Inbox"]',
+    `button[aria-label="${translate("Inbox")}"]`,
   )!;
   inbox.focus();
   await act(async () =>
@@ -113,22 +114,30 @@ it("uses already loaded Inbox activity immediately even when the provider stops 
   }
   await act(async () => root.render(createElement(Harness)));
   vi.mocked(listInboxItems).mockClear().mockImplementation(() => new Promise(() => {}));
-  const inbox = container.querySelector<HTMLElement>('button[aria-label="Inbox, new items"]')!;
+  const inbox = container.querySelector<HTMLElement>(
+    `button[aria-label="${translate("Inbox, new items")}"]`,
+  )!;
   act(() => inbox.dispatchEvent(new KeyboardEvent("keydown", { key: "ContextMenu", bubbles: true })));
-  expect(button("Mark all as read").disabled).toBe(false);
-  act(() => button("Mark all as read").click());
+  expect(button(translate("Mark all as read")).disabled).toBe(false);
+  act(() => button(translate("Mark all as read")).click());
   expect(isInboxEntryUnseen(entry)).toBe(false);
-  expect(container.querySelector('button[aria-label="Inbox"]')).not.toBeNull();
-  expect(document.querySelector('[role="menu"][aria-label="Inbox actions"]')).toBeNull();
+  expect(
+    container.querySelector(`button[aria-label="${translate("Inbox")}"]`),
+  ).not.toBeNull();
+  expect(
+    document.querySelector(
+      `[role="menu"][aria-label="${translate("Inbox actions")}"]`,
+    ),
+  ).toBeNull();
   expect(listInboxItems).not.toHaveBeenCalled();
 });
 
 it("reopens known Inbox actions without a disabled loading frame", async () => {
   const inbox = await openInboxMenu();
-  expect(button("Mute all projects").disabled).toBe(false);
+  expect(button(translate("Mute all projects")).disabled).toBe(false);
   act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
   act(() => inbox.dispatchEvent(new KeyboardEvent("keydown", { key: "ContextMenu", bubbles: true })));
-  expect(button("Mute all projects").disabled).toBe(false);
+  expect(button(translate("Mute all projects")).disabled).toBe(false);
   await act(async () => {});
   expect(document.querySelector('[role="status"]')?.textContent).toContain("2 projects");
 });
@@ -141,14 +150,16 @@ it("keeps unread items and the menu open when marking read fails, then allows re
   const write = vi.spyOn(localStorage, "setItem").mockImplementation(() => {
     throw new Error("Storage full");
   });
-  act(() => button("Mark all as read").click());
-  expect(document.querySelector('[role="alert"]')?.textContent).toContain("Could not save read status");
+  act(() => button(translate("Mark all as read")).click());
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+    translate("Could not save read status. Please try again."),
+  );
   expect(isInboxEntryUnseen(entry)).toBe(true);
-  expect(button("Mark all as read").disabled).toBe(false);
+  expect(button(translate("Mark all as read")).disabled).toBe(false);
   write.mockRestore();
-  act(() => button("Mark all as read").click());
+  act(() => button(translate("Mark all as read")).click());
   expect(isInboxEntryUnseen(entry)).toBe(false);
-  expect(document.querySelector('[role="menu"][aria-label="Inbox actions"]')).toBeNull();
+  expect(document.querySelector(`[role="menu"][aria-label="${translate("Inbox actions")}"]`)).toBeNull();
   expect(document.activeElement).toBe(inbox);
 });
 
@@ -168,12 +179,12 @@ it("marks all Inbox providers as read from the rail, including muted projects", 
   })));
   const inbox = await openInboxMenu();
   expect(entries.every(isInboxEntryUnseen)).toBe(true);
-  await act(async () => button("Mark all as read").click());
+  await act(async () => button(translate("Mark all as read")).click());
   expect(entries.some(isInboxEntryUnseen)).toBe(false);
   expect(listInboxItems).not.toHaveBeenCalled();
   expect(isInboxEntryUnseen({ ...entries[0]!, updatedAt: "2026-09-16T11:00:00Z" })).toBe(true);
   expect(loadNotificationPreferences()["local:/repos/work"].mutedUntil).toBeNull();
-  expect(document.querySelector('[role="menu"][aria-label="Inbox actions"]')).toBeNull();
+  expect(document.querySelector(`[role="menu"][aria-label="${translate("Inbox actions")}"]`)).toBeNull();
   expect(document.activeElement).toBe(inbox);
 });
 
@@ -189,16 +200,16 @@ it("disables mark all as read for read items and reacts when unread items are re
   rememberInboxItems([{ ...entry, projectPath: item.projectPath }]);
   vi.mocked(listInboxItems).mockResolvedValue({ items: [item], errors: {} });
   await openInboxMenu();
-  expect(button("Mark all as read").disabled).toBe(true);
+  expect(button(translate("Mark all as read")).disabled).toBe(true);
 
   act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
   const updated = { ...item, updatedAt: "2026-09-16T11:00:00Z" };
   rememberInboxItems([{ ...entry, updatedAt: updated.updatedAt, projectPath: item.projectPath }]);
   vi.mocked(listInboxItems).mockResolvedValue({ items: [updated], errors: {} });
   await openInboxMenu();
-  expect(button("Mark all as read").disabled).toBe(false);
+  expect(button(translate("Mark all as read")).disabled).toBe(false);
   act(() => markInboxItemsSeen([{ ...entry, updatedAt: updated.updatedAt }]));
-  expect(button("Mark all as read").disabled).toBe(true);
+  expect(button(translate("Mark all as read")).disabled).toBe(true);
 });
 
 it("mutes all rail and known Inbox projects for one hour directly from Inbox", async () => {
@@ -213,14 +224,24 @@ it("mutes all rail and known Inbox projects for one hour directly from Inbox", a
     },
   ]);
   const inbox = await openInboxMenu();
-  act(() => button("Mute all projects").click());
-  expect(button("1 hour").textContent).toBe("1 hour (21:30)");
-  expect(button("4 hours").textContent).toBe("4 hours (Tomorrow, 0:30)");
-  expect(button("8 hours").textContent).toBe("8 hours (Tomorrow, 4:30)");
-  expect(button("Until resumed").textContent).toBe("Until resumed");
-  expect(button("Choose date and time").textContent).toBe("Choose date and time");
+  act(() => button(translate("Mute all projects")).click());
+  expect(button(translate("{hours} hour", { hours: 1 })).textContent).toBe(
+    `${translate("{hours} hour", { hours: 1 })} (21:30)`,
+  );
+  expect(button(translate("{hours} hours", { hours: 4 })).textContent).toBe(
+    `${translate("{hours} hours", { hours: 4 })} (${translate("Tomorrow, ")}0:30)`,
+  );
+  expect(button(translate("{hours} hours", { hours: 8 })).textContent).toBe(
+    `${translate("{hours} hours", { hours: 8 })} (${translate("Tomorrow, ")}4:30)`,
+  );
+  expect(button(translate("Until resumed")).textContent).toBe(
+    translate("Until resumed"),
+  );
+  expect(button(translate("Choose date and time")).textContent).toBe(
+    translate("Choose date and time"),
+  );
   const start = Date.now();
-  act(() => button("1 hour").click());
+  act(() => button(translate("{hours} hour", { hours: 1 })).click());
   const preferences = loadNotificationPreferences();
   expect(Object.keys(preferences).sort()).toEqual([
     "linear:project:planning",
@@ -232,7 +253,7 @@ it("mutes all rail and known Inbox projects for one hour directly from Inbox", a
     expect(preference.mutedUntil).toBeLessThanOrEqual(Date.now() + 3_600_000);
   }
   expect(
-    document.querySelector('[role="menu"][aria-label="Inbox actions"]'),
+    document.querySelector(`[role="menu"][aria-label="${translate("Inbox actions")}"]`),
   ).toBeNull();
   expect(document.activeElement).toBe(inbox);
 });
@@ -253,8 +274,8 @@ it("offers explicit all-project actions without an implicit active-project exclu
   await openInboxMenu();
   expect(document.body.textContent).not.toContain("Mute other projects");
   expect(document.body.textContent).not.toContain("Keeps");
-  act(() => button("Mute all projects").click());
-  act(() => button("Until resumed").click());
+  act(() => button(translate("Mute all projects")).click());
+  act(() => button(translate("Until resumed")).click());
   expect(loadNotificationPreferences()).toEqual({
     "repository:github.com/company/work": {
       disabled: ["issues"],
@@ -274,7 +295,7 @@ it("resumes muted projects without changing category choices or unmuted projects
     disabled: ["agentFinished"],
   });
   await openInboxMenu();
-  act(() => button("Resume muted projects").click());
+  act(() => button(translate("Resume muted projects")).click());
   expect(loadNotificationPreferences()).toEqual({
     "local:/repos/work": {
       disabled: ["issues"],
@@ -283,16 +304,20 @@ it("resumes muted projects without changing category choices or unmuted projects
     "local:/repos/private": { disabled: ["agentFinished"] },
   });
   await openInboxMenu();
-  expect(button("Resume muted projects").disabled).toBe(true);
+  expect(button(translate("Resume muted projects")).disabled).toBe(true);
 });
 
 it("opens custom timing from the duration submenu for all projects", async () => {
   const now = vi.spyOn(Date, "now").mockReturnValue(new Date(2030, 0, 15, 9).getTime());
   await openInboxMenu();
-  act(() => button("Mute all projects").click());
-  act(() => button("Choose date and time").click());
+  act(() => button(translate("Mute all projects")).click());
+  act(() => button(translate("Choose date and time")).click());
   expect(document.querySelector('input[type="datetime-local"]')).toBeNull();
-  expect([...document.querySelectorAll("button")].some(item => item.textContent === "1 hour")).toBe(false);
+  expect(
+    [...document.querySelectorAll("button")].some(
+      (item) => item.textContent === translate("{hours} hour", { hours: 1 }),
+    ),
+  ).toBe(false);
   act(() => document.querySelector<HTMLButtonElement>('button[aria-label="2030-01-16"]')!.click());
   const input = document.querySelector<HTMLInputElement>('input[placeholder="HH:mm"]');
   expect(input).not.toBeNull();
@@ -303,7 +328,7 @@ it("opens custom timing from the duration submenu for all projects", async () =>
     )!.set!.call(input, "12:00");
     input!.dispatchEvent(new Event("input", { bubbles: true }));
   });
-  act(() => button("Mute until then").click());
+  act(() => button(translate("Mute until then")).click());
   expect(loadNotificationPreferences()).toEqual({
     "local:/repos/work": {
       disabled: [],
@@ -319,36 +344,36 @@ it("opens custom timing from the duration submenu for all projects", async () =>
 
 it("keeps the menu open and reports failed persistence so the action can be retried", async () => {
   await openInboxMenu();
-  act(() => button("Mute all projects").click());
+  act(() => button(translate("Mute all projects")).click());
   const write = vi.spyOn(localStorage, "setItem").mockImplementation(() => {
     throw new Error("Storage full");
   });
-  act(() => button("4 hours").click());
+  act(() => button(translate("{hours} hours", { hours: 4 })).click());
   expect(document.querySelector('[role="alert"]')?.textContent).toContain(
-    "Could not save",
+    translate("Could not save notification preferences. Please try again."),
   );
   expect(loadNotificationPreferences()).toEqual({});
   expect(
-    document.querySelector('[role="menu"][aria-label="Inbox actions"]'),
+    document.querySelector(`[role="menu"][aria-label="${translate("Inbox actions")}"]`),
   ).not.toBeNull();
   write.mockRestore();
-  act(() => button("4 hours").click());
+  act(() => button(translate("{hours} hours", { hours: 4 })).click());
   expect(Object.keys(loadNotificationPreferences())).toHaveLength(2);
   expect(
-    document.querySelector('[role="menu"][aria-label="Inbox actions"]'),
+    document.querySelector(`[role="menu"][aria-label="${translate("Inbox actions")}"]`),
   ).toBeNull();
 });
 
 it("keeps every rail path actionable without checking the filesystem", async () => {
   vi.mocked(invoke).mockRejectedValue(new Error("Native bridge unavailable"));
   await openInboxMenu();
-  expect(button("Mute all projects").disabled).toBe(false);
+  expect(button(translate("Mute all projects")).disabled).toBe(false);
   expect(document.body.textContent).not.toContain("unavailable");
   expect(document.querySelector('[role="alert"]')).toBeNull();
   expect(document.body.textContent).not.toContain("Retry loading projects");
 
-  act(() => button("Mute all projects").click());
-  act(() => button("Until resumed").click());
+  act(() => button(translate("Mute all projects")).click());
+  act(() => button(translate("Until resumed")).click());
   expect(loadNotificationPreferences()).toEqual({
     "local:/repos/private": { disabled: [], mutedUntil: null },
     "local:/repos/work": { disabled: [], mutedUntil: null },

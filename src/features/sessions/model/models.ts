@@ -160,7 +160,21 @@ export const MODELS: AgentModel[] = [
   {
     id: "opencode:deepseek-v4-flash",
     harness: "opencode",
-    name: "DeepSeek V4 Flash",
+    name: "DeepSeek V4 Flash (via OpenCode)",
+  },
+  {
+    id: "opencode:deepseek/deepseek-chat",
+    harness: "opencode",
+    name: "DeepSeek Chat (via OpenCode)",
+    nativeId: "deepseek/deepseek-chat",
+    provider: { id: "deepseek", name: "DeepSeek" },
+  },
+  {
+    id: "opencode:deepseek/deepseek-reasoner",
+    harness: "opencode",
+    name: "DeepSeek Reasoner (via OpenCode)",
+    nativeId: "deepseek/deepseek-reasoner",
+    provider: { id: "deepseek", name: "DeepSeek" },
   },
   { id: "opencode:qwen-3.5", harness: "opencode", name: "Qwen 3.5" },
   { id: "opencode:grok-4.5", harness: "opencode", name: "Grok 4.5" },
@@ -187,6 +201,44 @@ export const MODELS: AgentModel[] = [
     harness: "fx",
     name: "GLM 5.2 Fast",
     nativeId: "zai/glm-5.2-fast",
+  },
+  {
+    id: "deepseek:deepseek-v4-flash",
+    harness: "deepseek",
+    name: "DeepSeek V4 Flash",
+    nativeId: "deepseek-v4-flash",
+    settings: [
+      {
+        id: "effort",
+        label: "Reasoning",
+        kind: "select",
+        value: "high",
+        options: [
+          { value: "off", label: "Off" },
+          { value: "low", label: "Low" },
+          { value: "high", label: "High" },
+        ],
+      },
+    ],
+  },
+  {
+    id: "deepseek:deepseek-v4-pro",
+    harness: "deepseek",
+    name: "DeepSeek V4 Pro",
+    nativeId: "deepseek-v4-pro",
+    settings: [
+      {
+        id: "effort",
+        label: "Reasoning",
+        kind: "select",
+        value: "high",
+        options: [
+          { value: "off", label: "Off" },
+          { value: "low", label: "Low" },
+          { value: "high", label: "High" },
+        ],
+      },
+    ],
   },
   {
     id: "hermes:default",
@@ -220,6 +272,7 @@ export const DEFAULT_MODEL_ID: Record<HarnessId, string> = {
   hermes: "hermes:default",
   antigravity: "antigravity:gemini-3.8-flash-high",
   devin: "devin:adaptive",
+  deepseek: "deepseek:deepseek-v4-flash",
 };
 
 const FAVORITES_KEY = "monocode.favoriteModels";
@@ -250,6 +303,7 @@ const HARNESS_ORDER: HarnessId[] = [
   "hermes",
   "antigravity",
   "devin",
+  "deepseek",
 ];
 
 const EMPTY_MODELS: AgentModel[] = [];
@@ -1031,6 +1085,15 @@ function pickDefaultId(harness: HarnessId, models: AgentModel[]): string {
       models.find((model) => model.id === DEFAULT_MODEL_ID.fx)?.id ??
       models[0]?.id ??
       DEFAULT_MODEL_ID.fx
+    );
+  }
+  if (harness === "deepseek") {
+    return (
+      models.find((model) => model.nativeId === "deepseek-flash")?.id ??
+      models.find((model) => model.nativeId === "deepseek-v4-flash")?.id ??
+      models.find((model) => model.id === DEFAULT_MODEL_ID.deepseek)?.id ??
+      models[0]?.id ??
+      DEFAULT_MODEL_ID.deepseek
     );
   }
   return (

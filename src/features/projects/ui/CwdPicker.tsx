@@ -20,6 +20,8 @@ import { LAYER } from "../../../shared/lib/layers";
 import { Popover } from "../../../shared/ui/Popover";
 import { ProjectLogoIcon } from "./ProjectLogoIcon";
 import { MOD } from "../../../platform/tauri/platform";
+import { translate } from "../../../shared/i18n/locale";
+import { useLanguage } from "../../../shared/i18n/useTranslation";
 
 type Props = {
   cwd: string;
@@ -73,6 +75,7 @@ export function CwdPicker({
   onNewTerminal,
   onClose,
 }: Props) {
+  useLanguage();
   const [open, setOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [active, setActive] = useState(0);
@@ -254,7 +257,7 @@ export function CwdPicker({
           ignore={SELF}
           onDismiss={(reason) => dismiss(reason === "escape")}
           role="menu"
-          aria-label="Project picker"
+          aria-label={translate("Project picker")}
           data-cwd-picker
           className="flex flex-col overflow-hidden"
         >
@@ -265,7 +268,7 @@ export function CwdPicker({
             {inProject ? (
               <>
                 <p className="px-2.5 pb-1 pt-2 text-[10px] uppercase tracking-widest text-content/50">
-                  Current project
+                  {translate("Current project")}
                 </p>
                 <div className="px-2.5 py-1.5 text-content/50">
                   <p className="truncate text-[13px] text-content">
@@ -280,11 +283,13 @@ export function CwdPicker({
             {previewRecents.length > 0 || mode === "move" ? (
               <>
                 <p className="px-2.5 pb-1 pt-2 text-[10px] uppercase tracking-widest text-content/50">
-                  {mode === "move" ? "Move to project" : "Recent projects"}
+                  {mode === "move"
+                    ? translate("Move to project")
+                    : translate("Recent projects")}
                 </p>
                 {mode === "move" && previewRecents.length === 0 ? (
                   <p className="px-2.5 py-2 text-[13px] text-content/50">
-                    No other projects
+                    {translate("No other projects")}
                   </p>
                 ) : null}
                 {previewRecents.map((item, index) => (
@@ -339,7 +344,7 @@ export function CwdPicker({
                     : "text-content/80 hover:bg-content/5"
                 }`}
               >
-                <span className="text-[13px]">More Projects</span>
+                <span className="text-[13px]">{translate("More Projects")}</span>
                 <ChevronRight
                   className="size-3.5 shrink-0"
                   strokeWidth={1.75}
@@ -364,7 +369,7 @@ export function CwdPicker({
                     : "text-content/80 hover:bg-content/5"
                 }`}
               >
-                <span className="text-[13px]">New terminal</span>
+                <span className="text-[13px]">{translate("New terminal")}</span>
                 <span className="shrink-0 font-mono text-[11px] text-content/45">
                   {MOD}`
                 </span>
@@ -382,7 +387,7 @@ export function CwdPicker({
           maxHeight={SUBMENU_MAX_HEIGHT}
           layer={LAYER.submenu}
           role="menu"
-          aria-label="More projects"
+          aria-label={translate("More projects")}
           data-cwd-submenu
           className="overflow-y-auto overscroll-none py-1"
           onMouseEnter={openMore}

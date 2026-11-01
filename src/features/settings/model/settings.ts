@@ -56,7 +56,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     label: "General",
     description:
       "The build you are running, how MonoCode reaches you, and the panels it shows.",
-    keywords: "version update sounds notifications notes rail",
+    keywords: "version update sounds notifications notes rail language locale 中文 语言 英文",
   },
   {
     id: "connections",
@@ -100,7 +100,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description:
       "Provider accounts, agent CLIs MonoCode can drive, and the model new sessions start with.",
     keywords:
-      "account sign in login model harness claude codex gemini cli default hooks",
+      "account sign in login model harness claude codex gemini cli default hooks deepseek 深度求索 api key 余额 登录",
   },
   {
     id: "mcp",
@@ -175,6 +175,12 @@ export type SettingsEntry = {
 };
 
 export const SETTINGS_INDEX: SettingsEntry[] = [
+  {
+    id: "language",
+    section: "general",
+    label: "Display language",
+    keywords: "language locale english chinese 中文 简体中文 语言 英文 系统",
+  },
   {
     id: "mobile-access",
     section: "connections",
@@ -441,6 +447,36 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "pacman snake arcade grid fun",
   },
   {
+    id: "deepseek-provider",
+    section: "providers",
+    label: "DeepSeek",
+    keywords: "deepseek 深度求索 api key 密钥 余额 balance 登录 扫码 oauth 账号",
+  },
+  {
+    id: "deepseek-official-login",
+    section: "providers",
+    label: "DeepSeek login",
+    keywords: "deepseek 深度求索 登录 login oauth 账号 accounts",
+  },
+  {
+    id: "deepseek-quota",
+    section: "providers",
+    label: "DeepSeek quota",
+    keywords: "deepseek quota 额度 wallet 余额",
+  },
+  {
+    id: "deepseek-models",
+    section: "providers",
+    label: "DeepSeek models",
+    keywords: "deepseek models catalog 模型 harness",
+  },
+  {
+    id: "deepseek-api-key",
+    section: "providers",
+    label: "DeepSeek API key",
+    keywords: "deepseek api key 密钥 opencode auth.json",
+  },
+  {
     id: "agent-clis",
     section: "providers",
     label: "Agent CLIs",
@@ -452,7 +488,7 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     section: "providers",
     label: "Provider accounts",
     keywords:
-      "account sign in login rename remove delete credentials profile usage limit quota exhausted",
+      "account sign in login rename remove delete credentials profile usage limit quota exhausted deepseek 深度求索 登录 oauth",
   },
   {
     id: "show-remaining-usage",

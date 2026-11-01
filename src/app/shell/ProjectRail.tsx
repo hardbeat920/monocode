@@ -1,3 +1,5 @@
+import { translate } from "../../shared/i18n/locale";
+import { useLanguage } from "../../shared/i18n/useTranslation";
 import {
   BellOff,
   ChevronDown,
@@ -187,6 +189,7 @@ export function ProjectRail({
   onDismissUpdate,
   monos,
 }: Props) {
+  useLanguage();
   const trafficLightsVisible = useTrafficLightsVisible();
   const resize = useDragResize({
     min: sharedWidth?.min ?? PROJECT_RAIL_WIDTH_MIN,
@@ -379,7 +382,7 @@ export function ProjectRail({
   return (
     <nav
       ref={resize.setPaneRef}
-      aria-label="Projects"
+      aria-label={translate("Projects")}
       className={`sidebar-glass relative shrink-0 flex-col border-r border-stroke ${visible ? "flex" : "hidden"}`}
     >
       {headerless ? null : (
@@ -410,7 +413,7 @@ export function ProjectRail({
         <>
           <div className="flex shrink-0 flex-col gap-px px-2 pb-2 pt-0.5">
             <RailSearch
-              label="Search"
+              label={translate("Search")}
               icon={Search}
               onClick={onSearch}
               active={searchActive}
@@ -419,7 +422,7 @@ export function ProjectRail({
             />
             <div className="mt-0.5" />
             <RailAction
-              label="Inbox"
+              label={translate("Inbox")}
               icon={Inbox}
               onClick={onOpenInbox}
               onOpenContextMenu={(x, y) => {
@@ -432,23 +435,23 @@ export function ProjectRail({
               }}
               active={inboxActive}
               dot={inboxUnseen}
-              ariaLabel={inboxUnseen ? "Inbox, new items" : "Inbox"}
+              ariaLabel={inboxUnseen ? translate("Inbox, new items") : translate("Inbox")}
             />
             {notesEnabled ? (
               <RailAction
-                label="Notes"
+                label={translate("Notes")}
                 icon={File}
                 onClick={onOpenNotes}
                 active={notesActive}
-                ariaLabel="Notes"
+                ariaLabel={translate("Notes")}
               />
             ) : null}
             <RailAction
-              label="Automations"
+              label={translate("Automations")}
               icon={Zap}
               onClick={onOpenAutomations}
               active={automationsActive}
-              ariaLabel="Automations"
+              ariaLabel={translate("Automations")}
             />
           </div>
 
@@ -463,7 +466,7 @@ export function ProjectRail({
 
             {sections.pinned.length > 0 ? (
               <ProjectSection
-                label="Pinned"
+                label={translate("Pinned")}
                 items={sections.pinned}
                 muteStatuses={muteStatuses}
                 cwd={cwd}
@@ -487,7 +490,7 @@ export function ProjectRail({
             {projectGroups.length > 0 ? (
               <div className="mb-2 shrink-0">
                 <ProjectSectionHeader
-                  label="Groups"
+                  label={translate("Groups")}
                   onAddGroup={(x, y) => projectMenu.createGroup(x, y)}
                 />
                 <div className="flex flex-col gap-px px-2">
@@ -528,12 +531,12 @@ export function ProjectRail({
             ) : null}
 
             <ProjectSection
-              label="Projects"
+              label={translate("Projects")}
               items={groupedProjectSections.ungrouped}
               muteStatuses={muteStatuses}
               emptyLabel={
                 sections.projects.length === 0 && projectGroups.length === 0
-                  ? "No projects yet"
+                  ? translate("No projects yet")
                   : undefined
               }
               onAdd={onOpenProject}
@@ -571,7 +574,7 @@ export function ProjectRail({
           <div className="flex shrink-0 flex-col gap-px p-2">
             <GithubStarPrompt />
             <RailAction
-              label="Settings"
+              label={translate("Settings")}
               icon={Settings}
               onClick={onOpenSettings}
               shortcut={`${MOD},`}
@@ -595,7 +598,7 @@ export function ProjectRail({
       <div
         role="separator"
         aria-orientation="vertical"
-        aria-label="Resize project sidebar"
+        aria-label={translate("Resize project sidebar")}
         aria-valuenow={resize.width}
         aria-valuemin={PROJECT_RAIL_WIDTH_MIN}
         aria-valuemax={PROJECT_RAIL_WIDTH_MAX}
@@ -711,8 +714,8 @@ function ProjectSectionHeader({
       {onAddGroup ? (
         <button
           type="button"
-          title="New project group"
-          aria-label="New project group"
+          title={translate("New project group")}
+          aria-label={translate("New project group")}
           onClick={(event) => {
             const rect = event.currentTarget.getBoundingClientRect();
             onAddGroup(rect.left, rect.bottom);
@@ -850,7 +853,7 @@ function ProjectGroupSection({
         <button
           type="button"
           data-no-drag
-          title="Group options"
+          title={translate("Group options")}
           aria-label={`${group.name} group options`}
           aria-haspopup="menu"
           onPointerDown={(event) => event.stopPropagation()}
@@ -951,22 +954,26 @@ function ProjectCard({
   const connection = !remote
     ? ""
     : !machine
-      ? "Machine not connected on this computer"
+      ? translate("Machine not connected on this computer")
       : online === undefined
-        ? "Connecting"
+        ? translate("Connecting")
         : online
-          ? "Connected"
-          : "Reconnecting";
+          ? translate("Connected")
+          : translate("Reconnecting");
   const cardTitle = projectCardTitle(
     remote
-      ? `${remote.cwd} on ${machine?.name ?? "another machine"} (${connection})`
+      ? translate("{cwd} on {machine} ({connection})", {
+          cwd: remote.cwd,
+          machine: machine?.name ?? translate("another machine"),
+          connection,
+        })
       : item.path,
     name,
     stats,
     busy,
   );
   const cardAriaLabel = projectCardAriaLabel(
-    machine ? `${name} on ${machine.name}` : name,
+    machine ? translate("{name} on {machine}", { name, machine: machine.name }) : name,
     stats,
     busy,
   );
@@ -1088,8 +1095,8 @@ function ProjectCard({
       <button
         type="button"
         data-no-drag
-        title="Project options"
-        aria-label="Project options"
+        title={translate("Project options")}
+        aria-label={translate("Project options")}
         aria-haspopup="menu"
         onPointerDown={(event) => event.stopPropagation()}
         onClick={(event) => {
@@ -1108,8 +1115,8 @@ function ProjectCard({
       <button
         type="button"
         data-no-drag
-        title={pinned ? "Unpin project" : "Pin project"}
-        aria-label={pinned ? "Unpin project" : "Pin project"}
+        title={pinned ? translate("Unpin project") : translate("Pin project")}
+        aria-label={pinned ? translate("Unpin project") : translate("Pin project")}
         onPointerDown={(event) => event.stopPropagation()}
         onClick={(event) => {
           event.stopPropagation();
@@ -1152,7 +1159,7 @@ function ProjectDiffStat({
 
   return (
     <span
-      title={`${label} uncommitted`}
+      title={translate("{label} uncommitted", { label })}
       className="flex shrink-0 items-center gap-1 font-sans text-[11px] font-semibold tabular-nums"
     >
       {additions > 0 ? (
@@ -1172,14 +1179,18 @@ function projectCardTitle(
   busy: boolean,
 ): string {
   const parts = [name, path];
-  if (busy) parts.push("Working");
+  if (busy) parts.push(translate("Working"));
   const files = stats?.files ?? 0;
   const additions = stats?.additions ?? 0;
   const deletions = stats?.deletions ?? 0;
   if (files > 0 || additions > 0 || deletions > 0) {
     parts.push(
       [
-        files > 0 ? `${files} ${files === 1 ? "file" : "files"} changed` : "",
+        files > 0
+          ? translate(files === 1 ? "{count} file changed" : "{count} files changed", {
+              count: files,
+            })
+          : "",
         additions > 0 ? `+${formatInteger(additions)}` : "",
         deletions > 0 ? `-${formatInteger(deletions)}` : "",
       ]
@@ -1196,12 +1207,16 @@ function projectCardAriaLabel(
   busy: boolean,
 ): string {
   const parts = [name];
-  if (busy) parts.push("working");
+  if (busy) parts.push(translate("Working"));
   const files = stats?.files ?? 0;
   const additions = stats?.additions ?? 0;
   const deletions = stats?.deletions ?? 0;
   if (files > 0) {
-    parts.push(`${files} ${files === 1 ? "file" : "files"} changed`);
+    parts.push(
+      translate(files === 1 ? "{count} file changed" : "{count} files changed", {
+        count: files,
+      }),
+    );
   }
   if (additions > 0) parts.push(`+${formatInteger(additions)}`);
   if (deletions > 0) parts.push(`-${formatInteger(deletions)}`);
@@ -1219,8 +1234,8 @@ function AddProjectButton({ onOpenFolder }: { onOpenFolder: () => void }) {
       <button
         ref={anchor}
         type="button"
-        title="Open project"
-        aria-label="Open project"
+        title={translate("Open project")}
+        aria-label={translate("Open project")}
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
@@ -1235,7 +1250,7 @@ function AddProjectButton({ onOpenFolder }: { onOpenFolder: () => void }) {
           width={230}
           onDismiss={() => setOpen(false)}
           role="menu"
-          aria-label="Open project"
+          aria-label={translate("Open project")}
           className="p-1"
         >
           <button

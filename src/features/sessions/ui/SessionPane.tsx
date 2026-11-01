@@ -1,4 +1,6 @@
 import { GripVertical, X } from "../../../shared/ui/icons";
+import { translate } from "../../../shared/i18n/locale";
+import { useLanguage } from "../../../shared/i18n/useTranslation";
 import { useSessionSnapshot } from "../model/sessionStateStore";
 import {
   memo,
@@ -282,6 +284,7 @@ type Props = SessionPaneProps & {
 };
 
 export const SessionPane = memo(function SessionPane(input: SessionPaneProps) {
+  useLanguage();
   const session = useSessionSnapshot(input.session, input.visible);
   const props = session === input.session ? input : { ...input, session };
   // Sessions in a project on another machine render this same pane, backed by
@@ -857,8 +860,8 @@ const LocalSessionPane = memo(function LocalSessionPane({
           </span>
           <button
             type="button"
-            title={`Close Pane (${MOD}W)`}
-            aria-label="Close pane"
+            title={translate("Close Pane ({shortcut})", { shortcut: `${MOD}W` })}
+            aria-label={translate("Close pane")}
             data-no-drag
             className="grid size-5 shrink-0 place-items-center rounded text-content/50 hover:bg-content/10 hover:text-content"
             onPointerDown={(e) => e.stopPropagation()}
@@ -918,7 +921,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
                 </div>
               ) : session.inboxAsk ? (
                 <div className="scrollbar-none h-full min-h-0 overflow-y-auto">
-                  <DiscussionEmpty message="Explore this item with your agent." />
+                  <DiscussionEmpty message={translate("Explore this item with your agent.")} />
                 </div>
               ) : (
                 <EmptySession

@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
+import { translate } from "../../../shared/i18n/locale";
+import { useLanguage } from "../../../shared/i18n/useTranslation";
 import QRCode from "qrcode";
 import { Plus, SmartPhone, Trash2 } from "../../../shared/ui/icons";
 import { PairPhoneDialog } from "./PairPhoneDialog";
@@ -26,6 +28,7 @@ const quiet =
   "px-3 py-2 text-[13px] text-content/50 hover:text-content disabled:opacity-40";
 
 export function MobileSettings() {
+  useLanguage();
   const [status, setStatus] = useState<Status | null>(null);
   const [remote, setRemote] = useState("");
   const [invite, setInvite] = useState<Invite | null>(null);
@@ -72,7 +75,7 @@ export function MobileSettings() {
     if (!paired) return;
     known.current = null;
     setInvite(null);
-    setNotice(`${paired.name} is paired.`);
+    setNotice(translate("{name} is paired.", { name: paired.name }));
     void invoke("mobile_cancel_invite");
   }, [invite, status]);
 
@@ -147,18 +150,21 @@ export function MobileSettings() {
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-[13px] font-semibold text-content">
-              Your phones
+              {translate("Your phones")}
             </h2>
             <span className="rounded-md border border-content/10 bg-content/5 px-1.5 py-0.5 text-[10px] font-medium text-content/60">
-              Invite-only beta
+              {translate("Invite-only beta")}
             </span>
           </div>
           <p className="mt-1 text-[12px] leading-relaxed text-content/45">
-            Check on projects and conversations from the MonoCode mobile
-            app. Your phone connects straight to this desktop.
+            {translate(
+              "Check on projects and conversations from the MonoCode mobile app. Your phone connects straight to this desktop.",
+            )}
           </p>
           <p className="mt-1 text-[12px] leading-relaxed text-content/45">
-            The iPhone app currently requires a TestFlight invitation.
+            {translate(
+              "The iPhone app currently requires a TestFlight invitation.",
+            )}
           </p>
         </div>
         <button
@@ -166,7 +172,7 @@ export function MobileSettings() {
           disabled={!status || busy || invite !== null}
           onClick={() => void pair()}
         >
-          <Plus className="size-4" /> Pair phone
+          <Plus className="size-4" /> {translate("Pair phone")}
         </button>
       </div>
 
@@ -184,14 +190,15 @@ export function MobileSettings() {
 
       {status && devices.length > 0 && !status.listening ? (
         <div className="flex items-center justify-between gap-4 rounded-lg bg-amber-500/5 px-4 py-3 text-[12px] text-amber-500">
-          Your phones can’t connect because this desktop isn’t accepting
-          connections right now.
+          {translate(
+            "Your phones can’t connect because this desktop isn’t accepting connections right now.",
+          )}
           <button
             className={`${button} shrink-0 text-content`}
             disabled={busy}
             onClick={() => void act(() => configure(true, status.openRouter))}
           >
-            Reconnect
+            {translate("Reconnect")}
           </button>
         </div>
       ) : null}
@@ -206,13 +213,17 @@ export function MobileSettings() {
                   <div className="truncate text-[13px] font-medium">
                     {device.name}
                   </div>
-                  <div className="mt-1 text-[12px] text-content/50">Paired</div>
+                  <div className="mt-1 text-[12px] text-content/50">
+                    {translate("Paired")}
+                  </div>
                 </div>
                 <button
                   disabled={busy}
                   className="rounded p-2 text-content/40 hover:bg-selection hover:text-content disabled:opacity-40"
-                  aria-label={`Remove ${device.name}`}
-                  title="Remove phone…"
+                  aria-label={translate("Remove {name}", {
+                    name: device.name,
+                  })}
+                  title={translate("Remove phone…")}
                   onClick={() => {
                     setError("");
                     setRemoving(device.id);
@@ -224,15 +235,18 @@ export function MobileSettings() {
               {removing === device.id && (
                 <div
                   role="group"
-                  aria-label={`Confirm removing ${device.name}`}
+                  aria-label={translate("Confirm removing {name}", {
+                    name: device.name,
+                  })}
                   className="flex flex-col gap-3 border-t border-stroke bg-content/3 px-4 py-4 text-[12px] leading-relaxed text-content/60"
                 >
                   <p className="text-[13px] font-medium text-content">
-                    Remove {device.name}?
+                    {translate("Remove {name}?", { name: device.name })}
                   </p>
                   <p>
-                    It disconnects right away and can’t reach this desktop again
-                    until you pair it with a new code.
+                    {translate(
+                      "It disconnects right away and can’t reach this desktop again until you pair it with a new code.",
+                    )}
                   </p>
                   <div className="flex gap-2">
                     <button
@@ -246,18 +260,22 @@ export function MobileSettings() {
                           if (devices.length === 1 && !invite)
                             await stopListening();
                           setRemoving(undefined);
-                          setNotice(`${device.name} was removed.`);
+                          setNotice(
+                            translate("{name} was removed.", {
+                              name: device.name,
+                            }),
+                          );
                         })
                       }
                     >
-                      Remove phone
+                      {translate("Remove phone")}
                     </button>
                     <button
                       className={quiet}
                       disabled={busy}
                       onClick={() => setRemoving(undefined)}
                     >
-                      Cancel
+                      {translate("Cancel")}
                     </button>
                   </div>
                 </div>
@@ -267,7 +285,7 @@ export function MobileSettings() {
         </div>
       ) : status ? (
         <div className="rounded-xl border border-dashed border-content/15 px-5 py-8 text-center text-[13px] text-content/45">
-          Pair your iPhone or Android phone to get started.
+          {translate("Pair your iPhone or Android phone to get started.")}
         </div>
       ) : null}
 
@@ -287,12 +305,14 @@ export function MobileSettings() {
 
       {status ? (
         <details className="text-[12px] text-content/45">
-          <summary className="cursor-pointer">Connect away from home</summary>
+          <summary className="cursor-pointer">
+            {translate("Connect away from home")}
+          </summary>
           <div className="mt-4 flex flex-col gap-3 leading-relaxed">
             <p>
-              On the same Wi-Fi, phones connect without any setup. To reach this
-              desktop from anywhere else, it needs a public address. Keep the
-              desktop awake.
+              {translate(
+                "On the same Wi-Fi, phones connect without any setup. To reach this desktop from anywhere else, it needs a public address. Keep the desktop awake.",
+              )}
             </p>
             <label className="flex items-center gap-2 text-[13px] text-content/70">
               <input
@@ -305,19 +325,21 @@ export function MobileSettings() {
                   )
                 }
               />
-              Open the router port automatically
+              {translate("Open the router port automatically")}
             </label>
             <p>{status.routerStatus}</p>
             <div className="flex flex-col gap-1.5 text-content/65">
-              Remote address
+              {translate("Remote address")}
               <div className="flex gap-2">
                 <input
                   type="text"
-                  aria-label="Remote address"
+                  aria-label={translate("Remote address")}
                   className={input}
                   value={remote}
                   onChange={(event) => setRemote(event.target.value)}
-                  placeholder="Public hostname or VPN IP, optionally :port"
+                  placeholder={translate(
+                    "Public hostname or VPN IP, optionally :port",
+                  )}
                   autoCapitalize="none"
                   spellCheck={false}
                 />
@@ -328,14 +350,14 @@ export function MobileSettings() {
                     void act(() => configure(status.enabled, status.openRouter))
                   }
                 >
-                  Save
+                  {translate("Save")}
                 </button>
               </div>
             </div>
             <p>
-              Automatic mapping needs a public IP. Otherwise, forward UDP port
-              38416 to this desktop or use a VPN address. Set the address before
-              making a pairing code.
+              {translate(
+                "Automatic mapping needs a public IP. Otherwise, forward UDP port 38416 to this desktop or use a VPN address. Set the address before making a pairing code.",
+              )}
             </p>
           </div>
         </details>

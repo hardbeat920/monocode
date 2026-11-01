@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { translate } from "../../../shared/i18n/locale";
 import {
   collectInboxResults,
   composeInboxMessage,
@@ -152,10 +153,14 @@ describe("githubReviewStateLabel", () => {
 
 describe("gitlabAttentionLabel", () => {
   it("labels the GitLab actions that put work in the attention view", () => {
-    expect(gitlabAttentionLabel("assigned")).toBe("Assigned to you");
-    expect(gitlabAttentionLabel("mentioned")).toBe("Mentioned you");
-    expect(gitlabAttentionLabel("review_requested")).toBe("Review requested");
-    expect(gitlabAttentionLabel("marked")).toBe("Added to your to-dos");
+    expect(gitlabAttentionLabel("assigned")).toBe(translate("Assigned to you"));
+    expect(gitlabAttentionLabel("mentioned")).toBe(translate("Mentioned you"));
+    expect(gitlabAttentionLabel("review_requested")).toBe(
+      translate("Review requested"),
+    );
+    expect(gitlabAttentionLabel("marked")).toBe(
+      translate("Added to your to-dos"),
+    );
     expect(gitlabAttentionLabel("unknown_action")).toBe("Unknown action");
     expect(gitlabAttentionLabel("")).toBe("");
   });

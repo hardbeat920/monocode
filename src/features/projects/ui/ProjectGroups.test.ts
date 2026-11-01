@@ -12,6 +12,7 @@ import {
 } from "../model/projectGroups";
 import { savePinnedProjects } from "../model/recents";
 import { ProjectRail } from "../../../app/shell/ProjectRail";
+import { translate } from "../../../shared/i18n/locale";
 import { useProjectDiffStats } from "../../source-control/hooks/useProjectDiffStats";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -168,7 +169,9 @@ it("creates, styles, assigns, and deletes a group from the rail", async () => {
   await renderRail();
   expect(sectionLabels()).toEqual(["Projects"]);
   expect(
-    document.querySelector('button[aria-label="New project group"]'),
+    document.querySelector(
+      `button[aria-label="${translate("New project group")}"]`,
+    ),
   ).toBeNull();
 
   const personal = button("personal");
@@ -222,7 +225,9 @@ it("creates, styles, assigns, and deletes a group from the rail", async () => {
   expect(button("personal")).toBeDefined();
   expect(sectionLabels()).toEqual(["Projects"]);
   expect(
-    document.querySelector('button[aria-label="New project group"]'),
+    document.querySelector(
+      `button[aria-label="${translate("New project group")}"]`,
+    ),
   ).toBeNull();
 });
 

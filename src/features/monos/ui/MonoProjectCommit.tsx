@@ -1,3 +1,5 @@
+import { translate } from "../../../shared/i18n/locale";
+import { useLanguage } from "../../../shared/i18n/useTranslation";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -145,6 +147,7 @@ export function MonoProjectCommit({
   /** The file, opened with its changes over the list. */
   onOpenFile: (path: string) => void;
 }) {
+  useLanguage();
   const { pr, reload: reloadPr } = usePrStatus(root, index?.branch);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
@@ -457,13 +460,13 @@ export function MonoProjectCommit({
             type="button"
             aria-label={
               busy === "generate"
-                ? "Cancel commit message generation"
-                : "Generate commit message"
+                ? translate("Cancel commit message generation")
+                : translate("Generate commit message")
             }
             title={
               busy === "generate"
-                ? "Cancel commit message generation"
-                : "Generate commit message"
+                ? translate("Cancel commit message generation")
+                : translate("Generate commit message")
             }
             disabled={
               busy === "generate" ? false : !!busy || staged.length === 0
@@ -505,12 +508,12 @@ export function MonoProjectCommit({
             ) : (
               <Check className="size-3.5" strokeWidth={2} />
             )}
-            Commit
+            {translate("Commit")}
           </button>
           <button
             type="button"
-            aria-label="Commit options"
-            title="Commit options"
+            aria-label={translate("Commit options")}
+            title={translate("Commit options")}
             aria-expanded={menuOpen}
             disabled={!!busy || !index?.branch}
             onClick={() => setMenuOpen((open) => !open)}
@@ -525,7 +528,7 @@ export function MonoProjectCommit({
           {menuOpen ? (
             <div
               role="menu"
-              aria-label="Commit options"
+              aria-label={translate("Commit options")}
               className="absolute top-full right-0 z-30 mt-1 min-w-48 rounded-md border border-content/10 bg-background-base py-1 shadow-lg"
             >
               <button
@@ -535,7 +538,7 @@ export function MonoProjectCommit({
                 onClick={() => void commit(true)}
                 className="flex h-7 w-full items-center px-3 text-left text-[12px] text-content hover:bg-content/10 disabled:opacity-40"
               >
-                Commit & Push
+                {translate("Commit & Push")}
               </button>
               <button
                 type="button"
@@ -544,7 +547,7 @@ export function MonoProjectCommit({
                 onClick={() => void commit(true, true)}
                 className="flex h-7 w-full items-center px-3 text-left text-[12px] text-content hover:bg-content/10 disabled:opacity-40"
               >
-                Commit, Push & Create PR
+                {translate("Commit, Push & Create PR")}
               </button>
             </div>
           ) : null}
@@ -572,7 +575,10 @@ export function MonoProjectCommit({
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-none py-1">
         {changed.length === 0 ? (
           <p role="status" className="px-3 py-2 text-[12px] text-content/45">
-            {status ?? (index ? "No uncommitted changes" : "Loading changes…")}
+            {status ??
+              (index
+                ? translate("No uncommitted changes")
+                : translate("Loading changes…"))}
           </p>
         ) : (
           <>
@@ -586,7 +592,7 @@ export function MonoProjectCommit({
             ) : null}
             {staged.length > 0 ? (
               <FileSection
-                title="Staged Changes"
+                title={translate("Staged Changes")}
                 count={staged.length}
                 open={commitOpen}
                 onToggle={() => setCommitOpen((open) => !open)}
@@ -594,7 +600,7 @@ export function MonoProjectCommit({
                 onToggleView={toggleView}
                 headerActions={[
                   {
-                    title: "Unstage All Changes",
+                    title: translate("Unstage All Changes"),
                     icon: <Minus className="size-3.5" strokeWidth={1.75} />,
                     onClick: () =>
                       void runStaging("unstage", () => gitUnstageAll(root)),
@@ -610,7 +616,7 @@ export function MonoProjectCommit({
             ) : null}
             {unstaged.length > 0 ? (
               <FileSection
-                title="Changes"
+                title={translate("Changes")}
                 count={unstaged.length}
                 open={restOpen}
                 onToggle={() => setRestOpen((open) => !open)}
@@ -618,7 +624,7 @@ export function MonoProjectCommit({
                 onToggleView={toggleView}
                 headerActions={[
                   {
-                    title: "Stage All Changes",
+                    title: translate("Stage All Changes"),
                     icon: <Plus className="size-3.5" strokeWidth={1.75} />,
                     onClick: () =>
                       void runStaging("stage", () => gitStageAll(root)),

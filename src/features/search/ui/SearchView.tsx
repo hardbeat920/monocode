@@ -1,4 +1,6 @@
 import { Folder, LoaderCircle, MessageSquare, Search } from "../../../shared/ui/icons";
+import { translate } from "../../../shared/i18n/locale";
+import { useLanguage } from "../../../shared/i18n/useTranslation";
 import {
   useEffect,
   useMemo,
@@ -50,12 +52,14 @@ import {
   type SessionSummary,
 } from "../../sessions/data/sessionStore";
 
-const SCOPES: { id: SearchScope; label: string }[] = [
-  { id: "all", label: "All" },
-  { id: "conversations", label: "Conversations" },
-  { id: "files", label: "Files" },
-  { id: "projects", label: "Projects" },
-];
+function searchScopes(): { id: SearchScope; label: string }[] {
+  return [
+    { id: "all", label: translate("All") },
+    { id: "conversations", label: translate("Conversations") },
+    { id: "files", label: translate("Files") },
+    { id: "projects", label: translate("Projects") },
+  ];
+}
 
 type Props = {
   tabbed?: boolean;
@@ -90,6 +94,7 @@ export function SearchView({
   onOpenSession,
   onOpenProject,
 }: Props) {
+  useLanguage();
   const inputRef = useRef<HTMLInputElement>(null);
   const activeProjectSearchId = useRef<string | null>(null);
   const activeSessionOwner = useRef<string | null>(null);
@@ -375,14 +380,14 @@ export function SearchView({
   const noResults = !empty && hits.length === 0 && !loading;
   const limitNotice = truncated ? (
     <p className="px-2.5 py-1 text-[11px] text-content/45">
-      Results limited to the first matches
+      {translate("Results limited to the first matches")}
     </p>
   ) : null;
 
   return (
     <div
       role="search"
-      aria-label="Search"
+      aria-label={translate("Search")}
       data-app-search
       className="flex min-h-0 min-w-0 flex-1 flex-col text-content"
     >
@@ -402,8 +407,8 @@ export function SearchView({
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={onQueryKeyDown}
-            placeholder="Search everything..."
-            aria-label="Search"
+            placeholder={translate("Search everything...")}
+            aria-label={translate("Search")}
             spellCheck={false}
             autoComplete="off"
             autoCorrect="off"
@@ -422,7 +427,7 @@ export function SearchView({
       </div>
 
       <div className="flex h-9 shrink-0 items-center gap-px border-b border-stroke px-3">
-        {SCOPES.map((item) => {
+        {searchScopes().map((item) => {
           const selected = scope === item.id;
           return (
             <button
@@ -456,7 +461,7 @@ export function SearchView({
           <p className="px-2 py-1.5 text-[12px] text-red-400">{error}</p>
         ) : noResults ? (
           <>
-            <p className="px-2 py-1.5 text-[12px] text-content/50">No results</p>
+            <p className="px-2 py-1.5 text-[12px] text-content/50">{translate("No results")}</p>
             {limitNotice}
           </>
         ) : (
@@ -505,7 +510,7 @@ function EmptyState() {
       </div>
 
       <p className="max-w-xs text-center text-[13px] text-content/45">
-        Find files, conversations, messages, and projects.
+        {translate("Find files, conversations, messages, and projects.")}
       </p>
     </div>
   );
@@ -560,7 +565,7 @@ function ResultList({
   return (
     <div
       role="listbox"
-      aria-label="Search results"
+      aria-label={translate("Search results")}
       onMouseMove={onListMouseMove}
     >
       {hits.map((hit, index) => {

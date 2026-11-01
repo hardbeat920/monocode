@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { translate } from "../../../shared/i18n/locale";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -81,8 +82,8 @@ function click(scope: ParentNode, label: string) {
   act(() => button!.click());
 }
 function mute(scope: ParentNode) {
-  click(scope, "Mute notifications");
-  click(document.querySelector('[role="menu"]')!, "Until resumed");
+  click(scope, translate("Mute notifications"));
+  click(document.querySelector('[role="menu"]')!, translate("Until resumed"));
 }
 
 beforeEach(() => {

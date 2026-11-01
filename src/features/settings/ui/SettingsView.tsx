@@ -3,6 +3,12 @@ import { createPortal } from "react-dom";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ConnectionsSettings } from "../../connections/ui/ConnectionsSettings";
 import { MobileSettings } from "../../mobile/ui/MobileSettings";
+import {
+  normalizeLanguage,
+  saveLanguage,
+  translate,
+} from "../../../shared/i18n/locale";
+import { useLanguage } from "../../../shared/i18n/useTranslation";
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
   ArrowDownCircle,
@@ -255,6 +261,7 @@ import {
   useProviderAccountIdentities,
 } from "../../providers/model/providerAccountIdentity";
 import { ProviderAccountSubtitle } from "../../providers/ui/ProviderAccountSubtitle";
+import { DeepSeekSettings } from "../../providers/ui/DeepSeekSettings";
 import {
   saveComposerAutocorrect,
   savePacedReveal,
@@ -507,6 +514,7 @@ export function SettingsView({
   collapsedProjectRailMode,
   onCollapsedProjectRailModeChange,
 }: Props) {
+  useLanguage();
   const lockOverscroll = useLockOverscroll<HTMLDivElement>();
   const [revealed, setRevealed] = useState<string | null>(anchor);
   const onCloseRef = useRef(onClose);
@@ -521,6 +529,7 @@ export function SettingsView({
   // Section is a dependency so a search result on another page scrolls once
   // that page has mounted the row.
   useEffect(() => {
+
     if (!revealed) return;
     // A project quick action lets the project card focus itself after discovery.
     if (!(revealed === "project-notifications" && notificationProjectPath)) {
@@ -564,12 +573,12 @@ export function SettingsView({
           inTitleBar ? "pr-3 pl-1" : "px-3"
         }`}
       >
-        <span className="shrink-0 text-content/45">Settings</span>
+        <span className="shrink-0 text-content/45">{translate("Settings")}</span>
         <span aria-hidden className="shrink-0 text-content/25">
           /
         </span>
         <span className="min-w-0 truncate text-content">
-          {settingsSectionLabel(section)}
+          {translate(settingsSectionLabel(section))}
         </span>
       </div>
       <div
@@ -585,7 +594,7 @@ export function SettingsView({
             className="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-[12px] text-content/50 hover:bg-content/10 hover:text-content"
           >
             <RotateCcw className="size-3.5" strokeWidth={1.75} />
-            Restore defaults
+            {translate("Restore defaults")}
           </button>
         ) : null}
         <SettingsSearch onReveal={onReveal} />
@@ -596,7 +605,7 @@ export function SettingsView({
   return (
     <div
       role="region"
-      aria-label="Settings"
+      aria-label={translate("Settings")}
       data-app-settings
       className="flex min-h-0 min-w-0 flex-1 flex-col text-content"
     >
@@ -625,8 +634,8 @@ export function SettingsView({
           cwd={cwd}
           header={
             <PageHeader
-              title={settingsSectionLabel(section)}
-              description={settingsSectionDescription(section)}
+              title={translate(settingsSectionLabel(section))}
+              description={translate(settingsSectionDescription(section))}
             />
           }
         />
@@ -638,8 +647,8 @@ export function SettingsView({
           >
             <div className="mx-auto w-full max-w-5xl px-5 py-6 pb-16 @min-[560px]/settings:px-8 @min-[560px]/settings:py-8">
               <PageHeader
-                title={settingsSectionLabel(section)}
-                description={settingsSectionDescription(section)}
+                title={translate(settingsSectionLabel(section))}
+                description={translate(settingsSectionDescription(section))}
               />
               {section === "general" ? (
                 <GeneralPage onOpenWhatsNew={onOpenWhatsNew} />
@@ -764,8 +773,8 @@ function SettingsSearch({
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="Search settings"
-          aria-label="Search settings"
+          placeholder={translate("Search settings")}
+          aria-label={translate("Search settings")}
           aria-expanded={open}
           aria-controls={listId}
           spellCheck={false}
@@ -775,7 +784,7 @@ function SettingsSearch({
         {query ? (
           <button
             type="button"
-            aria-label="Clear settings search"
+            aria-label={translate("Clear settings search")}
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => {
               setQuery("");
@@ -800,12 +809,12 @@ function SettingsSearch({
           }}
           id={listId}
           role="listbox"
-          aria-label="Settings search results"
+          aria-label={translate("Settings search results")}
           className="overflow-y-auto overscroll-contain p-1"
         >
           {results.length === 0 ? (
             <p className="px-2 py-1.5 text-[12px] text-content/45">
-              No matching settings
+              {translate("No matching settings")}
             </p>
           ) : (
             results.map((result, index) => (
@@ -823,9 +832,13 @@ function SettingsSearch({
                     : "text-content hover:bg-content/5"
                 }`}
               >
-                <span className="min-w-0 flex-1 truncate">{result.label}</span>
+                <span className="min-w-0 flex-1 truncate">
+                  {translate(result.label)}
+                </span>
                 <span className="shrink-0 text-[11px] text-content/40">
-                  {result.settingId ? result.sectionLabel : "Page"}
+                  {result.settingId
+                    ? translate(result.sectionLabel)
+                    : translate("Page")}
                 </span>
               </button>
             ))
@@ -841,6 +854,8 @@ function GeneralPage({
 }: {
   onOpenWhatsNew: (version: string) => void;
 }) {
+  useLanguage();
+
   const [soundsEnabled, setSoundsEnabled] = useState(loadSoundsEnabled);
   const [notificationsEnabled, setNotificationsEnabled] = useState(
     loadNotificationsEnabled,
@@ -925,36 +940,37 @@ function GeneralPage({
 
   return (
     <>
+      <LanguageSettings />
       <Group
-        title="Alerts"
-        description="How MonoCode reaches you while you are looking somewhere else."
+        title={translate("Alerts")}
+        description={translate("How MonoCode reaches you while you are looking somewhere else.")}
       >
         <Row
           id="sounds"
-          label="Sounds"
-          description="Short cues for project activity, finished turns, and available updates. Choose project notification categories in Inbox settings. Switches and Copy on a finished turn also play."
+          label={translate("Sounds")}
+          description={translate("Short cues for project activity, finished turns, and available updates. Choose project notification categories in Inbox settings. Switches and Copy on a finished turn also play.")}
         >
           <Toggle
-            label="Sounds"
+            label={translate("Sounds")}
             on={soundsEnabled}
             onChange={onSoundsEnabled}
           />
         </Row>
         <Row
           id="notifications"
-          label="Notifications"
-          description="Notify when a reminder is due, or when an agent finishes or needs input in another session or while MonoCode is in the background. Click the notification to open that session."
+          label={translate("Notifications")}
+          description={translate("Notify when a reminder is due, or when an agent finishes or needs input in another session or while MonoCode is in the background. Click the notification to open that session.")}
         >
           {notificationsEnabled && notificationPermission === "denied" ? (
             <NotificationsBlocked />
           ) : null}
           {notificationsEnabled && notificationPermission === "unsupported" ? (
             <span className="text-[12px] text-content/45">
-              Not available on this platform
+              {translate("Not available on this platform")}
             </span>
           ) : null}
           <Toggle
-            label="Notifications"
+            label={translate("Notifications")}
             on={notificationsEnabled}
             onChange={onNotificationsEnabled}
           />
@@ -962,47 +978,47 @@ function GeneralPage({
       </Group>
 
       <Group
-        title="Workspace"
-        description="How project navigation and workspace tabs behave."
+        title={translate("Workspace")}
+        description={translate("How project navigation and workspace tabs behave.")}
       >
         <Row
           id="file-tabs"
-          label="File tabs"
-          description="Open files beside the active chat, or give each file a normal tab in the top bar. Top-bar files can still be combined into split panes."
+          label={translate("File tabs")}
+          description={translate("Open files beside the active chat, or give each file a normal tab in the top bar. Top-bar files can still be combined into split panes.")}
         >
           <Segmented
-            label="File tabs"
+            label={translate("File tabs")}
             value={fileTabMode}
             options={[
-              { value: "pane", label: "Beside chat" },
-              { value: "workspace", label: "Top bar" },
+              { value: "pane", label: translate("Beside chat") },
+              { value: "workspace", label: translate("Top bar") },
             ]}
             onChange={onFileTabMode}
           />
         </Row>
         <Row
           id="tab-animations"
-          label="Tab animations"
-          description="Animate tabs as they open and close. Turn this off for instant tab changes."
+          label={translate("Tab animations")}
+          description={translate("Animate tabs as they open and close. Turn this off for instant tab changes.")}
         >
           <Toggle
-            label="Tab animations"
+            label={translate("Tab animations")}
             on={tabAnimationsEnabled}
             onChange={onTabAnimationsEnabled}
           />
         </Row>
         <Row
           id="notes"
-          label="Notes"
-          description="A global markdown notebook on the project rail. Save a finished turn from the transcript, then mention it later with @note or add it to chat."
+          label={translate("Notes")}
+          description={translate("A global markdown notebook on the project rail. Save a finished turn from the transcript, then mention it later with @note or add it to chat.")}
         >
-          <Toggle label="Notes" on={notesEnabled} onChange={onNotesEnabled} />
+          <Toggle label={translate("Notes")} on={notesEnabled} onChange={onNotesEnabled} />
         </Row>
         {IS_MAC && (
           <Row
             id="quick-composer"
-            label="Quick composer"
-            description={`Press ${quickComposerShortcutLabel(loadQuickComposerShortcut())} in any app to float a prompt over it and start a session without switching to MonoCode. Change the shortcut in Keybindings. Return starts it in the background; ⌘Return starts it and brings the session forward.`}
+            label={translate("Quick composer")}
+            description={translate("Press {shortcut} in any app to float a prompt over it and start a session without switching to MonoCode. Change the shortcut in Keybindings. Return starts it in the background; ⌘Return starts it and brings the session forward.", { shortcut: quickComposerShortcutLabel(loadQuickComposerShortcut()) })}
           >
             {quickComposerError ? (
               <span className="text-[12px] text-content/45">
@@ -1010,7 +1026,7 @@ function GeneralPage({
               </span>
             ) : null}
             <Toggle
-              label="Quick composer"
+              label={translate("Quick composer")}
               on={quickComposerEnabled}
               onChange={onQuickComposerEnabled}
             />
@@ -1018,11 +1034,11 @@ function GeneralPage({
         )}
         <Row
           id="working-agents"
-          label="Working agents"
-          description="When two or more chats are in flight, a card on the project rail lists them so you can jump across projects. Finished turns stay until you open that session."
+          label={translate("Working agents")}
+          description={translate("When two or more chats are in flight, a card on the project rail lists them so you can jump across projects. Finished turns stay until you open that session.")}
         >
           <Toggle
-            label="Working agents"
+            label={translate("Working agents")}
             on={liveAgentsEnabled}
             onChange={onLiveAgentsEnabled}
           />
@@ -1030,11 +1046,11 @@ function GeneralPage({
         {IS_WIN && (
           <Row
             id="close-to-tray"
-            label="Close to tray"
-            description="Closing a window hides it to the system tray instead of quitting, so running agents keep going. Reopen from the tray icon, and quit for real from its menu. Turn this off to have close end the window."
+            label={translate("Close to tray")}
+            description={translate("Closing a window hides it to the system tray instead of quitting, so running agents keep going. Reopen from the tray icon, and quit for real from its menu. Turn this off to have close end the window.")}
           >
             <Toggle
-              label="Close to tray"
+              label={translate("Close to tray")}
               on={closeToTray}
               onChange={onCloseToTray}
             />
@@ -1042,10 +1058,37 @@ function GeneralPage({
         )}
       </Group>
 
-      <Group title="About">
+      <Group title={translate("About")}>
         <UpdateRow onOpenWhatsNew={onOpenWhatsNew} />
       </Group>
     </>
+  );
+}
+
+
+function LanguageSettings() {
+  const language = useLanguage();
+  return (
+    <Group title={translate("Language")}>
+      <Row
+        id="language"
+        label={translate("Display language")}
+        description={translate(
+          "Choose the language used in MonoCode. Changes apply immediately.",
+        )}
+      >
+        <Select
+          label={translate("Display language")}
+          value={language}
+          options={[
+            { value: "system", label: translate("Follow system") },
+            { value: "en", label: "English" },
+            { value: "zh-CN", label: "简体中文" },
+          ]}
+          onChange={(value) => saveLanguage(normalizeLanguage(value))}
+        />
+      </Row>
+    </Group>
   );
 }
 
@@ -1120,42 +1163,42 @@ function ChatPage() {
   return (
     <>
       <Group
-        title="Transcript"
-        description="How a conversation reads as it grows."
+        title={translate("Transcript")}
+        description={translate("How a conversation reads as it grows.")}
       >
         <Row
           id="transcript-layout"
-          label="Transcript layout"
-          description="Full width keeps user prompts as a spanning card. Chat aligns them to the right with a max width, like a messaging app."
+          label={translate("Transcript layout")}
+          description={translate("Full width keeps user prompts as a spanning card. Chat aligns them to the right with a max width, like a messaging app.")}
         >
           <Segmented
-            label="Transcript layout"
+            label={translate("Transcript layout")}
             value={transcriptLayout}
             options={[
-              { value: "full", label: "Full width" },
-              { value: "chat", label: "Chat" },
+              { value: "full", label: translate("Full width") },
+              { value: "chat", label: translate("Chat") },
             ]}
             onChange={onTranscriptLayout}
           />
         </Row>
         <Row
           id="anchor-prompts"
-          label="Anchor prompts to top"
-          description="When you send, the new prompt sits at the top of the transcript and the reply grows into the space below. Turn this off to keep the classic layout, with the latest message resting on the composer."
+          label={translate("Anchor prompts to top")}
+          description={translate("When you send, the new prompt sits at the top of the transcript and the reply grows into the space below. Turn this off to keep the classic layout, with the latest message resting on the composer.")}
         >
           <Toggle
-            label="Anchor prompts to top"
+            label={translate("Anchor prompts to top")}
             on={transcriptAnchor}
             onChange={onTranscriptAnchor}
           />
         </Row>
         <Row
           id="paced-reveal"
-          label="Smooth text reveal"
-          description="Reveal incoming bursts gradually. Turn this off to show received text immediately. This changes presentation timing, not processing speed."
+          label={translate("Smooth text reveal")}
+          description={translate("Reveal incoming bursts gradually. Turn this off to show received text immediately. This changes presentation timing, not processing speed.")}
         >
           <Toggle
-            label="Smooth text reveal"
+            label={translate("Smooth text reveal")}
             on={pacedReveal}
             onChange={savePacedReveal}
           />
@@ -1163,46 +1206,46 @@ function ChatPage() {
       </Group>
 
       <Group
-        title="Composer"
-        description="What the composer does with what you type."
+        title={translate("Composer")}
+        description={translate("What the composer does with what you type.")}
       >
         <Row
           id="follow-up"
-          label="Follow-up behavior"
-          description="Queue follow-ups until the active turn finishes, or steer the active turn immediately."
+          label={translate("Follow-up behavior")}
+          description={translate("Queue follow-ups until the active turn finishes, or steer the active turn immediately.")}
         >
           <Segmented
-            label="Follow-up behavior"
+            label={translate("Follow-up behavior")}
             value={followUpBehavior}
             options={[
-              { value: "queue", label: "Queue" },
-              { value: "steer", label: "Steer" },
+              { value: "queue", label: translate("Queue") },
+              { value: "steer", label: translate("Steer") },
             ]}
             onChange={onFollowUpBehavior}
           />
         </Row>
         <Row
           id="model-controls"
-          label="Model controls"
-          description="Show model options beside the picker instead of inside the model menu."
+          label={translate("Model controls")}
+          description={translate("Show model options beside the picker instead of inside the model menu.")}
         >
           <Segmented
-            label="Model controls"
+            label={translate("Model controls")}
             value={modelControls}
             options={[
-              { value: "menu", label: "Menu" },
-              { value: "beside", label: "Beside" },
+              { value: "menu", label: translate("Menu") },
+              { value: "beside", label: translate("Beside") },
             ]}
             onChange={onModelControls}
           />
         </Row>
         <Row
           id="composer-autocorrect"
-          label="Autocorrect"
-          description="Spell check and autocorrect prompts in session and mono composers. Turn this off to keep the text exactly as typed."
+          label={translate("Autocorrect")}
+          description={translate("Spell check and autocorrect prompts in session and mono composers. Turn this off to keep the text exactly as typed.")}
         >
           <Toggle
-            label="Autocorrect"
+            label={translate("Autocorrect")}
             on={composerAutocorrect}
             onChange={saveComposerAutocorrect}
           />
@@ -1210,16 +1253,16 @@ function ChatPage() {
       </Group>
 
       <Group
-        title="Editor"
-        description="What happens when you save a file in the workspace editor."
+        title={translate("Editor")}
+        description={translate("What happens when you save a file in the workspace editor.")}
       >
         <Row
           id="format-on-save"
-          label="Format on save"
-          description="Run Prettier on supported files before writing. Off keeps the text you typed, including quote style."
+          label={translate("Format on save")}
+          description={translate("Run Prettier on supported files before writing. Off keeps the text you typed, including quote style.")}
         >
           <Toggle
-            label="Format on save"
+            label={translate("Format on save")}
             on={formatOnSave}
             onChange={onFormatOnSave}
           />
@@ -1227,20 +1270,20 @@ function ChatPage() {
       </Group>
 
       <Group
-        title="Code review"
-        description="Where a turn's changes open when you go to read them."
+        title={translate("Code review")}
+        description={translate("Where a turn's changes open when you go to read them.")}
       >
         <Row
           id="diff-view"
-          label="Diff view"
-          description="Editor keeps working-tree changes in the file. Unified stacks every changed file in one review, with sticky headers and collapsed unchanged lines."
+          label={translate("Diff view")}
+          description={translate("Editor keeps working-tree changes in the file. Unified stacks every changed file in one review, with sticky headers and collapsed unchanged lines.")}
         >
           <Segmented
-            label="Diff view"
+            label={translate("Diff view")}
             value={diffViewer}
             options={[
-              { value: "editor", label: "Editor" },
-              { value: "unified", label: "Unified" },
+              { value: "editor", label: translate("Editor") },
+              { value: "unified", label: translate("Unified") },
             ]}
             onChange={onDiffViewer}
           />
@@ -1248,27 +1291,27 @@ function ChatPage() {
       </Group>
 
       <Group
-        title="Extras"
-        description="Idle animation, and nothing else. Turn both off for a still workspace."
+        title={translate("Extras")}
+        description={translate("Idle animation, and nothing else. Turn both off for a still workspace.")}
       >
         <Row
           id="composer-mascot"
-          label="Composer mascot"
-          description="When a turn is running, the project mascot runs along the composer, bonks the scroll-to-latest button the first time, then jumps it, and sometimes grabs a coin."
+          label={translate("Composer mascot")}
+          description={translate("When a turn is running, the project mascot runs along the composer, bonks the scroll-to-latest button the first time, then jumps it, and sometimes grabs a coin.")}
         >
           <Toggle
-            label="Composer mascot"
+            label={translate("Composer mascot")}
             on={composerRunner}
             onChange={onComposerRunner}
           />
         </Row>
         <Row
           id="empty-session-games"
-          label="Empty session games"
-          description="Pac-man and snake idle on the empty-session grid. Hover the band to take control of whichever is on screen. Turn this off to keep the pane still."
+          label={translate("Empty session games")}
+          description={translate("Pac-man and snake idle on the empty-session grid. Hover the band to take control of whichever is on screen. Turn this off to keep the pane still.")}
         >
           <Toggle
-            label="Empty session games"
+            label={translate("Empty session games")}
             on={gridArcadeEnabled}
             onChange={onGridArcadeEnabled}
           />
@@ -1312,7 +1355,7 @@ function InboxPage({
             GitHub
           </span>
         }
-        description="Pull requests, reviews, and issues, read through the GitHub CLI."
+        description={translate("Pull requests, reviews, and issues, read through the GitHub CLI.")}
       >
         <GithubSettings />
       </Group>
@@ -1325,7 +1368,7 @@ function InboxPage({
             GitLab
           </span>
         }
-        description="Merge requests from GitLab.com or a self-managed instance."
+        description={translate("Merge requests from GitLab.com or a self-managed instance.")}
       >
         <GitlabSettings />
       </Group>
@@ -1341,7 +1384,7 @@ function InboxPage({
             ADO
           </span>
         }
-        description="Pull requests and Boards work items from your ADO organization."
+        description={translate("Pull requests and Boards work items from your ADO organization.")}
       >
         <AzureDevOpsSettings />
       </Group>
@@ -1354,7 +1397,7 @@ function InboxPage({
             Jira
           </span>
         }
-        description="Jira Cloud issues from the projects you pick."
+        description={translate("Jira Cloud issues from the projects you pick.")}
       >
         <JiraSettings />
       </Group>
@@ -1367,7 +1410,7 @@ function InboxPage({
             Linear
           </span>
         }
-        description="Issues assigned to you, from the teams you pick."
+        description={translate("Issues assigned to you, from the teams you pick.")}
       >
         <LinearSettings />
       </Group>
@@ -1419,7 +1462,7 @@ function GithubSettings() {
 
   return (
     <>
-      <Row label="Connection" description={description}>
+      <Row label={translate("Connection")} description={description}>
         <span className="text-[12px] text-content/50">{label}</span>
         {!checking && !status?.installed ? (
           <SecondaryButton
@@ -1504,8 +1547,8 @@ function GitlabSettings() {
   return (
     <>
       <Row
-        label="Connection"
-        description="Connect GitLab.com or a self-managed GitLab instance. Use a personal access token with API access; the token is stored locally and Disconnect deletes it."
+        label={translate("Connection")}
+        description={translate("Connect GitLab.com or a self-managed GitLab instance. Use a personal access token with API access; the token is stored locally and Disconnect deletes it.")}
       >
         {connected ? (
           <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
@@ -1516,7 +1559,7 @@ function GitlabSettings() {
               onClick={() => void onDisconnect()}
               disabled={busy}
             >
-              Disconnect
+              {translate("Disconnect")}
             </SecondaryButton>
           </div>
         ) : (
@@ -1527,7 +1570,7 @@ function GitlabSettings() {
                 value={url}
                 onChange={(event) => setUrl(event.target.value)}
                 placeholder="https://gitlab.com"
-                aria-label="GitLab URL"
+                aria-label={translate("GitLab URL")}
                 autoComplete="url"
                 spellCheck={false}
                 className="min-w-0 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content/35"
@@ -1541,8 +1584,8 @@ function GitlabSettings() {
                 onKeyDown={(event) => {
                   if (event.key === "Enter") void onSave();
                 }}
-                placeholder="glpat-…"
-                aria-label="GitLab access token"
+                placeholder={translate("glpat-…")}
+                aria-label={translate("GitLab access token")}
                 autoComplete="off"
                 spellCheck={false}
                 className="min-w-0 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content/35"
@@ -1552,7 +1595,7 @@ function GitlabSettings() {
               onClick={() => void onSave()}
               disabled={busy || !token.trim()}
             >
-              {busy ? "Saving" : "Connect"}
+              {busy ? translate("Saving") : translate("Connect")}
             </SecondaryButton>
           </div>
         )}
@@ -1627,8 +1670,8 @@ function AzureDevOpsSettings() {
   return (
     <>
       <Row
-        label="Connection"
-        description="Connect your ADO organization with a personal access token (Boards + Repos read & write for comments). The token is stored locally and Disconnect deletes it."
+        label={translate("Connection")}
+        description={translate("Connect your ADO organization with a personal access token (Boards + Repos read & write for comments). The token is stored locally and Disconnect deletes it.")}
       >
         {connected ? (
           <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
@@ -1639,7 +1682,7 @@ function AzureDevOpsSettings() {
               onClick={() => void onDisconnect()}
               disabled={busy}
             >
-              Disconnect
+              {translate("Disconnect")}
             </SecondaryButton>
           </div>
         ) : (
@@ -1650,7 +1693,7 @@ function AzureDevOpsSettings() {
                 value={url}
                 onChange={(event) => setUrl(event.target.value)}
                 placeholder="https://dev.azure.com/myorg"
-                aria-label="Azure DevOps organization URL"
+                aria-label={translate("Azure DevOps organization URL")}
                 autoComplete="url"
                 spellCheck={false}
                 className="min-w-0 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content/35"
@@ -1664,8 +1707,8 @@ function AzureDevOpsSettings() {
                 onKeyDown={(event) => {
                   if (event.key === "Enter") void onSave();
                 }}
-                placeholder="PAT…"
-                aria-label="Azure DevOps personal access token"
+                placeholder={translate("PAT…")}
+                aria-label={translate("Azure DevOps personal access token")}
                 autoComplete="off"
                 spellCheck={false}
                 className="min-w-0 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content/35"
@@ -1675,7 +1718,7 @@ function AzureDevOpsSettings() {
               onClick={() => void onSave()}
               disabled={busy || !token.trim()}
             >
-              {busy ? "Saving" : "Connect"}
+              {busy ? translate("Saving") : translate("Connect")}
             </SecondaryButton>
           </div>
         )}
@@ -1778,12 +1821,12 @@ function LinearSettings() {
   return (
     <>
       <Row
-        label="API key"
-        description="Create a personal API key in Linear → Settings → Security & Access. Disconnect deletes it."
+        label={translate("API key")}
+        description={translate("Create a personal API key in Linear → Settings → Security & Access. Disconnect deletes it.")}
       >
         {connected ? (
           <SecondaryButton onClick={() => void onDisconnect()} disabled={busy}>
-            Disconnect
+            {translate("Disconnect")}
           </SecondaryButton>
         ) : (
           <div className="flex max-w-full flex-wrap items-center gap-2">
@@ -1795,8 +1838,8 @@ function LinearSettings() {
                 onKeyDown={(event) => {
                   if (event.key === "Enter") void onSave();
                 }}
-                placeholder="lin_api_…"
-                aria-label="Linear API key"
+                placeholder={translate("lin_api_…")}
+                aria-label={translate("Linear API key")}
                 autoComplete="off"
                 spellCheck={false}
                 className="min-w-0 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content/35"
@@ -1806,7 +1849,7 @@ function LinearSettings() {
               onClick={() => void onSave()}
               disabled={busy || !token.trim()}
             >
-              {busy ? "Saving" : "Connect"}
+              {busy ? translate("Saving") : translate("Connect")}
             </SecondaryButton>
           </div>
         )}
@@ -1818,9 +1861,9 @@ function LinearSettings() {
       ) : null}
       {connected && teams.length > 0 ? (
         <div className="border-b border-content/5 px-4 py-3.5 last:border-b-0">
-          <div className="text-[13px] font-medium text-content">Teams</div>
+          <div className="text-[13px] font-medium text-content">{translate("Teams")}</div>
           <p className="mt-1 text-[12px] leading-relaxed text-content/45">
-            Unchecked teams stay out of the inbox.
+            {translate("Unchecked teams stay out of the inbox.")}
           </p>
           <div className="-mx-2 mt-2 flex flex-col gap-0.5">
             {teams.map((team) => {
@@ -1893,25 +1936,27 @@ function UpdateRow({
 
   const status =
     snapshot.phase === "available"
-      ? `Version ${snapshot.availableVersion} is available.`
+      ? translate("Version {version} is available.", {
+          version: snapshot.availableVersion ?? "",
+        })
       : snapshot.phase === "downloading"
-        ? `Downloading${snapshot.progress != null ? ` ${snapshot.progress}%` : "…"}`
+        ? `${translate("Downloading")}${snapshot.progress != null ? ` ${snapshot.progress}%` : "…"}`
         : snapshot.phase === "checking"
-          ? "Checking for updates…"
+          ? translate("Checking for updates…")
           : snapshot.phase === "current"
-            ? "You're on the latest version."
+            ? translate("You're on the latest version.")
             : snapshot.phase === "error"
-              ? (snapshot.error ?? "Update check failed.")
+              ? (snapshot.error ?? translate("Update check failed."))
               : snapshot.packageManaged
                 ? packageManagerHint(snapshot.packageManaged)
-                : "MonoCode updates itself from the release feed.";
+                : translate("MonoCode updates itself from the release feed.");
 
   return (
     <Row
       id="update"
       label={
         <span className="flex items-baseline gap-2">
-          Version
+          {translate("Version")}
           <span className="font-mono text-[12px] text-content/45">
             {snapshot.currentVersion}
           </span>
@@ -1924,7 +1969,7 @@ function UpdateRow({
           onClick={() => onOpenWhatsNew(snapshot.currentVersion)}
           disabled={snapshot.currentVersion === "…"}
         >
-          What's new
+          {translate("What's new")}
         </SecondaryButton>
         <SecondaryButton onClick={() => void onClick()} disabled={busy}>
           {busy ? (
@@ -1934,7 +1979,7 @@ function UpdateRow({
           ) : (
             <RefreshCw className="size-3.5" strokeWidth={1.75} aria-hidden />
           )}
-          {hasUpdate ? "Download" : "Check for updates"}
+          {hasUpdate ? translate("Download") : translate("Check for updates")}
         </SecondaryButton>
       </div>
     </Row>
@@ -2240,6 +2285,7 @@ function useAppearanceSettings(
 }
 
 function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
+  useLanguage();
   const percent = Math.round(appearance.opacity * 100);
   const glassDisabled = useColorScheme() === "light";
   // The inset workspace takes its colours from the workspace theme and has a
@@ -2250,25 +2296,25 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
   return (
     <>
       <Group
-        title="Theme"
+        title={translate("Theme")}
         description={
           inset
-            ? "Each workspace theme has its own dark and light palette."
-            : "Dark and light share the same tint, so the color settings below apply to both."
+            ? translate("Each workspace theme has its own dark and light palette.")
+            : translate("Dark and light share the same tint, so the color settings below apply to both.")
         }
       >
         <Row
           id="theme"
-          label="Theme"
-          description="System follows the OS appearance."
+          label={translate("Theme")}
+          description={translate("System follows the OS appearance.")}
         >
           <Segmented
-            label="Theme"
+            label={translate("Theme")}
             value={appearance.themePreference}
             options={[
-              { value: "system", label: "System" },
-              { value: "dark", label: "Dark" },
-              { value: "light", label: "Light" },
+              { value: "system", label: translate("System") },
+              { value: "dark", label: translate("Dark") },
+              { value: "light", label: translate("Light") },
             ]}
             onChange={appearance.onThemePreference}
           />
@@ -2276,12 +2322,12 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
         {inset ? (
           <Row
             id="workspace-theme"
-            label="Workspace theme"
-            description="Colors for the inset workspace's shell, card, text and accent. Each theme has a dark and a light palette."
+            label={translate("Workspace theme")}
+            description={translate("Colors for the inset workspace's shell, card, text and accent. Each theme has a dark and a light palette.")}
           >
             <div className="w-48">
               <Select
-                label="Workspace theme"
+                label={translate("Workspace theme")}
                 value={appearance.workspaceTheme}
                 options={WORKSPACE_THEMES.map((theme) => ({
                   value: theme.id,
@@ -2303,17 +2349,17 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
         {inset ? (
           <Row
             id="inset-glass"
-            label="Transparent window"
+            label={translate("Transparent window")}
             description={
               IS_LINUX
-                ? "The window stays opaque on Linux."
+                ? translate("The window stays opaque on Linux.")
                 : glassDisabled
-                  ? "Light mode keeps the window opaque. Your dark-mode choice is remembered."
-                  : "Show the desktop through the window. Turn off to keep the window opaque."
+                  ? translate("Light mode keeps the window opaque. Your dark-mode choice is remembered.")
+                  : translate("Show the desktop through the window. Turn off to keep the window opaque.")
             }
           >
             <Toggle
-              label="Transparent window"
+              label={translate("Transparent window")}
               on={appearance.insetGlass}
               onChange={appearance.onInsetGlass}
               disabled={glassDisabled || IS_LINUX}
@@ -2322,8 +2368,8 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
         ) : null}
         <Row
           id="accent-color"
-          label="Accent color"
-          description="Used for the composer send button and your message bubbles."
+          label={translate("Accent color")}
+          description={translate("Used for the composer send button and your message bubbles.")}
         >
           <AccentColorPicker
             value={appearance.accentColor}
@@ -2332,16 +2378,16 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
         </Row>
         <Row
           id="diff-colors"
-          label="Diff colors"
-          description="Colors for added and removed lines. Colorblind and High contrast use blue and orange instead of green and red; High contrast adds stronger tints and text."
+          label={translate("Diff colors")}
+          description={translate("Colors for added and removed lines. Colorblind and High contrast use blue and orange instead of green and red; High contrast adds stronger tints and text.")}
         >
           <Segmented
-            label="Diff colors"
+            label={translate("Diff colors")}
             value={appearance.diffPalette}
             options={[
-              { value: "default", label: "Default" },
-              { value: "colorblind", label: "Colorblind" },
-              { value: "high-contrast", label: "High contrast" },
+              { value: "default", label: translate("Default") },
+              { value: "colorblind", label: translate("Colorblind") },
+              { value: "high-contrast", label: translate("High contrast") },
             ]}
             onChange={appearance.onDiffPalette}
           />
@@ -2351,16 +2397,16 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
       {inset ? null : (
         <>
           <Group
-            title="Color"
-            description="Hue and saturation tint every surface. Lightness only moves the dark theme."
+            title={translate("Color")}
+            description={translate("Hue and saturation tint every surface. Lightness only moves the dark theme.")}
           >
             <Row
               id="hue"
-              label="Hue"
-              description="Base hue for accents and tinted surfaces."
+              label={translate("Hue")}
+              description={translate("Base hue for accents and tinted surfaces.")}
             >
               <Slider
-                label="Hue"
+                label={translate("Hue")}
                 value={appearance.themeHue}
                 display={`${appearance.themeHue}°`}
                 min={THEME_HUE_MIN}
@@ -2372,11 +2418,11 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
             </Row>
             <Row
               id="saturation"
-              label="Saturation"
-              description="How strongly the hue tints the interface. Zero keeps it neutral."
+              label={translate("Saturation")}
+              description={translate("How strongly the hue tints the interface. Zero keeps it neutral.")}
             >
               <Slider
-                label="Saturation"
+                label={translate("Saturation")}
                 value={appearance.themeSaturation}
                 display={`${appearance.themeSaturation}%`}
                 min={THEME_SATURATION_MIN}
@@ -2388,15 +2434,15 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
             </Row>
             <Row
               id="dark-lightness"
-              label="Dark-mode lightness"
+              label={translate("Dark-mode lightness")}
               description={
                 glassDisabled
-                  ? "This only affects dark mode. Your dark-mode value is preserved."
-                  : "Base brightness of the dark theme. Lower values are darker; zero is true black."
+                  ? translate("This only affects dark mode. Your dark-mode value is preserved.")
+                  : translate("Base brightness of the dark theme. Lower values are darker; zero is true black.")
               }
             >
               <Slider
-                label="Dark-mode lightness"
+                label={translate("Dark-mode lightness")}
                 value={appearance.themeDarkLightness}
                 display={`${appearance.themeDarkLightness}%`}
                 min={THEME_DARK_LIGHTNESS_MIN}
@@ -2408,20 +2454,20 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
           </Group>
 
           <Group
-            title="Translucency"
+            title={translate("Translucency")}
             description={
               glassDisabled
-                ? "Light mode always uses an opaque window, so these are off. Your dark-mode values are preserved."
-                : "How much of the desktop shows through MonoCode. Blur costs more to composite the higher it goes."
+                ? translate("Light mode always uses an opaque window, so these are off. Your dark-mode values are preserved.")
+                : translate("How much of the desktop shows through MonoCode. Blur costs more to composite the higher it goes.")
             }
           >
             <Row
               id="sidebar-opacity"
-              label="Sidebar opacity"
-              description="Applies to the project rail and the other glass panes."
+              label={translate("Sidebar opacity")}
+              description={translate("Applies to the project rail and the other glass panes.")}
             >
               <Slider
-                label="Sidebar opacity"
+                label={translate("Sidebar opacity")}
                 value={percent}
                 display={`${percent}%`}
                 min={Math.round(SIDEBAR_OPACITY_MIN * 100)}
@@ -2432,11 +2478,11 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
             </Row>
             <Row
               id="blur"
-              label="Blur radius"
-              description="Background blur behind the window."
+              label={translate("Blur radius")}
+              description={translate("Background blur behind the window.")}
             >
               <Slider
-                label="Blur radius"
+                label={translate("Blur radius")}
                 value={appearance.blur}
                 display={String(appearance.blur)}
                 min={SIDEBAR_BLUR_MIN}
@@ -2447,11 +2493,11 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
             </Row>
             <Row
               id="main-pane-glass"
-              label="Main pane glass"
-              description="Extend the translucent treatment to the main pane behind sessions and editors."
+              label={translate("Main pane glass")}
+              description={translate("Extend the translucent treatment to the main pane behind sessions and editors.")}
             >
               <Toggle
-                label="Main pane glass"
+                label={translate("Main pane glass")}
                 on={appearance.bodyGlass}
                 onChange={appearance.onBodyGlass}
                 disabled={glassDisabled}
@@ -2463,44 +2509,44 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
 
       <ChatBackgroundCard appearance={appearance} />
 
-      <Group title="Layout">
+      <Group title={translate("Layout")}>
         <Row
           id="inset-layout"
-          label="Layout"
-          description="Classic keeps everything in one sidebar. Focused adds a project switcher, workspace tabs and a right panel."
+          label={translate("Layout")}
+          description={translate("Classic keeps everything in one sidebar. Focused adds a project switcher, workspace tabs and a right panel.")}
         >
           <Segmented
-            label="Layout"
+            label={translate("Layout")}
             value={appearance.insetLayout ? "focused" : "classic"}
             options={[
-              { value: "classic", label: "Classic" },
-              { value: "focused", label: "Focused" },
+              { value: "classic", label: translate("Classic") },
+              { value: "focused", label: translate("Focused") },
             ]}
             onChange={(value) => appearance.onInsetLayout(value === "focused")}
           />
         </Row>
         <Row
           id="collapsed-project-rail"
-          label="Collapsed project rail"
-          description="Keep project navigation available as a compact icon rail, or hide the rail completely."
+          label={translate("Collapsed project rail")}
+          description={translate("Keep project navigation available as a compact icon rail, or hide the rail completely.")}
         >
           <Segmented
-            label="Collapsed project rail"
+            label={translate("Collapsed project rail")}
             value={appearance.collapsedProjectRailMode}
             options={[
-              { value: "compact", label: "Icon rail" },
-              { value: "hidden", label: "Hidden" },
+              { value: "compact", label: translate("Icon rail") },
+              { value: "hidden", label: translate("Hidden") },
             ]}
             onChange={appearance.onCollapsedProjectRailMode}
           />
         </Row>
         <Row
           id="interface-scale"
-          label="Interface scale"
-          description="Zoom the whole interface. You can also use Ctrl+=, Ctrl+-, and Ctrl+0 (Cmd on macOS)."
+          label={translate("Interface scale")}
+          description={translate("Zoom the whole interface. You can also use Ctrl+=, Ctrl+-, and Ctrl+0 (Cmd on macOS).")}
         >
           <Select
-            label="Interface scale"
+            label={translate("Interface scale")}
             value={String(Math.round(appearance.uiScale * 100))}
             options={UI_SCALE_PERCENTS.map((percent) => ({
               value: String(percent),
@@ -2511,11 +2557,11 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
         </Row>
         <Row
           id="show-excluded-files"
-          label="Show excluded files"
-          description="Show files and folders Git excludes, such as build output and dependencies, in the explorer."
+          label={translate("Show excluded files")}
+          description={translate("Show files and folders Git excludes, such as build output and dependencies, in the explorer.")}
         >
           <Toggle
-            label="Show excluded files"
+            label={translate("Show excluded files")}
             on={appearance.showExcludedFiles}
             onChange={appearance.onShowExcludedFiles}
           />
@@ -2543,8 +2589,8 @@ function ChatBackgroundCard({
   return (
     <Group
       id="chat-background"
-      title="Chat background"
-      description="An image behind your chat panes. It stays on this device."
+      title={translate("Chat background")}
+      description={translate("An image behind your chat panes. It stays on this device.")}
     >
       <div className="border-b border-content/5 p-4 last:border-b-0">
         <div className="overflow-hidden rounded-lg border border-content/10">
@@ -2568,7 +2614,9 @@ function ChatBackgroundCard({
                 />
               )}
               <span className="pointer-events-none absolute bottom-2 left-2 text-[11px] text-content/40">
-                Empty chat preview at {emptyVisibility}%
+                {translate("Empty chat preview at {percent}%", {
+                  percent: emptyVisibility,
+                })}
               </span>
             </div>
           ) : (
@@ -2583,7 +2631,7 @@ function ChatBackgroundCard({
               ) : (
                 <ImagePlus className="size-5" aria-hidden />
               )}
-              <span className="text-[12px]">Choose an image</span>
+              <span className="text-[12px]">{translate("Choose an image")}</span>
             </button>
           )}
         </div>
@@ -2616,44 +2664,46 @@ function ChatBackgroundCard({
       {hasImage ? (
         <>
           <Row
-            label="Background effect"
+            label={translate("Background effect")}
             description={
-              NEW_THREAD_BACKGROUND_EFFECT_DESCRIPTIONS[
-                appearance.newThreadBackgroundEffect
-              ]
+              translate(
+                NEW_THREAD_BACKGROUND_EFFECT_DESCRIPTIONS[
+                  appearance.newThreadBackgroundEffect
+                ],
+              )
             }
           >
             <Segmented
-              label="Background effect"
+              label={translate("Background effect")}
               value={appearance.newThreadBackgroundEffect}
               options={NEW_THREAD_BACKGROUND_EFFECTS.map((effect) => ({
                 value: effect,
-                label: NEW_THREAD_BACKGROUND_EFFECT_LABELS[effect],
+                label: translate(NEW_THREAD_BACKGROUND_EFFECT_LABELS[effect]),
               }))}
               onChange={appearance.onNewThreadBackgroundEffect}
               optionIdPrefix="new-thread-background-effect"
             />
           </Row>
           <Row
-            label="Show on"
-            description="Empty sessions only, or every conversation."
+            label={translate("Show on")}
+            description={translate("Empty sessions only, or every conversation.")}
           >
             <Segmented
-              label="Show background on"
+              label={translate("Show background on")}
               value={appearance.chatBackgroundScope}
               options={[
-                { value: "empty", label: "Empty only" },
-                { value: "all", label: "All sessions" },
+                { value: "empty", label: translate("Empty only") },
+                { value: "all", label: translate("All sessions") },
               ]}
               onChange={appearance.onChatBackgroundScope}
             />
           </Row>
           <Row
-            label="Empty chat visibility"
-            description="Background strength before a chat has messages."
+            label={translate("Empty chat visibility")}
+            description={translate("Background strength before a chat has messages.")}
           >
             <Slider
-              label="Empty chat background visibility"
+              label={translate("Empty chat background visibility")}
               value={emptyVisibility}
               display={`${emptyVisibility}%`}
               min={Math.round(CHAT_BACKGROUND_OPACITY_MIN * 100)}
@@ -2662,11 +2712,11 @@ function ChatBackgroundCard({
             />
           </Row>
           <Row
-            label="Session visibility"
-            description="Background strength once the conversation has messages."
+            label={translate("Session visibility")}
+            description={translate("Background strength once the conversation has messages.")}
           >
             <Slider
-              label="Session background visibility"
+              label={translate("Session background visibility")}
               value={sessionVisibility}
               display={`${sessionVisibility}%`}
               min={Math.round(CHAT_BACKGROUND_OPACITY_MIN * 100)}
@@ -2951,8 +3001,8 @@ function KeybindingsPage() {
 
   return (
     <Group
-      title="Shortcuts"
-      description="Click a shortcut to record new keys. Press Delete while recording to disable it."
+      title={translate("Shortcuts")}
+      description={translate("Click a shortcut to record new keys. Press Delete while recording to disable it.")}
       action={
         <div className="flex items-center gap-3">
           <span className="shrink-0 text-[12px] text-content/40 tabular-nums">
@@ -2963,8 +3013,8 @@ function KeybindingsPage() {
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Filter"
-              aria-label="Filter keybindings"
+              placeholder={translate("Filter")}
+              aria-label={translate("Filter keybindings")}
               spellCheck={false}
               autoComplete="off"
               className="min-w-0 flex-1 bg-transparent text-[12px] text-content outline-none placeholder:text-content/35"
@@ -2974,9 +3024,9 @@ function KeybindingsPage() {
       }
     >
       <div className="flex items-center border-b border-stroke bg-content/5 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-content/40">
-        <span className="min-w-0 flex-1">Command</span>
-        <span className="w-40 shrink-0">Keybinding</span>
-        <span className="w-28 shrink-0">When</span>
+        <span className="min-w-0 flex-1">{translate("Command")}</span>
+        <span className="w-40 shrink-0">{translate("Keybinding")}</span>
+        <span className="w-28 shrink-0">{translate("When")}</span>
       </div>
       {rows.length === 0 ? (
         <p className="px-4 py-3 text-[12px] text-content/45">
@@ -3209,20 +3259,20 @@ function ProviderBinaryControl({
         >
           <div className="flex items-center justify-between gap-3">
             <span className="text-[12px] font-medium text-content">
-              {title} CLI
+              {translate("{title} CLI", { title })}
             </span>
             <div className="flex items-center gap-1.5">
               <span className="rounded-full bg-content/10 px-1.5 py-0.5 text-[10px] text-content/50">
-                Global path
+                {translate("Global path")}
               </span>
               <span className="rounded-full bg-content/10 px-1.5 py-0.5 text-[10px] text-content/50">
                 {error
-                  ? "Needs attention"
+                  ? translate("Needs attention")
                   : restartRequired
-                    ? "Restart required"
+                    ? translate("Restart required")
                     : overridden
-                      ? "Configured"
-                      : "Auto-detected"}
+                      ? translate("Configured")
+                      : translate("Auto-detected")}
               </span>
             </div>
           </div>
@@ -3369,6 +3419,7 @@ function ProvidersPage({
   cwd?: string;
   recents?: RecentProject[];
 }) {
+  useLanguage();
   useSyncExternalStore(subscribeModels, getModelSnapshot, getModelSnapshot);
   useSyncExternalStore(
     subscribeHarnessAvailability,
@@ -3395,7 +3446,7 @@ function ProvidersPage({
     const options: { value: string; label: string; icon?: ReactNode }[] = [
       {
         value: GLOBAL_PROVIDER_SCOPE,
-        label: "Global",
+        label: translate("Global"),
         icon: (
           <Globe
             className="size-3.5 shrink-0 text-content/60"
@@ -3497,10 +3548,10 @@ function ProvidersPage({
 
       <Group
         id="agent-clis"
-        title="Agent CLIs"
+        title={translate("Agent CLIs")}
         action={
           <Select
-            label="Provider defaults scope"
+            label={translate("Provider defaults scope")}
             value={scope}
             options={scopeOptions}
             onChange={setScope}
@@ -3508,8 +3559,11 @@ function ProvidersPage({
         }
         description={
           project
-            ? `These defaults apply to ${projectName(project)} only. A provider with Show in picker off is also kept out of new conversations started in this project. CLI paths remain global for MonoCode.`
-            : "A provider is listed as installed once its CLI is found on your PATH. Uninstalled CLIs stay listed but are left out of the model picker, as are installed ones with Show in picker off. The model beside a provider is what its new conversations start with; Use by default picks the provider itself. CLI paths are global for MonoCode and apply to every project."
+            ? translate(
+                "These defaults apply to {project} only. A provider with Show in picker off is also kept out of new conversations started in this project. CLI paths remain global for MonoCode.",
+                { project: projectName(project) },
+              )
+            : translate("A provider is listed as installed once its CLI is found on your PATH. Uninstalled CLIs stay listed but are left out of the model picker, as are installed ones with Show in picker off. The model beside a provider is what its new conversations start with; Use by default picks the provider itself. CLI paths are global for MonoCode and apply to every project.")
         }
       >
         {HARNESSES.map((harness) => {
@@ -3553,29 +3607,29 @@ function ProvidersPage({
         })}
       </Group>
 
-      <Group title="Advanced">
+      <Group title={translate("Advanced")}>
         <Row
           id="idle-agents"
-          label="Keep idle agents ready"
-          description="A finished conversation keeps its agent CLI running for a few minutes, so a follow-up starts instantly. Each one can hold a few hundred MB of memory. Past this many, the one idle longest stops early; it resumes on your next message after a short restart. Choose None on a machine short on memory."
+          label={translate("Keep idle agents ready")}
+          description={translate("A finished conversation keeps its agent CLI running for a few minutes, so a follow-up starts instantly. Each one can hold a few hundred MB of memory. Past this many, the one idle longest stops early; it resumes on your next message after a short restart. Choose None on a machine short on memory.")}
         >
           <Segmented
-            label="Keep idle agents ready"
+            label={translate("Keep idle agents ready")}
             value={String(idleAgentLimit)}
             options={IDLE_AGENT_LIMITS.map((limit) => ({
               value: String(limit),
-              label: limit === 0 ? "None" : String(limit),
+              label: limit === 0 ? translate("None") : String(limit),
             }))}
             onChange={onIdleAgentLimit}
           />
         </Row>
         <Row
           id="claude-hooks"
-          label="Claude Code hooks"
-          description="Run the hooks configured in your settings.json files — PreToolUse command rewrites, blocks, notifications, and the rest — just as the Claude Code CLI would. Turn this off if a hook is misbehaving and you need the session back. Takes effect on the next turn."
+          label={translate("Claude Code hooks")}
+          description={translate("Run the hooks configured in your settings.json files — PreToolUse command rewrites, blocks, notifications, and the rest — just as the Claude Code CLI would. Turn this off if a hook is misbehaving and you need the session back. Takes effect on the next turn.")}
         >
           <Toggle
-            label="Claude Code hooks"
+            label={translate("Claude Code hooks")}
             on={claudeHooks}
             onChange={onClaudeHooks}
           />
@@ -3586,28 +3640,29 @@ function ProvidersPage({
 }
 
 function UsageDisplaySettings() {
+  useLanguage();
   const showRemainingUsage = useShowRemainingUsage();
   const maskEmails = useMaskEmails();
   return (
-    <Group title="Usage and privacy">
+    <Group title={translate("Usage and privacy")}>
       <Row
         id="show-remaining-usage"
-        label="Show remaining usage"
-        description="Fill usage meters with what is left in each limit instead of what has been used."
+        label={translate("Show remaining usage")}
+        description={translate("Fill usage meters with what is left in each limit instead of what has been used.")}
       >
         <Toggle
-          label="Show remaining usage"
+          label={translate("Show remaining usage")}
           on={showRemainingUsage}
           onChange={saveShowRemainingUsage}
         />
       </Row>
       <Row
         id="mask-emails"
-        label="Mask account emails"
-        description="Blur account emails in Settings and the usage popover until you click one, so they stay out of screenshots."
+        label={translate("Mask account emails")}
+        description={translate("Blur account emails in Settings and the usage popover until you click one, so they stay out of screenshots.")}
       >
         <Toggle
-          label="Mask account emails"
+          label={translate("Mask account emails")}
           on={maskEmails}
           onChange={saveMaskEmails}
         />
@@ -3623,6 +3678,7 @@ type AccountEditor = {
 };
 
 function ProviderAccountsSettings() {
+  useLanguage();
   const [version, setVersion] = useState(0);
   const [editor, setEditor] = useState<AccountEditor | null>(null);
   const [working, setWorking] = useState<string | null>(null);
@@ -3668,7 +3724,7 @@ function ProviderAccountsSettings() {
       setError(
         caught instanceof Error
           ? caught.message
-          : "Could not save this account",
+          : translate("Could not save this account"),
       );
     } finally {
       setWorking(null);
@@ -3704,7 +3760,7 @@ function ProviderAccountsSettings() {
       setError(
         caught instanceof Error
           ? caught.message
-          : "Could not remove this account",
+          : translate("Could not remove this account"),
       );
     } finally {
       setWorking(null);
@@ -3720,10 +3776,11 @@ function ProviderAccountsSettings() {
   return (
     <Group
       id="provider-accounts"
-      title="Accounts"
-      description="Create isolated sign-ins for providers that support account profiles. Account switching stays available from the usage control in the footer."
+      title={translate("Accounts")}
+      description={translate("Sign in to Claude, Codex, Devin, and DeepSeek. DeepSeek uses MonoCode’s official OAuth, not the dsh CLI. Account switching stays available from the usage control in the footer.")}
       action={<AccountUsageRefresh usage={usage} />}
     >
+      <DeepSeekSettings Group={Group} Row={Row} embedded />
       {PROVIDER_ACCOUNT_PROVIDERS.map((provider) => {
         const accounts = providerAccounts(provider);
         const adding = editor?.provider === provider && !editor.accountId;
@@ -3742,8 +3799,12 @@ function ProviderAccountsSettings() {
                     {HARNESS_TITLE[provider]}
                   </div>
                   <div className="mt-0.5 text-[11px] text-content/40">
-                    {accounts.length}{" "}
-                    {accounts.length === 1 ? "account" : "accounts"}
+                    {translate(
+                      accounts.length === 1
+                        ? "{count} account"
+                        : "{count} accounts",
+                      { count: accounts.length },
+                    )}
                   </div>
                 </div>
               </div>
@@ -3755,7 +3816,7 @@ function ProviderAccountsSettings() {
                   className="flex shrink-0 items-center gap-1.5 rounded-md border border-content/10 px-2.5 py-1 text-[12px] text-content/70 transition-transform duration-150 hover:bg-content/10 hover:text-content active:scale-[0.97] disabled:cursor-default disabled:opacity-40"
                 >
                   <Plus className="size-3.5" strokeWidth={1.75} aria-hidden />
-                  Add account
+                  {translate("Add account")}
                 </button>
               ) : null}
             </div>
@@ -3806,8 +3867,8 @@ function ProviderAccountsSettings() {
                           identity={identity}
                           fallback={
                             account.isDefault
-                              ? "Provider CLI profile"
-                              : "Isolated profile"
+                              ? translate("Provider CLI profile")
+                              : translate("Isolated profile")
                           }
                           className="truncate text-content/30"
                         />
@@ -3817,14 +3878,16 @@ function ProviderAccountsSettings() {
                     <div className="flex w-24 shrink-0 items-center justify-end gap-1">
                       {account.isDefault ? (
                         <span className="mr-1 text-[10px] font-medium uppercase tracking-wide text-content/30">
-                          Default
+                          {translate("Default")}
                         </span>
                       ) : null}
                       <button
                         type="button"
                         disabled={Boolean(working)}
-                        aria-label={`Rename ${account.label}`}
-                        title="Rename account"
+                        aria-label={translate("Rename {name}", {
+                          name: account.label,
+                        })}
+                        title={translate("Rename account")}
                         onClick={() => startRename(account)}
                         className="grid size-7 place-items-center rounded-md text-content/40 transition-transform duration-150 hover:bg-content/10 hover:text-content active:scale-[0.96] disabled:opacity-35"
                       >
@@ -3834,8 +3897,10 @@ function ProviderAccountsSettings() {
                         <button
                           type="button"
                           disabled={Boolean(working)}
-                          aria-label={`Remove ${account.label}`}
-                          title="Remove account"
+                          aria-label={translate("Remove {name}", {
+                            name: account.label,
+                          })}
+                          title={translate("Remove account")}
                           onClick={() => void removeAccount(account)}
                           className="grid size-7 place-items-center rounded-md text-content/35 transition-transform duration-150 hover:bg-red-400/10 hover:text-red-400 active:scale-[0.96] disabled:opacity-35"
                         >
@@ -3892,6 +3957,7 @@ function ProviderAccountEditor({
   onCancel: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
+  useLanguage();
   const adding = !editor.accountId;
   return (
     <form
@@ -3903,15 +3969,23 @@ function ProviderAccountEditor({
         className="flex items-center pr-1 h-8 min-w-0 flex-1 overflow-hidden rounded-md border border-content/10 bg-content/[0.04] focus-within:border-accent/45"
       >
         <label className="h-full min-w-0 flex-1">
-          <span className="sr-only">Account name</span>
+          <span className="sr-only">{translate("Account name")}</span>
           <input
             autoFocus
             type="text"
             maxLength={48}
             value={editor.label}
             disabled={working}
-            placeholder="Work or Personal"
-            aria-label={`${adding ? "New" : "Rename"} ${HARNESS_TITLE[editor.provider]} account`}
+            placeholder={translate("Work or Personal")}
+            aria-label={
+              adding
+                ? translate("New {name} account", {
+                    name: HARNESS_TITLE[editor.provider],
+                  })
+                : translate("Rename {name} account", {
+                    name: HARNESS_TITLE[editor.provider],
+                  })
+            }
             onChange={(event) => onLabel(event.target.value)}
             className="h-full w-full bg-transparent px-2.5 text-[12px] text-content outline-none placeholder:text-content/25 disabled:opacity-50"
           />
@@ -3922,7 +3996,7 @@ function ProviderAccountEditor({
           onClick={onCancel}
           className="flex h-6 shrink-0 items-center rounded-[4.5px] bg-content/[0.05] px-2.5 text-[11px] text-content/45 transition-transform duration-150 hover:bg-content/10 hover:text-content active:scale-[0.97] disabled:opacity-40"
         >
-          Cancel
+          {translate("Cancel")}
         </button>
         <button
           type="submit"
@@ -3932,9 +4006,9 @@ function ProviderAccountEditor({
           {working ? <Loader className="size-3 animate-spin" /> : null}
           {adding
             ? working
-              ? "Waiting for browser…"
-              : "Sign in and add"
-            : "Save"}
+              ? translate("Waiting for browser…")
+              : translate("Sign in and add")
+            : translate("Save")}
         </button>
       </div>
     </form>
@@ -4015,8 +4089,13 @@ function ProviderRow({
       }
       description={
         available
-          ? `${models.length} ${models.length === 1 ? "model" : "models"} available.`
-          : harnessUnavailableHint(harness)
+          ? translate(
+              models.length === 1
+                ? "{count} model available."
+                : "{count} models available.",
+              { count: models.length },
+            )
+          : translate(harnessUnavailableHint(harness))
       }
     >
       {current ? (
@@ -4042,12 +4121,12 @@ function ProviderRow({
         onClick={() => current && onDefault(harness, current.id)}
         disabled={isDefault || !current}
       >
-        {isDefault ? "Default" : "Use by default"}
+        {isDefault ? translate("Default") : translate("Use by default")}
       </SecondaryButton>
       {available ? (
         <div className="flex items-center gap-2">
           <span className="text-[12px] text-content/50">
-            {pickerLocked ? "Hidden globally" : "Show in picker"}
+            {pickerLocked ? translate("Hidden globally") : translate("Show in picker")}
           </span>
           <Toggle
             label={`Show ${HARNESS_TITLE[harness]} in the model picker`}
@@ -4095,6 +4174,7 @@ function ArchivePage({
   onRestoreProject?: (path: string) => void;
   onDeleteProject?: (path: string) => void;
 }) {
+  useLanguage();
   const [filters, setFilters] = useState(loadSessionSidebarFilters);
   const [deleting, setDeleting] = useState<ArchivedProject | null>(null);
   const archivedProjects = useArchivedProjects();
@@ -4115,12 +4195,12 @@ function ArchivePage({
   return (
     <>
       <Group
-        title="Archived projects"
-        description="Archive a project from the rail to keep its chats without listing it in the sidebar."
+        title={translate("Archived projects")}
+        description={translate("Archive a project from the rail to keep its chats without listing it in the sidebar.")}
       >
         {archivedProjects.length === 0 ? (
           <p className="px-4 py-3.5 text-[12px] text-content/45">
-            No archived projects.
+            {translate("No archived projects.")}
           </p>
         ) : (
           archivedProjects.map((project) => (
@@ -4138,12 +4218,12 @@ function ArchivePage({
               </div>
               {onRestoreProject ? (
                 <SecondaryButton onClick={() => onRestoreProject(project.path)}>
-                  Restore
+                  {translate("Restore project")}
                 </SecondaryButton>
               ) : null}
               {onDeleteProject ? (
                 <SecondaryButton danger onClick={() => setDeleting(project)}>
-                  Delete
+                  {translate("Delete")}
                 </SecondaryButton>
               ) : null}
             </div>
@@ -4154,28 +4234,28 @@ function ArchivePage({
       <Group
         title={
           looksLikeProject(cwd)
-            ? `Archived in ${projectName(cwd)}`
-            : "Archived conversations"
+            ? translate("Archived in {name}", { name: projectName(cwd) })
+            : translate("Archived conversations")
         }
       >
         <Row
           id="show-archived"
-          label="Show archived in the sidebar"
-          description="Keep archived conversations listed alongside the active ones."
+          label={translate("Show archived in the sidebar")}
+          description={translate("Keep archived conversations listed alongside the active ones.")}
         >
           <Toggle
-            label="Show archived in the sidebar"
+            label={translate("Show archived in the sidebar")}
             on={filters.showArchived}
             onChange={onShowArchived}
           />
         </Row>
         {!looksLikeProject(cwd) ? (
           <p className="px-4 py-3.5 text-[12px] text-content/45">
-            Open a project to see its archived conversations.
+            {translate("Open a project to see its archived conversations.")}
           </p>
         ) : archived.length === 0 ? (
           <p className="px-4 py-3.5 text-[12px] text-content/45">
-            No archived conversations in this project.
+            {translate("No archived conversations in this project.")}
           </p>
         ) : (
           archived.map((session) => (
@@ -4200,13 +4280,13 @@ function ArchivePage({
               <SecondaryButton
                 onClick={() => onArchiveSession(session.id, false)}
               >
-                Unarchive
+                {translate("Unarchive")}
               </SecondaryButton>
               <SecondaryButton
                 danger
                 onClick={() => onDeleteSession(session.id)}
               >
-                Delete
+                {translate("Delete")}
               </SecondaryButton>
             </div>
           ))
@@ -4242,6 +4322,7 @@ function formatDate(value: number): string {
 
 /** Monos on or off, and each Mono the user has. */
 function MonosPage() {
+  useLanguage();
   const enabled = useSyncExternalStore(
     subscribeMonosEnabled,
     loadMonosEnabled,
@@ -4258,21 +4339,21 @@ function MonosPage() {
 
   return (
     <>
-      <Group title="Monos">
+      <Group title={translate("Monos")}>
         <Row
           id="monos-enabled"
-          label="Show monos"
-          description="Agents of your own on the project rail. Each works on the projects you give it, remembers what matters and picks up habits it runs on its own. Turn this off to hide them."
+          label={translate("Show monos")}
+          description={translate("Agents of your own on the project rail. Each works on the projects you give it, remembers what matters and picks up habits it runs on its own. Turn this off to hide them.")}
         >
-          <Toggle label="Show monos" on={enabled} onChange={saveMonosEnabled} />
+          <Toggle label={translate("Show monos")} on={enabled} onChange={saveMonosEnabled} />
         </Row>
         <Row
           id="rail-monos-pinned"
-          label="Pin monos to the icon rail"
-          description="When the project rail is collapsed to icons, show each Mono at the top of the rail, above a divider, instead of inside the project picker."
+          label={translate("Pin monos to the icon rail")}
+          description={translate("When the project rail is collapsed to icons, show each Mono at the top of the rail, above a divider, instead of inside the project picker.")}
         >
           <Toggle
-            label="Pin monos to the icon rail"
+            label={translate("Pin monos to the icon rail")}
             on={railPinned}
             onChange={saveRailMonosPinned}
             disabled={!enabled}
@@ -4281,11 +4362,11 @@ function MonosPage() {
         {IS_MAC && (
           <Row
             id="mono-menu-bar-icon"
-            label="Menu bar icon"
-            description="Chat with a Mono or open the quick composer from the macOS menu bar. Turn this off to hide the icon."
+            label={translate("Menu bar icon")}
+            description={translate("Chat with a Mono or open the quick composer from the macOS menu bar. Turn this off to hide the icon.")}
           >
             <Toggle
-              label="Menu bar icon"
+              label={translate("Menu bar icon")}
               on={menuBarIcon}
               onChange={saveMonoMenuBarIcon}
             />
@@ -4294,8 +4375,8 @@ function MonosPage() {
       </Group>
       <Group
         id="mono-list"
-        title="Your monos"
-        description="Choose whether new sessions started by each Mono appear in the sidebar. Hidden sessions remain saved and can be opened from the Mono's chat. Add a Mono with the plus on the rail and choose its projects from its details."
+        title={translate("Your monos")}
+        description={translate("Choose whether new sessions started by each Mono appear in the sidebar. Hidden sessions remain saved and can be opened from the Mono's chat. Add a Mono with the plus on the rail and choose its projects from its details.")}
       >
         {monos.length ? (
           monos.map((mono) => <MonoRow key={mono.id} mono={mono} />)
@@ -4344,7 +4425,7 @@ function MonoRow({ mono }: { mono: Mono }) {
         }
       />
       <ConfirmReset
-        label="Reset Mono"
+        label={translate("Reset Mono")}
         title={`Reset ${look.name} to its defaults?`}
         body={`Its soul goes back to the default and its name to ${defaultMonoName(look.mascot)}. Changes to its soul can't be recovered.`}
         kept="Its conversation, projects, memory and habits will be kept."
@@ -4355,7 +4436,7 @@ function MonoRow({ mono }: { mono: Mono }) {
           <button
             ref={ref}
             type="button"
-            title="Reset to defaults"
+            title={translate("Reset to defaults")}
             aria-label={`Reset ${look.name} to defaults`}
             onClick={open}
             className="grid size-7 place-items-center rounded-md text-content/40 transition-transform duration-150 hover:bg-content/10 hover:text-content active:scale-[0.96]"

@@ -1,3 +1,5 @@
+import { translate } from "../../../shared/i18n/locale";
+import { useLanguage } from "../../../shared/i18n/useTranslation";
 import {
   INBOX_SOURCE_LABELS,
   type ConnectableInboxSource,
@@ -18,6 +20,7 @@ export function InboxConnectMenu({
   onConnect: (source: ConnectableInboxSource) => void;
   onClose: () => void;
 }) {
+  useLanguage();
   return (
     <Popover
       anchor={anchor}
@@ -25,12 +28,12 @@ export function InboxConnectMenu({
       width={WIDTH}
       onDismiss={onClose}
       role="menu"
-      aria-label="Connect an inbox source"
+      aria-label={translate("Connect an inbox source")}
       onContextMenu={(event) => event.preventDefault()}
       className="p-1"
     >
       <div className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-content/40">
-        Not connected
+        {translate("Not connected")}
       </div>
       {sources.map((source) => (
         <button
@@ -49,7 +52,9 @@ export function InboxConnectMenu({
             className="block size-3.5 shrink-0"
           />
           <span className="min-w-0 flex-1 truncate">
-            Connect {INBOX_SOURCE_LABELS[source]}
+            {translate("Connect {label}", {
+              label: INBOX_SOURCE_LABELS[source],
+            })}
           </span>
         </button>
       ))}

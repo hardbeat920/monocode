@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { invalidateNotes, loadNotes, NOTES_CHANGED_EVENT, type Note, type NoteUpsert } from "../notes";
 import { NotesView } from "./NotesView";
+import { translate } from "../../../shared/i18n/locale";
 import { savePinnedProjects, saveProjectRailOrder } from "../../projects/model/recents";
 
 const invoke = vi.hoisted(() => vi.fn());
@@ -277,7 +278,7 @@ it("uses the searchable rail project picker when moving a note", async () => {
     "/work/Active",
   ]);
   const search = menu.querySelector<HTMLInputElement>(
-    'input[placeholder="Search projects..."]',
+    `input[placeholder="${translate("Search projects...")}"]`,
   );
   expect(search).not.toBeNull();
   expect(document.activeElement).toBe(search);
