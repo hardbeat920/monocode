@@ -586,7 +586,11 @@ fn blocks(events: &mut Events<'_>, until: Option<TagEnd>, depth: usize) -> Vec<B
                         align,
                     });
                 }
-                tag @ (Tag::Strong | Tag::Emphasis | Tag::Strikethrough | Tag::Link { .. }) => {
+                tag @ (Tag::Strong
+                | Tag::Emphasis
+                | Tag::Strikethrough
+                | Tag::Link { .. }
+                | Tag::Image { .. }) => {
                     let mut runs = Vec::new();
                     inline_span(events, tag, InlineStyle::default(), &mut runs);
                     if let Some(Block::Paragraph { runs: previous }) = out.last_mut() {
@@ -795,20 +799,15 @@ fn next_bare_url(text: &str) -> Option<(Range<usize>, String)> {
         from = start + 1;
         let rest = &text[start..];
         let before = text[..start].chars().next_back();
+        let schemed = !before.is_some_and(|c| c.is_ascii_alphabetic());
         let (prefix, origin, bounded) = if rest.starts_with("https://") {
-            (
-                "https://",
-                "",
-                !before.is_some_and(|c| c.is_ascii_alphanumeric()),
-            )
+            ("https://", "", schemed)
         } else if rest.starts_with("http://") {
-            (
-                "http://",
-                "",
-                !before.is_some_and(|c| c.is_ascii_alphanumeric()),
-            )
+            ("http://", "", schemed)
         } else if rest.starts_with("www.") {
-            let bounded = before.is_none_or(|c| c.is_whitespace() || c.is_ascii_punctuation());
+            // After `@` this is an email's domain.
+            let bounded =
+                before.is_none_or(|c| c.is_whitespace() || (c.is_ascii_punctuation() && c != '@'));
             ("www.", "http://", bounded)
         } else {
             continue;
@@ -841,12 +840,9 @@ fn next_bare_email(text: &str) -> Option<(Range<usize>, String)> {
             && !host.ends_with(|c: char| c.is_ascii_digit() || c == '-' || c == '_');
         if start < at && bounded && valid {
             let end = at + 1 + host.len();
-            let shown = start
-                - if text[..start].ends_with("mailto:") {
-                    7
-                } else {
-                    0
-                };
+            let shown = text[..start]
+                .strip_suffix("mailto:")
+                .map_or(start, str::len);
             return Some((shown..end, format!("mailto:{}", &text[start..end])));
         }
     }
@@ -942,6 +938,7 @@ mod bare_url_tests {
         assert_eq!(links(&format!("**{url}**")), [url]);
         assert_eq!(links(&format!("|a|\n|-|\n|{url}|")), [url]);
         assert_eq!(links(&format!("链接{url}，然后")), [url]);
+        assert_eq!(links(&format!("1{url}")), [url]);
     }
 
     #[test]
@@ -978,6 +975,7 @@ mod bare_url_tests {
     fn emails_become_mailto_links() {
         assert_eq!(links("me@a.com"), ["mailto:me@a.com"]);
         assert_eq!(links("<me@a.com>"), ["mailto:me@a.com"]);
+        assert_eq!(links("me@www.a.com"), ["mailto:me@www.a.com"]);
         assert_eq!(links("邮箱me@a.com"), ["mailto:me@a.com"]);
         assert_eq!(
             links("write to me.you+x@a.co.uk."),
@@ -1000,6 +998,7 @@ mod bare_url_tests {
     #[test]
     fn image_alt_text_is_not_linked_but_keeps_an_outer_link() {
         assert!(links("![https://a.com/x](b.png)").is_empty());
+        assert!(links("- ![https://a.com/x](b.png)").is_empty());
         assert_eq!(
             links("[![https://a.com/x](b.png)](https://target.example)"),
             ["https://target.example"]
