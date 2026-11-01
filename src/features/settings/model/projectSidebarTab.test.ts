@@ -5,6 +5,12 @@ import {
   rebaseProjectSidebarTab,
   saveProjectSidebarTab,
 } from "./projectSidebarTab";
+import {
+  isSidebarTabId,
+  loadSidebarTabOrder,
+  modSidebarTabId,
+  parseModSidebarTabId,
+} from "./appearance";
 
 const KEY = "monocode.projectSidebarTabs.v1";
 
@@ -55,5 +61,43 @@ describe("project Workspace tab", () => {
 
     clearProjectSidebarTab("/work/renamed");
     expect(loadProjectSidebarTab("/work/renamed")).toBe("sessions");
+  });
+});
+
+describe("mod sidebar tabs", () => {
+  it("accepts mod:<name>:<view> ids and rejects malformed ones", () => {
+    expect(isSidebarTabId(modSidebarTabId("radar", "prs"))).toBe(true);
+    expect(isSidebarTabId("mod:radar:files:all")).toBe(true);
+    expect(isSidebarTabId("mod:radar:")).toBe(false);
+    expect(isSidebarTabId("mod:Radar Mod:prs")).toBe(false);
+    expect(isSidebarTabId("mods")).toBe(false);
+    expect(parseModSidebarTabId("mod:radar:files:all")).toEqual({
+      name: "radar",
+      viewId: "files:all",
+    });
+    expect(parseModSidebarTabId("files")).toBeNull();
+  });
+
+  it("keeps saved mod tabs in the order and merges missing built-ins", () => {
+    localStorage.setItem(
+      "monocode.sidebarTabOrder",
+      JSON.stringify(["mod:radar:prs", "files", "files", "bogus", "sessions"]),
+    );
+    expect(loadSidebarTabOrder()).toEqual([
+      "mod:radar:prs",
+      "files",
+      "sessions",
+      "inbox",
+      "changes",
+    ]);
+    // A mod tab dragged to the front is not the default for new projects.
+    expect(loadProjectSidebarTab("/work/new")).toBe("files");
+  });
+
+  it("remembers a mod tab per project but still not the Inbox", () => {
+    saveProjectSidebarTab("/work/one", "mod:radar:prs");
+    expect(loadProjectSidebarTab("/work/one")).toBe("mod:radar:prs");
+    saveProjectSidebarTab("/work/one", "inbox");
+    expect(loadProjectSidebarTab("/work/one")).toBe("mod:radar:prs");
   });
 });

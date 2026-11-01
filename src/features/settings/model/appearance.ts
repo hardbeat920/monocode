@@ -121,7 +121,32 @@ export const SHOW_EXCLUDED_FILES_DEFAULT = false;
 export const SHOW_EXCLUDED_FILES_CHANGE_EVENT =
   "monocode:showexcludedfileschange";
 
-export type SidebarTabId = "files" | "sessions" | "changes" | "inbox";
+/** A mod's `SidebarTab` view: `mod:<mod name>:<view id>`. */
+export type ModSidebarTabId = `mod:${string}:${string}`;
+
+export type SidebarTabId =
+  | "files"
+  | "sessions"
+  | "changes"
+  | "inbox"
+  | ModSidebarTabId;
+
+const MOD_SIDEBAR_TAB = /^mod:([a-z0-9][a-z0-9-]{0,63}):(.+)$/;
+
+export function modSidebarTabId(name: string, viewId: string): ModSidebarTabId {
+  return `mod:${name}:${viewId}`;
+}
+
+export function parseModSidebarTabId(
+  value: string,
+): { name: string; viewId: string } | null {
+  const match = MOD_SIDEBAR_TAB.exec(value);
+  return match ? { name: match[1], viewId: match[2] } : null;
+}
+
+export function isModSidebarTabId(value: unknown): value is ModSidebarTabId {
+  return typeof value === "string" && MOD_SIDEBAR_TAB.test(value);
+}
 
 const DEFAULT_SIDEBAR_TAB_ORDER: SidebarTabId[] = [
   "sessions",
@@ -961,12 +986,13 @@ export function applyDiffPalette(value: DiffPalette) {
   return value;
 }
 
-function isSidebarTabId(value: unknown): value is SidebarTabId {
+export function isSidebarTabId(value: unknown): value is SidebarTabId {
   return (
     value === "files" ||
     value === "sessions" ||
     value === "changes" ||
-    value === "inbox"
+    value === "inbox" ||
+    isModSidebarTabId(value)
   );
 }
 
@@ -1072,13 +1098,12 @@ export function loadSidebarTabOrder(): SidebarTabId[] {
     if (!raw) return [...DEFAULT_SIDEBAR_TAB_ORDER];
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [...DEFAULT_SIDEBAR_TAB_ORDER];
-    const next = parsed.filter(isSidebarTabId);
+    // Mod tabs stay in the saved order even while their mod is not loaded.
+    const next = [...new Set(parsed.filter(isSidebarTabId))];
     for (const id of DEFAULT_SIDEBAR_TAB_ORDER) {
       if (!next.includes(id)) next.push(id);
     }
-    return next.length === DEFAULT_SIDEBAR_TAB_ORDER.length
-      ? next
-      : [...DEFAULT_SIDEBAR_TAB_ORDER];
+    return next;
   } catch {
     return [...DEFAULT_SIDEBAR_TAB_ORDER];
   }

@@ -629,6 +629,7 @@ describe("settings navigation", () => {
       "mcp",
       "skills",
       "monos",
+      "mods",
       "inbox",
       "archive",
       "worktrees",
