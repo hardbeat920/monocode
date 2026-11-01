@@ -39,6 +39,8 @@ generated Mermaid diagrams, preserving normal image resolution for other SVGs.
 Monocode removes the unused zed-scap dependency and its feature links from their
 manifests, and rejects screen-capture builds in gpui-pre/build.rs pending license
 review. The retained framework code remains Apache-2.0.
+Monocode also fixes Windows Explorer reveal by initializing COM on background
+workers, normalizing filesystem paths and releasing Shell item allocations.
 Unused upstream examples and their demo assets are omitted, together with four
 upstream SVG tests requiring font fixtures absent from the published crate.
 The small EXIF image regression fixture is retained under tests/assets.
