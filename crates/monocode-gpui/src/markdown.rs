@@ -38,8 +38,10 @@ fn activate_link(event: &ClickEvent, selection: Option<&TextSelection>) -> bool 
         && !selection.is_some_and(TextSelection::has_selection)
 }
 use std::{
+    cell::RefCell,
     hash::{DefaultHasher, Hash, Hasher},
     ops::Range,
+    rc::Rc,
     sync::Arc,
     time::Instant,
 };
@@ -450,6 +452,7 @@ fn inline_selected(
     let clicked_links = links.clone();
     let menu_links = links.clone();
     let clicked_urls = urls.clone();
+    let intercept = link_intercept();
     let text_id: SharedString = format!("{id}-text").into();
     let child = div()
         .id(id)
@@ -471,7 +474,13 @@ fn inline_selected(
                         return;
                     }
                 }
-                open_link(&clicked_urls[ix], window, cx);
+                open_link(
+                    &clicked_urls[ix],
+                    !event.modifiers().secondary(),
+                    intercept.as_ref(),
+                    window,
+                    cx,
+                );
             }
         })
         .on_mouse_down(MouseButton::Right, move |event, window, cx| {
@@ -549,7 +558,7 @@ fn rich_inline(
                             .hover(|s| s.bg(content(0.13)))
                             .on_click(move |event, window, cx| {
                                 if activate_link(event, clicked_selection.as_ref()) {
-                                    open_link(&path, window, cx)
+                                    open_link(&path, false, None, window, cx)
                                 }
                             })
                             .on_mouse_down(MouseButton::Right, move |event, window, cx| {
@@ -598,6 +607,7 @@ fn rich_inline(
                 };
                 let link = style.link.clone();
                 let menu_link = link.clone();
+                let intercept = link_intercept();
                 let styled =
                     StyledText::new(text.to_owned()).with_highlights([(0..text.len(), highlight)]);
                 let layout = styled.layout().clone();
@@ -630,7 +640,13 @@ fn rich_inline(
                             if let Some(url) = &link
                                 && activate_link(event, clicked_selection.as_ref())
                             {
-                                open_link(url, window, cx);
+                                open_link(
+                                    url,
+                                    !event.modifiers().secondary(),
+                                    intercept.as_ref(),
+                                    window,
+                                    cx,
+                                );
                             }
                         })
                         .on_mouse_down(MouseButton::Right, move |event, window, cx| {
@@ -700,7 +716,45 @@ pub(crate) fn resolve_file_links(row: &mut MarkdownRow, base: &str) {
     }
 }
 
-fn open_link(url: &str, window: &mut Window, cx: &mut App) {
+/// A surface that owns some web links (the Inbox owns GitHub work items) can
+/// claim them before they reach the browser. Return true when handled.
+pub(crate) type LinkIntercept = Rc<dyn Fn(&str, &mut Window, &mut App) -> bool>;
+
+thread_local! {
+    static INTERCEPT: RefCell<Option<LinkIntercept>> = const { RefCell::new(None) };
+}
+
+/// Elements built inside `build` route plain link clicks through `intercept`.
+/// Modified clicks still open the browser.
+pub(crate) fn with_link_intercept<R>(
+    intercept: Option<LinkIntercept>,
+    build: impl FnOnce() -> R,
+) -> R {
+    let previous = INTERCEPT.replace(intercept);
+    let built = build();
+    INTERCEPT.set(previous);
+    built
+}
+
+fn link_intercept() -> Option<LinkIntercept> {
+    INTERCEPT.with_borrow(Clone::clone)
+}
+
+/// `route` is false for modified clicks, which always mean the browser.
+fn open_link(
+    url: &str,
+    route: bool,
+    intercept: Option<&LinkIntercept>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if route
+        && (intercept.is_some_and(|intercept| intercept(url, window, cx))
+            || (monocode_core::inbox::link_target(url).is_some()
+                && crate::inbox::open_in_inbox(url, window, cx)))
+    {
+        return;
+    }
     if url.starts_with("https://") || url.starts_with("http://") || url.starts_with("mailto:") {
         cx.open_url(url);
     } else if !url.starts_with('#') && (!url.contains("://") || url.starts_with("file://")) {
@@ -1072,6 +1126,17 @@ mod file_link_tests {
             Some("/project/docs/src/lib.rs")
         );
         assert_eq!(runs[2].style.link.as_deref(), Some("https://example.com"));
+    }
+    #[test]
+    fn link_intercepts_apply_only_while_building_and_restore_the_outer_one() {
+        let outer: LinkIntercept = Rc::new(|_, _, _| true);
+        assert!(link_intercept().is_none());
+        with_link_intercept(Some(outer.clone()), || {
+            assert!(link_intercept().is_some_and(|set| Rc::ptr_eq(&set, &outer)));
+            with_link_intercept(None, || assert!(link_intercept().is_none()));
+            assert!(link_intercept().is_some_and(|set| Rc::ptr_eq(&set, &outer)));
+        });
+        assert!(link_intercept().is_none());
     }
 }
 

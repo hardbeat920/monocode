@@ -8422,6 +8422,11 @@ impl Render for Shell {
                 }
             }))
             .on_action(
+                cx.listener(|this, event: &crate::inbox::OpenWorkLink, window, cx| {
+                    this.open_work_link(&event.0, window, cx)
+                }),
+            )
+            .on_action(
                 cx.listener(|this, event: &crate::file_editor::OpenPath, window, cx| {
                     let cwd = this.git.read(cx).project().to_owned();
                     let (path, location) = crate::file_editor::file_location(&event.0, &cwd);

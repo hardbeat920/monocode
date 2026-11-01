@@ -152,6 +152,19 @@ pub fn linear_issue_details(app: PathBuf, id: String) -> Result<LinearIssueDetai
     parse_linear_issue_details(&data)
 }
 
+/// One issue as an inbox row, looked up by id or identifier such as `ENG-42`.
+pub fn linear_issue_lookup(app: PathBuf, id: String) -> Result<LinearIssue, String> {
+    let token = require_token(&app)?;
+    let id = id.trim();
+    if !valid_linear_id(id) {
+        return Err("Invalid Linear issue".into());
+    }
+    let data = graphql_with_token(&token, ISSUE_LOOKUP_QUERY, json!({ "id": id }))?;
+    data.get("issue")
+        .and_then(parse_linear_issue)
+        .ok_or_else(|| "Linear did not return that issue".to_string())
+}
+
 pub fn linear_issue_thread(app: PathBuf, id: String) -> Result<LinearIssueThread, String> {
     let token = require_token(&app)?;
     let id = id.trim();
@@ -219,6 +232,23 @@ query InboxIssues($first: Int!, $filter: IssueFilter) {
       labels { nodes { name color } }
       assignee { name displayName avatarUrl }
     }
+  }
+}
+"#;
+const ISSUE_LOOKUP_QUERY: &str = r#"
+query InboxIssueLookup($id: String!) {
+  issue(id: $id) {
+    id
+    identifier
+    number
+    title
+    url
+    updatedAt
+    state { name type }
+    team { id key name }
+    project { id name }
+    labels { nodes { name color } }
+    assignee { name displayName avatarUrl }
   }
 }
 "#;
