@@ -3173,7 +3173,6 @@ impl Conversation {
                                     .debug_selector(|| "provider-status".into())
                                     .role(Role::Status)
                                     .aria_label(self.status.clone())
-                                    .tip(self.status.clone())
                                     .max_w(px(220.))
                                     .truncate()
                                     .text_size(px(11.))

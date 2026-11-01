@@ -165,12 +165,39 @@ impl Conversation {
         cx.notify();
     }
 
+    /// Links the pull request unless the session already links another one:
+    /// a pull request outranks an issue link, but the first pull request stays.
+    fn link_pull_request(
+        &mut self,
+        item: monocode_core::session_groups::WorkItem,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .summary
+            .work_item
+            .as_ref()
+            .is_some_and(|linked| linked.kind == "pr")
+        {
+            return;
+        }
+        self.summary.work_item = Some(item.clone());
+        let store = self.store.clone();
+        let id = self.summary.id;
+        cx.background_executor()
+            .spawn(async move {
+                let _ = locked(&store).and_then(|s| s.set_work_item(id, Some(&item)));
+            })
+            .detach();
+        cx.emit(SessionChanged);
+        cx.notify();
+    }
+
     /// Links the pull request to the session, clears the command and opens it.
     fn show_opened_pr(&mut self, url: String, existing: bool, sent: &str, cx: &mut Context<Self>) {
         if let Some(item) = monocode_core::session_groups::parse_github_work_item(&url)
             .filter(|item| item.kind == "pr")
         {
-            self.link_opened_pull_request(item, cx);
+            self.link_pull_request(item, cx);
         }
         if self.input.read(cx).content.trim() == sent.trim() {
             self.input.update(cx, |input, cx| {
