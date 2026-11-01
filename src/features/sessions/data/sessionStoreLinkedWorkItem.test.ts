@@ -28,6 +28,44 @@ describe("setSessionLinkedWorkItem", () => {
     });
   });
 
+  it("persists a Linear issue with its canonical identifier", async () => {
+    await setSessionLinkedWorkItem("session-1", {
+      kind: "linear",
+      identifier: "sw-29",
+      id: "issue-uuid",
+      repo: "",
+      number: 0,
+      url: "https://linear.app/acme/issue/SW-29",
+    });
+
+    expect(invoke).toHaveBeenCalledWith("session_set_linked_work_item", {
+      sessionId: "session-1",
+      linkedWorkItem: {
+        kind: "linear",
+        identifier: "SW-29",
+        id: "issue-uuid",
+        repo: "SW",
+        number: 29,
+        url: "https://linear.app/acme/issue/SW-29",
+      },
+    });
+  });
+
+  it("drops a Linear link whose URL is not on linear.app", async () => {
+    await setSessionLinkedWorkItem("session-1", {
+      kind: "linear",
+      identifier: "SW-29",
+      repo: "SW",
+      number: 29,
+      url: "https://example.com/SW-29",
+    });
+
+    expect(invoke).toHaveBeenCalledWith("session_set_linked_work_item", {
+      sessionId: "session-1",
+      linkedWorkItem: null,
+    });
+  });
+
   it("uses null to remove a persisted link", async () => {
     await setSessionLinkedWorkItem("session-1", undefined);
 

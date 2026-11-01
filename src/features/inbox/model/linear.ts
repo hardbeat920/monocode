@@ -86,6 +86,38 @@ export function listLinearTeams(): Promise<LinearTeam[]> {
   return invoke<LinearTeam[]>("linear_list_teams");
 }
 
+const TEAM_KEYS_TTL_MS = 5 * 60_000;
+let teamKeysCache: { keys: Set<string>; fetchedAt: number } | null = null;
+
+export function clearLinearTeamKeysCache() {
+  teamKeysCache = null;
+}
+
+/** Upper-case team keys such as `ENG`, cached briefly. `null` when the list is unavailable. */
+export async function linearTeamKeys(): Promise<Set<string> | null> {
+  if (
+    teamKeysCache &&
+    Date.now() - teamKeysCache.fetchedAt < TEAM_KEYS_TTL_MS
+  ) {
+    return teamKeysCache.keys;
+  }
+  const generation = cacheGeneration;
+  try {
+    const keys = new Set(
+      (await listLinearTeams())
+        .map((team) => team.key.trim().toUpperCase())
+        .filter(Boolean),
+    );
+    if (keys.size === 0) return null;
+    if (generation === cacheGeneration) {
+      teamKeysCache = { keys, fetchedAt: Date.now() };
+    }
+    return keys;
+  } catch {
+    return null;
+  }
+}
+
 /** `null` means do not filter by team. `[]` means every known team is hidden. */
 export function linearTeamIdsForFetch(
   teams: readonly LinearTeam[],
@@ -112,6 +144,37 @@ export function listLinearIssues(query: {
     teamIds: query.teamIds,
     limit: query.limit,
   });
+}
+
+const issueByKey = new Map<string, LinearIssue>();
+/** Bumped on every invalidation so a request started under an old token cannot refill the caches. */
+let cacheGeneration = 0;
+
+function issueLookupKey(key: string): string {
+  return key.trim().toLowerCase();
+}
+
+export function clearLinearIssueCache() {
+  cacheGeneration += 1;
+  issueByKey.clear();
+  clearLinearTeamKeysCache();
+}
+
+/** `key` is a Linear issue UUID or a `TEAM-123` identifier. */
+export function peekLinearIssue(key: string): LinearIssue | null {
+  return issueByKey.get(issueLookupKey(key)) ?? null;
+}
+
+export async function lookupLinearIssue(key: string): Promise<LinearIssue> {
+  const generation = cacheGeneration;
+  const issue = await invoke<LinearIssue>("linear_issue_lookup", {
+    key: key.trim(),
+  });
+  if (generation !== cacheGeneration) return issue;
+  issueByKey.set(issueLookupKey(key), issue);
+  if (issue.identifier) issueByKey.set(issueLookupKey(issue.identifier), issue);
+  if (issue.id) issueByKey.set(issueLookupKey(issue.id), issue);
+  return issue;
 }
 
 export function peekLinearIssueDetails(id: string): LinearIssueDetails | null {
