@@ -1956,3 +1956,29 @@ fn habits_and_documents_search_like_sessions(cx: &mut TestAppContext) {
     assert!(visual.debug_bounds("mono-document-plan").is_none());
     assert!(visual.debug_bounds("mono-document-summary").is_some());
 }
+
+#[gpui::test]
+fn the_sidebar_lists_monos_that_do_not_work_on_the_open_project(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    s.window
+        .update(cx, |shell, _, cx| {
+            assert!(!shell.workspace.classic_layout);
+            s.manager.update(cx, |m, cx| {
+                m.settings = None;
+                m.close(cx);
+                let mono = m.roster.get_mut(&s.id).unwrap();
+                mono.projects = vec!["/somewhere/else".into()];
+                cx.notify();
+            });
+        })
+        .unwrap();
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    let row: &'static str = Box::leak(format!("mono-rail-{}", s.id).into_boxed_str());
+    assert!(
+        visual.debug_bounds(row).is_some(),
+        "an existing Mono stays listed whichever project is open"
+    );
+}
