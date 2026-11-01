@@ -1487,41 +1487,65 @@ fn open_target(target: impl AsRef<OsStr>) -> Result<()> {
     }
 }
 
+// Reveal runs on a thread-pool worker. COM initialization on the UI thread
+// does not initialize that worker, and must be balanced on the same thread.
+struct ExplorerApartment(bool);
+
+impl ExplorerApartment {
+    fn new() -> Result<Self> {
+        let result = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+        if result == RPC_E_CHANGED_MODE {
+            // The caller already initialized COM using another apartment model.
+            Ok(Self(false))
+        } else {
+            result.ok()?;
+            Ok(Self(true))
+        }
+    }
+}
+
+impl Drop for ExplorerApartment {
+    fn drop(&mut self) {
+        if self.0 {
+            unsafe { CoUninitialize() };
+        }
+    }
+}
+
+struct ExplorerItem(*mut Common::ITEMIDLIST);
+
+impl ExplorerItem {
+    fn parse(target: &Path) -> Result<Self> {
+        // Git returns forward slashes, which the Shell namespace parser does
+        // not consistently accept. Also resolve relative paths and dot segments.
+        let target = dunce::canonicalize(target).context("Resolving Explorer target")?;
+        let mut item = Self(std::ptr::null_mut());
+        unsafe {
+            SHParseDisplayName(&HSTRING::from(target.as_path()), None, &mut item.0, 0, None)?;
+        }
+        Ok(item)
+    }
+}
+
+impl Drop for ExplorerItem {
+    fn drop(&mut self) {
+        unsafe { CoTaskMemFree(Some(self.0.cast())) };
+    }
+}
+
 fn open_target_in_explorer(target: &Path) -> Result<()> {
-    let dir = target.parent().context("No parent folder found")?;
-    let desktop = unsafe { SHGetDesktopFolder()? };
-
-    let mut dir_item = std::ptr::null_mut();
-    unsafe {
-        desktop.ParseDisplayName(
-            HWND::default(),
-            None,
-            &HSTRING::from(dir),
-            None,
-            &mut dir_item,
-            std::ptr::null_mut(),
-        )?;
-    }
-
-    let mut file_item = std::ptr::null_mut();
-    unsafe {
-        desktop.ParseDisplayName(
-            HWND::default(),
-            None,
-            &HSTRING::from(target),
-            None,
-            &mut file_item,
-            std::ptr::null_mut(),
-        )?;
-    }
-
-    let highlight = [file_item as *const _];
-    unsafe { SHOpenFolderAndSelectItems(dir_item as _, Some(&highlight), 0) }.or_else(|err| {
-        if err.code().0 == ERROR_FILE_NOT_FOUND.0 as i32 {
+    let _apartment = ExplorerApartment::new()?;
+    let item = ExplorerItem::parse(target)?;
+    // With no child array, the Shell accepts a single absolute PIDL and opens
+    // its parent with the item selected. An absolute PIDL in the child array
+    // is invalid. This also supports drive roots, which have no parent path.
+    unsafe { SHOpenFolderAndSelectItems(item.0, None, 0) }.or_else(|err| {
+        if err.code() == HRESULT::from_win32(ERROR_FILE_NOT_FOUND.0) {
             // On some systems, the above call mysteriously fails with "file not
             // found" even though the file is there.  In these cases, ShellExecute()
             // seems to work as a fallback (although it won't select the file).
-            open_target(dir).context("Opening target parent folder")
+            let target = dunce::canonicalize(target)?;
+            open_target(target.parent().unwrap_or(&target)).context("Opening target parent folder")
         } else {
             Err(anyhow::anyhow!("Can not open target path: {}", err))
         }
@@ -1879,6 +1903,88 @@ mod tests {
     use windows::core::{PCWSTR, PWSTR};
 
     use super::{encode_restart_arguments, username_and_password};
+
+    #[test]
+    fn explorer_parses_git_paths_on_a_background_thread() {
+        std::thread::spawn(|| {
+            use super::{ExplorerApartment, ExplorerItem};
+            use windows::Win32::System::Com::*;
+
+            struct Fixture(std::path::PathBuf);
+            impl Drop for Fixture {
+                fn drop(&mut self) {
+                    std::fs::remove_dir_all(&self.0).unwrap();
+                }
+            }
+            let fixture = Fixture(std::env::temp_dir().join(format!(
+                "monocode-reveal-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            )));
+            let folder = fixture.0.join("worktree with spaces 日本語");
+            std::fs::create_dir_all(&folder).unwrap();
+            let file = folder.join("hello.txt");
+            std::fs::write(&file, "test").unwrap();
+
+            {
+                let apartment = ExplorerApartment::new().unwrap();
+                assert!(apartment.0);
+                for path in [&folder, &file] {
+                    let git_path = path.to_str().unwrap().replace('\\', "/");
+                    let item = ExplorerItem::parse(std::path::Path::new(&git_path)).unwrap();
+                    assert!(!item.0.is_null());
+                }
+                assert!(ExplorerItem::parse(&folder.join("missing")).is_err());
+                let absolute = dunce::canonicalize(&folder).unwrap();
+                let root = absolute.ancestors().last().unwrap();
+                assert!(!ExplorerItem::parse(root).unwrap().0.is_null());
+            }
+
+            // Leave the pooled thread uninitialized so its next user can
+            // choose an apartment model without a conflict.
+            let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+            assert_eq!(initialized, windows::core::HRESULT(0));
+            unsafe { CoUninitialize() };
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    #[ignore = "opens a Windows Explorer window"]
+    fn explorer_reveals_folder_on_a_background_thread() {
+        std::thread::spawn(|| {
+            let git_path = env!("CARGO_MANIFEST_DIR").replace('\\', "/");
+            super::open_target_in_explorer(std::path::Path::new(&git_path)).unwrap();
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn explorer_preserves_an_existing_com_apartment() {
+        std::thread::spawn(|| {
+            use super::ExplorerApartment;
+            use windows::Win32::System::Com::*;
+
+            unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).ok().unwrap() };
+            {
+                let apartment = ExplorerApartment::new().unwrap();
+                assert!(!apartment.0);
+            }
+            let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+            assert_eq!(initialized, windows::core::HRESULT(1)); // S_FALSE: still initialized.
+            unsafe {
+                CoUninitialize();
+                CoUninitialize();
+            }
+        })
+        .join()
+        .unwrap();
+    }
 
     #[test]
     fn test_read_credential_with_username() {
