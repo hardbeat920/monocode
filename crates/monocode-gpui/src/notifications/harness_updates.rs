@@ -23,29 +23,34 @@ pub(crate) struct HarnessUpdates {
     rows: HashMap<Kind, RowState>,
     checking: bool,
     generation: u64,
+    hidden: bool,
 }
 impl EventEmitter<HarnessUpdatesEvent> for HarnessUpdates {}
 impl HarnessUpdates {
-    pub(crate) fn new(hidden: Vec<String>, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(hidden: Vec<String>, check_on_launch: bool, cx: &mut Context<Self>) -> Self {
         let mut this = Self {
             updates: Vec::new(),
             rows: HashMap::new(),
             checking: false,
             generation: 0,
+            hidden: false,
         };
-        if harness_updates::claim_launch_check() {
+        if check_on_launch && harness_updates::claim_launch_check() {
             this.check_now(hidden, cx);
         }
         this
     }
     pub(crate) fn is_visible(&self) -> bool {
-        !self.updates.is_empty()
+        !self.hidden && !self.updates.is_empty()
     }
     fn busy(&self) -> bool {
         self.rows.values().any(|s| matches!(s, RowState::Updating))
     }
     /// Explicit refresh is permitted after the launch claim or a dismissal.
     pub(crate) fn check_now(&mut self, hidden: Vec<String>, cx: &mut Context<Self>) {
+        self.hidden = false;
+        cx.emit(HarnessUpdatesEvent::Changed);
+        cx.notify();
         if self.checking || self.busy() {
             return;
         }
@@ -69,6 +74,11 @@ impl HarnessUpdates {
             });
         })
         .detach();
+    }
+    pub(crate) fn hide(&mut self, cx: &mut Context<Self>) {
+        self.hidden = true;
+        cx.emit(HarnessUpdatesEvent::Changed);
+        cx.notify();
     }
     pub(crate) fn dismiss(&mut self, cx: &mut Context<Self>) {
         if self.busy() {
@@ -301,5 +311,113 @@ impl Render for HarnessUpdates {
                 ),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::TestAppContext;
+    use std::{cell::Cell, rc::Rc};
+
+    #[gpui::test]
+    fn manual_check_reveals_hidden_status_without_restarting_work(cx: &mut TestAppContext) {
+        for checking in [false, true] {
+            let notice = cx.new(|cx| HarnessUpdates::new(Vec::new(), false, cx));
+            notice.update(cx, |notice, cx| {
+                notice.updates.push(Update {
+                    harness: Kind::Claude,
+                    installed: "2.1.310".into(),
+                    latest: "2.1.311".into(),
+                });
+                notice.checking = checking;
+                if !checking {
+                    notice.rows.insert(Kind::Claude, RowState::Updating);
+                }
+                notice.hide(cx);
+            });
+            let changed = Rc::new(Cell::new(false));
+            let observed = changed.clone();
+            let _subscription = cx.update(|cx| {
+                cx.subscribe(&notice, move |_, event, _| {
+                    if matches!(event, HarnessUpdatesEvent::Changed) {
+                        observed.set(true);
+                    }
+                })
+            });
+            notice.update(cx, |notice, cx| {
+                notice.check_now(Vec::new(), cx);
+                assert!(notice.is_visible(), "manual checks reveal current status");
+                assert_eq!(notice.checking, checking, "keep the active check state");
+                assert_eq!(notice.busy(), !checking, "keep the active update state");
+                assert_eq!(notice.generation, 0, "do not start another check");
+            });
+            assert!(changed.get(), "notify the shell even when work is active");
+        }
+    }
+
+    #[gpui::test]
+    fn hiding_a_busy_notice_preserves_the_update(cx: &mut TestAppContext) {
+        let notice = cx.new(|cx| HarnessUpdates::new(Vec::new(), false, cx));
+        notice.update(cx, |notice, cx| {
+            notice.updates.push(Update {
+                harness: Kind::Claude,
+                installed: "2.1.310".into(),
+                latest: "2.1.311".into(),
+            });
+            notice.rows.insert(Kind::Claude, RowState::Updating);
+            notice.dismiss(cx);
+            assert!(
+                notice.is_visible(),
+                "the close button stays disabled while busy"
+            );
+
+            notice.hide(cx);
+            assert!(
+                !notice.is_visible(),
+                "the preference hides even a busy notice"
+            );
+            assert!(
+                notice.busy(),
+                "hiding must retain the in-progress update state"
+            );
+            assert_eq!(notice.updates.len(), 1, "hiding must retain update details");
+
+            notice
+                .rows
+                .insert(Kind::Claude, RowState::Updated("2.1.311".into()));
+            assert!(
+                !notice.is_visible(),
+                "completion must not reveal the notice"
+            );
+            notice.check_now(
+                Kind::ALL.into_iter().map(|kind| kind.id().into()).collect(),
+                cx,
+            );
+            assert!(!notice.hidden, "a manual check can show notices again");
+        });
+    }
+
+    #[gpui::test]
+    fn disabled_launch_check_and_dismissed_results_stay_hidden(cx: &mut TestAppContext) {
+        let notice = cx.new(|cx| HarnessUpdates::new(Vec::new(), false, cx));
+        notice.update(cx, |notice, cx| {
+            assert!(!notice.checking);
+            assert_eq!(notice.generation, 0);
+            assert!(!notice.is_visible());
+
+            notice.updates.push(Update {
+                harness: Kind::Claude,
+                installed: "2.1.310".into(),
+                latest: "2.1.311".into(),
+            });
+            // A late worker result must not restore the dismissed notification.
+            notice.checking = true;
+            let generation = notice.generation;
+            notice.dismiss(cx);
+            assert_ne!(notice.generation, generation);
+            assert!(!notice.checking);
+            assert!(!notice.is_visible());
+        });
     }
 }

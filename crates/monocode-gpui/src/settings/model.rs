@@ -236,6 +236,13 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         "Notifications",
         "notify alert toast permission reminder background",
     ),
+    #[cfg(target_os = "linux")]
+    (
+        "harness-update-notifications",
+        Section::General,
+        "Harness update notifications",
+        "cli startup update upgrade alert toast linux distribution package project managed",
+    ),
     (
         "notes",
         Section::General,
@@ -586,6 +593,15 @@ pub(crate) fn search(query: &str, compositor: &str) -> Vec<SearchResult> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn harness_update_notifications_are_searchable_on_linux() {
+        assert_eq!(
+            search("harness update", "X11")[0].setting,
+            Some("harness-update-notifications")
+        );
+    }
+
     #[test]
     fn wayland_decorations_are_searchable_only_on_wayland() {
         for query in ["Wayland", "window decorations", "compositor", "title bar"] {

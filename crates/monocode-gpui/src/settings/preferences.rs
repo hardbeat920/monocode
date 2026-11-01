@@ -10,6 +10,7 @@ pub(crate) struct Preferences {
     // General
     pub sounds: bool,
     pub notifications: bool,
+    pub harness_update_notifications: bool,
     pub project_notifications: serde_json::Value,
     pub notification_projects: serde_json::Value,
     pub file_tabs: String,
@@ -104,6 +105,7 @@ impl Default for Preferences {
         Self {
             sounds: true,
             notifications: false,
+            harness_update_notifications: true,
             project_notifications: serde_json::json!({}),
             notification_projects: serde_json::json!([]),
             file_tabs: "pane".into(),
