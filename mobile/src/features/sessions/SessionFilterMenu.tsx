@@ -1,19 +1,9 @@
-import { Host, HStack, Label, Menu, Picker, Spacer } from "@expo/ui/swift-ui";
-import {
-  accessibilityLabel,
-  contentShape,
-  frame,
-  pickerStyle,
-  shapes,
-  tag,
-} from "@expo/ui/swift-ui/modifiers";
-import { StyleSheet, View } from "react-native";
+import { Label, Picker, Toggle } from "@expo/ui/swift-ui";
+import { pickerStyle, tag } from "@expo/ui/swift-ui/modifiers";
 
 import { SEARCH_BAR } from "@/features/files/FileSearchBar";
 import type { Harness, SessionSummary } from "@/features/workspace/types";
-import { Icon } from "@/ui/Icon";
-import { LiquidView } from "@/ui/LiquidView";
-import { useColors } from "@/ui/theme";
+import { GlassMenuButton } from "@/ui/GlassMenuButton";
 
 export type SessionFilter = {
   /** Only the sessions working now. */
@@ -49,76 +39,66 @@ export function filterSessions(sessions: SessionSummary[], filter: SessionFilter
 
 /**
  * The round button beside the Sessions page's search: a native menu to show
- * only the sessions working now, or one agent's, from those in the list.
- * Lit while a filter is on.
+ * only the sessions working now, or one agent's, from those in the list, and
+ * to show or hide the pinned Monos group. Lit while a filter is on, hiding
+ * the Monos included.
  */
 export function SessionFilterMenu({
   value,
   onChange,
   harnesses,
+  monos,
 }: {
   value: SessionFilter;
   onChange: (value: SessionFilter) => void;
   /** The agents the list has sessions from. */
   harnesses: Harness[];
+  /** The pinned Monos group, offered only on a page that has Monos. */
+  monos?: { shown: boolean; onChange: (shown: boolean) => void };
 }) {
-  const colors = useColors();
-  const on = value.working || !!value.harness;
+  const on = value.working || !!value.harness || (!!monos && !monos.shown);
   return (
-    <View>
-      <LiquidView borderRadius={SEARCH_BAR / 2} innerStyle={styles.round}>
-        <Icon name="filter" size={20} color={on ? colors.accent : colors.content} />
-      </LiquidView>
-      {/* The native menu lies over the glass, its label an invisible box of
-          the button's size, as in WorkspaceMenu. */}
-      <Host style={StyleSheet.absoluteFill}>
-        <Menu
-          modifiers={[accessibilityLabel(on ? "Filter sessions, on" : "Filter sessions")]}
-          label={
-            <HStack
-              modifiers={[
-                frame({ width: SEARCH_BAR, height: SEARCH_BAR }),
-                contentShape(shapes.circle()),
-              ]}
-            >
-              <Spacer />
-            </HStack>
+    <GlassMenuButton
+      icon="filter"
+      symbol="slider.horizontal.3"
+      label="Filter sessions"
+      size={SEARCH_BAR}
+      on={on}
+    >
+      <Picker
+        selection={value.working ? "working" : "all"}
+        onSelectionChange={(status) => onChange({ ...value, working: status === "working" })}
+        modifiers={[pickerStyle("inline")]}
+      >
+        <Label title="All sessions" systemImage="tray.full" modifiers={[tag("all")]} />
+        <Label title="Working now" systemImage="bolt" modifiers={[tag("working")]} />
+      </Picker>
+      {harnesses.length > 1 || value.harness ? (
+        <Picker
+          selection={value.harness ?? "any"}
+          onSelectionChange={(harness) =>
+            onChange({
+              ...value,
+              harness: harness === "any" ? null : (harness as Harness),
+            })
           }
+          modifiers={[pickerStyle("inline")]}
         >
-          <Picker
-            selection={value.working ? "working" : "all"}
-            onSelectionChange={(status) => onChange({ ...value, working: status === "working" })}
-            modifiers={[pickerStyle("inline")]}
-          >
-            <Label title="All sessions" systemImage="tray.full" modifiers={[tag("all")]} />
-            <Label title="Working now" systemImage="bolt" modifiers={[tag("working")]} />
-          </Picker>
-          {harnesses.length > 1 || value.harness ? (
-            <Picker
-              selection={value.harness ?? "any"}
-              onSelectionChange={(harness) =>
-                onChange({
-                  ...value,
-                  harness: harness === "any" ? null : (harness as Harness),
-                })
-              }
-              modifiers={[pickerStyle("inline")]}
-            >
-              <Label title="Any agent" modifiers={[tag("any")]} />
-              {harnesses.map((harness) => (
-                <Label key={harness} title={HARNESS_NAMES[harness]} modifiers={[tag(harness)]} />
-              ))}
-            </Picker>
-          ) : null}
-        </Menu>
-      </Host>
-    </View>
+          <Label title="Any agent" modifiers={[tag("any")]} />
+          {harnesses.map((harness) => (
+            <Label key={harness} title={HARNESS_NAMES[harness]} modifiers={[tag(harness)]} />
+          ))}
+        </Picker>
+      ) : null}
+      {monos ? (
+        <Toggle
+          label="Monos"
+          systemImage="person.2"
+          isOn={monos.shown}
+          onIsOnChange={monos.onChange}
+        />
+      ) : null}
+    </GlassMenuButton>
   );
 }
 
-const styles = StyleSheet.create({
-  round: {
-    width: SEARCH_BAR,
-    height: SEARCH_BAR,
-  },
-});

@@ -204,6 +204,9 @@ vi.mock("@/features/sessions/Transcript", () => ({
   Transcript: () => null,
   TranscriptLoading: () => null,
 }));
+vi.mock("@/features/workspace/useCreateMono", () => ({ useCreateMono: () => undefined }));
+vi.mock("@/features/inbox/InboxPage", () => ({ InboxPage: () => null }));
+vi.mock("@/features/inbox/InboxProvider", () => ({ useInboxSupported: () => false }));
 vi.mock("@/features/workspace/ProjectPages", () => ({
   useProjectPages: () => ({ progress: { get: () => 0 }, view: "chat" }),
   ProjectPages: () => null,
@@ -260,7 +263,7 @@ vi.mock("@/ui/ScenePager", () => ({
 vi.mock("@/ui/DitherLoading", () => ({ DitherLoading: () => null }));
 vi.mock("@/features/workspace/UnreadDot", () => ({
   UnreadDot: () => null,
-  useAnyUnreadMono: () => false,
+  useAnyUnread: () => false,
 }));
 vi.mock("@/ui/Icon", () => ({ Icon: () => null }));
 vi.mock("@/ui/LiquidView", async () => {
@@ -355,14 +358,17 @@ describe("new session composer workspace", () => {
   });
   afterEach(() => act(() => root.unmount()));
 
-  it("keeps circular Android project/settings controls after switching projects", () => {
+  it("keeps the circular Android drawer button after switching projects", () => {
     desktop.os = "android";
     render();
     // The drawer's button, where the project switcher was.
-    for (const label of ["Projects and monos", "Settings"]) {
-      expect(button(label).style.borderRadius).toBe("22px");
-      expect(button(label).hasAttribute("data-glass")).toBe(true);
-    }
+    expect(button("Projects").style.borderRadius).toBe("22px");
+    expect(button("Projects").hasAttribute("data-glass")).toBe(true);
+    // Settings moved off the project's header.
+    const settings = Array.from(container.querySelectorAll("button")).find(
+      (found) => found.getAttribute("aria-label") === "Settings" || found.textContent === "Settings",
+    );
+    expect(settings).toBeUndefined();
     act(() =>
       root.render(
         <ProjectScreen
@@ -371,8 +377,8 @@ describe("new session composer workspace", () => {
         />,
       ),
     );
-    expect(button("Projects and monos").style.borderRadius).toBe("22px");
-    expect(button("Settings").hasAttribute("data-glass")).toBe(true);
+    expect(button("Projects").style.borderRadius).toBe("22px");
+    expect(button("Projects").hasAttribute("data-glass")).toBe(true);
     expect(desktop.header.headerTitleAlign).toBe("center");
   });
 
@@ -389,7 +395,7 @@ describe("new session composer workspace", () => {
     const renderAvatar = desktop.header.headerLeft as () => ReactNode;
     act(() => root.render(<>{renderAvatar()}</>));
     expect(desktop.headerTarget).toBe(target);
-    expect(button("Projects and monos").hasAttribute("data-glass")).toBe(true);
+    expect(button("Projects").hasAttribute("data-glass")).toBe(true);
   });
 
   it("keeps Android session titles next to the back target and actions on the right", () => {

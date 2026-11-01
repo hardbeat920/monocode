@@ -7,6 +7,18 @@ use std::collections::HashMap;
 const RECENT_SESSIONS: usize = 20;
 const SESSION_PAGE_MAX: usize = 100;
 
+/// Which Mono launched each session: a session id to the Mono's id. Sessions
+/// adopted through `sessions.send` with `notifyOnComplete` are recorded as
+/// launches too and can't be told apart yet.
+pub fn launch_origins<'a>(
+    monos: impl IntoIterator<Item = (&'a str, Vec<i64>)>,
+) -> HashMap<i64, String> {
+    monos
+        .into_iter()
+        .flat_map(|(mono, sessions)| sessions.into_iter().map(move |id| (id, mono.to_owned())))
+        .collect()
+}
+
 /// The workspace poll's sessions: each project's most recent, every busy one,
 /// and every Mono's. `sessions` is newest first, as the catalog is sorted.
 pub fn recent_sessions(sessions: &Value) -> Vec<Value> {
@@ -71,6 +83,21 @@ pub fn session_page(sessions: &Value, params: &Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn launched_sessions_map_to_their_mono_and_keep_it_in_the_poll() {
+        let origins = launch_origins([("mono-a", vec![1, 2]), ("mono-b", vec![3])]);
+        assert_eq!(origins.get(&2).map(String::as_str), Some("mono-a"));
+        assert_eq!(origins.get(&3).map(String::as_str), Some("mono-b"));
+        assert!(!origins.contains_key(&4));
+        let mut sessions: Vec<Value> = (0..30)
+            .map(|i| json!({"id":format!("s{i}"),"projectId":"p"}))
+            .collect();
+        sessions[28]["monoId"] = json!("mono-a");
+        let recent = recent_sessions(&json!(sessions));
+        assert!(recent.iter().any(|s| s["id"] == "s28"));
+        assert!(!recent.iter().any(|s| s["id"] == "s27"));
+    }
+
     #[test]
     fn the_poll_carries_recent_sessions_and_pages_serve_the_rest() {
         let sessions: Vec<Value> = (0..30)

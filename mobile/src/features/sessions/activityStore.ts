@@ -222,3 +222,8 @@ export function useSessionActivity(projectId: string) {
     [current, projectId],
   );
 }
+
+/** How many sessions have finished, across every project, with none opened or put away yet. */
+export function useFinishedCount() {
+  return useSyncExternalStore(subscribe, () => activity.finished.length);
+}

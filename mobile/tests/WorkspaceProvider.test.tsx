@@ -19,6 +19,11 @@ const link = vi.hoisted(() => ({
   closeWatch: vi.fn(),
   storage: new Map<string, string>(),
   nativeTranscript: false,
+  catalog: {
+    projects: [{ id: "project" }],
+    monos: [] as object[],
+    sessions: [] as object[],
+  } as { projects: object[]; monos: object[]; sessions: object[]; sessionUnarchive?: boolean },
 }));
 vi.mock("react-native", () => ({
   AppState: { currentState: "active", addEventListener: () => ({ remove() {} }) },
@@ -33,7 +38,7 @@ vi.mock("expo-sqlite/kv-store", () => ({
 vi.mock("@/features/connection/ConnectionProvider", () => ({
   useConnection: () => ({
     pairing: link.pairing,
-    catalog: { projects: [{ id: "project" }], monos: [], sessions: [] },
+    catalog: link.catalog,
     selection: { projectIds: ["project"], monoIds: [] },
     command: link.command,
     refresh: link.refresh,
@@ -84,6 +89,7 @@ describe("starting mobile sessions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     link.nativeTranscript = false;
+    link.catalog = { projects: [{ id: "project" }], monos: [], sessions: [] };
     link.storage.clear();
     vi.stubGlobal("__DEV__", false);
     link.openWatch.mockResolvedValue(1);
@@ -401,4 +407,69 @@ describe("starting mobile sessions", () => {
     act(() => workspace.nativeTranscriptStatus("session", { ...status, question: null }));
     expect(conversation.question).toBeNull();
   });
+
+  describe("archiving a session", () => {
+    const row = (id: string) => ({ id, projectId: "project", title: id, harness: "claude", model: "m", branch: "", updatedAt: 1 });
+    const listed = () => workspace.sessions.map((session) => session.id);
+    beforeEach(() => {
+      link.catalog = { projects: [{ id: "project" }], monos: [], sessions: [row("a"), row("b")] };
+      link.refresh.mockResolvedValue(undefined);
+    });
+
+    it("takes the session off every list before the desktop has answered", async () => {
+      const answer = deferred<object>();
+      link.command.mockReturnValue(answer.promise);
+      render();
+      expect(listed()).toEqual(["a", "b"]);
+      let archived!: Promise<void>;
+      await act(async () => { archived = workspace.archiveSession("a"); await Promise.resolve(); });
+      expect(link.command).toHaveBeenCalledWith("session.archive", { conversationId: "a" }, "request-id");
+      expect(listed()).toEqual(["b"]);
+      await act(async () => { answer.resolve({}); await archived; });
+      expect(listed()).toEqual(["b"]);
+      expect(link.refresh).toHaveBeenCalled();
+    });
+
+    it("puts the session back when the desktop refuses", async () => {
+      link.command.mockRejectedValue(new Error("No such session"));
+      render();
+      await act(async () => {
+        await expect(workspace.archiveSession("a")).rejects.toThrow("No such session");
+      });
+      expect(listed()).toEqual(["a", "b"]);
+    });
+
+    it("brings an archived session back on unarchive, and hides it again if that fails", async () => {
+      link.command.mockResolvedValue({});
+      render();
+      await act(async () => { await workspace.archiveSession("a"); });
+      expect(listed()).toEqual(["b"]);
+      await act(async () => { await workspace.unarchiveSession("a"); });
+      expect(link.command).toHaveBeenLastCalledWith("session.unarchive", { conversationId: "a" }, "request-id");
+      expect(listed()).toEqual(["a", "b"]);
+
+      await act(async () => { await workspace.archiveSession("a"); });
+      link.command.mockRejectedValue(new Error("Unknown method"));
+      await act(async () => {
+        await expect(workspace.unarchiveSession("a")).rejects.toThrow("Unknown method");
+      });
+      expect(listed()).toEqual(["b"]);
+    });
+
+    it("offers an Undo only where the desktop says it can unarchive", () => {
+      render();
+      expect(workspace.canUnarchive).toBe(false);
+      link.catalog = { ...link.catalog, sessionUnarchive: true };
+      render();
+      expect(workspace.canUnarchive).toBe(true);
+    });
+
+    it("names every Mono on the desktop, not only those whose projects are picked", () => {
+      link.catalog = { ...link.catalog, monos: [{ id: "elsewhere", projectIds: ["other"] }, { id: "here", projectIds: ["project"] }] };
+      render();
+      expect(workspace.monos.map((mono) => mono.id)).toEqual(["here"]);
+      expect(workspace.allMonos.map((mono) => mono.id)).toEqual(["elsewhere", "here"]);
+    });
+  });
+
 });

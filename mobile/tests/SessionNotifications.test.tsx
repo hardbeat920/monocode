@@ -27,6 +27,9 @@ const state = vi.hoisted(() => ({
   schedule: vi.fn(),
   pushToken: vi.fn(),
   command: vi.fn(),
+  response: null as unknown,
+  navigate: vi.fn(),
+  clearResponse: vi.fn(),
 }));
 
 vi.mock("react-native", () => ({
@@ -46,12 +49,13 @@ vi.mock("expo-notifications", () => ({
   setNotificationChannelAsync: state.setChannel,
   scheduleNotificationAsync: state.schedule,
   getExpoPushTokenAsync: state.pushToken,
-  useLastNotificationResponse: () => null,
+  useLastNotificationResponse: () => state.response,
+  clearLastNotificationResponseAsync: state.clearResponse,
   DEFAULT_ACTION_IDENTIFIER: "default",
   AndroidImportance: { DEFAULT: 3 },
   IosAuthorizationStatus: { NOT_DETERMINED: 0 },
 }));
-vi.mock("expo-router", () => ({ router: { push: vi.fn() } }));
+vi.mock("expo-router", () => ({ router: { push: state.navigate } }));
 vi.mock("expo-constants", () => ({
   default: { expoConfig: { extra: { eas: { projectId: "project-id" } } } },
 }));
@@ -83,6 +87,7 @@ beforeEach(() => {
   state.enabled = true;
   state.push = false;
   state.sessions = [];
+  state.response = null;
   state.settings = { status: "undetermined", canAskAgain: true };
   state.getPermissions.mockImplementation(async () => state.settings);
   state.requestPermissions.mockResolvedValue({ status: "granted" });
@@ -234,4 +239,28 @@ it("retries a push token that failed to come, and posts its own alerts meanwhile
   } finally {
     vi.useRealTimers();
   }
+});
+
+const tapped = (data: object) => ({
+  actionIdentifier: "default",
+  notification: { request: { content: { data } } },
+});
+
+it("opens an inbox item's sheet when its push is tapped", async () => {
+  state.response = tapped({ kind: "inbox", key: "github:acme/app#12" });
+  await render();
+  expect(state.navigate).toHaveBeenCalledWith({
+    pathname: "/inbox/item",
+    params: { key: "github:acme/app#12" },
+  });
+  expect(state.clearResponse).toHaveBeenCalled();
+});
+
+it("still opens a session from its push", async () => {
+  state.response = tapped({ projectId: "p1", sessionId: "s1" });
+  await render();
+  expect(state.navigate).toHaveBeenCalledWith({
+    pathname: "/project/[projectId]/session/[sessionId]",
+    params: { projectId: "p1", sessionId: "s1" },
+  });
 });

@@ -12,7 +12,7 @@ pub struct GitHubLabel {
     pub color: String,
 }
 
-#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GitHubAssignee {
     pub login: String,
@@ -32,6 +32,7 @@ pub struct GitHubWorkItem {
     pub updated_at: String,
     pub labels: Vec<GitHubLabel>,
     pub assignees: Vec<GitHubAssignee>,
+    pub author: GitHubAssignee,
     pub draft: bool,
     pub repo: String,
 }
@@ -164,8 +165,8 @@ pub(super) fn git_github_work_items_for(
     repo: &str,
     kind: &str,
     assigned_to_me: bool,
+    author: &str,
     state: &str,
-    search: &str,
     limit: u32,
 ) -> Result<Vec<GitHubWorkItem>, String> {
     let kind = kind.trim();
@@ -181,9 +182,9 @@ pub(super) fn git_github_work_items_for(
     };
     let limit = limit.clamp(1, 100).to_string();
     let fields = if kind == "pr" {
-        "number,title,url,state,createdAt,updatedAt,labels,assignees,isDraft"
+        "number,title,url,state,createdAt,updatedAt,labels,assignees,author,isDraft"
     } else {
-        "number,title,url,state,stateReason,createdAt,updatedAt,labels,assignees"
+        "number,title,url,state,stateReason,createdAt,updatedAt,labels,assignees,author"
     };
     let mut args = vec![
         kind.to_string(),
@@ -201,14 +202,90 @@ pub(super) fn git_github_work_items_for(
         args.push("--assignee".into());
         args.push("@me".into());
     }
-    let search = search.trim();
-    if !search.is_empty() {
-        args.push("--search".into());
-        args.push(search.to_string());
+    let author = author.trim();
+    if !author.is_empty() {
+        args.push("--author".into());
+        args.push(author.to_string());
     }
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let json = gh_checked(root, &refs)?;
     parse_github_work_items(&json, kind, &repo)
+}
+
+/// What the signed-in user is wanted for, as a GitHub search qualifier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Involvement {
+    ReviewRequested,
+    Mentioned,
+}
+impl Involvement {
+    fn qualifier(self) -> &'static str {
+        match self {
+            Self::ReviewRequested => "review-requested",
+            Self::Mentioned => "mentions",
+        }
+    }
+}
+
+/// The `gh` arguments listing the open items of `repo` that `involvement` names
+/// `viewer` in. Only numbers come back: the main list already holds the rows.
+fn github_involvement_args(
+    repo: &str,
+    kind: &str,
+    involvement: Involvement,
+    viewer: &str,
+) -> Result<Vec<String>, String> {
+    if kind != "issue" && kind != "pr" {
+        return Err("Unknown GitHub task kind".into());
+    }
+    if involvement == Involvement::ReviewRequested && kind != "pr" {
+        return Err("Only pull requests have reviews".into());
+    }
+    if viewer.is_empty()
+        || !viewer
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return Err("Unknown GitHub user".into());
+    }
+    let (owner, name) = split_github_repo(repo)?;
+    Ok(vec![
+        kind.into(),
+        "list".into(),
+        "--state".into(),
+        "open".into(),
+        "--limit".into(),
+        "100".into(),
+        "--repo".into(),
+        format!("{owner}/{name}"),
+        "--search".into(),
+        format!("{}:{viewer}", involvement.qualifier()),
+        "--json".into(),
+        "number".into(),
+    ])
+}
+
+fn parse_github_numbers(json: &str) -> Result<Vec<i64>, String> {
+    #[derive(Deserialize)]
+    struct Row {
+        number: i64,
+    }
+    serde_json::from_str::<Vec<Row>>(json)
+        .map(|rows| rows.into_iter().map(|row| row.number).collect())
+        .map_err(|error| error.to_string())
+}
+
+/// The open items of `repo` the viewer is asked to review or is mentioned in.
+pub(super) fn git_github_involved_for(
+    root: &Path,
+    repo: &str,
+    kind: &str,
+    involvement: Involvement,
+    viewer: &str,
+) -> Result<Vec<i64>, String> {
+    let args = github_involvement_args(repo, kind, involvement, viewer)?;
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    parse_github_numbers(&gh_checked(root, &refs)?)
 }
 
 pub(super) fn git_github_work_item_for(
@@ -228,9 +305,9 @@ pub(super) fn git_github_work_item_for(
     let repo = format!("{owner}/{name}");
     let number = number.to_string();
     let fields = if kind == "pr" {
-        "number,title,url,state,createdAt,updatedAt,labels,assignees,isDraft"
+        "number,title,url,state,createdAt,updatedAt,labels,assignees,author,isDraft"
     } else {
-        "number,title,url,state,stateReason,createdAt,updatedAt,labels,assignees"
+        "number,title,url,state,stateReason,createdAt,updatedAt,labels,assignees,author"
     };
     let json = gh_checked(
         root,
@@ -1282,6 +1359,8 @@ fn parse_github_work_items(
         #[serde(default)]
         assignees: Vec<RowAssignee>,
         #[serde(default)]
+        author: Option<RowAssignee>,
+        #[serde(default)]
         is_draft: bool,
     }
     let rows: Vec<Row> = serde_json::from_str(json).map_err(|error| error.to_string())?;
@@ -1312,6 +1391,13 @@ fn parse_github_work_items(
                     login: assignee.login,
                 })
                 .collect(),
+            author: row
+                .author
+                .map(|author| GitHubAssignee {
+                    avatar_url: github_avatar_url(&author.login),
+                    login: author.login,
+                })
+                .unwrap_or_default(),
             draft: row.is_draft,
             repo: repo.to_string(),
         })
@@ -1347,5 +1433,59 @@ fn git_diff_full_context(root: &Path, base: &str, head: &str) -> Result<(String,
         Ok((String::new(), true))
     } else {
         Ok((output, false))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn list_rows_carry_their_author() {
+        let json = r#"[
+            {"number":1,"title":"A","url":"u","state":"OPEN","author":{"login":"octocat"}},
+            {"number":2,"title":"B","url":"u","state":"OPEN","author":null}
+        ]"#;
+        let items = parse_github_work_items(json, "pr", "acme/app").unwrap();
+        assert_eq!(items[0].author.login, "octocat");
+        assert!(items[0].author.avatar_url.contains("octocat"));
+        assert_eq!(items[1].author, GitHubAssignee::default());
+    }
+
+    #[test]
+    fn involvement_searches_name_the_viewer_and_ask_only_for_numbers() {
+        let args =
+            github_involvement_args("Acme/App", "pr", Involvement::ReviewRequested, "octo-cat")
+                .unwrap();
+        assert!(args
+            .windows(2)
+            .any(|w| w == ["--search", "review-requested:octo-cat"]));
+        assert!(args.windows(2).any(|w| w == ["--repo", "Acme/App"]));
+        assert!(args.windows(2).any(|w| w == ["--json", "number"]));
+        let mention =
+            github_involvement_args("a/b", "issue", Involvement::Mentioned, "sam").unwrap();
+        assert!(mention.contains(&"mentions:sam".to_string()));
+        for bad in ["", "sam repo:x/y", "a:b", "sam\n"] {
+            assert!(
+                github_involvement_args("a/b", "pr", Involvement::Mentioned, bad).is_err(),
+                "{bad}"
+            );
+        }
+        assert!(
+            github_involvement_args("a/b", "issue", Involvement::ReviewRequested, "sam").is_err()
+        );
+        assert!(
+            github_involvement_args("not a repo", "pr", Involvement::Mentioned, "sam").is_err()
+        );
+    }
+
+    #[test]
+    fn involvement_answers_are_number_lists() {
+        assert_eq!(
+            parse_github_numbers(r#"[{"number":4},{"number":9}]"#).unwrap(),
+            [4, 9]
+        );
+        assert_eq!(parse_github_numbers("[]").unwrap(), Vec::<i64>::new());
+        assert!(parse_github_numbers("nope").is_err());
     }
 }

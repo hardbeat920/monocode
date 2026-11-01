@@ -2,6 +2,7 @@
 //! validation, response parsers and credential file formats.
 mod avatar;
 mod media;
+pub use media::phone_image;
 pub use media::png as media_png;
 pub mod azure_devops;
 pub use avatar::png as avatar_png;
@@ -9,6 +10,7 @@ mod github;
 pub mod gitlab;
 pub mod jira;
 pub mod linear;
+pub mod patch;
 
 use crate::{desktop_preferences::DesktopPreferences, session_groups::WorkItem, store::Store};
 use chrono::{Datelike, Local, TimeZone};
@@ -17,6 +19,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
     process::Command,
+    sync::{Arc, Mutex},
 };
 
 pub const PROVIDERS: [&str; 5] = ["github", "linear", "jira", "gitlab", "azuredevops"];
@@ -62,6 +65,7 @@ pub struct Item {
     pub updated_at: String,
     pub labels: Vec<Label>,
     pub assignees: Vec<Person>,
+    pub author: Person,
     pub draft: bool,
     pub repo: String,
     pub team_id: String,
@@ -283,10 +287,18 @@ pub struct StatusFilter {
     pub closed: bool,
     pub merged: bool,
 }
+/// The author filter's stand-in for the signed-in user, as in `gh --author @me`.
+pub const ME: &str = "@me";
+/// Sources whose list rows carry the author, so the author filter applies.
+pub fn has_authors(source: &str) -> bool {
+    source == "github"
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Filters {
     pub assigned_to_me: bool,
+    /// Author logins, or `ME`; empty shows everyone's items.
+    pub authors: Vec<String>,
     pub hidden_projects: Vec<String>,
     pub hidden_linear_projects: Vec<String>,
     pub hidden_kinds: Vec<String>,
@@ -297,6 +309,7 @@ impl Default for Filters {
     fn default() -> Self {
         Self {
             assigned_to_me: false,
+            authors: vec![],
             hidden_projects: vec![],
             hidden_linear_projects: vec![],
             hidden_kinds: vec![],
@@ -313,8 +326,30 @@ impl Filters {
             "open"
         }
     }
-    pub fn matches(&self, item: &Item, source: &str, search: &str) -> bool {
+    /// A single author is fetched with `--author` so a busy repository's
+    /// fetch limit doesn't hide their older items; several are filtered here.
+    pub fn fetch_author(&self) -> Option<&str> {
+        match self.authors.as_slice() {
+            [author] => Some(author),
+            _ => None,
+        }
+    }
+    /// `viewer` is the signed-in login; while it is unknown `ME` matches
+    /// everything rather than hiding the list.
+    pub fn matches(&self, item: &Item, source: &str, search: &str, viewer: &str) -> bool {
         if item.provider != source {
+            return false;
+        }
+        if has_authors(source)
+            && !self.authors.is_empty()
+            && !self.authors.iter().any(|author| {
+                if author == ME {
+                    viewer.is_empty() || item.author.login.eq_ignore_ascii_case(viewer)
+                } else {
+                    item.author.login.eq_ignore_ascii_case(author)
+                }
+            })
+        {
             return false;
         }
         let tracker = is_tracker(source);
@@ -367,12 +402,13 @@ impl Filters {
             return false;
         }
         let text = format!(
-            "{} {} {} {} {} {}",
+            "{} {} {} {} {} {} {}",
             item.title,
             item.reference(),
             item.number,
             item.repo,
             item.team_name,
+            item.author.login,
             item.labels
                 .iter()
                 .map(|l| l.name.as_str())
@@ -411,6 +447,61 @@ impl Seen {
             self.seeded = true;
         }
     }
+    /// Reads the item as unread again, until it is opened or marked.
+    pub fn unmark(&mut self, item: &Item) {
+        self.items.remove(&item.key());
+    }
+}
+
+/// Most entries `Triage` keeps for finished items; the oldest go first.
+const MAX_DONE: usize = 5000;
+
+/// What the user did with an item, kept next to `Seen` and keyed the same way
+/// (`Item::key()`), so the desktop and a paired phone share it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Triage {
+    /// When each finished item was marked done, in ms.
+    pub done: BTreeMap<String, i64>,
+    /// Until when each snoozed item stays out of the lists, in ms.
+    pub snoozed: BTreeMap<String, i64>,
+}
+impl Triage {
+    pub fn is_done(&self, key: &str) -> bool {
+        self.done.contains_key(key)
+    }
+    /// The time a snooze ends, while it still hides the item.
+    pub fn snoozed_until(&self, key: &str, now: i64) -> Option<i64> {
+        self.snoozed.get(key).copied().filter(|until| *until > now)
+    }
+    pub fn mark_done(&mut self, key: &str, now: i64) {
+        self.snoozed.remove(key);
+        self.done.insert(key.to_owned(), now);
+        while self.done.len() > MAX_DONE {
+            let Some(oldest) = self
+                .done
+                .iter()
+                .min_by_key(|(_, at)| **at)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            self.done.remove(&oldest);
+        }
+    }
+    pub fn undo_done(&mut self, key: &str) {
+        self.done.remove(key);
+    }
+    pub fn snooze(&mut self, key: &str, until: i64) {
+        self.snoozed.insert(key.to_owned(), until);
+    }
+    pub fn unsnooze(&mut self, key: &str) {
+        self.snoozed.remove(key);
+    }
+    /// Forgets snoozes that have ended, so their items show again.
+    pub fn prune(&mut self, now: i64) {
+        self.snoozed.retain(|_, until| *until > now);
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -418,6 +509,7 @@ pub struct ViewState {
     pub source: String,
     pub filters: Filters,
     pub seen: Seen,
+    pub triage: Triage,
     pub hidden_linear_teams: Vec<String>,
     pub hidden_jira_projects: Vec<String>,
     pub list_width: f32,
@@ -428,6 +520,7 @@ impl Default for ViewState {
             source: "github".into(),
             filters: Filters::default(),
             seen: Seen::default(),
+            triage: Triage::default(),
             hidden_linear_teams: vec![],
             hidden_jira_projects: vec![],
             list_width: 280.,
@@ -447,8 +540,9 @@ impl ViewState {
         let mut jira = self.hidden_jira_projects.clone();
         jira.sort();
         format!(
-            "{}:{}:{}:{}:{}",
+            "{}:{}:{}:{}:{}:{}",
             self.filters.assigned_to_me,
+            self.filters.fetch_author().unwrap_or_default(),
             self.filters.fetch_state(),
             paths.join("|"),
             teams.join(","),
@@ -511,6 +605,8 @@ pub struct Snapshot {
     pub connections: BTreeMap<String, Status>,
     pub linear_teams: Vec<OptionRow>,
     pub jira_projects: Vec<OptionRow>,
+    /// The signed-in login per provider, where it is known.
+    pub viewers: BTreeMap<String, String>,
 }
 
 /// The Tauri InboxNotificationTracker: provider baselines and revisions are
@@ -583,6 +679,8 @@ impl NotificationTracker {
 pub struct Service {
     pub data_dir: PathBuf,
     pub cwd: PathBuf,
+    /// The `gh` login, looked up once it succeeds.
+    pub github_viewer: Arc<Mutex<Option<String>>>,
 }
 /// Pairs each repository with one checkout to fetch it through. Several
 /// checkouts of the same repository share its rows, so the active checkout
@@ -605,11 +703,44 @@ fn repo_checkouts<'a>(
     }
     checkouts
 }
+/// Gives GitHub rows the reason the viewer should look: a requested review,
+/// then an assignment, then a mention. A reason a row already has stays.
+fn mark_github_attention(rows: &mut [Item], viewer: &str, reviews: &[i64], mentions: &[i64]) {
+    for row in rows {
+        if !row.attention_reason.is_empty() {
+            continue;
+        }
+        row.attention_reason = if reviews.contains(&row.number) {
+            "review_requested"
+        } else if row
+            .assignees
+            .iter()
+            .any(|assignee| assignee.login.eq_ignore_ascii_case(viewer))
+        {
+            "assigned"
+        } else if mentions.contains(&row.number) {
+            "mentioned"
+        } else {
+            continue;
+        }
+        .into();
+    }
+}
 fn convert<T: Serialize, U: DeserializeOwned>(value: T) -> Result<U, String> {
     serde_json::from_value(serde_json::to_value(value).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())
 }
 impl Service {
+    fn github_viewer(&self) -> Option<String> {
+        let mut cached = self.github_viewer.lock().ok()?;
+        if cached.is_none() {
+            *cached = run_gh(&self.cwd, &["api", "user", "--jq", ".login"], false)
+                .ok()
+                .map(|login| login.trim().to_owned())
+                .filter(|login| !login.is_empty());
+        }
+        cached.clone()
+    }
     pub fn status(&self, provider: &str) -> Result<Status, String> {
         match provider {
             "linear" => convert(linear::linear_status(self.data_dir.clone())?),
@@ -681,6 +812,11 @@ impl Service {
             snapshot.connections.insert(provider.into(), status);
             if !connected {
                 continue;
+            }
+            if provider == "github" {
+                if let Some(login) = self.github_viewer() {
+                    snapshot.viewers.insert(provider.into(), login);
+                }
             }
             let result: Result<Vec<Item>, String> = (|| {
                 if provider == "linear" {
@@ -776,8 +912,8 @@ impl Service {
                                 &repo,
                                 kind,
                                 state.filters.assigned_to_me,
+                                state.filters.fetch_author().unwrap_or_default(),
                                 state.filters.fetch_state(),
-                                "",
                                 limit,
                             )?)?,
                             "gitlab" => convert(gitlab::gitlab_list_work_items(
@@ -797,6 +933,29 @@ impl Service {
                                 Some(limit),
                             )?)?,
                         };
+                        let mut rows = rows;
+                        if provider == "github" {
+                            if let Some(viewer) = snapshot.viewers.get("github") {
+                                // Best effort: a failed search leaves the rows as listed.
+                                let involved = |involvement| {
+                                    github::git_github_involved_for(
+                                        project,
+                                        &repo,
+                                        kind,
+                                        involvement,
+                                        viewer,
+                                    )
+                                    .unwrap_or_default()
+                                };
+                                let reviews = if kind == "pr" {
+                                    involved(github::Involvement::ReviewRequested)
+                                } else {
+                                    vec![]
+                                };
+                                let mentions = involved(github::Involvement::Mentioned);
+                                mark_github_attention(&mut rows, viewer, &reviews, &mentions);
+                            }
+                        }
                         items.extend(rows.into_iter().map(|mut item| {
                             item.provider = provider.into();
                             item.project_path = project.to_string_lossy().into_owned();
@@ -1160,5 +1319,182 @@ mod notification_tests {
                 "from {cwd:?}: {checkouts:?}"
             );
         }
+    }
+}
+#[cfg(test)]
+mod author_tests {
+    use super::*;
+
+    fn by(login: &str, provider: &str) -> Item {
+        Item {
+            provider: provider.into(),
+            kind: "pr".into(),
+            repo: "acme/app".into(),
+            author: Person {
+                login: login.into(),
+                ..Person::default()
+            },
+            ..Item::default()
+        }
+    }
+    fn authors(authors: &[&str]) -> Filters {
+        Filters {
+            authors: authors.iter().map(|a| a.to_string()).collect(),
+            ..Filters::default()
+        }
+    }
+
+    #[test]
+    fn author_filter_keeps_the_chosen_authors() {
+        let item = by("Octocat", "github");
+        assert!(authors(&[]).matches(&item, "github", "", "me"));
+        assert!(authors(&["octocat"]).matches(&item, "github", "", "me"));
+        assert!(authors(&["hubot", "octocat"]).matches(&item, "github", "", "me"));
+        assert!(!authors(&["hubot"]).matches(&item, "github", "", "me"));
+    }
+
+    #[test]
+    fn me_matches_the_viewer_and_everything_while_it_is_unknown() {
+        let item = by("octocat", "github");
+        assert!(authors(&[ME]).matches(&item, "github", "", "OctoCat"));
+        assert!(!authors(&[ME]).matches(&item, "github", "", "hubot"));
+        assert!(authors(&[ME]).matches(&item, "github", "", ""));
+        assert!(authors(&[ME, "octocat"]).matches(&item, "github", "", "hubot"));
+    }
+
+    #[test]
+    fn author_filter_combines_with_other_filters_and_search() {
+        let mut filters = authors(&["octocat"]);
+        filters.hidden_kinds = vec!["pr".into()];
+        assert!(!filters.matches(&by("octocat", "github"), "github", "", ""));
+        assert!(authors(&[]).matches(&by("octocat", "github"), "github", "octo", ""));
+    }
+
+    #[test]
+    fn sources_without_authors_ignore_the_filter() {
+        assert!(authors(&["octocat"]).matches(&by("", "gitlab"), "gitlab", "", ""));
+        assert!(authors(&[ME]).matches(&by("", "linear"), "linear", "", "octocat"));
+    }
+
+    #[test]
+    fn only_a_single_author_changes_the_fetch() {
+        let scope = |filters: Filters| {
+            ViewState {
+                filters,
+                ..ViewState::default()
+            }
+            .fetch_scope(&[])
+        };
+        assert_eq!(authors(&[ME]).fetch_author(), Some(ME));
+        assert_eq!(authors(&[ME, "octocat"]).fetch_author(), None);
+        assert_ne!(scope(authors(&[ME])), scope(authors(&[])));
+        assert_eq!(scope(authors(&[ME, "octocat"])), scope(authors(&[])));
+    }
+}
+
+#[cfg(test)]
+mod attention_tests {
+    use super::*;
+
+    fn row(number: i64, assignees: &[&str]) -> Item {
+        Item {
+            provider: "github".into(),
+            kind: "pr".into(),
+            number,
+            assignees: assignees
+                .iter()
+                .map(|login| Person {
+                    login: (*login).into(),
+                    ..Person::default()
+                })
+                .collect(),
+            ..Item::default()
+        }
+    }
+
+    #[test]
+    fn rows_get_the_reason_the_viewer_is_wanted() {
+        let mut rows = vec![
+            row(1, &[]),
+            row(2, &["Octocat"]),
+            row(3, &["octocat"]),
+            row(4, &[]),
+            row(5, &["hubot"]),
+        ];
+        rows[3].attention_reason = "build_failed".into();
+        mark_github_attention(&mut rows, "octocat", &[1, 3, 4], &[1, 2, 5]);
+        let reasons: Vec<_> = rows.iter().map(|r| r.attention_reason.as_str()).collect();
+        assert_eq!(
+            reasons,
+            [
+                "review_requested",
+                "assigned",
+                "review_requested",
+                "build_failed",
+                "mentioned"
+            ]
+        );
+    }
+
+    #[test]
+    fn rows_nobody_asked_about_have_no_reason() {
+        let mut rows = vec![row(1, &["hubot"]), row(2, &[])];
+        mark_github_attention(&mut rows, "octocat", &[], &[]);
+        assert!(rows.iter().all(|r| r.attention_reason.is_empty()));
+    }
+}
+
+#[cfg(test)]
+mod fetch_scope_tests {
+    use super::*;
+
+    fn projects(paths: &[&str]) -> Vec<PathBuf> {
+        paths.iter().map(PathBuf::from).collect()
+    }
+
+    /// A paired phone is served from the desktop's own fetch only while the two
+    /// scopes are the same string, so everything the fetch depends on must be in it.
+    #[test]
+    fn the_scope_changes_with_everything_that_changes_the_fetch() {
+        let app = projects(&["/work/app"]);
+        let base = ViewState::default().fetch_scope(&app);
+        assert_eq!(base, ViewState::default().fetch_scope(&app));
+
+        let mut assigned = ViewState::default();
+        assigned.filters.assigned_to_me = true;
+        assert_ne!(base, assigned.fetch_scope(&app));
+
+        let mut author = ViewState::default();
+        author.filters.authors = vec!["octo".into()];
+        assert_ne!(base, author.fetch_scope(&app));
+
+        let mut open = ViewState::default();
+        open.filters.status.open = true;
+        assert_ne!(base, open.fetch_scope(&app));
+
+        let team = ViewState {
+            hidden_linear_teams: vec!["t1".into()],
+            ..ViewState::default()
+        };
+        assert_ne!(base, team.fetch_scope(&app));
+
+        assert_ne!(
+            base,
+            ViewState::default().fetch_scope(&projects(&["/work/app", "/work/mono"]))
+        );
+    }
+
+    #[test]
+    fn the_scope_ignores_what_the_desktop_only_filters_on_screen() {
+        let app = projects(&["/work/app"]);
+        let mut shown = ViewState::default();
+        shown.filters.authors = vec!["a".into(), "b".into()];
+        shown.filters.hidden_kinds = vec!["issue".into()];
+        shown.filters.time = "7d".into();
+        shown.source = "linear".into();
+        assert_eq!(
+            ViewState::default().fetch_scope(&app),
+            shown.fetch_scope(&app)
+        );
     }
 }

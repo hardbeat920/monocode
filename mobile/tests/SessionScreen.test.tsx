@@ -78,7 +78,7 @@ vi.mock("@/ui/ScenePager", () => ({
 vi.mock("@/ui/DitherLoading", () => ({ DitherLoading: () => null }));
 vi.mock("@/features/workspace/UnreadDot", () => ({
   UnreadDot: () => null,
-  useAnyUnreadMono: () => false,
+  useAnyUnread: () => false,
 }));
 vi.mock("@/ui/Icon", () => ({ Icon: () => null }));
 vi.mock("@/ui/LiquidView", async () => ({

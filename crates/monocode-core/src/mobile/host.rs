@@ -40,6 +40,7 @@ const APP_METHODS: &[&str] = &[
     "session.rename",
     "session.delete",
     "session.archive",
+    "session.unarchive",
     "mono.document",
     "mono.profile",
     "mono.update",
@@ -48,6 +49,13 @@ const APP_METHODS: &[&str] = &[
     "mono.create",
     "mono.file",
     "mono.saveFile",
+    "inbox.list",
+    "inbox.item",
+    "inbox.diff",
+    "inbox.checks",
+    "inbox.mark",
+    "inbox.start",
+    "inbox.media",
 ];
 /// Under the phone's own wait, so it hears why rather than timing out.
 const REPLY_WAIT: Duration = Duration::from_secs(25);
@@ -129,6 +137,11 @@ pub struct Request {
 impl Request {
     pub fn reply(self, result: Result<Value, String>) {
         let _ = self.reply.send(result);
+    }
+    /// The same request, answered the same way, asking with `params`: for a
+    /// method the app builds from another one's input.
+    pub fn with_params(self, params: Value) -> Self {
+        Self { params, ..self }
     }
 }
 
@@ -936,6 +949,12 @@ mod tests {
         }
         result.unwrap();
         assert!(!listening, "listener started after shutdown={shutdown}");
+    }
+
+    #[test]
+    fn session_unarchive_is_an_app_method() {
+        assert!(APP_METHODS.contains(&"session.unarchive"));
+        assert!(APP_METHODS.contains(&"session.archive"));
     }
 
     #[test]

@@ -2086,6 +2086,7 @@ impl Inbox {
     fn filters_active(&self) -> bool {
         let f = &self.state.filters;
         f.assigned_to_me
+            || (model::has_authors(&self.state.source) && !f.authors.is_empty())
             || !f.hidden_projects.is_empty()
             || !f.hidden_linear_projects.is_empty()
             || !f.hidden_kinds.is_empty()
@@ -2109,7 +2110,85 @@ impl Inbox {
         }
         cx.notify();
     }
-    fn filters_menu(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// Only a change to the single fetched author needs a new fetch.
+    fn set_authors(&mut self, change: impl FnOnce(&mut Vec<String>), cx: &mut Context<Self>) {
+        let before = self.state.filters.fetch_author().map(str::to_owned);
+        change(&mut self.state.filters.authors);
+        let refetch = before.as_deref() != self.state.filters.fetch_author();
+        self.filters_changed(refetch, cx);
+    }
+    fn author_rows(&self, window: &mut Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let source = self.state.source.clone();
+        let f = &self.state.filters;
+        let viewer = self.viewer().to_owned();
+        let mut rows = vec![
+            caption("AUTHOR").into_any_element(),
+            menu_row("inbox-author-any", "Anyone", f.authors.is_empty())
+                .on_click(cx.listener(|this, _, _, cx| this.set_authors(Vec::clear, cx)))
+                .into_any_element(),
+            menu_row(
+                "inbox-author-me",
+                "Created by me",
+                f.authors.iter().any(|a| a == model::ME),
+            )
+            .when(!viewer.is_empty(), |row| {
+                row.child(avatar::image(&source, &viewer, "", 14., window, cx))
+            })
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.set_authors(|authors| toggle(authors, model::ME.into()), cx)
+            }))
+            .into_any_element(),
+        ];
+        let mut people = self
+            .authors
+            .iter()
+            .filter(|p| !p.login.eq_ignore_ascii_case(&viewer))
+            .take(10)
+            .cloned()
+            .collect::<Vec<_>>();
+        for login in &f.authors {
+            if login != model::ME && !people.iter().any(|p| p.login.eq_ignore_ascii_case(login)) {
+                people.push(model::Person {
+                    login: login.clone(),
+                    avatar_url: String::new(),
+                });
+            }
+        }
+        for (ix, person) in people.into_iter().enumerate() {
+            let login = person.login.clone();
+            rows.push(
+                menu_row(
+                    format!("inbox-author-{ix}"),
+                    person.login.clone(),
+                    f.authors.iter().any(|a| a.eq_ignore_ascii_case(&login)),
+                )
+                .child(avatar::image(
+                    &source,
+                    &person.login,
+                    &person.avatar_url,
+                    14.,
+                    window,
+                    cx,
+                ))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let login = login.clone();
+                    this.set_authors(
+                        |authors| match authors.iter().position(|a| a.eq_ignore_ascii_case(&login))
+                        {
+                            Some(ix) => {
+                                authors.remove(ix);
+                            }
+                            None => authors.push(login),
+                        },
+                        cx,
+                    )
+                }))
+                .into_any_element(),
+            );
+        }
+        rows
+    }
+    fn filters_menu(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let weak = cx.entity().downgrade();
         let f = &self.state.filters;
         let tracker = model::is_tracker(&self.state.source);
@@ -2129,8 +2208,11 @@ impl Inbox {
                 this.filters_changed(true, cx);
             }))
             .into_any_element(),
-            caption("UPDATED").into_any_element(),
         ];
+        if model::has_authors(&self.state.source) {
+            rows.extend(self.author_rows(window, cx));
+        }
+        rows.push(caption("UPDATED").into_any_element());
         for (time, label) in [
             ("all", "Any time"),
             ("today", "Today"),
@@ -2888,7 +2970,9 @@ impl gpui::Render for Inbox {
                     .child(div().flex_1().min_w_0().min_h_0().child(detail)),
             )
             .when_some(self.error.clone(), |d, text| d.child(error(text)))
-            .when(self.filters_open, |d| d.child(self.filters_menu(cx)))
+            .when(self.filters_open, |d| {
+                d.child(self.filters_menu(window, cx))
+            })
             .when(self.connections_open, |d| d.child(self.connection_menu(cx)))
             .when(self.project_picker, |d| d.child(self.project_menu(cx)))
             .when(self.action_menu, |d| d.child(self.action_menu_view(cx)))
@@ -2957,6 +3041,119 @@ mod tests {
         window.update(cx, |_, _, cx| cx.notify()).unwrap();
         cx.refresh().unwrap();
         cx.run_until_parked();
+    }
+    #[gpui::test]
+    fn a_phones_triage_is_kept_with_the_desktop_read_state_and_saved(cx: &mut TestAppContext) {
+        use monocode_core::mobile::inbox::Mark;
+        let window = fixture(cx);
+        window
+            .update(cx, |fixture, _, cx| {
+                fixture.inbox.update(cx, |inbox, cx| {
+                    let key = fixture.item.key();
+                    inbox.state.seen.seeded = true;
+                    assert!(inbox.phone_view().fetched_at.is_none());
+                    assert!(inbox.phone_mark("github:nope", Mark::Done, cx).is_err());
+                    inbox.phone_mark(&key, Mark::Done, cx).unwrap();
+                    assert!(inbox.phone_view().triage.is_done(&key));
+                    let until = monocode_core::time::now_ms() as i64 + 60_000;
+                    inbox.phone_mark(&key, Mark::Snooze(until), cx).unwrap();
+                    assert_eq!(
+                        inbox.phone_view().triage.snoozed_until(&key, 0),
+                        Some(until)
+                    );
+                    inbox.phone_mark(&key, Mark::Undone, cx).unwrap();
+                    inbox.phone_mark(&key, Mark::Unseen, cx).unwrap();
+                    assert!(inbox.state.seen.unseen(&fixture.item));
+                    inbox.phone_mark(&key, Mark::Seen, cx).unwrap();
+                    assert!(!inbox.state.seen.unseen(&fixture.item));
+                    // The desktop reads the same state back from its saved view.
+                    let saved = locked(&inbox.store).map(|db| ViewState::load(&db)).unwrap();
+                    assert!(!saved.triage.is_done(&key));
+                    assert_eq!(saved.triage.snoozed_until(&key, 0), Some(until));
+                    assert!(!saved.seen.unseen(&fixture.item));
+                    // A phone looking at a list that was just fetched starts no refresh.
+                    inbox.refresh_for_phone(cx);
+                    assert!(!inbox.loading);
+                });
+            })
+            .unwrap();
+    }
+    #[gpui::test]
+    fn a_phone_reads_its_own_fetch_when_the_desktops_would_hide_rows(cx: &mut TestAppContext) {
+        use monocode_core::mobile::inbox::Mark;
+        let window = fixture(cx);
+        window
+            .update(cx, |fixture, _, cx| {
+                fixture.inbox.update(cx, |inbox, cx| {
+                    let desktop_key = fixture.item.key();
+                    let extra = Item {
+                        provider: "github".into(),
+                        number: 99,
+                        title: "Only the phone lists this".into(),
+                        url: "https://github.com/acme/app/pull/99".into(),
+                        ..Default::default()
+                    };
+                    let extra_key = extra.key();
+                    inbox.state.seen.seeded = true;
+                    inbox.state.filters = model::Filters::default();
+                    let names = |inbox: &Inbox| {
+                        inbox
+                            .phone_view()
+                            .items
+                            .iter()
+                            .map(|item| item.key())
+                            .collect::<Vec<_>>()
+                    };
+
+                    // Nothing narrows the desktop's fetch: its snapshot is the phone's.
+                    assert!(!inbox.phone_separate());
+                    inbox.phone.snapshot = Some(Snapshot {
+                        items: vec![extra.clone()],
+                        ..Default::default()
+                    });
+                    inbox.phone.fetched_at = 5;
+                    assert!(names(inbox).contains(&desktop_key));
+                    assert!(!names(inbox).contains(&extra_key));
+                    inbox.refresh_for_phone(cx);
+                    assert!(
+                        inbox.phone.snapshot.is_none(),
+                        "an unused phone fetch is dropped"
+                    );
+
+                    // A desktop filter that narrows the fetch gives the phone its own.
+                    inbox.state.filters.assigned_to_me = true;
+                    assert!(inbox.phone_separate());
+                    assert!(inbox.phone_view().fetched_at.is_none(), "not fetched yet");
+                    assert!(
+                        names(inbox).contains(&desktop_key),
+                        "reads the desktop's until then"
+                    );
+                    inbox.phone.snapshot = Some(Snapshot {
+                        items: vec![extra.clone()],
+                        ..Default::default()
+                    });
+                    inbox.phone.fetched_at = 5;
+                    assert_eq!(names(inbox), std::slice::from_ref(&extra_key));
+                    assert_eq!(inbox.phone_view().fetched_at, Some(5));
+                    assert!(inbox.phone_mark(&desktop_key, Mark::Done, cx).is_err());
+                    inbox.phone_mark(&extra_key, Mark::Done, cx).unwrap();
+                    assert!(inbox.phone_view().triage.is_done(&extra_key));
+                    // The pull to refresh waits on the phone's fetch, not the desktop's.
+                    inbox.phone.loading = true;
+                    assert!(inbox.fetching());
+                    inbox.phone.loading = false;
+                    assert!(!inbox.fetching());
+
+                    // A Mono's project the desktop doesn't list does the same.
+                    inbox.state.filters = model::Filters::default();
+                    assert!(!inbox.phone_separate());
+                    inbox.set_phone_projects(vec![PathBuf::from("/work/mono-only")]);
+                    assert!(inbox.phone_separate());
+                    inbox.set_phone_projects(vec![]);
+                    assert!(!inbox.phone_separate());
+                });
+            })
+            .unwrap();
     }
     #[gpui::test]
     fn the_inbox_opens_scoped_to_its_project_and_labels_projects_by_appearance(

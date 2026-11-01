@@ -1,6 +1,8 @@
 //! A paired phone browses and drives this workspace. The core host pairs and
 //! serves devices; the shell answers their requests from its own state, through
 //! the same paths as the sidebar, composer and Changes panel.
+mod inbox;
+
 use super::*;
 use crate::{
     accounts::Tone,
@@ -60,6 +62,8 @@ pub(super) struct Mobile {
     /// session, with the update time it was read at: read again only once
     /// the conversation has changed.
     mono_previews: HashMap<i64, MonoPreview>,
+    /// Avatar addresses handed to phones as opaque keys.
+    inbox_avatars: monocode_core::mobile::inbox::AvatarBook,
 }
 
 #[derive(Clone)]
@@ -347,7 +351,7 @@ impl Shell {
     // MARK: catalog
 
     /// Projects on the rail and those Monos work in.
-    fn mobile_projects(&self, cx: &App) -> Vec<String> {
+    pub(in crate::shell) fn mobile_projects(&self, cx: &App) -> Vec<String> {
         let mut paths: Vec<String> = Vec::new();
         let monos = self
             .monos
@@ -558,6 +562,9 @@ impl Shell {
                 project["branch"] = json!(mobile_catalog::checkout_branch(&cwd, &mut branches));
                 project
             }).collect();
+            let origins = monocode_core::mobile::catalog::launch_origins(
+                monos.iter().map(|(mono, _)| (mono.id.as_str(), mono.launches.iter().map(|l| l.session_id).collect())),
+            );
             let mut sessions = Vec::new();
             for entry in entries {
                 let Some(id) = ids.get(&entry.id) else {
@@ -567,7 +574,11 @@ impl Shell {
                 let branch = if !metadata.worktree_removed && metadata.branch.as_ref().is_none_or(|branch| branch.is_empty()) {
                     mobile_catalog::checkout_branch(metadata.worktree_cwd.as_deref().unwrap_or(&entry.summary.cwd), &mut branches)
                 } else { String::new() };
-                sessions.push(mobile_catalog::session(&entry.summary, id, &entry.project, &metadata, entry.live.as_ref(), &branch));
+                let mut session = mobile_catalog::session(&entry.summary, id, &entry.project, &metadata, entry.live.as_ref(), &branch);
+                if let Some(mono) = origins.get(&entry.id) {
+                    session["monoId"] = json!(mono);
+                }
+                sessions.push(session);
             }
             sessions.sort_by_key(|s| std::cmp::Reverse(s["updatedAt"].as_u64()));
             let monos: Vec<Value> = monos
@@ -609,7 +620,8 @@ impl Shell {
                 // and its phones hide them. `push`: it notifies phones through
                 // Expo, so they no longer post their own alerts. `monoFiles`:
                 // it reads and saves a Mono's soul and memory for the phone.
-                json!({"projects": projects, "monos": monos, "sessions": sessions, "monoTools": true, "push": true, "monoFiles": true}),
+                // `inbox`: it answers the phone's `inbox.*` requests.
+                json!({"projects": projects, "monos": monos, "sessions": sessions, "monoTools": true, "push": true, "monoFiles": true, "inbox": true, "sessionUnarchive": true}),
                 ids,
                 previews,
             ))
@@ -742,6 +754,9 @@ impl Shell {
                 request.reply(Ok(project::file_highlight(&job, from)));
             }
             "project.gitAction" => self.mobile_git_action(request, cx),
+            method if method.starts_with("inbox.") && method != "inbox.start" => {
+                self.mobile_inbox(request, window, cx)
+            }
             method if method.starts_with("project.") => self.mobile_project(request, cx),
             _ => self.mobile_command(request, window, cx),
         }
@@ -1285,6 +1300,7 @@ impl Shell {
         match request.method.as_str() {
             "session.start" => self.mobile_start(request, finish, cx),
             "conversation.send" => self.mobile_send(request, finish, cx),
+            "inbox.start" => self.mobile_inbox_start(request, finish, cx),
             _ => {
                 let result = self.mobile_session_command(&request, window, cx);
                 finish(self, request, result);
@@ -1373,6 +1389,12 @@ impl Shell {
                 }
                 Ok(reply)
             }
+            ("session.unarchive", Target::Session(id)) => {
+                if self.session_metadata(*id, cx).summary.archived {
+                    self.toggle_archive(*id, cx);
+                }
+                Ok(reply)
+            }
             ("session.delete", Target::Session(id)) => {
                 self.delete_session(*id, window, cx);
                 Ok(reply)
@@ -1399,7 +1421,7 @@ impl Shell {
             ("session.rename", Target::Mono(_)) => {
                 Err("A Mono's conversation can't be renamed".into())
             }
-            ("session.archive" | "session.delete", Target::Mono(_)) => {
+            ("session.archive" | "session.unarchive" | "session.delete", Target::Mono(_)) => {
                 Err("This session can't be changed from the phone".into())
             }
             _ => Err("Unsupported mobile command".into()),

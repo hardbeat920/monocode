@@ -20,6 +20,7 @@ import { LiquidView } from "@/ui/LiquidView";
 import { ChoiceMenu } from "@/ui/ChoiceMenu";
 import { themedStyles, useColors } from "@/ui/theme";
 
+import { confirmArchive } from "./archiveActions";
 import { useSessionActions } from "./useSessionActions";
 
 const failed = (title: string) => (reason: unknown) =>
@@ -141,18 +142,8 @@ export function SessionToolbar({
     remove(target.id).catch(failed(title));
   };
   const archive = (target: SessionSummary) =>
-    Alert.alert(
-      `Archive “${target.title}”?`,
-      "It moves to the archive on your desktop.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Archive",
-          isPreferred: true,
-          onPress: () =>
-            leaveAnd(archiveSession, "Could not archive the session", target),
-        },
-      ],
+    confirmArchive(target, () =>
+      leaveAnd(archiveSession, "Could not archive the session", target),
     );
   const remove = (target: SessionSummary) =>
     Alert.alert(`Delete “${target.title}”?`, "This can’t be undone.", [
