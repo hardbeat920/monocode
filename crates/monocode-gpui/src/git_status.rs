@@ -71,6 +71,12 @@ pub(crate) struct ProjectGit {
     pub statuses: StatusMap,
     /// Bumped on every observed change, for views that reread on it.
     pub epoch: u64,
+    /// Bumped when a file appears, disappears or changes status. Line counts
+    /// alone leave every folder's entries as they were.
+    pub listing: u64,
+    /// Bumped when HEAD, the branch or its sync with the remote moves.
+    /// Working-tree edits leave the commit graph as it was.
+    pub refs: u64,
     pub review_cache: crate::review::ReviewCache,
     versions: Option<HashMap<String, scm::FileDiffVersion>>,
     remembered: HashMap<String, (u64, DiffIndex)>,
@@ -92,6 +98,8 @@ impl ProjectGit {
             stats: None,
             statuses: StatusMap::default(),
             epoch: 0,
+            listing: 0,
+            refs: 0,
             review_cache: Default::default(),
             versions: None,
             remembered: HashMap::new(),
@@ -127,7 +135,7 @@ impl ProjectGit {
             .unwrap_or_default();
         self.stats_loaded = None;
         self.versions = None;
-        self.epoch += 1;
+        self.bump_all();
         cx.emit(GitChanged);
         cx.notify();
         self.warm_choices(cx);
@@ -203,10 +211,15 @@ impl ProjectGit {
     }
     /// A mutation or file operation: reread now and tell every view.
     pub(crate) fn changed(&mut self, cx: &mut Context<Self>) {
-        self.epoch += 1;
+        self.bump_all();
         cx.emit(GitChanged);
         self.warm_choices(cx);
         self.reload(cx);
+    }
+    fn bump_all(&mut self) {
+        self.epoch += 1;
+        self.listing += 1;
+        self.refs += 1;
     }
     /// Project selection warms both menus before the user opens either one.
     fn warm_choices(&self, cx: &Context<Self>) {
@@ -249,8 +262,15 @@ impl ProjectGit {
                     this.remember(&project, &next);
                     if this.index.as_ref() != Some(&next) || this.versions != versions {
                         let had = this.index.is_some();
+                        let statuses = status_maps(&next, &this.root);
+                        if statuses != this.statuses {
+                            this.listing += 1;
+                        }
+                        if this.index.as_ref().is_none_or(|old| !same_refs(old, &next)) {
+                            this.refs += 1;
+                        }
                         this.stats = Some(stats_of(&next));
-                        this.statuses = status_maps(&next, &this.root);
+                        this.statuses = statuses;
                         this.index = Some(next);
                         this.versions = versions;
                         if had {
@@ -292,6 +312,15 @@ impl ProjectGit {
         self.stats.as_ref().is_some_and(|s| s.files > 0)
     }
 }
+fn same_refs(a: &DiffIndex, b: &DiffIndex) -> bool {
+    a.branch == b.branch
+        && a.head == b.head
+        && a.remote == b.remote
+        && a.upstream == b.upstream
+        && a.default_branch == b.default_branch
+        && (a.ahead, a.behind, a.ahead_of_default) == (b.ahead, b.behind, b.ahead_of_default)
+        && a.head_pushed == b.head_pushed
+}
 fn stats_of(index: &DiffIndex) -> DiffStats {
     DiffStats {
         files: index.files.len() as i64,
@@ -330,5 +359,58 @@ mod tests {
         assert_eq!(map.dirs["/r/a"], "modified");
         assert!(!map.dirs.contains_key("/r"));
         assert_eq!(map.files["/r/a/gone.rs"], "deleted");
+    }
+
+    #[gpui::test]
+    fn line_count_edits_leave_the_listing_and_refs_alone(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext as _;
+        let dir = std::env::temp_dir().join(format!("monocode-git-listing-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let root = dir.canonicalize().unwrap();
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c"])
+                .arg("commit.gpgsign=false")
+                .args(args)
+                .current_dir(&root)
+                .output()
+                .unwrap()
+                .status
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        git(&["init", "-q", "-b", "main"]);
+        std::fs::write(root.join("a.txt"), "one\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "init"]);
+        std::fs::write(root.join("a.txt"), "one\ntwo\n").unwrap();
+
+        let project = cx.new(|cx| ProjectGit::new(root.to_string_lossy().into_owned(), cx));
+        cx.run_until_parked();
+        let read = |cx: &mut gpui::TestAppContext| {
+            project.read_with(cx, |git, _| (git.epoch, git.listing, git.refs))
+        };
+        let reread = |cx: &mut gpui::TestAppContext| {
+            project.update(cx, |git, cx| git.reload(cx));
+            cx.run_until_parked();
+            read(cx)
+        };
+        let (epoch, listing, refs) = read(cx);
+
+        std::fs::write(root.join("a.txt"), "one\ntwo\nthree\n").unwrap();
+        let after_edit = reread(cx);
+        assert!(after_edit.0 > epoch, "views still see the new counts");
+        assert_eq!((after_edit.1, after_edit.2), (listing, refs));
+
+        std::fs::write(root.join("b.txt"), "new\n").unwrap();
+        let after_create = reread(cx);
+        assert!(after_create.1 > listing);
+        assert_eq!(after_create.2, refs);
+
+        git(&["add", "."]);
+        git(&["commit", "-qm", "second"]);
+        let after_commit = reread(cx);
+        assert!(after_commit.2 > refs);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

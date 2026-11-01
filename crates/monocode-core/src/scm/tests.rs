@@ -283,6 +283,76 @@ fn diff_index_works_without_a_head() {
 }
 
 #[test]
+fn diff_index_lists_a_staged_rename_as_deleted_and_added() {
+    let dir = tmp();
+    let dir = dir.path();
+    assert!(init_git_commit(
+        dir,
+        &[("old.txt", "one\ntwo\nthree\nfour\n"), ("keep.txt", "k\n")]
+    ));
+    assert!(git(dir, &["mv", "old.txt", "new.txt"]));
+    std::fs::write(dir.join("new.txt"), "one\ntwo\nthree\nfour\nfive\n").unwrap();
+
+    let index = index(dir);
+    let listed: Vec<_> = index
+        .files
+        .iter()
+        .map(|file| {
+            (
+                file.relative.as_str(),
+                file.status.as_str(),
+                file.additions,
+                file.deletions,
+                file.staged,
+                file.unstaged,
+            )
+        })
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("new.txt", "added", 1, 0, true, true),
+            ("old.txt", "deleted", 0, 0, true, false)
+        ]
+    );
+}
+
+// Windows file names can't hold `:` or tabs.
+#[cfg(unix)]
+#[test]
+fn diff_index_reads_names_that_look_like_raw_records() {
+    let dir = tmp();
+    let dir = dir.path();
+    assert!(init_git_commit(
+        dir,
+        &[(":colon.txt", "a\n"), ("1\t2\tx.txt", "b\n")]
+    ));
+    std::fs::write(dir.join(":colon.txt"), "a\nb\n").unwrap();
+    std::fs::remove_file(dir.join("1\t2\tx.txt")).unwrap();
+
+    let colon = file(dir, ":colon.txt");
+    assert_eq!((colon.status.as_str(), colon.additions), ("modified", 1));
+    let tabbed = file(dir, "1\t2\tx.txt");
+    assert_eq!((tabbed.status.as_str(), tabbed.deletions), ("deleted", 1));
+}
+
+#[test]
+fn diff_index_without_a_head_prefers_the_staged_status() {
+    let dir = tmp();
+    let dir = dir.path();
+    assert!(init_git(dir, "main"));
+    std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+    stage_file(dir, "a.txt").unwrap();
+    std::fs::write(dir.join("a.txt"), "one\ntwo\n").unwrap();
+
+    let a = file(dir, "a.txt");
+    assert_eq!(a.status, "added");
+    // The index adds one line and the working tree one more.
+    assert_eq!((a.additions, a.deletions), (2, 0));
+    assert!(a.staged && a.unstaged);
+}
+
+#[test]
 fn parse_decorations_classifies_head_local_remote_and_tags() {
     let remotes = vec!["origin".to_string()];
     let (head, refs) = parse_decorations(

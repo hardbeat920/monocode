@@ -50,6 +50,8 @@ pub(crate) struct History {
     /// historyByCwd: a revisit opens on the last read.
     cache: HashMap<String, Vec<HistoryCommit>>,
     request: u64,
+    /// The Git refs these commits were last read at.
+    refs: u64,
     loading: bool,
     error: Option<String>,
     search_open: bool,
@@ -85,6 +87,7 @@ impl History {
             items: Vec::new(),
             cache: HashMap::new(),
             request: 0,
+            refs: 0,
             loading: false,
             error: None,
             search_open: false,
@@ -116,8 +119,9 @@ impl History {
         if !self.enabled {
             return;
         }
-        self.sync_project(cx);
-        self.load(cx);
+        if self.sync_project(cx) || self.git.read(cx).refs != self.refs {
+            self.load(cx);
+        }
     }
     /// A new checkout clears the search and opens on its cached history.
     fn sync_project(&mut self, cx: &mut Context<Self>) -> bool {
@@ -145,6 +149,7 @@ impl History {
         if !self.enabled || !self.available() {
             return;
         }
+        self.refs = self.git.read(cx).refs;
         self.request += 1;
         let request = self.request;
         self.loading = true;
