@@ -165,14 +165,29 @@ pub fn jira_list_issues(
     let Some(config) = read_config(&app)? else {
         return Ok(Vec::new());
     };
-    let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, 100);
+    let limit = limit
+        .unwrap_or(DEFAULT_LIMIT)
+        .clamp(1, super::MAX_FETCH_LIMIT) as usize;
     let jql = issue_jql(assigned_to_me, &state, &project_ids);
-    let data = jira_post(
-        &config,
-        "/rest/api/3/search/jql",
-        &json!({ "jql": jql, "maxResults": limit, "fields": ISSUE_FIELDS }),
-    )?;
-    parse_jira_issues(&data, &config.site)
+    let mut issues = Vec::new();
+    let mut token: Option<String> = None;
+    loop {
+        let mut body = json!({
+            "jql": jql,
+            "maxResults": (limit - issues.len()).min(super::PAGE_SIZE as usize),
+            "fields": ISSUE_FIELDS,
+        });
+        if let Some(token) = &token {
+            body["nextPageToken"] = json!(token);
+        }
+        let data = jira_post(&config, "/rest/api/3/search/jql", &body)?;
+        issues.extend(parse_jira_issues(&data, &config.site)?);
+        token = string_field(&data, "nextPageToken").filter(|token| !token.is_empty());
+        if token.is_none() || issues.len() >= limit {
+            break;
+        }
+    }
+    Ok(issues)
 }
 
 pub fn jira_issue_details(app: PathBuf, key: String) -> Result<JiraIssueDetails, String> {
