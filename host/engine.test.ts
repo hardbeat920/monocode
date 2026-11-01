@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { RuntimeMode } from "../src/features/sessions/model/session";
 import type { SendTurnInput } from "../src/integrations/harness/core/types";
 import type { HostProvider } from "./providers";
 import { HostEngine, parseCommand } from "./engine";
@@ -13,7 +14,10 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-function setup(harness: "codex" | "claude" = "codex") {
+function setup(
+  harness: "codex" | "claude" | "cursor" = "codex",
+  runtimeMode: RuntimeMode = "supervised",
+) {
   const directory = mkdtempSync(join(tmpdir(), "monocode-engine-test-"));
   const store = new HostStore(join(directory, "host.db"));
   const project = store.addProject(directory, "Test");
@@ -35,14 +39,18 @@ function setup(harness: "codex" | "claude" = "codex") {
     approve: vi.fn(),
     answer: vi.fn(),
   };
-  const engine = new HostEngine(store, { codex: provider, claude: provider });
+  const engine = new HostEngine(store, {
+    codex: provider,
+    claude: provider,
+    cursor: provider,
+  });
   const created = engine.command({
     type: "create",
     commandId: "create",
     projectId: project.id,
     harness,
     model: `${harness}:test`,
-    runtimeMode: "supervised",
+    runtimeMode,
   });
   cleanups.push(async () => {
     await engine.close();
@@ -61,6 +69,22 @@ function setup(harness: "codex" | "claude" = "codex") {
 }
 
 describe("headless session ownership", () => {
+  it.each(["send", "compact"] as const)(
+    "runs a %s in the closest mode the host's model supports",
+    async (type) => {
+      // Cursor has no Auto; its adapter would answer command prompts itself.
+      const { engine, store, turns, provider, id } = setup("cursor", "auto");
+      provider.compact = (input) =>
+        provider.send({ ...input, text: "/compact" });
+      engine.command({ type, commandId: "run", sessionId: id, text: "Work" });
+      await vi.waitFor(() => expect(turns).toHaveLength(1));
+      expect(turns[0].input.runtimeMode).toBe("auto-accept-edits");
+      // The saved preference is left alone.
+      expect(store.session(id).session.runtimeMode).toBe("auto");
+      turns[0].finish();
+    },
+  );
+
   it.each(["send", "compact"] as const)("clears the old draft when a normal %s starts", async (type) => {
     const { engine, store, turns, provider, id } = setup();
     provider.compact = (input) => provider.send({ ...input, text: "/compact" });
