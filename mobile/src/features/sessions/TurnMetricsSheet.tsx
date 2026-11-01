@@ -1,4 +1,4 @@
-import { BottomSheet } from "@expo/ui";
+import { BottomSheet, RNHostView } from "@expo/ui";
 import { Divider, HStack, Spacer, Text, VStack } from "@expo/ui/swift-ui";
 import {
   background,
@@ -9,9 +9,11 @@ import {
   shapes,
 } from "@expo/ui/swift-ui/modifiers";
 import { Fragment } from "react";
+import { Platform, StyleSheet, Text as RNText, View, useWindowDimensions } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import type { TurnMetrics } from "@/features/workspace/types";
-import { withAlpha, useColors } from "@/ui/theme";
+import { themedStyles, withAlpha, useColors } from "@/ui/theme";
 
 import {
   formatClockTime,
@@ -45,6 +47,17 @@ export function TurnMetricsSheet({
   completedAt?: number;
 }) {
   const { highlights, tokens } = turnMetricsSheet(metrics, elapsedMs);
+  // SwiftUI stacks have no Android view, so Android builds the same sheet
+  // from React Native views.
+  if (Platform.OS === "android") return (
+    <AndroidSheet
+      isPresented={isPresented}
+      onDismiss={onDismiss}
+      highlights={highlights}
+      tokens={tokens}
+      completedAt={completedAt}
+    />
+  );
   return (
     <BottomSheet
       isPresented={isPresented}
@@ -109,3 +122,80 @@ function StatGroup({ title, stats }: { title?: string; stats: MetricStat[] }) {
     </VStack>
   );
 }
+
+const statValue = (stat: MetricStat) =>
+  stat.unit === "%" ? `${stat.value}%` : stat.unit ? `${stat.value} ${stat.unit}` : stat.value;
+
+function AndroidSheet({
+  isPresented,
+  onDismiss,
+  highlights,
+  tokens,
+  completedAt,
+}: {
+  isPresented: boolean;
+  onDismiss: () => void;
+  highlights: MetricStat[];
+  tokens: MetricStat[];
+  completedAt?: number;
+}) {
+  const colors = useColors();
+  const styles = useStyles();
+  const { width } = useWindowDimensions();
+  const { bottom } = useSafeAreaInsets();
+  return (
+    <BottomSheet
+      isPresented={isPresented}
+      onDismiss={onDismiss}
+      contentPadding={0}
+      containerColor={colors.sheet}
+    >
+      <RNHostView matchContents={{ vertical: true }}>
+        <View style={[styles.sheet, { width, paddingBottom: Math.max(bottom, 12) + 12 }]}>
+          <View style={styles.header}>
+            <RNText accessibilityRole="header" style={styles.title}>Turn metrics</RNText>
+            {completedAt != null ? (
+              <RNText style={styles.subtitle}>{`Finished at ${formatClockTime(completedAt)}`}</RNText>
+            ) : null}
+          </View>
+          {highlights.length > 0 ? <AndroidStatGroup stats={highlights} /> : null}
+          {tokens.length > 0 ? <AndroidStatGroup title="Tokens" stats={tokens} /> : null}
+        </View>
+      </RNHostView>
+    </BottomSheet>
+  );
+}
+
+function AndroidStatGroup({ title, stats }: { title?: string; stats: MetricStat[] }) {
+  const styles = useStyles();
+  return (
+    <View style={styles.group}>
+      {title ? <RNText style={styles.groupTitle}>{title}</RNText> : null}
+      <View style={styles.card}>
+        {stats.map((stat, index) => (
+          <Fragment key={stat.label}>
+            {index > 0 ? <View style={styles.divider} /> : null}
+            <View style={styles.row}>
+              <RNText style={styles.label}>{stat.label}</RNText>
+              <RNText style={styles.value}>{statValue(stat)}</RNText>
+            </View>
+          </Fragment>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+const useStyles = themedStyles((colors) => ({
+  sheet: { paddingTop: 28, paddingHorizontal: 20, gap: 20 },
+  header: { gap: 2 },
+  title: { color: colors.content, fontSize: 20, fontWeight: "600" },
+  subtitle: { color: colors.muted, fontSize: 15 },
+  group: { gap: 8 },
+  groupTitle: { color: colors.muted, fontSize: 13, fontWeight: "600", paddingLeft: 4 },
+  card: { backgroundColor: withAlpha(colors.content, 0.07), borderRadius: 20, overflow: "hidden" },
+  divider: { height: StyleSheet.hairlineWidth, marginLeft: 16, backgroundColor: withAlpha(colors.content, 0.12) },
+  row: { flexDirection: "row", justifyContent: "space-between", paddingHorizontal: 16, paddingVertical: 13 },
+  label: { color: colors.muted, fontSize: 16 },
+  value: { color: colors.content, fontSize: 16, fontWeight: "500", fontVariant: ["tabular-nums"] },
+}));
