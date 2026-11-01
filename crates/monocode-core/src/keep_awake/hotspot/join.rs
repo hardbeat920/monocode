@@ -214,7 +214,14 @@ pub fn classify(out: &str) -> Option<JoinError> {
     if has(&["power", "turned off"]) && has(&["off"]) {
         return Some(JoinError::WifiOff);
     }
-    if has(&["failed", "error", "could not", "unable", "not a wi-fi", "invalid"]) {
+    if has(&[
+        "failed",
+        "error",
+        "could not",
+        "unable",
+        "not a wi-fi",
+        "invalid",
+    ]) {
         let first = text.lines().next().unwrap_or(text);
         return Some(JoinError::Failed(first.chars().take(160).collect()));
     }
@@ -454,7 +461,9 @@ mod tests {
             Some(JoinError::WifiOff)
         );
         assert_eq!(
-            classify("en7 is not a Wi-Fi interface.\n** Error: Error obtaining wireless information."),
+            classify(
+                "en7 is not a Wi-Fi interface.\n** Error: Error obtaining wireless information."
+            ),
             Some(JoinError::Failed("en7 is not a Wi-Fi interface.".into()))
         );
         assert!(JoinError::WrongPassword.permanent());
@@ -579,11 +588,17 @@ mod tests {
         let clock = FakeClock::new();
         let mut wifi = FakeWifi::new();
         wifi.links = vec![home()];
-        assert_eq!(leave(&mut wifi, &clock, Some(&record())), Ok(Left::AlreadyMoved));
+        assert_eq!(
+            leave(&mut wifi, &clock, Some(&record())),
+            Ok(Left::AlreadyMoved)
+        );
         assert!(wifi.calls.is_empty());
         let mut wifi = FakeWifi::new();
         wifi.powered = Some(false);
-        assert_eq!(leave(&mut wifi, &clock, Some(&record())), Ok(Left::AlreadyMoved));
+        assert_eq!(
+            leave(&mut wifi, &clock, Some(&record())),
+            Ok(Left::AlreadyMoved)
+        );
         assert!(wifi.calls.is_empty());
         // Still on the hotspot: cycle, and macOS picks home.
         let mut wifi = FakeWifi::new();

@@ -631,11 +631,10 @@ mod tests {
         step(&mut h, false, false, t0 + 2000 * S);
         step(&mut h, false, true, t0 + 2001 * S);
         assert_eq!(step(&mut h, false, true, t0 + 2100 * S), Step::Stay);
-        assert!(
-            h.summary("My iPhone", t0 + 2100 * S)
-                .unwrap()
-                .contains("password")
-        );
+        assert!(h
+            .summary("My iPhone", t0 + 2100 * S)
+            .unwrap()
+            .contains("password"));
     }
 
     #[test]
@@ -657,11 +656,7 @@ mod tests {
         step(&mut h, false, true, t0);
         h.woke(t0 + 5 * S);
         for t in 6..35 {
-            assert_eq!(
-                step(&mut h, false, true, t0 + t * S),
-                Step::Stay,
-                "at {t}s"
-            );
+            assert_eq!(step(&mut h, false, true, t0 + t * S), Step::Stay, "at {t}s");
         }
         assert_eq!(step(&mut h, false, true, t0 + 36 * S), Step::Join);
         // Wi-Fi back within the grace: nothing happens at all.
@@ -764,11 +759,10 @@ mod tests {
             "Wi-Fi dropped. Joining P… (try 1)"
         );
         h.join_failed(JoinError::NotFound, t0 + 20 * S);
-        assert!(
-            h.summary("P", t0 + 25 * S)
-                .unwrap()
-                .ends_with("Trying again in 15s.")
-        );
+        assert!(h
+            .summary("P", t0 + 25 * S)
+            .unwrap()
+            .ends_with("Trying again in 15s."));
         step(&mut h, false, true, t0 + 40 * S);
         h.joined(joined("P"));
         assert_eq!(

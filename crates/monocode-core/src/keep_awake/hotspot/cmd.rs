@@ -92,7 +92,10 @@ mod tests {
     fn keeps_stderr_and_the_status() {
         let ran = run(
             "/bin/sh",
-            &["-c", "echo out; echo 'Could not find network X.' >&2; exit 0"],
+            &[
+                "-c",
+                "echo out; echo 'Could not find network X.' >&2; exit 0",
+            ],
             Duration::from_secs(5),
         );
         assert_eq!(

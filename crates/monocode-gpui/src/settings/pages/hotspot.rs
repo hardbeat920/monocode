@@ -199,7 +199,8 @@ impl SettingsView {
         }
         if crate::keep_awake::on_hotspot() {
             self.hotspot.result = Some(Err(
-                "MonoCode has the Mac on the hotspot right now. Try again once agents finish.".into(),
+                "MonoCode has the Mac on the hotspot right now. Try again once agents finish."
+                    .into(),
             ));
             cx.notify();
             return;
@@ -224,7 +225,10 @@ impl SettingsView {
                 #[cfg(not(target_os = "macos"))]
                 {
                     let _ = ssid;
-                    (Err::<(), String>("Only on macOS.".into()), None::<Result<hotspot::Left, String>>)
+                    (
+                        Err::<(), String>("Only on macOS.".into()),
+                        None::<Result<hotspot::Left, String>>,
+                    )
                 }
             }
         });

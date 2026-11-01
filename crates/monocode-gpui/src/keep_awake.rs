@@ -248,6 +248,8 @@ impl KeepAwake {
         {
             this.hotspot.restore(record, Instant::now());
             this.after_network(cx);
+            // Starts the clock that goes back once no agents show up.
+            this.sync(cx);
         }
         // Know the power source before holding anything that depends on it.
         this.sample(cx);
@@ -279,7 +281,9 @@ impl KeepAwake {
         if (self.prefs.lid || self.prefs.low_power) && self.lid_ready.is_none() {
             self.check_lid_rule(cx);
         }
-        if (old.hotspot, old.hotspot_ssid.trim()) != (self.prefs.hotspot, self.prefs.hotspot_ssid.trim()) {
+        if (old.hotspot, old.hotspot_ssid.trim())
+            != (self.prefs.hotspot, self.prefs.hotspot_ssid.trim())
+        {
             self.hotspot.reset();
             self.after_network(cx);
         }

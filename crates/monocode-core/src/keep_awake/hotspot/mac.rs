@@ -2,7 +2,7 @@
 //! access. Every command has a time limit, and joins and leaves take one
 //! lock, so the settings test and an automatic join never interleave.
 use super::cmd::{self, Ran};
-use super::join::{self, Clock, JoinError, JoinRecord, Joined, Left, Link, SystemClock, Wifi};
+use super::join::{self, JoinError, JoinRecord, Joined, Left, Link, SystemClock, Wifi};
 use super::{parse_current_network, parse_saved_networks, parse_wifi_device, parse_wifi_power};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -57,7 +57,9 @@ impl Wifi for MacWifi {
         };
         match join::classify(&out) {
             Some(error) => Err(error),
-            None if !ok => Err(JoinError::Failed("networksetup exited with an error.".into())),
+            None if !ok => Err(JoinError::Failed(
+                "networksetup exited with an error.".into(),
+            )),
             None => Ok(()),
         }
     }
@@ -71,7 +73,8 @@ impl Wifi for MacWifi {
         }
     }
     fn cycle(&mut self, device: &str) -> Result<(), String> {
-        let power = |on: &str| cmd::run(NETWORKSETUP, &["-setairportpower", device, on], READ_LIMIT);
+        let power =
+            |on: &str| cmd::run(NETWORKSETUP, &["-setairportpower", device, on], READ_LIMIT);
         power("off").ok().ok_or("Couldn't turn Wi-Fi off.")?;
         std::thread::sleep(Duration::from_secs(1));
         if power("on").ok().is_none() {
@@ -104,18 +107,18 @@ pub fn saved_networks() -> Vec<String> {
 pub fn join(ssid: &str) -> Result<Joined, JoinError> {
     let _one = NETWORK.lock().unwrap_or_else(|e| e.into_inner());
     let password = password(ssid);
-    join::join(&mut MacWifi::default(), &SystemClock, ssid, password.as_deref())
+    join::join(
+        &mut MacWifi::default(),
+        &SystemClock,
+        ssid,
+        password.as_deref(),
+    )
 }
 
 /// Back to the usual network, unless the Mac already left `record`'s.
 pub fn leave(record: Option<&JoinRecord>) -> Result<Left, String> {
     let _one = NETWORK.lock().unwrap_or_else(|e| e.into_inner());
     join::leave(&mut MacWifi::default(), &SystemClock, record)
-}
-
-/// Unix seconds now, for records made outside a join.
-pub fn unix_now() -> u64 {
-    SystemClock.unix()
 }
 
 fn entry(ssid: &str) -> Option<keyring::Entry> {

@@ -92,7 +92,10 @@ mod tests {
             vec![blocked(), blocked(), Box::new(|| true)],
             Duration::from_secs(1)
         ));
-        assert!(!any_answers(vec![blocked(), blocked()], Duration::from_secs(1)));
+        assert!(!any_answers(
+            vec![blocked(), blocked()],
+            Duration::from_secs(1)
+        ));
         assert!(!any_answers(Vec::new(), Duration::from_secs(1)));
     }
 }
