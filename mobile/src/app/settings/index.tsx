@@ -3,7 +3,6 @@ import { Fragment } from "react";
 import { Alert, Linking, StyleSheet, Switch, Text, View } from "react-native";
 
 import { useConnection } from "@/features/connection/ConnectionProvider";
-import { MONOS_ENABLED } from "@/features/connection/selection";
 import { useNotificationsBlocked } from "@/features/notifications/SessionNotifications";
 import { useAppearancePreference } from "@/features/settings/appearance";
 import { accessMode } from "@/features/models/access";
@@ -177,11 +176,8 @@ export default function SettingsScreen() {
       <View style={styles.card}>
         <SettingsRow
           icon="folder"
-          label={MONOS_ENABLED ? "Projects and monos" : "Projects"}
-          value={String(
-            (selected?.projectIds.length ?? 0) +
-              (MONOS_ENABLED ? (selected?.monoIds.length ?? 0) : 0),
-          )}
+          label="Projects"
+          value={String(selected?.projectIds.length ?? 0)}
           onPress={() => router.push("/settings/workspace")}
         />
         <View style={styles.divider} />

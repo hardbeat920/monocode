@@ -5,7 +5,6 @@ import {
   modalStackOptions,
   sheetScreenLayout,
 } from "@/features/files/codeScreen";
-import { MONOS_ENABLED } from "@/features/connection/selection";
 import { androidBackHeader } from "@/ui/AndroidHeader";
 import { useColors } from "@/ui/theme";
 
@@ -48,8 +47,8 @@ export default function SettingsLayout() {
       <Stack.Screen
         name="workspace"
         options={{
-          title: MONOS_ENABLED ? "Projects and monos" : "Projects",
-          ...androidBackHeader(MONOS_ENABLED ? "Projects and monos" : "Projects"),
+          title: "Projects",
+          ...androidBackHeader("Projects"),
         }}
       />
     </Stack>

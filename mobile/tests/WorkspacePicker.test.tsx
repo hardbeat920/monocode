@@ -13,21 +13,25 @@ vi.mock("react-native", () => ({
   ScrollView: ({ children, contentContainerStyle, contentInsetAdjustmentBehavior }: {
     children: ReactNode; contentContainerStyle: object; contentInsetAdjustmentBehavior: string;
   }) => <main style={contentContainerStyle} data-insets={contentInsetAdjustmentBehavior}>{children}</main>,
-  Pressable: ({ children, onPress }: { children: ReactNode; onPress: () => void }) => <button onClick={onPress}>{children}</button>,
+  Pressable: ({ children, onPress, accessibilityLabel }: { children: ReactNode; onPress: () => void; accessibilityLabel?: string }) => <button aria-label={accessibilityLabel} onClick={onPress}>{children}</button>,
   ActivityIndicator: () => null,
 }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 24, bottom: 16 }) }));
+const link = vi.hoisted(() => ({ select: vi.fn(async () => {}) }));
 vi.mock("@/features/connection/ConnectionProvider", () => ({
-  useConnection: () => ({ connected: true, selection: { projectIds: [], monoIds: [] },
-    catalog: { projects: [], monos: [] }, select: vi.fn(), refresh: vi.fn() }),
+  useConnection: () => ({ connected: true, selection: { projectIds: [], monoIds: ["saved-mono"] },
+    catalog: {
+      projects: [{ id: "p1", name: "Alpha", path: "/a", color: "red" }],
+      monos: [{ id: "m1", name: "TaskGiver", mascot: "robot", color: "red", status: "idle" }],
+    }, select: link.select, refresh: vi.fn() }),
 }));
 vi.mock("@/features/connection/ConnectScreen", () => ({ connectionStyleSheet: () => ({}) }));
 vi.mock("@/features/mascots/PixelMascot", () => ({ MonoMascot: () => null }));
 vi.mock("@/features/mascots/ProjectMascot", () => ({ ProjectMascot: () => null }));
-vi.mock("@/features/settings/SettingsUI", () => ({ SettingsRow: () => null }));
+vi.mock("@/features/settings/SettingsUI", () => ({ SettingsRow: ({ label, onPress }: { label: string; onPress: () => void }) => <button onClick={onPress}>{label}</button> }));
 vi.mock("@/ui/GradualBlur", () => ({ GradualBlur: () => null }));
 vi.mock("@/ui/Icon", () => ({ Icon: () => null }));
-vi.mock("@/ui/LiquidView", () => ({ LiquidView: ({ children }: { children: ReactNode }) => <div>{children}</div> }));
+vi.mock("@/ui/LiquidView", () => ({ LiquidView: ({ children, onPress, accessibilityLabel }: { children: ReactNode; onPress?: () => void; accessibilityLabel?: string }) => <div role="button" aria-label={accessibilityLabel} onClick={onPress}>{children}</div> }));
 vi.mock("@/ui/theme", () => ({
   themedStyles: (create: (colors: object) => object) => () => create({}),
   useColors: () => ({ sheet: "black" }), withAlpha: () => "black", radii: { card: 20 },
@@ -58,4 +62,19 @@ it("retains the standalone workspace screen wrapper and safe-area spacing", () =
   const container = render(false);
   expect(container.firstElementChild?.tagName).toBe("DIV");
   expect(container.querySelector("main")?.style.paddingTop).toBe("72px");
+});
+
+it("lists projects only: a Mono comes with its projects, so there is nothing to pick for it", () => {
+  const container = render(true);
+  expect(container.textContent).toContain("Projects");
+  expect(container.textContent).toContain("Alpha");
+  expect(container.textContent).not.toContain("TaskGiver");
+  expect(container.textContent).not.toContain("Monos");
+  expect(render(false).textContent).not.toContain("projects and monos");
+});
+it("saves the picked projects and keeps the monoIds an older phone stored", async () => {
+  const container = render(true);
+  act(() => (Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Alpha") as HTMLElement).click());
+  await act(async () => (container.querySelector("[aria-label='Save']") as HTMLElement).click());
+  expect(link.select).toHaveBeenCalledWith({ projectIds: ["p1"], monoIds: ["saved-mono"] });
 });
