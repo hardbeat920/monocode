@@ -46,6 +46,10 @@ pub(super) struct State {
     notices: Vec<Event>,
     stale_model: Option<String>,
     mode: Option<&'static str>,
+    /// Antigravity offers Google sign-in in its `initialize` result.
+    oauth_personal: bool,
+    /// One sign-in per turn, so a rejected authenticate fails instead of looping.
+    auth_attempted: bool,
 }
 
 pub(super) fn configure(command: &mut Command, request: &Request) -> Result<(), String> {
@@ -94,6 +98,15 @@ pub(super) fn configure(command: &mut Command, request: &Request) -> Result<(), 
         }
     }
     Ok(())
+}
+
+/// Antigravity's ACP server answers a missing sign-in on `session/new` with
+/// -32000 and "Authentication required". Other -32000 failures must not start OAuth.
+fn auth_required(error: &Value) -> bool {
+    error["code"].as_i64() == Some(-32000)
+        && error["message"]
+            .as_str()
+            .is_some_and(|message| message.to_lowercase().contains("auth"))
 }
 
 impl Protocol {
@@ -196,6 +209,8 @@ impl Protocol {
                 (Kind::Grok | Kind::Fx | Kind::Antigravity, Stage::Initialize) => Some(12),
                 (Kind::Hermes | Kind::Devin, Stage::Initialize) => Some(20),
                 (Kind::Grok, Stage::Authenticate) => Some(15),
+                // The same ten minutes #775 allows for the Google browser flow.
+                (Kind::Antigravity, Stage::Authenticate) => Some(600),
                 (Kind::Devin, Stage::Authenticate) => {
                     Some(if params["_meta"]["api_key"].is_string() {
                         20
@@ -225,6 +240,7 @@ impl Protocol {
         self.acp.options.clear();
         self.acp.settings_applied = false;
         self.acp.spent_effort = false;
+        self.acp.auth_attempted = false;
         let setup = self.acp.setup.clone();
         self.acp_options(&setup)?;
         self.acp_next(stdin)
@@ -552,6 +568,30 @@ impl Protocol {
                 return self.acp_probe_next(stdin);
             }
             Stage::ListModels => return self.acp_session(stdin),
+            // Antigravity reports a fresh runtime as -32000 on session/new. One
+            // authenticate call persists `auth.type`, so retry the session after it.
+            // Probes stay read-only: a catalog refresh must never open a browser.
+            Stage::New
+                if kind == Kind::Antigravity
+                    && !self.probe
+                    && !self.command_probe
+                    && !self.request.settings.text_only
+                    && !self.acp.auth_attempted
+                    && auth_required(error) =>
+            {
+                if !self.acp.oauth_personal {
+                    return Err(
+                        "This Antigravity ACP server does not offer Google account sign-in.".into(),
+                    );
+                }
+                self.acp.auth_attempted = true;
+                return self.acp_send(
+                    Stage::Authenticate,
+                    "authenticate",
+                    json!({"methodId":"oauth-personal"}),
+                    stdin,
+                );
+            }
             Stage::Authenticate if matches!(kind, Kind::Cursor | Kind::Grok) => {
                 return self.acp_session(stdin);
             }
@@ -774,6 +814,14 @@ impl Protocol {
                         stdin,
                     )?;
                     return Ok(events);
+                }
+                if self.request.kind == Kind::Antigravity {
+                    // #775 checks the same method id before offering sign-in.
+                    self.acp.oauth_personal = result["authMethods"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|method| method["id"] == "oauth-personal");
                 }
                 let auth = match self.request.kind {
                     Kind::Cursor => Some(json!({"methodId":"cursor_login"})),
@@ -1688,5 +1736,112 @@ mod tests {
             assert!(events.is_empty());
             assert_eq!(last(&mut out)["result"]["outcome"]["optionId"], "no");
         }
+    }
+    #[test]
+    fn antigravity_signs_in_once_when_session_new_requires_it() {
+        let mut p = protocol(Kind::Antigravity);
+        let mut out = Vec::new();
+        p.acp_start(&mut out).unwrap();
+        let init = last(&mut out);
+        p.frame(
+            json!({"id":init["id"],"result":{"authMethods":[{"id":"oauth-personal"},{"id":"gemini-api-key"}]}}),
+            &mut out,
+        )
+        .unwrap();
+        let new = last(&mut out);
+        assert_eq!(new["method"], "session/new");
+        p.frame(
+            json!({"id":new["id"],"error":{"code":-32000,"message":"Authentication required","data":{"message":"No authentication method selected."}}}),
+            &mut out,
+        )
+        .unwrap();
+        let auth = last(&mut out);
+        assert_eq!(auth["method"], "authenticate");
+        assert_eq!(auth["params"], json!({"methodId":"oauth-personal"}));
+        p.frame(json!({"id":auth["id"],"result":{}}), &mut out)
+            .unwrap();
+        let retry = last(&mut out);
+        assert_eq!(retry["method"], "session/new");
+        // A rejected sign-in fails the turn instead of asking again.
+        let rejected = p.frame(
+            json!({"id":retry["id"],"error":{"code":-32000,"message":"Authentication required"}}),
+            &mut out,
+        );
+        assert!(rejected.is_err());
+        assert!(std::mem::take(&mut out).is_empty());
+    }
+    #[test]
+    fn antigravity_without_google_sign_in_reports_the_missing_method() {
+        let mut p = protocol(Kind::Antigravity);
+        let mut out = Vec::new();
+        p.acp_start(&mut out).unwrap();
+        let init = last(&mut out);
+        p.frame(
+            json!({"id":init["id"],"result":{"authMethods":[{"id":"gemini-api-key"}]}}),
+            &mut out,
+        )
+        .unwrap();
+        let new = last(&mut out);
+        let error = p
+            .frame(
+                json!({"id":new["id"],"error":{"code":-32000,"message":"Authentication required"}}),
+                &mut out,
+            )
+            .unwrap_err();
+        assert_eq!(
+            error,
+            "This Antigravity ACP server does not offer Google account sign-in."
+        );
+        assert!(std::mem::take(&mut out).is_empty());
+    }
+    #[test]
+    fn antigravity_probes_and_other_errors_never_sign_in() {
+        // A catalog refresh, slash-command discovery or background text request
+        // must fail quietly rather than open a browser.
+        for (probe, command_probe, text_only) in [
+            (true, false, false),
+            (false, true, false),
+            (false, false, true),
+        ] {
+            let mut p = protocol(Kind::Antigravity);
+            p.probe = probe;
+            p.command_probe = command_probe;
+            p.request.settings.text_only = text_only;
+            let mut out = Vec::new();
+            p.acp_start(&mut out).unwrap();
+            let init = last(&mut out);
+            p.frame(
+                json!({"id":init["id"],"result":{"authMethods":[{"id":"oauth-personal"}]}}),
+                &mut out,
+            )
+            .unwrap();
+            let new = last(&mut out);
+            assert!(p
+                .frame(
+                    json!({"id":new["id"],"error":{"code":-32000,"message":"Authentication required"}}),
+                    &mut out,
+                )
+                .is_err());
+            assert!(std::mem::take(&mut out).is_empty());
+        }
+
+        let mut p = protocol(Kind::Antigravity);
+        let mut out = Vec::new();
+        p.acp_start(&mut out).unwrap();
+        let init = last(&mut out);
+        p.frame(
+            json!({"id":init["id"],"result":{"authMethods":[{"id":"oauth-personal"}]}}),
+            &mut out,
+        )
+        .unwrap();
+        let new = last(&mut out);
+        let error = p
+            .frame(
+                json!({"id":new["id"],"error":{"code":-32603,"message":"Internal error"}}),
+                &mut out,
+            )
+            .unwrap_err();
+        assert!(error.contains("Internal error"));
+        assert!(std::mem::take(&mut out).is_empty());
     }
 }
