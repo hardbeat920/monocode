@@ -153,6 +153,9 @@ pub struct AutomationTrigger {
     pub time: String,
     #[serde(default = "default_day_of_week")]
     pub day_of_week: i64,
+    /// Step for the "interval" schedule, counted from local midnight on a fixed date.
+    #[serde(default = "default_interval_minutes")]
+    pub interval_minutes: i64,
     #[serde(default)]
     pub repos: Vec<String>,
     #[serde(default)]
@@ -198,6 +201,13 @@ fn default_time() -> String {
 
 fn default_day_of_week() -> i64 {
     1
+}
+
+pub const MIN_INTERVAL_MINUTES: i64 = 5;
+pub const MAX_INTERVAL_MINUTES: i64 = 24 * 60;
+
+fn default_interval_minutes() -> i64 {
+    60
 }
 
 fn default_actor() -> String {
@@ -305,7 +315,7 @@ fn validate_upsert(input: &AutomationUpsert, now: i64) -> Result<(), String> {
     }
     if !matches!(
         input.schedule_kind.as_str(),
-        "hourly" | "daily" | "weekdays" | "weekly"
+        "hourly" | "daily" | "weekdays" | "weekly" | "interval"
     ) {
         return Err("Invalid automation schedule.".into());
     }
@@ -350,7 +360,7 @@ fn validate_trigger(trigger: &AutomationTrigger) -> Result<(), String> {
     }
     if !matches!(
         trigger.schedule_kind.as_str(),
-        "hourly" | "daily" | "weekdays" | "weekly"
+        "hourly" | "daily" | "weekdays" | "weekly" | "interval"
     ) {
         return Err("Invalid automation schedule.".into());
     }
@@ -359,6 +369,11 @@ fn validate_trigger(trigger: &AutomationTrigger) -> Result<(), String> {
         || !valid_time(&trigger.time)
     {
         return Err("Invalid automation time.".into());
+    }
+    if trigger.schedule_kind == "interval"
+        && !(MIN_INTERVAL_MINUTES..=MAX_INTERVAL_MINUTES).contains(&trigger.interval_minutes)
+    {
+        return Err("Automation intervals must be between 5 minutes and 24 hours.".into());
     }
     Ok(())
 }
@@ -443,6 +458,7 @@ fn trigger_from_fields(
         minute,
         time: time.to_string(),
         day_of_week,
+        interval_minutes: default_interval_minutes(),
         repos: Vec::new(),
         repo: String::new(),
         branch: String::new(),
@@ -604,6 +620,30 @@ fn list_runs(conn: &Connection, automation_id: &str) -> Result<Vec<AutomationRun
         serde_json::from_str(&value).map_err(|error| error.to_string())
     })
     .collect()
+}
+
+/// Runs older than a day are ignored so one stuck run can't stop the schedule forever.
+fn has_active_run(conn: &Connection, automation_id: &str, now: i64) -> Result<bool, String> {
+    let mut statement = conn
+        .prepare(
+            "SELECT run_json FROM automation_runs WHERE automation_id = ?1 AND created_at >= ?2",
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map(
+            params![automation_id, now.saturating_sub(86_400_000)],
+            |row| row.get::<_, String>(0),
+        )
+        .map_err(|error| error.to_string())?;
+    for raw in rows {
+        let raw = raw.map_err(|error| error.to_string())?;
+        if serde_json::from_str::<AutomationRun>(&raw)
+            .is_ok_and(|run| matches!(run.status.as_str(), "pending" | "running"))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn trim_history(conn: &Connection, automation_id: &str) -> Result<(), String> {
@@ -842,15 +882,18 @@ impl Service {
         Ok(run)
     }
 
+    /// `scheduled_for` is the occurrence being run; earlier missed occurrences
+    /// between `expected_next_run_at` and it are superseded without a record.
     pub fn claim_occurrence(
         &mut self,
         automation_id: &str,
         expected_next_run_at: i64,
+        scheduled_for: i64,
         next_run_at: i64,
         now: i64,
     ) -> Result<Option<DueAutomationRun>, String> {
         validate_id(automation_id, "automation")?;
-        if next_run_at <= expected_next_run_at {
+        if next_run_at <= scheduled_for || scheduled_for < expected_next_run_at {
             return Err("The following automation occurrence must advance the schedule.".into());
         }
         let conn = self.lock_conn()?;
@@ -878,12 +921,20 @@ impl Service {
         let mut run = new_run(
             automation_id,
             "scheduled",
-            expected_next_run_at,
+            scheduled_for,
             now,
             &automation.prompt,
         );
+        // Never stack runs. The tick is dropped without a history entry so short
+        // intervals don't flood the run list while a long run is going.
+        if has_active_run(&tx, automation_id, now)? {
+            write_automation(&tx, &automation)?;
+            tx.commit().map_err(|error| error.to_string())?;
+            run.status = "skipped".into();
+            return Ok(Some(DueAutomationRun { automation, run }));
+        }
         let grace_ms = automation.missed_run_grace_minutes.saturating_mul(60_000);
-        let missed = now.saturating_sub(expected_next_run_at);
+        let missed = now.saturating_sub(scheduled_for);
         let dispatch = missed <= grace_ms;
         if !dispatch {
             run.status = "skipped".into();
@@ -1035,7 +1086,10 @@ impl AutomationTrigger {
             id: new_id(),
             kind: kind.into(),
             event: event.into(),
-            schedule_kind: if matches!(event, "hourly" | "daily" | "weekdays" | "weekly") {
+            schedule_kind: if matches!(
+                event,
+                "hourly" | "daily" | "weekdays" | "weekly" | "interval"
+            ) {
                 event.into()
             } else {
                 "weekdays".into()
@@ -1043,6 +1097,7 @@ impl AutomationTrigger {
             minute: 0,
             time: "09:00".into(),
             day_of_week: 1,
+            interval_minutes: default_interval_minutes(),
             repos: Vec::new(),
             repo: String::new(),
             branch: String::new(),
@@ -1061,19 +1116,24 @@ impl AutomationTrigger {
                 WEEKDAYS.get(self.day_of_week as usize).unwrap_or(&"Weekly"),
                 self.time
             ),
+            "interval" => format!("Every {}", interval_label(self.interval_minutes)),
             _ => format!("Weekdays at {}", self.time),
         }
     }
     /// Calendar arithmetic in the user's time zone, including daylight-saving changes.
     pub fn next_at(&self, after: i64) -> i64 {
-        let Some(start) = Local.timestamp_millis_opt(after).single() else {
+        self.next_at_in(&Local, after)
+    }
+
+    fn next_at_in<Tz: TimeZone>(&self, zone: &Tz, after: i64) -> i64 {
+        let Some(start) = zone.timestamp_millis_opt(after).single() else {
             return after.saturating_add(86_400_000);
         };
         if self.schedule_kind == "hourly" {
             // Enumerating actual clock minutes also handles repeated/nonexistent DST hours.
             let mut candidate = (after / 60_000 + 1) * 60_000;
             for _ in 0..180 {
-                if Local
+                if zone
                     .timestamp_millis_opt(candidate)
                     .single()
                     .is_some_and(|date| date.minute() == self.minute.clamp(0, 59) as u32)
@@ -1083,6 +1143,43 @@ impl AutomationTrigger {
                 candidate += 60_000;
             }
             return candidate;
+        }
+        if self.schedule_kind == "interval" {
+            let step = self
+                .interval_minutes
+                .clamp(MIN_INTERVAL_MINUTES, MAX_INTERVAL_MINUTES);
+            let anchor = chrono::NaiveDate::from_ymd_opt(2024, 1, 1)
+                .and_then(|date| date.and_hms_opt(0, 0, 0))
+                .unwrap_or_default();
+            if (24 * 60) % step != 0 {
+                // Steps that don't divide a day walk around the clock anyway, so count
+                // elapsed time from a fixed instant to keep them exact across DST changes.
+                let origin = zone
+                    .from_local_datetime(&anchor)
+                    .earliest()
+                    .map_or(0, |date| date.timestamp_millis());
+                let step = step * 60_000;
+                return origin + ((after - origin).div_euclid(step) + 1) * step;
+            }
+            // Steps that divide a day count wall-clock minutes from a fixed local
+            // midnight, so they stay on the same clock times across DST changes.
+            let index = (start.naive_local() - anchor)
+                .num_minutes()
+                .div_euclid(step);
+            for offset in 0..1_000 {
+                let naive = anchor + chrono::Duration::minutes((index + offset) * step);
+                for gap in 0..=180 {
+                    let target = naive + chrono::Duration::minutes(gap);
+                    if let Some(candidate) = zone.from_local_datetime(&target).earliest() {
+                        let at = candidate.timestamp_millis();
+                        if at > after {
+                            return at;
+                        }
+                        break;
+                    }
+                }
+            }
+            return after.saturating_add(step * 60_000);
         }
         let (hour, minute) = self
             .time
@@ -1103,7 +1200,7 @@ impl AutomationTrigger {
                 // valid clock minute after the requested wall time, as Date.setHours does.
                 for gap in 0..=180 {
                     let target = naive + chrono::Duration::minutes(gap);
-                    if let Some(candidate) = Local.from_local_datetime(&target).earliest() {
+                    if let Some(candidate) = zone.from_local_datetime(&target).earliest() {
                         let at = candidate.timestamp_millis();
                         if at > after {
                             return at;
@@ -1114,6 +1211,16 @@ impl AutomationTrigger {
             }
         }
         after.saturating_add(7 * 86_400_000)
+    }
+}
+
+/// "15 minutes", "hour", "5 hours": reads after "Every".
+pub fn interval_label(minutes: i64) -> String {
+    match minutes {
+        60 => "hour".into(),
+        m if m % 60 == 0 => format!("{} hours", m / 60),
+        1 => "minute".into(),
+        m => format!("{m} minutes"),
     }
 }
 
@@ -1247,31 +1354,37 @@ impl Service {
     /// the grace period. Bounded work prevents an offline period monopolizing UI polling.
     pub fn claim_due(&mut self, now: i64) -> Result<Vec<DueAutomationRun>, String> {
         let mut due = Vec::new();
-        for mut automation in self.list()? {
+        for automation in self.list()? {
             if !automation.enabled || !has_time_trigger(&automation) {
                 continue;
             }
-            for _ in 0..100 {
-                if automation.next_run_at > now {
+            if automation.next_run_at > now {
+                continue;
+            }
+            // After sleep or downtime only the most recent missed occurrence runs.
+            let triggers = automation.triggers();
+            let mut scheduled_for = automation.next_run_at;
+            let mut next = next_run_at(&triggers, scheduled_for);
+            for _ in 0..100_000 {
+                if next > now || next <= scheduled_for {
                     break;
                 }
-                let next = next_run_at(&automation.triggers(), automation.next_run_at);
-                if next <= automation.next_run_at {
-                    break;
-                }
-                let claim = match self.claim_occurrence(
-                    &automation.id,
-                    automation.next_run_at,
-                    next,
-                    now,
-                ) {
-                    Ok(Some(claim)) => claim,
-                    // A failed transaction leaves this occurrence due for the
-                    // next poll. Preserve already committed claims so callers
-                    // can dispatch them instead of stranding pending runs.
-                    Ok(None) | Err(_) => break,
-                };
-                automation = claim.automation.clone();
+                scheduled_for = next;
+                next = next_run_at(&triggers, scheduled_for);
+            }
+            if next <= scheduled_for {
+                continue;
+            }
+            // A failed transaction leaves this occurrence due for the next poll.
+            // Preserve already committed claims so callers can dispatch them
+            // instead of stranding pending runs.
+            if let Ok(Some(claim)) = self.claim_occurrence(
+                &automation.id,
+                automation.next_run_at,
+                scheduled_for,
+                next,
+                now,
+            ) {
                 if claim.run.status == "pending" {
                     due.push(claim);
                 }
@@ -1522,6 +1635,191 @@ mod tests {
         assert_eq!(
             next_run_at(&[weekdays, daily], local_at("2026-09-19T10:00:00")),
             local_at("2026-09-19T18:00:00")
+        );
+    }
+
+    #[test]
+    fn intervals_anchor_to_the_clock_and_keep_uneven_steps_exact() {
+        let every = |minutes| AutomationTrigger {
+            interval_minutes: minutes,
+            ..AutomationTrigger::new("time", "interval")
+        };
+        assert_eq!(
+            every(15).next_at(local_at("2026-09-19T10:20:00")),
+            local_at("2026-09-19T10:30:00")
+        );
+        assert_eq!(
+            every(15).next_at(local_at("2026-09-19T10:30:00")),
+            local_at("2026-09-19T10:45:00")
+        );
+        assert_eq!(
+            every(180).next_at(local_at("2026-09-19T10:00:00")),
+            local_at("2026-09-19T12:00:00")
+        );
+        // Five hours never divides a day, so occurrences walk around the clock
+        // while staying exactly five hours apart, including across midnight.
+        let five = every(300);
+        let first = five.next_at(local_at("2026-09-19T21:00:00"));
+        let second = five.next_at(first);
+        assert_eq!(second - first, 5 * 3_600_000);
+        assert_eq!(five.next_at(second) - second, 5 * 3_600_000);
+        assert_eq!(five.label(), "Every 5 hours");
+        assert_eq!(every(60).label(), "Every hour");
+        assert_eq!(every(15).label(), "Every 15 minutes");
+    }
+
+    /// US Eastern for 2026 only: clocks jump 02:00 -> 03:00 on March 8 and fall
+    /// back 02:00 -> 01:00 on November 1, independent of the machine's zone.
+    #[derive(Clone, Copy, Debug)]
+    struct Eastern2026;
+
+    impl Eastern2026 {
+        fn offset_at(utc: &chrono::NaiveDateTime) -> chrono::FixedOffset {
+            let at =
+                |text| chrono::NaiveDateTime::parse_from_str(text, "%Y-%m-%dT%H:%M:%S").unwrap();
+            let summer = *utc >= at("2026-03-08T07:00:00") && *utc < at("2026-11-01T06:00:00");
+            chrono::FixedOffset::west_opt(if summer { 4 } else { 5 } * 3600).unwrap()
+        }
+    }
+
+    impl TimeZone for Eastern2026 {
+        type Offset = chrono::FixedOffset;
+        fn from_offset(_: &chrono::FixedOffset) -> Self {
+            Eastern2026
+        }
+        fn offset_from_local_date(
+            &self,
+            local: &chrono::NaiveDate,
+        ) -> chrono::LocalResult<chrono::FixedOffset> {
+            self.offset_from_local_datetime(&local.and_hms_opt(12, 0, 0).unwrap())
+        }
+        fn offset_from_local_datetime(
+            &self,
+            local: &chrono::NaiveDateTime,
+        ) -> chrono::LocalResult<chrono::FixedOffset> {
+            // Summer time first, so an ambiguous wall time yields the earlier instant.
+            let valid: Vec<_> = [4, 5]
+                .into_iter()
+                .map(|hours| chrono::FixedOffset::west_opt(hours * 3600).unwrap())
+                .filter(|offset| Self::offset_at(&(*local - *offset)) == *offset)
+                .collect();
+            match valid[..] {
+                [] => chrono::LocalResult::None,
+                [offset] => chrono::LocalResult::Single(offset),
+                [earlier, later, ..] => chrono::LocalResult::Ambiguous(earlier, later),
+            }
+        }
+        fn offset_from_utc_date(&self, utc: &chrono::NaiveDate) -> chrono::FixedOffset {
+            Self::offset_at(&utc.and_hms_opt(12, 0, 0).unwrap())
+        }
+        fn offset_from_utc_datetime(&self, utc: &chrono::NaiveDateTime) -> chrono::FixedOffset {
+            Self::offset_at(utc)
+        }
+    }
+
+    fn eastern_at(value: &str) -> i64 {
+        let naive = chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S").unwrap();
+        Eastern2026
+            .from_local_datetime(&naive)
+            .earliest()
+            .unwrap()
+            .timestamp_millis()
+    }
+
+    /// Successive occurrences as (local clock hour, elapsed hours since the previous one).
+    fn eastern_steps(trigger: &AutomationTrigger, from: &str, count: usize) -> Vec<(u32, i64)> {
+        let mut at = eastern_at(from);
+        (0..count)
+            .map(|_| {
+                let next = trigger.next_at_in(&Eastern2026, at);
+                let gap = (next - at) / 3_600_000;
+                at = next;
+                (Eastern2026.timestamp_millis_opt(next).unwrap().hour(), gap)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn uneven_intervals_keep_elapsed_time_across_dst_changes() {
+        let five = AutomationTrigger {
+            interval_minutes: 300,
+            ..AutomationTrigger::new("time", "interval")
+        };
+        // Every step after the first is five elapsed hours, so the clock reads
+        // 21:00 -> 03:00 over spring-forward and 01:00 (EDT) -> 05:00 (EST) over fall-back.
+        assert_eq!(
+            eastern_steps(&five, "2026-03-07T18:00:00", 6),
+            [(21, 3), (3, 5), (8, 5), (13, 5), (18, 5), (23, 5)]
+        );
+        assert_eq!(
+            eastern_steps(&five, "2026-10-31T18:00:00", 6),
+            [(20, 2), (1, 5), (5, 5), (10, 5), (15, 5), (20, 5)]
+        );
+    }
+
+    #[test]
+    fn day_dividing_intervals_stay_on_clock_times_across_dst_changes() {
+        let six = AutomationTrigger {
+            interval_minutes: 360,
+            ..AutomationTrigger::new("time", "interval")
+        };
+        let spring = eastern_steps(&six, "2026-03-07T19:00:00", 5);
+        assert_eq!(
+            spring.iter().map(|(hour, _)| *hour).collect::<Vec<_>>(),
+            [0, 6, 12, 18, 0]
+        );
+        assert_eq!(spring[1].1, 5);
+        let fall = eastern_steps(&six, "2026-10-31T19:00:00", 5);
+        assert_eq!(
+            fall.iter().map(|(hour, _)| *hour).collect::<Vec<_>>(),
+            [0, 6, 12, 18, 0]
+        );
+        assert_eq!(fall[1].1, 7);
+    }
+
+    #[test]
+    fn interval_validation_rejects_steps_outside_five_minutes_to_a_day() {
+        let mut trigger = AutomationTrigger::new("time", "interval");
+        trigger.interval_minutes = 4;
+        assert!(validate_trigger(&trigger).is_err());
+        trigger.interval_minutes = 24 * 60 + 1;
+        assert!(validate_trigger(&trigger).is_err());
+        trigger.interval_minutes = 300;
+        assert!(validate_trigger(&trigger).is_ok());
+    }
+
+    #[test]
+    fn due_poll_runs_only_the_latest_missed_occurrence_and_never_stacks() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut service = Service::open(&directory.path().join("sessions.sqlite")).unwrap();
+        let trigger = AutomationTrigger {
+            interval_minutes: 5,
+            ..AutomationTrigger::new("time", "interval")
+        };
+        let mut automation = save(&mut service, vec![trigger]);
+        let now = now_millis();
+        automation.next_run_at = now - 60 * 60_000;
+        write_automation(&service.conn, &automation).unwrap();
+
+        let claimed = service.claim_due(now).unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert!(now - claimed[0].run.scheduled_for < 5 * 60_000);
+        assert_eq!(service.runs(&automation.id).unwrap().len(), 1);
+        let next = get(&service.conn, &automation.id)
+            .unwrap()
+            .unwrap()
+            .next_run_at;
+        assert!(next > now);
+
+        // The first run is still pending, so the following tick is dropped.
+        assert!(service.claim_due(next).unwrap().is_empty());
+        assert_eq!(service.runs(&automation.id).unwrap().len(), 1);
+        assert!(
+            get(&service.conn, &automation.id)
+                .unwrap()
+                .unwrap()
+                .next_run_at
+                > next
         );
     }
 

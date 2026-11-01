@@ -34,6 +34,7 @@ pub(super) fn events(kind: &str) -> Vec<(String, String)> {
             ("daily", "Daily"),
             ("weekdays", "Weekdays"),
             ("weekly", "Weekly"),
+            ("interval", "Every…"),
         ],
         "github" => &[
             ("draft_opened", "Draft opened"),
@@ -234,6 +235,16 @@ impl Automations {
                     trigger.day_of_week = value.parse().unwrap_or(1);
                 }
             }
+            Choice::Interval(id) => {
+                if let Some(trigger) = editor
+                    .draft
+                    .triggers
+                    .as_mut()
+                    .and_then(|ts| ts.iter_mut().find(|t| t.id == id))
+                {
+                    trigger.interval_minutes = value.parse().unwrap_or(60);
+                }
+            }
         }
         editor.dirty = true;
         self.choice = None;
@@ -308,6 +319,7 @@ impl Automations {
                 "hourly" => "Every hour at",
                 "daily" => "Every day at",
                 "weekly" => "Every week on",
+                "interval" => "Every",
                 _ => "Every weekday at",
             };
             let frequency_anchor = AnchorSlot::default();
@@ -358,7 +370,67 @@ impl Automations {
             if let Some(fields) = fields {
                 preview_trigger.time = fields.time.read(cx).content.to_string();
             }
-            if trigger.schedule_kind == "hourly" {
+            if trigger.schedule_kind == "interval" {
+                // Both pickers write minutes. Switching unit keeps the closest step.
+                let minutes = trigger.interval_minutes;
+                let in_hours = minutes % 60 == 0;
+                let (amount, amounts) = if in_hours {
+                    (
+                        (minutes / 60).to_string(),
+                        (1..=24)
+                            .map(|h| ((h * 60).to_string(), h.to_string()))
+                            .collect::<Vec<_>>(),
+                    )
+                } else {
+                    (
+                        minutes.to_string(),
+                        [5, 10, 15, 20, 30, 45]
+                            .map(|m| (m.to_string(), m.to_string()))
+                            .to_vec(),
+                    )
+                };
+                let one = minutes == 60;
+                let units = vec![
+                    (
+                        if in_hours {
+                            "30".into()
+                        } else {
+                            minutes.to_string()
+                        },
+                        "minutes".to_string(),
+                    ),
+                    (
+                        if in_hours {
+                            minutes.to_string()
+                        } else {
+                            "60".into()
+                        },
+                        if one { "hour" } else { "hours" }.to_string(),
+                    ),
+                ];
+                sentence = sentence
+                    .child(self.select_control(
+                        ("trigger-interval", index),
+                        amount,
+                        Choice::Interval(id.clone()),
+                        amounts,
+                        cx,
+                    ))
+                    .child(
+                        self.select_control(
+                            ("trigger-interval-unit", index),
+                            match (in_hours, one) {
+                                (false, _) => "minutes",
+                                (true, true) => "hour",
+                                (true, false) => "hours",
+                            }
+                            .into(),
+                            Choice::Interval(id.clone()),
+                            units,
+                            cx,
+                        ),
+                    );
+            } else if trigger.schedule_kind == "hourly" {
                 sentence = sentence.child(
                     self.select_control(
                         ("trigger-minute", index),
@@ -392,7 +464,9 @@ impl Automations {
                 ));
             }
             sentence = sentence
-                .child(div().text_color(content(0.45)).child(gmt_offset()))
+                .when(trigger.schedule_kind != "interval", |d| {
+                    d.child(div().text_color(content(0.45)).child(gmt_offset()))
+                })
                 .child(
                     div()
                         .ml(px(4.))
