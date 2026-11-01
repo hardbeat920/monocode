@@ -435,6 +435,9 @@ impl Shell {
             .iter()
             .all(|id| self.session_metadata(*id, cx).summary.archived);
         let mut items = Vec::new();
+        if !multiple {
+            items.extend(self.origin_menu_items(id, cx));
+        }
         if self.reminders.iter().any(|r| ids.contains(&r.session_id)) {
             items.push(MenuAction::new("reminder:cancel", "Cancel reminder").into());
             items.push(MenuItem::Separator);
@@ -551,6 +554,8 @@ impl Shell {
                 self.store_write("pin the session", cx, move |s| s.set_pinned(&ids, pinned));
                 self.invalidate_chrome(cx);
             }
+            "origin-open" => self.open_origin(id, window, cx),
+            "origin-only" => self.narrow_to_origin(id, cx),
             "rename" => self.start_rename(RenameTarget::Session(id), window, cx),
             "link-work-item" => self.open_link_dialog(id, window, cx),
             "reminder:cancel" => {

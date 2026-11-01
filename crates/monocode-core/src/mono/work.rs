@@ -270,6 +270,7 @@ impl super::Mono {
                 launch.notify_on_complete = previous.notify_on_complete;
                 launch.completed = previous.completed;
                 launch.dismissed = previous.dismissed;
+                launch.adopted = previous.adopted;
             }
         }
         self.documents.retain(|d| {

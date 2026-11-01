@@ -165,6 +165,30 @@ pub struct Launch {
     pub completed: bool,
     #[serde(default)]
     pub dismissed: bool,
+    /// A session this Mono only took over with `sessions.send`
+    /// (`notifyOnComplete`); another session or the user started it.
+    #[serde(default)]
+    pub adopted: bool,
+}
+/// A Mono that was deleted, kept so the sessions it started still show who
+/// began them.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Departed {
+    pub id: String,
+    pub name: String,
+    pub mascot: String,
+    pub color: u32,
+    pub sessions: Vec<i64>,
+}
+/// Which Mono started a session, for the sidebar's origin tile.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Origin {
+    pub mono: String,
+    pub name: String,
+    pub mascot: String,
+    pub color: u32,
+    pub deleted: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -197,6 +221,9 @@ pub struct Message {
 pub struct Roster {
     pub monos: Vec<Mono>,
     pub hidden_sessions: Vec<i64>,
+    /// Deleted Monos with the sessions they started.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub departed: Vec<Departed>,
     /// Last observed desktop identities, for reconciling later desktop edits
     /// without discarding deliberate native edits or resurrecting deletions.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -259,6 +286,60 @@ impl Roster {
     }
     pub fn of_session(&self, id: i64) -> Option<&Mono> {
         self.monos.iter().find(|m| m.session_id == Some(id))
+    }
+    /// The Mono that started `session`. Sessions a Mono only adopted, its own
+    /// conversation and habit runs have none.
+    pub fn origin_of(&self, session: i64) -> Option<Origin> {
+        self.monos
+            .iter()
+            .find(|m| {
+                m.launches
+                    .iter()
+                    .any(|l| l.session_id == session && !l.adopted)
+            })
+            .map(|m| Origin {
+                mono: m.id.clone(),
+                name: m.label(),
+                mascot: m.mascot.clone(),
+                color: m.color,
+                deleted: false,
+            })
+            .or_else(|| {
+                self.departed
+                    .iter()
+                    .find(|d| d.sessions.contains(&session))
+                    .map(|d| Origin {
+                        mono: d.id.clone(),
+                        name: d.name.clone(),
+                        mascot: d.mascot.clone(),
+                        color: d.color,
+                        deleted: true,
+                    })
+            })
+    }
+    /// Drops a Mono, remembering its look and the sessions it started.
+    pub fn remove(&mut self, id: &str) -> bool {
+        let Some(at) = self.monos.iter().position(|m| m.id == id) else {
+            return false;
+        };
+        let mono = self.monos.remove(at);
+        let sessions: Vec<i64> = mono
+            .launches
+            .iter()
+            .filter(|l| !l.adopted)
+            .map(|l| l.session_id)
+            .collect();
+        if !sessions.is_empty() {
+            self.departed.retain(|d| d.id != mono.id);
+            self.departed.push(Departed {
+                name: mono.label(),
+                id: mono.id,
+                mascot: mono.mascot,
+                color: mono.color,
+                sessions,
+            });
+        }
+        true
     }
     pub fn reorder(&mut self, ids: &[String]) {
         let mut seen = HashSet::new();
