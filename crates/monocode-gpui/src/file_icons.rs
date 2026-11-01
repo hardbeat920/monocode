@@ -1,5 +1,6 @@
 //! FileTypeIcon.tsx's Material Icon Theme lookup, from the same
-//! react-material-icon-theme 1.2.0 tables (scripts/generate-material-icons.mjs).
+//! react-material-icon-theme 1.2.0 tables, with open folder art it lacks from
+//! material-icon-theme 5.40.0 (scripts/generate-material-icons.mjs).
 use gpui::{AnyElement, img, prelude::*, px};
 use serde::Deserialize;
 use std::{collections::HashMap, sync::OnceLock};
@@ -35,9 +36,9 @@ pub(crate) fn file_icon_name(name: &str) -> &'static str {
     }
     "file"
 }
-/// `getFolderIcon` with the specific theme, never as a root. The package names
-/// icons it ships no art for, so fall back from the open glyph to the closed
-/// one, then to the generic folder.
+/// `getFolderIcon` with the specific theme, never as a root. Some named icons
+/// have no art in either source package, so fall back from the open glyph to
+/// the closed one, then to the generic folder.
 pub(crate) fn folder_icon_name(name: &str, open: bool) -> String {
     let table = table();
     let base = table.folders.get(name).map_or("folder", String::as_str);
@@ -93,8 +94,8 @@ mod tests {
 
     #[test]
     fn folders_without_artwork_fall_back_to_a_drawable_icon() {
-        // No `folder-features-open` in the package: stay on the closed glyph.
-        assert_eq!(folder_icon_name("features", true), "folder-features");
+        // Filled in from material-icon-theme, unlike the React package.
+        assert_eq!(folder_icon_name("features", true), "folder-features-open");
         // No `folder-redis` art at all: use the generic folder.
         assert_eq!(folder_icon_name("redis", false), "folder");
         assert_eq!(folder_icon_name("redis", true), "folder-open");

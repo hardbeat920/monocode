@@ -44,8 +44,10 @@ upstream SVG tests requiring font fixtures absent from the published crate.
 The small EXIF image regression fixture is retained under tests/assets.
 
 Native chat file icons and the Dark+ token palette reuse the React UI's
-react-material-icon-theme 1.2.0 and @shikijs/themes assets. Their MIT license
-notices are included alongside the assets in crates/monocode-gpui/assets.
+react-material-icon-theme 1.2.0 and @shikijs/themes assets, plus open folder
+icons from material-icon-theme 5.40.0 (Copyright (c) 2025 Material Extensions).
+Their MIT license notices are included alongside the assets in
+crates/monocode-gpui/assets.
 
 The native editor's analysis and formatting bundles reuse CodeMirror, Lezer,
 the Replit Svelte grammar and Prettier under their MIT licenses. Package versions and complete license notices are included in

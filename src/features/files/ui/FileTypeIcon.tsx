@@ -17,12 +17,17 @@ type IconPack = typeof import("react-material-icon-theme");
  * without it and nothing reflows when it arrives.
  */
 let pack: IconPack | null = null;
+let missingIcons: Record<string, string> = {};
 let loading: Promise<void> | null = null;
 const listeners = new Set<() => void>();
 
 function loadPack() {
   if (pack || loading) return;
-  loading = import("react-material-icon-theme").then((mod) => {
+  loading = Promise.all([
+    import("react-material-icon-theme"),
+    import("./missingFolderIcons.json"),
+  ]).then(([mod, missing]) => {
+    missingIcons = missing.default;
     pack = mod;
     for (const listener of listeners) listener();
   });
@@ -80,9 +85,10 @@ export const FileTypeIcon = memo(function FileTypeIcon({
 });
 
 /**
- * The package names icons it ships no art for (`folder-features-open`,
- * `folder-redis`), so fall back from the requested glyph to the closed one,
- * then to the generic folder, rather than drawing nothing.
+ * The package names icons it ships no art for. Open glyphs the upstream theme
+ * has come from `missingFolderIcons.json` (scripts/generate-material-icons.mjs).
+ * Anything else, like `folder-redis`, falls back to the closed glyph, then to
+ * the generic folder, rather than drawing nothing.
  */
 function resolveFolderSvg(
   icons: IconPack,
@@ -90,12 +96,13 @@ function resolveFolderSvg(
   isOpen: boolean,
   isRoot: boolean,
 ): string {
+  const svgFor = (icon: string) => icons.getIconSvg(icon) || missingIcons[icon];
   const icon = (open: boolean) =>
     icons.getFolderIcon({ folderName, isOpen: open, isRoot });
   return (
-    icons.getIconSvg(icon(isOpen)) ||
-    icons.getIconSvg(icon(false)) ||
-    icons.getIconSvg(isOpen ? "folder-open" : "folder") ||
+    svgFor(icon(isOpen)) ||
+    svgFor(icon(false)) ||
+    svgFor(isOpen ? "folder-open" : "folder") ||
     ""
   );
 }

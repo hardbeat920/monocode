@@ -4,6 +4,12 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FileTypeIcon } from "./FileTypeIcon";
 
+vi.mock("./missingFolderIcons.json", () => ({
+  default: {
+    "folder-features-open": '<svg data-icon="overlay-features-open"></svg>',
+  },
+}));
+
 vi.mock("react-material-icon-theme", () => ({
   getFileIcon: ({ fileExtension }: { fileExtension?: string }) =>
     fileExtension ?? "",
@@ -19,7 +25,12 @@ vi.mock("react-material-icon-theme", () => ({
   },
   // Like the package, returns nothing for icons it names but ships no art for.
   getIconSvg: (name: string) =>
-    ["folder-features-open", "folder-redis", "folder-redis-open"].includes(name)
+    [
+      "folder-features-open",
+      "folder-gone",
+      "folder-gone-open",
+      "folder-half-open",
+    ].includes(name)
       ? ""
       : `<svg data-icon="${name}"><path /></svg>`,
 }));
@@ -102,12 +113,27 @@ describe("FileTypeIcon DOM updates", () => {
     );
   });
 
+  it("fills open glyphs the package dropped from the upstream theme", async () => {
+    await act(async () =>
+      root.render(
+        createElement(FileTypeIcon, {
+          name: "features",
+          isDir: true,
+          isOpen: true,
+        }),
+      ),
+    );
+    expect(container.querySelector("svg")?.getAttribute("data-icon")).toBe(
+      "overlay-features-open",
+    );
+  });
+
   it.each([
-    ["features", true, "folder-features"],
-    ["redis", false, "folder"],
-    ["redis", true, "folder-open"],
+    ["half", true, "folder-half"],
+    ["gone", false, "folder"],
+    ["gone", true, "folder-open"],
   ])(
-    "falls back when the package has no art for %s (open: %s)",
+    "falls back when no art exists for %s (open: %s)",
     async (name, isOpen, icon) => {
       await act(async () =>
         root.render(createElement(FileTypeIcon, { name, isDir: true, isOpen })),
