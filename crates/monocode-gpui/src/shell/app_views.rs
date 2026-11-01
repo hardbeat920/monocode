@@ -276,8 +276,11 @@ impl Shell {
                             .into_iter()
                             .map(|(provider, (connected, _))| (provider, connected))
                             .collect();
-                        automations
-                            .update(cx, |view, cx| view.set_trigger_connections(connections, cx));
+                        let suggestions = inbox.read(cx).trigger_suggestions();
+                        automations.update(cx, |view, cx| {
+                            view.set_trigger_connections(connections, cx);
+                            view.set_trigger_suggestions(suggestions);
+                        });
                     }
                     this.invalidate_chrome(cx);
                     this.sync_settings(cx);

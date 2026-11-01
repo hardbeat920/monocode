@@ -51,6 +51,7 @@ pub struct GitlabWorkItem {
     pub updated_at: String,
     pub labels: Vec<GitlabLabel>,
     pub assignees: Vec<GitlabAssignee>,
+    pub author: GitlabAssignee,
     pub draft: bool,
     pub repo: String,
     pub attention_reason: String,
@@ -448,6 +449,16 @@ fn parse_work_item(row: &Value, kind: &str, repo: &str) -> Option<GitlabWorkItem
         updated_at: string_field(row, "updated_at").unwrap_or_default(),
         labels: parse_labels(row),
         assignees: parse_assignees(row),
+        author: GitlabAssignee {
+            login: row
+                .get("author")
+                .and_then(|author| string_field(author, "username"))
+                .unwrap_or_default(),
+            avatar_url: row
+                .get("author")
+                .and_then(|author| string_field(author, "avatar_url"))
+                .unwrap_or_default(),
+        },
         draft,
         repo: repo.into(),
         attention_reason: String::new(),

@@ -14,7 +14,7 @@ use gpui::{
 use monocode_core::{
     automations::{
         self, Automation, AutomationRun, AutomationTrigger, AutomationUpsert, DueAutomationRun,
-        Service,
+        Service, TriggerFilter,
     },
     provider::Kind,
     session_groups::Folder,
@@ -27,6 +27,8 @@ use std::{
 
 mod editor;
 mod gallery;
+#[cfg(test)]
+mod tests;
 mod trigger_menu;
 
 /// Event providers and schedules are separate from agent harness branding.
@@ -47,6 +49,40 @@ fn trigger_mark(kind: &str, side: f32) -> AnyElement {
         _ => ("zap", content(0.45)),
     };
     icon(path, side).text_color(color).into_any_element()
+}
+
+fn split_values(text: &str) -> Vec<String> {
+    text.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+fn read_trigger_inputs(trigger: &mut AutomationTrigger, fields: &TriggerFields, cx: &App) {
+    trigger.time = fields.time.read(cx).content.trim().to_string();
+    trigger.repo.clear();
+    trigger.repos = split_values(&fields.repos.read(cx).content);
+    if fields.custom_actor {
+        let logins = split_values(&fields.actor.read(cx).content).join(", ");
+        trigger.actor = if logins.is_empty() {
+            "anyone".into()
+        } else {
+            logins
+        };
+    }
+    for (filter, input) in trigger.filters.iter_mut().zip(&fields.filters) {
+        filter.values = split_values(&input.read(cx).content);
+    }
+}
+fn filter_placeholder(field: &str) -> &'static str {
+    match field {
+        "labels" => "bug, p1",
+        "assignee" => "octocat, unassigned",
+        "status" => "Todo, In Progress",
+        "project" => "Desktop app",
+        "title" => "crash, panic",
+        _ => "",
+    }
 }
 
 pub(crate) enum Event {
@@ -74,6 +110,10 @@ struct TriggerFields {
     time: Entity<Input>,
     repos: Entity<Input>,
     actor: Entity<Input>,
+    /// "by" names specific people, so the logins field shows.
+    custom_actor: bool,
+    /// One comma-separated values field per `AutomationTrigger::filters` entry.
+    filters: Vec<Entity<Input>>,
 }
 struct Editor {
     draft: AutomationUpsert,
@@ -94,6 +134,11 @@ enum Choice {
     Grace,
     AddTrigger,
     TriggerEvent(String),
+    Actor(String),
+    AddFilter(String),
+    FilterOp(String, usize),
+    FilterValue(String, usize),
+    ScopeValue(String),
     Schedule(String),
     Time(String),
     Minute(String),
@@ -141,6 +186,8 @@ pub(crate) struct Automations {
     trigger_menu: Option<Entity<trigger_menu::TriggerMenu>>,
     trigger_subscription: Option<Subscription>,
     trigger_connections: HashMap<String, bool>,
+    /// Values seen in the Inbox, keyed "provider:field", offered by filter fields.
+    trigger_suggestions: HashMap<String, Vec<String>>,
     request_generation: u64,
 }
 impl EventEmitter<Event> for Automations {}
@@ -195,6 +242,7 @@ impl Automations {
             trigger_menu: None,
             trigger_subscription: None,
             trigger_connections: HashMap::new(),
+            trigger_suggestions: HashMap::new(),
             request_generation: 0,
         };
         this.refresh(cx);
@@ -435,26 +483,42 @@ impl Automations {
         editor
             .fields
             .retain(|fields| triggers.iter().any(|t| t.id == fields.id));
+        let field = |label: &str, placeholder: &str, text: String, cx: &mut Context<Self>| {
+            cx.new(|cx| {
+                let mut input = Input::field(
+                    label.to_string(),
+                    placeholder.to_string(),
+                    content(0.35),
+                    cx,
+                );
+                input.set_text(text, cx);
+                input
+            })
+        };
+        let mut changed = Vec::new();
         for trigger in triggers {
-            if editor.fields.iter().any(|f| f.id == trigger.id) {
+            if let Some(fields) = editor.fields.iter_mut().find(|f| f.id == trigger.id) {
+                if fields.filters.len() != trigger.filters.len() {
+                    fields.filters = trigger
+                        .filters
+                        .iter()
+                        .map(|filter| {
+                            field(
+                                automations::filter_label(&trigger.kind, &filter.field),
+                                filter_placeholder(&filter.field),
+                                filter.values.join(", "),
+                                cx,
+                            )
+                        })
+                        .collect();
+                    changed.extend(fields.filters.clone());
+                }
                 continue;
             }
-            let field = |label: &str, placeholder: &str, text: String, cx: &mut Context<Self>| {
-                cx.new(|cx| {
-                    let mut input = Input::field(
-                        label.to_string(),
-                        placeholder.to_string(),
-                        content(0.35),
-                        cx,
-                    );
-                    input.set_text(text, cx);
-                    input
-                })
-            };
             let time = field("Trigger time", "09:00", trigger.time, cx);
             let repos = field(
                 "Trigger repositories",
-                "Any repository",
+                automations::scope_label(&trigger.kind).1,
                 trigger
                     .repos
                     .iter()
@@ -465,24 +529,61 @@ impl Automations {
                     .join(", "),
                 cx,
             );
-            let actor = field("Trigger actor", "Anyone", trigger.actor, cx);
-            for input in [&time, &repos, &actor] {
-                editor._subscriptions.push(cx.subscribe(
-                    input,
-                    |this, _, _: &input::Changed, cx| {
-                        if let Some(e) = &mut this.editor {
-                            e.dirty = true;
-                        }
-                        cx.notify();
-                    },
-                ));
-            }
+            let custom_actor = !matches!(trigger.actor.trim(), "" | "anyone" | "people");
+            let actor = field(
+                "Trigger actor",
+                "octocat, hubot",
+                if custom_actor {
+                    trigger.actor.clone()
+                } else {
+                    String::new()
+                },
+                cx,
+            );
+            let filters = trigger
+                .filters
+                .iter()
+                .map(|filter| {
+                    field(
+                        automations::filter_label(&trigger.kind, &filter.field),
+                        filter_placeholder(&filter.field),
+                        filter.values.join(", "),
+                        cx,
+                    )
+                })
+                .collect::<Vec<_>>();
+            changed.extend([time.clone(), repos.clone(), actor.clone()]);
+            changed.extend(filters.clone());
             editor.fields.push(TriggerFields {
                 id: trigger.id,
                 time,
                 repos,
                 actor,
+                custom_actor,
+                filters,
             });
+        }
+        for input in changed {
+            editor
+                ._subscriptions
+                .push(cx.subscribe(&input, |this, _, _: &input::Changed, cx| {
+                    if let Some(e) = &mut this.editor {
+                        e.dirty = true;
+                    }
+                    cx.notify();
+                }));
+        }
+    }
+    /// Copies the trigger's text fields into the draft, so structural edits
+    /// (adding or removing a filter) keep what was typed.
+    fn commit_trigger_inputs(&mut self, cx: &App) {
+        let Some(editor) = &mut self.editor else {
+            return;
+        };
+        for trigger in editor.draft.triggers.get_or_insert_with(Vec::new) {
+            if let Some(fields) = editor.fields.iter().find(|f| f.id == trigger.id) {
+                read_trigger_inputs(trigger, fields, cx);
+            }
         }
     }
     fn collected(&self, cx: &App) -> Option<AutomationUpsert> {
@@ -496,19 +597,9 @@ impl Automations {
             .expand_mentions(&editor.prompt.read(cx).content);
         for trigger in draft.triggers.get_or_insert_with(Vec::new) {
             if let Some(fields) = editor.fields.iter().find(|f| f.id == trigger.id) {
-                trigger.time = fields.time.read(cx).content.trim().to_string();
-                trigger.repo.clear();
-                trigger.repos = fields
-                    .repos
-                    .read(cx)
-                    .content
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_string)
-                    .collect();
-                trigger.actor = fields.actor.read(cx).content.trim().to_string();
+                read_trigger_inputs(trigger, fields, cx);
             }
+            trigger.filters.retain(|filter| !filter.values.is_empty());
         }
         draft.sync_triggers(monocode_core::time::now_ms() as i64);
         Some(draft)

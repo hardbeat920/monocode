@@ -150,6 +150,9 @@ impl Automations {
         }
         self.trigger_connections = connected;
     }
+    pub(crate) fn set_trigger_suggestions(&mut self, suggestions: HashMap<String, Vec<String>>) {
+        self.trigger_suggestions = suggestions;
+    }
     pub(super) fn open_trigger_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.editor.is_none()
             || self

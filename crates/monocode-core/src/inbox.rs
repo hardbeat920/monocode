@@ -62,6 +62,8 @@ pub struct Item {
     pub updated_at: String,
     pub labels: Vec<Label>,
     pub assignees: Vec<Person>,
+    /// Filled by providers whose list rows carry it (GitHub, GitLab).
+    pub author: Person,
     pub draft: bool,
     pub repo: String,
     pub team_id: String,
@@ -70,8 +72,20 @@ pub struct Item {
     pub project_name: String,
     pub project_path: String,
     pub attention_reason: String,
+    /// Set only on the copy the tracker reports when labels were added to an
+    /// item it had already seen.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub added_labels: Vec<String>,
 }
 impl Item {
+    /// `key`, kept apart for a "labels added" sighting of the same item.
+    pub fn event_key(&self) -> String {
+        if self.added_labels.is_empty() {
+            self.key()
+        } else {
+            format!("{}#labeled:{}", self.key(), self.added_labels.join(","))
+        }
+    }
     pub fn key(&self) -> String {
         let identity = if self.provider == "linear" {
             let id = if self.identifier.trim().is_empty() {
@@ -519,6 +533,7 @@ pub struct Snapshot {
 #[derive(Default)]
 pub struct NotificationTracker {
     revisions: HashMap<String, i64>,
+    labels: HashMap<String, HashSet<String>>,
     primed: HashSet<String>,
     scope: Option<String>,
 }
@@ -565,9 +580,33 @@ impl NotificationTracker {
             };
             let key = format!("{project}:{}:{id}", item.kind);
             let previous = self.revisions.get(&key).copied();
-            if self.primed.contains(&item.provider) && previous.is_none() {
-                appeared.push(item.clone());
+            let labels: HashSet<String> = item
+                .labels
+                .iter()
+                .map(|label| label.name.trim().to_lowercase())
+                .filter(|name| !name.is_empty())
+                .collect();
+            if self.primed.contains(&item.provider) {
+                if previous.is_none() {
+                    appeared.push(item.clone());
+                } else if let Some(before) = self.labels.get(&key) {
+                    let added: Vec<String> = item
+                        .labels
+                        .iter()
+                        .filter(|label| {
+                            let name = label.name.trim().to_lowercase();
+                            !name.is_empty() && !before.contains(&name)
+                        })
+                        .map(|label| label.name.trim().to_string())
+                        .collect();
+                    if !added.is_empty() {
+                        let mut labeled = item.clone();
+                        labeled.added_labels = added;
+                        appeared.push(labeled);
+                    }
+                }
             }
+            self.labels.insert(key.clone(), labels);
             self.revisions.insert(key, previous.unwrap_or(0).max(at));
         }
         for provider in PROVIDERS {
@@ -1083,6 +1122,31 @@ mod notification_tests {
         );
         assert!(tracker
             .observe(&snapshot(vec![item(2, "github")]), "scope".into())
+            .is_empty());
+    }
+
+    #[test]
+    fn labels_added_to_a_known_item_are_reported_once() {
+        let mut tracker = NotificationTracker::default();
+        let label = |name: &str| Label {
+            name: name.into(),
+            color: String::new(),
+        };
+        let mut issue = item(1, "github");
+        issue.labels = vec![label("docs")];
+        assert!(tracker
+            .observe(&snapshot(vec![issue.clone()]), "scope".into())
+            .is_empty());
+        issue.labels = vec![label("docs"), label("Bug")];
+        let labeled = tracker.observe(&snapshot(vec![issue.clone()]), "scope".into());
+        assert_eq!(labeled.len(), 1);
+        assert_eq!(labeled[0].added_labels, vec!["Bug".to_string()]);
+        assert!(tracker
+            .observe(&snapshot(vec![issue.clone()]), "scope".into())
+            .is_empty());
+        issue.labels = vec![label("bug")];
+        assert!(tracker
+            .observe(&snapshot(vec![issue]), "scope".into())
             .is_empty());
     }
 

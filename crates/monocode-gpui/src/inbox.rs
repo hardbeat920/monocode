@@ -393,6 +393,35 @@ impl Inbox {
             .count()
     }
 
+    /// Values the automation trigger filters offer, keyed "provider:field".
+    pub(crate) fn trigger_suggestions(&self) -> std::collections::HashMap<String, Vec<String>> {
+        let mut found: std::collections::HashMap<String, std::collections::BTreeSet<String>> =
+            Default::default();
+        for item in &self.snapshot.items {
+            let mut add = |field: &str, value: &str| {
+                let value = value.trim();
+                if !value.is_empty() {
+                    found
+                        .entry(format!("{}:{field}", item.provider))
+                        .or_default()
+                        .insert(value.to_string());
+                }
+            };
+            add("repo", &item.repo);
+            add("project", &item.project_name);
+            add("status", &item.state);
+            for label in &item.labels {
+                add("labels", &label.name);
+            }
+            for person in &item.assignees {
+                add("assignee", &person.login);
+            }
+        }
+        found
+            .into_iter()
+            .map(|(key, values)| (key, values.into_iter().take(40).collect()))
+            .collect()
+    }
     pub(crate) fn connection_statuses(&self) -> std::collections::HashMap<String, (bool, String)> {
         let mut statuses = self
             .snapshot
