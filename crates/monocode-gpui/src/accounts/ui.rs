@@ -480,12 +480,13 @@ impl Accounts {
         let Some(snapshot) = self.usage.get(&key).and_then(|s| s.snapshot.as_ref()) else {
             return div().into_any_element();
         };
+        let now = usage::now_ms();
         div()
             .flex()
             .items_center()
             .gap_3()
             .children(snapshot.windows.iter().map(|w| {
-                let used = if w.resets_at.is_some_and(|at| at <= usage::now_ms()) {
+                let used = if w.resets_at.is_some_and(|at| at <= now) {
                     0.
                 } else {
                     w.used_percent
@@ -508,10 +509,12 @@ impl Accounts {
                     )
                     .child(
                         div()
+                            .relative()
                             .mt_1()
                             .h(px(3.))
                             .rounded_full()
                             .bg(content(0.08))
+                            .overflow_hidden()
                             .child(
                                 div()
                                     .h_full()
@@ -524,7 +527,8 @@ impl Accounts {
                                     } else {
                                         content(0.55)
                                     }),
-                            ),
+                            )
+                            .children(pace_marker(w, now, self.show_remaining)),
                     )
             }))
             .into_any_element()
@@ -822,6 +826,21 @@ pub(crate) fn bar_color(used: f64) -> gpui::Hsla {
     }
 }
 
+/// Even-pace tick: where the fill would sit if usage were spread evenly.
+pub(crate) fn pace_marker(w: &usage::Window, now: i64, show_remaining: bool) -> Option<Div> {
+    let pace = w.pace(now)?;
+    let at = if show_remaining { 100. - pace } else { pace };
+    Some(
+        div()
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .left(gpui::relative(at as f32 / 100.))
+            .w(px(1.5))
+            .bg(content(0.8)),
+    )
+}
+
 fn accent(alpha: f32) -> gpui::Hsla {
     let mut color = accent_color();
     color.a = alpha;
@@ -919,6 +938,7 @@ fn meter(w: &usage::Window, now: i64, show_remaining: bool) -> Div {
         )
         .child(
             div()
+                .relative()
                 .mt(px(6.))
                 .h_1()
                 .rounded_full()
@@ -930,7 +950,8 @@ fn meter(w: &usage::Window, now: i64, show_remaining: bool) -> Div {
                         .w(gpui::relative(shown as f32 / 100.))
                         .rounded_full()
                         .bg(bar_color(used)),
-                ),
+                )
+                .children(pace_marker(w, now, show_remaining)),
         )
 }
 

@@ -25,6 +25,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+const TURN_REFRESH_GAP: Duration = Duration::from_secs(60);
+
 pub(crate) struct Shared(pub Entity<Accounts>);
 impl Global for Shared {}
 pub(crate) fn get(cx: &App) -> Option<Entity<Accounts>> {
@@ -428,6 +430,18 @@ impl Accounts {
         })
         .detach();
         cx.notify();
+    }
+    /// A finished turn is when usage changes, so fetch then, but let quick
+    /// back-to-back turns share one request.
+    pub(crate) fn refresh_after_turn(&mut self, key: Key, cx: &mut Context<Self>) {
+        let recent = self
+            .usage
+            .get(&key)
+            .and_then(|state| state.attempted)
+            .is_some_and(|at| at.elapsed() < TURN_REFRESH_GAP);
+        if !recent {
+            self.refresh(key, true, cx);
+        }
     }
     pub(crate) fn load_provider(&mut self, kind: Kind, force: bool, cx: &mut Context<Self>) {
         for account in self.book.list(kind) {

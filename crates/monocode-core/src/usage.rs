@@ -38,6 +38,16 @@ impl Window {
             None => format!("{} window", self.label()),
         }
     }
+    /// Percent of the window that should be used by `now` if spending were even.
+    pub fn pace(&self, now: i64) -> Option<f64> {
+        let at = self.resets_at?;
+        let span = self.minutes as i64 * 60_000;
+        if span == 0 || at <= now {
+            return None;
+        }
+        let left = (at - now).min(span) as f64 / span as f64;
+        Some((1. - left) * 100.)
+    }
 }
 
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -66,11 +76,20 @@ pub struct ResetCredit {
     pub title: Option<String>,
     pub description: Option<String>,
 }
-#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Limit {
     pub resets_at: Option<i64>,
+    /// Armed by default; the user cancels it explicitly.
     pub resume_at_reset: bool,
+}
+impl Default for Limit {
+    fn default() -> Self {
+        Self {
+            resets_at: None,
+            resume_at_reset: true,
+        }
+    }
 }
 impl Limit {
     pub fn from_error(message: &str) -> Option<Self> {
@@ -90,7 +109,7 @@ impl Limit {
             && info["rateLimitType"] != "overage")
             .then(|| Self {
                 resets_at: timestamp(&info["resetsAt"]),
-                resume_at_reset: false,
+                resume_at_reset: true,
             })
     }
     pub fn resume_due(&self, now: i64, busy: bool) -> bool {
@@ -626,5 +645,25 @@ mod tests {
             resets_at: None,
         };
         assert_eq!(w.countdown(0), "5h");
+    }
+    #[test]
+    fn continuing_after_the_reset_is_on_by_default() {
+        assert!(Limit::default().resume_at_reset);
+        let parsed: Limit = serde_json::from_str(r#"{"resets_at":5}"#).unwrap();
+        assert!(parsed.resume_at_reset);
+    }
+    #[test]
+    fn pace_tracks_elapsed_share_of_the_window() {
+        let at = |resets_at| Window {
+            used_percent: 0.,
+            minutes: 300,
+            resets_at,
+        };
+        let pace = at(Some(270 * 60_000)).pace(0).unwrap();
+        assert!((pace - 10.).abs() < 1e-9);
+        assert_eq!(at(None).pace(0), None);
+        assert_eq!(at(Some(0)).pace(0), None);
+        assert_eq!(at(Some(-1)).pace(0), None);
+        assert_eq!(at(Some(600 * 60_000)).pace(0), Some(0.));
     }
 }

@@ -641,6 +641,7 @@ pub(crate) struct Shell {
     /// Lightweight history index; only opened or previewed chats own GPUI entities.
     session_summaries: HashMap<i64, Session>,
     draft_sessions: HashSet<i64>,
+    usage_limits: HashMap<i64, monocode_core::usage::Limit>,
     history_recency: HashMap<i64, u64>,
     history_clock: u64,
     session_marks: HashMap<i64, Entity<SessionMark>>,
@@ -1007,6 +1008,7 @@ impl Shell {
             sessions: HashMap::new(),
             session_summaries: HashMap::new(),
             draft_sessions: sidebar_metadata.drafts,
+            usage_limits: sidebar_metadata.usage_limits,
             history_recency: HashMap::new(),
             history_clock: 0,
             session_marks: HashMap::new(),
@@ -1241,6 +1243,7 @@ impl Shell {
             this.order.push(summary.id);
             this.session_summaries.insert(summary.id, summary);
         }
+        this.restore_usage_continuations(cx);
         this.init_mobile_host(cx);
         if let Some(id) = this.workspace.active {
             this.ensure_session(this.workspace.session_for_pane(id), cx);
@@ -1342,6 +1345,7 @@ impl Shell {
             // the indexed working directory so those events cannot erase it.
             view.restore_worktree(worktree, None, cx);
             view.draft_hint = self.draft_sessions.contains(&id);
+            view.settings.usage_limit = self.usage_limits.get(&id).cloned();
             if let Some(bridge) = &self.app_bridge {
                 view.set_app_environment(bridge.environment(id));
             }
@@ -1357,6 +1361,11 @@ impl Shell {
                 };
                 this.session_worktrees
                     .insert(id, view.read(cx).settings.worktree_cwd.clone());
+                if let Some(limit) = &view.read(cx).settings.usage_limit {
+                    this.usage_limits.insert(id, limit.clone());
+                } else {
+                    this.usage_limits.remove(&id);
+                }
                 // A finished turn may have edited files or moved to a worktree.
                 if this.workspace.active == Some(id) {
                     this.sync_git(cx);
@@ -1439,7 +1448,7 @@ impl Shell {
         } else if self.busy_sessions.remove(&id) && !focused && !session.summary.archived {
             self.unseen_finished.insert(id);
         }
-        if focused || session.summary.archived {
+        if focused || session.summary.archived || session.settings.usage_limit.is_some() {
             self.unseen_finished.remove(&id);
         }
         let state = if busy {
@@ -1484,6 +1493,7 @@ impl Shell {
                                 session.summary.archived = archived;
                                 if archived {
                                     session.stop_if_busy(cx);
+                                    session.cancel_usage_resume(cx);
                                 }
                             });
                         }
@@ -6354,6 +6364,16 @@ impl Shell {
         cx: &Context<Self>,
     ) -> AnyElement {
         let detailed = !compact;
+        if !session.needs_approval()
+            && !session.responding()
+            && let Some(limit) = session.usage_limit()
+        {
+            return crate::usage_limit::sidebar_status(
+                id,
+                limit,
+                self.workspace.sidebar_width < 250.,
+            );
+        }
         if self.session_hover == Some(id) {
             return self.session_archive_button(id, session, cx);
         }

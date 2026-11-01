@@ -8,6 +8,7 @@ pub struct SessionSidebarMetadata {
     pub worktrees: HashMap<i64, Option<String>>,
     pub details: HashMap<i64, MobileSessionMetadata>,
     pub drafts: HashSet<i64>,
+    pub usage_limits: HashMap<i64, crate::usage::Limit>,
     pub sidebar_hidden: HashSet<i64>,
     pub started_by: HashMap<i64, i64>,
     pub orchestrations: HashMap<i64, orchestration::Summary>,
@@ -87,13 +88,41 @@ impl Store {
         Ok(result)
     }
 
-    /// Reads no transcript bodies or full agent settings. Call this on a loader
-    /// thread, before handing the snapshot to the interactive shell.
+    pub fn session_usage_limits(&self) -> Result<HashMap<i64, crate::usage::Limit>, String> {
+        #[derive(serde::Deserialize)]
+        struct Saved {
+            usage_limit: Option<crate::usage::Limit>,
+        }
+        let settings = if self.shared.is_some() {
+            self.shared_settings_with_prefix("agent:")?
+        } else {
+            let mut query = self.conn.prepare(
+                "SELECT cast(substr(key,7) AS INTEGER),value FROM native_settings WHERE key LIKE 'agent:%'",
+            ).map_err(|e| e.to_string())?;
+            let rows = query
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .map_err(|e| e.to_string())?
+                .collect::<Result<Vec<(i64, String)>, _>>()
+                .map_err(|e| e.to_string())?;
+            rows
+        };
+        Ok(settings
+            .into_iter()
+            .filter_map(|(id, raw)| {
+                let saved: Saved = serde_json::from_str(&raw).ok()?;
+                Some((id, saved.usage_limit?))
+            })
+            .collect())
+    }
+
+    /// Reads no transcript bodies. Call this on a loader thread, before
+    /// handing the snapshot to the interactive shell.
     pub fn session_sidebar_metadata(&self, projects: &[String]) -> SessionSidebarMetadata {
         SessionSidebarMetadata {
             worktrees: self.session_worktrees().unwrap_or_default(),
             details: self.mobile_session_metadata().unwrap_or_default(),
             drafts: self.draft_sessions().unwrap_or_default(),
+            usage_limits: self.session_usage_limits().unwrap_or_default(),
             sidebar_hidden: if self.shared.is_some() {
                 self.shared_sidebar_hidden().unwrap_or_default()
             } else {
@@ -118,6 +147,47 @@ impl Store {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn continuation_metadata_restores_armed_and_blocked_threads_in_both_stores() {
+        for shared in [false, true] {
+            let store = if shared {
+                Store::open_monocode(Path::new(":memory:"))
+            } else {
+                Store::open(Path::new(":memory:"))
+            }
+            .unwrap();
+            let armed = store.create("claude", "/project").unwrap();
+            let blocked = store.create("codex", "/project").unwrap();
+            let ordinary = store.create("codex", "/project").unwrap();
+            for (id, resume_at_reset) in [(armed.id, true), (blocked.id, false)] {
+                store
+                    .save_agent_settings(
+                        id,
+                        &crate::agent::Settings {
+                            usage_limit: Some(crate::usage::Limit {
+                                resets_at: Some(123_456),
+                                resume_at_reset,
+                            }),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+            }
+            let snapshot = store.session_sidebar_metadata(&["/project".into()]);
+            assert!(snapshot.usage_limits[&armed.id].resume_at_reset);
+            assert!(!snapshot.usage_limits[&blocked.id].resume_at_reset);
+            assert_eq!(snapshot.usage_limits[&armed.id].resets_at, Some(123_456));
+            assert!(!snapshot.usage_limits.contains_key(&ordinary.id));
+            store
+                .save_agent_settings(armed.id, &crate::agent::Settings::default())
+                .unwrap();
+            assert!(!store
+                .session_usage_limits()
+                .unwrap()
+                .contains_key(&armed.id));
+        }
+    }
 
     #[test]
     fn mobile_metadata_keeps_saved_branches_worktrees_models_and_access_without_decoding_history() {

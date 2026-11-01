@@ -127,6 +127,17 @@ impl Conversation {
             self.tick_usage(cx);
         }
     }
+    pub(super) fn refresh_usage_after_turn(&self, cx: &mut Context<Self>) {
+        let Some(center) = crate::accounts::get(cx) else {
+            return;
+        };
+        let key = crate::accounts::Key::new(
+            Kind::from_id(&self.summary.provider),
+            self.settings.account.clone(),
+            self.account_model(),
+        );
+        center.update(cx, |center, cx| center.refresh_after_turn(key, cx));
+    }
     /// Account recovery also works for saved conversations from before native
     /// limit metadata was recorded, and after dismissing the banner. Inspect
     /// only the final error/notice: an older limit must not affect a later turn.
@@ -146,10 +157,56 @@ impl Conversation {
                 Limit::from_error(&text)
             })
     }
-    pub(super) fn tick_usage(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn cancel_usage_resume(&mut self, cx: &mut Context<Self>) {
+        let Some(limit) = &mut self.settings.usage_limit else {
+            return;
+        };
+        if !limit.resume_at_reset {
+            return;
+        }
+        limit.resume_at_reset = false;
+        if self.needs_history_restore() {
+            // Cancel before an automatic retry already waiting for this load.
+            self.history_actions
+                .push_front(Box::new(|this, cx| this.cancel_usage_resume(cx)));
+            self.load(cx);
+        } else {
+            self.save_settings(cx);
+        }
+        cx.emit(SessionChanged);
+        cx.notify();
+    }
+    fn toggle_usage_resume(&mut self, cx: &mut Context<Self>) {
+        let Some(limit) = &mut self.settings.usage_limit else {
+            return;
+        };
+        if limit.resume_at_reset {
+            self.cancel_usage_resume(cx);
+        } else if limit.resets_at.is_some_and(|at| at > usage::now_ms()) {
+            limit.resume_at_reset = true;
+            self.save_settings(cx);
+            cx.emit(SessionChanged);
+            cx.notify();
+        } else {
+            self.resume_usage(cx);
+        }
+    }
+    pub(crate) fn tick_usage(&mut self, cx: &mut Context<Self>) {
         let Some(limit) = self.settings.usage_limit.clone() else {
             return;
         };
+        if self.needs_history_restore() {
+            if !self.loading {
+                self.defer_history_action(|this, cx| this.tick_usage(cx), cx);
+            }
+            return;
+        }
+        if self.summary.archived {
+            if limit.resume_at_reset {
+                self.cancel_usage_resume(cx);
+            }
+            return;
+        }
         if limit.resets_at.is_none() {
             let kind = Kind::from_id(&self.summary.provider);
             let key = crate::accounts::Key::new(
@@ -171,6 +228,7 @@ impl Conversation {
             if let Some(at) = reset {
                 self.settings.usage_limit.as_mut().unwrap().resets_at = Some(at);
                 self.save_settings(cx);
+                cx.emit(SessionChanged);
             }
         }
         if self
@@ -288,6 +346,7 @@ impl Conversation {
                                 service_tier: this.settings.service_tier.clone(),
                                 thinking: this.settings.thinking,
                                 skip_outgoing_recap: limited,
+                                usage_limit: this.settings.usage_limit.clone(),
                                 account: this.settings.account.clone(),
                                 provider_id: this.summary.provider_id.clone(),
                             });
@@ -355,36 +414,16 @@ impl Conversation {
         let armed = limit.resume_at_reset;
         let switching = self.account_switching;
         let kind = Kind::from_id(&self.summary.provider);
-        let reset = limit.resets_at.map(|at| {
-            if at <= now {
-                return "Limit has reset".to_owned();
-            }
-            let when = chrono::DateTime::from_timestamp_millis(at)
-                .map(|d| {
-                    let local = d.with_timezone(&chrono::Local);
-                    let today = chrono::Local::now().date_naive() == local.date_naive();
-                    local
-                        .format(if today {
-                            "%-I:%M %p"
-                        } else {
-                            "%b %-d, %-I:%M %p"
-                        })
-                        .to_string()
-                })
-                .unwrap_or_default();
-            format!(
-                "Resets {when} · in {}",
-                usage::Window {
-                    used_percent: 100.,
-                    minutes: 300,
-                    resets_at: Some(at)
-                }
-                .countdown(now)
-            )
-        });
+        let description = crate::usage_limit::description(limit, now);
+        let heading_label = if armed {
+            crate::usage_limit::label(limit, now)
+        } else {
+            "Usage limit reached".into()
+        };
         let mut controls = div()
             .flex()
-            .when(!mono, |d| d.flex_shrink_0())
+            .min_w_0()
+            .flex_wrap()
             .items_center()
             .gap(px(if mono { 12. } else { 8. }))
             .when(mono, |d| d.flex_wrap().gap_y(px(6.)))
@@ -454,109 +493,87 @@ impl Conversation {
                 }),
             );
         }
-        let resume = if waiting {
-            if armed {
-                "Resuming at reset"
-            } else {
-                "Resume at reset"
-            }
+        let resume = if armed {
+            "Cancel auto-resume"
+        } else if waiting {
+            "Resume at reset"
         } else {
             "Resume"
         };
-        controls = controls
-            .child(
-                usage_button(
-                    "resume-usage-limit",
-                    if waiting && armed {
-                        "Cancel the automatic resume"
-                    } else {
-                        resume
-                    },
-                    waiting && armed,
-                    switching,
-                    false,
-                )
-                .when(mono && !(waiting && armed), |d| d.text_color(content(0.6)))
+        controls = controls.child(
+            usage_button("resume-usage-limit", resume, armed, switching, false)
+                .focusable()
+                .tab_stop(true)
                 .child(
-                    icon(if waiting { "clock" } else { "play" }, 14.)
-                        .text_color(if waiting && armed {
-                            gpui::rgb(AMBER_400).into()
+                    gpui::svg()
+                        .path(if armed {
+                            "close"
+                        } else if waiting {
+                            "clock"
                         } else {
-                            content(if mono { 0.6 } else { 0.55 })
+                            "play"
                         })
-                        .group_hover("resume-usage-limit", |s| s.text_color(content(1.))),
+                        .size(px(14.))
+                        .flex_shrink_0(),
                 )
                 .child(resume)
                 .when(!switching, |d| {
-                    d.on_click(cx.listener(move |this, _, _, cx| {
-                        if waiting {
-                            if let Some(limit) = &mut this.settings.usage_limit {
-                                limit.resume_at_reset = !limit.resume_at_reset;
-                                this.save_settings(cx);
-                                cx.notify();
+                    d.on_click(cx.listener(|this, _, _, cx| this.toggle_usage_resume(cx)))
+                        .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                this.toggle_usage_resume(cx);
+                                cx.stop_propagation();
                             }
-                        } else {
-                            this.resume_usage(cx);
-                        }
-                    }))
+                        }))
                 }),
-            )
-            .when(!mono, |controls| {
-                controls.child(
-                    usage_button(
-                        "dismiss-usage-limit",
-                        "Dismiss usage limit notice",
-                        false,
-                        false,
-                        false,
-                    )
-                    .w(px(24.))
-                    .px_0()
-                    .child(
-                        icon("close", 14.)
-                            .text_color(content(0.55))
-                            .group_hover("dismiss-usage-limit", |s| s.text_color(content(1.))),
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.settings.usage_limit = None;
-                        this.save_settings(cx);
-                        cx.notify();
-                    })),
-                )
-            });
+        );
         let heading = div()
             .flex()
             .flex_shrink_0()
             .items_center()
             .gap(px(8.))
             .whitespace_nowrap()
-            .child(icon("gauge", 14.).text_color(gpui::rgb(AMBER_400)))
+            .child(
+                icon(if armed { "clock" } else { "gauge" }, 14.).text_color(gpui::rgb(AMBER_400)),
+            )
             .child(
                 div()
                     .text_size(px(12.))
                     .text_color(content(0.85))
-                    .child(if mono {
-                        format!("{} usage limit reached", kind.label())
-                    } else {
-                        "Usage limit reached".into()
-                    }),
+                    .child(heading_label.clone()),
             );
         let notice = div()
             .id("usage-limit-notice")
             .debug_selector(|| "usage-limit-notice".into())
             .role(Role::Status)
-            .aria_label("Usage limit reached")
+            .aria_label(format!("{heading_label}. {description}"))
             .text_size(px(12.))
             .line_height(px(16.))
             .text_color(content(if mono { 0.6 } else { 0.55 }));
         Some(if mono {
-            notice.mx(px(6.)).mb(px(8.)).rounded(px(8.)).border_1().border_color(tint(AMBER_400,0.2)).bg(tint(AMBER_400,0.06))
-                .px(px(12.)).py(px(10.)).child(heading)
-                .child(div().pl(px(22.))
-                    .child(div().mt(px(4.)).text_size(px(12.)).line_height(px(19.5)).text_color(content(0.6))
-                        .child("Your conversation is saved. Choose another model or account to keep going."))
-                    .children(reset.map(|label| div().mt(px(4.)).text_color(content(0.45)).child(label)))
-                    .child(controls.mt(px(8.))))
+            notice
+                .mx(px(6.))
+                .mb(px(8.))
+                .rounded(px(8.))
+                .border_1()
+                .border_color(tint(AMBER_400, 0.2))
+                .bg(tint(AMBER_400, 0.06))
+                .px(px(12.))
+                .py(px(10.))
+                .child(heading)
+                .child(
+                    div()
+                        .pl(px(22.))
+                        .child(
+                            div()
+                                .mt(px(4.))
+                                .text_size(px(12.))
+                                .line_height(px(19.5))
+                                .text_color(content(0.6))
+                                .child(description),
+                        )
+                        .child(controls.mt(px(8.))),
+                )
                 .into_any_element()
         } else {
             notice
@@ -565,8 +582,10 @@ impl Conversation {
                     div()
                         .id("usage-limit-banner")
                         .debug_selector(|| "usage-limit-banner".into())
-                        .h(px(32.))
+                        .min_h(px(32.))
+                        .py(px(6.))
                         .flex()
+                        .flex_wrap()
                         .items_center()
                         .gap(px(8.))
                         .rounded_t(px(10.))
@@ -576,13 +595,7 @@ impl Conversation {
                         .bg(tint(AMBER_400, 0.1))
                         .px(px(8.))
                         .child(heading)
-                        .child(
-                            div()
-                                .min_w_0()
-                                .flex_1()
-                                .truncate()
-                                .child(reset.unwrap_or_default()),
-                        )
+                        .child(div().min_w(px(180.)).flex_1().child(description))
                         .child(controls),
                 )
                 .into_any_element()
@@ -705,9 +718,44 @@ mod tests {
     }
 
     #[gpui::test]
-    fn usage_banner_matches_the_composer_and_can_arm_cancel_and_dismiss(
-        cx: &mut gpui::TestAppContext,
-    ) {
+    fn provider_round_trip_restores_the_usage_limit(cx: &mut gpui::TestAppContext) {
+        let store = Arc::new(std::sync::Mutex::new(
+            monocode_core::store::Store::open(Path::new(":memory:")).unwrap(),
+        ));
+        let summary = locked(&store)
+            .unwrap()
+            .create("claude", "/fixture")
+            .unwrap();
+        let view = cx.new(|cx| Conversation::new(summary, store, cx));
+        view.update(cx, |view, cx| {
+            let limit = Limit {
+                resets_at: Some(usage::now_ms() + 3_600_000),
+                resume_at_reset: true,
+            };
+            view.settings.usage_limit = Some(limit.clone());
+            view.transcript.update(cx, |transcript, cx| {
+                transcript.patch(
+                    0,
+                    vec![monocode_core::transcript::Row {
+                        role: "user".into(),
+                        text: "Keep going".into(),
+                        first: true,
+                        sent_at: None,
+                    }],
+                    cx,
+                );
+            });
+            view.apply_model_pick(&ModelPicked(Kind::Codex, None), cx);
+            assert!(view.settings.usage_limit.is_none());
+            view.apply_model_pick(&ModelPicked(Kind::Claude, None), cx);
+            assert_eq!(view.settings.usage_limit, Some(limit));
+            assert!(view.follow_ups.state.paused);
+            assert!(view.usage_notice(false, cx).is_some());
+        });
+    }
+
+    #[gpui::test]
+    fn usage_banner_matches_the_composer_and_can_arm_and_cancel(cx: &mut gpui::TestAppContext) {
         let store = Arc::new(std::sync::Mutex::new(
             monocode_core::store::Store::open(Path::new(":memory:")).unwrap(),
         ));
@@ -743,15 +791,13 @@ mod tests {
         let composer = visual.debug_bounds("composer-box").unwrap();
         let resume = visual.debug_bounds("resume-usage-limit").unwrap();
         let account = visual.debug_bounds("usage-account-picker").unwrap();
-        let dismiss = visual.debug_bounds("dismiss-usage-limit").unwrap();
-        assert_eq!(banner.size.height, px(32.));
+        assert!(visual.debug_bounds("dismiss-usage-limit").is_none());
+        assert!(banner.size.height >= px(32.));
         assert_eq!(resume.size.height, px(24.));
-        assert_eq!(dismiss.size, gpui::size(px(24.), px(24.)));
         assert_eq!(banner.bottom(), composer.top());
         assert_eq!(banner.left(), composer.left() + px(8.));
         assert_eq!(banner.right(), composer.right() - px(8.));
-        assert_eq!(account.right() + px(8.), resume.left());
-        assert_eq!(resume.right() + px(8.), dismiss.left());
+        assert!(account.right() <= resume.left());
         assert!(visual.debug_bounds("usage-model-picker").is_none());
         assert!(visual.debug_bounds("provider-status").is_none());
 
@@ -790,29 +836,113 @@ mod tests {
                 .unwrap()
         );
 
-        // Unknown or elapsed reset times keep a manual Resume control and the
-        // same right-aligned actions, as in React's composer variant.
+        // Unknown or elapsed reset times still offer a manual retry.
         for resets_at in [None, Some(usage::now_ms() - 1_000)] {
             window
                 .update(visual, |v, _, cx| {
-                    v.settings.usage_limit.as_mut().unwrap().resets_at = resets_at;
+                    let limit = v.settings.usage_limit.as_mut().unwrap();
+                    limit.resets_at = resets_at;
+                    limit.resume_at_reset = true;
                     cx.notify();
                 })
                 .unwrap();
             visual.refresh().unwrap();
+            let cancel = visual.debug_bounds("resume-usage-limit").unwrap();
+            visual.simulate_click(cancel.center(), Default::default());
+            window
+                .update(visual, |view, _, _| {
+                    assert!(!view.settings.usage_limit.as_ref().unwrap().resume_at_reset);
+                    assert!(!view.busy);
+                })
+                .unwrap();
+        }
+        assert!(visual.debug_bounds("usage-limit-notice").is_some());
+        assert!(visual.debug_bounds("dismiss-usage-limit").is_none());
+        window
+            .update(visual, |view, _, cx| {
+                view.settings.usage_limit = Some(Limit {
+                    resets_at: Some(usage::now_ms() + 3_600_000),
+                    resume_at_reset: true,
+                });
+                cx.notify();
+            })
+            .unwrap();
+        for width in [240., 480.] {
+            visual.simulate_resize(gpui::size(px(width), px(700.)));
+            visual.refresh().unwrap();
+            let banner = visual.debug_bounds("usage-limit-banner").unwrap();
+            let resume = visual.debug_bounds("resume-usage-limit").unwrap();
+            assert!(resume.left() >= banner.left() && resume.right() <= banner.right());
+            assert!(resume.bottom() <= banner.bottom());
             assert_eq!(
-                visual.debug_bounds("resume-usage-limit").unwrap().right(),
-                resume.right()
+                banner.bottom(),
+                visual.debug_bounds("composer-box").unwrap().top()
             );
         }
-        visual.simulate_click(dismiss.center(), Default::default());
-        visual.refresh().unwrap();
-        assert!(visual.debug_bounds("usage-limit-notice").is_none());
-        assert!(
-            window
-                .update(visual, |v, _, _| v.settings.usage_limit.is_none())
+    }
+
+    #[gpui::test]
+    fn continuation_due_after_history_restore_rechecks_cancel_and_resumes_once(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        for cancel in [false, true] {
+            let store = Arc::new(std::sync::Mutex::new(
+                monocode_core::store::Store::open(Path::new(":memory:")).unwrap(),
+            ));
+            let mut summary = locked(&store).unwrap().create("codex", "/fixture").unwrap();
+            summary.has_messages = true;
+            let id = summary.id;
+            let limit = Limit {
+                resets_at: Some(usage::now_ms() - 31_000),
+                resume_at_reset: true,
+            };
+            locked(&store)
                 .unwrap()
-        );
+                .save_agent_settings(
+                    id,
+                    &Settings {
+                        usage_limit: Some(limit.clone()),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            let resumed = std::rc::Rc::new(std::cell::Cell::new(0));
+            let view = cx.new(|cx| {
+                let mut view = Conversation::new(summary, store.clone(), cx);
+                view.settings.usage_limit = Some(limit);
+                view.settings.mono = Some(monocode_core::agent::MonoContext {
+                    mono: Default::default(),
+                    root: "/fixture".into(),
+                    executable: "/fixture/binary".into(),
+                });
+                view
+            });
+            cx.update(|cx| {
+                let count = resumed.clone();
+                cx.subscribe(&view, move |_, _: &UsageResumed, _| {
+                    count.set(count.get() + 1)
+                })
+                .detach();
+            });
+            view.update(cx, |view, cx| {
+                view.tick_usage(cx);
+                assert!(view.loading);
+                if cancel {
+                    view.cancel_usage_resume(cx);
+                }
+            });
+            cx.run_until_parked();
+            view.update(cx, |view, cx| {
+                assert!(view.history_loaded());
+                view.tick_usage(cx);
+                view.tick_usage(cx);
+                assert_eq!(resumed.get(), usize::from(!cancel));
+                assert_eq!(view.settings.usage_limit.is_some(), cancel);
+            });
+            cx.run_until_parked();
+            let saved = locked(&store).unwrap().agent_settings(id).unwrap().unwrap();
+            assert!(!saved.usage_limit.is_some_and(|limit| limit.resume_at_reset));
+        }
     }
 
     #[gpui::test]
@@ -857,6 +987,9 @@ mod tests {
         });
         view.update(cx, |v, cx| {
             v.settings.usage_limit.as_mut().unwrap().resets_at = Some(usage::now_ms() - 31_000);
+            // Continuing after the reset is on by default; cancelling holds it.
+            assert!(v.settings.usage_limit.as_ref().unwrap().resume_at_reset);
+            v.cancel_usage_resume(cx);
             v.tick_usage(cx);
             assert!(v.settings.usage_limit.is_some());
             v.settings.usage_limit.as_mut().unwrap().resume_at_reset = true;

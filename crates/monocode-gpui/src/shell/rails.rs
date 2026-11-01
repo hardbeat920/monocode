@@ -690,6 +690,8 @@ impl Shell {
                 .children(self.session_marks.get(&id).cloned())
                 .child("Working...")
                 .into_any_element()
+        } else if let Some(limit) = session.usage_limit() {
+            crate::usage_limit::sidebar_status(id, limit, self.workspace.sidebar_width < 250.)
         } else if self.unseen_finished.contains(&id) {
             status
                 .text_color(rgb(0x34d399))

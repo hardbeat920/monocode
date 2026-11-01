@@ -153,6 +153,7 @@ pub struct ProviderSwitch {
     pub service_tier: Option<String>,
     pub thinking: Option<bool>,
     pub skip_outgoing_recap: bool,
+    pub usage_limit: Option<crate::usage::Limit>,
     pub account: crate::accounts::Profile,
     pub provider_id: Option<String>,
 }
