@@ -24,6 +24,7 @@ import {
   monoSessionCompletionResult,
   MonoSessionCompletionBatches,
 } from "../features/monos/model/monoSessionCompletion";
+import { selectProjectWithMonoLanding } from "./model/projectSelection";
 import { acceptQuickLaunch } from "./model/quickLaunchSession";
 import { useWorkspaceNavigation } from "./hooks/useWorkspaceNavigation";
 import { useIdleSessionDetach } from "./hooks/useIdleSessionDetach";
@@ -620,6 +621,7 @@ import {
   createMono,
   findMono,
   monoWorksOn,
+  markMonoOpened,
   isMonoSession,
   listMonos,
   loadOpenMono,
@@ -664,7 +666,10 @@ import {
 } from "../features/monos/model/monoRotation";
 import {
   detachMonoTabs,
+  ensureLatestMonoSession,
   ensureMonoSession,
+  loadLatestMonoSession,
+  rememberMonoAfterOpen,
   resetMonoSession,
 } from "../features/monos/model/monoWorkspace";
 import {
@@ -782,6 +787,7 @@ import {
   loadAutosave,
   loadCollapsedProjectRailMode,
   loadFileTabMode,
+  loadProjectMonoLanding,
   loadLiveAgentsEnabled,
   loadNotesEnabled,
   loadMonosEnabled,
@@ -5057,21 +5063,29 @@ function Workspace({
 
   /** A Mono's conversation is a view over the existing workspace tabs. */
   const onOpenMono = useCallback(
-    async (monoId: string) => {
+    async (monoId: string, options: { loadOnly?: boolean } = {}) => {
       setMonoActivity(null);
       workspaceNavigation.cancel();
-      const request = ++monoViewRequest.current;
-      lastMonoIdRef.current = monoId;
-      const session = await ensureMonoSession(monoId, {
+      const host = {
         home: homeDir,
         load: ensureOpenSession,
-        create: (path) => newDefaultSession(path),
-        add: (created) => {
+        create: (path: string) => newDefaultSession(path),
+        add: (created: Session) => {
           sessionsRef.current = [...sessionsRef.current, created];
           setSessions(sessionsRef.current);
         },
-      });
-      if (!session || request !== monoViewRequest.current) return;
+      };
+      const session = await rememberMonoAfterOpen(
+        monoId,
+        options.loadOnly
+          ? loadLatestMonoSession(monoId, monoViewRequest, host)
+          : ensureLatestMonoSession(monoId, monoViewRequest, host),
+        (openedMonoId) => {
+          lastMonoIdRef.current = openedMonoId;
+          markMonoOpened(openedMonoId);
+        },
+      );
+      if (!session) return;
       // What the last Mono had open over its overview is its own; another
       // Mono opens on its list.
       if (monoViewIdRef.current !== session.id) {
@@ -6545,13 +6559,20 @@ function Workspace({
 
   const onSelectProject = useCallback(
     (path: string) => {
-      closeMonoView();
-      workspaceNavigation.cancel();
-      openProjects([path]);
-      workspaceNavigation.selectProject(path);
+      selectProjectWithMonoLanding(path, {
+        loadOpenMono,
+        closeMonoView,
+        cancelNavigation: workspaceNavigation.cancel,
+        openProject: (project) => openProjects([project]),
+        selectProject: workspaceNavigation.selectProject,
+        monosEnabled: loadMonosEnabled,
+        landingEnabled: loadProjectMonoLanding,
+        openMono: (monoId) => void onOpenMono(monoId, { loadOnly: true }),
+      });
     },
     [
       openProjects,
+      onOpenMono,
       closeMonoView,
       workspaceNavigation.cancel,
       workspaceNavigation.selectProject,

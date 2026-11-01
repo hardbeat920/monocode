@@ -265,6 +265,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: "editor open top workspace normal session pane beside chat",
   },
   {
+    id: "project-mono-landing",
+    section: "general",
+    label: "Open project Mono",
+    keywords: "project switch mono landing workspace remembered session",
+  },
+  {
     id: "tab-animations",
     section: "general",
     label: "Tab animations",
@@ -663,6 +669,15 @@ const FILE_TAB_MODE_KEY = "monocode.fileTabMode";
 const TAB_ANIMATIONS_ENABLED_KEY = "monocode.tabAnimationsEnabled";
 
 const COLLAPSED_PROJECT_RAIL_MODE_KEY = "monocode.collapsedProjectRailMode";
+const PROJECT_MONO_LANDING_KEY = "monocode.projectMonoLanding";
+
+export function loadProjectMonoLanding(): boolean {
+  return readFlag(PROJECT_MONO_LANDING_KEY) ?? false;
+}
+
+export function saveProjectMonoLanding(value: boolean) {
+  writeFlag(PROJECT_MONO_LANDING_KEY, value);
+}
 
 export type FollowUpBehavior = "steer" | "queue";
 
