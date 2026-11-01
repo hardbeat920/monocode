@@ -66,7 +66,8 @@ export function ModalSheet({
         {/* The sheet starts below the status bar: its stack's header, and
             anything else inside, take no top inset of their own. */}
         <SafeAreaInsetsContext.Provider value={{ ...insets, top: 0 }}>
-          {children}
+          {/* A strip for the handle, so the header's title sits clear of it as on iOS. */}
+          <View style={styles.page}>{children}</View>
         </SafeAreaInsetsContext.Provider>
         <View pointerEvents="none" style={styles.handle} />
       </Animated.View>
@@ -76,6 +77,7 @@ export function ModalSheet({
 
 const useStyles = themedStyles((colors) => ({
   fill: { flex: 1 },
+  page: { flex: 1, paddingTop: 10 },
   // iOS's own sheet grabber.
   grabber: {
     position: "absolute",
