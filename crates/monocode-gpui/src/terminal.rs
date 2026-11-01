@@ -31,6 +31,9 @@ use std::{
     time::Duration,
 };
 
+mod shell;
+use shell::default_shell;
+
 actions!(
     terminal,
     [SendTab, SendBackTab, SendEscape, Copy, Paste, SelectAll]
@@ -175,7 +178,7 @@ fn spawn(cwd: &str, size: GridSize, id: u64) -> Spawned {
         env.insert(key.to_owned(), value);
     }
     let options = tty::Options {
-        shell: Some(tty::Shell::new(program, args)),
+        shell: Some(tty::Shell::new(program.clone(), args)),
         working_directory: Some(workdir),
         drain_on_exit: false,
         env,
@@ -213,7 +216,7 @@ fn spawn(cwd: &str, size: GridSize, id: u64) -> Spawned {
         Err(error) => {
             write_note(
                 &term,
-                &format!("\x1b[31mCould not start the shell: {error}\x1b[0m"),
+                &format!("\x1b[31mCould not start the shell ({program}): {error}\x1b[0m"),
             );
             None
         }
@@ -1374,29 +1377,6 @@ fn working_dir(cwd: &str) -> std::path::PathBuf {
         home().unwrap_or(path)
     }
 }
-fn default_shell() -> (String, Vec<String>) {
-    let shell = std::env::var("SHELL")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| {
-            if cfg!(target_os = "macos") {
-                "/bin/zsh".into()
-            } else {
-                "/bin/bash".into()
-            }
-        });
-    let stem = std::path::Path::new(&shell)
-        .file_stem()
-        .and_then(|n| n.to_str())
-        .unwrap_or_default()
-        .to_owned();
-    let args = match stem.as_str() {
-        "zsh" | "bash" | "sh" | "fish" => vec!["-l".to_owned()],
-        _ => Vec::new(),
-    };
-    (shell, args)
-}
-
 /// pty.rs's foreground_label: the command holding the terminal, unless it
 /// is the shell itself.
 #[cfg(unix)]
