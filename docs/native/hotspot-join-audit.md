@@ -1,11 +1,12 @@
 # Hotspot join: reliability audit
 
 Keep-awake can move the Mac onto a phone hotspot when Wi-Fi drops while agents
-work, then move it back. Users called it "really bad, unpredictable and not
-reliable". This file records what was wrong, what changed, and what still
+work, then move it back. In use it was unpredictable and unreliable. This
+file records what was wrong, what changed, and what still
 needs a real phone to check.
 
-Line numbers refer to `snapshot/inbox-base`, before the fixes.
+Line numbers refer to `hotspot.rs` as of #1247 (`pr/keep-awake`), before the
+fixes.
 
 Tags: **[code]** = verified by reading the code or by tests.
 **[mac]** = observed on this machine (macOS 27.0.1, build 26A434) with
