@@ -146,13 +146,15 @@ providers' list calls don't return them. `inbox.item` fills `comments` and
 
 ## Attention
 
-`attention` comes from the provider's reason for the item: GitHub pull requests
-with a review requested from the signed-in user (`reviewRequested`), items that
-mention them (`mentioned`) and items assigned to them (`assigned`; where several
-apply the first of those wins); GitLab and Azure DevOps to-dos by their action
-(`build_failed` is `ciFailed`). Anything else a provider reports is `other`.
-`ciFailed` is only set where the provider says so; GitHub CI status is not
-polled for the list.
+`attention` comes from the provider's reason for the item. For GitHub the host
+asks, per checked-out repository, which open pull requests request the signed-in
+user's review (`review-requested:<login>`) and which open items mention them
+(`mentions:<login>`); items assigned to them come from the listed assignees.
+Where several apply the order is `reviewRequested`, `assigned`, `mentioned`.
+These searches are best effort: if one fails the rows stay as listed. GitLab and
+Azure DevOps to-dos carry their own action (`build_failed` is `ciFailed`).
+Anything else a provider reports is `other`. `ciFailed` is only set where the
+provider says so; GitHub CI status is not polled for the list.
 
 ## Push
 
