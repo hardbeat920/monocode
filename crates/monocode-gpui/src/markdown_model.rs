@@ -1,5 +1,8 @@
 //! Native Markdown model for AgentMarkdown's Streamdown elements.
-use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{
+    Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd,
+    TextMergeWithOffset,
+};
 use std::{iter::Peekable, ops::Range, sync::Arc};
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -456,7 +459,8 @@ fn parse_at(text: &str, base: usize, hard_breaks: bool) -> BlockTree {
     let mut pending = Vec::new();
     let mut depth = 0usize;
     let mut start = 0;
-    for (event, range) in parser.into_offset_iter() {
+    // URLs must stay whole: the parser splits text at characters like `_` and `&`.
+    for (event, range) in TextMergeWithOffset::new(parser.into_offset_iter()) {
         if pending.is_empty() {
             start = range.start;
         }
@@ -718,6 +722,10 @@ fn inline_span(
 }
 fn append_run(out: &mut Vec<InlineRun>, event: Event<'_>, mut style: InlineStyle) {
     let text = match event {
+        Event::Text(text) if style.link.is_none() => {
+            push_linked(out, &text, style);
+            return;
+        }
         Event::Text(text) => text.into_string(),
         Event::Code(text) => {
             style.code = true;
@@ -736,6 +744,168 @@ fn append_run(out: &mut Vec<InlineRun>, event: Event<'_>, mut style: InlineStyle
         _ => return,
     };
     out.push(InlineRun { text, style });
+}
+
+/// Pushes prose, giving bare URLs the link style like GFM's extended autolinks.
+fn push_linked(out: &mut Vec<InlineRun>, text: &str, style: InlineStyle) {
+    let mut push = |text: &str, link: Option<&str>| {
+        if !text.is_empty() {
+            let mut style = style.clone();
+            style.link = link.map(str::to_owned);
+            out.push(InlineRun {
+                text: text.to_owned(),
+                style,
+            });
+        }
+    };
+    let mut rest = text;
+    while let Some(url) = next_bare_url(rest) {
+        let (before, after) = rest.split_at(url.start);
+        let (url, after) = after.split_at(url.len());
+        push(before, None);
+        push(url, Some(url));
+        rest = after;
+    }
+    push(rest, None);
+}
+
+fn next_bare_url(text: &str) -> Option<Range<usize>> {
+    let mut from = 0;
+    while let Some(found) = text[from..].find("http") {
+        let start = from + found;
+        from = start + 4;
+        let scheme = ["https://", "http://"]
+            .into_iter()
+            .find(|scheme| text[start..].starts_with(scheme));
+        let bounded = !text[..start]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_ascii_alphanumeric());
+        if let Some(scheme) = scheme.filter(|_| bounded) {
+            let host = start + scheme.len();
+            let end = host + bare_url_len(&text[host..]);
+            if end > host {
+                return Some(start..end);
+            }
+        }
+    }
+    None
+}
+
+/// Length of a URL's body, without the sentence punctuation that may follow it.
+fn bare_url_len(text: &str) -> usize {
+    let stops =
+        |c: char| c.is_whitespace() || c == '<' || "，。！？；：、（）「」《》【】".contains(c);
+    let mut url = &text[..text.find(stops).unwrap_or(text.len())];
+    loop {
+        let trimmed =
+            url.trim_end_matches(['?', '!', '.', ',', ':', ';', '*', '_', '~', '\'', '"']);
+        let unbalanced =
+            trimmed.ends_with(')') && trimmed.matches(')').count() > trimmed.matches('(').count();
+        let trimmed = if unbalanced {
+            &trimmed[..trimmed.len() - 1]
+        } else {
+            trimmed
+        };
+        if trimmed.len() == url.len() {
+            return url.len();
+        }
+        url = trimmed;
+    }
+}
+
+#[cfg(test)]
+mod bare_url_tests {
+    use super::*;
+
+    fn links(text: &str) -> Vec<String> {
+        fn collect(blocks: &[&Block], out: &mut Vec<String>) {
+            for block in blocks {
+                match block {
+                    Block::Paragraph { runs } | Block::Heading { runs, .. } => {
+                        out.extend(runs.iter().filter_map(|run| run.style.link.clone()))
+                    }
+                    Block::List { items, .. } => {
+                        for item in items {
+                            collect(&item.iter().collect::<Vec<_>>(), out);
+                        }
+                    }
+                    Block::Table { rows, .. } => out.extend(
+                        rows.iter()
+                            .flatten()
+                            .flatten()
+                            .filter_map(|run| run.style.link.clone()),
+                    ),
+                    _ => {}
+                }
+            }
+        }
+        let tree = parse_full(text);
+        let blocks: Vec<_> = tree.blocks.iter().map(|top| &top.block).collect();
+        let mut out = Vec::new();
+        collect(&blocks, &mut out);
+        out
+    }
+
+    #[test]
+    fn bare_urls_become_links_and_keep_the_surrounding_text() {
+        let url = "https://github.com/hardbeat920/monocode/issues/1260";
+        assert_eq!(links(url), [url]);
+        let tree = parse_full(&format!("See {url} now"));
+        let Block::Paragraph { runs } = &tree.blocks[0].block else {
+            panic!("expected paragraph")
+        };
+        let parts: Vec<_> = runs
+            .iter()
+            .map(|run| (run.text.as_str(), run.style.link.as_deref()))
+            .collect();
+        assert_eq!(parts, [("See ", None), (url, Some(url)), (" now", None)]);
+    }
+
+    #[test]
+    fn urls_survive_characters_that_split_parser_text() {
+        for url in [
+            "https://example.com/a_b_c?x=1&y=2#z",
+            "https://example.com/~me/[1]",
+            "http://example.com/wiki/Rust_(language)",
+        ] {
+            assert_eq!(links(&format!("go {url} here")), [url]);
+        }
+    }
+
+    #[test]
+    fn urls_are_found_in_every_inline_context() {
+        let url = "https://example.com/x";
+        assert_eq!(links(&format!("- item {url}")), [url]);
+        assert_eq!(links(&format!("# title {url}")), [url]);
+        assert_eq!(links(&format!("**{url}**")), [url]);
+        assert_eq!(links(&format!("|a|\n|-|\n|{url}|")), [url]);
+        assert_eq!(links(&format!("链接{url}，然后")), [url]);
+    }
+
+    #[test]
+    fn sentence_punctuation_stays_outside_the_link() {
+        let url = "https://example.com/x";
+        for text in [
+            format!("{url}."),
+            format!("({url})"),
+            format!("\"{url}\","),
+            format!("{url}?!"),
+        ] {
+            assert_eq!(links(&text), [url], "{text}");
+        }
+    }
+
+    #[test]
+    fn code_explicit_links_and_lookalikes_are_left_alone() {
+        assert!(links("`https://example.com`").is_empty());
+        assert!(links("```\nhttps://example.com\n```").is_empty());
+        assert!(links("https:// and http and xhttps://example.com").is_empty());
+        assert_eq!(
+            links("[https://shown.example](https://target.example)"),
+            ["https://target.example"]
+        );
+    }
 }
 
 #[cfg(test)]
