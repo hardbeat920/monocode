@@ -27,6 +27,8 @@ pub(in crate::settings) struct HotspotState {
     checking: bool,
     testing: bool,
     result: Option<Result<SharedString, SharedString>>,
+    /// A redraw is due, so the status line counts down while it shows.
+    refreshing: bool,
 }
 
 impl SettingsView {
@@ -109,7 +111,10 @@ impl SettingsView {
             let _ = this.update(cx, |this, cx| {
                 this.hotspot.checking = false;
                 match result {
-                    Ok(()) => this.hotspot.password = Some((ssid, true)),
+                    Ok(()) => {
+                        this.hotspot.password = Some((ssid, true));
+                        crate::keep_awake::hotspot_password_changed();
+                    }
                     Err(error) => this.hotspot.result = Some(Err(error.into())),
                 }
                 cx.notify();
@@ -122,6 +127,7 @@ impl SettingsView {
         let ssid = self.prefs.keep_awake.hotspot_ssid.trim().to_string();
         #[cfg(target_os = "macos")]
         hotspot::mac::forget_password(&ssid);
+        crate::keep_awake::hotspot_password_changed();
         self.hotspot.password = Some((ssid, false));
         cx.notify();
     }
@@ -183,10 +189,19 @@ impl SettingsView {
         .detach();
     }
 
-    /// Joins the hotspot, checks the internet, then goes back.
+    /// Joins the hotspot, checks the internet, then goes back, but only if
+    /// the join may have moved the Mac: a hotspot out of range leaves the
+    /// current Wi-Fi alone.
     fn test_hotspot(&mut self, cx: &mut Context<Self>) {
         let ssid = self.prefs.keep_awake.hotspot_ssid.trim().to_string();
         if ssid.is_empty() || self.hotspot.testing {
+            return;
+        }
+        if crate::keep_awake::on_hotspot() {
+            self.hotspot.result = Some(Err(
+                "MonoCode has the Mac on the hotspot right now. Try again once agents finish.".into(),
+            ));
+            cx.notify();
             return;
         }
         self.hotspot.testing = true;
@@ -196,33 +211,61 @@ impl SettingsView {
             async move {
                 #[cfg(target_os = "macos")]
                 {
-                    let joined = hotspot::mac::join(&ssid).map(|_| ()).map_err(|e| e.message());
-                    let _ = hotspot::mac::leave(None);
-                    joined
+                    use hotspot::JoinError::{NoInternet, NoLease, Reverted};
+                    let joined = hotspot::mac::join(&ssid);
+                    let moved = match &joined {
+                        Ok(joined) => Some(Some(joined.record.clone())),
+                        Err(NoInternet | NoLease | Reverted) => Some(None),
+                        Err(_) => None,
+                    };
+                    let left = moved.map(|record| hotspot::mac::leave(record.as_ref()));
+                    (joined.map(|_| ()).map_err(|e| e.message()), left)
                 }
                 #[cfg(not(target_os = "macos"))]
                 {
                     let _ = ssid;
-                    Err::<(), String>("Only on macOS.".into())
+                    (Err::<(), String>("Only on macOS.".into()), None::<Result<hotspot::Left, String>>)
                 }
             }
         });
         cx.spawn(async move |this, cx| {
-            let result = work.await;
+            let (result, left) = work.await;
             let _ = this.update(cx, |this, cx| {
                 this.hotspot.testing = false;
+                let back = match left {
+                    Some(Ok(hotspot::Left::Rejoined)) => " macOS went straight back to the hotspot; pick your usual Wi-Fi from the menu bar.",
+                    Some(Err(_)) => " Couldn't switch Wi-Fi back; pick your usual network from the menu bar.",
+                    _ => "",
+                };
                 this.hotspot.result = Some(match result {
                     Ok(()) => Ok(format!(
-                        "Joined {ssid} and reached the internet, then went back to your usual Wi-Fi."
+                        "Joined {ssid} and reached the internet, then went back to your usual Wi-Fi.{back}"
                     )
                     .into()),
-                    Err(error) => Err(error.into()),
+                    Err(error) => Err(format!("{error}{back}").into()),
                 });
                 cx.notify();
             });
         })
         .detach();
         cx.notify();
+    }
+
+    fn refresh_hotspot_status(&mut self, cx: &mut Context<Self>) {
+        if self.hotspot.refreshing || cfg!(test) {
+            return;
+        }
+        self.hotspot.refreshing = true;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(1))
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.hotspot.refreshing = false;
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn hotspot_input(&self, key: &'static str, cx: &mut Context<Self>) -> AnyElement {
@@ -275,7 +318,7 @@ impl SettingsView {
             true,
             "Join a hotspot if Wi-Fi drops",
             Some(
-                "While agents work and the internet is gone for 15 seconds. Back to your usual Wi-Fi when they finish or you open the lid."
+                "While agents work and the internet is gone for 15 seconds. Back to your usual Wi-Fi when they finish or you open the lid, even after MonoCode restarts."
                     .into(),
             ),
             vec![self.toggle(
@@ -380,6 +423,16 @@ impl SettingsView {
                 Some(description.into()),
                 vec![control],
             ));
+            if let Some(status) = crate::keep_awake::hotspot_status() {
+                self.refresh_hotspot_status(cx);
+                rows.push(self.row(
+                    Some("keep-awake-hotspot-status"),
+                    false,
+                    "Status",
+                    Some(status.into()),
+                    Vec::new(),
+                ));
+            }
             let testing = self.hotspot.testing;
             let description: SharedString = match &self.hotspot.result {
                 Some(Ok(text) | Err(text)) => text.clone(),
@@ -404,7 +457,7 @@ impl SettingsView {
             None,
             false,
             "If Wi-Fi drops",
-            Some("On the iPhone, keep Personal Hotspot › Allow Others to Join on.".into()),
+            Some("On the iPhone, keep Personal Hotspot › Allow Others to Join on. An iPhone stops showing its hotspot a minute or so after the last device leaves, so MonoCode keeps trying for about half an hour; opening Personal Hotspot on the phone makes it visible again.".into()),
             None,
             rows,
         ))
