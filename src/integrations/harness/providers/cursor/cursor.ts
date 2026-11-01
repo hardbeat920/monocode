@@ -1,4 +1,5 @@
 import { TurnNotReadyError } from "../../core/types";
+import { acpBrowserMcpServersFor } from "../../../../features/browser/model/browserMcp";
 import { nativeModelId } from "../../../../features/sessions/model/models";
 import { AcpSubagents } from "../../core/acpSubagents";
 import type { RuntimeMode } from "../../../../features/sessions/model/session";
@@ -331,7 +332,7 @@ async function ensureLive(input: SendTurnInput): Promise<Live> {
         setup = await acp.request<SessionSetupResult>("session/load", {
           sessionId: resume.acpSessionId,
           cwd: input.cwd,
-          mcpServers: [],
+          mcpServers: await acpBrowserMcpServersFor(input.sessionId),
         });
         acpSessionId = resume.acpSessionId;
         didLoad = true;
@@ -347,7 +348,7 @@ async function ensureLive(input: SendTurnInput): Promise<Live> {
     if (!acpSessionId) {
       setup = await acp.request<SessionSetupResult>("session/new", {
         cwd: input.cwd,
-        mcpServers: [],
+        mcpServers: await acpBrowserMcpServersFor(input.sessionId),
       });
       acpSessionId = setup.sessionId?.trim();
     }

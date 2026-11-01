@@ -5,9 +5,16 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { WebLinksAddon } from "@xterm/addon-web-links";
 import type { ILink, ITerminalOptions } from "@xterm/xterm";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { ask } from "@tauri-apps/plugin-dialog";
+import { openLink } from "../../browser/model/openLink";
 
 vi.mock("@tauri-apps/plugin-opener", () => ({
   openUrl: vi.fn(async () => {}),
+}));
+
+vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn(async () => true) }));
+vi.mock("../../browser/model/openLink", () => ({
+  openLink: vi.fn((uri: string) => openUrl(uri)),
 }));
 
 const pty = vi.hoisted(() => ({
@@ -21,6 +28,7 @@ const pty = vi.hoisted(() => ({
 vi.mock("../../../platform/tauri/pty", () => pty);
 const xterm = vi.hoisted(() => ({
   options: [] as ITerminalOptions[],
+  linkLabel: "",
   loadAddon: vi.fn(),
 }));
 vi.mock("../model/terminalLayout", () => ({
@@ -38,7 +46,7 @@ vi.mock("@xterm/xterm", () => ({
     options = {};
     parser = { registerOscHandler: () => ({ dispose() {} }) };
     buffer = {
-      active: { type: "normal" },
+      active: { type: "normal", getLine: () => ({ translateToString: () => xterm.linkLabel }) },
       onBufferChange: () => ({ dispose() {} }),
     };
     open() {}
@@ -157,7 +165,8 @@ it("opens only HTTP(S) URLs dispatched by the OSC 8 link handler", async () => {
       "HTTPS://example.com",
     ];
     for (const uri of urls) {
-      handler.activate(new MouseEvent("click"), uri, undefined);
+      xterm.linkLabel = uri;
+      handler.activate(new MouseEvent("click"), uri, { start: { x: 1, y: 1 }, end: { x: uri.length, y: 1 } });
     }
     expect(vi.mocked(openUrl).mock.calls).toEqual(urls.map((url) => [url]));
     vi.mocked(openUrl).mockClear();
@@ -167,7 +176,8 @@ it("opens only HTTP(S) URLs dispatched by the OSC 8 link handler", async () => {
       "mailto:test@example.com",
       "ftp://example.com",
     ]) {
-      handler.activate(new MouseEvent("click"), uri, undefined);
+      xterm.linkLabel = uri;
+      handler.activate(new MouseEvent("click"), uri, { start: { x: 1, y: 1 }, end: { x: uri.length, y: 1 } });
     }
     expect(openUrl).not.toHaveBeenCalled();
   } finally {
@@ -310,5 +320,29 @@ it("uses the terminal-specific font stack", async () => {
     });
     host.remove();
     document.documentElement.style.removeProperty("--font-terminal");
+  }
+});
+
+it("asks before opening an OSC link whose label hides its destination", async () => {
+  const { host, root } = setup();
+  try {
+    await act(async () => root.render(createElement(TerminalView, {
+      id: "hidden-link", cwd: "/tmp", active: true,
+    })));
+    const handler = xterm.options[0].linkHandler!;
+    xterm.linkLabel = "A different destination";
+    const uri = "https://example.com";
+    const range = { start: { x: 1, y: 1 }, end: { x: 23, y: 1 } };
+    vi.mocked(ask).mockResolvedValueOnce(false);
+    await act(async () => handler.activate(new MouseEvent("click"), uri, range));
+    expect(ask).toHaveBeenCalled();
+    expect(openLink).not.toHaveBeenCalled();
+    vi.mocked(ask).mockResolvedValueOnce(true);
+    const event = new MouseEvent("click", { metaKey: true, ctrlKey: true });
+    await act(async () => handler.activate(event, uri, range));
+    expect(openLink).toHaveBeenCalledExactlyOnceWith(uri, event);
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
   }
 });
