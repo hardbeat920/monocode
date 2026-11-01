@@ -146,6 +146,7 @@ pub(crate) struct Conversation {
     _draft_observation: Subscription,
     _input_focus: Option<[Subscription; 2]>,
     draft_has_value: bool,
+    composer_draft: follow_up::ComposerDraft,
     folder_selected: bool,
     follow_ups: follow_up::FollowUps,
     background: background_tasks::BackgroundTasks,
@@ -514,6 +515,7 @@ impl Conversation {
                 this.draft_has_value = has_value;
                 cx.notify();
             }
+            this.queue_composer_draft(cx);
             this.open_typed_btw(cx);
         });
         input.update(cx, |input, _| input.set_alternate_submit(true));
@@ -596,6 +598,7 @@ impl Conversation {
             _draft_observation: draft_observation,
             _input_focus: None,
             draft_has_value: false,
+            composer_draft: Default::default(),
             folder_selected: false,
             follow_ups: Default::default(),
             background: Default::default(),
@@ -751,10 +754,11 @@ impl Conversation {
                     Ok(state) => {
                         this.follow_ups.persisted = state.revision;
                         this.follow_ups.state = state;
-                        let draft = this.follow_ups.state.draft.clone();
-                        if draft.is_some() {
+                        if this.follow_ups.state.draft.is_some() {
                             this.summary.has_messages = true;
                         }
+                        this.adopt_saved_draft(cx);
+                        let draft = this.follow_ups.state.draft.clone();
                         this.transcript
                             .update(cx, |view, cx| view.set_saved_draft(draft, cx));
                     }
@@ -904,10 +908,6 @@ impl Conversation {
             return;
         }
         if !self.loaded || (self.preparing_worktree && !self.busy && !self.stopping) {
-            return;
-        }
-        if self.draft_active(cx) {
-            self.save_message_draft(cx);
             return;
         }
         if !self.folder_selected
@@ -2071,7 +2071,7 @@ impl Conversation {
                 "thinking" => {
                     self.settings.thinking = Some(!self.settings.thinking.unwrap_or(false))
                 }
-                "plan" | "operator" | "orchestrator" | "draft" => {
+                "plan" | "operator" | "orchestrator" => {
                     self.toggle_mode(id, cx);
                     return;
                 }
@@ -2527,16 +2527,11 @@ impl Conversation {
                             .icon_color(tint(FUCHSIA_300, 0.65))
                             .badge("v1")
                             .description("Plan and coordinate agent work"),
-                        MenuAction::new("draft", "Draft")
-                            .icon("circle-dashed-hi")
-                            .description("Save this message without starting the agent")
-                            .disabled(self.busy || self.follow_ups.state.draft.is_some()),
                     ]
                     .into_iter()
                     .map(|action| {
                         let checked = match action.id.as_ref() {
                             "plan" => self.settings.plan,
-                            "draft" => self.draft_active(cx),
                             "operator" => self.settings.operator,
                             "orchestrator" => self.settings.orchestrator,
                             _ => false,
@@ -2752,9 +2747,7 @@ impl Conversation {
     }
     fn composer(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let radius = COMPOSER_RADIUS;
-        let command = if self.follow_ups.draft_selected {
-            Some(input::Command::Draft)
-        } else if self.settings.orchestrator {
+        let command = if self.settings.orchestrator {
             Some(input::Command::Orchestrator)
         } else if self.settings.plan {
             Some(input::Command::Plan)
@@ -3232,26 +3225,22 @@ impl Conversation {
     // ComposerAction: a solid submit, dimmed while empty; Stop while busy.
     fn action(&self, has_value: bool, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let busy = self.responding() && !has_value;
-        let draft = self.draft_active(cx);
         let modifiers = window.modifiers();
         let alternate = if cfg!(target_os = "macos") {
             modifiers.platform
         } else {
             modifiers.control
         };
-        let follow_up = (has_value && !draft)
+        let follow_up = has_value
             .then(|| self.follow_up_action(alternate, cx))
             .flatten();
         let enabled = !self.attaching
             && (!self.preparing_worktree || self.busy || self.stopping)
-            && (busy || (has_value && self.loaded))
-            && (busy || !draft || (!self.busy && self.follow_ups.state.draft.is_none()));
+            && (busy || (has_value && self.loaded));
         send_button(
             "send-or-stop",
             if busy {
                 "Stop"
-            } else if draft {
-                "Save draft"
             } else {
                 follow_up.map_or("Send", |(label, _)| label)
             },
@@ -3678,7 +3667,10 @@ impl Render for Conversation {
             let focus = self.input.focus_handle(cx);
             self._input_focus = Some([
                 cx.on_focus(&focus, window, |_, _, cx| cx.notify()),
-                cx.on_blur(&focus, window, |_, _, cx| cx.notify()),
+                cx.on_blur(&focus, window, |this, _, cx| {
+                    this.flush_composer_draft(cx);
+                    cx.notify()
+                }),
             ]);
         }
         if self.response_events.is_none() {

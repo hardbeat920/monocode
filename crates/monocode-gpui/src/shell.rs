@@ -641,6 +641,8 @@ pub(crate) struct Shell {
     /// Lightweight history index; only opened or previewed chats own GPUI entities.
     session_summaries: HashMap<i64, Session>,
     draft_sessions: HashSet<i64>,
+    /// Threads with unsent composer text saved at startup, until they load.
+    composer_draft_sessions: HashSet<i64>,
     history_recency: HashMap<i64, u64>,
     history_clock: u64,
     session_marks: HashMap<i64, Entity<SessionMark>>,
@@ -854,6 +856,14 @@ impl Shell {
             })
         })
         .detach();
+        // Typing saves after a short pause; quitting must not wait for it.
+        cx.on_app_quit(|this, cx| {
+            for view in this.sessions.values() {
+                view.update(cx, |view, cx| view.flush_composer_draft(cx));
+            }
+            async {}
+        })
+        .detach();
         let remote_clock = cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
@@ -1007,6 +1017,7 @@ impl Shell {
             sessions: HashMap::new(),
             session_summaries: HashMap::new(),
             draft_sessions: sidebar_metadata.drafts,
+            composer_draft_sessions: sidebar_metadata.composer_drafts,
             history_recency: HashMap::new(),
             history_clock: 0,
             session_marks: HashMap::new(),
@@ -1342,6 +1353,14 @@ impl Shell {
             // the indexed working directory so those events cannot erase it.
             view.restore_worktree(worktree, None, cx);
             view.draft_hint = self.draft_sessions.contains(&id);
+            if self.composer_draft_sessions.contains(&id)
+                && let Some(draft) = locked(&self.store)
+                    .and_then(|s| s.composer_draft(id))
+                    .ok()
+                    .flatten()
+            {
+                view.restore_composer_draft(draft, cx);
+            }
             if let Some(bridge) = &self.app_bridge {
                 view.set_app_environment(bridge.environment(id));
             }
@@ -5993,7 +6012,7 @@ impl Shell {
             .cloned()
             .unwrap_or_default();
         self.sidebar_list.track_anchor(anchor.clone());
-        let draft = session.has_saved_draft();
+        let draft = session.shows_draft();
         let (model, branch, workspace_label) = if compact {
             (SharedString::default(), None, String::new())
         } else {
@@ -6393,7 +6412,7 @@ impl Shell {
                     .child(icon("check-circle-2", 14.).text_color(rgb(0x2dd4bf)))
                     .child("Done")
                     .into_any()
-            } else if session.has_saved_draft() {
+            } else if session.shows_draft() {
                 div()
                     .id(("session-draft", id as usize))
                     .role(Role::Image)
@@ -6438,7 +6457,7 @@ impl Shell {
                 .as_ref()
                 .is_some_and(|m| m.read(cx).hidden_session(id))
                 && s.summary.cwd == self.workspace.project
-                && s.summary.has_messages
+                && (s.summary.has_messages || s.has_composer_draft())
                 && !self.orchestration_worker(id)
                 && self.in_sidebar_worktree_scope(id, cx)
         };

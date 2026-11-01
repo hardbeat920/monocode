@@ -808,13 +808,17 @@ fn app_actions_are_project_scoped_and_mutation_retries_are_idempotent(cx: &mut T
         assert_eq!(m.roster.get(&s.id).unwrap().launches.len(), 1);
         let owner = m.owner.upgrade().unwrap();
         let view = owner.read(cx).mono_session_entity(child).unwrap();
-        assert!(view.read(cx).has_saved_draft());
+        // A draft launch opens with its prompt in the composer.
+        assert!(view.read(cx).has_unsent_draft());
+        assert_eq!(
+            view.read(cx).input.read(cx).content.as_ref(),
+            "Review the project"
+        );
         assert_eq!(
             locked(&s.store)
                 .unwrap()
-                .follow_ups(child)
+                .composer_draft(child)
                 .unwrap()
-                .draft
                 .unwrap()
                 .text,
             "Review the project"

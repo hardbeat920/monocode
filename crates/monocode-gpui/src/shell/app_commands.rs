@@ -487,7 +487,7 @@ impl Shell {
                         } else {
                             view.update(cx, |v, cx| v.load(cx));
                             if !view.read(cx).ready_for_external(cx)
-                                || view.read(cx).has_saved_draft()
+                                || view.read(cx).has_unsent_draft()
                             {
                                 Err("Session is busy, loading, or has an unsent draft. Its draft was preserved.".into())
                             } else {
