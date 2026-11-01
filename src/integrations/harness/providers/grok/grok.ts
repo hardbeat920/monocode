@@ -440,16 +440,23 @@ async function applyModelSelection(
       });
   }
 
+  // Grok Build ignores `--reasoning-effort` in ACP mode and treats
+  // `session/set_mode` as a no-op, so the config option is the only way to
+  // apply effort to a live session.
   const effort = grokEffort(input.modelSettings);
   if (!effort) return;
   await live.acp
     .request(
-      "session/set_mode",
-      { sessionId: live.acpSessionId, modeId: effort },
+      "session/set_config_option",
+      {
+        sessionId: live.acpSessionId,
+        configId: "reasoning_effort",
+        value: effort,
+      },
       CONTROL_TIMEOUT_MS,
     )
     .catch((error: unknown) => {
-      ignoreUnsupportedControl("set_mode", error);
+      ignoreUnsupportedControl("set_config_option", error);
     });
 }
 
