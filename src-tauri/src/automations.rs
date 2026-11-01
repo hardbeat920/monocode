@@ -278,7 +278,7 @@ fn validate_upsert(input: &AutomationUpsert, now: i64) -> Result<(), String> {
     }
     if !matches!(
         input.trigger_kind.as_str(),
-        "time" | "github" | "linear" | "jira" | "gitlab" | "azuredevops"
+        "time" | "github" | "linear" | "jira" | "gitlab" | "azuredevops" | "bitbucket"
     ) {
         return Err("Invalid automation trigger.".into());
     }
@@ -317,7 +317,7 @@ fn validate_upsert(input: &AutomationUpsert, now: i64) -> Result<(), String> {
 fn validate_trigger(trigger: &AutomationTrigger) -> Result<(), String> {
     if !matches!(
         trigger.kind.as_str(),
-        "time" | "github" | "linear" | "jira" | "gitlab" | "azuredevops"
+        "time" | "github" | "linear" | "jira" | "gitlab" | "azuredevops" | "bitbucket"
     ) {
         return Err("Invalid automation trigger.".into());
     }
@@ -908,7 +908,7 @@ pub fn automations_claim_event(
     validate_event_key(&claim.event_key)?;
     if !matches!(
         claim.event_kind.as_str(),
-        "github" | "linear" | "jira" | "gitlab" | "azuredevops"
+        "github" | "linear" | "jira" | "gitlab" | "azuredevops" | "bitbucket"
     ) {
         return Err("Invalid automation trigger.".into());
     }

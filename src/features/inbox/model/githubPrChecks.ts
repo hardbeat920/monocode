@@ -1,5 +1,26 @@
 import { invoke } from "@tauri-apps/api/core";
 
+/** Which provider's results the Checks tab is showing. */
+export type ChecksProvider = "github" | "bitbucket";
+
+/**
+ * Bitbucket already has "checks" of its own (merge checks), so its CI results
+ * are called builds. Everything user-facing reads from here.
+ */
+export type ChecksTerms = {
+  /** Tab label, e.g. "Checks". */
+  tab: string;
+  noun: string;
+  nouns: string;
+  host: string;
+};
+
+export function checksTerms(provider: ChecksProvider = "github"): ChecksTerms {
+  return provider === "bitbucket"
+    ? { tab: "Builds", noun: "build", nouns: "builds", host: "Bitbucket" }
+    : { tab: "Checks", noun: "check", nouns: "checks", host: "GitHub" };
+}
+
 export type GithubPrCheckState =
   "pass" | "fail" | "pending" | "skipping" | "cancel" | "unknown";
 
@@ -140,9 +161,12 @@ export function summarizePrChecks(input: {
   loading: boolean;
   error: string | null;
   checks: readonly GithubPrCheck[] | null;
+  provider?: ChecksProvider;
 }): GithubPrChecksOverall {
+  const terms = checksTerms(input.provider);
+  const Tab = terms.tab;
   if (input.loading) {
-    return { kind: "loading", description: "Loading checks" };
+    return { kind: "loading", description: `Loading ${terms.nouns}` };
   }
   if (input.error) {
     const counts = input.checks ? countChecks(input.checks) : null;
@@ -150,8 +174,8 @@ export function summarizePrChecks(input: {
     return {
       kind: "error",
       description: saved
-        ? `Checks failed to load, showing saved results that may be out of date: ${saved}`
-        : "Checks failed to load",
+        ? `${Tab} failed to load, showing saved results that may be out of date: ${saved}`
+        : `${Tab} failed to load`,
     };
   }
   const checks = input.checks ?? [];
@@ -160,31 +184,31 @@ export function summarizePrChecks(input: {
     return {
       kind: "fail",
       failed: counts.fail,
-      description: describeCheckCounts(counts) ?? "No checks reported",
+      description: describeCheckCounts(counts) ?? `No ${terms.nouns} reported`,
     };
   }
   if (counts.pending > 0) {
     return {
       kind: "pending",
-      description: describeCheckCounts(counts) ?? "No checks reported",
+      description: describeCheckCounts(counts) ?? `No ${terms.nouns} reported`,
     };
   }
   if (counts.cancel > 0 || counts.unknown > 0) {
     return {
       kind: "neutral",
-      description: describeCheckCounts(counts) ?? "No checks reported",
+      description: describeCheckCounts(counts) ?? `No ${terms.nouns} reported`,
     };
   }
   if (counts.pass > 0) {
     return {
       kind: "pass",
-      description: describeCheckCounts(counts) ?? "No checks reported",
+      description: describeCheckCounts(counts) ?? `No ${terms.nouns} reported`,
     };
   }
   // Empty or skipping-only: neutral, but the skipped count still gets said.
   return {
     kind: "neutral",
-    description: describeCheckCounts(counts) ?? "No checks reported",
+    description: describeCheckCounts(counts) ?? `No ${terms.nouns} reported`,
   };
 }
 

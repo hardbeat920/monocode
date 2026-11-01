@@ -15,6 +15,13 @@ impl SettingsView {
                 "Install GitHub CLI from cli.github.com, run gh auth login in a terminal, then check again.",
             ),
             (
+                "bitbucket",
+                "Bitbucket",
+                "Pull requests and builds from Bitbucket Cloud.",
+                "Connection",
+                "Connect with your Atlassian email and a Bitbucket API token. Required scopes: read:user:bitbucket, read:repository:bitbucket, read:pullrequest:bitbucket, write:pullrequest:bitbucket. Add read:pipeline:bitbucket for build steps. Disconnect deletes the saved credentials.",
+            ),
+            (
                 "gitlab",
                 "GitLab",
                 "Merge requests from GitLab.com or a self-managed instance.",
@@ -103,6 +110,7 @@ impl SettingsView {
                                 "linear" => "inbox-linear",
                                 "jira" => "inbox-jira",
                                 "gitlab" => "inbox-gitlab",
+                                "bitbucket" => "inbox-bitbucket",
                                 "azuredevops" => "inbox-azuredevops",
                                 _ => "inbox-github",
                             },

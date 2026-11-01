@@ -30,6 +30,13 @@ export function InboxProviderMark({
       </svg>
     );
   }
+  if (provider === "bitbucket") {
+    return (
+      <svg viewBox="0 0 24 24" fill="#2684FF" aria-hidden className={className}>
+        <path d="M2.65 3a.65.65 0 0 0-.65.76l2.73 16.6c.07.4.41.69.82.69h13.1a.65.65 0 0 0 .65-.55l2.73-16.73a.65.65 0 0 0-.65-.77H2.65ZM14.3 15.1H9.78L8.56 8.74h6.9L14.3 15.1Z" />
+      </svg>
+    );
+  }
   if (provider === "azuredevops") {
     return (
       <svg
