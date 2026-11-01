@@ -502,6 +502,8 @@ export type ApprovalRelay = {
   runId: string;
   requestId: number;
   blockId: string;
+  /** In-memory request identity for stale-response validation on a paired phone. */
+  approval: NonNullable<Block["approval"]>;
 };
 
 const relays = new Map<number, ApprovalRelay>();
@@ -511,6 +513,12 @@ export function relayApproval(relay: ApprovalRelay): number {
   const id = nextRelayId++;
   relays.set(id, relay);
   return id;
+}
+
+/** Read-only validation before a phone offers a relayed approval. */
+export function relayedApproval(monoId: string, requestId: number): ApprovalRelay | undefined {
+  const relay = relays.get(requestId);
+  return relay?.monoId === monoId ? relay : undefined;
 }
 
 /** The relay behind a request in the Mono's chat, removed once answered. */

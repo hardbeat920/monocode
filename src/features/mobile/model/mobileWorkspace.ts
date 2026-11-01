@@ -1,3 +1,4 @@
+import { mobileApprovals } from "./mobileApprovals";
 import { invoke } from "@tauri-apps/api/core";
 import {
   gitCommit,
@@ -300,6 +301,7 @@ export async function mobileConversation(
         })
       : [],
     busy: !!session?.busy,
+    approvals: session ? mobileApprovals(session, live) : [],
     // What the agent asks, for the phone to answer as the desktop's card does.
     question: session?.pendingQuestion
       ? {

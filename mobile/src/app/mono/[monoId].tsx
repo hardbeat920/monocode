@@ -13,6 +13,7 @@ import { useConnection, useMonoTools } from "@/features/connection/ConnectionPro
 import { rememberPlace } from "@/features/workspace/lastPlace";
 import { markMonoSeen, markMonoUnread } from "@/features/workspace/monoSeen";
 import { Composer } from "@/features/sessions/Composer";
+import { ApprovalCard } from "@/features/sessions/ApprovalCard";
 import { MonoChoose, MonoMessageActions } from "@/features/sessions/MonoCards";
 import { MonoMenu } from "@/features/sessions/MonoMenu";
 import { useMonoAccent } from "@/features/workspace/monoAccent";
@@ -150,6 +151,9 @@ export default function MonoScreen() {
       }
       composer={
         <AccentOverride value={chatAccent}>
+          {conversationId && conversation.approvals?.length ? (
+            <ApprovalCard conversationId={conversationId} prompts={conversation.approvals} />
+          ) : null}
           {conversation.question ? (
             <QuestionCard conversationId={conversationId} prompt={conversation.question} />
           ) : null}

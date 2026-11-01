@@ -12,6 +12,18 @@ const turn = (id: string, text: string): MobileTurn => ({
 });
 
 describe("desktop-to-mobile watch frame round trips", () => {
+  it("propagates approvals without transcript changes and preserves ordered clear/replacement frames", () => {
+    const approval = { token: "first", requestId: 7, title: "Run?", detail: "git status", decisions: [{ id: "allow" as const, label: "Allow once" }] };
+    const state = { busy: true, older: false, turns: [], approvals: [approval] };
+    const first = watchUpdate(null, state)!;
+    expect((first.update as WatchFrame).approvals).toEqual([approval]);
+    expect(watchUpdate(first.baseline, state)).toBeNull();
+    const clear = watchUpdate(first.baseline, { ...state, approvals: [] })!;
+    const newer = { ...approval, token: "reused" };
+    const replaced = watchUpdate(clear.baseline, { ...state, approvals: [newer] })!;
+    expect(applyFrames([], [clear.update as WatchFrame, replaced.update as WatchFrame])?.approvals).toEqual([[], [newer]]);
+  });
+
   it("sends only the appended suffix of a long reply, including Unicode offsets", () => {
     const before = turn("a", "👋 stable text ".repeat(10_000));
     const first = watchUpdate(

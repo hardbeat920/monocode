@@ -7,6 +7,7 @@ use std::collections::HashMap;
 #[derive(Clone, Debug, Default)]
 pub struct Baseline {
     busy: bool,
+    approvals: Value,
     older: bool,
     /// The pending question as last sent, as JSON; "null" for none.
     question: String,
@@ -67,6 +68,7 @@ pub fn update(
     question: &Value,
     turns: &[Value],
     incremental: bool,
+    approvals: &Value,
 ) -> Option<(Value, Baseline)> {
     let asked = question.to_string();
     let order: Vec<String> = turns
@@ -86,6 +88,7 @@ pub fn update(
     if let Some(baseline) = baseline {
         if baseline.busy == busy
             && baseline.older == older
+            && baseline.approvals == *approvals
             && baseline.question == asked
             && changed.is_empty()
             && baseline.order == order
@@ -115,6 +118,9 @@ pub fn update(
         }
     }
     let mut frame = Map::new();
+    if baseline.is_none_or(|b| b.approvals != *approvals) {
+        frame.insert("approvals".into(), approvals.clone());
+    }
     frame.insert("busy".into(), json!(busy));
     frame.insert("older".into(), json!(older));
     frame.insert("order".into(), json!(order));
@@ -129,6 +135,7 @@ pub fn update(
         Value::Object(frame),
         Baseline {
             busy,
+            approvals: approvals.clone(),
             older,
             question: asked,
             order,
@@ -174,10 +181,106 @@ mod tests {
     }
 
     #[test]
+    fn approvals_change_without_transcript_changes_and_clear_after_desktop_resolution() {
+        let approvals = json!([{"token":"first","requestId":"7","title":"Run?","detail":"git status","decisions":[{"id":"allow","label":"Allow once"}]}]);
+        let (first, baseline) =
+            update(None, true, false, &Value::Null, &[], true, &approvals).unwrap();
+        assert_eq!(first["approvals"], approvals);
+        assert!(update(
+            Some(&baseline),
+            true,
+            false,
+            &Value::Null,
+            &[],
+            true,
+            &approvals
+        )
+        .is_none());
+        let mut replacement = approvals.clone();
+        replacement[0]["token"] = json!("second");
+        let (next, baseline) = update(
+            Some(&baseline),
+            true,
+            false,
+            &Value::Null,
+            &[],
+            true,
+            &replacement,
+        )
+        .unwrap();
+        assert_eq!(next["approvals"], replacement);
+        let (clear, _) = update(
+            Some(&baseline),
+            true,
+            false,
+            &Value::Null,
+            &[],
+            true,
+            &json!([]),
+        )
+        .unwrap();
+        assert_eq!(clear["approvals"], json!([]));
+    }
+
+    #[test]
+    fn questions_and_approvals_update_independently() {
+        let question = json!({"requestId": 7, "questions": []});
+        let approvals = json!([{"token": "approval"}]);
+        let (first, baseline) =
+            update(None, true, false, &question, &[], true, &approvals).unwrap();
+        assert_eq!(first["question"], question);
+        assert_eq!(first["approvals"], approvals);
+
+        let (answered, baseline) = update(
+            Some(&baseline),
+            true,
+            false,
+            &Value::Null,
+            &[],
+            true,
+            &approvals,
+        )
+        .unwrap();
+        assert!(answered["question"].is_null());
+        assert!(answered.get("approvals").is_none());
+
+        let (resolved, baseline) = update(
+            Some(&baseline),
+            true,
+            false,
+            &Value::Null,
+            &[],
+            true,
+            &json!([]),
+        )
+        .unwrap();
+        assert_eq!(resolved["approvals"], json!([]));
+        assert!(resolved.get("question").is_none());
+        assert!(update(
+            Some(&baseline),
+            true,
+            false,
+            &Value::Null,
+            &[],
+            true,
+            &json!([]),
+        )
+        .is_none());
+    }
+
+    #[test]
     fn unchanged_conversations_send_nothing_and_new_turns_send_only_themselves() {
         let none = Value::Null;
-        let (first, baseline) =
-            update(None, true, false, &none, &[turn("1", "hi")], false).unwrap();
+        let (first, baseline) = update(
+            None,
+            true,
+            false,
+            &none,
+            &[turn("1", "hi")],
+            false,
+            &json!([]),
+        )
+        .unwrap();
         assert_eq!(first["turns"].as_array().unwrap().len(), 1);
         assert!(update(
             Some(&baseline),
@@ -185,7 +288,8 @@ mod tests {
             false,
             &none,
             &[turn("1", "hi")],
-            false
+            false,
+            &json!([])
         )
         .is_none());
         let (next, _) = update(
@@ -195,6 +299,7 @@ mod tests {
             &none,
             &[turn("1", "hi"), turn("2", "yo")],
             false,
+            &json!([]),
         )
         .unwrap();
         assert_eq!(next["order"], json!(["1", "2"]));
@@ -206,7 +311,16 @@ mod tests {
     fn incremental_watches_receive_streamed_text_as_utf16_suffixes() {
         let long = "é".repeat(200);
         let none = Value::Null;
-        let (_, baseline) = update(None, true, false, &none, &[turn("1", &long)], true).unwrap();
+        let (_, baseline) = update(
+            None,
+            true,
+            false,
+            &none,
+            &[turn("1", &long)],
+            true,
+            &json!([]),
+        )
+        .unwrap();
         let grown = format!("{long} more");
         let (frame, _) = update(
             Some(&baseline),
@@ -215,6 +329,7 @@ mod tests {
             &none,
             &[turn("1", &grown)],
             true,
+            &json!([]),
         )
         .unwrap();
         assert!(frame["turns"].as_array().unwrap().is_empty());
@@ -228,17 +343,53 @@ mod tests {
     fn the_pending_question_comes_first_and_again_only_when_it_changes() {
         let turns = [turn("1", "hi")];
         let question = json!({"requestId": 7, "questions": []});
-        let (first, asked) = update(None, true, false, &question, &turns, false).unwrap();
+        let (first, asked) =
+            update(None, true, false, &question, &turns, false, &json!([])).unwrap();
         assert_eq!(first["question"], question);
         // Unchanged: nothing to send, and a frame for other reasons omits it.
-        assert!(update(Some(&asked), true, false, &question, &turns, false).is_none());
-        let (idle, _) = update(Some(&asked), false, false, &question, &turns, false).unwrap();
+        assert!(update(
+            Some(&asked),
+            true,
+            false,
+            &question,
+            &turns,
+            false,
+            &json!([])
+        )
+        .is_none());
+        let (idle, _) = update(
+            Some(&asked),
+            false,
+            false,
+            &question,
+            &turns,
+            false,
+            &json!([]),
+        )
+        .unwrap();
         assert!(idle.get("question").is_none());
         // Answered: null, so the phone drops its card.
-        let (answered, cleared) =
-            update(Some(&asked), true, false, &Value::Null, &turns, false).unwrap();
+        let (answered, cleared) = update(
+            Some(&asked),
+            true,
+            false,
+            &Value::Null,
+            &turns,
+            false,
+            &json!([]),
+        )
+        .unwrap();
         assert!(answered["question"].is_null());
-        assert!(update(Some(&cleared), true, false, &Value::Null, &turns, false).is_none());
+        assert!(update(
+            Some(&cleared),
+            true,
+            false,
+            &Value::Null,
+            &turns,
+            false,
+            &json!([])
+        )
+        .is_none());
     }
 
     #[test]
