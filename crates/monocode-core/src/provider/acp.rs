@@ -2,6 +2,8 @@
 //! Mirrors the ACP adapters in src/integrations/harness/providers. Providers own
 //! filesystem/terminal access; we never claim client capabilities we cannot serve.
 use super::*;
+#[path = "copilot.rs"]
+mod copilot;
 use std::collections::VecDeque;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -18,6 +20,7 @@ enum Stage {
     Background,
     ThoughtProbe,
     DeleteProbe,
+    Commands,
 }
 struct BackgroundDispatch {
     call_id: String,
@@ -26,6 +29,7 @@ struct BackgroundDispatch {
 }
 #[derive(Default)]
 pub(super) struct State {
+    copilot: copilot::Stream,
     sequence: u64,
     stage: Stage,
     session: String,
@@ -51,6 +55,9 @@ pub(super) struct State {
 pub(super) fn configure(command: &mut Command, request: &Request) -> Result<(), String> {
     let settings = &request.settings;
     match request.kind {
+        Kind::Copilot => {
+            command.args(["--acp", "--stdio", "--no-auto-update"]);
+        }
         Kind::Antigravity => {
             if cfg!(target_os = "linux") {
                 command.arg("--uid=");
@@ -138,6 +145,17 @@ impl Protocol {
 
     /// ACP deadlines apply to individual requests, never to a quiet stream.
     pub(super) fn acp_tick(&mut self, stdin: &mut impl Write) -> Result<Vec<Event>, String> {
+        if self.acp.stage == Stage::Commands {
+            if self
+                .acp
+                .deadline
+                .is_some_and(|deadline| Instant::now() >= deadline)
+            {
+                self.done = true;
+                self.acp.deadline = None;
+            }
+            return Ok(Vec::new());
+        }
         if self
             .acp
             .deadline
@@ -186,7 +204,7 @@ impl Protocol {
             match (self.request.kind, stage) {
                 (Kind::Devin, Stage::ThoughtProbe) => Some(5),
                 (Kind::Cursor | Kind::Grok | Kind::Antigravity, _) => Some(12),
-                (Kind::Hermes, _) => Some(20),
+                (Kind::Hermes | Kind::Copilot, _) => Some(20),
                 (Kind::Devin, _) => Some(30),
                 _ => None,
             }
@@ -194,7 +212,7 @@ impl Protocol {
             match (self.request.kind, stage) {
                 (Kind::Cursor, _) => None,
                 (Kind::Grok | Kind::Fx | Kind::Antigravity, Stage::Initialize) => Some(12),
-                (Kind::Hermes | Kind::Devin, Stage::Initialize) => Some(20),
+                (Kind::Hermes | Kind::Devin | Kind::Copilot, Stage::Initialize) => Some(20),
                 (Kind::Grok, Stage::Authenticate) => Some(15),
                 (Kind::Devin, Stage::Authenticate) => {
                     Some(if params["_meta"]["api_key"].is_string() {
@@ -206,7 +224,7 @@ impl Protocol {
                 (Kind::Devin, Stage::New) if self.probe => Some(30),
                 (_, Stage::New | Stage::Load | Stage::Resume) => Some(45),
                 (Kind::Grok | Kind::Fx | Kind::Antigravity, Stage::Configure) => Some(15),
-                (Kind::Hermes | Kind::Devin, Stage::Configure) => Some(20),
+                (Kind::Hermes | Kind::Devin | Kind::Copilot, Stage::Configure) => Some(20),
                 (_, Stage::Prompt) => Some(30 * 60),
                 (Kind::Devin, Stage::ThoughtProbe) => Some(5),
                 (Kind::Devin, Stage::DeleteProbe) => Some(30),
@@ -264,7 +282,8 @@ impl Protocol {
     }
     fn acp_next(&mut self, stdin: &mut impl Write) -> Result<(), String> {
         if let Some((method, params)) = self.acp.options.pop_front() {
-            if method == "session/set_config_option"
+            if !(self.request.kind == Kind::Copilot && params["configId"] == "allow_all")
+                && method == "session/set_config_option"
                 && self.acp.setup["configOptions"]
                     .as_array()
                     .is_some_and(|options| {
@@ -285,11 +304,21 @@ impl Protocol {
             {
                 return self.acp_next(stdin);
             }
+            if self.request.kind == Kind::Copilot && method == "session/set_model" {
+                // Effort choices belong to the newly selected model.
+                if let Some(options) = self.acp.setup["configOptions"].as_array_mut() {
+                    options.retain(|option| option["id"] != "reasoning_effort");
+                }
+            }
             self.acp_send(Stage::Configure, method, params, stdin)
         } else if !self.acp.settings_applied {
             self.acp.settings_applied = true;
             let setup = self.acp.setup.clone();
-            self.acp_settings(&setup);
+            if self.request.kind == Kind::Copilot {
+                self.copilot_settings(&setup)?;
+            } else {
+                self.acp_settings(&setup);
+            }
             self.acp_next(stdin)
         } else if let Some(mode) = self.acp.mode.take() {
             self.acp_send(
@@ -315,6 +344,9 @@ impl Protocol {
         }
     }
     fn acp_options(&mut self, setup: &Value) -> Result<(), String> {
+        if self.request.kind == Kind::Copilot {
+            return self.copilot_options(setup);
+        }
         let kind = self.request.kind;
         let settings = &self.request.settings;
         let planning = settings.plan || settings.access == AccessMode::ReadOnly;
@@ -541,6 +573,7 @@ impl Protocol {
             return Ok(());
         }
         match self.acp.stage {
+            Stage::Commands => unreachable!(),
             Stage::DeleteProbe => {
                 self.done = true;
                 return Ok(());
@@ -610,7 +643,21 @@ impl Protocol {
             _ => {}
         }
         // A JSON-RPC failure is not evidence that the user needs to log in.
-        Err(format!("{}: {detail}", kind.label()))
+        let hint = if kind == Kind::Copilot
+            && [
+                "authentication required",
+                "not authenticated",
+                "unauthorized",
+                "not logged in",
+            ]
+            .iter()
+            .any(|marker| detail.to_lowercase().contains(marker))
+        {
+            " Run `copilot login` in Terminal or sign in from Providers."
+        } else {
+            ""
+        };
+        Err(format!("{}: {detail}{hint}", kind.label()))
     }
     pub(super) fn acp_frame(
         &mut self,
@@ -669,6 +716,9 @@ impl Protocol {
                         .unwrap_or_else(|| serde_json::to_string_pretty(tool).unwrap_or_default());
                     let id = v["id"].to_string();
                     let mut permission = request.clone();
+                    if self.request.kind == Kind::Copilot {
+                        permission["_monocodeCopilot"] = true.into();
+                    }
                     if self.request.kind == Kind::Devin
                         && self.request.settings.access != AccessMode::FullAccess
                     {
@@ -681,14 +731,16 @@ impl Protocol {
                         || self.request.settings.plan
                         || self.request.settings.access == AccessMode::ReadOnly;
                     let access = self.request.settings.access;
+                    // Auto leaves approvals to the provider's own reviewer
+                    // (Grok's classifier, Devin's smart mode); whatever it still
+                    // asks about reaches the user.
                     let auto = self.request.kind == Kind::Fx
                         || access == AccessMode::FullAccess
-                        || (access == AccessMode::Auto
-                            && self.request.kind != Kind::Antigravity
-                            && self.request.kind != Kind::Devin)
                         || (access == AccessMode::AutoAcceptEdits
                             && if self.request.kind == Kind::Antigravity {
                                 kind == Some("edit")
+                            } else if self.request.kind == Kind::Copilot {
+                                matches!(kind, Some("read" | "search" | "edit"))
                             } else {
                                 self.request.kind != Kind::Devin
                                     && !matches!(kind, Some("execute" | "other" | "fetch"))
@@ -715,12 +767,26 @@ impl Protocol {
                             },
                             stdin,
                         )?;
+                        if self.request.kind == Kind::Copilot && planning && !read && !self.probe {
+                            let mode = if access == AccessMode::ReadOnly {
+                                "Read-only mode"
+                            } else {
+                                "Plan mode"
+                            };
+                            events.push(Event::Interjection {
+                                text: format!(
+                                    "{mode} blocked a tool request. Switch to Supervised to review and approve tools, then send your request again."
+                                ),
+                                custom_type: "custom".into(),
+                                severity: None,
+                            });
+                        }
                     } else {
                         events.push(Event::Approval(Approval {
                             id,
                             title,
                             detail,
-                            can_remember: self.request.kind != Kind::Devin
+                            can_remember: !matches!(self.request.kind, Kind::Devin | Kind::Copilot)
                                 && request["options"].as_array().is_some_and(|options| {
                                     options.iter().any(|o| o["kind"] == "allow_always")
                                 }),
@@ -732,6 +798,15 @@ impl Protocol {
                         json!({"jsonrpc":"2.0","id":v["id"],"error":{"code":-32601,"message":format!("Unsupported client method: {method}")}}),
                     )?;
                 }
+            } else if self.request.kind == Kind::Copilot
+                && method == "session/update"
+                && matches!(self.acp.stage, Stage::New | Stage::Load | Stage::Configure)
+                && matches!(
+                    v["params"]["update"]["sessionUpdate"].as_str(),
+                    Some("config_option_update" | "config_options_update")
+                )
+            {
+                self.acp_update(&v["params"]["update"], &mut events);
             } else if matches!(
                 method,
                 "session/update" | "_x.ai/session_notification" | "x.ai/session_notification"
@@ -774,6 +849,14 @@ impl Protocol {
                         stdin,
                     )?;
                     return Ok(events);
+                }
+                if self.request.kind == Kind::Copilot
+                    && self.request.provider_id.is_some()
+                    && result["agentCapabilities"]["loadSession"] != true
+                {
+                    return Err(
+                        "Copilot CLI cannot resume this session. Update the CLI and retry.".into(),
+                    );
                 }
                 let auth = match self.request.kind {
                     Kind::Cursor => Some(json!({"methodId":"cursor_login"})),
@@ -845,7 +928,10 @@ impl Protocol {
                     .filter(|id| !id.is_empty())
                     .ok_or("Provider returned no session id")?
                     .into();
-                if self.probe {
+                if self.command_probe && self.request.kind == Kind::Copilot {
+                    self.acp.stage = Stage::Commands;
+                    self.acp.deadline = Some(Instant::now() + Duration::from_millis(500));
+                } else if self.probe {
                     self.catalog_result = Some(result.clone());
                     if self.request.kind == Kind::Devin {
                         if result["configOptions"].as_array().is_some_and(|options| {
@@ -882,10 +968,15 @@ impl Protocol {
                 self.acp_next(stdin)?;
             }
             Stage::Prompt => {
-                if matches!(self.request.kind, Kind::Antigravity | Kind::Devin)
-                    && result["stopReason"]
-                        .as_str()
-                        .is_some_and(|reason| !matches!(reason, "end_turn" | "cancelled"))
+                if self.request.kind == Kind::Copilot {
+                    self.copilot_flush(&mut events);
+                }
+                if matches!(
+                    self.request.kind,
+                    Kind::Antigravity | Kind::Devin | Kind::Copilot
+                ) && result["stopReason"]
+                    .as_str()
+                    .is_some_and(|reason| !matches!(reason, "end_turn" | "cancelled"))
                 {
                     return Err(format!(
                         "{} ended the turn ({}).",
@@ -904,7 +995,7 @@ impl Protocol {
                     events.push(Event::Done);
                 }
             }
-            Stage::Background => {}
+            Stage::Background | Stage::Commands => {}
             Stage::ThoughtProbe => {
                 if let Some(catalog) = self.catalog_result.as_mut() {
                     let model = self.acp.pending_params["value"].as_str().unwrap_or("");
@@ -918,6 +1009,13 @@ impl Protocol {
         Ok(events)
     }
     fn acp_update(&mut self, update: &Value, events: &mut Vec<Event>) {
+        if self.request.kind == Kind::Copilot {
+            self.copilot_update(update, events);
+        } else {
+            self.acp_update_body(update, events);
+        }
+    }
+    fn acp_update_body(&mut self, update: &Value, events: &mut Vec<Event>) {
         if self.request.kind == Kind::Hermes {
             if let Some(dispatch) = background_dispatch(update) {
                 self.acp
@@ -1364,7 +1462,8 @@ pub(super) fn respond(
 ) -> Result<(), String> {
     let preference = match &decision {
         Decision::Allow => ["allow_once", "allow_always"],
-        Decision::Session => ["allow_always", "allow_once"],
+        Decision::Session if request["_monocodeCopilot"] != true => ["allow_always", "allow_once"],
+        Decision::Session => ["allow_once", "allow_always"],
         Decision::Deny | Decision::KeepOpen | Decision::Answer(_) | Decision::Steer(_) => {
             ["reject_once", "reject_always"]
         }
@@ -1588,6 +1687,32 @@ mod tests {
         assert_eq!(last(&mut out)["result"]["outcome"]["optionId"], "no");
     }
     #[test]
+    fn copilot_read_only_reports_blocked_tools_without_allowing_them() {
+        for kind in ["execute", "edit", "other"] {
+            let mut p = protocol(Kind::Copilot);
+            p.acp.stage = Stage::Prompt;
+            p.request.settings.access = AccessMode::ReadOnly;
+            let mut out = Vec::new();
+            let events = p.frame(json!({"id":"permission","method":"session/request_permission","params":{"toolCall":{"kind":kind},"options":[{"kind":"allow_once","optionId":"yes"},{"kind":"reject_once","optionId":"no"}]}}), &mut out).unwrap();
+            assert_eq!(last(&mut out)["result"]["outcome"]["optionId"], "no");
+            assert!(
+                matches!(events.as_slice(), [Event::Interjection { text, custom_type, severity }]
+                if text.contains("Read-only mode blocked") && text.contains("Supervised")
+                && custom_type == "custom" && severity.is_none())
+            );
+            assert!(p.approvals.is_empty());
+        }
+        for kind in ["read", "search"] {
+            let mut p = protocol(Kind::Copilot);
+            p.acp.stage = Stage::Prompt;
+            p.request.settings.access = AccessMode::ReadOnly;
+            let mut out = Vec::new();
+            let events = p.frame(json!({"id":"permission","method":"session/request_permission","params":{"toolCall":{"kind":kind},"options":[{"kind":"allow_once","optionId":"yes"},{"kind":"reject_once","optionId":"no"}]}}), &mut out).unwrap();
+            assert_eq!(last(&mut out)["result"]["outcome"]["optionId"], "yes");
+            assert!(events.is_empty());
+        }
+    }
+    #[test]
     fn sparse_permission_requests_keep_the_tool_preview() {
         let mut p = protocol(Kind::Devin);
         p.acp.stage = Stage::Prompt;
@@ -1656,6 +1781,16 @@ mod tests {
         assert!(choices
             .iter()
             .any(|p| p["configId"] == "fast" && p["type"].is_null() && p["value"] == "false"));
+    }
+    #[test]
+    fn grok_auto_leaves_approvals_to_its_classifier_and_the_user() {
+        let mut p = protocol(Kind::Grok);
+        p.request.settings.access = AccessMode::Auto;
+        p.acp.stage = Stage::Prompt;
+        let mut out = Vec::new();
+        let events = p.frame(json!({"id":"permission","method":"session/request_permission","params":{"toolCall":{"kind":"edit"},"options":[{"kind":"allow_once","optionId":"yes"},{"kind":"reject_once","optionId":"no"}]}}), &mut out).unwrap();
+        assert!(matches!(events.as_slice(), [Event::Approval(_)]));
+        assert!(out.is_empty());
     }
     #[test]
     fn cursor_planning_denies_execution_without_requiring_a_session_mode() {

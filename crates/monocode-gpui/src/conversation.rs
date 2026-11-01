@@ -2770,6 +2770,7 @@ impl Conversation {
             .try_global::<crate::settings::Preferences>()
             .is_some_and(|p| p.model_controls == "beside");
         let trigger_effort = (!beside).then(|| self.trigger_effort_label()).flatten();
+        let access = self.supported_access();
         let controls = if beside {
             self.model_controls(cx)
         } else {
@@ -2981,7 +2982,7 @@ impl Conversation {
                                         tool_pill("composer-access", "Access")
                                             .aria_label(format!(
                                                 "Access, {}",
-                                                self.settings.access.label()
+                                                access.label()
                                             ))
                                             .aria_expanded(self.menu_is(ComposerMenu::Access))
                                             .child(self.access_anchor.probe())
@@ -2990,7 +2991,7 @@ impl Conversation {
                                             }))
                                             .child(
                                                 icon(
-                                                    match self.settings.access {
+                                                    match access {
                                                         AccessMode::FullAccess => "shield-alert",
                                                         AccessMode::AutoAcceptEdits => {
                                                             "pencil-edit"
@@ -3001,8 +3002,7 @@ impl Conversation {
                                                     14.,
                                                 )
                                                 .text_color(
-                                                    if self.settings.access
-                                                        == AccessMode::FullAccess
+                                                    if access == AccessMode::FullAccess
                                                     {
                                                         tint(AMBER_400, 0.9)
                                                     } else {
@@ -3010,7 +3010,7 @@ impl Conversation {
                                                     },
                                                 ),
                                             )
-                                            .child(pill_label(self.settings.access.label()))
+                                            .child(pill_label(access.label()))
                                             .child(icon("chevron-down", 12.)),
                                     ),
                             )
@@ -3991,6 +3991,7 @@ mod menu_tests {
                     default: true,
                     tiers: Vec::new(),
                     controls: Vec::new(),
+                    supports_auto: None,
                 }];
                 cx.set_global(crate::settings::Preferences::default());
                 cx.notify();
@@ -4025,6 +4026,82 @@ mod menu_tests {
     }
 
     #[gpui::test]
+    fn access_menu_offers_auto_only_where_the_model_supports_it(cx: &mut TestAppContext) {
+        let window = conversation(cx);
+        window
+            .update(cx, |view, _, _| {
+                let offered = |view: &Conversation| {
+                    view.mono_access_options()
+                        .into_iter()
+                        .filter_map(|item| match item {
+                            MenuItem::Action(a) => Some((a.id.to_string(), a.checked)),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                };
+                let ids = |view: &Conversation| {
+                    offered(view)
+                        .into_iter()
+                        .map(|(id, _)| id)
+                        .collect::<Vec<_>>()
+                };
+                let model = |id: &str, supports_auto| Model {
+                    alias_target: None,
+                    id: id.into(),
+                    name: id.into(),
+                    efforts: Vec::new(),
+                    default_effort: None,
+                    fast: false,
+                    thinking: false,
+                    default: false,
+                    tiers: Vec::new(),
+                    controls: Vec::new(),
+                    supports_auto,
+                };
+                view.summary.provider = "claude".into();
+                view.catalog = vec![
+                    model("claude-opus-5-5", Some(true)),
+                    model("claude-haiku-4-5", Some(false)),
+                ];
+                view.model = Some("claude-opus-5-5".into());
+                view.settings.access = AccessMode::Auto;
+                assert!(ids(view).contains(&"access:auto".to_string()));
+                assert_eq!(view.supported_access(), AccessMode::Auto);
+
+                // The saved choice is kept; the model that can't do it shows
+                // and runs with the closest mode before it.
+                view.model = Some("claude-haiku-4-5".into());
+                assert!(!ids(view).contains(&"access:auto".to_string()));
+                assert_eq!(view.supported_access(), AccessMode::AutoAcceptEdits);
+                assert_eq!(view.settings.access, AccessMode::Auto);
+                assert!(offered(view).contains(&("access:auto-accept-edits".into(), true)));
+
+                view.summary.provider = "copilot".into();
+                view.catalog.clear();
+                view.model = Some("auto".into());
+                assert_eq!(
+                    ids(view),
+                    [
+                        "access:read-only",
+                        "access:supervised",
+                        "access:auto-accept-edits",
+                        "access:full-access"
+                    ]
+                );
+                assert_eq!(view.supported_access(), AccessMode::AutoAcceptEdits);
+                assert_eq!(view.settings.access, AccessMode::Auto);
+                assert!(offered(view).contains(&("access:auto-accept-edits".into(), true)));
+
+                view.summary.provider = "pi".into();
+                view.catalog.clear();
+                view.model = None;
+                assert_eq!(ids(view), ["access:read-only", "access:supervised"]);
+                assert_eq!(view.supported_access(), AccessMode::Supervised);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
     fn composer_labels_use_the_saved_model_effort_and_the_catalog_default(cx: &mut TestAppContext) {
         let window = conversation(cx);
         window
@@ -4046,6 +4123,7 @@ mod menu_tests {
                     default: true,
                     tiers: Vec::new(),
                     controls: Vec::new(),
+                    supports_auto: None,
                 });
                 assert_eq!(view.model_label(), "GPT-6.1 Sol");
                 assert_eq!(view.trigger_effort_label().as_deref(), Some("Extra High"));
@@ -4141,6 +4219,7 @@ mod menu_tests {
                         current: "1m".into(),
                         choices: vec![("1m".into(), "1M".into())],
                     }],
+                    supports_auto: None,
                 };
                 view.make_response_menu(
                     1,

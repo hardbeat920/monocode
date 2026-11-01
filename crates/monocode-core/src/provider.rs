@@ -1342,6 +1342,25 @@ pub(crate) fn catalog_for(kind: Kind, account: crate::accounts::Profile) -> Resu
     .ok_or_else(|| format!("{} returned no model catalog", kind.label()))
 }
 
+/// The saved mode is the user's choice; the provider gets what this computer's
+/// catalog says the model supports. Only Claude's Auto depends on the model, so
+/// only it waits for a catalog that isn't cached yet.
+pub(crate) fn with_supported_access(mut request: Request) -> Request {
+    let access = request.settings.access;
+    let account = &request.settings.account;
+    let models = crate::catalog::cached_models_for(request.kind, account).or_else(|| {
+        (request.kind == Kind::Claude && access == AccessMode::Auto)
+            .then(|| crate::catalog::models_for(request.kind, account).ok())
+            .flatten()
+    });
+    let model = crate::catalog::launch_model(
+        models.as_deref().unwrap_or_default(),
+        request.model.as_deref(),
+    );
+    request.settings.access = crate::catalog::supported_access(request.kind, model, access);
+    request
+}
+
 fn run_process(
     request: Request,
     cancel: Arc<AtomicBool>,
@@ -1364,6 +1383,7 @@ fn run_operation(
     if cancel.load(Ordering::Relaxed) {
         return Err("Stopped".into());
     }
+    let request = with_supported_access(request);
     if request.kind == Kind::OpenCode {
         return opencode::run(request, cancel, controls, probe, compact, emit);
     }

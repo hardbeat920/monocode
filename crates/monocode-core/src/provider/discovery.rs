@@ -19,7 +19,10 @@ pub(super) fn matches(kind: Kind, path: &Path) -> bool {
             });
         }
     }
-    if !matches!(kind, Kind::Pi | Kind::Omp | Kind::Fx | Kind::Grok) {
+    if !matches!(
+        kind,
+        Kind::Pi | Kind::Omp | Kind::Fx | Kind::Grok | Kind::Copilot
+    ) {
         return true;
     }
     static CACHE: OnceLock<Mutex<IdentityCache>> = OnceLock::new();
@@ -31,7 +34,11 @@ pub(super) fn matches(kind: Kind, path: &Path) -> bool {
     }
     let mut command = Command::new(path);
     command
-        .arg("--help")
+        .arg(if kind == Kind::Copilot {
+            "--version"
+        } else {
+            "--help"
+        })
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -64,6 +71,7 @@ fn help_matches(kind: Kind, text: &str) -> bool {
         Kind::Fx => {
             text.contains("acp") && (text.contains("fx.sh") || text.contains("coding agent"))
         }
+        Kind::Copilot => text.contains("copilot"),
         Kind::Grok => text.contains("agent") && (text.contains("x.ai") || text.contains("grok")),
         _ => true,
     }
@@ -86,6 +94,8 @@ mod tests {
             "pi: print digits of pi --precision"
         ));
         assert!(help_matches(Kind::Pi, "pi --mode rpc"));
+        assert!(!help_matches(Kind::Copilot, "unrelated cli 1.0.0"));
+        assert!(help_matches(Kind::Copilot, "github copilot cli 1.0.94"));
         assert!(help_matches(Kind::Grok, "grok build: x.ai agent stdio"));
     }
 }
