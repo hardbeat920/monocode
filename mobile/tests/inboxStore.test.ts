@@ -21,7 +21,7 @@ afterEach(() => vi.useRealTimers());
 describe("the store", () => {
   it("reads a list, caches its first page and serves the cache to a new store", async () => {
     const storage = memory();
-    const store = createInboxStore({ client: fixture(), storage, namespace: "desk", now: () => NOW });
+    const store = createInboxStore({ client: fixture(), storage, namespace: "desk" });
     const query = { scope: "all" as const, projectId: "p1" };
     expect(store.getFeed(query).loaded).toBe(false);
     await store.refresh(query);

@@ -1,17 +1,10 @@
 import { useEffect, useState } from "react";
 import { Image, Text, View } from "react-native";
 
+import { initials } from "./model";
 import type { InboxClient, InboxPerson } from "./protocol";
 
 const TONES = ["#8b5cf6", "#0ea5a4", "#e0658f", "#e08a3c", "#4c8fe0", "#5c6bd8"];
-
-/** Up to two letters of a name, as the mock's avatars. */
-export function initials(name: string) {
-  const words = name.replace(/[^A-Za-z ]/g, " ").trim().split(/\s+/).filter(Boolean);
-  if (words.length === 0) return "?";
-  const letters = words.length > 1 ? words[0][0] + words[1][0] : (words[0][0] + (words[0][1] ?? ""));
-  return letters.toUpperCase();
-}
 
 function toneOf(name: string) {
   let hash = 0;

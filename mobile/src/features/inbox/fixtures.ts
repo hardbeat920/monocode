@@ -14,8 +14,6 @@ import type {
 // release turns it on.
 
 const MIN = 60_000;
-const HOUR = 60 * MIN;
-const DAY = 24 * HOUR;
 
 /** Whether this build was started with the fixture client switched on. */
 export const FIXTURES_ENABLED = process.env.EXPO_PUBLIC_INBOX_FIXTURES === "1";

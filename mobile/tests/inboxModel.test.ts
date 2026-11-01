@@ -15,6 +15,7 @@ import {
   withOverrides,
   type MarkState,
 } from "@/features/inbox/model";
+import { checkLabel, toChangedFile } from "@/features/inbox/itemView";
 import type { InboxItem } from "@/features/inbox/protocol";
 
 const NOW = new Date("2026-11-01T14:00:00").getTime();
@@ -207,5 +208,34 @@ describe("cache and staleness", () => {
   it("keys lists by what they ask for", () => {
     expect(feedKey({ scope: "all" })).not.toBe(feedKey({ scope: "all", projectId: "p" }));
     expect(feedKey({ scope: "done", projectId: "p" })).toBe("done|p|*|");
+  });
+});
+
+describe("item sheet helpers", () => {
+  it("words a check's outcome and time", () => {
+    expect(checkLabel({ name: "a", state: "failing", durationMs: 400_000 })).toBe("failed · 6m 40s");
+    expect(checkLabel({ name: "a", state: "passing", durationMs: 41_000 })).toBe("41s");
+    expect(checkLabel({ name: "a", state: "pending" })).toBe("running");
+    expect(checkLabel({ name: "a", state: "skipped" })).toBe("skipped");
+    expect(checkLabel({ name: "a", state: "passing", durationMs: 120_000 })).toBe("2m");
+  });
+
+  it("hands a diff to the diff screen with null for the numbers it lacks", () => {
+    const file = toChangedFile({
+      path: "src/a.ts",
+      additions: 1,
+      deletions: 1,
+      lines: [
+        { kind: "hunk", text: "@@ -1 +1 @@" },
+        { kind: "del", text: "old", oldNo: 1 },
+        { kind: "add", text: "new", newNo: 1 },
+      ],
+    });
+    expect(file).toMatchObject({ relative: "src/a.ts", status: "modified", additions: 1, deletions: 1 });
+    expect(file.lines.map((line) => [line.kind, line.oldNumber, line.newNumber])).toEqual([
+      ["hunk", null, null],
+      ["del", 1, null],
+      ["add", null, 1],
+    ]);
   });
 });

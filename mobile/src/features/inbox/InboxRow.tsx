@@ -158,8 +158,10 @@ export const InboxRow = memo(function InboxRow({
             { name: "agent", label: "Start agent" },
           ]}
           onAccessibilityAction={({ nativeEvent }) => {
-            if (nativeEvent.actionName === "done")
-              item.done ? handlers.undone(item) : commitDone();
+            if (nativeEvent.actionName === "done") {
+              if (item.done) handlers.undone(item);
+              else commitDone();
+            }
             if (nativeEvent.actionName === "agent") handlers.startAgent(item);
           }}
           // A tap on a row with its actions out puts them away instead.

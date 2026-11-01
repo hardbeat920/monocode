@@ -17,6 +17,7 @@ import { makeCommandId } from "@/features/connection/nativeLink";
 
 import { createFixtureClient, FIXTURES_ENABLED } from "./fixtures";
 import { countItems, markMessage } from "./model";
+import { useNow } from "./useNow";
 import {
   createInboxClient,
   type InboxClient,
@@ -205,5 +206,6 @@ export function useInboxFeed(query: FeedQuery, watching = true) {
 export function useInboxBadge(projectId: string | undefined) {
   const supported = useInboxSupported();
   const { feed } = useInboxFeed({ scope: "all", projectId }, supported);
-  return supported ? countItems(feed.items, undefined, Date.now()).unread : 0;
+  const now = useNow(supported);
+  return supported ? countItems(feed.items, undefined, now).unread : 0;
 }

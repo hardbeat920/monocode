@@ -50,7 +50,6 @@ export function useInboxDetail(key: string): DetailState {
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
     const keep = (part: Partial<Cached>) => {
       const next = { ...(cache.get(key) ?? { detail: null, diff: null, checks: null }), ...part };
       cache.set(key, next);
@@ -87,6 +86,9 @@ export function useInboxDetail(key: string): DetailState {
     item: listed ?? state.detail?.item,
     error: state.detail || listed ? null : error,
     loading,
-    reload: useCallback(() => setTick((value) => value + 1), []),
+    reload: useCallback(() => {
+      setLoading(true);
+      setTick((value) => value + 1);
+    }, []),
   };
 }

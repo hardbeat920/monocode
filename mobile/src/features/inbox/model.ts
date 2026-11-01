@@ -345,3 +345,13 @@ export function feedKey(query: {
 }) {
   return [query.scope, query.projectId ?? "*", query.source ?? "*", query.q ?? ""].join("|");
 }
+
+// -- People ------------------------------------------------------------------
+
+/** Up to two letters of a name, as the mock's avatars. */
+export function initials(name: string) {
+  const words = name.replace(/[^A-Za-z ]/g, " ").trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return "?";
+  const letters = words.length > 1 ? words[0][0] + words[1][0] : (words[0][0] + (words[0][1] ?? ""));
+  return letters.toUpperCase();
+}

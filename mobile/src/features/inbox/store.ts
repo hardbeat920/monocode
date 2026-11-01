@@ -61,7 +61,6 @@ export type InboxStoreOptions = {
   namespace: string;
   /** As often as the workspace catalog: every 5 seconds while a list is in view. */
   pollMs?: number;
-  now?: () => number;
   /** False while the app is in the background: nothing is polled then. */
   isActive?: () => boolean;
 };
@@ -88,7 +87,6 @@ export type MarkResult = {
 export function createInboxStore(options: InboxStoreOptions) {
   const { client, storage, namespace } = options;
   const pollMs = options.pollMs ?? POLL_MS;
-  const now = options.now ?? Date.now;
   const isActive = options.isActive ?? (() => true);
 
   const raws = new Map<string, Raw>();
