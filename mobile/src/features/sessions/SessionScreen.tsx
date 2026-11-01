@@ -50,7 +50,7 @@ import {
 import { GlassBlurTarget, GlassPresence, LiquidView } from "@/ui/LiquidView";
 import { DitherLoading } from "@/ui/DitherLoading";
 import { useDrawerActions, useSceneSwapping, useSceneSwitching } from "@/ui/ScenePager";
-import { UnreadDot, useAnyUnreadMono } from "@/features/workspace/UnreadDot";
+import { UnreadDot, useAnyUnread } from "@/features/workspace/UnreadDot";
 import { themedStyles, useColors } from "@/ui/theme";
 
 export const HEADER_HEIGHT = 44;
@@ -440,7 +440,7 @@ export function SessionFrame({
   // The menu button opens the drawer of projects and monos.
   const drawer = useDrawerActions();
   // Dotted while a mono has a reply the user hasn't seen.
-  const unread = useAnyUnreadMono();
+  const unread = useAnyUnread();
   const insets = useSafeAreaInsets();
   const extraContentPadding = useSharedValue(0);
   const restingHeight = useRef<number | null>(null);
@@ -628,7 +628,7 @@ export function SessionFrame({
                 <View>
                   <CircleButton
                     icon="menu"
-                    label={unread ? "Projects and monos, new replies" : "Projects and monos"}
+                    label={unread ? "Projects, new replies" : "Projects"}
                     onPress={drawer.open}
                   />
                   {unread ? <UnreadDot /> : null}
