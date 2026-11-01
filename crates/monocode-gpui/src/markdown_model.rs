@@ -1,6 +1,6 @@
 //! Native Markdown model for AgentMarkdown's Streamdown elements.
 use pulldown_cmark::{
-    Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd,
+    Alignment, CodeBlockKind, Event, HeadingLevel, LinkType, Options, Parser, Tag, TagEnd,
     TextMergeWithOffset,
 };
 use std::{iter::Peekable, ops::Range, sync::Arc};
@@ -703,10 +703,17 @@ fn inline_span(
     out: &mut Vec<InlineRun>,
 ) {
     let end = tag.to_end();
+    let image = matches!(tag, Tag::Image { .. });
+    let first = out.len();
     match tag {
         Tag::Strong => style.bold = true,
         Tag::Emphasis => style.italic = true,
         Tag::Strikethrough => style.strikethrough = true,
+        Tag::Link {
+            link_type: LinkType::Email,
+            dest_url,
+            ..
+        } => style.link = Some(format!("mailto:{dest_url}")),
         Tag::Link { dest_url, .. } if dest_url.as_ref() != "streamdown:incomplete-link" => {
             style.link = Some(dest_url.into_string());
         }
@@ -717,6 +724,12 @@ fn inline_span(
             Event::End(tag) if tag == end => break,
             Event::Start(tag) => inline_span(events, tag, style.clone(), out),
             event => append_run(out, event, style.clone()),
+        }
+    }
+    if image {
+        // Alt text describes the image, so it never autolinks.
+        for run in &mut out[first..] {
+            run.style.link = style.link.clone();
         }
     }
 }
@@ -746,12 +759,12 @@ fn append_run(out: &mut Vec<InlineRun>, event: Event<'_>, mut style: InlineStyle
     out.push(InlineRun { text, style });
 }
 
-/// Pushes prose, giving bare URLs the link style like GFM's extended autolinks.
+/// Pushes prose, linking bare URLs and emails like GFM's extended autolinks.
 fn push_linked(out: &mut Vec<InlineRun>, text: &str, style: InlineStyle) {
-    let mut push = |text: &str, link: Option<&str>| {
+    let mut push = |text: &str, link: Option<String>| {
         if !text.is_empty() {
             let mut style = style.clone();
-            style.link = link.map(str::to_owned);
+            style.link = link;
             out.push(InlineRun {
                 text: text.to_owned(),
                 style,
@@ -759,34 +772,82 @@ fn push_linked(out: &mut Vec<InlineRun>, text: &str, style: InlineStyle) {
         }
     };
     let mut rest = text;
-    while let Some(url) = next_bare_url(rest) {
-        let (before, after) = rest.split_at(url.start);
-        let (url, after) = after.split_at(url.len());
-        push(before, None);
-        push(url, Some(url));
-        rest = after;
+    while let Some((range, target)) = next_bare_link(rest) {
+        push(&rest[..range.start], None);
+        push(&rest[range.clone()], Some(target));
+        rest = &rest[range.end..];
     }
     push(rest, None);
 }
 
-fn next_bare_url(text: &str) -> Option<Range<usize>> {
+/// The first bare link in `text`, with the target it opens.
+fn next_bare_link(text: &str) -> Option<(Range<usize>, String)> {
+    let web = next_bare_url(text);
+    // A URL can hold an `@`, so only text before it can be an email.
+    let email_end = web.as_ref().map_or(text.len(), |(range, _)| range.start);
+    next_bare_email(&text[..email_end]).or(web)
+}
+
+fn next_bare_url(text: &str) -> Option<(Range<usize>, String)> {
     let mut from = 0;
-    while let Some(found) = text[from..].find("http") {
+    while let Some(found) = text[from..].find(['h', 'w']) {
         let start = from + found;
-        from = start + 4;
-        let scheme = ["https://", "http://"]
-            .into_iter()
-            .find(|scheme| text[start..].starts_with(scheme));
-        let bounded = !text[..start]
-            .chars()
-            .next_back()
-            .is_some_and(|c| c.is_ascii_alphanumeric());
-        if let Some(scheme) = scheme.filter(|_| bounded) {
-            let host = start + scheme.len();
-            let end = host + bare_url_len(&text[host..]);
-            if end > host {
-                return Some(start..end);
-            }
+        from = start + 1;
+        let rest = &text[start..];
+        let before = text[..start].chars().next_back();
+        let (prefix, origin, bounded) = if rest.starts_with("https://") {
+            (
+                "https://",
+                "",
+                !before.is_some_and(|c| c.is_ascii_alphanumeric()),
+            )
+        } else if rest.starts_with("http://") {
+            (
+                "http://",
+                "",
+                !before.is_some_and(|c| c.is_ascii_alphanumeric()),
+            )
+        } else if rest.starts_with("www.") {
+            let bounded = before.is_none_or(|c| c.is_whitespace() || c.is_ascii_punctuation());
+            ("www.", "http://", bounded)
+        } else {
+            continue;
+        };
+        let body = bare_url_len(&rest[prefix.len()..]);
+        if bounded && body > 0 {
+            let end = start + prefix.len() + body;
+            return Some((start..end, format!("{origin}{}", &text[start..end])));
+        }
+    }
+    None
+}
+
+fn next_bare_email(text: &str) -> Option<(Range<usize>, String)> {
+    let local = |c: char| c.is_ascii_alphanumeric() || "-._+".contains(c);
+    let label = |c: char| c.is_ascii_alphanumeric() || "-_.".contains(c);
+    for (at, _) in text.match_indices('@') {
+        let start = text[..at]
+            .char_indices()
+            .rev()
+            .find(|(_, c)| !local(*c))
+            .map_or(0, |(ix, c)| ix + c.len_utf8());
+        let bounded = !text[..start].ends_with('/');
+        let host = &text[at + 1..];
+        let host = &host[..host.find(|c| !label(c)).unwrap_or(host.len())];
+        let host = host.split("..").next().unwrap_or("").trim_end_matches('.');
+        // A trailing digit is a version, like `react@18.2.0`.
+        let valid = host.contains('.')
+            && !host.starts_with('.')
+            && !host.ends_with(|c: char| c.is_ascii_digit() || c == '-' || c == '_');
+        if start < at && bounded && valid {
+            let end = at + 1 + host.len();
+            let shown = start
+                - if text[..start].ends_with("mailto:") {
+                    7
+                } else {
+                    0
+                };
+            return Some((shown..end, format!("mailto:{}", &text[start..end])));
         }
     }
     None
@@ -799,7 +860,7 @@ fn bare_url_len(text: &str) -> usize {
     let mut url = &text[..text.find(stops).unwrap_or(text.len())];
     loop {
         let trimmed =
-            url.trim_end_matches(['?', '!', '.', ',', ':', ';', '*', '_', '~', '\'', '"']);
+            url.trim_end_matches(['?', '!', '.', ',', ':', ';', '*', '_', '~', '\'', '"', ']']);
         let unbalanced =
             trimmed.ends_with(')') && trimmed.matches(')').count() > trimmed.matches('(').count();
         let trimmed = if unbalanced {
@@ -866,7 +927,7 @@ mod bare_url_tests {
     fn urls_survive_characters_that_split_parser_text() {
         for url in [
             "https://example.com/a_b_c?x=1&y=2#z",
-            "https://example.com/~me/[1]",
+            "https://example.com/~me/[1]/x",
             "http://example.com/wiki/Rust_(language)",
         ] {
             assert_eq!(links(&format!("go {url} here")), [url]);
@@ -894,6 +955,55 @@ mod bare_url_tests {
         ] {
             assert_eq!(links(&text), [url], "{text}");
         }
+    }
+
+    #[test]
+    fn closing_brackets_stay_outside_the_link() {
+        assert_eq!(links("[https://a.com/x]"), ["https://a.com/x"]);
+    }
+
+    #[test]
+    fn www_addresses_open_over_http_and_keep_their_text() {
+        assert_eq!(links("see www.a.com."), ["http://www.a.com"]);
+        assert_eq!(links("(www.a.com/x)"), ["http://www.a.com/x"]);
+        assert!(links("awww.a.com and www. alone").is_empty());
+        let tree = parse_full("www.a.com/x");
+        let Block::Paragraph { runs } = &tree.blocks[0].block else {
+            panic!("expected paragraph")
+        };
+        assert_eq!(runs[0].text, "www.a.com/x");
+    }
+
+    #[test]
+    fn emails_become_mailto_links() {
+        assert_eq!(links("me@a.com"), ["mailto:me@a.com"]);
+        assert_eq!(links("<me@a.com>"), ["mailto:me@a.com"]);
+        assert_eq!(links("邮箱me@a.com"), ["mailto:me@a.com"]);
+        assert_eq!(
+            links("write to me.you+x@a.co.uk."),
+            ["mailto:me.you+x@a.co.uk"]
+        );
+        let tree = parse_full("mailto:me@a.com now");
+        let Block::Paragraph { runs } = &tree.blocks[0].block else {
+            panic!("expected paragraph")
+        };
+        assert_eq!(runs[0].text, "mailto:me@a.com");
+        assert_eq!(runs[0].style.link.as_deref(), Some("mailto:me@a.com"));
+    }
+
+    #[test]
+    fn versions_handles_and_url_credentials_are_not_emails() {
+        assert!(links("react@18.2.0 and @types/node and a@b and x/me@a.com").is_empty());
+        assert_eq!(links("https://me:pw@a.com/x"), ["https://me:pw@a.com/x"]);
+    }
+
+    #[test]
+    fn image_alt_text_is_not_linked_but_keeps_an_outer_link() {
+        assert!(links("![https://a.com/x](b.png)").is_empty());
+        assert_eq!(
+            links("[![https://a.com/x](b.png)](https://target.example)"),
+            ["https://target.example"]
+        );
     }
 
     #[test]
