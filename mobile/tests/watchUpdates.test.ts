@@ -9,6 +9,23 @@ const turn = (id: string, text: string): Turn => ({
 });
 
 describe("watch frames", () => {
+  it("rejects append edits against a missing or stale baseline and accepts a fresh snapshot", () => {
+    const patches = [
+      {
+        id: "a",
+        edits: [{ path: ["items", 0, "text"], from: 4, append: "ing" }],
+      },
+    ];
+    const frame = { order: ["a"], patches };
+    expect(applyFrames([], [frame])).toBeNull();
+    expect(applyFrames([turn("a", "wrong length")], [frame])).toBeNull();
+    const restored = applyFrames(
+      [],
+      [{ order: ["a"], turns: [turn("a", "Work")] }, frame],
+    );
+    expect(restored?.turns).toEqual([turn("a", "Working")]);
+  });
+
   it("swaps in changed turns and keeps the rest as they were", () => {
     const a = turn("a", "done");
     const start = [a, turn("b", "Wor")];
@@ -23,16 +40,34 @@ describe("watch frames", () => {
 
   it("keeps the same list when a frame changes nothing", () => {
     const start = [turn("a", "done")];
-    expect(applyFrames(start, [{ busy: false, order: ["a"], turns: [] }])!.turns).toBe(start);
+    expect(
+      applyFrames(start, [{ busy: false, order: ["a"], turns: [] }])!.turns,
+    ).toBe(start);
   });
 
   it("asks for a fresh watch when a frame names a turn it never got", () => {
     expect(applyFrames([], [{ order: ["a"], turns: [] }])).toBeNull();
   });
 
+  it("preserves question transitions in a burst, including clears before reused IDs", () => {
+    const question = {
+      requestId: 4,
+      questions: [{ id: "q", prompt: "Which?", multiSelect: false, allowCustom: true, options: [] }],
+    };
+    expect(applyFrames([], [{ order: [], turns: [] }])!.questions).toEqual([]);
+    expect(applyFrames([], [{ order: [], turns: [], question }])!.questions).toEqual([question]);
+    expect(
+      applyFrames([], [
+        { order: [], turns: [], question },
+        { order: [], turns: [], question: null },
+        { order: [], turns: [], question },
+      ])!.questions,
+    ).toEqual([question, null, question]);
+  });
+
   it("carries an error until the next good frame", () => {
-    expect(applyFrames([], [{ error: "Mono is no longer available" }])!.error).toBe(
-      "Mono is no longer available",
-    );
+    expect(
+      applyFrames([], [{ error: "Mono is no longer available" }])!.error,
+    ).toBe("Mono is no longer available");
   });
 });

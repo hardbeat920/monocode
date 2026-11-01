@@ -21,7 +21,6 @@ import Animated, {
 import { scheduleOnRN } from "react-native-worklets";
 
 import { useEmptyBackground } from "@/features/background/useEmptyBackground";
-import { ProjectMascot } from "@/features/mascots/ProjectMascot";
 import { effortLabel } from "@/features/models/modelChoice";
 import {
   useForgetChoiceOnLeave,
@@ -31,6 +30,7 @@ import { useModelCatalog } from "@/features/models/useModelCatalog";
 import { useOpenSessionAfterStarting } from "@/features/settings/newSessions";
 import type { Attachment } from "@/features/sessions/attachments";
 import { Composer } from "@/features/sessions/Composer";
+import { QuestionCard } from "@/features/sessions/QuestionCard";
 import { EmptySession } from "@/features/sessions/EmptySession";
 import {
   latestSessionError,
@@ -67,9 +67,12 @@ import {
   type Workspace,
 } from "@/features/workspace/WorkspaceMenu";
 import { ComposerWorkspace } from "@/features/workspace/ComposerWorkspace";
+import { UnreadDot, useAnyUnreadMono } from "@/features/workspace/UnreadDot";
 import { Icon } from "@/ui/Icon";
 import { androidBackHeader } from "@/ui/AndroidHeader";
 import { GlassBlurTarget, LiquidView } from "@/ui/LiquidView";
+import { useDrawerActions, useDrawerSwipe } from "@/ui/ScenePager";
+import { Timed } from "@/ui/Timed";
 import { useColors } from "@/ui/theme";
 import { usePushedIn, usePushStarted } from "@/ui/usePushedIn";
 
@@ -77,22 +80,35 @@ import { usePushedIn, usePushStarted } from "@/ui/usePushedIn";
  * A project's screen: a new session, or with `sessionId` one of its sessions.
  * A new session comes first, then the project's sessions to its right;
  * swiping left slides the sessions in (and the composer out with the new
- * session), the header switch following the finger. The menu button opens
- * the project picker, and the button on the right settings; a session's
+ * session), the header switch following the finger; a swipe right from the
+ * new session opens the drawer. The project's mascot opens it too, and the
+ * button on the right settings; a session's
  * right has its changes and a menu of its actions instead. A session, or
  * one just started, is pushed over it as a screen of its own: its chat under
- * the stack's native header (see the session route).
+ * the stack's native header (see the session route). With `sheet`, a session
+ * is presented over a Mono's chat instead, and closes rather than goes back.
  */
 export function ProjectScreen({
   project,
   sessionId,
+  sheet = false,
+  title,
 }: {
   project: Project;
   sessionId: string | undefined;
+  sheet?: boolean;
+  /** Its title until the session is in the catalog, which may leave it out. */
+  title?: string;
 }) {
   const { startSession, sendMessage, stop } = useWorkspace();
   const [openAfterStarting] = useOpenSessionAfterStarting();
   const colors = useColors();
+  const drawer = useDrawerActions();
+  // Read here: the native header's buttons render outside this tree.
+  const unread = useAnyUnreadMono();
+  // A session is pushed over its project and swipes back; only the project
+  // itself swipes the drawer open.
+  useDrawerSwipe(!sessionId);
   const blurTarget = use(GlassBlurTarget);
   // What it runs with, as the model picker, a route over it, sets it.
   const { session, chosen, startAccess, accounts } = useSessionChoice(project, sessionId);
@@ -266,20 +282,14 @@ export function ProjectScreen({
   const headerSurface = (content: ReactNode) => (
     <GlassBlurTarget value={blurTarget}>{content}</GlassBlurTarget>
   );
-  const projectAvatar = (
+  const menuButton = (
     <ProjectHeaderButton
-      label={`Switch project, ${project.name}`}
-      onPress={() => router.push({
-        pathname: "/projects",
-        params: { current: project.id },
-      })}
+      label={unread ? "Projects and monos, new replies" : "Projects and monos"}
+      onPress={drawer.open}
     >
-      <ProjectMascot
-        project={project.path}
-        name={project.mascot}
-        color={project.color}
-        size={20}
-      />
+      {/* The drawer's button, as on every screen it opens from. */}
+      <Icon name="menu" size={22} color={colors.content} />
+      {unread ? <UnreadDot /> : null}
     </ProjectHeaderButton>
   );
   const settingsButton = (
@@ -293,8 +303,9 @@ export function ProjectScreen({
 
   const sessionTitle = sessionId ? (
     <SessionTitle
-      title={session?.title ?? "Session"}
+      title={session?.title ?? title ?? "Session"}
       subtitle={[project.name, branch].filter(Boolean).join(" · ")}
+      onClose={sheet ? () => router.back() : undefined}
     />
   ) : null;
   const sessionToolbar = sessionId ? (
@@ -344,50 +355,55 @@ export function ProjectScreen({
       // The composer, its blur and all, slides off with the new session's page.
       dockStyle={sessionId ? undefined : pages.slide}
       composer={
-        <Composer
-          key={sessionId ?? project.id}
-          notice={sessionNotice}
-          context={project.name}
-          branch={sessionId ? (session?.branch ?? project.branch) : branch}
-          model={model}
-          effort={effort}
-          harness={harness}
-          onModelPress={() =>
-            router.push({
-              pathname: "/models",
-              params: {
-                projectId: project.id,
-                ...(sessionId ? { sessionId } : {}),
-              },
-            })
-          }
-          {...(sessionId
-            ? {
-                busy: conversation.busy,
-                onStop: () => stop(sessionId),
-                onSend: (text: string, attachments: Attachment[]) => {
-                  markStartedHere(sessionId);
-                  return sendMessage(sessionId, text, attachments);
+        <>
+          {sessionId && conversation.question ? (
+            <QuestionCard conversationId={sessionId} prompt={conversation.question} />
+          ) : null}
+          <Composer
+            key={sessionId ?? project.id}
+            notice={sessionNotice}
+            context={project.name}
+            branch={sessionId ? (session?.branch ?? project.branch) : branch}
+            model={model}
+            effort={effort}
+            harness={harness}
+            onModelPress={() =>
+              router.push({
+                pathname: "/models",
+                params: {
+                  projectId: project.id,
+                  ...(sessionId ? { sessionId } : {}),
                 },
-                workspace: (
-                  <WorkspaceLine
-                    current={!worktreePath}
-                    branch={branch}
-                    files={changes}
-                  />
-                ),
-              }
-            : {
-                onSend: start,
-                workspace: (
-                  <ComposerWorkspace
-                    value={workspace}
-                    onChange={setWorkspace}
-                    disabled={offline}
-                  />
-                ),
-              })}
-        />
+              })
+            }
+            {...(sessionId
+              ? {
+                  busy: conversation.busy,
+                  onStop: () => stop(sessionId),
+                  onSend: (text: string, attachments: Attachment[]) => {
+                    markStartedHere(sessionId);
+                    return sendMessage(sessionId, text, attachments);
+                  },
+                  workspace: (
+                    <WorkspaceLine
+                      current={!worktreePath}
+                      branch={branch}
+                      files={changes}
+                    />
+                  ),
+                }
+              : {
+                  onSend: start,
+                  workspace: (
+                    <ComposerWorkspace
+                      value={workspace}
+                      onChange={setWorkspace}
+                      disabled={offline}
+                    />
+                  ),
+                })}
+          />
+        </>
       }
     >
       {/* The stack's native header: native items, so the same ones morph
@@ -404,13 +420,13 @@ export function ProjectScreen({
                   headerTitleAlign: "left",
                   headerRight: () => headerSurface(sessionToolbar),
                 }
-              : { headerTitle: "", headerBackVisible: true }
+              : { headerTitle: "", headerBackVisible: !sheet }
             : {
                 headerTitle: () => <ProjectSwitch pages={pages} />,
                 ...(Platform.OS === "android"
                   ? {
                       headerTitleAlign: "center" as const,
-                      headerLeft: () => headerSurface(projectAvatar),
+                      headerLeft: () => headerSurface(menuButton),
                       headerRight: () => headerSurface(settingsButton),
                       headerBackVisible: false,
                     }
@@ -424,8 +440,8 @@ export function ProjectScreen({
         )
       ) : Platform.OS === "android" ? null : (
         <Stack.Toolbar placement="left">
-          {/* The project's mascot in the bar's glass, for the button. */}
-          <Stack.Toolbar.View>{projectAvatar}</Stack.Toolbar.View>
+          {/* The drawer's menu button in the bar's glass. */}
+          <Stack.Toolbar.View>{menuButton}</Stack.Toolbar.View>
         </Stack.Toolbar>
       )}
       {sessionId ? (
@@ -452,23 +468,27 @@ export function ProjectScreen({
             pages={pages}
             chat={
               <Animated.View style={[styles.chat, emptyStyle]}>
-                <ProjectEmptySession
-                  project={project}
-                  inView={focused && pages.view === "chat"}
-                  swiping={swiping}
-                  onOpen={(session) => openSession(session.id)}
-                />
+                <Timed id="project new-session page">
+                  <ProjectEmptySession
+                    project={project}
+                    inView={focused && pages.view === "chat"}
+                    swiping={swiping}
+                    onOpen={(session) => openSession(session.id)}
+                  />
+                </Timed>
               </Animated.View>
             }
             sessions={
-              <SessionsPage
-                projectId={project.id}
-                active={pages.view === "sessions"}
-                worktree={
-                  workspace.mode === "existing" ? workspace.worktree : undefined
-                }
-                onOpen={(session) => openSession(session.id)}
-              />
+              <Timed id="project sessions page">
+                <SessionsPage
+                  projectId={project.id}
+                  active={pages.view === "sessions"}
+                  worktree={
+                    workspace.mode === "existing" ? workspace.worktree : undefined
+                  }
+                  onOpen={(session) => openSession(session.id)}
+                />
+              </Timed>
             }
           />
         )}

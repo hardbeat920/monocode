@@ -12,6 +12,9 @@
   <img width="1680" height="1050" alt="MonoCode with agent sessions open side by side" src="https://github.com/user-attachments/assets/2cd4a6ec-eb1e-4b45-8627-a76442ea3874" />
 </p>
 
+> [!NOTE]
+> **Try the new [Monocode Native preview](https://github.com/hardbeat920/monocode/releases)**, our experimental Rust + GPUI app for macOS, Linux and Windows. Read the [preview details](#monocode-native-preview) before installing.
+
 Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, OpenCode, Antigravity, Pi, omp, fx, Hermes Agent, and Devin. If they’re installed and logged in, MonoCode can run them. Tabs are sessions. The composer is the input. MonoCode does not sell tokens.
 
 ## Install
@@ -59,6 +62,32 @@ npm run tauri dev
 ```
 
 Small, focused contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+
+## Monocode Native preview
+
+The Rust + GPUI app is an experimental preview. React/Tauri remains the
+production app.
+
+Download a packaged preview for macOS, Linux or Windows from the
+[releases page](https://github.com/hardbeat920/monocode/releases). See
+[known limitations](docs/native/parity.md) before testing.
+
+You can install it alongside MonoCode, but **the preview uses your existing
+MonoCode database and saves changes there**. Back up your data with the app
+closed before testing, and avoid editing the same conversations in both apps
+at once.
+
+To try GPUI from this checkout with Node.js 22+, Rust and Xcode on macOS:
+
+```sh
+npm run native:dev     # launch with a separate development database
+npm run native:build   # create an optimized app using installed MonoCode data
+```
+
+Type `r` then Enter in the development terminal to rebuild and restart; there is
+no hot reload. The release app saves changes to your installed MonoCode data.
+See the [native guide](docs/native/README.md) for prerequisites, build output,
+checks and preview limitations.
 
 ## Contributors
 

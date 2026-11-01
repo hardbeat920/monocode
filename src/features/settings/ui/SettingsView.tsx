@@ -2466,13 +2466,17 @@ function AppearancePage({ appearance }: { appearance: AppearanceSettings }) {
       <Group title="Layout">
         <Row
           id="inset-layout"
-          label="New layout"
-          description="Use the redesigned sidebar, project switcher, workspace tabs and right panel. Turn off to return to the classic layout."
+          label="Layout"
+          description="Classic keeps everything in one sidebar. Focused adds a project switcher, workspace tabs and a right panel."
         >
-          <Toggle
-            label="New layout"
-            on={appearance.insetLayout}
-            onChange={appearance.onInsetLayout}
+          <Segmented
+            label="Layout"
+            value={appearance.insetLayout ? "focused" : "classic"}
+            options={[
+              { value: "classic", label: "Classic" },
+              { value: "focused", label: "Focused" },
+            ]}
+            onChange={(value) => appearance.onInsetLayout(value === "focused")}
           />
         </Row>
         <Row
