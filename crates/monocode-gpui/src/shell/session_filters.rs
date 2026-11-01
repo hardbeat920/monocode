@@ -56,6 +56,7 @@ impl Shell {
                 );
             }
         }
+        items.extend(self.origin_filter_items(cx));
         if filters.active(self.workspace.preferences.show_archived) {
             items.push(MenuItem::Separator);
             items.push(MenuAction::new("clear", "Clear filters").keep_open().into());
@@ -79,6 +80,10 @@ impl Shell {
             _ => {
                 if let Some(provider) = action.strip_prefix("provider:") {
                     filters.toggle_provider(provider);
+                } else if let Some(origin) = action.strip_prefix("origin:") {
+                    filters.toggle_origin(origin);
+                } else if let Some(origin) = action.strip_prefix("origin-only:") {
+                    self.only_origin(origin, cx);
                 } else if let Some(time) = action.strip_prefix("time:").and_then(|id| {
                     TimeFilter::OPTIONS
                         .iter()
@@ -111,7 +116,7 @@ impl Shell {
             },
             start,
             self.workspace.preferences.show_archived,
-        )
+        ) && self.origin_visible(id, cx)
     }
 }
 

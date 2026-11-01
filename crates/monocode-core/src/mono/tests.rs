@@ -185,3 +185,74 @@ fn context_shows_how_to_delegate_without_running_help() {
         r#"/Applications/Monocode.app/monocode app sessions.start --json '{"project":"<assigned path>","title":"<short title>","prompt":"<complete instructions>","notifyOnComplete":true}'"#
     ));
 }
+
+fn launch(session_id: i64, adopted: bool) -> Launch {
+    Launch {
+        session_id,
+        cwd: "/repo".into(),
+        title: "Work".into(),
+        harness: "claude".into(),
+        model: None,
+        origin_turn: (5 << 32) | 3,
+        notify_on_complete: true,
+        completed: false,
+        dismissed: false,
+        adopted,
+    }
+}
+
+#[test]
+fn a_session_knows_the_mono_that_started_it_but_not_one_that_only_adopted_it() {
+    let mut roster = Roster::default();
+    let first = roster.create(vec!["/repo".into()]).id.clone();
+    let second = roster.create(vec!["/repo".into()]).id.clone();
+    roster.get_mut(&first).unwrap().name = "TaskGiver".into();
+    roster.get_mut(&first).unwrap().launches = vec![launch(10, false), launch(11, true)];
+    roster.get_mut(&second).unwrap().launches = vec![launch(10, true), launch(12, false)];
+    let origin = roster.origin_of(10).unwrap();
+    assert_eq!(
+        (origin.mono.as_str(), origin.name.as_str()),
+        (first.as_str(), "TaskGiver")
+    );
+    assert!(!origin.deleted);
+    assert_eq!(roster.origin_of(12).unwrap().mono, second);
+    assert!(roster.origin_of(11).is_none(), "adopted, never started");
+    assert!(roster.origin_of(99).is_none());
+}
+
+#[test]
+fn a_deleted_mono_keeps_its_look_for_the_sessions_it_started() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Store::open(&temp.path().join("native.sqlite")).unwrap();
+    let mut roster = Roster::default();
+    let id = roster.create(vec!["/repo".into()]).id.clone();
+    let mono = roster.get_mut(&id).unwrap();
+    mono.name = "Scout".into();
+    mono.launches = vec![launch(20, false), launch(21, true)];
+    let (mascot, color) = (mono.mascot.clone(), mono.color);
+    assert!(roster.remove(&id));
+    assert!(!roster.remove(&id));
+    let origin = roster.origin_of(20).unwrap();
+    assert!(origin.deleted);
+    assert_eq!(
+        (origin.name.as_str(), origin.mascot.as_str(), origin.color),
+        ("Scout", mascot.as_str(), color)
+    );
+    assert!(roster.origin_of(21).is_none());
+    roster.save(&db).unwrap();
+    let saved = Roster::load(&db).unwrap();
+    assert!(saved.origin_of(20).unwrap().deleted);
+    // A Mono that started nothing leaves no trace behind.
+    let other = roster.create(vec![]).id.clone();
+    roster.remove(&other);
+    assert_eq!(roster.departed.len(), 1);
+}
+
+#[test]
+fn launches_saved_before_adoption_was_tracked_read_as_started() {
+    let launch: Launch = serde_json::from_str(
+        r#"{"sessionId":1,"cwd":"/r","title":"t","harness":"claude","model":null,"originTurn":4,"notifyOnComplete":true}"#,
+    )
+    .unwrap();
+    assert!(!launch.adopted);
+}

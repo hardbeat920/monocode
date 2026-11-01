@@ -295,6 +295,7 @@ impl Shell {
             return row;
         }
         let work_item = self.work_item_badge(id, false, cx);
+        let origin = self.origin_tile(id, 16., cx);
         let agents = match rail {
             Some((Rail::Agents(summary), true)) => Some(self.agents(id, summary, cx)),
             _ => None,
@@ -418,6 +419,7 @@ impl Shell {
                     .when(session.summary.pinned, |d| {
                         d.child(icon("pin", 12.).text_color(content(0.45)))
                     })
+                    .children(origin)
                     .child(title)
                     .when(!header, |d| {
                         d.child(

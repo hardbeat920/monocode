@@ -45,6 +45,9 @@ impl TimeFilter {
     }
 }
 
+/// The origin key of a session the user started themselves.
+pub const YOU: &str = "you";
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Status {
@@ -68,6 +71,8 @@ impl Status {
 #[serde(default)]
 pub struct Filters {
     pub hidden_providers: Vec<String>,
+    /// Who started a session: `YOU` for the user, else a Mono's id.
+    pub hidden_origins: Vec<String>,
     pub time: TimeFilter,
     pub status: Status,
 }
@@ -75,6 +80,7 @@ impl Filters {
     pub fn active(&self, show_archived: bool) -> bool {
         show_archived
             || !self.hidden_providers.is_empty()
+            || !self.hidden_origins.is_empty()
             || self.time != TimeFilter::All
             || self.status.active()
     }
@@ -89,6 +95,24 @@ impl Filters {
             && !self.hidden_providers.contains(&session.provider)
             && session.updated_at >= start
             && self.status.matches(state)
+    }
+    pub fn origin_matches(&self, origin: &str) -> bool {
+        !self.hidden_origins.iter().any(|id| id == origin)
+    }
+    pub fn toggle_origin(&mut self, origin: &str) {
+        if self.hidden_origins.iter().any(|id| id == origin) {
+            self.hidden_origins.retain(|id| id != origin);
+        } else {
+            self.hidden_origins.push(origin.into());
+        }
+    }
+    /// Shows only `origin` among `all` the origins that are listed.
+    pub fn only_origin<'a>(&mut self, origin: &str, all: impl IntoIterator<Item = &'a str>) {
+        self.hidden_origins = all
+            .into_iter()
+            .filter(|id| *id != origin)
+            .map(str::to_owned)
+            .collect();
     }
     pub fn toggle_provider(&mut self, provider: &str) {
         if Kind::parse(provider).is_none() {
@@ -180,5 +204,24 @@ mod tests {
         let restored: Filters =
             serde_json::from_str(&serde_json::to_string(&filters).unwrap()).unwrap();
         assert_eq!(restored, filters);
+    }
+
+    #[test]
+    fn origins_are_hidden_one_by_one_or_narrowed_to_one() {
+        let mut filters = Filters::default();
+        assert!(!filters.active(false));
+        filters.toggle_origin("mono-a");
+        assert!(filters.active(false));
+        assert!(!filters.origin_matches("mono-a"));
+        assert!(filters.origin_matches(YOU));
+        filters.toggle_origin("mono-a");
+        assert!(!filters.active(false));
+        filters.only_origin("mono-b", [YOU, "mono-a", "mono-b"]);
+        assert!(filters.origin_matches("mono-b"));
+        assert!(!filters.origin_matches("mono-a"));
+        assert!(!filters.origin_matches(YOU));
+        let old: Filters = serde_json::from_str(r#"{"hidden_providers":["codex"]}"#).unwrap();
+        assert_eq!(old.hidden_providers, ["codex"]);
+        assert!(old.hidden_origins.is_empty());
     }
 }
