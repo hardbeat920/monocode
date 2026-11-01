@@ -214,6 +214,10 @@ pub(crate) struct SettingsView {
     select_open: Option<&'static str>,
     select_active: usize,
     select_focus: FocusHandle,
+    /// The open select's list, so a long one scrolls to its active row.
+    select_scroll: gpui::ScrollHandle,
+    /// The opened select still has to reveal its selected row.
+    select_reveal: std::cell::Cell<bool>,
     select_anchors: RefCell<HashMap<&'static str, AnchorSlot>>,
     search: Entity<Input>,
     search_query: String,
@@ -350,6 +354,8 @@ impl SettingsView {
             select_open: None,
             select_active: 0,
             select_focus: cx.focus_handle(),
+            select_scroll: gpui::ScrollHandle::new(),
+            select_reveal: std::cell::Cell::new(false),
             select_anchors: Default::default(),
             search,
             search_query: String::new(),

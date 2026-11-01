@@ -56,10 +56,7 @@ impl PiUsageProvider {
 }
 
 pub(super) fn fetch_pi_usage(provider: PiUsageProvider) -> PiUsageResult {
-    let Some(dir) = agent_dir(
-        std::env::var_os("PI_CODING_AGENT_DIR"),
-        crate::accounts::home().map(|p| p.to_string_lossy().into_owned()),
-    ) else {
+    let Some(dir) = configured_agent_dir() else {
         return unavailable(
             "Pi usage needs an absolute configuration directory. Check PI_CODING_AGENT_DIR.",
         );
@@ -67,6 +64,14 @@ pub(super) fn fetch_pi_usage(provider: PiUsageProvider) -> PiUsageResult {
     read_usage(&dir, provider, |credential| {
         request_usage(provider, credential, provider.endpoint())
     })
+}
+
+/// Pi's configuration directory: `PI_CODING_AGENT_DIR`, else `~/.pi/agent`.
+pub(crate) fn configured_agent_dir() -> Option<PathBuf> {
+    agent_dir(
+        std::env::var_os("PI_CODING_AGENT_DIR"),
+        crate::accounts::home().map(|p| p.to_string_lossy().into_owned()),
+    )
 }
 
 fn agent_dir(override_dir: Option<std::ffi::OsString>, home: Option<String>) -> Option<PathBuf> {

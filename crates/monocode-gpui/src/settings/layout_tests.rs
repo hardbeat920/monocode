@@ -194,3 +194,49 @@ fn mono_mascot_is_beside_name_and_sidebar_switch_stays_visible(cx: &mut TestAppC
     assert_eq!(switch.size, size(px(36.), px(20.)));
     assert!(switch.right() <= px(700.));
 }
+
+#[gpui::test]
+fn a_long_select_scrolls_to_its_selected_and_keyboard_rows(cx: &mut TestAppContext) {
+    let window = window(Section::Worktrees, cx);
+    window
+        .update(cx, |view, _, cx| {
+            view.ctx.projects = (0..30)
+                .map(|ix| (format!("/work/project-{ix}"), format!("project-{ix}")))
+                .collect();
+            view.selected_project = "/work/project-29".into();
+            cx.notify();
+        })
+        .unwrap();
+    let visual = &mut VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    let trigger = visual
+        .debug_bounds("settings-select-settings-project")
+        .unwrap();
+    visual.simulate_click(trigger.center(), Default::default());
+    visual.run_until_parked();
+    // The popover is at most 320pt tall, so a row is reachable only when the
+    // list scrolls it next to the trigger.
+    let near = |visual: &mut VisualTestContext, ix: usize| {
+        let id = format!("settings-option-settings-project-{ix}").leak();
+        let row = visual.debug_bounds(id).unwrap();
+        (row.center().y - trigger.center().y).abs() < px(340.)
+    };
+    assert!(near(visual, 29), "opening reveals the selected last row");
+    assert!(!near(visual, 0));
+    visual.simulate_keystrokes("home");
+    visual.run_until_parked();
+    assert!(near(visual, 0), "Home scrolls back to the first row");
+    assert!(!near(visual, 29));
+    visual.simulate_keystrokes("end");
+    visual.run_until_parked();
+    assert!(near(visual, 29));
+    // Dismissing without a pick keeps the selection.
+    visual.simulate_keystrokes("escape");
+    visual.run_until_parked();
+    window
+        .update(visual, |view, _, _| {
+            assert_eq!(view.selected_project, "/work/project-29");
+            assert!(view.select_open.is_none());
+        })
+        .unwrap();
+}

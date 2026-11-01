@@ -266,6 +266,8 @@ pub fn models_for(kind: Kind, account: &crate::accounts::Profile) -> Result<Vec<
         provider::devin::catalog_models(&value)
     } else if kind.is_acp() {
         acp_models(&value)
+    } else if kind == Kind::Pi {
+        scope_to_enabled(pi_models(kind, &value), &pi_enabled_models())
     } else if kind.is_pi() {
         pi_models(kind, &value)
     } else if kind == Kind::Claude {
@@ -660,6 +662,65 @@ fn pi_models(kind: Kind, value: &Value) -> Vec<Model> {
     models.sort_by(|a, b| a.name.cmp(&b.name));
     models
 }
+/// The `enabledModels` scope saved with Pi's `/models`. Pi's RPC lists every
+/// authenticated model, while its own picker opens on this scope; omp already
+/// applies it before answering.
+fn pi_enabled_models() -> Vec<String> {
+    crate::usage::pi_agent_dir()
+        .and_then(|dir| std::fs::read_to_string(dir.join("settings.json")).ok())
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|settings| {
+            settings["enabledModels"].as_array().map(|patterns| {
+                patterns
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+        })
+        .unwrap_or_default()
+}
+/// Keep the models a scope names. No scope, or one that names nothing
+/// installed, keeps the whole catalog, as Pi does.
+fn scope_to_enabled(models: Vec<Model>, patterns: &[String]) -> Vec<Model> {
+    if patterns.is_empty() {
+        return models;
+    }
+    let scoped: Vec<_> = models
+        .iter()
+        .filter(|model| patterns.iter().any(|p| pi_scope_matches(p, &model.id)))
+        .cloned()
+        .collect();
+    if scoped.is_empty() {
+        models
+    } else {
+        scoped
+    }
+}
+/// Pi's scope rules: an optional `:thinking` level is ignored; globs match
+/// `provider/id` or the bare id; anything else is an exact, case-insensitive
+/// `provider/id` or bare id.
+fn pi_scope_matches(pattern: &str, id: &str) -> bool {
+    let pattern = pattern.trim();
+    let pattern = match pattern.rsplit_once(':') {
+        Some((head, "off" | "minimal" | "low" | "medium" | "high" | "xhigh")) => head,
+        _ => pattern,
+    };
+    let bare = id.split_once('/').map_or(id, |(_, model)| model);
+    if !pattern.contains(['*', '?']) {
+        return pattern.eq_ignore_ascii_case(id) || pattern.eq_ignore_ascii_case(bare);
+    }
+    let mut glob = String::from("(?i)^");
+    for c in pattern.chars() {
+        match c {
+            '*' => glob.push_str("[^/]*"),
+            '?' => glob.push_str("[^/]"),
+            c => glob.push_str(&regex::escape(&c.to_string())),
+        }
+    }
+    glob.push('$');
+    regex::Regex::new(&glob).is_ok_and(|glob| glob.is_match(id) || glob.is_match(bare))
+}
 
 fn send(out: &mut impl Write, v: Value) -> Result<(), String> {
     writeln!(out, "{v}")
@@ -930,6 +991,42 @@ mod tests {
         assert!(rows[0].efforts.contains(&"xhigh".into()));
         assert!(rows[1].efforts.is_empty());
         assert!(rows.iter().all(|m| m.fast));
+    }
+    #[test]
+    fn pi_catalog_follows_the_enabled_models_scope() {
+        let rows = pi_models(
+            Kind::Pi,
+            &json!({"models":[
+                {"provider":"openai-codex","id":"gpt-6-sol","name":"Sol"},
+                {"provider":"openai-codex","id":"gpt-5.5","name":"5.5"},
+                {"provider":"zai-coding-cn","id":"glm-5.3","name":"GLM"},
+                {"provider":"github-copilot","id":"claude-sonnet-5","name":"Sonnet"},
+                {"provider":"stepfun","id":"step-5-preview","name":"Step"}
+            ]}),
+        );
+        let ids = |patterns: &[&str]| {
+            let patterns: Vec<String> = patterns.iter().map(|p| p.to_string()).collect();
+            scope_to_enabled(rows.clone(), &patterns)
+                .into_iter()
+                .map(|m| m.id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(&[]).len(), 5, "no scope keeps every model");
+        assert_eq!(
+            ids(&["OpenAI-Codex/GPT-6-Sol", "glm-5.3:high", "github-copilot/*"]),
+            [
+                "zai-coding-cn/glm-5.3",
+                "openai-codex/gpt-6-sol",
+                "github-copilot/claude-sonnet-5",
+            ]
+        );
+        assert_eq!(ids(&["*sonnet*"]), ["github-copilot/claude-sonnet-5"]);
+        assert_eq!(ids(&["gpt-?.5"]), ["openai-codex/gpt-5.5"]);
+        assert_eq!(
+            ids(&["missing/model"]).len(),
+            5,
+            "a scope naming nothing keeps all"
+        );
     }
     #[test]
     fn parameterized_cursor_catalog_keeps_thinking_and_context_controls() {

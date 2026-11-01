@@ -139,6 +139,57 @@ mod model_label_tests {
         });
     }
 
+    #[gpui::test]
+    fn the_rail_lists_only_installed_providers_from_the_first_frame(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            remember_missing_providers(vec![Kind::Pi, Kind::Devin], cx);
+            let list = cx.new(|cx| {
+                ModelList::new_for(Kind::Claude, None, "/work", Default::default(), cx)
+                    .hide_providers(vec!["cursor".into()])
+            });
+            list.update(cx, |list, _| {
+                assert!(list.listed(Kind::Claude));
+                assert!(list.listed(Kind::Codex));
+                assert!(!list.listed(Kind::Pi), "an uninstalled CLI never shows");
+                assert!(!list.listed(Kind::Devin));
+                assert!(!list.listed(Kind::Cursor), "hidden in Settings");
+                // Before any probe has answered, only the session's provider
+                // shows, so the rail grows rather than dropping tabs.
+                list.probed = false;
+                assert!(list.listed(Kind::Claude));
+                assert!(!list.listed(Kind::Codex));
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn a_remote_projects_tabs_come_from_its_host(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            // This machine lacks Claude; the remote host has it.
+            remember_missing_providers(vec![Kind::Claude, Kind::Pi], cx);
+            let list = cx.new(|cx| {
+                ModelList::new_for(
+                    Kind::Codex,
+                    None,
+                    "remote://env/home/code",
+                    Default::default(),
+                    cx,
+                )
+                .quick(cx)
+            });
+            list.update(cx, |list, _| {
+                assert!(list.missing.is_empty(), "local installs don't apply");
+                // Before the host answers, only the session's provider shows.
+                assert!(list.listed(Kind::Codex));
+                assert!(!list.listed(Kind::Claude));
+                list.remote_providers = Some(vec![Kind::Claude, Kind::Pi]);
+                assert!(list.listed(Kind::Claude));
+                assert!(list.listed(Kind::Pi));
+                assert!(!list.listed(Kind::Cursor));
+            });
+        });
+    }
+
     #[test]
     fn account_metadata_never_becomes_a_model_label() {
         for id in [
@@ -240,6 +291,22 @@ struct ModelEntry {
 /// The model the next turn uses; `None` is the provider's default.
 pub(crate) struct ModelPicked(pub Kind, pub Option<String>);
 
+/// The provider CLIs that were missing when last probed, so a picker's rail
+/// is settled from its first frame instead of dropping providers under the
+/// cursor.
+struct MissingProviders(Vec<Kind>);
+impl gpui::Global for MissingProviders {}
+/// Which provider CLIs aren't installed. Probes paths; call off the main thread.
+pub(crate) fn missing_providers() -> Vec<Kind> {
+    Kind::ALL
+        .into_iter()
+        .filter(|kind| monocode_core::provider::resolve(*kind).is_none())
+        .collect()
+}
+pub(crate) fn remember_missing_providers(missing: Vec<Kind>, cx: &mut gpui::App) {
+    cx.set_global(MissingProviders(missing));
+}
+
 /// ModelFlyout: providers down a rail on the left, a search field over the
 /// selected provider's models on the right. Switching providers is available
 /// between turns.
@@ -253,6 +320,9 @@ pub(crate) struct ModelList {
     errors: Vec<(Kind, String)>,
     loading: Vec<Kind>,
     missing: Vec<Kind>,
+    /// Whether `missing` is known yet. Until then the rail lists only the
+    /// session's provider.
+    probed: bool,
     switch_allowed: bool,
     hidden: Vec<String>,
     /// QuickModelSelector.tsx: providers as tabs above the search and list.
@@ -296,6 +366,7 @@ impl ModelList {
             errors: Vec::new(),
             loading: Vec::new(),
             missing: Vec::new(),
+            probed: false,
             switch_allowed: true,
             hidden: Vec::new(),
             quick: false,
@@ -314,6 +385,13 @@ impl ModelList {
             search,
             _changed: changed,
         };
+        // A remote host's providers come from its catalog, not this machine.
+        if list.remote_project.is_none()
+            && let Some(MissingProviders(missing)) = cx.try_global::<MissingProviders>()
+        {
+            list.missing = missing.clone();
+            list.probed = true;
+        }
         list.highlighted = list.current_index(cx);
         list.probe_installed(cx);
         list.discover(
@@ -397,26 +475,26 @@ impl ModelList {
         self.switch_allowed = allowed;
         self
     }
-    /// Like the Tauri picker, hide providers whose CLI isn't installed once the
-    /// probe settles. The session's own provider always stays.
+    /// Like the Tauri picker, hide providers whose CLI isn't installed. The
+    /// last probe's answer settles the rail from the first frame; this probe
+    /// refreshes it. The session's own provider always stays.
     fn probe_installed(&mut self, cx: &mut Context<Self>) {
-        if cfg!(test) || self.remote_project.is_some() {
+        if self.remote_project.is_some() {
             return;
         }
-        let work = cx.background_executor().spawn(async move {
-            Kind::ALL
-                .into_iter()
-                .filter(|kind| monocode_core::provider::resolve(*kind).is_none())
-                .collect::<Vec<_>>()
-        });
+        if cfg!(test) {
+            self.probed = true;
+            return;
+        }
+        let work = cx
+            .background_executor()
+            .spawn(async move { missing_providers() });
         cx.spawn(async move |this, cx| {
             let missing = work.await;
             let _ = this.update(cx, |this, cx| {
-                for kind in missing {
-                    if !this.missing.contains(&kind) {
-                        this.missing.push(kind);
-                    }
-                }
+                remember_missing_providers(missing.clone(), cx);
+                this.missing = missing;
+                this.probed = true;
                 if let ModelTab::Harness(selected) = this.tab
                     && selected != this.provider
                     && this.missing.contains(&selected)
@@ -625,6 +703,21 @@ impl ModelList {
                     .remote_providers
                     .as_ref()
                     .is_some_and(|providers| providers.contains(&kind)))
+    }
+    /// A provider's tab. A remote project lists what its host reported; a
+    /// local one, providers shown in Settings and known to be installed.
+    fn listed(&self, kind: Kind) -> bool {
+        if self.remote_project.is_some() {
+            return kind == self.provider
+                || self
+                    .remote_providers
+                    .as_ref()
+                    .is_some_and(|providers| providers.contains(&kind));
+        }
+        kind == self.provider
+            || (self.probed
+                && !self.hidden.iter().any(|id| id == kind.id())
+                && !self.missing.contains(&kind))
     }
     fn saved_model_name(&self, kind: Kind, id: Option<&str>) -> SharedString {
         self.catalogs
@@ -852,19 +945,7 @@ impl Render for ModelList {
                     .children(
                         Kind::ALL
                             .into_iter()
-                            .filter(|kind| {
-                                if self.remote_project.is_some() {
-                                    *kind == self.provider
-                                        || self
-                                            .remote_providers
-                                            .as_ref()
-                                            .is_some_and(|providers| providers.contains(kind))
-                                } else {
-                                    *kind == self.provider
-                                        || (!self.hidden.iter().any(|id| id == kind.id())
-                                            && !self.missing.contains(kind))
-                                }
-                            })
+                            .filter(|kind| self.listed(*kind))
                             .map(|kind| self.tab(ModelTab::Harness(kind), cx)),
                     ),
             )
@@ -1052,11 +1133,7 @@ impl ModelList {
             .chain(
                 Kind::ALL
                     .into_iter()
-                    .filter(|kind| {
-                        *kind == self.provider
-                            || (!self.hidden.iter().any(|id| id == kind.id())
-                                && !self.missing.contains(kind))
-                    })
+                    .filter(|kind| self.listed(*kind))
                     .map(ModelTab::Harness),
             )
             .collect();
