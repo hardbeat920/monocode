@@ -1446,6 +1446,7 @@ impl Conversation {
                             }
                             if !this.is_remote() {
                                 this.detect_usage_limit(cx);
+                                this.refresh_usage_after_turn(cx);
                             }
                             this.review
                                 .update(cx, |review, cx| review.set_busy(false, cx));
