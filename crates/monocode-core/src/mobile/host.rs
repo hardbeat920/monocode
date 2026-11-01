@@ -40,6 +40,7 @@ const APP_METHODS: &[&str] = &[
     "session.rename",
     "session.delete",
     "session.archive",
+    "session.unarchive",
     "mono.document",
     "mono.profile",
     "mono.update",
@@ -948,6 +949,12 @@ mod tests {
         }
         result.unwrap();
         assert!(!listening, "listener started after shutdown={shutdown}");
+    }
+
+    #[test]
+    fn session_unarchive_is_an_app_method() {
+        assert!(APP_METHODS.contains(&"session.unarchive"));
+        assert!(APP_METHODS.contains(&"session.archive"));
     }
 
     #[test]

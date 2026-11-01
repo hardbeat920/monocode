@@ -621,7 +621,7 @@ impl Shell {
                 // Expo, so they no longer post their own alerts. `monoFiles`:
                 // it reads and saves a Mono's soul and memory for the phone.
                 // `inbox`: it answers the phone's `inbox.*` requests.
-                json!({"projects": projects, "monos": monos, "sessions": sessions, "monoTools": true, "push": true, "monoFiles": true, "inbox": true}),
+                json!({"projects": projects, "monos": monos, "sessions": sessions, "monoTools": true, "push": true, "monoFiles": true, "inbox": true, "sessionUnarchive": true}),
                 ids,
                 previews,
             ))
@@ -1389,6 +1389,12 @@ impl Shell {
                 }
                 Ok(reply)
             }
+            ("session.unarchive", Target::Session(id)) => {
+                if self.session_metadata(*id, cx).summary.archived {
+                    self.toggle_archive(*id, cx);
+                }
+                Ok(reply)
+            }
             ("session.delete", Target::Session(id)) => {
                 self.delete_session(*id, window, cx);
                 Ok(reply)
@@ -1415,7 +1421,7 @@ impl Shell {
             ("session.rename", Target::Mono(_)) => {
                 Err("A Mono's conversation can't be renamed".into())
             }
-            ("session.archive" | "session.delete", Target::Mono(_)) => {
+            ("session.archive" | "session.unarchive" | "session.delete", Target::Mono(_)) => {
                 Err("This session can't be changed from the phone".into())
             }
             _ => Err("Unsupported mobile command".into()),

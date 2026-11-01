@@ -16,6 +16,12 @@ The workspace catalog carries `"inbox": true` (next to `monoTools`, `push` and
 `monoFiles`). A desktop without it does not answer `inbox.*`; the phone hides
 the Inbox segment.
 
+It also carries `"sessionUnarchive": true` when the desktop answers
+`session.unarchive` (params: the session id). It un-archives the session and
+does nothing if it isn't archived, like `session.archive`; Mono targets are
+refused. The phone offers Undo after an archive only when the flag is set.
+Catalog sessions a Mono launched carry `monoId`.
+
 ## Methods
 
 ### `inbox.list`
