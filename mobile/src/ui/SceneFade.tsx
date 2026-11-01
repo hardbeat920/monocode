@@ -48,6 +48,7 @@ const MODAL_ROUTES = [
   "/changes",
   "/file",
   "/diff",
+  "/mono-new",
 ];
 export const isModalRoute = (pathname: string) =>
   MODAL_ROUTES.some((route) => pathname === route || pathname.startsWith(`${route}/`));

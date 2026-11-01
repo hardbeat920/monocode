@@ -21,9 +21,16 @@ import { SessionFrame } from "@/features/sessions/SessionScreen";
 import { WorkspaceDrawer } from "@/features/workspace/WorkspaceDrawer";
 import { WorkspaceProvider } from "@/features/workspace/WorkspaceProvider";
 import { Timed } from "@/ui/Timed";
-import { codeScreenOptions, HEADER_OWN_BLUR } from "@/features/files/codeScreen";
+import {
+  codeScreenOptions,
+  HEADER_OWN_BLUR,
+  modalStackOptions,
+} from "@/features/files/codeScreen";
 import { applySavedAppearance } from "@/features/settings/appearance";
 import { modalSheetOptions } from "@/ui/ModalSheet";
+import { useLayoutChanging, useMonoOnlyLayout } from "@/features/settings/monoOnly";
+import { DitherLoading } from "@/ui/DitherLoading";
+import { useState } from "react";
 import { ScenePagerHost } from "@/ui/ScenePager";
 import {
   paletteFor,
@@ -92,6 +99,13 @@ const screenOptions = (colors: Palette) => ({
     animation: "default",
     contentStyle: { backgroundColor: colors.sheet },
   } satisfies NativeStackNavigationOptions,
+  // A modal of one screen, as a modal stack's are: a transparent native
+  // header over the sheet's colour, with the screen's own gradual blur.
+  page: {
+    presentation: "modal",
+    animation: "default",
+    ...modalStackOptions(colors),
+  } satisfies NativeStackNavigationOptions,
   code: codeScreenOptions(colors),
   // Changes over a session: a code screen's modal, on the page's own colour
   // so its bottom blur matches.
@@ -151,19 +165,37 @@ export default function RootLayout() {
 function LinkedWorkspace() {
   const connection = useConnection();
   const { screens } = useNavigationLook();
+  // Monos only: no drawer, and the frame stands aside for the list and for
+  // each chat's own frame.
+  const [monoOnly] = useMonoOnlyLayout();
+  // Switching layouts: covered while the app starts over in the new one.
+  const changing = useLayoutChanging();
+  const [covered, setCovered] = useState(changing);
+  if (changing && !covered) setCovered(true);
   return (
     <WorkspaceProvider key={connection.pairing?.desktop.deviceId}>
       <SessionNotifications />
       <SessionActivity />
-      <ScenePagerHost drawer={<WorkspaceDrawer />}>
+      <ScenePagerHost drawer={monoOnly ? undefined : <WorkspaceDrawer />}>
         <Timed id="persistent frame">
-        <SessionFrame>
+        <SessionFrame standAside={monoOnly}>
           {/* A native stack: sessions push over their project, and the
               code screens, Changes, settings, the model picker and the project
               picker present
               over the rest as native modals; everything else swaps in place,
               as a plain slot did. */}
           <Stack screenOptions={{ headerShown: false, animation: "none" }}>
+            {/* Monos only: the list and each chat under native headers, a
+                chat pushing over the list as a session does over its
+                project, its buttons morphing as it goes. */}
+            <Stack.Screen
+              name="index"
+              options={monoOnly ? screens.nativeHeader : {}}
+            />
+            <Stack.Screen
+              name="mono/[monoId]"
+              options={monoOnly ? screens.session : {}}
+            />
             <Stack.Screen name="file" options={screens.code} />
             <Stack.Screen name="document" options={screens.code} />
             <Stack.Screen name="diff" options={screens.code} />
@@ -178,6 +210,7 @@ function LinkedWorkspace() {
             <Stack.Screen name="session" options={screens.sessionSheet} />
             <Stack.Screen name="projects" options={screens.modal} />
             <Stack.Screen name="settings" options={screens.modal} />
+            <Stack.Screen name="mono-new" options={screens.page} />
             <Stack.Screen name="mono-profile/[monoId]" options={screens.sheet} />
             <Stack.Screen name="models" options={screens.modal} />
             <Stack.Screen name="changes" options={screens.changes} />
@@ -185,6 +218,9 @@ function LinkedWorkspace() {
         </SessionFrame>
         </Timed>
       </ScenePagerHost>
+      {covered ? (
+        <DitherLoading leaving={!changing} onGone={() => setCovered(false)} />
+      ) : null}
     </WorkspaceProvider>
   );
 }

@@ -30,6 +30,9 @@ public class MonocodeLinkModule: Module {
         view.selectText(text)
       }
     }
+    AsyncFunction("hideScrollEdgeEffects") { (testID: String) -> Bool in
+      MainActor.assumeIsolated { ScrollEdgeEffects.hide(testID: testID) }
+    }.runOnQueue(.main)
     AsyncFunction("execute") { (input: String) -> String in
       return input.withCString { pointer in
         guard let output = monocode_link_call(pointer) else {

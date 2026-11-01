@@ -12,15 +12,11 @@ import { useOffline } from "@/features/connection/ConnectionNotice";
 import { useMonoFiles } from "@/features/connection/ConnectionProvider";
 import { useWorkspace, type MonoChange } from "@/features/workspace/WorkspaceProvider";
 import { Icon } from "@/ui/Icon";
+import { SWATCHES } from "@/features/workspace/monoLook";
 import { setMonoAccent, useMonoAccent, type MonoAccent } from "@/features/workspace/monoAccent";
 import { ACCENTS, paletteFor, radii, themedStyles, useColors, useScheme } from "@/ui/theme";
 
 const TILE_GAP = 10;
-
-/** The desktop's swatches for a Mono (COLORS_MONO). */
-const SWATCHES = [
-  "#459cf7", "#ea603e", "#f4bf25", "#39c363", "#e45a9f", "#b168d4", "#37beb4", "#ef8c39", "#8b63e9",
-];
 
 // A Mono's look: its name, then which mascot it is and in what colour, as the
 // desktop's look editor. Each change shows everywhere at once and saves on the

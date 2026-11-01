@@ -308,11 +308,15 @@ export function SessionScreen({
 export function SessionFrame({
   children,
   nativeHeaderHeight,
+  standAside = false,
 }: {
   children: ReactNode;
   /** For a screen under the stack's native header: that header's height.
    *  It takes the place of this frame's own. */
   nativeHeaderHeight?: number;
+  /** Draws no header or composer of its own, as for a native header, for
+   *  screens that bring their own frame or none (the Monos-only layout). */
+  standAside?: boolean;
 }) {
   const colors = useColors();
   const styles = useStyles();
@@ -333,8 +337,9 @@ export function SessionFrame({
   // Android's modals are screens in the same stack, under this frame's
   // header and composer rather than over them, so those stand aside too.
   const covered =
-    !native &&
-    (hasNativeHeader(scene) || (Platform.OS === "android" && isModalRoute(pathname)));
+    standAside ||
+    (!native &&
+      (hasNativeHeader(scene) || (Platform.OS === "android" && isModalRoute(pathname))));
   // The loading cover stays up through its own way out, the ring then the
   // ground, once the switch no longer needs it.
   const covering = switching && !covered;
