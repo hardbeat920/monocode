@@ -413,7 +413,10 @@ impl Completion {
         // An empty caret token closes the picker and clears an earlier Escape
         // dismissal, so deleting and retyping the same command can reopen it.
         self.dismissed = None;
-        let close_mcp = self.mcp_open && token.as_ref().is_none_or(|token| token.query != "mcp");
+        let close_mcp = self.mcp_open
+            && token
+                .as_ref()
+                .is_none_or(|token| token.trigger != Trigger::Skill || token.query != "mcp");
         if close_mcp {
             self.mcp_open = false;
         }
@@ -659,14 +662,13 @@ impl Completion {
                     file: false,
                     server: None,
                 }));
+        } else if token.trigger == Trigger::SkillSearch {
+            let mut choices = self.skill_choices(&token.query);
+            choices.sort_by(|(a, x), (b, y)| b.cmp(a).then_with(|| x.label.cmp(&y.label)));
+            self.choices = choices.into_iter().take(60).map(|(_, c)| c).collect();
         } else {
             let mut choices = Vec::new();
             for (order, (id, label, detail)) in [
-                (
-                    "draft",
-                    "Draft",
-                    "Save this message without starting the agent",
-                ),
                 (
                     "orchestrator",
                     "Orchestrator",
@@ -787,44 +789,7 @@ impl Completion {
                     ));
                 }
             }
-            for skill in &self.skills {
-                if matches!(
-                    skill.name.as_str(),
-                    "plan"
-                        | "compact"
-                        | "mcp"
-                        | "operator"
-                        | "orchestrator"
-                        | "add-to-folder"
-                        | "draft"
-                        | "btw"
-                        | "mono"
-                        | "monocode"
-                ) {
-                    continue;
-                }
-                if let Some(score) = composer::score(
-                    &token.query,
-                    &format!("{} {}", skill.name, skill.description),
-                ) {
-                    choices.push((
-                        score,
-                        Choice {
-                            label: skill.name.trim_start_matches('/').into(),
-                            detail: if skill.description.is_empty() {
-                                format!("{} · {}", skill.scope, skill.source)
-                            } else {
-                                skill.description.clone()
-                            },
-                            insertion: format!("/{}", skill.name),
-                            builtin: None,
-                            mode: None,
-                            file: false,
-                            server: None,
-                        },
-                    ));
-                }
-            }
+            choices.extend(self.skill_choices(&token.query));
             choices.sort_by(|(a, x), (b, y)| b.cmp(a).then_with(|| x.label.cmp(&y.label)));
             let limit = if self.native_commands.is_empty() {
                 60
@@ -835,6 +800,54 @@ impl Completion {
         }
         self.active = self.active.min(self.choices.len().saturating_sub(1));
         self.scroll.scroll_to_item(self.active);
+    }
+    /// Skills insert their `/name`, so names MonoCode's own commands own are
+    /// left out wherever skills are listed.
+    fn skill_choices(&self, query: &str) -> Vec<(i64, Choice)> {
+        self.skills
+            .iter()
+            .filter(|skill| {
+                !matches!(
+                    skill.name.as_str(),
+                    "plan"
+                        | "compact"
+                        | "mcp"
+                        | "operator"
+                        | "orchestrator"
+                        | "add-to-folder"
+                        | "btw"
+                        | "mono"
+                        | "monocode"
+                )
+            })
+            .filter_map(|skill| {
+                let score =
+                    composer::score(query, &format!("{} {}", skill.name, skill.description))?;
+                Some((
+                    score,
+                    Choice {
+                        label: skill.name.trim_start_matches('/').into(),
+                        detail: if skill.description.is_empty() {
+                            format!("{} · {}", skill.scope, skill.source)
+                        } else {
+                            skill.description.clone()
+                        },
+                        insertion: format!("/{}", skill.name),
+                        builtin: None,
+                        mode: None,
+                        file: false,
+                        server: None,
+                    },
+                ))
+            })
+            .collect()
+    }
+    /// A `$` that finds no skill stays ordinary text, such as `$HOME`, so it
+    /// neither shows the menu nor holds back Enter and the arrow keys.
+    fn showing(&self) -> bool {
+        self.token
+            .as_ref()
+            .is_some_and(|token| token.trigger != Trigger::SkillSearch || !self.choices.is_empty())
     }
     fn step(&mut self, delta: isize, cx: &mut Context<Self>) {
         if !self.choices.is_empty() {
@@ -915,7 +928,7 @@ impl Completion {
 }
 impl Render for Completion {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let open = self.token.is_some() && self.input.focus_handle(cx).is_focused(window);
+        let open = self.showing() && self.input.focus_handle(cx).is_focused(window);
         let mut root = div()
             .debug_selector(|| "composer-text-field".into())
             .relative()
@@ -923,19 +936,19 @@ impl Render for Completion {
             .child(self.anchor.layout_probe())
             .key_context(if open { "Completion" } else { "" })
             .capture_action(cx.listener(|this, _: &input::Up, _, cx| {
-                if this.token.is_some() && !this.input.read(cx).is_composing() {
+                if this.showing() && !this.input.read(cx).is_composing() {
                     this.step(-1, cx);
                     cx.stop_propagation();
                 }
             }))
             .capture_action(cx.listener(|this, _: &input::Down, _, cx| {
-                if this.token.is_some() && !this.input.read(cx).is_composing() {
+                if this.showing() && !this.input.read(cx).is_composing() {
                     this.step(1, cx);
                     cx.stop_propagation();
                 }
             }))
             .capture_action(cx.listener(|this, _: &input::Submit, window, cx| {
-                if this.token.is_some() && !this.input.read(cx).is_composing() {
+                if this.showing() && !this.input.read(cx).is_composing() {
                     if !this.choices.is_empty() {
                         this.pick(this.active, window, cx);
                     } else {
@@ -1024,14 +1037,12 @@ impl Render for Completion {
             let weak = cx.weak_entity();
             let title = if self.mcp_open {
                 "MCP SERVERS"
-            } else if self
-                .token
-                .as_ref()
-                .is_some_and(|t| t.trigger == Trigger::Mention)
-            {
-                "FILES & NOTES"
             } else {
-                "SKILLS & COMMANDS"
+                match self.token.as_ref().map(|t| t.trigger) {
+                    Some(Trigger::Mention) => "FILES & NOTES",
+                    Some(Trigger::SkillSearch) => "SKILLS",
+                    _ => "SKILLS & COMMANDS",
+                }
             };
             let anchor = if self.composer_anchor.get().is_some() {
                 self.composer_anchor.clone()
@@ -1194,7 +1205,6 @@ mod tests {
                 assert_eq!(
                     commands,
                     [
-                        "/draft",
                         "/orchestrator",
                         "/operator",
                         "/plan",
@@ -1233,6 +1243,62 @@ mod tests {
                 assert_eq!(view.choices[1].insertion, "/orchestrator");
             })
             .unwrap();
+    }
+    #[gpui::test]
+    fn dollar_lists_only_skills_and_stays_text_when_none_match(cx: &mut TestAppContext) {
+        let window = window(cx);
+        let submitted = std::rc::Rc::new(std::cell::Cell::new(0));
+        let count = submitted.clone();
+        let _submission = window
+            .update(cx, |v, _, cx| {
+                cx.subscribe(&v.input, move |_, _, _: &input::Submitted, _| {
+                    count.set(count.get() + 1)
+                })
+            })
+            .unwrap();
+        window
+            .update(cx, |view, _, cx| {
+                view.skills = ["zebra", "alpha", "plan"]
+                    .into_iter()
+                    .map(|name| DiscoveredSkill {
+                        name: name.into(),
+                        description: String::new(),
+                        path: format!("/skills/{name}/SKILL.md"),
+                        scope: "project".into(),
+                        source: "codex".into(),
+                    })
+                    .collect();
+                view.input
+                    .update(cx, |input, cx| input.set_text("$".into(), cx));
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, cx| {
+                let skills: Vec<_> = view.choices.iter().map(|c| c.insertion.as_str()).collect();
+                assert_eq!(skills, ["/alpha", "/zebra"]);
+                view.input
+                    .update(cx, |input, cx| input.set_text("Try $zeb".into(), cx));
+            })
+            .unwrap();
+        cx.run_until_parked();
+        cx.simulate_keystrokes(window.into(), "enter");
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, cx| {
+                assert_eq!(view.input.read(cx).content, "Try /zebra ");
+                view.input
+                    .update(cx, |input, cx| input.set_text("echo $HOME".into(), cx));
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(submitted.get(), 0);
+        window
+            .update(cx, |view, _, _| assert!(!view.showing()))
+            .unwrap();
+        cx.simulate_keystrokes(window.into(), "enter");
+        cx.run_until_parked();
+        assert_eq!(submitted.get(), 1);
     }
     #[gpui::test]
     fn a_users_skill_wins_over_the_git_command_of_its_name(cx: &mut TestAppContext) {
