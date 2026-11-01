@@ -6,6 +6,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { Check, MessageSquare } from "../../../shared/ui/icons";
+import { useComposerAutocorrect } from "../../settings/model/displayPrefs";
 import {
   CUSTOM_OPTION_ID,
   buildQuestionReply,
@@ -218,6 +219,7 @@ function QuestionFields({
   const options = displayOptions(question);
   const customSelected = selected.some((id) => isCustomId(question, id));
   const customId = customOptionId(question);
+  const autocorrect = useComposerAutocorrect();
   const [highlighted, setHighlighted] = useState(() => {
     const selectedIndex = options.findIndex((option) =>
       selected.includes(option.id),
@@ -279,6 +281,8 @@ function QuestionFields({
         <input
           value={custom}
           onChange={(event) => onCustom(event.target.value)}
+          spellCheck={autocorrect}
+          autoCorrect={autocorrect ? "on" : "off"}
           placeholder="Type your answer"
           className="mt-1.5 w-full rounded-md border border-content/15 bg-transparent px-2 py-1 text-[12px] text-content outline-none placeholder:text-content/35 focus:border-content/30"
         />
@@ -347,6 +351,8 @@ function QuestionFields({
                   <input
                     value={custom}
                     onChange={(event) => onCustom(event.target.value)}
+                    spellCheck={autocorrect}
+                    autoCorrect={autocorrect ? "on" : "off"}
                     placeholder="Type your answer"
                     className="mt-1 w-full rounded-md border border-content/15 bg-transparent px-2 py-1 text-[12px] text-content outline-none placeholder:text-content/35 focus:border-content/30"
                     onClick={(event) => event.stopPropagation()}
