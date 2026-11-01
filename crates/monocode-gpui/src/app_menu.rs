@@ -76,6 +76,7 @@ pub(crate) fn install(prefs: &crate::settings::Preferences, cx: &mut App) {
             MenuItem::separator(),
             MenuItem::action("New Tab", NewCodex),
             MenuItem::action("New Claude Tab", NewClaude),
+            MenuItem::action("New Conversation in Project…", NewInProject),
             MenuItem::action("New Terminal", NewTerminal),
             MenuItem::action("Split Pane Right", SplitRight),
             MenuItem::action("Split Pane Down", SplitDown),

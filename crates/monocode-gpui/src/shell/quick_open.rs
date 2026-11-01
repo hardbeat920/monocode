@@ -2,7 +2,7 @@ use super::*;
 use crate::quick_open::{Command, Picked, QuickOpen};
 pub(super) struct Open {
     picker: Entity<QuickOpen>,
-    restore: Option<FocusHandle>,
+    pub(super) restore: Option<FocusHandle>,
     _events: Subscription,
 }
 impl Shell {
@@ -26,6 +26,7 @@ impl Shell {
             .quick_open
             .as_ref()
             .and_then(|o| o.restore.clone())
+            .or_else(|| self.project_picker.take().and_then(|o| o.restore))
             .or_else(|| window.focused(cx));
         self.close_menu(cx);
         self.close_preview(cx);
