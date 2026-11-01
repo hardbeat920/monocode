@@ -16,6 +16,7 @@ mod live_agents;
 mod mobile_host;
 mod mono_panes;
 pub(crate) mod monos;
+mod named_workspaces;
 mod notifications;
 mod orchestration;
 mod picker_preferences;
@@ -356,6 +357,10 @@ pub(crate) enum MenuTarget {
     Folder(String),
     /// The sidebar project header's menu.
     Header,
+    /// The sidebar's named workspace switcher and membership.
+    NamedWorkspace,
+    /// A blank session's choice of workspace project to start in.
+    SessionProject(i64),
     /// The original project rail's local or remote folder menu.
     ProjectRailAdd,
     CompactProjectPicker,
@@ -532,6 +537,8 @@ struct TabPane {
     key: (i64, bool),
     title: String,
     mark: PaneMark,
+    /// The pane's project, marked when a workspace shows several.
+    project: Option<String>,
 }
 enum PaneMark {
     /// The provider, with the session id when its mark is lit.
@@ -682,6 +689,7 @@ pub(crate) struct Shell {
     filter_anchor: AnchorSlot,
     folder_picker: Option<session_folders::Open>,
     pending_folder: Option<(i64, AnchorSlot)>,
+    pending_project_choice: Option<(i64, AnchorSlot)>,
     _session_clock: gpui::Task<()>,
     notes: Option<Entity<Notes>>,
     inbox: Option<Entity<crate::inbox::Inbox>>,
@@ -726,6 +734,7 @@ pub(crate) struct Shell {
     backdrop: Option<(i64, bool)>,
     background_card: AnchorSlot,
     project_anchor: AnchorSlot,
+    named_workspace_anchor: AnchorSlot,
     sidebar_options_anchor: AnchorSlot,
     history: VisitHistory,
     /// User navigation invalidates pending requests that would otherwise
@@ -1043,6 +1052,7 @@ impl Shell {
             filter_anchor: AnchorSlot::default(),
             folder_picker: None,
             pending_folder: None,
+            pending_project_choice: None,
             _session_clock: session_clock,
             notes: None,
             inbox: None,
@@ -1081,6 +1091,7 @@ impl Shell {
             backdrop: None,
             background_card: AnchorSlot::default(),
             project_anchor: AnchorSlot::default(),
+            named_workspace_anchor: AnchorSlot::default(),
             sidebar_options_anchor: AnchorSlot::default(),
             history: VisitHistory::default(),
             navigation_revision: 0,
@@ -1398,6 +1409,13 @@ impl Shell {
             }));
         self.observe_orchestration(&view, id, cx);
         self.observe_session_folders(&view, id, cx);
+        self.observations.push(cx.subscribe(
+            &view,
+            move |this, _, event: &crate::conversation::ChooseProject, cx| {
+                this.pending_project_choice = Some((id, event.0.clone()));
+                cx.notify();
+            },
+        ));
         self.sessions.insert(id, view);
         if !self.order.contains(&id) {
             self.order.push(id);
@@ -2293,6 +2311,7 @@ impl Shell {
                     .rounded_full()
                     .when(focused, |d| d.bg(accent_color())),
             )
+            .children(self.pane_project_badge(id, cx))
             .child(
                 div()
                     .min_w_0()
@@ -3933,7 +3952,9 @@ impl Shell {
             self.refresh_session_mark(id, cx);
         }
         self.workspace.worktree_focus = self.worktree_focus.clone();
+        self.workspace.sync_pane_owners();
         self.workspace.normalize_title_order();
+        self.sync_project_choices(cx);
         self.sync_git(cx);
         self.update_chat_visibility(cx);
         self.update_usage_provider(cx);
@@ -4116,6 +4137,8 @@ impl Shell {
             .project_focus
             .insert(self.workspace.project.clone(), id);
         self.workspace.collapsed.remove(&self.workspace.project);
+        let project = self.workspace.project.clone();
+        self.workspace.add_workspace_member(&project);
         view.update(cx, |v, cx| v.load(cx));
         self.record_worktree_session(id, cx);
         self.remember_title_tab(TitleTab::Session(self.workspace.tab_of(id).unwrap()));
@@ -4245,9 +4268,13 @@ impl Shell {
         if let Some(monos) = self.monos.clone() {
             monos.update(cx, |m, cx| m.close(cx));
         }
+        let spaces = self
+            .workspace
+            .named_workspace()
+            .map_or_else(|| self.workspace.projects.clone(), |w| w.projects.clone());
         self.workspace.project = path.clone();
         self.workspace.active = None;
-        if let Some(ix) = self.workspace.projects.iter().position(|p| p == &path) {
+        if let Some(ix) = spaces.iter().position(|p| p == &path) {
             if ix < self.spaces_start {
                 self.spaces_start = ix;
             } else if ix >= self.spaces_start + 5 {
@@ -4255,6 +4282,10 @@ impl Shell {
             }
         }
         self.workspace.collapsed.remove(&path);
+        // A workspace remembers one tab for all its projects, so a project
+        // there returns to its own last pane below instead.
+        let in_workspace = self.named_workspace_mode();
+        self.workspace.add_workspace_member(&path);
         // Original-layout project buttons leave the standalone Mono/app view.
         // The new layout restores each project's selected tab, including Monos.
         let remembered_session = self
@@ -4262,7 +4293,8 @@ impl Shell {
             .scope_focus
             .get(&self.tab_scope())
             .is_some_and(|tab| matches!(tab, TitleTab::Session(_)));
-        if (!self.workspace.classic_layout || remembered_session)
+        if !in_workspace
+            && (!self.workspace.classic_layout || remembered_session)
             && self.restore_scope_tab(window, cx)
         {
             return;
@@ -4273,7 +4305,9 @@ impl Shell {
             .get(&path)
             .copied()
             .filter(|id| {
-                self.workspace.tab_of(*id).is_some()
+                self.workspace
+                    .tab_of(*id)
+                    .is_some_and(|tab| self.tab_in_view(tab))
                     && self
                         .session_summaries
                         .contains_key(&self.workspace.session_for_pane(*id))
@@ -4282,7 +4316,7 @@ impl Shell {
                         .summary
                         .cwd
                         == path
-                    && self.in_worktree_scope(*id, cx)
+                    && (in_workspace || self.in_worktree_scope(*id, cx))
             })
             .or_else(|| {
                 self.workspace
@@ -4290,20 +4324,23 @@ impl Shell {
                     .iter()
                     .rev()
                     .find(|id| {
-                        self.session_summaries.contains_key(
-                            &self
-                                .workspace
-                                .session_for_pane(self.workspace.scope_pane(**id)),
-                        ) && self
-                            .session_metadata(
-                                self.workspace
+                        self.tab_in_view(**id)
+                            && self.session_summaries.contains_key(
+                                &self
+                                    .workspace
                                     .session_for_pane(self.workspace.scope_pane(**id)),
-                                cx,
                             )
-                            .summary
-                            .cwd
-                            == path
-                            && self.in_worktree_scope(self.workspace.scope_pane(**id), cx)
+                            && self
+                                .session_metadata(
+                                    self.workspace
+                                        .session_for_pane(self.workspace.scope_pane(**id)),
+                                    cx,
+                                )
+                                .summary
+                                .cwd
+                                == path
+                            && (in_workspace
+                                || self.in_worktree_scope(self.workspace.scope_pane(**id), cx))
                     })
                     .map(|tab| self.workspace.tab_focus(*tab))
             });
@@ -4376,20 +4413,27 @@ impl Shell {
         self.create_session(kind, false, cx);
     }
     fn create_session(&mut self, kind: Kind, only_if_empty: bool, cx: &mut Context<Self>) {
-        self.create_session_target(kind, only_if_empty, None, cx);
+        self.create_session_target(kind, only_if_empty, None, None, cx);
     }
     fn create_in_folder(&mut self, folder: String, cx: &mut Context<Self>) {
-        self.create_session_target(self.default_kind(), false, Some(folder), cx);
+        self.create_session_target(self.default_kind(), false, Some(folder), None, cx);
     }
-    fn create_session_target(
+    /// `placement` starts the session in that project rather than the
+    /// selected one, optionally in place of a blank pane.
+    pub(super) fn create_session_target(
         &mut self,
         kind: Kind,
         only_if_empty: bool,
         folder: Option<String>,
+        placement: Option<(String, Option<i64>)>,
         cx: &mut Context<Self>,
     ) {
         let store = self.store.clone();
-        let cwd = self.workspace.project.clone();
+        let placed = placement.is_some();
+        let (cwd, replace) = match placement {
+            Some((project, pane)) => (project, pane),
+            None => (self.workspace.project.clone(), None),
+        };
         let focus = self.worktree_focus.get(&cwd).cloned();
         // The project folder as a selected checkout is not a separate worktree.
         let copy = focus.clone().filter(|f| {
@@ -4476,6 +4520,15 @@ impl Shell {
                             view.update(cx, |view, cx| view.seed_new_settings(settings, cx));
                         }
                         this.seed_worktree(id, copy.as_ref(), cx);
+                        if placed {
+                            this.order.retain(|s| *s != id);
+                            this.order.insert(0, id);
+                            if let Some(pane) = replace {
+                                this.replace_blank_with(pane, id, cx);
+                            }
+                            this.activate_session(id, window, cx);
+                            return;
+                        }
                         // A pending blank belongs to the copy that requested it;
                         // navigation to another copy must never redirect that request.
                         if this.workspace.project != cwd
@@ -5203,6 +5256,20 @@ impl Shell {
                     return;
                 }
                 if let MenuEvent::Picked(id, _) = event
+                    && id.starts_with("member:")
+                    && this.menu_open(&MenuTarget::NamedWorkspace)
+                {
+                    this.named_workspace_menu_toggle(id, window, cx);
+                    let mut events = Vec::new();
+                    let items = this.named_workspace_menu_items(&mut events, window, cx);
+                    if let Some(open) = this.menu.as_mut() {
+                        open._events.extend(events);
+                        let menu = open.menu.clone();
+                        menu.update(cx, |menu, cx| menu.replace_items(items, cx));
+                    }
+                    return;
+                }
+                if let MenuEvent::Picked(id, _) = event
                     && id != "archived"
                     && let Some(open) = this
                         .menu
@@ -5397,6 +5464,11 @@ impl Shell {
                     MenuAction::new("open-remote-project", "Open folder on a machine…")
                         .icon("globe")
                         .into(),
+                    MenuItem::Separator,
+                    MenuAction::new("new-workspace", "New workspace")
+                        .icon("dashboard")
+                        .description("Several projects side by side")
+                        .into(),
                 ],
                 230.,
                 MenuStyle::Explorer,
@@ -5422,11 +5494,17 @@ impl Shell {
                         (monos, manager.active.clone())
                     })
                     .unwrap_or_default();
+                let workspaces = self.picker_workspaces();
                 let picker = cx.new(|cx| {
                     ProjectPicker::new(&self.workspace.projects, &self.workspace.project, cx)
                         .appearance(self.workspace.project_appearance.clone())
                         .allow_remote()
                         .monos(monos, active, cx)
+                        .workspaces(
+                            workspaces,
+                            self.workspace.active_named_workspace.clone(),
+                            cx,
+                        )
                 });
                 events.push(cx.subscribe_in(
                     &picker,
@@ -5435,8 +5513,16 @@ impl Shell {
                         this.close_menu(cx);
                         match picked {
                             ProjectPicked::Project(path) => {
-                                this.select_project(path.clone(), window, cx)
+                                if this.named_workspace_mode() {
+                                    this.leave_named_workspace(path.clone(), window, cx)
+                                } else {
+                                    this.select_project(path.clone(), window, cx)
+                                }
                             }
+                            ProjectPicked::Workspace(id) => {
+                                this.enter_named_workspace(id, window, cx)
+                            }
+                            ProjectPicked::NewWorkspace => this.new_named_workspace(window, cx),
                             ProjectPicked::Mono(id) => {
                                 if let Some(monos) = this.monos.clone() {
                                     monos.update(cx, |m, cx| m.open(id, window, cx));
@@ -5463,10 +5549,16 @@ impl Shell {
             }
             // SidebarWorktreeSwitcher's menu under the project header.
             MenuTarget::Header => {
+                let workspaces = self.picker_workspaces();
                 let picker = cx.new(|cx| {
                     ProjectPicker::new(&self.workspace.projects, &self.workspace.project, cx)
                         .appearance(self.workspace.project_appearance.clone())
                         .allow_remote()
+                        .workspaces(
+                            workspaces,
+                            self.workspace.active_named_workspace.clone(),
+                            cx,
+                        )
                 });
                 events.push(cx.subscribe_in(
                     &picker,
@@ -5474,10 +5566,14 @@ impl Shell {
                     |this, _, picked: &ProjectPicked, window, cx| {
                         this.close_menu(cx);
                         match picked {
-                            ProjectPicked::Project(path) if *path != this.workspace.project => {
-                                this.select_project(path.clone(), window, cx)
+                            ProjectPicked::Project(path) => {
+                                this.pick_project(path.clone(), window, cx)
                             }
-                            ProjectPicked::Project(_) | ProjectPicked::Mono(_) => {}
+                            ProjectPicked::Workspace(id) => {
+                                this.enter_named_workspace(id, window, cx)
+                            }
+                            ProjectPicked::NewWorkspace => this.new_named_workspace(window, cx),
+                            ProjectPicked::Mono(_) => {}
                             ProjectPicked::New => this.open_project(cx),
                             ProjectPicked::Remote => {
                                 this.open_remote_project(window, cx);
@@ -5502,16 +5598,43 @@ impl Shell {
                 let worktree = MenuAction::new("switch-worktree", "Switch worktree")
                     .icon("folder-tree")
                     .flyout(self.worktree_flyout(events, window, cx));
+                let named = self.workspace.named_workspace();
+                let mut items: Vec<MenuItem> = vec![
+                    match branch {
+                        Some(branch) => worktree.value(branch),
+                        None => worktree,
+                    }
+                    .into(),
+                    MenuItem::Separator,
+                ];
+                if let Some(named) = named {
+                    items.push(
+                        MenuAction::new("edit-workspace", "Edit workspace")
+                            .icon("dashboard")
+                            .value(named.name.clone())
+                            .into(),
+                    );
+                }
                 (
-                    format!("{} menu", self.project_label(&self.workspace.project)).into(),
-                    vec![
-                        match branch {
-                            Some(branch) => worktree.value(branch),
-                            None => worktree,
-                        }
-                        .into(),
-                        MenuItem::Separator,
-                        MenuAction::new("switch-project", "Switch project")
+                    format!(
+                        "{} menu",
+                        named.map_or_else(
+                            || self.project_label(&self.workspace.project),
+                            |w| w.name.clone()
+                        )
+                    )
+                    .into(),
+                    items
+                        .into_iter()
+                        .chain([
+                            MenuAction::new(
+                                "switch-project",
+                                if self.workspace.named_workspaces.is_empty() {
+                                    "Switch project"
+                                } else {
+                                    "Switch project or workspace"
+                                },
+                            )
                             .icon("folder")
                             .flyout(Flyout {
                                 view: picker.into(),
@@ -5523,22 +5646,35 @@ impl Shell {
                                 surface: None,
                             })
                             .into(),
-                        MenuAction::new("project-settings", "Project settings")
-                            .icon("sliders")
-                            .flyout(self.project_settings_flyout(events, window, cx))
-                            .into(),
-                        MenuAction::new("open-remote-project", "Open folder on a machine…")
-                            .icon("globe")
-                            .into(),
-                        MenuAction::new("settings", "Settings")
-                            .icon("settings")
-                            .shortcut(format!("{MOD},"))
-                            .into(),
-                    ],
+                            MenuAction::new("project-settings", "Project settings")
+                                .icon("sliders")
+                                .flyout(self.project_settings_flyout(events, window, cx))
+                                .into(),
+                            MenuAction::new("open-remote-project", "Open folder on a machine…")
+                                .icon("globe")
+                                .into(),
+                            MenuAction::new("settings", "Settings")
+                                .icon("settings")
+                                .shortcut(format!("{MOD},"))
+                                .into(),
+                        ])
+                        .collect(),
                     240.,
                     MenuStyle::Switcher,
                 )
             }
+            MenuTarget::SessionProject(id) => (
+                "Start in project".into(),
+                self.session_project_menu_items(*id, cx),
+                240.,
+                MenuStyle::Switcher,
+            ),
+            MenuTarget::NamedWorkspace => (
+                "Workspace menu".into(),
+                self.named_workspace_menu_items(events, window, cx),
+                260.,
+                MenuStyle::Switcher,
+            ),
             MenuTarget::ProjectRailGroup(id) => {
                 let controls = self.project_rail_group_controls(id, events, window, cx);
                 (
@@ -5698,9 +5834,12 @@ impl Shell {
             MenuTarget::ProjectRailAdd => match action {
                 "open-project" => self.open_project(cx),
                 "open-remote-project" => self.open_remote_project(window, cx),
+                "new-workspace" => self.new_named_workspace(window, cx),
                 _ => {}
             },
             MenuTarget::CompactProjectPicker => {}
+            MenuTarget::NamedWorkspace => self.run_named_workspace_menu(action, window, cx),
+            MenuTarget::SessionProject(id) => self.start_blank_in_project(id, action, cx),
             MenuTarget::ProjectRailGroup(id) => {
                 if action == "delete-project-group" {
                     self.workspace.project_rail_groups.retain(|g| g.id != id);
@@ -5717,6 +5856,10 @@ impl Shell {
                     self.open_settings(crate::settings::Section::General, window, cx);
                 } else if action == "open-remote-project" {
                     self.open_remote_project(window, cx);
+                } else if action == "edit-workspace" {
+                    let at = row
+                        .map_or_else(Point::default, |r| Point::new(r.right(), r.top() - px(8.)));
+                    self.open_menu(MenuTarget::NamedWorkspace, Anchor::Point(at), window, cx);
                 } else if action == "project-settings" {
                     let at = row
                         .map_or_else(Point::default, |r| Point::new(r.right(), r.top() - px(8.)));
@@ -6437,7 +6580,7 @@ impl Shell {
                 .monos
                 .as_ref()
                 .is_some_and(|m| m.read(cx).hidden_session(id))
-                && s.summary.cwd == self.workspace.project
+                && self.listed_project(&s.summary.cwd)
                 && s.summary.has_messages
                 && !self.orchestration_worker(id)
                 && self.in_sidebar_worktree_scope(id, cx)
@@ -6537,7 +6680,10 @@ impl Shell {
         if self.menu.is_some() {
             return;
         }
-        let projects = self.workspace.visible_project_order();
+        let projects = self.workspace.named_workspace().map_or_else(
+            || self.workspace.visible_project_order(),
+            |w| w.projects.clone(),
+        );
         if let Some(next) = adjacent(&projects, Some(&self.workspace.project), step)
             && next != self.workspace.project
         {
@@ -6586,6 +6732,10 @@ impl Shell {
         }
         self.refresh_sidebar_structure(cx);
         let live_agents = self.live_agents_preview(cx);
+        let workspace_button = self
+            .named_workspace_mode()
+            .then(|| self.named_workspace_button(cx));
+        let named = workspace_button.is_some();
         div()
             .id("monocode-sidebar")
             .debug_selector(|| "sidebar-content".into())
@@ -6623,83 +6773,90 @@ impl Shell {
                                 .flex()
                                 .items_center()
                                 .gap_1()
-                                .child(
-                                    div().flex_1().min_w_0().flex().items_center().child(
-                                        div()
-                                            .id("workspace-project")
-                                            .debug_selector(|| "sidebar-project-button".into())
-                                            .relative()
-                                            .role(Role::Button)
-                                            .aria_label(format!(
-                                                "Switch project, {}",
-                                                self.project_label(&self.workspace.project)
-                                            ))
-                                            .aria_description(self.workspace.project.clone())
-                                            .aria_expanded(self.menu_open(&MenuTarget::Header))
-                                            .cursor_pointer()
-                                            .h(px(28.))
-                                            // The whole picker shares Search's left edge.
-                                            .px_1p5()
-                                            .ml(px(-4.))
-                                            .rounded_md()
-                                            .max_w_full()
-                                            .hover(|s| s.bg(content(0.08)))
-                                            .when(self.menu_open(&MenuTarget::Header), |d| {
-                                                d.bg(content(0.08))
-                                            })
-                                            .min_w_0()
-                                            .flex()
-                                            .items_center()
-                                            .gap_1p5()
-                                            .text_size(px(13.))
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .child(crate::project_settings::header_project_icon(
-                                                &self.appearance(&self.workspace.project),
-                                                &self.workspace.project,
-                                            ))
-                                            .child(
-                                                div().min_w_0().truncate().child(
+                                .children(workspace_button.map(|button| {
+                                    div().flex_1().min_w_0().flex().items_center().child(button)
+                                }))
+                                .when(!named, |d| {
+                                    d.child(
+                                        div().flex_1().min_w_0().flex().items_center().child(
+                                            div()
+                                                .id("workspace-project")
+                                                .debug_selector(|| "sidebar-project-button".into())
+                                                .relative()
+                                                .role(Role::Button)
+                                                .aria_label(format!(
+                                                    "Switch project, {}",
+                                                    self.project_label(&self.workspace.project)
+                                                ))
+                                                .aria_description(self.workspace.project.clone())
+                                                .aria_expanded(self.menu_open(&MenuTarget::Header))
+                                                .cursor_pointer()
+                                                .h(px(28.))
+                                                // The whole picker shares Search's left edge.
+                                                .px_1p5()
+                                                .ml(px(-4.))
+                                                .rounded_md()
+                                                .max_w_full()
+                                                .hover(|s| s.bg(content(0.08)))
+                                                .when(self.menu_open(&MenuTarget::Header), |d| {
+                                                    d.bg(content(0.08))
+                                                })
+                                                .min_w_0()
+                                                .flex()
+                                                .items_center()
+                                                .gap_1p5()
+                                                .text_size(px(13.))
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .child(
+                                                    crate::project_settings::header_project_icon(
+                                                        &self.appearance(&self.workspace.project),
+                                                        &self.workspace.project,
+                                                    ),
+                                                )
+                                                .child(div().min_w_0().truncate().child(
                                                     self.project_label(&self.workspace.project),
-                                                ),
-                                            )
-                                            .when_some(
-                                                self.worktree_focus.get(&self.workspace.project),
-                                                |d, focus| {
-                                                    d.child(
-                                                        div()
-                                                            .min_w_0()
-                                                            .truncate()
-                                                            .font_weight(FontWeight::NORMAL)
-                                                            .text_color(content(0.45))
-                                                            .child(
-                                                                focus
-                                                                    .branch
-                                                                    .clone()
-                                                                    .unwrap_or_else(|| {
-                                                                        "detached".into()
-                                                                    }),
-                                                            ),
-                                                    )
-                                                },
-                                            )
-                                            .child(icon("chevron-down", 14.))
-                                            .child(self.project_anchor.probe())
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                if this.menu_open(&MenuTarget::Header) {
-                                                    this.close_menu(cx);
-                                                } else {
-                                                    let anchor =
-                                                        Anchor::Slot(this.project_anchor.clone());
-                                                    this.open_menu(
-                                                        MenuTarget::Header,
-                                                        anchor,
-                                                        window,
-                                                        cx,
-                                                    );
-                                                }
-                                            })),
-                                    ),
-                                )
+                                                ))
+                                                .when_some(
+                                                    self.worktree_focus
+                                                        .get(&self.workspace.project),
+                                                    |d, focus| {
+                                                        d.child(
+                                                            div()
+                                                                .min_w_0()
+                                                                .truncate()
+                                                                .font_weight(FontWeight::NORMAL)
+                                                                .text_color(content(0.45))
+                                                                .child(
+                                                                    focus
+                                                                        .branch
+                                                                        .clone()
+                                                                        .unwrap_or_else(|| {
+                                                                            "detached".into()
+                                                                        }),
+                                                                ),
+                                                        )
+                                                    },
+                                                )
+                                                .child(icon("chevron-down", 14.))
+                                                .child(self.project_anchor.probe())
+                                                .on_click(cx.listener(|this, _, window, cx| {
+                                                    if this.menu_open(&MenuTarget::Header) {
+                                                        this.close_menu(cx);
+                                                    } else {
+                                                        let anchor = Anchor::Slot(
+                                                            this.project_anchor.clone(),
+                                                        );
+                                                        this.open_menu(
+                                                            MenuTarget::Header,
+                                                            anchor,
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    }
+                                                })),
+                                        ),
+                                    )
+                                })
                                 .child(
                                     icon_button(
                                         "sidebar-options",
@@ -6786,13 +6943,18 @@ impl Shell {
 
     fn project_spaces(&mut self, cx: &mut Context<Self>) -> AnyElement {
         // Sidebar.tsx's ProjectSpacesBar: five equal spaces, paged by chevrons.
-        let shown = self.workspace.projects.len().min(5);
-        let last = self.workspace.projects.len().saturating_sub(shown);
+        // A workspace's spaces are its member projects.
+        let all = self
+            .workspace
+            .named_workspace()
+            .map_or_else(|| self.workspace.projects.clone(), |w| w.projects.clone());
+        let shown = all.len().min(5);
+        let last = all.len().saturating_sub(shown);
         self.spaces_start = self.spaces_start.min(last);
         let first = self.spaces_start;
         let projects: Vec<_> = self
             .space_reorder
-            .order(&self.workspace.projects)
+            .order(&all)
             .into_iter()
             .enumerate()
             .skip(first)
@@ -7057,6 +7219,8 @@ impl Shell {
                     key: (id, false),
                     title,
                     mark,
+                    // A Mono works across projects, so it carries no badge.
+                    project: None,
                 });
             }
             if sessions.contains(&id) {
@@ -7073,6 +7237,7 @@ impl Shell {
                         title
                     },
                     mark: PaneMark::Session(session.summary.provider.clone(), lit.then_some(id)),
+                    project: self.badged_pane_project(id, cx),
                 });
             }
             if let Some(r) = review(&id)
@@ -7084,6 +7249,7 @@ impl Shell {
                     mark: PaneMark::File(
                         matches!(t, crate::review::ReviewTab::File { .. }).then(|| t.label()),
                     ),
+                    project: self.badged_pane_project(id, cx),
                 });
             }
         }
@@ -7150,6 +7316,9 @@ impl Shell {
                 .flex()
                 .items_center()
                 .gap(px(6.))
+                .when_some(pane.project.as_ref(), |d, project| {
+                    d.child(self.project_mark(project, 12.))
+                })
                 .child(self.pane_mark(&pane.mark, active))
                 .child(
                     div()
@@ -8796,6 +8965,7 @@ impl Render for Shell {
             .children(self.layout_body(sidebar_width, right_shown, right_width, full, window, cx))
             .children(self.peek_watch(window, cx))
             .child(self.notices_overlay(cx))
+            .children(self.open_pending_project_choice(window, cx))
             .children(self.menu.as_ref().map(|open| {
                 let point = matches!(open.anchor, Anchor::Point(_));
                 let beside = matches!(open.target, MenuTarget::Project { .. });

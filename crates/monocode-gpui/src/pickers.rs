@@ -1182,8 +1182,18 @@ impl ModelList {
 pub(crate) enum ProjectPicked {
     Project(String),
     Mono(String),
+    /// A named workspace of several projects.
+    Workspace(String),
     New,
+    NewWorkspace,
     Remote,
+}
+
+/// A named workspace row: several projects shown together.
+pub(crate) struct PickerWorkspace {
+    pub id: String,
+    pub name: String,
+    pub projects: usize,
 }
 
 pub(crate) struct PickerMono {
@@ -1201,6 +1211,9 @@ pub(crate) struct ProjectPicker {
     projects: Vec<String>,
     monos: Vec<PickerMono>,
     active_mono: Option<String>,
+    workspaces: Vec<PickerWorkspace>,
+    active_workspace: Option<String>,
+    allow_workspaces: bool,
     current: String,
     active: usize,
     allow_remote: bool,
@@ -1225,6 +1238,9 @@ impl ProjectPicker {
             projects,
             monos: Vec::new(),
             active_mono: None,
+            workspaces: Vec::new(),
+            active_workspace: None,
+            allow_workspaces: false,
             current: current.into(),
             active: 0,
             allow_remote: false,
@@ -1264,6 +1280,28 @@ impl ProjectPicker {
         self.monos = monos;
         self
     }
+    /// Offer named workspaces beside the projects, and "New workspace".
+    pub(crate) fn workspaces(
+        mut self,
+        workspaces: Vec<PickerWorkspace>,
+        active: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        self.allow_workspaces = true;
+        self.active_workspace = active.filter(|id| workspaces.iter().any(|w| &w.id == id));
+        self.search.update(cx, |search, cx| {
+            search.set_placeholder("Search projects and workspaces...", cx)
+        });
+        self.workspaces = workspaces;
+        self
+    }
+    fn matching_workspaces(&self, cx: &gpui::App) -> Vec<&PickerWorkspace> {
+        let query = self.search.read(cx).content.trim().to_lowercase();
+        self.workspaces
+            .iter()
+            .filter(|w| w.name.to_lowercase().contains(&query))
+            .collect()
+    }
     fn matching_monos(&self, cx: &gpui::App) -> Vec<&PickerMono> {
         let query = self.search.read(cx).content.trim().to_lowercase();
         self.monos
@@ -1290,7 +1328,9 @@ impl ProjectPicker {
             .collect()
     }
     fn step(&mut self, direction: isize, cx: &mut Context<Self>) {
-        let count = self.matching_monos(cx).len() + self.matches(cx).len();
+        let count = self.matching_monos(cx).len()
+            + self.matching_workspaces(cx).len()
+            + self.matches(cx).len();
         if count > 0 {
             self.active = (self.active as isize + direction).clamp(0, count as isize - 1) as usize;
             cx.notify();
@@ -1298,12 +1338,15 @@ impl ProjectPicker {
     }
     fn pick(&mut self, ix: usize, cx: &mut Context<Self>) {
         let monos = self.matching_monos(cx);
+        let workspaces = self.matching_workspaces(cx);
         if let Some(mono) = monos.get(ix) {
             cx.emit(ProjectPicked::Mono(mono.id.clone()));
+        } else if let Some(workspace) = workspaces.get(ix - monos.len()) {
+            cx.emit(ProjectPicked::Workspace(workspace.id.clone()));
         } else if let Some(path) = self
             .matches(cx)
             .into_iter()
-            .nth(ix.saturating_sub(monos.len()))
+            .nth(ix.saturating_sub(monos.len() + workspaces.len()))
         {
             cx.emit(ProjectPicked::Project(path));
         }
@@ -1403,10 +1446,83 @@ impl Render for ProjectPicker {
                     .into_any_element()
             })
             .collect();
+        let matching_workspaces = self.matching_workspaces(cx);
+        let workspace_count = matching_workspaces.len();
+        rows.extend(matching_workspaces.into_iter().enumerate().map(
+            |(workspace_ix, workspace)| {
+                let ix = mono_count + workspace_ix;
+                let active = self.active == ix;
+                let current = self.active_mono.is_none()
+                    && self.active_workspace.as_ref() == Some(&workspace.id);
+                let projects = if workspace.projects == 1 {
+                    "1 project".to_owned()
+                } else {
+                    format!("{} projects", workspace.projects)
+                };
+                div()
+                    .id(("project-picker-workspace", ix))
+                    .debug_selector(move || format!("project-picker-workspace-{workspace_ix}"))
+                    .role(Role::ListBoxOption)
+                    .aria_label(format!("{}, workspace, {projects}", workspace.name))
+                    .aria_selected(current)
+                    .cursor_pointer()
+                    .flex_shrink_0()
+                    .h(px(36.))
+                    .px(px(10.))
+                    .gap(px(10.))
+                    .rounded(px(8.))
+                    .flex()
+                    .items_center()
+                    .text_color(content(if active { 1. } else { 0.75 }))
+                    .when(active, |d| d.bg(content(0.1)))
+                    .when(!active, |d| {
+                        d.hover(|s| s.bg(content(0.05)).text_color(content(1.)))
+                    })
+                    .child(
+                        div()
+                            .size(px(16.))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(if current {
+                                icon("check-2", 14.).text_color(content(1.))
+                            } else {
+                                icon("dashboard", 14.).text_color(content(0.6))
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(13.))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .child(workspace.name.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_size(px(11.))
+                            .text_color(content(0.4))
+                            .child(projects),
+                    )
+                    .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                        if *hovered {
+                            this.active = ix;
+                            cx.notify();
+                        }
+                    }))
+                    .on_click(cx.listener(move |this, _, _, cx| this.pick(ix, cx)))
+                    .into_any_element()
+            },
+        ));
         rows.extend(matches.into_iter().enumerate().map(|(project_ix, path)| {
-            let ix = mono_count + project_ix;
+            let ix = mono_count + workspace_count + project_ix;
             let active = self.active == ix;
-            let current = self.active_mono.is_none() && path == self.current;
+            let current = self.active_mono.is_none()
+                && self.active_workspace.is_none()
+                && path == self.current;
             div()
                 .id(("project-option", ix))
                 .debug_selector(move || format!("project-picker-project-{project_ix}"))
@@ -1586,6 +1702,30 @@ impl Render for ProjectPicker {
                             .child("New project")
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(ProjectPicked::New))),
                     )
+                    .when(self.allow_workspaces, |d| {
+                        d.child(
+                            div()
+                                .id("project-new-workspace")
+                                .debug_selector(|| "project-picker-new-workspace".into())
+                                .role(Role::Button)
+                                .aria_label("New workspace")
+                                .cursor_pointer()
+                                .h(px(36.))
+                                .px(px(10.))
+                                .gap(px(10.))
+                                .rounded(px(8.))
+                                .flex()
+                                .items_center()
+                                .text_size(px(13.))
+                                .text_color(content(0.75))
+                                .hover(|s| s.bg(content(0.08)).text_color(content(1.)))
+                                .child(icon("dashboard", 16.).text_color(content(0.75)))
+                                .child("New workspace")
+                                .on_click(
+                                    cx.listener(|_, _, _, cx| cx.emit(ProjectPicked::NewWorkspace)),
+                                ),
+                        )
+                    })
                     .when(self.allow_remote, |d| {
                         d.child(
                             div()

@@ -32,8 +32,9 @@ impl Shell {
         path_key(scope) == path_key(self.working_copy())
     }
     pub(super) fn in_sidebar_worktree_scope(&self, id: i64, cx: &App) -> bool {
+        // Each project narrows by its own selected worktree.
         self.worktree_focus
-            .get(&self.workspace.project)
+            .get(&self.session_metadata(id, cx).summary.cwd)
             .is_none_or(|focus| {
                 path_key(self.session_working_copy(id, cx)) == path_key(&focus.path)
             })
