@@ -1,10 +1,12 @@
 import Add01Icon from "@hugeicons/core-free-icons/Add01Icon";
+import Archive01Icon from "@hugeicons/core-free-icons/Archive01Icon";
 import ArrowDown01Icon from "@hugeicons/core-free-icons/ArrowDown01Icon";
 import ArrowRight01Icon from "@hugeicons/core-free-icons/ArrowRight01Icon";
 import ArrowUp02Icon from "@hugeicons/core-free-icons/ArrowUp02Icon";
 import BotIcon from "@hugeicons/core-free-icons/BotIcon";
 import BubbleChatIcon from "@hugeicons/core-free-icons/BubbleChatIcon";
 import Cancel01Icon from "@hugeicons/core-free-icons/Cancel01Icon";
+import CircleIcon from "@hugeicons/core-free-icons/CircleIcon";
 import ChartBreakoutSquareIcon from "@hugeicons/core-free-icons/ChartBreakoutSquareIcon";
 import ComputerIcon from "@hugeicons/core-free-icons/ComputerIcon";
 import ComputerRemoveIcon from "@hugeicons/core-free-icons/ComputerRemoveIcon";
@@ -20,12 +22,14 @@ import Folder01Icon from "@hugeicons/core-free-icons/Folder01Icon";
 import GitBranchIcon from "@hugeicons/core-free-icons/GitBranchIcon";
 import Image01Icon from "@hugeicons/core-free-icons/Image01Icon";
 import InboxIcon from "@hugeicons/core-free-icons/InboxIcon";
+import InformationCircleIcon from "@hugeicons/core-free-icons/InformationCircleIcon";
+import Layers01Icon from "@hugeicons/core-free-icons/Layers01Icon";
+import LayoutAlignRightIcon from "@hugeicons/core-free-icons/LayoutAlignRightIcon";
 import LockIcon from "@hugeicons/core-free-icons/LockIcon";
 import LeftToRightListBulletIcon from "@hugeicons/core-free-icons/LeftToRightListBulletIcon";
 import Moon02Icon from "@hugeicons/core-free-icons/Moon02Icon";
 import MinusSignIcon from "@hugeicons/core-free-icons/MinusSignIcon";
 import MoreHorizontalIcon from "@hugeicons/core-free-icons/MoreHorizontalIcon";
-import Menu01Icon from "@hugeicons/core-free-icons/Menu01Icon";
 import Mic01Icon from "@hugeicons/core-free-icons/Mic01Icon";
 import Note01Icon from "@hugeicons/core-free-icons/Note01Icon";
 import Notification01Icon from "@hugeicons/core-free-icons/Notification01Icon";
@@ -41,6 +45,7 @@ import SourceCodeIcon from "@hugeicons/core-free-icons/SourceCodeIcon";
 import SparklesIcon from "@hugeicons/core-free-icons/SparklesIcon";
 import TextWrapIcon from "@hugeicons/core-free-icons/TextWrapIcon";
 import Tick02Icon from "@hugeicons/core-free-icons/Tick02Icon";
+import UserGroupIcon from "@hugeicons/core-free-icons/UserGroupIcon";
 import UnfoldMoreIcon from "@hugeicons/core-free-icons/UnfoldMoreIcon";
 import ViewIcon from "@hugeicons/core-free-icons/ViewIcon";
 import Wrench01Icon from "@hugeicons/core-free-icons/Wrench01Icon";
@@ -52,7 +57,8 @@ import { useColors } from "./theme";
 // Hugeicons, the same set as the desktop chrome (src/shared/ui/icons.tsx).
 // Deep imports keep the full catalog out of the bundle.
 const icons = {
-  menu: Menu01Icon,
+  // The desktop title bar's sidebar toggle (PanelLeft in src/shared/ui/icons.tsx).
+  sidebar: LayoutAlignRightIcon,
   more: MoreHorizontalIcon,
   search: Search01Icon,
   close: Cancel01Icon,
@@ -98,6 +104,11 @@ const icons = {
   appearance: DarkModeIcon,
   sun: Sun03Icon,
   moon: Moon02Icon,
+  info: InformationCircleIcon,
+  archive: Archive01Icon,
+  people: UserGroupIcon,
+  layers: Layers01Icon,
+  circle: CircleIcon,
 };
 
 export type IconName = keyof typeof icons;

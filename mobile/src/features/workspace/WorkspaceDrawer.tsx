@@ -9,7 +9,7 @@ import {
 } from "@expo/ui/swift-ui/modifiers";
 import { router, useGlobalSearchParams, usePathname } from "expo-router";
 import { memo, useMemo, useState } from "react";
-import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Alert, Image, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import Animated from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -19,10 +19,11 @@ import { ProjectMascot } from "@/features/mascots/ProjectMascot";
 import { plainText } from "@/features/sessions/markdownParser";
 import { HEADER_GAP, HEADER_HEIGHT, useKeyboardLift } from "@/features/sessions/SessionScreen";
 import { MONOCODE_MARK } from "@/ui/brand";
+import { ChoiceMenu } from "@/ui/ChoiceMenu";
 import { CircleButton } from "@/ui/CircleButton";
 import { useWarmDitherLoading } from "@/ui/DitherLoading";
 import { GradualBlur } from "@/ui/GradualBlur";
-import { Icon } from "@/ui/Icon";
+import { Icon, type IconName } from "@/ui/Icon";
 import { LiquidView } from "@/ui/LiquidView";
 import { isModalRoute } from "@/ui/SceneFade";
 import { AnimationsPaused } from "@/ui/AnimationsPaused";
@@ -255,16 +256,27 @@ export function WorkspaceDrawer() {
   );
 }
 
-const FILTERS: { value: Filter; label: string; symbol: "tray.full" | "circlebadge" | "bolt" }[] = [
-  { value: "all", label: "All", symbol: "tray.full" },
-  { value: "unread", label: "Unread", symbol: "circlebadge" },
-  { value: "working", label: "Working now", symbol: "bolt" },
+// Each with its SF Symbol for the iOS menu and its icon for Android's sheet.
+const FILTERS: {
+  value: Filter;
+  label: string;
+  symbol: "tray.full" | "circlebadge" | "bolt";
+  icon: IconName;
+}[] = [
+  { value: "all", label: "All", symbol: "tray.full", icon: "inbox" },
+  { value: "unread", label: "Unread", symbol: "circlebadge", icon: "circle" },
+  { value: "working", label: "Working now", symbol: "bolt", icon: "automation" },
 ];
 
-const SHOWS: { value: Show; label: string; symbol: "square.stack" | "person.2" | "folder" }[] = [
-  { value: "both", label: "Monos and projects", symbol: "square.stack" },
-  { value: "monos", label: "Monos", symbol: "person.2" },
-  { value: "projects", label: "Projects", symbol: "folder" },
+const SHOWS: {
+  value: Show;
+  label: string;
+  symbol: "square.stack" | "person.2" | "folder";
+  icon: IconName;
+}[] = [
+  { value: "both", label: "Monos and projects", symbol: "square.stack", icon: "layers" },
+  { value: "monos", label: "Monos", symbol: "person.2", icon: "people" },
+  { value: "projects", label: "Projects", symbol: "folder", icon: "folder" },
 ];
 
 /** The round button beside a new Mono: a native menu of which kinds to show
@@ -282,6 +294,27 @@ function FilterMenu({
 }) {
   const colors = useColors();
   const on = filter !== "all" || show !== "both";
+  // The SwiftUI menu has no Android view, so Android groups the same choices in a sheet.
+  if (Platform.OS === "android") return (
+    <ChoiceMenu label={on ? "Filter, on" : "Filter"} title="Filter" sections={[
+      SHOWS.map((option) => ({
+        label: option.label,
+        icon: option.icon,
+        selected: show === option.value,
+        onPress: () => onShow(option.value),
+      })),
+      FILTERS.map((option) => ({
+        label: option.label,
+        icon: option.icon,
+        selected: filter === option.value,
+        onPress: () => onFilter(option.value),
+      })),
+    ]}>
+      <LiquidView borderRadius={HEADER_HEIGHT / 2} innerStyle={filterStyles.round}>
+        <Icon name="filter" size={20} color={on ? colors.accent : colors.content} />
+      </LiquidView>
+    </ChoiceMenu>
+  );
   return (
     <View>
       <LiquidView borderRadius={HEADER_HEIGHT / 2} innerStyle={filterStyles.round}>

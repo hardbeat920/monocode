@@ -330,7 +330,11 @@ export function SessionFrame({
   // going the moment the route changes while it is still on screen.
   const holding = swapping && !native && !hasNativeHeader(scene);
   if (scene !== pathname && !isModalRoute(pathname) && !holding) setScene(pathname);
-  const covered = !native && hasNativeHeader(scene);
+  // Android's modals are screens in the same stack, under this frame's
+  // header and composer rather than over them, so those stand aside too.
+  const covered =
+    !native &&
+    (hasNativeHeader(scene) || (Platform.OS === "android" && isModalRoute(pathname)));
   // The loading cover stays up through its own way out, the ring then the
   // ground, once the switch no longer needs it.
   const covering = switching && !covered;
@@ -627,7 +631,7 @@ export function SessionFrame({
               <View style={[styles.header, { top: headerTop }]}>
                 <View>
                   <CircleButton
-                    icon="menu"
+                    icon="sidebar"
                     label={unread ? "Projects and monos, new replies" : "Projects and monos"}
                     onPress={drawer.open}
                   />

@@ -1,3 +1,4 @@
+import { Host as UniversalHost, Slider as UniversalSlider } from "@expo/ui";
 import { Host, Slider } from "@expo/ui/swift-ui";
 import { accessibilityLabel, tint } from "@expo/ui/swift-ui/modifiers";
 import * as Haptics from "expo-haptics";
@@ -5,6 +6,7 @@ import { router } from "expo-router";
 import { Fragment, useState } from "react";
 import {
   ActivityIndicator,
+  Platform,
   Pressable,
   StyleSheet,
   Switch,
@@ -597,6 +599,12 @@ export function EffortControl({
     options.findIndex((option) => option.value === value),
   );
   const hot = HOT_EFFORT.test(options[index]?.value ?? "");
+  const pick = (next: number) => {
+    const option = options[Math.round(next)];
+    if (!option || option.value === value) return;
+    void Haptics.selectionAsync();
+    onChange(option.value);
+  };
   return (
     <View style={styles.effort}>
       <View style={styles.effortHeader}>
@@ -605,25 +613,31 @@ export function EffortControl({
           {options[index]?.label}
         </Text>
       </View>
-      {/* The native slider, so a drag along it is not taken by the scroll. */}
-      <Host style={styles.effortSlider}>
+      {/* The native slider, so a drag along it is not taken by the scroll.
+          SwiftUI's has no Android view, so Android takes the universal one. */}
+      {Platform.OS === "android" ? (
+        <UniversalHost style={styles.effortSlider}>
+          <UniversalSlider
+            value={index}
+            min={0}
+            max={options.length - 1}
+            step={1}
+            onValueChange={pick}
+          />
+        </UniversalHost>
+      ) : <Host style={styles.effortSlider}>
         <Slider
           value={index}
           min={0}
           max={options.length - 1}
           step={1}
-          onValueChange={(next) => {
-            const option = options[Math.round(next)];
-            if (!option || option.value === value) return;
-            void Haptics.selectionAsync();
-            onChange(option.value);
-          }}
+          onValueChange={pick}
           modifiers={[
             tint(hot ? colors.caution : colors.accent),
             accessibilityLabel(label),
           ]}
         />
-      </Host>
+      </Host>}
     </View>
   );
 }

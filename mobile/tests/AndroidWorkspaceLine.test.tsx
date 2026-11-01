@@ -65,6 +65,7 @@ vi.mock("react-native-safe-area-context", () => ({
 vi.mock("@/ui/Icon", () => ({ Icon: () => null }));
 vi.mock("@/ui/theme", () => ({
   useColors: () => ({ content: "white", muted: "gray" }),
+  themedStyles: (fn: (colors: object) => object) => () => fn({}),
 }));
 vi.mock("@/features/changes/diffTheme", () => ({
   formatCount: String,
