@@ -190,6 +190,7 @@ export type SessionPaneProps = {
   onRemoveDraft: (sessionId: string, draftBlockId: string) => boolean | void;
   onStop: (sessionId: string) => void;
   onCompactContext: (sessionId: string) => boolean;
+  onRunShellCommand: (sessionId: string, command: string) => boolean;
   onPlaceSessionInFolder: (
     sessionId: string,
     target: SessionFolderTarget,
@@ -334,6 +335,7 @@ const LocalSessionPane = memo(function LocalSessionPane({
   onSubmit,
   onStop,
   onCompactContext,
+  onRunShellCommand,
   onPlaceSessionInFolder,
   onDeleteQueuedMessage,
   onEditQueuedMessage,
@@ -758,6 +760,11 @@ const LocalSessionPane = memo(function LocalSessionPane({
       onBtwCommand={btw.openWith}
       onStop={() => onStop(session.id)}
       onCompactContext={() => onCompactContext(session.id)}
+      onRunShellCommand={
+        remote || agent
+          ? undefined
+          : (command) => onRunShellCommand(session.id, command)
+      }
       onPlaceInFolder={(target) => onPlaceSessionInFolder(session.id, target)}
       queuedMessages={session.queuedMessages}
       queueStatus={session.queueStatus}
