@@ -263,6 +263,14 @@ On macOS with a Metal device, the renderer regression opens no window:
 cargo test --manifest-path crates/monocode-gpui/Cargo.toml --locked -p monocode-gpui --profile native-dev overlapping_shell_pane -- --ignored
 ```
 
+On Linux with a Vulkan or GLES device, the scroll-edge mask regressions render
+and read back pixels without opening a window. They cover transparent backdrops,
+overlapping content, nested masks, clipping and resize:
+
+```sh
+cargo test --manifest-path crates/monocode-gpui/Cargo.toml --locked -p monocode-gpui --profile native-dev wgpu_tests:: -- --ignored --test-threads=1
+```
+
 ## Optional runtime checks
 
 The provider smoke example uses an existing CLI login. `--models` only discovers
