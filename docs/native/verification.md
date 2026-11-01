@@ -265,6 +265,23 @@ cargo test --manifest-path crates/monocode-gpui/Cargo.toml --locked -p monocode-
 
 ## Optional runtime checks
 
+### Windows activity scroll-edge masks
+
+The DirectX group compositor has GPU pixel regressions for independent top and
+bottom ramps, translucent backgrounds, clipping, and nested/disjoint groups:
+
+```sh
+cargo test --manifest-path crates/monocode-gpui/Cargo.toml -p gpui-pre-windows edge_fade -- --test-threads=1
+cargo test --manifest-path crates/monocode-gpui/Cargo.toml -p monocode-gpui transcript::live_phase -- --test-threads=1
+```
+
+On Windows, four GPU regressions and three native activity-window tests passed.
+Strict Windows-renderer Clippy and optimized HLSL shader compilation passed.
+A local native demo with 32 simulated file reads was checked by scrolling inside
+the activity window; both edges fade without changing the pane background.
+The demo makes no provider requests. The full production/native suites and
+other operating systems were not rerun for this renderer change.
+
 The provider smoke example uses an existing CLI login. `--models` only discovers
 the catalog; without it, the example makes two real provider requests and checks
 streaming and resumed context:
