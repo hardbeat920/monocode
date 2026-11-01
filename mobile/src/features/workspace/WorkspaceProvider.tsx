@@ -88,6 +88,9 @@ type Workspace = {
   renameSession: (session: SessionSummary, title: string) => Promise<void>;
   /** Every project on the desktop, chosen for this phone or not, as a Mono can work in any. */
   allProjects: Project[];
+  /** Every Mono on the desktop, whether this phone lists its chat or not: the
+   *  chip on a session it started names it from here. */
+  allMonos: Mono[];
   /**
    * Changes a Mono's look or projects. Shown at once, as the desktop's catalog
    * will have it; undone if the desktop refuses.
@@ -96,8 +99,14 @@ type Workspace = {
   /** Deletes a session on the desktop. It leaves every list at once, and comes
    *  back if the desktop refuses. */
   deleteSession: (conversationId: string) => Promise<void>;
-  /** Archives a session on the desktop; like a delete, it leaves every list at once. */
+  /** Archives a session on the desktop; like a delete, it leaves every list at once,
+   *  and comes back if the desktop refuses. */
   archiveSession: (conversationId: string) => Promise<void>;
+  /** Takes an archive back: the session returns to its lists at once, and leaves
+   *  again if the desktop refuses. Only where `canUnarchive`. */
+  unarchiveSession: (conversationId: string) => Promise<void>;
+  /** Whether the desktop can unarchive; without it an archive can't be undone. */
+  canUnarchive: boolean;
   /** A session as the phone last changed it, or null once deleted here. */
   edited: (session: SessionSummary) => SessionSummary | null;
   nativeTranscriptStatus: (id: string, status: NativeTranscriptStatus) => void;
@@ -634,6 +643,24 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     (conversationId: string) => removeSession("session.archive", conversationId),
     [removeSession],
   );
+  const unarchiveSession = useCallback(
+    async (conversationId: string) => {
+      setDeleted((previous) => {
+        const next = new Set(previous);
+        next.delete(conversationId);
+        return next;
+      });
+      try {
+        await mutate("session.unarchive", { conversationId });
+      } catch (reason) {
+        // Still archived there, so still off the lists.
+        setDeleted((previous) => new Set(previous).add(conversationId));
+        throw reason;
+      }
+      void refresh();
+    },
+    [mutate, refresh],
+  );
   const listSessions = useCallback(
     (projectId: string, query: string, offset: number, filters?: SessionListFilters) =>
       command<SessionPage>("sessions.list", {
@@ -693,6 +720,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     return {
       projects: selected.projects,
       allProjects: catalog.projects,
+      allMonos: catalog.monos,
       monos: selected.monos.map((mono) => {
         const edits = monoEdits[mono.id];
         if (!edits) return mono;
@@ -720,6 +748,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       editMono,
       deleteSession,
       archiveSession,
+      unarchiveSession,
+      canUnarchive: catalog.sessionUnarchive === true,
       edited,
       nativeTranscriptStatus,
     };
@@ -744,6 +774,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     renameSession,
     deleteSession,
     archiveSession,
+    unarchiveSession,
     nativeTranscriptStatus,
   ]);
   const live = useMemo<Live>(

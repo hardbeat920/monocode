@@ -46,6 +46,9 @@ export type Catalog = {
   /** The desktop serves the Inbox (`inbox.*`); the older desktop app doesn't,
    *  and the phone leaves the Inbox out. */
   inbox?: boolean;
+  /** The desktop answers `session.unarchive`, so an archive can be undone;
+   *  the desktop app today only archives, and the phone then offers no Undo. */
+  sessionUnarchive?: boolean;
 };
 const EMPTY: Catalog = { projects: [], monos: [], sessions: [] };
 const PAIRING = "monocode.mobile.pairing";
