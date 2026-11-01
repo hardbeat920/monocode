@@ -15,6 +15,7 @@ import {
 } from "@/features/connection/ConnectionProvider";
 import { WorkspaceGate } from "@/features/connection/WorkspaceGate";
 
+import { InboxProvider } from "@/features/inbox/InboxProvider";
 import { SessionNotifications } from "@/features/notifications/SessionNotifications";
 import { SessionActivity } from "@/features/sessions/SessionActivity";
 import { SessionFrame } from "@/features/sessions/SessionScreen";
@@ -150,6 +151,7 @@ function LinkedWorkspace() {
   const { screens } = useNavigationLook();
   return (
     <WorkspaceProvider key={connection.pairing?.desktop.deviceId}>
+      <InboxProvider>
       <SessionNotifications />
       <SessionActivity />
       <ScenePagerHost drawer={<WorkspaceDrawer />}>
@@ -177,11 +179,13 @@ function LinkedWorkspace() {
             <Stack.Screen name="settings" options={screens.modal} />
             <Stack.Screen name="mono-profile/[monoId]" options={screens.modal} />
             <Stack.Screen name="models" options={screens.modal} />
+            <Stack.Screen name="inbox" options={screens.modal} />
             <Stack.Screen name="changes" options={screens.changes} />
           </Stack>
         </SessionFrame>
         </Timed>
       </ScenePagerHost>
+      </InboxProvider>
     </WorkspaceProvider>
   );
 }
