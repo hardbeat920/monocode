@@ -555,6 +555,51 @@ function withoutPreview(file: FilePaneTab): FilePaneTab {
   return rest;
 }
 
+/** Restore a history entry with a fresh ID allocated by the caller before its updater. */
+export function restorePaneFile(
+  pane: EditorPane,
+  file: FilePaneTab,
+  restoredId: string,
+): EditorPane {
+  const existing = pane.files.find(
+    (entry) => editorTabKey(entry) === editorTabKey(file),
+  );
+  if (existing) return { ...pane, activeFileId: existing.id };
+  const restored = { ...file, id: restoredId, preview: true };
+  const previewIndex = pane.files.findIndex((entry) => entry.preview);
+  const files =
+    previewIndex < 0
+      ? [...pane.files, restored]
+      : pane.files.map((entry, index) =>
+          index === previewIndex ? restored : entry,
+        );
+  return { ...pane, files, activeFileId: restored.id };
+}
+
+/** Apply file history within the addressed pane. Unknown panes are a no-op. */
+export function restoreWorkspacePaneFile(
+  tabs: WorkspaceTab[],
+  paneId: string,
+  file: FilePaneTab,
+  restoredId: string,
+): WorkspaceTab[] {
+  const index = tabs.findIndex((tab) =>
+    tab.editorPanes.some((pane) => pane.id === paneId),
+  );
+  if (index < 0) return tabs;
+  return tabs.map((tab, tabIndex) => {
+    if (tabIndex !== index) return tab;
+    return {
+      ...tab,
+      focusedId: paneId,
+      diffFocused: false,
+      editorPanes: tab.editorPanes.map((pane) =>
+        pane.id === paneId ? restorePaneFile(pane, file, restoredId) : pane,
+      ),
+    };
+  });
+}
+
 /** Make a preview tab permanent. Returns `tab` unchanged when nothing matched. */
 export function pinEditorFile(tab: WorkspaceTab, fileId: string): WorkspaceTab {
   let changed = false;
