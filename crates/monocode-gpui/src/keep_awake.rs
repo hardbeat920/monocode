@@ -17,14 +17,28 @@ use monocode_core::keep_awake::{
 };
 use std::{
     path::PathBuf,
-    sync::atomic::{AtomicBool, Ordering},
-    time::{Duration, Instant},
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant, SystemTime},
 };
 
 /// The Mac is on a hotspot this moved it to; background refreshes hold off.
 static ON_HOTSPOT: AtomicBool = AtomicBool::new(false);
 pub(crate) fn on_hotspot() -> bool {
     ON_HOTSPOT.load(Ordering::Relaxed)
+}
+/// What the hotspot switch is doing, for Settings.
+static HOTSPOT_STATUS: Mutex<Option<String>> = Mutex::new(None);
+pub(crate) fn hotspot_status() -> Option<String> {
+    HOTSPOT_STATUS.lock().ok()?.clone()
+}
+/// Settings saved or removed the hotspot's password; a join that gave up on
+/// the old one may try again.
+static PASSWORD_CHANGED: AtomicBool = AtomicBool::new(false);
+pub(crate) fn hotspot_password_changed() {
+    PASSWORD_CHANGED.store(true, Ordering::Relaxed);
 }
 /// The saved "continue replies cut off by a drop" choice, for conversations.
 static CONTINUE_AFTER_DROP: AtomicBool = AtomicBool::new(true);
@@ -151,10 +165,14 @@ pub(crate) struct KeepAwake {
     sampling: bool,
     hotspot: Hotspot,
     last_probe: Option<Instant>,
+    /// The wall and monotonic clocks at the last network check; the gap
+    /// between them grows while the Mac sleeps.
+    last_seen: Option<(SystemTime, Instant)>,
     /// A reachability check, join or leave is in flight.
     networking: bool,
-    /// Why the last join failed.
-    network_error: Option<SharedString>,
+    /// The join this app made, so a later run can still go back.
+    hotspot_record: PathBuf,
+    hotspot_log: hotspot::record::Log,
 }
 impl EventEmitter<PrefsChanged> for KeepAwake {}
 
@@ -219,9 +237,18 @@ impl KeepAwake {
             sampling: false,
             hotspot: Hotspot::default(),
             last_probe: None,
+            last_seen: None,
             networking: false,
-            network_error: None,
+            hotspot_record: data_dir.join(hotspot::record::RECORD_FILE),
+            hotspot_log: hotspot::record::Log::new(data_dir.join(hotspot::record::LOG_FILE)),
         };
+        // An earlier run moved the Mac to the hotspot and never moved it back.
+        if !cfg!(test)
+            && let Some(record) = hotspot::record::load(&this.hotspot_record)
+        {
+            this.hotspot.restore(record, Instant::now());
+            this.after_network(cx);
+        }
         // Know the power source before holding anything that depends on it.
         this.sample(cx);
         // Also undoes a lid hold or Low Power Mode a crashed run left behind.
@@ -245,15 +272,16 @@ impl KeepAwake {
         }
         let retime = self.prefs.timer_minutes != prefs.timer_minutes;
         CONTINUE_AFTER_DROP.store(prefs.continue_after_drop, Ordering::Relaxed);
-        self.prefs = prefs;
+        let old = std::mem::replace(&mut self.prefs, prefs);
         if retime {
             self.policy.retime(&self.settings(), Instant::now());
         }
         if (self.prefs.lid || self.prefs.low_power) && self.lid_ready.is_none() {
             self.check_lid_rule(cx);
         }
-        if !self.prefs.hotspot_ready() {
-            self.network_error = None;
+        if (old.hotspot, old.hotspot_ssid.trim()) != (self.prefs.hotspot, self.prefs.hotspot_ssid.trim()) {
+            self.hotspot.reset();
+            self.after_network(cx);
         }
         self.sync(cx);
     }
@@ -376,6 +404,7 @@ impl KeepAwake {
         if !closed && !self.networking && self.hotspot.lid_opened() == Step::Leave {
             self.network_step(Step::Leave, cx);
         }
+        self.after_network(cx);
         let screen = settings.lid_screen;
         let restore = (!closed).then(|| self.held.dimmed_from.take()).flatten();
         let dim = closed && lid_held && screen == LidScreen::Dim;
@@ -468,15 +497,33 @@ impl KeepAwake {
     /// While agents work, checks the internet every few seconds and moves to
     /// the hotspot after a sustained drop; back once they finish.
     fn follow_network(&mut self, cx: &mut Context<Self>) {
-        if cfg!(test) || self.networking {
+        if cfg!(test) {
             return;
         }
-        let working = self.prefs.enabled && self.prefs.hotspot_ready() && !self.agents.is_empty();
+        if PASSWORD_CHANGED.swap(false, Ordering::Relaxed) {
+            self.hotspot.reset();
+            self.after_network(cx);
+        }
+        let working = self.network_working();
         let now = Instant::now();
+        // Instant stops while the Mac sleeps; the wall clock doesn't.
+        let wall = SystemTime::now();
+        let seen = working.then_some((wall, now));
+        if let (Some((w, m)), true) = (std::mem::replace(&mut self.last_seen, seen), working) {
+            let wall_gap = wall.duration_since(w).unwrap_or_default();
+            if hotspot::slept(wall_gap, now.saturating_duration_since(m)) {
+                self.hotspot.woke(now);
+                self.after_network(cx);
+            }
+        }
+        if self.networking {
+            return;
+        }
         if !working {
             if self.hotspot.on_hotspot() {
                 let step = self.hotspot.step(true, false, now);
                 self.network_step(step, cx);
+                self.after_network(cx);
             }
             return;
         }
@@ -495,16 +542,45 @@ impl KeepAwake {
             let online = probe.await;
             let _ = this.update(cx, |this, cx| {
                 this.networking = false;
-                let working =
-                    this.prefs.enabled && this.prefs.hotspot_ready() && !this.agents.is_empty();
-                if online || !working {
-                    this.network_error = None;
-                }
+                let working = this.network_working();
                 let step = this.hotspot.step(online, working, Instant::now());
                 this.network_step(step, cx);
+                this.after_network(cx);
             });
         })
         .detach();
+    }
+    /// Agents work and a hotspot is set up.
+    fn network_working(&self) -> bool {
+        self.prefs.enabled && self.prefs.hotspot_ready() && !self.agents.is_empty()
+    }
+    /// Writes the decisions since the last call to the log and shares the
+    /// status line.
+    fn after_network(&mut self, cx: &mut Context<Self>) {
+        ON_HOTSPOT.store(self.hotspot.on_hotspot(), Ordering::Relaxed);
+        let status = self.hotspot_summary();
+        if let Ok(mut shared) = HOTSPOT_STATUS.lock() {
+            *shared = status;
+        }
+        let events = self.hotspot.take_events();
+        if events.is_empty() || cfg!(test) {
+            return;
+        }
+        let unix = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let lines: Vec<String> = events.iter().map(|e| e.json(unix)).collect();
+        let log = self.hotspot_log.clone();
+        cx.background_executor()
+            .spawn(async move { log.append(&lines) })
+            .detach();
+    }
+    fn hotspot_summary(&self) -> Option<String> {
+        if !self.prefs.hotspot_ready() && !self.hotspot.on_hotspot() {
+            return None;
+        }
+        self.hotspot
+            .summary(self.prefs.hotspot_ssid.trim(), Instant::now())
     }
     fn network_step(&mut self, step: Step, cx: &mut Context<Self>) {
         if step == Step::Stay || cfg!(test) {
@@ -514,15 +590,26 @@ impl KeepAwake {
         self.hotspot.started(step);
         let ssid = self.prefs.hotspot_ssid.trim().to_string();
         let record = self.hotspot.record().cloned();
+        let path = self.hotspot_record.clone();
         let work = cx.background_executor().spawn(async move {
             #[cfg(target_os = "macos")]
             return match step {
-                Step::Join => Outcome::Join(hotspot::mac::join(&ssid)),
-                _ => Outcome::Leave(hotspot::mac::leave(record.as_ref())),
+                Step::Join => {
+                    let joined = hotspot::mac::join(&ssid);
+                    if let Ok(joined) = &joined {
+                        let _ = hotspot::record::save(&path, &joined.record);
+                    }
+                    Outcome::Join(joined)
+                }
+                _ => {
+                    let left = hotspot::mac::leave(record.as_ref());
+                    hotspot::record::clear(&path);
+                    Outcome::Leave(left)
+                }
             };
             #[cfg(not(target_os = "macos"))]
             {
-                let _ = (ssid, record);
+                let _ = (ssid, record, path);
                 Outcome::Leave(Err("Only on macOS.".to_string()))
             }
         });
@@ -535,8 +622,7 @@ impl KeepAwake {
                     Outcome::Join(Err(error)) => this.hotspot.join_failed(error, Instant::now()),
                     Outcome::Leave(result) => this.hotspot.left(result),
                 }
-                this.network_error = this.hotspot.error().map(|e| e.message().into());
-                ON_HOTSPOT.store(this.hotspot.on_hotspot(), Ordering::Relaxed);
+                this.after_network(cx);
                 cx.notify();
             });
         })
@@ -1265,29 +1351,22 @@ impl KeepAwake {
                             ),
                     ),
             )
-            .when(self.hotspot.on_hotspot(), |d| {
+            .when_some(self.hotspot_summary(), |d, line| {
+                let error = self.hotspot.error().is_some();
                 d.child(
                     div()
                         .id("keep-awake-hotspot")
-                        .role(Role::Status)
+                        .role(if error { Role::Alert } else { Role::Status })
                         .text_size(px(11.))
                         .line_height(px(16.))
-                        .text_color(content(0.7))
-                        .child(format!(
-                            "Wi-Fi dropped, so it joined {}. Back to your usual Wi-Fi when agents finish.",
-                            self.prefs.hotspot_ssid.trim()
-                        )),
-                )
-            })
-            .when_some(self.network_error.clone(), |d, error| {
-                d.child(
-                    div()
-                        .id("keep-awake-hotspot-error")
-                        .role(Role::Alert)
-                        .text_size(px(11.))
-                        .line_height(px(16.))
-                        .text_color(gpui::rgb(0xf59e0b))
-                        .child(format!("Wi-Fi dropped. {error} Trying again every minute.")),
+                        .map(|d| {
+                            if error {
+                                d.text_color(gpui::rgb(0xf59e0b))
+                            } else {
+                                d.text_color(content(0.7))
+                            }
+                        })
+                        .child(line),
                 )
             })
             .child(self.modes(cx));
