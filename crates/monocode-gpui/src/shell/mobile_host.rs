@@ -562,6 +562,9 @@ impl Shell {
                 project["branch"] = json!(mobile_catalog::checkout_branch(&cwd, &mut branches));
                 project
             }).collect();
+            let origins = monocode_core::mobile::catalog::launch_origins(
+                monos.iter().map(|(mono, _)| (mono.id.as_str(), mono.launches.iter().map(|l| l.session_id).collect())),
+            );
             let mut sessions = Vec::new();
             for entry in entries {
                 let Some(id) = ids.get(&entry.id) else {
@@ -571,7 +574,11 @@ impl Shell {
                 let branch = if !metadata.worktree_removed && metadata.branch.as_ref().is_none_or(|branch| branch.is_empty()) {
                     mobile_catalog::checkout_branch(metadata.worktree_cwd.as_deref().unwrap_or(&entry.summary.cwd), &mut branches)
                 } else { String::new() };
-                sessions.push(mobile_catalog::session(&entry.summary, id, &entry.project, &metadata, entry.live.as_ref(), &branch));
+                let mut session = mobile_catalog::session(&entry.summary, id, &entry.project, &metadata, entry.live.as_ref(), &branch);
+                if let Some(mono) = origins.get(&entry.id) {
+                    session["monoId"] = json!(mono);
+                }
+                sessions.push(session);
             }
             sessions.sort_by_key(|s| std::cmp::Reverse(s["updatedAt"].as_u64()));
             let monos: Vec<Value> = monos
