@@ -3,31 +3,26 @@ import { Pressable, Text, View } from "react-native";
 import ReanimatedSwipeable, {
   type SwipeableMethods,
 } from "react-native-gesture-handler/ReanimatedSwipeable";
-import Animated, {
-  interpolate,
-  type EntryOrExitLayoutType,
-  useAnimatedStyle,
-  type SharedValue,
-} from "react-native-reanimated";
+import Animated, { type EntryOrExitLayoutType, type SharedValue } from "react-native-reanimated";
 
+import { PixelMascot } from "@/features/mascots/PixelMascot";
 import { relativeTime } from "@/features/workspace/relativeTime";
 import type { SessionSummary } from "@/features/workspace/types";
-import { Icon, type IconName } from "@/ui/Icon";
+import { Icon } from "@/ui/Icon";
+import { ACTION_SIZE, SwipeAction, SwipeActions } from "@/ui/SwipeAction";
 import { radii, withAlpha, themedStyles, useColors } from "@/ui/theme";
 
+import type { SessionOrigin } from "./sessionMonos";
 import { ProviderLogo } from "./ProviderLogo";
 import { TerminalSpinner } from "./TerminalSpinner";
-
-/** The swipe actions' buttons and the gap around them. */
-const ACTION_SIZE = 40;
-const ACTION_GAP = 8;
 
 /**
  * A session as one line, like a chat in the Claude app's drawer: the
  * provider's mark where that app shows its chat icon, then the title. While
  * it works, the terminal spinner takes the mark's place, as in the desktop
  * sidebar. Laid out like the drawer's nav rows. Swiping it left uncovers
- * rename and delete, as in Mail; a long press offers the same.
+ * rename, delete and, where offered, archive, as in Mail; a long press
+ * offers the same.
  *
  * `detailed` lays it out as the desktop's SessionCard instead, for the
  * Sessions screen: see SessionDetails.
@@ -39,6 +34,10 @@ export function SessionCard({
   onLongPress,
   onRename,
   onDelete,
+  onArchive,
+  origin,
+  onOpenOrigin,
+  onOriginLongPress,
   onSwipeOpen,
   entering,
   exiting,
@@ -50,6 +49,14 @@ export function SessionCard({
   onLongPress?: () => void;
   onRename?: () => void;
   onDelete?: () => void;
+  /** Archives it; the swipe offers the button only with this. */
+  onArchive?: () => void;
+  /** Who started it, when a Mono did: a chip under the title. */
+  origin?: SessionOrigin | null;
+  /** The chip was tapped; the Mono's chat opens. */
+  onOpenOrigin?: () => void;
+  /** The chip was held, for its Mono's menu. */
+  onOriginLongPress?: () => void;
   /** Told when this row's actions open, to close another row's. */
   onSwipeOpen?: (row: SwipeableMethods) => void;
   /** How the row comes into the list, when it is new. */
@@ -72,9 +79,13 @@ export function SessionCard({
       // A tap on a row with its actions out puts them away instead.
       onPress={() => (opened.current ? swipeable.current?.close() : onPress())}
       onLongPress={onLongPress}
-      accessibilityActions={onLongPress ? [{ name: "longpress", label: "Rename or delete" }] : undefined}
+      accessibilityActions={[
+        ...(onLongPress ? [{ name: "longpress", label: "Rename or delete" }] : []),
+        ...(onArchive ? [{ name: "archive", label: "Archive" }] : []),
+      ]}
       onAccessibilityAction={({ nativeEvent }) => {
         if (nativeEvent.actionName === "longpress") onLongPress?.();
+        if (nativeEvent.actionName === "archive") onArchive?.();
       }}
       style={({ pressed }) => [
         detailed ? styles.card : styles.row,
@@ -83,7 +94,12 @@ export function SessionCard({
       ]}
     >
       {detailed ? (
-        <SessionDetails session={session} />
+        <SessionDetails
+          session={session}
+          origin={origin}
+          onOpenOrigin={onOpenOrigin}
+          onOriginLongPress={onOriginLongPress}
+        />
       ) : (
         <>
           <View style={styles.mark}>
@@ -126,7 +142,12 @@ export function SessionCard({
           opened.current = false;
         }}
         renderRightActions={(progress) => (
-          <RowActions progress={progress} onRename={act(onRename)} onDelete={act(onDelete)} />
+          <RowActions
+            progress={progress}
+            onRename={act(onRename)}
+            onDelete={act(onDelete)}
+            onArchive={onArchive ? act(onArchive) : undefined}
+          />
         )}
       >
         {row}
@@ -141,7 +162,17 @@ export function SessionCard({
  * branch with the model and its provider's mark on its right. The desktop
  * reveals the model's name on hover; with no hover here it always shows.
  */
-function SessionDetails({ session }: { session: SessionSummary }) {
+function SessionDetails({
+  session,
+  origin,
+  onOpenOrigin,
+  onOriginLongPress,
+}: {
+  session: SessionSummary;
+  origin?: SessionOrigin | null;
+  onOpenOrigin?: () => void;
+  onOriginLongPress?: () => void;
+}) {
   const colors = useColors();
   const styles = useStyles();
   const model = session.modelName || session.model;
@@ -176,87 +207,109 @@ function SessionDetails({ session }: { session: SessionSummary }) {
           <ProviderLogo harness={session.harness} size={14} color={colors.muted} />
         </View>
       </View>
+      {origin ? (
+        <OriginChip origin={origin} onPress={onOpenOrigin} onLongPress={onOriginLongPress} />
+      ) : null}
     </>
   );
 }
 
 /**
- * Rename and delete, uncovered from the right edge: delete, nearest the edge,
- * fades and grows in first, then rename, as the row slides aside.
+ * Who started a session, on a line of its own under the meta so it never
+ * crowds the branch and model: the Mono's mascot in its colour and "via" its
+ * name, quiet. Tapping opens the Mono's chat. A Mono the desktop has since
+ * deleted shows greyed and says so, with no tap.
+ */
+export function OriginChip({
+  origin,
+  onPress,
+  onLongPress,
+}: {
+  origin: SessionOrigin;
+  onPress?: () => void;
+  onLongPress?: () => void;
+}) {
+  const colors = useColors();
+  const styles = useStyles();
+  const removed = origin.kind === "removed";
+  const name = removed ? "Mono removed" : `via ${origin.mono.name}`;
+  const tappable = !removed && origin.openable && !!onPress;
+  // A removed Mono has no menu either.
+  const held = removed ? undefined : onLongPress;
+  return (
+    <Pressable
+      accessibilityRole={tappable ? "button" : "text"}
+      accessibilityLabel={removed ? "Started by a Mono that was removed" : `Started by ${origin.mono.name}`}
+      accessibilityHint={tappable ? "Opens the Mono's chat" : undefined}
+      disabled={!tappable && !held}
+      onPress={tappable ? onPress : undefined}
+      onLongPress={held}
+      hitSlop={{ top: 6, bottom: 6, left: 4, right: 12 }}
+      style={({ pressed }) => [styles.chip, pressed && tappable && styles.chipPressed]}
+    >
+      <View style={styles.chipMascot}>
+        {removed ? (
+          <Icon name="bot" size={14} color={colors.faint} />
+        ) : (
+          <PixelMascot name={origin.mono.mascot} color={origin.mono.color} size={14} />
+        )}
+      </View>
+      <Text style={[styles.chipLabel, removed && styles.chipRemoved]} numberOfLines={1}>
+        {name}
+      </Text>
+    </Pressable>
+  );
+}
+
+/**
+ * Archive, delete and rename, uncovered from the right edge: archive, nearest
+ * the edge, fades and grows in first, then delete, then rename, as the row
+ * slides aside.
  */
 function RowActions({
   progress,
   onRename,
   onDelete,
+  onArchive,
 }: {
   progress: SharedValue<number>;
   onRename: () => void;
   onDelete: () => void;
+  onArchive?: () => void;
 }) {
   const colors = useColors();
-  const styles = useStyles();
   return (
-    <View style={styles.actions}>
-      <RowAction
+    <SwipeActions>
+      <SwipeAction
         progress={progress}
-        from={0.35}
+        from={onArchive ? 0.4 : 0.35}
         icon="edit"
         label="Rename"
         color={colors.content}
         background={colors.surfaceRaised}
         onPress={onRename}
       />
-      <RowAction
+      <SwipeAction
         progress={progress}
-        from={0}
+        from={onArchive ? 0.2 : 0}
         icon="trash"
         label="Delete"
         color={colors.deletions}
         background={withAlpha(colors.deletions, 0.16)}
         onPress={onDelete}
       />
-    </View>
-  );
-}
-
-function RowAction({
-  progress,
-  from,
-  icon,
-  label,
-  color,
-  background,
-  onPress,
-}: {
-  progress: SharedValue<number>;
-  /** How far open the row is when this button starts to appear. */
-  from: number;
-  icon: IconName;
-  label: string;
-  color: string;
-  background: string;
-  onPress: () => void;
-}) {
-  const styles = useStyles();
-  const style = useAnimatedStyle(() => {
-    const shown = interpolate(progress.get(), [from, from + 0.65], [0, 1], "clamp");
-    return { opacity: shown, transform: [{ scale: 0.7 + 0.3 * shown }] };
-  });
-  return (
-    <Animated.View style={style}>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={label}
-        onPress={onPress}
-        style={({ pressed }) => [
-          styles.action,
-          { backgroundColor: background },
-          pressed && styles.actionPressed,
-        ]}
-      >
-        <Icon name={icon} size={18} color={color} />
-      </Pressable>
-    </Animated.View>
+      {onArchive ? (
+        <SwipeAction
+          progress={progress}
+          from={0}
+          icon="archive"
+          label="Archive"
+          color={colors.accent}
+          background={withAlpha(colors.accent, 0.16)}
+          onPress={onArchive}
+        />
+      ) : null}
+    </SwipeActions>
   );
 }
 
@@ -345,21 +398,26 @@ const useStyles = themedStyles((colors) => ({
   noBranch: {
     color: colors.faint,
   },
-  actions: {
+  chip: {
+    alignSelf: "flex-start",
     flexDirection: "row",
     alignItems: "center",
-    gap: ACTION_GAP,
-    paddingLeft: ACTION_GAP,
-    paddingRight: 4,
+    gap: 6,
+    maxWidth: "100%",
   },
-  action: {
-    width: ACTION_SIZE,
-    height: ACTION_SIZE,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: radii.row,
-  },
-  actionPressed: {
+  chipPressed: {
     opacity: 0.6,
+  },
+  chipMascot: {
+    width: 14,
+    height: 14,
+  },
+  chipLabel: {
+    flexShrink: 1,
+    color: colors.faint,
+    fontSize: 13,
+  },
+  chipRemoved: {
+    fontStyle: "italic",
   },
 }));

@@ -1,4 +1,4 @@
-import { Host, HStack, Label, Menu, Picker, Spacer } from "@expo/ui/swift-ui";
+import { Host, HStack, Label, Menu, Picker, Spacer, Toggle } from "@expo/ui/swift-ui";
 import {
   accessibilityLabel,
   contentShape,
@@ -49,21 +49,25 @@ export function filterSessions(sessions: SessionSummary[], filter: SessionFilter
 
 /**
  * The round button beside the Sessions page's search: a native menu to show
- * only the sessions working now, or one agent's, from those in the list.
- * Lit while a filter is on.
+ * only the sessions working now, or one agent's, from those in the list, and
+ * to show or hide the pinned Monos group. Lit while a filter is on, hiding
+ * the Monos included.
  */
 export function SessionFilterMenu({
   value,
   onChange,
   harnesses,
+  monos,
 }: {
   value: SessionFilter;
   onChange: (value: SessionFilter) => void;
   /** The agents the list has sessions from. */
   harnesses: Harness[];
+  /** The pinned Monos group, offered only on a page that has Monos. */
+  monos?: { shown: boolean; onChange: (shown: boolean) => void };
 }) {
   const colors = useColors();
-  const on = value.working || !!value.harness;
+  const on = value.working || !!value.harness || (!!monos && !monos.shown);
   return (
     <View>
       <LiquidView borderRadius={SEARCH_BAR / 2} innerStyle={styles.round}>
@@ -109,6 +113,14 @@ export function SessionFilterMenu({
                 <Label key={harness} title={HARNESS_NAMES[harness]} modifiers={[tag(harness)]} />
               ))}
             </Picker>
+          ) : null}
+          {monos ? (
+            <Toggle
+              label="Monos"
+              systemImage="person.2"
+              isOn={monos.shown}
+              onIsOnChange={monos.onChange}
+            />
           ) : null}
         </Menu>
       </Host>
