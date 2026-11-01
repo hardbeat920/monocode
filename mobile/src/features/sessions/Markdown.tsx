@@ -1,6 +1,5 @@
 import {
   createContext,
-  Fragment,
   memo,
   use,
   useMemo,
@@ -207,18 +206,72 @@ function Table({ rows, fade }: { rows: Inline[][][]; fade?: Fade }) {
   );
 }
 
+/** The word number just past the last word of `node`, to tell if any of it still fades. */
+const ends = new WeakMap<Inline, number>();
+function inlineEnd(node: Inline): number {
+  let end = ends.get(node);
+  if (end === undefined) {
+    if (node.type === "text")
+      end = (node.word ?? 0) + splitWords(node.text).filter((part) => !/^\s/.test(part)).length;
+    else if (node.type === "strong" || node.type === "em" || node.type === "strike")
+      end = Math.max(0, ...node.children.map(inlineEnd));
+    else end = 0;
+    ends.set(node, end);
+  }
+  return end;
+}
+
+const nodeSignatures = new WeakMap<Inline, string>();
+function sameInline(
+  previous: { node: Inline; fade?: Fade },
+  next: { node: Inline; fade?: Fade },
+) {
+  if (previous.fade !== next.fade) return false;
+  if (previous.node === next.node) return true;
+  let a = nodeSignatures.get(previous.node);
+  if (a === undefined) nodeSignatures.set(previous.node, (a = JSON.stringify(previous.node)));
+  let b = nodeSignatures.get(next.node);
+  if (b === undefined) nodeSignatures.set(next.node, (b = JSON.stringify(next.node)));
+  return a === b;
+}
+
 function Inlines({ nodes, fade }: { nodes: Inline[]; fade?: Fade }) {
-  const styles = useStyles();
-  const tone = use(Muted) ? 0.65 : 1;
-  const openFile = use(FileOpener);
   return (
     <>
       {nodes.map((node, index) => (
-        <Fragment key={index}>{inline(node, fade, tone, styles, openFile)}</Fragment>
+        // A node whose words have all settled gets no fade, so it keeps its
+        // props and skips the frame; only the node still fading renders.
+        <InlineNode key={index} node={node} fade={fade && inlineEnd(node) > fade.from ? fade : undefined} />
       ))}
     </>
   );
 }
+
+const InlineNode = memo(function InlineNode({ node, fade }: { node: Inline; fade?: Fade }) {
+  const styles = useStyles();
+  const tone = use(Muted) ? 0.65 : 1;
+  const openFile = use(FileOpener);
+  return <>{inline(node, fade, tone, styles, openFile)}</>;
+}, sameInline);
+
+/** `withAlpha` strings by ink and alpha: the words of a burst share one alpha, so most are looked up. */
+const alphaColors = new Map<string, Map<number, string>>();
+function inkAt(ink: string, alpha: number): string {
+  let byAlpha = alphaColors.get(ink);
+  if (!byAlpha) alphaColors.set(ink, (byAlpha = new Map()));
+  let color = byAlpha.get(alpha);
+  if (color === undefined) {
+    // A fade passes through many alphas; keep only a few seconds' worth.
+    if (byAlpha.size >= 512) byAlpha.clear();
+    byAlpha.set(alpha, (color = withAlpha(ink, alpha)));
+  }
+  return color;
+}
+
+/** One fading word. Its colour is its only prop, so it renders only when that changes. */
+const FadingWord = memo(function FadingWord({ text, color }: { text: string; color: string }) {
+  return <Text style={{ color }}>{text}</Text>;
+});
 
 /**
  * A run of text with its fading words in their own spans. Words already in
@@ -239,11 +292,7 @@ function FadingText({ text, word, fade, tone }: { text: string; word: number; fa
     if (plain) out.push(plain);
     plain = "";
     const alpha = fade.clock.alpha(index, fade.now, fade.ms);
-    out.push(
-      <Text key={index} style={{ color: withAlpha(colors.content, alpha * tone) }}>
-        {part}
-      </Text>,
-    );
+    out.push(<FadingWord key={index} text={part} color={inkAt(colors.content, alpha * tone)} />);
     index++;
   }
   if (plain) out.push(plain);

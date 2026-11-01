@@ -59,10 +59,8 @@ vi.mock("@expo/ui/swift-ui/modifiers", () => ({
   tint: vi.fn(),
 }));
 vi.mock("@/features/connection/ConnectionProvider", () => ({
-  useConnection: () => ({
-    pairing: { desktop: { fingerprint: desktop.fingerprint } },
-    command: desktop.usage,
-  }),
+  useCommand: () => desktop.usage,
+  usePairing: () => ({ desktop: { fingerprint: desktop.fingerprint } }),
 }));
 vi.mock("@/features/settings/defaultModel", () => ({
   useDefaultModel: () => null,

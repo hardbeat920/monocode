@@ -8,10 +8,8 @@ const desktop = vi.hoisted(() => ({
   fingerprint: "desktop",
 }));
 vi.mock("@/features/connection/ConnectionProvider", () => ({
-  useConnection: () => ({
-    command: desktop.command,
-    pairing: { desktop: { fingerprint: desktop.fingerprint } },
-  }),
+  useCommand: () => desktop.command,
+  usePairing: () => ({ desktop: { fingerprint: desktop.fingerprint } }),
 }));
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }

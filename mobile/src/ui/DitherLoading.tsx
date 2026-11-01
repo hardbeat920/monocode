@@ -2,10 +2,10 @@ import { useEffect } from "react";
 import { Image, PixelRatio, StyleSheet } from "react-native";
 import { scheduleOnRN } from "react-native-worklets";
 import Animated, {
+  cancelAnimation,
   Easing,
   withDelay,
   useAnimatedStyle,
-  useReducedMotion,
   useSharedValue,
   withRepeat,
   withTiming,
@@ -15,6 +15,7 @@ import { encodePng } from "@/features/background/dither";
 
 import { traceSwitch } from "./ScenePager";
 import { useColors } from "./theme";
+import { useAnimationsRunning } from "./useAnimationsRunning";
 
 // A screen's content loading, in the desktop charts' dither: a ring of 3pt
 // cells inked through the 4x4 Bayer pattern (crates/monocode-gpui/src/visuals/
@@ -140,15 +141,16 @@ export function DitherLoading({
   onGone?: () => void;
 }) {
   const colors = useColors();
-  const reduced = useReducedMotion();
+  const running = useAnimationsRunning();
   const source = strip();
   const turn = useSharedValue(0);
   const ground = useSharedValue(0);
   const ring = useSharedValue(0);
   useEffect(() => {
-    if (!reduced)
-      turn.set(withRepeat(withTiming(FRAMES, { duration: TURN_MS, easing: Easing.linear }), -1));
-  }, [turn, reduced]);
+    if (!running) return;
+    turn.set(withRepeat(withTiming(FRAMES, { duration: TURN_MS, easing: Easing.linear }), -1));
+    return () => cancelAnimation(turn);
+  }, [turn, running]);
   useEffect(() => {
     if (!leaving) {
       ground.set(withTiming(1, GROUND_IN));

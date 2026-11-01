@@ -1,7 +1,7 @@
 import { useFocusEffect } from "expo-router";
 import { useCallback, useState } from "react";
 
-import { useConnection } from "@/features/connection/ConnectionProvider";
+import { useCommand } from "@/features/connection/ConnectionProvider";
 
 /** A Mono's details, as the desktop's Overview tab has them (mono.profile). */
 export type MonoProfile = {
@@ -48,7 +48,7 @@ export type MonoHabit = {
 
 /** The profile, read each time its screen comes into view, and on a pull. */
 export function useMonoProfile(monoId: string) {
-  const { command } = useConnection();
+  const command = useCommand();
   const [profile, setProfile] = useState<MonoProfile | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);

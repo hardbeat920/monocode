@@ -34,6 +34,7 @@ import {
 } from "@/ui/LiquidView";
 import { GLASS_MIN_OPACITY } from "@/ui/SceneFade";
 import { Ticker, type TickerHandle } from "@/ui/Ticker";
+import { useAnimationsRunning } from "@/ui/useAnimationsRunning";
 import { radii, themedStyles, useColors, withAlpha } from "@/ui/theme";
 
 import { FinishedSessions } from "./FinishedSessions";
@@ -489,8 +490,11 @@ function Artwork({
   const tone = waiting ? colors.caution : colors.accent;
   const reduceMotion = useReducedMotion();
   const glow = useSharedValue(0.6);
+  // The glow loops only while seen: not in a shut drawer, in the background,
+  // or with Reduce Motion on.
+  const running = useAnimationsRunning();
   useEffect(() => {
-    if (reduceMotion) return;
+    if (!running) return;
     // Waiting pulses quicker, to catch the eye.
     const half = waiting ? 520 : 1100;
     glow.set(
@@ -503,7 +507,7 @@ function Artwork({
       ),
     );
     return () => cancelAnimation(glow);
-  }, [waiting, reduceMotion, glow]);
+  }, [waiting, running, glow]);
   const ring = useAnimatedStyle(() => ({ opacity: glow.get() }));
 
   // A ring thrown out and fading, for a session that just arrived.

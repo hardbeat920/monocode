@@ -1,7 +1,7 @@
 import { useEffect, useSyncExternalStore } from "react";
 import { Alert } from "react-native";
 
-import { useConnection } from "@/features/connection/ConnectionProvider";
+import { usePairing } from "@/features/connection/ConnectionProvider";
 import {
   useDefaultModel,
   useDefaultRuntimeMode,
@@ -61,7 +61,7 @@ export function useSessionChoice(
   sessionId: string | undefined,
 ) {
   const { sessions, configureSession } = useWorkspace();
-  const desktop = useConnection().pairing?.desktop.fingerprint;
+  const desktop = usePairing()?.desktop.fingerprint;
   const defaultModel = useDefaultModel();
   const defaultAccess = useDefaultRuntimeMode();
   const session = sessionId
@@ -141,7 +141,7 @@ export function useForgetChoiceOnLeave(
   projectId: string,
   sessionId: string | undefined,
 ) {
-  const desktop = useConnection().pairing?.desktop.fingerprint;
+  const desktop = usePairing()?.desktop.fingerprint;
   const scope = choiceScope(desktop, projectId, sessionId);
   useEffect(
     () => () => {

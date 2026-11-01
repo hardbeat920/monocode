@@ -1,7 +1,7 @@
 import Storage from "expo-sqlite/kv-store";
 import { useSyncExternalStore } from "react";
 
-import { useConnection } from "@/features/connection/ConnectionProvider";
+import { usePairing } from "@/features/connection/ConnectionProvider";
 import type { ModelPick, RuntimeMode } from "@/features/models/types";
 import type { Harness } from "@/features/workspace/types";
 
@@ -56,7 +56,7 @@ function save(desktop: string, next: DefaultModels) {
 
 /** The paired desktop's defaults, and setters that save them. */
 export function useDefaultModels() {
-  const desktop = useConnection().pairing?.desktop.deviceId ?? "";
+  const desktop = usePairing()?.desktop.deviceId ?? "";
   const defaults = useSyncExternalStore(subscribe, () => load(desktop));
   return {
     defaults,

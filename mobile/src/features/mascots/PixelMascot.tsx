@@ -1,14 +1,28 @@
-import { View } from "react-native";
+import { memo } from "react";
+import { StyleSheet, View } from "react-native";
 
 import { withAlpha, themedStyles } from "@/ui/theme";
 
-import { BULB, PIXEL_GRID, pixelLayers, pixelOffset, type PixelRect } from "./pixelMascots";
+import {
+  BULB,
+  PIXEL_GRID,
+  pixelLayers,
+  pixelOffset,
+  type PixelLayers,
+  type PixelRect,
+} from "./pixelMascots";
 import { useFrameToggle } from "./useFrameToggle";
 
 /** What a mascot's agent is doing, as on desktop. */
 export type MascotStatus = "idle" | "working" | "needs-you";
 
-function Rects({ rects, unit }: { rects: readonly PixelRect[]; unit: number }) {
+const Rects = memo(function Rects({
+  rects,
+  unit,
+}: {
+  rects: readonly PixelRect[];
+  unit: number;
+}) {
   return (
     <>
       {rects.map(({ x, y, w, h, fill }, i) => (
@@ -26,12 +40,24 @@ function Rects({ rects, unit }: { rects: readonly PixelRect[]; unit: number }) {
       ))}
     </>
   );
-}
+});
+
+/** One frame's body and eyes; the layers are cached, so it renders once per mascot. */
+const Figure = memo(function Figure({ layers, unit }: { layers: PixelLayers; unit: number }) {
+  return (
+    <>
+      <Rects rects={layers.body} unit={unit} />
+      <Rects rects={layers.open} unit={unit} />
+    </>
+  );
+});
 
 /**
  * Shaded pixel mascot used for monos, the native take on the desktop PixelMascot.
- * Drawn with Views from the same rects, so there is no SVG dependency. Swaps
- * frames while working and shows the bulb when the mono needs you.
+ * Drawn with Views from the same rects, so there is no SVG dependency. While
+ * working it keeps both frames mounted and flips which one shows, so the shared
+ * clock changes two styles rather than rebuilding hundreds of Views. Shows the
+ * bulb when the mono needs you.
  */
 export function PixelMascot({
   name,
@@ -48,15 +74,26 @@ export function PixelMascot({
   centered?: boolean;
 }) {
   const talking = useFrameToggle(status === "working");
-  const layers = pixelLayers(name, color, talking);
+  const rest = pixelLayers(name, color, false);
+  const talk = status === "working" ? pixelLayers(name, color, true) : null;
   const unit = size / PIXEL_GRID;
   const offset = centered ? pixelOffset(name) : { x: 0, y: 0 };
 
   return (
     <View style={{ width: size, height: size }} accessibilityElementsHidden>
       <View style={{ position: "absolute", left: offset.x * unit, top: offset.y * unit, width: size, height: size }}>
-        <Rects rects={layers.body} unit={unit} />
-        <Rects rects={layers.open} unit={unit} />
+        {talk ? (
+          <>
+            <View style={talking ? styles.off : styles.frame}>
+              <Figure layers={rest} unit={unit} />
+            </View>
+            <View style={talking ? styles.frame : styles.off}>
+              <Figure layers={talk} unit={unit} />
+            </View>
+          </>
+        ) : (
+          <Figure layers={rest} unit={unit} />
+        )}
       </View>
       {status === "needs-you" ? (
         <View style={{ position: "absolute", left: 12.5 * unit, top: -2.5 * unit }}>
@@ -96,6 +133,11 @@ export function MonoMascot({
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  frame: { ...StyleSheet.absoluteFill },
+  off: { ...StyleSheet.absoluteFill, display: "none" },
+});
 
 const useStyles = themedStyles((colors) => ({
   dot: {

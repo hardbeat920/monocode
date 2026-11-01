@@ -1,7 +1,7 @@
 import { Redirect, useLocalSearchParams, useNavigation } from "expo-router";
 import { useEffect } from "react";
 
-import { useConnection } from "@/features/connection/ConnectionProvider";
+import { usePairing } from "@/features/connection/ConnectionProvider";
 import { SessionFrame } from "@/features/sessions/SessionScreen";
 import { rememberPlace } from "@/features/workspace/lastPlace";
 import { onProjectPick } from "@/features/workspace/projectPick";
@@ -27,7 +27,7 @@ export default function ProjectRoute() {
     [navigation],
   );
   // Where the app opens next time.
-  const desktop = useConnection().pairing?.desktop.fingerprint;
+  const desktop = usePairing()?.desktop.fingerprint;
   const placeId = project?.id;
   useEffect(() => {
     if (placeId) rememberPlace(desktop, { kind: "project", id: placeId });

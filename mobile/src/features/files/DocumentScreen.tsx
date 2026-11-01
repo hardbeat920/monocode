@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { ActivityIndicator, ScrollView, Text, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 
-import { useConnection } from "@/features/connection/ConnectionProvider";
+import { useCommand } from "@/features/connection/ConnectionProvider";
 import { VisualTree } from "@/features/visuals/VisualTree";
 import type { VisualNode } from "@/features/visuals/types";
 import { Markdown } from "@/features/sessions/Markdown";
@@ -38,7 +38,7 @@ export function DocumentScreen({
 }) {
   const styles = useStyles();
   const colors = useColors();
-  const { command } = useConnection();
+  const command = useCommand();
   const [document, setDocument] = useState<MonoDocument | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {

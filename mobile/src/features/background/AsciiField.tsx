@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { StyleSheet, Text, View, type LayoutChangeEvent } from "react-native";
-import { useReducedMotion } from "react-native-reanimated";
 
 import { MONO } from "@/features/changes/diffTheme";
+import { useAnimationsRunning } from "@/ui/useAnimationsRunning";
 
 /** Characters from empty to dense. */
 const RAMP = " .·:-=+*#%@";
@@ -28,22 +28,26 @@ const REACH = 0.55;
  * Interfering waves drawn in characters, drifting slowly: densest at the top
  * and thinning out before halfway down, so the words and buttons at the foot
  * sit on plain black. Coloured in bands that sweep diagonally across it.
- * Still, on one frame, when motion is reduced or it's asked to be.
+ * Still, on one frame, when motion is reduced or it's asked to be. Holds its
+ * frame, with no timer running, while paused, covered or in the background.
  */
 export function AsciiField({
   opacity = 0.3,
   still = false,
+  paused = false,
 }: {
   opacity?: number;
   /** Drawn once and left, as behind an empty session. */
   still?: boolean;
+  /** Holds the field where it is, say under a camera or a sheet. */
+  paused?: boolean;
 }) {
-  const reduceMotion = useReducedMotion();
+  const running = useAnimationsRunning() && !paused;
   const [size, setSize] = useState<{ cols: number; rows: number } | null>(null);
   const [time, setTime] = useState(0);
 
   useEffect(() => {
-    if (reduceMotion || still || !size) return;
+    if (!running || still || !size) return;
     const started = Date.now() - time * 1000;
     const interval = setInterval(
       () => setTime((Date.now() - started) / 1000),
@@ -52,7 +56,7 @@ export function AsciiField({
     return () => clearInterval(interval);
     // `time` only seeds the clock, so a restart picks up where it left off.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reduceMotion, still, size]);
+  }, [running, still, size]);
 
   // Worked out again only for a new frame, not whenever the parent renders.
   const runs = useMemo(

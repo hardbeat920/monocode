@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { useConnection } from "@/features/connection/ConnectionProvider";
+import { useCommand, usePairing } from "@/features/connection/ConnectionProvider";
 
 export type AccountUsageSnapshot = {
   status: {
@@ -25,7 +25,8 @@ export function useAccountUsage(
   projectId: string | undefined,
   provider: string | undefined,
 ) {
-  const { command, pairing } = useConnection();
+  const command = useCommand();
+  const pairing = usePairing();
   const desktop = pairing?.desktop.fingerprint;
   const enabled =
     !!projectId && (provider === "claude" || provider === "codex");

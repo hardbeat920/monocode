@@ -28,6 +28,8 @@ import Animated, {
 } from "react-native-reanimated";
 import { scheduleOnRN } from "react-native-worklets";
 
+import { useAnimationsRunning } from "./useAnimationsRunning";
+
 /** Points a second, about the pace of the Music app's now-playing title. */
 const SPEED = 30;
 /** Space between one title and the next. */
@@ -72,6 +74,7 @@ export function Ticker({
   ref?: Ref<TickerHandle>;
 }) {
   const reduceMotion = useReducedMotion();
+  const running = useAnimationsRunning();
   const [box, setBox] = useState(0);
   const [widths, setWidths] = useState<Record<string, number>>({});
   // A title joins the line once measured, so a new one doesn't hold it up.
@@ -127,9 +130,11 @@ export function Ticker({
     const dt = Math.min((timeSincePreviousFrame ?? 16) / 1000, 1 / 20);
     travel.set(travel.get() + SPEED * dt);
   }, false);
+  // The frame clock runs only while the line moves and is seen: not in a shut
+  // drawer, a page swiped away, or the background.
   useLayoutEffect(() => {
-    frame.setActive(moving);
-  }, [frame, moving]);
+    frame.setActive(moving && running);
+  }, [frame, moving, running]);
 
   // Reached through a ref, as the reaction below keeps its first closure.
   // The line's order is the items' with some not in it yet, so a place in

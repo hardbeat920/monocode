@@ -22,6 +22,7 @@ import {
   useConnection,
   type Conversation,
 } from "@/features/connection/ConnectionProvider";
+import { backoff, pause, waitForActive } from "@/features/connection/appActivity";
 import { selectedWorkspace } from "@/features/connection/selection";
 import type { ModelCatalog, ModelChoice } from "@/features/models/types";
 import { toWire, type Attachment } from "@/features/sessions/attachments";
@@ -294,7 +295,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     const id = watching;
     let disposed = false;
     let watchId: number | null = null;
-    const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    const stop = new AbortController();
+    // Failed opens in a row, for waiting longer between them.
+    let failures = 0;
     // What the watch has built so far: frames are changes against it.
     let known: Turn[] = [];
     // The turn a reopened watch was asked to carry on from. If it opens
@@ -347,9 +350,12 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         }
       }
       while (!disposed) {
+        // Backgrounded: wait to be shown again rather than wake to check.
+        await waitForActive(stop.signal);
+        if (disposed) break;
         const pairing = current.current.pairing;
-        if (AppState.currentState !== "active" || !pairing) {
-          await pause(500);
+        if (!pairing) {
+          await pause(500, stop.signal);
           continue;
         }
         try {
@@ -372,12 +378,18 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           while (!disposed && AppState.currentState === "active") {
             const frames = await nextUpdates<WatchFrame>(watchId, 10_000);
             if (disposed || current.current.pairing !== pairing) break;
+            failures = 0;
             if (frames.length && !apply(frames)) break;
           }
         } catch {
           if (disposed) break;
           await read(id);
-          await pause((starting.current.get(id) ?? 0) > Date.now() ? 200 : 1000);
+          await pause(
+            (starting.current.get(id) ?? 0) > Date.now()
+              ? 200
+              : backoff(1000, failures++, 15_000),
+            stop.signal,
+          );
         }
         if (watchId !== null) void closeWatch(watchId);
         watchId = null;
@@ -394,6 +406,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     });
     return () => {
       disposed = true;
+      stop.abort();
       subscription.remove();
       save();
       if (watchId !== null) void closeWatch(watchId);
