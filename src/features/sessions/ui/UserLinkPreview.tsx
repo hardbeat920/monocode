@@ -131,10 +131,10 @@ function GithubWorkItemPreview({
   const tooltipId = useId();
   const [open, setOpen] = useState(false);
   const [item, setItem] = useState<GithubWorkItem | null>(() =>
-    peekGithubWorkItem(workItem.repo, workItem.kind, workItem.number),
+    peekGithubWorkItem(workItem.repo, workItem.kind, workItem.number, cwd),
   );
   const [details, setDetails] = useState<GithubWorkItemDetails | null>(() =>
-    peekGithubWorkItemDetails(workItem.repo, workItem.kind, workItem.number),
+    peekGithubWorkItemDetails(workItem.repo, workItem.kind, workItem.number, cwd),
   );
   const [loadState, setLoadState] = useState<
     "idle" | "loading" | "ready" | "unavailable"
@@ -153,10 +153,10 @@ function GithubWorkItemPreview({
     if (requestStarted.current) return;
     requestStarted.current = true;
     const cachedItem =
-      item ?? peekGithubWorkItem(workItem.repo, workItem.kind, workItem.number);
+      item ?? peekGithubWorkItem(workItem.repo, workItem.kind, workItem.number, cwd);
     const cachedDetails =
       details ??
-      peekGithubWorkItemDetails(workItem.repo, workItem.kind, workItem.number);
+      peekGithubWorkItemDetails(workItem.repo, workItem.kind, workItem.number, cwd);
     if (!cachedItem || !cachedDetails) setLoadState("loading");
 
     void Promise.allSettled([
