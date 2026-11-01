@@ -3043,6 +3043,41 @@ mod tests {
         cx.run_until_parked();
     }
     #[gpui::test]
+    fn a_phones_triage_is_kept_with_the_desktop_read_state_and_saved(cx: &mut TestAppContext) {
+        use monocode_core::mobile::inbox::Mark;
+        let window = fixture(cx);
+        window
+            .update(cx, |fixture, _, cx| {
+                fixture.inbox.update(cx, |inbox, cx| {
+                    let key = fixture.item.key();
+                    inbox.state.seen.seeded = true;
+                    assert!(inbox.phone_view().fetched_at.is_none());
+                    assert!(inbox.phone_mark("github:nope", Mark::Done, cx).is_err());
+                    inbox.phone_mark(&key, Mark::Done, cx).unwrap();
+                    assert!(inbox.phone_view().triage.is_done(&key));
+                    let until = monocode_core::time::now_ms() as i64 + 60_000;
+                    inbox.phone_mark(&key, Mark::Snooze(until), cx).unwrap();
+                    assert_eq!(inbox.phone_view().triage.snoozed_until(&key, 0), Some(until));
+                    inbox.phone_mark(&key, Mark::Undone, cx).unwrap();
+                    inbox.phone_mark(&key, Mark::Unseen, cx).unwrap();
+                    assert!(inbox.state.seen.unseen(&fixture.item));
+                    inbox.phone_mark(&key, Mark::Seen, cx).unwrap();
+                    assert!(!inbox.state.seen.unseen(&fixture.item));
+                    // The desktop reads the same state back from its saved view.
+                    let saved = locked(&inbox.store)
+                        .map(|db| ViewState::load(&db))
+                        .unwrap();
+                    assert!(!saved.triage.is_done(&key));
+                    assert_eq!(saved.triage.snoozed_until(&key, 0), Some(until));
+                    assert!(!saved.seen.unseen(&fixture.item));
+                    // A phone looking at a list that was just fetched starts no refresh.
+                    inbox.refresh_for_phone(cx);
+                    assert!(!inbox.loading);
+                });
+            })
+            .unwrap();
+    }
+    #[gpui::test]
     fn the_inbox_opens_scoped_to_its_project_and_labels_projects_by_appearance(
         cx: &mut TestAppContext,
     ) {

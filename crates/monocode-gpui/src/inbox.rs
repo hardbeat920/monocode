@@ -113,7 +113,29 @@ pub(crate) struct Inbox {
     refresh_queued: bool,
     notifications: model::NotificationTracker,
     last_refresh: Instant,
+    /// When the snapshot was last replaced by a fetch, in ms; 0 before the first.
+    fetched_at: i64,
     _subscriptions: Vec<Subscription>,
+}
+
+/// How often the list refreshes in the background: sooner while the Inbox is
+/// on screen.
+fn poll_interval(active: bool) -> Duration {
+    Duration::from_secs(if active { 120 } else { 300 })
+}
+
+/// What a paired phone reads from the Inbox: the cached snapshot and the state
+/// shared with the desktop, borrowed.
+pub(crate) struct PhoneView<'a> {
+    pub items: &'a [Item],
+    pub errors: &'a std::collections::BTreeMap<String, String>,
+    pub connections: &'a std::collections::BTreeMap<String, model::Status>,
+    pub seen: &'a model::Seen,
+    pub triage: &'a model::Triage,
+    /// ms, None before the first fetch ends.
+    pub fetched_at: Option<i64>,
+    pub interval_ms: i64,
+    pub service: &'a Service,
 }
 
 /// The inbox opens scoped to the project it was opened from.
@@ -239,8 +261,7 @@ impl Inbox {
                         .await;
                     if this
                         .update(cx, |this, cx| {
-                            let interval = Duration::from_secs(if this.active { 120 } else { 300 });
-                            if this.last_refresh.elapsed() >= interval {
+                            if this.last_refresh.elapsed() >= poll_interval(this.active) {
                                 this.refresh(cx);
                             }
                             if this.active
@@ -336,6 +357,7 @@ impl Inbox {
             refresh_queued: false,
             notifications: model::NotificationTracker::default(),
             last_refresh: Instant::now(),
+            fetched_at: 0,
             _subscriptions: subscriptions,
         }
     }
@@ -405,6 +427,52 @@ impl Inbox {
             }
         }
         cx.notify();
+    }
+
+    pub(crate) fn phone_view(&self) -> PhoneView<'_> {
+        PhoneView {
+            items: &self.snapshot.items,
+            errors: &self.snapshot.errors,
+            connections: &self.snapshot.connections,
+            seen: &self.state.seen,
+            triage: &self.state.triage,
+            fetched_at: (self.fetched_at > 0).then_some(self.fetched_at),
+            interval_ms: poll_interval(self.active).as_millis() as i64,
+            service: &self.service,
+        }
+    }
+
+    /// A phone looked at the list: refresh in the background when the last
+    /// fetch is older than the polling interval of an open Inbox. The answer
+    /// does not wait for it.
+    pub(crate) fn refresh_for_phone(&mut self, cx: &mut Context<Self>) {
+        let due = self.last_refresh.elapsed() >= poll_interval(true);
+        if due && !self.loading {
+            self.refresh(cx);
+        }
+    }
+
+    /// A phone's triage action on a listed item, kept and saved with the
+    /// desktop's own read state. The item as it now stands.
+    pub(crate) fn phone_mark(
+        &mut self,
+        key: &str,
+        mark: monocode_core::mobile::inbox::Mark,
+        cx: &mut Context<Self>,
+    ) -> Result<Item, String> {
+        let item = self
+            .snapshot
+            .items
+            .iter()
+            .find(|item| item.key() == key)
+            .cloned()
+            .ok_or("That item is no longer in the Inbox")?;
+        let now = monocode_core::time::now_ms() as i64;
+        self.state.triage.prune(now);
+        mark.apply(&item, &mut self.state.seen, &mut self.state.triage, now);
+        self.save();
+        cx.notify();
+        Ok(item)
     }
 
     pub(crate) fn unread_count(&self) -> usize {
@@ -500,6 +568,7 @@ impl Inbox {
                     this.authors = authors(&snapshot.items);
                 }
                 this.state.seen.seed(&snapshot.items);
+                this.fetched_at = monocode_core::time::now_ms() as i64;
                 this.snapshot = snapshot;
                 this.sessions = sessions;
                 if this.active

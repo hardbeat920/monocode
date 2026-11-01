@@ -3,6 +3,7 @@
 mod avatar;
 mod media;
 pub use media::png as media_png;
+pub use media::phone_image;
 pub mod azure_devops;
 pub use avatar::png as avatar_png;
 mod github;
