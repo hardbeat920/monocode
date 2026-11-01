@@ -8,6 +8,9 @@ use serde_json::Value;
 pub enum Panel {
     Tasks(TaskList),
     Agent(AgentRun),
+    Thread(super::threads::ThreadRun),
+    /// A plan an Orchestrator turn submitted; its run shows in the same card.
+    Orchestration(crate::orchestration::Plan),
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskList {
@@ -551,6 +554,12 @@ impl ToolCall {
         if let Some(panel) = &self.panel {
             return Some(panel.clone());
         }
+        if let Some(panel) = self.thread_panel() {
+            return Some(panel);
+        }
+        if let Some(plan) = self.orchestration_plan() {
+            return Some(Panel::Orchestration(plan));
+        }
         let input: Value = serde_json::from_str(&self.input).unwrap_or_default();
         let name = self.name.to_lowercase().replace([' ', '-', '_'], "");
         if ["todowrite", "writetodos", "updatetodos", "updateplan"]
@@ -598,8 +607,12 @@ impl ToolCall {
         }
     }
     pub fn agent_mut(&mut self) -> Option<&mut AgentRun> {
+        // Cache only agent panels: thread and orchestration panels are derived
+        // from the output, which a snapshot taken at tool_use would freeze.
         if self.panel.is_none() {
-            self.panel = self.panel();
+            self.panel = self
+                .panel()
+                .filter(|panel| matches!(panel, Panel::Agent(_)));
         }
         match self.panel.as_mut() {
             Some(Panel::Agent(run)) => Some(run),

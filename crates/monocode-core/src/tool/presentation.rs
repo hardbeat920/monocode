@@ -325,15 +325,15 @@ pub enum VisualStep {
 }
 
 /// Recognizes Monocode's visual tools however a provider names an MCP tool:
-/// `visual_show`, `monocode_visual:visual_show`,
-/// `mcp__monocode_visual__visual_show` or `monocode_visual.visual_show`.
+/// `visual_show`, `monocode:visual_show`, `mcp__monocode__visual_show`, or
+/// the older server name `monocode_visual` in saved transcripts.
 pub fn visual_tool(name: &str) -> Option<VisualStep> {
     let (server, tool) = name
         .rsplit_once("__")
         .or_else(|| name.rsplit_once(':'))
         .or_else(|| name.rsplit_once('.'))
         .unwrap_or(("", name));
-    if !server.is_empty() && !server.contains("monocode_visual") {
+    if !server.is_empty() && !server.contains("monocode") {
         return None;
     }
     match tool {
@@ -975,6 +975,8 @@ mod visual_tests {
             "monocode_visual:visual_show",
             "mcp__monocode_visual__visual_show",
             "monocode_visual.visual_show",
+            "mcp__monocode__visual_show",
+            "monocode:visual_show",
         ] {
             assert_eq!(visual_tool(name), Some(VisualStep::Show), "{name}");
         }

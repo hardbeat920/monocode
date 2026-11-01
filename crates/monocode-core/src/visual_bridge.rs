@@ -22,6 +22,42 @@ const ENV_TOKEN: &str = "MONOCODE_VISUAL_TOKEN";
 const ENV_SESSION: &str = "MONOCODE_VISUAL_SESSION";
 const ENV_EXECUTABLE: &str = "MONOCODE_VISUAL_EXECUTABLE";
 
+/// The MCP server's name, so its tools reach the model as `mcp__monocode__*`.
+pub const SERVER_NAME: &str = "monocode";
+/// What the MCP server needs from the provider process: the visual capability
+/// and, in a chat that can start threads, its app capability.
+const SERVER_ENV: [&str; 9] = [
+    ENV_ENDPOINT,
+    ENV_TOKEN,
+    ENV_SESSION,
+    ENV_EXECUTABLE,
+    "MONOCODE_APP_ENDPOINT",
+    "MONOCODE_APP_TOKEN",
+    "MONOCODE_APP_SESSION",
+    "MONOCODE_THREADS",
+    crate::orchestration::ENV,
+];
+/// Harnesses ship their own subagent tools, which run out of the user's sight
+/// and only on that harness. Claude Code also defers MCP tools to a name until
+/// searched, so the server instructions and each harness's own system prompt
+/// (see [`instructions`]) are where an agent learns that MonoCode starts
+/// subagents, and how that differs from opening a new thread for the user.
+pub(crate) const THREAD_INSTRUCTIONS: &str = "MonoCode runs your subagents. Whenever you would hand work to a subagent or another agent, and whenever the user asks for one on another harness or model (Codex, Claude, Haiku and so on), start it with thread_start and collect its reply with thread_wait. Each runs as its own chat the user can watch in MonoCode. Use thread_start instead of your built-in subagent or task tool, and do not run agent CLIs from the shell. A subagent works for you and reports back. When the user asks for a new thread or chat instead, open it with new_thread: it is theirs, so you don't send to it or wait on it. If you can't tell which they mean, ask.";
+fn threads_enabled(environment: &HashMap<String, String>) -> bool {
+    environment
+        .get("MONOCODE_THREADS")
+        .is_some_and(|v| v == "1")
+}
+/// The chat the user talks to, which can start MonoCode threads.
+pub fn lead_chat(environment: &HashMap<String, String>) -> bool {
+    configured(environment) && threads_enabled(environment)
+}
+/// Claude Code shows these in full rather than as a name behind tool search,
+/// so in a lead chat they compete on equal terms with its own subagent tool.
+const ALWAYS_LOADED: [&str; 3] = ["thread_start", "thread_wait", NEW_THREAD];
+/// Opens a top-level thread the user owns, unlike thread_start's children.
+const NEW_THREAD: &str = "new_thread";
+
 /// Loaded through visual_docs or the CLI only when authoring a visual. Keep the
 /// SDK out of ordinary prompts, server instructions and tool descriptions; only
 /// the short USAGE trigger is part of the system prompt.
@@ -99,12 +135,18 @@ const USAGE: &str = "### Native visuals\n\nAnswer data with a trend, comparison 
 
 /// Usage guidance for a provider that received the visual MCP server. Claude
 /// Code may defer MCP tools behind ToolSearch, so it is told how to load them.
+/// A lead chat is also told to start its subagents through MonoCode.
 pub fn instructions(environment: &HashMap<String, String>, deferred: bool) -> Option<String> {
     configured(environment).then(|| {
-        if deferred {
-            format!("{USAGE} The monocode_visual tools may be deferred: load them with ToolSearch before you call them.")
+        let usage = if deferred {
+            format!("{USAGE} The monocode tools may be deferred: load them with ToolSearch before you call them.")
         } else {
             USAGE.to_owned()
+        };
+        if lead_chat(environment) {
+            format!("{usage}\n\n{THREAD_INSTRUCTIONS}")
+        } else {
+            usage
         }
     })
 }
@@ -119,7 +161,7 @@ pub fn requested_prompt(request: &str) -> String {
     };
     format!(
         "Create and publish at least one native inline visual in this conversation during this turn. The user invoked the visualization command, so a visual is required even if you would normally answer only in prose.\n\n\
-         Read `visual_docs`, build the visual, run `visual_check`, fix any errors, and call `visual_show` before finishing. The monocode_visual MCP tools may be deferred; load them with ToolSearch if needed. If these tools are unavailable, use the executable in MONOCODE_VISUAL_EXECUTABLE: run `\"$MONOCODE_VISUAL_EXECUTABLE\" visual docs`, write the JavaScript source to a file, then run `\"$MONOCODE_VISUAL_EXECUTABLE\" visual check --input FILE` and `\"$MONOCODE_VISUAL_EXECUTABLE\" visual show --input FILE --title TITLE`.\n\n\
+         Read `visual_docs`, build the visual, run `visual_check`, fix any errors, and call `visual_show` before finishing. The monocode MCP tools may be deferred; load them with ToolSearch if needed. If these tools are unavailable, use the executable in MONOCODE_VISUAL_EXECUTABLE: run `\"$MONOCODE_VISUAL_EXECUTABLE\" visual docs`, write the JavaScript source to a file, then run `\"$MONOCODE_VISUAL_EXECUTABLE\" visual check --input FILE` and `\"$MONOCODE_VISUAL_EXECUTABLE\" visual show --input FILE --title TITLE`.\n\n\
          Use the native visual SDK, never a server, browser or HTML file. Include the embed line returned by visual_show in your reply, alongside concise supporting prose. If publication fails, explain the failure; do not claim a visual was shown. Never print capability environment variables.\n\n\
          User request:\n{request}"
     )
@@ -127,7 +169,8 @@ pub fn requested_prompt(request: &str) -> String {
 
 /// Claude permission rule that pre-approves every visual tool. Publishing
 /// only affects this conversation, so read-only and plan turns may use it.
-pub const CLAUDE_ALLOWED_TOOLS: &str = "mcp__monocode_visual";
+pub const CLAUDE_ALLOWED_TOOLS: &str =
+    "mcp__monocode__visual_docs,mcp__monocode__visual_check,mcp__monocode__visual_show";
 
 #[derive(Serialize, Deserialize)]
 struct Wire {
@@ -716,10 +759,14 @@ pub fn acp_servers(environment: &HashMap<String, String>) -> Value {
     };
     // ACP's stdio server shape omits the transport discriminator.
     server.as_object_mut().unwrap().remove("type");
-    server["name"] = "monocode_visual".into();
-    server["env"] = [ENV_ENDPOINT, ENV_TOKEN, ENV_SESSION, ENV_EXECUTABLE]
+    server["name"] = SERVER_NAME.into();
+    server["env"] = SERVER_ENV
         .into_iter()
-        .map(|key| json!({"name":key,"value":environment[key]}))
+        .filter_map(|key| {
+            environment
+                .get(key)
+                .map(|value| json!({"name":key,"value":value}))
+        })
         .collect::<Vec<_>>()
         .into();
     json!([server])
@@ -732,13 +779,12 @@ pub fn configure_codex(command: &mut std::process::Command, environment: &HashMa
     for (key, value) in [
         ("command", json!(environment[ENV_EXECUTABLE])),
         ("args", json!(["visual-mcp"])),
-        (
-            "env_vars",
-            json!([ENV_ENDPOINT, ENV_TOKEN, ENV_SESSION, ENV_EXECUTABLE]),
-        ),
+        // thread_wait holds a call for up to 50 seconds.
+        ("tool_timeout_sec", json!(90)),
+        ("env_vars", json!(SERVER_ENV)),
     ] {
         // JSON's strings and arrays are valid TOML literals for these values.
-        command.args(["-c", &format!("mcp_servers.monocode_visual.{key}={value}")]);
+        command.args(["-c", &format!("mcp_servers.{SERVER_NAME}.{key}={value}")]);
     }
 }
 
@@ -755,14 +801,157 @@ pub fn tool_definitions() -> Vec<Value> {
     ]
 }
 
+pub(crate) fn thread_tool_definitions() -> Vec<Value> {
+    ["start", "send", "wait", "read", "stop", "close", "list"].into_iter().map(|action| {
+        let mut properties = json!({"requestId":{"type":"string","maxLength":128,"description":"Reuse for an uncertain retry with identical input"}});
+        let required = match action {
+            "start" => {
+                properties["prompt"] = json!({"type":"string","minLength":1,"maxLength":240000});
+                for key in ["model", "effort", "title"] { properties[key] = json!({"type":"string"}); }
+                let harnesses: Vec<&str> = crate::provider::Kind::ALL.iter().map(|kind| kind.id()).collect();
+                properties["harness"] = json!({"type":"string","description":format!("One of {}. Defaults to yours.", harnesses.join(", "))});
+                properties["model"] = json!({"type":"string","description":"The harness's model id or alias, such as haiku for claude"});
+                properties["modelSettings"] = json!({"type":"object","additionalProperties":{"type":"string"}});
+                properties["workspaceMode"] = json!({"enum":["current","worktree"]});
+                vec!["prompt"]
+            }
+            "list" => vec![],
+            _ => {
+                properties["threadId"] = json!({"type":"integer","minimum":1});
+                match action {
+                    "send" => { properties["prompt"] = json!({"type":"string","minLength":1,"maxLength":240000}); }
+                    "wait" => { properties["timeoutSeconds"] = json!({"type":"integer","minimum":0,"maximum":50,"default":50}); }
+                    "read" => {
+                        properties["before"] = json!({"type":["string","integer"]});
+                        properties["limit"] = json!({"type":"integer","minimum":1,"maximum":3});
+                        properties["maxChars"] = json!({"type":"integer","minimum":200,"maximum":6000});
+                    }
+                    _ => (),
+                }
+                if action == "send" { vec!["threadId","prompt"] } else { vec!["threadId"] }
+            }
+        };
+        let detail = match action {
+            "start" => "Start a subagent: a child chat on any harness and model that works for you and reports back, which the user can watch in MonoCode. Use it instead of a built-in subagent tool or an agent CLI. When the user asks for a new thread or chat of their own, use new_thread instead.",
+            "send" => "Send a follow-up to an idle child; fails while it is busy.",
+            "wait" => "Wait up to 50 seconds. Returns idle with success and the final reply, working, or needsInput for a user approval or question. Tell the user when input is needed.",
+            "read" => "Read recent prose exchanges with an owned child, using nextBefore for older turns.",
+            "stop" => "Stop an owned child.",
+            "close" => "Close a finished child: archive its chat and take it off your list and the user's sidebar. Fails while it is working or needs input; stop it first. Close children you no longer need.",
+            _ => "List your own children and their current status.",
+        };
+        json!({"name":format!("thread_{action}"),"description":format!("{detail} Start/send return at once; call thread_wait until status is idle. Children share your checkout unless workspaceMode is worktree. Children cannot spawn or message other threads."),"inputSchema":{"type":"object","properties":properties,"required":required,"additionalProperties":false},"annotations":{"readOnlyHint":matches!(action,"wait"|"read"|"list"),"destructiveHint":false,"openWorldHint":false}})
+    }).chain(std::iter::once(new_thread_definition())).collect()
+}
+
+fn new_thread_definition() -> Value {
+    let harnesses: Vec<&str> = crate::provider::Kind::ALL
+        .iter()
+        .map(|kind| kind.id())
+        .collect();
+    let properties = json!({
+        "prompt":{"type":"string","minLength":1,"maxLength":240000,"description":"The thread's first message"},
+        "title":{"type":"string","maxLength":160},
+        "harness":{"type":"string","description":format!("One of {}. Defaults to yours.", harnesses.join(", "))},
+        "model":{"type":"string","description":"The harness's model id or alias, such as haiku for claude"},
+        "effort":{"type":"string"},
+        "modelSettings":{"type":"object","additionalProperties":{"type":"string"}},
+        "workspaceMode":{"enum":["current","worktree"]},
+        "draft":{"type":"boolean","description":"Leave the prompt in the new thread's composer for the user to send"},
+        "reveal":{"type":"boolean","description":"Open the new thread for the user now"},
+        "requestId":{"type":"string","maxLength":128,"description":"Reuse for an uncertain retry with identical input"},
+    });
+    json!({"name":NEW_THREAD,"description":"Open a new thread for the user: a top-level chat in this project's sidebar that the user owns and continues. Use it when the user asks for a new thread, chat or conversation. It is not a subagent: you don't send to it, wait on it or get its reply. Tell the user it is open.","inputSchema":{"type":"object","properties":properties,"required":["prompt"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})
+}
+
+fn call_thread_tool(
+    action: &str,
+    mut input: Value,
+    environment: &HashMap<String, String>,
+) -> Result<Value, String> {
+    if !threads_enabled(environment) {
+        return Err("Thread tools are only available to top-level threads".into());
+    }
+    let request = crate::app_access::optional_text(&input, "requestId", 128)?
+        .unwrap_or_else(crate::mono::new_id);
+    input
+        .as_object_mut()
+        .ok_or("Input must be an object")?
+        .remove("requestId");
+    let action = format!("threads.{action}");
+    crate::app_access::validate_threads(&action, &input)?;
+    let response = crate::mono::bridge::call(&action, input, &request, environment)?;
+    if response["ok"] == true {
+        Ok(response["result"].clone())
+    } else {
+        Err(response["error"]
+            .as_str()
+            .unwrap_or("Thread request failed")
+            .to_owned())
+    }
+}
+
+pub fn read_only_tool(name: &str) -> bool {
+    matches!(
+        name.strip_prefix("mcp__monocode__")
+            .or_else(|| name.strip_prefix("monocode:"))
+            .or_else(|| name.strip_prefix("monocode_")),
+        Some("thread_wait" | "thread_read" | "thread_list" | crate::orchestration::TOOL)
+    )
+}
+
+fn planning_orchestration(environment: &HashMap<String, String>) -> bool {
+    environment
+        .get(crate::orchestration::ENV)
+        .is_some_and(|v| v == "1")
+}
+
+/// The plan lives in the tool call's input, where the app reads it when the
+/// turn ends. This only refuses a plan it could not start.
+fn check_orchestration_plan(
+    input: &Value,
+    environment: &HashMap<String, String>,
+) -> Result<Value, String> {
+    if !planning_orchestration(environment) {
+        return Err("Orchestration plans can only be submitted in an Orchestrator turn".into());
+    }
+    let plan = crate::orchestration::from_input(input)?;
+    Ok(json!({
+        "ok": true,
+        "title": plan.title,
+        "assignments": plan.tasks.len(),
+        "next": "The user reviews and starts the plan in MonoCode. Reply with a short explanation of the approach; do not repeat the plan."
+    }))
+}
+
 fn mcp_response(request: Value, environment: &HashMap<String, String>) -> Option<Value> {
     let id = request.get("id")?.clone();
     let result = match request["method"].as_str().unwrap_or("") {
         "initialize" => Ok(
-            json!({"protocolVersion":request["params"]["protocolVersion"].as_str().unwrap_or("2024-11-05"),"capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"monocode_visual","version":env!("CARGO_PKG_VERSION")}}),
-        ),
+            json!({"protocolVersion":request["params"]["protocolVersion"].as_str().unwrap_or("2024-11-05"),"capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":SERVER_NAME,"version":env!("CARGO_PKG_VERSION")}}),
+        )
+        .map(|mut result: Value| {
+            if threads_enabled(environment) {
+                result["instructions"] = THREAD_INSTRUCTIONS.into();
+            }
+            result
+        }),
         "ping" => Ok(json!({})),
-        "tools/list" => Ok(json!({"tools":tool_definitions()})),
+        "tools/list" => {
+            let mut tools = tool_definitions();
+            if threads_enabled(environment) {
+                tools.extend(thread_tool_definitions());
+                for tool in &mut tools {
+                    if ALWAYS_LOADED.contains(&tool["name"].as_str().unwrap_or_default()) {
+                        tool["_meta"]["anthropic/alwaysLoad"] = true.into();
+                    }
+                }
+            }
+            if planning_orchestration(environment) {
+                tools.push(crate::orchestration::tool_definition());
+            }
+            Ok(json!({"tools":tools}))
+        }
         "tools/call" => {
             let input = request["params"]["arguments"].clone();
             let result = match request["params"]["name"].as_str().unwrap_or("") {
@@ -772,6 +961,11 @@ fn mcp_response(request: Value, environment: &HashMap<String, String>) -> Option
                     .ok_or("source must be a JavaScript string".into())
                     .and_then(check),
                 "visual_show" => publish_with_environment(input, environment),
+                crate::orchestration::TOOL => check_orchestration_plan(&input, environment),
+                NEW_THREAD => call_thread_tool("new", input, environment),
+                name if name.starts_with("thread_") => {
+                    call_thread_tool(&name["thread_".len()..], input, environment)
+                }
                 _ => Err("Unknown native visual tool".into()),
             };
             Ok(match result {
@@ -974,6 +1168,57 @@ mod tests {
     }
 
     #[test]
+    fn only_a_lead_chat_lists_thread_tools_and_only_a_planning_turn_the_plan_tool() {
+        let names = |environment: &HashMap<String, String>| -> Vec<String> {
+            let catalog = mcp_response(json!({"id":1,"method":"tools/list"}), environment).unwrap();
+            catalog["result"]["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|tool| tool["name"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        let plain = names(&HashMap::new());
+        assert!(!plain.iter().any(|name| name.starts_with("thread_")));
+        assert!(!plain.contains(&crate::orchestration::TOOL.to_owned()));
+        let lead = HashMap::from([("MONOCODE_THREADS".to_string(), "1".to_string())]);
+        let tools = names(&lead);
+        for name in ["thread_start", "thread_wait", "thread_close", NEW_THREAD] {
+            assert!(tools.contains(&name.to_owned()), "{name}");
+        }
+        let initialization =
+            mcp_response(json!({"id":2,"method":"initialize","params":{}}), &lead).unwrap();
+        assert_eq!(
+            initialization["result"]["instructions"], THREAD_INSTRUCTIONS,
+            "the lead learns that MonoCode starts its subagents"
+        );
+        let catalog = mcp_response(json!({"id":3,"method":"tools/list"}), &lead).unwrap();
+        let start = catalog["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "thread_start")
+            .unwrap();
+        assert_eq!(start["_meta"]["anthropic/alwaysLoad"], true);
+        let planning = HashMap::from([(crate::orchestration::ENV.to_string(), "1".to_string())]);
+        assert!(names(&planning).contains(&crate::orchestration::TOOL.to_owned()));
+        let refused = mcp_response(
+            json!({"id":4,"method":"tools/call","params":{"name":"thread_list","arguments":{}}}),
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(refused["result"]["isError"], true);
+        assert!(read_only_tool("mcp__monocode__thread_wait"));
+        assert!(!read_only_tool("mcp__monocode__thread_start"));
+        assert!(!read_only_tool("mcp__other__thread_wait"));
+        // Visual tools keep working under the server's new name.
+        assert_eq!(
+            crate::tool::visual_tool("mcp__monocode__visual_show"),
+            Some(crate::tool::VisualStep::Show)
+        );
+    }
+
+    #[test]
     fn stable_session_configuration_rejects_old_in_flight_requests() {
         let server = Server::start(83).unwrap();
         let environment = server.environment(std::path::Path::new("/test/app"));
@@ -1010,7 +1255,7 @@ mod tests {
         assert!(arguments.contains(ENV_TOKEN));
         assert!(!arguments.contains(&environment[ENV_TOKEN]));
         let acp = acp_servers(&environment);
-        assert_eq!(acp[0]["name"], "monocode_visual");
+        assert_eq!(acp[0]["name"], SERVER_NAME);
         assert_eq!(acp[0]["env"].as_array().unwrap().len(), 4);
         assert_eq!(mcp_server(&environment).unwrap()["command"], "/test/app");
     }

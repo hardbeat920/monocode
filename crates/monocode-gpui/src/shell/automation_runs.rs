@@ -460,6 +460,8 @@ impl Shell {
                         }
                         let linked = summary.work_item.clone();
                         this.add(summary, cx);
+                        // An automation run does not start threads of its own.
+                        this.sessions[&id].update(cx, |view, _| view.managed = true);
                         if let Some(linked) = linked {
                             this.sessions[&id]
                                 .update(cx, |view, _| view.summary.work_item = Some(linked));

@@ -2,6 +2,7 @@
 use serde::{Deserialize, Serialize};
 mod presentation;
 pub mod tasks;
+pub mod threads;
 pub use presentation::{visual_tool, CommandStep, ToolPresentation, VisualStep};
 
 /// The app's own step while a conversation carries over from another model.
@@ -74,6 +75,8 @@ impl ToolCall {
         match self.panel() {
             Some(tasks::Panel::Tasks(list)) => return ("Tasks".into(), list.progress()),
             Some(tasks::Panel::Agent(run)) => return ("Agent".into(), run.title().into()),
+            Some(tasks::Panel::Thread(run)) => return ("Thread".into(), run.title),
+            Some(tasks::Panel::Orchestration(plan)) => return ("Orchestration".into(), plan.title),
             None => {}
         }
         let shown = self.presentation();

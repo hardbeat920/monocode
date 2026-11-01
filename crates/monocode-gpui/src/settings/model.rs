@@ -466,6 +466,12 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         "pretooluse settings.json block command notification",
     ),
     (
+        "monocode-subagents-only",
+        Section::Providers,
+        "Subagents only through MonoCode",
+        "agent task explore delegate spawn threads multi-agent codex claude built-in",
+    ),
+    (
         "claude-entrypoint",
         Section::Providers,
         "Identify as Monocode to Claude",

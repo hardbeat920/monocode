@@ -1,6 +1,6 @@
 //! The workspace catalog a phone polls, and the session pages it browses.
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// How many of a project's sessions the workspace poll carries; the sessions
 /// sheet pages through the rest with `sessions.list`.
@@ -9,18 +9,29 @@ const SESSION_PAGE_MAX: usize = 100;
 
 /// The workspace poll's sessions: each project's most recent, every busy one,
 /// and every Mono's. `sessions` is newest first, as the catalog is sorted.
+/// Orchestrator workers (with a `leadId`) ride along with their lead and don't
+/// count toward the project's recent ones.
 pub fn recent_sessions(sessions: &Value) -> Vec<Value> {
     let mut per_project: HashMap<&str, usize> = HashMap::new();
-    sessions
-        .as_array()
-        .into_iter()
-        .flatten()
+    let all = sessions.as_array().map(Vec::as_slice).unwrap_or_default();
+    let kept: HashSet<&str> = all
+        .iter()
+        .filter(|session| !session["leadId"].is_string())
         .filter(|session| {
             let count = per_project
                 .entry(session["projectId"].as_str().unwrap_or(""))
                 .or_default();
             *count += 1;
             *count <= RECENT_SESSIONS || session["busy"] == true || session["monoId"].is_string()
+        })
+        .filter_map(|session| session["id"].as_str())
+        .collect();
+    all.iter()
+        .filter(|session| {
+            session["leadId"]
+                .as_str()
+                .or(session["id"].as_str())
+                .is_some_and(|id| kept.contains(id))
         })
         .cloned()
         .collect()
@@ -46,6 +57,8 @@ pub fn session_page(sessions: &Value, params: &Value) -> Value {
         .into_iter()
         .flatten()
         .filter(|session| session["projectId"] == project)
+        // Workers open from their lead's Agents sheet, not the list.
+        .filter(|session| !session["leadId"].is_string())
         .filter(|session| since <= 0.0 || session["updatedAt"].as_f64().unwrap_or(0.0) >= since)
         .filter(|session| {
             !session["harness"]
@@ -115,5 +128,29 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn workers_ride_with_their_lead_and_stay_out_of_pages() {
+        let mut sessions: Vec<Value> = (0..RECENT_SESSIONS + 1)
+            .map(|i| json!({"id":format!("s{i}"),"projectId":"p"}))
+            .collect();
+        // Newest first: the workers come before both leads.
+        sessions.insert(0, json!({"id":"w1","projectId":"p","leadId":"s0"}));
+        sessions.insert(0, json!({"id":"w2","projectId":"p","leadId":"s20"}));
+        let sessions = json!(sessions);
+        let ids: Vec<String> = recent_sessions(&sessions)
+            .iter()
+            .map(|s| s["id"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(ids.len(), RECENT_SESSIONS + 1);
+        assert!(ids.contains(&"w1".to_string()));
+        assert!(!ids.contains(&"w2".to_string()) && !ids.contains(&"s20".to_string()));
+        let page = session_page(&sessions, &json!({"projectId":"p","limit":100}));
+        assert!(page["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|s| s["leadId"].is_null()));
     }
 }

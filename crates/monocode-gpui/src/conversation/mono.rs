@@ -43,11 +43,14 @@ impl Conversation {
         }
         self.install_transfer(settings, None, cx);
         if send {
-            self.draft_action(true, cx);
+            self.apply_draft_action(true, cx);
         }
         cx.emit(SessionChanged);
     }
     pub(crate) fn save_app_draft(&mut self, prompt: String, cx: &mut Context<Self>) {
+        if self.driven_by.is_some() {
+            return;
+        }
         self.input
             .update(cx, |input, cx| input.set_text(prompt, cx));
         self.save_message_draft(cx);
@@ -85,6 +88,9 @@ impl Conversation {
         draft: bool,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
+        if self.driven_by.is_some() {
+            return Err("This child thread is driven by its lead".into());
+        }
         if self.busy
             || self.stopping
             || self.mono_ui.external.is_some()

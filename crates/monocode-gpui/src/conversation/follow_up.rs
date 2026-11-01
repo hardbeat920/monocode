@@ -135,6 +135,9 @@ impl Conversation {
         self.save_follow_ups(cx);
     }
     pub(super) fn save_message_draft(&mut self, cx: &mut Context<Self>) {
+        if self.driven_by.is_some() {
+            return;
+        }
         if self.is_remote() {
             self.remote_save_draft(cx);
             return;
@@ -200,6 +203,12 @@ impl Conversation {
         cx.emit(SessionChanged);
     }
     pub(super) fn draft_action(&mut self, send: bool, cx: &mut Context<Self>) {
+        if self.driven_by.is_some() {
+            return;
+        }
+        self.apply_draft_action(send, cx);
+    }
+    pub(super) fn apply_draft_action(&mut self, send: bool, cx: &mut Context<Self>) {
         if self.is_remote() {
             self.remote_draft_action(send, cx);
             return;
@@ -413,6 +422,9 @@ impl Conversation {
         ) = previous;
     }
     fn resume_queue(&mut self, cx: &mut Context<Self>) {
+        if self.driven_by.is_some() {
+            return;
+        }
         if self.stopping {
             self.defer_history_action(|this, cx| this.resume_queue(cx), cx);
             return;

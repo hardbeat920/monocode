@@ -10,14 +10,16 @@ mod edit_last_turn;
 mod follow_up;
 pub(crate) mod git_actions;
 mod history;
-mod mobile;
+pub(crate) mod mobile;
 mod mono;
 mod notifications;
 mod remote;
 pub(crate) mod remote_plans;
 mod response_menu;
+pub(crate) mod subagents;
 #[cfg(test)]
 mod submission_tests;
+mod threads;
 mod title;
 mod worktree_naming;
 use crate::{
@@ -122,6 +124,10 @@ struct OpenMenu {
 use response_menu::ResponseMenu;
 pub(crate) struct SessionChanged;
 pub(crate) struct ChooseFolder(pub(crate) AnchorSlot);
+pub(crate) struct OpenThread(pub i64);
+/// The user removed these finished children from the lead's spawn tree; the
+/// shell closes (archives) them.
+pub(crate) struct CloseThreads(pub Vec<i64>);
 /// The review card asked to open the session's recorded changes.
 pub(crate) struct OpenSessionChanges(pub(crate) crate::review::ReviewTab);
 pub(crate) struct Conversation {
@@ -161,10 +167,16 @@ pub(crate) struct Conversation {
     app_environment: std::collections::HashMap<String, String>,
     /// The running turn's policy, independent of the next composer's mode.
     pub(crate) app_read_only: bool,
+    /// The running turn prepares an orchestration plan.
     planning_orchestration: bool,
-    pub(crate) orchestration_plan: Option<monocode_core::orchestration::Plan>,
+    /// The plan under review, with the tool call that submitted it (none for
+    /// the tagged fallback).
+    pub(crate) orchestration_plan: Option<(Option<String>, monocode_core::orchestration::Plan)>,
     orchestration_error: Option<String>,
-    pub(crate) orchestration_progress: Option<String>,
+    /// The shell's cards for this lead's plans and runs.
+    orchestration_views: Vec<(Option<String>, crate::transcript::orchestration::RunView)>,
+    /// One of this lead's runs is not finished.
+    pub(crate) orchestration_active: bool,
     status: String,
     loaded: bool,
     history_unloaded: bool,
@@ -177,6 +189,18 @@ pub(crate) struct Conversation {
     notification_cancelled: bool,
     /// The store's saved-draft flag, until the conversation loads its own.
     pub(crate) draft_hint: bool,
+    /// Automation runs, Orchestrator workers and subagents: they are run by
+    /// something else, so they cannot start threads of their own.
+    pub(crate) managed: bool,
+    /// The lead that drives this subagent. The user can watch it, answer
+    /// its approvals and stop it, but not send it messages.
+    pub(crate) driven_by: Option<i64>,
+    /// The lead's title, for the read-only bar.
+    pub(crate) thread_lead_title: String,
+    /// The thread whose message the next turn delivers, kept on its receipt.
+    pub(crate) thread_sender: Option<i64>,
+    /// This lead's subagents, for the strip above its composer.
+    subagents: Vec<subagents::Subagent>,
     /// The provider model for the next turn; `None` uses its configured default.
     model: Option<String>,
     resolved_model: Option<String>,
@@ -610,7 +634,8 @@ impl Conversation {
             planning_orchestration: false,
             orchestration_plan: None,
             orchestration_error: None,
-            orchestration_progress: None,
+            orchestration_views: Vec::new(),
+            orchestration_active: false,
             status: "Loading conversation…".into(),
             loaded: false,
             history_unloaded: false,
@@ -621,6 +646,11 @@ impl Conversation {
             stopping: false,
             notification_cancelled: false,
             draft_hint: false,
+            managed: false,
+            driven_by: None,
+            thread_lead_title: String::new(),
+            thread_sender: None,
+            subagents: Vec::new(),
             model: std::env::var(format!(
                 "MONOCODE_{}_MODEL",
                 summary.provider.to_uppercase()
@@ -839,6 +869,9 @@ impl Conversation {
         settings: Settings,
         cx: &mut Context<Self>,
     ) {
+        if self.driven_by.is_some() {
+            return;
+        }
         if self.editing_last_turn.pending() {
             self.defer_edit_transfer(settings, Some(prompt), cx);
             return;
@@ -870,6 +903,9 @@ impl Conversation {
     /// `invert` sends a mid-turn message the opposite way from the follow-up
     /// preference: queued when it steers, steering when it queues.
     fn send_follow_up(&mut self, invert: bool, cx: &mut Context<Self>) {
+        if self.driven_by.is_some() {
+            return;
+        }
         if self.is_remote() && self.remote_send_guard(cx) {
             return;
         }
@@ -979,9 +1015,6 @@ impl Conversation {
             }
             return;
         }
-        self.planning_orchestration = self.settings.orchestrator;
-        self.orchestration_plan = None;
-        self.orchestration_error = None;
         self.launch_prompt(prompt, cx);
         if self.busy && mode.is_some() {
             self.clear_submitted_mode(cx);
@@ -1083,6 +1116,13 @@ impl Conversation {
         self.sync_tool_paths(cx);
         self.transcript
             .update(cx, |v, _| v.identity(&self.summary.provider, &model_label));
+        // Set here, where the turn really starts, so a deferred or failed
+        // launch cannot leave a later turn parsed as a plan.
+        self.planning_orchestration = self.settings.orchestrator;
+        if self.planning_orchestration {
+            self.orchestration_plan = None;
+            self.orchestration_error = None;
+        }
         self.begin_turn(cx);
         let generation = self.submission_generation;
         let source_provider = self.summary.provider.clone();
@@ -1112,6 +1152,8 @@ impl Conversation {
                     .or_insert_with(|| control.current.clone());
             }
         }
+        let sender = self.thread_sender.take();
+        self.transcript.update(cx, |t, _| t.live_sender = sender);
         settings.turn_model = Some(monocode_core::agent::TurnInfo {
             provider: self.summary.provider.clone(),
             model: model_label.to_string(),
@@ -1120,6 +1162,7 @@ impl Conversation {
                 .map(|model| model.id.clone())
                 .or(self.model.clone()),
             started_at: Some(monocode_core::time::now_ms()),
+            sender,
             ..Default::default()
         });
         if !self.is_remote() && settings.prepared_prompt.is_none() {
@@ -1131,8 +1174,11 @@ impl Conversation {
         settings.disable_claude_hooks = cx
             .try_global::<crate::settings::Preferences>()
             .is_some_and(|p| !p.claude_hooks);
+        settings.monocode_subagents_only = cx
+            .try_global::<crate::settings::Preferences>()
+            .is_some_and(|p| p.monocode_subagents_only);
         settings.model = self.model.clone();
-        settings.environment.extend(self.app_environment.clone());
+        settings.environment = self.provider_environment(&settings);
         if settings.remote_action.as_ref().is_none_or(|action| {
             (action["type"] == "send"
                 && action["draftBlockId"].is_null()
@@ -1490,7 +1536,6 @@ impl Conversation {
                             });
                             if stopping {
                                 this.planning_orchestration = false;
-                                this.orchestration_progress = None;
                             } else {
                                 this.finish_orchestration_plan(cx);
                             }
@@ -1543,12 +1588,25 @@ impl Conversation {
 impl EventEmitter<SessionChanged> for Conversation {}
 impl EventEmitter<ChooseFolder> for Conversation {}
 impl EventEmitter<OpenSessionChanges> for Conversation {}
+impl EventEmitter<OpenThread> for Conversation {}
 impl EventEmitter<Transfer> for Conversation {}
-impl EventEmitter<composer_features::StartOrchestration> for Conversation {}
-impl EventEmitter<composer_features::StopOrchestration> for Conversation {}
+impl EventEmitter<crate::transcript::orchestration::OrchestrationAction> for Conversation {}
 
 impl Conversation {
     pub(crate) fn install_transfer(
+        &mut self,
+        settings: Settings,
+        prompt: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.driven_by.is_some() && prompt.is_some() {
+            return;
+        }
+        self.install_lead_transfer(settings, prompt, cx);
+    }
+    /// install_transfer for a lead or the Orchestrator starting work on its
+    /// own subagent, which the user can't send messages to.
+    pub(crate) fn install_lead_transfer(
         &mut self,
         settings: Settings,
         prompt: Option<String>,
@@ -1575,7 +1633,7 @@ impl Conversation {
                             this.install_transfer(settings, None, cx);
                             this.enqueue_restored_prompt(prompt, cx);
                         }
-                        prompt => this.install_transfer(settings, prompt, cx),
+                        prompt => this.install_lead_transfer(settings, prompt, cx),
                     }
                 },
                 cx,
@@ -2213,7 +2271,10 @@ impl Conversation {
         picked: &ModelPicked,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.editing_last_turn.pending() || self.status == "Preparing handoff…" {
+        if self.driven_by.is_some()
+            || self.editing_last_turn.pending()
+            || self.status == "Preparing handoff…"
+        {
             return false;
         }
         let changed_model = self.summary.provider != picked.0.id() || self.model != picked.1;
@@ -2695,6 +2756,10 @@ impl Conversation {
         }
         if self.busy {
             self.stop(cx);
+        } else if self.driven_by.is_none() || self.thread_pending() {
+            self.notification_cancelled = true;
+            cx.emit(SessionChanged);
+            cx.notify();
         }
     }
     fn stop(&mut self, cx: &mut Context<Self>) {
@@ -2751,6 +2816,9 @@ impl Conversation {
         Some(runner)
     }
     fn composer(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        if self.driven_by.is_some() {
+            return self.thread_composer(cx);
+        }
         let radius = COMPOSER_RADIUS;
         let command = if self.follow_ups.draft_selected {
             Some(input::Command::Draft)
@@ -2810,6 +2878,7 @@ impl Conversation {
             .children(self.model_list_popover(cx))
             .children(self.orchestration_card(cx))
             .children(if self.is_remote() { None } else { self.usage_notice(false, cx) })
+            .children(self.subagent_strip(cx))
             .child(self.background_shelf(window, cx))
             .child(self.message_queue(window, cx))
             .children(if self.is_remote() { None } else { self.auth_notice(cx) })

@@ -25,6 +25,11 @@ sessions.start {prompt,project?,harness?,model?,modelSettings?,effort?,runtimeMo
 sessions.send {sessionId,prompt,project?,notifyOnComplete?}
 sessions.draft {sessionId,prompt,project?}
 sessions.stop / sessions.archive / sessions.delete {sessionId,project?}
+threads.start {prompt,harness?,model?,effort?,modelSettings?,title?,workspaceMode?}
+threads.new {prompt,harness?,model?,effort?,modelSettings?,title?,workspaceMode?,draft?,reveal?}
+threads.send {threadId,prompt}; threads.wait {threadId,timeoutSeconds?}; threads.read {threadId,before?,limit?,maxChars?}
+threads.stop {threadId}; threads.list {}
+Thread actions require a top-level caller. Only its own children may be addressed. threads.start makes a subagent that reports back to the caller; threads.new and sessions.start open a top-level thread the user owns, which the caller does not drive. Start/send return immediately; wait returns idle, working or needsInput, with a timeout of at most 50 seconds.
 worktrees.list {project?}
 worktrees.create {branch,base?,existing?,project?}
 folders.list {project?}
@@ -161,6 +166,7 @@ fn serve(
         return Err("Invalid app capability".into());
     }
     let (reply, result) = mpsc::channel();
+    let timeout = response_timeout(&wire.action, &wire.input);
     let request_id = wire.request_id;
     tx.send_blocking(Call {
         session: wire.session,
@@ -170,7 +176,7 @@ fn serve(
         reply,
     })
     .map_err(|_| "App closed")?;
-    let response = match result.recv_timeout(Duration::from_secs(60)) {
+    let response = match result.recv_timeout(timeout) {
         Ok(Ok(value)) => json!({"ok":true,"result":value,"requestId":request_id}),
         Ok(Err(error)) => json!({"ok":false,"error":error,"requestId":request_id}),
         Err(_) => {
@@ -221,29 +227,49 @@ pub fn client(args: &[String]) -> Result<Value, String> {
             _ => return Err(format!("Unknown app argument: {arg}")),
         }
     }
-    let endpoint: SocketAddr = std::env::var("MONOCODE_APP_ENDPOINT")
-        .map_err(|_| "App access is unavailable outside a Mono's provider process")?
+    call(&action, input, &request_id, &std::env::vars().collect())
+}
+
+fn response_timeout(action: &str, input: &Value) -> Duration {
+    Duration::from_secs(if action == "threads.wait" {
+        input["timeoutSeconds"].as_u64().unwrap_or(50).min(50) + 10
+    } else {
+        60
+    })
+}
+
+pub fn call(
+    action: &str,
+    input: Value,
+    request_id: &str,
+    environment: &HashMap<String, String>,
+) -> Result<Value, String> {
+    let get = |key: &str| {
+        environment
+            .get(key)
+            .cloned()
+            .ok_or_else(|| format!("Missing {key}"))
+    };
+    let endpoint: SocketAddr = get("MONOCODE_APP_ENDPOINT")?
         .parse()
         .map_err(|_| "Invalid app endpoint")?;
     if !endpoint.ip().is_loopback() {
         return Err("App access requires a local endpoint".into());
     }
-    let token = std::env::var("MONOCODE_APP_TOKEN").map_err(|_| "App capability missing")?;
-    let session = std::env::var("MONOCODE_APP_SESSION")
-        .map_err(|_| "App session missing")?
-        .parse()
-        .map_err(|_| "Invalid app session")?;
+    let timeout = response_timeout(action, &input) + Duration::from_secs(5);
     let wire = Wire {
-        session,
-        token,
-        request_id,
-        action,
+        session: get("MONOCODE_APP_SESSION")?
+            .parse()
+            .map_err(|_| "Invalid app session")?,
+        token: get("MONOCODE_APP_TOKEN")?,
+        request_id: request_id.to_owned(),
+        action: action.to_owned(),
         input,
     };
     let mut stream =
         TcpStream::connect_timeout(&endpoint, Duration::from_secs(3)).map_err(|e| e.to_string())?;
     stream
-        .set_read_timeout(Some(Duration::from_secs(65)))
+        .set_read_timeout(Some(timeout))
         .map_err(|e| e.to_string())?;
     stream
         .set_write_timeout(Some(Duration::from_secs(5)))
@@ -290,6 +316,25 @@ mod capability_tests {
             let _ = BufReader::new(stream).read_line(&mut result);
             serde_json::from_str(&result).ok()
         })
+    }
+    #[test]
+    fn wait_transport_timeout_is_bounded_and_has_reply_headroom() {
+        assert_eq!(
+            response_timeout("threads.wait", &json!({"timeoutSeconds":0})),
+            Duration::from_secs(10)
+        );
+        assert_eq!(
+            response_timeout("threads.wait", &json!({"timeoutSeconds":50})),
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            response_timeout("threads.wait", &json!({"timeoutSeconds":999})),
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            response_timeout("threads.list", &json!({})),
+            Duration::from_secs(60)
+        );
     }
     #[test]
     fn capability_is_bound_to_its_session_and_only_authenticated_calls_reach_the_app() {

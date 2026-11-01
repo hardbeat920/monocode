@@ -12,9 +12,9 @@ use serde_json::{Value, json};
 mod tests;
 
 type Placement = Option<(i64, Edge)>;
-enum Effect {
+pub(super) enum Effect {
     None,
-    Start(Box<(Session, Settings, bool, bool, Placement)>),
+    Start(Box<(Session, Settings, bool, bool, Placement, u64)>),
     Groups(String, monocode_core::session_groups::Groups),
     Archive(i64),
 }
@@ -43,7 +43,7 @@ impl Shell {
             Err(error) => self.error = Some(format!("Operator app access: {error}")),
         }
     }
-    fn finish_app_call(
+    pub(super) fn finish_app_call(
         &mut self,
         call: Call,
         result: Result<Value, String>,
@@ -82,7 +82,7 @@ impl Shell {
         })
         .detach();
     }
-    fn app_background<F>(&mut self, call: Call, work: F, cx: &mut Context<Self>)
+    pub(super) fn app_background<F>(&mut self, call: Call, work: F, cx: &mut Context<Self>)
     where
         F: FnOnce(Database) -> Result<(Value, Effect), String> + Send + 'static,
     {
@@ -91,22 +91,46 @@ impl Shell {
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| {
-                let result = result.map(|(value, effect)| {
+                let result = result.map(|(mut value, effect)| {
                     match effect {
                         Effect::None => (),
                         Effect::Start(start) => {
-                            let (summary, settings, draft, reveal, placement) = *start;
+                            let (summary, settings, draft, reveal, placement, generation) = *start;
+                            let cancelled = call.action == "threads.start"
+                                && this.sessions.get(&call.session).is_none_or(|view| {
+                                    view.read(cx).notification_was_cancelled()
+                                        || view.read(cx).submission_generation != generation
+                                });
                             let id = summary.id;
                             this.draft_sessions.insert(id);
                             this.sidebar_hidden_sessions.remove(&id);
                             this.session_worktrees
                                 .insert(id, settings.worktree_cwd.clone());
-                            this.add(summary, cx);
+                            if call.action == "threads.start" {
+                                this.thread_parents.insert(id, call.session);
+                            }
                             this.started_by.insert(id, call.session);
+                            this.add(summary, cx);
                             if let Some(view) = this.sessions.get(&id) {
-                                view.update(cx, |v, cx| v.install_app_launch(settings, !draft, cx));
+                                let send = !draft && !cancelled;
+                                view.update(cx, |v, cx| {
+                                    if send {
+                                        v.thread_sender = Some(call.session);
+                                    }
+                                    v.install_app_launch(settings, send, cx);
+                                    if cancelled {
+                                        v.stop_app_session(cx);
+                                    }
+                                });
+                            }
+                            if cancelled {
+                                value["submitted"] = json!(false);
+                                value["stopped"] = json!(true);
                             }
                             this.app_place_launch(id, placement, reveal, window, cx);
+                            if call.action == "threads.start" {
+                                this.thread_session_changed(id, cx);
+                            }
                         }
                         Effect::Groups(project, groups) => {
                             this.groups.insert(project, groups);
@@ -134,7 +158,12 @@ impl Shell {
         .detach();
     }
     fn authorize_app_call(&self, call: &Call, cx: &App) -> Result<(), String> {
-        app::validate_operator(&call.action, &call.input)?;
+        let thread = call.action.starts_with("threads.");
+        if thread {
+            app::validate_threads(&call.action, &call.input)?;
+        } else {
+            app::validate_operator(&call.action, &call.input)?;
+        }
         if call.request_id.is_empty()
             || call.request_id.len() > 128
             || !call
@@ -148,8 +177,11 @@ impl Shell {
             .sessions
             .get(&call.session)
             .map(|v| v.read(cx))
-            .filter(|v| v.settings.operator_enabled)
+            .filter(|v| thread || v.settings.operator_enabled)
             .ok_or("Operator is not enabled for this thread.")?;
+        if thread {
+            self.authorize_thread_caller(call, cx)?;
+        }
         if caller.summary.cwd.starts_with("remote://") {
             return Err("Operator is not available on remote projects".into());
         }
@@ -176,13 +208,21 @@ impl Shell {
                     | "notes.list"
                     | "notes.read"
                     | "worktrees.list"
+                    | "threads.read"
+                    | "threads.wait"
+                    | "threads.list"
             )
         {
             return Err("This thread's access policy allows read-only app actions.".into());
         }
         Ok(())
     }
-    fn handle_app_call(&mut self, call: Call, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn handle_app_call(
+        &mut self,
+        call: Call,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Err(error) = self.authorize_app_call(&call, cx) {
             let _ = call.reply.send(Err(error));
             return;
@@ -207,6 +247,7 @@ impl Shell {
             self.dispatch_app_call(call, window, cx);
             return;
         }
+        let generation = self.sessions[&call.session].read(cx).submission_generation;
         let receipt_key = app::receipt_key(call.session, &call.request_id);
         let store = self.store.clone();
         let work = cx.background_executor().spawn(async move {
@@ -229,6 +270,19 @@ impl Shell {
                     } else {
                         Err("Request ID was already used with different input".into())
                     });
+                }
+                Ok(None)
+                    if matches!(call.action.as_str(), "threads.start" | "threads.send")
+                        && this.sessions.get(&call.session).is_none_or(|v| {
+                            v.read(cx).submission_generation != generation
+                                || v.read(cx).thread_stopping()
+                        }) =>
+                {
+                    this.finish_app_call(
+                        call,
+                        Err("Lead thread was stopped or started another turn".into()),
+                        cx,
+                    );
                 }
                 Ok(None) => this.dispatch_app_call(call, window, cx),
                 Err(error) => this.finish_app_call(call, Err(error), cx),
@@ -255,6 +309,7 @@ impl Shell {
         }
         if manage
             && (id == caller
+                || self.thread_parents.contains_key(&id)
                 || self.orchestration_worker(id)
                 || self
                     .monos
@@ -317,10 +372,17 @@ impl Shell {
             self.finish_app_call(call, Err(error), cx);
             return;
         }
+        if call.action.starts_with("threads.")
+            && !matches!(call.action.as_str(), "threads.start" | "threads.new")
+        {
+            self.dispatch_thread_call(call, cx);
+            return;
+        }
         let caller = self.sessions[&call.session].read(cx);
         let project = caller.summary.cwd.clone();
         let provider = caller.summary.provider.clone();
         let inherited = caller.settings.clone();
+        let generation = caller.submission_generation;
         let input = call.input.clone();
         let action = call.action.clone();
         let result: Result<Value, String> = match action.as_str() {
@@ -353,7 +415,9 @@ impl Shell {
                 );
                 return;
             }
-            "sessions.start" => {
+            // threads.new reuses sessions.start: a top-level thread the user
+            // owns, opened from a lead without the Operator grant.
+            "sessions.start" | "threads.start" | "threads.new" => {
                 let parsed = (|| {
                     let prompt = app::prompt(&input)?;
                     let kind = Kind::parse(input["harness"].as_str().unwrap_or(&provider))
@@ -377,6 +441,7 @@ impl Shell {
                 let caller = call.session;
                 let request = call.request_id.clone();
                 let fingerprint = app::fingerprint(&action, &input);
+                let is_thread = action == "threads.start";
                 self.app_background(call,move|store| {
                     let models=if input.get("model").is_some() || input.get("modelSettings").is_some() || input.get("effort").is_some() {
                         monocode_core::catalog::models_for(kind,&settings.account)?
@@ -391,12 +456,13 @@ impl Shell {
                         store.title(summary.id,&title)?;summary.title=title;
                         store.configure_agent(summary.id,kind.id(),&settings)?;
                         store.save_started_link(summary.id,caller)?;
+                        if is_thread { store.save_thread_parent(summary.id,caller)?; }
                         store.prepare_app_prompt(summary.id,&request,&prompt)?;
                         summary.has_messages=true;
                     }
                     let draft=input["draft"].as_bool().unwrap_or(false);let reveal=input["reveal"].as_bool().unwrap_or(false);
-                    let value=json!({"id":summary.id,"sessionId":summary.id,"cwd":project,"harness":kind.id(),"model":settings.model,"submitted":!draft,"draft":draft,"accepted":true});
-                    Ok((value,if fresh {Effect::Start(Box::new((summary,settings,draft,reveal,placement)))}else{Effect::None}))
+                    let value=json!({"id":summary.id,"threadId":if is_thread {Some(summary.id)}else{None},"sessionId":summary.id,"cwd":project,"harness":kind.id(),"model":settings.model,"submitted":!draft,"draft":draft,"accepted":true});
+                    Ok((value,if fresh {Effect::Start(Box::new((summary,settings,draft,reveal,placement,generation)))}else{Effect::None}))
                 },cx);
                 return;
             }
@@ -617,6 +683,9 @@ fn mutating(action: &str) -> bool {
             | "notes.list"
             | "notes.read"
             | "worktrees.list"
+            | "threads.read"
+            | "threads.wait"
+            | "threads.list"
     )
 }
 fn worktree_json(tree: &monocode_core::git::Worktree) -> Value {

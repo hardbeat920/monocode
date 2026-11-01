@@ -476,6 +476,15 @@ impl Store {
     pub fn save_started_link(&self, child: i64, caller: i64) -> Result<(), String> {
         self.save_setting(&format!("started-by:{child}"), &caller.to_string())
     }
+    pub fn thread_parents(&self) -> Result<std::collections::HashMap<i64, i64>, String> {
+        self.settings_with_prefix("thread-parent:")?
+            .into_iter()
+            .map(|(child, value)| Ok((child, value.parse().map_err(|_| "Invalid thread parent")?)))
+            .collect()
+    }
+    pub fn save_thread_parent(&self, child: i64, parent: i64) -> Result<(), String> {
+        self.save_setting(&format!("thread-parent:{child}"), &parent.to_string())
+    }
     /// Every lead's last orchestration summary.
     pub fn orchestration_summaries(
         &self,
@@ -493,6 +502,24 @@ impl Store {
     ) -> Result<(), String> {
         let value = serde_json::to_string(summary).map_err(|e| e.to_string())?;
         self.save_setting(&format!("orchestration:{lead}"), &value)
+    }
+    /// Each lead's recent orchestration runs, oldest first, as they were saved.
+    pub fn orchestration_runs(
+        &self,
+    ) -> Result<std::collections::HashMap<i64, Vec<crate::orchestration::Run>>, String> {
+        Ok(self
+            .settings_with_prefix("orchestration-runs:")?
+            .into_iter()
+            .filter_map(|(lead, value)| Some((lead, serde_json::from_str(&value).ok()?)))
+            .collect())
+    }
+    pub fn save_orchestration_runs(
+        &self,
+        lead: i64,
+        runs: &[crate::orchestration::Run],
+    ) -> Result<(), String> {
+        let value = serde_json::to_string(runs).map_err(|e| e.to_string())?;
+        self.save_setting(&format!("orchestration-runs:{lead}"), &value)
     }
     /// `prefix<session id>` settings, by session id.
     fn settings_with_prefix(&self, prefix: &str) -> Result<Vec<(i64, String)>, String> {
@@ -1047,7 +1074,7 @@ impl Store {
         tx.execute("DELETE FROM native_reminders WHERE session_id=?1", [id])
             .map_err(|e| e.to_string())?;
         tx.execute(
-            "DELETE FROM native_settings WHERE key IN (?1,?2,?3,?5,?6,?7,?8) OR key LIKE ?4",
+            "DELETE FROM native_settings WHERE key IN (?1,?2,?3,?5,?6,?7,?8,?9,?10) OR key LIKE ?4",
             params![
                 format!("agent:{id}"),
                 format!("context:{id}"),
@@ -1056,7 +1083,9 @@ impl Store {
                 format!("started-by:{id}"),
                 format!("orchestration:{id}"),
                 format!("inbox-ask:{id}"),
-                format!("automation:{id}")
+                format!("automation:{id}"),
+                format!("thread-parent:{id}"),
+                format!("orchestration-runs:{id}")
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -1285,6 +1314,36 @@ mod tests {
         assert!(!store.sessions().unwrap()[0].archived);
     }
     #[test]
+    fn thread_parent_lock_survives_restart_and_is_distinct_from_operator_launches() {
+        let dir = tempfile::tempdir().unwrap();
+        for shared in [false, true] {
+            let path = dir.path().join(if shared {
+                "shared.sqlite3"
+            } else {
+                "native.sqlite3"
+            });
+            let open = || {
+                if shared {
+                    Store::open_monocode(&path).unwrap()
+                } else {
+                    Store::open(&path).unwrap()
+                }
+            };
+            let store = open();
+            let lead = store.create("claude", "/project").unwrap().id;
+            let child = store.create("codex", "/project").unwrap().id;
+            let ordinary = store.create("codex", "/project").unwrap().id;
+            store.save_started_link(child, lead).unwrap();
+            store.save_started_link(ordinary, lead).unwrap();
+            store.save_thread_parent(child, lead).unwrap();
+            drop(store);
+            let store = open();
+            let sidebar = store.session_sidebar_metadata(&[]);
+            assert_eq!(sidebar.thread_parents.get(&child), Some(&lead));
+            assert!(!sidebar.thread_parents.contains_key(&ordinary));
+        }
+    }
+    #[test]
     fn started_links_and_orchestration_summaries_survive_restart_and_delete() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("s.sqlite3");
@@ -1303,15 +1362,35 @@ mod tests {
             live: true,
         };
         store.save_orchestration_summary(lead, &summary).unwrap();
+        let plan = crate::orchestration::from_input(&serde_json::json!({
+            "title": "Tests", "tasks": [{"id": "a", "title": "Tests", "prompt": "Run", "files": ["tests"]}]
+        }))
+        .unwrap();
+        let mut run = crate::orchestration::Run::new(
+            plan,
+            Some("call-1".into()),
+            "/p".into(),
+            "codex".into(),
+            Default::default(),
+        );
+        run.dispatch();
+        store.save_orchestration_runs(lead, &[run]).unwrap();
         drop(store);
         let mut store = Store::open(&path).unwrap();
         assert_eq!(store.started_links().unwrap()[&child], lead);
         assert_eq!(store.orchestration_summaries().unwrap()[&lead], summary);
+        let runs = store.orchestration_runs().unwrap();
+        assert_eq!(runs[&lead][0].call.as_deref(), Some("call-1"));
+        assert_eq!(
+            runs[&lead][0].tasks[0].state,
+            crate::orchestration::State::Starting
+        );
         assert_eq!(summary.tasks[0].label(&summary, false), "Working");
         store.delete(child).unwrap();
         store.delete(lead).unwrap();
         assert!(store.started_links().unwrap().is_empty());
         assert!(store.orchestration_summaries().unwrap().is_empty());
+        assert!(store.orchestration_runs().unwrap().is_empty());
     }
     #[test]
     fn pins_links_groups_and_reminders_survive_restart_and_delete_clears_them() {
