@@ -5,6 +5,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MonoComposer } from "./MonoComposer";
 import { clearComposerDraft } from "../../sessions/model/draftCache";
 import { saveComposerAutocorrect } from "../../settings/model/displayPrefs";
+import {
+  hasBlockingProjectNavigationSurface,
+  shouldHandleListNavigation,
+} from "../../workspace/model/tabKeys";
 
 const { pick } = vi.hoisted(() => ({ pick: vi.fn() }));
 vi.mock("../../sessions/model/attachments", async (original) => ({
@@ -17,12 +21,20 @@ vi.mock("../../sessions/hooks/useFileDrop", () => ({
 // The picker itself is covered on its own; here it just hands over a pick.
 vi.mock("../../../shared/ui/EmojiPicker", async () => {
   const { createElement } = await import("react");
+  const { createPortal } = await import("react-dom");
   return {
     EmojiPickerPopover: ({ onPick }: { onPick: (emoji: string) => void }) =>
-      createElement(
-        "button",
-        { type: "button", "data-pick": "", onClick: () => onPick("😀") },
-        "pick",
+      createPortal(
+        createElement(
+          "div",
+          { "data-emoji-picker": "" },
+          createElement(
+            "button",
+            { type: "button", "data-pick": "", onClick: () => onPick("😀") },
+            "pick",
+          ),
+        ),
+        document.body,
       ),
   };
 });
@@ -87,6 +99,115 @@ function submit() {
     .querySelector("form")!
     .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
 }
+
+it("marks only an empty Mono composer for project navigation", async () => {
+  render();
+  expect(field().getAttribute("data-mono-composer-empty")).toBe("true");
+
+  type("Draft");
+  expect(field().hasAttribute("data-mono-composer-empty")).toBe(false);
+
+  type("");
+  await act(async () =>
+    container
+      .querySelector<HTMLButtonElement>('[aria-label="Attach files"]')!
+      .click(),
+  );
+  expect(field().hasAttribute("data-mono-composer-empty")).toBe(false);
+});
+
+it("blocks project navigation while an attachment read is pending", async () => {
+  let finishRead!: (attachments: (typeof file)[]) => void;
+  pick.mockReturnValueOnce(
+    new Promise<(typeof file)[]>((resolve) => {
+      finishRead = resolve;
+    }),
+  );
+  render();
+
+  await act(async () => {
+    const button = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Attach files"]',
+    )!;
+    button.focus();
+    button.click();
+    await Promise.resolve();
+  });
+  const button = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Attach files"]',
+  )!;
+  expect(field().value).toBe("");
+  expect(field().hasAttribute("data-mono-composer-empty")).toBe(false);
+  expect(
+    container
+      .querySelector(".agent-chat-composer")
+      ?.getAttribute("data-mono-composer-pending"),
+  ).toBe("true");
+  expect(
+    shouldHandleListNavigation({
+      blockedTarget: false,
+      emptyComposerTarget: false,
+      monoComposerEmptyTarget: false,
+      projectNavigation: true,
+      projectNavigationSurfaceOpen: hasBlockingProjectNavigationSurface(button),
+      surfaceOpen: false,
+    }),
+  ).toBe(false);
+
+  await act(async () => finishRead([file]));
+  expect(field().hasAttribute("data-mono-composer-empty")).toBe(false);
+});
+
+it("does not mark a hidden composer as a blocking project-navigation surface", async () => {
+  let finishRead!: (attachments: (typeof file)[]) => void;
+  pick.mockReturnValueOnce(
+    new Promise<(typeof file)[]>((resolve) => {
+      finishRead = resolve;
+    }),
+  );
+  render();
+  await act(async () => {
+    container
+      .querySelector<HTMLButtonElement>('[aria-label="Attach files"]')!
+      .click();
+    await Promise.resolve();
+  });
+
+  render({ enabled: false });
+  expect(
+    container
+      .querySelector(".agent-chat-composer")
+      ?.hasAttribute("data-mono-composer-pending"),
+  ).toBe(false);
+  const outside = document.createElement("button");
+  document.body.append(outside);
+  expect(hasBlockingProjectNavigationSurface(outside)).toBe(false);
+  outside.remove();
+
+  await act(async () => finishRead([file]));
+});
+
+it("blocks project cycling from the focused emoji toggle while its portal is open", async () => {
+  render({ controls: createElement("span", null, "Model") });
+  const toggle = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Add emoji"]',
+  )!;
+
+  await act(async () => toggle.click());
+  expect(document.querySelector("[data-emoji-picker]")).not.toBeNull();
+  act(() => toggle.focus());
+  expect(document.activeElement).toBe(toggle);
+  expect(
+    shouldHandleListNavigation({
+      blockedTarget: false,
+      emptyComposerTarget: false,
+      monoComposerEmptyTarget: false,
+      projectNavigation: true,
+      projectNavigationSurfaceOpen: hasBlockingProjectNavigationSurface(toggle),
+      surfaceOpen: false,
+    }),
+  ).toBe(false);
+});
 
 it("consumes quotes once and adds them to the current draft", () => {
   const consumed = vi.fn();
@@ -222,12 +343,12 @@ it("inserts a picked emoji where the cursor was, beside attach", async () => {
   // The picker loads on first open.
   await act(async () => button.click());
   await vi.waitFor(() =>
-    expect(container.querySelector("[data-pick]")).not.toBeNull(),
+    expect(document.querySelector("[data-pick]")).not.toBeNull(),
   );
   expect(button.getAttribute("aria-expanded")).toBe("true");
-  act(() => container.querySelector<HTMLButtonElement>("[data-pick]")!.click());
+  act(() => document.querySelector<HTMLButtonElement>("[data-pick]")!.click());
   expect(field.value).toBe("hi😀 there");
-  expect(container.querySelector("[data-pick]")).toBeNull();
+  expect(document.querySelector("[data-pick]")).toBeNull();
 
   // The floating chat keeps its inline input, without the extra row.
   render();
