@@ -435,7 +435,8 @@ impl Shell {
                 | Row::ClassicGroupMember { id, .. },
             ) = self.sidebar_list.rows.get(ix)
                 && (self.rails.started.contains_key(id)
-                    || self.orchestration_summaries.contains_key(id))
+                    || self.orchestration_summaries.contains_key(id)
+                    || self.archive_exits.exiting(*id))
             {
                 self.sidebar_list.state.remeasure_items(ix..ix + 1);
             }
@@ -470,10 +471,27 @@ impl Shell {
                 !self.workspace.boxy_layout(),
                 false,
             ))
+            .children(self.archive_burst_overlay())
             .into_any()
     }
 
     fn sidebar_list_row(&mut self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
+        let exiting = match self.sidebar_list.rows.get(ix) {
+            Some(
+                Row::Session(id)
+                | Row::GroupedSession { id, .. }
+                | Row::ClassicGroupMember { id, .. },
+            ) => Some(*id),
+            _ => None,
+        };
+        let element = self.sidebar_list_row_content(ix, cx);
+        match exiting {
+            Some(id) => self.archive_exit_row(id, element, cx),
+            None => element,
+        }
+    }
+
+    fn sidebar_list_row_content(&mut self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
         let Some(row) = self.sidebar_list.rows.get(ix).cloned() else {
             return div().into_any();
         };
