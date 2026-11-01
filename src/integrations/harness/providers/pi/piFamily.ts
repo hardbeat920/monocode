@@ -495,7 +495,7 @@ async function startLive(
       if (!current) return;
       handleFrame(flavor, input.sessionId, current, rec);
     },
-    flavor.label,
+    flavor,
   );
 
   const live: Live = {
