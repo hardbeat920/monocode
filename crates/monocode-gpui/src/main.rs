@@ -68,6 +68,7 @@ mod quick_open;
 mod reflow_motion;
 mod resource_pressure;
 mod response_actions;
+mod restart_resume;
 mod reveal;
 mod review;
 mod right_panel;
@@ -110,6 +111,7 @@ fn quit(cx: &mut App) {
     if notifications::updater::defer_quit(cx) {
         return;
     }
+    hide_while_shutting_down(cx);
     let shutdown = cx
         .background_executor()
         .spawn(async { monocode_core::process::shutdown_all() });
@@ -120,8 +122,22 @@ fn quit(cx: &mut App) {
     .detach();
 }
 
+/// Shutdown gives running turns a moment to stop and save. Get out of the way
+/// at once so the quit feels immediate. Only macOS can hide an application;
+/// elsewhere minimize its windows.
+fn hide_while_shutting_down(cx: &mut App) {
+    if cfg!(target_os = "macos") {
+        cx.hide();
+        return;
+    }
+    for window in cx.windows() {
+        let _ = window.update(cx, |_, window, _| window.minimize_window());
+    }
+}
+
 /// Quit, then relaunch the same app once this process has exited.
 fn restart(cx: &mut App) {
+    hide_while_shutting_down(cx);
     let shutdown = cx
         .background_executor()
         .spawn(async { monocode_core::process::shutdown_all() });
@@ -383,6 +399,7 @@ fn main() {
             .unwrap();
     }
     let mut sessions = db.sessions().expect("read native sessions");
+    restart_resume::prepare(&mut db, &sessions);
     if sessions.is_empty() {
         sessions.push(db.create("codex", &cwd).expect("create initial session"));
     }

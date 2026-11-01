@@ -488,6 +488,10 @@ impl Protocol {
                         if self.request.settings.mono.is_some() {
                             return Err("The saved Mono Codex context could not be resumed. Retry to keep its saved context.".into());
                         }
+                        if self.request.settings.restart_continuation {
+                            // A fresh thread would receive "Continue" with no context.
+                            return Err("The saved Codex thread was not found, so the interrupted turn could not continue. Send your request again to start over.".into());
+                        }
                         self.request.provider_id = None;
                         return self.frame(json!({"id":1,"result":{}}), stdin);
                     }
@@ -1845,6 +1849,22 @@ mod tests {
             model: None,
             settings: Default::default(),
         })
+    }
+    #[test]
+    fn restart_continuation_never_falls_back_to_a_fresh_codex_thread() {
+        let missing = json!({"id":2,"error":{"message":"thread not found: saved"}});
+        let mut p = protocol(Kind::Codex);
+        p.request.provider_id = Some("saved".into());
+        let mut out = Vec::new();
+        assert!(p.frame(missing.clone(), &mut out).is_ok());
+        assert_eq!(p.request.provider_id, None);
+
+        let mut p = protocol(Kind::Codex);
+        p.request.provider_id = Some("saved".into());
+        p.request.settings.restart_continuation = true;
+        let error = p.frame(missing, &mut Vec::new()).unwrap_err();
+        assert!(error.contains("Codex thread was not found"));
+        assert_eq!(p.request.provider_id.as_deref(), Some("saved"));
     }
     #[test]
     fn codex_file_changes_retain_every_edited_path() {

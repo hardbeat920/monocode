@@ -16,6 +16,7 @@ mod notifications;
 mod remote;
 pub(crate) mod remote_plans;
 mod response_menu;
+mod restart;
 #[cfg(test)]
 mod submission_tests;
 mod title;
@@ -189,6 +190,8 @@ pub(crate) struct Conversation {
     catalog: Vec<Model>,
     catalog_epoch: u64,
     account_switching: bool,
+    /// Run by an automation or orchestration; its owner handles recovery.
+    pub(crate) managed: bool,
     _usage_clock: gpui::Task<()>,
     _account_usage: Option<Subscription>,
     approvals: std::collections::VecDeque<Approval>,
@@ -638,6 +641,7 @@ impl Conversation {
             catalog: Vec::new(),
             catalog_epoch: 0,
             account_switching: false,
+            managed: false,
             _usage_clock: usage_clock,
             _account_usage: account_usage,
             approvals: Default::default(),
@@ -1104,6 +1108,9 @@ impl Conversation {
             || self.settings.orchestrator
             || self.settings.access == AccessMode::ReadOnly;
         let mut settings = self.settings.clone();
+        settings.resume_after_restart = !self.managed;
+        // One-shot: only the launch that continues an interrupted turn.
+        self.settings.restart_continuation = false;
         if let Some(model) = self.model_info() {
             for control in &model.controls {
                 settings
