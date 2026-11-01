@@ -2,6 +2,7 @@
 //! actions, the commit box, sync and pull-request actions, and the staged
 //! and unstaged files as a list or a tree. Every Git call runs off-thread,
 //! one mutation at a time per checkout.
+use crate::tooltip::Tip;
 use crate::{
     file_icons::file_type_icon,
     git_status::{GitChanged, ProjectGit},
@@ -1026,6 +1027,7 @@ impl Changes {
                         .id("branch-actions")
                         .role(Role::Button)
                         .aria_label("Branch actions")
+                        .tip("Branch actions")
                         .aria_expanded(menu_open)
                         .group("branch-actions")
                         .relative()
@@ -1112,6 +1114,7 @@ impl Changes {
                             .id("generate-commit-message")
                             .role(Role::Button)
                             .aria_label(generate_label)
+                            .tip(generate_label)
                             .group("generate")
                             .absolute()
                             .top_1()
@@ -1195,6 +1198,7 @@ impl Changes {
                             .id("commit-options")
                             .role(Role::Button)
                             .aria_label("Commit options")
+                            .tip("Commit options")
                             .aria_expanded(menu_open)
                             .size(px(28.))
                             .flex_shrink_0()

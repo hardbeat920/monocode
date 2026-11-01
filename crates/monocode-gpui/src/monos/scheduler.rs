@@ -1,5 +1,6 @@
 use super::panels::{button, empty_state, matches_query, search_bar};
 use super::*;
+use crate::tooltip::Tip;
 use monocode_core::mono::habits::{Run, Schedule};
 use monocode_core::mono::heartbeat;
 use monocode_core::time::now_ms;
@@ -265,6 +266,7 @@ fn habit_icon_button(
         .id(id)
         .role(Role::Button)
         .aria_label(label)
+        .tip(label)
         .flex_shrink_0()
         .size(px(24.))
         .flex()

@@ -1,5 +1,6 @@
 //! Installed-update card and bundled What's new content. The app updater itself
 //! is a separate backend concern; a successful installer records the marker.
+use crate::tooltip::Tip;
 use crate::{
     markdown::{self, MarkdownRow, Tone},
     markdown_model,
@@ -123,6 +124,7 @@ impl Render for InstalledUpdateNotice {
                     .id("dismiss-installed-update")
                     .role(Role::Button)
                     .aria_label("Dismiss update notification")
+                    .tip("Dismiss update notification")
                     .absolute()
                     .right(px(4.))
                     .top(px(4.))
@@ -328,6 +330,7 @@ impl Render for WhatsNew {
                             .id("close-whats-new")
                             .role(Role::Button)
                             .aria_label("Close")
+                            .tip("Close")
                             .cursor_pointer()
                             .size(px(24.))
                             .flex()

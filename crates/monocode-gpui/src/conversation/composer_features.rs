@@ -1,4 +1,5 @@
 use super::*;
+use crate::tooltip::Tip;
 use std::path::PathBuf;
 pub(crate) struct StartOrchestration(pub monocode_core::orchestration::Plan);
 pub(crate) struct StopOrchestration;
@@ -330,6 +331,7 @@ impl Conversation {
                         .id(("remove-attachment", ix))
                         .role(Role::Button)
                         .aria_label(format!("Remove {label}"))
+                        .tip(format!("Remove {label}"))
                         .cursor_pointer()
                         .flex_shrink_0()
                         .flex()

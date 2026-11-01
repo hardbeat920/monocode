@@ -1,4 +1,5 @@
 use super::*;
+use crate::tooltip::Tip;
 use chrono::{Local, TimeZone};
 
 pub(super) fn toggle(id: impl Into<gpui::ElementId>, on: bool) -> gpui::Stateful<gpui::Div> {
@@ -439,6 +440,7 @@ impl Automations {
                     .id(SharedString::from(format!("remove-trigger-{id}")))
                     .role(Role::Button)
                     .aria_label("Remove trigger")
+                    .tip("Remove trigger")
                     .size(px(28.))
                     .flex_shrink_0()
                     .rounded(px(6.))

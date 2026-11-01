@@ -2,6 +2,7 @@
 //! per checkout. Only the selected checkout owns a live Git poller.
 use super::*;
 use crate::popover::{MenuAction, MenuItem};
+use crate::tooltip::Tip;
 use std::{path::Path, time::Instant};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -685,6 +686,7 @@ impl Monos {
                                 .id(("mono-changes-checkouts", ix))
                                 .role(Role::Button)
                                 .aria_label("Switch project working copy")
+                                .tip("Switch project working copy")
                                 .size(px(18.))
                                 .mr_1()
                                 .flex()

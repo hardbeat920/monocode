@@ -1,4 +1,5 @@
 //! React's command names, defaults, scopes, filter and shortcut recorder.
+use crate::tooltip::Tip;
 use crate::{
     settings::{Preferences, SettingsView},
     theme::*,
@@ -531,6 +532,7 @@ impl SettingsView {
                                         .debug_selector(move || format!("reset-shortcut-{command}"))
                                         .role(Role::Button)
                                         .aria_label(format!("Reset {command} shortcut"))
+                                        .tip(format!("Reset {command} shortcut"))
                                         .p_1()
                                         .rounded_md()
                                         .cursor_pointer()

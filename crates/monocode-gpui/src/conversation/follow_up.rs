@@ -1,5 +1,6 @@
 //! Composer.tsx / MessageQueue.tsx's durable follow-ups and saved user draft.
 use super::*;
+use crate::tooltip::Tip;
 use monocode_core::follow_up::{Message, State};
 
 #[derive(Default)]
@@ -571,6 +572,7 @@ fn queue_button(
         .id(id)
         .role(Role::Button)
         .aria_label(label)
+        .tip(label)
         .size(px(24.))
         .flex_shrink_0()
         .rounded_md()

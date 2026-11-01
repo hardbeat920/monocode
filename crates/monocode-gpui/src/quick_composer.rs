@@ -2,6 +2,7 @@
 //! and the menu bar. It floats over other apps without activating MonoCode,
 //! keeps its draft across a dismiss, and opens its pickers below the toolbar
 //! so the prompt never moves.
+use crate::tooltip::Tip;
 use crate::{
     git_picker::{GitPicker, Mode as GitMode, Picked as GitPicked},
     input::{self, Command, Input},
@@ -1138,6 +1139,7 @@ impl QuickComposer {
                         .id(("quick-remove-attachment", ix))
                         .role(Role::Button)
                         .aria_label(format!("Remove {label}"))
+                        .tip(format!("Remove {label}"))
                         .cursor_pointer()
                         .flex_shrink_0()
                         .size(px(16.))
@@ -1741,6 +1743,7 @@ impl QuickComposer {
                                 .id("quick-effort-reset")
                                 .role(Role::Button)
                                 .aria_label("Reset to saved defaults")
+                                .tip("Reset to saved defaults")
                                 .group("quick-effort-reset")
                                 .cursor_pointer()
                                 .size(px(28.))
@@ -1996,6 +1999,7 @@ impl Render for QuickComposer {
                             .id("quick-close")
                             .role(Role::Button)
                             .aria_label("Close composer")
+                            .tip("Close composer")
                             .group("quick-close")
                             .cursor_pointer()
                             .absolute()

@@ -1,6 +1,7 @@
 //! Sidebar.tsx's inset `RightPanel`: the project tools beside the card, with
 //! reorderable Explorer / Changes / History tabs in the title bar, and a
 //! trailing Terminal tab when the terminal lives in the panel.
+use crate::tooltip::Tip;
 use crate::{
     changes::Changes,
     explorer::Explorer,
@@ -123,10 +124,12 @@ pub(crate) fn icon_action(
 ) -> Stateful<gpui::Div> {
     let id = id.into();
     let group: SharedString = format!("icon-action-{id:?}").into();
+    let label = label.into();
     div()
         .id(id)
         .role(Role::Button)
-        .aria_label(label.into())
+        .aria_label(label.clone())
+        .tip(label)
         .group(group.clone())
         .size(px(20.))
         .flex_shrink_0()

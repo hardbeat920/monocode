@@ -2,6 +2,7 @@
 //! SurfaceTabs.tsx), holding files, Changes and commit tabs. WorkingTreeDiff.tsx and
 //! CommitDiff.tsx load their files four at a time off the UI thread and
 //! build each diff there too; the view only lays out rows.
+use crate::tooltip::Tip;
 use crate::{
     diff_view::{DiffEvent, DiffFile, DiffView},
     file_editor::{FileEditor, FileEvent},
@@ -1572,6 +1573,7 @@ impl ReviewPane {
                         .debug_selector(|| "drag-file-pane".into())
                         .role(Role::Button)
                         .aria_label("Drag to reorder pane")
+                        .tip("Drag to reorder pane")
                         .w(px(20.))
                         .h(px(TAB_PLATE_HEIGHT))
                         .ml(px(6.))
@@ -1729,6 +1731,7 @@ impl ReviewPane {
                             .id(("review-tab-close", ix))
                             .role(Role::Button)
                             .aria_label(SharedString::from(format!("Close {label}")))
+                            .tip(SharedString::from(format!("Close {label}")))
                             .absolute()
                             .right_1()
                             .top(gpui::relative(0.5))
