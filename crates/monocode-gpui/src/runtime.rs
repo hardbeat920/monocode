@@ -119,6 +119,7 @@ fn run_turn_using(
         prompt,
         mut settings,
     } = input;
+    let _registration = monocode_core::process::register_turn(cancel.clone());
     if settings.account.root.is_none() && settings.account.id != monocode_core::accounts::DEFAULT {
         settings.account.root = locked(&store)
             .ok()
@@ -908,8 +909,12 @@ fn run_turn_using(
         }
         result
     })();
-    let cancelled =
-        cancel.load(Ordering::Relaxed) || result.as_ref().is_err_and(|error| error == "Stopped");
+    // A provider killed or cancelled by the quit was interrupted, not failed.
+    // A turn that completed while the app was quitting is simply done.
+    let quitting = monocode_core::process::shutting_down() && result.is_err();
+    let cancelled = quitting
+        || cancel.load(Ordering::Relaxed)
+        || result.as_ref().is_err_and(|error| error == "Stopped");
     let handoff = prepared_handoff.map(|mut ready| {
         if handoff_accepted {
             None
@@ -956,7 +961,9 @@ fn run_turn_using(
                 monocode_core::tool::ToolState::Failed
             };
             if tool.output.is_empty() {
-                tool.output = if cancelled {
+                tool.output = if quitting {
+                    monocode_core::process::INTERRUPTED_BY_QUIT.into()
+                } else if cancelled {
                     "Cancelled".into()
                 } else {
                     result.as_ref().err().cloned().unwrap_or_else(|| {
