@@ -156,11 +156,14 @@ export function HeaderButton({
   label,
   onPress,
   on,
+  round,
 }: {
   icon: IconName;
   label: string;
   onPress: () => void;
   on?: boolean;
+  /** On a round fill, as iOS's glass header buttons, where Android has none. */
+  round?: boolean;
 }) {
   const colors = useColors();
   const styles = useStyles();
@@ -171,7 +174,7 @@ export function HeaderButton({
       accessibilityState={on === undefined ? undefined : { selected: on }}
       hitSlop={8}
       onPress={onPress}
-      style={styles.button}
+      style={[styles.button, round && Platform.OS === "android" && styles.round]}
     >
       <Icon name={icon} size={20} color={on ? colors.accent : colors.content} />
     </Pressable>
@@ -209,5 +212,11 @@ const useStyles = themedStyles((colors) => ({
     height: 36,
     alignItems: "center",
     justifyContent: "center",
+  },
+  round: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.fill,
   },
 }));
