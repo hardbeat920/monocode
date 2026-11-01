@@ -850,6 +850,32 @@ describe("contextFromResult", () => {
   it("has nothing to report for a turn that never called the API", () => {
     expect(contextFromResult({ type: "result", usage: {} })).toBeUndefined();
   });
+
+  it("does not treat a multi-step turn total as the context level", () => {
+    expect(
+      contextFromResult({
+        type: "result",
+        num_turns: 16,
+        usage: {
+          input_tokens: 40,
+          cache_read_input_tokens: 6_500_000,
+          output_tokens: 12_000,
+        },
+        modelUsage: { "claude-sonnet-5": { contextWindow: 1_000_000 } },
+      }),
+    ).toEqual({ window: 1_000_000 });
+  });
+
+  it("keeps a one-step result, since that usage is the window", () => {
+    expect(
+      contextFromResult({
+        type: "result",
+        num_turns: 1,
+        usage: { input_tokens: 100, output_tokens: 20 },
+        modelUsage: { "claude-sonnet-5": { contextWindow: 200_000 } },
+      }),
+    ).toEqual({ used: 120, window: 200_000 });
+  });
 });
 
 describe("turnMetricsFromResult", () => {
