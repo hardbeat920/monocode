@@ -201,6 +201,8 @@ impl Shell {
             .update(cx, |footer, cx| footer.set_classic(classic, cx));
         self.resources
             .update(cx, |monitor, cx| monitor.set_classic(classic, cx));
+        self.keep_awake
+            .update(cx, |keep, cx| keep.set_classic(classic, cx));
         self.invalidate_chrome(cx);
         self.drop_peek();
         if !self.workspace.classic_layout && !self.query.is_empty() {
@@ -227,6 +229,8 @@ impl Shell {
             .update(cx, |footer, cx| footer.set_classic(classic, cx));
         self.resources
             .update(cx, |monitor, cx| monitor.set_classic(classic, cx));
+        self.keep_awake
+            .update(cx, |keep, cx| keep.set_classic(classic, cx));
         if classic {
             return vec![self.classic_body(
                 sidebar_width,
@@ -809,7 +813,28 @@ impl Shell {
                     .cached(StyleRefinement::default().flex_1().min_w_0().h(px(height))),
             )
             .children(self.pressure_chip(cx))
+            .children(self.keep_awake_pill())
             .children(self.terminal_footer(cx))
+    }
+    /// The keep-awake pill, just before the terminal controls (macOS only).
+    fn keep_awake_pill(&self) -> Option<AnyElement> {
+        if !crate::keep_awake::KeepAwake::supported() {
+            return None;
+        }
+        let classic = self.workspace.boxy_layout();
+        let alone = self.app_view_open() || self.workspace.project.is_empty();
+        Some(
+            div()
+                .flex_shrink_0()
+                .map(|d| match (classic, alone) {
+                    (true, true) => d,
+                    (true, false) => d.mr(px(super::terminal_dock::FOOTER_GAP)),
+                    (false, true) => d.mr(px(6.)).pb(px(2.)),
+                    (false, false) => d.mr(px(super::terminal_dock::FOOTER_GAP)).pb(px(2.)),
+                })
+                .child(self.keep_awake.clone())
+                .into_any_element(),
+        )
     }
     /// ResourcePressureNotice's chip, just before the terminal controls.
     fn pressure_chip(&self, cx: &mut Context<Self>) -> Option<AnyElement> {

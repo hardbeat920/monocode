@@ -4,6 +4,7 @@ mod archive;
 mod chat;
 mod connections;
 mod general;
+mod hotspot;
 mod inbox;
 mod keybindings;
 mod mcp;
@@ -16,6 +17,7 @@ mod worktrees;
 pub(super) use appearance::parse_hex;
 pub(crate) use appearance::{ACCENTS, swatch};
 pub(super) use connections::ConnectionsState;
+pub(super) use hotspot::HotspotState;
 pub(crate) use keybindings::command_shortcut;
 pub(super) use mobile::MobileState;
 

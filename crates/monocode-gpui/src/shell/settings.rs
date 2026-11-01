@@ -181,6 +181,16 @@ impl Shell {
                     this.invalidate_chrome(cx);
                     cx.notify();
                 }
+                SettingsEvent::KeepAwakeLid(on) => {
+                    let on = *on;
+                    this.keep_awake
+                        .update(cx, |keep, cx| keep.request_lid(on, cx));
+                }
+                SettingsEvent::KeepAwakeLowPower(on) => {
+                    let on = *on;
+                    this.keep_awake
+                        .update(cx, |keep, cx| keep.request_low_power(on, cx));
+                }
                 SettingsEvent::NewLayout(on) => {
                     if this.workspace.classic_layout == *on {
                         this.toggle_layout(cx);
@@ -382,6 +392,9 @@ impl Shell {
         self.usage_footer.update(cx, |footer, cx| {
             footer.set_remaining(self.workspace.preferences.show_remaining_usage, cx)
         });
+        let keep_awake = self.workspace.preferences.keep_awake.clone();
+        self.keep_awake
+            .update(cx, |keep, cx| keep.set_prefs(keep_awake, cx));
     }
     fn choose_chat_background(&mut self, cx: &mut Context<Self>) {
         let prompt = cx.prompt_for_paths(PathPromptOptions {

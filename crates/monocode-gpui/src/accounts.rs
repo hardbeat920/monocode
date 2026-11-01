@@ -25,6 +25,15 @@ use std::{
     time::{Duration, Instant},
 };
 
+const TURN_REFRESH_GAP: Duration = Duration::from_secs(60);
+
+/// A finished turn is when usage changes, so fetch then, but let quick
+/// back-to-back turns share one request. On a hotspot nothing goes out, to
+/// save its data; the next turn off it catches up.
+fn turn_refresh_due(on_hotspot: bool, attempted: Option<Instant>) -> bool {
+    !on_hotspot && !attempted.is_some_and(|at| at.elapsed() < TURN_REFRESH_GAP)
+}
+
 pub(crate) struct Shared(pub Entity<Accounts>);
 impl Global for Shared {}
 pub(crate) fn get(cx: &App) -> Option<Entity<Accounts>> {
@@ -428,6 +437,12 @@ impl Accounts {
         })
         .detach();
         cx.notify();
+    }
+    pub(crate) fn refresh_after_turn(&mut self, key: Key, cx: &mut Context<Self>) {
+        let attempted = self.usage.get(&key).and_then(|state| state.attempted);
+        if turn_refresh_due(crate::keep_awake::on_hotspot(), attempted) {
+            self.refresh(key, true, cx);
+        }
     }
     pub(crate) fn load_provider(&mut self, kind: Kind, force: bool, cx: &mut Context<Self>) {
         for account in self.book.list(kind) {
@@ -842,6 +857,19 @@ impl Drop for Accounts {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn turn_refresh_waits_out_a_hotspot_and_shares_quick_turns() {
+        assert!(turn_refresh_due(false, None));
+        assert!(!turn_refresh_due(true, None));
+        let just_now = Some(Instant::now());
+        assert!(!turn_refresh_due(false, just_now));
+        assert!(!turn_refresh_due(true, just_now));
+        // The first turn back off the hotspot catches up.
+        let long_ago = Instant::now().checked_sub(TURN_REFRESH_GAP * 2);
+        assert!(long_ago.is_some());
+        assert!(turn_refresh_due(false, long_ago));
+        assert!(!turn_refresh_due(true, long_ago));
+    }
     #[test]
     fn usage_cache_preserves_stale_data_on_errors_and_separates_accounts_and_pi_billing() {
         let snapshot = Snapshot {
