@@ -7,6 +7,7 @@ import {
   isEditingQueuedHead,
   queuedHead,
   queuedMessageForSubmit,
+  requeueUnsteered,
 } from "./messageQueue";
 import { newSession, type QueuedMessage, type Session } from "./session";
 
@@ -173,5 +174,31 @@ describe("queuedMessageForSubmit", () => {
       queuedMessageForSubmit(chat({ queueStatus: "paused" }), "a", "steer")?.id,
     ).toBe("a");
     expect(queuedMessageForSubmit(chat(), "missing", "steer")).toBeUndefined();
+  });
+});
+
+describe("requeueUnsteered", () => {
+  it("moves a refused steer from the transcript to the front of the queue", () => {
+    const session = chat({
+      queueStatus: undefined,
+      blocks: [
+        {
+          id: "steer",
+          role: "user",
+          text: "late",
+        } as Session["blocks"][number],
+      ],
+    });
+    const next = requeueUnsteered(session, "steer", queued("c", "late"));
+    expect(next.blocks).toEqual([]);
+    expect(next.queuedMessages?.map((m) => m.id)).toEqual(["c", "a", "b"]);
+    expect(next.queueStatus).toBe("active");
+    expect(
+      requeueUnsteered(chat({ queueStatus: "paused" }), "x", queued("c"))
+        .queueStatus,
+    ).toBe("paused");
+    expect(
+      requeueUnsteered(chat(), "x", queued("c"), true).queueStatus,
+    ).toBe("paused");
   });
 });

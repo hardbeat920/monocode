@@ -282,6 +282,10 @@ export type QueuedMessage = {
   intent?: TurnIntent;
   /** An app notification that must wait for an idle Mono, never steer its work. */
   monoSessionCompletion?: MonoSessionCompletion;
+  /** Mobile command ID, stamped on the sent turn so a retry is recognized. */
+  appRequestId?: string;
+  /** Orchestrator guidance for a worker it manages. */
+  managed?: boolean;
   /** Delivery failed; the message remains available to retry or edit. */
   error?: string;
 };
