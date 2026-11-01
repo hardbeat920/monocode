@@ -1,11 +1,11 @@
 //! Platform shell selection, independent of the terminal renderer.
 
 #[cfg(windows)]
-pub(super) fn default_shell() -> (String, Vec<String>) {
+pub(super) fn default_shell(search_path: &str) -> (String, Vec<String>) {
     windows_shell(
         std::env::var("SHELL").ok().as_deref(),
         std::env::var("COMSPEC").ok().as_deref(),
-        resolve_windows_shell,
+        |program| resolve_windows_shell(program, search_path),
     )
 }
 
@@ -38,7 +38,7 @@ fn windows_shell(
 }
 
 #[cfg(windows)]
-fn resolve_windows_shell(program: &str) -> Option<String> {
+fn resolve_windows_shell(program: &str, search_path: &str) -> Option<String> {
     use std::path::PathBuf;
 
     let program = program.trim().trim_matches('"');
@@ -56,9 +56,7 @@ fn resolve_windows_shell(program: &str) -> Option<String> {
     if executable.is_absolute() {
         candidates.push(executable);
     } else if executable.components().count() == 1 {
-        if let Some(path) = std::env::var_os("PATH") {
-            candidates.extend(std::env::split_paths(&path).map(|dir| dir.join(&executable)));
-        }
+        candidates.extend(std::env::split_paths(search_path).map(|dir| dir.join(&executable)));
         // GUI launches can inherit a PATH that lacks PowerShell's install dir.
         match program.to_ascii_lowercase().as_str() {
             "pwsh" | "pwsh.exe" => {
@@ -95,7 +93,7 @@ pub(super) fn pty_program(program: &str) -> String {
 }
 
 #[cfg(not(windows))]
-pub(super) fn default_shell() -> (String, Vec<String>) {
+pub(super) fn default_shell(_search_path: &str) -> (String, Vec<String>) {
     let shell = std::env::var("SHELL")
         .ok()
         .filter(|s| !s.is_empty())
@@ -171,10 +169,49 @@ mod tests {
                 ("pwsh.exe".into(), vec!["-NoLogo".into()])
             );
         }
-        assert!(resolve_windows_shell("/bin/bash").is_none());
-        assert!(resolve_windows_shell("missing.exe").is_none());
-        assert!(resolve_windows_shell("script.cmd").is_none());
-        assert!(resolve_windows_shell("").is_none());
+        assert!(resolve_windows_shell("/bin/bash", "").is_none());
+        assert!(resolve_windows_shell("missing.exe", "").is_none());
+        assert!(resolve_windows_shell("script.cmd", "").is_none());
+        assert!(resolve_windows_shell("", "").is_none());
+    }
+
+    #[test]
+    fn windows_uses_terminal_path_and_preserves_candidate_order() {
+        use std::{
+            fs,
+            time::{SystemTime, UNIX_EPOCH},
+        };
+
+        let root = std::env::temp_dir().join(format!(
+            "monocode-shell-path-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let system = root.join("system");
+        let scoop = root.join("scoop/shims");
+        let later = root.join("later");
+        for dir in [&system, &scoop, &later] {
+            fs::create_dir_all(dir).unwrap();
+        }
+        fs::write(system.join("powershell.exe"), []).unwrap();
+        fs::write(scoop.join("pwsh.exe"), []).unwrap();
+        fs::write(later.join("pwsh.exe"), []).unwrap();
+        let search_path = std::env::join_paths([&system, &scoop, &later]).unwrap();
+        let search_path = search_path.to_str().unwrap();
+
+        // PowerShell 7 in the terminal-only Scoop path wins over both Windows
+        // PowerShell earlier in PATH and another pwsh later in PATH.
+        let selected = windows_shell(None, None, |program| {
+            resolve_windows_shell(program, search_path)
+        });
+        let resolved = resolve_windows_shell("pwsh.exe", search_path);
+        fs::remove_dir_all(&root).unwrap();
+        let expected = scoop.join("pwsh.exe").to_string_lossy().into_owned();
+        assert_eq!(resolved, Some(expected.clone()));
+        assert_eq!(selected, (expected, vec!["-NoLogo".into()]));
     }
 
     #[test]
@@ -188,11 +225,10 @@ mod tests {
     #[test]
     fn windows_default_shell_runs_a_command() {
         use std::os::windows::process::CommandExt;
-        let (shell, args) = windows_shell(
-            None,
-            std::env::var("COMSPEC").ok().as_deref(),
-            resolve_windows_shell,
-        );
+        let (shell, args) =
+            windows_shell(None, std::env::var("COMSPEC").ok().as_deref(), |program| {
+                resolve_windows_shell(program, &std::env::var("PATH").unwrap_or_default())
+            });
         let powershell = std::path::Path::new(&shell)
             .file_stem()
             .unwrap()

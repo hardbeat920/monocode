@@ -165,14 +165,15 @@ fn spawn(cwd: &str, size: GridSize, id: u64) -> Spawned {
     };
     let term = Arc::new(FairMutex::new(Term::new(config, &size, listener.clone())));
     let workdir = working_dir(cwd);
-    let (program, args) = default_shell();
+    let search_path = monocode_core::scm::terminal_search_path();
+    let (program, args) = default_shell(&search_path);
     let mut env = HashMap::new();
     for (key, value) in [
         ("TERM", "xterm-256color".to_owned()),
         ("COLORTERM", "truecolor".to_owned()),
         ("COLORFGBG", "15;0".to_owned()),
         ("TERM_PROGRAM", "MonoCode".to_owned()),
-        ("PATH", monocode_core::scm::terminal_search_path()),
+        ("PATH", search_path),
         ("PWD", workdir.to_string_lossy().into_owned()),
     ] {
         env.insert(key.to_owned(), value);
