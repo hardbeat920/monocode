@@ -48,10 +48,12 @@ impl HarnessUpdates {
     }
     /// Explicit refresh is permitted after the launch claim or a dismissal.
     pub(crate) fn check_now(&mut self, hidden: Vec<String>, cx: &mut Context<Self>) {
+        self.hidden = false;
+        cx.emit(HarnessUpdatesEvent::Changed);
+        cx.notify();
         if self.checking || self.busy() {
             return;
         }
-        self.hidden = false;
         self.checking = true;
         self.generation += 1;
         let generation = self.generation;
@@ -316,6 +318,43 @@ impl Render for HarnessUpdates {
 mod tests {
     use super::*;
     use gpui::TestAppContext;
+    use std::{cell::Cell, rc::Rc};
+
+    #[gpui::test]
+    fn manual_check_reveals_hidden_status_without_restarting_work(cx: &mut TestAppContext) {
+        for checking in [false, true] {
+            let notice = cx.new(|cx| HarnessUpdates::new(Vec::new(), false, cx));
+            notice.update(cx, |notice, cx| {
+                notice.updates.push(Update {
+                    harness: Kind::Claude,
+                    installed: "2.1.310".into(),
+                    latest: "2.1.311".into(),
+                });
+                notice.checking = checking;
+                if !checking {
+                    notice.rows.insert(Kind::Claude, RowState::Updating);
+                }
+                notice.hide(cx);
+            });
+            let changed = Rc::new(Cell::new(false));
+            let observed = changed.clone();
+            let _subscription = cx.update(|cx| {
+                cx.subscribe(&notice, move |_, event, _| {
+                    if matches!(event, HarnessUpdatesEvent::Changed) {
+                        observed.set(true);
+                    }
+                })
+            });
+            notice.update(cx, |notice, cx| {
+                notice.check_now(Vec::new(), cx);
+                assert!(notice.is_visible(), "manual checks reveal current status");
+                assert_eq!(notice.checking, checking, "keep the active check state");
+                assert_eq!(notice.busy(), !checking, "keep the active update state");
+                assert_eq!(notice.generation, 0, "do not start another check");
+            });
+            assert!(changed.get(), "notify the shell even when work is active");
+        }
+    }
 
     #[gpui::test]
     fn hiding_a_busy_notice_preserves_the_update(cx: &mut TestAppContext) {
