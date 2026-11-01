@@ -126,6 +126,90 @@ export type SessionSummary = {
   busy?: boolean;
   /** What it waits on the user for; absent from an older desktop. */
   waiting?: "approval" | "question";
+  /** An Orchestrator worker's lead; workers open from its Agents sheet, not lists. */
+  leadId?: string;
+  /** A lead's newest Orchestrator plan or run. */
+  orchestration?: OrchestrationSummary;
+};
+
+// The desktop's Orchestrator card (crates/monocode-gpui/src/mobile/orchestration.rs).
+export type OrchestrationPhase =
+  | "review"
+  | "running"
+  | "paused"
+  | "stopped"
+  | "finished"
+  | "inactive";
+
+/** Picks an assignment's colour; its label is the desktop's. */
+export type OrchestrationTone =
+  | "queued"
+  | "starting"
+  | "working"
+  | "done"
+  | "failed"
+  | "stopped"
+  | "blocked"
+  | "interrupted"
+  | "input";
+
+export type OrchestrationSummary = {
+  title: string;
+  phase: OrchestrationPhase;
+  /** "2 of 4 done · 1 working · running", as the desktop card's. */
+  headline: string;
+  tones: OrchestrationTone[];
+};
+
+export type OrchestrationActionName =
+  | "start"
+  | "dismiss"
+  | "remove"
+  | "stop"
+  | "resume"
+  | "retry"
+  | "sendReport";
+
+export type OrchestrationTask = {
+  id: string;
+  index: number;
+  title: string;
+  prompt: string;
+  files: string[];
+  dependsOn: string[];
+  tone: OrchestrationTone;
+  label: string;
+  harness: string;
+  model: string;
+  steps: number;
+  /** Why it waits, or what went wrong. */
+  note?: string;
+  outsideScope: string[];
+  /** The end of its report. */
+  report: string;
+  /** Its worker's chat, once it has one. */
+  sessionId?: string;
+  canRetry: boolean;
+  canRemove: boolean;
+};
+
+export type OrchestrationRun = {
+  /** The tool call that submitted the plan; actions name it. */
+  call: string;
+  title: string;
+  summary: string;
+  phase: OrchestrationPhase;
+  headline: string;
+  /** The card's buttons, main one first. */
+  actions: {
+    action: OrchestrationActionName;
+    label: string;
+    primary: boolean;
+    disabled: boolean;
+  }[];
+  /** Why the main button can't be used yet. */
+  reason?: string;
+  tasks: OrchestrationTask[];
 };
 
 // The desktop's UserQuestionPrompt (src/features/sessions/model/userQuestion.ts):

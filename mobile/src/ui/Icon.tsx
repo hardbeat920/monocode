@@ -35,6 +35,7 @@ import Robot01Icon from "@hugeicons/core-free-icons/Robot01Icon";
 import Refresh01Icon from "@hugeicons/core-free-icons/Refresh01Icon";
 import Search01Icon from "@hugeicons/core-free-icons/Search01Icon";
 import Settings01Icon from "@hugeicons/core-free-icons/Settings01Icon";
+import Share02Icon from "@hugeicons/core-free-icons/Share02Icon";
 import Shield01Icon from "@hugeicons/core-free-icons/Shield01Icon";
 import Sun03Icon from "@hugeicons/core-free-icons/Sun03Icon";
 import SourceCodeIcon from "@hugeicons/core-free-icons/SourceCodeIcon";
@@ -56,6 +57,8 @@ const icons = {
   more: MoreHorizontalIcon,
   search: Search01Icon,
   close: Cancel01Icon,
+  // The Orchestrator, as the desktop's + menu draws it.
+  orchestrator: Share02Icon,
   add: Add01Icon,
   compose: PencilEdit02Icon,
   chat: BubbleChatIcon,
