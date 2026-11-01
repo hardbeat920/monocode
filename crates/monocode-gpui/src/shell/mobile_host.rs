@@ -92,10 +92,10 @@ enum Target {
 
 /// A conversation read from disk, reused until the session opens on desktop.
 struct Saved {
+    id: i64,
+    settings: Settings,
     rows: Vec<Row>,
-    turns: HashMap<usize, TurnInfo>,
     harness: String,
-    model: Option<String>,
     cwd: String,
     /// The store cursor for turns above `rows`: a long Mono loads only its
     /// newest page.
@@ -138,6 +138,7 @@ struct Watch {
 
 /// What a session's turns are built from, live or saved.
 struct Snapshot<'a> {
+    usage_limit: Value,
     rows: &'a [Row],
     turns: &'a HashMap<usize, TurnInfo>,
     cwd: &'a str,
@@ -893,6 +894,7 @@ impl Shell {
                 "messages": turns::messages(snapshot.rows),
                 "turns": turns::build(&source, start..ids.len()),
                 "busy": snapshot.busy,
+                "usageLimit": snapshot.usage_limit,
                 "older": start > 0 || snapshot.history.is_some(),
                 "question": snapshot.question,
             })))
@@ -1001,6 +1003,7 @@ impl Shell {
             None => None,
         };
         let snapshot = Snapshot {
+            usage_limit: chat.mobile_usage_limit(cx),
             rows: chat.transcript.read(cx).source_rows(),
             turns: &chat.settings.turns,
             cwd: &chat.summary.cwd,
@@ -1037,10 +1040,10 @@ impl Shell {
             let Some(id) = id else {
                 // A Mono that has not talked yet.
                 return Ok(Arc::new(Saved {
+                    id: 0,
+                    settings: Settings::default(),
                     rows: Vec::new(),
-                    turns: HashMap::new(),
                     harness: String::new(),
-                    model: None,
                     cwd: String::new(),
                     history: None,
                     mono,
@@ -1061,10 +1064,10 @@ impl Shell {
                     .ok_or("Session is no longer available")?,
             };
             Ok(Arc::new(Saved {
+                id,
+                settings,
                 rows,
-                turns: settings.turns,
                 harness,
-                model: settings.model,
                 cwd,
                 history,
                 mono,
@@ -1161,7 +1164,14 @@ impl Shell {
                 // Turns above the loaded rows are older history too.
                 let older = older || snapshot.history.is_some();
                 let built = turns::build(&source, start..ids.len());
-                (from, older, built, snapshot.busy, snapshot.question.clone())
+                (
+                    from,
+                    older,
+                    built,
+                    snapshot.busy,
+                    snapshot.question.clone(),
+                    snapshot.usage_limit.clone(),
+                )
             };
             let built = match self.with_live_snapshot(&target, cx, frame) {
                 Some(built) => built,
@@ -1176,7 +1186,7 @@ impl Shell {
             let Some(watch) = self.mobile.watches.get_mut(&id) else {
                 continue;
             };
-            let (from, older, built, busy, question) = built;
+            let (from, older, built, busy, question, usage_limit) = built;
             watch.from = from;
             let Some((update, baseline)) = watch::update(
                 watch.baseline.as_ref(),
@@ -1185,6 +1195,7 @@ impl Shell {
                 &question,
                 &built,
                 incremental,
+                &usage_limit,
             ) else {
                 continue;
             };
@@ -1223,7 +1234,24 @@ impl Shell {
                 watch.loading = false;
                 match result {
                     Ok(saved) => {
+                        let limited = saved.settings.usage_limit.is_some();
+                        let target = watch.target.clone();
                         watch.saved = Some(saved);
+                        // A limited conversation needs the desktop clock even when
+                        // first opened from a phone: reset labels and eligibility
+                        // must advance without another transcript row arriving.
+                        if limited {
+                            let view = match target {
+                                Target::Session(session) => this.ensure_session(session, cx),
+                                Target::Mono(mono) => this
+                                    .monos
+                                    .clone()
+                                    .and_then(|m| m.update(cx, |m, cx| m.mobile_chat(&mono, cx))),
+                            };
+                            if let Some(view) = view {
+                                view.update(cx, |v, cx| v.load(cx));
+                            }
+                        }
                         this.push_mobile_watches(cx);
                     }
                     Err(error) => {
@@ -1286,7 +1314,8 @@ impl Shell {
             "session.start" => self.mobile_start(request, finish, cx),
             "conversation.send" => self.mobile_send(request, finish, cx),
             _ => {
-                let result = self.mobile_session_command(&request, window, cx);
+                let result =
+                    self.mobile_session_command(&request.method, &request.params, window, cx);
                 finish(self, request, result);
             }
         }
@@ -1294,15 +1323,15 @@ impl Shell {
 
     fn mobile_session_command(
         &mut self,
-        request: &Request,
+        method: &str,
+        params: &Value,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<Value, String> {
-        let params = &request.params;
         let conversation = string(params, "conversationId").unwrap_or_default();
         let target = self.mobile_target(&conversation, cx)?;
         let reply = json!({"sessionId": conversation});
-        match (request.method.as_str(), &target) {
+        match (method, &target) {
             ("session.cancel", Target::Session(id)) => {
                 if let Some(view) = self.sessions.get(id) {
                     view.update(cx, |v, cx| v.stop_if_busy(cx));
@@ -1313,6 +1342,29 @@ impl Shell {
                 if let Some(chat) = self.monos.as_ref().and_then(|m| m.read(cx).open_chat(mono)) {
                     chat.update(cx, |v, cx| v.stop_if_busy(cx));
                 }
+                Ok(reply)
+            }
+            ("session.resumeUsage" | "session.resumeUsageAtReset", target) => {
+                let automatic = if method == "session.resumeUsageAtReset" {
+                    Some(
+                        params["enabled"]
+                            .as_bool()
+                            .ok_or("Choose whether to resume at reset")?,
+                    )
+                } else {
+                    None
+                };
+                let view = match target {
+                    Target::Session(id) => self.ensure_session(*id, cx),
+                    Target::Mono(mono) => self
+                        .monos
+                        .clone()
+                        .and_then(|m| m.update(cx, |m, cx| m.mobile_chat(mono, cx))),
+                }
+                .ok_or("This conversation is still opening on desktop; try again")?;
+                view.update(cx, |v, cx| {
+                    v.mobile_resume_usage(&params["token"], automatic, cx)
+                })?;
                 Ok(reply)
             }
             ("session.configure", target) => {
@@ -1389,7 +1441,7 @@ impl Shell {
                     .as_u64()
                     .ok_or("This question was already answered")?;
                 // Keeping it open sends no reply, only holds a timed question.
-                let answer = request.method == "session.answerQuestion";
+                let answer = method == "session.answerQuestion";
                 let answered = answer.then(|| &params["reply"]);
                 view.update(cx, |v, cx| {
                     v.mobile_answer_question(request_id, answered, cx)
@@ -2244,6 +2296,7 @@ fn older_page(
                 launches: &look.launches,
                 question: Value::Null,
                 history: page.before,
+                usage_limit: Value::Null,
             };
             let source = snapshot.source();
             let ids = turns::turn_ids(&source);
@@ -2279,11 +2332,20 @@ fn older_page(
 
 fn saved_snapshot(saved: &Saved) -> Snapshot<'_> {
     Snapshot {
+        usage_limit: crate::conversation::mobile_usage_state(
+            saved.id,
+            &saved.harness,
+            saved.settings.model.as_deref(),
+            &saved.settings,
+            saved.settings.usage_limit.as_ref(),
+            false,
+            saved.cwd.starts_with("remote://"),
+        ),
         rows: &saved.rows,
-        turns: &saved.turns,
+        turns: &saved.settings.turns,
         cwd: &saved.cwd,
         harness: &saved.harness,
-        model: saved.model.clone(),
+        model: saved.settings.model.clone(),
         busy: false,
         waiting: None,
         mono: saved.mono.clone(),
@@ -2434,6 +2496,100 @@ mod tests {
                 );
             })
             .unwrap();
+    }
+
+    #[gpui::test]
+    fn saved_and_live_usage_tokens_match_and_shell_routes_continuation_controls(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (window, id, _) = super::super::tests::window(cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.sessions[&id].update(cx, |v, cx| v.load(cx))
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let conversation = window
+            .update(cx, |shell, _, cx| {
+                let conversation = shell.mobile_session_id(id);
+                shell.sessions[&id].update(cx, |v, cx| {
+                    v.mobile_configure(
+                        Some((Kind::Codex, Some("fixture-model".into()))),
+                        &HashMap::new(),
+                        None,
+                        cx,
+                    );
+                    v.settings.usage_limit = Some(monocode_core::usage::Limit {
+                        resets_at: Some(monocode_core::usage::now_ms() + 60_000),
+                        resume_at_reset: false,
+                    });
+                    let token = v.mobile_usage_limit(cx)["token"].clone();
+                    v.mobile_resume_usage(&token, Some(true), cx).unwrap();
+                });
+                conversation
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window.update(cx, |shell, window, cx| {
+            let store = locked(&shell.store).unwrap();
+            let summary = shell.session_summaries[&id].clone();
+            let saved = Saved { id, settings: store.agent_settings(id).unwrap().unwrap(), rows: store.load(id).unwrap().rows, harness: summary.provider, cwd: summary.cwd, history: None, mono: None, launches: HashMap::new() };
+            drop(store);
+            let from_disk = saved_snapshot(&saved).usage_limit;
+            let live = shell.with_live_snapshot(&Target::Session(id), cx, |s| s.usage_limit.clone()).unwrap();
+            assert_eq!(from_disk["token"], live["token"]);
+            let params = json!({"conversationId":conversation, "token":from_disk["token"], "enabled":false});
+            shell.mobile_session_command("session.resumeUsageAtReset", &params, window, cx).unwrap();
+            assert!(!shell.sessions[&id].read(cx).settings.usage_limit.as_ref().unwrap().resume_at_reset);
+            assert!(shell.mobile_session_command("session.resumeUsageAtReset", &params, window, cx).unwrap_err().contains("changed"));
+            shell.sessions[&id].update(cx, |v, _| {
+                v.settings.usage_limit.as_mut().unwrap().resets_at = None;
+                v.settings.mono = Some(monocode_core::agent::MonoContext { mono: Default::default(), root: "/fixture".into(), executable: "/fixture/binary".into() });
+            });
+            let token = shell.sessions[&id].read(cx).mobile_usage_limit(cx)["token"].clone();
+            let params = json!({"conversationId":conversation, "token":token});
+            shell.mobile_session_command("session.resumeUsage", &params, window, cx).unwrap();
+            assert!(shell.sessions[&id].read(cx).settings.usage_limit.is_none());
+            assert!(shell.mobile_session_command("session.resumeUsage", &params, window, cx).unwrap_err().contains("no longer paused"));
+            shell.session_summaries.remove(&id);
+            assert!(shell.mobile_session_command("session.resumeUsage", &params, window, cx).unwrap_err().contains("no longer available"));
+        }).unwrap();
+    }
+
+    #[test]
+    fn saved_usage_state_carries_provider_reset_and_recomputes_eligibility() {
+        let reset = monocode_core::usage::now_ms() + 7 * 24 * 3_600_000;
+        let mut saved = Saved {
+            id: 42,
+            settings: Settings {
+                usage_limit: Some(monocode_core::usage::Limit {
+                    resets_at: Some(reset),
+                    resume_at_reset: true,
+                }),
+                ..Default::default()
+            },
+            rows: Vec::new(),
+            harness: "codex".into(),
+            cwd: "/fixture".into(),
+            history: None,
+            mono: None,
+            launches: HashMap::new(),
+        };
+        let state = saved_snapshot(&saved).usage_limit;
+        assert_eq!(state["resetsAt"], reset);
+        assert_eq!(state["canResume"], false);
+        assert_eq!(state["resumeAtReset"], true);
+        saved.settings.usage_limit.as_mut().unwrap().resets_at =
+            Some(monocode_core::usage::now_ms() - 1);
+        let state = saved_snapshot(&saved).usage_limit;
+        assert_eq!(state["canResume"], true);
+        assert_eq!(state["resetLabel"], "Limit has reset");
+        saved.cwd = "remote://host/fixture".into();
+        let remote = saved_snapshot(&saved).usage_limit;
+        assert_eq!(remote["canResume"], false);
+        assert_eq!(remote["canAutoResume"], false);
+        saved.settings.usage_limit = None;
+        assert!(saved_snapshot(&saved).usage_limit.is_null());
     }
 
     #[test]

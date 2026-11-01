@@ -1,3 +1,4 @@
+import { UsageLimitCard } from "@/features/sessions/UsageLimitCard";
 import { Redirect, router, useIsFocused, useLocalSearchParams } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -152,6 +153,9 @@ export default function MonoScreen() {
         <AccentOverride value={chatAccent}>
           {conversation.question ? (
             <QuestionCard conversationId={conversationId} prompt={conversation.question} />
+          ) : null}
+          {conversationId && conversation.usageLimit ? (
+            <UsageLimitCard key={`usage:${conversationId}`} conversationId={conversationId} state={conversation.usageLimit} />
           ) : null}
           <Composer
             key={mono.id}

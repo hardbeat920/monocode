@@ -3,7 +3,8 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ProjectScreen } from "@/features/workspace/ProjectScreen";
-import type { Project } from "@/features/workspace/types";
+import MonoScreen from "@/app/mono/[monoId]";
+import type { UsageLimitState, Project } from "@/features/workspace/types";
 import type { Workspace } from "@/features/workspace/WorkspaceMenu";
 import { GlassBlurTarget } from "@/ui/LiquidView";
 
@@ -12,6 +13,10 @@ const desktop = vi.hoisted(() => ({
   sendMessage: vi.fn(),
   offline: false,
   os: "ios",
+  usageLimit: undefined as UsageLimitState | undefined,
+  cardMounts: 0,
+  monoId: "first",
+  watched: null as string | null,
   headerTarget: undefined as unknown,
   header: {} as {
     headerTitle?: unknown;
@@ -23,6 +28,28 @@ const desktop = vi.hoisted(() => ({
   existing: { path: "/repo/.worktrees/mobile", name: "feature/mobile" },
 }));
 
+vi.mock("@/features/sessions/UsageLimitCard", () => ({
+  UsageLimitCard: ({ conversationId, state }: { conversationId: string; state: UsageLimitState }) => {
+    const [mount] = useState(() => ++desktop.cardMounts);
+    return <output data-usage-card data-mount={mount}>{conversationId}:{state.token}</output>;
+  },
+}));
+vi.mock("@/features/mascots/PixelMascot", () => ({ PixelMascot: () => null }));
+vi.mock("expo-haptics", () => ({}));
+vi.mock("@/features/connection/ConnectionProvider", () => ({
+  useConnection: () => ({}),
+  useMonoTools: () => false,
+}));
+vi.mock("@/features/models/useMonoModel", () => ({ useMonoModel: () => ({}) }));
+vi.mock("@/features/workspace/monoAccent", () => ({ useMonoAccent: () => "theme" }));
+vi.mock("@/features/workspace/lastPlace", () => ({ rememberPlace: vi.fn() }));
+vi.mock("@/features/workspace/monoSeen", () => ({ markMonoSeen: vi.fn(), markMonoUnread: vi.fn() }));
+vi.mock("@/features/sessions/MonoCards", () => ({
+  MonoChoose: ({ children }: { children: ReactNode }) => children,
+  MonoMessageActions: ({ children }: { children: ReactNode }) => children,
+}));
+vi.mock("@/features/sessions/MonoMenu", () => ({ MonoMenu: () => null }));
+vi.mock("@/ui/Timed", () => ({ Timed: ({ children }: { children: ReactNode }) => children }));
 vi.mock("react-native-svg", () => ({ default: () => <svg />, Path: () => null }));
 vi.mock("react-native", () => ({
   Platform: {
@@ -84,6 +111,8 @@ vi.mock("react-native-reanimated", () => ({
 vi.mock("react-native-worklets", () => ({ scheduleOnRN: vi.fn() }));
 vi.mock("expo-router", () => ({
   router: { push: vi.fn() },
+  Redirect: () => null,
+  useLocalSearchParams: () => ({ monoId: desktop.monoId }),
   Stack: {
     Screen: ({ options }: { options: typeof desktop.header }) => {
       desktop.header = options;
@@ -213,8 +242,10 @@ vi.mock("@/features/workspace/WorkspaceProvider", () => ({
   useWorkspace: () => ({
     startSession: desktop.startSession,
     sendMessage: desktop.sendMessage,
+    monos: ["first", "second"].map(id => ({ id, name: id, mascot: "cat", color: "blue", status: "idle" })),
   }),
-  useConversation: () => ({}),
+  monoConversationId: (id: string) => `mono:${id}`,
+  useConversation: (id: string | null) => { desktop.watched = id; return { usageLimit: desktop.usageLimit }; },
   useConversationTurns: () => ({ turns: [], hasOlder: false }),
 }));
 vi.mock("@/features/workspace/WorkspaceMenu", () => ({
@@ -299,6 +330,9 @@ vi.mock("@/ui/theme", () => {
   const colors = { content: "white", muted: "gray", fill: "gray" };
   return {
     useColors: () => colors,
+    useScheme: () => "dark",
+    ACCENTS: {},
+    AccentOverride: ({ children }: { children: ReactNode }) => children,
     themedStyles: (create: (value: typeof colors) => object) => () =>
       create(colors),
   };
@@ -350,10 +384,38 @@ describe("new session composer workspace", () => {
     desktop.sendMessage.mockReset().mockResolvedValue(undefined);
     desktop.offline = false;
     desktop.os = "ios";
+    desktop.usageLimit = undefined;
+    desktop.cardMounts = 0;
+    desktop.monoId = "first";
     container = document.createElement("div");
     root = createRoot(container);
   });
   afterEach(() => act(() => root.unmount()));
+
+  const usageLimit: UsageLimitState = { token: "paused", canResume: true, canAutoResume: false, resumeAtReset: false,
+    resetLabel: "Reset time unknown", limitation: "Keep desktop running" };
+  it("wires usage cards into project sessions and remounts them when the session changes", () => {
+    desktop.usageLimit = usageLimit;
+    render("first");
+    expect(container.querySelector("[data-usage-card]")?.textContent).toBe("first:paused");
+    expect(desktop.watched).toBe("first");
+    render("second");
+    expect(container.querySelector("[data-usage-card]")?.textContent).toBe("second:paused");
+    expect(desktop.cardMounts).toBe(2);
+    desktop.usageLimit = undefined;
+    render("second");
+    expect(container.querySelector("[data-usage-card]")).toBeNull();
+  });
+  it("wires usage cards into Mono sessions and remounts them when the Mono changes", () => {
+    desktop.usageLimit = usageLimit;
+    act(() => root.render(<MonoScreen />));
+    expect(container.querySelector("[data-usage-card]")?.textContent).toBe("mono:first:paused");
+    expect(desktop.watched).toBe("mono:first");
+    desktop.monoId = "second";
+    act(() => root.render(<MonoScreen />));
+    expect(container.querySelector("[data-usage-card]")?.textContent).toBe("mono:second:paused");
+    expect(desktop.cardMounts).toBe(2);
+  });
 
   it("keeps circular Android project/settings controls after switching projects", () => {
     desktop.os = "android";

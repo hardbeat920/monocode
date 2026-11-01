@@ -401,4 +401,42 @@ describe("starting mobile sessions", () => {
     act(() => workspace.nativeTranscriptStatus("session", { ...status, question: null }));
     expect(conversation.question).toBeNull();
   });
+  const usage = { token: "paused", resetsAt: 123456, resumeAtReset: false, canResume: true,
+    canAutoResume: true, resetLabel: "Limit has reset", limitation: "Keep desktop running" };
+  it("synchronizes usage preferences and resume state from JavaScript watch frames", async () => {
+    link.command.mockResolvedValue({ sessionId: "existing" });
+    await act(async () => { render("existing"); });
+    await frame([{ order: [], turns: [], usageLimit: usage }]);
+    expect(conversation.usageLimit).toEqual(usage);
+    await act(async () => { await workspace.recoverUsage("existing", usage, true); });
+    expect(link.command).toHaveBeenCalledWith("session.resumeUsageAtReset", { conversationId: "existing", token: usage.token, enabled: true }, "request-id");
+    await frame([{ usageLimit: { ...usage, resumeAtReset: true } }]);
+    expect(conversation.usageLimit?.resumeAtReset).toBe(true);
+    await act(async () => { await workspace.recoverUsage("existing", usage, false); });
+    expect(link.command).toHaveBeenCalledWith("session.resumeUsageAtReset", { conversationId: "existing", token: usage.token, enabled: false }, "request-id");
+    await frame([{ usageLimit: null }]);
+    expect(conversation.usageLimit).toBeNull();
+  });
+  it("passes native transcript usage state, suppresses duplicate actions, and retries a failed continuation", async () => {
+    link.nativeTranscript = true;
+    render("session");
+    const status = { busy: false, error: null, hasTurns: true, userCount: 1, pendingId: null };
+    act(() => workspace.nativeTranscriptStatus("session", { ...status, usageLimit: usage }));
+    expect(conversation.usageLimit).toEqual(usage);
+    const pending = deferred<object>();
+    link.command.mockReturnValueOnce(pending.promise);
+    let first!: Promise<void>;
+    act(() => { first = workspace.recoverUsage("session", usage); });
+    await workspace.recoverUsage("session", usage);
+    expect(link.command).toHaveBeenCalledTimes(1);
+    await act(async () => { pending.resolve({}); await first; });
+    link.command.mockRejectedValueOnce(new Error("Desktop busy"));
+    await act(async () => { await expect(workspace.recoverUsage("session", usage)).rejects.toThrow("Desktop busy"); });
+    link.command.mockResolvedValueOnce({});
+    await act(async () => { await workspace.recoverUsage("session", usage); });
+    expect(link.command).toHaveBeenLastCalledWith("session.resumeUsage", { conversationId: "session", token: usage.token }, "request-id");
+    act(() => workspace.nativeTranscriptStatus("session", { ...status, usageLimit: null }));
+    expect(conversation.usageLimit).toBeNull();
+  });
+
 });
