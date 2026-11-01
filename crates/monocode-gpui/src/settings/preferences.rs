@@ -66,6 +66,9 @@ pub(crate) struct Preferences {
     pub mask_emails: bool,
     pub idle_agents: u32,
     pub claude_hooks: bool,
+    /// Turns off Claude Code's and Codex's own subagent tools in chats that
+    /// can start MonoCode threads.
+    pub monocode_subagents_only: bool,
     /// Experimental: report Monocode instead of `sdk-cli` as Claude's entrypoint.
     pub claude_entrypoint: bool,
     pub binary_paths: HashMap<String, String>,
@@ -151,6 +154,7 @@ impl Default for Preferences {
             mask_emails: true,
             idle_agents: 3,
             claude_hooks: true,
+            monocode_subagents_only: true,
             claude_entrypoint: false,
             binary_paths: HashMap::new(),
             disabled_skill_paths: Vec::new(),

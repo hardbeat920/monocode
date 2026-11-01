@@ -31,6 +31,15 @@ pub(crate) fn collect(rows: &[Row], from: usize, streaming: bool) -> Phases {
     let mut result = Phases::default();
     let mut members = Vec::new();
     let mut calls = Vec::new();
+    let mut thread_ids: HashSet<i64> = rows[..from]
+        .iter()
+        .filter(|r| r.role == "tool")
+        .filter_map(|r| serde_json::from_str::<ToolCall>(&r.text).ok())
+        .filter_map(|call| match call.panel() {
+            Some(Panel::Thread(run)) if call.thread_action() == Some("start") => run.id,
+            _ => None,
+        })
+        .collect();
     let live_turn = streaming.then(|| rows.iter().rposition(Row::is_prompt).map_or(0, |i| i + 1));
     let turn = rows[..from]
         .iter()
@@ -69,11 +78,34 @@ pub(crate) fn collect(rows: &[Row], from: usize, streaming: bool) -> Phases {
         } else if role == "tool"
             && let Ok(mut call) = serde_json::from_str::<ToolCall>(&rows[at].text)
         {
+            if matches!(
+                call.thread_action(),
+                Some("wait" | "send" | "stop" | "close")
+            ) {
+                result.hidden.insert(at);
+                at = end;
+                continue;
+            }
             let standalone = match call.panel() {
+                Some(Panel::Thread(run)) => {
+                    if run.id.is_some_and(|id| !thread_ids.insert(id)) {
+                        result.hidden.insert(at);
+                        at = end;
+                        continue;
+                    }
+                    result.pinned.insert(at);
+                    true
+                }
                 Some(Panel::Agent(_))
                     if live_turn.is_some_and(|turn| at >= turn)
                         || matches!(call.state, ToolState::Failed | ToolState::Cancelled) =>
                 {
+                    result.pinned.insert(at);
+                    true
+                }
+                // A plan stays in view after its turn folds: it is where the
+                // run is started and followed.
+                Some(Panel::Orchestration(_)) => {
                     result.pinned.insert(at);
                     true
                 }
@@ -143,6 +175,35 @@ mod tests {
             "tool",
             &serde_json::to_string(&ToolCall::new("read", "Read")).unwrap(),
         )
+    }
+    #[test]
+    fn thread_polls_and_followups_share_one_visible_child_row() {
+        let tool = |name: &str, id: i64| {
+            let mut call = ToolCall::new(name, name);
+            call.input = serde_json::json!({"threadId":id,"prompt":"Review"}).to_string();
+            call.output =
+                serde_json::json!({"threadId":id,"status":"idle","reply":"Checked"}).to_string();
+            call.state = ToolState::Completed;
+            row("tool", &serde_json::to_string(&call).unwrap())
+        };
+        let rows = vec![
+            row("user", "Review"),
+            tool("monocode:thread_start", 7),
+            tool("mcp__monocode__thread_wait", 7),
+            tool("thread_send", 7),
+            tool("thread_start", 7),
+            row("assistant", "Done"),
+        ];
+        let phases = collect(&rows, 0, false);
+        assert!(phases.pinned.contains(&1));
+        for at in [2, 3, 4] {
+            assert!(phases.hidden.contains(&at));
+        }
+        let suffix = collect(&rows, 4, false);
+        assert!(
+            suffix.hidden.contains(&4),
+            "incremental rebuilds keep child identity"
+        );
     }
     #[test]
     fn empty_thoughts_are_invisible_and_do_not_split_calls() {

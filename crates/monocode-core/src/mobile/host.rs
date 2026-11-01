@@ -40,6 +40,8 @@ const APP_METHODS: &[&str] = &[
     "session.rename",
     "session.delete",
     "session.archive",
+    "orchestration.read",
+    "orchestration.action",
     "mono.document",
     "mono.profile",
     "mono.update",

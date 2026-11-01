@@ -676,7 +676,11 @@ impl Protocol {
                     }
                     self.approvals
                         .insert(id.clone(), (v["id"].clone(), "acp".into(), permission));
-                    let read = matches!(kind, Some("read" | "search"));
+                    let thread_read = tool["title"]
+                        .as_str()
+                        .or_else(|| known.map(|t| t.name.as_str()))
+                        .is_some_and(crate::visual_bridge::read_only_tool);
+                    let read = thread_read || matches!(kind, Some("read" | "search"));
                     let planning = self.probe
                         || self.request.settings.plan
                         || self.request.settings.access == AccessMode::ReadOnly;
@@ -701,7 +705,7 @@ impl Protocol {
                         )?;
                         return Ok(events);
                     }
-                    if planning || auto {
+                    if thread_read || planning || auto {
                         self.respond(
                             Control {
                                 id,

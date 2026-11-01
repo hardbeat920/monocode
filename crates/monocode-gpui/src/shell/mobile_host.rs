@@ -4,7 +4,10 @@
 use super::*;
 use crate::{
     accounts::Tone,
-    mobile::{catalog as mobile_catalog, project, transcript as turns},
+    mobile::{
+        catalog as mobile_catalog, orchestration as mobile_orchestration, project,
+        transcript as turns,
+    },
     notifications::delivery,
     pickers,
 };
@@ -70,6 +73,9 @@ struct MonoPreview {
 
 struct CatalogEntry {
     id: i64,
+    /// The lead of a subagent (a thread it drives, or an Orchestrator
+    /// worker), which the phone lists under it.
+    lead: Option<i64>,
     project: String,
     summary: Session,
     live: Option<mobile_catalog::LiveSession>,
@@ -406,7 +412,6 @@ impl Shell {
                 let summary = metadata.summary;
                 if summary.archived
                     || !summary.has_messages
-                    || self.orchestration_worker(id)
                     || self
                         .monos
                         .as_ref()
@@ -435,10 +440,14 @@ impl Shell {
                             Some(crate::conversation::MobileWaiting::Question) => Some("question"),
                             None => None,
                         },
+                        orchestration: mobile_orchestration::current(view.orchestration_views())
+                            .last()
+                            .map(|(_, run)| mobile_orchestration::summary(run)),
                     }
                 });
                 Some(CatalogEntry {
                     id,
+                    lead: self.subagent_lead(id),
                     project: project_id(project),
                     summary: summary.clone(),
                     live,
@@ -563,11 +572,23 @@ impl Shell {
                 let Some(id) = ids.get(&entry.id) else {
                     continue;
                 };
+                // A worker whose lead the phone can't open is left out, as before.
+                let lead = match entry.lead {
+                    Some(lead) => match ids.get(&lead) {
+                        Some(lead) => Some(lead),
+                        None => continue,
+                    },
+                    None => None,
+                };
                 let metadata = mobile_catalog::metadata(saved.get(&entry.id).unwrap_or(&Default::default()), entry.live.as_ref());
                 let branch = if !metadata.worktree_removed && metadata.branch.as_ref().is_none_or(|branch| branch.is_empty()) {
                     mobile_catalog::checkout_branch(metadata.worktree_cwd.as_deref().unwrap_or(&entry.summary.cwd), &mut branches)
                 } else { String::new() };
-                sessions.push(mobile_catalog::session(&entry.summary, id, &entry.project, &metadata, entry.live.as_ref(), &branch));
+                let mut session = mobile_catalog::session(&entry.summary, id, &entry.project, &metadata, entry.live.as_ref(), &branch);
+                if let Some(lead) = lead {
+                    session["leadId"] = json!(lead);
+                }
+                sessions.push(session);
             }
             sessions.sort_by_key(|s| std::cmp::Reverse(s["updatedAt"].as_u64()));
             let monos: Vec<Value> = monos
@@ -742,6 +763,10 @@ impl Shell {
                 request.reply(Ok(project::file_highlight(&job, from)));
             }
             "project.gitAction" => self.mobile_git_action(request, cx),
+            "orchestration.read" => {
+                let result = self.mobile_orchestration(&request.params, cx);
+                request.reply(result);
+            }
             method if method.starts_with("project.") => self.mobile_project(request, cx),
             _ => self.mobile_command(request, window, cx),
         }
@@ -1324,6 +1349,9 @@ impl Shell {
                         .and_then(|m| m.update(cx, |m, cx| m.mobile_chat(mono, cx))),
                 }
                 .ok_or("This conversation is still opening on desktop; try again")?;
+                if view.read(cx).driven_by.is_some() {
+                    return Err("A subagent is driven by its lead".into());
+                }
                 let model = match (
                     string(params, "harness").as_deref().and_then(Kind::parse),
                     string(params, "model"),
@@ -1377,6 +1405,27 @@ impl Shell {
                 self.delete_session(*id, window, cx);
                 Ok(reply)
             }
+            ("orchestration.action", Target::Session(id)) => {
+                let action = mobile_orchestration::action(
+                    params["action"].as_str().unwrap_or_default(),
+                    params["taskId"].as_str(),
+                    params["index"].as_u64().map(|ix| ix as usize),
+                )
+                .ok_or("Unsupported orchestration action")?;
+                let call = string(params, "call").unwrap_or_default();
+                let lead = *id;
+                self.ensure_session(lead, cx)
+                    .ok_or("Session is no longer available")?;
+                self.orchestration_action(
+                    lead,
+                    crate::transcript::orchestration::OrchestrationAction { call, action },
+                    cx,
+                );
+                self.mobile_orchestration(params, cx)
+            }
+            ("orchestration.action", Target::Mono(_)) => {
+                Err("A Mono's conversation has no orchestration".into())
+            }
             ("session.answerQuestion" | "session.keepQuestionOpen", target) => {
                 let view = match target {
                     Target::Session(id) => self.sessions.get(id).cloned(),
@@ -1406,6 +1455,40 @@ impl Shell {
         }
     }
 
+    /// A lead's current Orchestrator cards in full, for the phone's Agents
+    /// sheet. Opening the lead brings back a run saved before a restart.
+    fn mobile_orchestration(
+        &mut self,
+        params: &Value,
+        cx: &mut Context<Self>,
+    ) -> Result<Value, String> {
+        let conversation = string(params, "conversationId").unwrap_or_default();
+        let Target::Session(lead) = self.mobile_target(&conversation, cx)? else {
+            return Ok(json!({"runs": []}));
+        };
+        let view = self
+            .ensure_session(lead, cx)
+            .ok_or("Session is no longer available")?;
+        self.push_orchestration_views(lead, cx);
+        let views: Vec<_> = mobile_orchestration::current(view.read(cx).orchestration_views())
+            .into_iter()
+            .cloned()
+            .collect();
+        let workers: HashMap<i64, String> = views
+            .iter()
+            .flat_map(|(_, run)| run.tasks.iter().filter_map(|task| task.session))
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .map(|id| (id, self.mobile_session_id(id)))
+            .collect();
+        Ok(json!({
+            "runs": views
+                .iter()
+                .map(|(call, run)| mobile_orchestration::run(call.as_deref(), run, |id| workers.get(&id).cloned()))
+                .collect::<Vec<_>>(),
+        }))
+    }
+
     fn mobile_send(
         &mut self,
         request: Request,
@@ -1431,6 +1514,9 @@ impl Shell {
                         let view = this
                             .ensure_session(*id, cx)
                             .ok_or("Session is no longer available")?;
+                        if view.read(cx).driven_by.is_some() {
+                            return Err("A subagent is driven by its lead".into());
+                        }
                         view.update(cx, |v, cx| v.mobile_submit(text, attachments, cx));
                         this.mobile.started.insert(*id);
                         Ok(())
@@ -2432,6 +2518,89 @@ mod tests {
                     vec![blank],
                     "a real conversation with a default title is still history"
                 );
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn a_lead_shows_its_plan_on_the_phone_and_lists_its_workers_under_it(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use monocode_core::orchestration::{Plan, Summary, SummaryTask, Task};
+        let (window, lead, worker) = super::super::tests::window(cx);
+        let task = |id: &str| Task {
+            id: id.into(),
+            title: format!("Assignment {id}"),
+            prompt: "Do it and report.".into(),
+            files: vec!["src".into()],
+            depends_on: Vec::new(),
+            provider: None,
+            model: None,
+            difficulty: None,
+        };
+        let plan = Plan {
+            title: "Split settings".into(),
+            summary: String::new(),
+            tasks: vec![task("a"), task("b")],
+        };
+        window
+            .update(cx, |shell, _, cx| {
+                let id = shell.mobile_session_id(lead);
+                let params = json!({"conversationId": id});
+                assert_eq!(
+                    shell.mobile_orchestration(&params, cx).unwrap()["runs"],
+                    json!([])
+                );
+
+                shell.sessions[&lead].update(cx, |v, cx| {
+                    v.orchestration_plan = Some((Some("plan-call".into()), plan.clone()));
+                    cx.notify();
+                });
+                let runs = shell.mobile_orchestration(&params, cx).unwrap()["runs"].clone();
+                assert_eq!(runs[0]["phase"], "review");
+                assert_eq!(runs[0]["call"], "plan-call");
+                assert_eq!(runs[0]["tasks"].as_array().unwrap().len(), 2);
+
+                // The phone's Remove reaches the plan under review.
+                let action = mobile_orchestration::action("remove", Some("b"), None).unwrap();
+                shell.orchestration_action(
+                    lead,
+                    crate::transcript::orchestration::OrchestrationAction {
+                        call: "plan-call".into(),
+                        action,
+                    },
+                    cx,
+                );
+                let runs = shell.mobile_orchestration(&params, cx).unwrap()["runs"].clone();
+                assert_eq!(runs[0]["tasks"].as_array().unwrap().len(), 1);
+
+                // The lead's catalog entry carries the card; its worker names it.
+                shell.sessions[&worker].update(cx, |chat, _| chat.summary.has_messages = true);
+                shell.orchestration_summaries.insert(
+                    lead,
+                    Summary {
+                        tasks: vec![SummaryTask {
+                            session: Some(worker),
+                            status: "running".into(),
+                            ..Default::default()
+                        }],
+                        live: true,
+                    },
+                );
+                let paths = shell.mobile_projects(cx);
+                let entries = shell.mobile_catalog_sessions(&paths, cx);
+                let entry = |id: i64| entries.iter().find(|e| e.id == id).unwrap();
+                let summary = entry(lead)
+                    .live
+                    .as_ref()
+                    .unwrap()
+                    .orchestration
+                    .clone()
+                    .unwrap();
+                assert_eq!(summary["phase"], "review");
+                assert_eq!(summary["tones"], json!(["queued"]));
+                assert_eq!(entry(worker).lead, Some(lead));
+                assert_eq!(entry(lead).lead, None);
             })
             .unwrap();
     }

@@ -298,12 +298,7 @@ impl Shell {
                         folders = false;
                     }
                     rows.push(Row::Pinned);
-                    rows.extend(
-                        sessions
-                            .iter()
-                            .filter(|id| !self.rails.children.contains(id))
-                            .map(|id| Row::Session(*id)),
-                    );
+                    rows.extend(sessions.iter().map(|id| Row::Session(*id)));
                     rows.push(Row::Gap);
                     continue;
                 }
@@ -322,11 +317,6 @@ impl Shell {
             }
             rows.push(Row::Group(entry.clone()));
             if !collapsed || !self.query.is_empty() {
-                let members: Vec<_> = members
-                    .iter()
-                    .copied()
-                    .filter(|id| !self.rails.children.contains(id))
-                    .collect();
                 rows.extend(
                     members
                         .iter()
@@ -348,9 +338,6 @@ impl Shell {
             let Entry::Session(id) = entry else {
                 continue;
             };
-            if self.rails.children.contains(id) {
-                continue;
-            }
             let label = age_label(self.session_metadata(*id, cx).summary.updated_at, now);
             if previous != Some(label) {
                 rows.push(Row::Heading { label, first });
@@ -434,8 +421,7 @@ impl Shell {
                 | Row::GroupedSession { id, .. }
                 | Row::ClassicGroupMember { id, .. },
             ) = self.sidebar_list.rows.get(ix)
-                && (self.rails.started.contains_key(id)
-                    || self.orchestration_summaries.contains_key(id))
+                && self.orchestration_summaries.contains_key(id)
             {
                 self.sidebar_list.state.remeasure_items(ix..ix + 1);
             }

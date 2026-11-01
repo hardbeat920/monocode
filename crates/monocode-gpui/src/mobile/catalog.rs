@@ -54,6 +54,8 @@ pub(crate) struct LiveSession {
     pub metadata: MobileSessionMetadata,
     pub busy: bool,
     pub waiting: Option<&'static str>,
+    /// The newest Orchestrator card of a lead (`orchestration::summary`).
+    pub orchestration: Option<Value>,
 }
 
 /// The phone keeps model choices across desktop versions. Keep Tauri's
@@ -142,6 +144,9 @@ pub(crate) fn session(
     if let Some(waiting) = live.and_then(|live| live.waiting) {
         value["waiting"] = json!(waiting);
     }
+    if let Some(orchestration) = live.and_then(|live| live.orchestration.clone()) {
+        value["orchestration"] = orchestration;
+    }
     value
 }
 
@@ -209,6 +214,7 @@ mod tests {
             metadata: Default::default(),
             busy: false,
             waiting: None,
+            orchestration: None,
         };
         let mut opening = session(
             &summary,

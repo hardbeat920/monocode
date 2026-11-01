@@ -105,6 +105,10 @@ pub struct Settings {
     pub turn_model: Option<TurnInfo>,
     #[serde(skip)]
     pub disable_claude_hooks: bool,
+    /// Turns off the harness's own subagent tool in a lead chat, so every
+    /// subagent starts as a MonoCode thread.
+    #[serde(skip)]
+    pub monocode_subagents_only: bool,
     #[serde(skip)]
     pub environment: std::collections::HashMap<String, String>,
     #[serde(skip)]
@@ -178,6 +182,9 @@ pub struct TurnInfo {
     pub started_at: Option<u64>,
     pub completed_at: Option<u64>,
     pub metrics: Option<TurnMetrics>,
+    /// The thread that sent this turn's prompt, when another thread did.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sender: Option<i64>,
 }
 impl TurnInfo {
     pub fn has_duration(&self) -> bool {

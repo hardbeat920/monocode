@@ -41,6 +41,68 @@ pub fn validate_operator(action: &str, input: &Value) -> Result<(), String> {
     Ok(())
 }
 
+pub fn validate_threads(action: &str, input: &Value) -> Result<(), String> {
+    let fields = match action {
+        "threads.start" => "prompt harness model effort modelSettings title workspaceMode",
+        "threads.new" => {
+            "prompt harness model effort modelSettings title workspaceMode draft reveal"
+        }
+        "threads.send" => "threadId prompt",
+        "threads.wait" => "threadId timeoutSeconds",
+        "threads.read" => "threadId before limit maxChars",
+        "threads.stop" => "threadId",
+        "threads.close" => "threadId",
+        "threads.list" => "",
+        _ => return Err("Unknown thread action".into()),
+    };
+    for key in input.as_object().ok_or("Input must be an object")?.keys() {
+        if !fields.split_whitespace().any(|field| field == key) {
+            return Err(format!("{action} does not take {key}"));
+        }
+    }
+    if !matches!(action, "threads.start" | "threads.new" | "threads.list")
+        && input["threadId"].as_i64().is_none_or(|id| id <= 0)
+    {
+        return Err("threadId must be a positive integer".into());
+    }
+    match action {
+        "threads.start" | "threads.new" => {
+            crate::mono::api::validate("sessions.start", input)?;
+            prompt(input)?;
+            for (key, max) in [
+                ("harness", 128),
+                ("model", 512),
+                ("effort", 128),
+                ("title", 160),
+            ] {
+                optional_text(input, key, max)?;
+            }
+        }
+        "threads.send" => {
+            prompt(input)?;
+        }
+        "threads.wait"
+            if input
+                .get("timeoutSeconds")
+                .is_some_and(|v| v.as_u64().is_none_or(|n| n > 50)) =>
+        {
+            return Err("timeoutSeconds must be an integer from 0 to 50".into());
+        }
+        "threads.read" => {
+            bounded(input, "limit", 3, 1, 3)?;
+            bounded(input, "maxChars", 1200, 200, 6000)?;
+            if input
+                .get("before")
+                .is_some_and(|v| !v.is_string() && v.as_u64().is_none())
+            {
+                return Err("before must be a turn ID".into());
+            }
+        }
+        _ => (),
+    }
+    Ok(())
+}
+
 pub fn text(input: &Value, key: &str, max: usize) -> Result<String, String> {
     input
         .get(key)

@@ -269,6 +269,7 @@ impl SettingsView {
                     | "show-remaining-usage"
                     | "mask-emails"
                     | "claude-hooks"
+                    | "monocode-subagents-only"
                     | "claude-entrypoint"
                     | "monos-enabled"
                     | "rail-monos-pinned"

@@ -25,7 +25,20 @@ import {
 import { selectedWorkspace } from "@/features/connection/selection";
 import type { ModelCatalog, ModelChoice } from "@/features/models/types";
 import { toWire, type Attachment } from "@/features/sessions/attachments";
-import type { DisplayedQuestionPrompt, Message, Mono, Project, QuestionPrompt, QuestionReply, SessionSummary, Turn, TurnItem } from "./types";
+import type {
+  DisplayedQuestionPrompt,
+  Message,
+  Mono,
+  OrchestrationActionName,
+  OrchestrationRun,
+  OrchestrationTask,
+  Project,
+  QuestionPrompt,
+  QuestionReply,
+  SessionSummary,
+  Turn,
+  TurnItem,
+} from "./types";
 import { applyFrames, type WatchFrame } from "./watchUpdates";
 /**
  * The workspace: what the desktop has and what can be done with it. Changes
@@ -53,6 +66,17 @@ type Workspace = {
   projects: Project[];
   monos: Mono[];
   sessions: SessionSummary[];
+  /** Orchestrator workers, apart from `sessions` so no list shows them. */
+  agents: SessionSummary[];
+  /** A lead's plan under review and latest run, in full. */
+  readOrchestration: (conversationId: string) => Promise<OrchestrationRun[]>;
+  /** Presses one of a card's buttons; resolves to the cards as they are after it. */
+  orchestrationAction: (
+    conversationId: string,
+    run: OrchestrationRun,
+    action: OrchestrationActionName,
+    task?: OrchestrationTask,
+  ) => Promise<OrchestrationRun[]>;
   watch: (id: string | null) => void;
   startSession: (
     projectId: string,
@@ -634,6 +658,30 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     (conversationId: string) => removeSession("session.archive", conversationId),
     [removeSession],
   );
+  const readOrchestration = useCallback(
+    async (conversationId: string) =>
+      (await command<{ runs: OrchestrationRun[] }>("orchestration.read", { conversationId })).runs,
+    [command],
+  );
+  const orchestrationAction = useCallback(
+    async (
+      conversationId: string,
+      run: OrchestrationRun,
+      action: OrchestrationActionName,
+      task?: OrchestrationTask,
+    ) => {
+      const result = await mutate<{ runs: OrchestrationRun[] }>("orchestration.action", {
+        conversationId,
+        call: run.call,
+        action,
+        ...(task ? { taskId: task.id, index: task.index } : {}),
+      });
+      // The lead's row and strip follow on the next catalog.
+      void refresh();
+      return result.runs;
+    },
+    [mutate, refresh],
+  );
   const listSessions = useCallback(
     (projectId: string, query: string, offset: number, filters?: SessionListFilters) =>
       command<SessionPage>("sessions.list", {
@@ -690,6 +738,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         : renamed[session.id]?.from === session.title
           ? { ...session, title: renamed[session.id].title }
           : session;
+    const all = [
+      ...selected.sessions,
+      ...Object.values(remembered).filter((session) => !known.has(session.id)),
+    ].flatMap((session) => edited(session) ?? []);
     return {
       projects: selected.projects,
       allProjects: catalog.projects,
@@ -701,10 +753,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           if (sameValue(mono[field], edit.from)) Object.assign(shown, { [field]: edit.value });
         return shown;
       }),
-      sessions: [
-        ...selected.sessions,
-        ...Object.values(remembered).filter((session) => !known.has(session.id)),
-      ].flatMap((session) => edited(session) ?? []),
+      sessions: all.filter((session) => !session.leadId),
+      agents: all.filter((session) => !!session.leadId),
+      readOrchestration,
+      orchestrationAction,
       watch,
       startSession,
       sendMessage,
@@ -734,6 +786,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     startSession,
     sendMessage,
     stop,
+    readOrchestration,
+    orchestrationAction,
     answerQuestion,
     keepQuestionOpen,
     listSessions,

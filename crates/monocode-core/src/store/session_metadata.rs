@@ -10,7 +10,10 @@ pub struct SessionSidebarMetadata {
     pub drafts: HashSet<i64>,
     pub sidebar_hidden: HashSet<i64>,
     pub started_by: HashMap<i64, i64>,
+    pub thread_parents: HashMap<i64, i64>,
     pub orchestrations: HashMap<i64, orchestration::Summary>,
+    /// Each lead's recent runs, restored for resuming.
+    pub orchestration_runs: HashMap<i64, Vec<orchestration::Run>>,
     pub groups: HashMap<String, session_groups::Groups>,
     pub reminders: Vec<super::Reminder>,
 }
@@ -100,7 +103,9 @@ impl Store {
                 HashSet::new()
             },
             started_by: self.started_links().unwrap_or_default(),
+            thread_parents: self.thread_parents().unwrap_or_default(),
             orchestrations: self.orchestration_summaries().unwrap_or_default(),
+            orchestration_runs: self.orchestration_runs().unwrap_or_default(),
             groups: projects
                 .iter()
                 .filter_map(|project| {

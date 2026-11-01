@@ -335,3 +335,64 @@ fn launch_identity_and_unsent_prompt_survive_reopen_without_duplicate_sessions()
             .unwrap();
     }
 }
+
+#[test]
+fn thread_actions_validate_prompts_targets_and_bounded_waits() {
+    for (action, input) in [
+        (
+            "threads.start",
+            json!({"prompt":"Review", "harness":"codex", "workspaceMode":"worktree"}),
+        ),
+        (
+            "threads.new",
+            json!({"prompt":"Plan drafts", "title":"Drafts", "draft":true, "reveal":false}),
+        ),
+        ("threads.send", json!({"threadId":7,"prompt":"Explain"})),
+        ("threads.wait", json!({"threadId":7,"timeoutSeconds":50})),
+        ("threads.wait", json!({"threadId":7,"timeoutSeconds":0})),
+        (
+            "threads.read",
+            json!({"threadId":7,"limit":3,"maxChars":1000}),
+        ),
+        ("threads.stop", json!({"threadId":7})),
+        ("threads.close", json!({"threadId":7})),
+        ("threads.list", json!({})),
+    ] {
+        assert!(
+            validate_threads(action, &input).is_ok(),
+            "{action}: {input}"
+        );
+    }
+    for (action, input) in [
+        ("threads.start", json!({"prompt":" "})),
+        ("threads.start", json!({"prompt":"/operator do it"})),
+        (
+            "threads.start",
+            json!({"prompt":"x","workspaceMode":"invalid"}),
+        ),
+        (
+            "threads.start",
+            json!({"prompt":"x","runtimeMode":"full-access"}),
+        ),
+        ("threads.new", json!({"prompt":" "})),
+        // A new thread is the user's own; it has no lead to place it beside.
+        ("threads.new", json!({"prompt":"x","placement":"right"})),
+        ("threads.start", json!({"prompt":"x","draft":true})),
+        ("threads.send", json!({"threadId":0,"prompt":"x"})),
+        ("threads.send", json!({"threadId":7})),
+        ("threads.wait", json!({"threadId":7,"timeoutSeconds":51})),
+        ("threads.wait", json!({"threadId":7,"timeoutSeconds":-1})),
+        ("threads.wait", json!({"threadId":7,"timeoutSeconds":1.5})),
+        ("threads.wait", json!({"threadId":7,"timeoutSeconds":"50"})),
+        ("threads.read", json!({"threadId":7,"limit":"3"})),
+        ("threads.stop", json!({"threadId":7,"force":true})),
+        ("threads.close", json!({"threadId":0})),
+        ("threads.close", json!({"threadId":7,"archive":false})),
+        ("threads.list", json!({"project":"/other"})),
+    ] {
+        assert!(
+            validate_threads(action, &input).is_err(),
+            "{action}: {input}"
+        );
+    }
+}

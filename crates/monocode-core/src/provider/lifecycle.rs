@@ -160,7 +160,13 @@ impl Protocol {
         let (policy, sandbox, mut sandbox_policy, reviewer) = self.request.settings.access.codex();
         if (self.request.settings.operator
             || self.request.settings.operator_enabled
-            || self.request.settings.orchestrator)
+            || self.request.settings.orchestrator
+            || self
+                .request
+                .settings
+                .environment
+                .get("MONOCODE_THREADS")
+                .is_some_and(|v| v == "1"))
             && sandbox_policy["type"] != "dangerFullAccess"
         {
             sandbox_policy["networkAccess"] = true.into();
