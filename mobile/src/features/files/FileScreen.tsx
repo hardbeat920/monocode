@@ -4,13 +4,19 @@ import { ActivityIndicator, ScrollView, Text, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 
 import { splitPath } from "@/features/changes/diffTheme";
-import { useConnection } from "@/features/connection/ConnectionProvider";
+import { pause, waitForActive } from "@/features/connection/appActivity";
+import { useCommand } from "@/features/connection/ConnectionProvider";
 import { Markdown } from "@/features/sessions/Markdown";
 import type { FileContents } from "@/features/workspace/types";
 import { themedStyles, useColors } from "@/ui/theme";
 
 import { CodeView, type CodeRow } from "./CodeView";
 import { FileMissing } from "./FileMissing";
+import {
+  HIGHLIGHT_POLL_MS,
+  HighlightProgress,
+  type Highlight,
+} from "./highlightProgress";
 import {
   CodeHeaderTitle,
   HeaderButton,
@@ -22,10 +28,6 @@ import {
 /** Files that open rendered rather than as source. */
 const isMarkdown = (path: string) => /\.(md|mdx|markdown)$/i.test(path);
 
-/** How often to collect a large file's colours while the desktop works on them. */
-const HIGHLIGHT_POLL_MS = 250;
-
-type Highlight = { palette: string[]; lines: [string, number][][] };
 
 // Remembered between files for as long as the app runs.
 let previewPreference = true;
@@ -48,7 +50,7 @@ export function FileScreen({
 }) {
   const styles = useStyles();
   const colors = useColors();
-  const { command } = useConnection();
+  const command = useCommand();
   const [file, setFile] = useState<FileContents | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -76,38 +78,35 @@ export function FileScreen({
   const job = file?.highlightJob;
   useEffect(() => {
     if (!job) return;
-    let disposed = false;
-    let timer: ReturnType<typeof setTimeout>;
-    let palette: string[] = [];
-    let lines: [string, number][][] = [];
-    const collect = async () => {
-      try {
-        const value = await command<Highlight & { done: boolean }>(
-          "project.fileHighlight",
-          {
+    const stop = new AbortController();
+    const collected = new HighlightProgress();
+    void (async () => {
+      while (!stop.signal.aborted) {
+        // Nothing to collect for while the app is in the background.
+        await waitForActive(stop.signal);
+        if (stop.signal.aborted) return;
+        let done = false;
+        try {
+          const value = await command<Highlight & { done: boolean }>("project.fileHighlight", {
             projectId,
             job,
-            from: lines.length,
-          },
-        );
-        if (disposed) return;
-        if (value.lines.length > 0 || value.palette.length !== palette.length) {
-          palette = value.palette;
-          lines = lines.concat(value.lines);
-          setProgress({ palette, lines });
+            from: collected.collected,
+          });
+          if (stop.signal.aborted) return;
+          collected.add(value);
+          done = value.done;
+        } catch {
+          // Missed this time; the next ask picks up from the same line.
+          if (stop.signal.aborted) return;
         }
-        if (value.done) return;
-      } catch {
-        // Missed this time; the next ask picks up from the same line.
-        if (disposed) return;
+        // Shown with every reply that brought colours, as before.
+        const shown = collected.take();
+        if (shown) setProgress(shown);
+        if (done) return;
+        await pause(HIGHLIGHT_POLL_MS, stop.signal);
       }
-      timer = setTimeout(() => void collect(), HIGHLIGHT_POLL_MS);
-    };
-    void collect();
-    return () => {
-      disposed = true;
-      clearTimeout(timer);
-    };
+    })();
+    return () => stop.abort();
   }, [command, projectId, job]);
   const highlight = file?.highlighted ?? (job ? progress : null);
 

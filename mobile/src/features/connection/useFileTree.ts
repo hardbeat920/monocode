@@ -7,7 +7,7 @@ import {
   useState,
 } from "react";
 import type { FileEntry } from "@/features/workspace/types";
-import { useConnection } from "./ConnectionProvider";
+import { useCommand } from "./ConnectionProvider";
 
 /** A folder's entries once read, or why they couldn't be. */
 type Folder = { entries: FileEntry[] } | { error: string };
@@ -45,7 +45,7 @@ export function useFileTree(
   active: boolean,
   worktreePath?: string,
 ) {
-  const { command } = useConnection();
+  const command = useCommand();
   const scope = `${projectId}\n${worktreePath ?? ""}`;
   const [byPath, setFolders] = useState<Map<string, Folder>>(
     () => lastShown.get(scope)?.folders ?? new Map(),

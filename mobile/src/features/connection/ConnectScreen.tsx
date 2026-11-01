@@ -57,6 +57,8 @@ export function ConnectScreen() {
         "Allow camera access in your phone’s settings, or paste a pairing link.",
       );
   };
+  // The scanner and the paste sheet cover the field and the rain; they rest meanwhile.
+  const covered = scanning || pasting;
   const error = connection.error || cameraError;
   const colliders = useScreenColliders();
   return (
@@ -66,9 +68,9 @@ export function ConnectScreen() {
         style={StyleSheet.absoluteFill}
         entering={FadeIn.duration(700).easing(EASE)}
       >
-        <AsciiField />
+        <AsciiField paused={covered} />
       </Animated.View>
-      <MascotRain colliders={colliders.shared} />
+      <MascotRain colliders={colliders.shared} paused={covered} />
       <View
         style={[
           styles.content,

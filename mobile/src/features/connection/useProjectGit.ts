@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
-import { AppState } from "react-native";
+import { useCallback, useMemo } from "react";
 import { makeCommandId } from "./nativeLink";
-import { useConnection } from "./ConnectionProvider";
+import { useCommand } from "./ConnectionProvider";
+import { sameRecord } from "./changed";
+import { polledResource } from "./polledResource";
+import { usePolled } from "./usePolled";
 
 /** How the working copy's branch stands, for the commit sheet's actions. */
 export type GitStatus = {
@@ -27,14 +29,16 @@ export type GitAction =
   | { action: "sync" }
   | { action: "pr" };
 
-/** The last status read for each working copy, shown at once while it is read again. */
-const lastRead = new Map<string, GitStatus>();
+const resourceFor = (projectId: string, worktreePath?: string) =>
+  polledResource<GitStatus>(`git\n${projectId}\n${worktreePath ?? ""}`, {
+    merge: (held, next) => (held && sameRecord(held, next) ? held : next),
+  });
 
 /**
- * The branch status behind the commit sheet, read while `enabled`, and a way to
- * run its actions on the desktop. Generating a message or pushing can take
- * longer than a request may, so an action is asked for again under the same ID
- * until the desktop has its answer.
+ * The branch status behind the commit sheet, read while `enabled` and focused,
+ * and a way to run its actions on the desktop. Generating a message or pushing
+ * can take longer than a request may, so an action is asked for again under
+ * the same ID until the desktop has its answer.
  */
 export function useProjectGit(
   projectId: string,
@@ -43,49 +47,18 @@ export function useProjectGit(
   /** The composer's harness, which writes commit messages and pull requests. */
   harness?: string,
 ) {
-  const { command } = useConnection();
+  const command = useCommand();
   const scope = worktreePath ? { projectId, worktreePath } : { projectId };
-  const scopeKey = `${projectId}\n${worktreePath ?? ""}`;
-  const [status, setStatus] = useState<GitStatus | null>(() => lastRead.get(scopeKey) ?? null);
-  const [error, setError] = useState<string | null>(null);
-  const [nonce, setNonce] = useState(0);
-  const [shown, setShown] = useState(scopeKey);
-  if (shown !== scopeKey) {
-    setShown(scopeKey);
-    setStatus(lastRead.get(scopeKey) ?? null);
-    setError(null);
-  }
-
-  useEffect(() => {
-    if (!enabled) return;
-    let disposed = false;
-    let timer: ReturnType<typeof setTimeout>;
-    const poll = async () => {
-      if (AppState.currentState === "active") {
-        try {
-          const value = await command<GitStatus>("project.git", {
-            projectId,
-            ...(worktreePath ? { worktreePath } : {}),
-          });
-          lastRead.set(`${projectId}\n${worktreePath ?? ""}`, value);
-          if (!disposed) {
-            setStatus(value);
-            setError(null);
-          }
-        } catch (reason) {
-          if (!disposed) setError(reason instanceof Error ? reason.message : String(reason));
-        }
-      }
-      if (!disposed) timer = setTimeout(() => void poll(), 10000);
-    };
-    void poll();
-    return () => {
-      disposed = true;
-      clearTimeout(timer);
-    };
-  }, [projectId, enabled, worktreePath, command, nonce]);
-
-  const reload = useCallback(() => setNonce((n) => n + 1), []);
+  const resource = useMemo(() => resourceFor(projectId, worktreePath), [projectId, worktreePath]);
+  const fetch = useCallback(
+    () =>
+      command<GitStatus>("project.git", {
+        projectId,
+        ...(worktreePath ? { worktreePath } : {}),
+      }),
+    [command, projectId, worktreePath],
+  );
+  const { value: status, error } = usePolled(resource, fetch, enabled);
 
   const run = async (action: GitAction) => {
     const id = makeCommandId();
@@ -100,5 +73,5 @@ export function useProjectGit(
     }
   };
 
-  return { status, error, reload, run };
+  return { status, error, reload: resource.reload, run };
 }

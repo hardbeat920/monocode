@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useConnection } from "./ConnectionProvider";
+import { useCommand } from "./ConnectionProvider";
 
 /** A file whose path matched, relative to the working copy. */
 export type FileMatch = { path: string; name: string };
@@ -12,7 +12,7 @@ const DEBOUNCE_MS = 150;
  * as its quick open ranks them. Empty while there is no query.
  */
 export function useFileSearch(projectId: string, query: string, worktreePath?: string) {
-  const { command } = useConnection();
+  const command = useCommand();
   const wanted = query.trim();
   const scope = `${projectId}\n${worktreePath ?? ""}`;
   // The last answer and what it answered; anything else is still on its way.

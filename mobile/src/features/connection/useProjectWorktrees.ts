@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Worktree } from "@/features/workspace/types";
-import { useConnection } from "./ConnectionProvider";
+import { useCommand } from "./ConnectionProvider";
 /** The last list read for each project, shown at once while it is read again. */
 const lastRead = new Map<string, Worktree[]>();
 /**
@@ -9,7 +9,7 @@ const lastRead = new Map<string, Worktree[]>();
  * Read only once `enabled`; until then the last list stands.
  */
 export function useProjectWorktrees(projectId: string, enabled = true) {
-  const { command } = useConnection();
+  const command = useCommand();
   const [worktrees, setWorktrees] = useState(() => lastRead.get(projectId));
   useEffect(() => {
     if (!enabled) return;

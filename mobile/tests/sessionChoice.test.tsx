@@ -15,9 +15,7 @@ const desktop = vi.hoisted(() => ({
 }));
 vi.mock("react-native", () => ({ Alert: { alert: vi.fn() } }));
 vi.mock("@/features/connection/ConnectionProvider", () => ({
-  useConnection: () => ({
-    pairing: { desktop: { fingerprint: desktop.fingerprint } },
-  }),
+  usePairing: () => ({ desktop: { fingerprint: desktop.fingerprint } }),
 }));
 vi.mock("@/features/settings/defaultModel", () => ({
   useDefaultModel: () => null,

@@ -12,7 +12,7 @@ import {
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { useConnection } from "@/features/connection/ConnectionProvider";
+import { useCommand } from "@/features/connection/ConnectionProvider";
 import { useOffline } from "@/features/connection/ConnectionNotice";
 import { HeaderButton } from "@/features/files/codeScreen";
 import { themedStyles, useColors, useScheme } from "@/ui/theme";
@@ -33,7 +33,7 @@ export default function MonoFileScreen() {
     monoId: string;
     file: MonoFile;
   }>();
-  const { command } = useConnection();
+  const command = useCommand();
   const offline = useOffline();
   const styles = useStyles();
   const colors = useColors();

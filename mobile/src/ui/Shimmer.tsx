@@ -9,6 +9,7 @@ import {
   type TextStyle,
 } from "react-native";
 import Animated, {
+  cancelAnimation,
   Easing,
   useAnimatedStyle,
   useSharedValue,
@@ -17,6 +18,7 @@ import Animated, {
 } from "react-native-reanimated";
 
 import { withAlpha, useColors } from "@/ui/theme";
+import { useAnimationsRunning } from "@/ui/useAnimationsRunning";
 
 /** Each character widens the light, as the desktop's `--spread` does. */
 const SPREAD_PER_CHAR = 2;
@@ -44,7 +46,11 @@ export function Shimmer({
   const spread = children.length * SPREAD_PER_CHAR;
 
   const progress = useSharedValue(0);
+  // Sweeps only while seen: not in a shut drawer, in the background, or with
+  // Reduce Motion on, where the light rests off the text's left edge.
+  const running = useAnimationsRunning();
   useEffect(() => {
+    if (!running) return;
     progress.set(
       withRepeat(
         withTiming(1, { duration: duration * 1000, easing: Easing.linear }),
@@ -52,7 +58,8 @@ export function Shimmer({
         false,
       ),
     );
-  }, [progress, duration]);
+    return () => cancelAnimation(progress);
+  }, [progress, duration, running]);
   const band = useAnimatedStyle(() => ({
     transform: [
       { translateX: width * (-0.25 + 1.5 * progress.get()) - spread },

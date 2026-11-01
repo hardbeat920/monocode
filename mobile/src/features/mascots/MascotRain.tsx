@@ -10,6 +10,7 @@ import Animated, {
 } from "react-native-reanimated";
 
 import { PROJECT_COLORS } from "@/features/workspace/projectColors";
+import { useAnimationsRunning } from "@/ui/useAnimationsRunning";
 
 import { step, screenGravity, type Body, type Collider } from "./mascotPhysics";
 import { PIXEL_MASCOT_NAMES } from "./pixelMascots";
@@ -62,15 +63,30 @@ function cast(width: number) {
  * Monocode's mascots raining down from the top of the screen, piling on
  * `colliders` and on the screen's foot, and sliding about as the phone tilts.
  * Fills its parent, which should be the whole screen; touches pass through.
- * Nothing shows with Reduce Motion on.
+ * Nothing shows with Reduce Motion on. While `paused` (a camera or sheet
+ * covers the screen) or the app is not in the foreground, the physics frame
+ * loop and the accelerometer stop and the pile holds where it lies.
  */
-export function MascotRain({ colliders }: { colliders: SharedValue<Collider[]> }) {
+export function MascotRain({
+  colliders,
+  paused = false,
+}: {
+  colliders: SharedValue<Collider[]>;
+  paused?: boolean;
+}) {
   const reduceMotion = useReducedMotion();
   if (reduceMotion) return null;
-  return <Rain colliders={colliders} />;
+  return <Rain colliders={colliders} paused={paused} />;
 }
 
-function Rain({ colliders }: { colliders: SharedValue<Collider[]> }) {
+function Rain({
+  colliders,
+  paused,
+}: {
+  colliders: SharedValue<Collider[]>;
+  paused: boolean;
+}) {
+  const running = useAnimationsRunning() && !paused;
   const { width, height } = useWindowDimensions();
   const [{ mascots, bodies: start }] = useState(() => cast(width));
   const bodies = useSharedValue(start);
@@ -79,6 +95,7 @@ function Rain({ colliders }: { colliders: SharedValue<Collider[]> }) {
   const time = useSharedValue(0);
 
   useEffect(() => {
+    if (!running) return;
     let subscription: { remove: () => void } | null = null;
     let cancelled = false;
     void Accelerometer.isAvailableAsync().then((available) => {
@@ -92,9 +109,9 @@ function Rain({ colliders }: { colliders: SharedValue<Collider[]> }) {
       cancelled = true;
       subscription?.remove();
     };
-  }, [gravity]);
+  }, [gravity, running]);
 
-  useFrameCallback(({ timeSincePreviousFrame }) => {
+  const frame = useFrameCallback(({ timeSincePreviousFrame }) => {
     // Held short after a stall, so nothing tunnels through a button.
     const dt = Math.min((timeSincePreviousFrame ?? 16) / 1000, 1 / 30);
     time.set(time.get() + dt);
@@ -106,7 +123,10 @@ function Rain({ colliders }: { colliders: SharedValue<Collider[]> }) {
       step(list, world, pull, width, height, dt, now);
       return list;
     });
-  });
+  }, running);
+  useEffect(() => {
+    frame.setActive(running);
+  }, [frame, running]);
 
   return (
     <View pointerEvents="none" style={StyleSheet.absoluteFill}>

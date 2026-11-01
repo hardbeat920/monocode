@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { Text, View } from "react-native";
 import Animated, {
+  cancelAnimation,
   Easing,
   useAnimatedStyle,
   useSharedValue,
@@ -10,6 +11,7 @@ import Animated, {
 
 import { useSessionLayout } from "@/features/sessions/SessionScreen";
 import { LiquidView } from "@/ui/LiquidView";
+import { useAnimationsRunning } from "@/ui/useAnimationsRunning";
 import { withAlpha, themedStyles, useColors } from "@/ui/theme";
 
 import { useConnection } from "./ConnectionProvider";
@@ -73,14 +75,22 @@ export function ReconnectingStatus() {
 export function PulsingDot() {
   const styles = useStyles();
   const pulse = useSharedValue(0);
+  // Pulses only while seen: not in a shut drawer, in the background, or with
+  // Reduce Motion on, when it rests as a plain dot.
+  const running = useAnimationsRunning();
   useEffect(() => {
+    if (!running) return;
     pulse.set(
       withRepeat(
         withTiming(1, { duration: PULSE_MS, easing: Easing.out(Easing.cubic) }),
         -1,
       ),
     );
-  }, [pulse]);
+    return () => {
+      cancelAnimation(pulse);
+      pulse.set(0);
+    };
+  }, [pulse, running]);
   // A ring grows out of the dot and fades, while the dot dims and comes back.
   const ring = useAnimatedStyle(() => ({
     opacity: 0.6 * (1 - pulse.get()),

@@ -15,6 +15,11 @@ const activity = vi.hoisted(() => ({
   activate: (_index: number) => {},
 }));
 
+const glow = vi.hoisted(() => ({ running: false, started: 0, cancelled: 0 }));
+vi.mock("@/ui/useAnimationsRunning", () => ({
+  useAnimationsRunning: () => glow.running,
+}));
+
 vi.mock("react-native", () => ({
   View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
   Text: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
@@ -112,10 +117,15 @@ vi.mock("react-native-reanimated", async () => {
       duration,
     }),
     withSequence: (value: number) => value,
-    withRepeat: (value: number) => value,
+    withRepeat: (value: number) => {
+      glow.started++;
+      return value;
+    },
     withDelay: (_delay: number, value: number) => value,
     interpolate: () => 0,
-    cancelAnimation: () => {},
+    cancelAnimation: () => {
+      glow.cancelled++;
+    },
   };
 });
 vi.mock("react-native-svg", () => ({ default: () => null, Path: () => null }));
@@ -240,12 +250,28 @@ describe("working-to-finished pill handoff", () => {
     activity.finished = [];
     activity.arrivals = { "Build the app": 1 };
     activity.hidden = false;
+    glow.running = false;
+    glow.started = 0;
+    glow.cancelled = 0;
     container = document.createElement("div");
     root = createRoot(container);
   });
   afterEach(() => {
     act(() => root.unmount());
     vi.useRealTimers();
+  });
+
+  it("loops the artwork glow only while animations run", () => {
+    render();
+    expect(glow.started).toBe(0);
+    glow.running = true;
+    render();
+    expect(glow.started).toBe(1);
+    expect(glow.cancelled).toBe(0);
+    glow.running = false;
+    render();
+    expect(glow.started).toBe(1);
+    expect(glow.cancelled).toBe(1);
   });
 
   it("keeps the outgoing title and subtitle, then shows the finished card after it clears", () => {

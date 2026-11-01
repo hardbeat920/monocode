@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { useConnection } from "@/features/connection/ConnectionProvider";
+import { usePairing } from "@/features/connection/ConnectionProvider";
 import { useWorkspace } from "@/features/workspace/WorkspaceProvider";
 
 import type { ModelCatalog } from "./types";
@@ -18,7 +18,7 @@ export function useModelCatalog(
   conversationId?: string,
 ) {
   const { listModels } = useWorkspace();
-  const desktop = useConnection().pairing?.desktop.fingerprint;
+  const desktop = usePairing()?.desktop.fingerprint;
   const key = `${desktop}\n${projectId}\n${conversationId ?? ""}`;
   const [loaded, setLoaded] = useState<{
     key: string;

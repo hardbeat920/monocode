@@ -1,6 +1,6 @@
 import { View } from "react-native";
 
-import { useConnection } from "@/features/connection/ConnectionProvider";
+import { usePairing } from "@/features/connection/ConnectionProvider";
 import { themedStyles } from "@/ui/theme";
 
 import { useUnreadMonos } from "./monoSeen";
@@ -9,7 +9,7 @@ import { useWorkspace } from "./WorkspaceProvider";
 /** Whether any mono has a reply the user hasn't seen, for the drawer's button. */
 export function useAnyUnreadMono() {
   const { monos } = useWorkspace();
-  const desktop = useConnection().pairing?.desktop.fingerprint;
+  const desktop = usePairing()?.desktop.fingerprint;
   return useUnreadMonos(desktop, monos).size > 0;
 }
 
