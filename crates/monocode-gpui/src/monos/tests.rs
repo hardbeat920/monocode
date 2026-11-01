@@ -585,6 +585,90 @@ fn floating_chat_opens_after_releasing_the_manager_and_shares_the_runtime(cx: &m
     cx.update(|cx| assert!(!s.manager.read(cx).floating_shows(&s.id, cx)));
 }
 
+fn change_effort_keys() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "cmd-/"
+    } else {
+        "ctrl-/"
+    }
+}
+
+fn effort_model() -> monocode_core::catalog::Model {
+    monocode_core::catalog::Model {
+        alias_target: None,
+        id: "gpt-effort".into(),
+        name: "GPT Effort".into(),
+        efforts: vec!["low".into(), "high".into()],
+        default_effort: Some("high".into()),
+        fast: false,
+        thinking: false,
+        default: true,
+        tiers: Vec::new(),
+        controls: Vec::new(),
+    }
+}
+
+#[gpui::test]
+fn change_effort_opens_the_effort_menu_in_the_monos_composer(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    cx.update(crate::shell::bind_keys);
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    visual.run_until_parked();
+    let chat = s.manager.read_with(visual, |m, _| m.chat().unwrap());
+    chat.update(visual, |chat, cx| {
+        chat.use_catalog_model(effort_model());
+        cx.notify();
+    });
+    s.window
+        .update(visual, |_, window, cx| {
+            window.focus(&chat.read(cx).input.focus_handle(cx), cx)
+        })
+        .unwrap();
+    visual.run_until_parked();
+    visual.simulate_keystrokes(change_effort_keys());
+    visual.run_until_parked();
+    assert!(
+        chat.read_with(visual, |chat, _| chat.mono_menus_open().1),
+        "Cmd+/ opens the effort menu over the Mono's composer"
+    );
+    visual.simulate_keystrokes(change_effort_keys());
+    visual.run_until_parked();
+    assert!(!chat.read_with(visual, |chat, _| chat.mono_menus_open().1));
+}
+
+#[gpui::test]
+fn change_effort_opens_the_effort_menu_in_the_floating_chat(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    cx.update(crate::shell::bind_keys);
+    cx.update(|cx| {
+        s.manager
+            .update(cx, |m, cx| m.open_floating(s.id.clone(), cx))
+    });
+    cx.run_until_parked();
+    let (panel, chat) = cx.update(|cx| {
+        let manager = s.manager.read(cx);
+        (manager.floating[0], manager.chats[&s.id].clone())
+    });
+    chat.update(cx, |chat, cx| {
+        chat.use_catalog_model(effort_model());
+        cx.notify();
+    });
+    let visual = &mut gpui::VisualTestContext::from_window(panel, cx);
+    visual.run_until_parked();
+    visual.simulate_keystrokes(change_effort_keys());
+    visual.run_until_parked();
+    assert!(
+        chat.read_with(visual, |chat, _| chat.mono_menus_open().1),
+        "Cmd+/ opens the effort menu in the floating Mono chat"
+    );
+    // The workspace leaves a chat that a floating panel owns alone.
+    s.window
+        .update(visual, |shell, _, cx| {
+            assert!(shell.shortcut_conversation(cx).is_none())
+        })
+        .unwrap();
+}
+
 #[gpui::test]
 fn floating_chat_leaves_the_workspace_selection_alone(cx: &mut TestAppContext) {
     let s = setup(cx);

@@ -112,6 +112,7 @@ actions!(
         MoveProjectBack,
         MoveProjectForward,
         SwitchModel,
+        ChangeEffort,
         ToggleRightPanel,
         SplitRight,
         SplitDown,
@@ -239,6 +240,12 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new(&format!("{modifier}-alt-shift-left"), MoveProjectBack, context),
         KeyBinding::new(&format!("{modifier}-alt-shift-right"), MoveProjectForward, context),
         KeyBinding::new(&format!("{modifier}-."), SwitchModel, context),
+        // The floating Mono chat is its own window, outside the workspace.
+        KeyBinding::new(
+            &format!("{modifier}-/"),
+            ChangeEffort,
+            Some("Workspace || MonoFloating"),
+        ),
         KeyBinding::new(&format!("{modifier}-shift-b"), ToggleRightPanel, context),
         KeyBinding::new(&format!("{modifier}-d"), SplitRight, context),
         KeyBinding::new(&format!("{modifier}-j"), ToggleTerminal, context),
@@ -3975,6 +3982,17 @@ impl Shell {
             }
         })
         .detach();
+    }
+    /// The composer the model and effort shortcuts act on: the open Mono's
+    /// chat, otherwise the active session.
+    pub(crate) fn shortcut_conversation(&self, cx: &App) -> Option<Entity<Conversation>> {
+        if self.mono_active(cx) {
+            return self.monos.as_ref()?.read(cx).workspace_chat(cx);
+        }
+        self.workspace
+            .active
+            .and_then(|id| self.sessions.get(&id))
+            .cloned()
     }
     fn update_usage_provider(&self, cx: &mut Context<Self>) {
         let view = self
@@ -8586,6 +8604,11 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &SwitchModel, window, cx| {
                 if let Some(view) = this.workspace.active.and_then(|id| this.sessions.get(&id)) {
                     view.update(cx, |v, cx| v.toggle_recent_models(window, cx));
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ChangeEffort, window, cx| {
+                if let Some(view) = this.shortcut_conversation(cx) {
+                    view.update(cx, |v, cx| v.toggle_effort_menu(window, cx));
                 }
             }))
             .on_action(cx.listener(|this, _: &DismissMenu, window, cx| {
