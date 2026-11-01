@@ -26,6 +26,9 @@ public class MonocodeLinkModule: Module {
       }
       OnViewDidUpdateProps { (view: NativeTranscriptView) in view.updateProps() }
       AsyncFunction("scrollToEnd") { (view: NativeTranscriptView) in view.jumpToEnd() }
+      AsyncFunction("selectText") { (view: NativeTranscriptView, text: String) in
+        view.selectText(text)
+      }
     }
     AsyncFunction("execute") { (input: String) -> String in
       return input.withCString { pointer in

@@ -5,12 +5,13 @@ use super::*;
 use crate::{
     accounts::Tone,
     mobile::{catalog as mobile_catalog, project, transcript as turns},
+    notifications::delivery,
     pickers,
 };
 use gpui::{EntityId, Task};
 use monocode_core::{
     agent::{AccessMode, Settings, TurnInfo},
-    mobile::{Event, Invite, MobileHost, Push, Request, Status, WatchStart, watch},
+    mobile::{Event, Invite, MobileHost, Push, Request, Status, WatchStart, notify, watch},
     transcript::Row,
 };
 use serde_json::{Value, json};
@@ -52,6 +53,19 @@ pub(super) struct Mobile {
     publishing: bool,
     /// Persisted session IDs, which stay stable for paired phones.
     ids: HashMap<i64, String>,
+    /// Sessions whose current turn a phone started: their approvals,
+    /// questions and finish are sent to it.
+    started: HashSet<i64>,
+    /// The last message of each Mono conversation not open here, by its
+    /// session, with the update time it was read at: read again only once
+    /// the conversation has changed.
+    mono_previews: HashMap<i64, MonoPreview>,
+}
+
+#[derive(Clone)]
+struct MonoPreview {
+    updated_at: u64,
+    text: Value,
 }
 
 struct CatalogEntry {
@@ -83,6 +97,30 @@ struct Saved {
     harness: String,
     model: Option<String>,
     cwd: String,
+    /// The store cursor for turns above `rows`: a long Mono loads only its
+    /// newest page.
+    history: Option<i64>,
+    /// The Mono's name, so its saved turns are drawn as Mono turns, as they
+    /// are once its chat opens, and keep their heights when it does.
+    mono: Option<String>,
+    /// The cards of the sessions the Mono started, as they stood on reading.
+    launches: HashMap<i64, Value>,
+}
+
+/// How an older page's turns are drawn, as the conversation's own are.
+struct PageLook {
+    mono: Option<String>,
+    launches: HashMap<i64, Value>,
+    cwd: String,
+    harness: String,
+    model: Option<String>,
+}
+
+/// A read's answer, or the store page it still needs.
+enum Read {
+    Done(Value),
+    /// The turns before the loaded rows, from the page at this cursor.
+    Page(i64),
 }
 
 struct Watch {
@@ -109,6 +147,14 @@ struct Snapshot<'a> {
     waiting: Option<&'static str>,
     mono: Option<String>,
     pending: Vec<turns::Pending>,
+    /// A Mono's launched sessions, as the phone's cards show them.
+    launches: &'a HashMap<i64, Value>,
+    /// The question the agent waits on, as the phone's card shows it; null
+    /// for none, as always for a saved conversation.
+    question: Value,
+    /// The store cursor for turns above `rows`, which the phone pages in
+    /// through `conversation.older`.
+    history: Option<i64>,
 }
 impl Snapshot<'_> {
     fn source(&self) -> turns::Source<'_> {
@@ -124,11 +170,21 @@ impl Snapshot<'_> {
             waiting: self.waiting,
             mono: self.mono.as_deref(),
             pending: &self.pending,
+            launches: self.launches,
         }
     }
 }
 
 /// `encodeURIComponent`, as paired phones already know projects by it.
+/// A visual document's component tree, as its first render draws it.
+fn visual_tree(body: &str) -> Result<Value, String> {
+    use monocode_core::visual::{VisualDocument, VisualRuntime};
+    let visual: VisualDocument = serde_json::from_str(body).map_err(|e| e.to_string())?;
+    visual.validate()?;
+    let tree = VisualRuntime::new(&visual.source)?.render()?;
+    serde_json::to_value(tree).map_err(|e| e.to_string())
+}
+
 fn project_id(path: &str) -> String {
     let mut out = String::with_capacity(path.len());
     for byte in path.bytes() {
@@ -455,6 +511,15 @@ impl Shell {
                     .collect()
             })
             .unwrap_or_default();
+        // A Mono's conversation not open here still shows its last message
+        // on the phone, read from its saved history.
+        let saved_monos: Vec<(i64, Option<u64>)> = monos
+            .iter()
+            .filter(|(_, live)| live.is_none())
+            .filter_map(|(mono, _)| mono.session_id)
+            .map(|id| (id, self.session_summaries.get(&id).map(|s| s.updated_at)))
+            .collect();
+        let mut previews = self.mobile.mono_previews.clone();
         let store = self.store.clone();
         let mut ids = self.mobile.ids.clone();
         self.mobile.publishing = true;
@@ -468,6 +533,23 @@ impl Shell {
                         entry.insert(value);
                     }
                 }
+                for (id, updated_at) in &saved_monos {
+                    let fresh = previews
+                        .get(id)
+                        .is_some_and(|p| updated_at.is_some_and(|at| at == p.updated_at));
+                    if fresh {
+                        continue;
+                    }
+                    let Ok(history) = store.load(*id) else {
+                        continue;
+                    };
+                    let text = turns::messages(&history.rows)
+                        .pop()
+                        .map(|m| m["text"].clone())
+                        .unwrap_or(json!(""));
+                    previews.insert(*id, MonoPreview { updated_at: updated_at.unwrap_or(0), text });
+                }
+                previews.retain(|id, _| saved_monos.iter().any(|(saved, _)| saved == id));
                 store.mobile_session_metadata()?
             };
             let mut branches = HashMap::new();
@@ -507,6 +589,10 @@ impl Shell {
                     if let Some(session) = mono.session_id.and_then(|id| ids.get(&id)) {
                         value["sessionId"] = json!(session);
                     }
+                    if let Some(preview) = mono.session_id.and_then(|id| previews.get(&id)) {
+                        value["lastMessage"] = preview.text.clone();
+                        value["lastActiveAt"] = json!(preview.updated_at);
+                    }
                     if let Some(live) = live {
                         for (key, field) in live.as_object().into_iter().flatten() {
                             if !field.is_null() {
@@ -518,16 +604,23 @@ impl Shell {
                 })
                 .collect();
             Ok::<_, String>((
-                json!({"projects": projects, "monos": monos, "sessions": sessions}),
+                // `monoTools`: this desktop answers the phone's Mono profile,
+                // editing, reset, delete and create; the older app doesn't,
+                // and its phones hide them. `push`: it notifies phones through
+                // Expo, so they no longer post their own alerts. `monoFiles`:
+                // it reads and saves a Mono's soul and memory for the phone.
+                json!({"projects": projects, "monos": monos, "sessions": sessions, "monoTools": true, "push": true, "monoFiles": true}),
                 ids,
+                previews,
             ))
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, _| {
                 this.mobile.publishing = false;
-                if let Ok((catalog, ids)) = result {
+                if let Ok((catalog, ids, previews)) = result {
                     this.mobile.ids = ids;
+                    this.mobile.mono_previews = previews;
                     let _ = host.publish(catalog);
                 }
             });
@@ -558,6 +651,63 @@ impl Shell {
         Ok(Target::Session(session))
     }
 
+    /// The sessions a Mono started, as the cards in its chat show them on the
+    /// phone: the phone's IDs for each and the project it runs in, its title
+    /// and how it stands. None for a session's own conversation.
+    fn mobile_launches(&self, target: &Target, cx: &App) -> HashMap<i64, Value> {
+        let Target::Mono(mono) = target else {
+            return HashMap::new();
+        };
+        let Some(mono) = self
+            .monos
+            .as_ref()
+            .and_then(|m| m.read(cx).roster.get(mono).cloned())
+        else {
+            return HashMap::new();
+        };
+        let projects = self.mobile_projects(cx);
+        crate::monos::cards::launch_views(&mono, self, cx)
+            .into_iter()
+            .map(|(id, view)| {
+                // A worktree's session belongs to the project it was made from.
+                let cwd = view.cwd.as_str();
+                let project = projects
+                    .iter()
+                    .find(|path| {
+                        monocode_core::files::path_key(path) == monocode_core::files::path_key(cwd)
+                    })
+                    .or_else(|| {
+                        mono.projects.iter().find(|path| {
+                            projects.contains(path) && cwd.starts_with(path.as_str())
+                        })
+                    });
+                let name = match project {
+                    Some(path) => self.appearance(path).label(path),
+                    None => std::path::Path::new(cwd)
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                };
+                let phone_id = self.mobile.ids.get(&id).cloned().unwrap_or_else(|| {
+                    locked(&self.store)
+                        .ok()
+                        .and_then(|store| store.persisted_session_id(id).ok())
+                        .unwrap_or_else(|| id.to_string())
+                });
+                let card = json!({
+                    "id": phone_id,
+                    "projectId": project_id(project.map_or(cwd, String::as_str)),
+                    "project": name,
+                    "title": monocode_core::session_title::display_title(&view.title, &view.harness),
+                    "harness": view.harness,
+                    // One the desktop can't find any more reads as done.
+                    "state": if view.state == "unavailable" { "done" } else { view.state },
+                });
+                (id, card)
+            })
+            .collect()
+    }
+
     fn mobile_session_id(&mut self, id: i64) -> String {
         if let Some(value) = self.mobile.ids.get(&id) {
             return value.clone();
@@ -581,6 +731,11 @@ impl Shell {
             "conversation.read" | "conversation.older" => self.mobile_read(request, cx),
             "models.list" => self.mobile_models(request, cx),
             "accounts.usage" => self.mobile_usage(request, cx),
+            "mono.document" => self.mobile_document(request, cx),
+            "mono.profile" | "mono.update" | "mono.reset" | "mono.delete" | "mono.create" => {
+                self.mobile_mono(request, cx)
+            }
+            "mono.file" | "mono.saveFile" => self.mobile_mono_file(request, cx),
             "project.fileHighlight" => {
                 let job = string(&request.params, "job").unwrap_or_default();
                 let from = request.params["from"].as_u64().unwrap_or(0) as usize;
@@ -647,11 +802,14 @@ impl Shell {
                 let result = Arc::new(Mutex::new(None));
                 let slot = result.clone();
                 let params = request.params.clone();
+                let chosen = cx
+                    .try_global::<crate::settings::Preferences>()
+                    .and_then(|p| p.background_text_model());
                 cx.background_executor()
                     .spawn(async move {
                         let cwd = PathBuf::from(cwd);
                         let outcome = project::resolve_root(&cwd, params["worktreePath"].as_str())
-                            .and_then(|root| project::git_action(&root, &params));
+                            .and_then(|root| project::git_action(&root, &params, chosen));
                         if let Ok(mut slot) = slot.lock() {
                             *slot = Some(outcome);
                         }
@@ -707,32 +865,113 @@ impl Shell {
             .as_u64()
             .unwrap_or(DEFAULT_TAIL as u64) as usize)
             .clamp(1, MAX_PAGE);
-        let page = move |snapshot: &Snapshot| -> Result<Value, String> {
+        // Before a turn of an older page the phone already holds: the store
+        // has the rest.
+        if older && let Some((cursor, at)) = page_turn(&before) {
+            return self.mobile_older_page(request, &target, cursor, Some(at), limit, cx);
+        }
+        let page = move |snapshot: &Snapshot| -> Result<Read, String> {
             let source = snapshot.source();
             let ids = turns::turn_ids(&source);
             if older {
                 let (start, end, more) = watch::before(&ids, &before, limit)?;
-                return Ok(json!({"turns": turns::build(&source, start..end), "older": more}));
+                // At the top of the loaded rows; a long Mono keeps the rest in
+                // the store.
+                if start == end
+                    && let Some(cursor) = snapshot.history
+                {
+                    return Ok(Read::Page(cursor));
+                }
+                return Ok(Read::Done(json!({
+                    "turns": turns::build(&source, start..end),
+                    "older": more || snapshot.history.is_some(),
+                })));
             }
             let start = ids.len().saturating_sub(READ_TURNS);
-            Ok(json!({
+            Ok(Read::Done(json!({
                 "id": conversation,
                 "messages": turns::messages(snapshot.rows),
                 "turns": turns::build(&source, start..ids.len()),
                 "busy": snapshot.busy,
-            }))
+                "older": start > 0 || snapshot.history.is_some(),
+                "question": snapshot.question,
+            })))
         };
-        if let Some(result) = self.with_live_snapshot(&target, cx, &page) {
-            return request.reply(result);
+        match self.with_live_snapshot(&target, cx, &page) {
+            Some(Ok(Read::Done(value))) => request.reply(Ok(value)),
+            Some(Ok(Read::Page(cursor))) => {
+                self.mobile_older_page(request, &target, cursor, None, limit, cx)
+            }
+            Some(Err(error)) => request.reply(Err(error)),
+            None => {
+                let load = self.load_saved(&target, cx);
+                cx.spawn(async move |this, cx| {
+                    match load.await.and_then(|saved| page(&saved_snapshot(&saved))) {
+                        Ok(Read::Done(value)) => request.reply(Ok(value)),
+                        Ok(Read::Page(cursor)) => {
+                            let _ = this.update(cx, |this, cx| {
+                                this.mobile_older_page(request, &target, cursor, None, limit, cx)
+                            });
+                        }
+                        Err(error) => request.reply(Err(error)),
+                    }
+                })
+                .detach();
+            }
         }
-        let load = self.load_saved(&target, cx);
-        cx.spawn(async move |_, _| {
-            let result = load
-                .await
-                .and_then(|saved| page(&saved_snapshot(&saved, None)));
-            request.reply(result);
-        })
-        .detach();
+    }
+
+    /// Turns from the store page at `cursor`, above the loaded rows: before
+    /// its turn starting at row `before`, or with none its newest. Their IDs
+    /// name the page, so the turns the phone has keep theirs.
+    fn mobile_older_page(
+        &mut self,
+        request: Request,
+        target: &Target,
+        cursor: i64,
+        before: Option<usize>,
+        limit: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let (session, name) = match target {
+            Target::Session(id) => (Some(*id), None),
+            Target::Mono(mono) => {
+                let found = self.monos.as_ref().and_then(|m| {
+                    let mono = m.read(cx).roster.get(mono)?;
+                    Some((mono.session_id, mono.label()))
+                });
+                (found.as_ref().and_then(|f| f.0), found.map(|f| f.1))
+            }
+        };
+        let Some(session) = session else {
+            return request.reply(Ok(json!({"turns": [], "older": false})));
+        };
+        // Drawn as the loaded turns are, from the open chat or the summary.
+        let look = self
+            .with_live_snapshot(target, cx, |s| PageLook {
+                mono: s.mono.clone(),
+                launches: s.launches.clone(),
+                cwd: s.cwd.to_owned(),
+                harness: s.harness.to_owned(),
+                model: s.model.clone(),
+            })
+            .unwrap_or_else(|| {
+                let summary = self.session_summaries.get(&session);
+                PageLook {
+                    mono: name,
+                    launches: self.mobile_launches(target, cx),
+                    cwd: summary.map(|s| s.cwd.clone()).unwrap_or_default(),
+                    harness: summary.map(|s| s.provider.clone()).unwrap_or_default(),
+                    model: None,
+                }
+            });
+        let store = self.store.clone();
+        let work = cx.background_executor().spawn(async move {
+            let store = locked(&store)?;
+            older_page(&store, session, cursor, before, limit, look)
+        });
+        cx.spawn(async move |_, _| request.reply(work.await))
+            .detach();
     }
 
     /// Runs `f` on the open chat's transcript when its history is in memory.
@@ -754,6 +993,8 @@ impl Shell {
         if !chat.history_loaded() {
             return None;
         }
+        // Built for every streamed frame, so only once there's history to show.
+        let launches = self.mobile_launches(target, cx);
         let waiting = match chat.mobile_waiting(cx) {
             Some(crate::conversation::MobileWaiting::Approval) => Some("Waiting for approval"),
             Some(crate::conversation::MobileWaiting::Question) => Some("Waiting for answers"),
@@ -769,6 +1010,9 @@ impl Shell {
             waiting,
             mono,
             pending: chat.mobile_pending(cx),
+            launches: &launches,
+            question: chat.mobile_question(cx),
+            history: chat.transcript.read(cx).older_history_cursor(),
         };
         Some(f(&snapshot))
     }
@@ -787,6 +1031,7 @@ impl Shell {
             }
         };
         let summary = id.and_then(|id| self.session_summaries.get(&id).cloned());
+        let launches = self.mobile_launches(target, cx);
         let store = self.store.clone();
         cx.background_executor().spawn(async move {
             let Some(id) = id else {
@@ -797,10 +1042,14 @@ impl Shell {
                     harness: String::new(),
                     model: None,
                     cwd: String::new(),
+                    history: None,
+                    mono,
+                    launches,
                 }));
             };
             let store = locked(&store)?;
             let rows = store.load(id)?.rows;
+            let history = store.history_before(id)?;
             let settings = store.agent_settings(id)?.unwrap_or_default();
             let (harness, cwd) = match summary {
                 Some(summary) => (summary.provider, summary.cwd),
@@ -811,13 +1060,15 @@ impl Shell {
                     .map(|s| (s.provider, s.cwd))
                     .ok_or("Session is no longer available")?,
             };
-            let _ = mono;
             Ok(Arc::new(Saved {
                 rows,
                 turns: settings.turns,
                 harness,
                 model: settings.model,
                 cwd,
+                history,
+                mono,
+                launches,
             }))
         })
     }
@@ -907,13 +1158,15 @@ impl Shell {
                 let source = snapshot.source();
                 let ids = turns::turn_ids(&source);
                 let (start, from, older) = watch::window(&ids, from.as_deref(), tail);
+                // Turns above the loaded rows are older history too.
+                let older = older || snapshot.history.is_some();
                 let built = turns::build(&source, start..ids.len());
-                (from, older, built, snapshot.busy)
+                (from, older, built, snapshot.busy, snapshot.question.clone())
             };
             let built = match self.with_live_snapshot(&target, cx, frame) {
                 Some(built) => built,
                 None => match watch.saved.clone() {
-                    Some(saved) => frame(&saved_snapshot(&saved, None)),
+                    Some(saved) => frame(&saved_snapshot(&saved)),
                     None => {
                         self.load_mobile_watch(&id, cx);
                         continue;
@@ -923,11 +1176,16 @@ impl Shell {
             let Some(watch) = self.mobile.watches.get_mut(&id) else {
                 continue;
             };
-            let (from, older, built, busy) = built;
+            let (from, older, built, busy, question) = built;
             watch.from = from;
-            let Some((update, baseline)) =
-                watch::update(watch.baseline.as_ref(), busy, older, &built, incremental)
-            else {
+            let Some((update, baseline)) = watch::update(
+                watch.baseline.as_ref(),
+                busy,
+                older,
+                &question,
+                &built,
+                incremental,
+            ) else {
                 continue;
             };
             match host.push(&id, update) {
@@ -1119,6 +1377,25 @@ impl Shell {
                 self.delete_session(*id, window, cx);
                 Ok(reply)
             }
+            ("session.answerQuestion" | "session.keepQuestionOpen", target) => {
+                let view = match target {
+                    Target::Session(id) => self.sessions.get(id).cloned(),
+                    Target::Mono(mono) => {
+                        self.monos.as_ref().and_then(|m| m.read(cx).open_chat(mono))
+                    }
+                }
+                .ok_or("This question was already answered")?;
+                let request_id = params["requestId"]
+                    .as_u64()
+                    .ok_or("This question was already answered")?;
+                // Keeping it open sends no reply, only holds a timed question.
+                let answer = request.method == "session.answerQuestion";
+                let answered = answer.then(|| &params["reply"]);
+                view.update(cx, |v, cx| {
+                    v.mobile_answer_question(request_id, answered, cx)
+                })?;
+                Ok(reply)
+            }
             ("session.rename", Target::Mono(_)) => {
                 Err("A Mono's conversation can't be renamed".into())
             }
@@ -1155,6 +1432,7 @@ impl Shell {
                             .ensure_session(*id, cx)
                             .ok_or("Session is no longer available")?;
                         view.update(cx, |v, cx| v.mobile_submit(text, attachments, cx));
+                        this.mobile.started.insert(*id);
                         Ok(())
                     }
                     Target::Mono(mono) => this
@@ -1263,6 +1541,7 @@ impl Shell {
             let _ = this.update(cx, |this, cx| {
                 let result = result.map(|(summary, settings, attachments)| {
                     let id = summary.id;
+                    this.mobile.started.insert(id);
                     this.add(summary, cx);
                     if let Some(view) = this.sessions.get(&id) {
                         view.update(cx, |v, cx| {
@@ -1282,6 +1561,144 @@ impl Shell {
             });
         })
         .detach();
+    }
+
+    // MARK: notifications
+
+    /// Sends a session's notice to paired phones: always a Mono's, and
+    /// another's while a phone started its current turn, which its finish
+    /// ends. Not while the desktop shows that session in front of the user.
+    pub(super) fn notify_mobile(
+        &mut self,
+        summary: &Session,
+        category: &str,
+        body: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let id = summary.id;
+        let from_phone = if category == "agentFinished" {
+            self.mobile.started.remove(&id)
+        } else {
+            self.mobile.started.contains(&id)
+        };
+        // A Mono's own chat, or one of its habit runs.
+        let mono = self.monos.as_ref().and_then(|monos| {
+            let mono = monos.read(cx).notification_mono(id)?;
+            Some((mono.id.clone(), mono.label(), mono.session_id != Some(id)))
+        });
+        if self.mobile.host.is_none()
+            || (mono.is_none() && !from_phone)
+            || (self.window_active && self.notice_session_visible(id, cx))
+        {
+            return;
+        }
+        let body = delivery::clip_body(body);
+        let notice = match mono {
+            Some((mono, name, habit)) => notify::Notice {
+                title: name,
+                subtitle: None,
+                body: if body.is_empty() {
+                    "Sent you a message".into()
+                } else {
+                    body
+                },
+                // A habit run's question is in its own session, not the
+                // Mono's chat: the phone opens it as it does a Mono's
+                // sessions, in any project.
+                data: if habit && self.session_summaries.contains_key(&id) {
+                    let mut data = self.mobile_notice_session(summary, cx);
+                    data["monoId"] = json!(mono);
+                    data
+                } else {
+                    json!({"monoId": mono})
+                },
+            },
+            None => {
+                let (project, _) = self.mobile_notice_project(summary, cx);
+                notify::Notice {
+                    title: monocode_core::session_title::display_title(
+                        &summary.title,
+                        &summary.provider,
+                    )
+                    .to_owned(),
+                    subtitle: Some(project),
+                    body: if body.is_empty() {
+                        "Finished".into()
+                    } else {
+                        body
+                    },
+                    data: self.mobile_notice_session(summary, cx),
+                }
+            }
+        };
+        // A Mono's own messages are their own category; its questions and
+        // approvals are like any agent's.
+        let category = if self
+            .monos
+            .as_ref()
+            .is_some_and(|monos| monos.read(cx).notification_mono(id).is_some())
+            && category != "agentInput"
+        {
+            "monoMessages"
+        } else {
+            category
+        };
+        self.send_mobile_notice(category, notice, cx);
+    }
+
+    /// The project a session's notice is filed under, by name and path.
+    fn mobile_notice_project(&self, summary: &Session, cx: &App) -> (String, String) {
+        let key = monocode_core::files::path_key(&summary.cwd);
+        let path = self
+            .mobile_projects(cx)
+            .into_iter()
+            .find(|path| monocode_core::files::path_key(path) == key)
+            .unwrap_or_else(|| summary.cwd.clone());
+        (self.appearance(&path).label(&path), path)
+    }
+
+    /// Where a tap on a session's notice opens it on the phone.
+    fn mobile_notice_session(&mut self, summary: &Session, cx: &App) -> Value {
+        let (_, path) = self.mobile_notice_project(summary, cx);
+        json!({
+            "projectId": project_id(&path),
+            "sessionId": self.mobile_session_id(summary.id),
+        })
+    }
+
+    /// A turn the phone started ended with no finish to tell it of, as when
+    /// it was stopped: the session's next turns are the desktop's again.
+    pub(super) fn mobile_turn_ended(&mut self, id: i64) {
+        self.mobile.started.remove(&id);
+    }
+
+    /// A Mono's report, posted to its chat on its own.
+    pub(super) fn notify_mobile_post(&mut self, session: i64, body: &str, cx: &mut Context<Self>) {
+        if let Some(view) = self.notification_chat(session, cx) {
+            let summary = view.read(cx).summary.clone();
+            self.notify_mobile(&summary, "monoMessages", body, cx);
+        }
+    }
+
+    fn send_mobile_notice(&self, category: &str, notice: notify::Notice, cx: &App) {
+        let Some(host) = self.mobile.host.clone() else {
+            return;
+        };
+        let tokens = host.push_tokens(category);
+        if tokens.is_empty() {
+            return;
+        }
+        cx.background_executor()
+            .spawn(async move {
+                match notify::send(&tokens, &notice) {
+                    Ok(gone) if !gone.is_empty() => {
+                        let _ = host.forget_push_tokens(&gone);
+                    }
+                    Ok(_) => {}
+                    Err(error) => eprintln!("Mobile notification not sent: {error}"),
+                }
+            })
+            .detach();
     }
 
     /// The account a new session uses: the phone's pick, checked against the
@@ -1419,8 +1836,34 @@ impl Shell {
                                 Some(settings.account.id.clone()),
                             ))
                         }
-                        Target::Mono(_) => {
-                            Err("This conversation is still opening on desktop; try again".into())
+                        // Not open here: what its saved conversation runs with.
+                        Target::Mono(mono) => {
+                            let id = self
+                                .monos
+                                .as_ref()
+                                .and_then(|m| m.read(cx).roster.get(&mono)?.session_id)
+                                .ok_or(
+                                    "This conversation is still opening on desktop; try again",
+                                )?;
+                            let store = locked(&self.store)?;
+                            let (cwd, provider) = match self.session_summaries.get(&id) {
+                                Some(summary) => (summary.cwd.clone(), summary.provider.clone()),
+                                None => store
+                                    .sessions()?
+                                    .into_iter()
+                                    .find(|s| s.id == id)
+                                    .map(|s| (s.cwd, s.provider))
+                                    .ok_or("Session is no longer available")?,
+                            };
+                            let settings = store.agent_settings(id)?.unwrap_or_default();
+                            Ok((
+                                cwd,
+                                Kind::from_id(&provider),
+                                settings.model.clone(),
+                                mobile_settings_of(&settings),
+                                settings.access,
+                                Some(settings.account.id.clone()),
+                            ))
                         }
                     },
                 }
@@ -1527,6 +1970,125 @@ impl Shell {
 
     /// The desktop footer's usage windows for a provider's accounts, from the
     /// same cache; only an explicit refresh probes again.
+    /// A document a Mono wrote, for the phone's reader: only one a Mono's
+    /// chat lists, read from the store when the roster has no body for it.
+    fn mobile_document(&mut self, request: Request, cx: &mut Context<Self>) {
+        let id = string(&request.params, "documentId").unwrap_or_default();
+        let listed = self.monos.as_ref().and_then(|monos| {
+            monos.read(cx).roster.monos.iter().find_map(|mono| {
+                let document = mono.documents.iter().find(|d| d.id == id);
+                (document.is_some() || mono.desktop_document_ids.contains(&id))
+                    .then(|| document.cloned())
+            })
+        });
+        let Some(document) = listed else {
+            return request.reply(Err("This document is no longer available".into()));
+        };
+        // A visual runs here and goes as its rendered tree, which the phone
+        // draws with the same dither; its source stays on the desktop.
+        let reply = |document: monocode_core::mono::Document| {
+            let mut value =
+                json!({"title": document.title, "kind": document.kind, "body": document.body});
+            if document.kind == "visual" {
+                match visual_tree(&document.body) {
+                    Ok(tree) => value["tree"] = tree,
+                    Err(error) => value["treeError"] = json!(error),
+                }
+            }
+            value
+        };
+        if let Some(document) = document.filter(|d| !d.body.is_empty()) {
+            return request.reply(Ok(reply(document)));
+        }
+        let store = self.store.clone();
+        let work = cx
+            .background_executor()
+            .spawn(async move { locked(&store)?.mono_document(&id) });
+        cx.spawn(async move |_, _| {
+            request.reply(work.await.and_then(|document| {
+                document
+                    .map(reply)
+                    .ok_or_else(|| "This document is no longer available".into())
+            }))
+        })
+        .detach();
+    }
+
+    /// A Mono's details for the phone's profile, or a change to its look.
+    fn mobile_mono(&mut self, request: Request, cx: &mut Context<Self>) {
+        let id = string(&request.params, "monoId").unwrap_or_default();
+        let Some(monos) = self.monos.clone() else {
+            return request.reply(Err("Mono is no longer available".into()));
+        };
+        let result = if request.method == "mono.create" {
+            let result = monos.update(cx, |monos, cx| monos.mobile_create(cx));
+            if result.is_ok() {
+                self.publish_mobile_catalog(cx);
+            }
+            result
+        } else if matches!(request.method.as_str(), "mono.reset" | "mono.delete") {
+            let reset = request.method == "mono.reset";
+            let result = monos.update(cx, |monos, cx| {
+                if reset {
+                    monos.mobile_reset(&id, cx)
+                } else {
+                    monos.mobile_delete(&id, cx)
+                }
+            });
+            if result.is_ok() {
+                self.publish_mobile_catalog(cx);
+                // A reset chat is a new one: phones watching it follow it now.
+                self.push_mobile_watches(cx);
+            }
+            result
+        } else if request.method == "mono.update" {
+            // Projects come as the phone's IDs; the roster keeps paths.
+            let mut params = request.params.clone();
+            if let Some(add) = string(&request.params, "addProject") {
+                match self.mobile_project_path(&add, cx) {
+                    Ok(path) => params["addPath"] = json!(path),
+                    Err(error) => return request.reply(Err(error)),
+                }
+            }
+            if let Some(remove) = string(&request.params, "removeProject") {
+                let paths: Vec<String> = monos
+                    .read(cx)
+                    .roster
+                    .get(&id)
+                    .map(|mono| {
+                        mono.projects
+                            .iter()
+                            .filter(|p| project_id(p) == remove)
+                            .cloned()
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                params["removePaths"] = json!(paths);
+            }
+            let result = monos.update(cx, |monos, cx| monos.mobile_update(&id, &params, cx));
+            // The phone's drawer and header show the new look at once.
+            if result.is_ok() {
+                self.publish_mobile_catalog(cx);
+            }
+            result
+        } else {
+            let views = self.mono_session_views(cx);
+            monos.update(cx, |monos, cx| monos.mobile_profile(&id, &views, cx))
+        };
+        request.reply(result);
+    }
+
+    /// A Mono's soul or memory for the phone to read, or its edit to save.
+    fn mobile_mono_file(&mut self, request: Request, cx: &mut Context<Self>) {
+        let id = string(&request.params, "monoId").unwrap_or_default();
+        let Some(monos) = self.monos.clone() else {
+            return request.reply(Err("Mono is no longer available".into()));
+        };
+        let work = monos.update(cx, |monos, cx| monos.mobile_file(&id, &request.params, cx));
+        cx.spawn(async move |_, _| request.reply(work.await))
+            .detach();
+    }
+
     fn mobile_usage(&mut self, request: Request, cx: &mut Context<Self>) {
         let kind = match request.params["provider"].as_str() {
             Some("claude") => Kind::Claude,
@@ -1641,7 +2203,81 @@ fn tone_id(tone: Tone) -> &'static str {
     }
 }
 
-fn saved_snapshot<'a>(saved: &'a Saved, mono: Option<String>) -> Snapshot<'a> {
+/// An older page's turn ID, `p{cursor}t{row}`: its page's store cursor and
+/// the row its turn starts at.
+fn page_turn(id: &str) -> Option<(i64, usize)> {
+    let (cursor, row) = id.strip_prefix('p')?.split_once('t')?;
+    Some((cursor.parse().ok()?, row.parse().ok()?))
+}
+
+/// See `Shell::mobile_older_page`. Before a page's first turn it reads the
+/// page before that one.
+fn older_page(
+    store: &monocode_core::store::Store,
+    session: i64,
+    mut cursor: i64,
+    before: Option<usize>,
+    limit: usize,
+    mut look: PageLook,
+) -> Result<Value, String> {
+    if look.harness.is_empty()
+        && let Some(saved) = store.sessions()?.into_iter().find(|s| s.id == session)
+    {
+        look.harness = saved.provider;
+        look.cwd = saved.cwd;
+    }
+    let mut page = store.load_before(session, cursor, false)?;
+    let mut before = before.map(|row| format!("t{row}"));
+    loop {
+        // The page's turns, or None when the turn asked for is its first.
+        let turns = {
+            let snapshot = Snapshot {
+                rows: &page.rows,
+                turns: &page.turns,
+                cwd: &look.cwd,
+                harness: &look.harness,
+                model: look.model.clone(),
+                busy: false,
+                waiting: None,
+                mono: look.mono.clone(),
+                pending: Vec::new(),
+                launches: &look.launches,
+                question: Value::Null,
+                history: page.before,
+            };
+            let source = snapshot.source();
+            let ids = turns::turn_ids(&source);
+            let end = match &before {
+                Some(id) => ids
+                    .iter()
+                    .position(|turn| turn == id)
+                    .ok_or("This part of the conversation is no longer available")?,
+                None => ids.len(),
+            };
+            let start = end.saturating_sub(limit);
+            (end > 0).then(|| (start, turns::build(&source, start..end)))
+        };
+        let Some((start, mut built)) = turns else {
+            // Before this page's first turn: the page above it, if any.
+            let Some(above) = page.before else {
+                return Ok(json!({"turns": [], "older": false}));
+            };
+            cursor = above;
+            page = store.load_before(session, cursor, false)?;
+            before = None;
+            continue;
+        };
+        for turn in &mut built {
+            let id = turn["id"].as_str().map(|id| format!("p{cursor}{id}"));
+            if let Some(id) = id {
+                turn["id"] = json!(id);
+            }
+        }
+        return Ok(json!({"turns": built, "older": start > 0 || page.before.is_some()}));
+    }
+}
+
+fn saved_snapshot(saved: &Saved) -> Snapshot<'_> {
     Snapshot {
         rows: &saved.rows,
         turns: &saved.turns,
@@ -1650,8 +2286,11 @@ fn saved_snapshot<'a>(saved: &'a Saved, mono: Option<String>) -> Snapshot<'a> {
         model: saved.model.clone(),
         busy: false,
         waiting: None,
-        mono,
+        mono: saved.mono.clone(),
         pending: Vec::new(),
+        launches: &saved.launches,
+        question: Value::Null,
+        history: saved.history,
     }
 }
 
@@ -1838,6 +2477,16 @@ mod tests {
         assert_eq!(project_id("/Users/me/My App"), "%2FUsers%2Fme%2FMy%20App");
         assert_eq!(project_id("C:\\code\\é"), "C%3A%5Ccode%5C%C3%A9");
         assert_eq!(project_id("a-b_c.d!~*'()"), "a-b_c.d!~*'()");
+    }
+
+    #[test]
+    fn older_page_turns_name_their_page_and_window_turns_do_not() {
+        assert_eq!(page_turn("p42t7"), Some((42, 7)));
+        assert_eq!(page_turn("p-3t0"), Some((-3, 0)));
+        // The loaded window's own turns, and anything malformed, are not pages.
+        assert_eq!(page_turn("t7"), None);
+        assert_eq!(page_turn("p42"), None);
+        assert_eq!(page_turn("pxtn"), None);
     }
 
     #[test]

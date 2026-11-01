@@ -18,7 +18,7 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 sha2 = "0.10"
 rand = "0.9"
 regex = "1"
-zstd = "0.13"
+zstd = "0.14.3"
 toml = "0.8"
 ureq = "2.12"
 webpki-roots = "0.26.11"
@@ -26,7 +26,7 @@ similar = "2"
 unicode-width = "0.2"
 monocode-mobile-link = { path = "../mobile-link" }
 quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "sync", "time", "macros"] }
 uuid = { version = "1", features = ["v4"] }
 if-addrs = "0.15"
 hostname = "0.4"

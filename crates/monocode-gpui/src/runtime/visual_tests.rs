@@ -10,12 +10,33 @@ impl Drop for Fixture {
 
 #[test]
 fn silent_provider_visual_is_saved_and_acknowledged_before_streaming_resumes() {
+    visual_turn(None);
+}
+
+#[test]
+fn visualize_command_sends_required_workflow_and_keeps_the_visible_request() {
+    visual_turn(Some(""));
+    visual_turn(Some("Compare the two approaches"));
+}
+
+fn visual_turn(request: Option<&str>) {
     let fixture = Fixture(std::env::temp_dir().join(format!(
         "monocode-runtime-visual-{}-{}",
         std::process::id(),
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     )));
     std::fs::create_dir_all(&fixture.0).unwrap();
+    let prompt = match request {
+        Some("") => "/visualize".to_owned(),
+        Some(request) => format!("/visualize {request}"),
+        None => "Show a native visual".to_owned(),
+    };
+    let prepared_prompt = request.map(monocode_core::visual_bridge::requested_prompt);
+    std::fs::write(
+        fixture.0.join("expected-prompt.txt"),
+        prepared_prompt.as_ref().unwrap_or(&prompt),
+    )
+    .unwrap();
     let binary = fixture.0.join("mock-provider");
     std::fs::write(&binary, r#"#!/usr/bin/env python3
 import json, os, socket, sys, time
@@ -30,7 +51,8 @@ for line in sys.stdin:
         send({'id': 2, 'result': {'thread': {'id': 'native-visual-test'}}})
     elif value.get('id') == 3:
         assert value['method'] == 'turn/start'
-        assert value['params']['input'] == [{'type': 'text', 'text': 'Show a native visual'}], 'Visual discovery must not alter the user prompt'
+        with open('expected-prompt.txt') as expected:
+            assert value['params']['input'] == [{'type': 'text', 'text': expected.read()}], 'The provider must receive the prepared prompt'
         send({'method': 'item/agentMessage/delta', 'params': {'itemId': 'before', 'delta': 'Before the visual.'}})
         time.sleep(0.05)
         address, port = os.environ['MONOCODE_VISUAL_ENDPOINT'].rsplit(':', 1)
@@ -39,7 +61,7 @@ for line in sys.stdin:
             request = {
                 'session': int(os.environ['MONOCODE_VISUAL_SESSION']),
                 'token': os.environ['MONOCODE_VISUAL_TOKEN'],
-                'request_id': 'runtime-integration-request',
+                    'request_id': 'runtime-integration-request-' + str(os.getpid()),
                 'document': {
                     'id': 'runtime-native', 'title': 'Native result',
                     'source': 'return () => visual.text(' + json.dumps('a' * 3000) + ');'
@@ -69,12 +91,16 @@ for line in sys.stdin:
     let worker_store = store.clone();
     let (updates, receive) = async_channel::bounded(64);
     let (_controls, control_rx) = std::sync::mpsc::channel();
+    let visible_prompt = prompt.clone();
     let worker = std::thread::spawn(move || {
         run_turn_using(
             TurnInput {
                 summary,
-                prompt: "Show a native visual".into(),
-                settings: Settings::default(),
+                prompt,
+                settings: Settings {
+                    prepared_prompt,
+                    ..Default::default()
+                },
             },
             control_rx,
             worker_store,
@@ -126,6 +152,15 @@ for line in sys.stdin:
             .unwrap();
     assert_eq!(acknowledgment["result"]["saved"], true);
     let saved = locked(&store).unwrap().load(session).unwrap();
+    assert_eq!(
+        saved
+            .rows
+            .iter()
+            .filter(|row| row.is_prompt())
+            .map(|row| row.text.as_str())
+            .collect::<String>(),
+        visible_prompt
+    );
     let before = saved
         .rows
         .iter()

@@ -13,6 +13,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 mod code;
 mod command;
+mod context_menu;
 mod mention;
 mod spelling;
 pub(crate) use command::{Command, CommandRemoved};
@@ -200,6 +201,7 @@ pub fn bind(cx: &mut App) {
 }
 
 pub struct Input {
+    context_menu: Option<context_menu::EditingMenu>,
     code: Option<code::Code>,
     focus: FocusHandle,
     height: f32,
@@ -254,6 +256,7 @@ impl Input {
     }
     pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
+            context_menu: None,
             code: None,
             focus: cx.focus_handle(),
             height: MIN_HEIGHT,
@@ -1038,6 +1041,10 @@ impl Input {
         self.replace_text_in_range(None, "", w, cx);
     }
     fn mouse_down(&mut self, e: &MouseDownEvent, w: &mut Window, cx: &mut Context<Self>) {
+        if cfg!(target_os = "macos") && e.modifiers.control {
+            self.open_context_menu(e, w, cx);
+            return;
+        }
         #[cfg(target_os = "macos")]
         crate::traffic_lights::focus_content(w);
         if self.code_fold_down(e, cx) || self.code_scrollbar_down(e, w, cx) {
@@ -1895,6 +1902,7 @@ impl Render for Input {
             .on_action(cx.listener(Self::submit))
             .on_action(cx.listener(Self::submit_secondary))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
+            .on_mouse_down(MouseButton::Right, cx.listener(Self::open_context_menu))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::mouse_up))
             .on_mouse_move(cx.listener(Self::mouse_move))
@@ -1906,6 +1914,7 @@ impl Render for Input {
             .children(self.code_tooltip())
             .children(self.completion_popup(cx))
             .children(self.hunk_actions(cx))
+            .children(self.editing_menu(cx))
     }
 }
 
@@ -1960,6 +1969,7 @@ mod native_input_tests {
     fn field(cx: &mut TestAppContext, single_line: bool) -> WindowHandle<Input> {
         let window = cx.update(|cx| {
             bind(cx);
+            crate::popover::bind(cx);
             cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(Bounds::new(
@@ -1984,6 +1994,106 @@ mod native_input_tests {
         cx.refresh().unwrap();
         window
     }
+    #[gpui::test]
+    fn context_menu_preserves_selection_copies_pastes_and_restores_focus(cx: &mut TestAppContext) {
+        let window = field(cx, false);
+        replace(window, "hello world", cx);
+        window
+            .update(cx, |input, _, cx| input.select_range(0..5, cx))
+            .unwrap();
+        cx.refresh().unwrap();
+        let position = window
+            .update(cx, |input, _, _| input.position(2) + point(px(0.), px(8.)))
+            .unwrap();
+        cx.update_window(window.into(), |_, w, cx| {
+            w.dispatch_event(
+                gpui::PlatformInput::MouseDown(MouseDownEvent {
+                    position,
+                    button: MouseButton::Right,
+                    modifiers: Default::default(),
+                    click_count: 1,
+                    first_mouse: false,
+                }),
+                cx,
+            );
+        })
+        .unwrap();
+        cx.refresh().unwrap();
+        window
+            .update(cx, |input, _, _| {
+                assert!(input.context_menu.is_some());
+                assert_eq!(input.selection, 0..5);
+                assert!(!input.selecting);
+            })
+            .unwrap();
+        // Cut is first, Copy second. Exercise the real menu's keyboard path.
+        cx.simulate_keystrokes(window.into(), "down enter");
+        cx.run_until_parked();
+        window
+            .update(cx, |input, w, cx| {
+                assert!(input.context_menu.is_none());
+                assert!(input.focus.is_focused(w));
+                assert_eq!(
+                    cx.read_from_clipboard().unwrap().text().as_deref(),
+                    Some("hello")
+                );
+                assert_eq!(input.content.as_ref(), "hello world");
+                cx.write_to_clipboard(ClipboardItem::new_string("replacement".into()));
+                input.open_context_menu(
+                    &MouseDownEvent {
+                        position,
+                        button: MouseButton::Right,
+                        ..Default::default()
+                    },
+                    w,
+                    cx,
+                );
+            })
+            .unwrap();
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes(window.into(), "down down enter");
+        cx.run_until_parked();
+        window
+            .update(cx, |input, w, _| {
+                assert_eq!(input.content.as_ref(), "replacement world");
+                assert!(input.focus.is_focused(w));
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn context_menu_moves_caret_outside_selection_and_escape_preserves_text(
+        cx: &mut TestAppContext,
+    ) {
+        let window = field(cx, true);
+        replace(window, "hello world", cx);
+        window
+            .update(cx, |input, w, cx| {
+                input.select_range(0..2, cx);
+                input.open_context_menu(
+                    &MouseDownEvent {
+                        position: input.position(8) + point(px(0.), px(8.)),
+                        button: MouseButton::Right,
+                        ..Default::default()
+                    },
+                    w,
+                    cx,
+                );
+                assert_eq!(input.selection, 8..8);
+            })
+            .unwrap();
+        cx.refresh().unwrap();
+        cx.simulate_keystrokes(window.into(), "escape");
+        cx.run_until_parked();
+        window
+            .update(cx, |input, w, _| {
+                assert!(input.context_menu.is_none());
+                assert!(input.focus.is_focused(w));
+                assert_eq!(input.content.as_ref(), "hello world");
+            })
+            .unwrap();
+    }
+
     #[gpui::test]
     fn bounded_textarea_wheel_scroll_survives_repaint_and_typing_reveals_caret(
         cx: &mut TestAppContext,

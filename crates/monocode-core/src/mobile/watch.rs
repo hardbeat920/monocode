@@ -8,6 +8,8 @@ use std::collections::HashMap;
 pub struct Baseline {
     busy: bool,
     older: bool,
+    /// The pending question as last sent, as JSON; "null" for none.
+    question: String,
     order: Vec<String>,
     turns: HashMap<String, String>,
 }
@@ -55,14 +57,18 @@ fn edits_between(before: &Value, after: &Value, path: &mut Vec<Value>, out: &mut
 
 /// The next frame for a watched conversation. While a reply streams that is
 /// the one live turn, not the whole transcript. Capable phones opt into field
-/// edits and text suffixes instead of a growing turn. None when nothing changed.
+/// edits and text suffixes instead of a growing turn. The pending question
+/// comes with the first frame and again whenever it changes, null once it is
+/// answered. None when nothing changed.
 pub fn update(
     baseline: Option<&Baseline>,
     busy: bool,
     older: bool,
+    question: &Value,
     turns: &[Value],
     incremental: bool,
 ) -> Option<(Value, Baseline)> {
+    let asked = question.to_string();
     let order: Vec<String> = turns
         .iter()
         .map(|turn| turn["id"].as_str().unwrap_or_default().to_string())
@@ -80,6 +86,7 @@ pub fn update(
     if let Some(baseline) = baseline {
         if baseline.busy == busy
             && baseline.older == older
+            && baseline.question == asked
             && changed.is_empty()
             && baseline.order == order
         {
@@ -111,6 +118,9 @@ pub fn update(
     frame.insert("busy".into(), json!(busy));
     frame.insert("older".into(), json!(older));
     frame.insert("order".into(), json!(order));
+    if baseline.is_none_or(|b| b.question != asked) {
+        frame.insert("question".into(), question.clone());
+    }
     frame.insert("turns".into(), Value::Array(replaced));
     if !patches.is_empty() {
         frame.insert("patches".into(), Value::Array(patches));
@@ -120,6 +130,7 @@ pub fn update(
         Baseline {
             busy,
             older,
+            question: asked,
             order,
             turns: serialized,
         },
@@ -164,13 +175,24 @@ mod tests {
 
     #[test]
     fn unchanged_conversations_send_nothing_and_new_turns_send_only_themselves() {
-        let (first, baseline) = update(None, true, false, &[turn("1", "hi")], false).unwrap();
+        let none = Value::Null;
+        let (first, baseline) =
+            update(None, true, false, &none, &[turn("1", "hi")], false).unwrap();
         assert_eq!(first["turns"].as_array().unwrap().len(), 1);
-        assert!(update(Some(&baseline), true, false, &[turn("1", "hi")], false).is_none());
+        assert!(update(
+            Some(&baseline),
+            true,
+            false,
+            &none,
+            &[turn("1", "hi")],
+            false
+        )
+        .is_none());
         let (next, _) = update(
             Some(&baseline),
             false,
             false,
+            &none,
             &[turn("1", "hi"), turn("2", "yo")],
             false,
         )
@@ -183,14 +205,40 @@ mod tests {
     #[test]
     fn incremental_watches_receive_streamed_text_as_utf16_suffixes() {
         let long = "é".repeat(200);
-        let (_, baseline) = update(None, true, false, &[turn("1", &long)], true).unwrap();
+        let none = Value::Null;
+        let (_, baseline) = update(None, true, false, &none, &[turn("1", &long)], true).unwrap();
         let grown = format!("{long} more");
-        let (frame, _) = update(Some(&baseline), true, false, &[turn("1", &grown)], true).unwrap();
+        let (frame, _) = update(
+            Some(&baseline),
+            true,
+            false,
+            &none,
+            &[turn("1", &grown)],
+            true,
+        )
+        .unwrap();
         assert!(frame["turns"].as_array().unwrap().is_empty());
         let edit = &frame["patches"][0]["edits"][0];
         assert_eq!(edit["path"], json!(["items", 0, "text"]));
         assert_eq!(edit["from"], 200);
         assert_eq!(edit["append"], " more");
+    }
+
+    #[test]
+    fn the_pending_question_comes_first_and_again_only_when_it_changes() {
+        let turns = [turn("1", "hi")];
+        let question = json!({"requestId": 7, "questions": []});
+        let (first, asked) = update(None, true, false, &question, &turns, false).unwrap();
+        assert_eq!(first["question"], question);
+        // Unchanged: nothing to send, and a frame for other reasons omits it.
+        assert!(update(Some(&asked), true, false, &question, &turns, false).is_none());
+        let (idle, _) = update(Some(&asked), false, false, &question, &turns, false).unwrap();
+        assert!(idle.get("question").is_none());
+        // Answered: null, so the phone drops its card.
+        let (answered, cleared) =
+            update(Some(&asked), true, false, &Value::Null, &turns, false).unwrap();
+        assert!(answered["question"].is_null());
+        assert!(update(Some(&cleared), true, false, &Value::Null, &turns, false).is_none());
     }
 
     #[test]

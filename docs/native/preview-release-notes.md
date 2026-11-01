@@ -1,26 +1,33 @@
-# Monocode Native 0.16.0-preview.8
+# Monocode Native 0.16.0-preview.12
 
 This experimental Monocode Native preview is built with Rust + GPUI. React/Tauri remains the production app.
 
-## Changes since preview 7
+## Changes since preview 11
 
-- Native charts and dashboard components can appear inline in assistant replies.
-- Mono tabs can join session splits as panes. The terminal panel hides when its last terminal closes, and the sidebar adjusts as the surrounding layout changes.
-- New `/stage` and `/commit` commands handle session Git actions, with compact summaries of Git turns.
-- GitHub issue and pull request links in prompts appear as chips with hover cards and can be linked to the session.
-- The Inbox opens scoped to the active project, uses configured project names, and clears stale selection and detail requests when switching projects.
-- Window size, fullscreen and maximized state survive relaunches. Wayland users gain a decoration setting, window controls, title-bar dragging and edge resizing.
-- Expanded user messages keep a consistent bubble width. Windows and Linux builds resolve a real monospace font and show the app icon.
-- Idle conversations switch accounts in place, stored floating-point values reload accurately, and composer autocorrect is off by default.
-- Missing-provider hints name the runtime actually needed, including the Antigravity ACP server.
+### Phones
 
-Thanks to @parkgogogo, @knot2006, @Kaloyanes and @Hazem-Samak for their contributions in this preview.
+- Paired phones get push notifications while the Monocode app is closed. Sessions started or messaged from the phone notify on approvals, questions, and finishing; Monos notify on their replies and on the reports their habits post. Nothing is sent for a session open in front of you on the desktop. The phone chooses which kinds it receives in its Settings. The desktop sends notifications through Expo's push service; Android phones keep their in-app alerts for now.
+- Phones can answer an agent's pending questions, page back through the full history of long conversations, and reopen the last project or Mono on launch.
+- Monos can be browsed from the phone's side drawer alongside projects, with search, filters, and unread replies marked. Phones can create Monos, edit a Mono's name, mascot, color, model, projects, and its soul and memory files, and reset or delete a Mono. Saving a soul or memory file is refused if it changed on the desktop since it was opened.
+- Mono chats on the phone show reply bubbles, reactions as tapbacks, suggested replies, document cards, and the sessions a Mono launched.
+
+### Background tasks
+
+- A **Background model** setting (Settings → Providers → Background tasks) chooses the model that writes session titles, worktree branch names, commit messages, and pull request text, on the desktop and for phone git actions. **Automatic** keeps using each session's provider and its quick model.
+
+### Editor
+
+- Zig files get syntax highlighting and fold their struct, enum, union, error-set, and switch blocks. ZON files are not supported.
+
+Thanks to @404khai for their contribution in #1246.
 
 ## Installation and testing
 
 Choose the download for your platform: macOS Apple Silicon or Intel, Windows x64, or Linux x64 (AppImage, Debian/Ubuntu `.deb`, or Fedora/Enterprise Linux `.rpm`). Install it alongside your existing Monocode application.
 
-**Testing status:** macOS is the primary tested platform. A Linux ARM64 source build was launched and exercised in an Ubuntu VM with a graphics workaround; the downloadable Linux x64 packages and Windows app still need runtime testing. Native system notifications currently support macOS only. HTML panels and media support remain limited on Linux and Windows.
+**Testing status:** macOS is the primary tested platform. A Linux ARM64 source build was exercised in an Ubuntu VM with a graphics workaround, and a Windows 10 source build passed manual title-bar checks. The downloadable Linux x64 and Windows packages still need broader runtime testing. Native system notifications currently support macOS only. HTML panels and media support remain limited on Linux and Windows.
+
+Local automated checks, the native dependency audit, and the long-history CPU comparison are recorded in [verification](verification.md).
 
 **Data:** this preview uses your existing Monocode database and saves changes there. Back up your Monocode data with the app closed before testing. Native preferences are stored separately. Avoid editing the same conversations in both apps at once.
 

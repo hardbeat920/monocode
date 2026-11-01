@@ -19,6 +19,7 @@ mod response_menu;
 #[cfg(test)]
 mod submission_tests;
 mod title;
+mod worktree_naming;
 use crate::{
     composer_motion::ComposerMotion,
     git_picker::{GitPicker, Mode as GitMode, Picked as GitPicked},
@@ -59,6 +60,7 @@ use std::{
 // Keep empty and docked composers aligned with the transcript column. Below
 // this width the empty session drops its title.
 const COMPOSER_COLUMN: f32 = COLUMN;
+const COMPOSER_RADIUS: f32 = 12.;
 // RUNTIME_MODE_LABEL and RUNTIME_MODE_HINT from the React session model,
 // with AccessPicker's icons; Full access is amber.
 const ACCESS_MODES: &[(&str, &str, &str, &str)] = &[
@@ -225,9 +227,11 @@ pub(crate) struct Conversation {
     // pane rest the composer where it docks.
     beside_pane: bool,
     arcade: Option<Entity<crate::arcade::Arcade>>,
+    ink: Option<Entity<crate::ink_field::InkField>>,
     runner: Option<Entity<crate::composer_runner::Runner>>,
     cancel: Arc<AtomicBool>,
     title_cancel: Option<Arc<AtomicBool>>,
+    worktree_name_cancel: Option<Arc<AtomicBool>>,
     _submission: Subscription,
     _alternate_submission: Subscription,
     response_events: Option<Subscription>,
@@ -236,6 +240,9 @@ pub(crate) struct Conversation {
 }
 impl Drop for Conversation {
     fn drop(&mut self) {
+        if let Some(cancel) = self.worktree_name_cancel.take() {
+            cancel.store(true, Ordering::Relaxed);
+        }
         if !self.summary.cwd.starts_with("remote://") {
             self.cancel.store(true, Ordering::Relaxed);
         }
@@ -663,9 +670,11 @@ impl Conversation {
             narrow: false,
             beside_pane: false,
             arcade: None,
+            ink: None,
             runner: None,
             cancel: Arc::new(AtomicBool::new(false)),
             title_cancel: None,
+            worktree_name_cancel: None,
             _submission: submission,
             _alternate_submission: alternate_submission,
             response_events: None,
@@ -1052,7 +1061,22 @@ impl Conversation {
         }
         self.settings.usage_limit = None;
         self.attach_account(cx);
+        let worktree_message = if prompt.trim().is_empty() {
+            self.settings
+                .attachments
+                .iter()
+                .chain(&self.attachments)
+                .filter_map(|path| path.file_name())
+                .map(|name| name.to_string_lossy())
+                .collect::<Vec<_>>()
+                .join(", ")
+        } else {
+            prompt.clone()
+        };
         if !self.is_remote() {
+            if !self.summary.has_messages {
+                self.generate_worktree_branch(&worktree_message, cx);
+            }
             self.generate_title(&prompt, cx);
         }
         let model_label = self.model_label();
@@ -1197,7 +1221,15 @@ impl Conversation {
                             this.settings.worktree_cwd = Some(cwd);
                             this.settings.new_worktree = false;
                             this.save_settings(cx);
+                            this.generate_worktree_branch(&worktree_message, cx);
                             this.refresh_git(cx);
+                        }
+                        // The host renamed the conversation; it is not sent back.
+                        if let Some(title) = update.title
+                            && this.summary.title != title
+                        {
+                            this.summary.title = title;
+                            cx.emit(SessionChanged);
                         }
                         if let Some(commands) = update.commands.filter(|_| source_selected) {
                             this.completion.update(cx, |completion, cx| {
@@ -2719,7 +2751,7 @@ impl Conversation {
         Some(runner)
     }
     fn composer(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
-        let radius = 12.;
+        let radius = COMPOSER_RADIUS;
         let command = if self.follow_ups.draft_selected {
             Some(input::Command::Draft)
         } else if self.settings.orchestrator {
@@ -3248,20 +3280,30 @@ impl Conversation {
     // where it will dock once a neighbouring pane squeezes it narrower than
     // the column. A narrow window alone keeps it centred.
     fn empty(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
-        let games = cx
+        // A chat background replaces the canvas; the ink only lives in motion.
+        let fill = cx
             .try_global::<crate::settings::Preferences>()
-            .is_none_or(|p| p.empty_session_games)
-            && cx
-                .try_global::<crate::settings::Preferences>()
-                .is_none_or(|p| p.chat_background.is_none());
-        let arcade = if games {
-            Some(
+            .map_or("ink", |p| {
+                if p.chat_background.is_some() {
+                    "none"
+                } else {
+                    p.empty_session.as_str()
+                }
+            });
+        let canvas_fill: Option<AnyElement> = match fill {
+            "games" => Some(
                 self.arcade
                     .get_or_insert_with(|| cx.new(crate::arcade::Arcade::new))
-                    .clone(),
-            )
-        } else {
-            None
+                    .clone()
+                    .into_any_element(),
+            ),
+            "ink" if !cx.reduce_motion() => Some(
+                self.ink
+                    .get_or_insert_with(|| cx.new(crate::ink_field::InkField::new))
+                    .clone()
+                    .into_any_element(),
+            ),
+            _ => None,
         };
         let this = cx.entity().downgrade();
         let narrow = self.narrow;
@@ -3271,7 +3313,7 @@ impl Conversation {
             .size_full()
             .flex()
             .justify_center()
-            .children(arcade)
+            .children(canvas_fill)
             .child(
                 canvas(
                     move |bounds, _, cx| {

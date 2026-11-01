@@ -4,12 +4,14 @@ pub(crate) mod avatar;
 pub(crate) mod cards;
 mod changes;
 mod color_picker;
+mod dashboard;
 mod files;
 mod filters;
 mod floating;
 mod host;
 mod html;
 mod memory_ui;
+mod mobile;
 mod notifications;
 mod overview;
 mod panel_stack;
@@ -52,7 +54,7 @@ use std::{
 pub(crate) struct Changed;
 pub(crate) struct TabOpened(pub String);
 pub(crate) struct ShowDetails(pub String);
-pub(crate) use notifications::{NotificationChanged, NotificationFinished};
+pub(crate) use notifications::{NotificationChanged, NotificationFinished, NotificationPosted};
 #[derive(Clone, PartialEq)]
 pub(crate) struct OverviewChrome {
     active: Option<String>,
@@ -95,6 +97,11 @@ pub(crate) struct Monos {
     original_chrome: bool,
     overview_tab: OverviewTab,
     overview_previous: OverviewTab,
+    /// When the Overview tab last appeared for a Mono, so its graph draws in.
+    dashboard_shown: Option<(String, std::time::Instant)>,
+    /// Each Mono's contributions as last loaded, and those loading now.
+    contributions: HashMap<String, dashboard::Loaded>,
+    contributions_loading: HashSet<String>,
     overview_reveal: Option<crate::project_tabs::TabReveal<OverviewTab>>,
     route: Option<Route>,
     settings: Option<SettingsSection>,
@@ -119,6 +126,8 @@ pub(crate) struct Monos {
     menu_anchor: Anchor,
     documents: HashMap<String, Entity<crate::transcript::TranscriptView>>,
     html_documents: HashMap<String, Entity<html::Html>>,
+    /// Native visuals the Mono published in its chat, opened as documents.
+    visual_documents: HashMap<String, Entity<crate::visuals::VisualView>>,
     project_changes: changes::ProjectChanges,
     review: Option<Entity<crate::review::ReviewPane>>,
     activity: Option<(String, Entity<crate::transcript::TranscriptView>)>,
@@ -320,8 +329,11 @@ impl Monos {
             notice_region,
             details,
             original_chrome: false,
-            overview_tab: OverviewTab::Sessions,
-            overview_previous: OverviewTab::Sessions,
+            overview_tab: OverviewTab::Overview,
+            overview_previous: OverviewTab::Overview,
+            dashboard_shown: None,
+            contributions: HashMap::new(),
+            contributions_loading: HashSet::new(),
             overview_reveal: None,
             route: None,
             settings: None,
@@ -346,6 +358,7 @@ impl Monos {
             menu_anchor: Anchor::Point(gpui::Point::default()),
             documents: HashMap::new(),
             html_documents: HashMap::new(),
+            visual_documents: HashMap::new(),
             project_changes: Default::default(),
             review: None,
             activity: None,
@@ -439,6 +452,13 @@ impl Monos {
         self.details
             .update(cx, |view, cx| view.set_original_chrome(original, cx));
         cx.notify();
+    }
+    /// The session the details panel shows as a page, if any.
+    pub(crate) fn routed_session(&self) -> Option<i64> {
+        match self.route {
+            Some(Route::Session(id)) => Some(id),
+            _ => None,
+        }
     }
     pub(crate) fn overview_chrome(&self) -> OverviewChrome {
         let counts = self.current().map_or((0, 0, 0, 0), |mono| {
@@ -956,10 +976,19 @@ impl Monos {
                         .strip_prefix("mono-card:")
                         .map(|s| ("mono-card", s.to_string()))
                         .unwrap_or_else(|| ("assistant", report.clone()));
+                    let body = (role == "assistant").then(|| {
+                        text.strip_prefix("**Habit report**")
+                            .unwrap_or(&text)
+                            .trim()
+                            .to_owned()
+                    });
                     if let Err(error) = view.update(cx, |v, cx| v.mono_post(role, text, cx)) {
                         self.error = Some(error);
                         self.failed_reports.insert(id.into());
                         failed.push(report);
+                    } else if let Some(body) = body {
+                        let session = view.read(cx).summary.id;
+                        cx.emit(NotificationPosted { session, body });
                     }
                 }
                 if let Some(mono) = self.roster.get_mut(id) {

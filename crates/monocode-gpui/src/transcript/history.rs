@@ -73,8 +73,14 @@ impl TranscriptView {
     /// its newest turns; scrolling up reads the rest a page at a time.
     pub(crate) fn set_history_pager(&mut self, before: Option<i64>, pager: Option<HistoryPager>) {
         self.history_before = before;
+        self.window_before = before;
         self.history_pager = pager;
         self.history_failed = false;
+    }
+    /// The store cursor for the turns just above the window, for a paired
+    /// phone, which sees only the window's rows, to page in the rest itself.
+    pub(crate) fn older_history_cursor(&self) -> Option<i64> {
+        self.window_before
     }
     /// Saved turn receipts, keyed by store row, for the window's turns.
     pub(crate) fn set_turns(&mut self, turns: HashMap<usize, monocode_core::agent::TurnInfo>) {
@@ -306,6 +312,7 @@ impl TranscriptView {
     fn drop_older_history(&mut self) {
         let base = std::mem::take(&mut self.base);
         self.history_before = None;
+        self.window_before = None;
         if base > 0 {
             self.shift_rows(&|row| row.checked_sub(base));
         }

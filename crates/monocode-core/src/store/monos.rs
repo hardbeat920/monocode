@@ -154,9 +154,11 @@ impl Store {
         let query = format!(
             r#"SELECT json_object('id',json_extract(block,'$.id'),'role',json_extract(block,'$.role'),
             'artifactCards',json_extract(block,'$.artifactCards'),'monoSpawnedSessions',json_extract(block,'$.monoSpawnedSessions'),
-            'text',CASE WHEN json_extract(block,'$.role')='tool' THEN json_extract(block,'$.text') ELSE '' END,
+            'text',CASE WHEN json_extract(block,'$.role') IN ('tool','visual') THEN json_extract(block,'$.text') ELSE '' END,
+            'sentAt',json_extract(block,'$.sentAt'),
             'tool',CASE WHEN json_extract(block,'$.role')='tool' THEN json_extract(block,'$.tool') ELSE NULL END)
             FROM ({source}) WHERE json_type(block,'$.artifactCards')='array' OR json_type(block,'$.monoSpawnedSessions')='array'
+            OR json_extract(block,'$.role')='visual'
             OR (json_extract(block,'$.role')='tool' AND json_extract(block,'$.tool.status') IN ('completed','success')
                 AND COALESCE(json_extract(block,'$.tool.preview.title'),json_extract(block,'$.tool.title'),json_extract(block,'$.text'),'') LIKE '%monocode%app%sessions.%') ORDER BY seq"#
         );
@@ -171,9 +173,21 @@ impl Store {
                     .map_err(|e| e.to_string())?,
             );
         }
-        let mut documents = Vec::new();
+        let mut documents: Vec<crate::mono::Document> = Vec::new();
         let mut launches = Vec::new();
         for block in &blocks {
+            // Native visuals published in the Mono's chat are its visual documents.
+            if let Some(document) = crate::mono::work::visual_document(block) {
+                if let Some(old) = documents.iter_mut().find(|d| d.id == document.id) {
+                    *old = crate::mono::Document {
+                        created_at: old.created_at,
+                        ..document
+                    };
+                } else {
+                    documents.push(document);
+                }
+                continue;
+            }
             for card in crate::mono::work::document_cards(block) {
                 let id = card["documentId"].as_str().unwrap();
                 let mut document =
@@ -198,6 +212,7 @@ impl Store {
                 }
             }
         }
+        blocks.retain(|block| block["role"] != "visual");
         for (index, values) in crate::mono::work::block_launches(&blocks)
             .into_iter()
             .enumerate()
@@ -256,6 +271,40 @@ mod tests {
                 .unwrap(),
             1
         );
+    }
+    #[test]
+    fn published_visuals_become_mono_visual_documents() {
+        use serde_json::json;
+        let store = Store::open_monocode(Path::new(":memory:")).unwrap();
+        let mono = store.create("claude", "/mono").unwrap();
+        let original = store.persisted_session_id(mono.id).unwrap();
+        let visual = |title: &str| {
+            json!({"id":"deploys","title":title,"source":"return () => visual.text('Ready');"})
+                .to_string()
+        };
+        let blocks = json!([
+            {"id":"a","role":"visual","text":visual("Deploys"),"sentAt":10},
+            {"id":"b","role":"assistant","text":"Here it is"},
+            {"id":"c","role":"visual","text":visual("Deploys per week"),"sentAt":20},
+            {"id":"d","role":"visual","text":"not a visual"}
+        ]);
+        store
+            .conn
+            .execute(
+                "UPDATE sessions SET blocks_json=?2 WHERE id=?1",
+                rusqlite::params![original, blocks.to_string()],
+            )
+            .unwrap();
+        let (documents, launches) = store.mono_work(mono.id).unwrap().unwrap();
+        assert!(launches.is_empty());
+        assert_eq!(documents.len(), 1);
+        assert_eq!(documents[0].id, "visual:deploys");
+        assert_eq!(documents[0].kind, "visual");
+        assert_eq!(documents[0].title, "Deploys per week");
+        assert_eq!((documents[0].created_at, documents[0].updated_at), (10, 20));
+        let loaded: crate::visual::VisualDocument =
+            serde_json::from_str(&documents[0].body).unwrap();
+        assert_eq!(loaded.title, "Deploys per week");
     }
     #[test]
     fn desktop_work_uses_saved_block_references_and_note_bodies_without_mutation() {
