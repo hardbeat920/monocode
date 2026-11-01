@@ -292,6 +292,12 @@ impl Conversation {
         self.add_attachments(pending, cx);
         cx.notify();
     }
+    /// Hand the draft's files to a message. A rejected attach described
+    /// the draft, so its error leaves with it.
+    pub(super) fn take_attachments(&mut self) -> Vec<PathBuf> {
+        self.attachment_error = None;
+        std::mem::take(&mut self.attachments)
+    }
     pub(super) fn attachment_chips(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         // Removed chips release their thumbnail sprites with the entity.
         let attachments = &self.attachments;
@@ -359,6 +365,7 @@ impl Conversation {
                             cx.stop_propagation();
                             if ix < this.attachments.len() {
                                 this.attachments.remove(ix);
+                                this.attachment_error = None;
                                 cx.notify();
                             }
                         }));

@@ -891,7 +891,7 @@ impl Conversation {
                 .input
                 .update(cx, |input, cx| input.take(cx))
                 .unwrap_or_default();
-            let attachments = std::mem::take(&mut self.attachments);
+            let attachments = self.take_attachments();
             if !text.trim().is_empty() || !attachments.is_empty() {
                 cx.emit(mono::Submitted { text, attachments });
                 cx.notify();
@@ -1139,9 +1139,7 @@ impl Conversation {
                 && action["planBlockId"].is_null())
                 || action["type"] == "draft"
         }) {
-            settings
-                .attachments
-                .extend(std::mem::take(&mut self.attachments));
+            settings.attachments.extend(self.take_attachments());
         }
         if settings
             .remote_action

@@ -90,6 +90,28 @@ fn mono_messages_steer_the_ready_provider_once_and_keep_their_send_time(cx: &mut
 }
 
 #[gpui::test]
+fn sending_a_mono_message_clears_a_rejected_attachment_warning(cx: &mut TestAppContext) {
+    let window = conversation(cx);
+    window
+        .update(cx, |view, _, cx| {
+            view.configure_mono(
+                monocode_core::mono::Mono::default(),
+                "/tmp".into(),
+                Default::default(),
+                cx,
+            );
+            view.attachment_error = Some("Attachments must total 20 MB or less.".into());
+            view.attachments = vec!["/tmp/kept-image.png".into()];
+            view.input
+                .update(cx, |input, cx| input.set_text("Next message".into(), cx));
+            view.send(cx);
+            assert!(view.attachments.is_empty());
+            assert_eq!(view.attachment_error, None);
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn send_paints_before_storage_and_keeps_one_message_after_startup_failure(cx: &mut TestAppContext) {
     for text in [
         "First message".to_owned(),

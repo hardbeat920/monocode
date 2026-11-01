@@ -120,7 +120,7 @@ impl Conversation {
         invert: bool,
         cx: &mut Context<Self>,
     ) {
-        let attachments = std::mem::take(&mut self.attachments);
+        let attachments = self.take_attachments();
         let mut message = self.message(prompt, attachments, mode, cx);
         message.steer = message.can_steer() && self.steers_follow_up(invert, cx);
         if invert && self.busy && message.steer {
@@ -159,7 +159,7 @@ impl Conversation {
             return;
         }
         self.input.update(cx, |i, cx| i.set_text(String::new(), cx));
-        let attachments = std::mem::take(&mut self.attachments);
+        let attachments = self.take_attachments();
         let mut message = self.message(text, attachments, None, cx);
         message.at = self.transcript.read(cx).source_rows().len();
         if self.summary.title.starts_with("New ") {
