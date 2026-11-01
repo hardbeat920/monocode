@@ -1517,8 +1517,9 @@ struct ExplorerItem(*mut Common::ITEMIDLIST);
 impl ExplorerItem {
     fn parse(target: &Path) -> Result<Self> {
         // Git returns forward slashes, which the Shell namespace parser does
-        // not consistently accept. Also resolve relative paths and dot segments.
-        let target = dunce::canonicalize(target).context("Resolving Explorer target")?;
+        // not consistently accept. Make the path absolute without following
+        // symlinks or junctions, so Explorer selects the requested link itself.
+        let target = std::path::absolute(target).context("Resolving Explorer target")?;
         let mut item = Self(std::ptr::null_mut());
         unsafe {
             SHParseDisplayName(&HSTRING::from(target.as_path()), None, &mut item.0, 0, None)?;
@@ -1544,7 +1545,7 @@ fn open_target_in_explorer(target: &Path) -> Result<()> {
             // On some systems, the above call mysteriously fails with "file not
             // found" even though the file is there.  In these cases, ShellExecute()
             // seems to work as a fallback (although it won't select the file).
-            let target = dunce::canonicalize(target)?;
+            let target = std::path::absolute(target)?;
             open_target(target.parent().unwrap_or(&target)).context("Opening target parent folder")
         } else {
             Err(anyhow::anyhow!("Can not open target path: {}", err))
@@ -1928,6 +1929,15 @@ mod tests {
             std::fs::create_dir_all(&folder).unwrap();
             let file = folder.join("hello.txt");
             std::fs::write(&file, "test").unwrap();
+            // Junctions do not require the symlink privilege on Windows.
+            let junction = fixture.0.join("requested junction");
+            let output = gpui_util::new_std_command("cmd.exe")
+                .args(["/d", "/c", "mklink", "/J"])
+                .arg(&junction)
+                .arg(&folder)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
 
             {
                 let apartment = ExplorerApartment::new().unwrap();
@@ -1938,10 +1948,23 @@ mod tests {
                     assert!(!item.0.is_null());
                 }
                 assert!(ExplorerItem::parse(&folder.join("missing")).is_err());
-                let absolute = dunce::canonicalize(&folder).unwrap();
+                let git_junction = junction.to_str().unwrap().replace('\\', "/");
+                let item = ExplorerItem::parse(std::path::Path::new(&git_junction)).unwrap();
+                let mut selected_path = [0u16; 260];
+                assert!(unsafe {
+                    windows::Win32::UI::Shell::SHGetPathFromIDListW(item.0, &mut selected_path)
+                        .as_bool()
+                });
+                let len = selected_path.iter().position(|c| *c == 0).unwrap();
+                assert_eq!(
+                    std::path::PathBuf::from(String::from_utf16(&selected_path[..len]).unwrap()),
+                    std::path::absolute(&junction).unwrap()
+                );
+                let absolute = std::path::absolute(&folder).unwrap();
                 let root = absolute.ancestors().last().unwrap();
                 assert!(!ExplorerItem::parse(root).unwrap().0.is_null());
             }
+            std::fs::remove_dir(&junction).unwrap();
 
             // Leave the pooled thread uninitialized so its next user can
             // choose an apartment model without a conflict.
