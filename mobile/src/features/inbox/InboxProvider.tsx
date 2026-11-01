@@ -17,6 +17,8 @@ import { makeCommandId } from "@/features/connection/nativeLink";
 
 import { createFixtureClient, FIXTURES_ENABLED } from "./fixtures";
 import { countItems, markMessage } from "./model";
+import { useToast, type ToastState } from "@/ui/useToast";
+
 import { useNow } from "./useNow";
 import {
   createInboxClient,
@@ -26,12 +28,7 @@ import {
 } from "./protocol";
 import { createInboxStore, type Feed, type FeedQuery, type InboxStore } from "./store";
 
-export type InboxToastState = {
-  id: number;
-  message: string;
-  /** Present while the mark can still be taken back. */
-  undo?: () => void;
-};
+export type InboxToastState = ToastState;
 
 type InboxContext = {
   store: InboxStore;
@@ -43,8 +40,6 @@ type InboxContext = {
 };
 
 const Context = createContext<InboxContext | null>(null);
-
-const TOAST_MS = 5000;
 
 /**
  * The Inbox for the linked desktop: its client and store, and the one toast
@@ -97,20 +92,7 @@ export function InboxProvider({
     return () => subscription.remove();
   }, [store]);
 
-  const [toast, setToast] = useState<InboxToastState | null>(null);
-  const toastId = useRef(0);
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  useEffect(() => () => clearTimeout(timer.current), []);
-  const dismissToast = useCallback(() => {
-    clearTimeout(timer.current);
-    setToast(null);
-  }, []);
-  const show = useCallback((message: string, undo?: () => void) => {
-    clearTimeout(timer.current);
-    const id = ++toastId.current;
-    setToast({ id, message, undo });
-    timer.current = setTimeout(() => setToast((now) => (now?.id === id ? null : now)), TOAST_MS);
-  }, []);
+  const { toast, show, dismiss: dismissToast } = useToast();
 
   const mark = useCallback(
     async (item: InboxItem, action: InboxMarkAction, until?: number) => {
@@ -119,14 +101,14 @@ export function InboxProvider({
         // Opening an item marks it read; that needs no toast.
         if (action === "seen") return;
         show(markMessage(action), () => {
-          setToast(null);
+          dismissToast();
           void result.undo().catch(() => show("Couldn't undo. The desktop didn't answer."));
         });
       } catch {
         show("Couldn't reach the desktop. Nothing changed.");
       }
     },
-    [store, show],
+    [store, show, dismissToast],
   );
 
   const value = useMemo(

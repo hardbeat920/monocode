@@ -17,14 +17,13 @@ import { scheduleOnRN } from "react-native-worklets";
 import { relativeTime } from "@/features/workspace/relativeTime";
 import { Icon, type IconName } from "@/ui/Icon";
 import { ChoiceMenu } from "@/ui/ChoiceMenu";
+import { ACTION_GAP, ACTION_SIZE, ActionFace, SwipeAction, SwipeActions } from "@/ui/SwipeAction";
 import { radii, themedStyles, useColors, withAlpha } from "@/ui/theme";
 
 import { snoozeOptions } from "./model";
 import { ProviderMark } from "./ProviderMark";
 import type { InboxItem } from "./protocol";
 
-const ACTION_SIZE = 40;
-const ACTION_GAP = 8;
 /** Three buttons and the gaps around them: how far the row slides to show them. */
 const ACTIONS_WIDTH = ACTION_SIZE * 3 + ACTION_GAP * 3 + 4;
 /** How much farther past the buttons a swipe commits Done. */
@@ -268,9 +267,9 @@ function RowActions({
     [item.done],
   );
   return (
-    <View style={styles.actions}>
+    <SwipeActions>
       {item.done ? (
-        <RowAction
+        <SwipeAction
           progress={progress}
           from={0}
           icon="undo"
@@ -296,7 +295,7 @@ function RowActions({
           />
         </ChoiceMenu>
       )}
-      <RowAction
+      <SwipeAction
         progress={progress}
         from={0.25}
         icon="sparkle"
@@ -306,7 +305,7 @@ function RowActions({
         onPress={onStart}
       />
       {item.done ? null : (
-        <RowAction
+        <SwipeAction
           progress={progress}
           from={0}
           icon="check"
@@ -316,64 +315,7 @@ function RowActions({
           onPress={onDone}
         />
       )}
-    </View>
-  );
-}
-
-function ActionFace({
-  progress,
-  from,
-  icon,
-  color,
-  background,
-}: {
-  progress: SharedValue<number>;
-  from: number;
-  icon: IconName;
-  color: string;
-  background: string;
-}) {
-  const styles = useStyles();
-  const style = useAnimatedStyle(() => {
-    const shown = interpolate(progress.get(), [from, from + 0.65], [0, 1], "clamp");
-    return { opacity: shown, transform: [{ scale: 0.7 + 0.3 * shown }] };
-  });
-  return (
-    <Animated.View
-      style={[styles.action, { backgroundColor: background }, style]}
-    >
-      <Icon name={icon} size={18} color={color} />
-    </Animated.View>
-  );
-}
-
-function RowAction({
-  progress,
-  from,
-  icon,
-  label,
-  color,
-  background,
-  onPress,
-}: {
-  progress: SharedValue<number>;
-  from: number;
-  icon: IconName;
-  label: string;
-  color: string;
-  background: string;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={onPress}>
-      <ActionFace
-        progress={progress}
-        from={from}
-        icon={icon}
-        color={color}
-        background={background}
-      />
-    </Pressable>
+    </SwipeActions>
   );
 }
 
@@ -455,20 +397,5 @@ const useStyles = themedStyles((colors) => ({
     flexDirection: "row",
     alignItems: "center",
     gap: 3,
-  },
-  actions: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: ACTION_GAP,
-    paddingLeft: ACTION_GAP,
-    paddingRight: 4,
-  },
-  action: {
-    width: ACTION_SIZE,
-    height: ACTION_SIZE,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: radii.row,
-    borderCurve: "continuous",
   },
 }));
