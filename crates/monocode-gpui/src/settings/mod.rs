@@ -232,6 +232,10 @@ pub(crate) struct SettingsView {
     mcp_show_all: bool,
     mcp_remove_scopes: HashMap<String, String>,
     mcp_busy: bool,
+    grants: Vec<monocode_core::permissions::Grant>,
+    grants_error: Option<String>,
+    grants_busy: bool,
+    grants_task: Option<Task<()>>,
     mcp_health: Option<Task<()>>,
     discovery: data::Discovery,
     discovery_loading: bool,
@@ -367,6 +371,10 @@ impl SettingsView {
             mcp_show_all: false,
             mcp_remove_scopes: HashMap::new(),
             mcp_busy: false,
+            grants: Vec::new(),
+            grants_error: None,
+            grants_busy: false,
+            grants_task: None,
             mcp_health: None,
             discovery: data::Discovery::default(),
             discovery_loading: false,
@@ -411,15 +419,28 @@ impl SettingsView {
         }
         let cwd = self.selected_project.clone();
         self.discovery_loading = true;
-        let work = cx
-            .background_executor()
-            .spawn(async move { data::discover(&cwd) });
+        let work = cx.background_executor().spawn(async move {
+            (
+                data::discover(&cwd),
+                monocode_core::permissions::Store::default().list(),
+            )
+        });
         self.discovery_task = Some(cx.spawn(async move |this, cx| {
-            let data = work.await;
+            let (data, grants) = work.await;
             let _ = this.update(cx, |this, cx| {
                 this.skill_documents.clear();
                 this.discovery = data;
                 this.discovery_loading = false;
+                match grants {
+                    Ok(grants) => {
+                        this.grants = grants;
+                        this.grants_error = None;
+                    }
+                    Err(error) => {
+                        this.grants.clear();
+                        this.grants_error = Some(error);
+                    }
+                }
                 if this.section == Section::Mcp {
                     this.refresh_mcp_health(cx);
                 }
@@ -465,6 +486,9 @@ impl SettingsView {
             self.watch_connections(cx);
             if section == Section::Mcp {
                 self.refresh_mcp_health(cx);
+            }
+            if section == Section::Permissions {
+                self.refresh_grants(cx);
             }
             self.select_open = None;
             self.recording = None;

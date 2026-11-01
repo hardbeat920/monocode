@@ -462,6 +462,15 @@ impl State {
                         client.permission(&session, id, allow)?;
                     } else {
                         let ui = format!("opencode-permission-{id}");
+                        let subjects = crate::provider::grants::opencode_subjects(
+                            &self.protocol.request.cwd,
+                            action,
+                            permission,
+                        );
+                        if self.protocol.offer(&ui, subjects, action) {
+                            client.permission(&session, id, true)?;
+                            return Ok(events);
+                        }
                         self.approvals.insert(
                             ui.clone(),
                             Pending {
@@ -471,6 +480,7 @@ impl State {
                             },
                         );
                         events.push(Event::Approval(Approval {
+                            remember_scope: self.protocol.remember_scope(&ui),
                             id: ui,
                             title: action.into(),
                             detail: permission.to_string(),
@@ -726,13 +736,24 @@ impl State {
         if matches!(control.decision, Decision::KeepOpen) {
             return Ok(Vec::new());
         }
+        let always = matches!(control.decision, Decision::Always);
+        if always && self.approvals.contains_key(&control.id) {
+            if let Some(failed) = self.protocol.save_offer(&control.id) {
+                return Ok(vec![failed]);
+            }
+        }
         if let Some(pending) = self.approvals.remove(&control.id) {
+            self.protocol.offers.remove(&control.id);
             client.permission(
                 &pending.session,
                 &pending.wire,
-                matches!(control.decision, Decision::Allow | Decision::Session),
+                always || matches!(control.decision, Decision::Allow | Decision::Session),
             )?;
-            return Ok(Vec::new());
+            return Ok(if always {
+                vec![Event::ApprovalResolved(control.id)]
+            } else {
+                Vec::new()
+            });
         }
         if let Some(pending) = self.questions.remove(&control.id) {
             let answers = if let Decision::Answer(answers) = control.decision {

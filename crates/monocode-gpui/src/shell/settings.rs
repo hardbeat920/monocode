@@ -674,6 +674,7 @@ mod tests {
             "settings-nav-chat",
             "settings-nav-providers",
             "settings-nav-mcp",
+            "settings-nav-permissions",
             "settings-nav-skills",
             "settings-nav-monos",
             "settings-nav-inbox",

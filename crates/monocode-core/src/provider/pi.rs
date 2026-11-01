@@ -619,13 +619,26 @@ impl Protocol {
                         )?;
                         return Ok(events);
                     }
+                    let title = v["title"].as_str().unwrap_or("Provider confirmation");
+                    let detail = v["message"].as_str().unwrap_or("");
+                    let subjects = super::grants::exact(title, &json!(detail))
+                        .into_iter()
+                        .collect();
+                    if self.offer(&id, subjects, title) {
+                        self.respond(
+                            Control {
+                                id,
+                                decision: Decision::Allow,
+                            },
+                            stdin,
+                        )?;
+                        return Ok(events);
+                    }
                     events.push(Event::Approval(Approval {
+                        remember_scope: self.remember_scope(&id),
                         id,
-                        title: v["title"]
-                            .as_str()
-                            .unwrap_or("Provider confirmation")
-                            .into(),
-                        detail: v["message"].as_str().unwrap_or("").into(),
+                        title: title.into(),
+                        detail: detail.into(),
                         can_remember: false,
                     }));
                 } else if matches!(method, "select" | "input" | "editor") {

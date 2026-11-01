@@ -47,6 +47,16 @@ pub(super) struct State {
     stale_model: Option<String>,
     mode: Option<&'static str>,
 }
+#[cfg(test)]
+impl State {
+    /// A session already past `session/new`, answering permission requests.
+    pub(super) fn prompting() -> Self {
+        Self {
+            stage: Stage::Prompt,
+            ..Default::default()
+        }
+    }
+}
 
 pub(super) fn configure(command: &mut Command, request: &Request) -> Result<(), String> {
     let settings = &request.settings;
@@ -667,6 +677,7 @@ impl Protocol {
                     let detail = known
                         .map(|call| format!("{}\n{}\n{}", call.name, call.input, call.output))
                         .unwrap_or_else(|| serde_json::to_string_pretty(tool).unwrap_or_default());
+                    let subjects = self.acp_subjects(tool, kind);
                     let id = v["id"].to_string();
                     let mut permission = request.clone();
                     if self.request.kind == Kind::Devin
@@ -715,8 +726,17 @@ impl Protocol {
                             },
                             stdin,
                         )?;
+                    } else if self.offer(&id, subjects, &title) {
+                        self.respond(
+                            Control {
+                                id,
+                                decision: Decision::Allow,
+                            },
+                            stdin,
+                        )?;
                     } else {
                         events.push(Event::Approval(Approval {
+                            remember_scope: self.remember_scope(&id),
                             id,
                             title,
                             detail,
@@ -1365,9 +1385,11 @@ pub(super) fn respond(
     let preference = match &decision {
         Decision::Allow => ["allow_once", "allow_always"],
         Decision::Session => ["allow_always", "allow_once"],
-        Decision::Deny | Decision::KeepOpen | Decision::Answer(_) | Decision::Steer(_) => {
-            ["reject_once", "reject_always"]
-        }
+        Decision::Deny
+        | Decision::Always
+        | Decision::KeepOpen
+        | Decision::Answer(_)
+        | Decision::Steer(_) => ["reject_once", "reject_always"],
     };
     let options: Vec<_> = request["options"]
         .as_array()

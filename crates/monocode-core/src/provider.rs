@@ -26,6 +26,7 @@ mod compaction;
 pub(crate) mod devin;
 mod discovery;
 mod follow_up;
+mod grants;
 mod kind;
 mod lifecycle;
 mod limits;
@@ -90,6 +91,10 @@ pub enum Event {
     Metrics(TurnMetrics),
     Approval(Approval),
     ApprovalResolved(String),
+    ApprovalSaveFailed {
+        id: String,
+        error: String,
+    },
     Question(crate::agent::Question),
     QuestionResolved(String),
     BeginAssistant,
@@ -272,6 +277,9 @@ struct Protocol {
     claude_tools: HashMap<u64, (String, String)>,
     text_key: Option<String>,
     approvals: HashMap<String, (Value, String, Value)>,
+    permissions: crate::permissions::Store,
+    /// What Always allow would save, by approval id.
+    offers: HashMap<String, Vec<crate::permissions::Grant>>,
     metrics: TurnMetrics,
     usage_total: u64,
     acp: acp::State,
@@ -311,6 +319,8 @@ impl Protocol {
             claude_tools: HashMap::new(),
             text_key: None,
             approvals: HashMap::new(),
+            permissions: Default::default(),
+            offers: HashMap::new(),
             metrics: TurnMetrics::default(),
             usage_total: 0,
             acp: Default::default(),
@@ -1032,6 +1042,7 @@ impl Protocol {
                 .and_then(|p| serde_json::to_string_pretty(p).ok())
                 .unwrap_or_else(|| "The agent is requesting permission to continue.".into());
         }
+        let subjects = self.approval_subjects(kind, &request);
         self.approvals
             .insert(id.clone(), (wire, kind.into(), request));
         if self.request.settings.plan || self.request.settings.access == AccessMode::ReadOnly {
@@ -1064,7 +1075,17 @@ impl Protocol {
                 stdin,
             );
         }
+        if self.offer(&id, subjects, &title) {
+            return self.respond(
+                Control {
+                    id,
+                    decision: Decision::Allow,
+                },
+                stdin,
+            );
+        }
         events.push(Event::Approval(Approval {
+            remember_scope: self.remember_scope(&id),
             id,
             title,
             detail,
@@ -1109,6 +1130,7 @@ impl Protocol {
             }
             return questions::respond(stdin, wire, &kind, &request, &question, control.decision);
         }
+        self.offers.remove(&control.id);
         let Some((wire, kind, request)) = self.approvals.remove(&control.id) else {
             return Ok(());
         };
@@ -1623,6 +1645,8 @@ fn run_operation(
                                 Ok(events) => pending.extend(events),
                                 Err(error) => pending.push(Event::FollowUpFailed { id, error }),
                             }
+                        } else if matches!(control.decision, Decision::Always) {
+                            pending.extend(protocol.remember_approval(&control.id, &mut stdin)?);
                         } else {
                             protocol.respond(control, &mut stdin)?;
                         }
