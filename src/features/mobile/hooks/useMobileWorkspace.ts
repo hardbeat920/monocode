@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef } from "react";
+import { subscribeProjectPathsChanged } from "../../projects/model/recents";
 import {
   mobileCatalog,
   mobileConversation,
@@ -399,8 +400,15 @@ export function useMobileWorkspace(options: Options) {
         })();
       },
     );
+    const stopProjectChanges = subscribeProjectPathsChanged(() => {
+      void (async () => {
+        const status = await invoke<{ enabled: boolean }>("mobile_status");
+        if (status.enabled && !disposed) await publishCatalog();
+      })().catch((error) => console.error("Mobile workspace publish failed", error));
+    });
     void publish();
     return () => {
+      stopProjectChanges();
       disposed = true;
       clearTimeout(timer);
       void listening.then((unlisten) => unlisten());
