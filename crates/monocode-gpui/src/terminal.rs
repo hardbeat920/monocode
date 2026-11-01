@@ -178,7 +178,7 @@ fn spawn(cwd: &str, size: GridSize, id: u64) -> Spawned {
         env.insert(key.to_owned(), value);
     }
     let options = tty::Options {
-        shell: Some(tty::Shell::new(program.clone(), args)),
+        shell: Some(tty::Shell::new(shell::pty_program(&program), args)),
         working_directory: Some(workdir),
         drain_on_exit: false,
         env,
