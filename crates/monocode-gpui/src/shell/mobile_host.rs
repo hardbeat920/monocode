@@ -1190,15 +1190,13 @@ impl Shell {
             let (default_kind, default_model, default_access) = self.mobile_defaults(&cwd, cx);
             let chosen = string(&params, "harness").as_deref().and_then(Kind::parse);
             let kind = chosen.unwrap_or(default_kind);
-            let model = match (chosen, string(&params, "model")) {
-                (Some(kind), Some(model)) if model.len() <= 256 => {
-                    monocode_core::store::native_model(&model, kind.id())
-                }
-                (Some(kind), _) if kind != default_kind => {
-                    explicit_model(&self.workspace.preferences, &cwd, kind)
-                }
-                _ => default_model,
-            };
+            let model = start_model(
+                &self.workspace.preferences,
+                &cwd,
+                chosen,
+                string(&params, "model"),
+                default_model,
+            );
             let access = params["runtimeMode"]
                 .as_str()
                 .filter(|mode| {
@@ -1751,13 +1749,31 @@ fn explicit_model(prefs: &crate::settings::Preferences, cwd: &str, kind: Kind) -
         .and_then(|model| monocode_core::store::native_model(&model, kind.id()))
 }
 
+/// The model a phone-started session gets: the phone's own pick, else the
+/// project then Settings model of an explicit provider, else the new-chat default.
+fn start_model(
+    prefs: &crate::settings::Preferences,
+    cwd: &str,
+    chosen: Option<Kind>,
+    requested: Option<String>,
+    default_model: Option<String>,
+) -> Option<String> {
+    match (chosen, requested) {
+        (Some(kind), Some(model)) if model.len() <= 256 => {
+            monocode_core::store::native_model(&model, kind.id())
+        }
+        (Some(kind), _) => explicit_model(prefs, cwd, kind),
+        _ => default_model,
+    }
+}
+
 /// Providers the phone's model sheet leaves out. Remote projects list them all,
 /// as the desktop model picker does.
 fn hidden_providers(prefs: &crate::settings::Preferences, cwd: &str) -> Vec<String> {
     if monocode_core::remote::parse_remote_path(cwd).is_some() {
         return Vec::new();
     }
-    prefs.hidden_providers.clone()
+    prefs.hidden_for(cwd)
 }
 
 #[cfg(test)]
@@ -1855,6 +1871,25 @@ mod tests {
     }
 
     #[test]
+    fn a_project_hidden_provider_is_left_out_of_the_model_sheet_for_local_projects() {
+        let mut prefs = crate::settings::Preferences {
+            hidden_providers: vec!["claude".into()],
+            ..Default::default()
+        };
+        prefs
+            .project_providers
+            .entry("/work/project".into())
+            .or_default()
+            .hidden = vec!["codex".into()];
+        assert_eq!(
+            hidden_providers(&prefs, "/work/project"),
+            ["claude", "codex"]
+        );
+        assert_eq!(hidden_providers(&prefs, "/work/other"), ["claude"]);
+        assert!(hidden_providers(&prefs, "remote://env/work/project").is_empty());
+    }
+
+    #[test]
     fn an_explicit_phone_provider_without_a_model_uses_its_configured_model() {
         let mut prefs = crate::settings::Preferences {
             default_models: [("claude".into(), "claude-opus-5-5".into())].into(),
@@ -1874,6 +1909,48 @@ mod tests {
             Some("claude-sonnet-5-5")
         );
         assert_eq!(explicit_model(&prefs, "/work/project", Kind::Codex), None);
+    }
+
+    #[test]
+    fn an_explicit_phone_provider_that_is_the_default_ignores_the_recent_model() {
+        let mut prefs = crate::settings::Preferences {
+            recent_models: vec![crate::settings::ModelChoice {
+                provider: "claude".into(),
+                model: Some("claude-haiku-5-5".into()),
+            }],
+            ..Default::default()
+        };
+        let choice = new_chat_choice::resolve(&prefs, "/work/project");
+        assert_eq!(choice.kind, Kind::Claude);
+        let recent = choice
+            .model
+            .and_then(|model| monocode_core::store::native_model(&model, "claude"));
+        assert_eq!(recent.as_deref(), Some("claude-haiku-5-5"));
+        let start = |prefs: &crate::settings::Preferences, chosen, requested: Option<&str>| {
+            start_model(
+                prefs,
+                "/work/project",
+                chosen,
+                requested.map(Into::into),
+                recent.clone(),
+            )
+        };
+        // Omitted: the new-chat default, recent model included.
+        assert_eq!(start(&prefs, None, None).as_deref(), recent.as_deref());
+        // Explicit without a model: the harness default, not the recent model.
+        assert_eq!(start(&prefs, Some(Kind::Claude), None), None);
+        prefs
+            .default_models
+            .insert("claude".into(), "claude-opus-5-5".into());
+        assert_eq!(
+            start(&prefs, Some(Kind::Claude), None).as_deref(),
+            Some("claude-opus-5-5")
+        );
+        // Explicit with a model: that model.
+        assert_eq!(
+            start(&prefs, Some(Kind::Claude), Some("claude:sonnet-5-5")).as_deref(),
+            Some("claude-sonnet-5-5")
+        );
     }
 
     #[test]
