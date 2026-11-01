@@ -1378,6 +1378,25 @@ fn opening_a_session_card_uses_the_shared_sidebar_state(cx: &mut TestAppContext)
 }
 
 #[gpui::test]
+fn pull_request_cards_open_inside_the_mono(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    s.window
+        .update(cx, |_, _, cx| {
+            s.manager.update(cx, |m, cx| {
+                assert!(!m.open_work_item("https://example.com/page", cx));
+                assert_eq!(m.route, None);
+                m.card_action(
+                    &s.id,
+                    &json!({"type":"pr", "repo":"acme/app", "number":9}),
+                    cx,
+                );
+                assert_eq!(m.route, Some(Route::WorkItem));
+            })
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn a_session_open_in_mono_details_keeps_its_history(cx: &mut TestAppContext) {
     let s = setup(cx);
     cx.update(|cx| cx.set_reduce_motion(true));

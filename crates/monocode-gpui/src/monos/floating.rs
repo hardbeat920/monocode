@@ -344,6 +344,17 @@ impl gpui::Render for Floating {
                     this.stop(cx);
                 }
             }))
+            .on_action(
+                cx.listener(|this, link: &crate::inbox::OpenWorkLink, _, cx| {
+                    let mono = this.selected.clone();
+                    let shown = this.owner.update(cx, |monos, cx| {
+                        monos.open_work_item_from(&mono, &link.0, cx)
+                    });
+                    if !shown {
+                        cx.open_url(&link.0);
+                    }
+                }),
+            )
             .child(
                 // The card's spread shadow: it shades the rail and the gaps
                 // around the chat, never the chat itself.
