@@ -365,6 +365,7 @@ type Props = {
   onSelectProject?: (path: string) => void;
   onOpenProject?: () => void;
   onRemoveProject?: (path: string, options: { purgeData: boolean }) => void;
+  onRelocateProject?: (from: string, to: string) => Promise<void>;
   onNew?: () => string | void;
   onNewTerminal?: () => void;
   onSearch?: () => void;
@@ -478,6 +479,7 @@ function SidebarComponent({
   onSelectProject,
   onOpenProject,
   onRemoveProject,
+  onRelocateProject,
   onNew,
   onSearch,
   onOpenInbox,
@@ -2122,6 +2124,7 @@ function SidebarComponent({
   }, [inset, panelOpen, sidebarAvailable]);
   const headerProjectMenu = useProjectMenu({
     onRemoveProject,
+    onRelocateProject,
     onOpenNotificationSettings,
     onOpen: () => setInsetInboxMenu(null),
     // Only the inset layout uses this menu, and it has no project rail.
@@ -2605,6 +2608,7 @@ function SidebarComponent({
               onSelectProject={onSelectProject}
               onOpenProject={onOpenProject}
               onRemoveProject={onRemoveProject}
+              onRelocateProject={onRelocateProject}
               onNew={onNew}
               onSearch={onSearch}
               onOpenInbox={onOpenInbox}
@@ -3224,6 +3228,7 @@ function SidebarComponent({
           onSelectProject={onSelectProject}
           onOpenProject={onOpenProject}
           onRemoveProject={onRemoveProject}
+          onRelocateProject={onRelocateProject}
           onTabChange={onCompactTabPick}
           onSearch={onSearch}
           searchActive={searchActive}
@@ -3272,6 +3277,7 @@ function SidebarComponent({
           onSelectProject={onSelectProject}
           onOpenProject={onOpenProject}
           onRemoveProject={onRemoveProject}
+          onRelocateProject={onRelocateProject}
           settingsOpen={settingsOpen}
           settingsSection={settingsSection}
           onOpenSettings={onOpenSettings}
@@ -3373,6 +3379,7 @@ export const Sidebar = memo(SidebarComponent);
 /** Project picker whose rows open the shared project context menu. */
 function SearchableProjectPickerWithMenu({
   onRemoveProject,
+  onRelocateProject,
   onOpenNotificationSettings,
   ...pickerProps
 }: Omit<
@@ -3380,10 +3387,12 @@ function SearchableProjectPickerWithMenu({
   "onProjectContextMenu" | "projectMenuActive"
 > & {
   onRemoveProject?: Props["onRemoveProject"];
+  onRelocateProject?: Props["onRelocateProject"];
   onOpenNotificationSettings?: (projectPath?: string) => void;
 }) {
   const projectMenu = useProjectMenu({
     onRemoveProject,
+    onRelocateProject,
     onOpenNotificationSettings,
   });
   return (
@@ -3405,6 +3414,7 @@ function SidebarProjectPicker({
   onSelectProject,
   onOpenProject,
   onRemoveProject,
+  onRelocateProject,
   onNew,
   onSearch,
   onOpenInbox,
@@ -3423,6 +3433,7 @@ function SidebarProjectPicker({
   onSelectProject: (path: string) => void;
   onOpenProject?: () => void;
   onRemoveProject?: Props["onRemoveProject"];
+  onRelocateProject?: Props["onRelocateProject"];
   onNew?: () => string | void;
   onSearch?: () => void;
   onOpenInbox?: () => void;
@@ -3452,6 +3463,7 @@ function SidebarProjectPicker({
         onSelectProject={onSelectProject}
         onOpenProject={onOpenProject}
         onRemoveProject={onRemoveProject}
+        onRelocateProject={onRelocateProject}
         onOpenNotificationSettings={onOpenNotificationSettings}
       />
       <div className="ml-auto flex items-center">
@@ -3539,6 +3551,7 @@ function CompactProjectRail({
   onSelectProject,
   onOpenProject,
   onRemoveProject,
+  onRelocateProject,
   onTabChange,
   onSearch,
   searchActive,
@@ -3572,6 +3585,7 @@ function CompactProjectRail({
   onSelectProject?: (path: string) => void;
   onOpenProject?: () => void;
   onRemoveProject?: Props["onRemoveProject"];
+  onRelocateProject?: Props["onRelocateProject"];
   onTabChange: (tab: SidebarTab) => void;
   onSearch?: () => void;
   searchActive: boolean;
@@ -3702,6 +3716,7 @@ function CompactProjectRail({
             onSelectProject={onSelectProject}
             onOpenProject={onOpenProject}
             onRemoveProject={onRemoveProject}
+            onRelocateProject={onRelocateProject}
             onOpenNotificationSettings={onOpenNotificationSettings}
             monos={pickerMonos}
           />

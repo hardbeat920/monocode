@@ -458,6 +458,7 @@ import {
   archiveProject,
   forgetProject,
   lastProjectPath,
+  loadArchivedProjects,
   loadRecents,
   loadPinnedProjects,
   isLocalProject,
@@ -1786,6 +1787,14 @@ function Workspace({
   const loadedSessionCache = useRef(new Map<string, Session>());
   const sessionLoads = useRef(new Map<string, Promise<Session | null>>());
   const sessionLoadEpochs = useRef(new Map<string, number>());
+  /** Project moves made while a session was still loading, oldest first.
+   * `applied` settles once the stored rows were rebased, false if that failed. */
+  const sessionLoadMoves = useRef(
+    new Map<
+      string,
+      { from: string; to: string; applied: Promise<boolean> }[]
+    >(),
+  );
   const openingSessionIds = useRef(new Set<string>());
   const activeSessionPrefetch = useRef<Promise<Session | null> | null>(null);
   const [transcriptPool] = useState(() => new TranscriptPool());
@@ -4732,22 +4741,39 @@ function Workspace({
       if (pending) return pending;
 
       const epoch = sessionLoadEpochs.current.get(sessionId) ?? 0;
+      // Owned by this load, so a replaced load finishing late cannot take
+      // the moves recorded for its replacement.
+      const moves: { from: string; to: string; applied: Promise<boolean> }[] =
+        [];
+      sessionLoadMoves.current.set(sessionId, moves);
+      const stale = () =>
+        removingSessionIds.current.has(sessionId) ||
+        (sessionLoadEpochs.current.get(sessionId) ?? 0) !== epoch;
       const loading = readSession(sessionId)
-        .then((loaded) => {
-          if (
-            !loaded ||
-            removingSessionIds.current.has(sessionId) ||
-            (sessionLoadEpochs.current.get(sessionId) ?? 0) !== epoch
-          ) {
-            return null;
+        .then(async (loaded) => {
+          if (!loaded || stale()) return null;
+          // The read may have run before its project moved; follow each move
+          // that went through so a later save does not write the old folder
+          // back, and keep the folder when one failed.
+          let session = loaded;
+          for (const move of moves) {
+            if (
+              (await move.applied) &&
+              sameProjectPath(session.cwd, move.from)
+            ) {
+              session = { ...session, cwd: move.to };
+            }
           }
-          return loaded;
+          return stale() ? null : session;
         })
         .catch(() => null);
       sessionLoads.current.set(sessionId, loading);
       void loading.then(() => {
         if (sessionLoads.current.get(sessionId) === loading) {
           sessionLoads.current.delete(sessionId);
+        }
+        if (sessionLoadMoves.current.get(sessionId) === moves) {
+          sessionLoadMoves.current.delete(sessionId);
         }
       });
       return loading;
@@ -6743,7 +6769,22 @@ function Workspace({
 
   const applyProjectLocationChange = useCallback(
     async (from: string, to: string) => {
-      await rebaseProjectSessions(from, to);
+      // Loads in flight wait for the stored rows to be rebased, then follow
+      // the move only if that went through.
+      let settle: (applied: boolean) => void = () => {};
+      const applied = new Promise<boolean>((resolve) => {
+        settle = resolve;
+      });
+      for (const moves of sessionLoadMoves.current.values()) {
+        moves.push({ from, to, applied });
+      }
+      try {
+        await rebaseProjectSessions(from, to);
+      } catch (error) {
+        settle(false);
+        throw error;
+      }
+      settle(true);
       rebaseCiRepairs(from, to);
 
       const nextSessions = sessionsRef.current.map((session) =>
@@ -6786,9 +6827,23 @@ function Workspace({
         projectCwdRef.current = to;
         setProjectCwd(to);
       }
+      // Open files and terminals also name the project they belong to; a
+      // plain file move leaves that alone, but here the project itself moved.
+      const rebaseProject = (path: string) =>
+        sameProjectPath(path, from) ? to : path;
+      const rebasePane = (pane: EditorPane): EditorPane => ({
+        ...pane,
+        files: pane.files.map((file) => ({
+          ...file,
+          cwd: rebaseProject(file.cwd),
+          ...(file.projectCwd
+            ? { projectCwd: rebaseProject(file.projectCwd) }
+            : {}),
+        })),
+      });
       const nextDocks = projectTerminalsRef.current.map((dock) =>
         sameProjectPath(dock.projectPath, from)
-          ? { ...dock, projectPath: to }
+          ? { ...dock, projectPath: to, pane: rebasePane(dock.pane) }
           : dock,
       );
       projectTerminalsRef.current = nextDocks;
@@ -6801,9 +6856,45 @@ function Workspace({
       );
       setRecents(replaceProjectPath(from, to));
       onFileMoved(from, to);
+      // Saved tabs keep only those pinned to their project's folder.
+      for (const [id, workspace] of workspacePins.current) {
+        if (isEqualOrInside(workspace, from)) {
+          workspacePins.current.set(id, rebasePath(workspace, from, to));
+        }
+      }
+      setTabs((prev) =>
+        prev.map((tab) => ({
+          ...tab,
+          editorPanes: tab.editorPanes.map(rebasePane),
+          terminalPanes: (tab.terminalPanes ?? []).map(rebasePane),
+        })),
+      );
       notifyDirsChanged();
     },
     [onFileMoved],
+  );
+
+  // The user pointed a project at another folder, usually after moving it
+  // outside the app. Its sessions, tabs and settings follow it there.
+  const onRelocateProject = useCallback(
+    async (from: string, to: string) => {
+      const previous = normalizeProjectPath(from);
+      const next = normalizeProjectPath(to);
+      if (sameProjectPath(previous, next)) return;
+      // Moving onto another project would merge their chats for good.
+      const taken = [...loadRecents(), ...loadArchivedProjects()].some(
+        (project) => sameProjectPath(project.path, next),
+      );
+      if (taken) {
+        throw new Error(
+          `${displayPath(next)} is already a project. Choose another folder.`,
+        );
+      }
+      await applyProjectLocationChange(previous, next);
+      forgetProjectLocation(previous);
+      void rememberProjectLocation(next).catch(() => undefined);
+    },
+    [applyProjectLocationChange],
   );
 
   const onFileDeleted = useCallback((path: string) => {
@@ -14069,6 +14160,7 @@ function Workspace({
       onSelectProject={onSelectProject}
       onOpenProject={pickProject}
       onRemoveProject={onRemoveProject}
+      onRelocateProject={onRelocateProject}
       monos={sidebarMonos}
       monoViewActive={monoCovers}
       onNew={onNew}
