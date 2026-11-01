@@ -440,6 +440,31 @@ pub fn resolve_work_item(
     })
 }
 
+/// The pull request a finished tool call opened: `gh pr create` printing the
+/// new PR's URL, or a GitHub MCP `create_pull_request` returning it.
+pub fn opened_pull_request(tool: &crate::tool::ToolCall) -> Option<WorkItem> {
+    static GH_PR_CREATE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r#"(?:^|[\s;&|('"])gh\s+pr\s+(?:create|new)\b"#).unwrap()
+    });
+    if tool.state != crate::tool::ToolState::Completed {
+        return None;
+    }
+    let pull = |text: &str| parse_github_work_item(text).filter(|item| item.kind == "pr");
+    if tool.name.ends_with("create_pull_request") {
+        let html_url = serde_json::from_str::<serde_json::Value>(&tool.output)
+            .ok()
+            .and_then(|value| value["html_url"].as_str().and_then(pull));
+        return html_url.or_else(|| pull(&tool.output));
+    }
+    let shown = tool.presentation();
+    let command = shown.command.unwrap_or(shown.target);
+    if !GH_PR_CREATE.is_match(&command) {
+        return None;
+    }
+    // `gh` prints the new PR's URL last; earlier lines may quote other links.
+    tool.output.lines().rev().find_map(pull)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -599,5 +624,73 @@ mod tests {
         assert!(references_current_pr("review the current PR"));
         assert!(references_current_pr("land this pull request"));
         assert!(!references_current_pr("open a PR for this"));
+    }
+
+    #[test]
+    fn opened_pull_requests_come_from_gh_and_github_mcp_output() {
+        use crate::tool::{ToolCall, ToolState};
+        let call = |name: &str, input: serde_json::Value, output: &str| {
+            let mut tool = ToolCall::new("t", name);
+            tool.input = input.to_string();
+            tool.output = output.into();
+            tool.state = ToolState::Completed;
+            tool
+        };
+        let created = "Warning: 2 uncommitted changes\n\nCreating pull request for feat/x into main in acme/app\n\nhttps://github.com/acme/app/pull/1187\n";
+        let pr = |tool: &ToolCall| opened_pull_request(tool).map(|i| (i.repo, i.number, i.url));
+        let expected = Some((
+            "acme/app".to_string(),
+            1187,
+            "https://github.com/acme/app/pull/1187".to_string(),
+        ));
+        for command in [
+            "gh pr create --title Fix --body 'Fixes https://github.com/acme/app/pull/3'",
+            "git push -u origin feat/x && gh pr create --fill",
+            "/bin/zsh -lc 'gh pr create --fill'",
+            "gh pr new --fill",
+        ] {
+            let bash = call("Bash", serde_json::json!({"command": command}), created);
+            assert_eq!(pr(&bash), expected, "{command}");
+        }
+        let codex = call(
+            "commandExecution",
+            serde_json::json!({"command": "gh pr create --fill", "cwd": "/repo"}),
+            created,
+        );
+        assert_eq!(pr(&codex), expected);
+
+        let mcp = call(
+            "mcp__github__create_pull_request",
+            serde_json::json!({"owner": "acme"}),
+            r#"{"url":"https://api.github.com/repos/acme/app/pulls/1187","body":"Fixes https://github.com/acme/app/pull/3","html_url":"https://github.com/acme/app/pull/1187"}"#,
+        );
+        assert_eq!(pr(&mcp), expected);
+
+        let mut failed = call(
+            "Bash",
+            serde_json::json!({"command": "gh pr create"}),
+            created,
+        );
+        failed.state = ToolState::Failed;
+        let mut running = failed.clone();
+        running.state = ToolState::Running;
+        for tool in [
+            failed,
+            running,
+            call("Bash", serde_json::json!({"command": "gh pr view 1187"}), created),
+            call("Bash", serde_json::json!({"command": "echo gh pr creates"}), created),
+            call(
+                "Bash",
+                serde_json::json!({"command": "git push -u origin feat/x"}),
+                "remote: Create a pull request for 'feat/x' on GitHub by visiting:\nremote:   https://github.com/acme/app/pull/new/feat/x\n",
+            ),
+            call(
+                "Bash",
+                serde_json::json!({"command": "gh pr create --fill"}),
+                "https://github.com/acme/app/issues/5\n",
+            ),
+        ] {
+            assert_eq!(pr(&tool), None, "{}", tool.input);
+        }
     }
 }

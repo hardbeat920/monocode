@@ -17,7 +17,7 @@ impl Conversation {
                 .update(cx, |completion, cx| completion.open_mcp(cx));
             return true;
         }
-        if self.git_action_command(&text, cx) {
+        if self.git_action_command(&text, cx) || self.pr_command(&text, cx) {
             return true;
         }
         if let Some(request) = monocode_core::composer::consume_command(&text, "visualize") {

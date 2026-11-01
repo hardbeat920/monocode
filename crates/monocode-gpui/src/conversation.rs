@@ -13,6 +13,7 @@ mod history;
 mod mobile;
 mod mono;
 mod notifications;
+mod open_pr;
 mod remote;
 pub(crate) mod remote_plans;
 mod response_menu;
@@ -166,6 +167,8 @@ pub(crate) struct Conversation {
     orchestration_error: Option<String>,
     pub(crate) orchestration_progress: Option<String>,
     status: String,
+    /// `/pr` is checking the branch or opening the pull request.
+    pr_busy: bool,
     loaded: bool,
     history_unloaded: bool,
     history_actions: std::collections::VecDeque<history::HistoryAction>,
@@ -612,6 +615,7 @@ impl Conversation {
             orchestration_error: None,
             orchestration_progress: None,
             status: "Loading conversation…".into(),
+            pr_busy: false,
             loaded: false,
             history_unloaded: false,
             history_actions: Default::default(),
@@ -1244,6 +1248,17 @@ impl Conversation {
                                 || update.delivered.is_some()
                                 || !update.follow_up_delivered.is_empty()
                                 || !update.follow_up_errors.is_empty());
+                        let opened_pull_request = update
+                            .rows
+                            .iter()
+                            .filter(|row| row.role == "tool")
+                            .filter_map(|row| serde_json::from_str(&row.text).ok())
+                            .find_map(|tool| {
+                                monocode_core::session_groups::opened_pull_request(&tool)
+                            });
+                        if let Some(item) = opened_pull_request {
+                            this.link_opened_pull_request(item, cx);
+                        }
                         this.transcript.update(cx, |v, cx| {
                             v.patch(update.start, update.rows, cx);
                             if stopping {
