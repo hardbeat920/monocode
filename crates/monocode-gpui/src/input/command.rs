@@ -125,6 +125,42 @@ impl Input {
             cx.notify();
         }
     }
+    pub(crate) fn set_shell_commands(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.shell_commands != enabled {
+            self.shell_commands = enabled;
+            cx.notify();
+        }
+    }
+    /// The draft opens with `!`: it runs as a shell command, not a message.
+    pub(crate) fn shell_mode(&self) -> bool {
+        self.shell_commands
+            && !self.single_line
+            && self.code.is_none()
+            && monocode_core::shell_run::command(&self.content).is_some()
+    }
+    /// The draft's command and the question under it, once it has a command to run.
+    pub(crate) fn shell_command(&self) -> Option<(&str, &str)> {
+        self.shell_mode()
+            .then(|| monocode_core::shell_run::split(&self.content))
+            .flatten()
+            .filter(|(command, _)| !command.is_empty())
+    }
+    pub(super) fn emit_submitted(&mut self, cx: &mut Context<Self>) {
+        if self.shell_mode() {
+            cx.emit(ShellSubmitted);
+        } else {
+            cx.emit(Submitted);
+        }
+    }
+    /// The leading `!`'s ink, and the composer border's in shell mode.
+    pub(crate) fn shell_color() -> Hsla {
+        let dark = crate::theme::content(1.).l > 0.5;
+        let mut color: Hsla = rgb(if dark { 0x7bf1a8 } else { 0x008236 }).into();
+        if dark {
+            color.a = 0.9;
+        }
+        color
+    }
     pub(crate) fn has_message_text(&self) -> bool {
         let body = Command::leading(&self.content).map_or(self.content.as_ref(), |mode| {
             &self.content[mode.name().len() + 1..]
@@ -132,7 +168,7 @@ impl Input {
         !body.trim().is_empty()
     }
     pub(super) fn command_layout(&self) -> Option<CommandLayout> {
-        if !self.inline_commands || self.single_line || self.code.is_some() {
+        if !self.inline_commands || self.single_line || self.code.is_some() || self.shell_mode() {
             return None;
         }
         if let Some(mode) = Command::leading(&self.content) {

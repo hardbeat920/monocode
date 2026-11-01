@@ -17,6 +17,7 @@ pub(crate) mod phases;
 mod provider_switch;
 mod remote_plans;
 pub(crate) mod selection;
+mod shell;
 pub(crate) mod tasks;
 mod tools;
 mod user_links;
@@ -149,6 +150,7 @@ enum Body {
     Visual(Arc<monocode_core::visual::VisualDocument>),
     Plain(SharedString),
     Interjection(monocode_core::transcript::Interjection),
+    Shell(Arc<monocode_core::shell_run::ShellRun>),
     MonoCard(serde_json::Value),
     /// A queued message's bubble, by its index in `pending`.
     Pending(usize),
@@ -790,6 +792,7 @@ impl TranscriptView {
                     Body::Markdown(md) => markdown::row_text(md),
                     Body::Plain(text) => text.to_string(),
                     Body::Interjection(note) => note.text.clone(),
+                    Body::Shell(run) => format!("{}\n{}", run.command, run.output),
                     Body::Tool { .. } => query.to_owned(),
                     _ => String::new(),
                 };
@@ -3411,6 +3414,26 @@ impl TranscriptView {
                         thought_phase: None,
                     });
                 }
+            } else if role == "user"
+                && text.trim().is_empty()
+                && attachments.is_empty()
+                && at > 0
+                && self.source[at - 1].role == monocode_core::shell_run::ROLE
+            {
+                // A bare `!command`'s turn: its card above is the message.
+            } else if role == monocode_core::shell_run::ROLE {
+                if let Some(run) = monocode_core::shell_run::ShellRun::parse(&text) {
+                    self.rows.push(UiRow {
+                        key: (0, 0),
+                        body: Body::Shell(Arc::new(run)),
+                        message,
+                        first: false,
+                        last: false,
+                        work: false,
+                        work_tail: false,
+                        thought_phase: None,
+                    });
+                }
             } else if role == "remote-plan" {
                 if let Ok(plan) = serde_json::from_str(&text) {
                     self.rows.push(UiRow {
@@ -4790,6 +4813,7 @@ impl TranscriptView {
                     })
                     .into_any_element()
             }
+            Body::Shell(ref run) => self.shell_row(run, message_start, cx),
             Body::MonoCard(ref value) => {
                 let chosen = self.reply_after(row.message);
                 crate::monos::cards::render(value, chosen.as_deref(), cx)

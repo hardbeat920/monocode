@@ -1,6 +1,7 @@
 use monocode_core::agent::{Approval, Control, Settings};
 use monocode_core::{
     provider::{self, Event, Kind, Request},
+    shell_run,
     store::{Session, Store},
     transcript::{Row, Transcript},
 };
@@ -17,6 +18,8 @@ mod handoff;
 mod handoff_tests;
 mod persistence;
 pub(crate) mod remote;
+#[cfg(all(test, unix))]
+mod shell_tests;
 mod visual_discovery;
 #[cfg(all(test, unix))]
 mod visual_tests;
@@ -434,6 +437,8 @@ fn run_turn_using(
         // These providers parse slash arguments themselves. App context before
         // the command would turn it into an ordinary message instead.
         let prompt = settings.prepared_prompt.take().unwrap_or(prompt);
+        // Shell runs since the last turn go with this prompt, not its history.
+        let shell_start = shell_run::pending_start(&transcript.rows[..turn_start]);
         let raw_native_command = matches!(kind, Kind::Omp | Kind::Devin)
             && provider::native_prompt(kind, &prompt)
                 .trim_start()
@@ -473,17 +478,25 @@ fn run_turn_using(
             format!("{intro}\n\n{brief}\n\n<local_time>{now}</local_time>\n{prompt}")
         } else if let Some(handoff) = &settings.handoff {
             monocode_core::response::wrap_handoff_prompt(&handoff.from, &handoff.brief, &prompt)
-        } else if provider_id.is_none() && turn_start > 0 {
+        } else if provider_id.is_none() && shell_start > 0 {
             let mut history = String::new();
-            for row in transcript.rows[..turn_start]
+            for row in transcript.rows[..shell_start]
                 .iter()
                 .rev()
-                .filter(|r| matches!(r.role.as_str(), "user" | "assistant"))
+                .filter(|r| matches!(r.role.as_str(), "user" | "assistant" | "shell"))
             {
-                if history.len() + row.text.len() > 32_000 {
+                let text = if row.role == shell_run::ROLE {
+                    match shell_run::ShellRun::parse(&row.text) {
+                        Some(run) => shell_run::history_line(&run),
+                        None => continue,
+                    }
+                } else {
+                    row.text.clone()
+                };
+                if history.len() + text.len() > 32_000 {
                     break;
                 }
-                history = format!("{}: {}\n\n{history}", row.role, row.text);
+                history = format!("{}: {text}\n\n{history}", row.role);
             }
             format!(
                 "Continue this conversation, using the prior messages as context.\n\n{history}\nCurrent user message:\n{prompt}"
@@ -507,6 +520,14 @@ fn run_turn_using(
             checkpoint = Some((cwd.to_owned(), id));
         }
         let mut prompt = provider::prepare_prompt(kind, &prompt, cwd, &settings.attachments)?;
+        if !raw_native_command
+            && let Some(shell) = shell_run::context(
+                &shell_run::pending(&transcript.rows[..turn_start]),
+                !user_request.trim().is_empty(),
+            )
+        {
+            prompt = format!("{shell}\n\n{prompt}");
+        }
         if !raw_native_command && prompt.contains("@note:") {
             let notes = locked(&store)?.notes()?;
             for note in notes {

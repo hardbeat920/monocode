@@ -126,6 +126,11 @@ fn project_content(block: &Value) -> Result<Vec<Row>, String> {
     let role = block["role"].as_str().unwrap_or("system");
     let text = block["text"].as_str().unwrap_or("");
     let mut t = Transcript::default();
+    if block["shell"].is_object() {
+        let mut row = metadata_row(crate::shell_run::ROLE, &block["shell"]);
+        row.sent_at = block["sentAt"].as_u64();
+        return Ok(vec![row]);
+    }
     if block["interjection"].is_object() {
         let note = crate::transcript::Interjection {
             text: text.into(),
@@ -243,7 +248,15 @@ fn update(old: Option<&Value>, rows: &[Row]) -> Result<Value, String> {
             return Ok(old.clone());
         }
     }
-    if role == "interjection" {
+    if role == crate::shell_run::ROLE {
+        let run: crate::shell_run::ShellRun = super::parse(&text)?;
+        block["role"] = json!("system");
+        block["text"] = json!(format!("$ {}", run.command));
+        block["shell"] = serde_json::to_value(&run).map_err(|e| e.to_string())?;
+        if old.is_none() {
+            block["sentAt"] = json!(rows[0].sent_at);
+        }
+    } else if role == "interjection" {
         let note: crate::transcript::Interjection = super::parse(&text)?;
         block["role"] = json!("system");
         block["text"] = json!(note.text);
@@ -551,6 +564,37 @@ mod notice_tests {
 
         let legacy = json!({"id":"legacy","role":"error","text":"Stopped"});
         assert_eq!(project(&[legacy]).unwrap()[0].role, "error");
+    }
+
+    #[test]
+    fn shell_runs_stay_one_row_through_storage_and_updates() {
+        let mut run = crate::shell_run::ShellRun::new("git status", "/repo");
+        let mut row = run.row();
+        row.sent_at = Some(42);
+        let saved = merge(&[], 0, std::slice::from_ref(&row)).unwrap();
+        assert_eq!(saved[0]["role"], "system");
+        assert_eq!(saved[0]["text"], "$ git status");
+        let loaded = project(&saved).unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].role, crate::shell_run::ROLE);
+        assert_eq!(loaded[0].sent_at, Some(42));
+        assert_eq!(
+            crate::shell_run::ShellRun::parse(&loaded[0].text),
+            Some(run.clone())
+        );
+
+        run.output = "x".repeat(5000);
+        run.exit = Some(0);
+        run.state = crate::shell_run::State::Completed;
+        let mut finished = run.row();
+        finished.sent_at = Some(42);
+        let saved = merge(&saved, 0, std::slice::from_ref(&finished)).unwrap();
+        assert_eq!(saved.len(), 1);
+        let loaded = project(&saved).unwrap();
+        assert_eq!(
+            crate::shell_run::ShellRun::parse(&loaded[0].text),
+            Some(run)
+        );
     }
 }
 

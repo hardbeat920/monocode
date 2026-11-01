@@ -28,6 +28,7 @@ pub mod scm;
 pub mod session_filters;
 pub mod session_groups;
 pub mod session_title;
+pub mod shell_run;
 pub mod store;
 pub mod time;
 pub mod tool;
