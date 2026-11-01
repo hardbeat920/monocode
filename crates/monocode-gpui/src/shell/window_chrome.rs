@@ -185,6 +185,133 @@ mod tests {
     use super::*;
 
     #[gpui::test]
+    fn window_controls_respect_mouse_blocking_overlays(cx: &mut gpui::TestAppContext) {
+        struct Caption {
+            renders: usize,
+        }
+        impl gpui::Render for Caption {
+            fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+                self.renders += 1;
+                div()
+                    .debug_selector(|| "test-caption".into())
+                    .size_full()
+                    .flex()
+                    .children(
+                        [
+                            WindowControlArea::Drag,
+                            WindowControlArea::Min,
+                            WindowControlArea::Max,
+                            WindowControlArea::Close,
+                        ]
+                        .map(|area| div().w(px(60.)).h_full().window_control_area(area)),
+                    )
+            }
+        }
+        struct Preview {
+            caption: gpui::Entity<Caption>,
+            cached: bool,
+            overlay: Option<bool>,
+        }
+        impl gpui::Render for Preview {
+            fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+                let caption = if self.cached {
+                    self.caption
+                        .clone()
+                        .cached(gpui::StyleRefinement::default().w(px(240.)).h(px(40.)))
+                        .into_any_element()
+                } else {
+                    div()
+                        .w(px(240.))
+                        .h(px(40.))
+                        .child(self.caption.clone())
+                        .into_any_element()
+                };
+                div().size_full().relative().child(caption).when_some(
+                    self.overlay,
+                    |root, block_scroll| {
+                        let overlay = div().absolute().top_0().left_0().w(px(240.)).h(px(20.));
+                        root.child(if block_scroll {
+                            overlay.occlude()
+                        } else {
+                            overlay.block_mouse_except_scroll()
+                        })
+                    },
+                )
+            }
+        }
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|cx| Preview {
+                    caption: cx.new(|_| Caption { renders: 0 }),
+                    cached: false,
+                    overlay: None,
+                })
+            })
+            .unwrap()
+        });
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.refresh().unwrap();
+        for cached in [false, true] {
+            for overlay in [None, Some(false), Some(true), None] {
+                window
+                    .update(visual, |preview, _, cx| {
+                        preview.cached = cached;
+                        preview.overlay = overlay;
+                        cx.notify();
+                    })
+                    .unwrap();
+                visual.run_until_parked();
+                let bounds = visual.debug_bounds("test-caption").unwrap();
+                let renders = window
+                    .update(visual, |preview, _, cx| preview.caption.read(cx).renders)
+                    .unwrap();
+                for (index, area) in [
+                    WindowControlArea::Drag,
+                    WindowControlArea::Min,
+                    WindowControlArea::Max,
+                    WindowControlArea::Close,
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    for y in [10., 30.] {
+                        visual.simulate_mouse_move(
+                            bounds.origin + point(px(index as f32 * 60. + 30.), px(y)),
+                            None,
+                            Default::default(),
+                        );
+                        visual.update(|window, cx| {
+                            window.simulate_next_frame(cx);
+                            window.draw(cx).clear(cx);
+                        });
+                        let expected = if overlay.is_some() && y < 20. {
+                            None
+                        } else {
+                            Some(area)
+                        };
+                        assert_eq!(
+                            visual.window_control_area(),
+                            expected,
+                            "cached={cached}, overlay={overlay:?}, area={area:?}, y={y}"
+                        );
+                    }
+                }
+                if cached {
+                    window
+                        .update(visual, |preview, _, cx| {
+                            assert_eq!(
+                                preview.caption.read(cx).renders,
+                                renders,
+                                "the caption must be reused from cache"
+                            )
+                        })
+                        .unwrap();
+                }
+            }
+        }
+    }
+
+    #[gpui::test]
     fn controls_fit_the_reserved_space_and_close_receives_clicks(cx: &mut gpui::TestAppContext) {
         struct Preview {
             close_requests: usize,
