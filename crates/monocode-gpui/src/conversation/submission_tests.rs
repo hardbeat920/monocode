@@ -90,6 +90,62 @@ fn mono_messages_steer_the_ready_provider_once_and_keep_their_send_time(cx: &mut
 }
 
 #[gpui::test]
+fn sending_a_picked_hash_item_links_an_unlinked_thread(cx: &mut TestAppContext) {
+    let window = conversation(cx);
+    let linear = monocode_core::inbox::Item {
+        provider: "linear".into(),
+        kind: "linear".into(),
+        repo: "ENG".into(),
+        identifier: "ENG-12".into(),
+        number: 12,
+        title: "Crash on launch".into(),
+        url: "https://linear.app/acme/issue/ENG-12".into(),
+        state: "open".into(),
+        ..Default::default()
+    };
+    cx.update(|cx| {
+        crate::composer_completion::bind(cx);
+        crate::popover::bind(cx);
+        cx.set_global(crate::inbox::Catalog {
+            items: vec![linear.clone()].into(),
+            at: std::time::Instant::now(),
+        });
+    });
+    window
+        .update(cx, |view, window, cx| {
+            window.focus(&view.input.focus_handle(cx), cx);
+            view.input
+                .update(cx, |input, cx| input.set_text("Fix #crash".into(), cx));
+        })
+        .unwrap();
+    cx.run_until_parked();
+    cx.simulate_keystrokes(window.into(), "enter");
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            assert_eq!(view.input.read(cx).content, "Fix #ENG-12 ");
+            assert_eq!(view.summary.work_item, None);
+            view.send(cx);
+            assert_eq!(view.summary.work_item, Some(linear.work_item()));
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, _| {
+            let stored = locked(&view.store)
+                .unwrap()
+                .sessions()
+                .unwrap()
+                .into_iter()
+                .find(|s| s.id == view.summary.id)
+                .unwrap()
+                .work_item;
+            assert_eq!(stored, Some(linear.work_item()));
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn send_paints_before_storage_and_keeps_one_message_after_startup_failure(cx: &mut TestAppContext) {
     for text in [
         "First message".to_owned(),
