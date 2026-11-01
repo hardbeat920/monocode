@@ -1,3 +1,4 @@
+import CrossSlider from "@expo/ui/community/slider";
 import { Host, Slider } from "@expo/ui/swift-ui";
 import { accessibilityLabel, tint } from "@expo/ui/swift-ui/modifiers";
 import * as Haptics from "expo-haptics";
@@ -5,6 +6,7 @@ import { router } from "expo-router";
 import { Fragment, useState } from "react";
 import {
   ActivityIndicator,
+  Platform,
   Pressable,
   StyleSheet,
   Switch,
@@ -597,6 +599,12 @@ export function EffortControl({
     options.findIndex((option) => option.value === value),
   );
   const hot = HOT_EFFORT.test(options[index]?.value ?? "");
+  const pick = (next: number) => {
+    const option = options[Math.round(next)];
+    if (!option || option.value === value) return;
+    void Haptics.selectionAsync();
+    onChange(option.value);
+  };
   return (
     <View style={styles.effort}>
       <View style={styles.effortHeader}>
@@ -605,25 +613,37 @@ export function EffortControl({
           {options[index]?.label}
         </Text>
       </View>
-      {/* The native slider, so a drag along it is not taken by the scroll. */}
-      <Host style={styles.effortSlider}>
-        <Slider
+      {/* The native slider, so a drag along it is not taken by the scroll.
+          SwiftUI's Slider sends onValueChanged and takes `step`; Android's
+          SliderView, of the same name, sends onValueChange and takes `steps`,
+          so on Android a drag never reached here. The community slider maps
+          each platform's own props. */}
+      {Platform.OS === "android" ? (
+        <CrossSlider
+          style={styles.effortSlider}
           value={index}
-          min={0}
-          max={options.length - 1}
+          minimumValue={0}
+          maximumValue={options.length - 1}
           step={1}
-          onValueChange={(next) => {
-            const option = options[Math.round(next)];
-            if (!option || option.value === value) return;
-            void Haptics.selectionAsync();
-            onChange(option.value);
-          }}
-          modifiers={[
-            tint(hot ? colors.caution : colors.accent),
-            accessibilityLabel(label),
-          ]}
+          onValueChange={pick}
+          minimumTrackTintColor={hot ? colors.caution : colors.accent}
+          thumbTintColor={hot ? colors.caution : colors.accent}
         />
-      </Host>
+      ) : (
+        <Host style={styles.effortSlider}>
+          <Slider
+            value={index}
+            min={0}
+            max={options.length - 1}
+            step={1}
+            onValueChange={pick}
+            modifiers={[
+              tint(hot ? colors.caution : colors.accent),
+              accessibilityLabel(label),
+            ]}
+          />
+        </Host>
+      )}
     </View>
   );
 }
