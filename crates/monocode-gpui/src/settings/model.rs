@@ -143,7 +143,7 @@ impl Section {
             Section::Skills => "skill instructions prompt",
             Section::Monos => "mono resident agent mascot claim project title bar",
             Section::Inbox => {
-                "github gitlab linear jira atlassian azure devops connect token integration"
+                "github gitlab linear jira atlassian azure devops sonar sonarqube connect token integration"
             }
             Section::Archive => "archived restore delete hidden",
             Section::Worktrees => "git branch worktree working copy project create delete",
@@ -506,6 +506,12 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         Section::Inbox,
         "Jira",
         "atlassian cloud site email api token issues projects connect",
+    ),
+    (
+        "sonar",
+        Section::Inbox,
+        "Sonar",
+        "sonarqube cloud server token organization project branch findings rules connect",
     ),
     (
         "linear",

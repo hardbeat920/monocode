@@ -3,6 +3,7 @@
 mod avatar;
 mod diff;
 mod document;
+mod sonar;
 mod ui;
 pub(crate) use avatar::image as avatar_image;
 pub(crate) use ui::relative_time;
@@ -90,6 +91,21 @@ pub(crate) struct Inbox {
     connections_open: bool,
     filter_anchor: AnchorSlot,
     connection_anchor: AnchorSlot,
+    sonar_connect_current: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    sonar_edit_connection: bool,
+    sonar_loading: Option<String>,
+    sonar_connection_generation: u64,
+    sonar_project_page: u32,
+    sonar_projects_more: bool,
+    sonar_organization_input: Entity<Input>,
+    sonar_project_search: Entity<Input>,
+    sonar_projects_scroll: gpui::UniformListScrollHandle,
+    sonar_status: Option<model::sonar::SonarStatus>,
+    sonar_organizations: Vec<model::sonar::SonarOrganization>,
+    sonar_projects: Vec<model::sonar::SonarProject>,
+    sonar_content: Option<model::sonar::SonarIssueContent>,
+    sonar_transition: String,
+    sonar_feedback: bool,
     connect_provider: Option<String>,
     connect_url: Entity<Input>,
     connect_email: Entity<Input>,
@@ -183,11 +199,34 @@ impl Inbox {
         let comment = cx.new(Input::inbox_comment);
         let connect_url = cx.new(|cx| Input::field("Instance URL", "https://", content(0.4), cx));
         let connect_email = cx.new(|cx| Input::field("Email", "you@example.com", content(0.4), cx));
-        let connect_token =
-            cx.new(|cx| Input::field("API token", "Personal access token", content(0.4), cx));
+        let connect_token = cx.new(|cx| {
+            let mut input = Input::field("API token", "Personal access token", content(0.4), cx);
+            input.set_secret(true);
+            input
+        });
+        let sonar_organization_input = cx.new(|cx| {
+            Input::field(
+                "Organization key",
+                "Organization key (from your Sonar URL)",
+                content(0.4),
+                cx,
+            )
+        });
+        let sonar_project_search = cx.new(|cx| {
+            Input::field(
+                "Search Sonar projects",
+                "Filter projects by name or key",
+                content(0.4),
+                cx,
+            )
+        });
         let diff_view = cx.new(DiffView::new);
         let subscriptions = vec![
             cx.subscribe(&search, |_, _, _: &input::Changed, cx| cx.notify()),
+            cx.subscribe(&connect_token, |_, _, _: &input::Changed, cx| cx.notify()),
+            cx.subscribe(&sonar_project_search, |_, _, _: &input::Changed, cx| {
+                cx.notify()
+            }),
             cx.subscribe(&comment, |this, _, _: &input::Changed, cx| {
                 let count = this.summary_scroll.item_count();
                 this.summary_scroll
@@ -294,6 +333,21 @@ impl Inbox {
             connections_open: false,
             filter_anchor: AnchorSlot::default(),
             connection_anchor: AnchorSlot::default(),
+            sonar_connect_current: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            sonar_edit_connection: false,
+            sonar_loading: None,
+            sonar_connection_generation: 0,
+            sonar_project_page: 0,
+            sonar_projects_more: false,
+            sonar_organization_input,
+            sonar_project_search,
+            sonar_projects_scroll: gpui::UniformListScrollHandle::new(),
+            sonar_status: None,
+            sonar_organizations: vec![],
+            sonar_projects: vec![],
+            sonar_content: None,
+            sonar_transition: String::new(),
+            sonar_feedback: false,
             connect_provider: None,
             connect_url,
             connect_email,
@@ -434,9 +488,10 @@ impl Inbox {
         let state = self.state.clone();
         let projects = self.projects.clone();
         let scope = self.fetch_scope();
+        let appearances = self.appearances.clone();
         let store = self.store.clone();
         let task = cx.background_executor().spawn(async move {
-            let snapshot = service.list(&projects, &state);
+            let snapshot = service.list_with_project_names(&projects, &state, &appearances);
             let sessions = locked(&store)
                 .and_then(|db| db.sessions())
                 .unwrap_or_default();
@@ -457,11 +512,17 @@ impl Inbox {
                 let appeared = this.notifications.observe(&snapshot, scope);
                 // A temporary outage must not erase the last usable provider list.
                 for provider in snapshot.errors.keys() {
+                    let fresh: std::collections::HashSet<_> =
+                        snapshot.items.iter().map(Item::key).collect();
                     snapshot.items.extend(
                         this.snapshot
                             .items
                             .iter()
-                            .filter(|i| &i.provider == provider)
+                            .filter(|i| &i.provider == provider && !fresh.contains(&i.key()))
+                            .filter(|i| {
+                                i.provider != "sonar"
+                                    || i.sonar_project == snapshot.sonar_selected_project
+                            })
                             .cloned(),
                     );
                 }
@@ -519,9 +580,10 @@ impl Inbox {
     /// one is stale even when the project list is the same.
     fn fetch_scope(&self) -> String {
         format!(
-            "{}:{}",
+            "{}:{}:{}",
             self.state.fetch_scope(&self.projects),
-            monocode_core::files::path_key(&self.service.cwd.to_string_lossy())
+            monocode_core::files::path_key(&self.service.cwd.to_string_lossy()),
+            self.snapshot.sonar_selected_project
         )
     }
     fn save(&mut self) {
@@ -590,6 +652,9 @@ impl Inbox {
         self.extra_loading = false;
         self.extra_error = None;
         self.details = None;
+        self.sonar_content = None;
+        self.sonar_transition.clear();
+        self.sonar_feedback = false;
         self.thread = None;
         self.document = None;
         self.comments.clear();
@@ -608,9 +673,7 @@ impl Inbox {
     fn change_source(&mut self, source: String, cx: &mut Context<Self>) {
         self.state.source = source;
         self.selected = None;
-        self.details = None;
-        self.document = None;
-        self.comments.clear();
+        self.reset_detail(cx);
         self.search
             .update(cx, |input, cx| input.set_text(String::new(), cx));
         if let Some(item) = self.visible_items(cx).first() {
@@ -623,6 +686,10 @@ impl Inbox {
         let Some(item) = self.item() else {
             return;
         };
+        if item.provider == "sonar" {
+            self.load_sonar_detail(cx);
+            return;
+        }
         self.detail_generation += 1;
         let generation = self.detail_generation;
         self.detail_loading = true;
@@ -782,6 +849,9 @@ impl Inbox {
         let Some(item) = self.item() else {
             return;
         };
+        if item.provider == "sonar" {
+            return;
+        }
         let body = self.comment.read(cx).content.trim().to_string();
         if body.is_empty() {
             return;
@@ -826,7 +896,7 @@ impl Inbox {
     }
     fn start(&mut self, cx: &mut Context<Self>) {
         if let Some(mut item) = self.item() {
-            if item.project_path.is_empty() {
+            if item.project_path.is_empty() || item.provider == "sonar" {
                 item.project_path = self.start_project.to_string_lossy().into_owned();
             }
             let body = self.details.as_ref().map(|d| d.body.as_str()).unwrap_or("");
@@ -858,6 +928,8 @@ impl Inbox {
             status.url
         } else if !status.organization.is_empty() {
             status.organization
+        } else if provider == "sonar" {
+            "https://sonarcloud.io".into()
         } else if provider == "gitlab" {
             "https://gitlab.com".into()
         } else {
@@ -869,10 +941,18 @@ impl Inbox {
             .update(cx, |input, cx| input.set_text(status.email, cx));
         self.connect_token
             .update(cx, |input, cx| input.set_text(String::new(), cx));
+        let sonar = provider == "sonar";
         self.connect_provider = Some(provider);
+        if sonar {
+            self.manage_sonar(sonar::Manage::Load, cx);
+        }
         cx.notify();
     }
     fn connect(&mut self, disconnect: bool, cx: &mut Context<Self>) {
+        if self.connect_provider.as_deref() == Some("sonar") {
+            self.connect_sonar(disconnect, cx);
+            return;
+        }
         if self.connecting {
             return;
         }

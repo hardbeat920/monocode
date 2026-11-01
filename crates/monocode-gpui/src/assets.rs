@@ -76,6 +76,7 @@ impl AssetSource for Assets {
    "inbox-jira"=>include_bytes!("../assets/inbox-jira.svg"),
    "inbox-gitlab"=>include_bytes!("../assets/inbox-gitlab.svg"),
    "inbox-gitlab-color.svg"=>include_bytes!("../assets/inbox-gitlab-color.svg"),
+   "inbox-sonar"=>include_bytes!("../assets/inbox-sonar.svg"),
    "inbox-azuredevops"=>include_bytes!("../assets/inbox-azuredevops.svg"),
 
    "note"=>include_bytes!("../assets/note.svg"),
