@@ -123,6 +123,16 @@ it("includes models registered three seconds after RPC starts answering", async 
 });
 
 it("loads extensions and preserves immediate discovery for omp", async () => {
+  mocks.spawnChild.mockImplementation(async (id: string) => {
+    const onLine = mocks.watchChild.mock.calls.find(([probe]) => probe === id)![1];
+    onLine(
+      JSON.stringify({
+        type: "ready",
+        protocolVersion: 1,
+        supportedProtocolVersions: [1, 2],
+      }),
+    );
+  });
   const models = await discoverOmpModels("/workspace");
   expect(models.map((model) => model.id)).toEqual(["omp:meta/shared-id"]);
   expect(mocks.spawnChild).toHaveBeenCalledWith(
@@ -133,7 +143,10 @@ it("loads extensions and preserves immediate discovery for omp", async () => {
     undefined,
     "omp",
   );
-  expect(mocks.writeChild).toHaveBeenCalledTimes(1);
+  expect(mocks.writeChild.mock.calls.map(([, line]) => JSON.parse(line).type)).toEqual([
+    "negotiate_protocol",
+    "get_available_models",
+  ]);
   expect(Date.now()).toBe(0);
   expectStopped();
 });
