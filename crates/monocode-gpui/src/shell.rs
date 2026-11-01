@@ -2,6 +2,7 @@ mod accounts;
 mod actions;
 mod app_commands;
 mod app_views;
+mod archive_undo;
 mod automation_runs;
 mod classic_sidebar;
 #[cfg(test)]
@@ -210,6 +211,8 @@ pub(crate) fn bind_keys(cx: &mut App) {
             ArchiveSession,
             Some("Session > (Composer || TranscriptSelection) && !CodeEditor && !Completion && !PopoverMenu && !Prompt"),
         ),
+        // Text fields take Undo first; it reaches the shell only when they pass.
+        KeyBinding::new(&format!("{modifier}-z"), input::Undo, context),
         KeyBinding::new(&format!("{modifier}-["), VisitBack, context),
         KeyBinding::new(&format!("{modifier}-]"), VisitForward, context),
         KeyBinding::new("escape", DismissMenu, context),
@@ -658,6 +661,7 @@ pub(crate) struct Shell {
     unseen_finished: HashSet<i64>,
     archiving: HashSet<i64>,
     archive_shortcut_held: bool,
+    archive_undo: Option<archive_undo::ArchiveUndo>,
     /// Editors offered by a project's "Open in editor"; `None` while scanning.
     external_editors: Option<Vec<monocode_core::external_editor::ExternalEditor>>,
     groups: HashMap<String, monocode_core::session_groups::Groups>,
@@ -1021,6 +1025,7 @@ impl Shell {
             unseen_finished: HashSet::new(),
             archiving: HashSet::new(),
             archive_shortcut_held: false,
+            archive_undo: None,
             external_editors: None,
             groups: sidebar_metadata.groups,
             reminders: sidebar_metadata.reminders,
@@ -1461,11 +1466,15 @@ impl Shell {
         self.tab_marks[&id].update(cx, |mark, cx| mark.set(&provider, tab_state, cx));
     }
     fn toggle_archive(&mut self, id: i64, cx: &mut Context<Self>) {
+        let archived = !self.session_metadata(id, cx).summary.archived;
+        self.set_archived(id, archived, false, cx);
+    }
+    /// `reopen` brings the thread back into a tab once it is unarchived.
+    fn set_archived(&mut self, id: i64, archived: bool, reopen: bool, cx: &mut Context<Self>) {
         if !self.archiving.insert(id) {
             return;
         }
         self.close_preview(cx);
-        let archived = !self.session_metadata(id, cx).summary.archived;
         let store = self.store.clone();
         let work = cx
             .background_executor()
@@ -1488,12 +1497,16 @@ impl Shell {
                             });
                         }
                         this.refresh_session_mark(id, cx);
-                        if archived && this.workspace.tab_of(id).is_some() {
+                        let had_tab = this.workspace.tab_of(id).is_some();
+                        if archived && had_tab {
                             this.close_pane(id, window, cx);
+                        } else if reopen {
+                            this.open(id, window, cx);
                         } else {
                             this.invalidate_chrome(cx);
                             cx.notify();
                         }
+                        this.remember_archive(id, archived, had_tab, window, cx);
                     }
                     Err(error) => {
                         this.error = Some(format!("Could not update archive: {error}"));
@@ -8391,6 +8404,9 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &ArchiveSession, window, cx| {
                 this.archive_active_session(window, cx)
             }))
+            .on_action(
+                cx.listener(|this, _: &input::Undo, window, cx| this.undo_archive(window, cx)),
+            )
             .on_action(
                 cx.listener(|this, open: &crate::image_lightbox::Open, window, cx| {
                     let view = cx.new(|cx| {
