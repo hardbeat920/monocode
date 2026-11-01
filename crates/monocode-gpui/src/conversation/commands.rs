@@ -58,7 +58,7 @@ impl Conversation {
             return;
         }
         let request = self.completion.read(cx).prepare_prompt(request);
-        let attachments = std::mem::take(&mut self.attachments);
+        let attachments = self.take_attachments();
         let mut message = self.message(text.to_owned(), attachments, None, cx);
         message.prepared_prompt = Some(monocode_core::visual_bridge::requested_prompt(&request));
         self.input.update(cx, |input, cx| {
