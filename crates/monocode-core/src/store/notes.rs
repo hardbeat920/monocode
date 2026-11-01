@@ -1,11 +1,9 @@
 //! Desktop-compatible note persistence, deliberately separate from session handles.
 use super::Store;
-use crate::notes::{Note, NoteImageAsset, NoteUpsert, MAX_BODY};
+use crate::notes::{normalize_tags, Note, NoteImageAsset, NoteUpsert, MAX_BODY};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::{Component, Path, PathBuf};
 const TITLE_MAX: usize = 200;
-const TAG_MAX: usize = 48;
-const TAGS_MAX: usize = 20;
 fn now_millis() -> i64 {
     crate::time::now_ms().min(i64::MAX as u64) as i64
 }
@@ -235,29 +233,6 @@ fn read_note(row: &rusqlite::Row<'_>) -> rusqlite::Result<Note> {
         updated_at: row.get(8)?,
         slug_pending: row.get(9)?,
     })
-}
-
-fn normalize_tags(tags: &[String]) -> Vec<String> {
-    let mut normalized = Vec::new();
-    for input in tags {
-        let tag = input
-            .trim()
-            .trim_start_matches('#')
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join("-")
-            .to_lowercase();
-        let tag: String = tag.chars().take(TAG_MAX).collect();
-        let tag = tag.trim_end_matches('-').to_string();
-        if tag.is_empty() || normalized.contains(&tag) {
-            continue;
-        }
-        normalized.push(tag);
-        if normalized.len() == TAGS_MAX {
-            break;
-        }
-    }
-    normalized
 }
 
 fn normalize_title(title: &str) -> String {
