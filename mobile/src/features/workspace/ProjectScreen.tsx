@@ -83,9 +83,8 @@ import { usePushedIn, usePushStarted } from "@/ui/usePushedIn";
  * A new session comes first, then the project's sessions to its right;
  * swiping left slides the sessions in (and the composer out with the new
  * session), the header switch following the finger; a swipe right from the
- * new session opens the drawer. The project's mascot opens it too, and the
- * button on the right settings; a session's
- * right has its changes and a menu of its actions instead. A session, or
+ * new session opens the drawer. The project's mascot opens it too; a session's
+ * right has its changes and a menu of its actions. A session, or
  * one just started, is pushed over it as a screen of its own: its chat under
  * the stack's native header (see the session route). With `sheet`, a session
  * is presented over a Mono's chat instead, and closes rather than goes back.
@@ -295,14 +294,6 @@ export function ProjectScreen({
       {unread ? <UnreadDot /> : null}
     </ProjectHeaderButton>
   );
-  const settingsButton = (
-    <ProjectHeaderButton
-      label="Settings"
-      onPress={openSettings}
-    >
-      <Icon name="settings" size={22} color={colors.content} />
-    </ProjectHeaderButton>
-  );
 
   const sessionTitle = sessionId ? (
     <SessionTitle
@@ -430,7 +421,6 @@ export function ProjectScreen({
                   ? {
                       headerTitleAlign: "center" as const,
                       headerLeft: () => headerSurface(menuButton),
-                      headerRight: () => headerSurface(settingsButton),
                       headerBackVisible: false,
                     }
                   : {}),
@@ -447,16 +437,7 @@ export function ProjectScreen({
           <Stack.Toolbar.View>{menuButton}</Stack.Toolbar.View>
         </Stack.Toolbar>
       )}
-      {sessionId ? (
-        Platform.OS === "android" ? null : (
-          sessionToolbar
-        )
-      ) : Platform.OS === "android" ? null : (
-        <Stack.Toolbar placement="right">
-          {/* The app's own cog in the bar's glass, as the mascot on the left. */}
-          <Stack.Toolbar.View>{settingsButton}</Stack.Toolbar.View>
-        </Stack.Toolbar>
-      )}
+      {sessionId && Platform.OS !== "android" ? sessionToolbar : null}
       <SessionContent>
         {sessionId ? (
           <SessionTranscript

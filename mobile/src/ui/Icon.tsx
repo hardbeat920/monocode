@@ -33,6 +33,7 @@ import GitBranchIcon from "@hugeicons/core-free-icons/GitBranchIcon";
 import Image01Icon from "@hugeicons/core-free-icons/Image01Icon";
 import InboxIcon from "@hugeicons/core-free-icons/InboxIcon";
 import LockIcon from "@hugeicons/core-free-icons/LockIcon";
+import ArrowLeft01Icon from "@hugeicons/core-free-icons/ArrowLeft01Icon";
 import LeftToRightListBulletIcon from "@hugeicons/core-free-icons/LeftToRightListBulletIcon";
 import Moon02Icon from "@hugeicons/core-free-icons/Moon02Icon";
 import MinusSignIcon from "@hugeicons/core-free-icons/MinusSignIcon";
@@ -78,6 +79,7 @@ const icons = {
   mic: Mic01Icon,
   chevronDown: ArrowDown01Icon,
   chevronUpDown: UnfoldMoreIcon,
+  chevronLeft: ArrowLeft01Icon,
   chevronRight: ArrowRight01Icon,
   branch: GitBranchIcon,
   computer: ComputerIcon,

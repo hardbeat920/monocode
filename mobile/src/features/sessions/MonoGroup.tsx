@@ -1,9 +1,20 @@
-import { memo } from "react";
+import { memo, useEffect, useState } from "react";
 import { Pressable, Text, View } from "react-native";
+import Animated, {
+  Easing,
+  FadeIn,
+  FadeOut,
+  LinearTransition,
+  ReduceMotion,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from "react-native-reanimated";
 
 import { PixelMascot } from "@/features/mascots/PixelMascot";
 import { monoDetail, when } from "@/features/workspace/monoRow";
 import type { Mono } from "@/features/workspace/types";
+import { Collapsible } from "@/ui/Collapsible";
 import { Icon } from "@/ui/Icon";
 import { radii, themedStyles, useColors, withAlpha } from "@/ui/theme";
 
@@ -36,6 +47,28 @@ export function MonoGroup({
   const styles = useStyles();
   const count = groupSize(group);
   const anyUnread = [...group.assigned, ...group.unassigned].some((mono) => unread.has(mono.id));
+  // Rows already here at the first render don't fade in; ones that arrive
+  // after it do, and the rest slide to make room.
+  const [settled, setSettled] = useState(false);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setSettled(true));
+    return () => cancelAnimationFrame(frame);
+  }, []);
+  const turn = useSharedValue(collapsed ? 1 : 0);
+  useEffect(() => {
+    turn.set(withTiming(collapsed ? 1 : 0, { duration: 280, easing: Easing.bezier(0.4, 0, 0.2, 1) }));
+  }, [collapsed, turn]);
+  const chevron = useAnimatedStyle(() => ({ transform: [{ rotate: `${-90 * turn.get()}deg` }] }));
+  const row = (mono: Mono) => (
+    <Animated.View
+      key={mono.id}
+      layout={LinearTransition.duration(220).reduceMotion(ReduceMotion.System)}
+      entering={settled ? FadeIn.duration(220).reduceMotion(ReduceMotion.System) : undefined}
+      exiting={FadeOut.duration(140).reduceMotion(ReduceMotion.System)}
+    >
+      <MonoRow mono={mono} unread={unread.has(mono.id)} onOpen={onOpen} />
+    </Animated.View>
+  );
   return (
     <View style={styles.group}>
       <View style={styles.header}>
@@ -46,9 +79,9 @@ export function MonoGroup({
           onPress={onToggle}
           style={({ pressed }) => [styles.toggle, pressed && styles.pressed]}
         >
-          <View style={collapsed ? styles.collapsed : undefined}>
+          <Animated.View style={chevron}>
             <Icon name="chevronDown" size={16} color={colors.muted} />
-          </View>
+          </Animated.View>
           <Text style={styles.heading}>Monos</Text>
           <Text style={styles.count}>{count}</Text>
           {collapsed && anyUnread ? <View style={styles.dot} /> : null}
@@ -65,21 +98,15 @@ export function MonoGroup({
           </Pressable>
         ) : null}
       </View>
-      {collapsed ? null : (
-        <>
-          {group.assigned.map((mono) => (
-            <MonoRow key={mono.id} mono={mono} unread={unread.has(mono.id)} onOpen={onOpen} />
-          ))}
-          {group.unassigned.length ? (
-            <>
-              <Text style={styles.subheading}>Unassigned</Text>
-              {group.unassigned.map((mono) => (
-                <MonoRow key={mono.id} mono={mono} unread={unread.has(mono.id)} onOpen={onOpen} />
-              ))}
-            </>
-          ) : null}
-        </>
-      )}
+      <Collapsible open={!collapsed}>
+        {group.assigned.map(row)}
+        {group.unassigned.length ? (
+          <>
+            <Text style={styles.subheading}>Unassigned</Text>
+            {group.unassigned.map(row)}
+          </>
+        ) : null}
+      </Collapsible>
       <View style={styles.rule} />
     </View>
   );
@@ -145,9 +172,6 @@ const useStyles = themedStyles((colors) => ({
     gap: 6,
     minHeight: 40,
     paddingRight: 12,
-  },
-  collapsed: {
-    transform: [{ rotate: "-90deg" }],
   },
   heading: {
     color: colors.muted,

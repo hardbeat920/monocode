@@ -1,12 +1,5 @@
-import { Host, HStack, Label, Menu, Picker, Spacer } from "@expo/ui/swift-ui";
-import {
-  accessibilityLabel,
-  contentShape,
-  frame,
-  pickerStyle,
-  shapes,
-  tag,
-} from "@expo/ui/swift-ui/modifiers";
+import { Label, Picker } from "@expo/ui/swift-ui";
+import { pickerStyle, tag } from "@expo/ui/swift-ui/modifiers";
 import { router, useGlobalSearchParams, usePathname } from "expo-router";
 import { memo, useState } from "react";
 import { Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
@@ -20,6 +13,7 @@ import { CircleButton } from "@/ui/CircleButton";
 import { useWarmDitherLoading } from "@/ui/DitherLoading";
 import { GradualBlur } from "@/ui/GradualBlur";
 import { Icon } from "@/ui/Icon";
+import { GlassMenuButton } from "@/ui/GlassMenuButton";
 import { LiquidView } from "@/ui/LiquidView";
 import { isModalRoute } from "@/ui/SceneFade";
 import { AnimationsPaused } from "@/ui/AnimationsPaused";
@@ -154,7 +148,7 @@ export function WorkspaceDrawer() {
         <Animated.View style={[styles.foot, { bottom: footerBottom }, lift]}>
           <View style={styles.footer}>
           <CircleButton icon="settings" label="Settings" onPress={openSettings} size={FOOTER_HEIGHT} />
-          <LiquidView borderRadius={FOOTER_HEIGHT / 2} style={styles.searchFrame} innerStyle={styles.search}>
+          <LiquidView interactive borderRadius={FOOTER_HEIGHT / 2} style={styles.searchFrame} innerStyle={styles.search}>
             <Icon name="search" size={18} color={colors.muted} />
             <TextInput
               value={query}
@@ -189,45 +183,26 @@ function FilterMenu({
   filter: Filter;
   onFilter: (value: Filter) => void;
 }) {
-  const colors = useColors();
-  const on = filter !== "all";
   return (
-    <View>
-      <LiquidView borderRadius={HEADER_HEIGHT / 2} innerStyle={filterStyles.round}>
-        <Icon name="filter" size={20} color={on ? colors.accent : colors.content} />
-      </LiquidView>
-      {/* The native menu lies over the glass, its label an invisible box of
-          the button's size, as in SessionFilterMenu. */}
-      <Host style={StyleSheet.absoluteFill}>
-        <Menu
-          modifiers={[accessibilityLabel(on ? "Filter, on" : "Filter")]}
-          label={
-            <HStack modifiers={[frame({ width: HEADER_HEIGHT, height: HEADER_HEIGHT }), contentShape(shapes.circle())]}>
-              <Spacer />
-            </HStack>
-          }
-        >
-          <Picker
-            selection={filter}
-            onSelectionChange={(next) => onFilter(next as Filter)}
-            modifiers={[pickerStyle("inline")]}
-          >
-            {FILTERS.map((option) => (
-              <Label key={option.value} title={option.label} systemImage={option.symbol} modifiers={[tag(option.value)]} />
-            ))}
-          </Picker>
-        </Menu>
-      </Host>
-    </View>
+    <GlassMenuButton
+      icon="filter"
+      symbol="slider.horizontal.3"
+      label="Filter"
+      size={HEADER_HEIGHT}
+      on={filter !== "all"}
+    >
+      <Picker
+        selection={filter}
+        onSelectionChange={(next) => onFilter(next as Filter)}
+        modifiers={[pickerStyle("inline")]}
+      >
+        {FILTERS.map((option) => (
+          <Label key={option.value} title={option.label} systemImage={option.symbol} modifiers={[tag(option.value)]} />
+        ))}
+      </Picker>
+    </GlassMenuButton>
   );
 }
-
-const filterStyles = StyleSheet.create({
-  round: {
-    width: HEADER_HEIGHT,
-    height: HEADER_HEIGHT,
-  },
-});
 
 /** A project as a row of the list: its mascot and name. */
 const ProjectRow = memo(function ProjectRow({

@@ -217,6 +217,9 @@ export type Chrome = {
   /** The header's centre and the line under it appear in place on arrival,
    *  rather than pushing in with the rest of the header. */
   instantCenter?: boolean;
+  /** A back button in place of the menu one, for a screen that sits over
+   *  another place (a Mono over its project) rather than beside it. */
+  back?: { label: string; onPress: () => void };
   /** Round button on the far right of the header. */
   action?: { icon: IconName; label: string; onPress?: () => void };
   /** Any element for the header's far right, e.g. a menu. Wins over `action`. */
@@ -250,6 +253,7 @@ export function SessionScreen({
   center,
   headerKey,
   instantCenter,
+  back,
   action,
   trailing,
   below,
@@ -274,6 +278,7 @@ export function SessionScreen({
         center,
         headerKey,
         instantCenter,
+        back,
         action,
         trailing,
         below,
@@ -291,6 +296,7 @@ export function SessionScreen({
       center,
       headerKey,
       instantCenter,
+      back,
       action,
       trailing,
       below,
@@ -626,12 +632,22 @@ export function SessionFrame({
               )}
               <View style={[styles.header, { top: headerTop }]}>
                 <View>
-                  <CircleButton
-                    icon="menu"
-                    label={unread ? "Projects, new replies" : "Projects"}
-                    onPress={drawer.open}
-                  />
-                  {unread ? <UnreadDot /> : null}
+                  {chrome?.back ? (
+                    <CircleButton
+                      icon="chevronLeft"
+                      label={chrome.back.label}
+                      onPress={chrome.back.onPress}
+                    />
+                  ) : (
+                    <>
+                      <CircleButton
+                        icon="menu"
+                        label={unread ? "Projects, new replies" : "Projects"}
+                        onPress={drawer.open}
+                      />
+                      {unread ? <UnreadDot /> : null}
+                    </>
+                  )}
                 </View>
                 <View style={styles.titleBlock}>
                   {centerLayers.map((layer) => (

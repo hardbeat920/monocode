@@ -38,6 +38,11 @@ vi.mock("react-native", () => ({
     <button aria-label={accessibilityLabel} onClick={onPress}>{children}</button>
   ),
 }));
+function animation() {
+  const chain: Record<string, () => unknown> = {};
+  for (const step of ["duration", "delay", "reduceMotion", "easing"]) chain[step] = () => chain;
+  return chain;
+}
 vi.mock("react-native-reanimated", () => ({
   default: {
     FlatList: ({ data, renderItem, ListHeaderComponent, ListEmptyComponent }: {
@@ -53,12 +58,17 @@ vi.mock("react-native-reanimated", () => ({
     ),
     View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
   },
-  FadeIn: { duration: () => ({ delay: () => ({}) }) },
-  FadeOut: { duration: () => ({}) },
-  FadeInDown: { duration: () => ({ reduceMotion: () => ({}) }) },
-  FadeOutDown: { duration: () => ({ reduceMotion: () => ({}) }) },
+  // Layout animations chain builders (`.duration(…).reduceMotion(…)`).
+  FadeIn: animation(),
+  FadeOut: animation(),
+  FadeInDown: animation(),
+  FadeOutDown: animation(),
   ReduceMotion: { System: "system" },
-  LinearTransition: { duration: () => ({}) },
+  LinearTransition: animation(),
+  Easing: { bezier: () => () => 0, out: () => () => 0, cubic: () => 0 },
+  useSharedValue: (value: number) => ({ value, get: () => value, set: () => {} }),
+  useAnimatedStyle: () => ({}),
+  withTiming: (value: number) => value,
 }));
 vi.mock("@/features/connection/ConnectionProvider", () => ({
   useConnection: () => ({ pairing: { desktop: { fingerprint: "desk" } } }),
@@ -79,6 +89,10 @@ vi.mock("@/features/mascots/PixelMascot", () => ({
 vi.mock("@/ui/Icon", () => ({ Icon: ({ name }: { name: string }) => <i data-icon={name} /> }));
 vi.mock("@/ui/AnimationsPaused", () => ({ AnimationsPaused: ({ children }: { children: ReactNode }) => <>{children}</> }));
 vi.mock("@/ui/GradualBlur", () => ({ GradualBlur: () => null }));
+vi.mock("@/ui/Collapsible", () => ({
+  Collapsible: ({ open, children }: { open: boolean; children: ReactNode }) =>
+    open ? <>{children}</> : null,
+}));
 vi.mock("@/ui/theme", () => ({
   themedStyles: (create: (colors: object) => object) => () => create({}),
   useColors: () => ({ muted: "gray" }),
