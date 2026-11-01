@@ -68,6 +68,8 @@ export type InboxStoreOptions = {
 export const POLL_MS = 5000;
 /** The lists kept on the phone per desktop; the least recently read go. */
 const CACHE_LIMIT = 8;
+/** Pages re-read in one refresh to cover what was scrolled in; the rest is dropped. */
+const MAX_REREAD_PAGES = 5;
 
 const EMPTY_COUNTS = { unread: 0, needsMe: 0, done: 0 };
 
@@ -99,6 +101,8 @@ export function createInboxStore(options: InboxStoreOptions) {
   const listeners = new Set<() => void>();
   const watching = new Map<string, { count: number; timer?: ReturnType<typeof setTimeout> }>();
   const inflight = new Map<string, Promise<void>>();
+  /** Bumped when a refresh replaces a list, so a page asked for before it is dropped. */
+  const generations = new Map<string, number>();
   let linked = true;
   let disposed = false;
 
@@ -182,8 +186,9 @@ export function createInboxStore(options: InboxStoreOptions) {
     storage.set(indexKey, JSON.stringify(index));
   }
 
-  function params(query: FeedQuery, cursor?: string) {
+  function params(query: FeedQuery, cursor?: string, refresh?: boolean) {
     return {
+      ...(refresh ? { refresh: true } : {}),
       scope: query.scope,
       ...(query.projectId ? { projectId: query.projectId } : {}),
       ...(query.source ? { source: query.source } : {}),
@@ -193,41 +198,46 @@ export function createInboxStore(options: InboxStoreOptions) {
     };
   }
 
-  async function read(query: FeedQuery): Promise<void> {
+  async function read(query: FeedQuery, force = false): Promise<void> {
     const key = feedKey(query);
-    raw(query);
+    const before = raw(query).items.length;
     if (!linked) {
       update(key, { offline: true });
       return;
     }
     update(key, { loading: true });
     try {
-      const page = await client.list(params(query));
+      const page = await client.list(params(query, undefined, force));
       if (disposed) return;
-      const latest = raws.get(key)!;
-      // Pages already scrolled in stay below the fresh first page.
-      const oldest = Math.min(...page.items.map((item) => item.updatedAt));
-      const fresh = new Set(page.items.map((item) => item.key));
-      const tail = latest.nextCursor && page.nextCursor
-        ? latest.items.filter((item) => !fresh.has(item.key) && item.updatedAt < oldest)
-        : [];
+      // Pages scrolled in are read again, not kept: an item the desktop has
+      // since finished or dropped must leave, and one that changed must change.
+      let items = page.items;
+      let cursor = page.nextCursor;
+      for (let pages = 1; cursor && items.length < before && pages < MAX_REREAD_PAGES; pages++) {
+        const more = await client.list(params(query, cursor));
+        if (disposed) return;
+        const have = new Set(items.map((item) => item.key));
+        items = [...items, ...more.items.filter((item) => !have.has(item.key))];
+        cursor = more.nextCursor;
+      }
       const next: Raw = {
-        ...latest,
-        items: [...page.items, ...tail],
+        ...raws.get(key)!,
+        items,
         loaded: true,
         loading: false,
         fromCache: false,
         offline: false,
         error: null,
-        nextCursor: tail.length > 0 ? latest.nextCursor : page.nextCursor,
+        nextCursor: cursor,
         stale: page.stale,
         fetchedAt: page.fetchedAt,
         providers: page.providers,
         counts: page.counts,
       };
       raws.set(key, next);
+      generations.set(key, (generations.get(key) ?? 0) + 1);
       if (!query.q) remember(key, { ...next, items: page.items, nextCursor: page.nextCursor });
-      for (const item of page.items) known.set(item.key, item);
+      for (const item of items) known.set(item.key, item);
       view(key);
       emit();
     } catch (reason) {
@@ -240,11 +250,17 @@ export function createInboxStore(options: InboxStoreOptions) {
     }
   }
 
-  function refresh(query: FeedQuery): Promise<void> {
+  /** Reads a list now. `force` makes the desktop fetch from its providers first. */
+  function refresh(query: FeedQuery, options: { force?: boolean } = {}): Promise<void> {
     const key = feedKey(query);
     const running = inflight.get(key);
-    if (running) return running;
-    const run = read(query).finally(() => inflight.delete(key));
+    // A pull to refresh isn't answered by a poll already on its way: it runs after it.
+    if (running && !options.force) return running;
+    const run: Promise<void> = (running ?? Promise.resolve())
+      .then(() => read(query, options.force))
+      .finally(() => {
+        if (inflight.get(key) === run) inflight.delete(key);
+      });
     inflight.set(key, run);
     return run;
   }
@@ -253,10 +269,16 @@ export function createInboxStore(options: InboxStoreOptions) {
     const key = feedKey(query);
     const value = raw(query);
     if (!value.nextCursor || value.loadingMore || !linked) return;
+    const generation = generations.get(key) ?? 0;
     update(key, { loadingMore: true });
     try {
       const page = await client.list(params(query, value.nextCursor));
       if (disposed) return;
+      if ((generations.get(key) ?? 0) !== generation) {
+        // A refresh replaced the list while this page was on its way.
+        update(key, { loadingMore: false });
+        return;
+      }
       const latest = raws.get(key)!;
       const have = new Set(latest.items.map((item) => item.key));
       update(key, {

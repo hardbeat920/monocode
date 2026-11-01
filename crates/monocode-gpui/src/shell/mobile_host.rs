@@ -351,7 +351,7 @@ impl Shell {
     // MARK: catalog
 
     /// Projects on the rail and those Monos work in.
-    fn mobile_projects(&self, cx: &App) -> Vec<String> {
+    pub(in crate::shell) fn mobile_projects(&self, cx: &App) -> Vec<String> {
         let mut paths: Vec<String> = Vec::new();
         let monos = self
             .monos

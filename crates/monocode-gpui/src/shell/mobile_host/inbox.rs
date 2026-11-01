@@ -13,6 +13,10 @@ use monocode_core::{
 /// after a long offline gap does not become a flood of alerts.
 const MAX_PUSHES: usize = 5;
 
+/// A pull-to-refresh waits for the fetch this long at most: 100 ticks of 200 ms.
+const REFRESH_TICK: std::time::Duration = std::time::Duration::from_millis(200);
+const REFRESH_WAIT_TICKS: usize = 100;
+
 fn to_value(value: impl serde::Serialize) -> Result<Value, String> {
     serde_json::to_value(value).map_err(|error| error.to_string())
 }
@@ -63,7 +67,14 @@ impl Shell {
         &self,
         params: &Value,
         cx: &App,
-    ) -> Result<(Entity<crate::inbox::Inbox>, Item, monocode_core::inbox::Service), String> {
+    ) -> Result<
+        (
+            Entity<crate::inbox::Inbox>,
+            Item,
+            monocode_core::inbox::Service,
+        ),
+        String,
+    > {
         let key = string(params, "key").ok_or("Missing item")?;
         let inbox = self.inbox.clone().ok_or("The Inbox is not available")?;
         let view = inbox.read(cx).phone_view();
@@ -99,13 +110,44 @@ impl Shell {
         let Some(inbox) = self.inbox.clone() else {
             return request.reply(Err("The Inbox is not available".into()));
         };
+        if params.refresh {
+            // Pull to refresh: fetch now and answer when the fetch ends, or
+            // after a while if a provider is slow, with what the Inbox has.
+            inbox.update(cx, |inbox, cx| inbox.refresh_now_for_phone(cx));
+            cx.spawn(async move |this, cx| {
+                for _ in 0..REFRESH_WAIT_TICKS {
+                    if !inbox.read_with(cx, |inbox, _| inbox.fetching()) {
+                        break;
+                    }
+                    cx.background_executor().timer(REFRESH_TICK).await;
+                }
+                let _ = this.update(cx, |this, cx| {
+                    this.mobile_inbox_answer(request, &params, cx)
+                });
+            })
+            .detach();
+            return;
+        }
         inbox.update(cx, |inbox, cx| inbox.refresh_for_phone(cx));
+        self.mobile_inbox_answer(request, &params, cx);
+    }
+
+    /// The list as the Inbox stands now.
+    fn mobile_inbox_answer(
+        &mut self,
+        request: Request,
+        params: &ListParams,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(inbox) = self.inbox.clone() else {
+            return request.reply(Err("The Inbox is not available".into()));
+        };
         let projects = self.mobile_inbox_projects(cx);
         let result = {
             let phone = inbox.read(cx).phone_view();
             wire::list_response(
                 phone.items,
-                &params,
+                params,
                 &View {
                     seen: phone.seen,
                     triage: phone.triage,
@@ -191,7 +233,8 @@ impl Shell {
                 .map_err(phone_error)
                 .and_then(to_value)
         });
-        cx.spawn(async move |_, _| request.reply(work.await)).detach();
+        cx.spawn(async move |_, _| request.reply(work.await))
+            .detach();
     }
 
     fn mobile_inbox_checks(&mut self, request: Request, cx: &mut Context<Self>) {
@@ -209,7 +252,8 @@ impl Shell {
                 .map_err(phone_error)
                 .and_then(to_value)
         });
-        cx.spawn(async move |_, _| request.reply(work.await)).detach();
+        cx.spawn(async move |_, _| request.reply(work.await))
+            .detach();
     }
 
     fn mobile_inbox_mark(&mut self, request: Request, cx: &mut Context<Self>) {
@@ -334,7 +378,11 @@ impl Shell {
 
     /// New items that need the user, sent to phones that take the `inbox`
     /// category. Not while the desktop shows the Inbox in front of the user.
-    pub(in crate::shell) fn notify_mobile_inbox(&mut self, items: Vec<Item>, cx: &mut Context<Self>) {
+    pub(in crate::shell) fn notify_mobile_inbox(
+        &mut self,
+        items: Vec<Item>,
+        cx: &mut Context<Self>,
+    ) {
         if self.mobile.host.is_none() {
             return;
         }

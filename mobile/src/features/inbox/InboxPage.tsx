@@ -8,7 +8,6 @@ import {
   ScrollView,
   Text,
   View,
-  type LayoutChangeEvent,
 } from "react-native";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 import Animated, {
@@ -32,13 +31,14 @@ import { useSessionLayout } from "@/features/sessions/SessionScreen";
 import { projectColor } from "@/features/workspace/projectColors";
 import { relativeTime } from "@/features/workspace/relativeTime";
 import { AnimationsPaused } from "@/ui/AnimationsPaused";
-import { ChoiceMenu } from "@/ui/ChoiceMenu";
+import { useKeepsSwipe } from "@/ui/ScenePager";
+import { GlassSegments } from "@/ui/GlassSegments";
 import { GradualBlur } from "@/ui/GradualBlur";
 import { Icon } from "@/ui/Icon";
-import { LiquidView } from "@/ui/LiquidView";
 import { themedStyles, useColors, withAlpha } from "@/ui/theme";
 
 import { useInbox, useInboxFeed } from "./InboxProvider";
+import { GroupMenu } from "./GroupMenu";
 import { InboxRow, type RowHandlers } from "./InboxRow";
 import { SOURCE_NAMES, useSourceColor } from "./ProviderMark";
 import { InboxToast } from "./InboxToast";
@@ -82,6 +82,7 @@ export function InboxPage({
   const colors = useColors();
   const styles = useStyles();
   const reduced = useReducedMotion();
+  const keepsSwipe = useKeepsSwipe();
   const { mark } = useInbox();
   const { pageTop, dockBottom } = useSessionLayout();
   const bottom = dockBottom + SEARCH_BAR + 16;
@@ -175,6 +176,8 @@ export function InboxPage({
         horizontal
         showsHorizontalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
+        {...keepsSwipe}
+        style={styles.chipScroll}
         contentContainerStyle={styles.chips}
       >
         <Chip
@@ -329,7 +332,7 @@ function GroupHeader({ entry }: { entry: Extract<Entry, { type: "header" }> }) {
   );
 }
 
-/** All / Needs me / Done, as a track with a thumb that slides to the choice. */
+/** All / Needs me / Done, in the same glass as the page switch above. */
 function ScopeSwitch({
   value,
   onChange,
@@ -340,47 +343,22 @@ function ScopeSwitch({
   needsMe: number;
 }) {
   const styles = useStyles();
-  const [width, setWidth] = useState(0);
-  const index = SCOPES.findIndex((scope) => scope.id === value);
-  const x = useSharedValue(index);
-  useEffect(() => {
-    x.set(withTiming(index, { duration: 220, easing: Easing.out(Easing.cubic) }));
-  }, [index, x]);
-  const cell = width > 0 ? (width - 6) / SCOPES.length : 0;
-  const thumb = useAnimatedStyle(() => ({
-    width: cell,
-    transform: [{ translateX: x.get() * cell }],
-  }));
   return (
-    <View
-      accessibilityRole="tablist"
-      style={styles.track}
-      onLayout={(event: LayoutChangeEvent) => setWidth(event.nativeEvent.layout.width)}
-    >
-      <Animated.View pointerEvents="none" style={[styles.thumb, thumb]} />
-      {SCOPES.map((scope) => (
-        <Pressable
-          key={scope.id}
-          accessibilityRole="tab"
-          accessibilityState={{ selected: scope.id === value }}
-          onPress={() => {
-            if (scope.id === value) return;
-            void Haptics.selectionAsync();
-            onChange(scope.id);
-          }}
-          style={styles.scope}
-        >
-          <Text style={[styles.scopeLabel, scope.id === value && styles.scopeSelected]}>
-            {scope.label}
-          </Text>
-          {scope.id === "needsMe" && needsMe > 0 ? (
+    <GlassSegments
+      style={styles.scopes}
+      value={value}
+      onChange={onChange}
+      segments={SCOPES.map((scope) => ({
+        value: scope.id,
+        label: scope.label,
+        trailing:
+          scope.id === "needsMe" && needsMe > 0 ? (
             <View style={styles.count}>
               <Text style={styles.countLabel}>{needsMe}</Text>
             </View>
-          ) : null}
-        </Pressable>
-      ))}
-    </View>
+          ) : undefined,
+      }))}
+    />
   );
 }
 
@@ -575,31 +553,6 @@ function Block({
   return <Animated.View style={[styles.block, style, animated]} />;
 }
 
-/** The round button beside the search: how rows are grouped. */
-function GroupMenu({
-  value,
-  onChange,
-}: {
-  value: InboxGrouping;
-  onChange: (value: InboxGrouping) => void;
-}) {
-  const colors = useColors();
-  const styles = useStyles();
-  return (
-    <ChoiceMenu
-      label="Group by"
-      actions={[
-        { label: "Day", selected: value === "day", onPress: () => onChange("day") },
-        { label: "Project", selected: value === "project", onPress: () => onChange("project") },
-      ]}
-    >
-      <LiquidView borderRadius={SEARCH_BAR / 2} innerStyle={styles.round}>
-        <Icon name="filter" size={20} color={colors.content} />
-      </LiquidView>
-    </ChoiceMenu>
-  );
-}
-
 const useStyles = themedStyles((colors) => ({
   page: {
     flex: 1,
@@ -611,38 +564,8 @@ const useStyles = themedStyles((colors) => ({
     gap: 10,
     paddingBottom: 4,
   },
-  track: {
-    flexDirection: "row",
-    height: 38,
-    padding: 3,
+  scopes: {
     marginHorizontal: 4,
-    borderRadius: 12,
-    borderCurve: "continuous",
-    backgroundColor: colors.fill,
-  },
-  thumb: {
-    position: "absolute",
-    top: 3,
-    left: 3,
-    bottom: 3,
-    borderRadius: 9,
-    borderCurve: "continuous",
-    backgroundColor: colors.thumb,
-  },
-  scope: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-  },
-  scopeLabel: {
-    color: colors.muted,
-    fontSize: 14,
-    fontWeight: "600",
-  },
-  scopeSelected: {
-    color: colors.content,
   },
   count: {
     minWidth: 18,
@@ -658,9 +581,14 @@ const useStyles = themedStyles((colors) => ({
     fontSize: 11,
     fontWeight: "700",
   },
+  // Bleeds past the list's side padding so the chips scroll to the screen's
+  // edges rather than clipping a few points short of them.
+  chipScroll: {
+    marginHorizontal: -10,
+  },
   chips: {
     gap: 6,
-    paddingHorizontal: 4,
+    paddingHorizontal: 14,
   },
   chip: {
     height: 32,
@@ -770,11 +698,5 @@ const useStyles = themedStyles((colors) => ({
   block: {
     borderRadius: 6,
     backgroundColor: colors.fill,
-  },
-  round: {
-    width: SEARCH_BAR,
-    height: SEARCH_BAR,
-    alignItems: "center",
-    justifyContent: "center",
   },
 }));

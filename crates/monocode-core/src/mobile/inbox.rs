@@ -192,6 +192,9 @@ pub struct ListParams {
     pub q: String,
     pub cursor: Option<String>,
     pub limit: usize,
+    /// The phone asked for a fresh read (pull to refresh): the host fetches from
+    /// the providers and answers when that ends, instead of from the cache.
+    pub refresh: bool,
 }
 impl ListParams {
     pub fn parse(params: &Value) -> Result<Self, String> {
@@ -224,6 +227,7 @@ impl ListParams {
                 .as_u64()
                 .map_or(DEFAULT_LIMIT, |limit| limit as usize)
                 .clamp(1, MAX_LIMIT),
+            refresh: params["refresh"].as_bool().unwrap_or(false),
         })
     }
 }
@@ -494,8 +498,11 @@ fn sort(items: &mut [&Item]) {
 }
 
 fn encode_cursor(item: &Item) -> String {
-    base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .encode(format!("v1|{}|{}", item.updated_ms(), item.key()))
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(format!(
+        "v1|{}|{}",
+        item.updated_ms(),
+        item.key()
+    ))
 }
 fn decode_cursor(cursor: &str) -> Result<(i64, String), String> {
     let invalid = || "Invalid inbox cursor".to_string();
@@ -998,7 +1005,10 @@ mod tests {
         assert_eq!(at("all"), [1, 2, 3, 5]);
         assert_eq!(at("needsMe"), [1, 3]);
         assert_eq!(at("done"), [4]);
-        assert_eq!(numbers(&visible(&items, &params(json!({})), &view)), [1, 2, 3, 5]);
+        assert_eq!(
+            numbers(&visible(&items, &params(json!({})), &view)),
+            [1, 2, 3, 5]
+        );
         assert_eq!(
             counts(&items, &params(json!({})), &view),
             Counts {
@@ -1007,6 +1017,13 @@ mod tests {
                 done: 1
             }
         );
+    }
+
+    #[test]
+    fn a_list_asks_for_a_fresh_read_only_when_told_to() {
+        assert!(!params(json!({})).refresh);
+        assert!(!params(json!({"refresh": "yes"})).refresh);
+        assert!(params(json!({"refresh": true})).refresh);
     }
 
     #[test]
@@ -1084,8 +1101,7 @@ mod tests {
         let mut triage = Triage::default();
         let (first, next) = {
             let view = view(&seen, &triage, &projects);
-            let (first, next) =
-                page(visible(&items, &params(json!({})), &view), None, 3).unwrap();
+            let (first, next) = page(visible(&items, &params(json!({})), &view), None, 3).unwrap();
             (numbers(&first), next.unwrap())
         };
         assert_eq!(first, [1, 2, 3]);
@@ -1093,12 +1109,7 @@ mod tests {
         triage.mark_done(&items[2].key(), NOW);
         items.push(item(9, 0, ""));
         let view = view(&seen, &triage, &projects);
-        let (second, _) = page(
-            visible(&items, &params(json!({})), &view),
-            Some(&next),
-            3,
-        )
-        .unwrap();
+        let (second, _) = page(visible(&items, &params(json!({})), &view), Some(&next), 3).unwrap();
         assert_eq!(numbers(&second), [4, 5, 6]);
     }
 
@@ -1188,7 +1199,11 @@ mod tests {
             };
             (
                 numbers(&visible(&items, &params(json!({})), &view)),
-                numbers(&visible(&items, &params(json!({"scope": "needsMe"})), &view)),
+                numbers(&visible(
+                    &items,
+                    &params(json!({"scope": "needsMe"})),
+                    &view,
+                )),
                 counts(&items, &params(json!({})), &view).needs_me,
             )
         };
@@ -1209,7 +1224,13 @@ mod tests {
     #[test]
     fn marks_change_the_shared_read_and_triage_state() {
         let one = item(1, 1, "");
-        let (mut seen, mut triage) = (Seen { seeded: true, ..Seen::default() }, Triage::default());
+        let (mut seen, mut triage) = (
+            Seen {
+                seeded: true,
+                ..Seen::default()
+            },
+            Triage::default(),
+        );
         assert!(seen.unseen(&one));
         Mark::Seen.apply(&one, &mut seen, &mut triage, NOW);
         assert!(!seen.unseen(&one));
@@ -1238,7 +1259,10 @@ mod tests {
         let saved = serde_json::to_string(&state).unwrap();
         let loaded: crate::inbox::ViewState = serde_json::from_str(&saved).unwrap();
         assert!(loaded.triage.is_done(&one.key()));
-        assert_eq!(loaded.triage.snoozed_until("github:acme/app:pr:2", NOW), Some(NOW + HOUR));
+        assert_eq!(
+            loaded.triage.snoozed_until("github:acme/app:pr:2", NOW),
+            Some(NOW + HOUR)
+        );
         // State saved before triage existed still loads.
         let old: crate::inbox::ViewState =
             serde_json::from_str(r#"{"source":"github","seen":{"seeded":true,"items":{}}}"#)
@@ -1254,7 +1278,9 @@ mod tests {
         let mut state = crate::inbox::ViewState::load(&store);
         state.triage.mark_done(&one.key(), NOW);
         state.save(&store).unwrap();
-        assert!(crate::inbox::ViewState::load(&store).triage.is_done(&one.key()));
+        assert!(crate::inbox::ViewState::load(&store)
+            .triage
+            .is_done(&one.key()));
     }
 
     #[test]
@@ -1282,7 +1308,10 @@ mod tests {
     #[test]
     fn a_push_carries_the_title_and_the_reason() {
         let (title, body, repo) = notice(&item(12, 1, "review_requested"));
-        assert_eq!((title.as_str(), body.as_str(), repo.as_str()), ("Change 12", "Review requested by sam", "acme/app"));
+        assert_eq!(
+            (title.as_str(), body.as_str(), repo.as_str()),
+            ("Change 12", "Review requested by sam", "acme/app")
+        );
         assert_eq!(notice(&item(1, 1, "build_failed")).1, "CI failed");
         assert_eq!(notice(&item(1, 1, "assigned")).1, "Assigned to you");
         let mut anonymous = item(1, 1, "mentioned");
@@ -1315,7 +1344,11 @@ mod tests {
             ]),
             "s".into(),
         );
-        let pushed: Vec<_> = appeared.iter().filter(|i| pushes(i)).map(|i| i.number).collect();
+        let pushed: Vec<_> = appeared
+            .iter()
+            .filter(|i| pushes(i))
+            .map(|i| i.number)
+            .collect();
         assert_eq!(pushed, [2, 6]);
         // An update to an item already seen is not new.
         let again = tracker.observe(&snapshot(vec![item(2, 0, "review_requested")]), "s".into());
@@ -1342,7 +1375,10 @@ mod tests {
         assert_eq!(slim["done"], false);
         assert_eq!(slim["author"]["name"], "sam");
         let key = slim["author"]["avatarKey"].as_str().unwrap();
-        assert_eq!(avatars.url(key).as_deref(), Some("https://avatars.example/sam.png"));
+        assert_eq!(
+            avatars.url(key).as_deref(),
+            Some("https://avatars.example/sam.png")
+        );
         assert!(slim.get("snoozedUntil").is_none() && slim.get("checks").is_none());
         // A GitHub login with no address falls back to the public avatar.
         let mut bare = item(1, 1, "");
@@ -1356,18 +1392,30 @@ mod tests {
 
     fn sample_diff() -> Diff {
         let mut body = String::new();
-        let mut patch = String::from("diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,1 +1,300 @@\n x\n");
+        let mut patch = String::from(
+            "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,1 +1,300 @@\n x\n",
+        );
         for n in 0..299 {
             body.push_str(&format!("+line {n}\n"));
         }
         patch.push_str(&body);
-        patch.push_str("diff --git a/b.rs b/b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -1 +1 @@\n-old\n+new\n");
+        patch.push_str(
+            "diff --git a/b.rs b/b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -1 +1 @@\n-old\n+new\n",
+        );
         Diff {
             additions: 300,
             deletions: 1,
             files: vec![
-                CoreDiffFile { path: "a.rs".into(), additions: 299, deletions: 0 },
-                CoreDiffFile { path: "b.rs".into(), additions: 1, deletions: 1 },
+                CoreDiffFile {
+                    path: "a.rs".into(),
+                    additions: 299,
+                    deletions: 0,
+                },
+                CoreDiffFile {
+                    path: "b.rs".into(),
+                    additions: 1,
+                    deletions: 1,
+                },
             ],
             patch,
             truncated: false,
@@ -1391,7 +1439,10 @@ mod tests {
             small.lines.iter().map(|l| l.kind).collect::<Vec<_>>(),
             ["hunk", "del", "add"]
         );
-        assert_eq!((small.lines[1].old_no, small.lines[1].new_no), (Some(1), None));
+        assert_eq!(
+            (small.lines[1].old_no, small.lines[1].new_no),
+            (Some(1), None)
+        );
         let full = diff_response(&diff, Some("a.rs")).unwrap();
         assert_eq!(full.files.len(), 1);
         assert_eq!(full.files[0].lines.len(), 301);
@@ -1412,17 +1463,37 @@ mod tests {
         timed.workflow = "CI".into();
         timed.started_at = Some("2026-10-01T10:00:00Z".into());
         timed.completed_at = Some("2026-10-01T10:01:30Z".into());
-        let all = |checks: Vec<Check>| Checks { head_oid: String::new(), checks };
-        assert_eq!(checks_summary(&all(vec![timed.clone(), check("x", "skipping")])), Some("passing"));
-        assert_eq!(checks_summary(&all(vec![timed.clone(), check("y", "fail")])), Some("failing"));
-        assert_eq!(checks_summary(&all(vec![timed.clone(), check("y", "pending")])), Some("pending"));
+        let all = |checks: Vec<Check>| Checks {
+            head_oid: String::new(),
+            checks,
+        };
+        assert_eq!(
+            checks_summary(&all(vec![timed.clone(), check("x", "skipping")])),
+            Some("passing")
+        );
+        assert_eq!(
+            checks_summary(&all(vec![timed.clone(), check("y", "fail")])),
+            Some("failing")
+        );
+        assert_eq!(
+            checks_summary(&all(vec![timed.clone(), check("y", "pending")])),
+            Some("pending")
+        );
         assert_eq!(checks_summary(&all(vec![])), None);
         let response = checks_response(&all(vec![timed, check("z", "cancel")]));
         assert_eq!(response.checks[0].name, "CI / build");
         assert_eq!(response.checks[0].duration_ms, Some(90_000));
         assert_eq!(response.checks[1].state, "skipped");
-        for (raw, wanted) in [("APPROVED", Some("approved")), ("CHANGES_REQUESTED", Some("changesRequested")), ("REVIEW_REQUIRED", Some("pending")), ("", None)] {
-            let details = Details { review_decision: raw.into(), ..Details::default() };
+        for (raw, wanted) in [
+            ("APPROVED", Some("approved")),
+            ("CHANGES_REQUESTED", Some("changesRequested")),
+            ("REVIEW_REQUIRED", Some("pending")),
+            ("", None),
+        ] {
+            let details = Details {
+                review_decision: raw.into(),
+                ..Details::default()
+            };
             assert_eq!(review_decision(&details), wanted);
         }
     }
@@ -1440,7 +1511,17 @@ mod tests {
         };
         let thread = Thread {
             comments: vec![
-                comment("c1", "2026-10-01T10:00:00Z", "comment", vec![comment("r1", "2026-10-01T12:00:00Z", "review_comment", vec![])]),
+                comment(
+                    "c1",
+                    "2026-10-01T10:00:00Z",
+                    "comment",
+                    vec![comment(
+                        "r1",
+                        "2026-10-01T12:00:00Z",
+                        "review_comment",
+                        vec![],
+                    )],
+                ),
                 comment("rv", "2026-10-01T09:00:00Z", "review", vec![]),
             ],
             commits: vec![Commit {
@@ -1454,10 +1535,25 @@ mod tests {
         };
         let entries = thread_entries(&item(1, 1, ""), &thread, &AvatarBook::default());
         let order: Vec<_> = entries.iter().map(|e| (e.id.as_str(), e.kind)).collect();
-        assert_eq!(order, [("rv", "review"), ("c1", "comment"), ("abc", "commit"), ("r1", "comment")]);
+        assert_eq!(
+            order,
+            [
+                ("rv", "review"),
+                ("c1", "comment"),
+                ("abc", "commit"),
+                ("r1", "comment")
+            ]
+        );
         let (seen, triage, projects) = (Seen::default(), Triage::default(), projects());
         let view = view(&seen, &triage, &projects);
-        let response = item_response(&item(1, 1, ""), &view, &AvatarBook::default(), None, Some(&thread), None);
+        let response = item_response(
+            &item(1, 1, ""),
+            &view,
+            &AvatarBook::default(),
+            None,
+            Some(&thread),
+            None,
+        );
         assert_eq!(response.item.comments, 3);
     }
 
@@ -1466,7 +1562,11 @@ mod tests {
         let body = "Intro ![a](https://x.test/1.png) text <img width=\"3\" src=\"https://x.test/2.png\"> ![b](<https://x.test/3.png> \"t\")";
         assert_eq!(
             image_urls(body),
-            ["https://x.test/1.png", "https://x.test/2.png", "https://x.test/3.png"]
+            [
+                "https://x.test/1.png",
+                "https://x.test/2.png",
+                "https://x.test/3.png"
+            ]
         );
         assert!(image_urls("no images, just [a link](https://x.test)").is_empty());
         assert!(media_response("image/png", &vec![0; MAX_IMAGE_BYTES + 1]).is_err());
@@ -1481,16 +1581,34 @@ mod tests {
         assert!(safe.starts_with("HTTP 401: Bad credentials"));
         assert!(safe_error(&"word ".repeat(100)).chars().count() <= MAX_ERROR_CHARS + 1);
         assert_eq!(safe_error("Authorization: Bearer abc"), "Authorization: …");
-        assert_eq!(safe_error("read /Users/me/linear-token failed"), "read … failed");
+        assert_eq!(
+            safe_error("read /Users/me/linear-token failed"),
+            "read … failed"
+        );
     }
 
     /// Keys and values that would mean a credential or a config crossed the link.
     fn assert_clean(value: &Value, path: &str) {
         const FORBIDDEN_KEYS: [&str; 9] = [
-            "token", "secret", "password", "authorization", "apikey", "api_key", "config", "email", "credential",
+            "token",
+            "secret",
+            "password",
+            "authorization",
+            "apikey",
+            "api_key",
+            "config",
+            "email",
+            "credential",
         ];
         const FORBIDDEN_VALUES: [&str; 8] = [
-            "ghp_", "gho_", "github_pat_", "glpat-", "lin_api_", "linear-token", "-config.json", "Bearer ",
+            "ghp_",
+            "gho_",
+            "github_pat_",
+            "glpat-",
+            "lin_api_",
+            "linear-token",
+            "-config.json",
+            "Bearer ",
         ];
         match value {
             Value::Object(map) => {
@@ -1567,7 +1685,15 @@ mod tests {
         };
         let responses = vec![
             serde_json::to_value(&list).unwrap(),
-            serde_json::to_value(item_response(&items[0], &view, &avatars, Some(&details), Some(&thread), Some(&checks))).unwrap(),
+            serde_json::to_value(item_response(
+                &items[0],
+                &view,
+                &avatars,
+                Some(&details),
+                Some(&thread),
+                Some(&checks),
+            ))
+            .unwrap(),
             serde_json::to_value(diff_response(&sample_diff(), None).unwrap()).unwrap(),
             serde_json::to_value(checks_response(&checks)).unwrap(),
             serde_json::to_value(media_response("image/png", b"png").unwrap()).unwrap(),
@@ -1578,6 +1704,9 @@ mod tests {
         }
         let serialized = serde_json::to_string(&responses).unwrap();
         assert!(!serialized.contains("me@acme.test") && !serialized.contains("atlassian"));
-        assert!(!list.providers.iter().any(|p| p.error.as_deref().is_some_and(|e| e.contains("ghp_"))));
+        assert!(!list
+            .providers
+            .iter()
+            .any(|p| p.error.as_deref().is_some_and(|e| e.contains("ghp_"))));
     }
 }

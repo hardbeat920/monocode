@@ -2,8 +2,8 @@
 //! validation, response parsers and credential file formats.
 mod avatar;
 mod media;
-pub use media::png as media_png;
 pub use media::phone_image;
+pub use media::png as media_png;
 pub mod azure_devops;
 pub use avatar::png as avatar_png;
 mod github;
@@ -939,7 +939,11 @@ impl Service {
                                 // Best effort: a failed search leaves the rows as listed.
                                 let involved = |involvement| {
                                     github::git_github_involved_for(
-                                        project, &repo, kind, involvement, viewer,
+                                        project,
+                                        &repo,
+                                        kind,
+                                        involvement,
+                                        viewer,
                                     )
                                     .unwrap_or_default()
                                 };
@@ -1422,7 +1426,13 @@ mod attention_tests {
         let reasons: Vec<_> = rows.iter().map(|r| r.attention_reason.as_str()).collect();
         assert_eq!(
             reasons,
-            ["review_requested", "assigned", "review_requested", "build_failed", "mentioned"]
+            [
+                "review_requested",
+                "assigned",
+                "review_requested",
+                "build_failed",
+                "mentioned"
+            ]
         );
     }
 
@@ -1431,5 +1441,60 @@ mod attention_tests {
         let mut rows = vec![row(1, &["hubot"]), row(2, &[])];
         mark_github_attention(&mut rows, "octocat", &[], &[]);
         assert!(rows.iter().all(|r| r.attention_reason.is_empty()));
+    }
+}
+
+#[cfg(test)]
+mod fetch_scope_tests {
+    use super::*;
+
+    fn projects(paths: &[&str]) -> Vec<PathBuf> {
+        paths.iter().map(PathBuf::from).collect()
+    }
+
+    /// A paired phone is served from the desktop's own fetch only while the two
+    /// scopes are the same string, so everything the fetch depends on must be in it.
+    #[test]
+    fn the_scope_changes_with_everything_that_changes_the_fetch() {
+        let app = projects(&["/work/app"]);
+        let base = ViewState::default().fetch_scope(&app);
+        assert_eq!(base, ViewState::default().fetch_scope(&app));
+
+        let mut assigned = ViewState::default();
+        assigned.filters.assigned_to_me = true;
+        assert_ne!(base, assigned.fetch_scope(&app));
+
+        let mut author = ViewState::default();
+        author.filters.authors = vec!["octo".into()];
+        assert_ne!(base, author.fetch_scope(&app));
+
+        let mut open = ViewState::default();
+        open.filters.status.open = true;
+        assert_ne!(base, open.fetch_scope(&app));
+
+        let team = ViewState {
+            hidden_linear_teams: vec!["t1".into()],
+            ..ViewState::default()
+        };
+        assert_ne!(base, team.fetch_scope(&app));
+
+        assert_ne!(
+            base,
+            ViewState::default().fetch_scope(&projects(&["/work/app", "/work/mono"]))
+        );
+    }
+
+    #[test]
+    fn the_scope_ignores_what_the_desktop_only_filters_on_screen() {
+        let app = projects(&["/work/app"]);
+        let mut shown = ViewState::default();
+        shown.filters.authors = vec!["a".into(), "b".into()];
+        shown.filters.hidden_kinds = vec!["issue".into()];
+        shown.filters.time = "7d".into();
+        shown.source = "linear".into();
+        assert_eq!(
+            ViewState::default().fetch_scope(&app),
+            shown.fetch_scope(&app)
+        );
     }
 }

@@ -56,7 +56,9 @@ export function InboxProvider({
   const { command, pairing, connected, catalog } = connection;
   const namespace = pairing?.desktop.fingerprint ?? "unpaired";
   const fixtures = !injected && FIXTURES_ENABLED;
-  const projectKey = catalog.projects.map((project) => project.id).join("\n");
+  // Only the fixture client maps its items onto the catalog's projects; the
+  // real one must not be rebuilt (losing pending marks) when a project is added.
+  const projectKey = fixtures ? catalog.projects.map((project) => project.id).join("\n") : "";
   const client = useMemo<InboxClient>(
     () =>
       injected ??
@@ -177,7 +179,11 @@ export function useInboxFeed(query: FeedQuery, watching = true) {
   }, [store, stable, watching]);
   return {
     feed,
-    refresh: useCallback(() => store?.refresh(stable) ?? Promise.resolve(), [store, stable]),
+    /** Pull to refresh: the desktop fetches from its providers before it answers. */
+    refresh: useCallback(
+      () => store?.refresh(stable, { force: true }) ?? Promise.resolve(),
+      [store, stable],
+    ),
     loadMore: useCallback(() => store?.loadMore(stable) ?? Promise.resolve(), [store, stable]),
   };
 }

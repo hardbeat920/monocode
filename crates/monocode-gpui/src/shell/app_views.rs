@@ -289,9 +289,16 @@ impl Shell {
         if let Some(inbox) = &self.inbox {
             let projects = self.workspace.projects.iter().map(Into::into).collect();
             let cwd = self.workspace.project.clone().into();
+            // What the phone lists besides the desktop's projects: the Monos'.
+            let phone_projects = self
+                .mobile_projects(cx)
+                .into_iter()
+                .map(Into::into)
+                .collect();
             inbox.update(cx, |inbox, cx| {
                 inbox.set_appearances(self.workspace.project_appearance.clone(), cx);
                 inbox.set_context(projects, cwd, cx);
+                inbox.set_phone_projects(phone_projects);
             });
         }
     }

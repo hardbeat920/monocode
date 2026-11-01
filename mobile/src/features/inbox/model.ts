@@ -327,9 +327,9 @@ export function bannerFor(feed: {
   if (feed.offline && feed.loaded) return { kind: "offline", fetchedAt: feed.fetchedAt };
   if (feed.offline) return { kind: "offline", fetchedAt: null };
   if (!feed.loaded || feed.fetchedAt === null) return null;
-  const failing = feed.providers
-    .filter((provider) => !provider.connected || provider.error)
-    .map((provider) => provider.id);
+  // A provider that isn't connected and reported no error is simply unused
+  // (turned off on the desktop), so it isn't a failure worth a warning.
+  const failing = feed.providers.filter((provider) => provider.error).map((provider) => provider.id);
   if (feed.stale || failing.length > 0) {
     return { kind: "stale", fetchedAt: feed.fetchedAt, failing };
   }

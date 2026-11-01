@@ -52,6 +52,8 @@ export type InboxListParams = {
   q?: string;
   cursor?: string;
   limit?: number;
+  /** Ask the desktop to fetch from its providers now and answer when it has. */
+  refresh?: boolean;
 };
 
 export type InboxList = {

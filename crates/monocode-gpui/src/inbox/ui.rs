@@ -3057,22 +3057,100 @@ mod tests {
                     assert!(inbox.phone_view().triage.is_done(&key));
                     let until = monocode_core::time::now_ms() as i64 + 60_000;
                     inbox.phone_mark(&key, Mark::Snooze(until), cx).unwrap();
-                    assert_eq!(inbox.phone_view().triage.snoozed_until(&key, 0), Some(until));
+                    assert_eq!(
+                        inbox.phone_view().triage.snoozed_until(&key, 0),
+                        Some(until)
+                    );
                     inbox.phone_mark(&key, Mark::Undone, cx).unwrap();
                     inbox.phone_mark(&key, Mark::Unseen, cx).unwrap();
                     assert!(inbox.state.seen.unseen(&fixture.item));
                     inbox.phone_mark(&key, Mark::Seen, cx).unwrap();
                     assert!(!inbox.state.seen.unseen(&fixture.item));
                     // The desktop reads the same state back from its saved view.
-                    let saved = locked(&inbox.store)
-                        .map(|db| ViewState::load(&db))
-                        .unwrap();
+                    let saved = locked(&inbox.store).map(|db| ViewState::load(&db)).unwrap();
                     assert!(!saved.triage.is_done(&key));
                     assert_eq!(saved.triage.snoozed_until(&key, 0), Some(until));
                     assert!(!saved.seen.unseen(&fixture.item));
                     // A phone looking at a list that was just fetched starts no refresh.
                     inbox.refresh_for_phone(cx);
                     assert!(!inbox.loading);
+                });
+            })
+            .unwrap();
+    }
+    #[gpui::test]
+    fn a_phone_reads_its_own_fetch_when_the_desktops_would_hide_rows(cx: &mut TestAppContext) {
+        use monocode_core::mobile::inbox::Mark;
+        let window = fixture(cx);
+        window
+            .update(cx, |fixture, _, cx| {
+                fixture.inbox.update(cx, |inbox, cx| {
+                    let desktop_key = fixture.item.key();
+                    let extra = Item {
+                        provider: "github".into(),
+                        number: 99,
+                        title: "Only the phone lists this".into(),
+                        url: "https://github.com/acme/app/pull/99".into(),
+                        ..Default::default()
+                    };
+                    let extra_key = extra.key();
+                    inbox.state.seen.seeded = true;
+                    inbox.state.filters = model::Filters::default();
+                    let names = |inbox: &Inbox| {
+                        inbox
+                            .phone_view()
+                            .items
+                            .iter()
+                            .map(|item| item.key())
+                            .collect::<Vec<_>>()
+                    };
+
+                    // Nothing narrows the desktop's fetch: its snapshot is the phone's.
+                    assert!(!inbox.phone_separate());
+                    inbox.phone.snapshot = Some(Snapshot {
+                        items: vec![extra.clone()],
+                        ..Default::default()
+                    });
+                    inbox.phone.fetched_at = 5;
+                    assert!(names(inbox).contains(&desktop_key));
+                    assert!(!names(inbox).contains(&extra_key));
+                    inbox.refresh_for_phone(cx);
+                    assert!(
+                        inbox.phone.snapshot.is_none(),
+                        "an unused phone fetch is dropped"
+                    );
+
+                    // A desktop filter that narrows the fetch gives the phone its own.
+                    inbox.state.filters.assigned_to_me = true;
+                    assert!(inbox.phone_separate());
+                    assert!(inbox.phone_view().fetched_at.is_none(), "not fetched yet");
+                    assert!(
+                        names(inbox).contains(&desktop_key),
+                        "reads the desktop's until then"
+                    );
+                    inbox.phone.snapshot = Some(Snapshot {
+                        items: vec![extra.clone()],
+                        ..Default::default()
+                    });
+                    inbox.phone.fetched_at = 5;
+                    assert_eq!(names(inbox), std::slice::from_ref(&extra_key));
+                    assert_eq!(inbox.phone_view().fetched_at, Some(5));
+                    assert!(inbox.phone_mark(&desktop_key, Mark::Done, cx).is_err());
+                    inbox.phone_mark(&extra_key, Mark::Done, cx).unwrap();
+                    assert!(inbox.phone_view().triage.is_done(&extra_key));
+                    // The pull to refresh waits on the phone's fetch, not the desktop's.
+                    inbox.phone.loading = true;
+                    assert!(inbox.fetching());
+                    inbox.phone.loading = false;
+                    assert!(!inbox.fetching());
+
+                    // A Mono's project the desktop doesn't list does the same.
+                    inbox.state.filters = model::Filters::default();
+                    assert!(!inbox.phone_separate());
+                    inbox.set_phone_projects(vec![PathBuf::from("/work/mono-only")]);
+                    assert!(inbox.phone_separate());
+                    inbox.set_phone_projects(vec![]);
+                    assert!(!inbox.phone_separate());
                 });
             })
             .unwrap();

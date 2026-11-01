@@ -9,6 +9,7 @@ import { HeaderButton } from "@/features/files/codeScreen";
 import { Markdown } from "@/features/sessions/Markdown";
 import { SettingsPage } from "@/features/settings/SettingsUI";
 import { relativeTime } from "@/features/workspace/relativeTime";
+import { GradualBlur } from "@/ui/GradualBlur";
 import { Icon } from "@/ui/Icon";
 import { themedStyles, useColors, withAlpha } from "@/ui/theme";
 
@@ -30,11 +31,14 @@ import { useNow } from "./useNow";
 
 type Tab = "summary" | "code" | "checks";
 
+/** The action bar over the page's end: the button, and room above and below it. */
+const BAR = 86;
+
 /**
  * An inbox item's sheet, as the mock lays it out: provider, number, status
  * and author; the description and comments; for a pull request its changed
  * files and, on GitHub, its checks. The primary action starts an agent on
- * it; the other opens it in the provider's own app or site.
+ * it; the header's button opens it in the provider's own app or site.
  */
 export function ItemSheet({ itemKey }: { itemKey: string }) {
   const colors = useColors();
@@ -94,7 +98,8 @@ export function ItemSheet({ itemKey }: { itemKey: string }) {
             item ? <HeaderButton icon="external" label="Open in provider" onPress={open} /> : null,
         }}
       />
-      <SettingsPage onRefresh={reload} refreshing={false}>
+      {/* No pull to refresh: pulling down at the top is how the sheet is dismissed. */}
+      <SettingsPage>
         {!item ? (
           <Missing error={error} loading={loading} onRetry={reload} />
         ) : (
@@ -150,10 +155,11 @@ export function ItemSheet({ itemKey }: { itemKey: string }) {
               />
             )}
             {/* Room for the action bar over the end of the page. */}
-            <View style={{ height: 96 + bottom }} />
+            <View style={{ height: BAR + bottom }} />
           </>
         )}
       </SettingsPage>
+      <GradualBlur edge="bottom" height={BAR + bottom} color={colors.sheet} />
       <View style={[styles.bar, { paddingBottom: bottom + 12 }]}>
         <Pressable
           accessibilityRole="button"
@@ -167,15 +173,6 @@ export function ItemSheet({ itemKey }: { itemKey: string }) {
         >
           <Icon name="sparkle" size={19} color={colors.inverse} />
           <Text style={styles.primaryLabel}>Start agent on this</Text>
-        </Pressable>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Open in provider"
-          disabled={!item}
-          onPress={open}
-          style={({ pressed }) => [styles.secondary, !item && styles.disabled, pressed && styles.pressed]}
-        >
-          <Icon name="external" size={19} />
         </Pressable>
       </View>
       <InboxToast bottom={bottom + 84} />
@@ -698,7 +695,6 @@ const useStyles = themedStyles((colors) => ({
     gap: 10,
     paddingTop: 12,
     paddingHorizontal: 16,
-    backgroundColor: withAlpha(colors.sheet, 0.94),
   },
   primary: {
     flex: 1,
@@ -714,16 +710,6 @@ const useStyles = themedStyles((colors) => ({
     color: colors.inverse,
     fontSize: 17,
     fontWeight: "600",
-  },
-  secondary: {
-    width: 50,
-    height: 50,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: 25,
-    backgroundColor: colors.fill,
-    borderWidth: 1,
-    borderColor: colors.stroke,
   },
   disabled: {
     opacity: 0.35,

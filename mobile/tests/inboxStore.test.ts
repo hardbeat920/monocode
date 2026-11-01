@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createFixtureClient } from "@/features/inbox/fixtures";
 import { createInboxStore, type InboxStorage } from "@/features/inbox/store";
-import { createInboxClient, type InboxClient } from "@/features/inbox/protocol";
+import {
+  createInboxClient,
+  type InboxClient,
+  type InboxItem,
+  type InboxListParams,
+} from "@/features/inbox/protocol";
 
 const NOW = new Date("2026-11-01T14:00:00").getTime();
 
@@ -216,5 +221,96 @@ describe("the client", () => {
     expect(transport.mock.calls[1][2]).toBe("id-1");
     await client.start(params);
     expect(transport.mock.calls[2][2]).toBe("id-2");
+  });
+});
+
+describe("staying in step with the desktop", () => {
+  const row = (n: number): InboxItem => ({
+    key: `github:o/r#${n}`,
+    source: "github",
+    kind: "pr",
+    title: `PR ${n}`,
+    repo: "o/r",
+    author: { name: "a" },
+    status: "open",
+    updatedAt: 1000 - n,
+    unread: false,
+    done: false,
+    comments: 0,
+    url: "https://example.test",
+  });
+
+  /** A desktop that pages `all` by 3 and records every request. */
+  function desktop(count: number) {
+    let all = Array.from({ length: count }, (_, i) => row(i));
+    const calls: InboxListParams[] = [];
+    const client = {
+      list: async (params: InboxListParams) => {
+        calls.push(params);
+        const start = params.cursor ? Number(params.cursor) : 0;
+        return {
+          items: all.slice(start, start + 3),
+          nextCursor: start + 3 < all.length ? String(start + 3) : undefined,
+          stale: false,
+          fetchedAt: NOW,
+          providers: [],
+          counts: { unread: 0, needsMe: 0, done: 0 },
+        };
+      },
+    } as unknown as InboxClient;
+    return {
+      client,
+      calls,
+      drop: (n: number) => (all = all.filter((item) => item.key !== `github:o/r#${n}`)),
+    };
+  }
+  const numbers = (store: ReturnType<typeof createInboxStore>, query: { scope: "all" }) =>
+    store.getFeed(query).items.map((item) => Number(item.key.split("#")[1]));
+
+  it("drops a scrolled-in item the desktop no longer lists, and keeps the depth", async () => {
+    const { client, drop } = desktop(9);
+    const store = createInboxStore({ client, storage: memory(), namespace: "d" });
+    const query = { scope: "all" as const };
+    await store.refresh(query);
+    await store.loadMore(query);
+    expect(numbers(store, query)).toEqual([0, 1, 2, 3, 4, 5]);
+    drop(4);
+    await store.refresh(query);
+    // Re-read down to where the list was, so the scroll position holds.
+    expect(numbers(store, query)).toEqual([0, 1, 2, 3, 5, 6]);
+    expect(store.getFeed(query).nextCursor).toBeDefined();
+  });
+
+  it("asks the desktop to fetch on a forced refresh, not on a poll", async () => {
+    const { client, calls } = desktop(3);
+    const store = createInboxStore({ client, storage: memory(), namespace: "d" });
+    const query = { scope: "all" as const };
+    await store.refresh(query);
+    await store.refresh(query, { force: true });
+    expect(calls.map((call) => call.refresh)).toEqual([undefined, true]);
+  });
+
+  it("runs a forced refresh after a poll that is already on its way", async () => {
+    const { client, calls } = desktop(3);
+    const store = createInboxStore({ client, storage: memory(), namespace: "d" });
+    const query = { scope: "all" as const };
+    const poll = store.refresh(query);
+    const pull = store.refresh(query, { force: true });
+    await Promise.all([poll, pull]);
+    expect(calls.map((call) => call.refresh)).toEqual([undefined, true]);
+  });
+
+  it("ignores a page that was asked for before a refresh replaced the list", async () => {
+    const { client, drop } = desktop(9);
+    const store = createInboxStore({ client, storage: memory(), namespace: "d" });
+    const query = { scope: "all" as const };
+    await store.refresh(query);
+    const more = store.loadMore(query);
+    drop(0);
+    await store.refresh(query);
+    await more;
+    const items = numbers(store, query);
+    expect(new Set(items).size).toBe(items.length);
+    expect(items).not.toContain(0);
   });
 });

@@ -241,7 +241,11 @@ fn github_involvement_args(
     if involvement == Involvement::ReviewRequested && kind != "pr" {
         return Err("Only pull requests have reviews".into());
     }
-    if viewer.is_empty() || !viewer.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+    if viewer.is_empty()
+        || !viewer
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
         return Err("Unknown GitHub user".into());
     }
     let (owner, name) = split_github_repo(repo)?;
@@ -1450,28 +1454,37 @@ mod tests {
 
     #[test]
     fn involvement_searches_name_the_viewer_and_ask_only_for_numbers() {
-        let args = github_involvement_args(
-            "Acme/App",
-            "pr",
-            Involvement::ReviewRequested,
-            "octo-cat",
-        )
-        .unwrap();
-        assert!(args.windows(2).any(|w| w == ["--search", "review-requested:octo-cat"]));
+        let args =
+            github_involvement_args("Acme/App", "pr", Involvement::ReviewRequested, "octo-cat")
+                .unwrap();
+        assert!(args
+            .windows(2)
+            .any(|w| w == ["--search", "review-requested:octo-cat"]));
         assert!(args.windows(2).any(|w| w == ["--repo", "Acme/App"]));
         assert!(args.windows(2).any(|w| w == ["--json", "number"]));
-        let mention = github_involvement_args("a/b", "issue", Involvement::Mentioned, "sam").unwrap();
+        let mention =
+            github_involvement_args("a/b", "issue", Involvement::Mentioned, "sam").unwrap();
         assert!(mention.contains(&"mentions:sam".to_string()));
         for bad in ["", "sam repo:x/y", "a:b", "sam\n"] {
-            assert!(github_involvement_args("a/b", "pr", Involvement::Mentioned, bad).is_err(), "{bad}");
+            assert!(
+                github_involvement_args("a/b", "pr", Involvement::Mentioned, bad).is_err(),
+                "{bad}"
+            );
         }
-        assert!(github_involvement_args("a/b", "issue", Involvement::ReviewRequested, "sam").is_err());
-        assert!(github_involvement_args("not a repo", "pr", Involvement::Mentioned, "sam").is_err());
+        assert!(
+            github_involvement_args("a/b", "issue", Involvement::ReviewRequested, "sam").is_err()
+        );
+        assert!(
+            github_involvement_args("not a repo", "pr", Involvement::Mentioned, "sam").is_err()
+        );
     }
 
     #[test]
     fn involvement_answers_are_number_lists() {
-        assert_eq!(parse_github_numbers(r#"[{"number":4},{"number":9}]"#).unwrap(), [4, 9]);
+        assert_eq!(
+            parse_github_numbers(r#"[{"number":4},{"number":9}]"#).unwrap(),
+            [4, 9]
+        );
         assert_eq!(parse_github_numbers("[]").unwrap(), Vec::<i64>::new());
         assert!(parse_github_numbers("nope").is_err());
     }
