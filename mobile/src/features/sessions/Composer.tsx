@@ -30,6 +30,7 @@ import {
 } from "./attachments";
 import { DictationBar } from "./DictationBar";
 import { canDictate, insertDictation } from "./dictation";
+import { TypingPostureFocus } from "./TypingPostureFocus";
 import { ProviderLogo } from "./ProviderLogo";
 import { COMPOSER_INPUT_ID } from "./SessionScreen";
 
@@ -85,10 +86,13 @@ export function Composer({
   onModelPress,
   workspace,
   notice,
+  active = true,
   compact = false,
   reply,
   onClearReply,
 }: {
+  /** Only the visible route may focus its composer in response to folding. */
+  active?: boolean;
   /** Where this runs: the project, or the mono. */
   context: string;
   branch: string;
@@ -276,6 +280,10 @@ export function Composer({
 
   return (
     <Animated.View style={containerStyle}>
+      <TypingPostureFocus
+        enabled={active && !blocked && !dictating && !sending}
+        onEnterTypingPosture={() => input.current?.focus()}
+      />
       <LiquidView fill row={false} borderRadius={RADIUS} style={StyleSheet.absoluteFill}>
         <View />
       </LiquidView>

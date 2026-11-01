@@ -15,11 +15,11 @@ import {
   Keyboard,
   Pressable,
   StyleSheet,
-  useWindowDimensions,
   View,
 } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
+  cancelAnimation,
   interpolate,
   ReduceMotion,
   useAnimatedReaction,
@@ -29,6 +29,7 @@ import Animated, {
   type SharedValue,
 } from "react-native-reanimated";
 import { scheduleOnRN } from "react-native-worklets";
+import { useContentWidth } from "./ContentPane";
 
 import { LinearGradient } from "expo-linear-gradient";
 
@@ -232,7 +233,7 @@ export function ScenePagerHost({
   drawer?: ReactNode;
 }) {
   const colors = useColors();
-  const { width } = useWindowDimensions();
+  const width = useContentWidth();
   const drawerWidth = Math.min(Math.round(width * 0.82), 330);
   const progress = useSharedValue(0);
   const target = useSharedValue(0);
@@ -264,6 +265,15 @@ export function ScenePagerHost({
   const dragStart = useSharedValue(0);
   /** What the current drag moves: NONE, PAGES or DRAWER. */
   const moving = useSharedValue(NONE);
+
+  // A fold can interrupt a drag or spring. Settle both within the resized pane.
+  useEffect(() => {
+    moving.set(NONE);
+    cancelAnimation(progress);
+    progress.set(target.get());
+    cancelAnimation(translateX);
+    translateX.set(isOpen.get() ? drawerWidth : 0);
+  }, [width, drawerWidth, moving, progress, target, translateX, isOpen]);
 
   // Side effects of opening or shutting; the motion itself runs on the UI thread.
   const onToggled = useCallback((willOpen: boolean) => {
@@ -376,7 +386,7 @@ export function ScenePagerHost({
       Gesture.Pan()
         // Not rebuilt as the drawer opens or shuts: a new gesture would be
         // attached anew mid-animation.
-        .enabled(on || (hasDrawer && swipeCount > 0))
+        .enabled(width > 0 && (on || (hasDrawer && swipeCount > 0)))
         // Takes only a swipe towards a page there is, or the drawer's way, so
         // one off the edge (left on the last page, say) goes to what is under
         // the finger, such as a row's own swipe actions.

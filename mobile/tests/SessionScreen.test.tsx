@@ -8,9 +8,16 @@ import {
   SessionContent,
   SessionScreen,
   useSessionLayout,
+  useKeyboardLift,
 } from "@/features/sessions/SessionScreen";
 const layout = vi.hoisted(() => ({
   OS: "ios",
+  windowHeight: 1000,
+  frameHandler: undefined as undefined | ((event: { endCoordinates: { screenY: number; height: number } }) => void),
+  keyboardHandler: undefined as undefined | {
+    onStart: () => void;
+    onEnd: (event: { height: number; progress: number }) => void;
+  },
   onTargetLayout: undefined as undefined | (() => void),
   onBelowLayout: undefined as undefined | ((event: { nativeEvent: { layout: { height: number } } }) => void),
 }));
@@ -35,6 +42,11 @@ vi.mock("react-native", () => {
   };
   return {
     Platform: { get OS() { return layout.OS; } },
+    Dimensions: { get: () => ({ height: layout.windowHeight }) },
+    Keyboard: { addListener: (_name: string, handler: typeof layout.frameHandler) => {
+      layout.frameHandler = handler;
+      return { remove: () => { layout.frameHandler = undefined; } };
+    } },
     View,
     Text: View,
     StyleSheet: { create: (styles: unknown) => styles },
@@ -43,13 +55,13 @@ vi.mock("react-native", () => {
 });
 vi.mock("react-native-keyboard-controller", () => ({
   KeyboardGestureArea: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
-  useKeyboardHandler: () => {},
+  useKeyboardHandler: (handler: typeof layout.keyboardHandler) => { layout.keyboardHandler = handler; },
 }));
 vi.mock("react-native-reanimated", () => ({
   default: { View: ({ children }: { children?: ReactNode }) => <div>{children}</div> },
   Easing: { out: () => {}, cubic: () => {} },
   interpolate: () => 0,
-  useAnimatedStyle: () => ({}),
+  useAnimatedStyle: (read: () => object) => read(),
   useSharedValue: (initial: number) =>
     useState(() => {
       let value = initial;
@@ -214,4 +226,70 @@ describe("persistent session frame", () => {
       act(() => root.unmount());
     }
   });
+});
+
+it("keeps the composer above the settled iOS keyboard through rotation and stale animation completions", () => {
+  layout.OS = "ios";
+  layout.windowHeight = 1000;
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  function Probe() {
+    const style = useKeyboardLift(0) as unknown as { transform: { translateY: number }[] };
+    return <span data-lift={style.transform[0].translateY} />;
+  }
+  const render = () => act(() => root.render(<Probe />));
+  const lift = () => container.querySelector("[data-lift]")!.getAttribute("data-lift");
+  try {
+    render();
+    act(() => layout.frameHandler!({ endCoordinates: { screenY: 600, height: 400 } }));
+    render();
+    expect(lift()).toBe("-400");
+    layout.windowHeight = 600;
+    act(() => layout.frameHandler!({ endCoordinates: { screenY: 400, height: 200 } }));
+    act(() => layout.keyboardHandler!.onEnd({ height: 0, progress: 0 }));
+    render();
+    expect(lift()).toBe("-200");
+    // A real dismissal still wins, even if an old show animation ends later.
+    act(() => layout.frameHandler!({ endCoordinates: { screenY: 600, height: 200 } }));
+    act(() => layout.keyboardHandler!.onEnd({ height: 400, progress: 1 }));
+    render();
+    expect(lift()).toBe("0");
+  } finally {
+    act(() => root.unmount());
+  }
+});
+
+it("does not apply a previous transition's settled iOS keyboard when onEnd beats the frame event", () => {
+  layout.OS = "ios";
+  layout.windowHeight = 1000;
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  function Probe() {
+    const style = useKeyboardLift(0) as unknown as { transform: { translateY: number }[] };
+    return <span data-lift={style.transform[0].translateY} />;
+  }
+  const render = () => act(() => root.render(<Probe />));
+  const lift = () => container.querySelector("[data-lift]")!.getAttribute("data-lift");
+  try {
+    render();
+    act(() => layout.frameHandler!({ endCoordinates: { screenY: 600, height: 400 } }));
+    // Dismissal: onEnd lands before UIKit's settled frame.
+    act(() => layout.keyboardHandler!.onStart());
+    act(() => layout.keyboardHandler!.onEnd({ height: 0, progress: 0 }));
+    render();
+    expect(lift()).toBe("0");
+    act(() => layout.frameHandler!({ endCoordinates: { screenY: 1000, height: 400 } }));
+    render();
+    expect(lift()).toBe("0");
+    // Show again: the dismissed overlap must not hold the composer down.
+    act(() => layout.keyboardHandler!.onStart());
+    act(() => layout.keyboardHandler!.onEnd({ height: 300, progress: 1 }));
+    render();
+    expect(lift()).toBe("-300");
+    act(() => layout.frameHandler!({ endCoordinates: { screenY: 700, height: 300 } }));
+    render();
+    expect(lift()).toBe("-300");
+  } finally {
+    act(() => root.unmount());
+  }
 });

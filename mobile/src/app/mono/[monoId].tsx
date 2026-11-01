@@ -156,6 +156,7 @@ export default function MonoScreen() {
           <Composer
             key={mono.id}
             // One line: the header names the Mono, and its model lives in settings.
+            active={focused}
             compact
             context=""
             branch=""

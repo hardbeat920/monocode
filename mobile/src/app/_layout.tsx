@@ -20,6 +20,7 @@ import { SessionActivity } from "@/features/sessions/SessionActivity";
 import { SessionFrame } from "@/features/sessions/SessionScreen";
 import { WorkspaceDrawer } from "@/features/workspace/WorkspaceDrawer";
 import { WorkspaceProvider } from "@/features/workspace/WorkspaceProvider";
+import { WorkspaceLayout } from "@/features/workspace/WorkspaceLayout";
 import { Timed } from "@/ui/Timed";
 import { codeScreenOptions, HEADER_OWN_BLUR } from "@/features/files/codeScreen";
 import { applySavedAppearance } from "@/features/settings/appearance";
@@ -152,36 +153,38 @@ function LinkedWorkspace() {
     <WorkspaceProvider key={connection.pairing?.desktop.deviceId}>
       <SessionNotifications />
       <SessionActivity />
-      <ScenePagerHost drawer={<WorkspaceDrawer />}>
-        <Timed id="persistent frame">
-        <SessionFrame>
-          {/* A native stack: sessions push over their project, and the
-              code screens, Changes, settings, the model picker and the project
-              picker present
-              over the rest as native modals; everything else swaps in place,
-              as a plain slot did. */}
-          <Stack screenOptions={{ headerShown: false, animation: "none" }}>
-            <Stack.Screen name="file" options={screens.code} />
-            <Stack.Screen name="document" options={screens.code} />
-            <Stack.Screen name="diff" options={screens.code} />
-            <Stack.Screen
-              name="project/[projectId]/index"
-              options={screens.nativeHeader}
-            />
-            <Stack.Screen
-              name="project/[projectId]/session/[sessionId]"
-              options={screens.session}
-            />
-            <Stack.Screen name="session" options={screens.sessionSheet} />
-            <Stack.Screen name="projects" options={screens.modal} />
-            <Stack.Screen name="settings" options={screens.modal} />
-            <Stack.Screen name="mono-profile/[monoId]" options={screens.modal} />
-            <Stack.Screen name="models" options={screens.modal} />
-            <Stack.Screen name="changes" options={screens.changes} />
-          </Stack>
-        </SessionFrame>
-        </Timed>
-      </ScenePagerHost>
+      <WorkspaceLayout>
+        <ScenePagerHost drawer={<WorkspaceDrawer />}>
+          <Timed id="persistent frame">
+            <SessionFrame>
+              {/* A native stack: sessions push over their project, and the
+                  code screens, Changes, settings, the model picker and the project
+                  picker present
+                  over the rest as native modals; everything else swaps in place,
+                  as a plain slot did. */}
+              <Stack screenOptions={{ headerShown: false, animation: "none" }}>
+                <Stack.Screen name="file" options={screens.code} />
+                <Stack.Screen name="document" options={screens.code} />
+                <Stack.Screen name="diff" options={screens.code} />
+                <Stack.Screen
+                  name="project/[projectId]/index"
+                  options={screens.nativeHeader}
+                />
+                <Stack.Screen
+                  name="project/[projectId]/session/[sessionId]"
+                  options={screens.session}
+                />
+                <Stack.Screen name="session" options={screens.sessionSheet} />
+                <Stack.Screen name="projects" options={screens.modal} />
+                <Stack.Screen name="settings" options={screens.modal} />
+                <Stack.Screen name="mono-profile/[monoId]" options={screens.modal} />
+                <Stack.Screen name="models" options={screens.modal} />
+                <Stack.Screen name="changes" options={screens.changes} />
+              </Stack>
+            </SessionFrame>
+          </Timed>
+        </ScenePagerHost>
+      </WorkspaceLayout>
     </WorkspaceProvider>
   );
 }

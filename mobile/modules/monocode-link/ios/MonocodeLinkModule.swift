@@ -5,6 +5,7 @@ public class MonocodeLinkModule: Module {
   public func definition() -> ModuleDefinition {
     Name("MonocodeLink")
     Constant("nativeTranscriptVersion") { 1 }
+    Constant("typingPostureVersion") { 1 }
     View(NativeTranscriptView.self) {
       Events("onStatus", "onAction", "onScrollState")
       Prop("configuration") { (view: NativeTranscriptView, value: String) in
@@ -29,6 +30,11 @@ public class MonocodeLinkModule: Module {
       AsyncFunction("selectText") { (view: NativeTranscriptView, text: String) in
         view.selectText(text)
       }
+    }
+    View(TypingPostureView.self) {
+      Events("onEnterTypingPosture")
+      Prop("enabled") { (view: TypingPostureView, value: Bool) in view.enabled = value }
+      OnViewDidUpdateProps { (view: TypingPostureView) in view.updatePosture() }
     }
     AsyncFunction("execute") { (input: String) -> String in
       return input.withCString { pointer in
