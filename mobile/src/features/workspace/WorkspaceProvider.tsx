@@ -62,6 +62,8 @@ type Workspace = {
   ) => Promise<string>;
   sendMessage: (conversationId: string, text: string, attachments?: Attachment[]) => Promise<void>;
   stop: (conversationId: string) => Promise<void>;
+  /** Answers the agent's request to use the browser, as the desktop's Allow bar does. */
+  answerBrowser: (conversationId: string, allow: boolean) => Promise<void>;
   /** Answers, or skips, the question an agent waits on, as the desktop's card does. */
   answerQuestion: (
     conversationId: string,
@@ -545,6 +547,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     },
     [mutate, read],
   );
+  const answerBrowser = useCallback(
+    async (conversationId: string, allow: boolean) => {
+      await mutate("browser.answer", { conversationId, allow });
+      void refresh();
+    },
+    [mutate, refresh],
+  );
   const answerQuestion = useCallback(
     async (conversationId: string, requestId: number, reply: QuestionReply) => {
       const shown = displayed.current.get(conversationId);
@@ -709,6 +718,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       startSession,
       sendMessage,
       stop,
+      answerBrowser,
       answerQuestion,
       keepQuestionOpen,
       listSessions,
@@ -734,6 +744,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     startSession,
     sendMessage,
     stop,
+    answerBrowser,
     answerQuestion,
     keepQuestionOpen,
     listSessions,

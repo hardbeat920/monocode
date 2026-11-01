@@ -563,6 +563,24 @@ fn run_turn_using(
                 prompt = discovery.prepend(prompt);
             }
         }
+        // The browser: the session's credentials and, for providers that
+        // take MCP servers at launch, the server; the turn stays active for
+        // the browser until the run returns.
+        let browser_turn = if !settings.text_only && !raw_native_command {
+            let cwd =
+                std::path::PathBuf::from(settings.worktree_cwd.as_deref().unwrap_or(&summary.cwd));
+            let eligible = !settings.agent_sent && !settings.orchestrator;
+            let full_access = settings.access == monocode_core::agent::AccessMode::FullAccess;
+            monocode_core::browser::begin_turn(summary.id, &cwd, kind, eligible, full_access)
+        } else {
+            monocode_core::browser::Turn::default()
+        };
+        settings
+            .environment
+            .extend(browser_turn.environment.clone());
+        if let Some(instructions) = &browser_turn.instructions {
+            prompt = format!("{prompt}\n\n{instructions}");
+        }
         let request = Request {
             kind,
             binary,

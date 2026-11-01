@@ -1,0 +1,25 @@
+[package]
+name = "monocode-browser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "MonoCode's browser module: a thin CDP client, the access policy, the agent's actions, its CLI and MCP server. Shared by the Tauri app and Monocode Native."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+rusqlite = { version = "0.40.2", features = ["bundled", "hooks"], default-features = false }
+uuid = { version = "1", features = ["v4"] }
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+base64 = "0.22"
+url = "2.5"
+sha2 = "0.10"
+toml = "0.9.12"
+log = "0.4"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_System_Diagnostics_ToolHelp"] }

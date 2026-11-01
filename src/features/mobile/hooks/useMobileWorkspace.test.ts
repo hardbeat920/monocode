@@ -4,6 +4,11 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useMobileWorkspace } from "./useMobileWorkspace";
+import { resetBrowserStore } from "../../settings/model/browser";
+import {
+  browserState,
+  browserTab,
+} from "../../settings/model/browser.fixtures";
 
 const desktop = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -11,7 +16,10 @@ const desktop = vi.hoisted(() => ({
   catalog: vi.fn(),
   usage: vi.fn(),
 }));
-vi.mock("@tauri-apps/api/core", () => ({ invoke: desktop.invoke }));
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: desktop.invoke,
+  isTauri: () => false,
+}));
 vi.mock("@tauri-apps/api/event", () => ({ listen: desktop.listen }));
 vi.mock("../model/mobileWorkspace", () => ({ mobileCatalog: desktop.catalog }));
 vi.mock("../model/mobileAccountUsage", () => ({
@@ -171,5 +179,45 @@ describe("new mobile session publication", () => {
       id: "retry",
       response: { ok: true, result: { sessionId: "new" } },
     });
+  });
+
+  it("tells the phone at once when a browser request starts or ends, and only then", async () => {
+    desktop.invoke.mockImplementation(async (method: string) =>
+      method === "mobile_status" ? { enabled: true } : undefined,
+    );
+    act(() => root.render(createElement(Probe)));
+    await flush();
+    const publications = () =>
+      desktop.invoke.mock.calls.filter(([method]) => method === "mobile_publish")
+        .length;
+    const polled = publications();
+    const access = {
+      session_id: "s1",
+      window: "main",
+      granted: false,
+      turn_active: true,
+      tabs: 0,
+      requested: true,
+      turned_off: false,
+    };
+    act(() => resetBrowserStore(browserState({ sessions: [access] })));
+    await flush();
+    expect(publications()).toBe(polled + 1);
+    // A tab at work changes nothing the phone is shown.
+    act(() =>
+      resetBrowserStore(
+        browserState({ sessions: [access], tabs: [browserTab({ busy: true })] }),
+      ),
+    );
+    await flush();
+    expect(publications()).toBe(polled + 1);
+    act(() =>
+      resetBrowserStore(
+        browserState({ sessions: [{ ...access, requested: false }] }),
+      ),
+    );
+    await flush();
+    expect(publications()).toBe(polled + 2);
+    act(() => resetBrowserStore());
   });
 });

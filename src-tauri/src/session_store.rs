@@ -537,6 +537,7 @@ pub fn session_delete(
     );
     delete_session(&conn, &session_id).map_err(|e| e.to_string())?;
     drop(conn);
+    crate::browser::session_deleted(&session_id);
     if !image_paths.is_empty() {
         if let Err(error) = crate::fs::delete_generated_images_sync(&app, &image_paths) {
             eprintln!("Generated image cleanup will need a retry: {error}");

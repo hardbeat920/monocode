@@ -557,6 +557,16 @@ impl Monos {
             .and_then(|id| self.chats.get(id))
             .cloned()
     }
+    /// The open Mono chats: each one's session and its Mono's name.
+    pub(crate) fn chat_sessions<'a>(
+        &'a self,
+        cx: &'a gpui::App,
+    ) -> impl Iterator<Item = (i64, String)> + 'a {
+        self.chats.iter().filter_map(move |(id, chat)| {
+            let mono = self.roster.get(id)?;
+            Some((chat.read(cx).summary.id, mono.label()))
+        })
+    }
     /// A Mono's chat when it is open, without opening it.
     pub(crate) fn open_chat(&self, id: &str) -> Option<Entity<Conversation>> {
         self.chats.get(id).cloned()

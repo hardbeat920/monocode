@@ -116,6 +116,7 @@ impl Conversation {
     pub(crate) fn mono_attention(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         div()
             .child(self.approval_shelf(window, cx))
+            .child(self.browser_shelf(cx))
             .when_some(self.questions.front(), |d, (card, _)| {
                 d.child(div().mb_2().child(card.clone()))
             })
@@ -677,6 +678,7 @@ impl Conversation {
                     .children(self.usage_notice(true, cx))
                     .children(self.auth_notice(cx))
                     .child(self.approval_shelf(window, cx))
+                    .child(self.browser_shelf(cx))
                     .child({
                         let composer = div()
                             .child(self.mono_composer_box(window, cx))

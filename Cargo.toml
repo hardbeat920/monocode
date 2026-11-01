@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["src-tauri", "crates/mobile-link"]
+members = ["src-tauri", "crates/mobile-link", "crates/monocode-browser"]
 exclude = ["vendor/portable-pty", "vendor/gpui-pre", "vendor/gpui-pre-apple", "vendor/gpui-pre-linux", "vendor/gpui-pre-windows", "crates/monocode-core", "crates/monocode-gpui"]
 
 [workspace.package]
@@ -10,5 +10,17 @@ license = "MIT"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["raw_value"] }
 thiserror = "2"
+
+# The browser pane runs hundreds of KB of JSON and base64 a second through
+# these three; unoptimised they cost a development build most of its frame
+# rate. Only they are optimised, so MonoCode itself still builds fast.
+[profile.dev.package.serde_json]
+opt-level = 3
+
+[profile.dev.package.base64]
+opt-level = 3
+
+[profile.dev.package.tungstenite]
+opt-level = 3

@@ -16,6 +16,7 @@ import {
   filesFromClipboard,
   mergeAttachments,
   pickAttachments,
+  pngAttachment,
   revokeAttachment,
 } from "../../sessions/model/attachments";
 import {
@@ -26,9 +27,15 @@ import { useFileDrop } from "../../sessions/hooks/useFileDrop";
 import { resizeComposer } from "../../sessions/model/composerResize";
 import { useComposerAutocorrect } from "../../settings/model/displayPrefs";
 import {
+  appendComposerInsert,
   consumeQuoteRequest,
   type QuoteRequest,
 } from "../../sessions/model/quoteDraft";
+import {
+  BrowserIndicator,
+  BrowserRequestPrompt,
+} from "../../sessions/ui/BrowserIndicator";
+import type { PickedBrowserElement } from "../../settings/model/browser";
 
 // Loaded on first open, with its emoji data, so neither weighs on startup.
 const EmojiPickerPopover = lazy(() =>
@@ -70,6 +77,12 @@ type Props = {
   controls?: ReactNode;
   /** Sits beside attach and emoji, on the left under the input. */
   tools?: ReactNode;
+  /**
+   * The Mono's own session, for the browser: its "Allow" prompt sits on the
+   * input, and with `controls` its browser indicator sits beside them.
+   * Separate from `sessionId`, which may key a draft of its own.
+   */
+  browser?: { sessionId: string; cwd?: string };
 };
 
 /**
@@ -91,6 +104,7 @@ export function MonoComposer({
   onFocus,
   controls,
   tools,
+  browser,
 }: Props) {
   const [text, setText] = useState(() => getComposerDraft(sessionId) ?? "");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -214,6 +228,17 @@ export function MonoComposer({
     const next = mergeAttachments(attachmentsRef.current, incoming);
     attachmentsRef.current = next;
     setAttachments(next);
+  };
+  // An element the user pointed at in a browser tab: its line goes into the
+  // message, its picture along as an attachment, as in a session.
+  const insertBrowserPick = (picked: PickedBrowserElement) => {
+    const next = appendComposerInsert(textRef.current, picked.text);
+    update(next);
+    if (picked.image) add([pngAttachment("picked-element.png", picked.image)]);
+    requestAnimationFrame(() => {
+      field.current?.focus();
+      field.current?.setSelectionRange(next.length, next.length);
+    });
   };
   const readAttachments = useCallback(
     (read: () => Promise<Attachment[]>, dropped = false) => {
@@ -374,6 +399,7 @@ export function MonoComposer({
         send();
       }}
     >
+      {browser ? <BrowserRequestPrompt sessionId={browser.sessionId} /> : null}
       <div
         ref={box}
         className={`agent-chat-composer relative rounded-lg border bg-content/3 backdrop-blur-sm ${fileDrag ? "border-accent/60" : "border-content/10 has-focus:border-content/20"}`}
@@ -476,6 +502,13 @@ export function MonoComposer({
           ) : null}
           {tools}
           <div className="ml-auto flex min-w-0 items-center gap-1">
+            {browser ? (
+              <BrowserIndicator
+                sessionId={browser.sessionId}
+                cwd={browser.cwd}
+                onPicked={insertBrowserPick}
+              />
+            ) : null}
             {controls}
           </div>
         </div>

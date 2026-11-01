@@ -1,5 +1,8 @@
 # Shell scripts are also embedded in the desktop app and sent to Unix hosts.
 *.sh text eol=lf
 
+# Embedded with include_str! and split on "\n## " headings (browser agent tools).
+docs/browser-instructions.md text eol=lf
+
 # Signature verification requires identical package bytes on every platform.
 crates/monocode-core/src/app_update/fixtures/package.txt text eol=lf

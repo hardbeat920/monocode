@@ -20,6 +20,9 @@ impl Conversation {
         if self.git_action_command(&text, cx) {
             return true;
         }
+        if self.browser_command(&text, cx) {
+            return true;
+        }
         if let Some(request) = monocode_core::composer::consume_command(&text, "visualize") {
             self.visualize_command(&text, request, cx);
             return true;
@@ -34,6 +37,61 @@ impl Conversation {
         }
         self.compact_context(cx);
         true
+    }
+
+    /// `/browser`: alone it switches this thread's browser access; with a
+    /// prompt it turns access on and sends the prompt without the command.
+    /// Returns true when nothing more is sent.
+    fn browser_command(&mut self, text: &str, cx: &mut Context<Self>) -> bool {
+        use monocode_core::browser::{self, turn};
+        let Some(rest) = turn::consume_command(text) else {
+            return false;
+        };
+        if self.input.read(cx).is_composing() {
+            return true;
+        }
+        let Some(host) = browser::host() else {
+            self.status = "The browser is not available in this app.".into();
+            cx.notify();
+            return true;
+        };
+        let state = host.state();
+        if !state.toggle_on {
+            self.status = turn::OFF_NOTICE.into();
+            cx.notify();
+            return true;
+        }
+        if self.is_remote() || self.settings.orchestrator {
+            self.status =
+                "Use /browser from a regular session turn, outside an orchestration run.".into();
+            cx.notify();
+            return true;
+        }
+        let key = browser::session_key(self.summary.id);
+        let bare = rest.trim().is_empty() && self.attachments.is_empty();
+        let change = turn::grant_change(turn::granted(&state, &key), bare);
+        match change {
+            // Turning access on is quick and must land before the turn.
+            Some(true) => host.set_grant(&key, browser::WINDOW, true),
+            // Turning it off lets go of the thread's tabs in the browser.
+            Some(false) => cx
+                .background_executor()
+                .spawn(async move { host.set_grant(&key, browser::WINDOW, false) })
+                .detach(),
+            None => {}
+        }
+        if bare {
+            self.input.update(cx, |input, cx| {
+                input.take(cx);
+            });
+            self.completion
+                .update(cx, |completion, cx| completion.dismiss(cx));
+            self.status = turn::grant_status(change == Some(true)).into();
+            cx.notify();
+            return true;
+        }
+        self.input.update(cx, |input, cx| input.set_text(rest, cx));
+        false
     }
 
     fn visualize_command(&mut self, text: &str, request: &str, cx: &mut Context<Self>) {

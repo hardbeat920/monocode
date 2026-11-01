@@ -101,6 +101,8 @@ export type Mono = {
   /** Latest line in the mono's conversation, for its drawer row. */
   lastMessage: string;
   lastActiveAt: number;
+  /** Its agent waits for the user to allow the browser, answered here. */
+  browserRequest?: boolean;
   harness?: Harness;
   model?: string;
 };
@@ -125,7 +127,9 @@ export type SessionSummary = {
   updatedAt: number;
   busy?: boolean;
   /** What it waits on the user for; absent from an older desktop. */
-  waiting?: "approval" | "question";
+  waiting?: "approval" | "question" | "browser";
+  /** Its agent waits for the user to allow the browser, answered here. */
+  browserRequest?: boolean;
 };
 
 // The desktop's UserQuestionPrompt (src/features/sessions/model/userQuestion.ts):

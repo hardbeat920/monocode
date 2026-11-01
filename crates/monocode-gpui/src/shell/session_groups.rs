@@ -789,6 +789,8 @@ impl Shell {
                 if let Some(checkpoints) = monocode_core::checkpoint::store() {
                     let _ = checkpoints.exclusive(|c| c.forget(&id.to_string()));
                 }
+                // Its browser grant goes and its tabs close.
+                monocode_core::browser::session_deleted(id);
                 Ok::<_, String>(())
             });
             let result = work.await;

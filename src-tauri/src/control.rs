@@ -1,18 +1,28 @@
 //! Authenticated loopback transport. App windows own execution; callers never
 //! receive arbitrary Tauri command access or direct database write access.
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::Write;
 use std::net::{TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::AtomicUsize;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 
 const APP_TURN_INACTIVE: &str = "MonoCode app access is inactive. Use /operator once in this thread to enable it, then call the CLI during an active agent turn. Retrying this request now will not enable access.";
+// The request line, its limits and the errors clients recognise are the
+// browser module's transport, shared with Monocode Native.
+use monocode_browser::transport::{read_request, BUSY, UNAUTHORIZED};
+/// Readers of request lines: control, app and browser requests alike. A
+/// browser request leaves its reader for a thread of its own as soon as it
+/// is read, since it may wait for the user and the browser for minutes.
+const SERVE_THREADS: usize = 8;
+/// Accepted connections waiting for a reader.
+const SERVE_QUEUE: usize = 32;
 
 #[derive(Clone)]
 struct Grant {
@@ -137,16 +147,6 @@ fn comparison_path(path: &Path) -> String {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Request {
-    token: String,
-    namespace: String,
-    action: String,
-    input: Value,
-    request_id: String,
-}
-
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Event {
@@ -165,7 +165,7 @@ fn request_grant(host: &Inner, namespace: &str, token: &str) -> Result<Grant, St
         _ => return Err("Unknown control namespace".into()),
     }
     .cloned()
-    .ok_or("Connection revoked or unauthorized")?;
+    .ok_or(UNAUTHORIZED)?;
     if namespace == "app"
         && (host.grants.contains_key(&grant.session)
             || host.workers.contains_key(&grant.session)
@@ -193,47 +193,66 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
     let app = app.clone();
     std::thread::spawn(move || {
         // Limit concurrent readers, including unauthenticated sockets.
-        let (tx, rx) = mpsc::sync_channel::<TcpStream>(32);
+        let (tx, rx) = mpsc::sync_channel::<TcpStream>(SERVE_QUEUE);
         let rx = Arc::new(Mutex::new(rx));
-        for _ in 0..8 {
+        let browser = Arc::new(AtomicUsize::new(0));
+        for _ in 0..SERVE_THREADS {
             let rx = rx.clone();
             let app = app.clone();
             let inner = inner.clone();
+            let browser = browser.clone();
             std::thread::spawn(move || loop {
                 let stream = match rx.lock() {
                     Ok(rx) => rx.recv(),
                     Err(_) => return,
                 };
                 let Ok(stream) = stream else { return };
-                serve(stream, &app, &inner);
+                serve(stream, &app, &inner, &browser);
             });
         }
         for stream in listener.incoming().flatten() {
-            let _ = tx.try_send(stream);
+            if let Err(mpsc::TrySendError::Full(stream)) = tx.try_send(stream) {
+                // Say so rather than drop the connection: the client then
+                // knows nothing ran. A short write timeout keeps a client
+                // that does not read from holding up the accept loop.
+                let _ = stream.set_write_timeout(Some(Duration::from_millis(200)));
+                respond(stream, Err(BUSY.into()));
+            }
         }
     });
     Ok(())
 }
 
-fn serve(mut stream: TcpStream, app: &AppHandle, inner: &Arc<Mutex<Inner>>) {
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
-    let _ = stream.set_write_timeout(Some(Duration::from_secs(3)));
+fn respond(mut stream: TcpStream, result: Result<Value, String>) {
+    let response = result.unwrap_or_else(|error| {
+        if error == APP_TURN_INACTIVE {
+            json!({"ok": false, "error": error, "retryable": false})
+        } else {
+            json!({"ok": false, "error": error})
+        }
+    });
+    let _ = writeln!(stream, "{response}");
+}
+
+fn serve(
+    mut stream: TcpStream,
+    app: &AppHandle,
+    inner: &Arc<Mutex<Inner>>,
+    browser: &Arc<AtomicUsize>,
+) {
+    let request = match read_request(&mut stream) {
+        Ok(request) => request,
+        Err(error) => return respond(stream, Err(error)),
+    };
+    if request.namespace == crate::browser::protocol::NAMESPACE {
+        return monocode_browser::transport::spawn_request(
+            stream,
+            request,
+            browser,
+            crate::browser::handle_token_request,
+        );
+    }
     let result = (|| -> Result<Value, String> {
-        let mut raw = String::new();
-        BufReader::new(&mut stream)
-            .take(262_145)
-            .read_line(&mut raw)
-            .map_err(|e| e.to_string())?;
-        if raw.len() > 262_144 {
-            return Err("Request exceeds 256 KiB".into());
-        }
-        let request: Request = serde_json::from_str(&raw).map_err(|_| "Invalid control request")?;
-        if !request.input.is_object()
-            || request.request_id.is_empty()
-            || request.request_id.len() > 128
-        {
-            return Err("Invalid input or request ID".into());
-        }
         let id = uuid::Uuid::new_v4().to_string();
         let (tx, rx) = mpsc::channel();
         let grant = {
@@ -271,14 +290,7 @@ fn serve(mut stream: TcpStream, app: &AppHandle, inner: &Arc<Mutex<Inner>>) {
         }
         result
     })();
-    let response = result.unwrap_or_else(|error| {
-        if error == APP_TURN_INACTIVE {
-            json!({"ok": false, "error": error, "retryable": false})
-        } else {
-            json!({"ok": false, "error": error})
-        }
-    });
-    let _ = writeln!(stream, "{response}");
+    respond(stream, result);
 }
 
 #[tauri::command]
@@ -409,6 +421,7 @@ pub fn control_authorize_turn(
     session_id: String,
     cwd: String,
     app_access: bool,
+    browser_access: Option<bool>,
 ) -> Result<(), String> {
     let workdir = crate::fs::expand_home(&cwd);
     let cwd = std::fs::canonicalize(&workdir)
@@ -432,13 +445,18 @@ pub fn control_authorize_turn(
     let eligible = inner.prepare_app_grant(&session_id, window.label(), &cwd);
     let app_allowed = app_access && eligible;
     inner.active.insert(
-        session_id,
+        session_id.clone(),
         ActiveTurn {
             window: window.label().to_string(),
-            cwd,
+            cwd: cwd.clone(),
             app_allowed,
         },
     );
+    drop(inner);
+    // Browser access, outside the control lock (it may detach tabs over
+    // CDP): token prepared before the provider spawns, grant set when the
+    // frontend passes the flag.
+    crate::browser::turn_started(&session_id, window.label(), &cwd, browser_access);
     Ok(())
 }
 
@@ -447,6 +465,7 @@ pub fn control_turn_finished(host: State<'_, ControlHost>, session_id: String) {
     if let Ok(mut inner) = host.inner.lock() {
         inner.active.remove(&session_id);
     }
+    crate::browser::turn_finished(&session_id);
 }
 
 pub fn window_closed(app: &AppHandle, label: &str) {
@@ -461,16 +480,25 @@ pub fn window_closed(app: &AppHandle, label: &str) {
     if let Ok(mut inner) = host.inner.lock() {
         inner.close_window(label);
     };
+    crate::browser::window_closed(label);
 }
 
 pub fn configure_child(app: &AppHandle, session_id: &str, cmd: &mut Command) {
     cmd.env_remove("MONOCODE_CONTROL_ENDPOINT")
         .env_remove("MONOCODE_CONTROL_TOKEN")
         .env_remove("MONOCODE_APP_ENDPOINT")
-        .env_remove("MONOCODE_APP_TOKEN");
+        .env_remove("MONOCODE_APP_TOKEN")
+        .env_remove(crate::browser::protocol::ENV_ENDPOINT)
+        .env_remove(crate::browser::protocol::ENV_TOKEN);
     let Some(host) = app.try_state::<ControlHost>() else {
         return;
     };
+    // Every session gets a browser token at spawn; whether it may use it is
+    // decided per request by the BrowserHost.
+    if let Some(token) = crate::browser::child_token(session_id) {
+        cmd.env(crate::browser::protocol::ENV_ENDPOINT, &host.endpoint)
+            .env(crate::browser::protocol::ENV_TOKEN, token);
+    }
     if let Ok(inner) = host.inner.lock() {
         if let Some(grant) = inner.grants.get(session_id) {
             cmd.env("MONOCODE_CONTROL_ENDPOINT", &host.endpoint)

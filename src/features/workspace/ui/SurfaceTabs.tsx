@@ -1,5 +1,6 @@
 import {
   GitCompare,
+  Globe,
   GripVertical,
   Terminal,
   X,
@@ -14,6 +15,7 @@ import {
 } from "../../../platform/tauri/fs";
 import {
   isAgentTab,
+  isBrowserPaneTab,
   isChangesTab,
   isCommitTab,
   isFilesystemTab,
@@ -40,6 +42,7 @@ import { FileActionError } from "../../files/ui/FileActionError";
 import { FileTypeIcon } from "../../files/ui/FileTypeIcon";
 import { HarnessIcon } from "../../sessions/ui/HarnessIcon";
 import { TabLabel } from "../../../shared/ui/TabLabel";
+import { BrowserPaneTitle } from "../../sessions/ui/BrowserLiveView";
 
 type Props = {
   files: FilePaneTab[];
@@ -151,6 +154,16 @@ export function surfaceTabPresentation(
       label: name,
       iconName: "AGENT",
       tooltip: `${name} — orchestration agent`,
+    };
+  }
+
+  if (isBrowserPaneTab(file)) {
+    const name = file.path.trim() || "Browser";
+    return {
+      name,
+      label: name,
+      iconName: "BROWSER",
+      tooltip: `${name} — browser tab, live`,
     };
   }
 
@@ -303,6 +316,7 @@ export function SurfaceTabs({
           const review = isReviewTab(file) && !changes;
           const terminal = isTerminalTab(file);
           const agent = isAgentTab(file) ? file.agent : null;
+          const browser = isBrowserPaneTab(file) ? file.browser : null;
           const { label, iconName, tooltip } = surfaceTabPresentation(file);
           const tab = (
             <div
@@ -371,6 +385,11 @@ export function SurfaceTabs({
               >
                 {terminal ? (
                   <Terminal className="size-3.5 shrink-0" strokeWidth={1.75} />
+                ) : browser ? (
+                  <Globe
+                    className="size-3.5 shrink-0 text-teal-600 dark:text-teal-300"
+                    strokeWidth={1.75}
+                  />
                 ) : agent ? (
                   <HarnessIcon
                     harness={agent.harness}
@@ -384,17 +403,25 @@ export function SurfaceTabs({
                 ) : (
                   <FileTypeIcon name={iconName} isDir={false} size={14} />
                 )}
-                <TabLabel
-                  className={`flex-1 ${file.preview ? "italic" : ""} ${
+                {(() => {
+                  const labelClass = `flex-1 ${file.preview ? "italic" : ""} ${
                     errors
                       ? active
                         ? "text-red-400"
                         : "text-red-400/75 group-hover:text-red-400"
                       : ""
-                  }`}
-                >
-                  {label}
-                </TabLabel>
+                  }`;
+                  return browser ? (
+                    <BrowserPaneTitle
+                      sessionId={browser.sessionId}
+                      tab={browser.tab}
+                      fallback={label}
+                      className={labelClass}
+                    />
+                  ) : (
+                    <TabLabel className={labelClass}>{label}</TabLabel>
+                  );
+                })()}
                 {dirty ? (
                   <span
                     className="size-1.5 shrink-0 rounded-full bg-content/70"

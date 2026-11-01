@@ -147,6 +147,40 @@ describe("child bridge", () => {
     release();
   });
 
+  it("names the owning thread only when the process key differs", async () => {
+    installResolvedListeners();
+    mocks.invoke.mockResolvedValue(7);
+    const child = await loadChild();
+    const release = await child.acquireHarnessBridge();
+    const spawnArgs = () =>
+      mocks.invoke.mock.calls
+        .filter(([command]) => command === "harness_spawn")
+        .at(-1)?.[1];
+
+    const spawn = (key: string) =>
+      child.spawnChild(
+        key,
+        "agy",
+        [],
+        "/repo",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        "thread",
+      );
+
+    // Antigravity restarts its process under `thread#n`.
+    await spawn("thread#0");
+    expect(spawnArgs()).toMatchObject({
+      sessionId: "thread#0",
+      owner: "thread",
+    });
+    await spawn("thread");
+    expect(spawnArgs()).not.toHaveProperty("owner");
+    release();
+  });
+
   it("passes stored overrides through resolution and command validation", async () => {
     vi.stubGlobal("localStorage", {
       getItem: (key: string) =>

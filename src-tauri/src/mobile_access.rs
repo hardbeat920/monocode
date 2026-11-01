@@ -755,6 +755,7 @@ async fn handle(
             "session.answerQuestion",
             "session.keepQuestionOpen",
             "session.cancel",
+            "browser.answer",
             "session.rename",
             "session.delete",
             "session.archive",

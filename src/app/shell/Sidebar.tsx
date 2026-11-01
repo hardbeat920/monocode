@@ -244,6 +244,12 @@ import {
   remotePath,
   remoteProjectFor,
 } from "../../features/connections/model/remoteProjects";
+import {
+  ensureBrowserMcp,
+  sessionBrowserGranted,
+  setSessionBrowserGrant,
+  useBrowserState,
+} from "../../features/settings/model/browser";
 
 const MIN_WIDTH = 260;
 /** The inset sidebar's one-line rows stay legible narrower. */
@@ -1438,6 +1444,7 @@ function SidebarComponent({
     });
   };
 
+  const browserState = useBrowserState();
   const menuSessionIds = sessionMenu
     ? orderedSessionActionIds(
         sessionMenu.sessionId,
@@ -1544,6 +1551,18 @@ function SidebarComponent({
             label: menuSessions[0]?.linkedWorkItem
               ? "Edit GitHub issue or PR link…"
               : "Link GitHub issue or PR…",
+          },
+        ]
+      : []),
+    ...(!multipleMenuSessions &&
+    browserState?.toggle_on &&
+    !menuSessions[0]?.orchestrationLeadId
+      ? [
+          {
+            kind: "item" as const,
+            id: "browser-access",
+            label: "Browser access",
+            checked: sessionBrowserGranted(browserState, menuSessionIds[0]),
           },
         ]
       : []),
@@ -1687,6 +1706,24 @@ function SidebarComponent({
     }
     if (id === "link-work-item") {
       setLinkingSession(menuSessions[0] ?? null);
+      return;
+    }
+    if (id === "browser-access") {
+      // Same switch as /browser alone in that thread.
+      const enable = !sessionBrowserGranted(browserState, sessionId);
+      const session = menuSessions[0];
+      void setSessionBrowserGrant(sessionId, enable)
+        .then(() =>
+          enable && session
+            ? ensureBrowserMcp(
+                session.harness,
+                session.worktreeCwd ?? session.cwd,
+              )
+            : undefined,
+        )
+        .catch((error) => {
+          console.error("Failed to change browser access:", error);
+        });
       return;
     }
     if (id === "folder-new") {

@@ -8138,6 +8138,8 @@ impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.keep_visible_idle_agents(cx);
         self.sync_ui_scale(window, cx);
+        // The MonoCode browser starts at the main window's display scale.
+        monocode_core::browser::set_display_scale(window.scale_factor() as f64);
         if self.mono_panes_unsettled(cx) {
             let this = cx.entity();
             window.defer(cx, move |window, cx| {

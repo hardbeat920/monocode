@@ -105,6 +105,7 @@ import { useDragResize } from "../shared/hooks/useDragResize";
 import { beginLayoutTransition } from "../shared/lib/layoutTransition";
 import { noteProjectStep, Sidebar } from "./shell/Sidebar";
 import { ApprovalToasts } from "../features/sessions/ui/ApprovalToasts";
+import { BrowserNotice } from "../features/settings/ui/BrowserNotice";
 import { ResourcePressureNotice } from "../features/notifications/ui/ResourcePressureNotice";
 import { HarnessUpdateNotice } from "../features/providers/ui/HarnessUpdateNotice";
 import { NewLayoutNotice } from "./shell/NewLayoutNotice";
@@ -260,6 +261,11 @@ import {
   openChangesTab,
   openCommitTab,
   newAgentTab,
+  newBrowserPaneTab,
+  openBrowserPane,
+  ownBrowserPaneTab,
+  browserPanePlacement,
+  isBrowserPaneTab,
   openEditorTab,
   openSessionChangesTab,
   pinEditorFile,
@@ -617,6 +623,31 @@ import {
   operatorEnabledInThread,
 } from "../features/sessions/model/operatorCommand";
 import {
+  browserGrantChange,
+  browserGrantStatus,
+  browserTurnAccess,
+  browserTurnEligible,
+  consumeBrowserCommand,
+  inheritsMonoBrowserGrant,
+  withBrowserAskNote,
+  type BrowserTurnAccess,
+} from "../features/sessions/model/browserCommand";
+import {
+  answerBrowserRequest,
+  BROWSER_OFF_NOTICE,
+  browserAccessTurnedOff,
+  browserAgentInstructions,
+  answerPendingBrowserRequest,
+  browserRequestsToDecline,
+  browserStateSnapshot,
+  closeBrowserTab,
+  ensureBrowserMcp,
+  sessionBrowserGranted,
+  setSessionBrowserGrant,
+  showBrowserNotice,
+  subscribeBrowserState,
+} from "../features/settings/model/browser";
+import {
   createMono,
   findMono,
   monoWorksOn,
@@ -722,6 +753,13 @@ import { ProjectTerminalDock } from "../features/terminal/ui/ProjectTerminalDock
 import { lazySurface } from "../shared/ui/lazySurface";
 import { preloadNavigationWhenIdle } from "./model/preloadNavigation";
 import { requestTranscriptJump } from "../features/sessions/model/transcriptJump";
+import {
+  loadBrowserPanePlacement,
+  openNewBrowserTabsInPanes,
+  saveBrowserPanePlacement,
+  subscribeBrowserPaneRequests,
+  takeBrowserPaneRequests,
+} from "../features/sessions/model/browserPane";
 import type { SettingsAnchor } from "../features/settings/ui/SettingsView";
 import {
   OPEN_CONNECTIONS_EVENT,
@@ -910,6 +948,9 @@ type SubmitOptions = ComposerTurnOptions & {
   managed?: boolean;
   orchestrationRetry?: OrchestrationProposal;
   appRequestId?: string;
+  /** A turn an agent launched through the app: it uses the browser only
+   * with a grant, never asks. */
+  browserGrantOnly?: boolean;
   /** An app request that may arrive mid-turn, steering or queuing as one typed here would. */
   followsUp?: boolean;
   monoSessionCompletion?: Block["monoSessionCompletion"];
@@ -1773,6 +1814,34 @@ function Workspace({
     canForward: false,
   });
   const turnGen = useRef(new Map<string, number>());
+  // Whether each session's latest turn may use the browser. A browser
+  // request from any other session this window runs (orchestration workers,
+  // agent app launches and follow-ups, or a turn this window never sent) is
+  // declined at once instead of asking the user. Every window gets the
+  // state; each answers only for the sessions whose turns it runs.
+  const browserEligibleTurns = useRef(new Map<string, boolean>());
+  const decliningBrowserRequests = useRef(new Set<string>());
+  useEffect(
+    () =>
+      subscribeBrowserState(() => {
+        const declines = browserRequestsToDecline(
+          browserStateSnapshot(),
+          getCurrentWindow().label,
+          (id) =>
+            !!browserEligibleTurns.current.get(id) ||
+            decliningBrowserRequests.current.has(id),
+        );
+        for (const id of declines) {
+          decliningBrowserRequests.current.add(id);
+          void answerBrowserRequest(id, false)
+            .catch((error: unknown) =>
+              console.warn("Declining a browser request failed:", error),
+            )
+            .finally(() => decliningBrowserRequests.current.delete(id));
+        }
+      }),
+    [],
+  );
   const editedResends = useRef(createEditedResendCoordinator()).current;
   const lastPersisted = useRef(new Map<string, string>());
   const lastBoundProvider = useRef(new Map<string, string>());
@@ -3685,10 +3754,14 @@ function Workspace({
       const index = pane.files.findIndex((file) => file.id === fileId);
       if (index < 0) return;
       const file = pane.files[index];
+      // A tab the user opened in the pane closes with it, as in a browser.
+      const closesBrowserTab = file.browser?.own ? file.browser.tab : null;
       const needsUnsavedConfirm =
         isFilesystemTab(file) && dirtyFilesRef.current.has(fileId);
 
       const finishClose = () => {
+        if (closesBrowserTab)
+          void closeBrowserTab(closesBrowserTab).catch(() => {});
         const files = pane.files.filter((entry) => entry.id !== fileId);
         let nextFocus = tab.focusedId;
         let nextLayout = tab.layout;
@@ -7326,7 +7399,92 @@ function Workspace({
         flushHarnessEvents();
         return false;
       }
-      const submittedText = intent === "build" ? "Build approved plan" : text;
+      const typedText = intent === "build" ? "Build approved plan" : text;
+      // /browser switches this session's browser grant. Alone it only
+      // switches; with a prompt it turns the grant on for that turn.
+      const browserCommand = consumeBrowserCommand(typedText);
+      // The one grant change this submission makes; the turn waits for it,
+      // so control_authorize_turn never has to grant again (one grant_on).
+      let browserGrant: Promise<unknown> | undefined;
+      const browserStatus = (message: string) => {
+        enqueueHarnessEvent(sessionId, { type: "status", text: message });
+        flushHarnessEvents();
+      };
+      // A turn may use the browser only where /browser itself is allowed.
+      const browserEligible = browserTurnEligible({
+        managed: options?.managed,
+        appRequestId: options?.appRequestId,
+        browserGrantOnly: options?.browserGrantOnly,
+        orchestration:
+          intent === "orchestrate" ||
+          !!current.orchestrationLeadId ||
+          !!orchestrator.run(sessionId),
+      });
+      if (browserCommand.matched) {
+        if (!browserEligible) {
+          browserStatus(
+            "Use /browser from a regular session turn, outside an orchestration run.",
+          );
+          return false;
+        }
+        const browserState = browserStateSnapshot();
+        if (!browserState?.toggle_on) {
+          showBrowserNotice(BROWSER_OFF_NOTICE);
+          browserStatus(BROWSER_OFF_NOTICE.message);
+          return false;
+        }
+        const bare =
+          !browserCommand.text.trim() &&
+          attachments.length === 0 &&
+          !noteCard &&
+          !handoffCard;
+        const granted = sessionBrowserGranted(browserState, sessionId);
+        const enable = browserGrantChange(granted, bare);
+        if (enable !== null)
+          browserGrant = setSessionBrowserGrant(sessionId, enable).catch(
+            (error: unknown) =>
+              browserStatus(
+                error instanceof Error ? error.message : String(error),
+              ),
+          );
+        if (enable)
+          void ensureBrowserMcp(
+            current.harness,
+            sessionWorkCwd(current),
+            providerAccountId,
+          ).catch(
+            (error: unknown) =>
+              console.warn("Browser MCP registration failed:", error),
+          );
+        if (bare) {
+          browserStatus(browserGrantStatus(enable === true));
+          return true;
+        }
+      }
+      const submittedText = browserCommand.text;
+      // Without /browser the access mode decides: "Always on" (or the
+      // thread's "Full access") grants the thread first, "Ask" carries the
+      // tools and the first browser action asks the user in the thread.
+      const browserSnapshot = browserStateSnapshot();
+      const browserTurn: BrowserTurnAccess = browserCommand.matched
+        ? "granted"
+        : browserTurnAccess({
+            toggleOn: !!browserSnapshot?.toggle_on,
+            access: browserSnapshot?.settings.access ?? "ask",
+            granted: sessionBrowserGranted(browserSnapshot, sessionId),
+            eligible: browserEligible,
+            turnedOff: browserAccessTurnedOff(browserSnapshot, sessionId),
+            fullAccess: current.runtimeMode === "full-access",
+          });
+      if (browserTurn === "grant")
+        browserGrant = setSessionBrowserGrant(sessionId, true).catch(
+          (error: unknown) =>
+            browserStatus(
+              error instanceof Error ? error.message : String(error),
+            ),
+        );
+      browserEligibleTurns.current.set(sessionId, browserEligible);
+      const browserAccess = browserTurn !== null;
       const operatorCommand = consumeOperatorCommand(submittedText);
       if (
         operatorCommand.matched &&
@@ -8305,6 +8463,8 @@ function Workspace({
               intent: intent === "orchestrate" ? "plan" : intent,
               // A /operator user turn enables app access for this thread;
               // orchestration leads retain their separate control access.
+              // The browser needs no sandbox network: Codex runs its MCP
+              // servers, monocode browser-mcp among them, outside the sandbox.
               controlsAgents:
                 operatorAccess ||
                 orchestrator.run(sessionId)?.status === "active",
@@ -8394,6 +8554,30 @@ function Workspace({
           ) {
             appContext.push(monoContext(agentLook, agentFiles, agentPlan));
           }
+          // While the thread can use the browser, every turn says how to
+          // reach it: a pointer to the MCP tools, or the CLI for providers
+          // without MCP. An "Ask" turn also says that the first action waits
+          // for the user's answer.
+          if (browserAccess && !rawCommand) {
+            await ensureBrowserMcp(
+              current.harness,
+              workCwd,
+              providerAccountId,
+            ).catch(
+              (error: unknown) =>
+                console.warn("Browser MCP registration failed:", error),
+            );
+            const browserContext = await browserAgentInstructions(
+              current.harness,
+              workCwd,
+            ).catch(() => "");
+            if (browserContext)
+              appContext.push(
+                browserTurn === "ask"
+                  ? withBrowserAskNote(browserContext)
+                  : browserContext,
+              );
+          }
           if (operatorCommand.matched || handAgent) {
             const cli = `${shellPath(await invoke<string>("app_cli_path"))} app`;
             appContext.push(
@@ -8405,6 +8589,7 @@ function Workspace({
           if (mono && !rawCommand) sendText = monoTurn(sendText, appContext);
           else if (appContext.length)
             sendText += `\n\n${appContext.join("\n\n")}`;
+          await browserGrant;
           await sendTurn(sendText);
           if (agentFiles) {
             recordAgentContext(
@@ -8971,6 +9156,10 @@ function Workspace({
       placement?: AppSessionPlacement,
       onSettled?: (outcome: ControlOutcome) => void,
       openTab?: boolean,
+      /** An agent's launch through the app: its turn uses the browser only
+       * with a grant, and `beforeSubmit` (passing a Mono's grant) runs once
+       * the session exists. */
+      appLaunch?: { beforeSubmit: () => Promise<unknown> },
     ) =>
       acceptQuickLaunch(
         launch,
@@ -9024,19 +9213,26 @@ function Workspace({
             setAutomationsViewOpen(false);
             setSidebarTab("sessions", cwd);
           },
-          submit: (id, text, attachments, options) =>
-            onSettled
-              ? submitWithSettlement({
-                  submit: (settle) =>
-                    submitSession(id, text, attachments, {
-                      ...options,
-                      appRequestId: deliveryId,
-                      onSettled: settle,
-                    }),
-                  onSettled,
-                  rejectionMessage: "The monitored session could not start.",
-                })
-              : submitSession(id, text, attachments, options),
+          submit: (id, text, attachments, options) => {
+            const submit = () =>
+              onSettled
+                ? submitWithSettlement({
+                    submit: (settle) =>
+                      submitSession(id, text, attachments, {
+                        ...options,
+                        appRequestId: deliveryId,
+                        ...(appLaunch ? { browserGrantOnly: true } : {}),
+                        onSettled: settle,
+                      }),
+                    onSettled,
+                    rejectionMessage: "The monitored session could not start.",
+                  })
+                : submitSession(id, text, attachments, {
+                    ...options,
+                    ...(appLaunch ? { browserGrantOnly: true } : {}),
+                  });
+            return appLaunch ? appLaunch.beforeSubmit().then(submit) : submit();
+          },
           saveDraft: (id, prompt, attachments, requestId) =>
             flushSync(() => onSaveDraft(id, prompt, attachments, requestId)),
         },
@@ -9122,6 +9318,11 @@ function Workspace({
       if (!session) throw new Error("Session is no longer available");
       if (method === "session.cancel") {
         await onStop(session.id);
+        return { sessionId: session.id };
+      }
+      if (method === "browser.answer") {
+        // The thread's browser Allow bar, answered from the phone.
+        await answerPendingBrowserRequest(session.id, params.allow === true);
         return { sessionId: session.id };
       }
       if (method === "session.configure") {
@@ -11319,6 +11520,27 @@ function Workspace({
             ),
           );
         };
+        // Sessions a Mono starts take its browser grant (when it has one) at
+        // launch and whenever it hands them work; they never ask on their own.
+        const monoBrowserGrant = async (sessionId: string) => {
+          if (!isMonoSession(source.id)) return false;
+          const state = browserStateSnapshot();
+          if (
+            !inheritsMonoBrowserGrant({
+              monoGranted: sessionBrowserGranted(state, source.id),
+              granted: sessionBrowserGranted(state, sessionId),
+              turnedOff: browserAccessTurnedOff(state, sessionId),
+            })
+          )
+            return false;
+          try {
+            await setSessionBrowserGrant(sessionId, true);
+            return true;
+          } catch (error) {
+            console.warn("Passing a Mono's browser access failed:", error);
+            return false;
+          }
+        };
         const promise = handleAgentApp(
           source,
           payload.requestId,
@@ -11389,6 +11611,8 @@ function Workspace({
                   placement,
                   onSettled,
                   !!placement || (!isMonoSession(source.id) && launch.reveal),
+                  // Any agent's launch: only a Mono passes its grant.
+                  { beforeSubmit: () => monoBrowserGrant(id) },
                 );
                 rememberLaunch();
                 onSettled?.accept();
@@ -11485,6 +11709,9 @@ function Workspace({
                 throw new Error(
                   "Session already has a draft; send or remove it first",
                 );
+              // Work a Mono hands to a session it started carries its grant.
+              if (id.startsWith(`app-${source.id}-`))
+                await monoBrowserGrant(id);
               const onSettled = notifyMonoId
                 ? monitorCompletion(
                     notifyMonoId,
@@ -11765,6 +11992,84 @@ function Workspace({
     setActiveTabId(tab.id);
     setComposerFocused(false);
   }, [tabs, workerDetailRequest]);
+  // "Show in MonoCode": the thread's browser tab opens in a pane beside the
+  // thread, on the side and at the share the user last left one. A tab the
+  // user asked for from a thread outside the workspace (a side or standalone
+  // conversation) shows in the active tab; one that opened on its own shows
+  // only beside its thread and leaves focus where it is.
+  useEffect(() => {
+    const open = () => {
+      for (const request of takeBrowserPaneRequests()) {
+        const { sessionId } = request;
+        const holds = (entry: WorkspaceTab) =>
+          leafIds(entry.layout).includes(sessionId);
+        const tab =
+          tabsRef.current.find(
+            (entry) => entry.id === activeTabIdRef.current && holds(entry),
+          ) ??
+          tabsRef.current.find(holds) ??
+          (request.auto
+            ? undefined
+            : tabsRef.current.find(
+                (entry) => entry.id === activeTabIdRef.current,
+              ));
+        if (!tab) continue;
+        const cwd =
+          sessionsRef.current.find((entry) => entry.id === sessionId)?.cwd ??
+          projectCwdRef.current;
+        const file = newBrowserPaneTab(request.title, cwd, {
+          sessionId,
+          tab: request.tab,
+          ...(request.own ? { own: true } : {}),
+        });
+        const placement = loadBrowserPanePlacement();
+        setTabs((prev) =>
+          prev.map((entry) => {
+            if (entry.id !== tab.id) return entry;
+            // The tab may already show on its own ("Show agent tabs: In
+            // MonoCode") by the time the user's request arrives.
+            const marked = request.own ? ownBrowserPaneTab(entry, file) : entry;
+            const opened = openBrowserPane(marked, file, sessionId, placement);
+            return request.auto
+              ? { ...opened, focusedId: entry.focusedId }
+              : opened;
+          }),
+        );
+        if (request.auto) continue;
+        setActiveTabId(tab.id);
+        setComposerFocused(false);
+      }
+    };
+    const unsubscribe = subscribeBrowserPaneRequests(open);
+    const stopWatching = openNewBrowserTabsInPanes();
+    return () => {
+      unsubscribe();
+      stopWatching();
+    };
+  }, [setActiveTabId]);
+  // Remember where the user leaves a browser pane, for the next one.
+  useEffect(() => {
+    const tab = tabs.find((entry) => entry.id === activeTabId);
+    if (!tab) return;
+    for (const pane of tab.editorPanes) {
+      const browser = pane.files.find(isBrowserPaneTab)?.browser;
+      if (!browser) continue;
+      const placement = browserPanePlacement(
+        tab.layout,
+        pane.id,
+        browser.sessionId,
+      );
+      const saved = loadBrowserPanePlacement();
+      if (
+        placement &&
+        (placement.edge !== saved?.edge ||
+          Math.abs(placement.size - saved.size) > 0.01)
+      ) {
+        saveBrowserPanePlacement(placement);
+      }
+      return;
+    }
+  }, [tabs, activeTabId]);
   const orchestrationWorkers = useMemo(
     () => ({
       selectedId: inspectedWorkerId,
@@ -14748,6 +15053,7 @@ function Workspace({
             onFocusSession={onOpenApprovalSession}
             onApproval={onApproval}
           />
+          <BrowserNotice onOpenSettings={() => openSettings("browser")} />
           <ReminderNotices
             reminders={sessionReminders.due}
             error={sessionReminders.error}

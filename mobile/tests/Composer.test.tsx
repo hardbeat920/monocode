@@ -306,3 +306,33 @@ it("opens a content-sized attachment menu with safe-area padding and retains bot
   );
   expect(runtime.files).toHaveBeenCalledWith(10);
 });
+
+it("puts the agent's browser request in the field's place, answered with Allow or Not now", () => {
+  const allow = vi.fn();
+  const decline = vi.fn();
+  const request = (answering: boolean) =>
+    act(() =>
+      root.render(
+        <Composer
+          context="Project"
+          branch="main"
+          model="GPT"
+          onSend={send}
+          busy
+          onStop={stop}
+          browserRequest={{ answering, allow, decline }}
+        />,
+      ),
+    );
+  request(false);
+  expect(container.textContent).toContain("Wants to use the browser");
+  act(() => button("Allow the browser for this thread").click());
+  act(() => button("Not now").click());
+  expect(allow).toHaveBeenCalledOnce();
+  expect(decline).toHaveBeenCalledOnce();
+  request(true);
+  expect(button("Allow the browser for this thread").disabled).toBe(true);
+  expect(button("Not now").disabled).toBe(true);
+  render();
+  expect(container.textContent).not.toContain("Wants to use the browser");
+});

@@ -237,7 +237,7 @@ impl Protocol {
         self.acp_send(Stage::Initialize, "initialize", params, stdin)
     }
     fn acp_session(&mut self, stdin: &mut impl Write) -> Result<(), String> {
-        let mut params = json!({"cwd":self.request.cwd,"mcpServers":crate::visual_bridge::acp_servers(&self.request.settings.environment)});
+        let mut params = json!({"cwd":self.request.cwd,"mcpServers":mcp_servers(&self.request.settings.environment)});
         if let Some(id) = &self.request.provider_id {
             params["sessionId"] = id.clone().into();
             if matches!(self.request.kind, Kind::Grok | Kind::Fx | Kind::Antigravity) {
@@ -251,7 +251,7 @@ impl Protocol {
         self.acp_new(stdin)
     }
     fn acp_new(&mut self, stdin: &mut impl Write) -> Result<(), String> {
-        let mut params = json!({"cwd":self.request.cwd,"mcpServers":crate::visual_bridge::acp_servers(&self.request.settings.environment)});
+        let mut params = json!({"cwd":self.request.cwd,"mcpServers":mcp_servers(&self.request.settings.environment)});
         if self.request.kind == Kind::Grok {
             if self.request.settings.access == AccessMode::FullAccess {
                 params["_meta"] = json!({"yoloMode":true});
@@ -556,7 +556,7 @@ impl Protocol {
                 return self.acp_session(stdin);
             }
             Stage::Resume if !(kind == Kind::Antigravity && timed_out) => {
-                return self.acp_send(Stage::Load, "session/load", json!({"sessionId":self.request.provider_id,"cwd":self.request.cwd,"mcpServers":crate::visual_bridge::acp_servers(&self.request.settings.environment)}), stdin);
+                return self.acp_send(Stage::Load, "session/load", json!({"sessionId":self.request.provider_id,"cwd":self.request.cwd,"mcpServers":mcp_servers(&self.request.settings.environment)}), stdin);
             }
             Stage::Load => {
                 let lower = detail.to_lowercase();
@@ -1125,6 +1125,17 @@ impl Protocol {
             )
         }
     }
+}
+
+/// The MCP servers a session gets at `session/new` and `session/load`:
+/// MonoCode's visual tools and its browser, when the turn carries them.
+fn mcp_servers(environment: &std::collections::HashMap<String, String>) -> Value {
+    let mut servers = match crate::visual_bridge::acp_servers(environment) {
+        Value::Array(servers) => servers,
+        _ => Vec::new(),
+    };
+    servers.extend(crate::browser::acp_server(environment));
+    Value::Array(servers)
 }
 
 fn config_id(option: &Value) -> &str {

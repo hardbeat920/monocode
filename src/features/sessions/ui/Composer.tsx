@@ -28,8 +28,10 @@ import {
   filesFromClipboard,
   mergeAttachments,
   pickAttachments,
+  pngAttachment,
   revokeAttachment,
 } from "../model/attachments";
+import type { PickedBrowserElement } from "../../settings/model/browser";
 import { resizeComposer, restoreComposerSize } from "../model/composerResize";
 import {
   isFileReferenceText,
@@ -120,7 +122,11 @@ import { QuestionForm } from "./QuestionForm";
 import { MessageQueue } from "./MessageQueue";
 import { SkillPicker } from "../../skills/ui/SkillPicker";
 import { pathKey, projectKey } from "../../../shared/lib/paths";
-import { consumeQuoteRequest, type QuoteRequest } from "../model/quoteDraft";
+import {
+  appendComposerInsert,
+  consumeQuoteRequest,
+  type QuoteRequest,
+} from "../model/quoteDraft";
 import { useTabGroupLogos } from "../../projects/hooks/useTabGroupLogos";
 import { useProjectBranchesState } from "../../source-control/hooks/useProjectBranches";
 import {
@@ -154,6 +160,8 @@ import {
   consumeOrchestratorCommand,
   ORCHESTRATOR_COMMAND,
 } from "../model/orchestratorCommand";
+import { BROWSER_COMMAND } from "../model/browserCommand";
+import { BrowserIndicator, BrowserRequestPrompt } from "./BrowserIndicator";
 import { consumeDraftCommand, DRAFT_COMMAND } from "../model/draftCommand";
 import {
   leadingModeCommand,
@@ -565,6 +573,7 @@ export function Composer({
             SESSION_FOLDER_COMMAND,
             MCP_COMMAND,
             OPERATOR_COMMAND,
+            BROWSER_COMMAND,
             ...(hideTopBar ? [] : [ORCHESTRATOR_COMMAND]),
             PLAN_COMMAND,
             ...(canSaveDraft && onSaveDraft ? [DRAFT_COMMAND] : []),
@@ -572,9 +581,12 @@ export function Composer({
             ...(supportsBtwHarness(harness) ? [BTW_COMMAND] : []),
             ...skills.filter(
               (skill) =>
-                ![OPERATOR_COMMAND.name, "mono", "monocode"].includes(
-                  skill.name,
-                ) &&
+                ![
+                  OPERATOR_COMMAND.name,
+                  BROWSER_COMMAND.name,
+                  "mono",
+                  "monocode",
+                ].includes(skill.name) &&
                 (skill.kind === "native" ||
                   (skill.name !== PLAN_COMMAND.name &&
                     skill.name !== COMPACT_COMMAND.name &&
@@ -988,6 +1000,26 @@ export function Composer({
     setSlash(token);
     setMention(token ? null : mentionTokenAt(el.value, cursor));
   };
+
+  /** "Point at an element": the line for the agent and the element's picture. */
+  const insertBrowserPick = useCallback(
+    (picked: PickedBrowserElement) => {
+      const el = ref.current;
+      if (!el) return;
+      const next = appendComposerInsert(el.value, picked.text);
+      el.value = next;
+      resizeComposer(el);
+      setDraft(next);
+      draftRevisionRef.current += 1;
+      syncHasValue(next, attachmentsRef.current);
+      el.setSelectionRange(next.length, next.length);
+      el.focus();
+      if (picked.image && attachmentsSupported) {
+        addAttachments([pngAttachment("picked-element.png", picked.image)]);
+      }
+    },
+    [addAttachments, attachmentsSupported, syncHasValue],
+  );
 
   const openSessionFolderPicker = useCallback(() => {
     setSessionFolders(loadSessionFolders(cwd));
@@ -1817,7 +1849,15 @@ export function Composer({
           />
         </>
       )}
-      <div className="ml-auto flex shrink-0 items-center">
+      <div className="ml-auto flex shrink-0 items-center gap-0.5">
+        {!remote && sessionId ? (
+          <BrowserIndicator
+            sessionId={sessionId}
+            cwd={executionCwd}
+            onPicked={insertBrowserPick}
+            canShow
+          />
+        ) : null}
         <ContextMeter
           usage={context}
           onCompact={
@@ -1843,6 +1883,9 @@ export function Composer({
         />
       ) : null}
       {children}
+      {!remote && sessionId ? (
+        <BrowserRequestPrompt sessionId={sessionId} />
+      ) : null}
       {usageLimit ? (
         <UsageLimitNotice
           limit={usageLimit}

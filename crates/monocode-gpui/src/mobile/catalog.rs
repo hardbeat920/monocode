@@ -54,6 +54,9 @@ pub(crate) struct LiveSession {
     pub metadata: MobileSessionMetadata,
     pub busy: bool,
     pub waiting: Option<&'static str>,
+    /// An agent of the session waits for the browser's Allow; the phone
+    /// answers it in the composer.
+    pub browser_request: bool,
 }
 
 /// The phone keeps model choices across desktop versions. Keep Tauri's
@@ -142,6 +145,9 @@ pub(crate) fn session(
     if let Some(waiting) = live.and_then(|live| live.waiting) {
         value["waiting"] = json!(waiting);
     }
+    if live.is_some_and(|live| live.browser_request) {
+        value["browserRequest"] = json!(true);
+    }
     value
 }
 
@@ -209,6 +215,7 @@ mod tests {
             metadata: Default::default(),
             busy: false,
             waiting: None,
+            browser_request: false,
         };
         let mut opening = session(
             &summary,
@@ -255,6 +262,17 @@ mod tests {
         assert_eq!(changed["runtimeMode"], "full-access");
         assert_eq!(changed["waiting"], "approval");
         assert_eq!(changed["busy"], true);
+        assert!(changed.get("browserRequest").is_none());
+        live.browser_request = true;
+        let asking = session(
+            &summary,
+            "session",
+            "project",
+            &metadata(&saved, Some(&live)),
+            Some(&live),
+            "main",
+        );
+        assert_eq!(asking["browserRequest"], true);
     }
 
     #[test]

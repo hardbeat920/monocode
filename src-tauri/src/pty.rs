@@ -297,6 +297,7 @@ fn spawn_unix(
         .map_err(|e| format!("Failed to start {shell}: {e}"))?;
     close_fd(slave);
     let pid = child.id();
+    crate::devservers::note_spawn(pid, &workdir, None);
 
     set_cloexec(master);
     let reader = unsafe { File::from_raw_fd(dup_fd(master)?) };
@@ -409,6 +410,7 @@ fn spawn_windows(
     let mut child = crate::windows::spawn_pty(pair.slave.as_ref(), cmd)
         .map_err(|err| format!("Failed to start {shell}: {err}"))?;
     let pid = child.process_id().unwrap_or(0);
+    crate::devservers::note_spawn(pid, &workdir, None);
     let mut reader = pair
         .master
         .try_clone_reader()

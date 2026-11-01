@@ -85,6 +85,7 @@ impl Shell {
                     )
                 })
                 .collect(),
+            browser_names: self.browser_names(cx),
             monos: self
                 .monos
                 .as_ref()
@@ -124,6 +125,27 @@ impl Shell {
                 .map(|path| (path.clone(), self.project_label(path)))
                 .collect(),
         }
+    }
+    /// Settings → Browser's names: every thread by its title, then the open
+    /// Mono chats.
+    fn browser_names(&self, cx: &App) -> Vec<(String, String)> {
+        let threads = self.order.iter().map(|&id| {
+            let title = &self.session_metadata(id, cx).summary.title;
+            let title = if title.trim().is_empty() {
+                "Untitled thread".to_owned()
+            } else {
+                title.clone()
+            };
+            (crate::browser::session_key(id), title)
+        });
+        let monos = self.monos.iter().flat_map(|monos| {
+            monos
+                .read(cx)
+                .chat_sessions(cx)
+                .map(|(id, name)| (crate::browser::session_key(id), format!("Mono {name}")))
+                .collect::<Vec<_>>()
+        });
+        threads.chain(monos).collect()
     }
     pub(super) fn open_settings(
         &mut self,

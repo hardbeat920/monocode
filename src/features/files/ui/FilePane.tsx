@@ -8,6 +8,7 @@ import {
 import { SurfaceTabs } from "../../workspace/ui/SurfaceTabs";
 import {
   isAgentTab,
+  isBrowserPaneTab,
   isChangesTab,
   isCommitTab,
   isPlanTab,
@@ -30,6 +31,7 @@ import {
   subscribeDiffViewer,
 } from "../../settings/model/settings";
 import { AgentTabView } from "../../sessions/ui/AgentTabView";
+import { BrowserLiveView } from "../../sessions/ui/BrowserLiveView";
 import { MarkdownPreview } from "../../sessions/ui/AgentMarkdown";
 import { BinaryFileView } from "./BinaryFileView";
 import { ReleaseNotesSurface } from "../../../app/ui/ReleaseNotesSurface";
@@ -180,6 +182,13 @@ function FilePaneComponent({
                   visible={visible && file.id === pane.activeFileId}
                   focused={focused && file.id === pane.activeFileId}
                   onOpenFile={onOpenFile}
+                />
+              ) : isBrowserPaneTab(file) ? (
+                <BrowserLiveView
+                  sessionId={file.browser.sessionId}
+                  tab={file.browser.tab}
+                  visible={active}
+                  focused={focused && active}
                 />
               ) : isPlanTab(file) ? (
                 <PlanSurface
