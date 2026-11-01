@@ -12,7 +12,9 @@
 use std::net::Ipv4Addr;
 use std::time::{Duration, Instant};
 
+// Only `mac` calls it; other Unixes build it for its tests.
 #[cfg(unix)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod cmd;
 pub mod join;
 #[cfg(target_os = "macos")]
