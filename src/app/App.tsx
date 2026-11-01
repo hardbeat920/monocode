@@ -619,7 +619,6 @@ import {
 import {
   createMono,
   findMono,
-  monoWorksOn,
   isMonoSession,
   listMonos,
   loadOpenMono,
@@ -11919,9 +11918,9 @@ function Workspace({
         : []),
       ...shownMonoTabs.flatMap((monoId): TitleTab[] => {
         const mono = findMono(monoId);
-        // Like the sidebar's Monos, a Mono's tab shows in the projects it
-        // works on; it keeps its place for when the project comes back.
-        if (!mono || !monoWorksOn(mono, sidebarCwd)) return [];
+        // Like the sidebar's Monos, a Mono's tab shows whichever project is
+        // open; switching projects never hides it.
+        if (!mono) return [];
         const look = monoLook(mono);
         const session = mono.sessionId
           ? sessions.find((entry) => entry.id === mono.sessionId)
